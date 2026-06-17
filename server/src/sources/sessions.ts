@@ -1,0 +1,273 @@
+import { readdir, stat } from "node:fs/promises";
+import path from "node:path";
+import { paths } from "../claudeHome.js";
+import { readJsonl } from "./readJson.js";
+
+const DEFAULT_LIMIT = 60;
+const TITLE_MAX = 100;
+const DISPLAY_TEXT_MAX = 4000;
+// Encoded project dirs may begin with "-" (Linux home paths); the session id
+// is a UUID-ish token. Both must be a single safe path segment: no slashes and
+// no "." that could enable traversal.
+const PROJECT_SEG_RE = /^[A-Za-z0-9_-]+$/;
+const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
+interface RawContentItem {
+  type?: string;
+  text?: string;
+  thinking?: string;
+  name?: string;
+  input?: unknown;
+  content?: unknown;
+  is_error?: boolean;
+}
+
+interface RawMessage {
+  role?: string;
+  model?: string;
+  content?: string | RawContentItem[];
+}
+
+interface RawLine {
+  type?: string;
+  aiTitle?: string;
+  isMeta?: boolean;
+  timestamp?: string;
+  message?: RawMessage;
+}
+
+export interface SessionSummary {
+  id: string;
+  project: string;
+  projectLabel: string;
+  title: string;
+  messageCount: number;
+  toolUseCount: number;
+  model: string | null;
+  firstActivity: string | null;
+  lastActivity: string | null;
+}
+
+export interface SessionMessage {
+  index: number;
+  type: string;
+  role: string | null;
+  timestamp: string | null;
+  model: string | null;
+  text: string | null;
+  toolName: string | null;
+  isError: boolean;
+}
+
+export interface SessionDetail {
+  id: string;
+  project: string;
+  projectLabel: string;
+  title: string;
+  model: string | null;
+  firstActivity: string | null;
+  lastActivity: string | null;
+  messages: SessionMessage[];
+}
+
+/**
+ * Turns an encoded project directory name back into something readable.
+ *
+ * The encoding is lossy (separators and spaces both collapse to `-`), so this
+ * is a best-effort cosmetic label only — never round-trip it back to disk.
+ */
+export function decodeProjectLabel(encoded: string): string {
+  let s = encoded;
+  if (s.startsWith("C--")) s = "C:/" + s.slice(3);
+  else if (s.startsWith("-")) s = s.slice(1);
+  return s.replace(/-/g, "/").replace(/\/+/g, "/");
+}
+
+function truncate(text: string, max: number): string {
+  return text.length > max ? text.slice(0, max).trimEnd() + "…" : text;
+}
+
+function extractText(content: string | RawContentItem[] | undefined): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  const parts: string[] = [];
+  for (const item of content) {
+    if (item.type === "text" && item.text) parts.push(item.text);
+    else if (item.type === "thinking" && item.thinking) parts.push(item.thinking);
+    else if (item.type === "tool_result") {
+      const c = item.content;
+      if (typeof c === "string") parts.push(c);
+      else if (Array.isArray(c)) {
+        for (const sub of c) {
+          if (sub && typeof sub === "object" && typeof (sub as RawContentItem).text === "string") {
+            parts.push((sub as RawContentItem).text as string);
+          }
+        }
+      }
+    }
+  }
+  return parts.join("\n").trim();
+}
+
+function isMessageLine(type: string | undefined): boolean {
+  return type === "user" || type === "assistant";
+}
+
+function deriveTitle(lines: RawLine[], fallbackId: string): string {
+  for (const line of lines) {
+    if (line.type === "ai-title" && line.aiTitle?.trim()) {
+      return truncate(line.aiTitle.trim(), TITLE_MAX);
+    }
+  }
+  for (const line of lines) {
+    if (line.type !== "user" || line.isMeta) continue;
+    const text = extractText(line.message?.content).trim();
+    if (text && !text.startsWith("<")) return truncate(text.replace(/\s+/g, " "), TITLE_MAX);
+  }
+  return `Session ${fallbackId.slice(0, 8)}`;
+}
+
+function summarize(project: string, id: string, lines: RawLine[]): SessionSummary {
+  let messageCount = 0;
+  let toolUseCount = 0;
+  let model: string | null = null;
+  let firstActivity: string | null = null;
+  let lastActivity: string | null = null;
+
+  for (const line of lines) {
+    if (line.timestamp) {
+      if (!firstActivity) firstActivity = line.timestamp;
+      lastActivity = line.timestamp;
+    }
+    if (!isMessageLine(line.type)) continue;
+    messageCount++;
+    if (line.message?.model) model = line.message.model;
+    const content = line.message?.content;
+    if (Array.isArray(content)) {
+      for (const item of content) if (item.type === "tool_use") toolUseCount++;
+    }
+  }
+
+  return {
+    id,
+    project,
+    projectLabel: decodeProjectLabel(project),
+    title: deriveTitle(lines, id),
+    messageCount,
+    toolUseCount,
+    model,
+    firstActivity,
+    lastActivity,
+  };
+}
+
+async function listSessionFiles(): Promise<{ project: string; id: string; file: string; mtime: number }[]> {
+  let projectDirs: string[];
+  try {
+    const entries = await readdir(paths.projects(), { withFileTypes: true });
+    projectDirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch {
+    return [];
+  }
+
+  const all = await Promise.all(
+    projectDirs.map(async (project) => {
+      const dir = path.join(paths.projects(), project);
+      let files: string[];
+      try {
+        files = (await readdir(dir)).filter((f) => f.endsWith(".jsonl"));
+      } catch {
+        return [];
+      }
+      return Promise.all(
+        files.map(async (f) => {
+          const file = path.join(dir, f);
+          let mtime = 0;
+          try {
+            mtime = (await stat(file)).mtimeMs;
+          } catch {
+            /* unreadable; keep mtime 0 */
+          }
+          return { project, id: f.replace(/\.jsonl$/, ""), file, mtime };
+        }),
+      );
+    }),
+  );
+
+  return all.flat();
+}
+
+/** Recent sessions across all projects, newest first (by last activity). */
+export async function readSessions(limit = DEFAULT_LIMIT): Promise<SessionSummary[]> {
+  const files = await listSessionFiles();
+  files.sort((a, b) => b.mtime - a.mtime);
+  const slice = files.slice(0, Math.max(0, limit));
+
+  const summaries = await Promise.all(
+    slice.map(async (entry) => {
+      const lines = await readJsonl<RawLine>(entry.file);
+      return summarize(entry.project, entry.id, lines);
+    }),
+  );
+
+  return summaries.sort((a, b) =>
+    (b.lastActivity ?? "").localeCompare(a.lastActivity ?? ""),
+  );
+}
+
+function resolveSessionPath(project: string, id: string): string | null {
+  if (!PROJECT_SEG_RE.test(project) || !SESSION_ID_RE.test(id)) return null;
+  const base = paths.projects();
+  const resolved = path.resolve(base, project, `${id}.jsonl`);
+  const expectedDir = path.resolve(base, project);
+  if (path.dirname(resolved) !== expectedDir) return null;
+  return resolved;
+}
+
+function normalizeMessage(line: RawLine, index: number): SessionMessage {
+  const content = line.message?.content;
+  let toolName: string | null = null;
+  let isError = false;
+  if (Array.isArray(content)) {
+    for (const item of content) {
+      if (item.type === "tool_use" && item.name) toolName = item.name;
+      if (item.type === "tool_result" && item.is_error) isError = true;
+    }
+  }
+  const text = extractText(content);
+  return {
+    index,
+    type: line.type ?? "unknown",
+    role: line.message?.role ?? null,
+    timestamp: line.timestamp ?? null,
+    model: line.message?.model ?? null,
+    text: text ? truncate(text, DISPLAY_TEXT_MAX) : null,
+    toolName,
+    isError,
+  };
+}
+
+/** Full ordered message list for one session, normalized for display. */
+export async function readSession(project: string, id: string): Promise<SessionDetail | null> {
+  const file = resolveSessionPath(project, id);
+  if (!file) return null;
+
+  const lines = await readJsonl<RawLine>(file);
+  if (lines.length === 0) return null;
+
+  const summary = summarize(project, id, lines);
+  const messages = lines
+    .filter((line) => isMessageLine(line.type))
+    .map((line, i) => normalizeMessage(line, i));
+
+  return {
+    id,
+    project,
+    projectLabel: summary.projectLabel,
+    title: summary.title,
+    model: summary.model,
+    firstActivity: summary.firstActivity,
+    lastActivity: summary.lastActivity,
+    messages,
+  };
+}

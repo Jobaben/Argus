@@ -1,0 +1,24 @@
+{
+  "name": "argus",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Argus — the all-seeing monitor for your Claude Code agents, jobs, history and results.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "npm -w server run dev",
+    "dev:web": "npm -w web run dev",
+    "build": "npm -w web run build",
+    "start": "npm -w server run start"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
