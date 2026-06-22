@@ -109,9 +109,9 @@ export function useSession(
           `/api/sessions/${encodeURIComponent(project)}/${encodeURIComponent(id)}`,
         );
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = (await res.json()) as { session: SessionDetail | null };
+        const data = (await res.json()) as SessionDetail | null;
         if (!mounted.current) return;
-        setSession(data.session);
+        setSession(data);
         setError(null);
       } catch (e) {
         if (mounted.current) setError(e instanceof Error ? e.message : String(e));

@@ -4,6 +4,7 @@ export type AgentStatus =
   | "failed"
   | "idle"
   | "queued"
+  | "stopped"
   | "unknown";
 
 export interface Agent {

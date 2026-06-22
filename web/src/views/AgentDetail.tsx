@@ -9,6 +9,7 @@ const STATUS_STYLE: Record<AgentStatus, string> = {
   failed: "bg-rose-500/15 text-rose-300 ring-rose-500/30",
   idle: "bg-slate-500/15 text-slate-300 ring-slate-500/30",
   queued: "bg-sky-500/15 text-sky-300 ring-sky-500/30",
+  stopped: "bg-zinc-600/20 text-zinc-300 ring-zinc-500/30",
   unknown: "bg-slate-500/15 text-slate-400 ring-slate-500/30",
 };
 
@@ -18,6 +19,7 @@ const DOT_STYLE: Record<AgentStatus, string> = {
   failed: "bg-rose-400 ring-rose-400/30",
   idle: "bg-slate-400 ring-slate-400/30",
   queued: "bg-sky-400 ring-sky-400/30",
+  stopped: "bg-zinc-400 ring-zinc-400/30",
   unknown: "bg-slate-500 ring-slate-500/30",
 };
 
@@ -43,7 +45,7 @@ function formatAt(iso: string): string {
 function StatusPill({ status }: { status: AgentStatus }) {
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium uppercase tracking-wide ring-1 ${STATUS_STYLE[status]}`}
+      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium uppercase tracking-wide ring-1 ${STATUS_STYLE[status] ?? STATUS_STYLE.unknown}`}
     >
       {status}
     </span>
@@ -140,7 +142,7 @@ function TimelineItem({ entry, last }: { entry: TimelineEntry; last: boolean }) 
     <li className="relative pl-8">
       {!last && <span className="absolute left-[7px] top-3 h-full w-px bg-white/10" aria-hidden />}
       <span
-        className={`absolute left-0 top-1.5 h-3.5 w-3.5 rounded-full ring-4 ${DOT_STYLE[state]}`}
+        className={`absolute left-0 top-1.5 h-3.5 w-3.5 rounded-full ring-4 ${DOT_STYLE[state] ?? DOT_STYLE.unknown}`}
         aria-hidden
       />
       <div className="pb-5">

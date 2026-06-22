@@ -17,6 +17,7 @@ const STATUS_STYLE: Record<AgentStatus, string> = {
   failed: "bg-rose-500/15 text-rose-300 ring-rose-500/30",
   idle: "bg-slate-500/15 text-slate-300 ring-slate-500/30",
   queued: "bg-sky-500/15 text-sky-300 ring-sky-500/30",
+  stopped: "bg-zinc-600/20 text-zinc-300 ring-zinc-500/30",
   unknown: "bg-slate-500/15 text-slate-400 ring-slate-500/30",
 };
 
@@ -36,7 +37,7 @@ function timeAgo(iso: string | null): string {
 function StatusPill({ status }: { status: AgentStatus }) {
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium uppercase tracking-wide ring-1 ${STATUS_STYLE[status]}`}
+      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium uppercase tracking-wide ring-1 ${STATUS_STYLE[status] ?? STATUS_STYLE.unknown}`}
     >
       {status}
     </span>
@@ -46,7 +47,10 @@ function StatusPill({ status }: { status: AgentStatus }) {
 function AgentCard({ agent }: { agent: Agent }) {
   const folder = agent.cwd?.split(/[\\/]/).filter(Boolean).pop() ?? null;
   return (
-    <article className="rounded-xl border border-white/10 bg-white/[0.03] p-4 transition hover:border-white/20 hover:bg-white/[0.05]">
+    <a
+      href={`#/agent/${encodeURIComponent(agent.short)}`}
+      className="block rounded-xl border border-white/10 bg-white/[0.03] p-4 transition hover:border-white/20 hover:bg-white/[0.05]"
+    >
       <header className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="truncate text-base font-semibold text-white">{agent.name}</h3>
@@ -85,7 +89,7 @@ function AgentCard({ agent }: { agent: Agent }) {
         )}
         <span className="ml-auto">updated {timeAgo(agent.updatedAt)}</span>
       </footer>
-    </article>
+    </a>
   );
 }
 
