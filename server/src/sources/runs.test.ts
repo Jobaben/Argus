@@ -1,6 +1,6 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -66,4 +66,30 @@ test("pruneRuns keeps only the newest N of a schedule", async () => {
   await m.pruneRuns("s1", 2);
   const left = await m.readRuns({ scheduleId: "s1" });
   assert.deepEqual(left.map((r: { id: string }) => r.id), ["r4", "r3"]);
+});
+
+test("readRun truncates the log to the last LOG_CAP_BYTES with a marker", async () => {
+  const m = await fresh();
+  const run = makeRun("big", "s1", new Date(2026, 5, 22, 10, 0).toISOString());
+  await m.writeRun(run);
+  writeFileSync(m.runLogPath("big"), "x".repeat(m.LOG_CAP_BYTES + 100));
+  const got = await m.readRun("big");
+  assert.ok(got);
+  assert.ok(got.log.startsWith("…(truncated)…\n"));
+  const body = got.log.slice("…(truncated)…\n".length);
+  assert.equal(body.length, m.LOG_CAP_BYTES);
+});
+
+test("pruneRuns deletes both .json and .log of dropped runs", async () => {
+  const m = await fresh();
+  for (let i = 0; i < 4; i++) {
+    await m.writeRun(makeRun(`p${i}`, "s9", new Date(2026, 5, 22, 9, i).toISOString()));
+    writeFileSync(m.runLogPath(`p${i}`), `log ${i}`);
+  }
+  await m.pruneRuns("s9", 2);
+  // Newest two (p3, p2) kept; oldest two (p0, p1) dropped — both files removed.
+  assert.equal(existsSync(m.runLogPath("p3")), true);
+  assert.equal(existsSync(m.runLogPath("p0")), false);
+  const left = await m.readRuns({ scheduleId: "s9" });
+  assert.deepEqual(left.map((r: { id: string }) => r.id), ["p3", "p2"]);
 });
