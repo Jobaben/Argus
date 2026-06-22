@@ -100,3 +100,25 @@ test("validateInput rejects an out-of-range time", async () => {
     (e: Error) => e.name === "ScheduleValidationError",
   );
 });
+
+test("validatePatch accepts a partial body (enable/disable only)", async () => {
+  const m = await fresh();
+  const patch = m.validatePatch({ enabled: false });
+  assert.deepEqual(patch, { enabled: false });
+});
+
+test("validatePatch validates only present fields and rejects a bad trigger", async () => {
+  const m = await fresh();
+  assert.throws(
+    () => m.validatePatch({ trigger: { kind: "daily", time: "99:99" } }),
+    (e: Error) => e.name === "ScheduleValidationError",
+  );
+});
+
+test("validatePatch rejects a non-existent cwd when cwd is present", async () => {
+  const m = await fresh();
+  assert.throws(
+    () => m.validatePatch({ cwd: path.join(home, "nope") }),
+    (e: Error) => e.name === "ScheduleValidationError",
+  );
+});

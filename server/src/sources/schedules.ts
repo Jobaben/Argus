@@ -64,6 +64,34 @@ export function validateInput(raw: unknown): ScheduleInput {
   return { name: r.name.trim(), prompt: r.prompt.trim(), cwd: r.cwd, trigger, enabled, overlapPolicy };
 }
 
+export function validatePatch(raw: unknown): Partial<ScheduleInput> {
+  if (!raw || typeof raw !== "object") throw new ScheduleValidationError("body required");
+  const r = raw as Record<string, unknown>;
+  const patch: Partial<ScheduleInput> = {};
+  if ("name" in r) {
+    if (typeof r.name !== "string" || !r.name.trim()) {
+      throw new ScheduleValidationError("name must be a non-empty string");
+    }
+    patch.name = r.name.trim();
+  }
+  if ("prompt" in r) {
+    if (typeof r.prompt !== "string" || !r.prompt.trim()) {
+      throw new ScheduleValidationError("prompt must be a non-empty string");
+    }
+    patch.prompt = r.prompt.trim();
+  }
+  if ("cwd" in r) {
+    if (typeof r.cwd !== "string" || !r.cwd.trim() || !existsSync(r.cwd) || !statSync(r.cwd).isDirectory()) {
+      throw new ScheduleValidationError(`cwd does not exist: ${String(r.cwd)}`);
+    }
+    patch.cwd = r.cwd;
+  }
+  if ("trigger" in r) patch.trigger = validateTrigger(r.trigger);
+  if ("enabled" in r) patch.enabled = Boolean(r.enabled);
+  if ("overlapPolicy" in r) patch.overlapPolicy = r.overlapPolicy === "allow" ? "allow" : "skip";
+  return patch;
+}
+
 /** Reads the raw file; returns { ok, list } so writers can refuse on corruption. */
 async function readRaw(): Promise<{ ok: boolean; list: Schedule[] }> {
   let text: string;

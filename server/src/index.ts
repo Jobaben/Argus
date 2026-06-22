@@ -19,6 +19,7 @@ import {
   readSchedulesWithNext,
   updateSchedule,
   validateInput,
+  validatePatch,
   ScheduleValidationError,
   readSchedules,
 } from "./sources/schedules.js";
@@ -69,8 +70,13 @@ app.get("/api/schedules", async (c) =>
 );
 
 app.post("/api/schedules", async (c) => {
+  let body: unknown;
   try {
-    const body = await c.req.json();
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid JSON body" }, 400);
+  }
+  try {
     const input = validateInput(body);
     const created = await createSchedule(input, new Date(), randomUUID());
     return c.json(created, 201);
@@ -81,13 +87,15 @@ app.post("/api/schedules", async (c) => {
 });
 
 app.put("/api/schedules/:id", async (c) => {
+  let body: unknown;
   try {
-    const body = await c.req.json();
-    // Full validation when core fields are present; partial enable/disable allowed.
-    if ("prompt" in body || "cwd" in body || "trigger" in body || "name" in body) {
-      validateInput({ ...body, name: body.name ?? "x", prompt: body.prompt ?? "x", cwd: body.cwd ?? process.cwd() });
-    }
-    const updated = await updateSchedule(c.req.param("id"), body, new Date());
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid JSON body" }, 400);
+  }
+  try {
+    const patch = validatePatch(body);
+    const updated = await updateSchedule(c.req.param("id"), patch, new Date());
     if (!updated) return c.json({ error: "not found" }, 404);
     return c.json(updated);
   } catch (e) {
@@ -103,27 +111,33 @@ app.delete("/api/schedules/:id", async (c) =>
 );
 
 app.post("/api/schedules/:id/run", async (c) => {
-  const all = await readSchedules();
-  const schedule = all.find((s) => s.id === c.req.param("id"));
-  if (!schedule) return c.json({ error: "not found" }, 404);
-  const run = await fireRun(schedule, "manual", {
-    now: () => new Date(),
-    spawn: defaultSpawn,
-    tickMs: Number(process.env.ARGUS_SCHED_TICK_MS ?? 30000),
-    newId: () => randomUUID(),
-    onChange: () => broadcast({ type: "schedules:changed" }),
-  });
-  return c.json(run, 202);
+  try {
+    const all = await readSchedules();
+    const schedule = all.find((s) => s.id === c.req.param("id"));
+    if (!schedule) return c.json({ error: "not found" }, 404);
+    const run = await fireRun(schedule, "manual", {
+      now: () => new Date(),
+      spawn: defaultSpawn,
+      tickMs: Number(process.env.ARGUS_SCHED_TICK_MS ?? 30000),
+      newId: () => randomUUID(),
+      onChange: () => broadcast({ type: "schedules:changed" }),
+    });
+    return c.json(run, 202);
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+  }
 });
 
-app.get("/api/runs", async (c) =>
-  c.json({
+app.get("/api/runs", async (c) => {
+  const limitRaw = c.req.query("limit");
+  const limit = limitRaw && Number.isFinite(Number(limitRaw)) ? Number(limitRaw) : 100;
+  return c.json({
     runs: await readRuns({
       scheduleId: c.req.query("scheduleId") || undefined,
-      limit: c.req.query("limit") ? Number(c.req.query("limit")) : 100,
+      limit,
     }),
-  }),
-);
+  });
+});
 
 app.get("/api/runs/:id", async (c) => {
   const got = await readRun(c.req.param("id"));
