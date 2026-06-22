@@ -24,4 +24,7 @@ export const paths = {
   projects: () => path.join(claudeHome(), "projects"),
   history: () => path.join(claudeHome(), "history.jsonl"),
   tasks: () => path.join(claudeHome(), "tasks"),
+  argus: () => path.join(claudeHome(), "argus"),
+  schedulesFile: () => path.join(claudeHome(), "argus", "schedules.json"),
+  runsDir: () => path.join(claudeHome(), "argus", "runs"),
 };
