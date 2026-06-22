@@ -60,7 +60,7 @@ test("overlap=skip records a skipped run when a prior run is alive", async () =>
     sessionId: null, project: null, resultSummary: null, error: null,
   });
   await scheduler.tick(deps({ spawn: () => { throw new Error("should not spawn"); } }));
-  const skipped = (await runs.readRuns({ scheduleId: "s1" })).find((r) => r.status === "skipped");
+  const skipped = (await runs.readRuns({ scheduleId: "s1" })).find((r: { status: string }) => r.status === "skipped");
   assert.ok(skipped, "expected a skipped run");
 });
 
