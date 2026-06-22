@@ -93,3 +93,10 @@ test("pruneRuns deletes both .json and .log of dropped runs", async () => {
   const left = await m.readRuns({ scheduleId: "s9" });
   assert.deepEqual(left.map((r: { id: string }) => r.id), ["p3", "p2"]);
 });
+
+test("readRun rejects path-traversal ids", async () => {
+  const m = await fresh();
+  assert.equal(await m.readRun("../../../etc/passwd"), null);
+  assert.equal(await m.readRun("..\\..\\secret"), null);
+  assert.equal(await m.readRun("a/b"), null);
+});

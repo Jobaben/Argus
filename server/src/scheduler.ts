@@ -87,9 +87,16 @@ export const defaultSpawn: SpawnFn = (run, logPath) => {
   const out = createWriteStream(logPath, { flags: "a" });
   const child = nodeSpawn(
     "claude",
-    ["-p", run.prompt, "--output-format", "json", "--session-id", run.sessionId ?? randomUUID()],
+    ["-p", "--output-format", "json", "--session-id", run.sessionId ?? randomUUID()],
     { cwd: run.cwd, shell: process.platform === "win32" },
   );
+  // The prompt is user-authored; pass it on stdin so no shell parsing touches it
+  // (shell:true on win32 would otherwise word-split it and interpret metacharacters).
+  child.stdin?.on("error", () => {
+    /* ignore broken pipe if the process failed to spawn */
+  });
+  child.stdin?.write(run.prompt);
+  child.stdin?.end();
   child.stdout?.pipe(out, { end: false });
   child.stderr?.pipe(out, { end: false });
 
@@ -198,6 +205,7 @@ export async function tick(deps: SchedulerDeps): Promise<void> {
           ephemeralRun(schedule, id, "skipped", iso, null, "skipped: previous run still in progress"),
         );
         await markScheduleRan(schedule.id, id, iso);
+        await pruneRuns(schedule.id, RUN_KEEP);
         deps.onChange?.();
         continue;
       }
@@ -218,6 +226,7 @@ export async function tick(deps: SchedulerDeps): Promise<void> {
           e instanceof Error ? e.message : String(e),
         ),
       );
+      await pruneRuns(schedule.id, RUN_KEEP);
       deps.onChange?.();
     }
   }

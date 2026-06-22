@@ -7,6 +7,10 @@ import type { Run } from "./scheduleTypes.js";
 export const LOG_CAP_BYTES = 1_048_576; // 1 MB
 export const RUN_KEEP = 50;
 
+// Run ids are generated UUIDs; reject anything that could escape the runs dir
+// (no dots/slashes allowed, mirroring the session-route segment guard).
+const RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
 /** Mirrors Claude Code's project-dir encoding so we can link to transcripts. */
 export function encodeProject(cwd: string): string {
   return cwd.replace(/[^A-Za-z0-9]/g, "-");
@@ -58,6 +62,7 @@ export async function readRuns(
 export async function readRun(
   id: string,
 ): Promise<{ run: Run; log: string } | null> {
+  if (!RUN_ID_RE.test(id)) return null;
   const run = await readRunFile(id);
   if (!run) return null;
   let log = "";
