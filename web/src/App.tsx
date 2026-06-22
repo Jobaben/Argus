@@ -9,6 +9,7 @@ import Inventory from "./views/Inventory";
 import Tasks from "./views/Tasks";
 import Search from "./views/Search";
 import Cron from "./views/Cron";
+import Schedules from "./views/Schedules";
 import AgentDetail from "./views/AgentDetail";
 
 const STATUS_STYLE: Record<AgentStatus, string> = {
@@ -179,6 +180,7 @@ const TABS: { id: string; label: string; render: () => React.ReactNode }[] = [
   { id: "inventory", label: "Inventory", render: () => <Inventory /> },
   { id: "tasks", label: "Tasks", render: () => <Tasks /> },
   { id: "cron", label: "Cron", render: () => <Cron /> },
+  { id: "schedules", label: "Schedules", render: () => <Schedules /> },
 ];
 
 function currentTabId(): string {
