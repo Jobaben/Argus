@@ -32,3 +32,66 @@ export interface TimelineEntry {
   detail?: string;
   text?: string;
 }
+
+export type TriggerKind = "interval" | "daily" | "weekly";
+
+export interface Trigger {
+  kind: TriggerKind;
+  everyMinutes?: number;
+  time?: string;
+  weekday?: number;
+}
+
+export interface Schedule {
+  id: string;
+  name: string;
+  prompt: string;
+  cwd: string;
+  trigger: Trigger;
+  enabled: boolean;
+  overlapPolicy: "skip" | "allow";
+  createdAt: string;
+  updatedAt: string;
+  lastRunAt: string | null;
+  lastRunId: string | null;
+}
+
+export interface ScheduleWithNext extends Schedule {
+  nextRun: string | null;
+}
+
+export type RunStatus =
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "skipped"
+  | "interrupted";
+
+export interface Run {
+  id: string;
+  scheduleId: string;
+  scheduleName: string;
+  prompt: string;
+  cwd: string;
+  status: RunStatus;
+  trigger: "scheduled" | "manual";
+  queuedAt: string;
+  startedAt: string | null;
+  endedAt: string | null;
+  durationMs: number | null;
+  pid: number | null;
+  exitCode: number | null;
+  sessionId: string | null;
+  project: string | null;
+  resultSummary: string | null;
+  error: string | null;
+}
+
+export interface ScheduleInput {
+  name: string;
+  prompt: string;
+  cwd: string;
+  trigger: Trigger;
+  enabled?: boolean;
+  overlapPolicy?: "skip" | "allow";
+}
