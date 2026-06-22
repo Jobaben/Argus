@@ -225,11 +225,16 @@ function RunLog({ id }: { id: string }) {
 function ScheduleCard({
   schedule,
   onEdit,
+  update,
+  remove,
+  runNow,
 }: {
   schedule: ScheduleWithNext;
   onEdit: () => void;
+  update: (id: string, patch: Partial<ScheduleInput>) => Promise<unknown>;
+  remove: (id: string) => Promise<unknown>;
+  runNow: (id: string) => Promise<unknown>;
 }) {
-  const { update, remove, runNow } = useSchedules();
   const { runs } = useRuns(schedule.id);
   const running = runs.filter((r) => r.status === "running");
   const recent = runs.slice(0, 5);
@@ -305,7 +310,7 @@ function ScheduleCard({
 }
 
 export default function Schedules() {
-  const { schedules, loading, error, create, update } = useSchedules();
+  const { schedules, loading, error, create, update, remove, runNow } = useSchedules();
   const [mode, setMode] = useState<{ kind: "none" } | { kind: "new" } | { kind: "edit"; id: string }>(
     { kind: "none" },
   );
@@ -356,6 +361,7 @@ export default function Schedules() {
       {mode.kind === "edit" && editing && (
         <div className="mb-6">
           <ScheduleForm
+            key={editing.id}
             initial={editing}
             onCancel={() => setMode({ kind: "none" })}
             onSubmit={async (input) => {
@@ -375,7 +381,14 @@ export default function Schedules() {
       ) : (
         <div className="grid grid-cols-1 gap-4">
           {schedules.map((s) => (
-            <ScheduleCard key={s.id} schedule={s} onEdit={() => setMode({ kind: "edit", id: s.id })} />
+            <ScheduleCard
+                key={s.id}
+                schedule={s}
+                onEdit={() => setMode({ kind: "edit", id: s.id })}
+                update={update}
+                remove={remove}
+                runNow={runNow}
+              />
           ))}
         </div>
       )}
