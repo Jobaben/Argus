@@ -15,7 +15,38 @@ import {
   runLogPath,
   writeRun,
 } from "./sources/runs.js";
-import type { Run, Schedule } from "./sources/scheduleTypes.js";
+import type { Run, RunStatus, Schedule } from "./sources/scheduleTypes.js";
+
+/** Builds a terminal run record for a schedule that never spawned a process
+ * (skipped due to overlap, or failed before/at spawn). */
+function ephemeralRun(
+  schedule: Schedule,
+  id: string,
+  status: RunStatus,
+  iso: string,
+  startedAt: string | null,
+  error: string,
+): Run {
+  return {
+    id,
+    scheduleId: schedule.id,
+    scheduleName: schedule.name,
+    prompt: schedule.prompt,
+    cwd: schedule.cwd,
+    status,
+    trigger: "scheduled",
+    queuedAt: iso,
+    startedAt,
+    endedAt: iso,
+    durationMs: 0,
+    pid: null,
+    exitCode: null,
+    sessionId: null,
+    project: null,
+    resultSummary: null,
+    error,
+  };
+}
 
 export interface SpawnHandle {
   pid: number | null;
@@ -64,15 +95,20 @@ export const defaultSpawn: SpawnFn = (run, logPath) => {
 
   const done = new Promise<{ code: number | null; result: string | null; error: string | null }>(
     (resolve) => {
+      let settled = false;
       let tail = "";
       child.stdout?.on("data", (d: Buffer) => {
         tail = (tail + d.toString("utf8")).slice(-8192);
       });
       child.on("error", (err) => {
+        if (settled) return;
+        settled = true;
         out.end();
         resolve({ code: null, result: null, error: err.message });
       });
       child.on("close", (code) => {
+        if (settled) return;
+        settled = true;
         out.end();
         let result: string | null = null;
         try {
@@ -95,7 +131,7 @@ export async function fireRun(
   deps: SchedulerDeps,
 ): Promise<Run> {
   const startedAt = deps.now();
-  const sessionId = randomUUID();
+  const sessionId = deps.newId();
   const run: Run = {
     id: deps.newId(),
     scheduleId: schedule.id,
@@ -157,26 +193,11 @@ export async function tick(deps: SchedulerDeps): Promise<void> {
       );
       if (alive) {
         const iso = now.toISOString();
-        await writeRun({
-          id: deps.newId(),
-          scheduleId: schedule.id,
-          scheduleName: schedule.name,
-          prompt: schedule.prompt,
-          cwd: schedule.cwd,
-          status: "skipped",
-          trigger: "scheduled",
-          queuedAt: iso,
-          startedAt: null,
-          endedAt: iso,
-          durationMs: 0,
-          pid: null,
-          exitCode: null,
-          sessionId: null,
-          project: null,
-          resultSummary: null,
-          error: "skipped: previous run still in progress",
-        });
-        await markScheduleRan(schedule.id, "", iso);
+        const id = deps.newId();
+        await writeRun(
+          ephemeralRun(schedule, id, "skipped", iso, null, "skipped: previous run still in progress"),
+        );
+        await markScheduleRan(schedule.id, id, iso);
         deps.onChange?.();
         continue;
       }
@@ -187,25 +208,16 @@ export async function tick(deps: SchedulerDeps): Promise<void> {
     } catch (e) {
       // Never let one schedule's failure break the tick.
       const iso = now.toISOString();
-      await writeRun({
-        id: deps.newId(),
-        scheduleId: schedule.id,
-        scheduleName: schedule.name,
-        prompt: schedule.prompt,
-        cwd: schedule.cwd,
-        status: "failed",
-        trigger: "scheduled",
-        queuedAt: iso,
-        startedAt: iso,
-        endedAt: iso,
-        durationMs: 0,
-        pid: null,
-        exitCode: null,
-        sessionId: null,
-        project: null,
-        resultSummary: null,
-        error: e instanceof Error ? e.message : String(e),
-      });
+      await writeRun(
+        ephemeralRun(
+          schedule,
+          deps.newId(),
+          "failed",
+          iso,
+          iso,
+          e instanceof Error ? e.message : String(e),
+        ),
+      );
       deps.onChange?.();
     }
   }
