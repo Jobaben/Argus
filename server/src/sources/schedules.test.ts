@@ -1,6 +1,6 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -15,17 +15,19 @@ async function fresh() {
   return import(`./schedules.js?${Math.random()}`);
 }
 
-const input = {
-  name: "Nightly",
-  prompt: "do it",
-  cwd: home || tmpdir(),
-  trigger: { kind: "daily", time: "02:00" },
-};
+function getInput() {
+  return {
+    name: "Nightly",
+    prompt: "do it",
+    cwd: home,
+    trigger: { kind: "daily", time: "02:00" },
+  };
+}
 
 test("createSchedule persists and reads back", async () => {
   const m = await fresh();
   const created = await m.createSchedule(
-    { ...input, cwd: home },
+    { ...getInput(), cwd: home },
     new Date(2026, 5, 22, 10, 0),
     "id-1",
   );
@@ -61,14 +63,14 @@ test("validateInput rejects a cwd that does not exist", async () => {
 
 test("updateSchedule patches and returns the row", async () => {
   const m = await fresh();
-  await m.createSchedule({ ...input, cwd: home }, new Date(2026, 5, 22, 10, 0), "id-1");
+  await m.createSchedule({ ...getInput(), cwd: home }, new Date(2026, 5, 22, 10, 0), "id-1");
   const updated = await m.updateSchedule("id-1", { enabled: false }, new Date(2026, 5, 22, 11, 0));
   assert.equal(updated?.enabled, false);
 });
 
 test("deleteSchedule removes the row", async () => {
   const m = await fresh();
-  await m.createSchedule({ ...input, cwd: home }, new Date(2026, 5, 22, 10, 0), "id-1");
+  await m.createSchedule({ ...getInput(), cwd: home }, new Date(2026, 5, 22, 10, 0), "id-1");
   assert.equal(await m.deleteSchedule("id-1"), true);
   assert.equal((await m.readSchedules()).length, 0);
 });
@@ -79,14 +81,22 @@ test("corrupt schedules.json reads as empty and is never overwritten", async () 
   writeFileSync(path.join(home, "argus", "schedules.json"), "{ not json");
   assert.deepEqual(await m.readSchedules(), []);
   await assert.rejects(
-    () => m.createSchedule({ ...input, cwd: home }, new Date(), "id-2"),
+    () => m.createSchedule({ ...getInput(), cwd: home }, new Date(), "id-2"),
     /could not be parsed/,
   );
 });
 
 test("readSchedulesWithNext attaches a future nextRun", async () => {
   const m = await fresh();
-  await m.createSchedule({ ...input, cwd: home }, new Date(2026, 5, 22, 10, 0), "id-1");
+  await m.createSchedule({ ...getInput(), cwd: home }, new Date(2026, 5, 22, 10, 0), "id-1");
   const rows = await m.readSchedulesWithNext(new Date(2026, 5, 22, 9, 0));
   assert.deepEqual(new Date(rows[0].nextRun), new Date(2026, 5, 23, 2, 0));
+});
+
+test("validateInput rejects an out-of-range time", async () => {
+  const m = await fresh();
+  assert.throws(
+    () => m.validateInput({ name: "x", prompt: "p", cwd: home, trigger: { kind: "daily", time: "25:61" } }),
+    (e: Error) => e.name === "ScheduleValidationError",
+  );
 });

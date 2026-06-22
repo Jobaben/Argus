@@ -1,6 +1,5 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
-import path from "node:path";
 import { paths } from "../claudeHome.js";
 import { nextFireAfter } from "./nextFire.js";
 import type { Schedule, Trigger } from "./scheduleTypes.js";
@@ -31,7 +30,7 @@ function validateTrigger(t: unknown): Trigger {
     return { kind: "interval", everyMinutes: Math.floor(trig.everyMinutes as number) };
   }
   if (trig.kind === "daily" || trig.kind === "weekly") {
-    if (!/^\d{1,2}:\d{2}$/.test(trig.time ?? "")) {
+    if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(trig.time ?? "")) {
       throw new ScheduleValidationError(`${trig.kind} trigger needs time "HH:MM"`);
     }
     if (trig.kind === "weekly" && !(Number(trig.weekday) >= 0 && Number(trig.weekday) <= 6)) {
@@ -175,6 +174,3 @@ export async function markScheduleRan(
   list[idx] = { ...list[idx], lastRunAt: atISO, lastRunId: runId };
   await writeSchedules(list);
 }
-
-// Re-export so callers have one import site for path joins if needed later.
-export { path };
