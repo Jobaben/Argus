@@ -6,6 +6,7 @@ import {
   previousFireTime,
   graceMsFor,
   shouldFire,
+  parseHHMM,
 } from "./nextFire.js";
 import type { Schedule } from "./scheduleTypes.js";
 
@@ -104,4 +105,21 @@ test("shouldFire: false when the window was missed (Argus was down)", () => {
     lastRunAt: at(2026, 5, 21, 2, 0).toISOString(),
   });
   assert.equal(shouldFire(s, at(2026, 5, 22, 9, 0), graceMsFor(30000)), false);
+});
+
+test("parseHHMM: parses and clips out-of-range values", () => {
+  assert.deepEqual(parseHHMM("09:30"), [9, 30]);
+  assert.deepEqual(parseHHMM(undefined), [0, 0]);
+  assert.deepEqual(parseHHMM("bad"), [0, 0]);
+  assert.deepEqual(parseHHMM("25:75"), [23, 59]);
+});
+
+test("shouldFire: grace boundary is inclusive (fires at exactly graceMs, not beyond)", () => {
+  // interval 60min, anchor 10:00, no prior run → most recent occurrence is 11:00.
+  const s = baseSchedule({});
+  const grace = graceMsFor(30000); // 5 minutes
+  // exactly at the grace edge (11:00 + 5min) → fires
+  assert.equal(shouldFire(s, at(2026, 5, 22, 11, 5), grace), true);
+  // one second past the edge → does not fire
+  assert.equal(shouldFire(s, new Date(2026, 5, 22, 11, 5, 1, 0), grace), false);
 });
