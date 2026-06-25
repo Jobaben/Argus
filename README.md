@@ -1,6 +1,6 @@
 # 👁️ Argus
 
-The all-seeing monitor for your Claude Code agents, jobs, history and results.
+Schedule and monitor your Claude Code agents, jobs, history and results.
 
 Argus reads Claude Code's local state under `~/.claude` and surfaces it as a
 live web dashboard — what's running now, what finished, what failed, and the
@@ -41,10 +41,12 @@ ARGUS_CLAUDE_HOME=/path/to/.claude ARGUS_PORT=7777 npm run dev
 | Prompt history | `history.jsonl` | global activity feed *(planned)* |
 | Tasks | `tasks/<id>/` | task-queue metadata *(planned)* |
 
-**Cron / scheduled routines** are **not** stored on disk — they are
+**Argus's Scheduler** fires its own headless `claude -p` runs on interval /
+daily / weekly triggers (see the Scheduler tab — create, run-now, history).
+This is distinct from Claude Code's **native cron routines**, which are
 session-scoped (harness-managed, visible only via `CronList` inside a live
-Claude session). A cron view would require a polling host process, not a
-file-watch, and is intentionally out of scope for v1.
+Claude session) and are **not** stored on disk; Argus, a disk reader, cannot
+surface those — the Cron tab explains why.
 
 ## API
 

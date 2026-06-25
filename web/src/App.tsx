@@ -169,22 +169,24 @@ function AgentsView() {
   );
 }
 
-const TABS: { id: string; label: string; render: () => React.ReactNode }[] = [
-  { id: "agents", label: "Agents", render: () => <AgentsView /> },
-  { id: "agent", label: "Detail", render: () => <AgentDetail /> },
-  { id: "sessions", label: "Sessions", render: () => <Sessions /> },
-  { id: "activity", label: "Activity", render: () => <ActivityFeed /> },
-  { id: "projects", label: "Projects", render: () => <Projects /> },
-  { id: "search", label: "Search", render: () => <Search /> },
-  { id: "stats", label: "Stats", render: () => <Stats /> },
-  { id: "inventory", label: "Inventory", render: () => <Inventory /> },
-  { id: "tasks", label: "Tasks", render: () => <Tasks /> },
-  { id: "cron", label: "Cron", render: () => <Cron /> },
-  { id: "schedules", label: "Schedules", render: () => <Schedules /> },
+type TabGroup = "primary" | "monitoring" | "hidden";
+
+const TABS: { id: string; label: string; group: TabGroup; render: () => React.ReactNode }[] = [
+  { id: "schedules", label: "Scheduler", group: "primary", render: () => <Schedules /> },
+  { id: "agents", label: "Agents", group: "monitoring", render: () => <AgentsView /> },
+  { id: "sessions", label: "Sessions", group: "monitoring", render: () => <Sessions /> },
+  { id: "activity", label: "Activity", group: "monitoring", render: () => <ActivityFeed /> },
+  { id: "projects", label: "Projects", group: "monitoring", render: () => <Projects /> },
+  { id: "search", label: "Search", group: "monitoring", render: () => <Search /> },
+  { id: "stats", label: "Stats", group: "monitoring", render: () => <Stats /> },
+  { id: "inventory", label: "Inventory", group: "monitoring", render: () => <Inventory /> },
+  { id: "tasks", label: "Tasks", group: "monitoring", render: () => <Tasks /> },
+  { id: "cron", label: "Cron", group: "monitoring", render: () => <Cron /> },
+  { id: "agent", label: "Detail", group: "hidden", render: () => <AgentDetail /> },
 ];
 
 function currentTabId(): string {
-  return window.location.hash.replace(/^#\/?/, "").split("/")[0] || "agents";
+  return window.location.hash.replace(/^#\/?/, "").split("/")[0] || "schedules";
 }
 
 export default function App() {
@@ -196,28 +198,50 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  const tab = TABS.find((t) => t.id === active) ?? TABS[0];
+  const tab = TABS.find((t) => t.id === active) ?? TABS.find((t) => t.id === "schedules")!;
+  const primaryTabs = TABS.filter((t) => t.group === "primary");
+  const monitoringTabs = TABS.filter((t) => t.group === "monitoring");
 
   return (
     <div className="min-h-screen">
       <nav className="sticky top-0 z-10 border-b border-white/10 bg-[#0a0b0f]/80 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center gap-1 overflow-x-auto px-6 py-2">
-          <span className="mr-3 shrink-0 text-sm font-semibold text-white">
-            👁️ Argus
-          </span>
-          {TABS.map((t) => (
-            <a
-              key={t.id}
-              href={`#/${t.id}`}
-              className={`shrink-0 rounded-md px-3 py-1.5 text-sm transition ${
-                t.id === tab.id
-                  ? "bg-white/10 text-white"
-                  : "text-white/45 hover:text-white/80"
-              }`}
-            >
-              {t.label}
-            </a>
-          ))}
+        <div className="mx-auto max-w-6xl px-6">
+          <div className="flex items-center gap-3 overflow-x-auto py-2">
+            <span className="shrink-0 text-sm font-semibold text-white">👁️ Argus</span>
+            <span className="hidden shrink-0 text-xs text-white/40 sm:inline">
+              — schedule &amp; monitor Claude agents
+            </span>
+            <div className="ml-2 flex items-center gap-1">
+              {primaryTabs.map((t) => (
+                <a
+                  key={t.id}
+                  href={`#/${t.id}`}
+                  className={`shrink-0 rounded-md px-3 py-1.5 text-sm font-medium transition ${
+                    t.id === tab.id
+                      ? "bg-white/10 text-white"
+                      : "text-white/70 hover:text-white"
+                  }`}
+                >
+                  {t.label}
+                </a>
+              ))}
+            </div>
+          </div>
+          <div className="flex items-center gap-1 overflow-x-auto border-t border-white/5 py-1.5">
+            {monitoringTabs.map((t) => (
+              <a
+                key={t.id}
+                href={`#/${t.id}`}
+                className={`shrink-0 rounded-md px-2.5 py-1 text-xs transition ${
+                  t.id === tab.id
+                    ? "bg-white/10 text-white"
+                    : "text-white/40 hover:text-white/70"
+                }`}
+              >
+                {t.label}
+              </a>
+            ))}
+          </div>
         </div>
       </nav>
       <main>{tab.render()}</main>
