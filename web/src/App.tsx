@@ -89,7 +89,7 @@ const TABS: { id: string; label: string; group: TabGroup; render: () => React.Re
 ];
 
 function currentTabId(): string {
-  return window.location.hash.replace(/^#\/?/, "").split("/")[0] || "schedules";
+  return window.location.hash.replace(/^#\/?/, "").split("/")[0] || "command";
 }
 
 export default function App() {
@@ -101,7 +101,7 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  const tab = TABS.find((t) => t.id === active) ?? TABS.find((t) => t.id === "schedules")!;
+  const tab = TABS.find((t) => t.id === active) ?? TABS.find((t) => t.id === "command")!;
   const primaryTabs = TABS.filter((t) => t.group === "primary");
   const monitoringTabs = TABS.filter((t) => t.group === "monitoring");
 
