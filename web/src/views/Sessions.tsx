@@ -5,7 +5,7 @@ import {
   type SessionMessage,
   type SessionSummary,
 } from "../useSessions";
-import { AlertStrip, EmptyState } from "../ds";
+import { AlertStrip, EmptyState, Page } from "../ds";
 
 function timeAgo(iso: string | null): string {
   if (!iso) return "—";
@@ -104,7 +104,13 @@ function SessionTranscript({
   );
 
   return (
-    <div>
+    <Page
+      title={session.title}
+      crumbs={[
+        { label: "Command Center", href: "#/command" },
+        { label: "Sessions", href: "#/sessions" },
+      ]}
+    >
       <button
         type="button"
         onClick={onBack}
@@ -112,19 +118,15 @@ function SessionTranscript({
       >
         ← Back to sessions
       </button>
-
-      <header className="mb-6">
-        <h2 className="text-2xl font-bold text-ink">{session.title}</h2>
-        <p className="mt-1 truncate font-mono text-xs text-ink-faint">
-          {session.projectLabel}
-        </p>
+      <div className="mb-6">
+        <p className="truncate font-mono text-xs text-ink-faint">{session.projectLabel}</p>
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-faint">
           <span>{session.messageCount} msgs</span>
           <span>· {session.toolUseCount} tools</span>
           {session.model && <span>· {session.model}</span>}
           <span>· last activity {timeAgo(session.lastActivity)}</span>
         </div>
-      </header>
+      </div>
 
       {error && (
         <div className="mb-6">
@@ -143,7 +145,7 @@ function SessionTranscript({
           ))}
         </div>
       )}
-    </div>
+    </Page>
   );
 }
 
@@ -158,13 +160,10 @@ export default function Sessions() {
   }
 
   return (
-    <div>
-      <header className="mb-6">
-        <h2 className="text-2xl font-bold text-ink">Sessions</h2>
-        <p className="mt-1 text-sm text-ink-faint">
-          Recent Claude Code transcripts across all projects
-        </p>
-      </header>
+    <Page title="Sessions" crumbs={[{ label: "Command Center", href: "#/command" }]}>
+      <p className="mb-6 text-sm text-ink-faint">
+        Recent Claude Code transcripts across all projects
+      </p>
 
       {error && (
         <div className="mb-6">
@@ -187,6 +186,6 @@ export default function Sessions() {
           ))}
         </div>
       )}
-    </div>
+    </Page>
   );
 }

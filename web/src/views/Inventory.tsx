@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertStrip, EmptyState } from "../ds";
+import { AlertStrip, EmptyState, Page } from "../ds";
 import {
   useInventory,
   type InventoryItem,
@@ -80,13 +80,10 @@ export default function Inventory() {
   const { inventory, loading, error } = useInventory();
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-8">
-      <header className="mb-6">
-        <h2 className="text-xl font-semibold text-ink">Extensions</h2>
-        <p className="mt-1 text-sm text-ink-faint">
-          Agents, commands, skills, and plugins installed under ~/.claude
-        </p>
-      </header>
+    <Page title="Extensions">
+      <p className="mb-6 text-sm text-ink-faint">
+        Agents, commands, skills, and plugins installed under ~/.claude
+      </p>
 
       {error && (
         <div className="mb-6">
@@ -134,6 +131,6 @@ export default function Inventory() {
           />
         </>
       )}
-    </div>
+    </Page>
   );
 }

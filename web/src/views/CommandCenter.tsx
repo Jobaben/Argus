@@ -1,4 +1,4 @@
-import { usePipeline, STATUS, StatusPill, RAIL } from "../ds";
+import { usePipeline, STATUS, StatusPill, RAIL, Page } from "../ds";
 import type { PipelineTile, DsStatus } from "../ds";
 
 // Status-specific border + background tint, per the design system Command Center.
@@ -20,7 +20,16 @@ function Tile({ tile }: { tile: PipelineTile }) {
       <span className={`absolute inset-y-0 left-0 w-[3px] ${RAIL[token]}`} />
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="truncate text-sm font-bold leading-tight">{tile.name}</div>
+          {tile.jobShort ? (
+            <a
+              href={`#/agent/${encodeURIComponent(tile.jobShort)}`}
+              className="block truncate text-sm font-bold leading-tight text-ink transition hover:text-eye"
+            >
+              {tile.name}
+            </a>
+          ) : (
+            <div className="truncate text-sm font-bold leading-tight">{tile.name}</div>
+          )}
           <div className="mt-0.5 font-mono text-[10px] text-ink-faint">
             {tile.jobShort ? `job ${tile.jobShort}` : "job ——"} · {tile.subId}
           </div>
@@ -64,15 +73,10 @@ function Tile({ tile }: { tile: PipelineTile }) {
 export default function CommandCenter() {
   const pipeline = usePipeline();
   return (
-    <div className="mx-auto max-w-[1600px] px-6 py-8">
-      <header className="mb-5 flex items-baseline gap-3.5">
-        <span className="text-[22px] font-extrabold tracking-[0.03em]">
-          ARG<span className="text-eye">U</span>S · command center
-        </span>
-        <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-ink-faint">
-          feature: {pipeline.feature} · {pipeline.phases.length} phases
-        </span>
-      </header>
+    <Page title="Command Center">
+      <div className="mb-5 font-mono text-[11px] uppercase tracking-[0.16em] text-ink-faint">
+        feature: {pipeline.feature} · {pipeline.phases.length} phases
+      </div>
       <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,11rem),1fr))] items-start gap-3.5 pb-2.5">
         {pipeline.phases.map((phase) => (
           <section key={phase.id} className="flex min-w-0 flex-col gap-2.5">
@@ -94,6 +98,6 @@ export default function CommandCenter() {
           </section>
         ))}
       </div>
-    </div>
+    </Page>
   );
 }

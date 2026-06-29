@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useAgents } from "../useAgents";
 import { useTimeline } from "../useTimeline";
 import type { Agent, AgentStatus, TimelineEntry } from "../types";
-import { AlertStrip, EmptyState, StatusPill, TimeAgo, toDsStatus } from "../ds";
+import { AlertStrip, EmptyState, Page, StatusPill, TimeAgo, toDsStatus } from "../ds";
 
 const DOT_STYLE: Record<AgentStatus, string> = {
   working: "bg-run ring-run/30",
@@ -170,22 +170,22 @@ export default function AgentDetail({ short: shortProp }: { short?: string } = {
 
   if (!short) {
     return (
-      <div className="mx-auto max-w-3xl px-6 py-8">
+      <Page title="Agent" crumbs={[{ label: "Command Center", href: "#/command" }]}>
         <EmptyState>
           No agent selected. Open <span className="font-mono text-ink-dim">#/agent/&lt;short&gt;</span> to view one.
         </EmptyState>
-      </div>
+      </Page>
     );
   }
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-8">
-      <a
-        href="#/"
-        className="mb-4 inline-flex items-center gap-1 text-sm text-ink-faint transition hover:text-ink-dim"
-      >
-        <span aria-hidden>←</span> All agents
-      </a>
+    <Page
+      title={`agent ${short}`}
+      crumbs={[
+        { label: "Command Center", href: "#/command" },
+        { label: "Agents", href: "#/agents" },
+      ]}
+    >
 
       {error && (
         <div className="mb-6">
@@ -227,6 +227,6 @@ export default function AgentDetail({ short: shortProp }: { short?: string } = {
           </ol>
         )}
       </section>
-    </div>
+    </Page>
   );
 }

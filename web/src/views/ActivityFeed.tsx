@@ -1,4 +1,4 @@
-import { AlertStrip, EmptyState } from "../ds";
+import { AlertStrip, EmptyState, Page } from "../ds";
 import { useActivity, type Activity } from "../useActivity";
 
 function timeAgo(iso: string): string {
@@ -40,11 +40,11 @@ export default function ActivityFeed() {
   const { activity, loading, error } = useActivity();
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-8">
-      <header className="mb-6">
-        <h2 className="text-xl font-semibold text-ink">Activity</h2>
-        <p className="mt-1 text-sm text-ink-faint">Recent prompt history across your projects</p>
-      </header>
+    <Page
+      title="Activity"
+      crumbs={[{ label: "Command Center", href: "#/command" }]}
+    >
+      <p className="mb-6 text-sm text-ink-faint">Recent prompt history across your projects</p>
 
       {error && (
         <div className="mb-6">
@@ -63,6 +63,6 @@ export default function ActivityFeed() {
           ))}
         </ol>
       )}
-    </div>
+    </Page>
   );
 }

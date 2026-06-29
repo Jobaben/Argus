@@ -1,4 +1,4 @@
-import { AlertStrip, Card, EmptyState } from "../ds";
+import { AlertStrip, Card, EmptyState, Page } from "../ds";
 import { useProjects, type Project } from "../useProjects";
 
 function timeAgo(iso: string | null): string {
@@ -42,13 +42,10 @@ export default function Projects() {
   const { projects, loading, error } = useProjects();
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-8">
-      <header className="mb-6">
-        <h2 className="text-xl font-semibold text-ink">Projects</h2>
-        <p className="mt-1 text-sm text-ink-faint">
-          Working directories Claude Code has sessions for
-        </p>
-      </header>
+    <Page title="Projects">
+      <p className="mb-6 text-sm text-ink-faint">
+        Working directories Claude Code has sessions for
+      </p>
 
       {error && (
         <div className="mb-6">
@@ -67,6 +64,6 @@ export default function Projects() {
           ))}
         </div>
       )}
-    </div>
+    </Page>
   );
 }

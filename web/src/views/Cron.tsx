@@ -11,20 +11,11 @@ function HintRow({ hint }: { hint: CronDiskHint }) {
   );
 }
 
-export default function Cron() {
+export function CronPanel() {
   const { cron, loading, error } = useCron();
 
   return (
-    <div className="mx-auto max-w-6xl px-6 py-8">
-      <header className="mb-8">
-        <h1 className="flex items-center gap-2.5 text-3xl font-bold tracking-tight text-ink">
-          <span aria-hidden>🕑</span> Scheduled / cron
-        </h1>
-        <p className="mt-1 text-sm text-ink-faint">
-          Recurring routines that fire on a schedule
-        </p>
-      </header>
-
+    <>
       {error && (
         <div className="mb-6">
           <AlertStrip subject="Error" message={`Couldn't reach the Argus server: ${error}`} />
@@ -88,6 +79,6 @@ export default function Cron() {
           </section>
         </div>
       )}
-    </div>
+    </>
   );
 }

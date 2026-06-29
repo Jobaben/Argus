@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useSearch, type SearchResult } from "../useSearch";
-import { AlertStrip, EmptyState } from "../ds";
+import { AlertStrip, EmptyState, Page } from "../ds";
 
 const TYPE_STYLE: Record<string, string> = {
   user: "bg-queue/12 text-queue ring-queue/30",
@@ -66,13 +66,10 @@ export default function Search() {
   const trimmed = input.trim();
 
   return (
-    <div>
-      <header className="mb-6">
-        <h2 className="text-2xl font-bold text-ink">Search</h2>
-        <p className="mt-1 text-sm text-ink-faint">
-          Plain-text search across every Claude Code transcript
-        </p>
-      </header>
+    <Page title="Search">
+      <p className="mb-6 text-sm text-ink-faint">
+        Plain-text search across every Claude Code transcript
+      </p>
 
       <div className="mb-6">
         <input
@@ -112,6 +109,6 @@ export default function Search() {
           </div>
         </>
       )}
-    </div>
+    </Page>
   );
 }

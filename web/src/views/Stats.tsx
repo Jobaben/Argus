@@ -5,7 +5,7 @@ import {
   type ModelStat,
   type PeakHour,
 } from "../useStats";
-import { AlertStrip, EmptyState } from "../ds";
+import { AlertStrip, EmptyState, Page } from "../ds";
 
 function compact(n: number): string {
   if (!Number.isFinite(n)) return "0";
@@ -118,16 +118,13 @@ export default function Stats() {
   );
 
   return (
-    <div>
-      <header className="mb-6">
-        <h2 className="text-2xl font-bold text-ink">Usage stats</h2>
-        <p className="mt-1 text-sm text-ink-faint">
-          Aggregate Claude Code usage across all projects
-          {stats?.lastComputedDate && (
-            <span className="text-ink-faint"> · computed {stats.lastComputedDate}</span>
-          )}
-        </p>
-      </header>
+    <Page title="Usage stats">
+      <p className="mb-6 text-sm text-ink-faint">
+        Aggregate Claude Code usage across all projects
+        {stats?.lastComputedDate && (
+          <span className="text-ink-faint"> · computed {stats.lastComputedDate}</span>
+        )}
+      </p>
 
       {error && (
         <div className="mb-6">
@@ -222,6 +219,6 @@ export default function Stats() {
           )}
         </div>
       )}
-    </div>
+    </Page>
   );
 }

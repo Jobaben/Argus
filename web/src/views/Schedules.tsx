@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { useSchedules } from "../useSchedules";
 import { useRuns } from "../useRuns";
 import type { Run, ScheduleInput, ScheduleWithNext, Trigger } from "../types";
-import { AlertStrip, EmptyState, StatusPill, runStatusToDsStatus } from "../ds";
+import { AlertStrip, EmptyState, StatusPill, runStatusToDsStatus, Page } from "../ds";
+import { CronPanel } from "./Cron";
 
 function when(iso: string | null): string {
   if (!iso) return "—";
@@ -301,21 +302,15 @@ export default function Schedules() {
   const [mode, setMode] = useState<{ kind: "none" } | { kind: "new" } | { kind: "edit"; id: string }>(
     { kind: "none" },
   );
+  const [subTab, setSubTab] = useState<"schedules" | "cron">("schedules");
 
   const editing = mode.kind === "edit" ? schedules.find((s) => s.id === mode.id) : undefined;
 
   return (
-    <div className="mx-auto max-w-6xl px-6 py-8">
-      <header className="mb-6 flex items-end justify-between gap-4">
-        <div>
-          <h1 className="flex items-center gap-2.5 text-3xl font-bold tracking-tight text-ink">
-            <span aria-hidden>⏰</span> Schedules
-          </h1>
-          <p className="mt-1 text-sm text-ink-faint">
-            Headless Claude runs Argus fires on a schedule
-          </p>
-        </div>
-        {mode.kind === "none" && (
+    <Page
+      title="Scheduler"
+      actions={
+        subTab === "schedules" && mode.kind === "none" ? (
           <button
             type="button"
             onClick={() => setMode({ kind: "new" })}
@@ -323,60 +318,87 @@ export default function Schedules() {
           >
             + New schedule
           </button>
-        )}
-      </header>
+        ) : null
+      }
+    >
+      <div className="mb-6 flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => setSubTab("schedules")}
+          className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
+            subTab === "schedules" ? "bg-surface-2 text-ink" : "text-ink-dim hover:text-ink"
+          }`}
+        >
+          Schedules
+        </button>
+        <button
+          type="button"
+          onClick={() => setSubTab("cron")}
+          className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
+            subTab === "cron" ? "bg-surface-2 text-ink" : "text-ink-dim hover:text-ink"
+          }`}
+        >
+          Cron
+        </button>
+      </div>
 
-      {error && (
-        <div className="mb-6">
-          <AlertStrip subject="Error" message={`Couldn't reach the Argus server: ${error}`} />
-        </div>
-      )}
-
-      {mode.kind === "new" && (
-        <div className="mb-6">
-          <ScheduleForm
-            initial={EMPTY}
-            onCancel={() => setMode({ kind: "none" })}
-            onSubmit={async (input) => {
-              await create(input);
-              setMode({ kind: "none" });
-            }}
-          />
-        </div>
-      )}
-
-      {mode.kind === "edit" && editing && (
-        <div className="mb-6">
-          <ScheduleForm
-            key={editing.id}
-            initial={editing}
-            onCancel={() => setMode({ kind: "none" })}
-            onSubmit={async (input) => {
-              await update(editing.id, input);
-              setMode({ kind: "none" });
-            }}
-          />
-        </div>
-      )}
-
-      {loading ? (
-        <p className="text-ink-faint">Loading schedules…</p>
-      ) : schedules.length === 0 && mode.kind === "none" ? (
-        <EmptyState>No schedules yet. Create one and Argus will fire it on time.</EmptyState>
+      {subTab === "cron" ? (
+        <CronPanel />
       ) : (
-        <div className="grid grid-cols-1 gap-4">
-          {schedules.map((s) => (
-            <ScheduleCard
-                key={s.id}
-                schedule={s}
-                onEdit={() => setMode({ kind: "edit", id: s.id })}
-                update={update}
-                remove={remove}
-                runNow={runNow}
+        <>
+          {error && (
+            <div className="mb-6">
+              <AlertStrip subject="Error" message={`Couldn't reach the Argus server: ${error}`} />
+            </div>
+          )}
+
+          {mode.kind === "new" && (
+            <div className="mb-6">
+              <ScheduleForm
+                initial={EMPTY}
+                onCancel={() => setMode({ kind: "none" })}
+                onSubmit={async (input) => {
+                  await create(input);
+                  setMode({ kind: "none" });
+                }}
               />
-          ))}
-        </div>
+            </div>
+          )}
+
+          {mode.kind === "edit" && editing && (
+            <div className="mb-6">
+              <ScheduleForm
+                key={editing.id}
+                initial={editing}
+                onCancel={() => setMode({ kind: "none" })}
+                onSubmit={async (input) => {
+                  await update(editing.id, input);
+                  setMode({ kind: "none" });
+                }}
+              />
+            </div>
+          )}
+
+          {loading ? (
+            <p className="text-ink-faint">Loading schedules…</p>
+          ) : schedules.length === 0 && mode.kind === "none" ? (
+            <EmptyState>No schedules yet. Create one and Argus will fire it on time.</EmptyState>
+          ) : (
+            <div className="grid grid-cols-1 gap-4">
+              {schedules.map((s) => (
+                <ScheduleCard
+                    key={s.id}
+                    schedule={s}
+                    onEdit={() => setMode({ kind: "edit", id: s.id })}
+                    update={update}
+                    remove={remove}
+                    runNow={runNow}
+                  />
+              ))}
+            </div>
+          )}
+        </>
       )}
-    </div>
+    </Page>
   );
 }

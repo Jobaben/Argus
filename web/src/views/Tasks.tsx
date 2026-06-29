@@ -1,4 +1,4 @@
-import { AlertStrip, EmptyState } from "../ds";
+import { AlertStrip, EmptyState, Page } from "../ds";
 import { useTasks, type Task } from "../useTasks";
 
 function timeAgo(iso: string | null): string {
@@ -52,13 +52,8 @@ export default function Tasks() {
   const { tasks, loading, error } = useTasks();
 
   return (
-    <div>
-      <header className="mb-6">
-        <h2 className="text-2xl font-bold text-ink">Tasks</h2>
-        <p className="mt-1 text-sm text-ink-faint">
-          Task workspaces under ~/.claude/tasks
-        </p>
-      </header>
+    <Page title="Tasks">
+      <p className="mb-6 text-sm text-ink-faint">Task workspaces under ~/.claude/tasks</p>
 
       {error && (
         <div className="mb-6">
@@ -77,6 +72,6 @@ export default function Tasks() {
           ))}
         </div>
       )}
-    </div>
+    </Page>
   );
 }
