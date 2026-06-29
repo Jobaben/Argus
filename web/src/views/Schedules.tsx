@@ -1,15 +1,8 @@
 import { useEffect, useState } from "react";
 import { useSchedules } from "../useSchedules";
 import { useRuns } from "../useRuns";
-import type { Run, RunStatus, ScheduleInput, ScheduleWithNext, Trigger } from "../types";
-
-const RUN_STYLE: Record<RunStatus, string> = {
-  running: "bg-amber-500/15 text-amber-300 ring-amber-500/30",
-  succeeded: "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30",
-  failed: "bg-rose-500/15 text-rose-300 ring-rose-500/30",
-  skipped: "bg-slate-500/15 text-slate-300 ring-slate-500/30",
-  interrupted: "bg-zinc-600/20 text-zinc-300 ring-zinc-500/30",
-};
+import type { Run, ScheduleInput, ScheduleWithNext, Trigger } from "../types";
+import { AlertStrip, EmptyState, StatusPill, runStatusToDsStatus } from "../ds";
 
 function when(iso: string | null): string {
   if (!iso) return "—";
@@ -57,14 +50,12 @@ function ScheduleForm({
     }
   };
 
-  const field = "w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white placeholder-white/30";
+  const field = "w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink placeholder-ink-faint";
 
   return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.03] p-5 space-y-3">
+    <div className="rounded-xl border border-line bg-surface p-5 space-y-3">
       {err && (
-        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
-          {err}
-        </div>
+        <AlertStrip subject="Error" message={err} />
       )}
       <input
         className={field}
@@ -145,14 +136,14 @@ function ScheduleForm({
           type="button"
           disabled={busy}
           onClick={submit}
-          className="rounded-lg bg-emerald-500/20 px-3 py-1.5 text-sm text-emerald-200 ring-1 ring-emerald-500/30 transition hover:bg-emerald-500/30 disabled:opacity-50"
+          className="rounded-lg bg-ok/20 px-3 py-1.5 text-sm text-ok ring-1 ring-ok/30 transition hover:bg-ok/30 disabled:opacity-50"
         >
           {busy ? "Saving…" : "Save schedule"}
         </button>
         <button
           type="button"
           onClick={onCancel}
-          className="rounded-lg border border-white/10 px-3 py-1.5 text-sm text-white/60 transition hover:text-white"
+          className="rounded-lg border border-line px-3 py-1.5 text-sm text-ink-dim transition hover:text-ink"
         >
           Cancel
         </button>
@@ -164,32 +155,28 @@ function ScheduleForm({
 function RunRow({ run }: { run: Run }) {
   const [open, setOpen] = useState(false);
   return (
-    <li className="rounded-lg border border-white/10 bg-white/[0.03]">
+    <li className="rounded-lg border border-line bg-surface">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
         className="flex w-full items-center gap-3 px-3 py-2 text-left"
       >
-        <span
-          className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium uppercase ring-1 ${RUN_STYLE[run.status]}`}
-        >
-          {run.status}
-        </span>
-        <span className="text-xs text-white/55">{when(run.startedAt ?? run.queuedAt)}</span>
+        <StatusPill status={runStatusToDsStatus(run.status)} />
+        <span className="text-xs text-ink-dim">{when(run.startedAt ?? run.queuedAt)}</span>
         {run.durationMs != null && (
-          <span className="text-xs text-white/40">{Math.round(run.durationMs / 1000)}s</span>
+          <span className="text-xs text-ink-faint">{Math.round(run.durationMs / 1000)}s</span>
         )}
-        {run.trigger === "manual" && <span className="text-xs text-sky-300/70">manual</span>}
-        <span className="ml-auto text-xs text-white/30">{open ? "▲" : "▼"}</span>
+        {run.trigger === "manual" && <span className="text-xs text-queue">manual</span>}
+        <span className="ml-auto text-xs text-ink-faint">{open ? "▲" : "▼"}</span>
       </button>
       {open && (
-        <div className="space-y-2 border-t border-white/10 px-3 py-2 text-sm">
-          {run.error && <p className="text-rose-300">{run.error}</p>}
-          {run.resultSummary && <p className="text-emerald-200/80">{run.resultSummary}</p>}
+        <div className="space-y-2 border-t border-line px-3 py-2 text-sm">
+          {run.error && <p className="text-fail">{run.error}</p>}
+          {run.resultSummary && <p className="text-ok">{run.resultSummary}</p>}
           {run.sessionId && run.project && (
             <a
               href={`#/sessions`}
-              className="inline-block font-mono text-xs text-sky-300 hover:underline"
+              className="inline-block font-mono text-xs text-queue hover:underline"
               title="Transcript session id"
             >
               transcript: {run.sessionId.slice(0, 8)}
@@ -216,7 +203,7 @@ function RunLog({ id }: { id: string }) {
     };
   }, [id]);
   return (
-    <pre className="max-h-64 overflow-auto rounded-lg bg-black/40 p-2 font-mono text-xs text-white/70">
+    <pre className="max-h-64 overflow-auto rounded-lg bg-black/40 p-2 font-mono text-xs text-ink-dim">
       {log}
     </pre>
   );
@@ -240,21 +227,21 @@ function ScheduleCard({
   const recent = runs.slice(0, 5);
 
   return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+    <div className="rounded-xl border border-line bg-surface p-4">
       <header className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="truncate text-base font-semibold text-white">{schedule.name}</h3>
-          <p className="mt-0.5 text-xs text-white/45">
+          <h3 className="truncate text-base font-semibold text-ink">{schedule.name}</h3>
+          <p className="mt-0.5 text-xs text-ink-faint">
             {triggerSummary(schedule.trigger)} · next {when(schedule.nextRun)}
           </p>
-          <p className="mt-0.5 truncate font-mono text-xs text-white/30">{schedule.cwd}</p>
+          <p className="mt-0.5 truncate font-mono text-xs text-ink-faint">{schedule.cwd}</p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {running.length > 0 && (
-            <span className="inline-flex items-center gap-1.5 text-xs text-amber-300">
+            <span className="inline-flex items-center gap-1.5 text-xs text-run">
               <span className="relative flex h-2 w-2">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75" />
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-amber-400" />
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-run opacity-75" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-run" />
               </span>
               running
             </span>
@@ -266,21 +253,21 @@ function ScheduleCard({
         <button
           type="button"
           onClick={() => void runNow(schedule.id)}
-          className="rounded-lg bg-emerald-500/15 px-2.5 py-1 text-xs text-emerald-200 ring-1 ring-emerald-500/30 hover:bg-emerald-500/25"
+          className="rounded-lg bg-ok/15 px-2.5 py-1 text-xs text-ok ring-1 ring-ok/30 hover:bg-ok/25"
         >
           Run now
         </button>
         <button
           type="button"
           onClick={() => void update(schedule.id, { enabled: !schedule.enabled })}
-          className="rounded-lg border border-white/10 px-2.5 py-1 text-xs text-white/70 hover:text-white"
+          className="rounded-lg border border-line px-2.5 py-1 text-xs text-ink-dim hover:text-ink"
         >
           {schedule.enabled ? "Disable" : "Enable"}
         </button>
         <button
           type="button"
           onClick={onEdit}
-          className="rounded-lg border border-white/10 px-2.5 py-1 text-xs text-white/70 hover:text-white"
+          className="rounded-lg border border-line px-2.5 py-1 text-xs text-ink-dim hover:text-ink"
         >
           Edit
         </button>
@@ -289,12 +276,12 @@ function ScheduleCard({
           onClick={() => {
             if (confirm(`Delete schedule "${schedule.name}"?`)) void remove(schedule.id);
           }}
-          className="rounded-lg border border-rose-500/20 px-2.5 py-1 text-xs text-rose-300/80 hover:bg-rose-500/10"
+          className="rounded-lg border border-fail/20 px-2.5 py-1 text-xs text-fail hover:bg-fail/10"
         >
           Delete
         </button>
         {!schedule.enabled && (
-          <span className="text-xs text-white/30">disabled</span>
+          <span className="text-xs text-ink-faint">disabled</span>
         )}
       </div>
 
@@ -321,10 +308,10 @@ export default function Schedules() {
     <div className="mx-auto max-w-6xl px-6 py-8">
       <header className="mb-6 flex items-end justify-between gap-4">
         <div>
-          <h1 className="flex items-center gap-2.5 text-3xl font-bold tracking-tight text-white">
+          <h1 className="flex items-center gap-2.5 text-3xl font-bold tracking-tight text-ink">
             <span aria-hidden>⏰</span> Schedules
           </h1>
-          <p className="mt-1 text-sm text-white/45">
+          <p className="mt-1 text-sm text-ink-faint">
             Headless Claude runs Argus fires on a schedule
           </p>
         </div>
@@ -332,7 +319,7 @@ export default function Schedules() {
           <button
             type="button"
             onClick={() => setMode({ kind: "new" })}
-            className="rounded-lg bg-emerald-500/20 px-3 py-1.5 text-sm text-emerald-200 ring-1 ring-emerald-500/30 hover:bg-emerald-500/30"
+            className="rounded-lg bg-ok/20 px-3 py-1.5 text-sm text-ok ring-1 ring-ok/30 hover:bg-ok/30"
           >
             + New schedule
           </button>
@@ -340,8 +327,8 @@ export default function Schedules() {
       </header>
 
       {error && (
-        <div className="mb-6 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
-          Couldn't reach the Argus server: {error}
+        <div className="mb-6">
+          <AlertStrip subject="Error" message={`Couldn't reach the Argus server: ${error}`} />
         </div>
       )}
 
@@ -373,11 +360,9 @@ export default function Schedules() {
       )}
 
       {loading ? (
-        <p className="text-white/40">Loading schedules…</p>
+        <p className="text-ink-faint">Loading schedules…</p>
       ) : schedules.length === 0 && mode.kind === "none" ? (
-        <div className="rounded-xl border border-dashed border-white/15 px-6 py-16 text-center text-white/40">
-          No schedules yet. Create one and Argus will fire it on time.
-        </div>
+        <EmptyState>No schedules yet. Create one and Argus will fire it on time.</EmptyState>
       ) : (
         <div className="grid grid-cols-1 gap-4">
           {schedules.map((s) => (

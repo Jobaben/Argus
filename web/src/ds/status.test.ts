@@ -1,0 +1,41 @@
+import { describe, it, expect } from "vitest";
+import { STATUS, toDsStatus } from "./status";
+
+describe("STATUS record", () => {
+  it("maps each status to its color token", () => {
+    expect(STATUS.working.token).toBe("run");
+    expect(STATUS.done.token).toBe("ok");
+    expect(STATUS.failed.token).toBe("fail");
+    expect(STATUS.queued.token).toBe("queue");
+    expect(STATUS.idle.token).toBe("idle");
+    expect(STATUS.await.token).toBe("await");
+  });
+
+  it("glows only for working, failed, await", () => {
+    expect(STATUS.working.glow).toBe(true);
+    expect(STATUS.failed.glow).toBe(true);
+    expect(STATUS.await.glow).toBe(true);
+    expect(STATUS.done.glow).toBe(false);
+    expect(STATUS.queued.glow).toBe(false);
+    expect(STATUS.idle.glow).toBe(false);
+  });
+
+  it('labels "await" as "Needs approval"', () => {
+    expect(STATUS.await.label).toBe("Needs approval");
+  });
+});
+
+describe("toDsStatus", () => {
+  it("passes through known statuses", () => {
+    expect(toDsStatus("working")).toBe("working");
+    expect(toDsStatus("done")).toBe("done");
+    expect(toDsStatus("failed")).toBe("failed");
+    expect(toDsStatus("queued")).toBe("queued");
+    expect(toDsStatus("idle")).toBe("idle");
+  });
+
+  it("folds stopped and unknown into idle", () => {
+    expect(toDsStatus("stopped")).toBe("idle");
+    expect(toDsStatus("unknown")).toBe("idle");
+  });
+});

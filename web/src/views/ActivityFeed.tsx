@@ -1,3 +1,4 @@
+import { AlertStrip, EmptyState } from "../ds";
 import { useActivity, type Activity } from "../useActivity";
 
 function timeAgo(iso: string): string {
@@ -19,16 +20,16 @@ function truncate(text: string, max = 240): string {
 
 function ActivityRow({ item }: { item: Activity }) {
   return (
-    <li className="rounded-xl border border-white/10 bg-white/[0.03] p-4 transition hover:border-white/20 hover:bg-white/[0.05]">
-      <div className="flex items-center gap-x-3 text-xs text-white/40">
+    <li className="rounded-xl border border-line bg-surface p-4 transition hover:border-ink-faint/40">
+      <div className="flex items-center gap-x-3 text-xs text-ink-faint">
         {item.project && (
-          <span className="font-mono text-sky-300/80" title={item.cwd}>
+          <span className="font-mono text-ink-faint" title={item.cwd}>
             {item.project}
           </span>
         )}
         <span className="ml-auto shrink-0">{timeAgo(item.ts)}</span>
       </div>
-      <p className="mt-2 whitespace-pre-wrap break-words text-sm text-white/80">
+      <p className="mt-2 whitespace-pre-wrap break-words text-sm text-ink-dim">
         {truncate(item.text)}
       </p>
     </li>
@@ -41,22 +42,20 @@ export default function ActivityFeed() {
   return (
     <div className="mx-auto max-w-3xl px-6 py-8">
       <header className="mb-6">
-        <h2 className="text-xl font-semibold text-white">Activity</h2>
-        <p className="mt-1 text-sm text-white/45">Recent prompt history across your projects</p>
+        <h2 className="text-xl font-semibold text-ink">Activity</h2>
+        <p className="mt-1 text-sm text-ink-faint">Recent prompt history across your projects</p>
       </header>
 
       {error && (
-        <div className="mb-6 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
-          Couldn’t load activity: {error}
+        <div className="mb-6">
+          <AlertStrip subject="Activity" message={`Couldn't load activity: ${error}`} />
         </div>
       )}
 
       {loading ? (
-        <p className="text-white/40">Loading activity…</p>
+        <p className="text-ink-faint">Loading activity…</p>
       ) : activity.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-white/15 px-6 py-16 text-center text-white/40">
-          No prompt history found yet.
-        </div>
+        <EmptyState>No prompt history found yet.</EmptyState>
       ) : (
         <ol className="flex flex-col gap-3">
           {activity.map((item, i) => (

@@ -5,6 +5,7 @@ import {
   type ModelStat,
   type PeakHour,
 } from "../useStats";
+import { AlertStrip, EmptyState } from "../ds";
 
 function compact(n: number): string {
   if (!Number.isFinite(n)) return "0";
@@ -32,10 +33,10 @@ function shortModel(model: string): string {
 
 function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="rounded-lg border border-white/10 bg-white/[0.03] px-4 py-3">
-      <div className="text-2xl font-semibold text-white">{value}</div>
-      <div className="text-xs uppercase tracking-wide text-white/40">{label}</div>
-      {hint && <div className="mt-0.5 text-xs text-white/30">{hint}</div>}
+    <div className="rounded-lg border border-line bg-surface px-4 py-3">
+      <div className="text-2xl font-semibold text-ink">{value}</div>
+      <div className="text-xs uppercase tracking-wide text-ink-faint">{label}</div>
+      {hint && <div className="mt-0.5 text-xs text-ink-faint">{hint}</div>}
     </div>
   );
 }
@@ -43,23 +44,23 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
 function ModelRow({ model, max }: { model: ModelStat; max: number }) {
   const pct = max > 0 ? Math.max(2, Math.round((model.totalTokens / max) * 100)) : 0;
   return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+    <div className="rounded-xl border border-line bg-surface p-4">
       <div className="flex items-center justify-between gap-3">
-        <span className="truncate font-mono text-sm text-white">{shortModel(model.model)}</span>
-        <span className="shrink-0 text-sm font-semibold text-sky-300">
+        <span className="truncate font-mono text-sm text-ink">{shortModel(model.model)}</span>
+        <span className="shrink-0 text-sm font-semibold text-queue">
           {compact(model.totalTokens)} tok
         </span>
       </div>
-      <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-white/[0.06]">
-        <div className="h-full rounded-full bg-sky-400/70" style={{ width: `${pct}%` }} />
+      <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
+        <div className="h-full rounded-full bg-queue/70" style={{ width: `${pct}%` }} />
       </div>
-      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-white/45">
+      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-faint">
         <span>in {compact(model.inputTokens)}</span>
-        <span className="text-emerald-300/70">out {compact(model.outputTokens)}</span>
+        <span className="text-ok/70">out {compact(model.outputTokens)}</span>
         <span>cache rd {compact(model.cacheReadTokens)}</span>
         <span>cache cr {compact(model.cacheCreationTokens)}</span>
         {model.webSearchRequests > 0 && (
-          <span className="text-amber-300/70">{model.webSearchRequests} web</span>
+          <span className="text-run/70">{model.webSearchRequests} web</span>
         )}
       </div>
     </div>
@@ -70,12 +71,12 @@ function DailyRow({ day, max }: { day: DailyStat; max: number }) {
   const pct = max > 0 ? Math.max(2, Math.round((day.tokens / max) * 100)) : 0;
   return (
     <div className="flex items-center gap-3 py-1.5 text-xs">
-      <span className="w-24 shrink-0 font-mono text-white/55">{day.date}</span>
-      <div className="h-2 flex-1 overflow-hidden rounded-full bg-white/[0.06]">
-        <div className="h-full rounded-full bg-emerald-400/60" style={{ width: `${pct}%` }} />
+      <span className="w-24 shrink-0 font-mono text-ink-dim">{day.date}</span>
+      <div className="h-2 flex-1 overflow-hidden rounded-full bg-surface-2">
+        <div className="h-full rounded-full bg-ok/60" style={{ width: `${pct}%` }} />
       </div>
-      <span className="w-16 shrink-0 text-right text-white/55">{compact(day.tokens)}</span>
-      <span className="w-20 shrink-0 text-right text-white/40">{day.messages} msgs</span>
+      <span className="w-16 shrink-0 text-right text-ink-dim">{compact(day.tokens)}</span>
+      <span className="w-20 shrink-0 text-right text-ink-faint">{day.messages} msgs</span>
     </div>
   );
 }
@@ -86,12 +87,12 @@ function HourBar({ peak, max }: { peak: PeakHour; max: number }) {
     <div className="flex flex-1 flex-col items-center gap-1">
       <div className="flex h-24 w-full items-end">
         <div
-          className="w-full rounded-t bg-amber-400/60"
+          className="w-full rounded-t bg-run/60"
           style={{ height: `${h}%` }}
           title={`${peak.count} sessions`}
         />
       </div>
-      <span className="text-[10px] text-white/35">{peak.hour}</span>
+      <span className="text-[10px] text-ink-faint">{peak.hour}</span>
     </div>
   );
 }
@@ -119,27 +120,25 @@ export default function Stats() {
   return (
     <div>
       <header className="mb-6">
-        <h2 className="text-2xl font-bold text-white">Usage stats</h2>
-        <p className="mt-1 text-sm text-white/45">
+        <h2 className="text-2xl font-bold text-ink">Usage stats</h2>
+        <p className="mt-1 text-sm text-ink-faint">
           Aggregate Claude Code usage across all projects
           {stats?.lastComputedDate && (
-            <span className="text-white/30"> · computed {stats.lastComputedDate}</span>
+            <span className="text-ink-faint"> · computed {stats.lastComputedDate}</span>
           )}
         </p>
       </header>
 
       {error && (
-        <div className="mb-6 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
-          Couldn’t reach the Argus server: {error}
+        <div className="mb-6">
+          <AlertStrip subject="Error" message={`Couldn't reach the Argus server: ${error}`} />
         </div>
       )}
 
       {loading ? (
-        <p className="text-white/40">Loading stats…</p>
+        <p className="text-ink-faint">Loading stats…</p>
       ) : !stats || !stats.available ? (
-        <div className="rounded-xl border border-dashed border-white/15 px-6 py-16 text-center text-white/40">
-          No usage stats found yet.
-        </div>
+        <EmptyState>No usage stats found yet.</EmptyState>
       ) : (
         <div className="flex flex-col gap-8">
           <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
@@ -185,7 +184,7 @@ export default function Stats() {
 
           {stats.models.length > 0 && (
             <section>
-              <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-white/40">
+              <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-ink-faint">
                 By model
               </h3>
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -198,10 +197,10 @@ export default function Stats() {
 
           {stats.peakHours.length > 0 && (
             <section>
-              <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-white/40">
+              <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-ink-faint">
                 Activity by hour
               </h3>
-              <div className="flex items-end gap-1 rounded-xl border border-white/10 bg-white/[0.03] p-4">
+              <div className="flex items-end gap-1 rounded-xl border border-line bg-surface p-4">
                 {stats.peakHours.map((p) => (
                   <HourBar key={p.hour} peak={p} max={maxHour} />
                 ))}
@@ -211,10 +210,10 @@ export default function Stats() {
 
           {recentDaily.length > 0 && (
             <section>
-              <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-white/40">
+              <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-ink-faint">
                 Recent daily activity
               </h3>
-              <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+              <div className="rounded-xl border border-line bg-surface p-4">
                 {recentDaily.map((d) => (
                   <DailyRow key={d.date} day={d} max={maxDailyTokens} />
                 ))}

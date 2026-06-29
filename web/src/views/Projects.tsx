@@ -1,3 +1,4 @@
+import { AlertStrip, Card, EmptyState } from "../ds";
 import { useProjects, type Project } from "../useProjects";
 
 function timeAgo(iso: string | null): string {
@@ -20,20 +21,20 @@ function lastSegment(label: string): string {
 
 function ProjectCard({ project }: { project: Project }) {
   return (
-    <div className="flex flex-col rounded-xl border border-white/10 bg-white/[0.03] p-4 transition hover:border-white/20 hover:bg-white/[0.05]">
-      <h3 className="truncate text-sm font-semibold text-white" title={project.label}>
+    <Card className="flex flex-col">
+      <h3 className="truncate text-sm font-semibold text-ink" title={project.label}>
         {lastSegment(project.label)}
       </h3>
-      <p className="mt-1 truncate font-mono text-xs text-sky-300/70" title={project.label}>
+      <p className="mt-1 truncate font-mono text-xs text-ink-faint" title={project.label}>
         {project.label}
       </p>
-      <div className="mt-4 flex items-center gap-x-3 text-xs text-white/40">
-        <span className="inline-flex items-center rounded-md bg-emerald-500/10 px-2 py-0.5 font-medium text-emerald-300 ring-1 ring-emerald-500/20">
+      <div className="mt-4 flex items-center gap-x-3 text-xs text-ink-faint">
+        <span className="inline-flex items-center rounded-md bg-ok/12 px-2 py-0.5 font-medium text-ok ring-1 ring-ok/20">
           {project.sessionCount} {project.sessionCount === 1 ? "session" : "sessions"}
         </span>
         <span className="ml-auto shrink-0">{timeAgo(project.lastActivity)}</span>
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -43,24 +44,22 @@ export default function Projects() {
   return (
     <div className="mx-auto max-w-5xl px-6 py-8">
       <header className="mb-6">
-        <h2 className="text-xl font-semibold text-white">Projects</h2>
-        <p className="mt-1 text-sm text-white/45">
+        <h2 className="text-xl font-semibold text-ink">Projects</h2>
+        <p className="mt-1 text-sm text-ink-faint">
           Working directories Claude Code has sessions for
         </p>
       </header>
 
       {error && (
-        <div className="mb-6 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
-          Couldn’t load projects: {error}
+        <div className="mb-6">
+          <AlertStrip subject="Projects" message={`Couldn't load projects: ${error}`} />
         </div>
       )}
 
       {loading ? (
-        <p className="text-white/40">Loading projects…</p>
+        <p className="text-ink-faint">Loading projects…</p>
       ) : projects.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-white/15 px-6 py-16 text-center text-white/40">
-          No projects found yet.
-        </div>
+        <EmptyState>No projects found yet.</EmptyState>
       ) : (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {projects.map((project) => (
