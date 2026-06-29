@@ -32,7 +32,7 @@ function AgentsView() {
       <header className="mb-8 flex items-end justify-between gap-4">
         <div>
           <h1 className="flex items-center gap-2.5 text-3xl font-extrabold tracking-tight">
-            <IrisMark size={30} /> ARG<span className="text-eye">U</span>S
+            <IrisMark size={30} /> <span>ARG<span className="text-eye">U</span>S</span>
           </h1>
           <p className="mt-1 text-sm text-ink-dim">
             The all-seeing monitor for your Claude Code agents
@@ -111,7 +111,7 @@ export default function App() {
         <div className="mx-auto max-w-6xl px-6">
           <div className="flex items-center gap-3 overflow-x-auto py-2">
             <span className="flex shrink-0 items-center gap-2 text-sm font-bold">
-              <IrisMark size={18} /> ARG<span className="text-eye">U</span>S
+              <IrisMark size={18} /> <span>ARG<span className="text-eye">U</span>S</span>
             </span>
             <span className="hidden shrink-0 text-xs text-ink-faint sm:inline">
               — schedule &amp; monitor Claude agents
