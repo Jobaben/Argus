@@ -20,7 +20,7 @@ export interface ScheduleInput {
   overlapPolicy?: "skip" | "allow";
 }
 
-function validateTrigger(t: unknown): Trigger {
+export function validateTrigger(t: unknown): Trigger {
   if (!t || typeof t !== "object") throw new ScheduleValidationError("trigger is required");
   const trig = t as Trigger;
   if (trig.kind === "interval") {

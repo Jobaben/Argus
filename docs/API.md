@@ -60,6 +60,42 @@ carry no payload by design (server stays the single source of truth).
 > v0.2 endpoint shapes are authored by the buildout fan-out; consult each
 > `server/src/sources/*.ts` for the exact DTO until this table is finalized.
 
+## Pipelines (v0.3)
+
+| Method + path | Effect |
+| --- | --- |
+| `GET /api/pipelines` | list pipeline definitions |
+| `POST /api/pipelines` | create a definition (validated) |
+| `PUT /api/pipelines/:id` | replace a definition |
+| `DELETE /api/pipelines/:id` | delete a definition |
+| `POST /api/pipelines/:id/start` | start an instance manually → `202`, or `409` on overlap |
+| `GET /api/pipelines/:id/instances` | instances for a pipeline (newest first) |
+| `GET /api/instances/:id` | full pipeline instance |
+| `POST /api/instances/:id/signal` | ingest a signal `{ phaseId, runId, type, token, payload? }`; `403` on bad token |
+| `POST /api/instances/:id/approve` | advance past a gate (optional `{ answers }`) |
+| `POST /api/instances/:id/revise` | re-run the current phase (optional `{ note }`) |
+| `POST /api/instances/:id/abort` | abort the instance |
+
+WS frame `{ "type": "pipelines:changed" }` is pushed on any pipeline mutation.
+
+### Emitting signals from a run
+
+The engine spawns each phase's `claude -p` run with `ARGUS_SIGNAL_URL`,
+`ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`, `ARGUS_RUN_ID`, and `ARGUS_SIGNAL_TOKEN`.
+`hooks/argus-signal.mjs` reads these and POSTs a signal. Register it as a Stop
+hook to emit `completed`, and (optionally) as a `PreToolUse` hook on
+`AskUserQuestion` invoked as `argus-signal.mjs needs-input` to pause at a gate.
+
+> **Important:** a phase advances ONLY on an explicit signal. If a run exits
+> without its hook POSTing `completed`, the reconciler heals it as `failed`
+> (process exit is not a success trigger). Register `argus-signal.mjs` as a Stop
+> hook so every completed run emits `completed`.
+
+| Env var | Meaning |
+| --- | --- |
+| `ARGUS_STEP_NAME` | label of the running step, injected into the run's environment |
+| `ARGUS_MAX_CONCURRENT_RUNS` | cap on concurrent `claude -p` processes (default 4) |
+
 ## Configuration
 
 | Env var | Default | Effect |

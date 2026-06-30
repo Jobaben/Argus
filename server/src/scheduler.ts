@@ -61,6 +61,7 @@ export interface SchedulerDeps {
   tickMs: number;
   newId: () => string;
   onChange?: () => void;
+  onTick?: () => Promise<void>;
 }
 
 /** True if a process with `pid` is currently alive. */
@@ -228,6 +229,13 @@ export async function tick(deps: SchedulerDeps): Promise<void> {
       );
       await pruneRuns(schedule.id, RUN_KEEP);
       deps.onChange?.();
+    }
+  }
+  if (deps.onTick) {
+    try {
+      await deps.onTick();
+    } catch (e) {
+      console.error("[argus] pipeline reconcile failed:", e);
     }
   }
 }

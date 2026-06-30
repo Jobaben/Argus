@@ -94,3 +94,10 @@ test("a failed spawn yields a failed run, scheduler does not throw", async () =>
   assert.equal(list[0].status, "failed");
   assert.equal(list[0].error, "boom");
 });
+
+test("tick calls the onTick hook", async () => {
+  const { scheduler } = await load();
+  let called = 0;
+  await scheduler.tick(deps({ onTick: async () => { called++; } }));
+  assert.equal(called, 1);
+});

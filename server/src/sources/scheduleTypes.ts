@@ -48,4 +48,6 @@ export interface Run {
   project: string | null;
   resultSummary: string | null;
   error: string | null;
+  instanceId?: string;
+  phaseId?: string;
 }

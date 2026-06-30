@@ -23,6 +23,9 @@ Fanned out in parallel; each is an isolated source + view + tab:
 - Serve `web/dist` from the Hono server; collapse to one port for `npm start`.
 - `npx argus` entry; `--open` flag.
 - Engines/CI pin (Node ≥20), `npm audit` cleanup.
+- **Pipeline engine** — event-driven, signal-chained ordered phases with human
+  gates; definitions + instances under `~/.claude/argus/`; REST/WS surface;
+  reference signal hook. (Command Center wiring tracked separately.)
 
 ## v0.4 — Cron host
 - Optional long-lived poller (in-session or sidecar) that publishes `CronList`
