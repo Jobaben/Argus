@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useSchedules } from "../useSchedules";
 import { useRuns } from "../useRuns";
 import type { Run, ScheduleInput, ScheduleWithNext, Trigger } from "../types";
-import { AlertStrip, EmptyState, StatusPill, runStatusToDsStatus, Page } from "../ds";
+import { AlertStrip, EmptyState, StatusPill, parseRunLog, runStatusToDsStatus, Page } from "../ds";
 import { CronPanel } from "./Cron";
 
 function when(iso: string | null): string {
@@ -171,9 +171,15 @@ function RunRow({ run }: { run: Run }) {
         <span className="ml-auto text-xs text-ink-faint">{open ? "▲" : "▼"}</span>
       </button>
       {open && (
-        <div className="space-y-2 border-t border-line px-3 py-2 text-sm">
-          {run.error && <p className="text-fail">{run.error}</p>}
-          {run.resultSummary && <p className="text-ok">{run.resultSummary}</p>}
+        <div className="space-y-3 border-t border-line px-3 py-3 text-sm">
+          {run.error && (
+            <p className="whitespace-pre-wrap leading-relaxed text-fail">{run.error}</p>
+          )}
+          {run.resultSummary && (
+            <p className="max-w-prose whitespace-pre-wrap leading-relaxed text-ok">
+              {run.resultSummary}
+            </p>
+          )}
           {run.sessionId && run.project && (
             <a
               href={`#/sessions`}
@@ -191,22 +197,50 @@ function RunRow({ run }: { run: Run }) {
 }
 
 function RunLog({ id }: { id: string }) {
-  const [log, setLog] = useState<string>("loading…");
+  const [log, setLog] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
   // Fetch on expand; live runs also refresh via the list's WS ping re-rendering this.
   useEffect(() => {
     let alive = true;
     void fetch(`/api/runs/${id}`)
       .then((r) => r.json())
-      .then((d: { log?: string }) => alive && setLog(d.log || "(no output)"))
-      .catch(() => alive && setLog("(could not load log)"));
+      .then((d: { log?: string }) => alive && setLog(d.log ?? ""))
+      .catch(() => {
+        if (alive) {
+          setFailed(true);
+          setLog("");
+        }
+      });
     return () => {
       alive = false;
     };
   }, [id]);
+
+  if (log === null) return <p className="text-xs text-ink-faint">loading…</p>;
+  if (failed) return <p className="text-xs text-ink-faint">Couldn't load the run log.</p>;
+
+  const parsed = parseRunLog(log);
+  if (parsed.kind === "empty") return null;
   return (
-    <pre className="max-h-64 overflow-auto rounded-lg bg-black/40 p-2 font-mono text-xs text-ink-dim">
-      {log}
-    </pre>
+    <div className="rounded-lg bg-black/30 p-3">
+      {parsed.truncated && (
+        <p className="mb-2 text-[11px] text-ink-faint">Showing the end of a longer log.</p>
+      )}
+      {parsed.kind === "envelope" ? (
+        <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1.5 text-xs">
+          {parsed.fields.map((f) => (
+            <Fragment key={f.label}>
+              <dt className="text-ink-faint">{f.label}</dt>
+              <dd className="font-mono text-ink-dim">{f.value}</dd>
+            </Fragment>
+          ))}
+        </dl>
+      ) : (
+        <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-ink-dim">
+          {parsed.text}
+        </pre>
+      )}
+    </div>
   );
 }
 
