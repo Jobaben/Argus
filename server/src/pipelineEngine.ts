@@ -66,12 +66,19 @@ export interface EngineDeps {
   onChange?: () => void;
 }
 
+export interface ActionResult {
+  ok: boolean;
+  code: number;
+  /** Human-readable reason on the failure paths (404/409), for surfacing to a client. */
+  error?: string;
+}
+
 export interface Engine {
   start(pipelineId: string, trigger?: "manual" | "scheduled"): Promise<PipelineInstance | null>;
-  onSignal(instanceId: string, signal: PipelineSignal): Promise<{ ok: boolean; code: number }>;
-  approve(instanceId: string, answers?: unknown): Promise<{ ok: boolean; code: number }>;
-  revise(instanceId: string, note?: string): Promise<{ ok: boolean; code: number }>;
-  abort(instanceId: string): Promise<{ ok: boolean; code: number }>;
+  onSignal(instanceId: string, signal: PipelineSignal): Promise<ActionResult>;
+  approve(instanceId: string, answers?: unknown): Promise<ActionResult>;
+  revise(instanceId: string, note?: string): Promise<ActionResult>;
+  abort(instanceId: string): Promise<ActionResult>;
   reconcile(): Promise<void>;
 }
 
@@ -195,14 +202,14 @@ export function createEngine(deps: EngineDeps): Engine {
 
   async function approve(instanceId: string, answers?: unknown) {
     const inst = await readInstance(instanceId);
-    if (!inst) return { ok: false, code: 404 };
+    if (!inst) return { ok: false, code: 404, error: "instance not found" };
     const def = await loadDef(inst.pipelineId);
-    if (!def) return { ok: false, code: 404 };
+    if (!def) return { ok: false, code: 404, error: "pipeline not found" };
     let res;
     try {
       res = applyApprove(def, inst, answers, nowISO());
-    } catch {
-      return { ok: false, code: 409 };
+    } catch (e) {
+      return { ok: false, code: 409, error: e instanceof Error ? e.message : String(e) };
     }
     await writeInstance(res.instance);
     if (res.startPhase !== null) await startPhase(def, res.instance, res.startPhase);
@@ -212,14 +219,14 @@ export function createEngine(deps: EngineDeps): Engine {
 
   async function revise(instanceId: string, note?: string) {
     const inst = await readInstance(instanceId);
-    if (!inst) return { ok: false, code: 404 };
+    if (!inst) return { ok: false, code: 404, error: "instance not found" };
     const def = await loadDef(inst.pipelineId);
-    if (!def) return { ok: false, code: 404 };
+    if (!def) return { ok: false, code: 404, error: "pipeline not found" };
     let res;
     try {
       res = applyRevise(inst, nowISO());
-    } catch {
-      return { ok: false, code: 409 };
+    } catch (e) {
+      return { ok: false, code: 409, error: e instanceof Error ? e.message : String(e) };
     }
     await writeInstance(res.instance);
     const suffix = note ? `\n\nRevision note: ${note}` : "";
@@ -230,12 +237,12 @@ export function createEngine(deps: EngineDeps): Engine {
 
   async function abort(instanceId: string) {
     const inst = await readInstance(instanceId);
-    if (!inst) return { ok: false, code: 404 };
+    if (!inst) return { ok: false, code: 404, error: "instance not found" };
     let aborted: PipelineInstance;
     try {
       aborted = applyAbort(inst, nowISO());
-    } catch {
-      return { ok: false, code: 409 };
+    } catch (e) {
+      return { ok: false, code: 409, error: e instanceof Error ? e.message : String(e) };
     }
     for (const s of inst.phases[inst.currentPhaseIndex]?.steps ?? []) {
       if (!s.runId) continue;

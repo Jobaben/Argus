@@ -29,6 +29,7 @@ import {
   validatePipelineInput, PipelineValidationError,
 } from "./sources/pipelines.js";
 import { readInstance, readInstances } from "./sources/instances.js";
+import { buildOverview } from "./sources/overview.js";
 import { createEngine, defaultPipelineSpawn } from "./pipelineEngine.js";
 import type { PipelineSignal } from "./sources/pipelineTypes.js";
 import { defaultSpawn, fireRun, startScheduler } from "./scheduler.js";
@@ -208,6 +209,11 @@ app.get("/api/pipelines/:id/instances", async (c) =>
   c.json({ instances: await readInstances({ pipelineId: c.req.param("id") }) }),
 );
 
+app.get("/api/overview", async (c) => {
+  const [defs, insts] = await Promise.all([readPipelines(), readInstances()]);
+  return c.json({ overview: buildOverview(defs, insts) });
+});
+
 app.get("/api/instances/:id", async (c) => {
   const inst = await readInstance(c.req.param("id"));
   return inst ? c.json(inst) : c.json({ error: "not found" }, 404);
@@ -232,18 +238,18 @@ app.post("/api/instances/:id/signal", async (c) => {
 app.post("/api/instances/:id/approve", async (c) => {
   const answers = await c.req.json().then((b) => (b as { answers?: unknown }).answers).catch(() => undefined);
   const res = await engine.approve(c.req.param("id"), answers);
-  return c.json({ ok: res.ok }, res.code as 200 | 404 | 409);
+  return c.json(res.ok ? { ok: true } : { ok: false, error: res.error }, res.code as 200 | 404 | 409);
 });
 
 app.post("/api/instances/:id/revise", async (c) => {
   const note = await c.req.json().then((b) => (b as { note?: string }).note).catch(() => undefined);
   const res = await engine.revise(c.req.param("id"), note);
-  return c.json({ ok: res.ok }, res.code as 200 | 404 | 409);
+  return c.json(res.ok ? { ok: true } : { ok: false, error: res.error }, res.code as 200 | 404 | 409);
 });
 
 app.post("/api/instances/:id/abort", async (c) => {
   const res = await engine.abort(c.req.param("id"));
-  return c.json({ ok: res.ok }, res.code as 200 | 404);
+  return c.json(res.ok ? { ok: true } : { ok: false, error: res.error }, res.code as 200 | 404 | 409);
 });
 
 const server = serve({ fetch: app.fetch, port: PORT }, (info) => {

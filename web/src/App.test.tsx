@@ -16,7 +16,7 @@ beforeEach(() => {
   vi.stubGlobal(
     "fetch",
     vi.fn(() =>
-      Promise.resolve({ ok: true, json: () => Promise.resolve({ agents: [] }) }),
+      Promise.resolve({ ok: true, json: () => Promise.resolve({ agents: [], overview: [] }) }),
     ) as unknown as typeof fetch,
   );
   window.location.hash = "#/command";
