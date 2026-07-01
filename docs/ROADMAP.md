@@ -37,6 +37,14 @@ Fanned out in parallel; each is an isolated source + view + tab:
   completes or fails.
 
 ## Quality backlog
+- **`/api/overview` instance-storage index** — the overview route calls
+  `readInstances()` unfiltered, reading and JSON-parsing every retained instance
+  file (~`INSTANCE_KEEP`×N) on every 10s poll and WS push, though `buildOverview`
+  keeps only the newest per pipeline. Add a latest-instance index (or
+  timestamp-sortable instance filenames) so the route reads N files, not 50×N.
+  Negligible at current scale; deferred from the Command Center wiring review
+  (2026-06-30). Touches `sources/instances.ts` storage format + the engine's
+  write/prune paths, so it warrants its own task.
 - `deriveName` should consult `nameSource` to avoid raw-prompt titles.
 - Transcript parser hardening across all 20 observed message types.
 - Resolve the 2 npm criticals; drop leftover Vite demo assets.
