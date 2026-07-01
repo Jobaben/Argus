@@ -57,6 +57,28 @@ export function validatePipelineInput(raw: unknown): PipelineInput {
   return { name: r.name.trim(), phases, trigger, enabled, overlapPolicy };
 }
 
+export function validatePipelinePatch(raw: unknown): Partial<PipelineInput> {
+  if (!raw || typeof raw !== "object") throw new PipelineValidationError("body required");
+  const r = raw as Record<string, unknown>;
+  const patch: Partial<PipelineInput> = {};
+  if ("name" in r) {
+    if (typeof r.name !== "string" || !r.name.trim()) {
+      throw new PipelineValidationError("name must be a non-empty string");
+    }
+    patch.name = r.name.trim();
+  }
+  if ("phases" in r) {
+    if (!Array.isArray(r.phases) || r.phases.length === 0) {
+      throw new PipelineValidationError("pipeline needs at least one phase");
+    }
+    patch.phases = r.phases.map((p, i) => validatePhase(p, i));
+  }
+  if ("trigger" in r) patch.trigger = r.trigger == null ? null : validateTrigger(r.trigger);
+  if ("enabled" in r) patch.enabled = Boolean(r.enabled);
+  if ("overlapPolicy" in r) patch.overlapPolicy = r.overlapPolicy === "allow" ? "allow" : "skip";
+  return patch;
+}
+
 async function readRaw(): Promise<{ ok: boolean; list: PipelineDefinition[] }> {
   let text: string;
   try {

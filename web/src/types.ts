@@ -153,6 +153,14 @@ export interface PipelineDefinition {
   updatedAt: string;
 }
 
+export interface PipelineInput {
+  name: string;
+  phases: PhaseDef[];
+  trigger: Trigger | null;
+  enabled?: boolean;
+  overlapPolicy?: "skip" | "allow";
+}
+
 export interface PipelineInstance {
   id: string;
   pipelineId: string;

@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from "react";
 import { useSchedules } from "../useSchedules";
 import { useRuns } from "../useRuns";
 import type { Run, ScheduleInput, ScheduleWithNext, Trigger } from "../types";
-import { AlertStrip, EmptyState, StatusPill, parseRunLog, runStatusToDsStatus, Page } from "../ds";
+import { AlertStrip, EmptyState, StatusPill, parseRunLog, runStatusToDsStatus, Page, TriggerFields } from "../ds";
 import { CronPanel } from "./Cron";
 
 function when(iso: string | null): string {
@@ -76,61 +76,11 @@ function ScheduleForm({
         value={form.cwd}
         onChange={(e) => setForm({ ...form, cwd: e.target.value })}
       />
-      <div className="flex flex-wrap items-center gap-2">
-        <select
-          className={`${field} w-auto`}
-          value={form.trigger.kind}
-          onChange={(e) => {
-            const kind = e.target.value as Trigger["kind"];
-            setForm({
-              ...form,
-              trigger:
-                kind === "interval"
-                  ? { kind, everyMinutes: 60 }
-                  : kind === "daily"
-                    ? { kind, time: "02:00" }
-                    : { kind, time: "02:00", weekday: 1 },
-            });
-          }}
-        >
-          <option value="interval">Every N minutes</option>
-          <option value="daily">Daily at time</option>
-          <option value="weekly">Weekly on day</option>
-        </select>
-
-        {form.trigger.kind === "interval" && (
-          <input
-            type="number"
-            min={1}
-            className={`${field} w-28`}
-            value={form.trigger.everyMinutes ?? 60}
-            onChange={(e) =>
-              setForm({ ...form, trigger: { kind: "interval", everyMinutes: Number(e.target.value) } })
-            }
-          />
-        )}
-        {form.trigger.kind !== "interval" && (
-          <input
-            type="time"
-            className={`${field} w-32`}
-            value={form.trigger.time ?? "02:00"}
-            onChange={(e) => setForm({ ...form, trigger: { ...form.trigger, time: e.target.value } })}
-          />
-        )}
-        {form.trigger.kind === "weekly" && (
-          <select
-            className={`${field} w-auto`}
-            value={form.trigger.weekday ?? 1}
-            onChange={(e) =>
-              setForm({ ...form, trigger: { ...form.trigger, weekday: Number(e.target.value) } })
-            }
-          >
-            {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d, i) => (
-              <option key={d} value={i}>{d}</option>
-            ))}
-          </select>
-        )}
-      </div>
+      <TriggerFields
+        fieldClass={field}
+        value={form.trigger}
+        onChange={(t) => setForm({ ...form, trigger: t ?? { kind: "daily", time: "02:00" } })}
+      />
 
       <div className="flex items-center gap-2 pt-1">
         <button

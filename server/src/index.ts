@@ -25,7 +25,7 @@ import {
 } from "./sources/schedules.js";
 import { readRun, readRuns } from "./sources/runs.js";
 import {
-  createPipeline, deletePipeline, readPipelines, updatePipeline,
+  createPipeline, deletePipeline, readPipelines, updatePipeline, validatePipelinePatch,
   validatePipelineInput, PipelineValidationError,
 } from "./sources/pipelines.js";
 import { readInstance, readInstances } from "./sources/instances.js";
@@ -181,6 +181,19 @@ app.put("/api/pipelines/:id", async (c) => {
   try { body = await c.req.json(); } catch { return c.json({ error: "invalid JSON body" }, 400); }
   try {
     const updated = await updatePipeline(c.req.param("id"), validatePipelineInput(body), new Date());
+    if (!updated) return c.json({ error: "not found" }, 404);
+    return c.json(updated);
+  } catch (e) {
+    if (e instanceof PipelineValidationError) return c.json({ error: e.message }, 400);
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+  }
+});
+
+app.patch("/api/pipelines/:id", async (c) => {
+  let body: unknown;
+  try { body = await c.req.json(); } catch { return c.json({ error: "invalid JSON body" }, 400); }
+  try {
+    const updated = await updatePipeline(c.req.param("id"), validatePipelinePatch(body), new Date());
     if (!updated) return c.json({ error: "not found" }, 404);
     return c.json(updated);
   } catch (e) {

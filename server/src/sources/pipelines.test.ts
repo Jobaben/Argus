@@ -68,3 +68,38 @@ test("deletePipeline removes it", async () => {
   assert.equal((await m.readPipelines()).length, 0);
   assert.equal(await m.deletePipeline("p1"), false);
 });
+
+test("validatePipelinePatch applies only present fields", async () => {
+  const m = await fresh();
+  const patch = m.validatePipelinePatch({ enabled: false });
+  assert.deepEqual(patch, { enabled: false });
+  assert.ok(!("phases" in patch));
+});
+
+test("validatePipelinePatch accepts a null (manual) trigger", async () => {
+  const m = await fresh();
+  const patch = m.validatePipelinePatch({ trigger: null });
+  assert.equal(patch.trigger, null);
+});
+
+test("validatePipelinePatch rejects an empty phases array", async () => {
+  const m = await fresh();
+  assert.throws(() => m.validatePipelinePatch({ phases: [] }), /at least one phase/);
+});
+
+test("validatePipelinePatch rejects a blank name", async () => {
+  const m = await fresh();
+  assert.throws(() => m.validatePipelinePatch({ name: "  " }), /non-empty/);
+});
+
+test("updatePipeline via patch flips enabled without touching phases", async () => {
+  const m = await fresh();
+  await m.createPipeline(m.validatePipelineInput(goodInput()), new Date(2026, 5, 30, 9, 0), "p1");
+  const updated = await m.updatePipeline(
+    "p1",
+    m.validatePipelinePatch({ enabled: false }),
+    new Date(2026, 5, 30, 10, 0),
+  );
+  assert.equal(updated.enabled, false);
+  assert.equal(updated.phases.length, 2);
+});

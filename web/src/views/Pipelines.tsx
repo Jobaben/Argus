@@ -1,0 +1,163 @@
+import { useState } from "react";
+import { usePipelines } from "../usePipelines";
+import type { PipelineDefinition, PipelineInput, Trigger } from "../types";
+import { AlertStrip, EmptyState, Page } from "../ds";
+import { PipelineForm, EMPTY_PIPELINE } from "./PipelineForm";
+
+function triggerSummary(t: Trigger | null): string {
+  if (t === null) return "manual";
+  if (t.kind === "interval") return `every ${t.everyMinutes} min`;
+  if (t.kind === "daily") return `daily at ${t.time}`;
+  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  return `weekly ${days[t.weekday ?? 0]} at ${t.time}`;
+}
+
+function toInput(def: PipelineDefinition): PipelineInput {
+  return {
+    name: def.name,
+    phases: def.phases,
+    trigger: def.trigger,
+    enabled: def.enabled,
+    overlapPolicy: def.overlapPolicy,
+  };
+}
+
+function PipelineCard({
+  def,
+  onEdit,
+  setEnabled,
+  remove,
+  runNow,
+}: {
+  def: PipelineDefinition;
+  onEdit: () => void;
+  setEnabled: (id: string, enabled: boolean) => Promise<unknown>;
+  remove: (id: string) => Promise<unknown>;
+  runNow: (id: string) => Promise<unknown>;
+}) {
+  return (
+    <div className="rounded-xl border border-line bg-surface p-4">
+      <header className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="truncate text-base font-semibold text-ink">{def.name}</h3>
+          <p className="mt-0.5 text-xs text-ink-faint">
+            {triggerSummary(def.trigger)} · {def.phases.length} phase{def.phases.length === 1 ? "" : "s"}
+          </p>
+        </div>
+        {!def.enabled && <span className="shrink-0 text-xs text-ink-faint">disabled</span>}
+      </header>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <button type="button" onClick={() => void runNow(def.id)}
+          className="rounded-lg bg-ok/15 px-2.5 py-1 text-xs text-ok ring-1 ring-ok/30 hover:bg-ok/25">
+          Run now
+        </button>
+        <button type="button" onClick={() => void setEnabled(def.id, !def.enabled)}
+          className="rounded-lg border border-line px-2.5 py-1 text-xs text-ink-dim hover:text-ink">
+          {def.enabled ? "Disable" : "Enable"}
+        </button>
+        <button type="button" onClick={onEdit}
+          className="rounded-lg border border-line px-2.5 py-1 text-xs text-ink-dim hover:text-ink">
+          Edit
+        </button>
+        <button type="button"
+          onClick={() => {
+            if (confirm(`Delete pipeline "${def.name}"?`)) void remove(def.id);
+          }}
+          className="rounded-lg border border-fail/20 px-2.5 py-1 text-xs text-fail hover:bg-fail/10">
+          Delete
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export default function Pipelines() {
+  const { pipelines, loading, error, create, update, remove, setEnabled, runNow } = usePipelines();
+  const [mode, setMode] = useState<{ kind: "none" } | { kind: "new" } | { kind: "edit"; id: string }>(
+    { kind: "none" },
+  );
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const editing = mode.kind === "edit" ? pipelines.find((p) => p.id === mode.id) : undefined;
+
+  const guarded = (fn: (id: string) => Promise<unknown>) => async (id: string) => {
+    setActionError(null);
+    try {
+      await fn(id);
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  return (
+    <Page
+      title="Pipelines"
+      actions={
+        mode.kind === "none" ? (
+          <button type="button" onClick={() => setMode({ kind: "new" })}
+            className="rounded-lg bg-ok/20 px-3 py-1.5 text-sm text-ok ring-1 ring-ok/30 hover:bg-ok/30">
+            + New pipeline
+          </button>
+        ) : null
+      }
+    >
+      {error && (
+        <div className="mb-6">
+          <AlertStrip subject="Error" message={`Couldn't reach the Argus server: ${error}`} />
+        </div>
+      )}
+      {actionError && (
+        <div className="mb-6">
+          <AlertStrip subject="Couldn't complete that" message={actionError} />
+        </div>
+      )}
+
+      {mode.kind === "new" && (
+        <div className="mb-6">
+          <PipelineForm
+            initial={EMPTY_PIPELINE}
+            onCancel={() => setMode({ kind: "none" })}
+            onSubmit={async (input) => {
+              await create(input);
+              setMode({ kind: "none" });
+            }}
+          />
+        </div>
+      )}
+
+      {mode.kind === "edit" && editing && (
+        <div className="mb-6">
+          <PipelineForm
+            key={editing.id}
+            initial={toInput(editing)}
+            onCancel={() => setMode({ kind: "none" })}
+            onSubmit={async (input) => {
+              await update(editing.id, input);
+              setMode({ kind: "none" });
+            }}
+          />
+        </div>
+      )}
+
+      {loading ? (
+        <p className="text-ink-faint">Loading pipelines…</p>
+      ) : pipelines.length === 0 && mode.kind === "none" ? (
+        <EmptyState>No pipelines yet. Create one and it'll appear on the Command Center wall.</EmptyState>
+      ) : (
+        <div className="grid grid-cols-1 gap-4">
+          {pipelines.map((p) => (
+            <PipelineCard
+              key={p.id}
+              def={p}
+              onEdit={() => setMode({ kind: "edit", id: p.id })}
+              setEnabled={guarded((id) => setEnabled(id, !p.enabled))}
+              remove={guarded(remove)}
+              runNow={guarded(runNow)}
+            />
+          ))}
+        </div>
+      )}
+    </Page>
+  );
+}

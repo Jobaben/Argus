@@ -15,6 +15,7 @@ import Search from "./views/Search";
 import Schedules from "./views/Schedules";
 import AgentDetail from "./views/AgentDetail";
 import CommandCenter from "./views/CommandCenter";
+import Pipelines from "./views/Pipelines";
 
 function AgentsView({
   agents,
@@ -72,6 +73,7 @@ type TabRole = "destination" | "utility" | "overflow" | "drilldown";
 const TAB_META: { id: string; label: string; role: TabRole }[] = [
   { id: "command", label: "Command Center", role: "destination" },
   { id: "schedules", label: "Scheduler", role: "destination" },
+  { id: "pipelines", label: "Pipelines", role: "destination" },
   { id: "search", label: "Search", role: "utility" },
   { id: "stats", label: "Stats", role: "overflow" },
   { id: "inventory", label: "Inventory", role: "overflow" },
@@ -111,6 +113,8 @@ export default function App() {
     switch (active) {
       case "schedules":
         return <Schedules />;
+      case "pipelines":
+        return <Pipelines />;
       case "search":
         return <Search />;
       case "stats":
