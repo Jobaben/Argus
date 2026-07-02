@@ -1,6 +1,6 @@
 import type { DsStatus } from "./status";
 import type {
-  InstanceStatus, PhaseStatus, PhaseProgress, OverviewEntry,
+  InstanceStatus, PhaseStatus, PhaseProgress, OverviewEntry, PipelineInstance,
 } from "../types";
 
 export interface PhasePill {
@@ -28,6 +28,7 @@ export interface OverviewRow {
   phases: PhasePill[];
   instanceId: string | null;
   gate: OverviewGate | null;
+  failure: { step: string | null; reason: string | null } | null;
 }
 
 const PHASE_STATUS_TO_DS: Record<PhaseStatus, DsStatus> = {
@@ -64,6 +65,24 @@ function gateFor(latest: OverviewEntry["latest"]): OverviewGate | null {
   return null;
 }
 
+function extractReason(payload: unknown): string | null {
+  if (typeof payload === "string") return payload.trim() || null;
+  if (payload && typeof payload === "object" && "reason" in payload) {
+    const r = (payload as { reason: unknown }).reason;
+    return typeof r === "string" ? r.trim() || null : null;
+  }
+  return null;
+}
+
+function failureFor(latest: PipelineInstance): OverviewRow["failure"] {
+  if (latest.status !== "failed") return null;
+  const phase = latest.phases.find((p) => p.status === "failed");
+  if (!phase) return null;
+  const failed = phase.steps.filter((s) => s.status === "failed").map((s) => s.name);
+  const step = failed.length ? failed.join(", ") : phase.name;
+  return { step, reason: extractReason(phase.payload) };
+}
+
 export function toOverviewRow(entry: OverviewEntry): OverviewRow {
   const { definition, latest } = entry;
 
@@ -78,6 +97,7 @@ export function toOverviewRow(entry: OverviewEntry): OverviewRow {
       })),
       instanceId: null,
       gate: null,
+      failure: null,
     };
   }
 
@@ -96,5 +116,6 @@ export function toOverviewRow(entry: OverviewEntry): OverviewRow {
     phases,
     instanceId: latest.id,
     gate: gateFor(latest),
+    failure: failureFor(latest),
   };
 }

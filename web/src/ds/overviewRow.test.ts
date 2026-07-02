@@ -4,6 +4,23 @@ import type {
   OverviewEntry, PipelineDefinition, PipelineInstance, InstanceStatus, PhaseStatus,
 } from "../types";
 
+function failedInst(payload: unknown, stepStatuses: ("failed" | "succeeded")[]): PipelineInstance {
+  return {
+    id: "i1", pipelineId: "p1", pipelineName: "scheduler-prune", status: "failed",
+    currentPhaseIndex: 1,
+    phases: [
+      { id: "bs", name: "Brainstorm", gated: true, status: "succeeded", steps: [], attempt: 1, payload: null },
+      {
+        id: "impl", name: "Implement", gated: false, status: "failed",
+        steps: stepStatuses.map((s, i) => ({ name: `step-${i}`, runId: `r${i}`, status: s })),
+        attempt: 1, payload,
+      },
+    ],
+    trigger: "manual", signalToken: "tok",
+    createdAt: "2026-06-30T09:00:00.000Z", updatedAt: "2026-06-30T10:00:00.000Z", endedAt: "2026-06-30T10:00:00.000Z",
+  };
+}
+
 function def(over: Partial<PipelineDefinition> = {}): PipelineDefinition {
   return {
     id: "p1", name: "scheduler-prune",
@@ -75,5 +92,30 @@ describe("toOverviewRow", () => {
     expect(row.gate).toBeNull();
     expect(row.phases.map((p) => p.status)).toEqual(["idle", "idle"]);
     expect(row.phases.map((p) => p.name)).toEqual(["Brainstorm", "Implement"]);
+  });
+
+  it("surfaces the failed step name and an object payload reason", () => {
+    const row = toOverviewRow({ definition: def(), latest: failedInst({ reason: "exit code 1" }, ["failed"]) });
+    expect(row.failure).toEqual({ step: "step-0", reason: "exit code 1" });
+  });
+
+  it("accepts a bare string payload as the reason", () => {
+    const row = toOverviewRow({ definition: def(), latest: failedInst("tests failed: 3 red", ["failed"]) });
+    expect(row.failure).toEqual({ step: "step-0", reason: "tests failed: 3 red" });
+  });
+
+  it("joins multiple failed step names and tolerates a garbage payload", () => {
+    const row = toOverviewRow({ definition: def(), latest: failedInst({ nope: 1 }, ["failed", "failed"]) });
+    expect(row.failure).toEqual({ step: "step-0, step-1", reason: null });
+  });
+
+  it("falls back to the phase name when no step is marked failed", () => {
+    const row = toOverviewRow({ definition: def(), latest: failedInst(null, ["succeeded"]) });
+    expect(row.failure).toEqual({ step: "Implement", reason: null });
+  });
+
+  it("has no failure on a non-failed instance", () => {
+    const row = toOverviewRow({ definition: def(), latest: inst("running", ["succeeded", "running"]) });
+    expect(row.failure).toBeNull();
   });
 });

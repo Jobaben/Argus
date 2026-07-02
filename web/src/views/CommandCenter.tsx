@@ -112,6 +112,12 @@ function Row({
           <TimeAgo iso={row.updatedAt} />
         </span>
       </div>
+      {row.failure && (
+        <p className="mt-1.5 truncate font-mono text-[11px] text-fail">
+          <span className="font-bold">{row.failure.step ?? "Pipeline"} failed</span>
+          {row.failure.reason && <span className="text-ink-dim">: {row.failure.reason}</span>}
+        </p>
+      )}
       <div className="mt-2.5 grid grid-cols-[repeat(auto-fit,minmax(7rem,1fr))] items-start gap-3">
         {row.phases.map((pill) => (
           <PhaseCell key={pill.id} pill={pill} />

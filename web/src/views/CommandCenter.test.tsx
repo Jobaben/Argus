@@ -90,6 +90,31 @@ describe("CommandCenter", () => {
     expect(screen.queryByRole("button", { name: /approve/i })).toBeNull();
   });
 
+  it("shows the failed step and reason on a failed pipeline", () => {
+    mockOverview.overview = [{
+      definition: {
+        id: "auth-refactor", name: "auth-refactor",
+        phases: [{ id: "ph0", name: "Implement", cwd: "/", gated: false, steps: [{ name: "s", prompt: "x" }] }],
+        trigger: null, enabled: true, overlapPolicy: "skip",
+        lastStartedAt: null, createdAt: "2026-06-01T00:00:00.000Z", updatedAt: "2026-06-01T00:00:00.000Z",
+      },
+      latest: {
+        id: "auth-refactor-i1", pipelineId: "auth-refactor", pipelineName: "auth-refactor", status: "failed",
+        currentPhaseIndex: 0,
+        phases: [{
+          id: "ph0", name: "Implement", gated: false, status: "failed",
+          steps: [{ name: "dev", runId: "r0", status: "failed" as const }],
+          attempt: 1, payload: { reason: "exit code 1" },
+        }],
+        trigger: "manual", signalToken: "tok",
+        createdAt: "2026-06-30T09:00:00.000Z", updatedAt: "2026-06-30T10:00:00.000Z", endedAt: "2026-06-30T10:00:00.000Z",
+      },
+    }];
+    render(<CommandCenter />);
+    expect(screen.getByText(/dev failed/i)).toBeInTheDocument();
+    expect(screen.getByText(/exit code 1/i)).toBeInTheDocument();
+  });
+
   it("surfaces an action error and re-enables the gate", async () => {
     mockOverview.overview = [entry("auth-refactor", "awaiting-approval", ["succeeded", "awaiting-approval"])];
     approve.mockImplementationOnce(() => Promise.reject(new Error("instance is not awaiting approval")));

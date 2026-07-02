@@ -244,3 +244,23 @@ test("reconcile fails a phase whose run ended without signalling", async () => {
   const after = await instances.readInstance(inst!.id);
   assert.equal(after?.status, "failed");
 });
+
+test("reconcile records the run error as the failed phase reason", async () => {
+  const { engine, pipelines, instances } = await load();
+  const runs = await import(`./sources/runs.js?${Math.random()}`);
+  await seedPipeline(pipelines);
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const inst = await e.start("p1", "manual");
+  // Run ended non-zero (dead pid, real error) but never emitted a signal.
+  const runId = rec.calls[0].runId;
+  const got = await runs.readRun(runId);
+  await runs.writeRun({
+    ...got!.run, status: "failed", error: "exit code 1",
+    pid: 2_000_000_000, endedAt: new Date().toISOString(),
+  });
+  await e.reconcile();
+  const after = await instances.readInstance(inst!.id);
+  assert.equal(after?.status, "failed");
+  assert.equal((after?.phases[0].payload as { reason?: string })?.reason, "exit code 1");
+});

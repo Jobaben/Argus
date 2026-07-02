@@ -285,7 +285,7 @@ export function createEngine(deps: EngineDeps): Engine {
           if (!ended) continue;
           const { instance } = advance(def, inst, {
             instanceId: inst.id, phaseId: phase.id, runId: s.runId, type: "failed", token: inst.signalToken,
-            payload: { reason: "run ended without emitting a completion signal" },
+            payload: { reason: got?.run.error ?? "run ended without emitting a completion signal" },
           }, nowISO());
           await writeInstance(instance);
           deps.onChange?.();
