@@ -2,21 +2,7 @@ import type { Agent } from "../types";
 import { STATUS, toDsStatus, type DsStatus } from "./status";
 import { StatusPill } from "./StatusPill";
 import { TimeAgo } from "./TimeAgo";
-import { RAIL } from "./rail";
-
-const SKIN: Record<DsStatus, string> = {
-  working: "border-run/30 from-surface-2",
-  done: "border-line from-surface-2",
-  failed: "border-fail/40 from-fail/10",
-  queued: "border-line from-surface-2",
-  idle: "border-line from-surface-2",
-  await: "border-await/42 from-await/12",
-};
-
-const DETAIL: Partial<Record<DsStatus, string>> = {
-  failed: "text-[#ffc4ca]",
-  await: "text-[#dcc8ff]",
-};
+import { RAIL, TILE_SKIN, TILE_DETAIL } from "./rail";
 
 export function AgentTile({
   agent,
@@ -35,7 +21,7 @@ export function AgentTile({
 
   return (
     <div
-      className={`relative flex flex-col gap-2 overflow-hidden rounded-tile border bg-gradient-to-b to-surface px-3.5 py-3 pl-4 ${SKIN[ds]}`}
+      className={`relative flex flex-col gap-2 overflow-hidden rounded-tile border bg-gradient-to-b to-surface px-3.5 py-3 pl-4 ${TILE_SKIN[token]}`}
     >
       <span className={`absolute inset-y-0 left-0 w-[3px] ${RAIL[token]}`} />
 
@@ -48,7 +34,7 @@ export function AgentTile({
       </div>
 
       {agent.detail && (
-        <div className={`text-[12.5px] leading-snug ${DETAIL[ds] ?? "text-ink-dim"}`}>
+        <div className={`text-[12.5px] leading-snug ${TILE_DETAIL[token] ?? "text-ink-dim"}`}>
           {agent.detail}
         </div>
       )}

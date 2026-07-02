@@ -1,7 +1,10 @@
 import { useMemo, useState } from "react";
 import { useOverview } from "../useOverview";
-import { toOverviewRow, STATUS, RAIL, StatusPill, TimeAgo, EmptyState, Page } from "../ds";
-import type { OverviewRow, PhasePill } from "../ds";
+import {
+  toOverviewRow, STATUS, RAIL, TILE_SKIN, TILE_DETAIL,
+  StatusPill, TimeAgo, EmptyState, Page,
+} from "../ds";
+import type { OverviewRow, OverviewGate, PhasePill, StepPill } from "../ds";
 
 function Gate({
   instanceId,
@@ -77,20 +80,81 @@ function Gate({
   );
 }
 
-function PhaseCell({ pill }: { pill: PhasePill }) {
-  const token = STATUS[pill.status].token;
+function StepTile({ step, reason }: { step: StepPill; reason: string | null }) {
+  const token = STATUS[step.status].token;
   return (
-    <div className="flex min-w-0 flex-col gap-1">
-      <div className="flex items-center gap-1.5">
-        <span className={`h-2 w-2 shrink-0 rounded-full ${RAIL[token]}`} />
-        <span className="truncate font-mono text-[11px] uppercase tracking-[0.1em] text-ink-dim">
+    <article
+      className={`relative flex flex-col gap-1.5 overflow-hidden rounded-[11px] border bg-gradient-to-b to-surface py-2 pl-3.5 pr-2.5 ${TILE_SKIN[token]}`}
+    >
+      <span className={`absolute inset-y-0 left-0 w-[3px] ${RAIL[token]}`} />
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="truncate text-[13px] font-bold leading-tight">{step.name}</div>
+          <div className="mt-0.5 font-mono text-[9.5px] text-ink-faint">
+            {step.runId ? `job ${step.runId}` : "job ——"}
+          </div>
+        </div>
+        <StatusPill status={step.status} size="sm" />
+      </div>
+      {reason && (
+        <div className={`text-[11.5px] leading-snug ${TILE_DETAIL[token] ?? "text-ink-dim"}`}>
+          {reason}
+        </div>
+      )}
+      {step.status === "working" && (
+        <div className="relative h-1 overflow-hidden rounded-full bg-ink-faint/15">
+          <i className="absolute inset-y-0 w-2/5 animate-[sweep_1.6s_ease-in-out_infinite] rounded-full bg-gradient-to-r from-transparent via-run to-transparent" />
+        </div>
+      )}
+    </article>
+  );
+}
+
+function PhaseColumn({
+  pill,
+  index,
+  instanceId,
+  gate,
+  approve,
+  revise,
+}: {
+  pill: PhasePill;
+  index: number;
+  instanceId: string | null;
+  gate: OverviewGate | null;
+  approve: (id: string) => Promise<unknown>;
+  revise: (id: string, note?: string) => Promise<unknown>;
+}) {
+  return (
+    <section className="flex min-w-0 flex-1 flex-col gap-2">
+      <div className="flex items-center gap-1.5 px-0.5">
+        <span className="font-mono text-[9px] text-ink-faint">
+          {String(index + 1).padStart(2, "0")}
+        </span>
+        <span className="truncate font-mono text-[10px] font-bold uppercase tracking-[0.12em] text-ink-dim">
           {pill.name}
         </span>
+        <span className="ml-auto rounded-full border border-line px-1.5 font-mono text-[10px] text-ink-faint">
+          {pill.steps.length}
+        </span>
       </div>
-      {pill.activeStep && (
-        <span className="truncate pl-3.5 font-mono text-[10px] text-ink-faint">{pill.activeStep}</span>
+      <div className="h-[2px] rounded-full bg-line" />
+      {pill.steps.map((step, i) => (
+        <StepTile
+          key={`${step.name}-${i}`}
+          step={step}
+          reason={step.status === "failed" ? pill.reason : null}
+        />
+      ))}
+      {instanceId && gate?.phaseId === pill.id && (
+        <Gate
+          instanceId={instanceId}
+          canApprove={gate.canApprove}
+          approve={approve}
+          revise={revise}
+        />
       )}
-    </div>
+    </section>
   );
 }
 
@@ -104,33 +168,32 @@ function Row({
   revise: (id: string, note?: string) => Promise<unknown>;
 }) {
   return (
-    <article className="rounded-tile border border-line bg-gradient-to-b from-surface-2 to-surface px-4 py-3">
-      <div className="flex items-center gap-2">
-        <span className="truncate text-sm font-bold text-ink">{row.name}</span>
+    <article className="rounded-tile border border-line bg-gradient-to-b from-surface-2 to-surface px-4 py-3.5">
+      <div className="flex items-center gap-3">
+        <span className="truncate text-[15px] font-extrabold tracking-[0.02em] text-ink">
+          {row.name}
+        </span>
+        <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint">
+          {row.phases.length} phases
+        </span>
         <StatusPill status={row.badge} />
         <span className="ml-auto font-mono text-[10px]">
           <TimeAgo iso={row.updatedAt} />
         </span>
       </div>
-      {row.failure && (
-        <p className="mt-1.5 truncate font-mono text-[11px] text-fail">
-          <span className="font-bold">{row.failure.step ?? "Pipeline"} failed</span>
-          {row.failure.reason && <span className="text-ink-dim">: {row.failure.reason}</span>}
-        </p>
-      )}
-      <div className="mt-2.5 grid grid-cols-[repeat(auto-fit,minmax(7rem,1fr))] items-start gap-3">
-        {row.phases.map((pill) => (
-          <PhaseCell key={pill.id} pill={pill} />
+      <div className="mt-3.5 flex items-start gap-3">
+        {row.phases.map((pill, i) => (
+          <PhaseColumn
+            key={pill.id}
+            pill={pill}
+            index={i}
+            instanceId={row.instanceId}
+            gate={row.gate}
+            approve={approve}
+            revise={revise}
+          />
         ))}
       </div>
-      {row.instanceId && row.gate && (
-        <Gate
-          instanceId={row.instanceId}
-          canApprove={row.gate.canApprove}
-          approve={approve}
-          revise={revise}
-        />
-      )}
     </article>
   );
 }

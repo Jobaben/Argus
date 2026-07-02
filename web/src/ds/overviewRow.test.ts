@@ -69,6 +69,23 @@ describe("toOverviewRow", () => {
     expect(row.phases[0].activeStep).toBeNull();
   });
 
+  it("maps step progress to step pills", () => {
+    const row = toOverviewRow({ definition: def(), latest: inst("running", ["succeeded", "running"]) });
+    expect(row.phases[1].steps).toEqual([{ name: "red-green", runId: "r1", status: "working" }]);
+  });
+
+  it("tiles phases without step progress from the definition", () => {
+    const row = toOverviewRow({ definition: def(), latest: inst("running", ["succeeded", "running"]) });
+    // phase 0 reported no steps; fall back to the definition's step, done since the phase succeeded
+    expect(row.phases[0].steps).toEqual([{ name: "s", runId: null, status: "done" }]);
+  });
+
+  it("exposes the failure reason on the failed phase pill", () => {
+    const row = toOverviewRow({ definition: def(), latest: failedInst({ reason: "exit code 1" }, ["failed"]) });
+    expect(row.phases[1].reason).toBe("exit code 1");
+    expect(row.phases[0].reason).toBeNull();
+  });
+
   it("exposes an approve+revise gate on an awaiting-approval phase", () => {
     const row = toOverviewRow({ definition: def(), latest: inst("awaiting-approval", ["succeeded", "awaiting-approval"]) });
     expect(row.gate).toEqual({ phaseId: "impl", canApprove: true });

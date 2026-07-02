@@ -58,6 +58,17 @@ describe("CommandCenter", () => {
     expect(screen.getByText("auth-refactor")).toBeInTheDocument();
   });
 
+  it("renders a numbered column per phase with step tiles", () => {
+    mockOverview.overview = [entry("scheduler-prune", "running", ["succeeded", "running"])];
+    render(<CommandCenter />);
+    expect(screen.getByText("01")).toBeInTheDocument();
+    expect(screen.getByText("02")).toBeInTheDocument();
+    expect(screen.getByText("Phase0")).toBeInTheDocument();
+    expect(screen.getByText("Phase1")).toBeInTheDocument();
+    expect(screen.getByText("step-x")).toBeInTheDocument();
+    expect(screen.getByText("job r")).toBeInTheDocument();
+  });
+
   it("shows Approve/Revise only on an awaiting pipeline", () => {
     mockOverview.overview = [entry("scheduler-prune", "running", ["succeeded", "running"])];
     render(<CommandCenter />);
@@ -111,7 +122,9 @@ describe("CommandCenter", () => {
       },
     }];
     render(<CommandCenter />);
-    expect(screen.getByText(/dev failed/i)).toBeInTheDocument();
+    expect(screen.getByText("dev")).toBeInTheDocument();
+    // one "Failed" pill on the row badge, one on the failed step tile
+    expect(screen.getAllByText("Failed")).toHaveLength(2);
     expect(screen.getByText(/exit code 1/i)).toBeInTheDocument();
   });
 

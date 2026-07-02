@@ -1,13 +1,23 @@
 import type { DsStatus } from "./status";
 import type {
-  InstanceStatus, PhaseStatus, PhaseProgress, OverviewEntry, PipelineInstance,
+  InstanceStatus, PhaseStatus, StepStatus, PhaseProgress, PhaseDef,
+  OverviewEntry, PipelineInstance,
 } from "../types";
+
+export interface StepPill {
+  name: string;
+  runId: string | null;
+  status: DsStatus;
+}
 
 export interface PhasePill {
   id: string;
   name: string;
   status: DsStatus;
   activeStep: string | null;
+  steps: StepPill[];
+  /** Failure reason from the phase payload, when the phase failed. */
+  reason: string | null;
 }
 
 /**
@@ -38,6 +48,37 @@ const PHASE_STATUS_TO_DS: Record<PhaseStatus, DsStatus> = {
   succeeded: "done",
   failed: "failed",
 };
+
+const STEP_STATUS_TO_DS: Record<StepStatus, DsStatus> = {
+  pending: "queued",
+  running: "working",
+  succeeded: "done",
+  failed: "failed",
+};
+
+/** Upcoming phases report no step progress yet; tile them from the definition. */
+const FALLBACK_STEP_STATUS: Record<PhaseStatus, DsStatus> = {
+  pending: "queued",
+  running: "working",
+  "awaiting-approval": "done",
+  succeeded: "done",
+  failed: "failed",
+};
+
+function stepPills(phase: PhaseProgress, def: PhaseDef | undefined): StepPill[] {
+  if (phase.steps.length > 0) {
+    return phase.steps.map((s) => ({
+      name: s.name,
+      runId: s.runId,
+      status: STEP_STATUS_TO_DS[s.status],
+    }));
+  }
+  return (def?.steps ?? []).map((s) => ({
+    name: s.name,
+    runId: null,
+    status: FALLBACK_STEP_STATUS[phase.status],
+  }));
+}
 
 const INSTANCE_BADGE: Record<InstanceStatus, DsStatus> = {
   running: "working",
@@ -93,7 +134,12 @@ export function toOverviewRow(entry: OverviewEntry): OverviewRow {
       badge: "idle",
       updatedAt: null,
       phases: definition.phases.map((p) => ({
-        id: p.id, name: p.name, status: "idle", activeStep: null,
+        id: p.id,
+        name: p.name,
+        status: "idle",
+        activeStep: null,
+        steps: p.steps.map((s) => ({ name: s.name, runId: null, status: "idle" as const })),
+        reason: null,
       })),
       instanceId: null,
       gate: null,
@@ -106,6 +152,8 @@ export function toOverviewRow(entry: OverviewEntry): OverviewRow {
     name: p.name,
     status: PHASE_STATUS_TO_DS[p.status],
     activeStep: activeStepName(p),
+    steps: stepPills(p, definition.phases.find((d) => d.id === p.id)),
+    reason: p.status === "failed" ? extractReason(p.payload) : null,
   }));
 
   return {
