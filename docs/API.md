@@ -85,13 +85,23 @@ WS frame `{ "type": "pipelines:changed" }` is pushed on any pipeline mutation.
 The engine spawns each phase's `claude -p` run with `ARGUS_SIGNAL_URL`,
 `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`, `ARGUS_RUN_ID`, and `ARGUS_SIGNAL_TOKEN`.
 `hooks/argus-signal.mjs` reads these and POSTs a signal. Register it as a Stop
-hook to emit `completed`, and (optionally) as a `PreToolUse` hook on
-`AskUserQuestion` invoked as `argus-signal.mjs needs-input` to pause at a gate.
+hook (no arg) to report the run's outcome, and (optionally) as a `PreToolUse`
+hook on `AskUserQuestion` invoked as `argus-signal.mjs needs-input` to pause at
+a gate.
+
+The Stop hook does **not** assume success. When invoked with no arg it derives
+the signal type from the agent's final message: a line matching
+`ARGUS_OUTCOME: failed` (or `blocked`) emits `failed`; anything else emits
+`completed`. A run that stops cleanly but concluded it failed can therefore fail
+its phase instead of being rubber-stamped. Give each phase's prompt a matching
+instruction, e.g. *"End your final message with a line `ARGUS_OUTCOME:
+<succeeded|failed>`."* An explicit CLI arg (`needs-input` / `failed`) always
+overrides the message-derived type.
 
 > **Important:** a phase advances ONLY on an explicit signal. If a run exits
-> without its hook POSTing `completed`, the reconciler heals it as `failed`
+> without its hook POSTing anything, the reconciler heals it as `failed`
 > (process exit is not a success trigger). Register `argus-signal.mjs` as a Stop
-> hook so every completed run emits `completed`.
+> hook so every finished run emits `completed` or `failed`.
 
 Argus surfaces missing prerequisites (including this hook) via `GET /api/setup`;
 the web UI's setup banner installs the fixable ones with `POST /api/setup/apply`.
