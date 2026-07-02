@@ -4,6 +4,7 @@ import { sparklinePoints } from "./format";
 const STROKE = {
   ok: "#2fe6a4",
   eye: "#36e3e8",
+  run: "#ffb224",
   fail: "#ff5765",
 } as const;
 

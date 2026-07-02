@@ -46,4 +46,12 @@ describe("AgentTile", () => {
     expect(onApprove).toHaveBeenCalledOnce();
     expect(onRevise).toHaveBeenCalledOnce();
   });
+
+  it("tints the tile for failed status", () => {
+    const { container } = render(
+      <AgentTile agent={{ ...base, status: "failed", live: false }} />,
+    );
+    expect(container.firstElementChild?.className).toContain("border-fail/40");
+    expect(container.firstElementChild?.className).toContain("from-fail/10");
+  });
 });

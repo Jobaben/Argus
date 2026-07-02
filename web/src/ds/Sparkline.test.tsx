@@ -11,4 +11,14 @@ describe("Sparkline", () => {
     expect(screen.getByText("28")).toBeInTheDocument();
     expect(container.querySelector("polyline")).toBeInTheDocument();
   });
+
+  it("supports the run tone from the design system", () => {
+    const { container } = render(
+      <Sparkline label="Token cost" value="63.40" values={[1, 2]} tone="run" />,
+    );
+    expect(container.querySelector("polyline")).toHaveAttribute(
+      "stroke",
+      "#ffb224",
+    );
+  });
 });

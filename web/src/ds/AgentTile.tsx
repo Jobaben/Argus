@@ -4,6 +4,20 @@ import { StatusPill } from "./StatusPill";
 import { TimeAgo } from "./TimeAgo";
 import { RAIL } from "./rail";
 
+const SKIN: Record<DsStatus, string> = {
+  working: "border-run/30 from-surface-2",
+  done: "border-line from-surface-2",
+  failed: "border-fail/40 from-fail/10",
+  queued: "border-line from-surface-2",
+  idle: "border-line from-surface-2",
+  await: "border-await/42 from-await/12",
+};
+
+const DETAIL: Partial<Record<DsStatus, string>> = {
+  failed: "text-[#ffc4ca]",
+  await: "text-[#dcc8ff]",
+};
+
 export function AgentTile({
   agent,
   dsStatusOverride,
@@ -20,7 +34,9 @@ export function AgentTile({
   const folder = agent.cwd?.split(/[\\/]/).filter(Boolean).pop() ?? null;
 
   return (
-    <div className="relative flex flex-col gap-2 overflow-hidden rounded-tile border border-line bg-gradient-to-b from-surface-2 to-surface px-3.5 py-3 pl-4">
+    <div
+      className={`relative flex flex-col gap-2 overflow-hidden rounded-tile border bg-gradient-to-b to-surface px-3.5 py-3 pl-4 ${SKIN[ds]}`}
+    >
       <span className={`absolute inset-y-0 left-0 w-[3px] ${RAIL[token]}`} />
 
       <div className="flex items-start justify-between gap-2">
@@ -32,7 +48,9 @@ export function AgentTile({
       </div>
 
       {agent.detail && (
-        <div className="text-[12.5px] leading-snug text-ink-dim">{agent.detail}</div>
+        <div className={`text-[12.5px] leading-snug ${DETAIL[ds] ?? "text-ink-dim"}`}>
+          {agent.detail}
+        </div>
       )}
 
       {ds === "working" && (
