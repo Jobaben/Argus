@@ -16,6 +16,7 @@ import Schedules from "./views/Schedules";
 import AgentDetail from "./views/AgentDetail";
 import CommandCenter from "./views/CommandCenter";
 import Pipelines from "./views/Pipelines";
+import SetupBanner from "./views/SetupBanner";
 
 function AgentsView({
   agents,
@@ -153,6 +154,7 @@ export default function App() {
         activeId={active}
         live={agentsState.live}
       />
+      <SetupBanner />
       <main>{renderActive()}</main>
     </div>
   );

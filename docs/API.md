@@ -75,6 +75,8 @@ carry no payload by design (server stays the single source of truth).
 | `POST /api/instances/:id/approve` | advance past a gate (optional `{ answers }`) |
 | `POST /api/instances/:id/revise` | re-run the current phase (optional `{ note }`) |
 | `POST /api/instances/:id/abort` | abort the instance |
+| `GET /api/setup` | prerequisite status `{ ok, prereqs[] }` |
+| `POST /api/setup/apply` | install fixable prerequisites, then re-check → `{ ok, prereqs[] }` |
 
 WS frame `{ "type": "pipelines:changed" }` is pushed on any pipeline mutation.
 
@@ -90,6 +92,9 @@ hook to emit `completed`, and (optionally) as a `PreToolUse` hook on
 > without its hook POSTing `completed`, the reconciler heals it as `failed`
 > (process exit is not a success trigger). Register `argus-signal.mjs` as a Stop
 > hook so every completed run emits `completed`.
+
+Argus surfaces missing prerequisites (including this hook) via `GET /api/setup`;
+the web UI's setup banner installs the fixable ones with `POST /api/setup/apply`.
 
 | Env var | Meaning |
 | --- | --- |

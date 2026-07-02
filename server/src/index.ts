@@ -34,6 +34,7 @@ import { createEngine, defaultPipelineSpawn } from "./pipelineEngine.js";
 import type { PipelineSignal } from "./sources/pipelineTypes.js";
 import { defaultSpawn, fireRun, startScheduler } from "./scheduler.js";
 import { randomUUID } from "node:crypto";
+import { checkAll as checkPrereqs, applyAll as applyPrereqs } from "./setup/prereqs.js";
 
 const PORT = Number(process.env.ARGUS_PORT ?? 7777);
 
@@ -52,6 +53,10 @@ const app = new Hono();
 app.get("/api/health", (c) =>
   c.json({ ok: true, claudeHome: claudeHome(), service: "argus" }),
 );
+
+app.get("/api/setup", async (c) => c.json(await checkPrereqs()));
+
+app.post("/api/setup/apply", async (c) => c.json(await applyPrereqs()));
 
 app.get("/api/agents", async (c) => c.json({ agents: await readAgents() }));
 
@@ -268,6 +273,12 @@ app.post("/api/instances/:id/abort", async (c) => {
 const server = serve({ fetch: app.fetch, port: PORT }, (info) => {
   console.log(`[argus] server on http://localhost:${info.port}`);
   console.log(`[argus] watching ${claudeHome()}`);
+  void checkPrereqs().then((s) => {
+    if (!s.ok) {
+      const missing = s.prereqs.filter((p) => p.status !== "ok").map((p) => p.label).join(", ");
+      console.log(`[argus] setup incomplete — missing: ${missing}. Open the UI to apply fixes.`);
+    }
+  });
 });
 
 // Live updates: push a "changed" ping whenever watched state mutates.
