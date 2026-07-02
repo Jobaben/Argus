@@ -5,11 +5,21 @@ import { AlertStrip, TriggerFields } from "../ds";
 const FIELD =
   "w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink placeholder-ink-faint";
 
+// crypto.randomUUID is only defined in secure contexts (HTTPS or localhost).
+// When Argus is served over plain HTTP on a LAN address it is undefined, so
+// fall back to a non-cryptographic id — these ids are only used as local keys.
+function uid(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `p-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function newStep(): PhaseStep {
   return { name: "", prompt: "" };
 }
 function newPhase(): PhaseDef {
-  return { id: crypto.randomUUID(), name: "", cwd: "", gated: false, steps: [newStep()] };
+  return { id: uid(), name: "", cwd: "", gated: false, steps: [newStep()] };
 }
 
 // eslint-disable-next-line react-refresh/only-export-components -- shared blank-form constant, required alongside the component export

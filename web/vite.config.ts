@@ -16,6 +16,7 @@ const testConfig: InlineConfig = {
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
+    host: true,
     port: 5757,
     proxy: {
       '/api': { target: `http://localhost:${SERVER_PORT}`, changeOrigin: true },
