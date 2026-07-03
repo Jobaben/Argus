@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { buildClaudeArgs, OUTCOME_CONTRACT } from "./pipelineEngine.js";
 
 let home: string;
 beforeEach(() => {
@@ -263,4 +264,44 @@ test("reconcile records the run error as the failed phase reason", async () => {
   const after = await instances.readInstance(inst!.id);
   assert.equal(after?.status, "failed");
   assert.equal((after?.phases[0].payload as { reason?: string })?.reason, "exit code 1");
+});
+
+test("OUTCOME_CONTRACT carries the sentinel the Stop hook matches", () => {
+  // Stop hook regex: /ARGUS_OUTCOME:\s*(failed|blocked)/i
+  assert.match(OUTCOME_CONTRACT, /ARGUS_OUTCOME:/);
+  assert.match(OUTCOME_CONTRACT, /succeeded/);
+  assert.match(OUTCOME_CONTRACT, /failed/);
+  assert.match(OUTCOME_CONTRACT, /blocked/);
+});
+
+test("OUTCOME_CONTRACT interpolates no per-run data", () => {
+  // A template placeholder here would change the system-prompt prefix per run
+  // and destroy the prompt cache.
+  assert.doesNotMatch(OUTCOME_CONTRACT, /\{\{/);
+});
+
+test("buildClaudeArgs appends the contract to the system prompt", () => {
+  const run = { sessionId: "sess-123" } as Parameters<typeof buildClaudeArgs>[0];
+  const args = buildClaudeArgs(run);
+  const i = args.indexOf("--append-system-prompt");
+  assert.notEqual(i, -1, "expected --append-system-prompt in args");
+  assert.equal(args[i + 1], OUTCOME_CONTRACT);
+});
+
+test("buildClaudeArgs keeps -p, json output, and the session id", () => {
+  const run = { sessionId: "sess-abc" } as Parameters<typeof buildClaudeArgs>[0];
+  const args = buildClaudeArgs(run);
+  assert.ok(args.includes("-p"));
+  const oi = args.indexOf("--output-format");
+  assert.equal(args[oi + 1], "json");
+  const si = args.indexOf("--session-id");
+  assert.equal(args[si + 1], "sess-abc");
+});
+
+test("buildClaudeArgs falls back to a generated session id when absent", () => {
+  const run = { sessionId: null } as Parameters<typeof buildClaudeArgs>[0];
+  const args = buildClaudeArgs(run);
+  const si = args.indexOf("--session-id");
+  assert.equal(typeof args[si + 1], "string");
+  assert.ok((args[si + 1] as string).length > 0);
 });

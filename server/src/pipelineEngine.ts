@@ -36,12 +36,35 @@ export type PipelineSpawnFn = (
   env: Record<string, string>,
 ) => { pid: number | null; done: Promise<{ code: number | null }> };
 
+/**
+ * Injected into every step run's system prompt so the Stop hook can derive an
+ * outcome without the pipeline author writing the ARGUS_OUTCOME mechanic. Must
+ * stay a pure constant — no per-run data — or the prompt cache prefix breaks.
+ */
+export const OUTCOME_CONTRACT =
+  "When you finish, the final line of your last message must report the outcome " +
+  "so the pipeline can decide whether to advance. Write `ARGUS_OUTCOME: succeeded` " +
+  "if you fully met the task's stated criteria, or `ARGUS_OUTCOME: failed` " +
+  "(use `blocked` if you could not proceed) followed by a one-line reason. " +
+  "Judge success against the criteria in the task, not merely whether you stopped cleanly.";
+
+/** Build the `claude -p` argument vector for a step run, with the outcome
+ *  contract appended to the system prompt. Kept pure for unit testing. */
+export function buildClaudeArgs(run: Run): string[] {
+  return [
+    "-p",
+    "--output-format", "json",
+    "--session-id", run.sessionId ?? randomUUID(),
+    "--append-system-prompt", OUTCOME_CONTRACT,
+  ];
+}
+
 /** Real spawn: `claude -p`, prompt on stdin, with the signal env injected. */
 export const defaultPipelineSpawn: PipelineSpawnFn = (run, logPath, env) => {
   const out = createWriteStream(logPath, { flags: "a" });
   const child = nodeSpawn(
     "claude",
-    ["-p", "--output-format", "json", "--session-id", run.sessionId ?? randomUUID()],
+    buildClaudeArgs(run),
     { cwd: run.cwd, shell: process.platform === "win32", env: { ...process.env, ...env } },
   );
   child.stdin?.on("error", () => {});

@@ -93,10 +93,15 @@ The Stop hook does **not** assume success. When invoked with no arg it derives
 the signal type from the agent's final message: a line matching
 `ARGUS_OUTCOME: failed` (or `blocked`) emits `failed`; anything else emits
 `completed`. A run that stops cleanly but concluded it failed can therefore fail
-its phase instead of being rubber-stamped. Give each phase's prompt a matching
-instruction, e.g. *"End your final message with a line `ARGUS_OUTCOME:
-<succeeded|failed>`."* An explicit CLI arg (`needs-input` / `failed`) always
-overrides the message-derived type.
+its phase instead of being rubber-stamped.
+
+The engine supplies this reporting contract automatically: every step run is
+spawned with `claude --append-system-prompt`, injecting a constant instruction
+to end the final message with `ARGUS_OUTCOME: <succeeded|failed|blocked>`.
+Pipeline authors therefore do **not** write the `ARGUS_OUTCOME` mechanic into
+their prompts — they only state each step's acceptance criteria in prose, and
+the agent judges success against them. An explicit CLI arg (`needs-input` /
+`failed`) always overrides the message-derived type.
 
 > **Important:** a phase advances ONLY on an explicit signal. If a run exits
 > without its hook POSTing anything, the reconciler heals it as `failed`
