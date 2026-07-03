@@ -54,7 +54,10 @@ export const OUTCOME_CONTRACT =
   "so the pipeline can decide whether to advance. Write `ARGUS_OUTCOME: succeeded` " +
   "if you fully met the task's stated criteria, or `ARGUS_OUTCOME: failed` " +
   "(use `blocked` if you could not proceed) followed by a one-line reason. " +
-  "Judge success against the criteria in the task, not merely whether you stopped cleanly.";
+  "Judge success against the criteria in the task, not merely whether you stopped cleanly. " +
+  "This is a one-shot batch run: it will not be re-invoked when background tasks or " +
+  "subagents finish, so do not stop while any are still in flight. If you must stop " +
+  "with deferred work unfinished, report `ARGUS_OUTCOME: blocked`.";
 
 /** Build the `claude -p` argument vector for a step run, with the outcome
  *  contract appended to the system prompt. Kept pure for unit testing. */

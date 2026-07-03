@@ -274,7 +274,15 @@ export async function preflight(): Promise<{ ok: boolean; reasons: string[] }> {
     }
   }
   const results = await Promise.all(
-    REGISTRY.filter((p) => CRITICAL_IDS.has(p.id)).map((p) => p.check()),
+    REGISTRY.filter((p) => CRITICAL_IDS.has(p.id)).map((p) =>
+      // Defensive: a check() should never throw, but if a future one does,
+      // degrade to an error result so preflight stays never-throwing (clean
+      // 412 refusal) rather than escaping as a 500.
+      p.check().catch((e): PrereqResult => ({
+        id: p.id, label: p.label, fixable: p.fixable, status: "error",
+        detail: e instanceof Error ? e.message : String(e),
+      })),
+    ),
   );
   const bad = results.filter((r) => r.status !== "ok");
   return { ok: bad.length === 0, reasons: bad.map((r) => `${r.label}: ${r.detail ?? r.status}`) };

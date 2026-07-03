@@ -274,6 +274,10 @@ test("OUTCOME_CONTRACT carries the sentinel the Stop hook matches", () => {
   assert.match(OUTCOME_CONTRACT, /blocked/);
 });
 
+test("OUTCOME_CONTRACT tells a run with unfinished background work to report blocked", () => {
+  assert.match(OUTCOME_CONTRACT, /background/i);
+});
+
 test("OUTCOME_CONTRACT interpolates no per-run data", () => {
   // A template placeholder here would change the system-prompt prefix per run
   // and destroy the prompt cache.
