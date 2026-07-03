@@ -14,6 +14,14 @@ import { graceMsFor, previousFireTime } from "./sources/nextFire.js";
 import type { Run } from "./sources/scheduleTypes.js";
 import type { PipelineDefinition, PipelineInstance, PipelineSignal } from "./sources/pipelineTypes.js";
 
+/** Thrown by start() when the pre-run guard finds a critical prerequisite still broken. */
+export class PreflightError extends Error {
+  constructor(public readonly reasons: string[]) {
+    super(`setup preconditions not met: ${reasons.join("; ")}`);
+    this.name = "PreflightError";
+  }
+}
+
 /** Caps the number of concurrently spawned child processes. */
 export class Semaphore {
   private active = 0;
@@ -87,6 +95,8 @@ export interface EngineDeps {
   maxConcurrent: number;
   tickMs?: number;
   onChange?: () => void;
+  /** Optional pre-run guard. When it returns { ok: false }, start() throws PreflightError. */
+  preflight?: () => Promise<{ ok: boolean; reasons: string[] }>;
 }
 
 export interface ActionResult {
@@ -197,6 +207,10 @@ export function createEngine(deps: EngineDeps): Engine {
         (i) => i.status === "running" || i.status === "awaiting-approval",
       );
       if (busy) return null;
+    }
+    if (deps.preflight) {
+      const pf = await deps.preflight();
+      if (!pf.ok) throw new PreflightError(pf.reasons);
     }
     const { instance, startPhase: idx } = initInstance(
       def, trigger, { instanceId: deps.newId(), token: deps.newId() }, nowISO(),

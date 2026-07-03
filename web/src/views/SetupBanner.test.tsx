@@ -49,4 +49,15 @@ describe("SetupBanner", () => {
     expect(screen.getByText(/not found/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /apply fixes/i })).toBeNull();
   });
+
+  it("marks an outdated fixable prereq and offers Apply fixes", () => {
+    mockSetup.ok = false;
+    mockSetup.prereqs = [
+      { id: "signal-stop-hook", label: "Signal Stop hook", status: "outdated", fixable: true, detail: "differs from shipped version" },
+    ];
+    render(<SetupBanner />);
+    expect(screen.getByText("Signal Stop hook")).toBeInTheDocument();
+    expect(screen.getByText(/outdated/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /apply fixes/i })).toBeInTheDocument();
+  });
 });

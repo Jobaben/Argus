@@ -27,18 +27,18 @@ test("fresh home reports the signal Stop hook as missing", async () => {
   assert.equal(ok, false);
 });
 
-test("a Stop hook referencing argus-signal reads back as ok", async () => {
+test("a registered Stop hook with no installed file reads back as outdated", async () => {
   writeSettings({ hooks: { Stop: [{ matcher: "", hooks: [{ type: "command", command: 'node "x/hooks/argus-signal.mjs"' }] }] } });
   const m = await fresh();
   const { prereqs } = await m.checkAll();
-  assert.equal(find(prereqs, "signal-stop-hook").status, "ok");
+  assert.equal(find(prereqs, "signal-stop-hook").status, "outdated");
 });
 
-test("gate hook requires both AskUserQuestion matcher and needs-input", async () => {
+test("gate hook registered but with no installed file reads back as outdated", async () => {
   writeSettings({ hooks: { PreToolUse: [{ matcher: "AskUserQuestion", hooks: [{ type: "command", command: 'node "x/hooks/argus-signal.mjs" needs-input' }] }] } });
   const m = await fresh();
   const { prereqs } = await m.checkAll();
-  assert.equal(find(prereqs, "gate-pretooluse-hook").status, "ok");
+  assert.equal(find(prereqs, "gate-pretooluse-hook").status, "outdated");
 });
 
 test("malformed settings.json is treated as missing, never throws", async () => {
@@ -93,4 +93,70 @@ test("applyAll surfaces an apply failure as status error with detail", async () 
   assert.equal(stop.status, "error");
   assert.ok(stop.detail && stop.detail.length > 0, "error detail present");
   assert.equal(ok, false);
+});
+
+test("a stale installed hook reads as outdated and applyAll refreshes it to ok", async () => {
+  // Register both hooks and install a DIFFERENT hook file (simulates version drift).
+  writeSettings({
+    hooks: {
+      Stop: [{ matcher: "", hooks: [{ type: "command", command: 'node "x/hooks/argus-signal.mjs"' }] }],
+      PreToolUse: [{ matcher: "AskUserQuestion", hooks: [{ type: "command", command: 'node "x/hooks/argus-signal.mjs" needs-input' }] }],
+    },
+  });
+  mkdirSync(path.join(home, "hooks"), { recursive: true });
+  writeFileSync(path.join(home, "hooks", "argus-signal.mjs"), "// STALE VERSION\n", "utf8");
+  const m = await fresh();
+  let prereqs = (await m.checkAll()).prereqs;
+  assert.equal(find(prereqs, "signal-stop-hook").status, "outdated");
+  assert.equal(find(prereqs, "gate-pretooluse-hook").status, "outdated");
+
+  await m.applyAll();
+  prereqs = (await m.checkAll()).prereqs;
+  assert.equal(find(prereqs, "signal-stop-hook").status, "ok");
+  assert.equal(find(prereqs, "gate-pretooluse-hook").status, "ok");
+});
+
+test("argus-data-dir is missing on a fresh home and applyAll creates the dirs", async () => {
+  const m = await fresh();
+  assert.equal(find((await m.checkAll()).prereqs, "argus-data-dir").status, "missing");
+  await m.applyAll();
+  assert.ok(existsSync(path.join(home, "argus", "instances")), "instances dir created");
+  assert.ok(existsSync(path.join(home, "argus", "runs")), "runs dir created");
+  assert.equal(find((await m.checkAll()).prereqs, "argus-data-dir").status, "ok");
+});
+
+test("pipelines-parse is ok when absent, error when corrupt", async () => {
+  let m = await fresh();
+  assert.equal(find((await m.checkAll()).prereqs, "pipelines-parse").status, "ok"); // absent
+  mkdirSync(path.join(home, "argus"), { recursive: true });
+  writeFileSync(path.join(home, "argus", "pipelines.json"), "{ not json", "utf8");
+  m = await fresh();
+  const p = find((await m.checkAll()).prereqs, "pipelines-parse");
+  assert.equal(p.status, "error");
+  assert.ok(p.detail && p.detail.includes("pipelines.json"), "detail names the file");
+});
+
+test("settings-parse is error when settings.json is corrupt", async () => {
+  writeFileSync(path.join(home, "settings.json"), "{ not json", "utf8");
+  const m = await fresh();
+  assert.equal(find((await m.checkAll()).prereqs, "settings-parse").status, "error");
+});
+
+test("preflight repairs fixable criticals and returns ok when PATH tools resolve", async () => {
+  const m = await fresh();
+  const res = await m.preflight();
+  // node is always on PATH in the test runner; claude may or may not be.
+  // The fixable criticals (hooks, data dir) must be repaired regardless.
+  assert.ok(existsSync(path.join(home, "hooks", "argus-signal.mjs")), "hook file installed by preflight");
+  assert.ok(existsSync(path.join(home, "argus", "instances")), "data dir created by preflight");
+  assert.equal(find((await m.checkAll()).prereqs, "signal-stop-hook").status, "ok");
+  assert.ok(Array.isArray(res.reasons));
+});
+
+test("repairSafeFixables installs the hook file and dirs but never writes settings.json", async () => {
+  const m = await fresh();
+  await m.repairSafeFixables();
+  assert.ok(existsSync(path.join(home, "hooks", "argus-signal.mjs")), "hook file copied");
+  assert.ok(existsSync(path.join(home, "argus", "runs")), "runs dir created");
+  assert.equal(existsSync(path.join(home, "settings.json")), false, "settings.json NOT written");
 });

@@ -4,10 +4,14 @@ import type { PrereqResult } from "../useSetup";
 
 function Item({ p }: { p: PrereqResult }) {
   const ok = p.status === "ok";
+  const outdated = p.status === "outdated";
+  const mark = ok ? "✓" : outdated ? "⚠" : "✗";
+  const markClass = ok ? "text-ok" : outdated ? "text-run" : "text-fail";
   return (
     <li className="flex items-baseline gap-2 font-mono text-[11px]">
-      <span className={ok ? "text-ok" : "text-fail"}>{ok ? "✓" : "✗"}</span>
+      <span className={markClass}>{mark}</span>
       <span className="text-ink-dim">{p.label}</span>
+      {outdated && <span className="text-run">— outdated</span>}
       {!ok && p.detail && <span className="text-ink-faint">— {p.detail}</span>}
     </li>
   );
@@ -19,7 +23,7 @@ export default function SetupBanner() {
 
   if (ok) return null;
 
-  const hasFixable = prereqs.some((p) => p.status === "missing" && p.fixable);
+  const hasFixable = prereqs.some((p) => (p.status === "missing" || p.status === "outdated") && p.fixable);
 
   const onApply = () => {
     setBusy(true);

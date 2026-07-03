@@ -30,11 +30,14 @@ import {
 } from "./sources/pipelines.js";
 import { readInstance, readInstances } from "./sources/instances.js";
 import { buildOverview } from "./sources/overview.js";
-import { createEngine, defaultPipelineSpawn } from "./pipelineEngine.js";
+import { createEngine, defaultPipelineSpawn, PreflightError } from "./pipelineEngine.js";
 import type { PipelineSignal } from "./sources/pipelineTypes.js";
 import { defaultSpawn, fireRun, startScheduler } from "./scheduler.js";
 import { randomUUID } from "node:crypto";
-import { checkAll as checkPrereqs, applyAll as applyPrereqs } from "./setup/prereqs.js";
+import {
+  checkAll as checkPrereqs, applyAll as applyPrereqs,
+  preflight as preflightPrereqs, repairSafeFixables,
+} from "./setup/prereqs.js";
 
 const PORT = Number(process.env.ARGUS_PORT ?? 7777);
 
@@ -46,6 +49,7 @@ const engine = createEngine({
   maxConcurrent: Number(process.env.ARGUS_MAX_CONCURRENT_RUNS ?? 4),
   tickMs: Number(process.env.ARGUS_SCHED_TICK_MS ?? 30000),
   onChange: () => broadcast({ type: "pipelines:changed" }),
+  preflight: () => preflightPrereqs(),
 });
 
 const app = new Hono();
@@ -219,6 +223,7 @@ app.post("/api/pipelines/:id/start", async (c) => {
     if (!inst) return c.json({ error: "an instance is already running (overlap=skip)" }, 409);
     return c.json(inst, 202);
   } catch (e) {
+    if (e instanceof PreflightError) return c.json({ error: e.message, reasons: e.reasons }, 412);
     return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
   }
 });
@@ -273,12 +278,14 @@ app.post("/api/instances/:id/abort", async (c) => {
 const server = serve({ fetch: app.fetch, port: PORT }, (info) => {
   console.log(`[argus] server on http://localhost:${info.port}`);
   console.log(`[argus] watching ${claudeHome()}`);
-  void checkPrereqs().then((s) => {
-    if (!s.ok) {
-      const missing = s.prereqs.filter((p) => p.status !== "ok").map((p) => p.label).join(", ");
-      console.log(`[argus] setup incomplete — missing: ${missing}. Open the UI to apply fixes.`);
-    }
-  });
+  void repairSafeFixables()
+    .then(checkPrereqs)
+    .then((s) => {
+      if (!s.ok) {
+        const bad = s.prereqs.filter((p) => p.status !== "ok").map((p) => `${p.label} (${p.status})`).join(", ");
+        console.log(`[argus] setup incomplete — ${bad}. Open the UI to apply fixes.`);
+      }
+    });
 });
 
 // Live updates: push a "changed" ping whenever watched state mutates.

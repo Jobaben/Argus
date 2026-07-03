@@ -305,3 +305,28 @@ test("buildClaudeArgs falls back to a generated session id when absent", () => {
   assert.equal(typeof args[si + 1], "string");
   assert.ok((args[si + 1] as string).length > 0);
 });
+
+test("start() refuses when preflight fails and spawns nothing", async () => {
+  const { engine, pipelines } = await load();
+  await seedPipeline(pipelines);
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({
+    spawn: rec.spawn,
+    preflight: async () => ({ ok: false, reasons: ["Signal Stop hook: outdated"] }),
+  }));
+  await assert.rejects(() => e.start("p1"), (err: Error) => err.name === "PreflightError");
+  assert.equal(rec.calls.length, 0);
+});
+
+test("start() proceeds when preflight passes", async () => {
+  const { engine, pipelines } = await load();
+  await seedPipeline(pipelines);
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({
+    spawn: rec.spawn,
+    preflight: async () => ({ ok: true, reasons: [] }),
+  }));
+  const inst = await e.start("p1");
+  assert.ok(inst);
+  assert.equal(rec.calls.length, 1);
+});

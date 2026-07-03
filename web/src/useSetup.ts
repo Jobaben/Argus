@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 export interface PrereqResult {
   id: string;
   label: string;
-  status: "ok" | "missing" | "error";
+  status: "ok" | "missing" | "outdated" | "error";
   fixable: boolean;
   detail?: string;
 }
