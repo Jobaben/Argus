@@ -135,4 +135,9 @@ describe("toOverviewRow", () => {
     const row = toOverviewRow({ definition: def(), latest: inst("running", ["succeeded", "running"]) });
     expect(row.failure).toBeNull();
   });
+
+  it("maps an aborted instance to the distinct stopped badge", () => {
+    const row = toOverviewRow({ definition: def(), latest: inst("aborted", ["succeeded", "succeeded"]) });
+    expect(row.badge).toBe("stopped");
+  });
 });

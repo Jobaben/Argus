@@ -30,7 +30,7 @@ export function useOverview() {
   // "pipelines:changed", and the WS handler below (or the 10s poll fallback)
   // drives the single refresh — so we deliberately do NOT refetch here.
   const act = useCallback(
-    async (instanceId: string, action: "approve" | "revise", body?: unknown) => {
+    async (instanceId: string, action: "approve" | "revise" | "abort", body?: unknown) => {
       const res = await fetch(`/api/instances/${instanceId}/${action}`, {
         method: "POST",
         headers: body ? { "content-type": "application/json" } : undefined,
@@ -50,6 +50,7 @@ export function useOverview() {
     (instanceId: string, note?: string) => act(instanceId, "revise", note ? { note } : undefined),
     [act],
   );
+  const abort = useCallback((instanceId: string) => act(instanceId, "abort"), [act]);
 
   useEffect(() => {
     mounted.current = true;
@@ -90,5 +91,5 @@ export function useOverview() {
     };
   }, [refresh]);
 
-  return { ...state, refresh, approve, revise };
+  return { ...state, refresh, approve, revise, abort };
 }

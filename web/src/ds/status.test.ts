@@ -23,6 +23,12 @@ describe("STATUS record", () => {
   it('labels "await" as "Needs approval"', () => {
     expect(STATUS.await.label).toBe("Needs approval");
   });
+
+  it("adds a label-distinct Stopped status on the idle color token", () => {
+    expect(STATUS.stopped.token).toBe("idle");
+    expect(STATUS.stopped.label).toBe("Stopped");
+    expect(STATUS.stopped.glow).toBe(false);
+  });
 });
 
 describe("toDsStatus", () => {

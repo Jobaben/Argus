@@ -85,7 +85,7 @@ const INSTANCE_BADGE: Record<InstanceStatus, DsStatus> = {
   "awaiting-approval": "await",
   failed: "failed",
   succeeded: "done",
-  aborted: "idle",
+  aborted: "stopped",
 };
 
 function activeStepName(phase: PhaseProgress): string | null {

@@ -6,7 +6,8 @@ export type DsStatus =
   | "failed"
   | "queued"
   | "idle"
-  | "await";
+  | "await"
+  | "stopped";
 
 export type ColorToken = "run" | "ok" | "fail" | "queue" | "idle" | "await";
 
@@ -26,6 +27,7 @@ export const STATUS: Record<DsStatus, StatusToken> = {
   queued: { token: "queue", label: "Queued", glow: false },
   idle: { token: "idle", label: "Idle", glow: false },
   await: { token: "await", label: "Needs approval", glow: true },
+  stopped: { token: "idle", label: "Stopped", glow: false },
 };
 
 export function toDsStatus(s: AgentStatus): DsStatus {

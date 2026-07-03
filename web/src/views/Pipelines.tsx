@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { usePipelines } from "../usePipelines";
+import { useOverview } from "../useOverview";
 import type { PipelineDefinition, PipelineInput, Trigger } from "../types";
-import { AlertStrip, EmptyState, Page } from "../ds";
+import { AlertStrip, EmptyState, Page, StatusPill, toOverviewRow, type DsStatus } from "../ds";
 import { PipelineForm, EMPTY_PIPELINE } from "./PipelineForm";
 
 function triggerSummary(t: Trigger | null): string {
@@ -24,17 +25,22 @@ function toInput(def: PipelineDefinition): PipelineInput {
 
 function PipelineCard({
   def,
+  live,
   onEdit,
   setEnabled,
   remove,
   runNow,
+  abort,
 }: {
   def: PipelineDefinition;
+  live: { badge: DsStatus; instanceId: string | null };
   onEdit: () => void;
   setEnabled: (id: string, enabled: boolean) => Promise<unknown>;
   remove: (id: string) => Promise<unknown>;
   runNow: (id: string) => Promise<unknown>;
+  abort: (id: string) => Promise<unknown>;
 }) {
+  const abortable = (live.badge === "working" || live.badge === "await") && live.instanceId !== null;
   return (
     <div className="rounded-xl border border-line bg-surface p-4">
       <header className="flex items-start justify-between gap-3">
@@ -44,14 +50,29 @@ function PipelineCard({
             {triggerSummary(def.trigger)} · {def.phases.length} phase{def.phases.length === 1 ? "" : "s"}
           </p>
         </div>
-        {!def.enabled && <span className="shrink-0 text-xs text-ink-faint">disabled</span>}
+        <div className="flex shrink-0 items-center gap-2">
+          {!def.enabled && <span className="text-xs text-ink-faint">disabled</span>}
+          <StatusPill status={live.badge} size="sm" />
+        </div>
       </header>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <button type="button" onClick={() => void runNow(def.id)}
-          className="rounded-lg bg-ok/15 px-2.5 py-1 text-xs text-ok ring-1 ring-ok/30 hover:bg-ok/25">
-          Run now
-        </button>
+        {abortable ? (
+          <button type="button"
+            onClick={() => {
+              if (confirm(`Stop running pipeline "${def.name}"? In-progress work will be discarded.`)) {
+                void abort(live.instanceId!);
+              }
+            }}
+            className="rounded-lg bg-fail/15 px-2.5 py-1 text-xs text-fail ring-1 ring-fail/30 hover:bg-fail/25">
+            Stop
+          </button>
+        ) : (
+          <button type="button" onClick={() => void runNow(def.id)}
+            className="rounded-lg bg-ok/15 px-2.5 py-1 text-xs text-ok ring-1 ring-ok/30 hover:bg-ok/25">
+            Run now
+          </button>
+        )}
         <button type="button" onClick={() => void setEnabled(def.id, !def.enabled)}
           className="rounded-lg border border-line px-2.5 py-1 text-xs text-ink-dim hover:text-ink">
           {def.enabled ? "Disable" : "Enable"}
@@ -74,6 +95,15 @@ function PipelineCard({
 
 export default function Pipelines() {
   const { pipelines, loading, error, create, update, remove, setEnabled, runNow } = usePipelines();
+  const { overview, abort } = useOverview();
+  const liveByPipeline = useMemo(() => {
+    const m = new Map<string, { badge: DsStatus; instanceId: string | null }>();
+    for (const entry of overview) {
+      const row = toOverviewRow(entry);
+      m.set(entry.definition.id, { badge: row.badge, instanceId: row.instanceId });
+    }
+    return m;
+  }, [overview]);
   const [mode, setMode] = useState<{ kind: "none" } | { kind: "new" } | { kind: "edit"; id: string }>(
     { kind: "none" },
   );
@@ -150,10 +180,12 @@ export default function Pipelines() {
             <PipelineCard
               key={p.id}
               def={p}
+              live={liveByPipeline.get(p.id) ?? { badge: "idle", instanceId: null }}
               onEdit={() => setMode({ kind: "edit", id: p.id })}
               setEnabled={guarded((id) => setEnabled(id, !p.enabled))}
               remove={guarded(remove)}
               runNow={guarded(runNow)}
+              abort={guarded(abort)}
             />
           ))}
         </div>
