@@ -39,9 +39,27 @@ Background jobs joined with daemon liveness, newest/live first.
 ```
 
 ### `WS /ws`
-On connect: `{ "type": "hello" }`. On any watched change (debounced ~150ms):
-`{ "type": "agents:changed" }`. Client re-fetches the relevant list — frames
-carry no payload by design (server stays the single source of truth).
+On connect: `{ "type": "hello" }`. On any watched change (debounced ~150ms) the
+server pushes one of `{ "type": "agents:changed" }`, `{ "type":
+"schedules:changed" }`, or `{ "type": "pipelines:changed" }`. The client
+re-fetches the relevant list — frames carry no payload by design (the server
+stays the single source of truth). The upgrade is subject to the same
+host/origin/token checks as the REST surface.
+
+## Security
+
+All `/api/*` routes and the `/ws` upgrade are gated:
+
+- The `Host` header must be loopback (or in `ARGUS_ALLOWED_HOSTS`) — else `403`.
+- Mutating verbs (POST/PUT/PATCH/DELETE) require a same-origin/allowlisted
+  `Origin` — else `403`.
+- When `ARGUS_TOKEN` is set, every request must send it as
+  `Authorization: Bearer <token>` or `X-Argus-Token: <token>` — else `401`.
+
+### `GET /api/health`
+```json
+{ "ok": true, "version": "0.2.0", "claudeHome": "/home/you/.claude", "service": "argus" }
+```
 
 ## Read coverage (v0.2)
 
@@ -57,8 +75,20 @@ carry no payload by design (server stays the single source of truth).
 | `GET /api/search?q=` | substring matches across transcripts |
 | `GET /api/cron` | `{ available: false, reason, howTo }` — see ARCHITECTURE §6 |
 
-> v0.2 endpoint shapes are authored by the buildout fan-out; consult each
-> `server/src/sources/*.ts` for the exact DTO until this table is finalized.
+For exact DTO shapes see the corresponding `server/src/sources/*.ts` reader.
+
+## Scheduler
+
+| Method + path | Effect |
+| --- | --- |
+| `GET /api/schedules` | list schedules, each with a computed `nextRun` |
+| `POST /api/schedules` | create a schedule (validated) → `201` |
+| `PUT /api/schedules/:id` | patch a schedule → `200`, `404` if unknown |
+| `DELETE /api/schedules/:id` | delete a schedule |
+| `POST /api/schedules/:id/run` | fire now → `202`, or `409` when `overlap=skip` and a run is live |
+| `GET /api/runs?scheduleId=&limit=` | run history (newest first) |
+| `GET /api/runs/:id` | one run plus the tail of its log |
+| `POST /api/runs/:id/cancel` | kill a running run → `200`, `409` if not running, `404` if unknown |
 
 ## Pipelines (v0.3)
 

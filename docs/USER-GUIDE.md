@@ -1,11 +1,22 @@
 # 👁️ Argus — User Guide
 
-**What Argus is:** a read-only dashboard over your local `~/.claude` folder. It
-watches the files Claude Code already writes (background jobs, transcripts,
-history, stats) and turns them into a live web view. It **never writes** to
-`~/.claude`, so it's safe to run alongside live sessions — and it means *every
-tab is for observing, not controlling*. There are no kill/stop/edit buttons
-anywhere; the only "actions" are navigating, filtering, expanding, and searching.
+**What Argus is:** a dashboard and control plane over your local `~/.claude`
+folder. It watches the files Claude Code already writes (background jobs,
+transcripts, history, stats) and turns them into a live web view.
+
+Argus **never modifies the state Claude Code owns** — it treats jobs,
+transcripts, history and daemon files as strictly read-only. It *does* own and
+write its own state under `~/.claude/argus/` (schedules, pipelines, run
+records) and, when you apply setup fixes, its signal hooks under
+`~/.claude/hooks/` and a hook entry in `settings.json`. So the monitoring tabs
+(Agents, Sessions, Activity, Projects, Stats, Search) are observe-only, while
+the Scheduler and Pipelines tabs let you create, run, revise, and cancel work.
+
+**Security note:** because Argus can launch `claude -p` agents with your
+credentials, the server binds to loopback (`127.0.0.1`) only and rejects
+cross-origin and unknown-Host requests. If you deliberately expose it on
+another interface (`ARGUS_HOST`), set `ARGUS_TOKEN` so the surface is
+authenticated.
 
 ## Global UI (applies to every tab)
 

@@ -34,7 +34,8 @@ export type RunStatus =
   | "succeeded"
   | "failed"
   | "skipped"
-  | "interrupted";
+  | "interrupted"
+  | "cancelled";
 
 export interface Run {
   id: string;

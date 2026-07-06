@@ -23,7 +23,7 @@ import {
   ScheduleValidationError,
   readSchedules,
 } from "./sources/schedules.js";
-import { readRun, readRuns, killRunProcess } from "./sources/runs.js";
+import { readRun, readRuns, killRunProcess, cancelRun } from "./sources/runs.js";
 import {
   createPipeline, deletePipeline, readPipelines, updatePipeline, validatePipelinePatch,
   validatePipelineInput, PipelineValidationError,
@@ -41,6 +41,7 @@ import {
 import { loadConfig } from "./config.js";
 import { securityMiddleware, isUpgradeAllowed } from "./security.js";
 import { VERSION } from "./version.js";
+import { mountWebApp } from "./static.js";
 
 const config = loadConfig();
 const PORT = config.port;
@@ -149,6 +150,15 @@ app.post("/api/schedules/:id/run", async (c) => {
     const all = await readSchedules();
     const schedule = all.find((s) => s.id === c.req.param("id"));
     if (!schedule) return c.json({ error: "not found" }, 404);
+    // Honour overlapPolicy=skip for manual runs too: the scheduler tick refuses
+    // to start a run while a prior one is live, and Run-now must not be a
+    // backdoor around that (it was, previously).
+    if (schedule.overlapPolicy === "skip") {
+      const live = (await readRuns({ scheduleId: schedule.id })).some(
+        (r) => r.status === "running" && isAlive(r.pid),
+      );
+      if (live) return c.json({ error: "a run is already in progress (overlap=skip)" }, 409);
+    }
     const run = await fireRun(schedule, "manual", {
       now: () => new Date(),
       spawn: defaultSpawn,
@@ -176,6 +186,14 @@ app.get("/api/runs", async (c) => {
 app.get("/api/runs/:id", async (c) => {
   const got = await readRun(c.req.param("id"));
   return got ? c.json(got) : c.json({ error: "not found" }, 404);
+});
+
+app.post("/api/runs/:id/cancel", async (c) => {
+  const outcome = await cancelRun(c.req.param("id"), new Date());
+  if (outcome === "not-found") return c.json({ error: "not found" }, 404);
+  if (outcome === "not-running") return c.json({ error: "run is not running" }, 409);
+  broadcast({ type: "schedules:changed" });
+  return c.json({ ok: true });
 });
 
 app.get("/api/pipelines", async (c) => c.json({ pipelines: await readPipelines() }));
@@ -283,6 +301,11 @@ app.post("/api/instances/:id/abort", async (c) => {
   return c.json(res.ok ? { ok: true } : { ok: false, error: res.error }, res.code as 200 | 404 | 409);
 });
 
+// Serve the built SPA on the same origin (single-port packaging). No-op in dev,
+// where Vite serves the UI and proxies /api here. Registered after the API
+// routes so it never shadows them.
+const webDir = mountWebApp(app);
+
 // Catch-all error boundary so a thrown handler returns 500 JSON instead of a
 // bare socket hangup, and every failure is logged with its route.
 app.onError((err, c) => {
@@ -293,6 +316,7 @@ app.notFound((c) => c.json({ error: "not found" }, 404));
 
 const server = serve({ fetch: app.fetch, port: PORT, hostname: config.host }, (info) => {
   console.log(`[argus] v${VERSION} on http://${config.host}:${info.port}`);
+  console.log(webDir ? `[argus] serving web UI from ${webDir}` : "[argus] API only (run the web dev server for the UI)");
   console.log(`[argus] watching ${claudeHome()}`);
   if (config.host !== "127.0.0.1" && config.host !== "localhost" && !config.token) {
     console.warn(

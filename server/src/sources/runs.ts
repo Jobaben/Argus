@@ -83,8 +83,7 @@ export async function readRun(
   return { run, log };
 }
 
-/** SIGTERM every run currently recorded as 'running' with a live pid. Returns
- *  the pids signalled. Used on shutdown and by the cancel-run endpoint. */
+/** SIGTERM a run's process if it's alive. Returns whether a signal was sent. */
 export async function killRunProcess(pid: number | null): Promise<boolean> {
   if (!pid) return false;
   try {
@@ -93,6 +92,28 @@ export async function killRunProcess(pid: number | null): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** Cancel a scheduler run: kill its live process and mark it cancelled.
+ *  Returns 'not-found' if the run is unknown, 'not-running' if already
+ *  terminal, or 'cancelled' on success. */
+export async function cancelRun(
+  id: string,
+  now: Date,
+): Promise<"not-found" | "not-running" | "cancelled"> {
+  const got = await readRun(id);
+  if (!got) return "not-found";
+  if (got.run.status !== "running") return "not-running";
+  await killRunProcess(got.run.pid);
+  const ended = now.toISOString();
+  await writeRun({
+    ...got.run,
+    status: "cancelled",
+    endedAt: ended,
+    durationMs: got.run.startedAt ? now.getTime() - new Date(got.run.startedAt).getTime() : null,
+    error: "cancelled by user",
+  });
+  return "cancelled";
 }
 
 export async function pruneRuns(scheduleId: string, keep: number): Promise<void> {

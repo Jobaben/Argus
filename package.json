@@ -1,11 +1,11 @@
 {
   "name": "argus",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Argus — the all-seeing monitor for your Claude Code agents, jobs, history and results.",
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "workspaces": [
     "server",
@@ -15,14 +15,17 @@
     "dev": "concurrently -n server,web -c blue,magenta \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "npm -w server run dev",
     "dev:web": "npm -w web run dev",
-    "build": "npm -w web run build",
+    "build": "npm -w web run build && npm -w server run build",
     "start": "npm -w server run start",
     "test": "npm -w server run test && npm -w web run test",
     "typecheck": "npm -w server run typecheck && npm -w web run typecheck",
-    "lint": "npm -w web run lint",
+    "lint": "npm -w server run lint && npm -w web run lint",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "check": "npm run typecheck && npm run lint && npm run test"
   },
   "devDependencies": {
-    "concurrently": "^9.1.0"
+    "concurrently": "^9.1.0",
+    "prettier": "^3.4.2"
   }
 }
