@@ -10,6 +10,12 @@ function triggerSummary(t: Trigger | null): string {
   if (t.kind === "interval") return `every ${t.everyMinutes} min`;
   if (t.kind === "daily") return `daily at ${t.time}`;
   const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  if (t.kind === "windowed") {
+    const dayStr = t.weekdays && t.weekdays.length
+      ? ` (${t.weekdays.map((d) => days[d]).join(", ")})`
+      : "";
+    return `every ${t.everyMinutes} min, ${t.startTime}–${t.endTime}${dayStr}`;
+  }
   return `weekly ${days[t.weekday ?? 0]} at ${t.time}`;
 }
 

@@ -157,6 +157,7 @@ export function PipelineForm({
         <TriggerFields
           fieldClass={FIELD}
           allowManual
+          allowWindowed
           value={form.trigger}
           onChange={(t) => setForm({ ...form, trigger: t })}
         />

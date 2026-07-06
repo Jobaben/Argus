@@ -33,13 +33,16 @@ export interface TimelineEntry {
   text?: string;
 }
 
-export type TriggerKind = "interval" | "daily" | "weekly";
+export type TriggerKind = "interval" | "daily" | "weekly" | "windowed";
 
 export interface Trigger {
   kind: TriggerKind;
   everyMinutes?: number;
   time?: string;
   weekday?: number;
+  startTime?: string;
+  endTime?: string;
+  weekdays?: number[];
 }
 
 export interface Schedule {
