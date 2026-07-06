@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
 import { paths } from "../claudeHome.js";
-import { nextFireAfter } from "./nextFire.js";
+import { nextFireAfter, parseHHMM } from "./nextFire.js";
 import type { Schedule, Trigger } from "./scheduleTypes.js";
 
 export class ScheduleValidationError extends Error {
@@ -20,7 +20,12 @@ export interface ScheduleInput {
   overlapPolicy?: "skip" | "allow";
 }
 
-export function validateTrigger(t: unknown): Trigger {
+const hhmmToMin = (s: string): number => {
+  const [h, m] = parseHHMM(s);
+  return h * 60 + m;
+};
+
+export function validateTrigger(t: unknown, opts?: { allowWindowed?: boolean }): Trigger {
   if (!t || typeof t !== "object") throw new ScheduleValidationError("trigger is required");
   const trig = t as Trigger;
   if (trig.kind === "interval") {
@@ -40,7 +45,39 @@ export function validateTrigger(t: unknown): Trigger {
       ? { kind: "weekly", time: trig.time, weekday: Number(trig.weekday) }
       : { kind: "daily", time: trig.time };
   }
-  throw new ScheduleValidationError("trigger.kind must be interval|daily|weekly");
+  if (trig.kind === "windowed") {
+    if (!opts?.allowWindowed) {
+      throw new ScheduleValidationError("windowed trigger is only available for pipelines");
+    }
+    const hhmm = /^([01]?\d|2[0-3]):[0-5]\d$/;
+    if (!hhmm.test(trig.startTime ?? "") || !hhmm.test(trig.endTime ?? "")) {
+      throw new ScheduleValidationError('windowed trigger needs startTime/endTime "HH:MM"');
+    }
+    if (hhmmToMin(trig.startTime as string) >= hhmmToMin(trig.endTime as string)) {
+      throw new ScheduleValidationError("windowed trigger needs endTime after startTime");
+    }
+    if (!Number.isFinite(trig.everyMinutes) || (trig.everyMinutes ?? 0) < 1) {
+      throw new ScheduleValidationError("windowed trigger needs everyMinutes >= 1");
+    }
+    let weekdays: number[] | undefined;
+    if (trig.weekdays !== undefined) {
+      if (
+        !Array.isArray(trig.weekdays) ||
+        trig.weekdays.some((d) => !Number.isInteger(d) || d < 0 || d > 6)
+      ) {
+        throw new ScheduleValidationError("windowed trigger weekdays must be integers 0-6");
+      }
+      weekdays = [...new Set(trig.weekdays)].sort((a, b) => a - b);
+    }
+    return {
+      kind: "windowed",
+      startTime: trig.startTime,
+      endTime: trig.endTime,
+      everyMinutes: Math.floor(trig.everyMinutes as number),
+      ...(weekdays && weekdays.length ? { weekdays } : {}),
+    };
+  }
+  throw new ScheduleValidationError("trigger.kind must be interval|daily|weekly|windowed");
 }
 
 export function validateInput(raw: unknown): ScheduleInput {

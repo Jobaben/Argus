@@ -61,7 +61,7 @@ export function validatePipelineInput(raw: unknown): PipelineInput {
     throw new PipelineValidationError("pipeline needs at least one phase");
   }
   const phases = r.phases.map((p, i) => validatePhase(p, i));
-  const trigger = r.trigger == null ? null : validateTrigger(r.trigger);
+  const trigger = r.trigger == null ? null : validateTrigger(r.trigger, { allowWindowed: true });
   const overlapPolicy = r.overlapPolicy === "allow" ? "allow" : "skip";
   const enabled = r.enabled === undefined ? true : Boolean(r.enabled);
   const input: PipelineInput = { name: r.name.trim(), phases, trigger, enabled, overlapPolicy };
@@ -85,7 +85,7 @@ export function validatePipelinePatch(raw: unknown): Partial<PipelineInput> {
     }
     patch.phases = r.phases.map((p, i) => validatePhase(p, i));
   }
-  if ("trigger" in r) patch.trigger = r.trigger == null ? null : validateTrigger(r.trigger);
+  if ("trigger" in r) patch.trigger = r.trigger == null ? null : validateTrigger(r.trigger, { allowWindowed: true });
   if ("enabled" in r) patch.enabled = Boolean(r.enabled);
   if ("overlapPolicy" in r) patch.overlapPolicy = r.overlapPolicy === "allow" ? "allow" : "skip";
   if ("model" in r) patch.model = r.model == null ? undefined : validateModel(r.model, "pipeline");
