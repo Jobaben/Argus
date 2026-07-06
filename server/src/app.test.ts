@@ -44,7 +44,7 @@ const sameOrigin = { host: "localhost:7777", origin: "http://localhost:7777", "c
 test("GET /api/health returns ok + version", async () => {
   const res = await makeApp().request("/api/health", { headers: loopback });
   assert.equal(res.status, 200);
-  const body = await res.json();
+  const body = (await res.json()) as { ok: boolean; version: string };
   assert.equal(body.ok, true);
   assert.equal(typeof body.version, "string");
 });
@@ -105,7 +105,9 @@ test("POST /api/schedules creates a schedule (201) and it appears in the list", 
     }),
   });
   assert.equal(create.status, 201);
-  const list = await (await app.request("/api/schedules", { headers: loopback })).json();
+  const list = (await (await app.request("/api/schedules", { headers: loopback })).json()) as {
+    schedules: { name: string }[];
+  };
   assert.equal(list.schedules.length, 1);
   assert.equal(list.schedules[0].name, "Nightly");
 });
