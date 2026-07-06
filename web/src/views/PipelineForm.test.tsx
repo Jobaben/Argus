@@ -55,7 +55,7 @@ describe("PipelineForm", () => {
     await user.type(screen.getByPlaceholderText("Step prompt"), "run the build");
 
     await user.selectOptions(screen.getByLabelText("Default model (inherit CLI)"), "opus");
-    await user.selectOptions(screen.getByLabelText("Use pipeline default"), "sonnet");
+    await user.selectOptions(screen.getByLabelText("Use pipeline default (phase 1 step 1)"), "sonnet");
 
     await user.click(screen.getByRole("button", { name: /save pipeline/i }));
 

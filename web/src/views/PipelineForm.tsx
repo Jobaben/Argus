@@ -42,10 +42,12 @@ const MODEL_ALIASES = ["opus", "sonnet", "haiku"];
 
 function ModelSelect({
   label,
+  ariaLabel,
   value,
   onChange,
 }: {
   label: string;
+  ariaLabel?: string;
   value?: string;
   onChange: (v: string | undefined) => void;
 }) {
@@ -55,7 +57,7 @@ function ModelSelect({
   return (
     <div className="flex items-center gap-1">
       <select
-        aria-label={label}
+        aria-label={ariaLabel ?? label}
         className={`${FIELD} w-auto`}
         value={selectValue}
         onChange={(e) => {
@@ -205,6 +207,7 @@ export function PipelineForm({
                       onChange={(e) => setStep(pi, si, { name: e.target.value })} />
                     <ModelSelect
                       label="Use pipeline default"
+                      ariaLabel={`Use pipeline default (phase ${pi + 1} step ${si + 1})`}
                       value={step.model}
                       onChange={(m) => setStep(pi, si, { model: m })}
                     />
