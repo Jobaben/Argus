@@ -12,12 +12,47 @@ function atTime(ref: Date, h: number, mi: number): Date {
   return new Date(ref.getFullYear(), ref.getMonth(), ref.getDate(), h, mi, 0, 0);
 }
 
+/** The clock grid for a windowed trigger on the calendar day of `ref`.
+ * Returns null when the window is invalid (missing/zero cadence or end<=start). */
+function windowGrid(
+  trigger: Trigger,
+  ref: Date,
+): { start: Date; end: Date; step: number } | null {
+  const step = (trigger.everyMinutes ?? 0) * 60000;
+  if (step <= 0) return null;
+  const [sh, sm] = parseHHMM(trigger.startTime);
+  const [eh, em] = parseHHMM(trigger.endTime);
+  const start = atTime(ref, sh, sm);
+  const end = atTime(ref, eh, em);
+  if (end.getTime() <= start.getTime()) return null;
+  return { start, end, step };
+}
+
+/** Whether a windowed trigger may fire on the weekday of `d`
+ * (empty/omitted weekdays = every day). */
+function weekdayAllowed(trigger: Trigger, d: Date): boolean {
+  const wds = trigger.weekdays;
+  if (!wds || wds.length === 0) return true;
+  return wds.includes(d.getDay());
+}
+
 /** The most recent scheduled instant at or before `now`, or null if none. */
 export function previousFireTime(
   trigger: Trigger,
   anchor: Date,
   now: Date,
 ): Date | null {
+  if (trigger.kind === "windowed") {
+    if (!weekdayAllowed(trigger, now)) return null;
+    const g = windowGrid(trigger, now);
+    if (!g) return null;
+    // Last grid index strictly inside [start, end) — the trailing partial slot is dropped.
+    const maxK = Math.ceil((g.end.getTime() - g.start.getTime()) / g.step) - 1;
+    const nowK = Math.floor((now.getTime() - g.start.getTime()) / g.step);
+    const k = Math.min(maxK, nowK);
+    if (k < 0) return null;
+    return new Date(g.start.getTime() + k * g.step);
+  }
   if (trigger.kind === "interval") {
     const step = (trigger.everyMinutes ?? 0) * 60000;
     if (step <= 0) return null;
@@ -46,6 +81,24 @@ export function previousFireTime(
 
 /** The next scheduled instant strictly after `from`. */
 export function nextFireTime(trigger: Trigger, from: Date): Date | null {
+  if (trigger.kind === "windowed") {
+    const step = (trigger.everyMinutes ?? 0) * 60000;
+    if (step <= 0) return null;
+    for (let dayOffset = 0; dayOffset <= 8; dayOffset++) {
+      const ref = new Date(
+        from.getFullYear(), from.getMonth(), from.getDate() + dayOffset, 0, 0, 0, 0,
+      );
+      if (!weekdayAllowed(trigger, ref)) continue;
+      const g = windowGrid(trigger, ref);
+      if (!g) return null;
+      const maxK = Math.ceil((g.end.getTime() - g.start.getTime()) / step) - 1;
+      for (let k = 0; k <= maxK; k++) {
+        const t = new Date(g.start.getTime() + k * step);
+        if (t.getTime() > from.getTime()) return t;
+      }
+    }
+    return null;
+  }
   if (trigger.kind === "interval") {
     const step = (trigger.everyMinutes ?? 0) * 60000;
     if (step <= 0) return null;
