@@ -87,6 +87,40 @@ test("failed signal pauses the instance as failed", () => {
   assert.equal(r.instance.phases[0].status, "failed");
 });
 
+test("failed signal sets the instance end time", () => {
+  const inst = started(def());
+  const r = advance(def(), inst, sig({ type: "failed", payload: "boom" }), NOW);
+  assert.equal(r.instance.endedAt, NOW);
+});
+
+test("a signal from an untracked run is ignored (dedup of concurrent runs)", () => {
+  // A stale/duplicate concurrent run signals with a runId that no longer
+  // matches the tracked step; it must not terminalize or advance the instance.
+  const inst = started(def());
+  const r = advance(def(), inst, sig({ type: "failed", payload: "boom", runId: "some-other-run" }), NOW);
+  assert.equal(r.startPhase, null);
+  assert.equal(r.instance.status, "running");
+  assert.equal(r.instance.phases[0].status, "running");
+  assert.equal(r.instance.phases[0].steps[0].status, "running");
+});
+
+test("a failed phase terminalizes running sibling steps", () => {
+  const d = def({
+    phases: [{ id: "brainstorm", name: "Brainstorm", cwd: "/tmp", gated: false, steps: [
+      { name: "a", prompt: "p" }, { name: "b", prompt: "p" },
+    ] }, { id: "plan", name: "Plan", cwd: "/tmp", gated: false, steps: [{ name: "wp", prompt: "p" }] }],
+  });
+  const inst = started(d);
+  inst.phases[0].steps = [
+    { name: "a", runId: "run-a", status: "running" },
+    { name: "b", runId: "run-b", status: "running" },
+  ];
+  const r = advance(d, inst, sig({ type: "failed", runId: "run-a" }), NOW);
+  assert.equal(r.instance.phases[0].status, "failed");
+  assert.equal(r.instance.phases[0].steps[0].status, "failed"); // the signalled step
+  assert.equal(r.instance.phases[0].steps[1].status, "failed"); // the abandoned sibling
+});
+
 test("a stale signal for a non-current phase is a no-op (idempotent)", () => {
   const d = def();
   d.phases[0].gated = false;

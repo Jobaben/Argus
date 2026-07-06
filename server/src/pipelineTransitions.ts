@@ -17,6 +17,18 @@ function touch(inst: PipelineInstance, nowISO: string): void {
   inst.updatedAt = nowISO;
 }
 
+/**
+ * When a phase fails, any of its steps still pending/running are abandoned —
+ * mark them failed so no step is left "running" under a terminal instance.
+ * Covers a running sibling in a multi-step phase, and a step whose runId the
+ * failing signal didn't match (e.g. a stale or duplicate concurrent run).
+ */
+function failLeftoverSteps(phase: PhaseProgress): void {
+  for (const s of phase.steps) {
+    if (s.status === "pending" || s.status === "running") s.status = "failed";
+  }
+}
+
 export function initInstance(
   def: PipelineDefinition,
   trigger: "manual" | "scheduled",
@@ -74,13 +86,20 @@ export function advance(
   const phase = inst.phases[inst.currentPhaseIndex];
   if (!phase || signal.phaseId !== phase.id) return { instance: inst, startPhase: null };
 
+  // Only a run currently tracked by this phase may drive it. A signal whose
+  // runId matches no step comes from a stale or duplicate concurrent run (its
+  // runId was overwritten by a later revise/re-spawn) and is ignored, so it
+  // can't terminalize or advance the instance behind the tracked run's back.
   const step = phase.steps.find((s) => s.runId === signal.runId);
-  if (step) step.status = signal.type === "failed" ? "failed" : "succeeded";
+  if (!step) return { instance: inst, startPhase: null };
+  step.status = signal.type === "failed" ? "failed" : "succeeded";
   if (signal.payload !== undefined) phase.payload = signal.payload;
 
   if (signal.type === "failed") {
     phase.status = "failed";
+    failLeftoverSteps(phase);
     inst.status = "failed";
+    inst.endedAt = nowISO;
     touch(inst, nowISO);
     return { instance: inst, startPhase: null };
   }
@@ -93,7 +112,9 @@ export function advance(
   // completed
   if (phase.steps.some((s) => s.status === "failed")) {
     phase.status = "failed";
+    failLeftoverSteps(phase);
     inst.status = "failed";
+    inst.endedAt = nowISO;
     touch(inst, nowISO);
     return { instance: inst, startPhase: null };
   }
@@ -132,6 +153,7 @@ export function applyRevise(inst: PipelineInstance, nowISO: string): TransitionR
   phase.status = "running";
   phase.steps = phase.steps.map((s) => ({ name: s.name, runId: null, status: "pending" }));
   inst.status = "running";
+  inst.endedAt = null; // re-opened from a failed/paused state — no longer terminal
   touch(inst, nowISO);
   return { instance: inst, startPhase: inst.currentPhaseIndex };
 }

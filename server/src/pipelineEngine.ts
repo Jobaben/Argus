@@ -205,6 +205,19 @@ export function createEngine(deps: EngineDeps): Engine {
     deps.onChange?.();
   }
 
+  /** Kill any still-alive process spawned for the instance's current phase.
+   *  Used before aborting, and before a revise re-spawns the phase, so a
+   *  straggler run can't keep executing (or later signal) against it. */
+  async function killPhaseRuns(inst: PipelineInstance): Promise<void> {
+    for (const s of inst.phases[inst.currentPhaseIndex]?.steps ?? []) {
+      if (!s.runId) continue;
+      const got = await readRun(s.runId);
+      if (got && isAlive(got.run.pid)) {
+        try { process.kill(got.run.pid!); } catch { /* already gone */ }
+      }
+    }
+  }
+
   async function start(pipelineId: string, trigger: "manual" | "scheduled" = "manual") {
     const def = await loadDef(pipelineId);
     if (!def) throw new Error("pipeline not found");
@@ -265,6 +278,9 @@ export function createEngine(deps: EngineDeps): Engine {
     if (!inst) return { ok: false, code: 404, error: "instance not found" };
     const def = await loadDef(inst.pipelineId);
     if (!def) return { ok: false, code: 404, error: "pipeline not found" };
+    // Kill any straggler from the phase before re-spawning, so a duplicate run
+    // can't keep executing alongside the retry.
+    await killPhaseRuns(inst);
     let res;
     try {
       res = applyRevise(inst, nowISO());
@@ -287,13 +303,7 @@ export function createEngine(deps: EngineDeps): Engine {
     } catch (e) {
       return { ok: false, code: 409, error: e instanceof Error ? e.message : String(e) };
     }
-    for (const s of inst.phases[inst.currentPhaseIndex]?.steps ?? []) {
-      if (!s.runId) continue;
-      const got = await readRun(s.runId);
-      if (got && isAlive(got.run.pid)) {
-        try { process.kill(got.run.pid!); } catch { /* already gone */ }
-      }
-    }
+    await killPhaseRuns(inst);
     await writeInstance(aborted);
     deps.onChange?.();
     return { ok: true, code: 200 };
