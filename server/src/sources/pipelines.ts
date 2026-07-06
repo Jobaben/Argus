@@ -1,9 +1,15 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
 import { paths } from "../claudeHome.js";
 import { validateTrigger } from "./schedules.js";
+import { atomicWriteJson } from "./atomicWrite.js";
+import { KeyedMutex } from "../mutex.js";
 import type { PhaseDef, PhaseStep, PipelineDefinition } from "./pipelineTypes.js";
 import type { Trigger } from "./scheduleTypes.js";
+
+// Serializes the whole-file read-modify-write cycle (see schedules.ts).
+const storeLock = new KeyedMutex();
+const withStoreLock = <T>(fn: () => Promise<T>) => storeLock.withLock("pipelines", fn);
 
 export class PipelineValidationError extends Error {
   constructor(message: string) {
@@ -125,11 +131,7 @@ export async function readPipelines(): Promise<PipelineDefinition[]> {
 async function writePipelines(list: PipelineDefinition[]): Promise<void> {
   const current = await readRaw();
   if (!current.ok) throw new Error("pipelines.json could not be parsed; refusing to overwrite it");
-  await mkdir(paths.argus(), { recursive: true });
-  const file = paths.pipelinesFile();
-  const tmp = `${file}.${process.pid}.tmp`;
-  await writeFile(tmp, JSON.stringify(list, null, 2), "utf8");
-  await rename(tmp, file);
+  await atomicWriteJson(paths.pipelinesFile(), list);
 }
 
 export async function createPipeline(input: PipelineInput, now: Date, id: string): Promise<PipelineDefinition> {
@@ -146,10 +148,12 @@ export async function createPipeline(input: PipelineInput, now: Date, id: string
     createdAt: iso,
     updatedAt: iso,
   };
-  const list = await readPipelines();
-  list.push(def);
-  await writePipelines(list);
-  return def;
+  return withStoreLock(async () => {
+    const list = await readPipelines();
+    list.push(def);
+    await writePipelines(list);
+    return def;
+  });
 }
 
 export async function updatePipeline(
@@ -157,36 +161,42 @@ export async function updatePipeline(
   patch: Partial<PipelineInput>,
   now: Date,
 ): Promise<PipelineDefinition | null> {
-  const list = await readPipelines();
-  const idx = list.findIndex((d) => d.id === id);
-  if (idx === -1) return null;
-  const merged: PipelineDefinition = {
-    ...list[idx],
-    ...("name" in patch ? { name: patch.name! } : {}),
-    ...("phases" in patch ? { phases: patch.phases! } : {}),
-    ...("trigger" in patch ? { trigger: patch.trigger! } : {}),
-    ...("enabled" in patch ? { enabled: patch.enabled! } : {}),
-    ...("overlapPolicy" in patch ? { overlapPolicy: patch.overlapPolicy! } : {}),
-    ...("model" in patch ? { model: patch.model } : {}),
-    updatedAt: now.toISOString(),
-  };
-  list[idx] = merged;
-  await writePipelines(list);
-  return merged;
+  return withStoreLock(async () => {
+    const list = await readPipelines();
+    const idx = list.findIndex((d) => d.id === id);
+    if (idx === -1) return null;
+    const merged: PipelineDefinition = {
+      ...list[idx],
+      ...("name" in patch ? { name: patch.name! } : {}),
+      ...("phases" in patch ? { phases: patch.phases! } : {}),
+      ...("trigger" in patch ? { trigger: patch.trigger! } : {}),
+      ...("enabled" in patch ? { enabled: patch.enabled! } : {}),
+      ...("overlapPolicy" in patch ? { overlapPolicy: patch.overlapPolicy! } : {}),
+      ...("model" in patch ? { model: patch.model } : {}),
+      updatedAt: now.toISOString(),
+    };
+    list[idx] = merged;
+    await writePipelines(list);
+    return merged;
+  });
 }
 
 export async function deletePipeline(id: string): Promise<boolean> {
-  const list = await readPipelines();
-  const next = list.filter((d) => d.id !== id);
-  if (next.length === list.length) return false;
-  await writePipelines(next);
-  return true;
+  return withStoreLock(async () => {
+    const list = await readPipelines();
+    const next = list.filter((d) => d.id !== id);
+    if (next.length === list.length) return false;
+    await writePipelines(next);
+    return true;
+  });
 }
 
 export async function markPipelineStarted(id: string, atISO: string): Promise<void> {
-  const list = await readPipelines();
-  const idx = list.findIndex((d) => d.id === id);
-  if (idx === -1) return;
-  list[idx] = { ...list[idx], lastStartedAt: atISO };
-  await writePipelines(list);
+  return withStoreLock(async () => {
+    const list = await readPipelines();
+    const idx = list.findIndex((d) => d.id === id);
+    if (idx === -1) return;
+    list[idx] = { ...list[idx], lastStartedAt: atISO };
+    await writePipelines(list);
+  });
 }

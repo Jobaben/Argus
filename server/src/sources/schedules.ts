@@ -1,8 +1,16 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
 import { paths } from "../claudeHome.js";
 import { nextFireAfter, parseHHMM } from "./nextFire.js";
+import { atomicWriteJson } from "./atomicWrite.js";
+import { KeyedMutex } from "../mutex.js";
 import type { Schedule, Trigger } from "./scheduleTypes.js";
+
+// Serializes the whole-file read-modify-write cycle so concurrent creates /
+// updates / markScheduleRan calls from HTTP handlers and the scheduler tick
+// cannot lose each other's changes.
+const storeLock = new KeyedMutex();
+const withStoreLock = <T>(fn: () => Promise<T>) => storeLock.withLock("schedules", fn);
 
 export class ScheduleValidationError extends Error {
   constructor(message: string) {
@@ -154,11 +162,7 @@ async function writeSchedules(list: Schedule[]): Promise<void> {
   if (!current.ok) {
     throw new Error("schedules.json could not be parsed; refusing to overwrite it");
   }
-  await mkdir(paths.argus(), { recursive: true });
-  const file = paths.schedulesFile();
-  const tmp = `${file}.${process.pid}.tmp`;
-  await writeFile(tmp, JSON.stringify(list, null, 2), "utf8");
-  await rename(tmp, file);
+  await atomicWriteJson(paths.schedulesFile(), list);
 }
 
 export async function readSchedulesWithNext(
@@ -191,10 +195,12 @@ export async function createSchedule(
     lastRunAt: null,
     lastRunId: null,
   };
-  const list = await readSchedules();
-  list.push(schedule);
-  await writeSchedules(list);
-  return schedule;
+  return withStoreLock(async () => {
+    const list = await readSchedules();
+    list.push(schedule);
+    await writeSchedules(list);
+    return schedule;
+  });
 }
 
 export async function updateSchedule(
@@ -202,30 +208,34 @@ export async function updateSchedule(
   patch: Partial<ScheduleInput>,
   now: Date,
 ): Promise<Schedule | null> {
-  const list = await readSchedules();
-  const idx = list.findIndex((s) => s.id === id);
-  if (idx === -1) return null;
-  const merged: Schedule = {
-    ...list[idx],
-    ...("name" in patch ? { name: patch.name! } : {}),
-    ...("prompt" in patch ? { prompt: patch.prompt! } : {}),
-    ...("cwd" in patch ? { cwd: patch.cwd! } : {}),
-    ...("trigger" in patch ? { trigger: patch.trigger! } : {}),
-    ...("enabled" in patch ? { enabled: patch.enabled! } : {}),
-    ...("overlapPolicy" in patch ? { overlapPolicy: patch.overlapPolicy! } : {}),
-    updatedAt: now.toISOString(),
-  };
-  list[idx] = merged;
-  await writeSchedules(list);
-  return merged;
+  return withStoreLock(async () => {
+    const list = await readSchedules();
+    const idx = list.findIndex((s) => s.id === id);
+    if (idx === -1) return null;
+    const merged: Schedule = {
+      ...list[idx],
+      ...("name" in patch ? { name: patch.name! } : {}),
+      ...("prompt" in patch ? { prompt: patch.prompt! } : {}),
+      ...("cwd" in patch ? { cwd: patch.cwd! } : {}),
+      ...("trigger" in patch ? { trigger: patch.trigger! } : {}),
+      ...("enabled" in patch ? { enabled: patch.enabled! } : {}),
+      ...("overlapPolicy" in patch ? { overlapPolicy: patch.overlapPolicy! } : {}),
+      updatedAt: now.toISOString(),
+    };
+    list[idx] = merged;
+    await writeSchedules(list);
+    return merged;
+  });
 }
 
 export async function deleteSchedule(id: string): Promise<boolean> {
-  const list = await readSchedules();
-  const next = list.filter((s) => s.id !== id);
-  if (next.length === list.length) return false;
-  await writeSchedules(next);
-  return true;
+  return withStoreLock(async () => {
+    const list = await readSchedules();
+    const next = list.filter((s) => s.id !== id);
+    if (next.length === list.length) return false;
+    await writeSchedules(next);
+    return true;
+  });
 }
 
 export async function markScheduleRan(
@@ -233,9 +243,11 @@ export async function markScheduleRan(
   runId: string,
   atISO: string,
 ): Promise<void> {
-  const list = await readSchedules();
-  const idx = list.findIndex((s) => s.id === id);
-  if (idx === -1) return;
-  list[idx] = { ...list[idx], lastRunAt: atISO, lastRunId: runId };
-  await writeSchedules(list);
+  return withStoreLock(async () => {
+    const list = await readSchedules();
+    const idx = list.findIndex((s) => s.id === id);
+    if (idx === -1) return;
+    list[idx] = { ...list[idx], lastRunAt: atISO, lastRunId: runId };
+    await writeSchedules(list);
+  });
 }

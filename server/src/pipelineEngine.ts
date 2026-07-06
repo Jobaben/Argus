@@ -11,6 +11,7 @@ import {
 } from "./pipelineTransitions.js";
 import { isAlive } from "./scheduler.js";
 import { graceMsFor, previousFireTime } from "./sources/nextFire.js";
+import { KeyedMutex } from "./mutex.js";
 import type { Run } from "./sources/scheduleTypes.js";
 import type { PipelineDefinition, PipelineInstance, PipelineSignal } from "./sources/pipelineTypes.js";
 
@@ -122,6 +123,9 @@ export interface Engine {
 
 export function createEngine(deps: EngineDeps): Engine {
   const sem = new Semaphore(deps.maxConcurrent);
+  // Serializes all read-modify-write mutations of a single instance so
+  // concurrent signals / reconcile passes cannot lose each other's updates.
+  const locks = new KeyedMutex();
   const nowISO = () => deps.now().toISOString();
 
   async function loadDef(pipelineId: string): Promise<PipelineDefinition | undefined> {
@@ -170,8 +174,28 @@ export function createEngine(deps: EngineDeps): Engine {
     inst.phases[phaseIndex].status = "running";
     await writeInstance(inst);
 
+    // Spawn each step in the background. Acquiring a concurrency slot must not
+    // block the caller: startPhase is awaited on the HTTP signal path, and a
+    // signalling child may still hold its slot until it exits — blocking here
+    // would deadlock (response waits on a slot the response's own child holds).
     for (const { run } of planned) {
-      await sem.acquire();
+      void spawnStep(run, phaseDef, inst, startedAt);
+    }
+    deps.onChange?.();
+  }
+
+  /** Acquire a slot, spawn one step, and record its terminal state. Runs
+   *  detached from the request path; failures are contained, never thrown. */
+  async function spawnStep(
+    run: Run,
+    phaseDef: PipelineDefinition["phases"][number],
+    inst: PipelineInstance,
+    startedAt: string,
+  ): Promise<void> {
+    await sem.acquire();
+    let released = false;
+    const release = () => { if (!released) { released = true; sem.release(); } };
+    try {
       const env: Record<string, string> = {
         ARGUS_SIGNAL_URL: `${deps.signalUrlBase}/api/instances/${inst.id}/signal`,
         ARGUS_INSTANCE_ID: inst.id,
@@ -184,25 +208,26 @@ export function createEngine(deps: EngineDeps): Engine {
       try {
         handle = deps.spawn(run, runLogPath(run.id), env);
       } catch (e) {
-        sem.release();
+        release();
         await writeRun({ ...run, status: "failed", error: String(e), endedAt: nowISO() });
-        continue;
+        return;
       }
       run.pid = handle.pid;
       await writeRun(run);
-      void handle.done.then(async (res) => {
-        sem.release();
-        await writeRun({
-          ...run,
-          status: res.code === 0 ? "succeeded" : "failed",
-          endedAt: nowISO(),
-          durationMs: deps.now().getTime() - new Date(startedAt).getTime(),
-          exitCode: res.code,
-          error: res.code === 0 ? null : `exit code ${res.code}`,
-        });
+      const res = await handle.done;
+      release();
+      await writeRun({
+        ...run,
+        status: res.code === 0 ? "succeeded" : "failed",
+        endedAt: nowISO(),
+        durationMs: deps.now().getTime() - new Date(startedAt).getTime(),
+        exitCode: res.code,
+        error: res.code === 0 ? null : `exit code ${res.code}`,
       });
+    } catch (e) {
+      release();
+      console.error(`[argus] step run ${run.id} handler failed:`, e);
     }
-    deps.onChange?.();
   }
 
   /** Kill any still-alive process spawned for the instance's current phase.
@@ -242,71 +267,81 @@ export function createEngine(deps: EngineDeps): Engine {
     return instance;
   }
 
-  async function onSignal(instanceId: string, signal: PipelineSignal) {
-    const inst = await readInstance(instanceId);
-    if (!inst) return { ok: false, code: 404 };
-    if (signal.token !== inst.signalToken) return { ok: false, code: 403 };
-    if (inst.status !== "running") return { ok: true, code: 200 }; // paused/terminal → idempotent ignore
-    const def = await loadDef(inst.pipelineId);
-    if (!def) return { ok: false, code: 404 };
-    const { instance, startPhase: idx } = advance(def, inst, signal, nowISO());
-    await writeInstance(instance);
-    if (idx !== null) await startPhase(def, instance, idx);
-    deps.onChange?.();
-    return { ok: true, code: 202 };
+  async function onSignal(instanceId: string, signal: PipelineSignal): Promise<ActionResult> {
+    return locks.withLock(instanceId, async () => {
+      const inst = await readInstance(instanceId);
+      if (!inst) return { ok: false, code: 404 };
+      if (signal.token !== inst.signalToken) return { ok: false, code: 403 };
+      if (inst.status !== "running") return { ok: true, code: 200 }; // paused/terminal → idempotent ignore
+      const def = await loadDef(inst.pipelineId);
+      if (!def) return { ok: false, code: 404 };
+      const { instance, startPhase: idx } = advance(def, inst, signal, nowISO());
+      await writeInstance(instance);
+      if (idx !== null) await startPhase(def, instance, idx);
+      deps.onChange?.();
+      return { ok: true, code: 202 };
+    });
   }
 
-  async function approve(instanceId: string, answers?: unknown) {
-    const inst = await readInstance(instanceId);
-    if (!inst) return { ok: false, code: 404, error: "instance not found" };
-    const def = await loadDef(inst.pipelineId);
-    if (!def) return { ok: false, code: 404, error: "pipeline not found" };
-    let res;
-    try {
-      res = applyApprove(def, inst, answers, nowISO());
-    } catch (e) {
-      return { ok: false, code: 409, error: e instanceof Error ? e.message : String(e) };
-    }
-    await writeInstance(res.instance);
-    if (res.startPhase !== null) await startPhase(def, res.instance, res.startPhase);
-    deps.onChange?.();
-    return { ok: true, code: 200 };
+  async function approve(instanceId: string, answers?: unknown): Promise<ActionResult> {
+    return locks.withLock(instanceId, async () => {
+      const inst = await readInstance(instanceId);
+      if (!inst) return { ok: false, code: 404, error: "instance not found" };
+      const def = await loadDef(inst.pipelineId);
+      if (!def) return { ok: false, code: 404, error: "pipeline not found" };
+      let res;
+      try {
+        res = applyApprove(def, inst, answers, nowISO());
+      } catch (e) {
+        return { ok: false, code: 409, error: e instanceof Error ? e.message : String(e) };
+      }
+      await writeInstance(res.instance);
+      if (res.startPhase !== null) await startPhase(def, res.instance, res.startPhase);
+      deps.onChange?.();
+      return { ok: true, code: 200 };
+    });
   }
 
-  async function revise(instanceId: string, note?: string) {
-    const inst = await readInstance(instanceId);
-    if (!inst) return { ok: false, code: 404, error: "instance not found" };
-    const def = await loadDef(inst.pipelineId);
-    if (!def) return { ok: false, code: 404, error: "pipeline not found" };
-    // Kill any straggler from the phase before re-spawning, so a duplicate run
-    // can't keep executing alongside the retry.
-    await killPhaseRuns(inst);
-    let res;
-    try {
-      res = applyRevise(inst, nowISO());
-    } catch (e) {
-      return { ok: false, code: 409, error: e instanceof Error ? e.message : String(e) };
-    }
-    await writeInstance(res.instance);
-    const suffix = note ? `\n\nRevision note: ${note}` : "";
-    if (res.startPhase !== null) await startPhase(def, res.instance, res.startPhase, suffix);
-    deps.onChange?.();
-    return { ok: true, code: 200 };
+  async function revise(instanceId: string, note?: string): Promise<ActionResult> {
+    return locks.withLock(instanceId, async () => {
+      const inst = await readInstance(instanceId);
+      if (!inst) return { ok: false, code: 404, error: "instance not found" };
+      const def = await loadDef(inst.pipelineId);
+      if (!def) return { ok: false, code: 404, error: "pipeline not found" };
+      // Validate the transition BEFORE any destructive side effect: killing the
+      // phase's straggler runs must not happen if the instance can't be revised
+      // (e.g. it isn't awaiting approval), or a rejected 409 would still have
+      // torn down live work.
+      let res;
+      try {
+        res = applyRevise(inst, nowISO());
+      } catch (e) {
+        return { ok: false, code: 409, error: e instanceof Error ? e.message : String(e) };
+      }
+      await killPhaseRuns(inst);
+      await writeInstance(res.instance);
+      const suffix = note ? `\n\nRevision note: ${note}` : "";
+      if (res.startPhase !== null) await startPhase(def, res.instance, res.startPhase, suffix);
+      deps.onChange?.();
+      return { ok: true, code: 200 };
+    });
   }
 
-  async function abort(instanceId: string) {
-    const inst = await readInstance(instanceId);
-    if (!inst) return { ok: false, code: 404, error: "instance not found" };
-    let aborted: PipelineInstance;
-    try {
-      aborted = applyAbort(inst, nowISO());
-    } catch (e) {
-      return { ok: false, code: 409, error: e instanceof Error ? e.message : String(e) };
-    }
-    await killPhaseRuns(inst);
-    await writeInstance(aborted);
-    deps.onChange?.();
-    return { ok: true, code: 200 };
+  async function abort(instanceId: string): Promise<ActionResult> {
+    return locks.withLock(instanceId, async () => {
+      const inst = await readInstance(instanceId);
+      if (!inst) return { ok: false, code: 404, error: "instance not found" };
+      let aborted: PipelineInstance;
+      try {
+        aborted = applyAbort(inst, nowISO());
+      } catch (e) {
+        return { ok: false, code: 409, error: e instanceof Error ? e.message : String(e) };
+      }
+      await killPhaseRuns(inst);
+      await writeInstance(aborted);
+      deps.onChange?.();
+      return { ok: true, code: 200 };
+    });
   }
 
   async function reconcile() {
@@ -320,30 +355,42 @@ export function createEngine(deps: EngineDeps): Engine {
       const anchor = new Date(def.lastStartedAt ?? def.createdAt);
       const prev = previousFireTime(def.trigger, anchor, now);
       if (!prev) continue;
+      // Don't backfill a slot from before the pipeline was created (mirrors
+      // shouldFire): avoids an immediate fire on creation within the window.
+      if (prev.getTime() < new Date(def.createdAt).getTime()) continue;
       if (def.lastStartedAt && new Date(def.lastStartedAt).getTime() >= prev.getTime()) continue;
       if (now.getTime() - prev.getTime() > grace) continue;
       await start(def.id, "scheduled");
     }
 
     // 2. Heal running instances whose current-phase runs ended without signalling.
+    //    Each instance is healed under its lock, re-reading fresh state inside,
+    //    so a genuine completion signal landing mid-pass is never clobbered by a
+    //    stale "failed" write (the TOCTOU the lock closes).
     for (const def of defs) {
-      const insts = await readInstances({ pipelineId: def.id });
-      for (const inst of insts) {
-        if (inst.status !== "running") continue;
-        const phase = inst.phases[inst.currentPhaseIndex];
-        for (const s of phase.steps) {
-          if (s.status !== "running" || !s.runId) continue;
-          const got = await readRun(s.runId);
-          const ended = got && (got.run.status === "failed" || got.run.status === "succeeded" || !isAlive(got.run.pid));
-          if (!ended) continue;
-          const { instance } = advance(def, inst, {
-            instanceId: inst.id, phaseId: phase.id, runId: s.runId, type: "failed", token: inst.signalToken,
-            payload: { reason: got?.run.error ?? "run ended without emitting a completion signal" },
-          }, nowISO());
-          await writeInstance(instance);
-          deps.onChange?.();
-          if (instance.status !== "running") break;
-        }
+      const candidates = await readInstances({ pipelineId: def.id });
+      for (const candidate of candidates) {
+        if (candidate.status !== "running") continue;
+        await locks.withLock(candidate.id, async () => {
+          const inst = await readInstance(candidate.id);
+          if (!inst || inst.status !== "running") return;
+          let current = inst;
+          const phase = current.phases[current.currentPhaseIndex];
+          for (const s of phase.steps) {
+            if (s.status !== "running" || !s.runId) continue;
+            const got = await readRun(s.runId);
+            const ended = got && (got.run.status === "failed" || got.run.status === "succeeded" || !isAlive(got.run.pid));
+            if (!ended) continue;
+            const { instance } = advance(def, current, {
+              instanceId: current.id, phaseId: phase.id, runId: s.runId, type: "failed", token: current.signalToken,
+              payload: { reason: got?.run.error ?? "run ended without emitting a completion signal" },
+            }, nowISO());
+            await writeInstance(instance);
+            deps.onChange?.();
+            current = instance;
+            if (current.status !== "running") break;
+          }
+        });
       }
     }
   }

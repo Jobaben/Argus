@@ -107,6 +107,19 @@ test("shouldFire: false when the window was missed (Argus was down)", () => {
   assert.equal(shouldFire(s, at(2026, 5, 22, 9, 0), graceMsFor(30000)), false);
 });
 
+test("shouldFire: false for a daily slot that predates creation (no fire-on-create)", () => {
+  // Daily 09:00 created at 09:05 the same day. The 09:00 slot is before
+  // createdAt, so it must not fire immediately on creation.
+  const s = baseSchedule({
+    trigger: { kind: "daily", time: "09:00" },
+    createdAt: at(2026, 5, 22, 9, 5).toISOString(),
+    lastRunAt: null,
+  });
+  assert.equal(shouldFire(s, at(2026, 5, 22, 9, 6), graceMsFor(30000)), false);
+  // But the next day's 09:00 slot (after creation) does fire within grace.
+  assert.equal(shouldFire(s, at(2026, 5, 23, 9, 1), graceMsFor(30000)), true);
+});
+
 test("parseHHMM: parses and clips out-of-range values", () => {
   assert.deepEqual(parseHHMM("09:30"), [9, 30]);
   assert.deepEqual(parseHHMM(undefined), [0, 0]);

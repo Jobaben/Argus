@@ -57,4 +57,8 @@ export interface Run {
   error: string | null;
   instanceId?: string;
   phaseId?: string;
+  /** Total USD cost reported by `claude -p --output-format json`, if present. */
+  costUsd?: number | null;
+  /** Total tokens (input+output) reported by the CLI result envelope, if present. */
+  tokens?: number | null;
 }

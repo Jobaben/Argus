@@ -153,6 +153,9 @@ export function shouldFire(
   const anchor = new Date(schedule.lastRunAt ?? schedule.createdAt);
   const prev = previousFireTime(schedule.trigger, anchor, now);
   if (!prev) return false;
+  // Never backfill a slot that fell before the schedule existed — otherwise a
+  // daily 09:00 schedule created at 09:05 fires immediately on creation.
+  if (prev.getTime() < new Date(schedule.createdAt).getTime()) return false;
   if (schedule.lastRunAt && new Date(schedule.lastRunAt).getTime() >= prev.getTime()) {
     return false;
   }

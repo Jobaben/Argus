@@ -1,7 +1,8 @@
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { readFile, readdir, rm, stat } from "node:fs/promises";
 import { open } from "node:fs/promises";
 import path from "node:path";
 import { paths } from "../claudeHome.js";
+import { atomicWriteJson } from "./atomicWrite.js";
 import type { Run } from "./scheduleTypes.js";
 
 export const LOG_CAP_BYTES = 1_048_576; // 1 MB
@@ -25,11 +26,7 @@ function runJsonPath(id: string): string {
 }
 
 export async function writeRun(run: Run): Promise<void> {
-  await mkdir(paths.runsDir(), { recursive: true });
-  const file = runJsonPath(run.id);
-  const tmp = `${file}.${process.pid}.tmp`;
-  await writeFile(tmp, JSON.stringify(run, null, 2), "utf8");
-  await rename(tmp, file);
+  await atomicWriteJson(runJsonPath(run.id), run);
 }
 
 async function readRunFile(id: string): Promise<Run | null> {
