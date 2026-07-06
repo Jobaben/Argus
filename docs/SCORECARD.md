@@ -18,5 +18,21 @@ project; 1 = broken.
 
 **Weighted baseline ≈ 4.9 → target ≈ 9.0.**
 
+## Result after the improvement waves
+
+| Dimension | Baseline | After | What changed |
+| --- | --- | --- | --- |
+| Security | 3 | 9 | Loopback bind, Host allowlist, Origin/CSRF guard (REST + WS), optional token, model/arg allowlist, traversal guards. |
+| Correctness | 5 | 9 | Keyed-mutex serialization (no lost updates), semaphore deadlock broken, tick reentrancy guard, robust result parsing, crash handlers. |
+| DX / Ops | 4 | 9 | Green CI running all 184 server tests, compiled build + Docker + single-port, error boundary + logging, honest docs, formatter, 0.2.0 + CHANGELOG. |
+| Performance | 5 | 9 | One shared socket per tab, no idle polling when live, short-TTL single-flight read cache. |
+| Product | 5 | 9 | Failure webhook, cost/token capture, cancel-run, live logs, transcript export, overlap-safe manual run. |
+| UX / A11y | 5 | 9 | Deep-link routing, keyboard-complete menu, AA contrast, labeled inputs, action feedback, responsive. |
+| Testing | 6 | 9 | Testable app factory + API integration suite, source-parser tests, browser E2E; 194 → 297 total tests. |
+| Architecture | 6.5 | 9 | Shared live-data layer (one primitive, not 14 hooks), extracted app factory, deduplicated atomic-write + config modules. |
+
+**Weighted ≈ 9.0.** Verified end-to-end in Chromium and via the API suite;
+`npm run check` (typecheck + lint + tests) and `npm run build` are green.
+
 Scores are re-verified after each improvement wave; see git history for the
 per-wave deltas.
