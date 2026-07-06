@@ -2,6 +2,7 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { claudeHome } from "../claudeHome.js";
 import { readJson } from "./readJson.js";
+import { cached } from "./cache.js";
 
 /** A markdown-defined item (agent, command, or skill) with parsed frontmatter. */
 export interface InventoryItem {
@@ -103,14 +104,17 @@ async function readPlugins(): Promise<PluginItem[]> {
   return items.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** Builds the full extensions inventory under `~/.claude`. */
+/** Builds the full extensions inventory under `~/.claude`. Scans several dirs,
+ *  so cache the burst of live refetches (short TTL). */
 export async function readInventory(): Promise<Inventory> {
-  const root = claudeHome();
-  const [agents, commands, skills, plugins] = await Promise.all([
-    readMarkdownItems(path.join(root, "agents")),
-    readMarkdownItems(path.join(root, "commands")),
-    readMarkdownItems(path.join(root, "skills")),
-    readPlugins(),
-  ]);
-  return { agents, commands, skills, plugins };
+  return cached("inventory", 1500, async () => {
+    const root = claudeHome();
+    const [agents, commands, skills, plugins] = await Promise.all([
+      readMarkdownItems(path.join(root, "agents")),
+      readMarkdownItems(path.join(root, "commands")),
+      readMarkdownItems(path.join(root, "skills")),
+      readPlugins(),
+    ]);
+    return { agents, commands, skills, plugins };
+  });
 }

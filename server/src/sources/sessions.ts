@@ -2,6 +2,7 @@ import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { paths } from "../claudeHome.js";
 import { readJsonl } from "./readJson.js";
+import { cached } from "./cache.js";
 
 const DEFAULT_LIMIT = 60;
 const TITLE_MAX = 100;
@@ -198,7 +199,7 @@ async function listSessionFiles(): Promise<{ project: string; id: string; file: 
 }
 
 /** Recent sessions across all projects, newest first (by last activity). */
-export async function readSessions(limit = DEFAULT_LIMIT): Promise<SessionSummary[]> {
+async function readSessionsRaw(limit: number): Promise<SessionSummary[]> {
   const files = await listSessionFiles();
   files.sort((a, b) => b.mtime - a.mtime);
   const slice = files.slice(0, Math.max(0, limit));
@@ -213,6 +214,12 @@ export async function readSessions(limit = DEFAULT_LIMIT): Promise<SessionSummar
   return summaries.sort((a, b) =>
     (b.lastActivity ?? "").localeCompare(a.lastActivity ?? ""),
   );
+}
+
+// The list read scans dozens of transcript files; a short-TTL single-flight
+// cache collapses the burst of refetches a single live broadcast triggers.
+export async function readSessions(limit = DEFAULT_LIMIT): Promise<SessionSummary[]> {
+  return cached(`sessions:${limit}`, 1500, () => readSessionsRaw(limit));
 }
 
 function resolveSessionPath(project: string, id: string): string | null {

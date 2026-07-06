@@ -1,5 +1,6 @@
 import { paths } from "../claudeHome.js";
 import { readJsonl } from "./readJson.js";
+import { cached } from "./cache.js";
 
 /** One raw line in `history.jsonl`. */
 interface HistoryEntry {
@@ -31,11 +32,12 @@ function normalize(entry: HistoryEntry): Activity {
   };
 }
 
-/** Reads the prompt history, most recent first, capped at `limit` entries. */
+/** Reads the prompt history, most recent first, capped at `limit` entries.
+ *  Parses the whole file, so cache the burst of live refetches (short TTL). */
 export async function readActivity(limit = 100): Promise<Activity[]> {
-  const entries = await readJsonl<HistoryEntry>(paths.history());
-  const normalized = entries
-    .map(normalize)
-    .filter((a) => a.text.length > 0);
-  return normalized.reverse().slice(0, limit);
+  return cached(`activity:${limit}`, 1500, async () => {
+    const entries = await readJsonl<HistoryEntry>(paths.history());
+    const normalized = entries.map(normalize).filter((a) => a.text.length > 0);
+    return normalized.reverse().slice(0, limit);
+  });
 }

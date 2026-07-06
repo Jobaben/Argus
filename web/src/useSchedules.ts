@@ -1,29 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback } from "react";
+import { useLiveResource } from "./live/useLiveResource";
 import type { ScheduleInput, ScheduleWithNext } from "./types";
 
-interface State {
-  schedules: ScheduleWithNext[];
-  loading: boolean;
-  error: string | null;
-}
-
-/** Lists schedules, refreshing on the server's "schedules:changed" WS ping. */
+/** Lists schedules, refreshing on "schedules:changed", plus CRUD + run/cancel. */
 export function useSchedules() {
-  const [state, setState] = useState<State>({ schedules: [], loading: true, error: null });
-  const mounted = useRef(true);
-
-  const refresh = useCallback(async () => {
-    try {
-      const res = await fetch("/api/schedules");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as { schedules: ScheduleWithNext[] };
-      if (mounted.current) setState({ schedules: data.schedules, loading: false, error: null });
-    } catch (e) {
-      if (mounted.current) {
-        setState((s) => ({ ...s, loading: false, error: e instanceof Error ? e.message : String(e) }));
-      }
-    }
-  }, []);
+  const { data, loading, error, refresh } = useLiveResource<ScheduleWithNext[]>("/api/schedules", {
+    events: ["schedules:changed"],
+    select: (j) => (j as { schedules?: ScheduleWithNext[] }).schedules ?? [],
+    initial: [],
+  });
 
   const mutate = useCallback(
     async (path: string, method: string, body?: unknown) => {
@@ -49,27 +34,7 @@ export function useSchedules() {
   );
   const remove = useCallback((id: string) => mutate(`/api/schedules/${id}`, "DELETE"), [mutate]);
   const runNow = useCallback((id: string) => mutate(`/api/schedules/${id}/run`, "POST"), [mutate]);
+  const cancelRun = useCallback((runId: string) => mutate(`/api/runs/${runId}/cancel`, "POST"), [mutate]);
 
-  useEffect(() => {
-    mounted.current = true;
-    void refresh();
-    const poll = setInterval(() => void refresh(), 10000);
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${proto}://${location.host}/ws`);
-    ws.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(ev.data) as { type?: string };
-        if (msg.type === "schedules:changed") void refresh();
-      } catch {
-        /* ignore */
-      }
-    };
-    return () => {
-      mounted.current = false;
-      clearInterval(poll);
-      ws.close();
-    };
-  }, [refresh]);
-
-  return { ...state, refresh, create, update, remove, runNow };
+  return { schedules: data, loading, error, refresh, create, update, remove, runNow, cancelRun };
 }
