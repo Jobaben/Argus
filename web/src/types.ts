@@ -82,6 +82,7 @@ export interface Run {
   pid: number | null;
   exitCode: number | null;
   sessionId: string | null;
+  model?: string;
   project: string | null;
   resultSummary: string | null;
   error: string | null;
@@ -131,6 +132,7 @@ export interface PhaseProgress {
 export interface PhaseStep {
   name: string;
   prompt: string;
+  model?: string;
 }
 
 export interface PhaseDef {
@@ -148,6 +150,7 @@ export interface PipelineDefinition {
   trigger: Trigger | null;
   enabled: boolean;
   overlapPolicy: "skip" | "allow";
+  model?: string;
   lastStartedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -159,6 +162,7 @@ export interface PipelineInput {
   trigger: Trigger | null;
   enabled?: boolean;
   overlapPolicy?: "skip" | "allow";
+  model?: string;
 }
 
 export interface PipelineInstance {
