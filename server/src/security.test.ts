@@ -11,6 +11,7 @@ const base: ArgusConfig = {
   allowedOrigins: [],
   maxConcurrentRuns: 4,
   schedulerTickMs: 30000,
+  webhookUrl: null,
 };
 
 test("host allowlist accepts loopback names with any port", () => {

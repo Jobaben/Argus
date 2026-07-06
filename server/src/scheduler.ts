@@ -112,6 +112,8 @@ export interface SchedulerDeps {
   newId: () => string;
   onChange?: () => void;
   onTick?: () => Promise<void>;
+  /** Called when a run reaches the 'failed' state (for failure notifications). */
+  onFailure?: (run: Run) => void;
 }
 
 /** True if a process with `pid` is currently alive. */
@@ -230,6 +232,7 @@ export async function fireRun(
       };
       await writeRun(finished);
       await pruneRuns(schedule.id, RUN_KEEP);
+      if (finished.status === "failed") deps.onFailure?.(finished);
       deps.onChange?.();
     })
     .catch((e) => console.error(`[argus] run ${run.id} completion handler failed:`, e));

@@ -278,3 +278,28 @@ export async function readSession(project: string, id: string): Promise<SessionD
     messages,
   };
 }
+
+/** Render a session transcript as portable Markdown for export/download. */
+export function sessionToMarkdown(session: SessionDetail): string {
+  const lines: string[] = [
+    `# ${session.title || session.id}`,
+    "",
+    `- **Session:** \`${session.id}\``,
+    `- **Project:** ${session.projectLabel}`,
+    ...(session.model ? [`- **Model:** ${session.model}`] : []),
+    ...(session.firstActivity ? [`- **Started:** ${session.firstActivity}`] : []),
+    ...(session.lastActivity ? [`- **Last activity:** ${session.lastActivity}`] : []),
+    "",
+    "---",
+    "",
+  ];
+  for (const m of session.messages) {
+    const who = m.role ?? m.type;
+    const tool = m.toolName ? ` · tool: \`${m.toolName}\`` : "";
+    const err = m.isError ? " · ⚠️ error" : "";
+    const when = m.timestamp ? ` — ${m.timestamp}` : "";
+    lines.push(`## ${who}${tool}${err}${when}`, "");
+    if (m.text) lines.push(m.text, "");
+  }
+  return lines.join("\n");
+}

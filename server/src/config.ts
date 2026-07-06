@@ -34,6 +34,8 @@ export interface ArgusConfig {
   allowedOrigins: string[];
   maxConcurrentRuns: number;
   schedulerTickMs: number;
+  /** Optional webhook POSTed a JSON payload whenever a run/pipeline fails. */
+  webhookUrl: string | null;
 }
 
 export function loadConfig(): ArgusConfig {
@@ -45,5 +47,6 @@ export function loadConfig(): ArgusConfig {
     allowedOrigins: listFromEnv("ARGUS_ALLOWED_ORIGINS"),
     maxConcurrentRuns: intFromEnv("ARGUS_MAX_CONCURRENT_RUNS", 4),
     schedulerTickMs: intFromEnv("ARGUS_SCHED_TICK_MS", 30000, 1000),
+    webhookUrl: process.env.ARGUS_WEBHOOK_URL?.trim() || null,
   };
 }

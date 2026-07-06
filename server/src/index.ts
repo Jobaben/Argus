@@ -4,7 +4,7 @@ import { WebSocketServer } from "ws";
 import { claudeHome } from "./claudeHome.js";
 import { readAgents, readTimeline } from "./sources/jobs.js";
 import { readDaemon } from "./sources/daemon.js";
-import { readSessions, readSession } from "./sources/sessions.js";
+import { readSessions, readSession, sessionToMarkdown } from "./sources/sessions.js";
 import { readActivity } from "./sources/history.js";
 import { readProjects } from "./sources/projects.js";
 import { readStats } from "./sources/stats.js";
@@ -42,6 +42,7 @@ import { loadConfig } from "./config.js";
 import { securityMiddleware, isUpgradeAllowed } from "./security.js";
 import { VERSION } from "./version.js";
 import { mountWebApp } from "./static.js";
+import { buildRunFailurePayload, buildPipelineFailurePayload, postWebhook } from "./notify.js";
 
 const config = loadConfig();
 const PORT = config.port;
@@ -54,6 +55,8 @@ const engine = createEngine({
   maxConcurrent: config.maxConcurrentRuns,
   tickMs: config.schedulerTickMs,
   onChange: () => broadcast({ type: "pipelines:changed" }),
+  onFailure: (inst) =>
+    void postWebhook(config.webhookUrl, buildPipelineFailurePayload(inst, new Date().toISOString())),
   preflight: () => preflightPrereqs(),
 });
 
@@ -83,6 +86,16 @@ app.get("/api/sessions", async (c) => c.json({ sessions: await readSessions() })
 app.get("/api/sessions/:project/:id", async (c) =>
   c.json(await readSession(c.req.param("project"), c.req.param("id"))),
 );
+
+app.get("/api/sessions/:project/:id/export", async (c) => {
+  const session = await readSession(c.req.param("project"), c.req.param("id"));
+  if (!session) return c.json({ error: "not found" }, 404);
+  const md = sessionToMarkdown(session);
+  return c.body(md, 200, {
+    "content-type": "text/markdown; charset=utf-8",
+    "content-disposition": `attachment; filename="argus-session-${session.id}.md"`,
+  });
+});
 
 app.get("/api/activity", async (c) => c.json({ activity: await readActivity() }));
 
@@ -162,9 +175,10 @@ app.post("/api/schedules/:id/run", async (c) => {
     const run = await fireRun(schedule, "manual", {
       now: () => new Date(),
       spawn: defaultSpawn,
-      tickMs: Number(process.env.ARGUS_SCHED_TICK_MS ?? 30000),
+      tickMs: config.schedulerTickMs,
       newId: () => randomUUID(),
       onChange: () => broadcast({ type: "schedules:changed" }),
+      onFailure: notifyRunFailed,
     });
     return c.json(run, 202);
   } catch (e) {
@@ -370,6 +384,10 @@ function broadcast(message: unknown) {
   }
 }
 
+function notifyRunFailed(run: Parameters<typeof buildRunFailurePayload>[0]) {
+  void postWebhook(config.webhookUrl, buildRunFailurePayload(run, new Date().toISOString()));
+}
+
 const stopWatching = watchAgents(() => broadcast({ type: "agents:changed" }));
 const stopWatchingSchedules = watchSchedules(() =>
   broadcast({ type: "schedules:changed" }),
@@ -377,6 +395,7 @@ const stopWatchingSchedules = watchSchedules(() =>
 const scheduler = startScheduler({
   onChange: () => broadcast({ type: "schedules:changed" }),
   onTick: () => engine.reconcile(),
+  onFailure: notifyRunFailed,
 });
 
 /** Terminate every scheduler/pipeline child still alive, so shutdown does not

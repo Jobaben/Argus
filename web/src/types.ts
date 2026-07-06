@@ -68,7 +68,8 @@ export type RunStatus =
   | "succeeded"
   | "failed"
   | "skipped"
-  | "interrupted";
+  | "interrupted"
+  | "cancelled";
 
 export interface Run {
   id: string;
@@ -89,6 +90,8 @@ export interface Run {
   project: string | null;
   resultSummary: string | null;
   error: string | null;
+  costUsd?: number | null;
+  tokens?: number | null;
 }
 
 export interface ScheduleInput {

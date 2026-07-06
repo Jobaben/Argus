@@ -51,5 +51,6 @@ export function runStatusToDsStatus(s: RunStatus): DsStatus {
     case "failed":      return "failed";
     case "skipped":     return "idle";
     case "interrupted": return "idle";
+    case "cancelled":   return "idle";
   }
 }

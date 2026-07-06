@@ -101,6 +101,8 @@ export interface EngineDeps {
   maxConcurrent: number;
   tickMs?: number;
   onChange?: () => void;
+  /** Called when an instance reaches the 'failed' state (failure notifications). */
+  onFailure?: (inst: PipelineInstance) => void;
   /** Optional pre-run guard. When it returns { ok: false }, start() throws PreflightError. */
   preflight?: () => Promise<{ ok: boolean; reasons: string[] }>;
 }
@@ -174,60 +176,72 @@ export function createEngine(deps: EngineDeps): Engine {
     inst.phases[phaseIndex].status = "running";
     await writeInstance(inst);
 
-    // Spawn each step in the background. Acquiring a concurrency slot must not
-    // block the caller: startPhase is awaited on the HTTP signal path, and a
-    // signalling child may still hold its slot until it exits — blocking here
-    // would deadlock (response waits on a slot the response's own child holds).
+    // Launch each step: acquire a slot, spawn, and persist the pid. Callers on
+    // the HTTP request path (start/approve/revise) await these launches so the
+    // spawn is observable when they return. The concurrency cap still applies —
+    // a launch past the cap waits for a slot, which is fine here because these
+    // callers hold no slot of their own.
     for (const { run } of planned) {
-      void spawnStep(run, phaseDef, inst, startedAt);
+      const handle = await launchStep(run, phaseDef, inst);
+      if (handle) trackStep(run, handle, startedAt);
     }
     deps.onChange?.();
   }
 
-  /** Acquire a slot, spawn one step, and record its terminal state. Runs
-   *  detached from the request path; failures are contained, never thrown. */
-  async function spawnStep(
+  /** Acquire a slot and spawn one step, persisting its pid. Returns the handle,
+   *  or null if the spawn itself threw (already recorded as failed). */
+  async function launchStep(
     run: Run,
     phaseDef: PipelineDefinition["phases"][number],
     inst: PipelineInstance,
-    startedAt: string,
-  ): Promise<void> {
+  ): Promise<{ pid: number | null; done: Promise<{ code: number | null }> } | null> {
     await sem.acquire();
+    const env: Record<string, string> = {
+      ARGUS_SIGNAL_URL: `${deps.signalUrlBase}/api/instances/${inst.id}/signal`,
+      ARGUS_INSTANCE_ID: inst.id,
+      ARGUS_PHASE_ID: phaseDef.id,
+      ARGUS_RUN_ID: run.id,
+      ARGUS_STEP_NAME: run.scheduleName,
+      ARGUS_SIGNAL_TOKEN: inst.signalToken,
+    };
+    let handle: { pid: number | null; done: Promise<{ code: number | null }> };
+    try {
+      handle = deps.spawn(run, runLogPath(run.id), env);
+    } catch (e) {
+      sem.release();
+      await writeRun({ ...run, status: "failed", error: String(e), endedAt: nowISO() });
+      return null;
+    }
+    run.pid = handle.pid;
+    await writeRun(run);
+    return handle;
+  }
+
+  /** Await a launched step's completion off the request path, release its slot,
+   *  and record the terminal state. Never throws. */
+  function trackStep(
+    run: Run,
+    handle: { done: Promise<{ code: number | null }> },
+    startedAt: string,
+  ): void {
     let released = false;
     const release = () => { if (!released) { released = true; sem.release(); } };
-    try {
-      const env: Record<string, string> = {
-        ARGUS_SIGNAL_URL: `${deps.signalUrlBase}/api/instances/${inst.id}/signal`,
-        ARGUS_INSTANCE_ID: inst.id,
-        ARGUS_PHASE_ID: phaseDef.id,
-        ARGUS_RUN_ID: run.id,
-        ARGUS_STEP_NAME: run.scheduleName,
-        ARGUS_SIGNAL_TOKEN: inst.signalToken,
-      };
-      let handle: { pid: number | null; done: Promise<{ code: number | null }> };
-      try {
-        handle = deps.spawn(run, runLogPath(run.id), env);
-      } catch (e) {
+    void handle.done
+      .then(async (res) => {
         release();
-        await writeRun({ ...run, status: "failed", error: String(e), endedAt: nowISO() });
-        return;
-      }
-      run.pid = handle.pid;
-      await writeRun(run);
-      const res = await handle.done;
-      release();
-      await writeRun({
-        ...run,
-        status: res.code === 0 ? "succeeded" : "failed",
-        endedAt: nowISO(),
-        durationMs: deps.now().getTime() - new Date(startedAt).getTime(),
-        exitCode: res.code,
-        error: res.code === 0 ? null : `exit code ${res.code}`,
+        await writeRun({
+          ...run,
+          status: res.code === 0 ? "succeeded" : "failed",
+          endedAt: nowISO(),
+          durationMs: deps.now().getTime() - new Date(startedAt).getTime(),
+          exitCode: res.code,
+          error: res.code === 0 ? null : `exit code ${res.code}`,
+        });
+      })
+      .catch((e) => {
+        release();
+        console.error(`[argus] step run ${run.id} completion handler failed:`, e);
       });
-    } catch (e) {
-      release();
-      console.error(`[argus] step run ${run.id} handler failed:`, e);
-    }
   }
 
   /** Kill any still-alive process spawned for the instance's current phase.
@@ -277,7 +291,17 @@ export function createEngine(deps: EngineDeps): Engine {
       if (!def) return { ok: false, code: 404 };
       const { instance, startPhase: idx } = advance(def, inst, signal, nowISO());
       await writeInstance(instance);
-      if (idx !== null) await startPhase(def, instance, idx);
+      // Start the next phase detached: this handler runs on the child's signal
+      // POST, and that child may still hold its concurrency slot until its
+      // process exits after we respond. Awaiting startPhase here (which acquires
+      // a slot) would deadlock when all slots are held by children waiting on
+      // their own signal responses. The detached launch acquires as slots free.
+      if (idx !== null) {
+        void startPhase(def, instance, idx).catch((e) =>
+          console.error(`[argus] deferred phase start for ${instance.id} failed:`, e),
+        );
+      }
+      if (instance.status === "failed") deps.onFailure?.(instance);
       deps.onChange?.();
       return { ok: true, code: 202 };
     });
@@ -386,6 +410,7 @@ export function createEngine(deps: EngineDeps): Engine {
               payload: { reason: got?.run.error ?? "run ended without emitting a completion signal" },
             }, nowISO());
             await writeInstance(instance);
+            if (instance.status === "failed") deps.onFailure?.(instance);
             deps.onChange?.();
             current = instance;
             if (current.status !== "running") break;
