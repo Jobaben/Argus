@@ -189,7 +189,8 @@ app.put("/api/pipelines/:id", async (c) => {
   let body: unknown;
   try { body = await c.req.json(); } catch { return c.json({ error: "invalid JSON body" }, 400); }
   try {
-    const updated = await updatePipeline(c.req.param("id"), validatePipelineInput(body), new Date());
+    const input = validatePipelineInput(body);
+    const updated = await updatePipeline(c.req.param("id"), { ...input, model: input.model }, new Date());
     if (!updated) return c.json({ error: "not found" }, 404);
     return c.json(updated);
   } catch (e) {

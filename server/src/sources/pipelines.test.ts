@@ -151,6 +151,24 @@ test("createPipeline persists both model levels", async () => {
   assert.equal(created.phases[0].steps[0].model, "haiku");
 });
 
+test("updatePipeline via a PUT-shaped input clears an existing model", async () => {
+  const m = await fresh();
+  await m.createPipeline(
+    m.validatePipelineInput(goodInput({ model: "opus" })),
+    new Date(2026, 5, 30, 9, 0), "p1",
+  );
+  const input = m.validatePipelineInput(goodInput());
+  const updated = await m.updatePipeline(
+    "p1",
+    { ...input, model: input.model },
+    new Date(2026, 5, 30, 10, 0),
+  );
+  assert.equal(updated.model, undefined);
+  assert.equal(updated.phases.length, 2);
+  const [persisted] = await m.readPipelines();
+  assert.ok(!("model" in persisted));
+});
+
 test("validatePipelinePatch validates and can clear model", async () => {
   const m = await fresh();
   assert.equal(m.validatePipelinePatch({ model: "sonnet" }).model, "sonnet");

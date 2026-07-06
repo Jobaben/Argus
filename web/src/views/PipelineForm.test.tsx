@@ -85,6 +85,17 @@ describe("PipelineForm", () => {
     expect(arg.model).toBe("claude-opus-4-8");
   });
 
+  it("displays a persisted pipeline-level model when editing an existing pipeline", () => {
+    const initial = {
+      ...EMPTY_PIPELINE,
+      name: "Ship it",
+      phases: [{ id: "p1", name: "Build", cwd: "/tmp", gated: false, steps: [{ name: "compile", prompt: "run" }] }],
+      model: "opus",
+    };
+    render(<PipelineForm initial={initial} onSubmit={vi.fn()} onCancel={vi.fn()} />);
+    expect((screen.getByLabelText("Default model (inherit CLI)") as HTMLSelectElement).value).toBe("opus");
+  });
+
   it("omits model when left on the inherit option", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn().mockResolvedValue(undefined);

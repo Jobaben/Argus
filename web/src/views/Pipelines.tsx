@@ -20,6 +20,7 @@ function toInput(def: PipelineDefinition): PipelineInput {
     trigger: def.trigger,
     enabled: def.enabled,
     overlapPolicy: def.overlapPolicy,
+    ...(def.model ? { model: def.model } : {}),
   };
 }
 
