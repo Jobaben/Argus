@@ -310,6 +310,19 @@ test("buildClaudeArgs falls back to a generated session id when absent", () => {
   assert.ok((args[si + 1] as string).length > 0);
 });
 
+test("buildClaudeArgs appends --model when the run has one", () => {
+  const run = { sessionId: "s", model: "opus" } as Parameters<typeof buildClaudeArgs>[0];
+  const args = buildClaudeArgs(run);
+  const i = args.indexOf("--model");
+  assert.notEqual(i, -1, "expected --model in args");
+  assert.equal(args[i + 1], "opus");
+});
+
+test("buildClaudeArgs omits --model when the run has none", () => {
+  const run = { sessionId: "s" } as Parameters<typeof buildClaudeArgs>[0];
+  assert.equal(buildClaudeArgs(run).includes("--model"), false);
+});
+
 test("start() refuses when preflight fails and spawns nothing", async () => {
   const { engine, pipelines } = await load();
   await seedPipeline(pipelines);
@@ -333,4 +346,38 @@ test("start() proceeds when preflight passes", async () => {
   const inst = await e.start("p1");
   assert.ok(inst);
   assert.equal(rec.calls.length, 1);
+});
+
+test("startPhase resolves step override over pipeline default", async () => {
+  const { engine, pipelines } = await load();
+  const runs = await import(`./sources/runs.js?${Math.random()}`);
+  await seedPipeline(pipelines, {
+    model: "sonnet",
+    phases: [
+      { id: "only", name: "Only", cwd: home, gated: false, steps: [
+        { name: "override", prompt: "p", model: "opus" },
+        { name: "inherit", prompt: "p" },
+      ] },
+    ],
+  });
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn, maxConcurrent: 4 }));
+  await e.start("p1", "manual");
+  const overrideRun = (await runs.readRun(rec.calls[0].runId))!.run;
+  const inheritRun = (await runs.readRun(rec.calls[1].runId))!.run;
+  assert.equal(overrideRun.model, "opus");   // step override wins
+  assert.equal(inheritRun.model, "sonnet");  // falls back to pipeline default
+});
+
+test("startPhase leaves model unset when neither level defines one", async () => {
+  const { engine, pipelines } = await load();
+  const runs = await import(`./sources/runs.js?${Math.random()}`);
+  await seedPipeline(pipelines, {
+    phases: [{ id: "only", name: "Only", cwd: home, gated: false, steps: [{ name: "s", prompt: "p" }] }],
+  });
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  await e.start("p1", "manual");
+  const run = (await runs.readRun(rec.calls[0].runId))!.run;
+  assert.equal(run.model, undefined);
 });

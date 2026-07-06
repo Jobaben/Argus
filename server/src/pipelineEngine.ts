@@ -62,12 +62,14 @@ export const OUTCOME_CONTRACT =
 /** Build the `claude -p` argument vector for a step run, with the outcome
  *  contract appended to the system prompt. Kept pure for unit testing. */
 export function buildClaudeArgs(run: Run): string[] {
-  return [
+  const args = [
     "-p",
     "--output-format", "json",
     "--session-id", run.sessionId ?? randomUUID(),
     "--append-system-prompt", OUTCOME_CONTRACT,
   ];
+  if (run.model && run.model.trim()) args.push("--model", run.model);
+  return args;
 }
 
 /** Real spawn: `claude -p`, prompt on stdin, with the signal env injected. */
@@ -152,6 +154,7 @@ export function createEngine(deps: EngineDeps): Engine {
         pid: null,
         exitCode: null,
         sessionId: deps.newId(),
+        model: stepDef.model ?? def.model,
         project: encodeProject(phaseDef.cwd),
         resultSummary: null,
         error: null,
