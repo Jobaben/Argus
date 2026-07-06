@@ -86,6 +86,18 @@ export async function readRun(
   return { run, log };
 }
 
+/** SIGTERM every run currently recorded as 'running' with a live pid. Returns
+ *  the pids signalled. Used on shutdown and by the cancel-run endpoint. */
+export async function killRunProcess(pid: number | null): Promise<boolean> {
+  if (!pid) return false;
+  try {
+    process.kill(pid);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function pruneRuns(scheduleId: string, keep: number): Promise<void> {
   const mine = await readRuns({ scheduleId });
   const drop = mine.slice(keep);

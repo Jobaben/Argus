@@ -21,11 +21,22 @@ export interface PipelineInput {
   model?: string;
 }
 
+// Model names are passed as a `--model <value>` argv pair to `claude`. Reject
+// anything that could be mistaken for a flag (leading dash) or smuggle shell
+// metacharacters on the win32 shell:true path — only plain identifier chars.
+const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+
 function validateModel(raw: unknown, ctx: string): string {
   if (typeof raw !== "string" || !raw.trim()) {
     throw new PipelineValidationError(`${ctx}: model must be a non-empty string`);
   }
-  return raw.trim();
+  const model = raw.trim();
+  if (!MODEL_RE.test(model)) {
+    throw new PipelineValidationError(
+      `${ctx}: model "${model}" is not a valid model identifier`,
+    );
+  }
+  return model;
 }
 
 function validateStep(raw: unknown, ctx: string): PhaseStep {

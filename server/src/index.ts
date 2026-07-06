@@ -23,7 +23,7 @@ import {
   ScheduleValidationError,
   readSchedules,
 } from "./sources/schedules.js";
-import { readRun, readRuns } from "./sources/runs.js";
+import { readRun, readRuns, killRunProcess } from "./sources/runs.js";
 import {
   createPipeline, deletePipeline, readPipelines, updatePipeline, validatePipelinePatch,
   validatePipelineInput, PipelineValidationError,
@@ -32,30 +32,37 @@ import { readInstance, readInstances } from "./sources/instances.js";
 import { buildOverview } from "./sources/overview.js";
 import { createEngine, defaultPipelineSpawn, PreflightError } from "./pipelineEngine.js";
 import type { PipelineSignal } from "./sources/pipelineTypes.js";
-import { defaultSpawn, fireRun, startScheduler } from "./scheduler.js";
+import { defaultSpawn, fireRun, startScheduler, isAlive } from "./scheduler.js";
 import { randomUUID } from "node:crypto";
 import {
   checkAll as checkPrereqs, applyAll as applyPrereqs,
   preflight as preflightPrereqs, repairSafeFixables,
 } from "./setup/prereqs.js";
+import { loadConfig } from "./config.js";
+import { securityMiddleware, isUpgradeAllowed } from "./security.js";
+import { VERSION } from "./version.js";
 
-const PORT = Number(process.env.ARGUS_PORT ?? 7777);
+const config = loadConfig();
+const PORT = config.port;
 
 const engine = createEngine({
   now: () => new Date(),
   newId: () => randomUUID(),
   spawn: defaultPipelineSpawn,
-  signalUrlBase: `http://localhost:${PORT}`,
-  maxConcurrent: Number(process.env.ARGUS_MAX_CONCURRENT_RUNS ?? 4),
-  tickMs: Number(process.env.ARGUS_SCHED_TICK_MS ?? 30000),
+  signalUrlBase: `http://127.0.0.1:${PORT}`,
+  maxConcurrent: config.maxConcurrentRuns,
+  tickMs: config.schedulerTickMs,
   onChange: () => broadcast({ type: "pipelines:changed" }),
   preflight: () => preflightPrereqs(),
 });
 
 const app = new Hono();
 
+// Every API route is gated by the host/origin/token model in security.ts.
+app.use("/api/*", securityMiddleware(config));
+
 app.get("/api/health", (c) =>
-  c.json({ ok: true, claudeHome: claudeHome(), service: "argus" }),
+  c.json({ ok: true, version: VERSION, claudeHome: claudeHome(), service: "argus" }),
 );
 
 app.get("/api/setup", async (c) => c.json(await checkPrereqs()));
@@ -276,9 +283,23 @@ app.post("/api/instances/:id/abort", async (c) => {
   return c.json(res.ok ? { ok: true } : { ok: false, error: res.error }, res.code as 200 | 404 | 409);
 });
 
-const server = serve({ fetch: app.fetch, port: PORT }, (info) => {
-  console.log(`[argus] server on http://localhost:${info.port}`);
+// Catch-all error boundary so a thrown handler returns 500 JSON instead of a
+// bare socket hangup, and every failure is logged with its route.
+app.onError((err, c) => {
+  console.error(`[argus] ${c.req.method} ${c.req.path} failed:`, err);
+  return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+});
+app.notFound((c) => c.json({ error: "not found" }, 404));
+
+const server = serve({ fetch: app.fetch, port: PORT, hostname: config.host }, (info) => {
+  console.log(`[argus] v${VERSION} on http://${config.host}:${info.port}`);
   console.log(`[argus] watching ${claudeHome()}`);
+  if (config.host !== "127.0.0.1" && config.host !== "localhost" && !config.token) {
+    console.warn(
+      "[argus] WARNING: bound to a non-loopback host without ARGUS_TOKEN — " +
+      "anyone who can reach this port can execute agents. Set ARGUS_TOKEN.",
+    );
+  }
   void repairSafeFixables()
     .then(checkPrereqs)
     .then((s) => {
@@ -289,9 +310,32 @@ const server = serve({ fetch: app.fetch, port: PORT }, (info) => {
     });
 });
 
-// Live updates: push a "changed" ping whenever watched state mutates.
-const wss = new WebSocketServer({ server: server as never, path: "/ws" });
+// Live updates: push a "changed" ping whenever watched state mutates. The
+// upgrade is guarded by the same host/origin/token model as the REST surface
+// (Hono middleware does not see raw WebSocket upgrades).
+const wss = new WebSocketServer({ noServer: true, path: "/ws" });
+server.on("upgrade", (req, socket, head) => {
+  const { pathname } = new URL(req.url ?? "/", "http://localhost");
+  if (pathname !== "/ws") return;
+  const allowed = isUpgradeAllowed(
+    {
+      host: req.headers.host,
+      origin: req.headers.origin,
+      authorization: req.headers.authorization,
+      token: (req.headers["x-argus-token"] as string | undefined) ?? undefined,
+    },
+    config,
+  );
+  if (!allowed) {
+    socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+  wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
+});
 wss.on("connection", (ws) => {
+  // A client that resets the connection must not crash the server.
+  ws.on("error", () => {});
   ws.send(JSON.stringify({ type: "hello" }));
 });
 
@@ -311,13 +355,34 @@ const scheduler = startScheduler({
   onTick: () => engine.reconcile(),
 });
 
+/** Terminate every scheduler/pipeline child still alive, so shutdown does not
+ *  orphan `claude -p` processes. */
+async function killLiveRuns(): Promise<void> {
+  const running = (await readRuns()).filter((r) => r.status === "running" && isAlive(r.pid));
+  await Promise.all(running.map((r) => killRunProcess(r.pid)));
+}
+
+let shuttingDown = false;
 async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
   await stopWatching();
   await stopWatchingSchedules();
   await scheduler.stop();
+  await killLiveRuns();
+  for (const client of wss.clients) client.terminate();
   wss.close();
-  server.close();
+  await new Promise<void>((resolve) => server.close(() => resolve()));
   process.exit(0);
 }
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
+
+// A background rejection or thrown timer must not silently take down the
+// daemon or leave it wedged: log and keep serving.
+process.on("unhandledRejection", (reason) => {
+  console.error("[argus] unhandledRejection:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[argus] uncaughtException:", err);
+});

@@ -70,7 +70,12 @@ export async function readAgents(): Promise<Agent[]> {
   });
 }
 
+// Job "short" ids are a single safe path segment — no slashes or dots that
+// could escape the jobs dir via ../ traversal in the :short route param.
+const SHORT_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
 /** Reads the progress timeline for a single job. */
 export async function readTimeline(short: string): Promise<TimelineEntry[]> {
+  if (!SHORT_RE.test(short)) return [];
   return readJsonl<TimelineEntry>(path.join(paths.jobs(), short, "timeline.jsonl"));
 }
