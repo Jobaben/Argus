@@ -3,6 +3,7 @@ import type { Trigger } from "./scheduleTypes.js";
 export interface PhaseStep {
   name: string;
   prompt: string;
+  model?: string;
 }
 
 export interface PhaseDef {
@@ -20,6 +21,7 @@ export interface PipelineDefinition {
   trigger: Trigger | null;
   enabled: boolean;
   overlapPolicy: "skip" | "allow";
+  model?: string;
   lastStartedAt: string | null;
   createdAt: string;
   updatedAt: string;

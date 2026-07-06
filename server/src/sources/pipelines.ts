@@ -18,6 +18,14 @@ export interface PipelineInput {
   trigger: Trigger | null;
   enabled?: boolean;
   overlapPolicy?: "skip" | "allow";
+  model?: string;
+}
+
+function validateModel(raw: unknown, ctx: string): string {
+  if (typeof raw !== "string" || !raw.trim()) {
+    throw new PipelineValidationError(`${ctx}: model must be a non-empty string`);
+  }
+  return raw.trim();
 }
 
 function validateStep(raw: unknown, ctx: string): PhaseStep {
@@ -25,7 +33,9 @@ function validateStep(raw: unknown, ctx: string): PhaseStep {
   const s = raw as Record<string, unknown>;
   if (typeof s.name !== "string" || !s.name.trim()) throw new PipelineValidationError(`${ctx}: step name is required`);
   if (typeof s.prompt !== "string" || !s.prompt.trim()) throw new PipelineValidationError(`${ctx}: step prompt is required`);
-  return { name: s.name.trim(), prompt: s.prompt.trim() };
+  const step: PhaseStep = { name: s.name.trim(), prompt: s.prompt.trim() };
+  if (s.model !== undefined && s.model !== null) step.model = validateModel(s.model, `${ctx}: step`);
+  return step;
 }
 
 function validatePhase(raw: unknown, i: number): PhaseDef {
@@ -54,7 +64,9 @@ export function validatePipelineInput(raw: unknown): PipelineInput {
   const trigger = r.trigger == null ? null : validateTrigger(r.trigger);
   const overlapPolicy = r.overlapPolicy === "allow" ? "allow" : "skip";
   const enabled = r.enabled === undefined ? true : Boolean(r.enabled);
-  return { name: r.name.trim(), phases, trigger, enabled, overlapPolicy };
+  const input: PipelineInput = { name: r.name.trim(), phases, trigger, enabled, overlapPolicy };
+  if (r.model !== undefined && r.model !== null) input.model = validateModel(r.model, "pipeline");
+  return input;
 }
 
 export function validatePipelinePatch(raw: unknown): Partial<PipelineInput> {
@@ -76,6 +88,7 @@ export function validatePipelinePatch(raw: unknown): Partial<PipelineInput> {
   if ("trigger" in r) patch.trigger = r.trigger == null ? null : validateTrigger(r.trigger);
   if ("enabled" in r) patch.enabled = Boolean(r.enabled);
   if ("overlapPolicy" in r) patch.overlapPolicy = r.overlapPolicy === "allow" ? "allow" : "skip";
+  if ("model" in r) patch.model = r.model == null ? undefined : validateModel(r.model, "pipeline");
   return patch;
 }
 
@@ -117,6 +130,7 @@ export async function createPipeline(input: PipelineInput, now: Date, id: string
     trigger: input.trigger,
     enabled: input.enabled ?? true,
     overlapPolicy: input.overlapPolicy ?? "skip",
+    ...(input.model ? { model: input.model } : {}),
     lastStartedAt: null,
     createdAt: iso,
     updatedAt: iso,
@@ -142,6 +156,7 @@ export async function updatePipeline(
     ...("trigger" in patch ? { trigger: patch.trigger! } : {}),
     ...("enabled" in patch ? { enabled: patch.enabled! } : {}),
     ...("overlapPolicy" in patch ? { overlapPolicy: patch.overlapPolicy! } : {}),
+    ...("model" in patch ? { model: patch.model } : {}),
     updatedAt: now.toISOString(),
   };
   list[idx] = merged;

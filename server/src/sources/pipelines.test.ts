@@ -103,3 +103,59 @@ test("updatePipeline via patch flips enabled without touching phases", async () 
   assert.equal(updated.enabled, false);
   assert.equal(updated.phases.length, 2);
 });
+
+test("validation stores a trimmed pipeline-level model", async () => {
+  const m = await fresh();
+  const input = m.validatePipelineInput(goodInput({ model: "  opus  " }));
+  assert.equal(input.model, "opus");
+});
+
+test("validation stores a trimmed step-level model override", async () => {
+  const m = await fresh();
+  const input = m.validatePipelineInput(goodInput({
+    phases: [{ id: "x", name: "X", cwd: home, gated: false, steps: [{ name: "s", prompt: "p", model: " sonnet " }] }],
+  }));
+  assert.equal(input.phases[0].steps[0].model, "sonnet");
+});
+
+test("validation omits model when absent", async () => {
+  const m = await fresh();
+  const input = m.validatePipelineInput(goodInput());
+  assert.ok(!("model" in input));
+  assert.ok(!("model" in input.phases[0].steps[0]));
+});
+
+test("validation rejects a blank pipeline model", async () => {
+  const m = await fresh();
+  assert.throws(() => m.validatePipelineInput(goodInput({ model: "   " })), /model must be a non-empty string/);
+});
+
+test("validation rejects a blank step model", async () => {
+  const m = await fresh();
+  const bad = goodInput({
+    phases: [{ id: "x", name: "X", cwd: home, gated: false, steps: [{ name: "s", prompt: "p", model: "" }] }],
+  });
+  assert.throws(() => m.validatePipelineInput(bad), /model must be a non-empty string/);
+});
+
+test("createPipeline persists both model levels", async () => {
+  const m = await fresh();
+  const created = await m.createPipeline(
+    m.validatePipelineInput(goodInput({
+      model: "opus",
+      phases: [{ id: "x", name: "X", cwd: home, gated: false, steps: [{ name: "s", prompt: "p", model: "haiku" }] }],
+    })),
+    new Date(2026, 5, 30, 9, 0), "p1",
+  );
+  assert.equal(created.model, "opus");
+  assert.equal(created.phases[0].steps[0].model, "haiku");
+});
+
+test("validatePipelinePatch validates and can clear model", async () => {
+  const m = await fresh();
+  assert.equal(m.validatePipelinePatch({ model: "sonnet" }).model, "sonnet");
+  const cleared = m.validatePipelinePatch({ model: null });
+  assert.ok("model" in cleared);
+  assert.equal(cleared.model, undefined);
+  assert.throws(() => m.validatePipelinePatch({ model: "  " }), /model must be a non-empty string/);
+});

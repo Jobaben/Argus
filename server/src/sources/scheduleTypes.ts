@@ -45,6 +45,7 @@ export interface Run {
   pid: number | null;
   exitCode: number | null;
   sessionId: string | null;
+  model?: string;
   project: string | null;
   resultSummary: string | null;
   error: string | null;
