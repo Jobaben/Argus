@@ -52,30 +52,41 @@ function ScheduleForm({
   };
 
   const field = "w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink placeholder-ink-faint";
+  const labelCls = "block space-y-1 text-xs font-medium text-ink-dim";
+  const valid = form.name.trim() && form.prompt.trim() && form.cwd.trim();
 
   return (
     <div className="rounded-xl border border-line bg-surface p-5 space-y-3">
       {err && (
         <AlertStrip subject="Error" message={err} />
       )}
-      <input
-        className={field}
-        placeholder="Name"
-        value={form.name}
-        onChange={(e) => setForm({ ...form, name: e.target.value })}
-      />
-      <textarea
-        className={`${field} h-24`}
-        placeholder="Prompt for claude -p"
-        value={form.prompt}
-        onChange={(e) => setForm({ ...form, prompt: e.target.value })}
-      />
-      <input
-        className={field}
-        placeholder="Working directory (absolute path)"
-        value={form.cwd}
-        onChange={(e) => setForm({ ...form, cwd: e.target.value })}
-      />
+      <label className={labelCls}>
+        <span>Name</span>
+        <input
+          className={field}
+          placeholder="Nightly audit"
+          value={form.name}
+          onChange={(e) => setForm({ ...form, name: e.target.value })}
+        />
+      </label>
+      <label className={labelCls}>
+        <span>Prompt for claude -p</span>
+        <textarea
+          className={`${field} h-24`}
+          placeholder="Review yesterday's changes and summarize risks"
+          value={form.prompt}
+          onChange={(e) => setForm({ ...form, prompt: e.target.value })}
+        />
+      </label>
+      <label className={labelCls}>
+        <span>Working directory (absolute path)</span>
+        <input
+          className={field}
+          placeholder="/home/you/project"
+          value={form.cwd}
+          onChange={(e) => setForm({ ...form, cwd: e.target.value })}
+        />
+      </label>
       <TriggerFields
         fieldClass={field}
         value={form.trigger}
@@ -85,7 +96,8 @@ function ScheduleForm({
       <div className="flex items-center gap-2 pt-1">
         <button
           type="button"
-          disabled={busy}
+          disabled={busy || !valid}
+          title={!valid ? "Name, prompt and working directory are required" : undefined}
           onClick={submit}
           className="rounded-lg bg-ok/20 px-3 py-1.5 text-sm text-ok ring-1 ring-ok/30 transition hover:bg-ok/30 disabled:opacity-50"
         >
@@ -266,6 +278,18 @@ function ScheduleCard({
   const { runs } = useRuns(schedule.id);
   const running = runs.filter((r) => r.status === "running");
   const recent = runs.slice(0, 5);
+  const [actionErr, setActionErr] = useState<string | null>(null);
+
+  // Wrap an action so a failed Run-now/Enable/Delete surfaces instead of being
+  // silently swallowed by a bare `void promise`.
+  const run = (fn: () => Promise<unknown>) => async () => {
+    setActionErr(null);
+    try {
+      await fn();
+    } catch (e) {
+      setActionErr(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   return (
     <div className="rounded-xl border border-line bg-surface p-4">
@@ -293,14 +317,14 @@ function ScheduleCard({
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <button
           type="button"
-          onClick={() => void runNow(schedule.id)}
+          onClick={run(() => runNow(schedule.id))}
           className="rounded-lg bg-ok/15 px-2.5 py-1 text-xs text-ok ring-1 ring-ok/30 hover:bg-ok/25"
         >
           Run now
         </button>
         <button
           type="button"
-          onClick={() => void update(schedule.id, { enabled: !schedule.enabled })}
+          onClick={run(() => update(schedule.id, { enabled: !schedule.enabled }))}
           className="rounded-lg border border-line px-2.5 py-1 text-xs text-ink-dim hover:text-ink"
         >
           {schedule.enabled ? "Disable" : "Enable"}
@@ -315,7 +339,7 @@ function ScheduleCard({
         <button
           type="button"
           onClick={() => {
-            if (confirm(`Delete schedule "${schedule.name}"?`)) void remove(schedule.id);
+            if (confirm(`Delete schedule "${schedule.name}"?`)) void run(() => remove(schedule.id))();
           }}
           className="rounded-lg border border-fail/20 px-2.5 py-1 text-xs text-fail hover:bg-fail/10"
         >
@@ -325,6 +349,12 @@ function ScheduleCard({
           <span className="text-xs text-ink-faint">disabled</span>
         )}
       </div>
+
+      {actionErr && (
+        <p role="alert" className="mt-2 text-xs text-fail">
+          {actionErr}
+        </p>
+      )}
 
       {recent.length > 0 && (
         <ul className="mt-3 space-y-1.5">

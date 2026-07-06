@@ -148,6 +148,7 @@ export function PipelineForm({
 
       <input
         className={FIELD}
+        aria-label="Pipeline name"
         placeholder="Pipeline name"
         value={form.name}
         onChange={(e) => setForm({ ...form, name: e.target.value })}
@@ -190,9 +191,9 @@ export function PipelineForm({
                   onClick={() => setForm((f) => ({ ...f, phases: f.phases.filter((_, j) => j !== pi) }))}>✕</button>
               </div>
             </div>
-            <input className={FIELD} placeholder="Phase name" value={phase.name}
+            <input className={FIELD} aria-label={`Phase ${pi + 1} name`} placeholder="Phase name" value={phase.name}
               onChange={(e) => setPhase(pi, { name: e.target.value })} />
-            <input className={FIELD} placeholder="Working directory (absolute path)" value={phase.cwd}
+            <input className={FIELD} aria-label={`Phase ${pi + 1} working directory`} placeholder="Working directory (absolute path)" value={phase.cwd}
               onChange={(e) => setPhase(pi, { cwd: e.target.value })} />
             <label className="flex items-center gap-2 text-sm text-ink-dim">
               <input type="checkbox" checked={phase.gated}
@@ -204,7 +205,7 @@ export function PipelineForm({
               {phase.steps.map((step, si) => (
                 <div key={si} className="space-y-1.5">
                   <div className="flex items-center gap-2">
-                    <input className={`${FIELD} w-48`} placeholder="Step name" value={step.name}
+                    <input className={`${FIELD} w-48`} aria-label={`Phase ${pi + 1} step ${si + 1} name`} placeholder="Step name" value={step.name}
                       onChange={(e) => setStep(pi, si, { name: e.target.value })} />
                     <ModelSelect
                       label="Use pipeline default"
@@ -221,7 +222,7 @@ export function PipelineForm({
                         onClick={() => setPhase(pi, { steps: phase.steps.filter((_, k) => k !== si) })}>✕</button>
                     </div>
                   </div>
-                  <textarea className={`${FIELD} h-20`} placeholder="Step prompt" value={step.prompt}
+                  <textarea className={`${FIELD} h-20`} aria-label={`Phase ${pi + 1} step ${si + 1} prompt`} placeholder="Step prompt" value={step.prompt}
                     onChange={(e) => setStep(pi, si, { prompt: e.target.value })} />
                 </div>
               ))}

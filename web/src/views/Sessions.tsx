@@ -1,10 +1,10 @@
-import { useState } from "react";
 import {
   useSession,
   useSessions,
   type SessionMessage,
   type SessionSummary,
 } from "../useSessions";
+import { useHashRoute } from "../useHashRoute";
 import { AlertStrip, EmptyState, Page } from "../ds";
 
 function timeAgo(iso: string | null): string {
@@ -20,18 +20,15 @@ function timeAgo(iso: string | null): string {
   return `${Math.round(hrs / 24)}d ago`;
 }
 
-function SessionCard({
-  session,
-  onOpen,
-}: {
-  session: SessionSummary;
-  onOpen: (s: SessionSummary) => void;
-}) {
+function sessionHref(project: string, id: string): string {
+  return `#/sessions/${encodeURIComponent(project)}/${encodeURIComponent(id)}`;
+}
+
+function SessionCard({ session }: { session: SessionSummary }) {
   return (
-    <button
-      type="button"
-      onClick={() => onOpen(session)}
-      className="rounded-xl border border-line bg-surface p-4 text-left transition hover:border-ink-faint/40 hover:bg-surface-2"
+    <a
+      href={sessionHref(session.project, session.id)}
+      className="block rounded-xl border border-line bg-surface p-4 text-left transition hover:border-ink-faint/40 hover:bg-surface-2"
     >
       <h3 className="line-clamp-2 text-base font-semibold text-ink">
         {session.title}
@@ -50,7 +47,7 @@ function SessionCard({
         )}
         <span className="ml-auto">{timeAgo(session.lastActivity)}</span>
       </div>
-    </button>
+    </a>
   );
 }
 
@@ -91,42 +88,45 @@ function MessageRow({ message }: { message: SessionMessage }) {
   );
 }
 
-function SessionTranscript({
-  session,
-  onBack,
-}: {
-  session: SessionSummary;
-  onBack: () => void;
-}) {
-  const { session: detail, loading, error } = useSession(
-    session.project,
-    session.id,
-  );
+function SessionTranscript({ project, id }: { project: string; id: string }) {
+  const { session: detail, loading, error } = useSession(project, id);
 
+  const toolUses = detail?.messages.filter((m) => m.toolName).length ?? 0;
   return (
     <Page
-      title={session.title}
+      title={detail?.title ?? "Transcript"}
       crumbs={[
         { label: "Command Center", href: "#/command" },
         { label: "Sessions", href: "#/sessions" },
       ]}
+      actions={
+        detail ? (
+          <a
+            href={`/api/sessions/${encodeURIComponent(project)}/${encodeURIComponent(id)}/export`}
+            className="rounded-lg border border-line bg-surface px-3 py-1.5 text-sm text-ink-dim transition hover:border-ink-faint/40 hover:text-ink"
+          >
+            ↓ Export Markdown
+          </a>
+        ) : null
+      }
     >
-      <button
-        type="button"
-        onClick={onBack}
+      <a
+        href="#/sessions"
         className="mb-6 inline-flex items-center gap-1.5 rounded-lg border border-line bg-surface px-3 py-1.5 text-sm text-ink-dim transition hover:border-ink-faint/40 hover:text-ink"
       >
         ← Back to sessions
-      </button>
-      <div className="mb-6">
-        <p className="truncate font-mono text-xs text-ink-faint">{session.projectLabel}</p>
-        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-faint">
-          <span>{session.messageCount} msgs</span>
-          <span>· {session.toolUseCount} tools</span>
-          {session.model && <span>· {session.model}</span>}
-          <span>· last activity {timeAgo(session.lastActivity)}</span>
+      </a>
+      {detail && (
+        <div className="mb-6">
+          <p className="truncate font-mono text-xs text-ink-faint">{detail.projectLabel}</p>
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-faint">
+            <span>{detail.messages.length} msgs</span>
+            <span>· {toolUses} tools</span>
+            {detail.model && <span>· {detail.model}</span>}
+            <span>· last activity {timeAgo(detail.lastActivity)}</span>
+          </div>
         </div>
-      </div>
+      )}
 
       {error && (
         <div className="mb-6">
@@ -151,12 +151,12 @@ function SessionTranscript({
 
 export default function Sessions() {
   const { sessions, loading, error } = useSessions();
-  const [selected, setSelected] = useState<SessionSummary | null>(null);
+  const segments = useHashRoute();
 
-  if (selected) {
-    return (
-      <SessionTranscript session={selected} onBack={() => setSelected(null)} />
-    );
+  // Deep-linkable transcript: #/sessions/:project/:id renders the transcript
+  // directly, so a reload or a shared link lands on the same view.
+  if (segments[0] === "sessions" && segments[1] && segments[2]) {
+    return <SessionTranscript project={segments[1]} id={segments[2]} />;
   }
 
   return (
@@ -178,11 +178,7 @@ export default function Sessions() {
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           {sessions.map((s) => (
-            <SessionCard
-              key={`${s.project}/${s.id}`}
-              session={s}
-              onOpen={setSelected}
-            />
+            <SessionCard key={`${s.project}/${s.id}`} session={s} />
           ))}
         </div>
       )}

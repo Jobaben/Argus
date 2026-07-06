@@ -23,4 +23,24 @@ describe("MoreMenu", () => {
     await user.click(screen.getByRole("menuitem", { name: "Stats" }));
     expect(screen.queryByRole("menuitem", { name: "Stats" })).toBeNull();
   });
+
+  it("moves focus into the menu on open and closes on Escape", async () => {
+    const user = userEvent.setup();
+    render(
+      <MoreMenu
+        active={false}
+        items={[
+          { id: "stats", label: "Stats", href: "#/stats" },
+          { id: "inv", label: "Inventory", href: "#/inventory" },
+        ]}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /more/i }));
+    expect(screen.getByRole("menuitem", { name: "Stats" })).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("menuitem", { name: "Inventory" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menuitem", { name: "Stats" })).toBeNull();
+    expect(screen.getByRole("button", { name: /more/i })).toHaveFocus();
+  });
 });

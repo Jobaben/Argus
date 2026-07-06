@@ -72,12 +72,16 @@ export default function Search() {
       </p>
 
       <div className="mb-6">
+        <label htmlFor="transcript-search" className="sr-only">
+          Search transcripts
+        </label>
         <input
+          id="transcript-search"
           type="search"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder="Search transcripts…"
-          className="w-full rounded-xl border border-line bg-surface px-4 py-3 text-ink placeholder:text-ink-faint outline-none transition focus:border-ink-faint/40 focus:bg-surface-2"
+          className="w-full rounded-xl border border-line bg-surface px-4 py-3 text-ink placeholder:text-ink-faint transition focus:border-eye/60 focus:bg-surface-2 focus:outline-none focus:ring-2 focus:ring-eye/40"
         />
       </div>
 

@@ -126,7 +126,7 @@ function PhaseColumn({
   revise: (id: string, note?: string) => Promise<unknown>;
 }) {
   return (
-    <section className="flex min-w-0 flex-1 flex-col gap-2">
+    <section className="flex w-44 min-w-44 flex-1 flex-col gap-2">
       <div className="flex items-center gap-1.5 px-0.5">
         <span className="font-mono text-[9px] text-ink-faint">
           {String(index + 1).padStart(2, "0")}
@@ -181,7 +181,9 @@ function Row({
           <TimeAgo iso={row.updatedAt} />
         </span>
       </div>
-      <div className="mt-3.5 flex items-start gap-3">
+      {/* Phase columns keep a readable minimum width and scroll horizontally
+          rather than squishing to nothing on narrow viewports. */}
+      <div className="mt-3.5 flex items-start gap-3 overflow-x-auto pb-1">
         {row.phases.map((pill, i) => (
           <PhaseColumn
             key={pill.id}
