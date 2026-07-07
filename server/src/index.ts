@@ -16,6 +16,7 @@ import { isUpgradeAllowed } from "./security.js";
 import { VERSION } from "./version.js";
 import { buildPipelineFailurePayload, buildRunFailurePayload, postWebhook } from "./notify.js";
 import { createApp } from "./app.js";
+import { createRunTailer } from "./runTailer.js";
 
 const config = loadConfig();
 const PORT = config.port;
@@ -31,6 +32,8 @@ function broadcast(message: unknown) {
   }
 }
 
+const tailer = createRunTailer({ broadcast, now: () => new Date() });
+
 const engine = createEngine({
   now: () => new Date(),
   newId: () => randomUUID(),
@@ -38,6 +41,7 @@ const engine = createEngine({
   signalUrlBase: `http://127.0.0.1:${PORT}`,
   maxConcurrent: config.maxConcurrentRuns,
   tickMs: config.schedulerTickMs,
+  tailer,
   onChange: () => broadcast({ type: "pipelines:changed" }),
   onFailure: (inst) =>
     void postWebhook(
@@ -47,7 +51,7 @@ const engine = createEngine({
   preflight: () => preflightPrereqs(),
 });
 
-const app = createApp({ config, engine, broadcast });
+const app = createApp({ config, engine, broadcast, activity: () => tailer.latest() });
 
 const server = serve({ fetch: app.fetch, port: PORT, hostname: config.host }, (info) => {
   console.log(`[argus] v${VERSION} on http://${config.host}:${info.port}`);
@@ -150,6 +154,7 @@ async function shutdown() {
   await stopWatchingSchedules();
   await stopWatchingExtensions();
   await scheduler.stop();
+  await tailer.stop();
   await killLiveRuns();
   if (wss) {
     for (const client of wss.clients) client.terminate();
