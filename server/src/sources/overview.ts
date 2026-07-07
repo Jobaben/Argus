@@ -1,5 +1,6 @@
 import type { PipelineDefinition, PipelineInstance, InstanceStatus } from "./pipelineTypes.js";
 import type { Run } from "./scheduleTypes.js";
+import type { ActivityEvent } from "../runTailer.js";
 
 /** Aggregated spend for one instance. Null field = no run reported that metric. */
 export interface OverviewCost {
@@ -30,8 +31,13 @@ function rank(latest: PipelineInstance | null): number {
   return ATTENTION_RANK[latest.status] ?? 3;
 }
 
-/** Copy the run's cost/token metrics onto each step that has a run record. */
-function enrichSteps(inst: PipelineInstance, byRunId: Map<string, Run>): PipelineInstance {
+/** Copy the run's cost/token/timing metrics — and, while running, its latest
+ *  tailer activity — onto each step that has a run record. */
+function enrichSteps(
+  inst: PipelineInstance,
+  byRunId: Map<string, Run>,
+  activity?: Map<string, ActivityEvent>,
+): PipelineInstance {
   return {
     ...inst,
     phases: inst.phases.map((p) => ({
@@ -39,7 +45,15 @@ function enrichSteps(inst: PipelineInstance, byRunId: Map<string, Run>): Pipelin
       steps: p.steps.map((s) => {
         const run = s.runId ? byRunId.get(s.runId) : undefined;
         if (!run) return s;
-        return { ...s, costUsd: run.costUsd ?? null, tokens: run.tokens ?? null };
+        const act = s.status === "running" && s.runId ? activity?.get(s.runId) : undefined;
+        return {
+          ...s,
+          costUsd: run.costUsd ?? null,
+          tokens: run.tokens ?? null,
+          startedAt: run.startedAt ?? null,
+          durationMs: run.durationMs ?? null,
+          ...(act ? { currentActivity: act.label, activityAt: act.at } : {}),
+        };
       }),
     })),
   };
@@ -62,13 +76,15 @@ function instanceCost(instanceId: string, runs: Run[]): OverviewCost {
  * Pair each definition with its latest instance and sort attention-first.
  * `instances` is expected newest-first (createdAt desc), as readInstances returns;
  * the first instance seen per pipelineId is therefore its latest.
- * `runs` (when given) joins per-step cost/tokens onto the latest instance and
- * totals the instance's spend.
+ * `runs` (when given) joins per-step cost/tokens/timing onto the latest
+ * instance and totals the instance's spend. `activity` (when given) further
+ * joins each running step's latest tailer event.
  */
 export function buildOverview(
   definitions: PipelineDefinition[],
   instances: PipelineInstance[],
   runs: Run[] = [],
+  activity?: Map<string, ActivityEvent>,
 ): OverviewEntry[] {
   const latestByPipeline = new Map<string, PipelineInstance>();
   for (const i of instances) {
@@ -79,7 +95,7 @@ export function buildOverview(
     const latest = latestByPipeline.get(definition.id) ?? null;
     return {
       definition,
-      latest: latest ? enrichSteps(latest, byRunId) : null,
+      latest: latest ? enrichSteps(latest, byRunId, activity) : null,
       cost: latest ? instanceCost(latest.id, runs) : null,
     };
   });

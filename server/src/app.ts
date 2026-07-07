@@ -35,6 +35,7 @@ import { readInstance, readInstances } from "./sources/instances.js";
 import { buildOverview } from "./sources/overview.js";
 import { PreflightError, type Engine } from "./pipelineEngine.js";
 import type { PipelineSignal } from "./sources/pipelineTypes.js";
+import type { ActivityEvent } from "./runTailer.js";
 import { defaultSpawn, fireRun, isAlive } from "./scheduler.js";
 import type { ArgusConfig } from "./config.js";
 import { securityMiddleware } from "./security.js";
@@ -49,6 +50,8 @@ export interface AppDeps {
   broadcast: (message: unknown) => void;
   /** Whether to mount the built SPA (skipped in tests). Defaults to true. */
   serveWeb?: boolean;
+  /** Latest activity per running step run, from the run tailer. */
+  activity?: () => Map<string, ActivityEvent>;
 }
 
 /**
@@ -276,7 +279,7 @@ export function createApp(deps: AppDeps): Hono {
 
   app.get("/api/overview", async (c) => {
     const [defs, insts, runs] = await Promise.all([readPipelines(), readInstances(), readRuns()]);
-    return c.json({ overview: buildOverview(defs, insts, runs) });
+    return c.json({ overview: buildOverview(defs, insts, runs, deps.activity?.()) });
   });
 
   app.get("/api/instances/:id", async (c) => {

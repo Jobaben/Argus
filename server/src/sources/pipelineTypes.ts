@@ -41,6 +41,14 @@ export interface StepProgress {
   costUsd?: number | null;
   /** Total tokens of the step's run, joined from the run record at read time. */
   tokens?: number | null;
+  /** Latest activity label from the run tailer; only set while running. */
+  currentActivity?: string | null;
+  /** Arrival timestamp of that activity. */
+  activityAt?: string | null;
+  /** Run start time, joined from the run record. */
+  startedAt?: string | null;
+  /** Final run duration, joined from the run record when it ended. */
+  durationMs?: number | null;
 }
 
 export interface PhaseProgress {

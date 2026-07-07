@@ -158,6 +158,61 @@ test("cost is null-per-metric when no run reported it, and null with no instance
   assert.equal(out[1].cost, null);
 });
 
+test("joins current activity and timing onto running steps", () => {
+  const d = def("a");
+  const i = inst("i1", "a", "running", "2026-06-30T10:00:00.000Z");
+  i.phases[0].steps = [{ name: "s", runId: "r1", status: "running" }];
+  const run = {
+    id: "r1",
+    scheduleId: "pipeline:a",
+    scheduleName: "a · P1",
+    prompt: "x",
+    cwd: "/",
+    status: "running",
+    trigger: "scheduled",
+    queuedAt: "2026-06-30T10:00:00.000Z",
+    startedAt: "2026-06-30T10:00:00.000Z",
+    endedAt: null,
+    durationMs: null,
+    pid: 1,
+    exitCode: null,
+    sessionId: "s",
+    project: null,
+    resultSummary: null,
+    error: null,
+    instanceId: "i1",
+    phaseId: "p1",
+  } as Run;
+  const activity = new Map([
+    ["r1", { at: "2026-06-30T10:05:00.000Z", kind: "tool" as const, label: "Bash: npm test" }],
+  ]);
+  const out = buildOverview([d], [i], [run], activity);
+  const step = out[0].latest!.phases[0].steps[0];
+  assert.equal(step.currentActivity, "Bash: npm test");
+  assert.equal(step.activityAt, "2026-06-30T10:05:00.000Z");
+  assert.equal(step.startedAt, "2026-06-30T10:00:00.000Z");
+});
+
+test("finished steps get durationMs but no activity", () => {
+  const d = def("a");
+  const i = inst("i1", "a", "running", "2026-06-30T10:00:00.000Z");
+  i.phases[0].steps = [{ name: "s", runId: "r1", status: "succeeded" }];
+  const run = {
+    id: "r1", scheduleId: "pipeline:a", scheduleName: "a · P1", prompt: "x", cwd: "/",
+    status: "succeeded", trigger: "scheduled", queuedAt: "2026-06-30T10:00:00.000Z",
+    startedAt: "2026-06-30T10:00:00.000Z", endedAt: "2026-06-30T10:02:08.000Z",
+    durationMs: 128000, pid: 1, exitCode: 0, sessionId: "s", project: null,
+    resultSummary: null, error: null, instanceId: "i1", phaseId: "p1",
+  } as Run;
+  const activity = new Map([
+    ["r1", { at: "2026-06-30T10:01:00.000Z", kind: "done" as const, label: "finished" }],
+  ]);
+  const out = buildOverview([d], [i], [run], activity);
+  const step = out[0].latest!.phases[0].steps[0];
+  assert.equal(step.durationMs, 128000);
+  assert.equal(step.currentActivity, undefined);
+});
+
 test("breaks ties by updatedAt desc then definition name", () => {
   const defs = [def("zeta"), def("alpha")];
   const instances = [
