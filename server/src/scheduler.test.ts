@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { parseRunEnvelope } from "./scheduler.js";
 
 let home: string;
 beforeEach(() => {
@@ -184,4 +185,40 @@ test("backfillRunCosts patches legacy terminal runs from their log envelope, onc
   assert.equal((await runs.readRun("done"))!.run.costUsd, 1);
   // Second pass: everything is checked; nothing to patch.
   assert.equal(await scheduler.backfillRunCosts(), 0);
+});
+
+test("parseRunEnvelope harvests the result line from a stream-json NDJSON transcript", () => {
+  const transcript = [
+    JSON.stringify({ type: "system", subtype: "init", session_id: "s1", model: "m" }),
+    JSON.stringify({
+      type: "assistant",
+      message: {
+        content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } }],
+        usage: { input_tokens: 9999, output_tokens: 9999 },
+      },
+      session_id: "s1",
+    }),
+    JSON.stringify({
+      type: "user",
+      message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }] },
+      session_id: "s1",
+    }),
+    JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      duration_ms: 42000,
+      num_turns: 2,
+      result: "All green. ARGUS_OUTCOME: succeeded",
+      session_id: "s1",
+      total_cost_usd: 0.123,
+      usage: { input_tokens: 100, output_tokens: 50 },
+    }),
+    "",
+  ].join("\n");
+  const env = parseRunEnvelope(transcript);
+  assert.equal(env.result, "All green. ARGUS_OUTCOME: succeeded");
+  assert.equal(env.costUsd, 0.123);
+  assert.equal(env.tokens, 150);
+  assert.equal(env.isError, false);
 });
