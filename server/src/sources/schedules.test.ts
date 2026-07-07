@@ -96,7 +96,13 @@ test("readSchedulesWithNext attaches a future nextRun", async () => {
 test("validateInput rejects an out-of-range time", async () => {
   const m = await fresh();
   assert.throws(
-    () => m.validateInput({ name: "x", prompt: "p", cwd: home, trigger: { kind: "daily", time: "25:61" } }),
+    () =>
+      m.validateInput({
+        name: "x",
+        prompt: "p",
+        cwd: home,
+        trigger: { kind: "daily", time: "25:61" },
+      }),
     (e: Error) => e.name === "ScheduleValidationError",
   );
 });

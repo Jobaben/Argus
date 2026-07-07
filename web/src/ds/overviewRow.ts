@@ -1,7 +1,12 @@
 import type { DsStatus } from "./status";
 import type {
-  InstanceStatus, PhaseStatus, StepStatus, PhaseProgress, PhaseDef,
-  OverviewEntry, PipelineInstance,
+  InstanceStatus,
+  PhaseStatus,
+  StepStatus,
+  PhaseProgress,
+  PhaseDef,
+  OverviewEntry,
+  PipelineInstance,
 } from "../types";
 
 export interface StepPill {
@@ -152,7 +157,10 @@ export function toOverviewRow(entry: OverviewEntry): OverviewRow {
     name: p.name,
     status: PHASE_STATUS_TO_DS[p.status],
     activeStep: activeStepName(p),
-    steps: stepPills(p, definition.phases.find((d) => d.id === p.id)),
+    steps: stepPills(
+      p,
+      definition.phases.find((d) => d.id === p.id),
+    ),
     reason: p.status === "failed" ? extractReason(p.payload) : null,
   }));
 

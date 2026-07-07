@@ -5,7 +5,7 @@ folder. It watches the files Claude Code already writes (background jobs,
 transcripts, history, stats) and turns them into a live web view.
 
 Argus **never modifies the state Claude Code owns** — it treats jobs,
-transcripts, history and daemon files as strictly read-only. It *does* own and
+transcripts, history and daemon files as strictly read-only. It _does_ own and
 write its own state under `~/.claude/argus/` (schedules, pipelines, run
 records) and, when you apply setup fixes, its signal hooks under
 `~/.claude/hooks/` and a hook entry in `settings.json`. So the monitoring tabs
@@ -33,12 +33,13 @@ authenticated.
 
 ---
 
-## 1. Agents — *the home view*
+## 1. Agents — _the home view_
 
 **Purpose:** the at-a-glance status board for all your background Claude Code
 jobs (agents launched to run in the background).
 
 **What you see:**
+
 - A **summary row**: total agents, how many are **live**, **working**, and
   **failed**.
 - A grid of **agent cards**, each with: the agent's name, its short ID (the
@@ -60,7 +61,7 @@ ID is an active worker in the roster).
 
 ---
 
-## 2. Detail — *single-agent deep dive + timeline*
+## 2. Detail — _single-agent deep dive + timeline_
 
 **Purpose:** everything about one agent, including the chronological trail of how
 it got to its current state. This is where a card click lands you
@@ -68,6 +69,7 @@ it got to its current state. This is where a card click lands you
 selected" prompt.
 
 **What you see:**
+
 - A **metadata card**: name, short ID, status pill, live dot, current detail and
   result text, plus a full field list — folder, full CWD, template, tempo,
   session ID, CLI version, PID, in-flight/queued task counts, and Created /
@@ -87,12 +89,13 @@ even for agents no longer in the main list.
 
 ---
 
-## 3. Sessions — *browse & read transcripts*
+## 3. Sessions — _browse & read transcripts_
 
 **Purpose:** read the actual conversation transcripts of your Claude Code
 sessions across all projects.
 
 **What you see:**
+
 - **List view:** cards sorted by most-recent activity, each showing a title
   (from the first user prompt or an AI-generated title), the project label,
   message count, tool-use count, the model used, and last-activity time.
@@ -112,7 +115,7 @@ Use **back** to return to the list.
 
 ---
 
-## 4. Activity — *global prompt feed*
+## 4. Activity — _global prompt feed_
 
 **Purpose:** a single chronological stream of recent prompts/commands issued
 across **all** projects and sessions — your "what have I been doing lately"
@@ -129,7 +132,7 @@ regardless of which project or session it belonged to. Read-only.
 
 ---
 
-## 5. Projects — *working directories overview*
+## 5. Projects — _working directories overview_
 
 **Purpose:** a directory-level roll-up — every project folder Claude Code has
 worked in, with how much activity each has.
@@ -148,7 +151,7 @@ session files and reading the newest modified time.
 
 ---
 
-## 6. Search — *full-text across all transcripts*
+## 6. Search — _full-text across all transcripts_
 
 **Purpose:** find any text anywhere in your session history — a phrase someone
 said, a file name, an error message.
@@ -169,11 +172,12 @@ background polling — it queries on each keystroke).
 
 ---
 
-## 7. Stats — *usage analytics*
+## 7. Stats — _usage analytics_
 
 **Purpose:** aggregate usage analytics across all your Claude Code activity.
 
 **What you see:**
+
 - **Headline metric cards:** total sessions, messages, tool calls, total tokens,
   output tokens, cache reads, active days, models used (compact `k/M/B`
   formatting). Plus, when available: total cost (USD), longest session duration,
@@ -196,13 +200,14 @@ secondary metrics appear only if present.)
 
 ---
 
-## 8. Inventory — *installed extensions catalog*
+## 8. Inventory — _installed extensions catalog_
 
 **Purpose:** see everything installed into your Claude Code environment — the
 agents, commands, skills, and plugins available to you.
 
 **What you see:** four collapsible, color-accented sections, each with a count
 badge:
+
 - **Agents** (emerald) — from `~/.claude/agents/*.md`
 - **Commands** (sky) — from `~/.claude/commands/*.md`
 - **Skills** (amber) — from `~/.claude/skills/*.md`
@@ -220,7 +225,7 @@ actions.
 
 ---
 
-## 9. Tasks — *task-queue workspace inventory*
+## 9. Tasks — _task-queue workspace inventory_
 
 **Purpose:** a low-level view of Claude Code's internal task directories (the
 in-session task queue's working folders).
@@ -238,18 +243,19 @@ for `.lock` and `.highwatermark` files and directory mtime.
 
 ---
 
-## 10. Cron — *honest empty state by design*
+## 10. Cron — _honest empty state by design_
 
 **Purpose:** to explain why scheduled/recurring routines **can't** be shown as a
 live table — and what would be needed to surface them.
 
 **What you see:**
+
 - A **"not watchable"** panel explaining that cron routines aren't stored on disk.
-- A **"path forward"** panel describing how a polling host process *could*
+- A **"path forward"** panel describing how a polling host process _could_
   publish them to a file Argus could then watch.
 - An **on-disk scan** result: Argus name-matches anything in `~/.claude` that
   looks schedule-related (`cron`/`routine`/`schedul`) and lists candidates as
-  *hints only* (usually "nothing found").
+  _hints only_ (usually "nothing found").
 
 **Why it's like this:** Claude Code's scheduled routines are **session-scoped** —
 they exist only inside a running Claude session and are enumerable solely via the
@@ -263,15 +269,15 @@ Argus is deliberately honest about the limitation rather than faking a table.
 
 ## Quick mental model
 
-| Tab | Answers the question | Source file(s) |
-|---|---|---|
-| **Agents** | What's running / done / failed right now? | `jobs/*/state.json` + `daemon/roster.json` |
-| **Detail** | How did *this* agent get here? | `jobs/<short>/timeline.jsonl` |
-| **Sessions** | What was actually said in a conversation? | `projects/*/*.jsonl` |
-| **Activity** | What have I prompted lately, everywhere? | `history.jsonl` |
-| **Projects** | Which folders are active, and when? | `projects/*/` |
-| **Search** | Where did I say/see *that*? | all `projects/*/*.jsonl` |
-| **Stats** | What's my usage / cost / token spend? | `stats/stats-cache.json` |
-| **Inventory** | What's installed and available? | `agents/ commands/ skills/ plugins/` |
-| **Tasks** | What task workspaces exist / are locked? | `tasks/<uuid>/` |
-| **Cron** | Why can't I see scheduled routines? | none (session-scoped) |
+| Tab           | Answers the question                      | Source file(s)                             |
+| ------------- | ----------------------------------------- | ------------------------------------------ |
+| **Agents**    | What's running / done / failed right now? | `jobs/*/state.json` + `daemon/roster.json` |
+| **Detail**    | How did _this_ agent get here?            | `jobs/<short>/timeline.jsonl`              |
+| **Sessions**  | What was actually said in a conversation? | `projects/*/*.jsonl`                       |
+| **Activity**  | What have I prompted lately, everywhere?  | `history.jsonl`                            |
+| **Projects**  | Which folders are active, and when?       | `projects/*/`                              |
+| **Search**    | Where did I say/see _that_?               | all `projects/*/*.jsonl`                   |
+| **Stats**     | What's my usage / cost / token spend?     | `stats/stats-cache.json`                   |
+| **Inventory** | What's installed and available?           | `agents/ commands/ skills/ plugins/`       |
+| **Tasks**     | What task workspaces exist / are locked?  | `tasks/<uuid>/`                            |
+| **Cron**      | Why can't I see scheduled routines?       | none (session-scoped)                      |

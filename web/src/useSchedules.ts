@@ -27,14 +27,20 @@ export function useSchedules() {
     [refresh],
   );
 
-  const create = useCallback((input: ScheduleInput) => mutate("/api/schedules", "POST", input), [mutate]);
+  const create = useCallback(
+    (input: ScheduleInput) => mutate("/api/schedules", "POST", input),
+    [mutate],
+  );
   const update = useCallback(
     (id: string, patch: Partial<ScheduleInput>) => mutate(`/api/schedules/${id}`, "PUT", patch),
     [mutate],
   );
   const remove = useCallback((id: string) => mutate(`/api/schedules/${id}`, "DELETE"), [mutate]);
   const runNow = useCallback((id: string) => mutate(`/api/schedules/${id}/run`, "POST"), [mutate]);
-  const cancelRun = useCallback((runId: string) => mutate(`/api/runs/${runId}/cancel`, "POST"), [mutate]);
+  const cancelRun = useCallback(
+    (runId: string) => mutate(`/api/runs/${runId}/cancel`, "POST"),
+    [mutate],
+  );
 
   return { schedules: data, loading, error, refresh, create, update, remove, runNow, cancelRun };
 }

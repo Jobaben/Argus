@@ -7,7 +7,9 @@ import { readRuns, killRunProcess } from "./sources/runs.js";
 import { createEngine, defaultPipelineSpawn } from "./pipelineEngine.js";
 import { startScheduler, isAlive } from "./scheduler.js";
 import {
-  checkAll as checkPrereqs, preflight as preflightPrereqs, repairSafeFixables,
+  checkAll as checkPrereqs,
+  preflight as preflightPrereqs,
+  repairSafeFixables,
 } from "./setup/prereqs.js";
 import { loadConfig } from "./config.js";
 import { isUpgradeAllowed } from "./security.js";
@@ -38,7 +40,10 @@ const engine = createEngine({
   tickMs: config.schedulerTickMs,
   onChange: () => broadcast({ type: "pipelines:changed" }),
   onFailure: (inst) =>
-    void postWebhook(config.webhookUrl, buildPipelineFailurePayload(inst, new Date().toISOString())),
+    void postWebhook(
+      config.webhookUrl,
+      buildPipelineFailurePayload(inst, new Date().toISOString()),
+    ),
   preflight: () => preflightPrereqs(),
 });
 
@@ -57,7 +62,10 @@ const server = serve({ fetch: app.fetch, port: PORT, hostname: config.host }, (i
     .then(checkPrereqs)
     .then((s) => {
       if (!s.ok) {
-        const bad = s.prereqs.filter((p) => p.status !== "ok").map((p) => `${p.label} (${p.status})`).join(", ");
+        const bad = s.prereqs
+          .filter((p) => p.status !== "ok")
+          .map((p) => `${p.label} (${p.status})`)
+          .join(", ");
         console.log(`[argus] setup incomplete — ${bad}. Open the UI to apply fixes.`);
       }
     });
@@ -98,7 +106,8 @@ const stopWatchingExtensions = watchExtensions(() => broadcast({ type: "inventor
 const scheduler = startScheduler({
   onChange: () => broadcast({ type: "schedules:changed" }),
   onTick: () => engine.reconcile(),
-  onFailure: (run) => void postWebhook(config.webhookUrl, buildRunFailurePayload(run, new Date().toISOString())),
+  onFailure: (run) =>
+    void postWebhook(config.webhookUrl, buildRunFailurePayload(run, new Date().toISOString())),
 });
 
 /** Terminate every scheduler/pipeline child still alive, so shutdown does not

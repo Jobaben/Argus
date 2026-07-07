@@ -39,9 +39,7 @@ async function readTask(id: string): Promise<Task> {
   let highwatermark: number | null = null;
   if (names.includes(".highwatermark")) {
     try {
-      highwatermark = parseHighwatermark(
-        await readFile(path.join(dir, ".highwatermark"), "utf8"),
-      );
+      highwatermark = parseHighwatermark(await readFile(path.join(dir, ".highwatermark"), "utf8"));
     } catch {
       highwatermark = null;
     }
@@ -61,7 +59,5 @@ async function readTask(id: string): Promise<Task> {
 export async function readTasks(): Promise<Task[]> {
   const ids = await listTaskDirs();
   const tasks = await Promise.all(ids.map((id) => readTask(id)));
-  return tasks.sort((a, b) =>
-    (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""),
-  );
+  return tasks.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
 }

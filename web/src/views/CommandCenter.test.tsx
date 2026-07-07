@@ -8,7 +8,9 @@ const revise = vi.fn(() => new Promise<Response>(() => {}));
 
 // Mutable mock state. The name is "mock"-prefixed so vitest's hoisted factory may close over it.
 const mockOverview: { overview: OverviewEntry[]; loading: boolean; error: string | null } = {
-  overview: [], loading: false, error: null,
+  overview: [],
+  loading: false,
+  error: null,
 };
 
 vi.mock("../useOverview", () => ({
@@ -18,23 +20,42 @@ vi.mock("../useOverview", () => ({
 function entry(name: string, status: InstanceStatus, phaseStatuses: PhaseStatus[]): OverviewEntry {
   return {
     definition: {
-      id: name, name,
+      id: name,
+      name,
       phases: phaseStatuses.map((_, i) => ({
-        id: `ph${i}`, name: `Phase${i}`, cwd: "/", gated: false, steps: [{ name: "s", prompt: "x" }],
+        id: `ph${i}`,
+        name: `Phase${i}`,
+        cwd: "/",
+        gated: false,
+        steps: [{ name: "s", prompt: "x" }],
       })),
-      trigger: null, enabled: true, overlapPolicy: "skip",
-      lastStartedAt: null, createdAt: "2026-06-01T00:00:00.000Z", updatedAt: "2026-06-01T00:00:00.000Z",
+      trigger: null,
+      enabled: true,
+      overlapPolicy: "skip",
+      lastStartedAt: null,
+      createdAt: "2026-06-01T00:00:00.000Z",
+      updatedAt: "2026-06-01T00:00:00.000Z",
     },
     latest: {
-      id: `${name}-i1`, pipelineId: name, pipelineName: name, status,
+      id: `${name}-i1`,
+      pipelineId: name,
+      pipelineName: name,
+      status,
       currentPhaseIndex: 0,
       phases: phaseStatuses.map((s, i) => ({
-        id: `ph${i}`, name: `Phase${i}`, gated: false, status: s,
+        id: `ph${i}`,
+        name: `Phase${i}`,
+        gated: false,
+        status: s,
         steps: s === "running" ? [{ name: "step-x", runId: "r", status: "running" as const }] : [],
-        attempt: 1, payload: null,
+        attempt: 1,
+        payload: null,
       })),
-      trigger: "manual", signalToken: "tok",
-      createdAt: "2026-06-30T09:00:00.000Z", updatedAt: "2026-06-30T10:00:00.000Z", endedAt: null,
+      trigger: "manual",
+      signalToken: "tok",
+      createdAt: "2026-06-30T09:00:00.000Z",
+      updatedAt: "2026-06-30T10:00:00.000Z",
+      endedAt: null,
     },
   };
 }
@@ -76,7 +97,9 @@ describe("CommandCenter", () => {
   });
 
   it("fires approve and disables the gate after clicking", () => {
-    mockOverview.overview = [entry("auth-refactor", "awaiting-approval", ["succeeded", "awaiting-approval"])];
+    mockOverview.overview = [
+      entry("auth-refactor", "awaiting-approval", ["succeeded", "awaiting-approval"]),
+    ];
     render(<CommandCenter />);
     const btn = screen.getByRole("button", { name: /approve/i });
     fireEvent.click(btn);
@@ -85,7 +108,9 @@ describe("CommandCenter", () => {
   });
 
   it("reveals a note field and fires revise", () => {
-    mockOverview.overview = [entry("auth-refactor", "awaiting-approval", ["succeeded", "awaiting-approval"])];
+    mockOverview.overview = [
+      entry("auth-refactor", "awaiting-approval", ["succeeded", "awaiting-approval"]),
+    ];
     render(<CommandCenter />);
     fireEvent.click(screen.getByRole("button", { name: /revise/i }));
     const note = screen.getByPlaceholderText(/note/i);
@@ -102,25 +127,52 @@ describe("CommandCenter", () => {
   });
 
   it("shows the failed step and reason on a failed pipeline", () => {
-    mockOverview.overview = [{
-      definition: {
-        id: "auth-refactor", name: "auth-refactor",
-        phases: [{ id: "ph0", name: "Implement", cwd: "/", gated: false, steps: [{ name: "s", prompt: "x" }] }],
-        trigger: null, enabled: true, overlapPolicy: "skip",
-        lastStartedAt: null, createdAt: "2026-06-01T00:00:00.000Z", updatedAt: "2026-06-01T00:00:00.000Z",
+    mockOverview.overview = [
+      {
+        definition: {
+          id: "auth-refactor",
+          name: "auth-refactor",
+          phases: [
+            {
+              id: "ph0",
+              name: "Implement",
+              cwd: "/",
+              gated: false,
+              steps: [{ name: "s", prompt: "x" }],
+            },
+          ],
+          trigger: null,
+          enabled: true,
+          overlapPolicy: "skip",
+          lastStartedAt: null,
+          createdAt: "2026-06-01T00:00:00.000Z",
+          updatedAt: "2026-06-01T00:00:00.000Z",
+        },
+        latest: {
+          id: "auth-refactor-i1",
+          pipelineId: "auth-refactor",
+          pipelineName: "auth-refactor",
+          status: "failed",
+          currentPhaseIndex: 0,
+          phases: [
+            {
+              id: "ph0",
+              name: "Implement",
+              gated: false,
+              status: "failed",
+              steps: [{ name: "dev", runId: "r0", status: "failed" as const }],
+              attempt: 1,
+              payload: { reason: "exit code 1" },
+            },
+          ],
+          trigger: "manual",
+          signalToken: "tok",
+          createdAt: "2026-06-30T09:00:00.000Z",
+          updatedAt: "2026-06-30T10:00:00.000Z",
+          endedAt: "2026-06-30T10:00:00.000Z",
+        },
       },
-      latest: {
-        id: "auth-refactor-i1", pipelineId: "auth-refactor", pipelineName: "auth-refactor", status: "failed",
-        currentPhaseIndex: 0,
-        phases: [{
-          id: "ph0", name: "Implement", gated: false, status: "failed",
-          steps: [{ name: "dev", runId: "r0", status: "failed" as const }],
-          attempt: 1, payload: { reason: "exit code 1" },
-        }],
-        trigger: "manual", signalToken: "tok",
-        createdAt: "2026-06-30T09:00:00.000Z", updatedAt: "2026-06-30T10:00:00.000Z", endedAt: "2026-06-30T10:00:00.000Z",
-      },
-    }];
+    ];
     render(<CommandCenter />);
     expect(screen.getByText("dev")).toBeInTheDocument();
     // one "Failed" pill on the row badge, one on the failed step tile
@@ -129,8 +181,12 @@ describe("CommandCenter", () => {
   });
 
   it("surfaces an action error and re-enables the gate", async () => {
-    mockOverview.overview = [entry("auth-refactor", "awaiting-approval", ["succeeded", "awaiting-approval"])];
-    approve.mockImplementationOnce(() => Promise.reject(new Error("instance is not awaiting approval")));
+    mockOverview.overview = [
+      entry("auth-refactor", "awaiting-approval", ["succeeded", "awaiting-approval"]),
+    ];
+    approve.mockImplementationOnce(() =>
+      Promise.reject(new Error("instance is not awaiting approval")),
+    );
     render(<CommandCenter />);
     const btn = screen.getByRole("button", { name: /approve/i });
     fireEvent.click(btn);

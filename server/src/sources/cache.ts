@@ -19,7 +19,12 @@ interface Entry<T> {
 
 const entries = new Map<string, Entry<unknown>>();
 
-export function cached<T>(key: string, ttlMs: number, load: () => Promise<T>, now = Date.now): Promise<T> {
+export function cached<T>(
+  key: string,
+  ttlMs: number,
+  load: () => Promise<T>,
+  now = Date.now,
+): Promise<T> {
   const hit = entries.get(key) as Entry<T> | undefined;
   const t = now();
   if (hit && t - hit.at < ttlMs) return hit.value;

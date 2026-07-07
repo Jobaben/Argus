@@ -40,10 +40,10 @@ CSRF), and an optional bearer token — all applied to the WebSocket upgrade too
 
 ## 2. Workspaces
 
-| Workspace | Runtime | Responsibility |
-| --- | --- | --- |
-| `server/` | Node 22 + TS (tsx) | Read `~/.claude`, expose REST + WebSocket, watch for changes |
-| `web/` | Vite 8 + React 19 + Tailwind v4 | Tabbed dashboard, live refresh |
+| Workspace | Runtime                         | Responsibility                                               |
+| --------- | ------------------------------- | ------------------------------------------------------------ |
+| `server/` | Node 22 + TS (tsx)              | Read `~/.claude`, expose REST + WebSocket, watch for changes |
+| `web/`    | Vite 8 + React 19 + Tailwind v4 | Tabbed dashboard, live refresh                               |
 
 Dev: `npm run dev` → server `:7777`, web `:5757` (Vite proxies `/api` and `/ws`
 to the server). One command, two processes via `concurrently`.
@@ -83,7 +83,7 @@ embedded path. Path splitting tolerates both separators: `split(/[\\/]/)`.
 `watch.ts` watches `jobs/`, `daemon/roster.json`, `daemon.status.json` (and, as
 features land, `history.jsonl` / `projects/`). Changes are **debounced ~150ms**
 and emit a single `{type:"agents:changed"}` frame over `/ws`. The client treats
-the socket as a *dumb tap*: a frame means "something changed, re-fetch" — the
+the socket as a _dumb tap_: a frame means "something changed, re-fetch" — the
 server stays the single source of truth and payloads never diverge from a fresh
 `GET`. A 10s polling fallback keeps the UI correct if the socket drops, with
 auto-reconnect (2s backoff).
@@ -93,17 +93,17 @@ server stateless per-connection and makes every view trivially correct.
 
 ## 5. Data sources map
 
-| Domain | Path(s) | Shape highlights |
-| --- | --- | --- |
+| Domain            | Path(s)                                     | Shape highlights                                                                   |
+| ----------------- | ------------------------------------------- | ---------------------------------------------------------------------------------- |
 | Background agents | `jobs/<short>/state.json`, `timeline.jsonl` | `state` (working/done/failed/idle), `tempo`, `detail`, `output.result`, `inFlight` |
-| Live workers | `daemon/roster.json`, `daemon.status.json` | `workers[short].pid` → liveness join |
-| Sessions | `projects/<proj>/<id>.jsonl` | typed message stream (`ai-title`, `user`, `assistant`, `tool_use`, …) |
-| Activity | `history.jsonl` | global prompt log |
-| Projects | `projects/<proj>/` | encoded path → label, session counts |
-| Stats | `stats-cache.json` | usage aggregates |
-| Inventory | `agents/ commands/ skills/ plugins/` | installed extensions (md frontmatter) |
-| Tasks | `tasks/<uuid>/` | `.highwatermark`, `.lock` |
-| Cron | — (not on disk) | session-scoped; see §6 |
+| Live workers      | `daemon/roster.json`, `daemon.status.json`  | `workers[short].pid` → liveness join                                               |
+| Sessions          | `projects/<proj>/<id>.jsonl`                | typed message stream (`ai-title`, `user`, `assistant`, `tool_use`, …)              |
+| Activity          | `history.jsonl`                             | global prompt log                                                                  |
+| Projects          | `projects/<proj>/`                          | encoded path → label, session counts                                               |
+| Stats             | `stats-cache.json`                          | usage aggregates                                                                   |
+| Inventory         | `agents/ commands/ skills/ plugins/`        | installed extensions (md frontmatter)                                              |
+| Tasks             | `tasks/<uuid>/`                             | `.highwatermark`, `.lock`                                                          |
+| Cron              | — (not on disk)                             | session-scoped; see §6                                                             |
 
 ## 6. The cron boundary (known limitation)
 

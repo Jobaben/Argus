@@ -55,7 +55,7 @@ export function IrisMark({ size = 28 }: { size?: number }) {
       ctx.arc(cx, cy, R * 0.6, 0, TAU);
       ctx.fill();
 
-      const sweep = ((t * 1.4) % TAU + TAU) % TAU;
+      const sweep = (((t * 1.4) % TAU) + TAU) % TAU;
       let topLit = 0;
       let topAngle: number | null = null;
 

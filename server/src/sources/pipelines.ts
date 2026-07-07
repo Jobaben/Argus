@@ -6,7 +6,10 @@ import type { PhaseDef, PhaseStep, PipelineDefinition } from "./pipelineTypes.js
 import type { Trigger } from "./scheduleTypes.js";
 
 // The crash-safe, mutex-serialized single-file store (shared with schedules).
-const store = createJsonArrayStore<PipelineDefinition>({ file: paths.pipelinesFile, label: "pipelines.json" });
+const store = createJsonArrayStore<PipelineDefinition>({
+  file: paths.pipelinesFile,
+  label: "pipelines.json",
+});
 const withStoreLock = store.withLock;
 
 export class PipelineValidationError extends Error {
@@ -36,29 +39,39 @@ function validateModel(raw: unknown, ctx: string): string {
   }
   const model = raw.trim();
   if (!MODEL_RE.test(model)) {
-    throw new PipelineValidationError(
-      `${ctx}: model "${model}" is not a valid model identifier`,
-    );
+    throw new PipelineValidationError(`${ctx}: model "${model}" is not a valid model identifier`);
   }
   return model;
 }
 
 function validateStep(raw: unknown, ctx: string): PhaseStep {
-  if (!raw || typeof raw !== "object") throw new PipelineValidationError(`${ctx}: step must be an object`);
+  if (!raw || typeof raw !== "object")
+    throw new PipelineValidationError(`${ctx}: step must be an object`);
   const s = raw as Record<string, unknown>;
-  if (typeof s.name !== "string" || !s.name.trim()) throw new PipelineValidationError(`${ctx}: step name is required`);
-  if (typeof s.prompt !== "string" || !s.prompt.trim()) throw new PipelineValidationError(`${ctx}: step prompt is required`);
+  if (typeof s.name !== "string" || !s.name.trim())
+    throw new PipelineValidationError(`${ctx}: step name is required`);
+  if (typeof s.prompt !== "string" || !s.prompt.trim())
+    throw new PipelineValidationError(`${ctx}: step prompt is required`);
   const step: PhaseStep = { name: s.name.trim(), prompt: s.prompt.trim() };
-  if (s.model !== undefined && s.model !== null) step.model = validateModel(s.model, `${ctx}: step`);
+  if (s.model !== undefined && s.model !== null)
+    step.model = validateModel(s.model, `${ctx}: step`);
   return step;
 }
 
 function validatePhase(raw: unknown, i: number): PhaseDef {
-  if (!raw || typeof raw !== "object") throw new PipelineValidationError(`phase ${i} must be an object`);
+  if (!raw || typeof raw !== "object")
+    throw new PipelineValidationError(`phase ${i} must be an object`);
   const p = raw as Record<string, unknown>;
-  if (typeof p.id !== "string" || !p.id.trim()) throw new PipelineValidationError(`phase ${i}: id is required`);
-  if (typeof p.name !== "string" || !p.name.trim()) throw new PipelineValidationError(`phase ${i}: name is required`);
-  if (typeof p.cwd !== "string" || !p.cwd.trim() || !existsSync(p.cwd) || !statSync(p.cwd).isDirectory()) {
+  if (typeof p.id !== "string" || !p.id.trim())
+    throw new PipelineValidationError(`phase ${i}: id is required`);
+  if (typeof p.name !== "string" || !p.name.trim())
+    throw new PipelineValidationError(`phase ${i}: name is required`);
+  if (
+    typeof p.cwd !== "string" ||
+    !p.cwd.trim() ||
+    !existsSync(p.cwd) ||
+    !statSync(p.cwd).isDirectory()
+  ) {
     throw new PipelineValidationError(`phase ${i}: cwd does not exist: ${String(p.cwd)}`);
   }
   if (!Array.isArray(p.steps) || p.steps.length === 0) {
@@ -71,7 +84,8 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
 export function validatePipelineInput(raw: unknown): PipelineInput {
   if (!raw || typeof raw !== "object") throw new PipelineValidationError("body required");
   const r = raw as Record<string, unknown>;
-  if (typeof r.name !== "string" || !r.name.trim()) throw new PipelineValidationError("name is required");
+  if (typeof r.name !== "string" || !r.name.trim())
+    throw new PipelineValidationError("name is required");
   if (!Array.isArray(r.phases) || r.phases.length === 0) {
     throw new PipelineValidationError("pipeline needs at least one phase");
   }
@@ -100,7 +114,8 @@ export function validatePipelinePatch(raw: unknown): Partial<PipelineInput> {
     }
     patch.phases = r.phases.map((p, i) => validatePhase(p, i));
   }
-  if ("trigger" in r) patch.trigger = r.trigger == null ? null : validateTrigger(r.trigger, { allowWindowed: true });
+  if ("trigger" in r)
+    patch.trigger = r.trigger == null ? null : validateTrigger(r.trigger, { allowWindowed: true });
   if ("enabled" in r) patch.enabled = Boolean(r.enabled);
   if ("overlapPolicy" in r) patch.overlapPolicy = r.overlapPolicy === "allow" ? "allow" : "skip";
   if ("model" in r) patch.model = r.model == null ? undefined : validateModel(r.model, "pipeline");
@@ -110,7 +125,11 @@ export function validatePipelinePatch(raw: unknown): Partial<PipelineInput> {
 export const readPipelines = store.read;
 const writePipelines = store.write;
 
-export async function createPipeline(input: PipelineInput, now: Date, id: string): Promise<PipelineDefinition> {
+export async function createPipeline(
+  input: PipelineInput,
+  now: Date,
+  id: string,
+): Promise<PipelineDefinition> {
   const iso = now.toISOString();
   const def: PipelineDefinition = {
     id,

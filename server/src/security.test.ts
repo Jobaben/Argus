@@ -15,7 +15,13 @@ const base: ArgusConfig = {
 };
 
 test("host allowlist accepts loopback names with any port", () => {
-  for (const h of ["localhost:7777", "127.0.0.1:7777", "[::1]:7777", "localhost", "LOCALHOST:5757"]) {
+  for (const h of [
+    "localhost:7777",
+    "127.0.0.1:7777",
+    "[::1]:7777",
+    "localhost",
+    "LOCALHOST:5757",
+  ]) {
     assert.equal(isHostAllowed(h, base), true, h);
   }
 });
@@ -54,7 +60,10 @@ test("origin check honors ARGUS_ALLOWED_ORIGINS", () => {
 test("upgrade guard requires host, origin, and token together", () => {
   const cfg = { ...base, token: "secret" };
   assert.equal(
-    isUpgradeAllowed({ host: "localhost:7777", origin: "http://localhost:7777", token: "secret" }, cfg),
+    isUpgradeAllowed(
+      { host: "localhost:7777", origin: "http://localhost:7777", token: "secret" },
+      cfg,
+    ),
     true,
   );
   // Missing token
@@ -69,7 +78,10 @@ test("upgrade guard requires host, origin, and token together", () => {
   );
   // Bearer form accepted
   assert.equal(
-    isUpgradeAllowed({ host: "localhost:7777", origin: "http://localhost:7777", authorization: "Bearer secret" }, cfg),
+    isUpgradeAllowed(
+      { host: "localhost:7777", origin: "http://localhost:7777", authorization: "Bearer secret" },
+      cfg,
+    ),
     true,
   );
 });

@@ -19,7 +19,10 @@ function intFromEnv(name: string, fallback: number, min = 1): number {
 function listFromEnv(name: string): string[] {
   const raw = process.env[name];
   if (!raw) return [];
-  return raw.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  return raw
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
 }
 
 export interface ArgusConfig {

@@ -39,7 +39,9 @@ function MetaRow({ label, value, mono }: { label: string; value: string; mono?: 
   return (
     <div className="flex items-baseline justify-between gap-4 py-1.5">
       <span className="shrink-0 text-xs uppercase tracking-wide text-ink-faint">{label}</span>
-      <span className={`min-w-0 truncate text-right text-sm text-ink-dim ${mono ? "font-mono" : ""}`}>
+      <span
+        className={`min-w-0 truncate text-right text-sm text-ink-dim ${mono ? "font-mono" : ""}`}
+      >
         {value}
       </span>
     </div>
@@ -99,7 +101,9 @@ function AgentMeta({ agent }: { agent: Agent }) {
         </div>
         {agent.firstTerminalAt && (
           <div className="flex items-baseline justify-between gap-4 py-1.5">
-            <span className="shrink-0 text-xs uppercase tracking-wide text-ink-faint">First terminal</span>
+            <span className="shrink-0 text-xs uppercase tracking-wide text-ink-faint">
+              First terminal
+            </span>
             <TimeAgo iso={agent.firstTerminalAt} />
           </div>
         )}
@@ -156,15 +160,12 @@ export default function AgentDetail({ short: shortProp }: { short?: string } = {
   const { timeline, loading: timelineLoading, error } = useTimeline(short);
 
   const agent = useMemo(
-    () => (short ? agents.find((a) => a.short === short) ?? null : null),
+    () => (short ? (agents.find((a) => a.short === short) ?? null) : null),
     [agents, short],
   );
 
   const ordered = useMemo(
-    () =>
-      [...timeline].sort(
-        (a, b) => new Date(b.at).getTime() - new Date(a.at).getTime(),
-      ),
+    () => [...timeline].sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime()),
     [timeline],
   );
 
@@ -172,7 +173,8 @@ export default function AgentDetail({ short: shortProp }: { short?: string } = {
     return (
       <Page title="Agent" crumbs={[{ label: "Command Center", href: "#/command" }]}>
         <EmptyState>
-          No agent selected. Open <span className="font-mono text-ink-dim">#/agent/&lt;short&gt;</span> to view one.
+          No agent selected. Open{" "}
+          <span className="font-mono text-ink-dim">#/agent/&lt;short&gt;</span> to view one.
         </EmptyState>
       </Page>
     );
@@ -186,7 +188,6 @@ export default function AgentDetail({ short: shortProp }: { short?: string } = {
         { label: "Agents", href: "#/agents" },
       ]}
     >
-
       {error && (
         <div className="mb-6">
           <AlertStrip subject="Error" message={`Couldn't load timeline: ${error}`} />

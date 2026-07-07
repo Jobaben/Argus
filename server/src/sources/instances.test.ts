@@ -20,7 +20,17 @@ const makeInstance = (id: string, pipelineId: string, createdAt: string) => ({
   pipelineName: "feature pipeline",
   status: "running" as const,
   currentPhaseIndex: 0,
-  phases: [{ id: "p0", name: "P0", gated: false, status: "running" as const, steps: [], attempt: 0, payload: null }],
+  phases: [
+    {
+      id: "p0",
+      name: "P0",
+      gated: false,
+      status: "running" as const,
+      steps: [],
+      attempt: 0,
+      payload: null,
+    },
+  ],
   trigger: "manual" as const,
   signalToken: "tok",
   createdAt,
@@ -42,7 +52,10 @@ test("readInstances filters by pipeline, newest first", async () => {
   await m.writeInstance(makeInstance("b", "p1", new Date(2026, 5, 30, 10, 0).toISOString()));
   await m.writeInstance(makeInstance("c", "p2", new Date(2026, 5, 30, 11, 0).toISOString()));
   const p1 = await m.readInstances({ pipelineId: "p1" });
-  assert.deepEqual(p1.map((i: { id: string }) => i.id), ["b", "a"]);
+  assert.deepEqual(
+    p1.map((i: { id: string }) => i.id),
+    ["b", "a"],
+  );
 });
 
 test("pruneInstances keeps only newest N of a pipeline", async () => {
@@ -52,7 +65,10 @@ test("pruneInstances keeps only newest N of a pipeline", async () => {
   }
   await m.pruneInstances("p1", 2);
   const left = await m.readInstances({ pipelineId: "p1" });
-  assert.deepEqual(left.map((i: { id: string }) => i.id), ["r4", "r3"]);
+  assert.deepEqual(
+    left.map((i: { id: string }) => i.id),
+    ["r4", "r3"],
+  );
 });
 
 test("readInstance rejects path-traversal ids", async () => {

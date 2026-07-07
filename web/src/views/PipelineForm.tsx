@@ -53,7 +53,7 @@ function ModelSelect({
 }) {
   const isCustom = !!value && !MODEL_ALIASES.includes(value);
   const [custom, setCustom] = useState(isCustom);
-  const selectValue = custom ? "custom" : value ?? "";
+  const selectValue = custom ? "custom" : (value ?? "");
   return (
     <div className="flex items-center gap-1">
       <select
@@ -179,25 +179,61 @@ export function PipelineForm({
 
       <div className="space-y-4">
         {form.phases.map((phase, pi) => (
-          <div key={phase.id} className="rounded-lg border border-line bg-surface-2/40 p-4 space-y-3">
+          <div
+            key={phase.id}
+            className="rounded-lg border border-line bg-surface-2/40 p-4 space-y-3"
+          >
             <div className="flex items-center gap-2">
               <span className="text-xs text-ink-faint">Phase {pi + 1}</span>
               <div className="ml-auto flex items-center gap-1">
-                <button type="button" aria-label="Move phase up" className={iconBtn}
-                  onClick={() => setForm((f) => ({ ...f, phases: move(f.phases, pi, pi - 1) }))}>↑</button>
-                <button type="button" aria-label="Move phase down" className={iconBtn}
-                  onClick={() => setForm((f) => ({ ...f, phases: move(f.phases, pi, pi + 1) }))}>↓</button>
-                <button type="button" aria-label="Remove phase" className={delBtn}
-                  onClick={() => setForm((f) => ({ ...f, phases: f.phases.filter((_, j) => j !== pi) }))}>✕</button>
+                <button
+                  type="button"
+                  aria-label="Move phase up"
+                  className={iconBtn}
+                  onClick={() => setForm((f) => ({ ...f, phases: move(f.phases, pi, pi - 1) }))}
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  aria-label="Move phase down"
+                  className={iconBtn}
+                  onClick={() => setForm((f) => ({ ...f, phases: move(f.phases, pi, pi + 1) }))}
+                >
+                  ↓
+                </button>
+                <button
+                  type="button"
+                  aria-label="Remove phase"
+                  className={delBtn}
+                  onClick={() =>
+                    setForm((f) => ({ ...f, phases: f.phases.filter((_, j) => j !== pi) }))
+                  }
+                >
+                  ✕
+                </button>
               </div>
             </div>
-            <input className={FIELD} aria-label={`Phase ${pi + 1} name`} placeholder="Phase name" value={phase.name}
-              onChange={(e) => setPhase(pi, { name: e.target.value })} />
-            <input className={FIELD} aria-label={`Phase ${pi + 1} working directory`} placeholder="Working directory (absolute path)" value={phase.cwd}
-              onChange={(e) => setPhase(pi, { cwd: e.target.value })} />
+            <input
+              className={FIELD}
+              aria-label={`Phase ${pi + 1} name`}
+              placeholder="Phase name"
+              value={phase.name}
+              onChange={(e) => setPhase(pi, { name: e.target.value })}
+            />
+            <input
+              className={FIELD}
+              aria-label={`Phase ${pi + 1} working directory`}
+              placeholder="Working directory (absolute path)"
+              value={phase.cwd}
+              onChange={(e) => setPhase(pi, { cwd: e.target.value })}
+            />
             <label className="flex items-center gap-2 text-sm text-ink-dim">
-              <input type="checkbox" checked={phase.gated}
-                onChange={(e) => setPhase(pi, { gated: e.target.checked })} />
+              <input
+                type="checkbox"
+                checked={phase.gated}
+                onChange={(e) => setPhase(pi, { gated: e.target.checked })}
+              />
               Requires human approval (gated)
             </label>
 
@@ -205,8 +241,13 @@ export function PipelineForm({
               {phase.steps.map((step, si) => (
                 <div key={si} className="space-y-1.5">
                   <div className="flex items-center gap-2">
-                    <input className={`${FIELD} w-48`} aria-label={`Phase ${pi + 1} step ${si + 1} name`} placeholder="Step name" value={step.name}
-                      onChange={(e) => setStep(pi, si, { name: e.target.value })} />
+                    <input
+                      className={`${FIELD} w-48`}
+                      aria-label={`Phase ${pi + 1} step ${si + 1} name`}
+                      placeholder="Step name"
+                      value={step.name}
+                      onChange={(e) => setStep(pi, si, { name: e.target.value })}
+                    />
                     <ModelSelect
                       label="Use pipeline default"
                       ariaLabel={`Use pipeline default (phase ${pi + 1} step ${si + 1})`}
@@ -214,35 +255,76 @@ export function PipelineForm({
                       onChange={(m) => setStep(pi, si, { model: m })}
                     />
                     <div className="ml-auto flex items-center gap-1">
-                      <button type="button" aria-label="Move step up" className={iconBtn}
-                        onClick={() => setPhase(pi, { steps: move(phase.steps, si, si - 1) })}>↑</button>
-                      <button type="button" aria-label="Move step down" className={iconBtn}
-                        onClick={() => setPhase(pi, { steps: move(phase.steps, si, si + 1) })}>↓</button>
-                      <button type="button" aria-label="Remove step" className={delBtn}
-                        onClick={() => setPhase(pi, { steps: phase.steps.filter((_, k) => k !== si) })}>✕</button>
+                      <button
+                        type="button"
+                        aria-label="Move step up"
+                        className={iconBtn}
+                        onClick={() => setPhase(pi, { steps: move(phase.steps, si, si - 1) })}
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        aria-label="Move step down"
+                        className={iconBtn}
+                        onClick={() => setPhase(pi, { steps: move(phase.steps, si, si + 1) })}
+                      >
+                        ↓
+                      </button>
+                      <button
+                        type="button"
+                        aria-label="Remove step"
+                        className={delBtn}
+                        onClick={() =>
+                          setPhase(pi, { steps: phase.steps.filter((_, k) => k !== si) })
+                        }
+                      >
+                        ✕
+                      </button>
                     </div>
                   </div>
-                  <textarea className={`${FIELD} h-20`} aria-label={`Phase ${pi + 1} step ${si + 1} prompt`} placeholder="Step prompt" value={step.prompt}
-                    onChange={(e) => setStep(pi, si, { prompt: e.target.value })} />
+                  <textarea
+                    className={`${FIELD} h-20`}
+                    aria-label={`Phase ${pi + 1} step ${si + 1} prompt`}
+                    placeholder="Step prompt"
+                    value={step.prompt}
+                    onChange={(e) => setStep(pi, si, { prompt: e.target.value })}
+                  />
                 </div>
               ))}
-              <button type="button" className={`${iconBtn} px-2.5 py-1`}
-                onClick={() => setPhase(pi, { steps: [...phase.steps, newStep()] })}>+ add step</button>
+              <button
+                type="button"
+                className={`${iconBtn} px-2.5 py-1`}
+                onClick={() => setPhase(pi, { steps: [...phase.steps, newStep()] })}
+              >
+                + add step
+              </button>
             </div>
           </div>
         ))}
-        <button type="button"
+        <button
+          type="button"
           className="rounded-lg border border-line px-3 py-1.5 text-sm text-ink-dim hover:text-ink"
-          onClick={() => setForm((f) => ({ ...f, phases: [...f.phases, newPhase()] }))}>+ add phase</button>
+          onClick={() => setForm((f) => ({ ...f, phases: [...f.phases, newPhase()] }))}
+        >
+          + add phase
+        </button>
       </div>
 
       <div className="flex items-center gap-2 pt-1">
-        <button type="button" disabled={busy || !canSave} onClick={submit}
-          className="rounded-lg bg-ok/20 px-3 py-1.5 text-sm text-ok ring-1 ring-ok/30 transition hover:bg-ok/30 disabled:opacity-50">
+        <button
+          type="button"
+          disabled={busy || !canSave}
+          onClick={submit}
+          className="rounded-lg bg-ok/20 px-3 py-1.5 text-sm text-ok ring-1 ring-ok/30 transition hover:bg-ok/30 disabled:opacity-50"
+        >
           {busy ? "Saving…" : "Save pipeline"}
         </button>
-        <button type="button" onClick={onCancel}
-          className="rounded-lg border border-line px-3 py-1.5 text-sm text-ink-dim transition hover:text-ink">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-lg border border-line px-3 py-1.5 text-sm text-ink-dim transition hover:text-ink"
+        >
           Cancel
         </button>
       </div>

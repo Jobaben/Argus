@@ -12,13 +12,24 @@ import { readTasks } from "./sources/tasks.js";
 import { searchTranscripts } from "./sources/search.js";
 import { readCron } from "./sources/cron.js";
 import {
-  createSchedule, deleteSchedule, readSchedulesWithNext, updateSchedule,
-  validateInput, validatePatch, ScheduleValidationError, readSchedules,
+  createSchedule,
+  deleteSchedule,
+  readSchedulesWithNext,
+  updateSchedule,
+  validateInput,
+  validatePatch,
+  ScheduleValidationError,
+  readSchedules,
 } from "./sources/schedules.js";
 import { readRun, readRuns, cancelRun } from "./sources/runs.js";
 import {
-  createPipeline, deletePipeline, readPipelines, updatePipeline, validatePipelinePatch,
-  validatePipelineInput, PipelineValidationError,
+  createPipeline,
+  deletePipeline,
+  readPipelines,
+  updatePipeline,
+  validatePipelinePatch,
+  validatePipelineInput,
+  PipelineValidationError,
 } from "./sources/pipelines.js";
 import { readInstance, readInstances } from "./sources/instances.js";
 import { buildOverview } from "./sources/overview.js";
@@ -76,8 +87,12 @@ export function createApp(deps: AppDeps): Hono {
     c.json({ ok: true, version: VERSION, claudeHome: claudeHome(), service: "argus" }),
   );
 
-  app.get("/api/setup", async (c) => c.json(await import("./setup/prereqs.js").then((m) => m.checkAll())));
-  app.post("/api/setup/apply", async (c) => c.json(await import("./setup/prereqs.js").then((m) => m.applyAll())));
+  app.get("/api/setup", async (c) =>
+    c.json(await import("./setup/prereqs.js").then((m) => m.checkAll())),
+  );
+  app.post("/api/setup/apply", async (c) =>
+    c.json(await import("./setup/prereqs.js").then((m) => m.applyAll())),
+  );
 
   app.get("/api/agents", async (c) => c.json({ agents: await readAgents() }));
   app.get("/api/agents/:short/timeline", async (c) =>
@@ -103,10 +118,14 @@ export function createApp(deps: AppDeps): Hono {
   app.get("/api/stats", async (c) => c.json(await readStats()));
   app.get("/api/inventory", async (c) => c.json(await readInventory()));
   app.get("/api/tasks", async (c) => c.json({ tasks: await readTasks() }));
-  app.get("/api/search", async (c) => c.json({ results: await searchTranscripts(c.req.query("q") ?? "") }));
+  app.get("/api/search", async (c) =>
+    c.json({ results: await searchTranscripts(c.req.query("q") ?? "") }),
+  );
   app.get("/api/cron", async (c) => c.json(await readCron()));
 
-  app.get("/api/schedules", async (c) => c.json({ schedules: await readSchedulesWithNext(new Date()) }));
+  app.get("/api/schedules", async (c) =>
+    c.json({ schedules: await readSchedulesWithNext(new Date()) }),
+  );
 
   app.post("/api/schedules", async (c) => {
     const body = await jsonBody(c);
@@ -123,7 +142,11 @@ export function createApp(deps: AppDeps): Hono {
     const body = await jsonBody(c);
     if (!body.ok) return body.res;
     try {
-      const updated = await updateSchedule(c.req.param("id"), validatePatch(body.value), new Date());
+      const updated = await updateSchedule(
+        c.req.param("id"),
+        validatePatch(body.value),
+        new Date(),
+      );
       if (!updated) return c.json({ error: "not found" }, 404);
       return c.json(updated);
     } catch (e) {
@@ -132,7 +155,9 @@ export function createApp(deps: AppDeps): Hono {
   });
 
   app.delete("/api/schedules/:id", async (c) =>
-    (await deleteSchedule(c.req.param("id"))) ? c.json({ ok: true }) : c.json({ error: "not found" }, 404),
+    (await deleteSchedule(c.req.param("id")))
+      ? c.json({ ok: true })
+      : c.json({ error: "not found" }, 404),
   );
 
   app.post("/api/schedules/:id/run", async (c) => {
@@ -163,7 +188,9 @@ export function createApp(deps: AppDeps): Hono {
   app.get("/api/runs", async (c) => {
     const limitRaw = c.req.query("limit");
     const limit = limitRaw && Number.isFinite(Number(limitRaw)) ? Number(limitRaw) : 100;
-    return c.json({ runs: await readRuns({ scheduleId: c.req.query("scheduleId") || undefined, limit }) });
+    return c.json({
+      runs: await readRuns({ scheduleId: c.req.query("scheduleId") || undefined, limit }),
+    });
   });
 
   app.get("/api/runs/:id", async (c) => {
@@ -185,7 +212,11 @@ export function createApp(deps: AppDeps): Hono {
     const body = await jsonBody(c);
     if (!body.ok) return body.res;
     try {
-      const created = await createPipeline(validatePipelineInput(body.value), new Date(), randomUUID());
+      const created = await createPipeline(
+        validatePipelineInput(body.value),
+        new Date(),
+        randomUUID(),
+      );
       return c.json(created, 201);
     } catch (e) {
       return fail(c, e, PipelineValidationError);
@@ -196,7 +227,11 @@ export function createApp(deps: AppDeps): Hono {
     const body = await jsonBody(c);
     if (!body.ok) return body.res;
     try {
-      const updated = await updatePipeline(c.req.param("id"), validatePipelineInput(body.value), new Date());
+      const updated = await updatePipeline(
+        c.req.param("id"),
+        validatePipelineInput(body.value),
+        new Date(),
+      );
       if (!updated) return c.json({ error: "not found" }, 404);
       return c.json(updated);
     } catch (e) {
@@ -208,7 +243,11 @@ export function createApp(deps: AppDeps): Hono {
     const body = await jsonBody(c);
     if (!body.ok) return body.res;
     try {
-      const updated = await updatePipeline(c.req.param("id"), validatePipelinePatch(body.value), new Date());
+      const updated = await updatePipeline(
+        c.req.param("id"),
+        validatePipelinePatch(body.value),
+        new Date(),
+      );
       if (!updated) return c.json({ error: "not found" }, 404);
       return c.json(updated);
     } catch (e) {
@@ -217,7 +256,9 @@ export function createApp(deps: AppDeps): Hono {
   });
 
   app.delete("/api/pipelines/:id", async (c) =>
-    (await deletePipeline(c.req.param("id"))) ? c.json({ ok: true }) : c.json({ error: "not found" }, 404),
+    (await deletePipeline(c.req.param("id")))
+      ? c.json({ ok: true })
+      : c.json({ error: "not found" }, 404),
   );
 
   app.post("/api/pipelines/:id/start", async (c) => {
@@ -247,7 +288,11 @@ export function createApp(deps: AppDeps): Hono {
 
   app.post("/api/instances/:id/signal", async (c) => {
     let body: Partial<PipelineSignal>;
-    try { body = (await c.req.json()) as Partial<PipelineSignal>; } catch { return c.json({ error: "invalid JSON body" }, 400); }
+    try {
+      body = (await c.req.json()) as Partial<PipelineSignal>;
+    } catch {
+      return c.json({ error: "invalid JSON body" }, 400);
+    }
     const id = c.req.param("id");
     const signal: PipelineSignal = {
       instanceId: id,
@@ -262,20 +307,35 @@ export function createApp(deps: AppDeps): Hono {
   });
 
   app.post("/api/instances/:id/approve", async (c) => {
-    const answers = await c.req.json().then((b) => (b as { answers?: unknown }).answers).catch(() => undefined);
+    const answers = await c.req
+      .json()
+      .then((b) => (b as { answers?: unknown }).answers)
+      .catch(() => undefined);
     const res = await engine.approve(c.req.param("id"), answers);
-    return c.json(res.ok ? { ok: true } : { ok: false, error: res.error }, res.code as 200 | 404 | 409);
+    return c.json(
+      res.ok ? { ok: true } : { ok: false, error: res.error },
+      res.code as 200 | 404 | 409,
+    );
   });
 
   app.post("/api/instances/:id/revise", async (c) => {
-    const note = await c.req.json().then((b) => (b as { note?: string }).note).catch(() => undefined);
+    const note = await c.req
+      .json()
+      .then((b) => (b as { note?: string }).note)
+      .catch(() => undefined);
     const res = await engine.revise(c.req.param("id"), note);
-    return c.json(res.ok ? { ok: true } : { ok: false, error: res.error }, res.code as 200 | 404 | 409);
+    return c.json(
+      res.ok ? { ok: true } : { ok: false, error: res.error },
+      res.code as 200 | 404 | 409,
+    );
   });
 
   app.post("/api/instances/:id/abort", async (c) => {
     const res = await engine.abort(c.req.param("id"));
-    return c.json(res.ok ? { ok: true } : { ok: false, error: res.error }, res.code as 200 | 404 | 409);
+    return c.json(
+      res.ok ? { ok: true } : { ok: false, error: res.error },
+      res.code as 200 | 404 | 409,
+    );
   });
 
   if (deps.serveWeb !== false) mountWebApp(app);

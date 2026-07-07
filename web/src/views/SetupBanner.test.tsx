@@ -4,9 +4,13 @@ import type { PrereqResult } from "../useSetup";
 import SetupBanner from "./SetupBanner";
 
 const apply = vi.fn(() => new Promise<void>(() => {})); // never resolves: lets us assert disabled-after-click
-const mockSetup: { ok: boolean; prereqs: PrereqResult[]; loading: boolean; error: string | null } = {
-  ok: true, prereqs: [], loading: false, error: null,
-};
+const mockSetup: { ok: boolean; prereqs: PrereqResult[]; loading: boolean; error: string | null } =
+  {
+    ok: true,
+    prereqs: [],
+    loading: false,
+    error: null,
+  };
 
 vi.mock("../useSetup", () => ({ useSetup: () => ({ ...mockSetup, apply }) }));
 
@@ -43,7 +47,13 @@ describe("SetupBanner", () => {
     mockSetup.ok = false;
     mockSetup.prereqs = [
       { id: "signal-stop-hook", label: "Signal Stop hook", status: "ok", fixable: true },
-      { id: "claude-cli", label: "Claude CLI on PATH", status: "error", fixable: false, detail: "not found" },
+      {
+        id: "claude-cli",
+        label: "Claude CLI on PATH",
+        status: "error",
+        fixable: false,
+        detail: "not found",
+      },
     ];
     render(<SetupBanner />);
     expect(screen.getByText(/not found/i)).toBeInTheDocument();
@@ -53,7 +63,13 @@ describe("SetupBanner", () => {
   it("marks an outdated fixable prereq and offers Apply fixes", () => {
     mockSetup.ok = false;
     mockSetup.prereqs = [
-      { id: "signal-stop-hook", label: "Signal Stop hook", status: "outdated", fixable: true, detail: "differs from shipped version" },
+      {
+        id: "signal-stop-hook",
+        label: "Signal Stop hook",
+        status: "outdated",
+        fixable: true,
+        detail: "differs from shipped version",
+      },
     ];
     render(<SetupBanner />);
     expect(screen.getByText("Signal Stop hook")).toBeInTheDocument();

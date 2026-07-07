@@ -31,12 +31,7 @@ function safeEqual(a: string | null, b: string): boolean {
  * deliberately bind a non-loopback interface behind a trusted proxy.
  */
 
-const LOOPBACK_HOSTS = new Set([
-  "localhost",
-  "127.0.0.1",
-  "[::1]",
-  "::1",
-]);
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
 
 /** Strip the port and lowercase, so "LocalHost:7777" matches "localhost". */
 function hostname(hostHeader: string | undefined): string | null {
@@ -93,10 +88,14 @@ export function securityMiddleware(cfg: ArgusConfig) {
       return c.json({ error: "forbidden: host not allowed" }, 403);
     }
     if (cfg.token) {
-      const supplied = bearer(c.req.header("authorization")) ?? c.req.header("x-argus-token") ?? null;
+      const supplied =
+        bearer(c.req.header("authorization")) ?? c.req.header("x-argus-token") ?? null;
       if (!safeEqual(supplied, cfg.token)) return c.json({ error: "unauthorized" }, 401);
     }
-    if (MUTATING.has(c.req.method) && !isOriginAllowed(c.req.header("origin"), c.req.header("host"), cfg)) {
+    if (
+      MUTATING.has(c.req.method) &&
+      !isOriginAllowed(c.req.header("origin"), c.req.header("host"), cfg)
+    ) {
       return c.json({ error: "forbidden: cross-origin request rejected" }, 403);
     }
     await next();

@@ -39,7 +39,11 @@ test("different keys run concurrently", async () => {
 
 test("a throwing section does not poison the queue", async () => {
   const m = new KeyedMutex();
-  await assert.rejects(m.withLock("k", async () => { throw new Error("boom"); }));
+  await assert.rejects(
+    m.withLock("k", async () => {
+      throw new Error("boom");
+    }),
+  );
   const result = await m.withLock("k", async () => 42);
   assert.equal(result, 42);
 });

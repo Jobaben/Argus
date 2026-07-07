@@ -30,7 +30,10 @@ test("searchTranscripts: empty query returns nothing", async () => {
 test("searchTranscripts: case-insensitive match with a centered snippet", async () => {
   seedTranscript("-home-user-proj", "s1", [
     { type: "user", message: { role: "user", content: "Please fix the WIDGET rendering bug" } },
-    { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "unrelated" }] } },
+    {
+      type: "assistant",
+      message: { role: "assistant", content: [{ type: "text", text: "unrelated" }] },
+    },
   ]);
   const { searchTranscripts } = await load("search");
   const results = await searchTranscripts("widget");

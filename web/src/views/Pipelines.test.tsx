@@ -22,23 +22,40 @@ function okJson(body: unknown) {
 }
 
 const p1: PipelineDefinition = {
-  id: "p1", name: "Nightly",
+  id: "p1",
+  name: "Nightly",
   phases: [{ id: "a", name: "x", cwd: "/", gated: false, steps: [{ name: "s", prompt: "p" }] }],
-  trigger: { kind: "daily", time: "02:00" }, enabled: true, overlapPolicy: "skip",
-  lastStartedAt: null, createdAt: "", updatedAt: "",
+  trigger: { kind: "daily", time: "02:00" },
+  enabled: true,
+  overlapPolicy: "skip",
+  lastStartedAt: null,
+  createdAt: "",
+  updatedAt: "",
 };
 
 function instance(status: InstanceStatus): PipelineInstance {
   return {
-    id: "i1", pipelineId: "p1", pipelineName: "Nightly", status,
+    id: "i1",
+    pipelineId: "p1",
+    pipelineName: "Nightly",
+    status,
     currentPhaseIndex: 0,
-    phases: [{
-      id: "a", name: "x", gated: false, status: status === "running" ? "running" : "succeeded",
-      steps: [{ name: "s", runId: "r1", status: status === "running" ? "running" : "succeeded" }],
-      attempt: 1, payload: null,
-    }],
-    trigger: "manual", signalToken: "tok",
-    createdAt: "", updatedAt: "", endedAt: null,
+    phases: [
+      {
+        id: "a",
+        name: "x",
+        gated: false,
+        status: status === "running" ? "running" : "succeeded",
+        steps: [{ name: "s", runId: "r1", status: status === "running" ? "running" : "succeeded" }],
+        attempt: 1,
+        payload: null,
+      },
+    ],
+    trigger: "manual",
+    signalToken: "tok",
+    createdAt: "",
+    updatedAt: "",
+    endedAt: null,
   };
 }
 

@@ -37,18 +37,16 @@ async function readRunFile(id: string): Promise<Run | null> {
   }
 }
 
-export async function readRuns(
-  opts: { scheduleId?: string; limit?: number } = {},
-): Promise<Run[]> {
+export async function readRuns(opts: { scheduleId?: string; limit?: number } = {}): Promise<Run[]> {
   let names: string[];
   try {
     names = (await readdir(paths.runsDir())).filter((f) => f.endsWith(".json"));
   } catch {
     return [];
   }
-  const runs = (
-    await Promise.all(names.map((f) => readRunFile(f.replace(/\.json$/, ""))))
-  ).filter((r): r is Run => r !== null);
+  const runs = (await Promise.all(names.map((f) => readRunFile(f.replace(/\.json$/, ""))))).filter(
+    (r): r is Run => r !== null,
+  );
   let out = runs.sort((a, b) => b.queuedAt.localeCompare(a.queuedAt));
   if (opts.scheduleId) out = out.filter((r) => r.scheduleId === opts.scheduleId);
   if (opts.limit && opts.limit > 0) out = out.slice(0, opts.limit);
@@ -56,9 +54,7 @@ export async function readRuns(
 }
 
 /** Reads a run plus the last LOG_CAP_BYTES of its log. */
-export async function readRun(
-  id: string,
-): Promise<{ run: Run; log: string } | null> {
+export async function readRun(id: string): Promise<{ run: Run; log: string } | null> {
   if (!RUN_ID_RE.test(id)) return null;
   const run = await readRunFile(id);
   if (!run) return null;

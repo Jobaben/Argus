@@ -6,9 +6,7 @@ import { MoreMenu } from "./MoreMenu";
 describe("MoreMenu", () => {
   it("hides items until opened, then shows them as links", async () => {
     const user = userEvent.setup();
-    render(
-      <MoreMenu active={false} items={[{ id: "stats", label: "Stats", href: "#/stats" }]} />,
-    );
+    render(<MoreMenu active={false} items={[{ id: "stats", label: "Stats", href: "#/stats" }]} />);
     expect(screen.queryByRole("menuitem", { name: "Stats" })).toBeNull();
 
     await user.click(screen.getByRole("button", { name: /more/i }));

@@ -25,7 +25,10 @@ export function NavBar({
     >
       <div className="mx-auto flex max-w-[1600px] items-center gap-3 px-4 py-2.5 sm:px-6">
         <span className="flex shrink-0 items-center gap-2 text-sm font-bold">
-          <IrisMark size={18} /> <span>ARG<span className="text-eye">U</span>S</span>
+          <IrisMark size={18} />{" "}
+          <span>
+            ARG<span className="text-eye">U</span>S
+          </span>
         </span>
         {/* Destinations scroll horizontally rather than overflow the bar on
             narrow viewports. */}

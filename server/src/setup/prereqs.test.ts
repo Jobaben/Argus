@@ -28,14 +28,29 @@ test("fresh home reports the signal Stop hook as missing", async () => {
 });
 
 test("a registered Stop hook with no installed file reads back as outdated", async () => {
-  writeSettings({ hooks: { Stop: [{ matcher: "", hooks: [{ type: "command", command: 'node "x/hooks/argus-signal.mjs"' }] }] } });
+  writeSettings({
+    hooks: {
+      Stop: [
+        { matcher: "", hooks: [{ type: "command", command: 'node "x/hooks/argus-signal.mjs"' }] },
+      ],
+    },
+  });
   const m = await fresh();
   const { prereqs } = await m.checkAll();
   assert.equal(find(prereqs, "signal-stop-hook").status, "outdated");
 });
 
 test("gate hook registered but with no installed file reads back as outdated", async () => {
-  writeSettings({ hooks: { PreToolUse: [{ matcher: "AskUserQuestion", hooks: [{ type: "command", command: 'node "x/hooks/argus-signal.mjs" needs-input' }] }] } });
+  writeSettings({
+    hooks: {
+      PreToolUse: [
+        {
+          matcher: "AskUserQuestion",
+          hooks: [{ type: "command", command: 'node "x/hooks/argus-signal.mjs" needs-input' }],
+        },
+      ],
+    },
+  });
   const m = await fresh();
   const { prereqs } = await m.checkAll();
   assert.equal(find(prereqs, "gate-pretooluse-hook").status, "outdated");
@@ -56,20 +71,40 @@ test("applyAll installs the hook file and a valid Stop entry", async () => {
   assert.ok(existsSync(path.join(home, "hooks", "argus-signal.mjs")), "hook file copied");
   const settings = JSON.parse(readFileSync(path.join(home, "settings.json"), "utf8"));
   const stopCmds = settings.hooks.Stop.flatMap((g: any) => g.hooks).map((h: any) => h.command);
-  assert.ok(stopCmds.some((c: string) => c.includes("argus-signal")), "Stop hook registered");
+  assert.ok(
+    stopCmds.some((c: string) => c.includes("argus-signal")),
+    "Stop hook registered",
+  );
   const { prereqs } = await m.checkAll();
   assert.equal(find(prereqs, "signal-stop-hook").status, "ok");
   assert.equal(find(prereqs, "gate-pretooluse-hook").status, "ok");
 });
 
 test("applyAll preserves a pre-existing unrelated Stop hook", async () => {
-  writeSettings({ hooks: { Stop: [{ matcher: "", hooks: [{ type: "command", command: "~/.claude/hooks/bmad-runlog-autoclose.sh", timeout: 5 }] }] } });
+  writeSettings({
+    hooks: {
+      Stop: [
+        {
+          matcher: "",
+          hooks: [
+            { type: "command", command: "~/.claude/hooks/bmad-runlog-autoclose.sh", timeout: 5 },
+          ],
+        },
+      ],
+    },
+  });
   const m = await fresh();
   await m.applyAll();
   const settings = JSON.parse(readFileSync(path.join(home, "settings.json"), "utf8"));
   const stopCmds = settings.hooks.Stop.flatMap((g: any) => g.hooks).map((h: any) => h.command);
-  assert.ok(stopCmds.some((c: string) => c.includes("bmad-runlog-autoclose")), "existing hook preserved");
-  assert.ok(stopCmds.some((c: string) => c.includes("argus-signal")), "new hook added");
+  assert.ok(
+    stopCmds.some((c: string) => c.includes("bmad-runlog-autoclose")),
+    "existing hook preserved",
+  );
+  assert.ok(
+    stopCmds.some((c: string) => c.includes("argus-signal")),
+    "new hook added",
+  );
 });
 
 test("applyAll is idempotent — no duplicate entries on re-apply", async () => {
@@ -77,7 +112,8 @@ test("applyAll is idempotent — no duplicate entries on re-apply", async () => 
   await m.applyAll();
   await m.applyAll();
   const settings = JSON.parse(readFileSync(path.join(home, "settings.json"), "utf8"));
-  const stopCmds = settings.hooks.Stop.flatMap((g: any) => g.hooks).map((h: any) => h.command)
+  const stopCmds = settings.hooks.Stop.flatMap((g: any) => g.hooks)
+    .map((h: any) => h.command)
     .filter((c: string) => c.includes("argus-signal"));
   assert.equal(stopCmds.length, 1, "exactly one signal Stop hook");
 });
@@ -99,8 +135,15 @@ test("a stale installed hook reads as outdated and applyAll refreshes it to ok",
   // Register both hooks and install a DIFFERENT hook file (simulates version drift).
   writeSettings({
     hooks: {
-      Stop: [{ matcher: "", hooks: [{ type: "command", command: 'node "x/hooks/argus-signal.mjs"' }] }],
-      PreToolUse: [{ matcher: "AskUserQuestion", hooks: [{ type: "command", command: 'node "x/hooks/argus-signal.mjs" needs-input' }] }],
+      Stop: [
+        { matcher: "", hooks: [{ type: "command", command: 'node "x/hooks/argus-signal.mjs"' }] },
+      ],
+      PreToolUse: [
+        {
+          matcher: "AskUserQuestion",
+          hooks: [{ type: "command", command: 'node "x/hooks/argus-signal.mjs" needs-input' }],
+        },
+      ],
     },
   });
   mkdirSync(path.join(home, "hooks"), { recursive: true });
@@ -147,7 +190,10 @@ test("preflight repairs fixable criticals and returns ok when PATH tools resolve
   const res = await m.preflight();
   // node is always on PATH in the test runner; claude may or may not be.
   // The fixable criticals (hooks, data dir) must be repaired regardless.
-  assert.ok(existsSync(path.join(home, "hooks", "argus-signal.mjs")), "hook file installed by preflight");
+  assert.ok(
+    existsSync(path.join(home, "hooks", "argus-signal.mjs")),
+    "hook file installed by preflight",
+  );
   assert.ok(existsSync(path.join(home, "argus", "instances")), "data dir created by preflight");
   assert.equal(find((await m.checkAll()).prereqs, "signal-stop-hook").status, "ok");
   assert.ok(Array.isArray(res.reasons));

@@ -26,7 +26,8 @@ export function TriggerFields({
           if (k === "manual") onChange(null);
           else if (k === "interval") onChange({ kind: "interval", everyMinutes: 60 });
           else if (k === "daily") onChange({ kind: "daily", time: "02:00" });
-          else if (k === "windowed") onChange({ kind: "windowed", startTime: "09:00", endTime: "17:00", everyMinutes: 30 });
+          else if (k === "windowed")
+            onChange({ kind: "windowed", startTime: "09:00", endTime: "17:00", everyMinutes: 30 });
           else onChange({ kind: "weekly", time: "02:00", weekday: 1 });
         }}
       >
@@ -63,7 +64,9 @@ export function TriggerFields({
           onChange={(e) => onChange({ ...value, weekday: Number(e.target.value) })}
         >
           {DAYS.map((d, i) => (
-            <option key={d} value={i}>{d}</option>
+            <option key={d} value={i}>
+              {d}
+            </option>
           ))}
         </select>
       )}

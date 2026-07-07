@@ -14,10 +14,7 @@ function atTime(ref: Date, h: number, mi: number): Date {
 
 /** The clock grid for a windowed trigger on the calendar day of `ref`.
  * Returns null when the window is invalid (missing/zero cadence or end<=start). */
-function windowGrid(
-  trigger: Trigger,
-  ref: Date,
-): { start: Date; end: Date; step: number } | null {
+function windowGrid(trigger: Trigger, ref: Date): { start: Date; end: Date; step: number } | null {
   const step = (trigger.everyMinutes ?? 0) * 60000;
   if (step <= 0) return null;
   const [sh, sm] = parseHHMM(trigger.startTime);
@@ -37,11 +34,7 @@ function weekdayAllowed(trigger: Trigger, d: Date): boolean {
 }
 
 /** The most recent scheduled instant at or before `now`, or null if none. */
-export function previousFireTime(
-  trigger: Trigger,
-  anchor: Date,
-  now: Date,
-): Date | null {
+export function previousFireTime(trigger: Trigger, anchor: Date, now: Date): Date | null {
   if (trigger.kind === "windowed") {
     if (!weekdayAllowed(trigger, now)) return null;
     const g = windowGrid(trigger, now);
@@ -86,7 +79,13 @@ export function nextFireTime(trigger: Trigger, from: Date): Date | null {
     if (step <= 0) return null;
     for (let dayOffset = 0; dayOffset <= 8; dayOffset++) {
       const ref = new Date(
-        from.getFullYear(), from.getMonth(), from.getDate() + dayOffset, 0, 0, 0, 0,
+        from.getFullYear(),
+        from.getMonth(),
+        from.getDate() + dayOffset,
+        0,
+        0,
+        0,
+        0,
       );
       if (!weekdayAllowed(trigger, ref)) continue;
       const g = windowGrid(trigger, ref);
@@ -122,11 +121,7 @@ export function nextFireTime(trigger: Trigger, from: Date): Date | null {
 }
 
 /** The next fire strictly after `now`, given an interval anchor for cadence. */
-export function nextFireAfter(
-  trigger: Trigger,
-  anchor: Date,
-  now: Date,
-): Date | null {
+export function nextFireAfter(trigger: Trigger, anchor: Date, now: Date): Date | null {
   if (trigger.kind === "interval") {
     const step = (trigger.everyMinutes ?? 0) * 60000;
     if (step <= 0) return null;
@@ -144,11 +139,7 @@ export function graceMsFor(tickMs: number): number {
 }
 
 /** Whether this schedule is due to fire at `now` (within the grace window). */
-export function shouldFire(
-  schedule: Schedule,
-  now: Date,
-  graceMs: number,
-): boolean {
+export function shouldFire(schedule: Schedule, now: Date, graceMs: number): boolean {
   if (!schedule.enabled) return false;
   const anchor = new Date(schedule.lastRunAt ?? schedule.createdAt);
   const prev = previousFireTime(schedule.trigger, anchor, now);

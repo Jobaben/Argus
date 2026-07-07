@@ -16,7 +16,11 @@ test("parses a clean JSON envelope with cost and usage", () => {
 
 test("recovers the envelope when preceded by log noise", () => {
   const noise = "some stderr\nprogress line\n";
-  const env = JSON.stringify({ result: "ok", total_cost_usd: 1, usage: { input_tokens: 1, output_tokens: 1 } });
+  const env = JSON.stringify({
+    result: "ok",
+    total_cost_usd: 1,
+    usage: { input_tokens: 1, output_tokens: 1 },
+  });
   const out = parseRunEnvelope(noise + env);
   assert.equal(out.result, "ok");
   assert.equal(out.tokens, 2);
@@ -39,7 +43,11 @@ test("returns nulls on empty output", () => {
 });
 
 test("recovers the envelope despite a stray brace emitted AFTER it", () => {
-  const env = JSON.stringify({ result: "ok", total_cost_usd: 0.5, usage: { input_tokens: 3, output_tokens: 4 } });
+  const env = JSON.stringify({
+    result: "ok",
+    total_cost_usd: 0.5,
+    usage: { input_tokens: 3, output_tokens: 4 },
+  });
   const out = parseRunEnvelope(`noise\n${env}\ntrailing } garbage`);
   assert.equal(out.result, "ok");
   assert.equal(out.costUsd, 0.5);
@@ -55,7 +63,10 @@ test("ignores a non-envelope object and picks the real envelope", () => {
 });
 
 test("brace inside a string value does not break extraction", () => {
-  const env = JSON.stringify({ result: "here is a brace } inside text", usage: { input_tokens: 2, output_tokens: 0 } });
+  const env = JSON.stringify({
+    result: "here is a brace } inside text",
+    usage: { input_tokens: 2, output_tokens: 0 },
+  });
   const out = parseRunEnvelope(`log line\n${env}`);
   assert.equal(out.result, "here is a brace } inside text");
 });

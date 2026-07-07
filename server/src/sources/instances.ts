@@ -34,9 +34,9 @@ export async function readInstances(
   } catch {
     return [];
   }
-  const all = (
-    await Promise.all(names.map((f) => readInstance(f.replace(/\.json$/, ""))))
-  ).filter((i): i is PipelineInstance => i !== null);
+  const all = (await Promise.all(names.map((f) => readInstance(f.replace(/\.json$/, ""))))).filter(
+    (i): i is PipelineInstance => i !== null,
+  );
   let out = all.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   if (opts.pipelineId) out = out.filter((i) => i.pipelineId === opts.pipelineId);
   if (opts.limit && opts.limit > 0) out = out.slice(0, opts.limit);

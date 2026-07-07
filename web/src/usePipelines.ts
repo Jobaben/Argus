@@ -4,11 +4,14 @@ import type { PipelineDefinition, PipelineInput } from "./types";
 
 /** Lists pipeline definitions, refreshing on "pipelines:changed", plus CRUD. */
 export function usePipelines() {
-  const { data, loading, error, refresh } = useLiveResource<PipelineDefinition[]>("/api/pipelines", {
-    events: ["pipelines:changed"],
-    select: (j) => (j as { pipelines?: PipelineDefinition[] }).pipelines ?? [],
-    initial: [],
-  });
+  const { data, loading, error, refresh } = useLiveResource<PipelineDefinition[]>(
+    "/api/pipelines",
+    {
+      events: ["pipelines:changed"],
+      select: (j) => (j as { pipelines?: PipelineDefinition[] }).pipelines ?? [],
+      initial: [],
+    },
+  );
 
   const mutate = useCallback(
     async (path: string, method: string, body?: unknown) => {
@@ -27,7 +30,10 @@ export function usePipelines() {
     [refresh],
   );
 
-  const create = useCallback((input: PipelineInput) => mutate("/api/pipelines", "POST", input), [mutate]);
+  const create = useCallback(
+    (input: PipelineInput) => mutate("/api/pipelines", "POST", input),
+    [mutate],
+  );
   const update = useCallback(
     (id: string, input: PipelineInput) => mutate(`/api/pipelines/${id}`, "PUT", input),
     [mutate],
@@ -37,7 +43,10 @@ export function usePipelines() {
     (id: string, enabled: boolean) => mutate(`/api/pipelines/${id}`, "PATCH", { enabled }),
     [mutate],
   );
-  const runNow = useCallback((id: string) => mutate(`/api/pipelines/${id}/start`, "POST"), [mutate]);
+  const runNow = useCallback(
+    (id: string) => mutate(`/api/pipelines/${id}/start`, "POST"),
+    [mutate],
+  );
 
   return { pipelines: data, loading, error, refresh, create, update, remove, setEnabled, runNow };
 }

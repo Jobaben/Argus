@@ -16,9 +16,15 @@ export class KeyedMutex {
     const prev = this.tails.get(key) ?? Promise.resolve();
     // Chain onto the current tail, swallowing its outcome so one failed
     // critical section doesn't poison the queue for the next caller.
-    const run = prev.then(() => fn(), () => fn());
+    const run = prev.then(
+      () => fn(),
+      () => fn(),
+    );
     // The stored tail must never reject — it exists only to order callers.
-    const tail = run.then(() => undefined, () => undefined);
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
     this.tails.set(key, tail);
     try {
       return await run;

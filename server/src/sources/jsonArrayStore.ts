@@ -27,7 +27,10 @@ export interface JsonArrayStore<T> {
   withLock<R>(fn: () => Promise<R>): Promise<R>;
 }
 
-export function createJsonArrayStore<T>(opts: { file: () => string; label: string }): JsonArrayStore<T> {
+export function createJsonArrayStore<T>(opts: {
+  file: () => string;
+  label: string;
+}): JsonArrayStore<T> {
   const lock = new KeyedMutex();
 
   async function readRaw(): Promise<{ ok: boolean; list: T[] }> {

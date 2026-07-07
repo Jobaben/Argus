@@ -56,10 +56,7 @@ export async function readAgents(): Promise<Agent[]> {
   const [shorts, daemon] = await Promise.all([listJobShorts(), readDaemon()]);
   const agents = await Promise.all(
     shorts.map(async (short) => {
-      const state = await readJson<JobState>(
-        path.join(paths.jobs(), short, "state.json"),
-        {},
-      );
+      const state = await readJson<JobState>(path.join(paths.jobs(), short, "state.json"), {});
       const worker = daemon.workers[short];
       return toAgent(short, state, Boolean(worker), worker?.pid ?? null);
     }),

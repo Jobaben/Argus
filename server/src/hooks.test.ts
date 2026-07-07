@@ -6,18 +6,33 @@ import assert from "node:assert/strict";
 import { resolveType, hasPendingBackgroundWork } from "../../hooks/argus-signal.mjs";
 
 test("explicit CLI arg always wins over the message", () => {
-  assert.equal(resolveType("needs-input", { last_assistant_message: "ARGUS_OUTCOME: failed" }), "needs-input");
+  assert.equal(
+    resolveType("needs-input", { last_assistant_message: "ARGUS_OUTCOME: failed" }),
+    "needs-input",
+  );
   assert.equal(resolveType("failed", { last_assistant_message: "all good" }), "failed");
 });
 
 test("Stop hook (no arg) derives failed from the sentinel", () => {
-  assert.equal(resolveType(undefined, { last_assistant_message: "work done\nARGUS_OUTCOME: failed" }), "failed");
-  assert.equal(resolveType(undefined, { last_assistant_message: "ARGUS_OUTCOME: blocked — no Jira" }), "failed");
-  assert.equal(resolveType(undefined, { last_assistant_message: "argus_outcome:  FAILED" }), "failed");
+  assert.equal(
+    resolveType(undefined, { last_assistant_message: "work done\nARGUS_OUTCOME: failed" }),
+    "failed",
+  );
+  assert.equal(
+    resolveType(undefined, { last_assistant_message: "ARGUS_OUTCOME: blocked — no Jira" }),
+    "failed",
+  );
+  assert.equal(
+    resolveType(undefined, { last_assistant_message: "argus_outcome:  FAILED" }),
+    "failed",
+  );
 });
 
 test("Stop hook defaults to completed without a failure sentinel", () => {
-  assert.equal(resolveType(undefined, { last_assistant_message: "Done. ARGUS_OUTCOME: succeeded" }), "completed");
+  assert.equal(
+    resolveType(undefined, { last_assistant_message: "Done. ARGUS_OUTCOME: succeeded" }),
+    "completed",
+  );
   assert.equal(resolveType(undefined, { last_assistant_message: "finished cleanly" }), "completed");
   assert.equal(resolveType(undefined, {}), "completed");
   assert.equal(resolveType(undefined, "raw non-json text"), "completed");
@@ -51,7 +66,10 @@ test("Stop hook ignores finished background tasks", () => {
 });
 
 test("explicit CLI arg still wins over unfinished background work", () => {
-  assert.equal(resolveType("needs-input", { background_tasks: [{ status: "running" }] }), "needs-input");
+  assert.equal(
+    resolveType("needs-input", { background_tasks: [{ status: "running" }] }),
+    "needs-input",
+  );
 });
 
 test("hasPendingBackgroundWork detects only non-terminal task statuses", () => {

@@ -6,13 +6,17 @@ import type { OverviewEntry } from "./types";
  *  the instance gate actions. Actions only POST — the resulting server
  *  broadcast drives the single refresh (no optimistic refetch here). */
 export function useOverview() {
-  const { data, loading, error, live, refresh } = useLiveResource<OverviewEntry[]>("/api/overview", {
-    events: ["pipelines:changed"],
-    select: (j) => (Array.isArray((j as { overview?: OverviewEntry[] }).overview)
-      ? (j as { overview: OverviewEntry[] }).overview
-      : []),
-    initial: [],
-  });
+  const { data, loading, error, live, refresh } = useLiveResource<OverviewEntry[]>(
+    "/api/overview",
+    {
+      events: ["pipelines:changed"],
+      select: (j) =>
+        Array.isArray((j as { overview?: OverviewEntry[] }).overview)
+          ? (j as { overview: OverviewEntry[] }).overview
+          : [],
+      initial: [],
+    },
+  );
 
   const act = useCallback(
     async (instanceId: string, action: "approve" | "revise" | "abort", body?: unknown) => {

@@ -41,7 +41,8 @@ export function hasPendingBackgroundWork(payload) {
       ? payload.background_tasks
       : [];
   return tasks.some(
-    (t) => t && typeof t === "object" && typeof t.status === "string" && PENDING_TASK_RE.test(t.status),
+    (t) =>
+      t && typeof t === "object" && typeof t.status === "string" && PENDING_TASK_RE.test(t.status),
   );
 }
 
@@ -70,7 +71,11 @@ function main() {
   process.stdin.on("data", (c) => (stdin += c));
   process.stdin.on("end", async () => {
     let payload = stdin;
-    try { payload = JSON.parse(stdin); } catch { /* keep raw text */ }
+    try {
+      payload = JSON.parse(stdin);
+    } catch {
+      /* keep raw text */
+    }
     const type = resolveType(argType, payload);
     try {
       await fetch(url, {
@@ -85,7 +90,9 @@ function main() {
           payload,
         }),
       });
-    } catch { /* server unreachable — nothing to do */ }
+    } catch {
+      /* server unreachable — nothing to do */
+    }
     process.exit(0);
   });
 }

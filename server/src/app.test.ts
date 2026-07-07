@@ -35,11 +35,20 @@ const fakeEngine: Engine = {
 };
 
 function makeApp(over: Partial<ArgusConfig> = {}) {
-  return createApp({ config: { ...config, ...over }, engine: fakeEngine, broadcast: () => {}, serveWeb: false });
+  return createApp({
+    config: { ...config, ...over },
+    engine: fakeEngine,
+    broadcast: () => {},
+    serveWeb: false,
+  });
 }
 
 const loopback = { host: "localhost:7777" };
-const sameOrigin = { host: "localhost:7777", origin: "http://localhost:7777", "content-type": "application/json" };
+const sameOrigin = {
+  host: "localhost:7777",
+  origin: "http://localhost:7777",
+  "content-type": "application/json",
+};
 
 test("GET /api/health returns ok + version", async () => {
   const res = await makeApp().request("/api/health", { headers: loopback });
@@ -57,7 +66,11 @@ test("unknown Host header is rejected with 403", async () => {
 test("cross-origin mutation is rejected with 403", async () => {
   const res = await makeApp().request("/api/schedules", {
     method: "POST",
-    headers: { host: "localhost:7777", origin: "https://evil.example.com", "content-type": "application/json" },
+    headers: {
+      host: "localhost:7777",
+      origin: "https://evil.example.com",
+      "content-type": "application/json",
+    },
     body: "{}",
   });
   assert.equal(res.status, 403);
@@ -67,7 +80,9 @@ test("token gate: missing token is 401, correct token passes", async () => {
   const app = makeApp({ token: "s3cret" });
   const denied = await app.request("/api/health", { headers: loopback });
   assert.equal(denied.status, 401);
-  const ok = await app.request("/api/health", { headers: { ...loopback, authorization: "Bearer s3cret" } });
+  const ok = await app.request("/api/health", {
+    headers: { ...loopback, authorization: "Bearer s3cret" },
+  });
   assert.equal(ok.status, 200);
 });
 
@@ -117,7 +132,11 @@ test("session transcript export renders Markdown with a download header", async 
   mkdirSync(path.join(home, "projects", proj), { recursive: true });
   writeFileSync(
     path.join(home, "projects", proj, "sess1.jsonl"),
-    JSON.stringify({ type: "user", timestamp: "2026-07-06T00:00:00Z", message: { role: "user", content: "hello" } }) + "\n",
+    JSON.stringify({
+      type: "user",
+      timestamp: "2026-07-06T00:00:00Z",
+      message: { role: "user", content: "hello" },
+    }) + "\n",
   );
   const res = await makeApp().request(`/api/sessions/${proj}/sess1/export`, { headers: loopback });
   assert.equal(res.status, 200);
@@ -133,6 +152,9 @@ test("unknown API route returns JSON 404, not HTML", async () => {
 });
 
 test("pipeline start overlap returns 409 (engine returns null)", async () => {
-  const res = await makeApp().request("/api/pipelines/p1/start", { method: "POST", headers: sameOrigin });
+  const res = await makeApp().request("/api/pipelines/p1/start", {
+    method: "POST",
+    headers: sameOrigin,
+  });
   assert.equal(res.status, 409);
 });

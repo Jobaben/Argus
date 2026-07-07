@@ -63,28 +63,28 @@ docker run --rm -p 7777:7777 \
 
 ### Configuration
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `ARGUS_CLAUDE_HOME` | `~/.claude` | Directory Argus watches. |
-| `ARGUS_PORT` | `7777` | HTTP/WS port. |
-| `ARGUS_HOST` | `127.0.0.1` | Bind interface. Non-loopback requires `ARGUS_TOKEN`. |
-| `ARGUS_TOKEN` | *(unset)* | Bearer token required on every request when set. |
-| `ARGUS_ALLOWED_HOSTS` | *(none)* | Extra Host values to accept (behind a proxy). |
-| `ARGUS_ALLOWED_ORIGINS` | *(none)* | Extra Origins to accept for cross-origin browser requests. |
-| `ARGUS_MAX_CONCURRENT_RUNS` | `4` | Cap on concurrently spawned pipeline steps. |
-| `ARGUS_SCHED_TICK_MS` | `30000` | Scheduler / reconcile tick interval. |
+| Variable                    | Default     | Purpose                                                    |
+| --------------------------- | ----------- | ---------------------------------------------------------- |
+| `ARGUS_CLAUDE_HOME`         | `~/.claude` | Directory Argus watches.                                   |
+| `ARGUS_PORT`                | `7777`      | HTTP/WS port.                                              |
+| `ARGUS_HOST`                | `127.0.0.1` | Bind interface. Non-loopback requires `ARGUS_TOKEN`.       |
+| `ARGUS_TOKEN`               | _(unset)_   | Bearer token required on every request when set.           |
+| `ARGUS_ALLOWED_HOSTS`       | _(none)_    | Extra Host values to accept (behind a proxy).              |
+| `ARGUS_ALLOWED_ORIGINS`     | _(none)_    | Extra Origins to accept for cross-origin browser requests. |
+| `ARGUS_MAX_CONCURRENT_RUNS` | `4`         | Cap on concurrently spawned pipeline steps.                |
+| `ARGUS_SCHED_TICK_MS`       | `30000`     | Scheduler / reconcile tick interval.                       |
 
 ## Data sources
 
-| Source | Path | Feeds |
-| --- | --- | --- |
-| Background agents | `jobs/<short>/state.json`, `timeline.jsonl` | status, tempo, progress, results |
-| Live workers | `daemon/roster.json`, `daemon.status.json` | which agents are alive right now |
-| Transcripts | `projects/<proj>/<session>.jsonl` | Sessions list + full transcript view |
-| Prompt history | `history.jsonl` | global activity feed |
-| Tasks | `tasks/<id>/` | task-queue metadata |
-| Argus schedules | `argus/schedules.json` | Scheduler triggers + run history |
-| Argus pipelines | `argus/pipelines.json`, `argus/instances/` | multi-phase pipeline defs + instances |
+| Source            | Path                                        | Feeds                                 |
+| ----------------- | ------------------------------------------- | ------------------------------------- |
+| Background agents | `jobs/<short>/state.json`, `timeline.jsonl` | status, tempo, progress, results      |
+| Live workers      | `daemon/roster.json`, `daemon.status.json`  | which agents are alive right now      |
+| Transcripts       | `projects/<proj>/<session>.jsonl`           | Sessions list + full transcript view  |
+| Prompt history    | `history.jsonl`                             | global activity feed                  |
+| Tasks             | `tasks/<id>/`                               | task-queue metadata                   |
+| Argus schedules   | `argus/schedules.json`                      | Scheduler triggers + run history      |
+| Argus pipelines   | `argus/pipelines.json`, `argus/instances/`  | multi-phase pipeline defs + instances |
 
 **Argus's Scheduler** fires its own headless `claude -p` runs on interval /
 daily / weekly triggers (see the Scheduler tab — create, run-now, history).
@@ -98,13 +98,13 @@ surface those — the Cron tab explains why.
 Full request/response detail lives in [docs/API.md](docs/API.md). The surface
 in brief:
 
-| Group | Endpoints |
-| --- | --- |
-| Health / setup | `GET /api/health`, `GET /api/setup`, `POST /api/setup/apply` |
-| Monitoring (read) | `GET /api/agents`, `/agents/:short/timeline`, `/daemon`, `/sessions`, `/sessions/:project/:id`, `/activity`, `/projects`, `/stats`, `/inventory`, `/tasks`, `/search`, `/cron` |
-| Scheduler | `GET/POST /api/schedules`, `PUT/DELETE /api/schedules/:id`, `POST /api/schedules/:id/run`, `POST /api/runs/:id/cancel`, `GET /api/runs`, `/runs/:id` |
-| Pipelines | `GET/POST /api/pipelines`, `PUT/PATCH/DELETE /api/pipelines/:id`, `POST /api/pipelines/:id/start`, `GET /api/pipelines/:id/instances`, `GET /api/overview`, `GET /api/instances/:id`, `POST /api/instances/:id/{signal,approve,revise,abort}` |
-| Live push | `WS /ws` — `{type:"agents:changed"｜"schedules:changed"｜"pipelines:changed"｜"inventory:changed"}` |
+| Group             | Endpoints                                                                                                                                                                                                                                     |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Health / setup    | `GET /api/health`, `GET /api/setup`, `POST /api/setup/apply`                                                                                                                                                                                  |
+| Monitoring (read) | `GET /api/agents`, `/agents/:short/timeline`, `/daemon`, `/sessions`, `/sessions/:project/:id`, `/activity`, `/projects`, `/stats`, `/inventory`, `/tasks`, `/search`, `/cron`                                                                |
+| Scheduler         | `GET/POST /api/schedules`, `PUT/DELETE /api/schedules/:id`, `POST /api/schedules/:id/run`, `POST /api/runs/:id/cancel`, `GET /api/runs`, `/runs/:id`                                                                                          |
+| Pipelines         | `GET/POST /api/pipelines`, `PUT/PATCH/DELETE /api/pipelines/:id`, `POST /api/pipelines/:id/start`, `GET /api/pipelines/:id/instances`, `GET /api/overview`, `GET /api/instances/:id`, `POST /api/instances/:id/{signal,approve,revise,abort}` |
+| Live push         | `WS /ws` — `{type:"agents:changed"｜"schedules:changed"｜"pipelines:changed"｜"inventory:changed"}`                                                                                                                                           |
 
 ## Status
 

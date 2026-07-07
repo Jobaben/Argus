@@ -162,7 +162,9 @@ function summarize(project: string, id: string, lines: RawLine[]): SessionSummar
   };
 }
 
-async function listSessionFiles(): Promise<{ project: string; id: string; file: string; mtime: number }[]> {
+async function listSessionFiles(): Promise<
+  { project: string; id: string; file: string; mtime: number }[]
+> {
   let projectDirs: string[];
   try {
     const entries = await readdir(paths.projects(), { withFileTypes: true });
@@ -232,9 +234,7 @@ async function readSessionsRaw(limit: number): Promise<SessionSummary[]> {
 
   const summaries = await Promise.all(slice.map((entry) => summarizeFile(entry)));
 
-  return summaries.sort((a, b) =>
-    (b.lastActivity ?? "").localeCompare(a.lastActivity ?? ""),
-  );
+  return summaries.sort((a, b) => (b.lastActivity ?? "").localeCompare(a.lastActivity ?? ""));
 }
 
 // The list read scans dozens of transcript files; a short-TTL single-flight

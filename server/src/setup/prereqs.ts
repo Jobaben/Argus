@@ -37,7 +37,9 @@ const REPO_HOOK_SRC = fileURLToPath(new URL("../../../hooks/argus-signal.mjs", i
 /** SHA-256 of a file's raw bytes; null if unreadable. */
 async function fileHash(p: string): Promise<string | null> {
   try {
-    return createHash("sha256").update(await readFile(p)).digest("hex");
+    return createHash("sha256")
+      .update(await readFile(p))
+      .digest("hex");
   } catch {
     return null;
   }
@@ -84,7 +86,10 @@ export async function readSettings(): Promise<Record<string, unknown>> {
   }
 }
 
-interface HookGroup { matcher?: string; hooks?: { type?: string; command?: string }[] }
+interface HookGroup {
+  matcher?: string;
+  hooks?: { type?: string; command?: string }[];
+}
 
 function groupsFor(settings: Record<string, unknown>, event: string): HookGroup[] {
   const hooks = settings.hooks as Record<string, unknown> | undefined;
@@ -100,7 +105,10 @@ function commands(groups: HookGroup[]): { matcher: string; command: string }[] {
 
 function onPath(cmd: string): boolean {
   try {
-    const res = spawnSync(cmd, ["--version"], { timeout: 3000, shell: process.platform === "win32" });
+    const res = spawnSync(cmd, ["--version"], {
+      timeout: 3000,
+      shell: process.platform === "win32",
+    });
     return !res.error && res.status === 0;
   } catch {
     return false;
@@ -119,19 +127,29 @@ const REGISTRY: Prerequisite[] = [
       const fresh = await installedHookMatchesRepo();
       const status: PrereqStatus = !registered ? "missing" : !fresh ? "outdated" : "ok";
       return {
-        id: "signal-stop-hook", label: "Signal Stop hook", fixable: true, status,
+        id: "signal-stop-hook",
+        label: "Signal Stop hook",
+        fixable: true,
+        status,
         detail:
-          status === "missing" ? "Pipelines can't complete without this hook."
-          : status === "outdated" ? "Installed hook differs from the shipped version — runs may mis-report their outcome. Apply fixes to refresh it."
-          : undefined,
+          status === "missing"
+            ? "Pipelines can't complete without this hook."
+            : status === "outdated"
+              ? "Installed hook differs from the shipped version — runs may mis-report their outcome. Apply fixes to refresh it."
+              : undefined,
       };
     },
     async apply() {
       await copyHookFile();
       const settings = await readSettings();
-      const present = commands(groupsFor(settings, "Stop")).some((c) => c.command.includes("argus-signal"));
+      const present = commands(groupsFor(settings, "Stop")).some((c) =>
+        c.command.includes("argus-signal"),
+      );
       if (present) return;
-      pushGroup(settings, "Stop", { matcher: "", hooks: [{ type: "command", command: hookCommand() }] });
+      pushGroup(settings, "Stop", {
+        matcher: "",
+        hooks: [{ type: "command", command: hookCommand() }],
+      });
       await writeSettings(settings);
     },
   },
@@ -141,26 +159,40 @@ const REGISTRY: Prerequisite[] = [
     fixable: true,
     async check() {
       const registered = commands(groupsFor(await readSettings(), "PreToolUse")).some(
-        (c) => c.matcher.includes("AskUserQuestion") && c.command.includes("argus-signal") && c.command.includes("needs-input"),
+        (c) =>
+          c.matcher.includes("AskUserQuestion") &&
+          c.command.includes("argus-signal") &&
+          c.command.includes("needs-input"),
       );
       const fresh = await installedHookMatchesRepo();
       const status: PrereqStatus = !registered ? "missing" : !fresh ? "outdated" : "ok";
       return {
-        id: "gate-pretooluse-hook", label: "Gate PreToolUse hook", fixable: true, status,
+        id: "gate-pretooluse-hook",
+        label: "Gate PreToolUse hook",
+        fixable: true,
+        status,
         detail:
-          status === "missing" ? "Gated phases won't pause for approval without this hook."
-          : status === "outdated" ? "Installed hook differs from the shipped version. Apply fixes to refresh it."
-          : undefined,
+          status === "missing"
+            ? "Gated phases won't pause for approval without this hook."
+            : status === "outdated"
+              ? "Installed hook differs from the shipped version. Apply fixes to refresh it."
+              : undefined,
       };
     },
     async apply() {
       await copyHookFile();
       const settings = await readSettings();
       const present = commands(groupsFor(settings, "PreToolUse")).some(
-        (c) => c.matcher.includes("AskUserQuestion") && c.command.includes("argus-signal") && c.command.includes("needs-input"),
+        (c) =>
+          c.matcher.includes("AskUserQuestion") &&
+          c.command.includes("argus-signal") &&
+          c.command.includes("needs-input"),
       );
       if (present) return;
-      pushGroup(settings, "PreToolUse", { matcher: "AskUserQuestion", hooks: [{ type: "command", command: hookCommand("needs-input") }] });
+      pushGroup(settings, "PreToolUse", {
+        matcher: "AskUserQuestion",
+        hooks: [{ type: "command", command: hookCommand("needs-input") }],
+      });
       await writeSettings(settings);
     },
   },
@@ -169,12 +201,18 @@ const REGISTRY: Prerequisite[] = [
     label: "Argus data directories",
     fixable: true,
     async check() {
-      const missing = [paths.argus(), paths.instancesDir(), paths.runsDir()].filter((d) => !existsSync(d));
+      const missing = [paths.argus(), paths.instancesDir(), paths.runsDir()].filter(
+        (d) => !existsSync(d),
+      );
       return {
-        id: "argus-data-dir", label: "Argus data directories", fixable: true,
+        id: "argus-data-dir",
+        label: "Argus data directories",
+        fixable: true,
         status: missing.length === 0 ? "ok" : "missing",
-        detail: missing.length === 0 ? undefined
-          : `Missing: ${missing.join(", ")}. Pipelines store instances and run logs here.`,
+        detail:
+          missing.length === 0
+            ? undefined
+            : `Missing: ${missing.join(", ")}. Pipelines store instances and run logs here.`,
       };
     },
     async apply() {
@@ -188,7 +226,9 @@ const REGISTRY: Prerequisite[] = [
     async check() {
       const ok = onPath("claude");
       return {
-        id: "claude-cli", label: "Claude CLI on PATH", fixable: false,
+        id: "claude-cli",
+        label: "Claude CLI on PATH",
+        fixable: false,
         status: ok ? "ok" : "error",
         detail: ok ? undefined : "`claude` was not found on PATH. Install the Claude CLI.",
       };
@@ -201,7 +241,9 @@ const REGISTRY: Prerequisite[] = [
     async check() {
       const ok = onPath("node");
       return {
-        id: "node-runtime", label: "Node on PATH", fixable: false,
+        id: "node-runtime",
+        label: "Node on PATH",
+        fixable: false,
         status: ok ? "ok" : "error",
         detail: ok ? undefined : "`node` was not found on PATH; hooks run via node.",
       };
@@ -214,20 +256,31 @@ const REGISTRY: Prerequisite[] = [
     async check() {
       const file = paths.pipelinesFile();
       if (!existsSync(file)) {
-        return { id: "pipelines-parse", label: "pipelines.json parses", fixable: false, status: "ok" };
+        return {
+          id: "pipelines-parse",
+          label: "pipelines.json parses",
+          fixable: false,
+          status: "ok",
+        };
       }
       try {
         const parsed = JSON.parse(await readFile(file, "utf8"));
         const valid = Array.isArray(parsed);
         return {
-          id: "pipelines-parse", label: "pipelines.json parses", fixable: false,
+          id: "pipelines-parse",
+          label: "pipelines.json parses",
+          fixable: false,
           status: valid ? "ok" : "error",
-          detail: valid ? undefined
+          detail: valid
+            ? undefined
             : `${file} is not a JSON array; the engine refuses to write pipelines until this is fixed.`,
         };
       } catch (e) {
         return {
-          id: "pipelines-parse", label: "pipelines.json parses", fixable: false, status: "error",
+          id: "pipelines-parse",
+          label: "pipelines.json parses",
+          fixable: false,
+          status: "error",
           detail: `${file} could not be parsed (${e instanceof Error ? e.message : String(e)}); the engine refuses to write pipelines until this is fixed.`,
         };
       }
@@ -240,14 +293,27 @@ const REGISTRY: Prerequisite[] = [
     async check() {
       const file = paths.settingsFile();
       if (!existsSync(file)) {
-        return { id: "settings-parse", label: "settings.json parses", fixable: false, status: "ok" };
+        return {
+          id: "settings-parse",
+          label: "settings.json parses",
+          fixable: false,
+          status: "ok",
+        };
       }
       try {
         JSON.parse(await readFile(file, "utf8"));
-        return { id: "settings-parse", label: "settings.json parses", fixable: false, status: "ok" };
+        return {
+          id: "settings-parse",
+          label: "settings.json parses",
+          fixable: false,
+          status: "ok",
+        };
       } catch (e) {
         return {
-          id: "settings-parse", label: "settings.json parses", fixable: false, status: "error",
+          id: "settings-parse",
+          label: "settings.json parses",
+          fixable: false,
+          status: "error",
           detail: `${file} could not be parsed (${e instanceof Error ? e.message : String(e)}); hooks can't be read or registered until this is fixed.`,
         };
       }
@@ -256,7 +322,11 @@ const REGISTRY: Prerequisite[] = [
 ];
 
 const CRITICAL_IDS = new Set([
-  "signal-stop-hook", "gate-pretooluse-hook", "argus-data-dir", "claude-cli", "node-runtime",
+  "signal-stop-hook",
+  "gate-pretooluse-hook",
+  "argus-data-dir",
+  "claude-cli",
+  "node-runtime",
 ]);
 
 /**
@@ -269,7 +339,11 @@ export async function preflight(): Promise<{ ok: boolean; reasons: string[] }> {
     if (!CRITICAL_IDS.has(p.id) || !p.fixable || !p.apply) continue;
     const s = await p.check();
     if (s.status === "missing" || s.status === "outdated") {
-      try { await p.apply(); } catch { /* surfaced by the re-check below */ }
+      try {
+        await p.apply();
+      } catch {
+        /* surfaced by the re-check below */
+      }
     }
   }
   const results = await Promise.all(
@@ -277,10 +351,15 @@ export async function preflight(): Promise<{ ok: boolean; reasons: string[] }> {
       // Defensive: a check() should never throw, but if a future one does,
       // degrade to an error result so preflight stays never-throwing (clean
       // 412 refusal) rather than escaping as a 500.
-      p.check().catch((e): PrereqResult => ({
-        id: p.id, label: p.label, fixable: p.fixable, status: "error",
-        detail: e instanceof Error ? e.message : String(e),
-      })),
+      p.check().catch(
+        (e): PrereqResult => ({
+          id: p.id,
+          label: p.label,
+          fixable: p.fixable,
+          status: "error",
+          detail: e instanceof Error ? e.message : String(e),
+        }),
+      ),
     ),
   );
   const bad = results.filter((r) => r.status !== "ok");
@@ -292,8 +371,16 @@ export async function preflight(): Promise<{ ok: boolean; reasons: string[] }> {
  * creates data dirs. NEVER edits settings.json. Used at server startup.
  */
 export async function repairSafeFixables(): Promise<void> {
-  try { await copyHookFile(); } catch { /* re-check by caller surfaces failures */ }
-  try { await ensureDataDirs(); } catch { /* idem */ }
+  try {
+    await copyHookFile();
+  } catch {
+    /* re-check by caller surfaces failures */
+  }
+  try {
+    await ensureDataDirs();
+  } catch {
+    /* idem */
+  }
 }
 
 export async function checkAll(): Promise<{ ok: boolean; prereqs: PrereqResult[] }> {

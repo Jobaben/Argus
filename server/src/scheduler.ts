@@ -2,10 +2,7 @@ import { spawn as nodeSpawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { graceMsFor, shouldFire } from "./sources/nextFire.js";
-import {
-  markScheduleRan,
-  readSchedules,
-} from "./sources/schedules.js";
+import { markScheduleRan, readSchedules } from "./sources/schedules.js";
 import {
   RUN_KEEP,
   encodeProject,
@@ -295,7 +292,14 @@ export async function tick(deps: SchedulerDeps): Promise<void> {
         const iso = now.toISOString();
         const id = deps.newId();
         await writeRun(
-          ephemeralRun(schedule, id, "skipped", iso, null, "skipped: previous run still in progress"),
+          ephemeralRun(
+            schedule,
+            id,
+            "skipped",
+            iso,
+            null,
+            "skipped: previous run still in progress",
+          ),
         );
         await markScheduleRan(schedule.id, id, iso);
         await pruneRuns(schedule.id, RUN_KEEP);
@@ -334,9 +338,7 @@ export async function tick(deps: SchedulerDeps): Promise<void> {
 }
 
 /** On startup, mark any 'running' run whose process is gone as interrupted. */
-export async function recoverInterruptedRuns(
-  deps: Pick<SchedulerDeps, "now">,
-): Promise<void> {
+export async function recoverInterruptedRuns(deps: Pick<SchedulerDeps, "now">): Promise<void> {
   const running = (await readRuns()).filter((r) => r.status === "running");
   for (const r of running) {
     if (isAlive(r.pid)) continue;
@@ -356,9 +358,9 @@ export async function recoverInterruptedRuns(
 }
 
 /** Boots the scheduler loop; returns a stop handle for graceful shutdown. */
-export function startScheduler(
-  overrides: Partial<SchedulerDeps> = {},
-): { stop: () => Promise<void> } {
+export function startScheduler(overrides: Partial<SchedulerDeps> = {}): {
+  stop: () => Promise<void>;
+} {
   const deps: SchedulerDeps = {
     now: () => new Date(),
     spawn: defaultSpawn,
@@ -382,7 +384,9 @@ export function startScheduler(
     if (stopped || inFlight) return;
     inFlight = tick(deps)
       .catch((e) => console.error("[argus] scheduler tick failed:", e))
-      .finally(() => { inFlight = null; });
+      .finally(() => {
+        inFlight = null;
+      });
   };
 
   const loop = setInterval(runTick, deps.tickMs);

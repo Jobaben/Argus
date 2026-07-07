@@ -1,11 +1,4 @@
-export type AgentStatus =
-  | "working"
-  | "done"
-  | "failed"
-  | "idle"
-  | "queued"
-  | "stopped"
-  | "unknown";
+export type AgentStatus = "working" | "done" | "failed" | "idle" | "queued" | "stopped" | "unknown";
 
 export interface Agent {
   short: string;
@@ -103,19 +96,9 @@ export interface ScheduleInput {
   overlapPolicy?: "skip" | "allow";
 }
 
-export type InstanceStatus =
-  | "running"
-  | "awaiting-approval"
-  | "failed"
-  | "succeeded"
-  | "aborted";
+export type InstanceStatus = "running" | "awaiting-approval" | "failed" | "succeeded" | "aborted";
 
-export type PhaseStatus =
-  | "pending"
-  | "running"
-  | "awaiting-approval"
-  | "succeeded"
-  | "failed";
+export type PhaseStatus = "pending" | "running" | "awaiting-approval" | "succeeded" | "failed";
 
 export type StepStatus = "pending" | "running" | "succeeded" | "failed";
 

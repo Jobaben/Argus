@@ -17,7 +17,12 @@ interface SetupState {
 
 /** Fetches prerequisite status and exposes an apply() that re-checks. */
 export function useSetup() {
-  const [state, setState] = useState<SetupState>({ ok: true, prereqs: [], loading: true, error: null });
+  const [state, setState] = useState<SetupState>({
+    ok: true,
+    prereqs: [],
+    loading: true,
+    error: null,
+  });
   const mounted = useRef(true);
 
   const load = useCallback(async (url: string, method: "GET" | "POST") => {
@@ -26,11 +31,20 @@ export function useSetup() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as { ok?: boolean; prereqs?: PrereqResult[] };
       if (mounted.current) {
-        setState({ ok: Boolean(data.ok), prereqs: data.prereqs ?? [], loading: false, error: null });
+        setState({
+          ok: Boolean(data.ok),
+          prereqs: data.prereqs ?? [],
+          loading: false,
+          error: null,
+        });
       }
     } catch (e) {
       if (mounted.current) {
-        setState((s) => ({ ...s, loading: false, error: e instanceof Error ? e.message : String(e) }));
+        setState((s) => ({
+          ...s,
+          loading: false,
+          error: e instanceof Error ? e.message : String(e),
+        }));
       }
     }
   }, []);

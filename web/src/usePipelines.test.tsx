@@ -36,7 +36,9 @@ describe("usePipelines", () => {
     await act(async () => {
       await result.current.create({ name: "p", phases: [], trigger: null });
     });
-    const call = fetchMock.mock.calls.find((c) => c[0] === "/api/pipelines" && c[1]?.method === "POST");
+    const call = fetchMock.mock.calls.find(
+      (c) => c[0] === "/api/pipelines" && c[1]?.method === "POST",
+    );
     expect(call).toBeTruthy();
     expect(JSON.parse(call![1].body as string)).toMatchObject({ name: "p" });
   });
@@ -48,7 +50,9 @@ describe("usePipelines", () => {
     await act(async () => {
       await result.current.setEnabled("p1", false);
     });
-    const call = fetchMock.mock.calls.find((c) => c[0] === "/api/pipelines/p1" && c[1]?.method === "PATCH");
+    const call = fetchMock.mock.calls.find(
+      (c) => c[0] === "/api/pipelines/p1" && c[1]?.method === "PATCH",
+    );
     expect(call).toBeTruthy();
     expect(JSON.parse(call![1].body as string)).toEqual({ enabled: false });
   });
@@ -57,7 +61,11 @@ describe("usePipelines", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(okJson({ pipelines: [] })) // mount refresh
-      .mockResolvedValueOnce({ ok: false, status: 409, json: async () => ({ error: "already running" }) } as Response);
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 409,
+        json: async () => ({ error: "already running" }),
+      } as Response);
     vi.stubGlobal("fetch", fetchMock);
     const { result } = renderHook(() => usePipelines());
     await expect(result.current.runNow("p1")).rejects.toThrow("already running");

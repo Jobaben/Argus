@@ -1,9 +1,4 @@
-import {
-  useSession,
-  useSessions,
-  type SessionMessage,
-  type SessionSummary,
-} from "../useSessions";
+import { useSession, useSessions, type SessionMessage, type SessionSummary } from "../useSessions";
 import { useHashRoute } from "../useHashRoute";
 import { AlertStrip, EmptyState, Page } from "../ds";
 
@@ -30,12 +25,8 @@ function SessionCard({ session }: { session: SessionSummary }) {
       href={sessionHref(session.project, session.id)}
       className="block rounded-xl border border-line bg-surface p-4 text-left transition hover:border-ink-faint/40 hover:bg-surface-2"
     >
-      <h3 className="line-clamp-2 text-base font-semibold text-ink">
-        {session.title}
-      </h3>
-      <p className="mt-1 truncate font-mono text-xs text-ink-faint">
-        {session.projectLabel}
-      </p>
+      <h3 className="line-clamp-2 text-base font-semibold text-ink">{session.title}</h3>
+      <p className="mt-1 truncate font-mono text-xs text-ink-faint">{session.projectLabel}</p>
 
       <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-faint">
         <span className="text-ink-dim">{session.messageCount} msgs</span>

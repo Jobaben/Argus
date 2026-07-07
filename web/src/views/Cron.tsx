@@ -33,9 +33,7 @@ export function CronPanel() {
               <span className="inline-flex items-center gap-1.5 rounded-full bg-run/15 px-2.5 py-0.5 text-xs font-medium uppercase tracking-wide text-run ring-1 ring-run/30">
                 not watchable
               </span>
-              <h2 className="text-base font-semibold text-ink">
-                Cron routines aren't on disk
-              </h2>
+              <h2 className="text-base font-semibold text-ink">Cron routines aren't on disk</h2>
             </div>
             <p className="mt-3 text-sm leading-relaxed text-ink-dim">{cron.reason}</p>
           </section>
@@ -58,16 +56,15 @@ export function CronPanel() {
             </h2>
             {cron.diskHints.length === 0 ? (
               <p className="mt-3 text-sm text-ink-dim">
-                Scanned the Claude home for any schedule-named store — nothing
-                found, as expected. There is no file to watch.
+                Scanned the Claude home for any schedule-named store — nothing found, as expected.
+                There is no file to watch.
               </p>
             ) : (
               <>
                 <p className="mt-3 text-sm text-ink-dim">
                   Found {cron.diskHints.length} name-matched{" "}
-                  {cron.diskHints.length === 1 ? "entry" : "entries"}. These are
-                  hints only and are almost certainly unrelated to actual cron
-                  routines:
+                  {cron.diskHints.length === 1 ? "entry" : "entries"}. These are hints only and are
+                  almost certainly unrelated to actual cron routines:
                 </p>
                 <ul className="mt-3 space-y-2">
                   {cron.diskHints.map((h) => (

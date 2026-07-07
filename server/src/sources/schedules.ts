@@ -5,7 +5,10 @@ import { createJsonArrayStore } from "./jsonArrayStore.js";
 import type { Schedule, Trigger } from "./scheduleTypes.js";
 
 // The crash-safe, mutex-serialized single-file store lives in one shared place.
-const store = createJsonArrayStore<Schedule>({ file: paths.schedulesFile, label: "schedules.json" });
+const store = createJsonArrayStore<Schedule>({
+  file: paths.schedulesFile,
+  label: "schedules.json",
+});
 const withStoreLock = store.withLock;
 
 export class ScheduleValidationError extends Error {
@@ -102,7 +105,14 @@ export function validateInput(raw: unknown): ScheduleInput {
   const trigger = validateTrigger(r.trigger);
   const overlapPolicy = r.overlapPolicy === "allow" ? "allow" : "skip";
   const enabled = r.enabled === undefined ? true : Boolean(r.enabled);
-  return { name: r.name.trim(), prompt: r.prompt.trim(), cwd: r.cwd, trigger, enabled, overlapPolicy };
+  return {
+    name: r.name.trim(),
+    prompt: r.prompt.trim(),
+    cwd: r.cwd,
+    trigger,
+    enabled,
+    overlapPolicy,
+  };
 }
 
 export function validatePatch(raw: unknown): Partial<ScheduleInput> {
@@ -122,7 +132,12 @@ export function validatePatch(raw: unknown): Partial<ScheduleInput> {
     patch.prompt = r.prompt.trim();
   }
   if ("cwd" in r) {
-    if (typeof r.cwd !== "string" || !r.cwd.trim() || !existsSync(r.cwd) || !statSync(r.cwd).isDirectory()) {
+    if (
+      typeof r.cwd !== "string" ||
+      !r.cwd.trim() ||
+      !existsSync(r.cwd) ||
+      !statSync(r.cwd).isDirectory()
+    ) {
       throw new ScheduleValidationError(`cwd does not exist: ${String(r.cwd)}`);
     }
     patch.cwd = r.cwd;
@@ -209,11 +224,7 @@ export async function deleteSchedule(id: string): Promise<boolean> {
   });
 }
 
-export async function markScheduleRan(
-  id: string,
-  runId: string,
-  atISO: string,
-): Promise<void> {
+export async function markScheduleRan(id: string, runId: string, atISO: string): Promise<void> {
   return withStoreLock(async () => {
     const list = await readSchedules();
     const idx = list.findIndex((s) => s.id === id);

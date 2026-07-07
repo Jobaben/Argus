@@ -4,16 +4,29 @@ import { randomUUID } from "node:crypto";
 import { encodeProject, readRun, runLogPath, writeRun } from "./sources/runs.js";
 import { markPipelineStarted, readPipelines } from "./sources/pipelines.js";
 import {
-  INSTANCE_KEEP, pruneInstances, readInstance, readInstances, writeInstance,
+  INSTANCE_KEEP,
+  pruneInstances,
+  readInstance,
+  readInstances,
+  writeInstance,
 } from "./sources/instances.js";
 import {
-  advance, applyAbort, applyApprove, applyRevise, applyTemplate, initInstance,
+  advance,
+  applyAbort,
+  applyApprove,
+  applyRevise,
+  applyTemplate,
+  initInstance,
 } from "./pipelineTransitions.js";
 import { isAlive } from "./scheduler.js";
 import { graceMsFor, previousFireTime } from "./sources/nextFire.js";
 import { KeyedMutex } from "./mutex.js";
 import type { Run } from "./sources/scheduleTypes.js";
-import type { PipelineDefinition, PipelineInstance, PipelineSignal } from "./sources/pipelineTypes.js";
+import type {
+  PipelineDefinition,
+  PipelineInstance,
+  PipelineSignal,
+} from "./sources/pipelineTypes.js";
 
 /** Thrown by start() when the pre-run guard finds a critical prerequisite still broken. */
 export class PreflightError extends Error {
@@ -65,9 +78,12 @@ export const OUTCOME_CONTRACT =
 export function buildClaudeArgs(run: Run): string[] {
   const args = [
     "-p",
-    "--output-format", "json",
-    "--session-id", run.sessionId ?? randomUUID(),
-    "--append-system-prompt", OUTCOME_CONTRACT,
+    "--output-format",
+    "json",
+    "--session-id",
+    run.sessionId ?? randomUUID(),
+    "--append-system-prompt",
+    OUTCOME_CONTRACT,
   ];
   if (run.model && run.model.trim()) args.push("--model", run.model);
   return args;
@@ -76,19 +92,25 @@ export function buildClaudeArgs(run: Run): string[] {
 /** Real spawn: `claude -p`, prompt on stdin, with the signal env injected. */
 export const defaultPipelineSpawn: PipelineSpawnFn = (run, logPath, env) => {
   const out = createWriteStream(logPath, { flags: "a" });
-  const child = nodeSpawn(
-    "claude",
-    buildClaudeArgs(run),
-    { cwd: run.cwd, shell: process.platform === "win32", env: { ...process.env, ...env } },
-  );
+  const child = nodeSpawn("claude", buildClaudeArgs(run), {
+    cwd: run.cwd,
+    shell: process.platform === "win32",
+    env: { ...process.env, ...env },
+  });
   child.stdin?.on("error", () => {});
   child.stdin?.write(run.prompt);
   child.stdin?.end();
   child.stdout?.pipe(out, { end: false });
   child.stderr?.pipe(out, { end: false });
   const done = new Promise<{ code: number | null }>((resolve) => {
-    child.on("error", () => { out.end(); resolve({ code: null }); });
-    child.on("close", (code) => { out.end(); resolve({ code }); });
+    child.on("error", () => {
+      out.end();
+      resolve({ code: null });
+    });
+    child.on("close", (code) => {
+      out.end();
+      resolve({ code });
+    });
   });
   return { pid: child.pid ?? null, done };
 };
@@ -171,7 +193,9 @@ export function createEngine(deps: EngineDeps): Engine {
     });
     // Record the runIds on the instance up front, then persist once (no write races).
     inst.phases[phaseIndex].steps = planned.map(({ stepDef, run }) => ({
-      name: stepDef.name, runId: run.id, status: "running" as const,
+      name: stepDef.name,
+      runId: run.id,
+      status: "running" as const,
     }));
     inst.phases[phaseIndex].status = "running";
     await writeInstance(inst);
@@ -225,7 +249,12 @@ export function createEngine(deps: EngineDeps): Engine {
     startedAt: string,
   ): void {
     let released = false;
-    const release = () => { if (!released) { released = true; sem.release(); } };
+    const release = () => {
+      if (!released) {
+        released = true;
+        sem.release();
+      }
+    };
     void handle.done
       .then(async (res) => {
         release();
@@ -252,7 +281,11 @@ export function createEngine(deps: EngineDeps): Engine {
       if (!s.runId) continue;
       const got = await readRun(s.runId);
       if (got && isAlive(got.run.pid)) {
-        try { process.kill(got.run.pid!); } catch { /* already gone */ }
+        try {
+          process.kill(got.run.pid!);
+        } catch {
+          /* already gone */
+        }
       }
     }
   }
@@ -271,7 +304,10 @@ export function createEngine(deps: EngineDeps): Engine {
       if (!pf.ok) throw new PreflightError(pf.reasons);
     }
     const { instance, startPhase: idx } = initInstance(
-      def, trigger, { instanceId: deps.newId(), token: deps.newId() }, nowISO(),
+      def,
+      trigger,
+      { instanceId: deps.newId(), token: deps.newId() },
+      nowISO(),
     );
     await writeInstance(instance);
     await markPipelineStarted(def.id, instance.createdAt);
@@ -410,12 +446,27 @@ export function createEngine(deps: EngineDeps): Engine {
           for (const s of phase.steps) {
             if (s.status !== "running" || !s.runId) continue;
             const got = await readRun(s.runId);
-            const ended = got && (got.run.status === "failed" || got.run.status === "succeeded" || !isAlive(got.run.pid));
+            const ended =
+              got &&
+              (got.run.status === "failed" ||
+                got.run.status === "succeeded" ||
+                !isAlive(got.run.pid));
             if (!ended) continue;
-            const { instance } = advance(def, current, {
-              instanceId: current.id, phaseId: phase.id, runId: s.runId, type: "failed", token: current.signalToken,
-              payload: { reason: got?.run.error ?? "run ended without emitting a completion signal" },
-            }, nowISO());
+            const { instance } = advance(
+              def,
+              current,
+              {
+                instanceId: current.id,
+                phaseId: phase.id,
+                runId: s.runId,
+                type: "failed",
+                token: current.signalToken,
+                payload: {
+                  reason: got?.run.error ?? "run ended without emitting a completion signal",
+                },
+              },
+              nowISO(),
+            );
             await writeInstance(instance);
             if (instance.status === "failed") deps.onFailure?.(instance);
             deps.onChange?.();

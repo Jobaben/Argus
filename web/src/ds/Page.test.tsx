@@ -4,7 +4,11 @@ import { Page } from "./Page";
 
 describe("Page", () => {
   it("renders the title as a heading and the children", () => {
-    render(<Page title="Stats"><p>body content</p></Page>);
+    render(
+      <Page title="Stats">
+        <p>body content</p>
+      </Page>,
+    );
     expect(screen.getByRole("heading", { name: "Stats" })).toBeInTheDocument();
     expect(screen.getByText("body content")).toBeInTheDocument();
   });
@@ -22,7 +26,11 @@ describe("Page", () => {
   });
 
   it("renders children even with no header props", () => {
-    render(<Page><span>just body</span></Page>);
+    render(
+      <Page>
+        <span>just body</span>
+      </Page>,
+    );
     expect(screen.getByText("just body")).toBeInTheDocument();
   });
 });

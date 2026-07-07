@@ -1,13 +1,6 @@
 import type { AgentStatus, RunStatus } from "../types";
 
-export type DsStatus =
-  | "working"
-  | "done"
-  | "failed"
-  | "queued"
-  | "idle"
-  | "await"
-  | "stopped";
+export type DsStatus = "working" | "done" | "failed" | "queued" | "idle" | "await" | "stopped";
 
 export type ColorToken = "run" | "ok" | "fail" | "queue" | "idle" | "await";
 
@@ -46,11 +39,17 @@ export function toDsStatus(s: AgentStatus): DsStatus {
 
 export function runStatusToDsStatus(s: RunStatus): DsStatus {
   switch (s) {
-    case "running":     return "working";
-    case "succeeded":   return "done";
-    case "failed":      return "failed";
-    case "skipped":     return "idle";
-    case "interrupted": return "idle";
-    case "cancelled":   return "idle";
+    case "running":
+      return "working";
+    case "succeeded":
+      return "done";
+    case "failed":
+      return "failed";
+    case "skipped":
+      return "idle";
+    case "interrupted":
+      return "idle";
+    case "cancelled":
+      return "idle";
   }
 }

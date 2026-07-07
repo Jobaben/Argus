@@ -2,7 +2,15 @@ import { Fragment, useEffect, useState } from "react";
 import { useSchedules } from "../useSchedules";
 import { useRuns } from "../useRuns";
 import type { Run, ScheduleInput, ScheduleWithNext, Trigger } from "../types";
-import { AlertStrip, EmptyState, StatusPill, parseRunLog, runStatusToDsStatus, Page, TriggerFields } from "../ds";
+import {
+  AlertStrip,
+  EmptyState,
+  StatusPill,
+  parseRunLog,
+  runStatusToDsStatus,
+  Page,
+  TriggerFields,
+} from "../ds";
 import { CronPanel } from "./Cron";
 
 function when(iso: string | null): string {
@@ -16,9 +24,8 @@ function triggerSummary(t: Trigger): string {
   if (t.kind === "interval") return `every ${t.everyMinutes} min`;
   if (t.kind === "daily") return `daily at ${t.time}`;
   if (t.kind === "windowed") {
-    const when = t.weekdays && t.weekdays.length > 0
-      ? t.weekdays.map((d) => days[d]).join(", ")
-      : "every day";
+    const when =
+      t.weekdays && t.weekdays.length > 0 ? t.weekdays.map((d) => days[d]).join(", ") : "every day";
     return `every ${t.everyMinutes} min, ${t.startTime}–${t.endTime}, ${when}`;
   }
   return `weekly ${days[t.weekday ?? 0]} at ${t.time}`;
@@ -57,15 +64,14 @@ function ScheduleForm({
     }
   };
 
-  const field = "w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink placeholder-ink-faint";
+  const field =
+    "w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink placeholder-ink-faint";
   const labelCls = "block space-y-1 text-xs font-medium text-ink-dim";
   const valid = form.name.trim() && form.prompt.trim() && form.cwd.trim();
 
   return (
     <div className="rounded-xl border border-line bg-surface p-5 space-y-3">
-      {err && (
-        <AlertStrip subject="Error" message={err} />
-      )}
+      {err && <AlertStrip subject="Error" message={err} />}
       <label className={labelCls}>
         <span>Name</span>
         <input
@@ -345,15 +351,14 @@ function ScheduleCard({
         <button
           type="button"
           onClick={() => {
-            if (confirm(`Delete schedule "${schedule.name}"?`)) void run(() => remove(schedule.id))();
+            if (confirm(`Delete schedule "${schedule.name}"?`))
+              void run(() => remove(schedule.id))();
           }}
           className="rounded-lg border border-fail/20 px-2.5 py-1 text-xs text-fail hover:bg-fail/10"
         >
           Delete
         </button>
-        {!schedule.enabled && (
-          <span className="text-xs text-ink-faint">disabled</span>
-        )}
+        {!schedule.enabled && <span className="text-xs text-ink-faint">disabled</span>}
       </div>
 
       {actionErr && (
@@ -375,9 +380,9 @@ function ScheduleCard({
 
 export default function Schedules() {
   const { schedules, loading, error, create, update, remove, runNow, cancelRun } = useSchedules();
-  const [mode, setMode] = useState<{ kind: "none" } | { kind: "new" } | { kind: "edit"; id: string }>(
-    { kind: "none" },
-  );
+  const [mode, setMode] = useState<
+    { kind: "none" } | { kind: "new" } | { kind: "edit"; id: string }
+  >({ kind: "none" });
   const [subTab, setSubTab] = useState<"schedules" | "cron">("schedules");
 
   const editing = mode.kind === "edit" ? schedules.find((s) => s.id === mode.id) : undefined;
@@ -463,14 +468,14 @@ export default function Schedules() {
             <div className="grid grid-cols-1 gap-4">
               {schedules.map((s) => (
                 <ScheduleCard
-                    key={s.id}
-                    schedule={s}
-                    onEdit={() => setMode({ kind: "edit", id: s.id })}
-                    update={update}
-                    remove={remove}
-                    runNow={runNow}
-                    cancelRun={cancelRun}
-                  />
+                  key={s.id}
+                  schedule={s}
+                  onEdit={() => setMode({ kind: "edit", id: s.id })}
+                  update={update}
+                  remove={remove}
+                  runNow={runNow}
+                  cancelRun={cancelRun}
+                />
               ))}
             </div>
           )}

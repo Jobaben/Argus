@@ -100,11 +100,7 @@ export function parseRunLog(raw: string): ParsedRunLog {
   return { kind: "envelope", fields, truncated };
 }
 
-export function sparklinePoints(
-  values: number[],
-  width = 100,
-  height = 26,
-): string {
+export function sparklinePoints(values: number[], width = 100, height = 26): string {
   const n = values.length;
   if (n === 0) return "";
   const min = Math.min(...values);

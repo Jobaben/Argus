@@ -98,9 +98,7 @@ describe("useLiveResource", () => {
   it("does not fetch when path is null", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    const { result } = renderHook(() =>
-      useLiveResource(null, { select: (j) => j, initial: null }),
-    );
+    const { result } = renderHook(() => useLiveResource(null, { select: (j) => j, initial: null }));
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(fetchMock).not.toHaveBeenCalled();
   });
