@@ -71,6 +71,26 @@ test("pruneInstances keeps only newest N of a pipeline", async () => {
   );
 });
 
+test("memo: repeat reads are stable and direct file edits are picked up", async () => {
+  const m = await fresh();
+  await m.writeInstance(makeInstance("i1", "p1", new Date(2026, 5, 30, 9, 0).toISOString()));
+  // Prime the memo, then read again — same object served from memory.
+  const first = await m.readInstance("i1");
+  const second = await m.readInstance("i1");
+  assert.equal(second, first);
+  // A direct on-disk edit (new mtime) must invalidate the memo entry.
+  const file = path.join(home, "argus", "instances", "i1.json");
+  const edited = {
+    ...makeInstance("i1", "p1", new Date(2026, 5, 30, 9, 0).toISOString()),
+    status: "failed",
+  };
+  const { writeFileSync, utimesSync } = await import("node:fs");
+  writeFileSync(file, JSON.stringify(edited));
+  utimesSync(file, new Date(), new Date(Date.now() + 5000));
+  const third = await m.readInstance("i1");
+  assert.equal(third?.status, "failed");
+});
+
 test("readInstance rejects path-traversal ids", async () => {
   const m = await fresh();
   assert.equal(await m.readInstance("../../../etc/passwd"), null);

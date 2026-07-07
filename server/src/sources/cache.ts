@@ -14,10 +14,26 @@
  */
 interface Entry<T> {
   at: number;
+  ttlMs: number;
   value: Promise<T>;
 }
 
+// Hard bound on distinct keys. Keys are a small fixed vocabulary
+// (`sessions:50`, `stats`, …), so overflow means a caller is interpolating
+// unbounded input into keys — sweep expired entries first, then evict oldest.
+const MAX_ENTRIES = 256;
+
 const entries = new Map<string, Entry<unknown>>();
+
+function enforceBound(t: number): void {
+  if (entries.size <= MAX_ENTRIES) return;
+  for (const [key, entry] of entries) {
+    if (t - entry.at >= entry.ttlMs) entries.delete(key);
+  }
+  while (entries.size > MAX_ENTRIES) {
+    entries.delete(entries.keys().next().value as string);
+  }
+}
 
 export function cached<T>(
   key: string,
@@ -29,7 +45,8 @@ export function cached<T>(
   const t = now();
   if (hit && t - hit.at < ttlMs) return hit.value;
   const value = load();
-  entries.set(key, { at: t, value });
+  entries.set(key, { at: t, ttlMs, value });
+  enforceBound(t);
   // If the load rejects, drop the entry so the next caller retries instead of
   // caching a rejected promise for the whole TTL.
   void value.catch(() => {
@@ -40,4 +57,9 @@ export function cached<T>(
 
 export function invalidateCaches(): void {
   entries.clear();
+}
+
+/** Current number of cached keys (test introspection). */
+export function cacheSize(): number {
+  return entries.size;
 }

@@ -48,13 +48,36 @@ all incremental hardening, none a correctness or gating failure:
 - **Correctness/Testing** — the locking model assumes single-process execution;
   the real subprocess-spawn and step-completion→auto-advance paths aren't driven
   end-to-end (they're unit-tested with injected spawns).
-- **Performance** — the generic TTL cache Map isn't size-bounded/swept; the
-  summary memo is FIFO rather than LRU.
-- **DX/Ops** — coverage thresholds are modest and web has no coverage gate; no
-  supply-chain scanning (Dependabot/CodeQL) or pre-commit hook.
-- **UX/A11y** — the conditional custom-model input relies on a placeholder only.
-- **Architecture** — three instance handlers bypass the shared jsonBody helper;
-  a couple of validation/patch idioms remain copied.
+- ~~**Performance** — the generic TTL cache Map isn't size-bounded/swept; the
+  summary memo is FIFO rather than LRU.~~ _Closed: cache bounded at 256 keys
+  with expired-entry sweep; summary memo is true LRU._
+- ~~**DX/Ops** — coverage thresholds are modest and web has no coverage gate; no
+  supply-chain scanning (Dependabot/CodeQL).~~ _Closed: server gate ratcheted to
+  70/58/58, web gate added at 50/75/50 (both just under actual, enforced in CI);
+  Dependabot + CodeQL workflows added. A pre-commit hook was deliberately
+  skipped — commits are reviewed manually and CI enforces format/lint._
+- **UX/A11y** — the conditional custom-model input relies on a placeholder only
+  (out of scope: internal tool, a11y de-prioritized by the owner).
+- ~~**Architecture** — three instance handlers bypass the shared jsonBody helper;
+  a couple of validation/patch idioms remain copied.~~ _Closed: signal/approve/
+  revise parse through jsonBody; PUT/PATCH pipelines share one handler; engine
+  gate replies share one mapper._
+
+### Beyond-the-rubric wave (post-9.0)
+
+Improvements past the audited 9.0 that no dimension demanded but the product
+benefits from:
+
+- **Product** — zero-touch setup: all fixable prerequisites (hook file, Stop +
+  PreToolUse registration, data dirs) auto-install at boot; the log names what
+  was installed and what still needs a human.
+- **Correctness** — a corrupt `settings.json` can no longer be clobbered by a
+  prerequisite apply: writes refuse when the file exists but does not parse.
+- **Correctness/DX** — the server test glob was single-quoted, which Windows
+  `cmd` treats literally: `npm test` on Windows ran **zero** tests and exited
+  green. Now double-quoted; the full suite runs on every OS.
+- **Performance** — instance reads (`/api/overview` and lists) are memoized by
+  mtime: unchanged files cost a `stat`, not a read + parse, per poll.
 
 Scores are re-verified after each improvement wave; see git history for the
 per-wave deltas.

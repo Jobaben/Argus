@@ -185,6 +185,16 @@ test("settings-parse is error when settings.json is corrupt", async () => {
   assert.equal(find((await m.checkAll()).prereqs, "settings-parse").status, "error");
 });
 
+test("applyAll refuses to clobber a corrupt settings.json", async () => {
+  writeFileSync(path.join(home, "settings.json"), "{ not json", "utf8");
+  const m = await fresh();
+  const { ok, prereqs } = await m.applyAll();
+  assert.equal(readFileSync(path.join(home, "settings.json"), "utf8"), "{ not json");
+  assert.equal(find(prereqs, "signal-stop-hook").status, "error");
+  assert.ok(find(prereqs, "signal-stop-hook").detail.includes("corrupt"));
+  assert.equal(ok, false);
+});
+
 test("preflight repairs fixable criticals and returns ok when PATH tools resolve", async () => {
   const m = await fresh();
   const res = await m.preflight();

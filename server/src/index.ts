@@ -7,9 +7,9 @@ import { readRuns, killRunProcess } from "./sources/runs.js";
 import { createEngine, defaultPipelineSpawn } from "./pipelineEngine.js";
 import { startScheduler, isAlive } from "./scheduler.js";
 import {
+  applyAll as applyPrereqs,
   checkAll as checkPrereqs,
   preflight as preflightPrereqs,
-  repairSafeFixables,
 } from "./setup/prereqs.js";
 import { loadConfig } from "./config.js";
 import { isUpgradeAllowed } from "./security.js";
@@ -58,17 +58,30 @@ const server = serve({ fetch: app.fetch, port: PORT, hostname: config.host }, (i
         "anyone who can reach this port can execute agents. Set ARGUS_TOKEN.",
     );
   }
-  void repairSafeFixables()
-    .then(checkPrereqs)
+  // Self-setup on boot: auto-install every fixable prerequisite (hook file,
+  // Stop/PreToolUse registration, data dirs) so pipelines work out of the box;
+  // report anything that still needs a human (missing CLI, corrupt files).
+  void checkPrereqs()
+    .then(async (before) => {
+      const broken = before.prereqs.filter((p) => p.status !== "ok");
+      if (broken.length === 0) return before;
+      const after = await applyPrereqs();
+      const fixed = broken.filter((b) => after.prereqs.find((a) => a.id === b.id)?.status === "ok");
+      if (fixed.length > 0) {
+        console.log(`[argus] auto-setup: installed ${fixed.map((f) => f.label).join(", ")}`);
+      }
+      return after;
+    })
     .then((s) => {
       if (!s.ok) {
         const bad = s.prereqs
           .filter((p) => p.status !== "ok")
           .map((p) => `${p.label} (${p.status})`)
           .join(", ");
-        console.log(`[argus] setup incomplete — ${bad}. Open the UI to apply fixes.`);
+        console.log(`[argus] setup incomplete — ${bad}. Open the UI for details.`);
       }
-    });
+    })
+    .catch((e) => console.error("[argus] auto-setup failed:", e));
 });
 
 // Live updates: push a "changed" ping whenever watched state mutates. The

@@ -81,6 +81,14 @@ export function createApp(deps: AppDeps): Hono {
     return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
   }
 
+  // Shared reply shape for engine gate actions (approve / revise / abort).
+  function engineReply(c: Context, res: { ok: boolean; code: number; error?: string }) {
+    return c.json(
+      res.ok ? { ok: true } : { ok: false, error: res.error },
+      res.code as 200 | 404 | 409,
+    );
+  }
+
   app.use("/api/*", securityMiddleware(config));
 
   app.get("/api/health", (c) =>
@@ -223,37 +231,27 @@ export function createApp(deps: AppDeps): Hono {
     }
   });
 
-  app.put("/api/pipelines/:id", async (c) => {
-    const body = await jsonBody(c);
-    if (!body.ok) return body.res;
-    try {
-      const updated = await updatePipeline(
-        c.req.param("id"),
-        validatePipelineInput(body.value),
-        new Date(),
-      );
-      if (!updated) return c.json({ error: "not found" }, 404);
-      return c.json(updated);
-    } catch (e) {
-      return fail(c, e, PipelineValidationError);
-    }
-  });
+  // PUT replaces via the full-input validator; PATCH merges via the partial one.
+  const pipelineUpdateHandler =
+    (validate: (v: unknown) => Parameters<typeof updatePipeline>[1]) => async (c: Context) => {
+      const body = await jsonBody(c);
+      if (!body.ok) return body.res;
+      try {
+        // Plain `Context` can't infer the :id param type; missing id → "" → 404.
+        const updated = await updatePipeline(
+          c.req.param("id") ?? "",
+          validate(body.value),
+          new Date(),
+        );
+        if (!updated) return c.json({ error: "not found" }, 404);
+        return c.json(updated);
+      } catch (e) {
+        return fail(c, e, PipelineValidationError);
+      }
+    };
 
-  app.patch("/api/pipelines/:id", async (c) => {
-    const body = await jsonBody(c);
-    if (!body.ok) return body.res;
-    try {
-      const updated = await updatePipeline(
-        c.req.param("id"),
-        validatePipelinePatch(body.value),
-        new Date(),
-      );
-      if (!updated) return c.json({ error: "not found" }, 404);
-      return c.json(updated);
-    } catch (e) {
-      return fail(c, e, PipelineValidationError);
-    }
-  });
+  app.put("/api/pipelines/:id", pipelineUpdateHandler(validatePipelineInput));
+  app.patch("/api/pipelines/:id", pipelineUpdateHandler(validatePipelinePatch));
 
   app.delete("/api/pipelines/:id", async (c) =>
     (await deletePipeline(c.req.param("id")))
@@ -287,12 +285,9 @@ export function createApp(deps: AppDeps): Hono {
   });
 
   app.post("/api/instances/:id/signal", async (c) => {
-    let body: Partial<PipelineSignal>;
-    try {
-      body = (await c.req.json()) as Partial<PipelineSignal>;
-    } catch {
-      return c.json({ error: "invalid JSON body" }, 400);
-    }
+    const parsed = await jsonBody(c);
+    if (!parsed.ok) return parsed.res;
+    const body = parsed.value as Partial<PipelineSignal>;
     const id = c.req.param("id");
     const signal: PipelineSignal = {
       instanceId: id,
@@ -306,37 +301,25 @@ export function createApp(deps: AppDeps): Hono {
     return c.json({ ok: res.ok }, res.code as 200 | 202 | 403 | 404);
   });
 
+  // Body is optional on approve/revise — a bare POST is a valid approval.
+  const optionalField = <T>(body: Awaited<ReturnType<typeof jsonBody>>, key: string) =>
+    body.ok && body.value && typeof body.value === "object"
+      ? ((body.value as Record<string, unknown>)[key] as T | undefined)
+      : undefined;
+
   app.post("/api/instances/:id/approve", async (c) => {
-    const answers = await c.req
-      .json()
-      .then((b) => (b as { answers?: unknown }).answers)
-      .catch(() => undefined);
-    const res = await engine.approve(c.req.param("id"), answers);
-    return c.json(
-      res.ok ? { ok: true } : { ok: false, error: res.error },
-      res.code as 200 | 404 | 409,
-    );
+    const answers = optionalField<unknown>(await jsonBody(c), "answers");
+    return engineReply(c, await engine.approve(c.req.param("id"), answers));
   });
 
   app.post("/api/instances/:id/revise", async (c) => {
-    const note = await c.req
-      .json()
-      .then((b) => (b as { note?: string }).note)
-      .catch(() => undefined);
-    const res = await engine.revise(c.req.param("id"), note);
-    return c.json(
-      res.ok ? { ok: true } : { ok: false, error: res.error },
-      res.code as 200 | 404 | 409,
-    );
+    const note = optionalField<string>(await jsonBody(c), "note");
+    return engineReply(c, await engine.revise(c.req.param("id"), note));
   });
 
-  app.post("/api/instances/:id/abort", async (c) => {
-    const res = await engine.abort(c.req.param("id"));
-    return c.json(
-      res.ok ? { ok: true } : { ok: false, error: res.error },
-      res.code as 200 | 404 | 409,
-    );
-  });
+  app.post("/api/instances/:id/abort", async (c) =>
+    engineReply(c, await engine.abort(c.req.param("id"))),
+  );
 
   if (deps.serveWeb !== false) mountWebApp(app);
 

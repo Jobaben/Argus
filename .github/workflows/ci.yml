@@ -29,5 +29,7 @@ jobs:
         run: npm test
       - name: Server coverage gate
         run: npm -w server run test:coverage
+      - name: Web coverage gate
+        run: npm -w web run test:coverage
       - name: Build (web + server)
         run: npm run build

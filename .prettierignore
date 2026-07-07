@@ -3,4 +3,5 @@ dist
 web/dist
 server/dist
 package-lock.json
+coverage
 *.log

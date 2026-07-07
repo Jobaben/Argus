@@ -86,6 +86,25 @@ export async function readSettings(): Promise<Record<string, unknown>> {
   }
 }
 
+/**
+ * Read settings.json for a read-modify-WRITE cycle. A missing file is a fresh
+ * start ({}), but a present-yet-unparseable file throws — silently treating it
+ * as {} would clobber the user's (recoverable) settings on the write-back.
+ */
+async function readSettingsForWrite(): Promise<Record<string, unknown>> {
+  let text: string;
+  try {
+    text = await readFile(paths.settingsFile(), "utf8");
+  } catch {
+    return {};
+  }
+  try {
+    return JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    throw new Error("settings.json is corrupt; refusing to modify it — repair or remove it first");
+  }
+}
+
 interface HookGroup {
   matcher?: string;
   hooks?: { type?: string; command?: string }[];
@@ -141,7 +160,7 @@ const REGISTRY: Prerequisite[] = [
     },
     async apply() {
       await copyHookFile();
-      const settings = await readSettings();
+      const settings = await readSettingsForWrite();
       const present = commands(groupsFor(settings, "Stop")).some((c) =>
         c.command.includes("argus-signal"),
       );
@@ -181,7 +200,7 @@ const REGISTRY: Prerequisite[] = [
     },
     async apply() {
       await copyHookFile();
-      const settings = await readSettings();
+      const settings = await readSettingsForWrite();
       const present = commands(groupsFor(settings, "PreToolUse")).some(
         (c) =>
           c.matcher.includes("AskUserQuestion") &&
@@ -351,15 +370,13 @@ export async function preflight(): Promise<{ ok: boolean; reasons: string[] }> {
       // Defensive: a check() should never throw, but if a future one does,
       // degrade to an error result so preflight stays never-throwing (clean
       // 412 refusal) rather than escaping as a 500.
-      p.check().catch(
-        (e): PrereqResult => ({
-          id: p.id,
-          label: p.label,
-          fixable: p.fixable,
-          status: "error",
-          detail: e instanceof Error ? e.message : String(e),
-        }),
-      ),
+      p.check().catch((e): PrereqResult => ({
+        id: p.id,
+        label: p.label,
+        fixable: p.fixable,
+        status: "error",
+        detail: e instanceof Error ? e.message : String(e),
+      })),
     ),
   );
   const bad = results.filter((r) => r.status !== "ok");

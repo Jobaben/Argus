@@ -3,6 +3,43 @@
 All notable changes to Argus are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [Unreleased]
+
+### Added
+
+- Auto-setup on boot: every fixable prerequisite (signal hook file, Stop and
+  PreToolUse registration, data directories) is installed automatically at
+  server start; the log reports what was installed and what still needs a
+  human (missing CLI, corrupt files).
+- Web test-coverage gate (`npm -w web run test:coverage`, enforced in CI) and
+  a raised server coverage gate (70/58/58, ratcheted to just under actual).
+- Supply-chain scanning: Dependabot (npm, GitHub Actions, Docker) and a CodeQL
+  workflow.
+
+### Fixed
+
+- `applyAll`/`preflight` no longer risk clobbering a corrupt-but-recoverable
+  `settings.json`: writes now refuse when the file exists but does not parse
+  (checks still report it as `settings-parse: error`).
+- The server test script used single quotes around its glob, which Windows
+  `cmd` passes through literally — `npm test` matched zero files and reported
+  a false green. Double-quoted so all 220 tests run on every OS.
+- Generated `web/coverage/` output is ignored by git, ESLint, and Prettier.
+
+### Performance
+
+- Pipeline-instance reads (`/api/overview`, instance lists) use an mtime-keyed
+  parse memo: unchanged instance files cost a `stat` instead of a read +
+  `JSON.parse` on every poll.
+- The shared TTL cache is size-bounded (256 keys) with expired-entry sweep;
+  the session-summary memo is now true LRU (hits refresh recency).
+
+### Changed
+
+- The three instance-action handlers (`signal`, `approve`, `revise`) parse
+  bodies through the shared `jsonBody` helper; pipeline PUT/PATCH share one
+  update handler; engine gate replies share one response mapper.
+
 ## [0.2.0]
 
 ### Hardening (post-audit polish)

@@ -10,6 +10,12 @@ const testConfig: InlineConfig = {
   globals: true,
   setupFiles: ["./src/test/setup.ts"],
   css: true,
+  coverage: {
+    provider: "v8",
+    include: ["src/**/*.{ts,tsx}"],
+    exclude: ["src/**/*.test.*", "src/test/**", "src/main.tsx", "src/vite-env.d.ts"],
+    thresholds: { lines: 50, functions: 50, branches: 75, statements: 50 },
+  },
 };
 
 // https://vite.dev/config/
