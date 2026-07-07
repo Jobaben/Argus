@@ -65,7 +65,16 @@ function PipelineCard({
       </header>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        {abortable ? (
+        {(!abortable || def.overlapPolicy === "allow") && (
+          <button
+            type="button"
+            onClick={() => void runNow(def.id)}
+            className="rounded-lg bg-ok/15 px-2.5 py-1 text-xs text-ok ring-1 ring-ok/30 hover:bg-ok/25"
+          >
+            Run now
+          </button>
+        )}
+        {abortable && (
           <button
             type="button"
             onClick={() => {
@@ -78,14 +87,6 @@ function PipelineCard({
             className="rounded-lg bg-fail/15 px-2.5 py-1 text-xs text-fail ring-1 ring-fail/30 hover:bg-fail/25"
           >
             Stop
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={() => void runNow(def.id)}
-            className="rounded-lg bg-ok/15 px-2.5 py-1 text-xs text-ok ring-1 ring-ok/30 hover:bg-ok/25"
-          >
-            Run now
           </button>
         )}
         <button
