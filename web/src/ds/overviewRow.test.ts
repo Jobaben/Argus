@@ -124,7 +124,7 @@ describe("toOverviewRow", () => {
       latest: inst("running", ["succeeded", "running"]),
     });
     expect(row.phases[1].steps).toEqual([
-      { name: "red-green", runId: "r1", status: "working", costUsd: null, tokens: null },
+      { name: "red-green", runId: "r1", status: "working", costUsd: null, tokens: null, currentActivity: null, startedAt: null, durationMs: null },
     ]);
   });
 
@@ -135,7 +135,7 @@ describe("toOverviewRow", () => {
     });
     // phase 0 reported no steps; fall back to the definition's step, done since the phase succeeded
     expect(row.phases[0].steps).toEqual([
-      { name: "s", runId: null, status: "done", costUsd: null, tokens: null },
+      { name: "s", runId: null, status: "done", costUsd: null, tokens: null, currentActivity: null, startedAt: null, durationMs: null },
     ]);
   });
 
@@ -257,5 +257,34 @@ describe("toOverviewRow", () => {
       latest: inst("aborted", ["succeeded", "succeeded"]),
     });
     expect(row.badge).toBe("stopped");
+  });
+
+  it("carries activity and timing fields through to step pills", () => {
+    const latest = inst("running", ["running", "pending"]);
+    latest.phases[0].steps = [
+      {
+        name: "red-green",
+        runId: "r1",
+        status: "running",
+        currentActivity: "Bash: npm test",
+        activityAt: "2026-06-30T10:05:00.000Z",
+        startedAt: "2026-06-30T10:00:00.000Z",
+        durationMs: null,
+      },
+    ];
+    const row = toOverviewRow({ definition: def(), latest });
+    const pill = row.phases[0].steps[0];
+    expect(pill.currentActivity).toBe("Bash: npm test");
+    expect(pill.startedAt).toBe("2026-06-30T10:00:00.000Z");
+    expect(pill.durationMs).toBeNull();
+  });
+
+  it("defaults activity and timing to null on definition-fallback pills", () => {
+    const latest = inst("running", ["pending", "pending"]); // no step progress → fallback path
+    const row = toOverviewRow({ definition: def(), latest });
+    const pill = row.phases[0].steps[0];
+    expect(pill.currentActivity).toBeNull();
+    expect(pill.startedAt).toBeNull();
+    expect(pill.durationMs).toBeNull();
   });
 });

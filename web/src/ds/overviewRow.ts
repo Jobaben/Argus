@@ -18,6 +18,12 @@ export interface StepPill {
   costUsd: number | null;
   /** Total tokens of the step's run, when reported. */
   tokens: number | null;
+  /** Latest live-activity label, while the step is running. */
+  currentActivity: string | null;
+  /** Run start time (ISO) for the elapsed ticker. */
+  startedAt: string | null;
+  /** Final run duration once the step ended. */
+  durationMs: number | null;
 }
 
 export interface PhasePill {
@@ -85,6 +91,9 @@ function stepPills(phase: PhaseProgress, def: PhaseDef | undefined): StepPill[] 
       status: STEP_STATUS_TO_DS[s.status],
       costUsd: s.costUsd ?? null,
       tokens: s.tokens ?? null,
+      currentActivity: s.currentActivity ?? null,
+      startedAt: s.startedAt ?? null,
+      durationMs: s.durationMs ?? null,
     }));
   }
   return (def?.steps ?? []).map((s) => ({
@@ -93,6 +102,9 @@ function stepPills(phase: PhaseProgress, def: PhaseDef | undefined): StepPill[] 
     status: FALLBACK_STEP_STATUS[phase.status],
     costUsd: null,
     tokens: null,
+    currentActivity: null,
+    startedAt: null,
+    durationMs: null,
   }));
 }
 
@@ -168,6 +180,9 @@ export function toOverviewRow(entry: OverviewEntry): OverviewRow {
           status: "idle" as const,
           costUsd: null,
           tokens: null,
+          currentActivity: null,
+          startedAt: null,
+          durationMs: null,
         })),
         reason: null,
       })),
