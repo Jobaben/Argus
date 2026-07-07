@@ -19,6 +19,18 @@ export function formatMs(ms: number): string {
   return `${m}m ${s}s`;
 }
 
+/** Ticking clock for a live elapsed duration: "04:12", "1:02:03". */
+export function formatElapsed(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  const total = Math.floor(ms / 1000);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const mm = String(m).padStart(2, "0");
+  const ss = String(s).padStart(2, "0");
+  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
 /** Dollar cost with enough precision for sub-cent agent runs. */
 export function formatUsd(v: number): string {
   return v >= 0.01 ? `$${v.toFixed(2)}` : `$${v.toFixed(4)}`;

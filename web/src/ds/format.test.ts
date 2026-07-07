@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   formatCost,
   formatDuration,
+  formatElapsed,
   formatMs,
   formatTokens,
   formatUsd,
@@ -148,5 +149,20 @@ describe("sparklinePoints", () => {
   });
   it("returns empty string for empty input", () => {
     expect(sparklinePoints([], 100, 26)).toBe("");
+  });
+});
+
+describe("formatElapsed", () => {
+  it("renders mm:ss under an hour", () => {
+    expect(formatElapsed(0)).toBe("00:00");
+    expect(formatElapsed(252_000)).toBe("04:12");
+    expect(formatElapsed(59 * 60_000 + 59_000)).toBe("59:59");
+  });
+  it("renders h:mm:ss from an hour up", () => {
+    expect(formatElapsed(3_723_000)).toBe("1:02:03");
+  });
+  it("is defensive about garbage", () => {
+    expect(formatElapsed(-5)).toBe("—");
+    expect(formatElapsed(Number.NaN)).toBe("—");
   });
 });
