@@ -1,15 +1,13 @@
-import { readFile } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
 import { paths } from "../claudeHome.js";
 import { validateTrigger } from "./schedules.js";
-import { atomicWriteJson } from "./atomicWrite.js";
-import { KeyedMutex } from "../mutex.js";
+import { createJsonArrayStore } from "./jsonArrayStore.js";
 import type { PhaseDef, PhaseStep, PipelineDefinition } from "./pipelineTypes.js";
 import type { Trigger } from "./scheduleTypes.js";
 
-// Serializes the whole-file read-modify-write cycle (see schedules.ts).
-const storeLock = new KeyedMutex();
-const withStoreLock = <T>(fn: () => Promise<T>) => storeLock.withLock("pipelines", fn);
+// The crash-safe, mutex-serialized single-file store (shared with schedules).
+const store = createJsonArrayStore<PipelineDefinition>({ file: paths.pipelinesFile, label: "pipelines.json" });
+const withStoreLock = store.withLock;
 
 export class PipelineValidationError extends Error {
   constructor(message: string) {
@@ -109,30 +107,8 @@ export function validatePipelinePatch(raw: unknown): Partial<PipelineInput> {
   return patch;
 }
 
-async function readRaw(): Promise<{ ok: boolean; list: PipelineDefinition[] }> {
-  let text: string;
-  try {
-    text = await readFile(paths.pipelinesFile(), "utf8");
-  } catch {
-    return { ok: true, list: [] };
-  }
-  try {
-    const parsed = JSON.parse(text) as PipelineDefinition[];
-    return { ok: true, list: Array.isArray(parsed) ? parsed : [] };
-  } catch {
-    return { ok: false, list: [] };
-  }
-}
-
-export async function readPipelines(): Promise<PipelineDefinition[]> {
-  return (await readRaw()).list;
-}
-
-async function writePipelines(list: PipelineDefinition[]): Promise<void> {
-  const current = await readRaw();
-  if (!current.ok) throw new Error("pipelines.json could not be parsed; refusing to overwrite it");
-  await atomicWriteJson(paths.pipelinesFile(), list);
-}
+export const readPipelines = store.read;
+const writePipelines = store.write;
 
 export async function createPipeline(input: PipelineInput, now: Date, id: string): Promise<PipelineDefinition> {
   const iso = now.toISOString();

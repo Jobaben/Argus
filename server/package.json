@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "tsx --test 'src/**/*.test.ts'",
     "build": "tsc -p tsconfig.build.json",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test:coverage": "tsx --test --experimental-test-coverage --test-coverage-lines=65 --test-coverage-functions=55 --test-coverage-branches=55 'src/**/*.test.ts'"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",

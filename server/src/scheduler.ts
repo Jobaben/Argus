@@ -90,17 +90,56 @@ export function parseRunEnvelope(stdout: string): {
   try {
     return extract(JSON.parse(text) as Record<string, unknown>);
   } catch {
-    // Scan backwards for the last balanced brace-delimited object.
-    const end = text.lastIndexOf("}");
-    for (let start = text.lastIndexOf("{", end); start >= 0; start = text.lastIndexOf("{", start - 1)) {
+    // Collect every balanced top-level {...} span with a string-aware depth
+    // scan (so braces inside strings and any stray brace emitted AFTER the
+    // envelope don't defeat extraction), then take the last span that parses
+    // AND looks like the CLI envelope (has result/cost/usage).
+    const spans = topLevelObjectSpans(text);
+    for (let i = spans.length - 1; i >= 0; i--) {
       try {
-        return extract(JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>);
+        const obj = JSON.parse(text.slice(spans[i][0], spans[i][1] + 1)) as Record<string, unknown>;
+        if ("result" in obj || "total_cost_usd" in obj || "cost_usd" in obj || "usage" in obj) {
+          return extract(obj);
+        }
       } catch {
-        /* keep scanning earlier braces */
+        /* not valid JSON; try an earlier span */
       }
     }
     return empty;
   }
+}
+
+/** Byte spans [start,end] of every balanced top-level `{...}` in `text`,
+ *  ignoring braces inside JSON strings. */
+function topLevelObjectSpans(text: string): [number, number][] {
+  const spans: [number, number][] = [];
+  let depth = 0;
+  let start = -1;
+  let inStr = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        spans.push([start, i]);
+        start = -1;
+      } else if (depth < 0) {
+        depth = 0; // stray closing brace; resync
+      }
+    }
+  }
+  return spans;
 }
 
 export type SpawnFn = (run: Run, logPath: string) => SpawnHandle;
@@ -333,7 +372,11 @@ export function startScheduler(
   // disk, many schedules) must not start a second pass concurrently, or the two
   // could both see a schedule as due and fire it twice within the grace window.
   let inFlight: Promise<void> | null = null;
-  void recoverInterruptedRuns(deps).then(() => deps.onChange?.());
+  // Startup recovery runs async; stop() awaits it so a shutdown mid-recovery
+  // doesn't let recovery writes continue past stop.
+  const recovery = recoverInterruptedRuns(deps)
+    .then(() => deps.onChange?.())
+    .catch((e) => console.error("[argus] interrupted-run recovery failed:", e));
 
   const runTick = () => {
     if (stopped || inFlight) return;
@@ -348,7 +391,8 @@ export function startScheduler(
     stop: async () => {
       stopped = true;
       clearInterval(loop);
-      // Let an in-flight tick finish so shutdown doesn't race its writes.
+      // Let in-flight recovery and tick finish so shutdown doesn't race writes.
+      await recovery;
       if (inFlight) await inFlight;
     },
   };

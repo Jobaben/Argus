@@ -19,12 +19,14 @@ export interface Inventory {
   plugins: PluginItem[];
 }
 
-/** Loads the extensions inventory. No push event, so polls on a 10s timer. */
+/** Loads the extensions inventory, refreshing on "inventory:changed" (the
+ *  server watches the extension dirs), with a slow poll fallback. */
 export function useInventory() {
   const { data, loading, error, refresh } = useLiveResource<Inventory | null>("/api/inventory", {
+    events: ["inventory:changed"],
     select: (j) => j as Inventory,
     initial: null,
-    pollMs: 10000,
+    pollMs: 30000,
   });
   return { inventory: data, loading, error, refresh };
 }

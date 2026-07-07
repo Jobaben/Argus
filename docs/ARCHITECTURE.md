@@ -1,25 +1,40 @@
 # Argus — Architecture
 
-> The all-seeing monitor for Claude Code. A pure **reader** over `~/.claude`
-> that turns local agent/job state into a live dashboard.
+> The all-seeing monitor for Claude Code. A dashboard **and control plane** over
+> `~/.claude`: it reads the state Claude Code owns and manages its own
+> scheduler/pipeline state alongside it.
 
-## 1. Principle: read, never write
+## 1. Principle: read Claude's state, own only Argus's
 
-Argus never mutates `~/.claude`. Every feature is a projection of files Claude
-Code already maintains. This keeps Argus safe to run alongside live sessions and
-means it can never corrupt the very state it observes. The only side effects are
-HTTP responses and WebSocket pushes.
+Argus treats the state Claude Code owns — `jobs/`, `daemon/`, `projects/`,
+`history.jsonl`, `tasks/`, `stats-cache.json` — as **strictly read-only**. It
+never mutates those files, so it is safe to run alongside live sessions and
+cannot corrupt the state it observes.
+
+Argus does **own and write** its own state, all confined to `~/.claude/argus/`
+(schedules, pipelines, per-run records and instances) plus, when the user
+applies setup fixes, its signal hook under `~/.claude/hooks/` and a hook entry
+in `settings.json`. All Argus writes go through an atomic tmp+rename writer and
+are serialized per file/instance by a keyed mutex.
+
+Because it can spawn `claude -p` agents with the user's credentials, the HTTP
+surface is a privileged single-user control plane: loopback-bound by default,
+with a Host allowlist (anti DNS-rebind), an Origin check on mutations (anti
+CSRF), and an optional bearer token — all applied to the WebSocket upgrade too.
 
 ```
-┌────────────────────┐      watch (chokidar)        ┌─────────────────────┐
-│   ~/.claude/*       │ ───────────────────────────▶ │  server (Hono+ws)   │
-│  jobs/ daemon/      │      read on demand          │  /api/* + /ws       │
-│  projects/ history  │ ◀─────────────────────────── │  pure reader        │
-└────────────────────┘                              └──────────┬──────────┘
-                                                                │ JSON + ws push
-                                                     ┌──────────▼──────────┐
+┌────────────────────┐   read-only (chokidar watch)  ┌─────────────────────┐
+│  Claude's state     │ ───────────────────────────▶ │  server (Hono+ws)   │
+│  jobs/ daemon/      │      read on demand           │  /api/* + /ws       │
+│  projects/ history  │                               │  createApp factory  │
+├────────────────────┤   read + atomic writes        │  + scheduler/engine │
+│  ~/.claude/argus/   │ ◀───────────────────────────▶ │                     │
+│  schedules pipelines│                               └──────────┬──────────┘
+│  runs/ instances/   │       spawn `claude -p`  ◀───────────────┤ JSON + ws push
+└────────────────────┘                              ┌──────────▼──────────┐
                                                      │  web (Vite/React)   │
-                                                     │  tabbed dashboard   │
+                                                     │  one live socket +  │
+                                                     │  useLiveResource    │
                                                      └─────────────────────┘
 ```
 

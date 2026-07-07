@@ -41,7 +41,8 @@ Background jobs joined with daemon liveness, newest/live first.
 ### `WS /ws`
 On connect: `{ "type": "hello" }`. On any watched change (debounced ~150ms) the
 server pushes one of `{ "type": "agents:changed" }`, `{ "type":
-"schedules:changed" }`, or `{ "type": "pipelines:changed" }`. The client
+"schedules:changed" }`, `{ "type": "pipelines:changed" }`, or `{ "type":
+"inventory:changed" }` (installed extensions + usage stats). The client
 re-fetches the relevant list — frames carry no payload by design (the server
 stays the single source of truth). The upgrade is subject to the same
 host/origin/token checks as the REST surface.

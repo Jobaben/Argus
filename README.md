@@ -104,7 +104,7 @@ in brief:
 | Monitoring (read) | `GET /api/agents`, `/agents/:short/timeline`, `/daemon`, `/sessions`, `/sessions/:project/:id`, `/activity`, `/projects`, `/stats`, `/inventory`, `/tasks`, `/search`, `/cron` |
 | Scheduler | `GET/POST /api/schedules`, `PUT/DELETE /api/schedules/:id`, `POST /api/schedules/:id/run`, `POST /api/runs/:id/cancel`, `GET /api/runs`, `/runs/:id` |
 | Pipelines | `GET/POST /api/pipelines`, `PUT/PATCH/DELETE /api/pipelines/:id`, `POST /api/pipelines/:id/start`, `GET /api/pipelines/:id/instances`, `GET /api/overview`, `GET /api/instances/:id`, `POST /api/instances/:id/{signal,approve,revise,abort}` |
-| Live push | `WS /ws` — `{type:"agents:changed"｜"schedules:changed"｜"pipelines:changed"}` |
+| Live push | `WS /ws` — `{type:"agents:changed"｜"schedules:changed"｜"pipelines:changed"｜"inventory:changed"}` |
 
 ## Status
 

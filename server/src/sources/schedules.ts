@@ -1,16 +1,12 @@
-import { readFile } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
 import { paths } from "../claudeHome.js";
 import { nextFireAfter, parseHHMM } from "./nextFire.js";
-import { atomicWriteJson } from "./atomicWrite.js";
-import { KeyedMutex } from "../mutex.js";
+import { createJsonArrayStore } from "./jsonArrayStore.js";
 import type { Schedule, Trigger } from "./scheduleTypes.js";
 
-// Serializes the whole-file read-modify-write cycle so concurrent creates /
-// updates / markScheduleRan calls from HTTP handlers and the scheduler tick
-// cannot lose each other's changes.
-const storeLock = new KeyedMutex();
-const withStoreLock = <T>(fn: () => Promise<T>) => storeLock.withLock("schedules", fn);
+// The crash-safe, mutex-serialized single-file store lives in one shared place.
+const store = createJsonArrayStore<Schedule>({ file: paths.schedulesFile, label: "schedules.json" });
+const withStoreLock = store.withLock;
 
 export class ScheduleValidationError extends Error {
   constructor(message: string) {
@@ -137,33 +133,8 @@ export function validatePatch(raw: unknown): Partial<ScheduleInput> {
   return patch;
 }
 
-/** Reads the raw file; returns { ok, list } so writers can refuse on corruption. */
-async function readRaw(): Promise<{ ok: boolean; list: Schedule[] }> {
-  let text: string;
-  try {
-    text = await readFile(paths.schedulesFile(), "utf8");
-  } catch {
-    return { ok: true, list: [] }; // missing file = empty, writable
-  }
-  try {
-    const parsed = JSON.parse(text) as Schedule[];
-    return { ok: true, list: Array.isArray(parsed) ? parsed : [] };
-  } catch {
-    return { ok: false, list: [] }; // present but corrupt = do not overwrite
-  }
-}
-
-export async function readSchedules(): Promise<Schedule[]> {
-  return (await readRaw()).list;
-}
-
-async function writeSchedules(list: Schedule[]): Promise<void> {
-  const current = await readRaw();
-  if (!current.ok) {
-    throw new Error("schedules.json could not be parsed; refusing to overwrite it");
-  }
-  await atomicWriteJson(paths.schedulesFile(), list);
-}
+export const readSchedules = store.read;
+const writeSchedules = store.write;
 
 export async function readSchedulesWithNext(
   now: Date,

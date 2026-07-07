@@ -72,6 +72,10 @@ export function useLiveResource<T>(
   useEffect(() => {
     mounted.current = true;
     if (path == null) {
+      // Intentional: reset loading when the resource path becomes null (a
+      // detail view with no selection). This is external-system sync on
+      // (un)mount, the sanctioned use of setState-in-effect.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setLoading(false);
       return () => {
         mounted.current = false;

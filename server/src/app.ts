@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { randomUUID } from "node:crypto";
 import { claudeHome } from "./claudeHome.js";
 import { readAgents, readTimeline } from "./sources/jobs.js";
@@ -53,6 +53,23 @@ export function createApp(deps: AppDeps): Hono {
   const notifyRunFailed = (run: Parameters<typeof buildRunFailurePayload>[0]) =>
     void postWebhook(config.webhookUrl, buildRunFailurePayload(run, new Date().toISOString()));
 
+  // Parse a JSON body, or short-circuit with a 400. Returns a discriminated
+  // result so the handler can `if (!parsed.ok) return parsed.res`.
+  async function jsonBody(c: Context) {
+    try {
+      return { ok: true as const, value: (await c.req.json()) as unknown };
+    } catch {
+      return { ok: false as const, res: c.json({ error: "invalid JSON body" }, 400) };
+    }
+  }
+
+  // Map a thrown validation error to 400 and anything else to 500 — the same
+  // shape every create/update handler needs.
+  function fail(c: Context, e: unknown, ValidationError: new (...a: never[]) => Error) {
+    if (e instanceof ValidationError) return c.json({ error: e.message }, 400);
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+  }
+
   app.use("/api/*", securityMiddleware(config));
 
   app.get("/api/health", (c) =>
@@ -92,27 +109,25 @@ export function createApp(deps: AppDeps): Hono {
   app.get("/api/schedules", async (c) => c.json({ schedules: await readSchedulesWithNext(new Date()) }));
 
   app.post("/api/schedules", async (c) => {
-    let body: unknown;
-    try { body = await c.req.json(); } catch { return c.json({ error: "invalid JSON body" }, 400); }
+    const body = await jsonBody(c);
+    if (!body.ok) return body.res;
     try {
-      const created = await createSchedule(validateInput(body), new Date(), randomUUID());
+      const created = await createSchedule(validateInput(body.value), new Date(), randomUUID());
       return c.json(created, 201);
     } catch (e) {
-      if (e instanceof ScheduleValidationError) return c.json({ error: e.message }, 400);
-      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+      return fail(c, e, ScheduleValidationError);
     }
   });
 
   app.put("/api/schedules/:id", async (c) => {
-    let body: unknown;
-    try { body = await c.req.json(); } catch { return c.json({ error: "invalid JSON body" }, 400); }
+    const body = await jsonBody(c);
+    if (!body.ok) return body.res;
     try {
-      const updated = await updateSchedule(c.req.param("id"), validatePatch(body), new Date());
+      const updated = await updateSchedule(c.req.param("id"), validatePatch(body.value), new Date());
       if (!updated) return c.json({ error: "not found" }, 404);
       return c.json(updated);
     } catch (e) {
-      if (e instanceof ScheduleValidationError) return c.json({ error: e.message }, 400);
-      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+      return fail(c, e, ScheduleValidationError);
     }
   });
 
@@ -167,40 +182,37 @@ export function createApp(deps: AppDeps): Hono {
   app.get("/api/pipelines", async (c) => c.json({ pipelines: await readPipelines() }));
 
   app.post("/api/pipelines", async (c) => {
-    let body: unknown;
-    try { body = await c.req.json(); } catch { return c.json({ error: "invalid JSON body" }, 400); }
+    const body = await jsonBody(c);
+    if (!body.ok) return body.res;
     try {
-      const created = await createPipeline(validatePipelineInput(body), new Date(), randomUUID());
+      const created = await createPipeline(validatePipelineInput(body.value), new Date(), randomUUID());
       return c.json(created, 201);
     } catch (e) {
-      if (e instanceof PipelineValidationError) return c.json({ error: e.message }, 400);
-      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+      return fail(c, e, PipelineValidationError);
     }
   });
 
   app.put("/api/pipelines/:id", async (c) => {
-    let body: unknown;
-    try { body = await c.req.json(); } catch { return c.json({ error: "invalid JSON body" }, 400); }
+    const body = await jsonBody(c);
+    if (!body.ok) return body.res;
     try {
-      const updated = await updatePipeline(c.req.param("id"), validatePipelineInput(body), new Date());
+      const updated = await updatePipeline(c.req.param("id"), validatePipelineInput(body.value), new Date());
       if (!updated) return c.json({ error: "not found" }, 404);
       return c.json(updated);
     } catch (e) {
-      if (e instanceof PipelineValidationError) return c.json({ error: e.message }, 400);
-      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+      return fail(c, e, PipelineValidationError);
     }
   });
 
   app.patch("/api/pipelines/:id", async (c) => {
-    let body: unknown;
-    try { body = await c.req.json(); } catch { return c.json({ error: "invalid JSON body" }, 400); }
+    const body = await jsonBody(c);
+    if (!body.ok) return body.res;
     try {
-      const updated = await updatePipeline(c.req.param("id"), validatePipelinePatch(body), new Date());
+      const updated = await updatePipeline(c.req.param("id"), validatePipelinePatch(body.value), new Date());
       if (!updated) return c.json({ error: "not found" }, 404);
       return c.json(updated);
     } catch (e) {
-      if (e instanceof PipelineValidationError) return c.json({ error: e.message }, 400);
-      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+      return fail(c, e, PipelineValidationError);
     }
   });
 

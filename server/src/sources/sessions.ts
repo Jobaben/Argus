@@ -275,8 +275,7 @@ function normalizeMessage(line: RawLine, index: number): SessionMessage {
   };
 }
 
-/** Full ordered message list for one session, normalized for display. */
-export async function readSession(project: string, id: string): Promise<SessionDetail | null> {
+async function readSessionRaw(project: string, id: string): Promise<SessionDetail | null> {
   const file = resolveSessionPath(project, id);
   if (!file) return null;
 
@@ -298,6 +297,13 @@ export async function readSession(project: string, id: string): Promise<SessionD
     lastActivity: summary.lastActivity,
     messages,
   };
+}
+
+/** Full ordered message list for one session, normalized for display. Cached
+ *  with a short TTL + single-flight so a large open transcript that refetches
+ *  on every live ping isn't fully re-parsed each time. */
+export async function readSession(project: string, id: string): Promise<SessionDetail | null> {
+  return cached(`session:${project}:${id}`, 1500, () => readSessionRaw(project, id));
 }
 
 /** Render a session transcript as portable Markdown for export/download. */

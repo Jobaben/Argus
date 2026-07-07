@@ -24,10 +24,9 @@ export default defineConfig([
         'error',
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
       ],
-      // Fetch-on-mount effects legitimately call setState to sync with an
-      // external system; the shared live-data store (see useLiveResource)
-      // centralizes this pattern in one audited place. Warn, don't fail.
-      'react-hooks/set-state-in-effect': 'warn',
+      // The two sanctioned external-system-sync uses carry scoped disables with
+      // rationale (useLiveResource, useSearch); any NEW occurrence should fail.
+      'react-hooks/set-state-in-effect': 'error',
     },
   },
 ])

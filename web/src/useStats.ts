@@ -50,12 +50,14 @@ export interface Stats {
   peakHours: PeakHour[];
 }
 
-/** Loads usage stats. Stats have no push event, so they poll on a 30s timer. */
+/** Loads usage stats, refreshing on "inventory:changed" (the server watches
+ *  stats-cache.json), with a slow poll fallback while the socket is down. */
 export function useStats() {
   const { data, loading, error, refresh } = useLiveResource<Stats | null>("/api/stats", {
+    events: ["inventory:changed"],
     select: (j) => j as Stats,
     initial: null,
-    pollMs: 30000,
+    pollMs: 60000,
   });
   return { stats: data, loading, error, refresh };
 }

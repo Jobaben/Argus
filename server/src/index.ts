@@ -2,7 +2,7 @@ import { serve } from "@hono/node-server";
 import { WebSocketServer } from "ws";
 import { randomUUID } from "node:crypto";
 import { claudeHome } from "./claudeHome.js";
-import { watchAgents, watchSchedules } from "./watch.js";
+import { watchAgents, watchSchedules, watchExtensions } from "./watch.js";
 import { readRuns, killRunProcess } from "./sources/runs.js";
 import { createEngine, defaultPipelineSpawn } from "./pipelineEngine.js";
 import { startScheduler, isAlive } from "./scheduler.js";
@@ -94,6 +94,7 @@ wss.on("connection", (ws) => {
 
 const stopWatching = watchAgents(() => broadcast({ type: "agents:changed" }));
 const stopWatchingSchedules = watchSchedules(() => broadcast({ type: "schedules:changed" }));
+const stopWatchingExtensions = watchExtensions(() => broadcast({ type: "inventory:changed" }));
 const scheduler = startScheduler({
   onChange: () => broadcast({ type: "schedules:changed" }),
   onTick: () => engine.reconcile(),
@@ -113,6 +114,7 @@ async function shutdown() {
   shuttingDown = true;
   await stopWatching();
   await stopWatchingSchedules();
+  await stopWatchingExtensions();
   await scheduler.stop();
   await killLiveRuns();
   if (wss) {

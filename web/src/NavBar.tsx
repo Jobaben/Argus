@@ -54,7 +54,7 @@ export function NavBar({
           >
             ⌕
           </a>
-          <MoreMenu items={overflow} active={overflowActive} />
+          <MoreMenu items={overflow} active={overflowActive} activeId={activeId} />
           <ConnectionPill live={live} />
         </div>
       </div>

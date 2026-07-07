@@ -6,7 +6,16 @@ export interface MoreItem {
   href: string;
 }
 
-export function MoreMenu({ items, active }: { items: MoreItem[]; active: boolean }) {
+export function MoreMenu({
+  items,
+  active,
+  activeId,
+}: {
+  items: MoreItem[];
+  active: boolean;
+  /** Id of the currently-active overflow route, marked aria-current in the menu. */
+  activeId?: string;
+}) {
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -32,6 +41,10 @@ export function MoreMenu({ items, active }: { items: MoreItem[]; active: boolean
     if (e.key === "Escape") {
       e.preventDefault();
       close();
+    } else if (e.key === "Tab") {
+      // Tabbing out of the menu closes it (without stealing focus, so focus
+      // moves naturally to the next element).
+      close(false);
     } else if (e.key === "ArrowDown") {
       e.preventDefault();
       links[Math.min(links.length - 1, idx + 1)]?.focus();
@@ -89,8 +102,11 @@ export function MoreMenu({ items, active }: { items: MoreItem[]; active: boolean
                 key={it.id}
                 href={it.href}
                 role="menuitem"
+                aria-current={it.id === activeId ? "page" : undefined}
                 onClick={() => close(false)}
-                className="block rounded-md px-3 py-1.5 text-sm text-ink-dim transition hover:bg-surface-2 hover:text-ink focus:bg-surface-2 focus:text-ink focus:outline-none"
+                className={`block rounded-md px-3 py-1.5 text-sm transition hover:bg-surface-2 hover:text-ink focus:bg-surface-2 focus:text-ink focus:outline-none ${
+                  it.id === activeId ? "text-ink" : "text-ink-dim"
+                }`}
               >
                 {it.label}
               </a>
