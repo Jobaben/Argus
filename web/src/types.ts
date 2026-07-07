@@ -94,9 +94,15 @@ export interface ScheduleInput {
 
 export type InstanceStatus = "running" | "awaiting-approval" | "failed" | "succeeded" | "aborted";
 
-export type PhaseStatus = "pending" | "running" | "awaiting-approval" | "succeeded" | "failed";
+export type PhaseStatus =
+  | "pending"
+  | "running"
+  | "awaiting-approval"
+  | "succeeded"
+  | "failed"
+  | "aborted";
 
-export type StepStatus = "pending" | "running" | "succeeded" | "failed";
+export type StepStatus = "pending" | "running" | "succeeded" | "failed" | "aborted";
 
 export interface StepProgress {
   name: string;
@@ -188,4 +194,7 @@ export interface OverviewEntry {
   /** Total spend of the latest instance across all its runs (including
    *  superseded revise attempts). Null/absent when there is no instance. */
   cost?: OverviewCost | null;
+  /** Every non-terminal instance (running / awaiting-approval), newest-first.
+   *  With overlapPolicy "allow" a pipeline can have several at once. */
+  active?: { instance: PipelineInstance; cost: OverviewCost }[];
 }

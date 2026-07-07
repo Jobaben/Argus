@@ -213,6 +213,30 @@ test("finished steps get durationMs but no activity", () => {
   assert.equal(step.currentActivity, undefined);
 });
 
+test("active lists every running/awaiting instance newest-first, with per-instance cost", () => {
+  const i2 = inst("i2", "a", "running", "2026-06-30T11:00:00.000Z");
+  i2.phases[0].steps = [{ name: "s1", runId: "r2", status: "running" }];
+  const i1 = inst("i1", "a", "awaiting-approval", "2026-06-30T10:00:00.000Z");
+  i1.phases[0].steps = [{ name: "s1", runId: "r1", status: "succeeded" }];
+  const i0 = inst("i0", "a", "aborted", "2026-06-30T09:00:00.000Z");
+  const runs = [run("r1", "i1", 0.25, 1000), run("r2", "i2", 0.5, 2000)];
+  const out = buildOverview([def("a")], [i2, i1, i0], runs);
+  assert.deepEqual(
+    out[0].active.map((a) => a.instance.id),
+    ["i2", "i1"],
+  );
+  assert.deepEqual(out[0].active[0].cost, { usd: 0.5, tokens: 2000 });
+  assert.deepEqual(out[0].active[1].cost, { usd: 0.25, tokens: 1000 });
+  // steps are enriched like latest
+  assert.equal(out[0].active[0].instance.phases[0].steps[0].costUsd, 0.5);
+});
+
+test("active is empty when the only instance is terminal", () => {
+  const out = buildOverview([def("a")], [inst("i1", "a", "aborted", "2026-06-30T10:00:00.000Z")]);
+  assert.deepEqual(out[0].active, []);
+  assert.equal(out[0].latest?.id, "i1");
+});
+
 test("breaks ties by updatedAt desc then definition name", () => {
   const defs = [def("zeta"), def("alpha")];
   const instances = [

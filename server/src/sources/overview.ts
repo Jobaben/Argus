@@ -14,6 +14,10 @@ export interface OverviewEntry {
   /** Total spend of the latest instance across all its runs (including
    *  superseded revise attempts). Null when there is no instance. */
   cost: OverviewCost | null;
+  /** Every non-terminal instance (running / awaiting-approval), newest-first.
+   *  With overlapPolicy "allow" a pipeline can have several at once; `latest`
+   *  alone would hide all but the newest. */
+  active: { instance: PipelineInstance; cost: OverviewCost }[];
 }
 
 // Lower rank sorts first: states needing human action come first
@@ -87,8 +91,14 @@ export function buildOverview(
   activity?: Map<string, ActivityEvent>,
 ): OverviewEntry[] {
   const latestByPipeline = new Map<string, PipelineInstance>();
+  const activeByPipeline = new Map<string, PipelineInstance[]>();
   for (const i of instances) {
     if (!latestByPipeline.has(i.pipelineId)) latestByPipeline.set(i.pipelineId, i);
+    if (i.status === "running" || i.status === "awaiting-approval") {
+      const list = activeByPipeline.get(i.pipelineId) ?? [];
+      list.push(i);
+      activeByPipeline.set(i.pipelineId, list);
+    }
   }
   const byRunId = new Map(runs.map((r) => [r.id, r]));
   const entries: OverviewEntry[] = definitions.map((definition) => {
@@ -97,6 +107,10 @@ export function buildOverview(
       definition,
       latest: latest ? enrichSteps(latest, byRunId, activity) : null,
       cost: latest ? instanceCost(latest.id, runs) : null,
+      active: (activeByPipeline.get(definition.id) ?? []).map((i) => ({
+        instance: enrichSteps(i, byRunId, activity),
+        cost: instanceCost(i.id, runs),
+      })),
     };
   });
   return entries.sort((a, b) => {

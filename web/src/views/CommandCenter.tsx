@@ -3,7 +3,7 @@ import { useOverview } from "../useOverview";
 import { useRunActivity } from "../useRunActivity";
 import type { LiveActivity } from "../useRunActivity";
 import {
-  toOverviewRow,
+  toOverviewRows,
   formatElapsed,
   STATUS,
   RAIL,
@@ -42,13 +42,15 @@ function useBoardAnnouncer(rows: OverviewRow[]): string {
     badges: new Map(),
     message: "",
   }));
-  const badges = new Map(rows.map((r) => [r.pipelineId, r.badge]));
+  // Keyed per instance: with overlap several rows can share a pipelineId.
+  const rowKey = (r: OverviewRow) => r.instanceId ?? r.pipelineId;
+  const badges = new Map(rows.map((r) => [rowKey(r), r.badge]));
   const differs =
-    badges.size !== seen.badges.size || rows.some((r) => seen.badges.get(r.pipelineId) !== r.badge);
+    badges.size !== seen.badges.size || rows.some((r) => seen.badges.get(rowKey(r)) !== r.badge);
   if (differs) {
     const msgs: string[] = [];
     for (const r of rows) {
-      const before = seen.badges.get(r.pipelineId);
+      const before = seen.badges.get(rowKey(r));
       if (before === undefined || before === r.badge) continue;
       if (r.badge === "await") msgs.push(`${r.name} needs approval`);
       else if (r.badge === "failed") msgs.push(`${r.name} failed`);
@@ -308,6 +310,9 @@ function Row({
         <span className="min-w-0 break-words text-[15px] font-extrabold tracking-[0.02em] text-ink">
           {row.name}
         </span>
+        {row.instanceLabel && (
+          <span className="font-mono text-[10px] text-ink-faint">#{row.instanceLabel}</span>
+        )}
         <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint">
           {row.phases.length} phases
         </span>
@@ -353,7 +358,7 @@ function Row({
 
 export default function CommandCenter() {
   const { overview, loading, error, approve, revise } = useOverview();
-  const rows = useMemo(() => overview.map(toOverviewRow), [overview]);
+  const rows = useMemo(() => overview.flatMap(toOverviewRows), [overview]);
   const announcement = useBoardAnnouncer(rows);
   const liveActivity = useRunActivity();
   const anyWorking = useMemo(
@@ -410,7 +415,7 @@ export default function CommandCenter() {
         <div className="flex flex-col gap-3">
           {rows.map((row) => (
             <Row
-              key={row.pipelineId}
+              key={row.instanceId ?? row.pipelineId}
               row={row}
               approve={approve}
               revise={revise}

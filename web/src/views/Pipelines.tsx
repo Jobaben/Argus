@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { usePipelines } from "../usePipelines";
 import { useOverview } from "../useOverview";
 import type { PipelineDefinition, PipelineInput, Trigger } from "../types";
-import { AlertStrip, EmptyState, Page, StatusPill, toOverviewRow, type DsStatus } from "../ds";
+import { AlertStrip, EmptyState, Page, StatusPill, toOverviewRows, type DsStatus } from "../ds";
 import { PipelineForm, EMPTY_PIPELINE } from "./PipelineForm";
 
 function triggerSummary(t: Trigger | null): string {
@@ -39,15 +39,20 @@ function PipelineCard({
   abort,
 }: {
   def: PipelineDefinition;
-  live: { badge: DsStatus; instanceId: string | null };
+  live: { badge: DsStatus; activeIds: string[] };
   onEdit: () => void;
   setEnabled: (id: string, enabled: boolean) => Promise<unknown>;
   remove: (id: string) => Promise<unknown>;
   runNow: (id: string) => Promise<unknown>;
   abort: (id: string) => Promise<unknown>;
 }) {
-  const abortable =
-    (live.badge === "working" || live.badge === "await") && live.instanceId !== null;
+  const abortable = live.activeIds.length > 0;
+  const stopLabel =
+    live.activeIds.length > 1 ? `Stop all (${live.activeIds.length})` : "Stop";
+  const stopPrompt =
+    live.activeIds.length > 1
+      ? `Stop all ${live.activeIds.length} running instances of "${def.name}"? In-progress work will be discarded.`
+      : `Stop running pipeline "${def.name}"? In-progress work will be discarded.`;
   return (
     <div className="rounded-xl border border-line bg-surface p-4">
       <header className="flex items-start justify-between gap-3">
@@ -78,15 +83,13 @@ function PipelineCard({
           <button
             type="button"
             onClick={() => {
-              if (
-                confirm(`Stop running pipeline "${def.name}"? In-progress work will be discarded.`)
-              ) {
-                void abort(live.instanceId!);
+              if (confirm(stopPrompt)) {
+                for (const id of live.activeIds) void abort(id);
               }
             }}
             className="rounded-lg bg-fail/15 px-2.5 py-1 text-xs text-fail ring-1 ring-fail/30 hover:bg-fail/25"
           >
-            Stop
+            {stopLabel}
           </button>
         )}
         <button
@@ -121,10 +124,14 @@ export default function Pipelines() {
   const { pipelines, loading, error, create, update, remove, setEnabled, runNow } = usePipelines();
   const { overview, abort } = useOverview();
   const liveByPipeline = useMemo(() => {
-    const m = new Map<string, { badge: DsStatus; instanceId: string | null }>();
+    const m = new Map<string, { badge: DsStatus; activeIds: string[] }>();
     for (const entry of overview) {
-      const row = toOverviewRow(entry);
-      m.set(entry.definition.id, { badge: row.badge, instanceId: row.instanceId });
+      const rows = toOverviewRows(entry);
+      const active = rows.filter((r) => r.badge === "working" || r.badge === "await");
+      m.set(entry.definition.id, {
+        badge: active.some((r) => r.badge === "await") ? "await" : rows[0].badge,
+        activeIds: active.map((r) => r.instanceId).filter((id): id is string => id !== null),
+      });
     }
     return m;
   }, [overview]);
@@ -209,7 +216,7 @@ export default function Pipelines() {
             <PipelineCard
               key={p.id}
               def={p}
-              live={liveByPipeline.get(p.id) ?? { badge: "idle", instanceId: null }}
+              live={liveByPipeline.get(p.id) ?? { badge: "idle", activeIds: [] }}
               onEdit={() => setMode({ kind: "edit", id: p.id })}
               setEnabled={guarded((id) => setEnabled(id, !p.enabled))}
               remove={guarded(remove)}

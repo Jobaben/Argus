@@ -57,6 +57,9 @@ export interface OverviewRow {
   failure: { step: string | null; reason: string | null; kind: string | null } | null;
   /** Total spend of the latest run (all attempts); null when unknown. */
   cost: OverviewCost | null;
+  /** Short instance id, set only when the pipeline has several concurrent
+   *  instances on the board so their otherwise-identical cards can be told apart. */
+  instanceLabel: string | null;
 }
 
 const PHASE_STATUS_TO_DS: Record<PhaseStatus, DsStatus> = {
@@ -65,6 +68,7 @@ const PHASE_STATUS_TO_DS: Record<PhaseStatus, DsStatus> = {
   "awaiting-approval": "await",
   succeeded: "done",
   failed: "failed",
+  aborted: "stopped",
 };
 
 const STEP_STATUS_TO_DS: Record<StepStatus, DsStatus> = {
@@ -72,6 +76,7 @@ const STEP_STATUS_TO_DS: Record<StepStatus, DsStatus> = {
   running: "working",
   succeeded: "done",
   failed: "failed",
+  aborted: "stopped",
 };
 
 /** Upcoming phases report no step progress yet; tile them from the definition. */
@@ -81,6 +86,7 @@ const FALLBACK_STEP_STATUS: Record<PhaseStatus, DsStatus> = {
   "awaiting-approval": "done",
   succeeded: "done",
   failed: "failed",
+  aborted: "stopped",
 };
 
 function stepPills(phase: PhaseProgress, def: PhaseDef | undefined): StepPill[] {
@@ -160,6 +166,37 @@ function failureFor(latest: PipelineInstance): OverviewRow["failure"] {
   return { step, reason: extractReason(phase.payload), kind: extractKind(phase.payload) };
 }
 
+function instanceRow(
+  definition: OverviewEntry["definition"],
+  instance: PipelineInstance,
+  cost: OverviewCost | null,
+): OverviewRow {
+  const phases: PhasePill[] = instance.phases.map((p) => ({
+    id: p.id,
+    name: p.name,
+    status: PHASE_STATUS_TO_DS[p.status],
+    activeStep: activeStepName(p),
+    steps: stepPills(
+      p,
+      definition.phases.find((d) => d.id === p.id),
+    ),
+    reason: p.status === "failed" ? extractReason(p.payload) : null,
+  }));
+
+  return {
+    pipelineId: definition.id,
+    name: definition.name,
+    badge: INSTANCE_BADGE[instance.status],
+    updatedAt: instance.updatedAt,
+    phases,
+    instanceId: instance.id,
+    gate: gateFor(instance),
+    failure: failureFor(instance),
+    cost,
+    instanceLabel: null,
+  };
+}
+
 export function toOverviewRow(entry: OverviewEntry): OverviewRow {
   const { definition, latest } = entry;
 
@@ -190,30 +227,24 @@ export function toOverviewRow(entry: OverviewEntry): OverviewRow {
       gate: null,
       failure: null,
       cost: null,
+      instanceLabel: null,
     };
   }
 
-  const phases: PhasePill[] = latest.phases.map((p) => ({
-    id: p.id,
-    name: p.name,
-    status: PHASE_STATUS_TO_DS[p.status],
-    activeStep: activeStepName(p),
-    steps: stepPills(
-      p,
-      definition.phases.find((d) => d.id === p.id),
-    ),
-    reason: p.status === "failed" ? extractReason(p.payload) : null,
-  }));
+  return instanceRow(definition, latest, entry.cost ?? null);
+}
 
-  return {
-    pipelineId: definition.id,
-    name: definition.name,
-    badge: INSTANCE_BADGE[latest.status],
-    updatedAt: latest.updatedAt,
-    phases,
-    instanceId: latest.id,
-    gate: gateFor(latest),
-    failure: failureFor(latest),
-    cost: entry.cost ?? null,
-  };
+/**
+ * One row per concurrent instance. With overlapPolicy "allow" a pipeline can
+ * have several active instances; each gets its own card (labelled with a short
+ * instance id when there is more than one). With no active instance, falls
+ * back to the single latest-instance row, exactly as before.
+ */
+export function toOverviewRows(entry: OverviewEntry): OverviewRow[] {
+  const active = entry.active ?? [];
+  if (active.length === 0) return [toOverviewRow(entry)];
+  return active.map((a) => ({
+    ...instanceRow(entry.definition, a.instance, a.cost),
+    instanceLabel: active.length > 1 ? a.instance.id.slice(0, 8) : null,
+  }));
 }

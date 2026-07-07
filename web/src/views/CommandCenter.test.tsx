@@ -75,6 +75,25 @@ beforeEach(() => {
 });
 
 describe("CommandCenter", () => {
+  it("renders one card per active instance when a pipeline overlaps", () => {
+    const e = entry("sprint-pr", "running", ["running", "pending"]);
+    const newest = { ...e.latest!, id: "11111111-aaaa" };
+    const older = {
+      ...e.latest!,
+      id: "22222222-bbbb",
+      phases: e.latest!.phases.map((p) => ({ ...p })),
+    };
+    e.active = [
+      { instance: newest, cost: { usd: null, tokens: null } },
+      { instance: older, cost: { usd: null, tokens: null } },
+    ];
+    mockOverview.overview = [e];
+    render(<CommandCenter />);
+    expect(screen.getAllByText("sprint-pr")).toHaveLength(2);
+    expect(screen.getByText("#11111111")).toBeInTheDocument();
+    expect(screen.getByText("#22222222")).toBeInTheDocument();
+  });
+
   it("renders a row per pipeline", () => {
     mockOverview.overview = [
       entry("scheduler-prune", "running", ["succeeded", "running"]),

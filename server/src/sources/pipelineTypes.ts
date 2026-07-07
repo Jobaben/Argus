@@ -29,9 +29,15 @@ export interface PipelineDefinition {
 
 export type InstanceStatus = "running" | "awaiting-approval" | "failed" | "succeeded" | "aborted";
 
-export type PhaseStatus = "pending" | "running" | "awaiting-approval" | "succeeded" | "failed";
+export type PhaseStatus =
+  | "pending"
+  | "running"
+  | "awaiting-approval"
+  | "succeeded"
+  | "failed"
+  | "aborted";
 
-export type StepStatus = "pending" | "running" | "succeeded" | "failed";
+export type StepStatus = "pending" | "running" | "succeeded" | "failed" | "aborted";
 
 export interface StepProgress {
   name: string;

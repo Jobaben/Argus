@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toOverviewRow } from "./overviewRow";
+import { toOverviewRow, toOverviewRows } from "./overviewRow";
 import type {
   OverviewEntry,
   PipelineDefinition,
@@ -286,5 +286,59 @@ describe("toOverviewRow", () => {
     expect(pill.currentActivity).toBeNull();
     expect(pill.startedAt).toBeNull();
     expect(pill.durationMs).toBeNull();
+  });
+
+  it("maps aborted phases and steps to the stopped pill", () => {
+    const latest = inst("aborted", ["aborted", "pending"]);
+    latest.phases[0].steps = [{ name: "red-green", runId: "r1", status: "aborted" }];
+    const row = toOverviewRow({ definition: def(), latest });
+    expect(row.phases[0].status).toBe("stopped");
+    expect(row.phases[0].steps[0].status).toBe("stopped");
+  });
+});
+
+describe("toOverviewRows", () => {
+  it("returns one row per active instance, labelled when there are several", () => {
+    const a = { ...inst("running", ["running", "pending"]), id: "aaaa1111-1" };
+    const b = { ...inst("awaiting-approval", ["awaiting-approval", "pending"]), id: "bbbb2222-2" };
+    const rows = toOverviewRows({
+      definition: def(),
+      latest: a,
+      active: [
+        { instance: a, cost: { usd: 1, tokens: 10 } },
+        { instance: b, cost: { usd: 2, tokens: 20 } },
+      ],
+    });
+    expect(rows.map((r) => r.instanceId)).toEqual(["aaaa1111-1", "bbbb2222-2"]);
+    expect(rows.map((r) => r.badge)).toEqual(["working", "await"]);
+    expect(rows.map((r) => r.instanceLabel)).toEqual(["aaaa1111", "bbbb2222"]);
+    expect(rows[1].cost).toEqual({ usd: 2, tokens: 20 });
+  });
+
+  it("omits the label for a single active instance", () => {
+    const a = inst("running", ["running", "pending"]);
+    const rows = toOverviewRows({
+      definition: def(),
+      latest: a,
+      active: [{ instance: a, cost: { usd: null, tokens: null } }],
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].instanceLabel).toBeNull();
+  });
+
+  it("falls back to the latest-instance row when nothing is active", () => {
+    const rows = toOverviewRows({
+      definition: def(),
+      latest: inst("aborted", ["succeeded", "succeeded"]),
+      active: [],
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].badge).toBe("stopped");
+  });
+
+  it("falls back when active is absent (older server payloads)", () => {
+    const rows = toOverviewRows({ definition: def(), latest: null });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].badge).toBe("idle");
   });
 });

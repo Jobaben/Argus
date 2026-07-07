@@ -228,6 +228,23 @@ test("applyAbort marks the instance aborted", () => {
   assert.equal(out.endedAt, NOW);
 });
 
+test("applyAbort closes out the in-flight phase and its running/pending steps", () => {
+  const inst = started(def());
+  const out = applyAbort(inst, NOW);
+  assert.equal(out.phases[0].status, "aborted");
+  assert.equal(out.phases[0].steps[0].status, "aborted");
+  // later phases were never reached — they stay pending, not aborted
+  assert.equal(out.phases[1].status, "pending");
+});
+
+test("applyAbort leaves finished steps of the current phase untouched", () => {
+  const inst = started(def());
+  inst.phases[0].steps[0].status = "succeeded";
+  const out = applyAbort(inst, NOW);
+  assert.equal(out.phases[0].steps[0].status, "succeeded");
+  assert.equal(out.phases[0].status, "aborted");
+});
+
 test("applyAbort throws when the instance is already terminal", () => {
   const inst = started(def());
   inst.status = "succeeded";
