@@ -1,7 +1,7 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { encodeProject, readRun, runLogPath, writeRun } from "./sources/runs.js";
+import { encodeProject, patchRun, readRun, runLogPath, writeRun } from "./sources/runs.js";
 import { markPipelineStarted, readPipelines } from "./sources/pipelines.js";
 import {
   INSTANCE_KEEP,
@@ -258,8 +258,7 @@ export function createEngine(deps: EngineDeps): Engine {
     void handle.done
       .then(async (res) => {
         release();
-        await writeRun({
-          ...run,
+        await patchRun(run.id, {
           status: res.code === 0 ? "succeeded" : "failed",
           endedAt: nowISO(),
           durationMs: deps.now().getTime() - new Date(startedAt).getTime(),
@@ -327,6 +326,9 @@ export function createEngine(deps: EngineDeps): Engine {
       if (!def) return { ok: false, code: 404 };
       const { instance, startPhase: idx } = advance(def, inst, signal, nowISO());
       await writeInstance(instance);
+      const outcome: Run["outcome"] | undefined =
+        signal.type === "failed" ? "failed" : signal.type === "completed" ? "succeeded" : undefined;
+      if (outcome) await patchRun(signal.runId, { outcome });
       // Start the next phase detached: this handler runs on the child's signal
       // POST, and that child may still hold its concurrency slot until its
       // process exits after we respond. Awaiting startPhase here (which acquires
@@ -452,6 +454,12 @@ export function createEngine(deps: EngineDeps): Engine {
                 got.run.status === "succeeded" ||
                 !isAlive(got.run.pid));
             if (!ended) continue;
+            const restarted = got?.run.status === "interrupted";
+            const payload = restarted
+              ? { reason: "Argus restarted mid-run — revise to retry", kind: "restarted" }
+              : {
+                  reason: got?.run.error ?? "run ended without emitting a completion signal",
+                };
             const { instance } = advance(
               def,
               current,
@@ -461,9 +469,7 @@ export function createEngine(deps: EngineDeps): Engine {
                 runId: s.runId,
                 type: "failed",
                 token: current.signalToken,
-                payload: {
-                  reason: got?.run.error ?? "run ended without emitting a completion signal",
-                },
+                payload,
               },
               nowISO(),
             );

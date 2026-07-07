@@ -109,3 +109,23 @@ test("readRun rejects path-traversal ids", async () => {
   assert.equal(await m.readRun("..\\..\\secret"), null);
   assert.equal(await m.readRun("a/b"), null);
 });
+
+test("patchRun merges onto the latest on-disk run, not a stale copy", async () => {
+  const m = await fresh();
+  await m.writeRun(makeRun("run-1", "s", new Date(2026, 6, 6).toISOString()));
+
+  // onSignal-style write lands first…
+  await m.patchRun("run-1", { outcome: "failed" });
+  // …then the exit-status write from a stale spawn-time closure re-reads and merges.
+  await m.patchRun("run-1", { status: "succeeded", exitCode: 0 });
+
+  const got = await m.readRun("run-1");
+  assert.equal(got?.run.outcome, "failed"); // preserved — not clobbered
+  assert.equal(got?.run.status, "succeeded");
+  assert.equal(got?.run.exitCode, 0);
+});
+
+test("patchRun returns null for a missing run", async () => {
+  const m = await fresh();
+  assert.equal(await m.patchRun("nope", { outcome: "failed" }), null);
+});

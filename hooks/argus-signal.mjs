@@ -23,8 +23,9 @@
 // running under a pipeline (env unset), so it is safe to register globally.
 import { pathToFileURL } from "node:url";
 
-/** A final message reporting a failed/blocked outcome via the sentinel line. */
-const OUTCOME_RE = /ARGUS_OUTCOME:\s*(failed|blocked)/i;
+/** A final message reporting a failed/blocked outcome via the sentinel line,
+ *  capturing any trailing reason text on that same line. */
+const OUTCOME_RE = /ARGUS_OUTCOME:\s*(failed|blocked)\b[^\S\r\n]*(.*)/i;
 
 /** Background-task statuses that mean the work is still in flight at Stop time.
  *  Anything not matching (done/completed/failed/cancelled/…) is treated as
@@ -44,6 +45,49 @@ export function hasPendingBackgroundWork(payload) {
     (t) =>
       t && typeof t === "object" && typeof t.status === "string" && PENDING_TASK_RE.test(t.status),
   );
+}
+
+/** Labels for background tasks still in flight, as "type: status" (or just the
+ *  status when no type is present). Used to explain a background-work failure. */
+function pendingTaskLabels(payload) {
+  const tasks =
+    payload && typeof payload === "object" && Array.isArray(payload.background_tasks)
+      ? payload.background_tasks
+      : [];
+  return tasks
+    .filter(
+      (t) =>
+        t &&
+        typeof t === "object" &&
+        typeof t.status === "string" &&
+        PENDING_TASK_RE.test(t.status),
+    )
+    .map((t) => (typeof t.type === "string" ? `${t.type}: ${t.status}` : t.status));
+}
+
+/**
+ * Compose a human-readable failure reason from a Stop payload. Only meaningful
+ * for a `failed` outcome. Precedence: the ARGUS_OUTCOME sentinel's trailing
+ * text, else a pending-background-work summary, else the last message's tail,
+ * else a generic fallback. Always returns a non-empty string.
+ */
+export function buildReason(payload) {
+  const msg =
+    payload && typeof payload === "object" && typeof payload.last_assistant_message === "string"
+      ? payload.last_assistant_message
+      : "";
+  const m = OUTCOME_RE.exec(msg);
+  if (m) {
+    const kind = m[1].toLowerCase();
+    const rest = (m[2] ?? "").replace(/^[\s:–—-]+/, "").trim();
+    return rest ? `${kind}: ${rest}` : kind;
+  }
+  const pending = pendingTaskLabels(payload);
+  if (pending.length) {
+    return `stopped with ${pending.length} background task(s) still in flight (${pending.join(", ")})`;
+  }
+  const tail = msg.trim().split("\n").pop()?.trim();
+  return tail ? tail.slice(0, 300) : "run stopped without reporting an outcome";
 }
 
 /**
@@ -77,6 +121,13 @@ function main() {
       /* keep raw text */
     }
     const type = resolveType(argType, payload);
+    if (type === "failed") {
+      const reason = buildReason(payload);
+      payload =
+        payload && typeof payload === "object" && !Array.isArray(payload)
+          ? { ...payload, reason }
+          : { reason, raw: payload };
+    }
     try {
       await fetch(url, {
         method: "POST",

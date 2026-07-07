@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { STATUS, toDsStatus } from "./status";
+import { STATUS, toDsStatus, runDsStatus } from "./status";
 
 describe("STATUS record", () => {
   it("maps each status to its color token", () => {
@@ -43,5 +43,17 @@ describe("toDsStatus", () => {
   it("folds stopped and unknown into idle", () => {
     expect(toDsStatus("stopped")).toBe("idle");
     expect(toDsStatus("unknown")).toBe("idle");
+  });
+});
+
+describe("runDsStatus", () => {
+  it("shows failed when the outcome failed even if the process exited 0", () => {
+    expect(runDsStatus({ status: "succeeded", outcome: "failed" })).toBe("failed");
+    expect(runDsStatus({ status: "succeeded", outcome: "blocked" })).toBe("failed");
+  });
+
+  it("falls back to the process status when there is no failing outcome", () => {
+    expect(runDsStatus({ status: "succeeded", outcome: "succeeded" })).toBe("done");
+    expect(runDsStatus({ status: "running" })).toBe("working");
   });
 });

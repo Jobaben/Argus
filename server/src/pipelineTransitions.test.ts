@@ -233,3 +233,23 @@ test("applyAbort throws when the instance is already terminal", () => {
   inst.status = "succeeded";
   assert.throws(() => applyAbort(inst, NOW), /already terminal/);
 });
+
+test("failed signal with no reason gets a backstop reason", () => {
+  const inst = started(def());
+  const r = advance(def(), inst, sig({ type: "failed", payload: { session_id: "x" } }), NOW);
+  assert.equal(r.instance.status, "failed");
+  const payload = r.instance.phases[0].payload as { reason?: string; session_id?: string };
+  assert.equal(payload.reason, "run stopped without reporting an outcome");
+  assert.equal(payload.session_id, "x"); // existing payload keys preserved
+});
+
+test("failed signal keeps an existing reason untouched", () => {
+  const inst = started(def());
+  const r = advance(
+    def(),
+    inst,
+    sig({ type: "failed", payload: { reason: "blocked: no Jira" } }),
+    NOW,
+  );
+  assert.equal((r.instance.phases[0].payload as { reason: string }).reason, "blocked: no Jira");
+});

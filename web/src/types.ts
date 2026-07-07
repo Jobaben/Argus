@@ -57,12 +57,7 @@ export interface ScheduleWithNext extends Schedule {
 }
 
 export type RunStatus =
-  | "running"
-  | "succeeded"
-  | "failed"
-  | "skipped"
-  | "interrupted"
-  | "cancelled";
+  "running" | "succeeded" | "failed" | "skipped" | "interrupted" | "cancelled";
 
 export interface Run {
   id: string;
@@ -85,6 +80,7 @@ export interface Run {
   error: string | null;
   costUsd?: number | null;
   tokens?: number | null;
+  outcome?: "succeeded" | "failed" | "blocked" | null;
 }
 
 export interface ScheduleInput {

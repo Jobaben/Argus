@@ -329,6 +329,35 @@ test("reconcile records the run error as the failed phase reason", async () => {
   assert.equal((after?.phases[0].payload as { reason?: string })?.reason, "exit code 1");
 });
 
+test("reconcile tags a restart-interrupted phase as retryable", async () => {
+  const { engine, pipelines, instances } = await load();
+  const runs = await import(`./sources/runs.js?${Math.random()}`);
+  await seedPipeline(pipelines);
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const inst = await e.start("p1", "manual");
+
+  // Simulate recoverInterruptedRuns having marked the in-flight run interrupted
+  // (dead pid so reconcile treats it as ended).
+  const runId = rec.calls[0].runId;
+  const got = await runs.readRun(runId);
+  await runs.writeRun({
+    ...got!.run,
+    status: "interrupted",
+    pid: 2_000_000_000,
+    endedAt: new Date().toISOString(),
+    error: "interrupted: Argus restarted while this run was in progress",
+  });
+
+  await e.reconcile();
+
+  const after = await instances.readInstance(inst!.id);
+  assert.equal(after?.status, "failed");
+  const phase = after!.phases.find((p: { status: string }) => p.status === "failed")!;
+  assert.equal((phase.payload as { kind?: string }).kind, "restarted");
+  assert.match((phase.payload as { reason: string }).reason, /revise to retry/);
+});
+
 test("OUTCOME_CONTRACT carries the sentinel the Stop hook matches", () => {
   // Stop hook regex: /ARGUS_OUTCOME:\s*(failed|blocked)/i
   assert.match(OUTCOME_CONTRACT, /ARGUS_OUTCOME:/);
@@ -458,4 +487,31 @@ test("startPhase leaves model unset when neither level defines one", async () =>
   await e.start("p1", "manual");
   const run = (await runs.readRun(rec.calls[0].runId))!.run;
   assert.equal(run.model, undefined);
+});
+
+test("onSignal records the run outcome, preserved when the process later exits 0", async () => {
+  const { engine, pipelines } = await load();
+  const runs = await import(`./sources/runs.js?${Math.random()}`);
+  await seedPipeline(pipelines);
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const inst = await e.start("p1", "manual");
+  const runId = rec.calls[0].runId;
+
+  // Signal failure (as the Stop hook would) on the gated phase-0 step…
+  await e.onSignal(inst!.id, {
+    instanceId: inst!.id,
+    phaseId: "brainstorm",
+    runId,
+    type: "failed",
+    token: inst!.signalToken,
+    payload: { reason: "blocked: no Jira" },
+  });
+  // …then the process exits 0 and the completion handler writes exit status.
+  rec.dones[0].resolve({ code: 0 });
+  await waitFor(async () => (await runs.readRun(runId))?.run.status === "succeeded");
+
+  const got = await runs.readRun(runId);
+  assert.equal(got?.run.status, "succeeded"); // honest exit-code record
+  assert.equal(got?.run.outcome, "failed"); // work outcome preserved, not clobbered
 });

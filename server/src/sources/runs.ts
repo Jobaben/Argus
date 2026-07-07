@@ -29,6 +29,20 @@ export async function writeRun(run: Run): Promise<void> {
   await atomicWriteJson(runJsonPath(run.id), run);
 }
 
+/**
+ * Merge a partial patch onto the latest on-disk run and write it back. Reads
+ * fresh each call so concurrent writers (the signal path and the spawn
+ * completion handler) don't clobber each other's fields. Returns null if the
+ * run is gone.
+ */
+export async function patchRun(id: string, patch: Partial<Run>): Promise<Run | null> {
+  const current = await readRunFile(id);
+  if (!current) return null;
+  const next = { ...current, ...patch };
+  await writeRun(next);
+  return next;
+}
+
 async function readRunFile(id: string): Promise<Run | null> {
   try {
     return JSON.parse(await readFile(runJsonPath(id), "utf8")) as Run;

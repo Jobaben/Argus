@@ -18,11 +18,13 @@ function Gate({
   canApprove,
   approve,
   revise,
+  reviseLabel = "Revise",
 }: {
   instanceId: string;
   canApprove: boolean;
   approve: (id: string) => Promise<unknown>;
   revise: (id: string, note?: string) => Promise<unknown>;
+  reviseLabel?: string;
 }) {
   const [busy, setBusy] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
@@ -60,7 +62,7 @@ function Gate({
           disabled={busy}
           className="rounded-md border border-await bg-await/10 px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-await disabled:opacity-40"
         >
-          Revise
+          {reviseLabel}
         </button>
       </div>
       {noteOpen && (
@@ -125,6 +127,7 @@ function PhaseColumn({
   gate,
   approve,
   revise,
+  reviseLabel,
 }: {
   pill: PhasePill;
   index: number;
@@ -132,6 +135,7 @@ function PhaseColumn({
   gate: OverviewGate | null;
   approve: (id: string) => Promise<unknown>;
   revise: (id: string, note?: string) => Promise<unknown>;
+  reviseLabel?: string;
 }) {
   return (
     <section className="flex w-44 min-w-44 flex-1 flex-col gap-2">
@@ -160,6 +164,7 @@ function PhaseColumn({
           canApprove={gate.canApprove}
           approve={approve}
           revise={revise}
+          reviseLabel={reviseLabel}
         />
       )}
     </section>
@@ -175,6 +180,7 @@ function Row({
   approve: (id: string) => Promise<unknown>;
   revise: (id: string, note?: string) => Promise<unknown>;
 }) {
+  const reviseLabel = row.failure?.kind === "restarted" ? "Retry" : "Revise";
   return (
     <article className="rounded-tile border border-line bg-gradient-to-b from-surface-2 to-surface px-4 py-3.5">
       <div className="flex items-center gap-3">
@@ -201,6 +207,7 @@ function Row({
             gate={row.gate}
             approve={approve}
             revise={revise}
+            reviseLabel={reviseLabel}
           />
         ))}
       </div>

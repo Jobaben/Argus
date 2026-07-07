@@ -43,7 +43,7 @@ export interface OverviewRow {
   phases: PhasePill[];
   instanceId: string | null;
   gate: OverviewGate | null;
-  failure: { step: string | null; reason: string | null } | null;
+  failure: { step: string | null; reason: string | null; kind: string | null } | null;
 }
 
 const PHASE_STATUS_TO_DS: Record<PhaseStatus, DsStatus> = {
@@ -120,13 +120,21 @@ function extractReason(payload: unknown): string | null {
   return null;
 }
 
+function extractKind(payload: unknown): string | null {
+  if (payload && typeof payload === "object" && "kind" in payload) {
+    const k = (payload as { kind: unknown }).kind;
+    return typeof k === "string" ? k : null;
+  }
+  return null;
+}
+
 function failureFor(latest: PipelineInstance): OverviewRow["failure"] {
   if (latest.status !== "failed") return null;
   const phase = latest.phases.find((p) => p.status === "failed");
   if (!phase) return null;
   const failed = phase.steps.filter((s) => s.status === "failed").map((s) => s.name);
   const step = failed.length ? failed.join(", ") : phase.name;
-  return { step, reason: extractReason(phase.payload) };
+  return { step, reason: extractReason(phase.payload), kind: extractKind(phase.payload) };
 }
 
 export function toOverviewRow(entry: OverviewEntry): OverviewRow {

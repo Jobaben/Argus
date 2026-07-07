@@ -10,3 +10,4 @@ export interface StopHookPayload {
 
 export function hasPendingBackgroundWork(payload: unknown): boolean;
 export function resolveType(argType: string | undefined, payload: unknown): string;
+export function buildReason(payload: unknown): string;

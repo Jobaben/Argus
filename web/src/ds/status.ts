@@ -53,3 +53,14 @@ export function runStatusToDsStatus(s: RunStatus): DsStatus {
       return "idle";
   }
 }
+
+/** DS status for a run row, preferring a failing work-outcome over the
+ *  exit-code-derived status so a run that exited 0 but signalled failure
+ *  reads as failed — matching its phase. */
+export function runDsStatus(run: {
+  status: RunStatus;
+  outcome?: "succeeded" | "failed" | "blocked" | null;
+}): DsStatus {
+  if (run.outcome === "failed" || run.outcome === "blocked") return "failed";
+  return runStatusToDsStatus(run.status);
+}

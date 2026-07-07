@@ -24,6 +24,18 @@ function touch(inst: PipelineInstance, nowISO: string): void {
   inst.updatedAt = nowISO;
 }
 
+const DEFAULT_FAIL_REASON = "run stopped without reporting an outcome";
+
+/** The failure reason carried by a payload, mirroring the web's extractReason. */
+function payloadReason(payload: unknown): string | null {
+  if (typeof payload === "string") return payload.trim() || null;
+  if (payload && typeof payload === "object" && "reason" in payload) {
+    const r = (payload as { reason: unknown }).reason;
+    return typeof r === "string" ? r.trim() || null : null;
+  }
+  return null;
+}
+
 /**
  * When a phase fails, any of its steps still pending/running are abandoned —
  * mark them failed so no step is left "running" under a terminal instance.
@@ -105,6 +117,13 @@ export function advance(
   if (!step) return { instance: inst, startPhase: null };
   step.status = signal.type === "failed" ? "failed" : "succeeded";
   if (signal.payload !== undefined) phase.payload = signal.payload;
+
+  if (signal.type === "failed" && !payloadReason(phase.payload)) {
+    phase.payload =
+      phase.payload && typeof phase.payload === "object" && !Array.isArray(phase.payload)
+        ? { ...(phase.payload as Record<string, unknown>), reason: DEFAULT_FAIL_REASON }
+        : { reason: DEFAULT_FAIL_REASON };
+  }
 
   if (signal.type === "failed") {
     phase.status = "failed";

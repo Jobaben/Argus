@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 // The reference hook lives at <repo>/hooks/argus-signal.mjs; import its pure
 // type-resolution helper. The module guards its side effects behind an
 // is-main check, so importing it here is safe.
-import { resolveType, hasPendingBackgroundWork } from "../../hooks/argus-signal.mjs";
+import { resolveType, hasPendingBackgroundWork, buildReason } from "../../hooks/argus-signal.mjs";
 
 test("explicit CLI arg always wins over the message", () => {
   assert.equal(
@@ -80,4 +80,32 @@ test("hasPendingBackgroundWork detects only non-terminal task statuses", () => {
   assert.equal(hasPendingBackgroundWork({}), false);
   assert.equal(hasPendingBackgroundWork("raw"), false);
   assert.equal(hasPendingBackgroundWork(null), false);
+});
+
+test("buildReason: uses the text after the ARGUS_OUTCOME sentinel", () => {
+  assert.equal(
+    buildReason({
+      last_assistant_message: "work done\nARGUS_OUTCOME: failed — Jira never flipped",
+    }),
+    "failed: Jira never flipped",
+  );
+  assert.equal(buildReason({ last_assistant_message: "ARGUS_OUTCOME: blocked" }), "blocked");
+});
+
+test("buildReason: summarizes pending background work when no sentinel", () => {
+  assert.equal(
+    buildReason({
+      last_assistant_message: "I'll wait for the agents to finish before finalizing.",
+      background_tasks: [{ id: "a1", type: "subagent", status: "running" }],
+    }),
+    "stopped with 1 background task(s) still in flight (subagent: running)",
+  );
+});
+
+test("buildReason: falls back to the last message tail, then a generic reason", () => {
+  assert.equal(
+    buildReason({ last_assistant_message: "first line\nStuck on the migration." }),
+    "Stuck on the migration.",
+  );
+  assert.equal(buildReason({}), "run stopped without reporting an outcome");
 });

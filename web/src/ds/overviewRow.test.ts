@@ -183,7 +183,7 @@ describe("toOverviewRow", () => {
       definition: def(),
       latest: failedInst({ reason: "exit code 1" }, ["failed"]),
     });
-    expect(row.failure).toEqual({ step: "step-0", reason: "exit code 1" });
+    expect(row.failure).toEqual({ step: "step-0", reason: "exit code 1", kind: null });
   });
 
   it("accepts a bare string payload as the reason", () => {
@@ -191,7 +191,7 @@ describe("toOverviewRow", () => {
       definition: def(),
       latest: failedInst("tests failed: 3 red", ["failed"]),
     });
-    expect(row.failure).toEqual({ step: "step-0", reason: "tests failed: 3 red" });
+    expect(row.failure).toEqual({ step: "step-0", reason: "tests failed: 3 red", kind: null });
   });
 
   it("joins multiple failed step names and tolerates a garbage payload", () => {
@@ -199,12 +199,28 @@ describe("toOverviewRow", () => {
       definition: def(),
       latest: failedInst({ nope: 1 }, ["failed", "failed"]),
     });
-    expect(row.failure).toEqual({ step: "step-0, step-1", reason: null });
+    expect(row.failure).toEqual({ step: "step-0, step-1", reason: null, kind: null });
   });
 
   it("falls back to the phase name when no step is marked failed", () => {
     const row = toOverviewRow({ definition: def(), latest: failedInst(null, ["succeeded"]) });
-    expect(row.failure).toEqual({ step: "Implement", reason: null });
+    expect(row.failure).toEqual({ step: "Implement", reason: null, kind: null });
+  });
+
+  it("surfaces the restarted kind on the failure", () => {
+    const inst = failedInst(
+      { reason: "Argus restarted mid-run — revise to retry", kind: "restarted" },
+      ["failed"],
+    );
+    const row = toOverviewRow({ definition: def(), latest: inst });
+    expect(row.failure?.kind).toBe("restarted");
+    expect(row.failure?.reason).toMatch(/revise to retry/);
+  });
+
+  it("leaves kind null for an ordinary failure", () => {
+    const inst = failedInst({ reason: "blocked: no Jira" }, ["failed"]);
+    const row = toOverviewRow({ definition: def(), latest: inst });
+    expect(row.failure?.kind).toBeNull();
   });
 
   it("has no failure on a non-failed instance", () => {

@@ -7,7 +7,7 @@ import {
   EmptyState,
   StatusPill,
   parseRunLog,
-  runStatusToDsStatus,
+  runDsStatus,
   Page,
   TriggerFields,
 } from "../ds";
@@ -150,7 +150,7 @@ function RunRow({ run, onCancel }: { run: Run; onCancel?: (runId: string) => Pro
           aria-expanded={open}
           className="flex flex-1 items-center gap-3 text-left"
         >
-          <StatusPill status={runStatusToDsStatus(run.status)} />
+          <StatusPill status={runDsStatus(run)} />
           <span className="text-xs text-ink-dim">{when(run.startedAt ?? run.queuedAt)}</span>
           {run.durationMs != null && (
             <span className="text-xs text-ink-faint">{Math.round(run.durationMs / 1000)}s</span>

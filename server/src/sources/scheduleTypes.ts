@@ -30,12 +30,7 @@ export interface Schedule {
 }
 
 export type RunStatus =
-  | "running"
-  | "succeeded"
-  | "failed"
-  | "skipped"
-  | "interrupted"
-  | "cancelled";
+  "running" | "succeeded" | "failed" | "skipped" | "interrupted" | "cancelled";
 
 export interface Run {
   id: string;
@@ -62,4 +57,7 @@ export interface Run {
   costUsd?: number | null;
   /** Total tokens (input+output) reported by the CLI result envelope, if present. */
   tokens?: number | null;
+  /** Work-level conclusion from the pipeline signal, distinct from the
+   *  exit-code-derived `status`. Null/absent for non-pipeline or unsignalled runs. */
+  outcome?: "succeeded" | "failed" | "blocked" | null;
 }
