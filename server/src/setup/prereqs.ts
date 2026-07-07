@@ -122,15 +122,41 @@ function commands(groups: HookGroup[]): { matcher: string; command: string }[] {
   );
 }
 
-function onPath(cmd: string): boolean {
+/**
+ * Probes a CLI by running it (default `--version`). On failure the reason
+ * distinguishes not-found, launch errors (EAGAIN, sandbox blocks), timeouts
+ * and nonzero exits — collapsing these into "not on PATH" hides the real
+ * problem when the process itself can't spawn children.
+ */
+export function probeCommand(
+  cmd: string,
+  args: string[] = ["--version"],
+  timeoutMs = 3000,
+): { ok: boolean; reason?: string } {
   try {
-    const res = spawnSync(cmd, ["--version"], {
-      timeout: 3000,
+    const res = spawnSync(cmd, args, {
+      timeout: timeoutMs,
       shell: process.platform === "win32",
     });
-    return !res.error && res.status === 0;
-  } catch {
-    return false;
+    if (res.error) {
+      const code = (res.error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") return { ok: false, reason: "was not found on PATH" };
+      if (code === "ETIMEDOUT") return { ok: false, reason: `timed out after ${timeoutMs}ms` };
+      return { ok: false, reason: `could not be launched (${code ?? res.error.message})` };
+    }
+    if (res.signal) {
+      return { ok: false, reason: `timed out after ${timeoutMs}ms (killed with ${res.signal})` };
+    }
+    if (res.status !== 0) {
+      const stderr = String(res.stderr ?? "").trim().split("\n")[0]?.slice(0, 120);
+      return {
+        ok: false,
+        reason: `exited with code ${res.status}${stderr ? `: ${stderr}` : ""}`,
+      };
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) };
   }
 }
 
@@ -243,13 +269,13 @@ const REGISTRY: Prerequisite[] = [
     label: "Claude CLI on PATH",
     fixable: false,
     async check() {
-      const ok = onPath("claude");
+      const probe = probeCommand("claude");
       return {
         id: "claude-cli",
         label: "Claude CLI on PATH",
         fixable: false,
-        status: ok ? "ok" : "error",
-        detail: ok ? undefined : "`claude` was not found on PATH. Install the Claude CLI.",
+        status: probe.ok ? "ok" : "error",
+        detail: probe.ok ? undefined : `\`claude\` ${probe.reason}. Install the Claude CLI.`,
       };
     },
   },
@@ -258,13 +284,13 @@ const REGISTRY: Prerequisite[] = [
     label: "Node on PATH",
     fixable: false,
     async check() {
-      const ok = onPath("node");
+      const probe = probeCommand("node");
       return {
         id: "node-runtime",
         label: "Node on PATH",
         fixable: false,
-        status: ok ? "ok" : "error",
-        detail: ok ? undefined : "`node` was not found on PATH; hooks run via node.",
+        status: probe.ok ? "ok" : "error",
+        detail: probe.ok ? undefined : `\`node\` ${probe.reason}; hooks run via node.`,
       };
     },
   },

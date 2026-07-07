@@ -209,6 +209,38 @@ test("preflight repairs fixable criticals and returns ok when PATH tools resolve
   assert.ok(Array.isArray(res.reasons));
 });
 
+test("probeCommand succeeds for a command on PATH", async () => {
+  const m = await fresh();
+  const res = m.probeCommand("node");
+  assert.equal(res.ok, true);
+  assert.equal(res.reason, undefined);
+});
+
+test("probeCommand reports why a nonexistent command failed", async () => {
+  const m = await fresh();
+  const res = m.probeCommand("argus-test-no-such-command-xyz");
+  assert.equal(res.ok, false);
+  assert.ok(res.reason && res.reason.length > 0, "reason present");
+  assert.ok(
+    /not found|not recognized|could not be launched|ENOENT/i.test(res.reason),
+    `reason explains lookup failure: ${res.reason}`,
+  );
+});
+
+test("probeCommand reports the exit code of a failing command", async () => {
+  const m = await fresh();
+  const res = m.probeCommand("node", ["-e", "process.exit(7)"]);
+  assert.equal(res.ok, false);
+  assert.ok(res.reason?.includes("7"), `reason names exit code: ${res.reason}`);
+});
+
+test("probeCommand reports a timeout instead of claiming not-found", async () => {
+  const m = await fresh();
+  const res = m.probeCommand("node", ["-e", "setTimeout(function(){},10000)"], 500);
+  assert.equal(res.ok, false);
+  assert.ok(/timed out/i.test(res.reason ?? ""), `reason mentions timeout: ${res.reason}`);
+});
+
 test("repairSafeFixables installs the hook file and dirs but never writes settings.json", async () => {
   const m = await fresh();
   await m.repairSafeFixables();
