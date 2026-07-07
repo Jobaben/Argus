@@ -397,12 +397,13 @@ test("buildClaudeArgs appends the contract to the system prompt", () => {
   assert.equal(args[i + 1], OUTCOME_CONTRACT);
 });
 
-test("buildClaudeArgs keeps -p, json output, and the session id", () => {
+test("buildClaudeArgs keeps -p, stream-json output with --verbose, and the session id", () => {
   const run = { sessionId: "sess-abc" } as Parameters<typeof buildClaudeArgs>[0];
   const args = buildClaudeArgs(run);
   assert.ok(args.includes("-p"));
   const oi = args.indexOf("--output-format");
-  assert.equal(args[oi + 1], "json");
+  assert.equal(args[oi + 1], "stream-json");
+  assert.ok(args.includes("--verbose"), "stream-json in -p mode requires --verbose");
   const si = args.indexOf("--session-id");
   assert.equal(args[si + 1], "sess-abc");
 });
@@ -709,4 +710,25 @@ test("reconcile finalizes an adopted run with no parseable envelope as failed", 
   const after = await runsSrc.readRun(runId);
   assert.equal(after!.run.status, "failed");
   assert.equal(after!.run.error, "ended while detached; no parseable result");
+});
+
+test("engine tracks a step run at spawn and untracks it on completion", async () => {
+  const { engine, pipelines } = await load();
+  await seedPipeline(pipelines);
+  const rec = recordingSpawn();
+  const tracked: { runId: string; instanceId: string }[] = [];
+  const untracked: string[] = [];
+  const tailer = {
+    track: (runId: string, instanceId: string) => tracked.push({ runId, instanceId }),
+    untrack: (runId: string) => untracked.push(runId),
+  };
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn, tailer }));
+  const inst = await e.start("p1", "manual");
+  assert.equal(tracked.length, 1);
+  assert.equal(tracked[0].runId, rec.calls[0].runId);
+  assert.equal(tracked[0].instanceId, inst!.id);
+  assert.equal(untracked.length, 0);
+  rec.dones[0].resolve({ code: 0 });
+  await waitFor(() => untracked.length === 1);
+  assert.equal(untracked[0], rec.calls[0].runId);
 });
