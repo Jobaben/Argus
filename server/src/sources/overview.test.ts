@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildOverview } from "./overview.js";
 import type { PipelineDefinition, PipelineInstance, InstanceStatus } from "./pipelineTypes.js";
+import type { Run } from "./scheduleTypes.js";
 
 function def(id: string, name = id): PipelineDefinition {
   return {
@@ -96,6 +97,65 @@ test("ranks a failed instance after awaiting but before running and succeeded", 
     out.map((e) => e.definition.id),
     ["await", "fail", "run", "done"],
   );
+});
+
+function run(id: string, instanceId: string, costUsd: number | null, tokens: number | null): Run {
+  return {
+    id,
+    scheduleId: "pipeline:a",
+    scheduleName: "a · P1",
+    prompt: "x",
+    cwd: "/",
+    status: "succeeded",
+    trigger: "scheduled",
+    queuedAt: "2026-06-30T10:00:00.000Z",
+    startedAt: "2026-06-30T10:00:00.000Z",
+    endedAt: "2026-06-30T10:01:00.000Z",
+    durationMs: 60000,
+    pid: null,
+    exitCode: 0,
+    sessionId: null,
+    project: null,
+    resultSummary: null,
+    error: null,
+    instanceId,
+    phaseId: "p1",
+    costUsd,
+    tokens,
+  };
+}
+
+test("joins run cost/tokens onto steps and totals the instance spend", () => {
+  const i = inst("i1", "a", "running", "2026-06-30T10:00:00.000Z");
+  i.phases[0].steps = [
+    { name: "s1", runId: "r1", status: "succeeded" },
+    { name: "s2", runId: "r2", status: "running" },
+  ];
+  const runs = [run("r1", "i1", 0.25, 1000), run("r2", "i1", null, null)];
+  const out = buildOverview([def("a")], [i], runs);
+  const steps = out[0].latest!.phases[0].steps;
+  assert.equal(steps[0].costUsd, 0.25);
+  assert.equal(steps[0].tokens, 1000);
+  assert.equal(steps[1].costUsd, null);
+  assert.equal(steps[1].tokens, null);
+  assert.deepEqual(out[0].cost, { usd: 0.25, tokens: 1000 });
+});
+
+test("instance total includes runs from superseded revise attempts", () => {
+  const i = inst("i1", "a", "running", "2026-06-30T10:00:00.000Z");
+  i.phases[0].steps = [{ name: "s1", runId: "r2", status: "running" }];
+  // r1 was the pre-revise attempt: no longer referenced by any step, still spent.
+  const runs = [run("r1", "i1", 0.25, 400), run("r2", "i1", 0.5, 600), run("rx", "other", 9, 9)];
+  const out = buildOverview([def("a")], [i], runs);
+  assert.deepEqual(out[0].cost, { usd: 0.75, tokens: 1000 });
+});
+
+test("cost is null-per-metric when no run reported it, and null with no instance", () => {
+  const i = inst("i1", "a", "running", "2026-06-30T10:00:00.000Z");
+  i.phases[0].steps = [{ name: "s1", runId: "r1", status: "running" }];
+  const out = buildOverview([def("a"), def("b")], [i], [run("r1", "i1", null, 500)]);
+  assert.deepEqual(out[0].cost, { usd: null, tokens: 500 });
+  assert.equal(out[1].cost, null);
 });
 
 test("breaks ties by updatedAt desc then definition name", () => {

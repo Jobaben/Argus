@@ -275,8 +275,8 @@ export function createApp(deps: AppDeps): Hono {
   );
 
   app.get("/api/overview", async (c) => {
-    const [defs, insts] = await Promise.all([readPipelines(), readInstances()]);
-    return c.json({ overview: buildOverview(defs, insts) });
+    const [defs, insts, runs] = await Promise.all([readPipelines(), readInstances(), readRuns()]);
+    return c.json({ overview: buildOverview(defs, insts, runs) });
   });
 
   app.get("/api/instances/:id", async (c) => {

@@ -139,3 +139,49 @@ test("tick calls the onTick hook", async () => {
   );
   assert.equal(called, 1);
 });
+
+test("backfillRunCosts patches legacy terminal runs from their log envelope, once", async () => {
+  const { scheduler, runs } = await load();
+  const { mkdirSync, writeFileSync } = await import("node:fs");
+  mkdirSync(path.join(home, "argus", "runs"), { recursive: true });
+  const base = {
+    scheduleId: "pipeline:p1",
+    scheduleName: "n",
+    prompt: "p",
+    cwd: home,
+    trigger: "scheduled" as const,
+    queuedAt: "2026-06-30T10:00:00.000Z",
+    startedAt: "2026-06-30T10:00:00.000Z",
+    endedAt: "2026-06-30T10:01:00.000Z",
+    durationMs: 60000,
+    pid: null,
+    exitCode: 0,
+    sessionId: null,
+    project: null,
+    resultSummary: null,
+    error: null,
+  };
+  // Legacy run (no costUsd/tokens keys) with an envelope in its log.
+  await runs.writeRun({ ...base, id: "legacy", status: "succeeded" });
+  writeFileSync(
+    runs.runLogPath("legacy"),
+    '{"type":"result","is_error":false,"result":"ok","total_cost_usd":0.11,"usage":{"input_tokens":10,"output_tokens":5}}\n',
+    "utf8",
+  );
+  // Legacy run with no envelope: must be marked checked (explicit nulls).
+  await runs.writeRun({ ...base, id: "bare", status: "failed" });
+  // Still-running and already-captured runs must be untouched.
+  await runs.writeRun({ ...base, id: "live", status: "running" });
+  await runs.writeRun({ ...base, id: "done", status: "succeeded", costUsd: 1, tokens: 2 });
+
+  const patched = await scheduler.backfillRunCosts();
+  assert.equal(patched, 2);
+  assert.equal((await runs.readRun("legacy"))!.run.costUsd, 0.11);
+  assert.equal((await runs.readRun("legacy"))!.run.tokens, 15);
+  assert.equal((await runs.readRun("legacy"))!.run.resultSummary, "ok");
+  assert.equal((await runs.readRun("bare"))!.run.costUsd, null);
+  assert.equal((await runs.readRun("live"))!.run.costUsd, undefined);
+  assert.equal((await runs.readRun("done"))!.run.costUsd, 1);
+  // Second pass: everything is checked; nothing to patch.
+  assert.equal(await scheduler.backfillRunCosts(), 0);
+});

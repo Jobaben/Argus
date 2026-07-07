@@ -102,6 +102,10 @@ export interface StepProgress {
   name: string;
   runId: string | null;
   status: StepStatus;
+  /** USD cost of the step's run, joined server-side from the run record. */
+  costUsd?: number | null;
+  /** Total tokens of the step's run, joined server-side from the run record. */
+  tokens?: number | null;
 }
 
 export interface PhaseProgress {
@@ -164,7 +168,16 @@ export interface PipelineInstance {
   endedAt: string | null;
 }
 
+/** Aggregated spend for one instance. Null field = no run reported that metric. */
+export interface OverviewCost {
+  usd: number | null;
+  tokens: number | null;
+}
+
 export interface OverviewEntry {
   definition: PipelineDefinition;
   latest: PipelineInstance | null;
+  /** Total spend of the latest instance across all its runs (including
+   *  superseded revise attempts). Null/absent when there is no instance. */
+  cost?: OverviewCost | null;
 }

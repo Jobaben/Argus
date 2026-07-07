@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useOverview } from "../useOverview";
 import {
   toOverviewRow,
+  formatCost,
   STATUS,
   RAIL,
   TILE_SKIN,
@@ -11,7 +12,39 @@ import {
   EmptyState,
   Page,
 } from "../ds";
-import type { OverviewRow, OverviewGate, PhasePill, StepPill } from "../ds";
+import type { OverviewRow, OverviewGate, PhasePill, StepPill, DsStatus } from "../ds";
+
+/**
+ * The board re-renders in place as pipelines change state, which is invisible
+ * to screen readers. Track badge transitions and speak the attention-relevant
+ * ones (needs approval / failed / completed / resumed) through one polite live
+ * region, so assistive tech perceives the live monitoring the board exists for.
+ */
+function useBoardAnnouncer(rows: OverviewRow[]): string {
+  // "Storing information from previous renders": compare against the badges
+  // seen last render and update state during render (not in an effect), so
+  // React re-renders immediately without a cascading effect pass.
+  const [seen, setSeen] = useState<{ badges: Map<string, DsStatus>; message: string }>(() => ({
+    badges: new Map(),
+    message: "",
+  }));
+  const badges = new Map(rows.map((r) => [r.pipelineId, r.badge]));
+  const differs =
+    badges.size !== seen.badges.size || rows.some((r) => seen.badges.get(r.pipelineId) !== r.badge);
+  if (differs) {
+    const msgs: string[] = [];
+    for (const r of rows) {
+      const before = seen.badges.get(r.pipelineId);
+      if (before === undefined || before === r.badge) continue;
+      if (r.badge === "await") msgs.push(`${r.name} needs approval`);
+      else if (r.badge === "failed") msgs.push(`${r.name} failed`);
+      else if (r.badge === "done") msgs.push(`${r.name} completed`);
+      else if (before === "await" && r.badge === "working") msgs.push(`${r.name} resumed`);
+    }
+    setSeen({ badges, message: msgs.length > 0 ? msgs.join(". ") : seen.message });
+  }
+  return seen.message;
+}
 
 function Gate({
   instanceId,
@@ -30,17 +63,21 @@ function Gate({
   const [noteOpen, setNoteOpen] = useState(false);
   const [note, setNote] = useState("");
   const [err, setErr] = useState<string | null>(null);
+  const [sent, setSent] = useState<string | null>(null);
 
   // On success we leave busy=true: the row is expected to refresh away on the
   // next "pipelines:changed" ping (or the 10s poll), which also clears any
-  // double-click window. On failure we surface the reason and re-enable.
-  const run = (action: () => Promise<unknown>) => {
+  // double-click window. A polite status line announces the accepted action
+  // until then. On failure we surface the reason and re-enable.
+  const run = (action: () => Promise<unknown>, sentLabel: string) => {
     setBusy(true);
     setErr(null);
-    void action().catch((e: unknown) => {
-      setErr(e instanceof Error ? e.message : String(e));
-      setBusy(false);
-    });
+    void action()
+      .then(() => setSent(sentLabel))
+      .catch((e: unknown) => {
+        setErr(e instanceof Error ? e.message : String(e));
+        setBusy(false);
+      });
   };
 
   return (
@@ -49,7 +86,7 @@ function Gate({
         {canApprove && (
           <button
             type="button"
-            onClick={() => run(() => approve(instanceId))}
+            onClick={() => run(() => approve(instanceId), "Approved — pipeline resuming")}
             disabled={busy}
             className="rounded-md border border-ok bg-ok/10 px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-ok disabled:opacity-40"
           >
@@ -77,7 +114,12 @@ function Gate({
           />
           <button
             type="button"
-            onClick={() => run(() => revise(instanceId, note.trim() || undefined))}
+            onClick={() =>
+              run(
+                () => revise(instanceId, note.trim() || undefined),
+                "Revision sent — phase restarting",
+              )
+            }
             disabled={busy}
             className="rounded-md border border-await bg-await/10 px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-await disabled:opacity-40"
           >
@@ -85,13 +127,23 @@ function Gate({
           </button>
         </div>
       )}
-      {err && <p className="font-mono text-[10px] text-fail">{err}</p>}
+      {sent && !err && (
+        <p role="status" className="font-mono text-[10px] text-ok">
+          {sent}
+        </p>
+      )}
+      {err && (
+        <p role="alert" className="font-mono text-[10px] text-fail">
+          {err}
+        </p>
+      )}
     </div>
   );
 }
 
 function StepTile({ step, reason }: { step: StepPill; reason: string | null }) {
   const token = STATUS[step.status].token;
+  const cost = formatCost(step.tokens, step.costUsd);
   return (
     <article
       className={`relative flex flex-col gap-1.5 overflow-hidden rounded-[11px] border bg-gradient-to-b to-surface py-2 pl-3.5 pr-2.5 ${TILE_SKIN[token]}`}
@@ -103,6 +155,14 @@ function StepTile({ step, reason }: { step: StepPill; reason: string | null }) {
           <div className="mt-0.5 font-mono text-[9.5px] text-ink-faint">
             {step.runId ? `job ${step.runId}` : "job ——"}
           </div>
+          {cost && (
+            <div
+              className="mt-0.5 font-mono text-[9.5px] text-ink-dim"
+              title="Tokens and dollar cost reported by this step's run"
+            >
+              {cost}
+            </div>
+          )}
         </div>
         <StatusPill status={step.status} size="sm" />
       </div>
@@ -181,6 +241,7 @@ function Row({
   revise: (id: string, note?: string) => Promise<unknown>;
 }) {
   const reviseLabel = row.failure?.kind === "restarted" ? "Retry" : "Revise";
+  const cost = row.cost ? formatCost(row.cost.tokens, row.cost.usd) : null;
   return (
     <article className="rounded-tile border border-line bg-gradient-to-b from-surface-2 to-surface px-4 py-3.5">
       <div className="flex items-center gap-3">
@@ -191,6 +252,16 @@ function Row({
           {row.phases.length} phases
         </span>
         <StatusPill status={row.badge} />
+        {cost && (
+          <span
+            className="rounded-full border border-line px-2 py-0.5 font-mono text-[10px] text-ink-dim"
+            title="Total tokens and dollar cost of the latest run, including revised attempts"
+          >
+            <span className="sr-only">Latest run total: </span>
+            <span aria-hidden="true">Σ </span>
+            {cost}
+          </span>
+        )}
         <span className="ml-auto font-mono text-[10px]">
           <TimeAgo iso={row.updatedAt} />
         </span>
@@ -218,9 +289,39 @@ function Row({
 export default function CommandCenter() {
   const { overview, loading, error, approve, revise } = useOverview();
   const rows = useMemo(() => overview.map(toOverviewRow), [overview]);
+  const announcement = useBoardAnnouncer(rows);
+  // Grand total across everything on the board: sum whichever metrics were
+  // reported; a metric stays null (hidden) until at least one run reports it.
+  const total = useMemo(() => {
+    let usd: number | null = null;
+    let tokens: number | null = null;
+    for (const r of rows) {
+      if (r.cost?.usd != null) usd = (usd ?? 0) + r.cost.usd;
+      if (r.cost?.tokens != null) tokens = (tokens ?? 0) + r.cost.tokens;
+    }
+    return formatCost(tokens, usd);
+  }, [rows]);
 
   return (
-    <Page title="Command Center">
+    <Page
+      title="Command Center"
+      actions={
+        total == null ? undefined : (
+          <div
+            className="flex items-baseline gap-2 rounded-full border border-line bg-surface px-3 py-1"
+            title="Combined tokens and dollar cost of every pipeline's latest run"
+          >
+            <span className="font-mono text-[9px] font-bold uppercase tracking-[0.14em] text-ink-faint">
+              Total spend
+            </span>
+            <span className="font-mono text-[11px] font-bold text-ink">{total}</span>
+          </div>
+        )
+      }
+    >
+      <div aria-live="polite" role="status" className="sr-only">
+        {announcement}
+      </div>
       {error && (
         <div className="mb-6 rounded-tile border border-fail/30 bg-fail/10 px-4 py-3 text-sm text-fail">
           Couldn't reach the Argus server: {error}
@@ -229,7 +330,13 @@ export default function CommandCenter() {
       {loading ? (
         <p className="text-ink-faint">Loading pipelines…</p>
       ) : rows.length === 0 ? (
-        <EmptyState>No pipelines defined yet.</EmptyState>
+        <EmptyState>
+          No pipelines defined yet. Create one in the{" "}
+          <a href="#/pipelines" className="text-ink underline decoration-line underline-offset-2">
+            Pipelines
+          </a>{" "}
+          tab.
+        </EmptyState>
       ) : (
         <div className="flex flex-col gap-3">
           {rows.map((row) => (

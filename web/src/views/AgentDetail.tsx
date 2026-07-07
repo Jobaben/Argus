@@ -135,6 +135,7 @@ function TimelineItem({ entry, last }: { entry: TimelineEntry; last: boolean }) 
             <button
               type="button"
               onClick={() => setOpen((v) => !v)}
+              aria-expanded={open}
               className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-queue ring-1 ring-queue/30 transition hover:bg-queue/10"
             >
               <span aria-hidden>{open ? "▾" : "▸"}</span>

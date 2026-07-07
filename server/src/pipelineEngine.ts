@@ -279,13 +279,22 @@ export function createEngine(deps: EngineDeps): Engine {
     void handle.done
       .then(async (res) => {
         release();
+        // The CLI's JSON result envelope is the last line of the log; harvest
+        // cost/tokens/result from it so every completed step reports its spend
+        // (not only runs finalized by the adopted-run reconcile path).
+        const got = await readRun(run.id);
+        const envelope = got ? parseRunEnvelope(got.log) : null;
         await patchRun(run.id, {
           status: res.code === 0 ? "succeeded" : "failed",
           endedAt: nowISO(),
           durationMs: deps.now().getTime() - new Date(startedAt).getTime(),
           exitCode: res.code,
+          resultSummary: envelope?.result ?? got?.run.resultSummary ?? null,
+          costUsd: envelope?.costUsd ?? got?.run.costUsd ?? null,
+          tokens: envelope?.tokens ?? got?.run.tokens ?? null,
           error: res.code === 0 ? null : `exit code ${res.code}`,
         });
+        deps.onChange?.();
       })
       .catch((e) => {
         release();

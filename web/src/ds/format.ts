@@ -19,6 +19,29 @@ export function formatMs(ms: number): string {
   return `${m}m ${s}s`;
 }
 
+/** Dollar cost with enough precision for sub-cent agent runs. */
+export function formatUsd(v: number): string {
+  return v >= 0.01 ? `$${v.toFixed(2)}` : `$${v.toFixed(4)}`;
+}
+
+/** Compact token count: 1234 → "1.2k", 2500000 → "2.5M". */
+export function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
+
+/** "12.3k tok · $0.42" from whichever of the two metrics is known; null when neither is. */
+export function formatCost(
+  tokens: number | null | undefined,
+  usd: number | null | undefined,
+): string | null {
+  const parts: string[] = [];
+  if (tokens != null) parts.push(`${formatTokens(tokens)} tok`);
+  if (usd != null) parts.push(formatUsd(usd));
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
 export interface RunLogField {
   label: string;
   value: string;

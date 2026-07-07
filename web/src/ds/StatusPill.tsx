@@ -11,7 +11,7 @@ const PILL: Record<ColorToken, string> = {
 
 const SIZE = {
   md: "gap-1.5 px-3 py-1 text-[11px] tracking-[0.13em]",
-  sm: "gap-1 px-1.5 py-0.5 text-[8px] tracking-[0.1em]",
+  sm: "gap-1 px-1.5 py-0.5 text-[9px] tracking-[0.1em]",
 } as const;
 
 const DOT = {

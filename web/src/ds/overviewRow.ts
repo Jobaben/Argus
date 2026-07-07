@@ -5,6 +5,7 @@ import type {
   StepStatus,
   PhaseProgress,
   PhaseDef,
+  OverviewCost,
   OverviewEntry,
   PipelineInstance,
 } from "../types";
@@ -13,6 +14,10 @@ export interface StepPill {
   name: string;
   runId: string | null;
   status: DsStatus;
+  /** USD cost of the step's run, when reported. */
+  costUsd: number | null;
+  /** Total tokens of the step's run, when reported. */
+  tokens: number | null;
 }
 
 export interface PhasePill {
@@ -44,6 +49,8 @@ export interface OverviewRow {
   instanceId: string | null;
   gate: OverviewGate | null;
   failure: { step: string | null; reason: string | null; kind: string | null } | null;
+  /** Total spend of the latest run (all attempts); null when unknown. */
+  cost: OverviewCost | null;
 }
 
 const PHASE_STATUS_TO_DS: Record<PhaseStatus, DsStatus> = {
@@ -76,12 +83,16 @@ function stepPills(phase: PhaseProgress, def: PhaseDef | undefined): StepPill[] 
       name: s.name,
       runId: s.runId,
       status: STEP_STATUS_TO_DS[s.status],
+      costUsd: s.costUsd ?? null,
+      tokens: s.tokens ?? null,
     }));
   }
   return (def?.steps ?? []).map((s) => ({
     name: s.name,
     runId: null,
     status: FALLBACK_STEP_STATUS[phase.status],
+    costUsd: null,
+    tokens: null,
   }));
 }
 
@@ -151,12 +162,19 @@ export function toOverviewRow(entry: OverviewEntry): OverviewRow {
         name: p.name,
         status: "idle",
         activeStep: null,
-        steps: p.steps.map((s) => ({ name: s.name, runId: null, status: "idle" as const })),
+        steps: p.steps.map((s) => ({
+          name: s.name,
+          runId: null,
+          status: "idle" as const,
+          costUsd: null,
+          tokens: null,
+        })),
         reason: null,
       })),
       instanceId: null,
       gate: null,
       failure: null,
+      cost: null,
     };
   }
 
@@ -181,5 +199,6 @@ export function toOverviewRow(entry: OverviewEntry): OverviewRow {
     instanceId: latest.id,
     gate: gateFor(latest),
     failure: failureFor(latest),
+    cost: entry.cost ?? null,
   };
 }

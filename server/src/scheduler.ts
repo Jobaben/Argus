@@ -6,6 +6,7 @@ import { markScheduleRan, readSchedules } from "./sources/schedules.js";
 import {
   RUN_KEEP,
   encodeProject,
+  patchRun,
   pruneRuns,
   readRun,
   readRuns,
@@ -106,6 +107,31 @@ export function parseRunEnvelope(stdout: string): {
     }
     return empty;
   }
+}
+
+/**
+ * One-time boot backfill: terminal runs recorded before cost capture existed
+ * have no `costUsd`/`tokens` keys at all. Harvest them from each run's log
+ * envelope and patch the record. Writing explicit nulls when the log has no
+ * envelope marks the run as checked, so later boots skip it (the `undefined`
+ * vs `null` distinction). Returns how many runs were patched.
+ */
+export async function backfillRunCosts(): Promise<number> {
+  let patched = 0;
+  for (const r of await readRuns()) {
+    if (r.status === "running") continue;
+    if (r.costUsd !== undefined || r.tokens !== undefined) continue;
+    const got = await readRun(r.id);
+    if (!got) continue;
+    const env = parseRunEnvelope(got.log);
+    await patchRun(r.id, {
+      costUsd: env.costUsd,
+      tokens: env.tokens,
+      resultSummary: got.run.resultSummary ?? env.result,
+    });
+    patched++;
+  }
+  return patched;
 }
 
 /** Byte spans [start,end] of every balanced top-level `{...}` in `text`,

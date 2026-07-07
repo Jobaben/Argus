@@ -80,6 +80,7 @@ function ModelSelect({
       {custom && (
         <input
           className={`${FIELD} w-40`}
+          aria-label={`Custom model id (${ariaLabel ?? label})`}
           placeholder="model id"
           value={isCustom ? value : ""}
           onChange={(e) => {
@@ -316,10 +317,21 @@ export function PipelineForm({
           type="button"
           disabled={busy || !canSave}
           onClick={submit}
+          title={
+            canSave
+              ? undefined
+              : "Requires a pipeline name and, per phase: a name, a working directory, and at least one step with a name and prompt"
+          }
           className="rounded-lg bg-ok/20 px-3 py-1.5 text-sm text-ok ring-1 ring-ok/30 transition hover:bg-ok/30 disabled:opacity-50"
         >
           {busy ? "Saving…" : "Save pipeline"}
         </button>
+        {!canSave && !busy && (
+          <span className="text-xs text-ink-faint">
+            Name the pipeline and complete every phase (name, working directory, one step with name
+            + prompt) to save.
+          </span>
+        )}
         <button
           type="button"
           onClick={onCancel}

@@ -123,7 +123,9 @@ describe("toOverviewRow", () => {
       definition: def(),
       latest: inst("running", ["succeeded", "running"]),
     });
-    expect(row.phases[1].steps).toEqual([{ name: "red-green", runId: "r1", status: "working" }]);
+    expect(row.phases[1].steps).toEqual([
+      { name: "red-green", runId: "r1", status: "working", costUsd: null, tokens: null },
+    ]);
   });
 
   it("tiles phases without step progress from the definition", () => {
@@ -132,7 +134,25 @@ describe("toOverviewRow", () => {
       latest: inst("running", ["succeeded", "running"]),
     });
     // phase 0 reported no steps; fall back to the definition's step, done since the phase succeeded
-    expect(row.phases[0].steps).toEqual([{ name: "s", runId: null, status: "done" }]);
+    expect(row.phases[0].steps).toEqual([
+      { name: "s", runId: null, status: "done", costUsd: null, tokens: null },
+    ]);
+  });
+
+  it("carries step cost/tokens and the entry's instance total onto the row", () => {
+    const latest = inst("running", ["succeeded", "running"]);
+    latest.phases[1].steps = [
+      { name: "red-green", runId: "r1", status: "running", costUsd: 0.42, tokens: 1500 },
+    ];
+    const row = toOverviewRow({ definition: def(), latest, cost: { usd: 0.42, tokens: 1500 } });
+    expect(row.phases[1].steps[0].costUsd).toBe(0.42);
+    expect(row.phases[1].steps[0].tokens).toBe(1500);
+    expect(row.cost).toEqual({ usd: 0.42, tokens: 1500 });
+  });
+
+  it("leaves cost null when the entry has none", () => {
+    const row = toOverviewRow({ definition: def(), latest: null });
+    expect(row.cost).toBeNull();
   });
 
   it("exposes the failure reason on the failed phase pill", () => {

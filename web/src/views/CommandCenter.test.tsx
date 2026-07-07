@@ -194,6 +194,57 @@ describe("CommandCenter", () => {
     expect(btn).not.toBeDisabled();
   });
 
+  it("shows step cost, per-pipeline total, and the grand total", () => {
+    const a = entry("scheduler-prune", "running", ["running"]);
+    a.latest!.phases[0].steps = [
+      { name: "step-x", runId: "r", status: "running", costUsd: 0.42, tokens: 1500 },
+    ];
+    a.cost = { usd: 0.42, tokens: 1500 };
+    const b = entry("auth-refactor", "succeeded", ["succeeded"]);
+    b.cost = { usd: 1.08, tokens: 3500 };
+    mockOverview.overview = [a, b];
+    render(<CommandCenter />);
+    // step tile + the pipeline chip both carry the run's spend
+    expect(screen.getAllByText("1.5k tok · $0.42")).toHaveLength(2);
+    // per-pipeline total chips (screen-reader label + Σ + amount)
+    const chips = screen.getAllByTitle(/latest run, including revised attempts/i);
+    expect(chips.map((c) => c.textContent)).toEqual([
+      "Latest run total: Σ 1.5k tok · $0.42",
+      "Latest run total: Σ 3.5k tok · $1.08",
+    ]);
+    // grand total in the page header
+    expect(screen.getByText("Total spend")).toBeInTheDocument();
+    expect(screen.getByText("5.0k tok · $1.50")).toBeInTheDocument();
+  });
+
+  it("hides all cost UI when no run reported spend", () => {
+    mockOverview.overview = [entry("scheduler-prune", "running", ["running"])];
+    render(<CommandCenter />);
+    expect(screen.queryByText("Total spend")).toBeNull();
+    expect(screen.queryByText(/Σ /)).toBeNull();
+  });
+
+  it("announces attention transitions through the live region", () => {
+    mockOverview.overview = [entry("auth-refactor", "running", ["running"])];
+    const { rerender } = render(<CommandCenter />);
+    mockOverview.overview = [entry("auth-refactor", "awaiting-approval", ["awaiting-approval"])];
+    rerender(<CommandCenter />);
+    expect(screen.getByText("auth-refactor needs approval")).toBeInTheDocument();
+    mockOverview.overview = [entry("auth-refactor", "failed", ["failed"])];
+    rerender(<CommandCenter />);
+    expect(screen.getByText("auth-refactor failed")).toBeInTheDocument();
+  });
+
+  it("confirms an accepted approve with a status line", async () => {
+    mockOverview.overview = [
+      entry("auth-refactor", "awaiting-approval", ["succeeded", "awaiting-approval"]),
+    ];
+    approve.mockImplementationOnce(() => Promise.resolve(new Response()));
+    render(<CommandCenter />);
+    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    expect(await screen.findByText(/approved — pipeline resuming/i)).toBeInTheDocument();
+  });
+
   it("renders the empty state when there are no pipelines", () => {
     mockOverview.overview = [];
     render(<CommandCenter />);

@@ -80,12 +80,13 @@ function HourBar({ peak, max }: { peak: PeakHour; max: number }) {
   const h = max > 0 ? Math.max(4, Math.round((peak.count / max) * 100)) : 0;
   return (
     <div className="flex flex-1 flex-col items-center gap-1">
-      <div className="flex h-24 w-full items-end">
-        <div
-          className="w-full rounded-t bg-run/60"
-          style={{ height: `${h}%` }}
-          title={`${peak.count} sessions`}
-        />
+      <div
+        role="img"
+        aria-label={`${peak.hour}: ${peak.count} session${peak.count === 1 ? "" : "s"}`}
+        title={`${peak.count} sessions`}
+        className="flex h-24 w-full items-end"
+      >
+        <div className="w-full rounded-t bg-run/60" style={{ height: `${h}%` }} />
       </div>
       <span className="text-[10px] text-ink-faint">{peak.hour}</span>
     </div>

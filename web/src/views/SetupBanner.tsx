@@ -20,6 +20,7 @@ function Item({ p }: { p: PrereqResult }) {
 export default function SetupBanner() {
   const { ok, prereqs, apply } = useSetup();
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
   if (ok) return null;
 
@@ -29,8 +30,13 @@ export default function SetupBanner() {
 
   const onApply = () => {
     setBusy(true);
-    // On success the hook state re-checks and the banner unmounts; on failure we re-enable.
-    void apply().catch(() => setBusy(false));
+    setErr(null);
+    // On success the hook state re-checks and the banner unmounts; on failure
+    // we surface the reason and re-enable.
+    void apply().catch((e: unknown) => {
+      setErr(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    });
   };
 
   return (
@@ -46,10 +52,15 @@ export default function SetupBanner() {
             disabled={busy}
             className="ml-auto rounded-md border border-ok bg-ok/10 px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-ok disabled:opacity-40"
           >
-            Apply fixes
+            {busy ? "Applying…" : "Apply fixes"}
           </button>
         )}
       </div>
+      {err && (
+        <p role="alert" className="mt-2 font-mono text-[11px] text-fail">
+          Apply failed: {err}
+        </p>
+      )}
       <ul className="mt-2 flex flex-col gap-1">
         {prereqs.map((p) => (
           <Item key={p.id} p={p} />

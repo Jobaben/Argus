@@ -1,8 +1,18 @@
 import type { PipelineDefinition, PipelineInstance, InstanceStatus } from "./pipelineTypes.js";
+import type { Run } from "./scheduleTypes.js";
+
+/** Aggregated spend for one instance. Null field = no run reported that metric. */
+export interface OverviewCost {
+  usd: number | null;
+  tokens: number | null;
+}
 
 export interface OverviewEntry {
   definition: PipelineDefinition;
   latest: PipelineInstance | null;
+  /** Total spend of the latest instance across all its runs (including
+   *  superseded revise attempts). Null when there is no instance. */
+  cost: OverviewCost | null;
 }
 
 // Lower rank sorts first: states needing human action come first
@@ -20,23 +30,59 @@ function rank(latest: PipelineInstance | null): number {
   return ATTENTION_RANK[latest.status] ?? 3;
 }
 
+/** Copy the run's cost/token metrics onto each step that has a run record. */
+function enrichSteps(inst: PipelineInstance, byRunId: Map<string, Run>): PipelineInstance {
+  return {
+    ...inst,
+    phases: inst.phases.map((p) => ({
+      ...p,
+      steps: p.steps.map((s) => {
+        const run = s.runId ? byRunId.get(s.runId) : undefined;
+        if (!run) return s;
+        return { ...s, costUsd: run.costUsd ?? null, tokens: run.tokens ?? null };
+      }),
+    })),
+  };
+}
+
+/** Sum reported cost/tokens over every run of the instance — including runs
+ *  from earlier revise attempts no longer referenced by the step list. */
+function instanceCost(instanceId: string, runs: Run[]): OverviewCost {
+  let usd: number | null = null;
+  let tokens: number | null = null;
+  for (const r of runs) {
+    if (r.instanceId !== instanceId) continue;
+    if (typeof r.costUsd === "number") usd = (usd ?? 0) + r.costUsd;
+    if (typeof r.tokens === "number") tokens = (tokens ?? 0) + r.tokens;
+  }
+  return { usd, tokens };
+}
+
 /**
  * Pair each definition with its latest instance and sort attention-first.
  * `instances` is expected newest-first (createdAt desc), as readInstances returns;
  * the first instance seen per pipelineId is therefore its latest.
+ * `runs` (when given) joins per-step cost/tokens onto the latest instance and
+ * totals the instance's spend.
  */
 export function buildOverview(
   definitions: PipelineDefinition[],
   instances: PipelineInstance[],
+  runs: Run[] = [],
 ): OverviewEntry[] {
   const latestByPipeline = new Map<string, PipelineInstance>();
   for (const i of instances) {
     if (!latestByPipeline.has(i.pipelineId)) latestByPipeline.set(i.pipelineId, i);
   }
-  const entries: OverviewEntry[] = definitions.map((definition) => ({
-    definition,
-    latest: latestByPipeline.get(definition.id) ?? null,
-  }));
+  const byRunId = new Map(runs.map((r) => [r.id, r]));
+  const entries: OverviewEntry[] = definitions.map((definition) => {
+    const latest = latestByPipeline.get(definition.id) ?? null;
+    return {
+      definition,
+      latest: latest ? enrichSteps(latest, byRunId) : null,
+      cost: latest ? instanceCost(latest.id, runs) : null,
+    };
+  });
   return entries.sort((a, b) => {
     const r = rank(a.latest) - rank(b.latest);
     if (r !== 0) return r;

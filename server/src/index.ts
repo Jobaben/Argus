@@ -5,7 +5,7 @@ import { claudeHome } from "./claudeHome.js";
 import { watchAgents, watchSchedules, watchExtensions } from "./watch.js";
 import { readRuns, killRunProcess } from "./sources/runs.js";
 import { createEngine, defaultPipelineSpawn } from "./pipelineEngine.js";
-import { startScheduler, isAlive } from "./scheduler.js";
+import { startScheduler, isAlive, backfillRunCosts } from "./scheduler.js";
 import {
   applyAll as applyPrereqs,
   checkAll as checkPrereqs,
@@ -117,6 +117,14 @@ const stopWatching = watchAgents(() => broadcast({ type: "agents:changed" }));
 const stopWatchingSchedules = watchSchedules(() => broadcast({ type: "schedules:changed" }));
 const stopWatchingExtensions = watchExtensions(() => broadcast({ type: "inventory:changed" }));
 void engine.adopt().catch((e) => console.error("[argus] run adoption failed:", e));
+void backfillRunCosts()
+  .then((n) => {
+    if (n > 0) {
+      console.log(`[argus] backfilled cost/tokens for ${n} pre-existing run(s)`);
+      broadcast({ type: "pipelines:changed" });
+    }
+  })
+  .catch((e) => console.error("[argus] run cost backfill failed:", e));
 const scheduler = startScheduler({
   onChange: () => broadcast({ type: "schedules:changed" }),
   onTick: () => engine.reconcile(),

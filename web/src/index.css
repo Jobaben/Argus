@@ -106,6 +106,13 @@ body {
   }
 }
 
+/* One consistent, high-contrast focus indicator everywhere; the eye accent
+   clears AA against every surface and never doubles up with hover borders. */
+:focus-visible {
+  outline: 2px solid var(--color-eye);
+  outline-offset: 2px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

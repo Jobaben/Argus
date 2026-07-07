@@ -113,23 +113,30 @@ For exact DTO shapes see the corresponding `server/src/sources/*.ts` reader.
 
 ## Pipelines (v0.3)
 
-| Method + path                      | Effect                                                                          |
-| ---------------------------------- | ------------------------------------------------------------------------------- |
-| `GET /api/pipelines`               | list pipeline definitions                                                       |
-| `POST /api/pipelines`              | create a definition (validated)                                                 |
-| `PUT /api/pipelines/:id`           | replace a definition                                                            |
-| `DELETE /api/pipelines/:id`        | delete a definition                                                             |
-| `POST /api/pipelines/:id/start`    | start an instance manually → `202`, or `409` on overlap                         |
-| `GET /api/pipelines/:id/instances` | instances for a pipeline (newest first)                                         |
-| `GET /api/instances/:id`           | full pipeline instance                                                          |
-| `POST /api/instances/:id/signal`   | ingest a signal `{ phaseId, runId, type, token, payload? }`; `403` on bad token |
-| `POST /api/instances/:id/approve`  | advance past a gate (optional `{ answers }`)                                    |
-| `POST /api/instances/:id/revise`   | re-run the current phase (optional `{ note }`)                                  |
-| `POST /api/instances/:id/abort`    | abort the instance                                                              |
-| `GET /api/setup`                   | prerequisite status `{ ok, prereqs[] }`                                         |
-| `POST /api/setup/apply`            | install fixable prerequisites, then re-check → `{ ok, prereqs[] }`              |
+| Method + path                      | Effect                                                                            |
+| ---------------------------------- | --------------------------------------------------------------------------------- |
+| `GET /api/pipelines`               | list pipeline definitions                                                         |
+| `POST /api/pipelines`              | create a definition (validated)                                                   |
+| `PUT /api/pipelines/:id`           | replace a definition                                                              |
+| `DELETE /api/pipelines/:id`        | delete a definition                                                               |
+| `POST /api/pipelines/:id/start`    | start an instance manually → `202`, or `409` on overlap                           |
+| `GET /api/pipelines/:id/instances` | instances for a pipeline (newest first)                                           |
+| `GET /api/overview`                | command-center rows: `{ definition, latest, cost }` per pipeline, attention-first |
+| `GET /api/instances/:id`           | full pipeline instance                                                            |
+| `POST /api/instances/:id/signal`   | ingest a signal `{ phaseId, runId, type, token, payload? }`; `403` on bad token   |
+| `POST /api/instances/:id/approve`  | advance past a gate (optional `{ answers }`)                                      |
+| `POST /api/instances/:id/revise`   | re-run the current phase (optional `{ note }`)                                    |
+| `POST /api/instances/:id/abort`    | abort the instance                                                                |
+| `GET /api/setup`                   | prerequisite status `{ ok, prereqs[] }`                                           |
+| `POST /api/setup/apply`            | install fixable prerequisites, then re-check → `{ ok, prereqs[] }`                |
 
 WS frame `{ "type": "pipelines:changed" }` is pushed on any pipeline mutation.
+
+In `GET /api/overview`, each entry's `latest.phases[].steps[]` carries
+`costUsd`/`tokens` joined from the step's run record, and `cost` is the
+instance's total spend `{ usd, tokens }` across **all** of its runs (including
+superseded revise attempts). A metric is `null` until at least one run reports
+it; `cost` is `null` when the pipeline has never run.
 
 ### Emitting signals from a run
 

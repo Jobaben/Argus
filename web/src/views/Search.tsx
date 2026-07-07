@@ -88,12 +88,16 @@ export default function Search() {
       {!trimmed ? (
         <EmptyState>Type to search across transcripts.</EmptyState>
       ) : loading ? (
-        <p className="text-ink-faint">Searching…</p>
+        <p role="status" className="text-ink-faint">
+          Searching…
+        </p>
       ) : results.length === 0 ? (
-        <EmptyState>No matches for "{trimmed}".</EmptyState>
+        <div role="status">
+          <EmptyState>No matches for "{trimmed}".</EmptyState>
+        </div>
       ) : (
         <>
-          <p className="mb-3 text-xs text-ink-faint">
+          <p role="status" className="mb-3 text-xs text-ink-faint">
             {results.length} match{results.length === 1 ? "" : "es"}
           </p>
           <div className="flex flex-col gap-3">

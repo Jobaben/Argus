@@ -37,6 +37,10 @@ export interface StepProgress {
   name: string;
   runId: string | null;
   status: StepStatus;
+  /** USD cost of the step's run, joined from the run record at read time. */
+  costUsd?: number | null;
+  /** Total tokens of the step's run, joined from the run record at read time. */
+  tokens?: number | null;
 }
 
 export interface PhaseProgress {
