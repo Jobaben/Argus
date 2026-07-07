@@ -270,17 +270,18 @@ export async function tick(deps: SchedulerDeps): Promise<void> {
     } catch (e) {
       // Never let one schedule's failure break the tick.
       const iso = now.toISOString();
-      await writeRun(
-        ephemeralRun(
-          schedule,
-          deps.newId(),
-          "failed",
-          iso,
-          iso,
-          e instanceof Error ? e.message : String(e),
-        ),
+      const failed = ephemeralRun(
+        schedule,
+        deps.newId(),
+        "failed",
+        iso,
+        iso,
+        e instanceof Error ? e.message : String(e),
       );
+      await writeRun(failed);
       await pruneRuns(schedule.id, RUN_KEEP);
+      // A spawn-time failure is still a failure the operator should hear about.
+      deps.onFailure?.(failed);
       deps.onChange?.();
     }
   }

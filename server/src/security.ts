@@ -1,5 +1,20 @@
+import { timingSafeEqual } from "node:crypto";
 import type { Context, Next } from "hono";
 import type { ArgusConfig } from "./config.js";
+
+/** Constant-time string compare — avoids leaking the token via response timing. */
+function safeEqual(a: string | null, b: string): boolean {
+  if (a === null) return false;
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  // timingSafeEqual requires equal lengths; compare against a fixed-length
+  // digest-like guard so unequal lengths still take constant work.
+  if (ab.length !== bb.length) {
+    timingSafeEqual(bb, bb);
+    return false;
+  }
+  return timingSafeEqual(ab, bb);
+}
 
 /**
  * Argus can spawn `claude -p` agents with the user's full credentials, so the
@@ -78,8 +93,8 @@ export function securityMiddleware(cfg: ArgusConfig) {
       return c.json({ error: "forbidden: host not allowed" }, 403);
     }
     if (cfg.token) {
-      const supplied = bearer(c.req.header("authorization")) ?? c.req.header("x-argus-token");
-      if (supplied !== cfg.token) return c.json({ error: "unauthorized" }, 401);
+      const supplied = bearer(c.req.header("authorization")) ?? c.req.header("x-argus-token") ?? null;
+      if (!safeEqual(supplied, cfg.token)) return c.json({ error: "unauthorized" }, 401);
     }
     if (MUTATING.has(c.req.method) && !isOriginAllowed(c.req.header("origin"), c.req.header("host"), cfg)) {
       return c.json({ error: "forbidden: cross-origin request rejected" }, 403);
@@ -99,8 +114,8 @@ export function isUpgradeAllowed(
   if (!isHostAllowed(headers.host, cfg)) return false;
   if (!isOriginAllowed(headers.origin, headers.host, cfg)) return false;
   if (cfg.token) {
-    const supplied = bearer(headers.authorization) ?? headers.token;
-    if (supplied !== cfg.token) return false;
+    const supplied = bearer(headers.authorization) ?? headers.token ?? null;
+    if (!safeEqual(supplied, cfg.token)) return false;
   }
   return true;
 }

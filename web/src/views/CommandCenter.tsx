@@ -62,6 +62,7 @@ function Gate({
             type="text"
             value={note}
             onChange={(e) => setNote(e.target.value)}
+            aria-label="Revision note"
             placeholder="Revise note (optional)"
             className="min-w-0 flex-1 rounded-md border border-line bg-surface px-2 py-1 font-mono text-[11px] text-ink placeholder:text-ink-faint"
           />

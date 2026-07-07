@@ -5,6 +5,20 @@ All notable changes to Argus are documented here. The format follows
 
 ## [0.2.0]
 
+### Hardening (post-audit polish)
+
+- Fix a race the deadlock fix introduced: the detached next-phase start now
+  re-acquires the instance lock and re-verifies liveness, so an abort/revise
+  landing mid-transition can't be clobbered or orphan spawned children.
+- `prereqs.writeSettings` uses the shared atomic writer (pid+random temp)
+  instead of a pid-only temp that could collide between concurrent writers.
+- Token comparison is constant-time (`crypto.timingSafeEqual`).
+- The failure webhook now also fires for runs that fail at spawn time.
+- Per-file, mtime-keyed session-summary memoization so a list refetch no longer
+  re-parses unchanged transcripts.
+- A11y: labeled interval/time trigger inputs and the pipeline revise-note input;
+  windowed schedules render an accurate summary string.
+
 ### Security
 
 - Server binds to loopback (`127.0.0.1`) by default; `ARGUS_HOST` to override.

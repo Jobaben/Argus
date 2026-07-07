@@ -41,6 +41,7 @@ export function TriggerFields({
         <input
           type="number"
           min={1}
+          aria-label="Interval in minutes"
           className={`${fieldClass} w-28`}
           value={value.everyMinutes ?? 60}
           onChange={(e) => onChange({ kind: "interval", everyMinutes: Number(e.target.value) })}
@@ -49,6 +50,7 @@ export function TriggerFields({
       {(value?.kind === "daily" || value?.kind === "weekly") && (
         <input
           type="time"
+          aria-label="Time of day"
           className={`${fieldClass} w-32`}
           value={value.time ?? "02:00"}
           onChange={(e) => onChange({ ...value, time: e.target.value })}

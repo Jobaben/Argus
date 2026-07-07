@@ -1,10 +1,11 @@
-import { readFile, writeFile, mkdir, copyFile, rename } from "node:fs/promises";
+import { readFile, mkdir, copyFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { claudeHome, paths } from "../claudeHome.js";
+import { atomicWriteJson } from "../sources/atomicWrite.js";
 
 export type PrereqStatus = "ok" | "missing" | "outdated" | "error";
 
@@ -57,11 +58,9 @@ async function ensureDataDirs(): Promise<void> {
 }
 
 async function writeSettings(settings: Record<string, unknown>): Promise<void> {
-  await mkdir(claudeHome(), { recursive: true });
-  const file = paths.settingsFile();
-  const tmp = `${file}.${process.pid}.tmp`;
-  await writeFile(tmp, JSON.stringify(settings, null, 2), "utf8");
-  await rename(tmp, file);
+  // Delegate to the shared atomic writer (pid+random temp name) rather than a
+  // pid-only temp, which would collide between concurrent same-process writers.
+  await atomicWriteJson(paths.settingsFile(), settings);
 }
 
 async function copyHookFile(): Promise<void> {

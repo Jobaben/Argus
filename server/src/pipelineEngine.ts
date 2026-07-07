@@ -295,11 +295,18 @@ export function createEngine(deps: EngineDeps): Engine {
       // POST, and that child may still hold its concurrency slot until its
       // process exits after we respond. Awaiting startPhase here (which acquires
       // a slot) would deadlock when all slots are held by children waiting on
-      // their own signal responses. The detached launch acquires as slots free.
+      // their own signal responses. The detached continuation RE-ACQUIRES the
+      // instance lock and re-verifies liveness before launching, so an abort/
+      // revise landing in the transition window can't be clobbered and won't be
+      // raced into spawning orphan children (it queues behind, then kills them).
       if (idx !== null) {
-        void startPhase(def, instance, idx).catch((e) =>
-          console.error(`[argus] deferred phase start for ${instance.id} failed:`, e),
-        );
+        void locks
+          .withLock(instanceId, async () => {
+            const fresh = await readInstance(instanceId);
+            if (!fresh || fresh.status !== "running" || fresh.currentPhaseIndex !== idx) return;
+            await startPhase(def, fresh, idx);
+          })
+          .catch((e) => console.error(`[argus] deferred phase start for ${instanceId} failed:`, e));
       }
       if (instance.status === "failed") deps.onFailure?.(instance);
       deps.onChange?.();

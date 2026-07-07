@@ -198,18 +198,39 @@ async function listSessionFiles(): Promise<{ project: string; id: string; file: 
   return all.flat();
 }
 
+// Per-file summary memo keyed by (file, mtimeMs). A transcript is only re-read
+// and re-parsed when its mtime changes; unchanged files (the common case on a
+// busy dashboard) are served from memory, so a cache miss on the list no longer
+// re-parses dozens of stable transcripts. Bounded so it can't grow unbounded.
+const SUMMARY_MEMO_MAX = 500;
+const summaryMemo = new Map<string, { mtime: number; summary: SessionSummary }>();
+
+async function summarizeFile(entry: {
+  project: string;
+  id: string;
+  file: string;
+  mtime: number;
+}): Promise<SessionSummary> {
+  const key = entry.file;
+  const hit = summaryMemo.get(key);
+  if (hit && hit.mtime === entry.mtime) return hit.summary;
+  const lines = await readJsonl<RawLine>(entry.file);
+  const summary = summarize(entry.project, entry.id, lines);
+  summaryMemo.set(key, { mtime: entry.mtime, summary });
+  if (summaryMemo.size > SUMMARY_MEMO_MAX) {
+    // Evict the oldest insertion (Map preserves insertion order).
+    summaryMemo.delete(summaryMemo.keys().next().value as string);
+  }
+  return summary;
+}
+
 /** Recent sessions across all projects, newest first (by last activity). */
 async function readSessionsRaw(limit: number): Promise<SessionSummary[]> {
   const files = await listSessionFiles();
   files.sort((a, b) => b.mtime - a.mtime);
   const slice = files.slice(0, Math.max(0, limit));
 
-  const summaries = await Promise.all(
-    slice.map(async (entry) => {
-      const lines = await readJsonl<RawLine>(entry.file);
-      return summarize(entry.project, entry.id, lines);
-    }),
-  );
+  const summaries = await Promise.all(slice.map((entry) => summarizeFile(entry)));
 
   return summaries.sort((a, b) =>
     (b.lastActivity ?? "").localeCompare(a.lastActivity ?? ""),

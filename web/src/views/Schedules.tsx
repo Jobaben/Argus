@@ -12,9 +12,15 @@ function when(iso: string | null): string {
 }
 
 function triggerSummary(t: Trigger): string {
+  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   if (t.kind === "interval") return `every ${t.everyMinutes} min`;
   if (t.kind === "daily") return `daily at ${t.time}`;
-  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  if (t.kind === "windowed") {
+    const when = t.weekdays && t.weekdays.length > 0
+      ? t.weekdays.map((d) => days[d]).join(", ")
+      : "every day";
+    return `every ${t.everyMinutes} min, ${t.startTime}–${t.endTime}, ${when}`;
+  }
   return `weekly ${days[t.weekday ?? 0]} at ${t.time}`;
 }
 
