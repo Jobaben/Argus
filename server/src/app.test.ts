@@ -32,6 +32,7 @@ const fakeEngine: Engine = {
   revise: async () => ({ ok: true, code: 200 }),
   abort: async () => ({ ok: true, code: 200 }),
   reconcile: async () => {},
+  adopt: async () => {},
 };
 
 function makeApp(over: Partial<ArgusConfig> = {}) {

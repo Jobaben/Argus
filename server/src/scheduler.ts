@@ -68,8 +68,9 @@ export function parseRunEnvelope(stdout: string): {
   result: string | null;
   costUsd: number | null;
   tokens: number | null;
+  isError: boolean | null;
 } {
-  const empty = { result: null, costUsd: null, tokens: null };
+  const empty = { result: null, costUsd: null, tokens: null, isError: null };
   const extract = (obj: Record<string, unknown>) => {
     const usage = (obj.usage ?? {}) as Record<string, unknown>;
     const inTok = Number(usage.input_tokens ?? 0);
@@ -80,6 +81,7 @@ export function parseRunEnvelope(stdout: string): {
       result: typeof obj.result === "string" ? obj.result : null,
       costUsd: Number.isFinite(cost) ? cost : null,
       tokens,
+      isError: typeof obj.is_error === "boolean" ? obj.is_error : null,
     };
   };
   const text = stdout.trim();
@@ -177,7 +179,9 @@ export const defaultSpawn: SpawnFn = (run, logPath) => {
   const child = nodeSpawn(
     "claude",
     ["-p", "--output-format", "json", "--session-id", run.sessionId ?? randomUUID()],
-    { cwd: run.cwd, shell: process.platform === "win32" },
+    // detached makes the child a POSIX process-group leader so killRunProcess
+    // can signal the whole tree with kill(-pid); irrelevant under win32 taskkill.
+    { cwd: run.cwd, shell: process.platform === "win32", detached: process.platform !== "win32" },
   );
   // The prompt is user-authored; pass it on stdin so no shell parsing touches it
   // (shell:true on win32 would otherwise word-split it and interpret metacharacters).

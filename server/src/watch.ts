@@ -19,7 +19,12 @@ function makeWatcher(targets: string[], onChange: () => void): () => Promise<voi
     depth: 3,
     awaitWriteFinish: { stabilityThreshold: 120, pollInterval: 40 },
   });
-  watcher.on("add", fire).on("change", fire).on("unlink", fire).on("addDir", fire);
+  watcher
+    .on("add", fire)
+    .on("change", fire)
+    .on("unlink", fire)
+    .on("addDir", fire)
+    .on("error", (e) => console.error("[argus] watcher error:", e));
 
   return async () => {
     if (timer) clearTimeout(timer);

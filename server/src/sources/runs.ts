@@ -1,5 +1,6 @@
 import { readFile, readdir, rm, stat } from "node:fs/promises";
 import { open } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { paths } from "../claudeHome.js";
 import { atomicWriteJson } from "./atomicWrite.js";
@@ -93,14 +94,27 @@ export async function readRun(id: string): Promise<{ run: Run; log: string } | n
   return { run, log };
 }
 
-/** SIGTERM a run's process if it's alive. Returns whether a signal was sent. */
+/** Kill a run's whole process tree if it's alive. `claude` spawns its own
+ *  subprocesses (tools, shells); a plain kill on the recorded pid would orphan
+ *  them, so use taskkill /T on win32. On POSIX, detached:true makes the child
+ *  a group leader, so signal the group, falling back to the single pid.
+ *  Returns whether a signal was sent. */
 export async function killRunProcess(pid: number | null): Promise<boolean> {
   if (!pid) return false;
+  if (process.platform === "win32") {
+    const res = spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
+    return res.status === 0;
+  }
   try {
-    process.kill(pid);
+    process.kill(-pid);
     return true;
   } catch {
-    return false;
+    try {
+      process.kill(pid);
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
 

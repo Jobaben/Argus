@@ -1,6 +1,6 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildClaudeArgs, OUTCOME_CONTRACT } from "./pipelineEngine.js";
@@ -79,6 +79,19 @@ async function seedPipeline(pipelines: any, over: Record<string, unknown> = {}) 
     }),
     new Date(2026, 5, 30, 9, 0),
     "p1",
+  );
+}
+
+async function seedSecondPipeline(pipelines: any) {
+  return pipelines.createPipeline(
+    pipelines.validatePipelineInput({
+      name: "second",
+      phases: [
+        { id: "o2", name: "O2", cwd: home, gated: false, steps: [{ name: "s2", prompt: "p2" }] },
+      ],
+    }),
+    new Date(2026, 5, 30, 9, 0),
+    "p2",
   );
 }
 
@@ -514,4 +527,158 @@ test("onSignal records the run outcome, preserved when the process later exits 0
   const got = await runs.readRun(runId);
   assert.equal(got?.run.status, "succeeded"); // honest exit-code record
   assert.equal(got?.run.outcome, "failed"); // work outcome preserved, not clobbered
+});
+
+test("abort kills the phase's live run via the injected kill fn", async () => {
+  const { engine, pipelines } = await load();
+  await seedPipeline(pipelines);
+  const rec = recordingSpawn();
+  const killed: number[] = [];
+  // recordingSpawn assigns pid 1000+n, which may not be alive on this machine;
+  // use a spawn that reports our own (definitely alive) pid instead.
+  const aliveSpawn = (run: { id: string }, _log: string, env: Record<string, string>) => {
+    rec.spawn(run, _log, env);
+    return { pid: process.pid, done: deferred().promise };
+  };
+  const e = engine.createEngine(
+    baseDeps({
+      spawn: aliveSpawn,
+      kill: (pid: number) => {
+        killed.push(pid);
+        return true;
+      },
+    }),
+  );
+  const inst = await e.start("p1", "manual");
+  const res = await e.abort(inst!.id);
+  assert.equal(res.ok, true);
+  assert.deepEqual(killed, [process.pid]);
+});
+
+// Simulates a restart: engine A starts a run (recorded pid = ours, so "alive"),
+// then a FRESH engine adopts it and must hold a semaphore slot for it.
+test("adopt claims alive running steps and occupies concurrency slots", async () => {
+  const { engine, pipelines } = await load();
+  await seedPipeline(pipelines, {
+    phases: [
+      { id: "only", name: "Only", cwd: home, gated: false, steps: [{ name: "s", prompt: "p" }] },
+    ],
+  });
+  const rec = recordingSpawn();
+  const aliveSpawn = (run: { id: string }, _log: string, env: Record<string, string>) => {
+    rec.spawn(run, _log, env);
+    return { pid: process.pid, done: deferred().promise };
+  };
+  const e1 = engine.createEngine(baseDeps({ spawn: aliveSpawn }));
+  await e1.start("p1", "manual");
+  assert.equal(rec.calls.length, 1);
+
+  // "Restart": fresh engine, maxConcurrent 1. Adoption must consume the only slot.
+  const rec2 = recordingSpawn();
+  const e2 = engine.createEngine(baseDeps({ spawn: rec2.spawn, maxConcurrent: 1 }));
+  await e2.adopt();
+
+  // A second pipeline start now queues behind the adopted run instead of spawning.
+  await seedSecondPipeline(pipelines);
+  const started = e2.start("p2", "manual"); // intentionally not awaited — it blocks on the slot
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(rec2.calls.length, 0); // blocked on the adopted run's slot
+  void started;
+});
+
+test("adopt ignores dead-pid runs and leaves the slot free", async () => {
+  const { engine, pipelines } = await load();
+  await seedPipeline(pipelines, {
+    phases: [
+      { id: "only", name: "Only", cwd: home, gated: false, steps: [{ name: "s", prompt: "p" }] },
+    ],
+  });
+  const rec = recordingSpawn();
+  const deadSpawn = (run: { id: string }, _log: string, env: Record<string, string>) => {
+    rec.spawn(run, _log, env);
+    return { pid: null, done: deferred().promise };
+  };
+  const e1 = engine.createEngine(baseDeps({ spawn: deadSpawn }));
+  await e1.start("p1", "manual");
+
+  // Restart: fresh engine, one slot. The dead-pid (null) run must NOT be adopted.
+  const rec2 = recordingSpawn();
+  const e2 = engine.createEngine(baseDeps({ spawn: rec2.spawn, maxConcurrent: 1 }));
+  await e2.adopt();
+
+  await seedSecondPipeline(pipelines);
+  await e2.start("p2", "manual");
+  assert.equal(rec2.calls.length, 1); // slot was free → spawned immediately
+});
+
+test("reconcile finalizes an adopted run whose process died, from the log envelope", async () => {
+  const { engine, pipelines } = await load();
+  const runsSrc = await import(`./sources/runs.js?${Math.random()}`);
+  await seedPipeline(pipelines, {
+    phases: [
+      { id: "only", name: "Only", cwd: home, gated: false, steps: [{ name: "s", prompt: "p" }] },
+    ],
+  });
+  const rec = recordingSpawn();
+  const aliveSpawn = (run: { id: string }, _log: string, env: Record<string, string>) => {
+    rec.spawn(run, _log, env);
+    return { pid: process.pid, done: deferred().promise };
+  };
+  const e1 = engine.createEngine(baseDeps({ spawn: aliveSpawn }));
+  await e1.start("p1", "manual");
+  const runId = rec.calls[0].runId;
+
+  // Restart + adopt while "alive".
+  const e2 = engine.createEngine(baseDeps({ spawn: recordingSpawn().spawn }));
+  await e2.adopt();
+
+  // Simulate the detached process ending: pid becomes dead (null) and the
+  // claude JSON envelope sits at the end of the log.
+  const got = await runsSrc.readRun(runId);
+  await runsSrc.writeRun({ ...got!.run, pid: null });
+  mkdirSync(path.join(home, "argus", "runs"), { recursive: true });
+  writeFileSync(
+    runsSrc.runLogPath(runId),
+    'noise\n{"type":"result","subtype":"success","is_error":false,"result":"done fine","total_cost_usd":0.42,"usage":{"input_tokens":100,"output_tokens":50}}\n',
+    "utf8",
+  );
+
+  await e2.reconcile();
+
+  const after = await runsSrc.readRun(runId);
+  assert.equal(after!.run.status, "succeeded");
+  assert.equal(after!.run.resultSummary, "done fine");
+  assert.equal(after!.run.costUsd, 0.42);
+  assert.equal(after!.run.tokens, 150);
+  assert.ok(after!.run.endedAt);
+  assert.equal(after!.run.exitCode, null);
+});
+
+test("reconcile finalizes an adopted run with no parseable envelope as failed", async () => {
+  const { engine, pipelines } = await load();
+  const runsSrc = await import(`./sources/runs.js?${Math.random()}`);
+  await seedPipeline(pipelines, {
+    phases: [
+      { id: "only", name: "Only", cwd: home, gated: false, steps: [{ name: "s", prompt: "p" }] },
+    ],
+  });
+  const rec = recordingSpawn();
+  const aliveSpawn = (run: { id: string }, _log: string, env: Record<string, string>) => {
+    rec.spawn(run, _log, env);
+    return { pid: process.pid, done: deferred().promise };
+  };
+  const e1 = engine.createEngine(baseDeps({ spawn: aliveSpawn }));
+  await e1.start("p1", "manual");
+  const runId = rec.calls[0].runId;
+
+  const e2 = engine.createEngine(baseDeps({ spawn: recordingSpawn().spawn }));
+  await e2.adopt();
+  const got = await runsSrc.readRun(runId);
+  await runsSrc.writeRun({ ...got!.run, pid: null }); // died, log stays empty
+
+  await e2.reconcile();
+
+  const after = await runsSrc.readRun(runId);
+  assert.equal(after!.run.status, "failed");
+  assert.equal(after!.run.error, "ended while detached; no parseable result");
 });

@@ -35,11 +35,16 @@ test("parses a large result that would have overflowed the old 8KB tail", () => 
 
 test("returns nulls, not a throw, on unparseable output", () => {
   const out = parseRunEnvelope("not json at all { partial");
-  assert.deepEqual(out, { result: null, costUsd: null, tokens: null });
+  assert.deepEqual(out, { result: null, costUsd: null, tokens: null, isError: null });
 });
 
 test("returns nulls on empty output", () => {
-  assert.deepEqual(parseRunEnvelope("   "), { result: null, costUsd: null, tokens: null });
+  assert.deepEqual(parseRunEnvelope("   "), {
+    result: null,
+    costUsd: null,
+    tokens: null,
+    isError: null,
+  });
 });
 
 test("recovers the envelope despite a stray brace emitted AFTER it", () => {
@@ -69,4 +74,19 @@ test("brace inside a string value does not break extraction", () => {
   });
   const out = parseRunEnvelope(`log line\n${env}`);
   assert.equal(out.result, "here is a brace } inside text");
+});
+
+test("parseRunEnvelope exposes is_error as isError", () => {
+  const ok = parseRunEnvelope(
+    '{"type":"result","subtype":"success","is_error":false,"result":"all done"}',
+  );
+  assert.equal(ok.isError, false);
+  assert.equal(ok.result, "all done");
+
+  const err = parseRunEnvelope('noise before\n{"type":"result","is_error":true,"result":"boom"}');
+  assert.equal(err.isError, true);
+
+  // Envelope without is_error, and no envelope at all → null.
+  assert.equal(parseRunEnvelope('{"result":"r"}').isError, null);
+  assert.equal(parseRunEnvelope("no json here").isError, null);
 });

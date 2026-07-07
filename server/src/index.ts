@@ -103,6 +103,7 @@ wss.on("connection", (ws) => {
 const stopWatching = watchAgents(() => broadcast({ type: "agents:changed" }));
 const stopWatchingSchedules = watchSchedules(() => broadcast({ type: "schedules:changed" }));
 const stopWatchingExtensions = watchExtensions(() => broadcast({ type: "inventory:changed" }));
+void engine.adopt().catch((e) => console.error("[argus] run adoption failed:", e));
 const scheduler = startScheduler({
   onChange: () => broadcast({ type: "schedules:changed" }),
   onTick: () => engine.reconcile(),
@@ -110,10 +111,13 @@ const scheduler = startScheduler({
     void postWebhook(config.webhookUrl, buildRunFailurePayload(run, new Date().toISOString())),
 });
 
-/** Terminate every scheduler/pipeline child still alive, so shutdown does not
- *  orphan `claude -p` processes. */
+/** Pipeline step runs are detached by design: they survive a restart and get
+ *  re-adopted on the next boot, so shutdown must NOT kill them. Scheduler runs
+ *  keep the kill-on-shutdown behavior. */
 async function killLiveRuns(): Promise<void> {
-  const running = (await readRuns()).filter((r) => r.status === "running" && isAlive(r.pid));
+  const running = (await readRuns()).filter(
+    (r) => r.status === "running" && isAlive(r.pid) && !r.scheduleId.startsWith("pipeline:"),
+  );
   await Promise.all(running.map((r) => killRunProcess(r.pid)));
 }
 

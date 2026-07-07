@@ -1,7 +1,14 @@
 import { spawn as nodeSpawn } from "node:child_process";
-import { createWriteStream } from "node:fs";
+import { closeSync, openSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { encodeProject, patchRun, readRun, runLogPath, writeRun } from "./sources/runs.js";
+import {
+  encodeProject,
+  killRunProcess,
+  patchRun,
+  readRun,
+  runLogPath,
+  writeRun,
+} from "./sources/runs.js";
 import { markPipelineStarted, readPipelines } from "./sources/pipelines.js";
 import {
   INSTANCE_KEEP,
@@ -18,7 +25,7 @@ import {
   applyTemplate,
   initInstance,
 } from "./pipelineTransitions.js";
-import { isAlive } from "./scheduler.js";
+import { isAlive, parseRunEnvelope } from "./scheduler.js";
 import { graceMsFor, previousFireTime } from "./sources/nextFire.js";
 import { KeyedMutex } from "./mutex.js";
 import type { Run } from "./sources/scheduleTypes.js";
@@ -89,28 +96,34 @@ export function buildClaudeArgs(run: Run): string[] {
   return args;
 }
 
-/** Real spawn: `claude -p`, prompt on stdin, with the signal env injected. */
+/** Real spawn: `claude -p`, prompt on stdin, with the signal env injected.
+ *  Detached with fd-backed stdio so the run survives an Argus restart and
+ *  keeps logging without the parent process. Deliberately NO shell: with a
+ *  cmd.exe wrapper the detached grandchild's output never reaches the log fd,
+ *  and the wrapper pid breaks pid tracking across restarts (spike-verified).
+ *  Requires `claude` to be a real executable (claude.exe / binary), which the
+ *  native installer provides. */
 export const defaultPipelineSpawn: PipelineSpawnFn = (run, logPath, env) => {
-  const out = createWriteStream(logPath, { flags: "a" });
-  const child = nodeSpawn("claude", buildClaudeArgs(run), {
-    cwd: run.cwd,
-    shell: process.platform === "win32",
-    env: { ...process.env, ...env },
-  });
+  const fd = openSync(logPath, "a");
+  let child: ReturnType<typeof nodeSpawn>;
+  try {
+    child = nodeSpawn("claude", buildClaudeArgs(run), {
+      cwd: run.cwd,
+      env: { ...process.env, ...env },
+      detached: true,
+      stdio: ["pipe", fd, fd],
+    });
+  } finally {
+    // The child holds its own duplicate of the descriptor.
+    closeSync(fd);
+  }
   child.stdin?.on("error", () => {});
   child.stdin?.write(run.prompt);
   child.stdin?.end();
-  child.stdout?.pipe(out, { end: false });
-  child.stderr?.pipe(out, { end: false });
+  child.unref();
   const done = new Promise<{ code: number | null }>((resolve) => {
-    child.on("error", () => {
-      out.end();
-      resolve({ code: null });
-    });
-    child.on("close", (code) => {
-      out.end();
-      resolve({ code });
-    });
+    child.on("error", () => resolve({ code: null }));
+    child.on("close", (code) => resolve({ code }));
   });
   return { pid: child.pid ?? null, done };
 };
@@ -127,6 +140,8 @@ export interface EngineDeps {
   onFailure?: (inst: PipelineInstance) => void;
   /** Optional pre-run guard. When it returns { ok: false }, start() throws PreflightError. */
   preflight?: () => Promise<{ ok: boolean; reasons: string[] }>;
+  /** Kills a run's process tree; injectable for tests. Defaults to killRunProcess. */
+  kill?: (pid: number) => Promise<boolean> | boolean;
 }
 
 export interface ActionResult {
@@ -143,6 +158,9 @@ export interface Engine {
   revise(instanceId: string, note?: string): Promise<ActionResult>;
   abort(instanceId: string): Promise<ActionResult>;
   reconcile(): Promise<void>;
+  /** On boot: claim still-alive runs from running instances so they keep
+   *  their concurrency slots and get finalized by reconcile when they end. */
+  adopt(): Promise<void>;
 }
 
 export function createEngine(deps: EngineDeps): Engine {
@@ -150,7 +168,10 @@ export function createEngine(deps: EngineDeps): Engine {
   // Serializes all read-modify-write mutations of a single instance so
   // concurrent signals / reconcile passes cannot lose each other's updates.
   const locks = new KeyedMutex();
+  /** Runs spawned by a previous server process, reattached after restart. */
+  const adopted = new Map<string, { instanceId: string }>();
   const nowISO = () => deps.now().toISOString();
+  const kill = deps.kill ?? killRunProcess;
 
   async function loadDef(pipelineId: string): Promise<PipelineDefinition | undefined> {
     return (await readPipelines()).find((d) => d.id === pipelineId);
@@ -281,10 +302,24 @@ export function createEngine(deps: EngineDeps): Engine {
       const got = await readRun(s.runId);
       if (got && isAlive(got.run.pid)) {
         try {
-          process.kill(got.run.pid!);
+          await kill(got.run.pid!);
         } catch {
           /* already gone */
         }
+      }
+    }
+  }
+
+  async function adopt(): Promise<void> {
+    for (const inst of await readInstances()) {
+      if (inst.status !== "running") continue;
+      const phase = inst.phases[inst.currentPhaseIndex];
+      for (const s of phase?.steps ?? []) {
+        if (s.status !== "running" || !s.runId || adopted.has(s.runId)) continue;
+        const got = await readRun(s.runId);
+        if (!got || got.run.status !== "running" || !isAlive(got.run.pid)) continue;
+        await sem.acquire();
+        adopted.set(s.runId, { instanceId: inst.id });
       }
     }
   }
@@ -418,6 +453,50 @@ export function createEngine(deps: EngineDeps): Engine {
     const grace = graceMsFor(deps.tickMs ?? 30000);
     const now = deps.now();
 
+    // 0. Finalize adopted (reattached) runs whose detached process has ended.
+    //    The in-memory done-handler was lost with the previous server process,
+    //    so status/result come from the log's JSON envelope instead. Instance
+    //    advancement is not done here — the healing pass below (under the
+    //    instance lock) handles steps whose runs ended without signalling.
+    for (const runId of [...adopted.keys()]) {
+      try {
+        const got = await readRun(runId);
+        if (!got || got.run.status !== "running") {
+          adopted.delete(runId);
+          sem.release();
+          continue;
+        }
+        if (isAlive(got.run.pid)) continue;
+        const envelope = parseRunEnvelope(got.log);
+        const parsed = envelope.isError !== null || envelope.result !== null ? envelope : null;
+        const ended = deps.now();
+        // patchRun (not a full writeRun spread): the signal path patches
+        // `outcome` concurrently, and a stale full-object write would drop it.
+        await patchRun(runId, {
+          status: parsed && parsed.isError === false ? "succeeded" : "failed",
+          endedAt: ended.toISOString(),
+          durationMs: got.run.startedAt
+            ? ended.getTime() - new Date(got.run.startedAt).getTime()
+            : null,
+          exitCode: null,
+          resultSummary: parsed?.result ?? got.run.resultSummary,
+          costUsd: parsed?.costUsd ?? got.run.costUsd,
+          tokens: parsed?.tokens ?? got.run.tokens,
+          error: !parsed
+            ? "ended while detached; no parseable result"
+            : parsed.isError === false
+              ? null
+              : (parsed.result ?? "run reported is_error"),
+        });
+        adopted.delete(runId);
+        sem.release();
+        deps.onChange?.();
+      } catch (e) {
+        // Keep the run adopted; retried next tick.
+        console.error("[argus] finalize of adopted run failed:", e);
+      }
+    }
+
     // 1. Start clock-due pipeline definitions.
     for (const def of defs) {
       if (!def.enabled || !def.trigger) continue;
@@ -484,5 +563,5 @@ export function createEngine(deps: EngineDeps): Engine {
     }
   }
 
-  return { start, onSignal, approve, revise, abort, reconcile };
+  return { start, onSignal, approve, revise, abort, reconcile, adopt };
 }
