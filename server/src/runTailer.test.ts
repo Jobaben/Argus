@@ -189,3 +189,20 @@ test("broadcast batches events and flushes on the throttle timer", async () => {
   assert.equal(sent[0].events.length, 3); // one batched flush, not three
   await tailer.stop();
 });
+
+test("an adopt-path rebuild with hundreds of lines still flushes a ring-capped batch", async () => {
+  const { createRunTailer, logPath } = await loadTailer();
+  const sent: { events: unknown[] }[] = [];
+  const tailer = createRunTailer({
+    broadcast: (m: unknown) => sent.push(m as { events: unknown[] }),
+    now: () => new Date(),
+    flushMs: 5,
+    watch: false,
+  });
+  const lines = Array.from({ length: 250 }, (_, i) => toolLine(`cmd ${i}`)).join("");
+  writeFileSync(logPath("r7"), lines);
+  tailer.track("r7", "inst-8");
+  await waitFor(() => sent.length >= 1);
+  assert.ok(sent[0].events.length <= 200);
+  await tailer.stop();
+});

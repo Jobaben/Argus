@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { parseRunEnvelope } from "../scheduler.js";
 
 let home: string;
 beforeEach(() => {
@@ -128,4 +129,43 @@ test("patchRun merges onto the latest on-disk run, not a stale copy", async () =
 test("patchRun returns null for a missing run", async () => {
   const m = await fresh();
   assert.equal(await m.patchRun("nope", { outcome: "failed" }), null);
+});
+
+test("readRun's tail starts at a line boundary even when the naive byte offset lands mid-JSON-string", async () => {
+  const m = await fresh();
+  const run = makeRun("huge", "s1", new Date(2026, 5, 22, 10, 0).toISOString());
+  await m.writeRun(run);
+
+  // A single giant NDJSON line whose "text" field is padded well past
+  // LOG_CAP_BYTES, followed by a one-line result envelope. size - LOG_CAP_BYTES
+  // (the naive tail-start byte) lands inside the padded string, not at a
+  // newline, which is exactly the scenario the fix must correct.
+  const prefix = '{"type":"assistant","message":{"content":[{"type":"text","text":"';
+  const suffix = '"}]}}\n';
+  const padLen: number = m.LOG_CAP_BYTES + 10_000;
+  const giantLine = prefix + "A".repeat(padLen) + suffix;
+  const resultLine =
+    JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      result: "all good",
+      total_cost_usd: 0.05,
+      usage: { input_tokens: 10, output_tokens: 20 },
+    }) + "\n";
+  const log = giantLine + resultLine;
+  writeFileSync(m.runLogPath("huge"), log);
+
+  const size = log.length; // ASCII-only fixture, so byte length === char length
+  const start = size - m.LOG_CAP_BYTES;
+  assert.ok(start > prefix.length && start < prefix.length + padLen); // sanity: mid-string
+
+  const got = await m.readRun("huge");
+  assert.ok(got);
+  assert.ok(got.log.startsWith("…(truncated)…\n"));
+
+  const env = parseRunEnvelope(got.log);
+  assert.equal(env.result, "all good");
+  assert.equal(env.costUsd, 0.05);
+  assert.equal(env.tokens, 30);
 });

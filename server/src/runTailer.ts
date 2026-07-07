@@ -205,6 +205,7 @@ export function createRunTailer(deps: TailerDeps): RunTailer {
         st.events.push(...events);
         if (st.events.length > RING_CAP) st.events.splice(0, st.events.length - RING_CAP);
         st.pending.push(...events);
+        if (st.pending.length > RING_CAP) st.pending.splice(0, st.pending.length - RING_CAP);
       }
       scheduleFlush(id, st);
     } finally {

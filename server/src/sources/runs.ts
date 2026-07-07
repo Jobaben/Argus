@@ -84,7 +84,16 @@ export async function readRun(id: string): Promise<{ run: Run; log: string } | n
         buffer: Buffer.alloc(size - start),
         position: start,
       });
-      log = (start > 0 ? "…(truncated)…\n" : "") + buffer.toString("utf8");
+      const decoded = buffer.toString("utf8");
+      if (start > 0) {
+        // The tail read starts at a byte offset that can land mid-line (or
+        // mid-JSON-string); drop the partial first line so envelope parsing
+        // begins at a line boundary.
+        const nl = decoded.indexOf("\n");
+        log = "…(truncated)…\n" + (nl === -1 ? decoded : decoded.slice(nl + 1));
+      } else {
+        log = decoded;
+      }
     } finally {
       await handle.close();
     }

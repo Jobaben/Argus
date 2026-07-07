@@ -308,6 +308,7 @@ export function createEngine(deps: EngineDeps): Engine {
       })
       .catch((e) => {
         release();
+        deps.tailer?.untrack(run.id);
         console.error(`[argus] step run ${run.id} completion handler failed:`, e);
       });
   }
