@@ -40,6 +40,24 @@ test("readActivity normalizes history.jsonl newest-first", async () => {
   assert.equal(activity[0].project, "proj");
 });
 
+test("readActivity returns newest entries from a large history file", async () => {
+  // ~3000 lines × ~160 bytes ≈ 480KB — larger than the tail-read window, so
+  // this exercises the partial-read path while asserting identical output.
+  const lines = Array.from({ length: 3000 }, (_, i) => ({
+    display: `prompt ${i} ${"x".repeat(120)}`,
+    timestamp: i + 1,
+    project: "/home/u/proj",
+  }));
+  writeFileSync(path.join(home, "history.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n"));
+  const { readActivity } = await load("history");
+  // Distinct limit → distinct cache key; cache.js is shared across the
+  // cache-busted module loads, so limit 100 would hit the previous test's entry.
+  const activity = await readActivity(120);
+  assert.equal(activity.length, 120);
+  assert.ok(activity[0].text.startsWith("prompt 2999"));
+  assert.ok(activity[119].text.startsWith("prompt 2880"));
+});
+
 test("readInventory reads markdown items and plugins", async () => {
   mkdirSync(path.join(home, "agents"), { recursive: true });
   writeFileSync(

@@ -26,8 +26,26 @@ function runJsonPath(id: string): string {
   return path.join(paths.runsDir(), `${id}.json`);
 }
 
+// mtime-keyed parse memo, mirroring instances.ts. readRuns() re-scans the whole
+// directory on every scheduler tick and every /api/overview refetch; an
+// unchanged run file (the common case — most runs are terminal) costs a stat
+// instead of a read + JSON.parse. Bounded LRU: hits refresh recency.
+const PARSE_MEMO_MAX = 500;
+const parseMemo = new Map<string, { mtime: number; run: Run }>();
+
+function memoSet(id: string, mtime: number, run: Run): void {
+  parseMemo.delete(id);
+  parseMemo.set(id, { mtime, run });
+  if (parseMemo.size > PARSE_MEMO_MAX) {
+    parseMemo.delete(parseMemo.keys().next().value as string);
+  }
+}
+
 export async function writeRun(run: Run): Promise<void> {
   await atomicWriteJson(runJsonPath(run.id), run);
+  // Eager eviction: atomic rename gives a fresh mtime, but dropping the entry
+  // makes staleness impossible even on filesystems with coarse mtime resolution.
+  parseMemo.delete(run.id);
 }
 
 /**
@@ -45,8 +63,17 @@ export async function patchRun(id: string, patch: Partial<Run>): Promise<Run | n
 }
 
 async function readRunFile(id: string): Promise<Run | null> {
+  const file = runJsonPath(id);
   try {
-    return JSON.parse(await readFile(runJsonPath(id), "utf8")) as Run;
+    const st = await stat(file);
+    const hit = parseMemo.get(id);
+    if (hit && hit.mtime === st.mtimeMs) {
+      memoSet(id, hit.mtime, hit.run); // refresh LRU recency
+      return hit.run;
+    }
+    const run = JSON.parse(await readFile(file, "utf8")) as Run;
+    memoSet(id, st.mtimeMs, run);
+    return run;
   } catch {
     return null;
   }
@@ -158,4 +185,5 @@ export async function pruneRuns(scheduleId: string, keep: number): Promise<void>
       rm(runLogPath(r.id), { force: true }),
     ]),
   );
+  for (const r of drop) parseMemo.delete(r.id);
 }
