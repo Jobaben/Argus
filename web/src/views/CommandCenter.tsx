@@ -251,7 +251,7 @@ function PhaseColumn({
   now: number;
 }) {
   return (
-    <section className="flex w-[248px] flex-none flex-col gap-2.5">
+    <section className="flex min-w-0 flex-col gap-2.5">
       <div className="flex items-center gap-2 px-0.5">
         <span className="font-mono text-[10px] text-ink-faint">
           {String(index + 1).padStart(2, "0")}
@@ -322,9 +322,12 @@ function Row({
           <TimeAgo iso={row.updatedAt} />
         </span>
       </div>
-      {/* Phase columns keep a readable minimum width and scroll horizontally
-          rather than squishing to nothing on narrow viewports. */}
-      <div className="mt-3.5 flex items-start gap-3.5 overflow-x-auto pb-1">
+      {/* Every phase must be visible at once: equal-width columns share the
+          row, shrinking and word-wrapping instead of scrolling horizontally. */}
+      <div
+        className="mt-3.5 grid items-start gap-3.5 pb-1"
+        style={{ gridTemplateColumns: `repeat(${row.phases.length}, minmax(0, 1fr))` }}
+      >
         {row.phases.map((pill, i) => (
           <PhaseColumn
             key={pill.id}
