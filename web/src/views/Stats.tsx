@@ -1,10 +1,5 @@
 import { useMemo } from "react";
-import {
-  useStats,
-  type DailyStat,
-  type ModelStat,
-  type PeakHour,
-} from "../useStats";
+import { useStats, type DailyStat, type ModelStat, type PeakHour } from "../useStats";
 import { AlertStrip, EmptyState, Page } from "../ds";
 
 function compact(n: number): string {
@@ -143,14 +138,8 @@ export default function Stats() {
             <Stat label="Messages" value={compact(stats.headline.totalMessages)} />
             <Stat label="Tool calls" value={compact(stats.headline.totalToolCalls)} />
             <Stat label="Total tokens" value={compact(stats.headline.totalTokens)} />
-            <Stat
-              label="Output tokens"
-              value={compact(stats.headline.totalOutputTokens)}
-            />
-            <Stat
-              label="Cache reads"
-              value={compact(stats.headline.totalCacheReadTokens)}
-            />
+            <Stat label="Output tokens" value={compact(stats.headline.totalOutputTokens)} />
+            <Stat label="Cache reads" value={compact(stats.headline.totalCacheReadTokens)} />
             <Stat label="Active days" value={`${stats.headline.activeDays}`} />
             <Stat label="Models used" value={`${stats.headline.modelsUsed}`} />
           </section>
@@ -158,10 +147,7 @@ export default function Stats() {
           {(stats.headline.totalCostUSD > 0 || stats.longestSession) && (
             <section className="grid grid-cols-2 gap-3 sm:grid-cols-3">
               {stats.headline.totalCostUSD > 0 && (
-                <Stat
-                  label="Total cost"
-                  value={`$${stats.headline.totalCostUSD.toFixed(2)}`}
-                />
+                <Stat label="Total cost" value={`$${stats.headline.totalCostUSD.toFixed(2)}`} />
               )}
               {stats.longestSession && (
                 <Stat

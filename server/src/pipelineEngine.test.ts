@@ -20,7 +20,7 @@ async function load() {
 
 async function waitFor(cond: () => boolean | Promise<boolean>, timeoutMs = 2000): Promise<void> {
   const start = Date.now();
-  while (!await cond()) {
+  while (!(await cond())) {
     if (Date.now() - start > timeoutMs) throw new Error("waitFor timed out");
     await new Promise((r) => setTimeout(r, 5));
   }
@@ -60,8 +60,20 @@ async function seedPipeline(pipelines: any, over: Record<string, unknown> = {}) 
     pipelines.validatePipelineInput({
       name: "feature",
       phases: [
-        { id: "brainstorm", name: "Brainstorm", cwd: home, gated: true, steps: [{ name: "bs", prompt: "go" }] },
-        { id: "plan", name: "Plan", cwd: home, gated: false, steps: [{ name: "wp", prompt: "plan {{previous.payload}}" }] },
+        {
+          id: "brainstorm",
+          name: "Brainstorm",
+          cwd: home,
+          gated: true,
+          steps: [{ name: "bs", prompt: "go" }],
+        },
+        {
+          id: "plan",
+          name: "Plan",
+          cwd: home,
+          gated: false,
+          steps: [{ name: "wp", prompt: "plan {{previous.payload}}" }],
+        },
       ],
       ...over,
     }),
@@ -92,7 +104,12 @@ test("a needs-input signal pauses the instance for approval", async () => {
   const inst = await e.start("p1", "manual");
   const runId = rec.calls[0].runId;
   const res = await e.onSignal(inst!.id, {
-    instanceId: inst!.id, phaseId: "brainstorm", runId, type: "needs-input", token: inst!.signalToken, payload: "Q?",
+    instanceId: inst!.id,
+    phaseId: "brainstorm",
+    runId,
+    type: "needs-input",
+    token: inst!.signalToken,
+    payload: "Q?",
   });
   assert.equal(res.code, 202);
   const after = await instances.readInstance(inst!.id);
@@ -107,7 +124,12 @@ test("approve advances to the next phase, forwarding answers into the prompt", a
   const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
   const inst = await e.start("p1", "manual");
   await e.onSignal(inst!.id, {
-    instanceId: inst!.id, phaseId: "brainstorm", runId: rec.calls[0].runId, type: "needs-input", token: inst!.signalToken, payload: "Q?",
+    instanceId: inst!.id,
+    phaseId: "brainstorm",
+    runId: rec.calls[0].runId,
+    type: "needs-input",
+    token: inst!.signalToken,
+    payload: "Q?",
   });
   await e.approve(inst!.id, "USE TYPESCRIPT");
   assert.equal(rec.calls.length, 2); // phase 1 spawned
@@ -122,20 +144,32 @@ test("onSignal rejects a bad token with 403", async () => {
   const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
   const inst = await e.start("p1", "manual");
   const res = await e.onSignal(inst!.id, {
-    instanceId: inst!.id, phaseId: "brainstorm", runId: rec.calls[0].runId, type: "completed", token: "WRONG",
+    instanceId: inst!.id,
+    phaseId: "brainstorm",
+    runId: rec.calls[0].runId,
+    type: "completed",
+    token: "WRONG",
   });
   assert.equal(res.code, 403);
 });
 
 test("a duplicate signal is idempotent (no double spawn)", async () => {
   const { engine, pipelines } = await load();
-  await seedPipeline(pipelines, { phases: [
-    { id: "only", name: "Only", cwd: home, gated: false, steps: [{ name: "s", prompt: "p" }] },
-  ] });
+  await seedPipeline(pipelines, {
+    phases: [
+      { id: "only", name: "Only", cwd: home, gated: false, steps: [{ name: "s", prompt: "p" }] },
+    ],
+  });
   const rec = recordingSpawn();
   const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
   const inst = await e.start("p1", "manual");
-  const sig = { instanceId: inst!.id, phaseId: "only", runId: rec.calls[0].runId, type: "completed" as const, token: inst!.signalToken };
+  const sig = {
+    instanceId: inst!.id,
+    phaseId: "only",
+    runId: rec.calls[0].runId,
+    type: "completed" as const,
+    token: inst!.signalToken,
+  };
   await e.onSignal(inst!.id, sig);
   await e.onSignal(inst!.id, sig);
   const { instances } = await load();
@@ -156,11 +190,21 @@ test("overlap=skip refuses a second concurrent instance", async () => {
 
 test("concurrency cap limits simultaneous spawns", async () => {
   const { engine, pipelines } = await load();
-  await seedPipeline(pipelines, { phases: [
-    { id: "wide", name: "Wide", cwd: home, gated: false, steps: [
-      { name: "a", prompt: "p" }, { name: "b", prompt: "p" }, { name: "c", prompt: "p" },
-    ] },
-  ] });
+  await seedPipeline(pipelines, {
+    phases: [
+      {
+        id: "wide",
+        name: "Wide",
+        cwd: home,
+        gated: false,
+        steps: [
+          { name: "a", prompt: "p" },
+          { name: "b", prompt: "p" },
+          { name: "c", prompt: "p" },
+        ],
+      },
+    ],
+  });
   // Wrap recordingSpawn so each handle.done is a custom thenable.
   // The engine calls `void handle.done.then(engineCb)` — our thenable's
   // .then() captures the returned promise (which resolves when engineCb
@@ -199,7 +243,10 @@ test("concurrency cap limits simultaneous spawns", async () => {
         drainResolve(thenResults[thenResults.length - 1] ?? Promise.resolve());
       });
     };
-    return { pid: 1000 + calls.length, done: trackedDone as unknown as Promise<{ code: number | null }> };
+    return {
+      pid: 1000 + calls.length,
+      done: trackedDone as unknown as Promise<{ code: number | null }>,
+    };
   };
   const e = engine.createEngine(baseDeps({ spawn, maxConcurrent: 2 }));
   const startP = e.start("p1", "manual");
@@ -218,14 +265,22 @@ test("concurrency cap limits simultaneous spawns", async () => {
 
 test("abort returns 409 on an already-terminal instance", async () => {
   const { engine, pipelines } = await load();
-  await seedPipeline(pipelines, { phases: [
-    { id: "only", name: "Only", cwd: home, gated: false, steps: [{ name: "s", prompt: "p" }] },
-  ] });
+  await seedPipeline(pipelines, {
+    phases: [
+      { id: "only", name: "Only", cwd: home, gated: false, steps: [{ name: "s", prompt: "p" }] },
+    ],
+  });
   const rec = recordingSpawn();
   const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
   const inst = await e.start("p1", "manual");
   // drive it to succeeded
-  await e.onSignal(inst!.id, { instanceId: inst!.id, phaseId: "only", runId: rec.calls[0].runId, type: "completed", token: inst!.signalToken });
+  await e.onSignal(inst!.id, {
+    instanceId: inst!.id,
+    phaseId: "only",
+    runId: rec.calls[0].runId,
+    type: "completed",
+    token: inst!.signalToken,
+  });
   const res = await e.abort(inst!.id);
   assert.equal(res.code, 409);
 });
@@ -240,7 +295,12 @@ test("reconcile fails a phase whose run ended without signalling", async () => {
   // Mark the run record terminal with a dead pid, but never send a signal.
   const runId = rec.calls[0].runId;
   const got = await runs.readRun(runId);
-  await runs.writeRun({ ...got!.run, status: "failed", pid: 2_000_000_000, endedAt: new Date().toISOString() });
+  await runs.writeRun({
+    ...got!.run,
+    status: "failed",
+    pid: 2_000_000_000,
+    endedAt: new Date().toISOString(),
+  });
   await e.reconcile();
   const after = await instances.readInstance(inst!.id);
   assert.equal(after?.status, "failed");
@@ -257,8 +317,11 @@ test("reconcile records the run error as the failed phase reason", async () => {
   const runId = rec.calls[0].runId;
   const got = await runs.readRun(runId);
   await runs.writeRun({
-    ...got!.run, status: "failed", error: "exit code 1",
-    pid: 2_000_000_000, endedAt: new Date().toISOString(),
+    ...got!.run,
+    status: "failed",
+    error: "exit code 1",
+    pid: 2_000_000_000,
+    endedAt: new Date().toISOString(),
   });
   await e.reconcile();
   const after = await instances.readInstance(inst!.id);
@@ -327,11 +390,16 @@ test("start() refuses when preflight fails and spawns nothing", async () => {
   const { engine, pipelines } = await load();
   await seedPipeline(pipelines);
   const rec = recordingSpawn();
-  const e = engine.createEngine(baseDeps({
-    spawn: rec.spawn,
-    preflight: async () => ({ ok: false, reasons: ["Signal Stop hook: outdated"] }),
-  }));
-  await assert.rejects(() => e.start("p1"), (err: Error) => err.name === "PreflightError");
+  const e = engine.createEngine(
+    baseDeps({
+      spawn: rec.spawn,
+      preflight: async () => ({ ok: false, reasons: ["Signal Stop hook: outdated"] }),
+    }),
+  );
+  await assert.rejects(
+    () => e.start("p1"),
+    (err: Error) => err.name === "PreflightError",
+  );
   assert.equal(rec.calls.length, 0);
 });
 
@@ -339,10 +407,12 @@ test("start() proceeds when preflight passes", async () => {
   const { engine, pipelines } = await load();
   await seedPipeline(pipelines);
   const rec = recordingSpawn();
-  const e = engine.createEngine(baseDeps({
-    spawn: rec.spawn,
-    preflight: async () => ({ ok: true, reasons: [] }),
-  }));
+  const e = engine.createEngine(
+    baseDeps({
+      spawn: rec.spawn,
+      preflight: async () => ({ ok: true, reasons: [] }),
+    }),
+  );
   const inst = await e.start("p1");
   assert.ok(inst);
   assert.equal(rec.calls.length, 1);
@@ -354,10 +424,16 @@ test("startPhase resolves step override over pipeline default", async () => {
   await seedPipeline(pipelines, {
     model: "sonnet",
     phases: [
-      { id: "only", name: "Only", cwd: home, gated: false, steps: [
-        { name: "override", prompt: "p", model: "opus" },
-        { name: "inherit", prompt: "p" },
-      ] },
+      {
+        id: "only",
+        name: "Only",
+        cwd: home,
+        gated: false,
+        steps: [
+          { name: "override", prompt: "p", model: "opus" },
+          { name: "inherit", prompt: "p" },
+        ],
+      },
     ],
   });
   const rec = recordingSpawn();
@@ -365,15 +441,17 @@ test("startPhase resolves step override over pipeline default", async () => {
   await e.start("p1", "manual");
   const overrideRun = (await runs.readRun(rec.calls[0].runId))!.run;
   const inheritRun = (await runs.readRun(rec.calls[1].runId))!.run;
-  assert.equal(overrideRun.model, "opus");   // step override wins
-  assert.equal(inheritRun.model, "sonnet");  // falls back to pipeline default
+  assert.equal(overrideRun.model, "opus"); // step override wins
+  assert.equal(inheritRun.model, "sonnet"); // falls back to pipeline default
 });
 
 test("startPhase leaves model unset when neither level defines one", async () => {
   const { engine, pipelines } = await load();
   const runs = await import(`./sources/runs.js?${Math.random()}`);
   await seedPipeline(pipelines, {
-    phases: [{ id: "only", name: "Only", cwd: home, gated: false, steps: [{ name: "s", prompt: "p" }] }],
+    phases: [
+      { id: "only", name: "Only", cwd: home, gated: false, steps: [{ name: "s", prompt: "p" }] },
+    ],
   });
   const rec = recordingSpawn();
   const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));

@@ -1,10 +1,6 @@
 import { useState } from "react";
 import { AlertStrip, EmptyState, Page } from "../ds";
-import {
-  useInventory,
-  type InventoryItem,
-  type PluginItem,
-} from "../useInventory";
+import { useInventory, type InventoryItem, type PluginItem } from "../useInventory";
 
 type AccentToken = "ok" | "queue" | "run" | "await" | "fail";
 
@@ -16,7 +12,15 @@ const ACCENT: Record<AccentToken, string> = {
   fail: "bg-fail/14 text-fail ring-fail/20",
 };
 
-function ItemRow({ name, description, badge }: { name: string; description: string; badge?: string }) {
+function ItemRow({
+  name,
+  description,
+  badge,
+}: {
+  name: string;
+  description: string;
+  badge?: string;
+}) {
   return (
     <div className="flex flex-col rounded-lg border border-line bg-surface px-4 py-3 transition hover:border-ink-faint/40">
       <div className="flex items-baseline gap-x-2">
@@ -25,9 +29,7 @@ function ItemRow({ name, description, badge }: { name: string; description: stri
         </span>
         {badge && <span className="shrink-0 text-xs text-ink-faint">{badge}</span>}
       </div>
-      {description && (
-        <p className="mt-1 text-xs leading-relaxed text-ink-faint">{description}</p>
-      )}
+      {description && <p className="mt-1 text-xs leading-relaxed text-ink-faint">{description}</p>}
     </div>
   );
 }
@@ -53,11 +55,16 @@ function InventorySection<T>({
         onClick={() => setOpen((v) => !v)}
         className="mb-3 flex w-full items-center gap-x-3 text-left"
       >
-        <span className="text-ink-faint transition-transform" style={{ transform: open ? "rotate(90deg)" : "none" }}>
+        <span
+          className="text-ink-faint transition-transform"
+          style={{ transform: open ? "rotate(90deg)" : "none" }}
+        >
           ›
         </span>
         <h3 className="text-sm font-semibold text-ink">{title}</h3>
-        <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ${ACCENT[accent]}`}>
+        <span
+          className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ${ACCENT[accent]}`}
+        >
           {items.length}
         </span>
       </button>

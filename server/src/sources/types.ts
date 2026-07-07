@@ -1,10 +1,4 @@
-export type AgentStatus =
-  | "working"
-  | "done"
-  | "failed"
-  | "idle"
-  | "queued"
-  | "unknown";
+export type AgentStatus = "working" | "done" | "failed" | "idle" | "queued" | "unknown";
 
 /** A background job's persisted state (`jobs/<short>/state.json`). */
 export interface JobState {

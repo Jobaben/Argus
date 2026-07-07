@@ -1,6 +1,7 @@
-import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { readFile, readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { paths } from "../claudeHome.js";
+import { atomicWriteJson } from "./atomicWrite.js";
 import type { PipelineInstance } from "./pipelineTypes.js";
 
 export const INSTANCE_KEEP = 50;
@@ -12,11 +13,7 @@ function instancePath(id: string): string {
 }
 
 export async function writeInstance(inst: PipelineInstance): Promise<void> {
-  await mkdir(paths.instancesDir(), { recursive: true });
-  const file = instancePath(inst.id);
-  const tmp = `${file}.${process.pid}.tmp`;
-  await writeFile(tmp, JSON.stringify(inst, null, 2), "utf8");
-  await rename(tmp, file);
+  await atomicWriteJson(instancePath(inst.id), inst);
 }
 
 export async function readInstance(id: string): Promise<PipelineInstance | null> {
@@ -37,9 +34,9 @@ export async function readInstances(
   } catch {
     return [];
   }
-  const all = (
-    await Promise.all(names.map((f) => readInstance(f.replace(/\.json$/, ""))))
-  ).filter((i): i is PipelineInstance => i !== null);
+  const all = (await Promise.all(names.map((f) => readInstance(f.replace(/\.json$/, ""))))).filter(
+    (i): i is PipelineInstance => i !== null,
+  );
   let out = all.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   if (opts.pipelineId) out = out.filter((i) => i.pipelineId === opts.pipelineId);
   if (opts.limit && opts.limit > 0) out = out.slice(0, opts.limit);

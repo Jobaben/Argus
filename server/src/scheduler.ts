@@ -2,10 +2,7 @@ import { spawn as nodeSpawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { graceMsFor, shouldFire } from "./sources/nextFire.js";
-import {
-  markScheduleRan,
-  readSchedules,
-} from "./sources/schedules.js";
+import { markScheduleRan, readSchedules } from "./sources/schedules.js";
 import {
   RUN_KEEP,
   encodeProject,
@@ -48,9 +45,98 @@ function ephemeralRun(
   };
 }
 
+export interface RunResult {
+  code: number | null;
+  result: string | null;
+  error: string | null;
+  costUsd: number | null;
+  tokens: number | null;
+}
+
 export interface SpawnHandle {
   pid: number | null;
-  done: Promise<{ code: number | null; result: string | null; error: string | null }>;
+  done: Promise<RunResult>;
+}
+
+/**
+ * `claude -p --output-format json` prints a single JSON envelope as its final
+ * output. Parse it out of the captured stdout, tolerant of anything the tool
+ * logged before it: try the whole buffer, then fall back to the last balanced
+ * top-level `{...}` object. Returns nulls when nothing parses.
+ */
+export function parseRunEnvelope(stdout: string): {
+  result: string | null;
+  costUsd: number | null;
+  tokens: number | null;
+} {
+  const empty = { result: null, costUsd: null, tokens: null };
+  const extract = (obj: Record<string, unknown>) => {
+    const usage = (obj.usage ?? {}) as Record<string, unknown>;
+    const inTok = Number(usage.input_tokens ?? 0);
+    const outTok = Number(usage.output_tokens ?? 0);
+    const tokens = Number.isFinite(inTok + outTok) && inTok + outTok > 0 ? inTok + outTok : null;
+    const cost = Number(obj.total_cost_usd ?? obj.cost_usd);
+    return {
+      result: typeof obj.result === "string" ? obj.result : null,
+      costUsd: Number.isFinite(cost) ? cost : null,
+      tokens,
+    };
+  };
+  const text = stdout.trim();
+  if (!text) return empty;
+  try {
+    return extract(JSON.parse(text) as Record<string, unknown>);
+  } catch {
+    // Collect every balanced top-level {...} span with a string-aware depth
+    // scan (so braces inside strings and any stray brace emitted AFTER the
+    // envelope don't defeat extraction), then take the last span that parses
+    // AND looks like the CLI envelope (has result/cost/usage).
+    const spans = topLevelObjectSpans(text);
+    for (let i = spans.length - 1; i >= 0; i--) {
+      try {
+        const obj = JSON.parse(text.slice(spans[i][0], spans[i][1] + 1)) as Record<string, unknown>;
+        if ("result" in obj || "total_cost_usd" in obj || "cost_usd" in obj || "usage" in obj) {
+          return extract(obj);
+        }
+      } catch {
+        /* not valid JSON; try an earlier span */
+      }
+    }
+    return empty;
+  }
+}
+
+/** Byte spans [start,end] of every balanced top-level `{...}` in `text`,
+ *  ignoring braces inside JSON strings. */
+function topLevelObjectSpans(text: string): [number, number][] {
+  const spans: [number, number][] = [];
+  let depth = 0;
+  let start = -1;
+  let inStr = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        spans.push([start, i]);
+        start = -1;
+      } else if (depth < 0) {
+        depth = 0; // stray closing brace; resync
+      }
+    }
+  }
+  return spans;
 }
 
 export type SpawnFn = (run: Run, logPath: string) => SpawnHandle;
@@ -62,6 +148,8 @@ export interface SchedulerDeps {
   newId: () => string;
   onChange?: () => void;
   onTick?: () => Promise<void>;
+  /** Called when a run reaches the 'failed' state (for failure notifications). */
+  onFailure?: (run: Run) => void;
 }
 
 /** True if a process with `pid` is currently alive. */
@@ -101,34 +189,29 @@ export const defaultSpawn: SpawnFn = (run, logPath) => {
   child.stdout?.pipe(out, { end: false });
   child.stderr?.pipe(out, { end: false });
 
-  const done = new Promise<{ code: number | null; result: string | null; error: string | null }>(
-    (resolve) => {
-      let settled = false;
-      let tail = "";
-      child.stdout?.on("data", (d: Buffer) => {
-        tail = (tail + d.toString("utf8")).slice(-8192);
-      });
-      child.on("error", (err) => {
-        if (settled) return;
-        settled = true;
-        out.end();
-        resolve({ code: null, result: null, error: err.message });
-      });
-      child.on("close", (code) => {
-        if (settled) return;
-        settled = true;
-        out.end();
-        let result: string | null = null;
-        try {
-          const parsed = JSON.parse(tail) as { result?: string };
-          result = parsed.result ?? null;
-        } catch {
-          result = null;
-        }
-        resolve({ code, result, error: code === 0 ? null : `exit code ${code}` });
-      });
-    },
-  );
+  const done = new Promise<RunResult>((resolve) => {
+    let settled = false;
+    // Keep enough tail to hold a large result envelope (the CLI can emit
+    // multi-KB JSON); 8 KB silently dropped results whose JSON exceeded it.
+    let tail = "";
+    const TAIL_CAP = 256 * 1024;
+    child.stdout?.on("data", (d: Buffer) => {
+      tail = (tail + d.toString("utf8")).slice(-TAIL_CAP);
+    });
+    child.on("error", (err) => {
+      if (settled) return;
+      settled = true;
+      out.end();
+      resolve({ code: null, result: null, error: err.message, costUsd: null, tokens: null });
+    });
+    child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      out.end();
+      const { result, costUsd, tokens } = parseRunEnvelope(tail);
+      resolve({ code, result, error: code === 0 ? null : `exit code ${code}`, costUsd, tokens });
+    });
+  });
   return { pid: child.pid ?? null, done };
 };
 
@@ -167,22 +250,28 @@ export async function fireRun(
   await writeRun(run);
   deps.onChange?.();
 
-  // Track completion without blocking the tick.
-  void handle.done.then(async (res) => {
-    const ended = deps.now();
-    const finished: Run = {
-      ...run,
-      status: res.code === 0 ? "succeeded" : "failed",
-      endedAt: ended.toISOString(),
-      durationMs: ended.getTime() - startedAt.getTime(),
-      exitCode: res.code,
-      resultSummary: res.result,
-      error: res.error,
-    };
-    await writeRun(finished);
-    await pruneRuns(schedule.id, RUN_KEEP);
-    deps.onChange?.();
-  });
+  // Track completion without blocking the tick. Errors in the handler must not
+  // become an unhandled rejection that crashes the daemon.
+  void handle.done
+    .then(async (res) => {
+      const ended = deps.now();
+      const finished: Run = {
+        ...run,
+        status: res.code === 0 ? "succeeded" : "failed",
+        endedAt: ended.toISOString(),
+        durationMs: ended.getTime() - startedAt.getTime(),
+        exitCode: res.code,
+        resultSummary: res.result,
+        error: res.error,
+        costUsd: res.costUsd,
+        tokens: res.tokens,
+      };
+      await writeRun(finished);
+      await pruneRuns(schedule.id, RUN_KEEP);
+      if (finished.status === "failed") deps.onFailure?.(finished);
+      deps.onChange?.();
+    })
+    .catch((e) => console.error(`[argus] run ${run.id} completion handler failed:`, e));
 
   return run;
 }
@@ -203,7 +292,14 @@ export async function tick(deps: SchedulerDeps): Promise<void> {
         const iso = now.toISOString();
         const id = deps.newId();
         await writeRun(
-          ephemeralRun(schedule, id, "skipped", iso, null, "skipped: previous run still in progress"),
+          ephemeralRun(
+            schedule,
+            id,
+            "skipped",
+            iso,
+            null,
+            "skipped: previous run still in progress",
+          ),
         );
         await markScheduleRan(schedule.id, id, iso);
         await pruneRuns(schedule.id, RUN_KEEP);
@@ -217,17 +313,18 @@ export async function tick(deps: SchedulerDeps): Promise<void> {
     } catch (e) {
       // Never let one schedule's failure break the tick.
       const iso = now.toISOString();
-      await writeRun(
-        ephemeralRun(
-          schedule,
-          deps.newId(),
-          "failed",
-          iso,
-          iso,
-          e instanceof Error ? e.message : String(e),
-        ),
+      const failed = ephemeralRun(
+        schedule,
+        deps.newId(),
+        "failed",
+        iso,
+        iso,
+        e instanceof Error ? e.message : String(e),
       );
+      await writeRun(failed);
       await pruneRuns(schedule.id, RUN_KEEP);
+      // A spawn-time failure is still a failure the operator should hear about.
+      deps.onFailure?.(failed);
       deps.onChange?.();
     }
   }
@@ -241,9 +338,7 @@ export async function tick(deps: SchedulerDeps): Promise<void> {
 }
 
 /** On startup, mark any 'running' run whose process is gone as interrupted. */
-export async function recoverInterruptedRuns(
-  deps: Pick<SchedulerDeps, "now">,
-): Promise<void> {
+export async function recoverInterruptedRuns(deps: Pick<SchedulerDeps, "now">): Promise<void> {
   const running = (await readRuns()).filter((r) => r.status === "running");
   for (const r of running) {
     if (isAlive(r.pid)) continue;
@@ -263,9 +358,9 @@ export async function recoverInterruptedRuns(
 }
 
 /** Boots the scheduler loop; returns a stop handle for graceful shutdown. */
-export function startScheduler(
-  overrides: Partial<SchedulerDeps> = {},
-): { stop: () => Promise<void> } {
+export function startScheduler(overrides: Partial<SchedulerDeps> = {}): {
+  stop: () => Promise<void>;
+} {
   const deps: SchedulerDeps = {
     now: () => new Date(),
     spawn: defaultSpawn,
@@ -275,17 +370,34 @@ export function startScheduler(
   };
 
   let stopped = false;
-  void recoverInterruptedRuns(deps).then(() => deps.onChange?.());
+  // Guards against overlapping ticks: a tick that runs longer than tickMs (slow
+  // disk, many schedules) must not start a second pass concurrently, or the two
+  // could both see a schedule as due and fire it twice within the grace window.
+  let inFlight: Promise<void> | null = null;
+  // Startup recovery runs async; stop() awaits it so a shutdown mid-recovery
+  // doesn't let recovery writes continue past stop.
+  const recovery = recoverInterruptedRuns(deps)
+    .then(() => deps.onChange?.())
+    .catch((e) => console.error("[argus] interrupted-run recovery failed:", e));
 
-  const loop = setInterval(() => {
-    if (stopped) return;
-    void tick(deps).catch((e) => console.error("[argus] scheduler tick failed:", e));
-  }, deps.tickMs);
+  const runTick = () => {
+    if (stopped || inFlight) return;
+    inFlight = tick(deps)
+      .catch((e) => console.error("[argus] scheduler tick failed:", e))
+      .finally(() => {
+        inFlight = null;
+      });
+  };
+
+  const loop = setInterval(runTick, deps.tickMs);
 
   return {
     stop: async () => {
       stopped = true;
       clearInterval(loop);
+      // Let in-flight recovery and tick finish so shutdown doesn't race writes.
+      await recovery;
+      if (inFlight) await inFlight;
     },
   };
 }

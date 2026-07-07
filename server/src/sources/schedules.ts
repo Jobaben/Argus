@@ -1,8 +1,15 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
 import { paths } from "../claudeHome.js";
 import { nextFireAfter, parseHHMM } from "./nextFire.js";
+import { createJsonArrayStore } from "./jsonArrayStore.js";
 import type { Schedule, Trigger } from "./scheduleTypes.js";
+
+// The crash-safe, mutex-serialized single-file store lives in one shared place.
+const store = createJsonArrayStore<Schedule>({
+  file: paths.schedulesFile,
+  label: "schedules.json",
+});
+const withStoreLock = store.withLock;
 
 export class ScheduleValidationError extends Error {
   constructor(message: string) {
@@ -98,7 +105,14 @@ export function validateInput(raw: unknown): ScheduleInput {
   const trigger = validateTrigger(r.trigger);
   const overlapPolicy = r.overlapPolicy === "allow" ? "allow" : "skip";
   const enabled = r.enabled === undefined ? true : Boolean(r.enabled);
-  return { name: r.name.trim(), prompt: r.prompt.trim(), cwd: r.cwd, trigger, enabled, overlapPolicy };
+  return {
+    name: r.name.trim(),
+    prompt: r.prompt.trim(),
+    cwd: r.cwd,
+    trigger,
+    enabled,
+    overlapPolicy,
+  };
 }
 
 export function validatePatch(raw: unknown): Partial<ScheduleInput> {
@@ -118,7 +132,12 @@ export function validatePatch(raw: unknown): Partial<ScheduleInput> {
     patch.prompt = r.prompt.trim();
   }
   if ("cwd" in r) {
-    if (typeof r.cwd !== "string" || !r.cwd.trim() || !existsSync(r.cwd) || !statSync(r.cwd).isDirectory()) {
+    if (
+      typeof r.cwd !== "string" ||
+      !r.cwd.trim() ||
+      !existsSync(r.cwd) ||
+      !statSync(r.cwd).isDirectory()
+    ) {
       throw new ScheduleValidationError(`cwd does not exist: ${String(r.cwd)}`);
     }
     patch.cwd = r.cwd;
@@ -129,37 +148,8 @@ export function validatePatch(raw: unknown): Partial<ScheduleInput> {
   return patch;
 }
 
-/** Reads the raw file; returns { ok, list } so writers can refuse on corruption. */
-async function readRaw(): Promise<{ ok: boolean; list: Schedule[] }> {
-  let text: string;
-  try {
-    text = await readFile(paths.schedulesFile(), "utf8");
-  } catch {
-    return { ok: true, list: [] }; // missing file = empty, writable
-  }
-  try {
-    const parsed = JSON.parse(text) as Schedule[];
-    return { ok: true, list: Array.isArray(parsed) ? parsed : [] };
-  } catch {
-    return { ok: false, list: [] }; // present but corrupt = do not overwrite
-  }
-}
-
-export async function readSchedules(): Promise<Schedule[]> {
-  return (await readRaw()).list;
-}
-
-async function writeSchedules(list: Schedule[]): Promise<void> {
-  const current = await readRaw();
-  if (!current.ok) {
-    throw new Error("schedules.json could not be parsed; refusing to overwrite it");
-  }
-  await mkdir(paths.argus(), { recursive: true });
-  const file = paths.schedulesFile();
-  const tmp = `${file}.${process.pid}.tmp`;
-  await writeFile(tmp, JSON.stringify(list, null, 2), "utf8");
-  await rename(tmp, file);
-}
+export const readSchedules = store.read;
+const writeSchedules = store.write;
 
 export async function readSchedulesWithNext(
   now: Date,
@@ -191,10 +181,12 @@ export async function createSchedule(
     lastRunAt: null,
     lastRunId: null,
   };
-  const list = await readSchedules();
-  list.push(schedule);
-  await writeSchedules(list);
-  return schedule;
+  return withStoreLock(async () => {
+    const list = await readSchedules();
+    list.push(schedule);
+    await writeSchedules(list);
+    return schedule;
+  });
 }
 
 export async function updateSchedule(
@@ -202,40 +194,42 @@ export async function updateSchedule(
   patch: Partial<ScheduleInput>,
   now: Date,
 ): Promise<Schedule | null> {
-  const list = await readSchedules();
-  const idx = list.findIndex((s) => s.id === id);
-  if (idx === -1) return null;
-  const merged: Schedule = {
-    ...list[idx],
-    ...("name" in patch ? { name: patch.name! } : {}),
-    ...("prompt" in patch ? { prompt: patch.prompt! } : {}),
-    ...("cwd" in patch ? { cwd: patch.cwd! } : {}),
-    ...("trigger" in patch ? { trigger: patch.trigger! } : {}),
-    ...("enabled" in patch ? { enabled: patch.enabled! } : {}),
-    ...("overlapPolicy" in patch ? { overlapPolicy: patch.overlapPolicy! } : {}),
-    updatedAt: now.toISOString(),
-  };
-  list[idx] = merged;
-  await writeSchedules(list);
-  return merged;
+  return withStoreLock(async () => {
+    const list = await readSchedules();
+    const idx = list.findIndex((s) => s.id === id);
+    if (idx === -1) return null;
+    const merged: Schedule = {
+      ...list[idx],
+      ...("name" in patch ? { name: patch.name! } : {}),
+      ...("prompt" in patch ? { prompt: patch.prompt! } : {}),
+      ...("cwd" in patch ? { cwd: patch.cwd! } : {}),
+      ...("trigger" in patch ? { trigger: patch.trigger! } : {}),
+      ...("enabled" in patch ? { enabled: patch.enabled! } : {}),
+      ...("overlapPolicy" in patch ? { overlapPolicy: patch.overlapPolicy! } : {}),
+      updatedAt: now.toISOString(),
+    };
+    list[idx] = merged;
+    await writeSchedules(list);
+    return merged;
+  });
 }
 
 export async function deleteSchedule(id: string): Promise<boolean> {
-  const list = await readSchedules();
-  const next = list.filter((s) => s.id !== id);
-  if (next.length === list.length) return false;
-  await writeSchedules(next);
-  return true;
+  return withStoreLock(async () => {
+    const list = await readSchedules();
+    const next = list.filter((s) => s.id !== id);
+    if (next.length === list.length) return false;
+    await writeSchedules(next);
+    return true;
+  });
 }
 
-export async function markScheduleRan(
-  id: string,
-  runId: string,
-  atISO: string,
-): Promise<void> {
-  const list = await readSchedules();
-  const idx = list.findIndex((s) => s.id === id);
-  if (idx === -1) return;
-  list[idx] = { ...list[idx], lastRunAt: atISO, lastRunId: runId };
-  await writeSchedules(list);
+export async function markScheduleRan(id: string, runId: string, atISO: string): Promise<void> {
+  return withStoreLock(async () => {
+    const list = await readSchedules();
+    const idx = list.findIndex((s) => s.id === id);
+    if (idx === -1) return;
+    list[idx] = { ...list[idx], lastRunAt: atISO, lastRunId: runId };
+    await writeSchedules(list);
+  });
 }

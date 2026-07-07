@@ -15,8 +15,6 @@ describe("ActivityEvent", () => {
         <b>deploy-bot</b> failed · exit 1
       </ActivityEvent>,
     );
-    expect(screen.getByText("deploy-bot").parentElement?.className).toContain(
-      "[&_b]:text-fail",
-    );
+    expect(screen.getByText("deploy-bot").parentElement?.className).toContain("[&_b]:text-fail");
   });
 });

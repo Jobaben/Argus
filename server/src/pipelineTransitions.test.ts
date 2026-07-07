@@ -1,19 +1,46 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  initInstance, advance, applyApprove, applyRevise, applyAbort, applyTemplate,
+  initInstance,
+  advance,
+  applyApprove,
+  applyRevise,
+  applyAbort,
+  applyTemplate,
 } from "./pipelineTransitions.js";
-import type { PipelineDefinition, PipelineInstance, PipelineSignal } from "./sources/pipelineTypes.js";
+import type {
+  PipelineDefinition,
+  PipelineInstance,
+  PipelineSignal,
+} from "./sources/pipelineTypes.js";
 
 const NOW = "2026-06-30T12:00:00.000Z";
 
 function def(over: Partial<PipelineDefinition> = {}): PipelineDefinition {
   return {
-    id: "p1", name: "feature", trigger: null, enabled: true, overlapPolicy: "skip",
-    lastStartedAt: null, createdAt: NOW, updatedAt: NOW,
+    id: "p1",
+    name: "feature",
+    trigger: null,
+    enabled: true,
+    overlapPolicy: "skip",
+    lastStartedAt: null,
+    createdAt: NOW,
+    updatedAt: NOW,
     phases: [
-      { id: "brainstorm", name: "Brainstorm", cwd: "/tmp", gated: true, steps: [{ name: "bs", prompt: "go" }] },
-      { id: "plan", name: "Plan", cwd: "/tmp", gated: false, steps: [{ name: "wp", prompt: "plan {{previous.payload}}" }] },
+      {
+        id: "brainstorm",
+        name: "Brainstorm",
+        cwd: "/tmp",
+        gated: true,
+        steps: [{ name: "bs", prompt: "go" }],
+      },
+      {
+        id: "plan",
+        name: "Plan",
+        cwd: "/tmp",
+        gated: false,
+        steps: [{ name: "wp", prompt: "plan {{previous.payload}}" }],
+      },
     ],
     ...over,
   };
@@ -28,7 +55,12 @@ function started(d: PipelineDefinition): PipelineInstance {
 }
 
 const sig = (over: Partial<PipelineSignal>): PipelineSignal => ({
-  instanceId: "i1", phaseId: "brainstorm", runId: "run-0", type: "completed", token: "tok", ...over,
+  instanceId: "i1",
+  phaseId: "brainstorm",
+  runId: "run-0",
+  type: "completed",
+  token: "tok",
+  ...over,
 });
 
 test("applyTemplate substitutes previous payload", () => {
@@ -72,9 +104,27 @@ test("completed on a non-gated phase advances and asks to spawn the next phase",
 });
 
 test("completed on the last non-gated phase succeeds the instance", () => {
-  const d = def({ phases: [{ id: "only", name: "Only", cwd: "/tmp", gated: false, steps: [{ name: "s", prompt: "p" }] }] });
+  const d = def({
+    phases: [
+      { id: "only", name: "Only", cwd: "/tmp", gated: false, steps: [{ name: "s", prompt: "p" }] },
+    ],
+  });
   const inst = started(d);
-  const r = advance(d, { ...inst, phases: [{ ...inst.phases[0], id: "only", steps: [{ name: "s", runId: "run-0", status: "running" }] }] }, sig({ phaseId: "only" }), NOW);
+  const r = advance(
+    d,
+    {
+      ...inst,
+      phases: [
+        {
+          ...inst.phases[0],
+          id: "only",
+          steps: [{ name: "s", runId: "run-0", status: "running" }],
+        },
+      ],
+    },
+    sig({ phaseId: "only" }),
+    NOW,
+  );
   assert.equal(r.startPhase, null);
   assert.equal(r.instance.status, "succeeded");
   assert.equal(r.instance.endedAt, NOW);
@@ -97,7 +147,12 @@ test("a signal from an untracked run is ignored (dedup of concurrent runs)", () 
   // A stale/duplicate concurrent run signals with a runId that no longer
   // matches the tracked step; it must not terminalize or advance the instance.
   const inst = started(def());
-  const r = advance(def(), inst, sig({ type: "failed", payload: "boom", runId: "some-other-run" }), NOW);
+  const r = advance(
+    def(),
+    inst,
+    sig({ type: "failed", payload: "boom", runId: "some-other-run" }),
+    NOW,
+  );
   assert.equal(r.startPhase, null);
   assert.equal(r.instance.status, "running");
   assert.equal(r.instance.phases[0].status, "running");
@@ -106,9 +161,19 @@ test("a signal from an untracked run is ignored (dedup of concurrent runs)", () 
 
 test("a failed phase terminalizes running sibling steps", () => {
   const d = def({
-    phases: [{ id: "brainstorm", name: "Brainstorm", cwd: "/tmp", gated: false, steps: [
-      { name: "a", prompt: "p" }, { name: "b", prompt: "p" },
-    ] }, { id: "plan", name: "Plan", cwd: "/tmp", gated: false, steps: [{ name: "wp", prompt: "p" }] }],
+    phases: [
+      {
+        id: "brainstorm",
+        name: "Brainstorm",
+        cwd: "/tmp",
+        gated: false,
+        steps: [
+          { name: "a", prompt: "p" },
+          { name: "b", prompt: "p" },
+        ],
+      },
+      { id: "plan", name: "Plan", cwd: "/tmp", gated: false, steps: [{ name: "wp", prompt: "p" }] },
+    ],
   });
   const inst = started(d);
   inst.phases[0].steps = [

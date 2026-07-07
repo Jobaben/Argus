@@ -128,10 +128,7 @@ async function scanFile(
  * memory; non-matching lines are rejected by a cheap raw-string check before
  * any JSON parsing happens.
  */
-export async function searchTranscripts(
-  q: string,
-  limit = DEFAULT_LIMIT,
-): Promise<SearchResult[]> {
+export async function searchTranscripts(q: string, limit = DEFAULT_LIMIT): Promise<SearchResult[]> {
   const lowerQ = q.trim().toLowerCase();
   if (!lowerQ) return [];
 

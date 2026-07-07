@@ -23,7 +23,9 @@ export default function SetupBanner() {
 
   if (ok) return null;
 
-  const hasFixable = prereqs.some((p) => (p.status === "missing" || p.status === "outdated") && p.fixable);
+  const hasFixable = prereqs.some(
+    (p) => (p.status === "missing" || p.status === "outdated") && p.fixable,
+  );
 
   const onApply = () => {
     setBusy(true);

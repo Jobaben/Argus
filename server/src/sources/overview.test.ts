@@ -5,19 +5,47 @@ import type { PipelineDefinition, PipelineInstance, InstanceStatus } from "./pip
 
 function def(id: string, name = id): PipelineDefinition {
   return {
-    id, name,
+    id,
+    name,
     phases: [{ id: "p1", name: "P1", cwd: "/", gated: false, steps: [{ name: "s", prompt: "x" }] }],
-    trigger: null, enabled: true, overlapPolicy: "skip",
-    lastStartedAt: null, createdAt: "2026-06-01T00:00:00.000Z", updatedAt: "2026-06-01T00:00:00.000Z",
+    trigger: null,
+    enabled: true,
+    overlapPolicy: "skip",
+    lastStartedAt: null,
+    createdAt: "2026-06-01T00:00:00.000Z",
+    updatedAt: "2026-06-01T00:00:00.000Z",
   };
 }
 
-function inst(id: string, pipelineId: string, status: InstanceStatus, createdAt: string, updatedAt = createdAt): PipelineInstance {
+function inst(
+  id: string,
+  pipelineId: string,
+  status: InstanceStatus,
+  createdAt: string,
+  updatedAt = createdAt,
+): PipelineInstance {
   return {
-    id, pipelineId, pipelineName: pipelineId, status,
+    id,
+    pipelineId,
+    pipelineName: pipelineId,
+    status,
     currentPhaseIndex: 0,
-    phases: [{ id: "p1", name: "P1", gated: false, status: "running", steps: [], attempt: 1, payload: null }],
-    trigger: "manual", signalToken: "tok", createdAt, updatedAt, endedAt: null,
+    phases: [
+      {
+        id: "p1",
+        name: "P1",
+        gated: false,
+        status: "running",
+        steps: [],
+        attempt: 1,
+        payload: null,
+      },
+    ],
+    trigger: "manual",
+    signalToken: "tok",
+    createdAt,
+    updatedAt,
+    endedAt: null,
   };
 }
 
@@ -49,7 +77,10 @@ test("sorts attention-first: awaiting-approval before running before succeeded",
     inst("i-done", "done", "succeeded", "2026-06-30T13:00:00.000Z"),
   ];
   const out = buildOverview(defs, instances);
-  assert.deepEqual(out.map((e) => e.definition.id), ["await", "run", "done"]);
+  assert.deepEqual(
+    out.map((e) => e.definition.id),
+    ["await", "run", "done"],
+  );
 });
 
 test("ranks a failed instance after awaiting but before running and succeeded", () => {
@@ -61,7 +92,10 @@ test("ranks a failed instance after awaiting but before running and succeeded", 
     inst("i-done", "done", "succeeded", "2026-06-30T13:00:00.000Z"),
   ];
   const out = buildOverview(defs, instances);
-  assert.deepEqual(out.map((e) => e.definition.id), ["await", "fail", "run", "done"]);
+  assert.deepEqual(
+    out.map((e) => e.definition.id),
+    ["await", "fail", "run", "done"],
+  );
 });
 
 test("breaks ties by updatedAt desc then definition name", () => {
@@ -71,5 +105,8 @@ test("breaks ties by updatedAt desc then definition name", () => {
     inst("i-a", "alpha", "running", "2026-06-30T10:00:00.000Z"),
   ];
   const out = buildOverview(defs, instances);
-  assert.deepEqual(out.map((e) => e.definition.id), ["alpha", "zeta"]);
+  assert.deepEqual(
+    out.map((e) => e.definition.id),
+    ["alpha", "zeta"],
+  );
 });

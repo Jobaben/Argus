@@ -35,9 +35,7 @@ export function Page({
               <h1 className="text-xl font-bold tracking-tight text-ink">{title}</h1>
             )}
           </div>
-          {actions != null && (
-            <div className="flex shrink-0 items-center gap-2">{actions}</div>
-          )}
+          {actions != null && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
         </header>
       )}
       {children}

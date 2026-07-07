@@ -32,7 +32,14 @@ describe("PipelineForm", () => {
       name: "Ship it",
       trigger: null,
       overlapPolicy: "skip",
-      phases: [{ name: "Build", cwd: "/tmp", gated: false, steps: [{ name: "compile", prompt: "run the build" }] }],
+      phases: [
+        {
+          name: "Build",
+          cwd: "/tmp",
+          gated: false,
+          steps: [{ name: "compile", prompt: "run the build" }],
+        },
+      ],
     });
     expect(typeof arg.phases[0].id).toBe("string");
     expect(arg.phases[0].id.length).toBeGreaterThan(0);
@@ -55,7 +62,10 @@ describe("PipelineForm", () => {
     await user.type(screen.getByPlaceholderText("Step prompt"), "run the build");
 
     await user.selectOptions(screen.getByLabelText("Default model (inherit CLI)"), "opus");
-    await user.selectOptions(screen.getByLabelText("Use pipeline default (phase 1 step 1)"), "sonnet");
+    await user.selectOptions(
+      screen.getByLabelText("Use pipeline default (phase 1 step 1)"),
+      "sonnet",
+    );
 
     await user.click(screen.getByRole("button", { name: /save pipeline/i }));
 
@@ -89,11 +99,21 @@ describe("PipelineForm", () => {
     const initial = {
       ...EMPTY_PIPELINE,
       name: "Ship it",
-      phases: [{ id: "p1", name: "Build", cwd: "/tmp", gated: false, steps: [{ name: "compile", prompt: "run" }] }],
+      phases: [
+        {
+          id: "p1",
+          name: "Build",
+          cwd: "/tmp",
+          gated: false,
+          steps: [{ name: "compile", prompt: "run" }],
+        },
+      ],
       model: "opus",
     };
     render(<PipelineForm initial={initial} onSubmit={vi.fn()} onCancel={vi.fn()} />);
-    expect((screen.getByLabelText("Default model (inherit CLI)") as HTMLSelectElement).value).toBe("opus");
+    expect((screen.getByLabelText("Default model (inherit CLI)") as HTMLSelectElement).value).toBe(
+      "opus",
+    );
   });
 
   it("omits model when left on the inherit option", async () => {

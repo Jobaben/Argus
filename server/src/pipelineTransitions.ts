@@ -1,5 +1,8 @@
 import type {
-  PhaseProgress, PipelineDefinition, PipelineInstance, PipelineSignal,
+  PhaseProgress,
+  PipelineDefinition,
+  PipelineInstance,
+  PipelineSignal,
 } from "./sources/pipelineTypes.js";
 
 export interface TransitionResult {
@@ -9,7 +12,11 @@ export interface TransitionResult {
 
 export function applyTemplate(prompt: string, prevPayload: unknown): string {
   const value =
-    prevPayload == null ? "" : typeof prevPayload === "string" ? prevPayload : JSON.stringify(prevPayload);
+    prevPayload == null
+      ? ""
+      : typeof prevPayload === "string"
+        ? prevPayload
+        : JSON.stringify(prevPayload);
   return prompt.replace(/\{\{previous\.payload\}\}/g, value);
 }
 
@@ -62,7 +69,11 @@ export function initInstance(
   return { instance, startPhase: 0 };
 }
 
-function advanceToNext(def: PipelineDefinition, inst: PipelineInstance, nowISO: string): TransitionResult {
+function advanceToNext(
+  def: PipelineDefinition,
+  inst: PipelineInstance,
+  nowISO: string,
+): TransitionResult {
   const next = inst.currentPhaseIndex + 1;
   if (next >= def.phases.length) {
     inst.status = "succeeded";

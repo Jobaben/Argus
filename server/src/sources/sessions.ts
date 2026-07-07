@@ -2,6 +2,7 @@ import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { paths } from "../claudeHome.js";
 import { readJsonl } from "./readJson.js";
+import { cached } from "./cache.js";
 
 const DEFAULT_LIMIT = 60;
 const TITLE_MAX = 100;
@@ -161,7 +162,9 @@ function summarize(project: string, id: string, lines: RawLine[]): SessionSummar
   };
 }
 
-async function listSessionFiles(): Promise<{ project: string; id: string; file: string; mtime: number }[]> {
+async function listSessionFiles(): Promise<
+  { project: string; id: string; file: string; mtime: number }[]
+> {
   let projectDirs: string[];
   try {
     const entries = await readdir(paths.projects(), { withFileTypes: true });
@@ -197,22 +200,47 @@ async function listSessionFiles(): Promise<{ project: string; id: string; file: 
   return all.flat();
 }
 
+// Per-file summary memo keyed by (file, mtimeMs). A transcript is only re-read
+// and re-parsed when its mtime changes; unchanged files (the common case on a
+// busy dashboard) are served from memory, so a cache miss on the list no longer
+// re-parses dozens of stable transcripts. Bounded so it can't grow unbounded.
+const SUMMARY_MEMO_MAX = 500;
+const summaryMemo = new Map<string, { mtime: number; summary: SessionSummary }>();
+
+async function summarizeFile(entry: {
+  project: string;
+  id: string;
+  file: string;
+  mtime: number;
+}): Promise<SessionSummary> {
+  const key = entry.file;
+  const hit = summaryMemo.get(key);
+  if (hit && hit.mtime === entry.mtime) return hit.summary;
+  const lines = await readJsonl<RawLine>(entry.file);
+  const summary = summarize(entry.project, entry.id, lines);
+  summaryMemo.set(key, { mtime: entry.mtime, summary });
+  if (summaryMemo.size > SUMMARY_MEMO_MAX) {
+    // Evict the oldest insertion (Map preserves insertion order).
+    summaryMemo.delete(summaryMemo.keys().next().value as string);
+  }
+  return summary;
+}
+
 /** Recent sessions across all projects, newest first (by last activity). */
-export async function readSessions(limit = DEFAULT_LIMIT): Promise<SessionSummary[]> {
+async function readSessionsRaw(limit: number): Promise<SessionSummary[]> {
   const files = await listSessionFiles();
   files.sort((a, b) => b.mtime - a.mtime);
   const slice = files.slice(0, Math.max(0, limit));
 
-  const summaries = await Promise.all(
-    slice.map(async (entry) => {
-      const lines = await readJsonl<RawLine>(entry.file);
-      return summarize(entry.project, entry.id, lines);
-    }),
-  );
+  const summaries = await Promise.all(slice.map((entry) => summarizeFile(entry)));
 
-  return summaries.sort((a, b) =>
-    (b.lastActivity ?? "").localeCompare(a.lastActivity ?? ""),
-  );
+  return summaries.sort((a, b) => (b.lastActivity ?? "").localeCompare(a.lastActivity ?? ""));
+}
+
+// The list read scans dozens of transcript files; a short-TTL single-flight
+// cache collapses the burst of refetches a single live broadcast triggers.
+export async function readSessions(limit = DEFAULT_LIMIT): Promise<SessionSummary[]> {
+  return cached(`sessions:${limit}`, 1500, () => readSessionsRaw(limit));
 }
 
 function resolveSessionPath(project: string, id: string): string | null {
@@ -247,8 +275,7 @@ function normalizeMessage(line: RawLine, index: number): SessionMessage {
   };
 }
 
-/** Full ordered message list for one session, normalized for display. */
-export async function readSession(project: string, id: string): Promise<SessionDetail | null> {
+async function readSessionRaw(project: string, id: string): Promise<SessionDetail | null> {
   const file = resolveSessionPath(project, id);
   if (!file) return null;
 
@@ -270,4 +297,36 @@ export async function readSession(project: string, id: string): Promise<SessionD
     lastActivity: summary.lastActivity,
     messages,
   };
+}
+
+/** Full ordered message list for one session, normalized for display. Cached
+ *  with a short TTL + single-flight so a large open transcript that refetches
+ *  on every live ping isn't fully re-parsed each time. */
+export async function readSession(project: string, id: string): Promise<SessionDetail | null> {
+  return cached(`session:${project}:${id}`, 1500, () => readSessionRaw(project, id));
+}
+
+/** Render a session transcript as portable Markdown for export/download. */
+export function sessionToMarkdown(session: SessionDetail): string {
+  const lines: string[] = [
+    `# ${session.title || session.id}`,
+    "",
+    `- **Session:** \`${session.id}\``,
+    `- **Project:** ${session.projectLabel}`,
+    ...(session.model ? [`- **Model:** ${session.model}`] : []),
+    ...(session.firstActivity ? [`- **Started:** ${session.firstActivity}`] : []),
+    ...(session.lastActivity ? [`- **Last activity:** ${session.lastActivity}`] : []),
+    "",
+    "---",
+    "",
+  ];
+  for (const m of session.messages) {
+    const who = m.role ?? m.type;
+    const tool = m.toolName ? ` · tool: \`${m.toolName}\`` : "";
+    const err = m.isError ? " · ⚠️ error" : "";
+    const when = m.timestamp ? ` — ${m.timestamp}` : "";
+    lines.push(`## ${who}${tool}${err}${when}`, "");
+    if (m.text) lines.push(m.text, "");
+  }
+  return lines.join("\n");
 }

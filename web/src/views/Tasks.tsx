@@ -17,9 +17,7 @@ function timeAgo(iso: string | null): string {
 function TaskRow({ task }: { task: Task }) {
   return (
     <div className="flex items-center gap-3 rounded-xl border border-line bg-surface px-4 py-3 transition hover:border-ink-faint/40">
-      <span className="min-w-0 flex-1 truncate font-mono text-sm text-ink-dim">
-        {task.id}
-      </span>
+      <span className="min-w-0 flex-1 truncate font-mono text-sm text-ink-dim">{task.id}</span>
 
       {task.highwatermark !== null && (
         <span className="shrink-0 rounded-full bg-queue/12 px-2.5 py-0.5 text-xs font-medium text-queue ring-1 ring-queue/30">
@@ -33,9 +31,7 @@ function TaskRow({ task }: { task: Task }) {
 
       <span
         className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium uppercase tracking-wide ring-1 ${
-          task.locked
-            ? "bg-fail/14 text-fail ring-fail/30"
-            : "bg-ok/12 text-ok ring-ok/30"
+          task.locked ? "bg-fail/14 text-fail ring-fail/30" : "bg-ok/12 text-ok ring-ok/30"
         }`}
       >
         {task.locked ? "locked" : "open"}

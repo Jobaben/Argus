@@ -55,7 +55,10 @@ test("readRuns returns newest first and filters by schedule", async () => {
   await m.writeRun(makeRun("b", "s1", new Date(2026, 5, 22, 11, 0).toISOString()));
   await m.writeRun(makeRun("c", "s2", new Date(2026, 5, 22, 12, 0).toISOString()));
   const s1 = await m.readRuns({ scheduleId: "s1" });
-  assert.deepEqual(s1.map((r: { id: string }) => r.id), ["b", "a"]);
+  assert.deepEqual(
+    s1.map((r: { id: string }) => r.id),
+    ["b", "a"],
+  );
 });
 
 test("pruneRuns keeps only the newest N of a schedule", async () => {
@@ -65,7 +68,10 @@ test("pruneRuns keeps only the newest N of a schedule", async () => {
   }
   await m.pruneRuns("s1", 2);
   const left = await m.readRuns({ scheduleId: "s1" });
-  assert.deepEqual(left.map((r: { id: string }) => r.id), ["r4", "r3"]);
+  assert.deepEqual(
+    left.map((r: { id: string }) => r.id),
+    ["r4", "r3"],
+  );
 });
 
 test("readRun truncates the log to the last LOG_CAP_BYTES with a marker", async () => {
@@ -91,7 +97,10 @@ test("pruneRuns deletes both .json and .log of dropped runs", async () => {
   assert.equal(existsSync(m.runLogPath("p3")), true);
   assert.equal(existsSync(m.runLogPath("p0")), false);
   const left = await m.readRuns({ scheduleId: "s9" });
-  assert.deepEqual(left.map((r: { id: string }) => r.id), ["p3", "p2"]);
+  assert.deepEqual(
+    left.map((r: { id: string }) => r.id),
+    ["p3", "p2"],
+  );
 });
 
 test("readRun rejects path-traversal ids", async () => {

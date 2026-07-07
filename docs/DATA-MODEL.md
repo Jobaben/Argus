@@ -8,27 +8,28 @@ read defensively — Claude Code versions vary and files are written incremental
 
 ```jsonc
 {
-  "state": "working",          // working | done | failed | idle  (others possible)
+  "state": "working", // working | done | failed | idle  (others possible)
   "detail": "root cause found …",
-  "tempo": "active",           // active | idle
+  "tempo": "active", // active | idle
   "inFlight": { "tasks": 0, "queued": 0, "kinds": [] },
   "output": { "result": "…final result text…" },
   "children": null,
-  "template": "bg",            // launch template
+  "template": "bg", // launch template
   "respawnFlags": ["--effort", "high", "--permission-mode", "auto"],
   "bgIsolation": "none",
   "sessionId": "96e07482-f8ff-416b-89a3-64d185cc3bd7",
   "resumeSessionId": "…",
-  "daemonShort": "96e07482",   // == the dir name <short>
+  "daemonShort": "96e07482", // == the dir name <short>
   "cliVersion": "2.1.165",
   "cwd": "C:\\GIT\\Spectacle", // ⚠ may be a foreign-OS path — display only
   "createdAt": "2026-06-05T06:47:44.453Z",
   "updatedAt": "2026-06-08T12:17:04.825Z",
   "firstTerminalAt": "2026-06-05T07:00:37.163Z",
   "backend": "daemon",
-  "name": "…", "nameSource": "…",   // sometimes a raw prompt — prefer nameSource heuristics
+  "name": "…",
+  "nameSource": "…", // sometimes a raw prompt — prefer nameSource heuristics
   "linkScanOffset": 368630,
-  "linkScanPath": "C:\\Users\\…"     // ⚠ foreign-OS path
+  "linkScanPath": "C:\\Users\\…", // ⚠ foreign-OS path
 }
 ```
 
@@ -51,20 +52,24 @@ Keys observed: `at`, `state`, `detail`, `text`. Append-only.
 {
   "proto": 1,
   "supervisorPid": 43460,
-  "updatedAt": 1781249595862,        // epoch ms
+  "updatedAt": 1781249595862, // epoch ms
   "workers": {
     "59b12afc": {
       "pid": 49616,
       "sessionId": "59b12afc-…",
-      "rendezvousSock": "\\\\.\\pipe\\cc-daemon-…",  // Windows named pipe
+      "rendezvousSock": "\\\\.\\pipe\\cc-daemon-…", // Windows named pipe
       "ptySock": "\\\\.\\pipe\\…",
       "cliVersion": "2.1.175",
       "startedAt": 1781249592832,
       "attempt": 1,
       "cwd": "C:\\GIT\\Replicas\\MotoritOnline",
-      "dispatch": { "short": "59b12afc", "source": "slash", "launch": { "mode": "resume", "fork": true } }
-    }
-  }
+      "dispatch": {
+        "short": "59b12afc",
+        "source": "slash",
+        "launch": { "mode": "resume", "fork": true },
+      },
+    },
+  },
 }
 ```
 
@@ -74,6 +79,7 @@ is a lighter `{ supervisorPid, writtenAt, workers }` snapshot.
 ## `projects/<encoded>/<sessionId>.jsonl` — transcripts
 
 Dir name = encoded absolute project path. Decoding rules observed:
+
 - `-home-mtrushbad-GIT` → `/home/mtrushbad/GIT`
 - `C--GIT-Spectacle` → `C:\GIT\Spectacle`
 - `C--Users-mtrushbad-OneDrive---Motorit-AB-…` → drive + `---` ≈ space/separator runs

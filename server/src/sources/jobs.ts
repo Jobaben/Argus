@@ -56,10 +56,7 @@ export async function readAgents(): Promise<Agent[]> {
   const [shorts, daemon] = await Promise.all([listJobShorts(), readDaemon()]);
   const agents = await Promise.all(
     shorts.map(async (short) => {
-      const state = await readJson<JobState>(
-        path.join(paths.jobs(), short, "state.json"),
-        {},
-      );
+      const state = await readJson<JobState>(path.join(paths.jobs(), short, "state.json"), {});
       const worker = daemon.workers[short];
       return toAgent(short, state, Boolean(worker), worker?.pid ?? null);
     }),
@@ -70,7 +67,12 @@ export async function readAgents(): Promise<Agent[]> {
   });
 }
 
+// Job "short" ids are a single safe path segment — no slashes or dots that
+// could escape the jobs dir via ../ traversal in the :short route param.
+const SHORT_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
 /** Reads the progress timeline for a single job. */
 export async function readTimeline(short: string): Promise<TimelineEntry[]> {
+  if (!SHORT_RE.test(short)) return [];
   return readJsonl<TimelineEntry>(path.join(paths.jobs(), short, "timeline.jsonl"));
 }

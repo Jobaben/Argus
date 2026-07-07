@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useLiveResource } from "./live/useLiveResource";
 
 export interface ModelStat {
   model: string;
@@ -50,43 +50,14 @@ export interface Stats {
   peakHours: PeakHour[];
 }
 
-interface StatsState {
-  stats: Stats | null;
-  loading: boolean;
-  error: string | null;
-}
-
-/** Loads usage stats from the server with loading/error state and a poll refresh. */
-export function useStats(): StatsState & { refresh: () => void } {
-  const [stats, setStats] = useState<Stats | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const mounted = useRef(true);
-
-  const refresh = useCallback(async () => {
-    try {
-      const res = await fetch("/api/stats");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as Stats;
-      if (!mounted.current) return;
-      setStats(data);
-      setError(null);
-    } catch (e) {
-      if (mounted.current) setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      if (mounted.current) setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    mounted.current = true;
-    void refresh();
-    const poll = setInterval(() => void refresh(), 30000);
-    return () => {
-      mounted.current = false;
-      clearInterval(poll);
-    };
-  }, [refresh]);
-
-  return { stats, loading, error, refresh };
+/** Loads usage stats, refreshing on "inventory:changed" (the server watches
+ *  stats-cache.json), with a slow poll fallback while the socket is down. */
+export function useStats() {
+  const { data, loading, error, refresh } = useLiveResource<Stats | null>("/api/stats", {
+    events: ["inventory:changed"],
+    select: (j) => j as Stats,
+    initial: null,
+    pollMs: 60000,
+  });
+  return { stats: data, loading, error, refresh };
 }

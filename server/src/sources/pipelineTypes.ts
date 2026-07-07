@@ -27,19 +27,9 @@ export interface PipelineDefinition {
   updatedAt: string;
 }
 
-export type InstanceStatus =
-  | "running"
-  | "awaiting-approval"
-  | "failed"
-  | "succeeded"
-  | "aborted";
+export type InstanceStatus = "running" | "awaiting-approval" | "failed" | "succeeded" | "aborted";
 
-export type PhaseStatus =
-  | "pending"
-  | "running"
-  | "awaiting-approval"
-  | "succeeded"
-  | "failed";
+export type PhaseStatus = "pending" | "running" | "awaiting-approval" | "succeeded" | "failed";
 
 export type StepStatus = "pending" | "running" | "succeeded" | "failed";
 

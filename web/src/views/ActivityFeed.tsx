@@ -40,10 +40,7 @@ export default function ActivityFeed() {
   const { activity, loading, error } = useActivity();
 
   return (
-    <Page
-      title="Activity"
-      crumbs={[{ label: "Command Center", href: "#/command" }]}
-    >
+    <Page title="Activity" crumbs={[{ label: "Command Center", href: "#/command" }]}>
       <p className="mb-6 text-sm text-ink-faint">Recent prompt history across your projects</p>
 
       {error && (

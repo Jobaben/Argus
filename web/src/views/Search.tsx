@@ -23,10 +23,7 @@ function Highlight({ text, query }: { text: string; query: string }) {
     }
     if (found > i) parts.push(text.slice(i, found));
     parts.push(
-      <mark
-        key={key++}
-        className="rounded bg-run/20 px-0.5 text-run"
-      >
+      <mark key={key++} className="rounded bg-run/20 px-0.5 text-run">
         {text.slice(found, found + q.length)}
       </mark>,
     );
@@ -36,8 +33,7 @@ function Highlight({ text, query }: { text: string; query: string }) {
 }
 
 function ResultRow({ result, query }: { result: SearchResult; query: string }) {
-  const pill =
-    TYPE_STYLE[result.type] ?? "bg-idle/12 text-idle ring-idle/30";
+  const pill = TYPE_STYLE[result.type] ?? "bg-idle/12 text-idle ring-idle/30";
   return (
     <article className="rounded-xl border border-line bg-surface p-4">
       <header className="flex items-center gap-2 text-xs">
@@ -46,9 +42,7 @@ function ResultRow({ result, query }: { result: SearchResult; query: string }) {
         >
           {result.type}
         </span>
-        <span className="truncate font-mono text-ink-faint">
-          {result.projectLabel}
-        </span>
+        <span className="truncate font-mono text-ink-faint">{result.projectLabel}</span>
         <span className="ml-auto truncate font-mono text-ink-faint">
           {result.sessionId.slice(0, 8)}
         </span>
@@ -72,12 +66,16 @@ export default function Search() {
       </p>
 
       <div className="mb-6">
+        <label htmlFor="transcript-search" className="sr-only">
+          Search transcripts
+        </label>
         <input
+          id="transcript-search"
           type="search"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder="Search transcripts…"
-          className="w-full rounded-xl border border-line bg-surface px-4 py-3 text-ink placeholder:text-ink-faint outline-none transition focus:border-ink-faint/40 focus:bg-surface-2"
+          className="w-full rounded-xl border border-line bg-surface px-4 py-3 text-ink placeholder:text-ink-faint transition focus:border-eye/60 focus:bg-surface-2 focus:outline-none focus:ring-2 focus:ring-eye/40"
         />
       </div>
 
@@ -100,11 +98,7 @@ export default function Search() {
           </p>
           <div className="flex flex-col gap-3">
             {results.map((r, i) => (
-              <ResultRow
-                key={`${r.project}/${r.sessionId}/${i}`}
-                result={r}
-                query={trimmed}
-              />
+              <ResultRow key={`${r.project}/${r.sessionId}/${i}`} result={r} query={trimmed} />
             ))}
           </div>
         </>

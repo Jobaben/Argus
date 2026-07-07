@@ -29,6 +29,9 @@ export function useSearch(query: string): SearchState {
   useEffect(() => {
     const q = query.trim();
     if (!q) {
+      // Intentional: clear results when the query is emptied — syncing view
+      // state to the (external) debounced query input, not a cascading render.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setResults([]);
       setLoading(false);
       setError(null);

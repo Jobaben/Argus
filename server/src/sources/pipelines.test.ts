@@ -17,8 +17,20 @@ async function fresh() {
 const goodInput = (over: Record<string, unknown> = {}) => ({
   name: "feature pipeline",
   phases: [
-    { id: "brainstorm", name: "Brainstorm", cwd: home, gated: true, steps: [{ name: "bs", prompt: "go" }] },
-    { id: "plan", name: "Plan", cwd: home, gated: false, steps: [{ name: "wp", prompt: "plan {{previous.payload}}" }] },
+    {
+      id: "brainstorm",
+      name: "Brainstorm",
+      cwd: home,
+      gated: true,
+      steps: [{ name: "bs", prompt: "go" }],
+    },
+    {
+      id: "plan",
+      name: "Plan",
+      cwd: home,
+      gated: false,
+      steps: [{ name: "wp", prompt: "plan {{previous.payload}}" }],
+    },
   ],
   trigger: null,
   ...over,
@@ -26,7 +38,11 @@ const goodInput = (over: Record<string, unknown> = {}) => ({
 
 test("create then read round-trips a definition", async () => {
   const m = await fresh();
-  const created = await m.createPipeline(m.validatePipelineInput(goodInput()), new Date(2026, 5, 30, 9, 0), "p1");
+  const created = await m.createPipeline(
+    m.validatePipelineInput(goodInput()),
+    new Date(2026, 5, 30, 9, 0),
+    "p1",
+  );
   assert.equal(created.id, "p1");
   assert.equal(created.phases.length, 2);
   assert.equal(created.enabled, true);
@@ -49,7 +65,17 @@ test("validation rejects a phase with no steps", async () => {
 
 test("validation rejects a non-existent cwd", async () => {
   const m = await fresh();
-  const bad = goodInput({ phases: [{ id: "x", name: "X", cwd: path.join(home, "nope"), gated: false, steps: [{ name: "s", prompt: "p" }] }] });
+  const bad = goodInput({
+    phases: [
+      {
+        id: "x",
+        name: "X",
+        cwd: path.join(home, "nope"),
+        gated: false,
+        steps: [{ name: "s", prompt: "p" }],
+      },
+    ],
+  });
   assert.throws(() => m.validatePipelineInput(bad), /cwd does not exist/);
 });
 
@@ -112,9 +138,19 @@ test("validation stores a trimmed pipeline-level model", async () => {
 
 test("validation stores a trimmed step-level model override", async () => {
   const m = await fresh();
-  const input = m.validatePipelineInput(goodInput({
-    phases: [{ id: "x", name: "X", cwd: home, gated: false, steps: [{ name: "s", prompt: "p", model: " sonnet " }] }],
-  }));
+  const input = m.validatePipelineInput(
+    goodInput({
+      phases: [
+        {
+          id: "x",
+          name: "X",
+          cwd: home,
+          gated: false,
+          steps: [{ name: "s", prompt: "p", model: " sonnet " }],
+        },
+      ],
+    }),
+  );
   assert.equal(input.phases[0].steps[0].model, "sonnet");
 });
 
@@ -127,13 +163,24 @@ test("validation omits model when absent", async () => {
 
 test("validation rejects a blank pipeline model", async () => {
   const m = await fresh();
-  assert.throws(() => m.validatePipelineInput(goodInput({ model: "   " })), /model must be a non-empty string/);
+  assert.throws(
+    () => m.validatePipelineInput(goodInput({ model: "   " })),
+    /model must be a non-empty string/,
+  );
 });
 
 test("validation rejects a blank step model", async () => {
   const m = await fresh();
   const bad = goodInput({
-    phases: [{ id: "x", name: "X", cwd: home, gated: false, steps: [{ name: "s", prompt: "p", model: "" }] }],
+    phases: [
+      {
+        id: "x",
+        name: "X",
+        cwd: home,
+        gated: false,
+        steps: [{ name: "s", prompt: "p", model: "" }],
+      },
+    ],
   });
   assert.throws(() => m.validatePipelineInput(bad), /model must be a non-empty string/);
 });
@@ -141,11 +188,22 @@ test("validation rejects a blank step model", async () => {
 test("createPipeline persists both model levels", async () => {
   const m = await fresh();
   const created = await m.createPipeline(
-    m.validatePipelineInput(goodInput({
-      model: "opus",
-      phases: [{ id: "x", name: "X", cwd: home, gated: false, steps: [{ name: "s", prompt: "p", model: "haiku" }] }],
-    })),
-    new Date(2026, 5, 30, 9, 0), "p1",
+    m.validatePipelineInput(
+      goodInput({
+        model: "opus",
+        phases: [
+          {
+            id: "x",
+            name: "X",
+            cwd: home,
+            gated: false,
+            steps: [{ name: "s", prompt: "p", model: "haiku" }],
+          },
+        ],
+      }),
+    ),
+    new Date(2026, 5, 30, 9, 0),
+    "p1",
   );
   assert.equal(created.model, "opus");
   assert.equal(created.phases[0].steps[0].model, "haiku");
@@ -155,7 +213,8 @@ test("updatePipeline via a PUT-shaped input clears an existing model", async () 
   const m = await fresh();
   await m.createPipeline(
     m.validatePipelineInput(goodInput({ model: "opus" })),
-    new Date(2026, 5, 30, 9, 0), "p1",
+    new Date(2026, 5, 30, 9, 0),
+    "p1",
   );
   const input = m.validatePipelineInput(goodInput());
   const updated = await m.updatePipeline(

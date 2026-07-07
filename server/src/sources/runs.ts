@@ -1,7 +1,8 @@
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { readFile, readdir, rm, stat } from "node:fs/promises";
 import { open } from "node:fs/promises";
 import path from "node:path";
 import { paths } from "../claudeHome.js";
+import { atomicWriteJson } from "./atomicWrite.js";
 import type { Run } from "./scheduleTypes.js";
 
 export const LOG_CAP_BYTES = 1_048_576; // 1 MB
@@ -25,11 +26,7 @@ function runJsonPath(id: string): string {
 }
 
 export async function writeRun(run: Run): Promise<void> {
-  await mkdir(paths.runsDir(), { recursive: true });
-  const file = runJsonPath(run.id);
-  const tmp = `${file}.${process.pid}.tmp`;
-  await writeFile(tmp, JSON.stringify(run, null, 2), "utf8");
-  await rename(tmp, file);
+  await atomicWriteJson(runJsonPath(run.id), run);
 }
 
 async function readRunFile(id: string): Promise<Run | null> {
@@ -40,18 +37,16 @@ async function readRunFile(id: string): Promise<Run | null> {
   }
 }
 
-export async function readRuns(
-  opts: { scheduleId?: string; limit?: number } = {},
-): Promise<Run[]> {
+export async function readRuns(opts: { scheduleId?: string; limit?: number } = {}): Promise<Run[]> {
   let names: string[];
   try {
     names = (await readdir(paths.runsDir())).filter((f) => f.endsWith(".json"));
   } catch {
     return [];
   }
-  const runs = (
-    await Promise.all(names.map((f) => readRunFile(f.replace(/\.json$/, ""))))
-  ).filter((r): r is Run => r !== null);
+  const runs = (await Promise.all(names.map((f) => readRunFile(f.replace(/\.json$/, ""))))).filter(
+    (r): r is Run => r !== null,
+  );
   let out = runs.sort((a, b) => b.queuedAt.localeCompare(a.queuedAt));
   if (opts.scheduleId) out = out.filter((r) => r.scheduleId === opts.scheduleId);
   if (opts.limit && opts.limit > 0) out = out.slice(0, opts.limit);
@@ -59,9 +54,7 @@ export async function readRuns(
 }
 
 /** Reads a run plus the last LOG_CAP_BYTES of its log. */
-export async function readRun(
-  id: string,
-): Promise<{ run: Run; log: string } | null> {
+export async function readRun(id: string): Promise<{ run: Run; log: string } | null> {
   if (!RUN_ID_RE.test(id)) return null;
   const run = await readRunFile(id);
   if (!run) return null;
@@ -84,6 +77,39 @@ export async function readRun(
     log = "";
   }
   return { run, log };
+}
+
+/** SIGTERM a run's process if it's alive. Returns whether a signal was sent. */
+export async function killRunProcess(pid: number | null): Promise<boolean> {
+  if (!pid) return false;
+  try {
+    process.kill(pid);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Cancel a scheduler run: kill its live process and mark it cancelled.
+ *  Returns 'not-found' if the run is unknown, 'not-running' if already
+ *  terminal, or 'cancelled' on success. */
+export async function cancelRun(
+  id: string,
+  now: Date,
+): Promise<"not-found" | "not-running" | "cancelled"> {
+  const got = await readRun(id);
+  if (!got) return "not-found";
+  if (got.run.status !== "running") return "not-running";
+  await killRunProcess(got.run.pid);
+  const ended = now.toISOString();
+  await writeRun({
+    ...got.run,
+    status: "cancelled",
+    endedAt: ended,
+    durationMs: got.run.startedAt ? now.getTime() - new Date(got.run.startedAt).getTime() : null,
+    error: "cancelled by user",
+  });
+  return "cancelled";
 }
 
 export async function pruneRuns(scheduleId: string, keep: number): Promise<void> {

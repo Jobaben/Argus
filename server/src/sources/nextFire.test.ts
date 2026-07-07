@@ -17,10 +17,7 @@ const at = (y: number, mo: number, d: number, h: number, mi: number) =>
 test("interval: previousFireTime returns null before one step elapses", () => {
   const anchor = at(2026, 5, 22, 10, 0);
   const now = at(2026, 5, 22, 10, 30);
-  assert.equal(
-    previousFireTime({ kind: "interval", everyMinutes: 60 }, anchor, now),
-    null,
-  );
+  assert.equal(previousFireTime({ kind: "interval", everyMinutes: 60 }, anchor, now), null);
 });
 
 test("interval: previousFireTime is the most recent mark <= now", () => {
@@ -45,7 +42,11 @@ test("daily: previousFireTime is yesterday when today's time not reached", () =>
 test("weekly: previousFireTime finds the most recent matching weekday", () => {
   // 2026-06-22 is a Monday (getDay()===1).
   const now = at(2026, 5, 22, 12, 0);
-  const prev = previousFireTime({ kind: "weekly", time: "09:00", weekday: 1 }, at(2026, 5, 1, 0, 0), now);
+  const prev = previousFireTime(
+    { kind: "weekly", time: "09:00", weekday: 1 },
+    at(2026, 5, 1, 0, 0),
+    now,
+  );
   assert.deepEqual(prev, at(2026, 5, 22, 9, 0));
 });
 
@@ -107,6 +108,19 @@ test("shouldFire: false when the window was missed (Argus was down)", () => {
   assert.equal(shouldFire(s, at(2026, 5, 22, 9, 0), graceMsFor(30000)), false);
 });
 
+test("shouldFire: false for a daily slot that predates creation (no fire-on-create)", () => {
+  // Daily 09:00 created at 09:05 the same day. The 09:00 slot is before
+  // createdAt, so it must not fire immediately on creation.
+  const s = baseSchedule({
+    trigger: { kind: "daily", time: "09:00" },
+    createdAt: at(2026, 5, 22, 9, 5).toISOString(),
+    lastRunAt: null,
+  });
+  assert.equal(shouldFire(s, at(2026, 5, 22, 9, 6), graceMsFor(30000)), false);
+  // But the next day's 09:00 slot (after creation) does fire within grace.
+  assert.equal(shouldFire(s, at(2026, 5, 23, 9, 1), graceMsFor(30000)), true);
+});
+
 test("parseHHMM: parses and clips out-of-range values", () => {
   assert.deepEqual(parseHHMM("09:30"), [9, 30]);
   assert.deepEqual(parseHHMM(undefined), [0, 0]);
@@ -125,7 +139,12 @@ test("shouldFire: grace boundary is inclusive (fires at exactly graceMs, not bey
 });
 
 test("windowed: 12:00-14:00 @30m yields exactly four grid points", () => {
-  const trig = { kind: "windowed" as const, startTime: "12:00", endTime: "14:00", everyMinutes: 30 };
+  const trig = {
+    kind: "windowed" as const,
+    startTime: "12:00",
+    endTime: "14:00",
+    everyMinutes: 30,
+  };
   const anchor = at(2026, 5, 22, 0, 0);
   const fires: Date[] = [];
   let from = at(2026, 5, 22, 11, 0);
@@ -146,40 +165,93 @@ test("windowed: 12:00-14:00 @30m yields exactly four grid points", () => {
 });
 
 test("windowed: uneven cadence drops the trailing partial slot", () => {
-  const trig = { kind: "windowed" as const, startTime: "12:00", endTime: "14:00", everyMinutes: 45 };
-  assert.deepEqual(previousFireTime(trig, at(2026, 5, 22, 0, 0), at(2026, 5, 22, 13, 40)), at(2026, 5, 22, 13, 30));
+  const trig = {
+    kind: "windowed" as const,
+    startTime: "12:00",
+    endTime: "14:00",
+    everyMinutes: 45,
+  };
+  assert.deepEqual(
+    previousFireTime(trig, at(2026, 5, 22, 0, 0), at(2026, 5, 22, 13, 40)),
+    at(2026, 5, 22, 13, 30),
+  );
   // 14:15 would be next but it's past 14:00 → after the window there is no fire today
-  assert.deepEqual(previousFireTime(trig, at(2026, 5, 22, 0, 0), at(2026, 5, 22, 13, 32)), at(2026, 5, 22, 13, 30));
+  assert.deepEqual(
+    previousFireTime(trig, at(2026, 5, 22, 0, 0), at(2026, 5, 22, 13, 32)),
+    at(2026, 5, 22, 13, 30),
+  );
 });
 
 test("windowed: previousFireTime is null before the window opens", () => {
-  const trig = { kind: "windowed" as const, startTime: "12:00", endTime: "14:00", everyMinutes: 30 };
+  const trig = {
+    kind: "windowed" as const,
+    startTime: "12:00",
+    endTime: "14:00",
+    everyMinutes: 30,
+  };
   assert.equal(previousFireTime(trig, at(2026, 5, 22, 0, 0), at(2026, 5, 22, 11, 59)), null);
 });
 
 test("windowed: previousFireTime clamps to last grid point after the window", () => {
-  const trig = { kind: "windowed" as const, startTime: "12:00", endTime: "14:00", everyMinutes: 30 };
-  assert.deepEqual(previousFireTime(trig, at(2026, 5, 22, 0, 0), at(2026, 5, 22, 18, 0)), at(2026, 5, 22, 13, 30));
+  const trig = {
+    kind: "windowed" as const,
+    startTime: "12:00",
+    endTime: "14:00",
+    everyMinutes: 30,
+  };
+  assert.deepEqual(
+    previousFireTime(trig, at(2026, 5, 22, 0, 0), at(2026, 5, 22, 18, 0)),
+    at(2026, 5, 22, 13, 30),
+  );
 });
 
 test("windowed: weekday filter excludes non-listed days", () => {
   // 2026-06-22 is a Monday (getDay()===1); filter allows only Tuesday(2).
-  const trig = { kind: "windowed" as const, startTime: "12:00", endTime: "14:00", everyMinutes: 30, weekdays: [2] };
+  const trig = {
+    kind: "windowed" as const,
+    startTime: "12:00",
+    endTime: "14:00",
+    everyMinutes: 30,
+    weekdays: [2],
+  };
   assert.equal(previousFireTime(trig, at(2026, 5, 22, 0, 0), at(2026, 5, 22, 12, 30)), null);
 });
 
 test("windowed: weekday filter includes listed days", () => {
-  const trig = { kind: "windowed" as const, startTime: "12:00", endTime: "14:00", everyMinutes: 30, weekdays: [1] };
-  assert.deepEqual(previousFireTime(trig, at(2026, 5, 22, 0, 0), at(2026, 5, 22, 12, 30)), at(2026, 5, 22, 12, 30));
+  const trig = {
+    kind: "windowed" as const,
+    startTime: "12:00",
+    endTime: "14:00",
+    everyMinutes: 30,
+    weekdays: [1],
+  };
+  assert.deepEqual(
+    previousFireTime(trig, at(2026, 5, 22, 0, 0), at(2026, 5, 22, 12, 30)),
+    at(2026, 5, 22, 12, 30),
+  );
 });
 
 test("windowed: nextFireTime rolls to the next allowed weekday", () => {
   // From Monday 15:00 with a Tuesday-only window → Tuesday 12:00.
-  const trig = { kind: "windowed" as const, startTime: "12:00", endTime: "14:00", everyMinutes: 30, weekdays: [2] };
+  const trig = {
+    kind: "windowed" as const,
+    startTime: "12:00",
+    endTime: "14:00",
+    everyMinutes: 30,
+    weekdays: [2],
+  };
   assert.deepEqual(nextFireTime(trig, at(2026, 5, 22, 15, 0)), at(2026, 5, 23, 12, 0));
 });
 
 test("windowed: nextFireAfter delegates to the daily grid", () => {
-  const trig = { kind: "windowed" as const, startTime: "12:00", endTime: "14:00", everyMinutes: 30 };
-  assert.deepEqual(nextFireAfter(trig, at(2026, 5, 22, 0, 0), at(2026, 5, 22, 12, 10)), at(2026, 5, 22, 12, 30));
+  const trig = {
+    kind: "windowed" as const,
+    startTime: "12:00",
+    endTime: "14:00",
+    everyMinutes: 30,
+  };
+  assert.deepEqual(
+    nextFireAfter(trig, at(2026, 5, 22, 0, 0), at(2026, 5, 22, 12, 10)),
+    at(2026, 5, 22, 12, 30),
+  );
 });

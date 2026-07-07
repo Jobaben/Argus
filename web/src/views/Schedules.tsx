@@ -2,7 +2,15 @@ import { Fragment, useEffect, useState } from "react";
 import { useSchedules } from "../useSchedules";
 import { useRuns } from "../useRuns";
 import type { Run, ScheduleInput, ScheduleWithNext, Trigger } from "../types";
-import { AlertStrip, EmptyState, StatusPill, parseRunLog, runStatusToDsStatus, Page, TriggerFields } from "../ds";
+import {
+  AlertStrip,
+  EmptyState,
+  StatusPill,
+  parseRunLog,
+  runStatusToDsStatus,
+  Page,
+  TriggerFields,
+} from "../ds";
 import { CronPanel } from "./Cron";
 
 function when(iso: string | null): string {
@@ -12,9 +20,14 @@ function when(iso: string | null): string {
 }
 
 function triggerSummary(t: Trigger): string {
+  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   if (t.kind === "interval") return `every ${t.everyMinutes} min`;
   if (t.kind === "daily") return `daily at ${t.time}`;
-  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  if (t.kind === "windowed") {
+    const when =
+      t.weekdays && t.weekdays.length > 0 ? t.weekdays.map((d) => days[d]).join(", ") : "every day";
+    return `every ${t.everyMinutes} min, ${t.startTime}–${t.endTime}, ${when}`;
+  }
   return `weekly ${days[t.weekday ?? 0]} at ${t.time}`;
 }
 
@@ -51,31 +64,41 @@ function ScheduleForm({
     }
   };
 
-  const field = "w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink placeholder-ink-faint";
+  const field =
+    "w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink placeholder-ink-faint";
+  const labelCls = "block space-y-1 text-xs font-medium text-ink-dim";
+  const valid = form.name.trim() && form.prompt.trim() && form.cwd.trim();
 
   return (
     <div className="rounded-xl border border-line bg-surface p-5 space-y-3">
-      {err && (
-        <AlertStrip subject="Error" message={err} />
-      )}
-      <input
-        className={field}
-        placeholder="Name"
-        value={form.name}
-        onChange={(e) => setForm({ ...form, name: e.target.value })}
-      />
-      <textarea
-        className={`${field} h-24`}
-        placeholder="Prompt for claude -p"
-        value={form.prompt}
-        onChange={(e) => setForm({ ...form, prompt: e.target.value })}
-      />
-      <input
-        className={field}
-        placeholder="Working directory (absolute path)"
-        value={form.cwd}
-        onChange={(e) => setForm({ ...form, cwd: e.target.value })}
-      />
+      {err && <AlertStrip subject="Error" message={err} />}
+      <label className={labelCls}>
+        <span>Name</span>
+        <input
+          className={field}
+          placeholder="Nightly audit"
+          value={form.name}
+          onChange={(e) => setForm({ ...form, name: e.target.value })}
+        />
+      </label>
+      <label className={labelCls}>
+        <span>Prompt for claude -p</span>
+        <textarea
+          className={`${field} h-24`}
+          placeholder="Review yesterday's changes and summarize risks"
+          value={form.prompt}
+          onChange={(e) => setForm({ ...form, prompt: e.target.value })}
+        />
+      </label>
+      <label className={labelCls}>
+        <span>Working directory (absolute path)</span>
+        <input
+          className={field}
+          placeholder="/home/you/project"
+          value={form.cwd}
+          onChange={(e) => setForm({ ...form, cwd: e.target.value })}
+        />
+      </label>
       <TriggerFields
         fieldClass={field}
         value={form.trigger}
@@ -85,7 +108,8 @@ function ScheduleForm({
       <div className="flex items-center gap-2 pt-1">
         <button
           type="button"
-          disabled={busy}
+          disabled={busy || !valid}
+          title={!valid ? "Name, prompt and working directory are required" : undefined}
           onClick={submit}
           className="rounded-lg bg-ok/20 px-3 py-1.5 text-sm text-ok ring-1 ring-ok/30 transition hover:bg-ok/30 disabled:opacity-50"
         >
@@ -103,23 +127,72 @@ function ScheduleForm({
   );
 }
 
-function RunRow({ run }: { run: Run }) {
+function formatUsd(v: number): string {
+  return v >= 0.01 ? `$${v.toFixed(2)}` : `$${v.toFixed(4)}`;
+}
+
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
+
+function RunRow({ run, onCancel }: { run: Run; onCancel?: (runId: string) => Promise<unknown> }) {
   const [open, setOpen] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const isRunning = run.status === "running";
   return (
     <li className="rounded-lg border border-line bg-surface">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center gap-3 px-3 py-2 text-left"
-      >
-        <StatusPill status={runStatusToDsStatus(run.status)} />
-        <span className="text-xs text-ink-dim">{when(run.startedAt ?? run.queuedAt)}</span>
-        {run.durationMs != null && (
-          <span className="text-xs text-ink-faint">{Math.round(run.durationMs / 1000)}s</span>
+      <div className="flex w-full items-center gap-3 px-3 py-2">
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          className="flex flex-1 items-center gap-3 text-left"
+        >
+          <StatusPill status={runStatusToDsStatus(run.status)} />
+          <span className="text-xs text-ink-dim">{when(run.startedAt ?? run.queuedAt)}</span>
+          {run.durationMs != null && (
+            <span className="text-xs text-ink-faint">{Math.round(run.durationMs / 1000)}s</span>
+          )}
+          {run.costUsd != null && (
+            <span className="text-xs text-ink-faint" title="Reported run cost">
+              {formatUsd(run.costUsd)}
+            </span>
+          )}
+          {run.tokens != null && (
+            <span className="text-xs text-ink-faint" title="Total tokens">
+              {formatTokens(run.tokens)} tok
+            </span>
+          )}
+          {run.trigger === "manual" && <span className="text-xs text-queue">manual</span>}
+        </button>
+        {isRunning && onCancel && (
+          <button
+            type="button"
+            disabled={cancelling}
+            onClick={async () => {
+              setCancelling(true);
+              try {
+                await onCancel(run.id);
+              } finally {
+                setCancelling(false);
+              }
+            }}
+            className="rounded-md border border-fail/30 px-2 py-0.5 text-xs text-fail hover:bg-fail/10 disabled:opacity-50"
+          >
+            {cancelling ? "Cancelling…" : "Cancel"}
+          </button>
         )}
-        {run.trigger === "manual" && <span className="text-xs text-queue">manual</span>}
-        <span className="ml-auto text-xs text-ink-faint">{open ? "▲" : "▼"}</span>
-      </button>
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-label={open ? "Collapse run" : "Expand run"}
+          className="text-xs text-ink-faint"
+        >
+          {open ? "▲" : "▼"}
+        </button>
+      </div>
       {open && (
         <div className="space-y-3 border-t border-line px-3 py-3 text-sm">
           {run.error && (
@@ -132,39 +205,44 @@ function RunRow({ run }: { run: Run }) {
           )}
           {run.sessionId && run.project && (
             <a
-              href={`#/sessions`}
+              href={`#/sessions/${encodeURIComponent(run.project)}/${encodeURIComponent(run.sessionId)}`}
               className="inline-block font-mono text-xs text-queue hover:underline"
-              title="Transcript session id"
+              title="Open this run's transcript"
             >
               transcript: {run.sessionId.slice(0, 8)}
             </a>
           )}
-          <RunLog id={run.id} />
+          <RunLog id={run.id} running={isRunning} />
         </div>
       )}
     </li>
   );
 }
 
-function RunLog({ id }: { id: string }) {
+function RunLog({ id, running }: { id: string; running: boolean }) {
   const [log, setLog] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
-  // Fetch on expand; live runs also refresh via the list's WS ping re-rendering this.
+  // Fetch on expand, then poll while the run is live so the log tails in real
+  // time (a re-render alone won't refetch — the id prop is unchanged).
   useEffect(() => {
     let alive = true;
-    void fetch(`/api/runs/${id}`)
-      .then((r) => r.json())
-      .then((d: { log?: string }) => alive && setLog(d.log ?? ""))
-      .catch(() => {
-        if (alive) {
-          setFailed(true);
-          setLog("");
-        }
-      });
+    const fetchLog = () =>
+      fetch(`/api/runs/${id}`)
+        .then((r) => r.json())
+        .then((d: { log?: string }) => alive && setLog(d.log ?? ""))
+        .catch(() => {
+          if (alive) {
+            setFailed(true);
+            setLog("");
+          }
+        });
+    void fetchLog();
+    const poll = running ? setInterval(() => void fetchLog(), 3000) : null;
     return () => {
       alive = false;
+      if (poll) clearInterval(poll);
     };
-  }, [id]);
+  }, [id, running]);
 
   if (log === null) return <p className="text-xs text-ink-faint">loading…</p>;
   if (failed) return <p className="text-xs text-ink-faint">Couldn't load the run log.</p>;
@@ -200,16 +278,30 @@ function ScheduleCard({
   update,
   remove,
   runNow,
+  cancelRun,
 }: {
   schedule: ScheduleWithNext;
   onEdit: () => void;
   update: (id: string, patch: Partial<ScheduleInput>) => Promise<unknown>;
   remove: (id: string) => Promise<unknown>;
   runNow: (id: string) => Promise<unknown>;
+  cancelRun: (runId: string) => Promise<unknown>;
 }) {
   const { runs } = useRuns(schedule.id);
   const running = runs.filter((r) => r.status === "running");
   const recent = runs.slice(0, 5);
+  const [actionErr, setActionErr] = useState<string | null>(null);
+
+  // Wrap an action so a failed Run-now/Enable/Delete surfaces instead of being
+  // silently swallowed by a bare `void promise`.
+  const run = (fn: () => Promise<unknown>) => async () => {
+    setActionErr(null);
+    try {
+      await fn();
+    } catch (e) {
+      setActionErr(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   return (
     <div className="rounded-xl border border-line bg-surface p-4">
@@ -237,14 +329,14 @@ function ScheduleCard({
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <button
           type="button"
-          onClick={() => void runNow(schedule.id)}
+          onClick={run(() => runNow(schedule.id))}
           className="rounded-lg bg-ok/15 px-2.5 py-1 text-xs text-ok ring-1 ring-ok/30 hover:bg-ok/25"
         >
           Run now
         </button>
         <button
           type="button"
-          onClick={() => void update(schedule.id, { enabled: !schedule.enabled })}
+          onClick={run(() => update(schedule.id, { enabled: !schedule.enabled }))}
           className="rounded-lg border border-line px-2.5 py-1 text-xs text-ink-dim hover:text-ink"
         >
           {schedule.enabled ? "Disable" : "Enable"}
@@ -259,21 +351,26 @@ function ScheduleCard({
         <button
           type="button"
           onClick={() => {
-            if (confirm(`Delete schedule "${schedule.name}"?`)) void remove(schedule.id);
+            if (confirm(`Delete schedule "${schedule.name}"?`))
+              void run(() => remove(schedule.id))();
           }}
           className="rounded-lg border border-fail/20 px-2.5 py-1 text-xs text-fail hover:bg-fail/10"
         >
           Delete
         </button>
-        {!schedule.enabled && (
-          <span className="text-xs text-ink-faint">disabled</span>
-        )}
+        {!schedule.enabled && <span className="text-xs text-ink-faint">disabled</span>}
       </div>
+
+      {actionErr && (
+        <p role="alert" className="mt-2 text-xs text-fail">
+          {actionErr}
+        </p>
+      )}
 
       {recent.length > 0 && (
         <ul className="mt-3 space-y-1.5">
           {recent.map((r) => (
-            <RunRow key={r.id} run={r} />
+            <RunRow key={r.id} run={r} onCancel={cancelRun} />
           ))}
         </ul>
       )}
@@ -282,10 +379,10 @@ function ScheduleCard({
 }
 
 export default function Schedules() {
-  const { schedules, loading, error, create, update, remove, runNow } = useSchedules();
-  const [mode, setMode] = useState<{ kind: "none" } | { kind: "new" } | { kind: "edit"; id: string }>(
-    { kind: "none" },
-  );
+  const { schedules, loading, error, create, update, remove, runNow, cancelRun } = useSchedules();
+  const [mode, setMode] = useState<
+    { kind: "none" } | { kind: "new" } | { kind: "edit"; id: string }
+  >({ kind: "none" });
   const [subTab, setSubTab] = useState<"schedules" | "cron">("schedules");
 
   const editing = mode.kind === "edit" ? schedules.find((s) => s.id === mode.id) : undefined;
@@ -371,13 +468,14 @@ export default function Schedules() {
             <div className="grid grid-cols-1 gap-4">
               {schedules.map((s) => (
                 <ScheduleCard
-                    key={s.id}
-                    schedule={s}
-                    onEdit={() => setMode({ kind: "edit", id: s.id })}
-                    update={update}
-                    remove={remove}
-                    runNow={runNow}
-                  />
+                  key={s.id}
+                  schedule={s}
+                  onEdit={() => setMode({ kind: "edit", id: s.id })}
+                  update={update}
+                  remove={remove}
+                  runNow={runNow}
+                  cancelRun={cancelRun}
+                />
               ))}
             </div>
           )}
