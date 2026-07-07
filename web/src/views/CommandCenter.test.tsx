@@ -17,6 +17,11 @@ vi.mock("../useOverview", () => ({
   useOverview: () => ({ ...mockOverview, refresh: vi.fn(), approve, revise }),
 }));
 
+const mockActivity = new Map<string, { label: string; at: string }>();
+vi.mock("../useRunActivity", () => ({
+  useRunActivity: () => mockActivity,
+}));
+
 function entry(name: string, status: InstanceStatus, phaseStatuses: PhaseStatus[]): OverviewEntry {
   return {
     definition: {
@@ -66,6 +71,7 @@ beforeEach(() => {
   mockOverview.overview = [];
   mockOverview.loading = false;
   mockOverview.error = null;
+  mockActivity.clear();
 });
 
 describe("CommandCenter", () => {
@@ -255,5 +261,62 @@ describe("CommandCenter", () => {
     mockOverview.error = "HTTP 500";
     render(<CommandCenter />);
     expect(screen.getByText(/couldn't reach the argus server/i)).toBeInTheDocument();
+  });
+
+  it("shows the current activity line on a running step", () => {
+    const e = entry("pipe", "running", ["running"]);
+    e.latest!.phases[0].steps = [
+      {
+        name: "step-x",
+        runId: "r",
+        status: "running",
+        currentActivity: "Bash: npm test",
+        startedAt: "2026-06-30T09:58:00.000Z",
+      },
+    ];
+    mockOverview.overview = [e];
+    render(<CommandCenter />);
+    expect(screen.getByText(/Bash: npm test/)).toBeInTheDocument();
+  });
+
+  it("prefers the live WS activity over the overview snapshot", () => {
+    const e = entry("pipe", "running", ["running"]);
+    e.latest!.phases[0].steps = [
+      { name: "step-x", runId: "r", status: "running", currentActivity: "Bash: npm ci" },
+    ];
+    mockActivity.set("r", { label: "Bash: npm test", at: "2026-06-30T10:00:00.000Z" });
+    mockOverview.overview = [e];
+    render(<CommandCenter />);
+    expect(screen.getByText(/Bash: npm test/)).toBeInTheDocument();
+    expect(screen.queryByText(/Bash: npm ci/)).not.toBeInTheDocument();
+  });
+
+  it("shows a ticking elapsed time for a running step with startedAt", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-30T10:02:12.000Z"));
+    const e = entry("pipe", "running", ["running"]);
+    e.latest!.phases[0].steps = [
+      { name: "step-x", runId: "r", status: "running", startedAt: "2026-06-30T09:58:00.000Z" },
+    ];
+    mockOverview.overview = [e];
+    render(<CommandCenter />);
+    expect(screen.getByText(/04:12/)).toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
+  it("shows the final duration on a finished step", () => {
+    const e = entry("pipe", "succeeded", ["succeeded"]);
+    e.latest!.phases[0].steps = [
+      { name: "step-x", runId: "r", status: "succeeded", durationMs: 128000 },
+    ];
+    mockOverview.overview = [e];
+    render(<CommandCenter />);
+    expect(screen.getByText(/2m 8s/)).toBeInTheDocument();
+  });
+
+  it("renders a running step without activity exactly as before", () => {
+    mockOverview.overview = [entry("pipe", "running", ["running"])];
+    render(<CommandCenter />);
+    expect(screen.queryByText(/▸/)).not.toBeInTheDocument();
   });
 });

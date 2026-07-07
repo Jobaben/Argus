@@ -1,8 +1,12 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useOverview } from "../useOverview";
+import { useRunActivity } from "../useRunActivity";
+import type { LiveActivity } from "../useRunActivity";
 import {
   toOverviewRow,
   formatCost,
+  formatElapsed,
+  formatMs,
   STATUS,
   RAIL,
   TILE_SKIN,
@@ -13,6 +17,17 @@ import {
   Page,
 } from "../ds";
 import type { OverviewRow, OverviewGate, PhasePill, StepPill, DsStatus } from "../ds";
+
+/** One clock for every running tile; only ticks while something is working. */
+function useNow(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [active]);
+  return now;
+}
 
 /**
  * The board re-renders in place as pipelines change state, which is invisible
@@ -141,9 +156,25 @@ function Gate({
   );
 }
 
-function StepTile({ step, reason }: { step: StepPill; reason: string | null }) {
+function StepTile({
+  step,
+  reason,
+  live,
+  now,
+}: {
+  step: StepPill;
+  reason: string | null;
+  live: LiveActivity | null;
+  now: number;
+}) {
   const token = STATUS[step.status].token;
   const cost = formatCost(step.tokens, step.costUsd);
+  const working = step.status === "working";
+  const activity = working ? (live?.label ?? step.currentActivity) : null;
+  const elapsed =
+    working && step.startedAt ? formatElapsed(now - new Date(step.startedAt).getTime()) : null;
+  const finished = step.status === "done" || step.status === "failed";
+  const duration = finished && step.durationMs != null ? formatMs(step.durationMs) : null;
   return (
     <article
       className={`relative flex flex-col gap-1.5 overflow-hidden rounded-[11px] border bg-gradient-to-b to-surface py-2 pl-3.5 pr-2.5 ${TILE_SKIN[token]}`}
@@ -155,12 +186,12 @@ function StepTile({ step, reason }: { step: StepPill; reason: string | null }) {
           <div className="mt-0.5 font-mono text-[9.5px] text-ink-faint">
             {step.runId ? `job ${step.runId}` : "job ——"}
           </div>
-          {cost && (
+          {(cost || duration) && (
             <div
               className="mt-0.5 font-mono text-[9.5px] text-ink-dim"
-              title="Tokens and dollar cost reported by this step's run"
+              title="Duration, tokens and dollar cost reported by this step's run"
             >
-              {cost}
+              {[duration, cost].filter(Boolean).join(" · ")}
             </div>
           )}
         </div>
@@ -169,6 +200,17 @@ function StepTile({ step, reason }: { step: StepPill; reason: string | null }) {
       {reason && (
         <div className={`text-[11.5px] leading-snug ${TILE_DETAIL[token] ?? "text-ink-dim"}`}>
           {reason}
+        </div>
+      )}
+      {activity && (
+        <div className="truncate font-mono text-[10px] text-ink-dim" title={activity}>
+          <span aria-hidden="true">▸ </span>
+          {activity}
+        </div>
+      )}
+      {elapsed && (
+        <div className="font-mono text-[9.5px] text-ink-faint">
+          {elapsed} <span className="text-ink-faint/70">elapsed</span>
         </div>
       )}
       {step.status === "working" && (
@@ -188,6 +230,8 @@ function PhaseColumn({
   approve,
   revise,
   reviseLabel,
+  liveActivity,
+  now,
 }: {
   pill: PhasePill;
   index: number;
@@ -196,6 +240,8 @@ function PhaseColumn({
   approve: (id: string) => Promise<unknown>;
   revise: (id: string, note?: string) => Promise<unknown>;
   reviseLabel?: string;
+  liveActivity: Map<string, LiveActivity>;
+  now: number;
 }) {
   return (
     <section className="flex w-44 min-w-44 flex-1 flex-col gap-2">
@@ -216,6 +262,8 @@ function PhaseColumn({
           key={`${step.name}-${i}`}
           step={step}
           reason={step.status === "failed" ? pill.reason : null}
+          live={step.runId ? (liveActivity.get(step.runId) ?? null) : null}
+          now={now}
         />
       ))}
       {instanceId && gate?.phaseId === pill.id && (
@@ -235,10 +283,14 @@ function Row({
   row,
   approve,
   revise,
+  liveActivity,
+  now,
 }: {
   row: OverviewRow;
   approve: (id: string) => Promise<unknown>;
   revise: (id: string, note?: string) => Promise<unknown>;
+  liveActivity: Map<string, LiveActivity>;
+  now: number;
 }) {
   const reviseLabel = row.failure?.kind === "restarted" ? "Retry" : "Revise";
   const cost = row.cost ? formatCost(row.cost.tokens, row.cost.usd) : null;
@@ -279,6 +331,8 @@ function Row({
             approve={approve}
             revise={revise}
             reviseLabel={reviseLabel}
+            liveActivity={liveActivity}
+            now={now}
           />
         ))}
       </div>
@@ -290,6 +344,12 @@ export default function CommandCenter() {
   const { overview, loading, error, approve, revise } = useOverview();
   const rows = useMemo(() => overview.map(toOverviewRow), [overview]);
   const announcement = useBoardAnnouncer(rows);
+  const liveActivity = useRunActivity();
+  const anyWorking = useMemo(
+    () => rows.some((r) => r.phases.some((p) => p.steps.some((s) => s.status === "working"))),
+    [rows],
+  );
+  const now = useNow(anyWorking);
   // Grand total across everything on the board: sum whichever metrics were
   // reported; a metric stays null (hidden) until at least one run reports it.
   const total = useMemo(() => {
@@ -340,7 +400,14 @@ export default function CommandCenter() {
       ) : (
         <div className="flex flex-col gap-3">
           {rows.map((row) => (
-            <Row key={row.pipelineId} row={row} approve={approve} revise={revise} />
+            <Row
+              key={row.pipelineId}
+              row={row}
+              approve={approve}
+              revise={revise}
+              liveActivity={liveActivity}
+              now={now}
+            />
           ))}
         </div>
       )}
