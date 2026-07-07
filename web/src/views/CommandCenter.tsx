@@ -4,9 +4,7 @@ import { useRunActivity } from "../useRunActivity";
 import type { LiveActivity } from "../useRunActivity";
 import {
   toOverviewRow,
-  formatCost,
   formatElapsed,
-  formatMs,
   STATUS,
   RAIL,
   TILE_SKIN,
@@ -15,6 +13,7 @@ import {
   TimeAgo,
   EmptyState,
   Page,
+  Meter,
 } from "../ds";
 import type { OverviewRow, OverviewGate, PhasePill, StepPill, DsStatus } from "../ds";
 
@@ -168,54 +167,62 @@ function StepTile({
   now: number;
 }) {
   const token = STATUS[step.status].token;
-  const cost = formatCost(step.tokens, step.costUsd);
   const working = step.status === "working";
   const activity = working ? (live?.label ?? step.currentActivity) : null;
   const elapsed =
     working && step.startedAt ? formatElapsed(now - new Date(step.startedAt).getTime()) : null;
   const finished = step.status === "done" || step.status === "failed";
-  const duration = finished && step.durationMs != null ? formatMs(step.durationMs) : null;
+  const hasMeter =
+    step.tokens != null || step.costUsd != null || (finished && step.durationMs != null);
   return (
     <article
-      className={`relative flex flex-col gap-1.5 overflow-hidden rounded-[11px] border bg-gradient-to-b to-surface py-2 pl-3.5 pr-2.5 ${TILE_SKIN[token]}`}
+      className={`relative flex flex-col gap-[7px] overflow-hidden rounded-tile border bg-gradient-to-b to-surface pb-2.5 pl-3.5 pr-3 pt-[11px] ${TILE_SKIN[token]}`}
     >
       <span className={`absolute inset-y-0 left-0 w-[3px] ${RAIL[token]}`} />
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="truncate text-[13px] font-bold leading-tight">{step.name}</div>
-          <div className="mt-0.5 font-mono text-[9.5px] text-ink-faint">
+          <div className="truncate text-tile-name font-bold leading-tight">{step.name}</div>
+          <div className="mt-0.5 font-mono text-id text-ink-faint">
             {step.runId ? `job ${step.runId}` : "job ——"}
           </div>
-          {(cost || duration) && (
-            <div
-              className="mt-0.5 font-mono text-[9.5px] text-ink-dim"
-              title="Duration, tokens and dollar cost reported by this step's run"
-            >
-              {[duration, cost].filter(Boolean).join(" · ")}
-            </div>
-          )}
         </div>
         <StatusPill status={step.status} size="sm" />
       </div>
       {reason && (
-        <div className={`text-[11.5px] leading-snug ${TILE_DETAIL[token] ?? "text-ink-dim"}`}>
+        <div className={`text-detail leading-snug ${TILE_DETAIL[token] ?? "text-ink-dim"}`}>
           {reason}
         </div>
       )}
       {activity && (
-        <div className="truncate font-mono text-[10px] text-ink-dim" title={activity}>
+        <div className="truncate font-mono text-meter text-ink-dim" title={activity}>
           <span aria-hidden="true">▸ </span>
           {activity}
         </div>
       )}
       {elapsed && (
-        <div className="font-mono text-[9.5px] text-ink-faint">
+        <div className="font-mono text-meter text-ink-faint">
           {elapsed} <span className="text-ink-faint/70">elapsed</span>
         </div>
       )}
-      {step.status === "working" && (
-        <div className="relative h-1 overflow-hidden rounded-full bg-ink-faint/15">
+      {working && (
+        <div className="relative h-[5px] overflow-hidden rounded-full bg-ink-faint/15">
           <i className="absolute inset-y-0 w-2/5 animate-[sweep_1.6s_ease-in-out_infinite] rounded-full bg-gradient-to-r from-transparent via-run to-transparent" />
+        </div>
+      )}
+      {hasMeter && (
+        <div className="flex items-center gap-2 font-mono text-meter text-ink-faint">
+          <Meter
+            level="step"
+            tokens={step.tokens}
+            usd={step.costUsd}
+            durationMs={finished ? step.durationMs : null}
+            title="Duration, tokens and dollar cost reported by this step's run"
+          />
+          {step.startedAt && (
+            <span className="ml-auto">
+              <TimeAgo iso={step.startedAt} />
+            </span>
+          )}
         </div>
       )}
     </article>
@@ -244,15 +251,15 @@ function PhaseColumn({
   now: number;
 }) {
   return (
-    <section className="flex w-44 min-w-44 flex-1 flex-col gap-2">
-      <div className="flex items-center gap-1.5 px-0.5">
-        <span className="font-mono text-[9px] text-ink-faint">
+    <section className="flex w-[248px] flex-none flex-col gap-2.5">
+      <div className="flex items-center gap-2 px-0.5">
+        <span className="font-mono text-[10px] text-ink-faint">
           {String(index + 1).padStart(2, "0")}
         </span>
-        <span className="truncate font-mono text-[10px] font-bold uppercase tracking-[0.12em] text-ink-dim">
+        <span className="truncate font-mono text-label font-bold uppercase tracking-[0.14em] text-ink-dim">
           {pill.name}
         </span>
-        <span className="ml-auto rounded-full border border-line px-1.5 font-mono text-[10px] text-ink-faint">
+        <span className="ml-auto rounded-full border border-line px-2 font-mono text-label text-ink-faint">
           {pill.steps.length}
         </span>
       </div>
@@ -293,7 +300,6 @@ function Row({
   now: number;
 }) {
   const reviseLabel = row.failure?.kind === "restarted" ? "Retry" : "Revise";
-  const cost = row.cost ? formatCost(row.cost.tokens, row.cost.usd) : null;
   return (
     <article className="rounded-tile border border-line bg-gradient-to-b from-surface-2 to-surface px-4 py-3.5">
       <div className="flex items-center gap-3">
@@ -304,15 +310,13 @@ function Row({
           {row.phases.length} phases
         </span>
         <StatusPill status={row.badge} />
-        {cost && (
-          <span
-            className="rounded-full border border-line px-2 py-0.5 font-mono text-[10px] text-ink-dim"
+        {row.cost && (
+          <Meter
+            level="row"
+            tokens={row.cost.tokens}
+            usd={row.cost.usd}
             title="Total tokens and dollar cost of the latest run, including revised attempts"
-          >
-            <span className="sr-only">Latest run total: </span>
-            <span aria-hidden="true">Σ </span>
-            {cost}
-          </span>
+          />
         )}
         <span className="ml-auto font-mono text-[10px]">
           <TimeAgo iso={row.updatedAt} />
@@ -320,7 +324,7 @@ function Row({
       </div>
       {/* Phase columns keep a readable minimum width and scroll horizontally
           rather than squishing to nothing on narrow viewports. */}
-      <div className="mt-3.5 flex items-start gap-3 overflow-x-auto pb-1">
+      <div className="mt-3.5 flex items-start gap-3.5 overflow-x-auto pb-1">
         {row.phases.map((pill, i) => (
           <PhaseColumn
             key={pill.id}
@@ -359,23 +363,21 @@ export default function CommandCenter() {
       if (r.cost?.usd != null) usd = (usd ?? 0) + r.cost.usd;
       if (r.cost?.tokens != null) tokens = (tokens ?? 0) + r.cost.tokens;
     }
-    return formatCost(tokens, usd);
+    return { usd, tokens };
   }, [rows]);
 
   return (
     <Page
+      wide
       title="Command Center"
       actions={
-        total == null ? undefined : (
-          <div
-            className="flex items-baseline gap-2 rounded-full border border-line bg-surface px-3 py-1"
+        total.usd == null && total.tokens == null ? undefined : (
+          <Meter
+            level="board"
+            tokens={total.tokens}
+            usd={total.usd}
             title="Combined tokens and dollar cost of every pipeline's latest run"
-          >
-            <span className="font-mono text-[9px] font-bold uppercase tracking-[0.14em] text-ink-faint">
-              Total spend
-            </span>
-            <span className="font-mono text-[11px] font-bold text-ink">{total}</span>
-          </div>
+          />
         )
       }
     >

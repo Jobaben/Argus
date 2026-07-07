@@ -51,6 +51,18 @@
   --font-sans: "Hellix", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
   --font-mono: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
 
+  /* Type scale — foundations/type + agent-tile component spec */
+  --text-glance: 54px;
+  --text-glance-sm: 24px;
+  --text-board-title: 22px;
+  --text-body: 14.5px;
+  --text-tile-name: 14.5px;
+  --text-detail: 12.5px;
+  --text-telemetry: 12px;
+  --text-label: 11px;
+  --text-id: 10.5px;
+  --text-meter: 10px;
+
   /* Radius */
   --radius-tile: 12px;
   --radius-panel: 14px;

@@ -210,24 +210,27 @@ describe("CommandCenter", () => {
     b.cost = { usd: 1.08, tokens: 3500 };
     mockOverview.overview = [a, b];
     render(<CommandCenter />);
-    // step tile + the pipeline chip both carry the run's spend
-    expect(screen.getAllByText("1.5k tok · $0.42")).toHaveLength(2);
-    // per-pipeline total chips (screen-reader label + Σ + amount)
-    const chips = screen.getAllByTitle(/latest run, including revised attempts/i);
-    expect(chips.map((c) => c.textContent)).toEqual([
-      "Latest run total: Σ 1.5k tok · $0.42",
-      "Latest run total: Σ 3.5k tok · $1.08",
-    ]);
-    // grand total in the page header
+    // step tile meter
+    const stepMeter = screen.getByTitle(/reported by this step's run/i);
+    expect(stepMeter).toHaveTextContent("1.5k tok · $0.42");
+    // per-pipeline row meters with the DS "run total" label
+    const rowMeters = screen.getAllByTitle(/latest run, including revised attempts/i);
+    expect(rowMeters).toHaveLength(2);
+    expect(rowMeters[0]).toHaveTextContent("run total");
+    expect(rowMeters[0]).toHaveTextContent("1.5k tok · $0.42");
+    expect(rowMeters[1]).toHaveTextContent("3.5k tok · $1.08");
+    // grand total glance in the page header
     expect(screen.getByText("Total spend")).toBeInTheDocument();
-    expect(screen.getByText("5.0k tok · $1.50")).toBeInTheDocument();
+    expect(screen.getByTitle(/every pipeline's latest run/i)).toHaveTextContent(
+      "5.0k tok · $1.50",
+    );
   });
 
   it("hides all cost UI when no run reported spend", () => {
     mockOverview.overview = [entry("scheduler-prune", "running", ["running"])];
     render(<CommandCenter />);
     expect(screen.queryByText("Total spend")).toBeNull();
-    expect(screen.queryByText(/Σ /)).toBeNull();
+    expect(screen.queryByText(/run total/)).toBeNull();
   });
 
   it("announces attention transitions through the live region", () => {

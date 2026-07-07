@@ -8,6 +8,8 @@ export { Page } from "./Page";
 export type { Crumb } from "./Page";
 export { TimeAgo } from "./TimeAgo";
 export { StatusPill } from "./StatusPill";
+export { Meter } from "./Meter";
+export type { MeterProps } from "./Meter";
 export { ConnectionPill } from "./ConnectionPill";
 export { HealthCounter } from "./HealthCounter";
 export { Sparkline } from "./Sparkline";
