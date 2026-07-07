@@ -251,8 +251,8 @@ function PhaseColumn({
   now: number;
 }) {
   return (
-    <section className="flex min-w-0 flex-col gap-2.5">
-      <div className="flex items-center gap-2 px-0.5">
+    <section className="grid min-w-0 grid-rows-subgrid row-span-3">
+      <div className="flex items-baseline gap-2 self-start px-0.5">
         <span className="font-mono text-[10px] text-ink-faint">
           {String(index + 1).padStart(2, "0")}
         </span>
@@ -264,24 +264,26 @@ function PhaseColumn({
         </span>
       </div>
       <div className="h-[2px] rounded-full bg-line" />
-      {pill.steps.map((step, i) => (
-        <StepTile
-          key={`${step.name}-${i}`}
-          step={step}
-          reason={step.status === "failed" ? pill.reason : null}
-          live={step.runId ? (liveActivity.get(step.runId) ?? null) : null}
-          now={now}
-        />
-      ))}
-      {instanceId && gate?.phaseId === pill.id && (
-        <Gate
-          instanceId={instanceId}
-          canApprove={gate.canApprove}
-          approve={approve}
-          revise={revise}
-          reviseLabel={reviseLabel}
-        />
-      )}
+      <div className="flex min-w-0 flex-col gap-2.5">
+        {pill.steps.map((step, i) => (
+          <StepTile
+            key={`${step.name}-${i}`}
+            step={step}
+            reason={step.status === "failed" ? pill.reason : null}
+            live={step.runId ? (liveActivity.get(step.runId) ?? null) : null}
+            now={now}
+          />
+        ))}
+        {instanceId && gate?.phaseId === pill.id && (
+          <Gate
+            instanceId={instanceId}
+            canApprove={gate.canApprove}
+            approve={approve}
+            revise={revise}
+            reviseLabel={reviseLabel}
+          />
+        )}
+      </div>
     </section>
   );
 }
@@ -323,9 +325,11 @@ function Row({
         </span>
       </div>
       {/* Every phase must be visible at once: equal-width columns share the
-          row, shrinking and word-wrapping instead of scrolling horizontally. */}
+          row, shrinking and word-wrapping instead of scrolling horizontally.
+          Columns subgrid into shared header/divider/body rows so the tallest
+          wrapped title sets one header height and tile tops align. */}
       <div
-        className="mt-3.5 grid items-start gap-3.5 pb-1"
+        className="mt-3.5 grid gap-x-3.5 gap-y-2.5 pb-1"
         style={{ gridTemplateColumns: `repeat(${row.phases.length}, minmax(0, 1fr))` }}
       >
         {row.phases.map((pill, i) => (
