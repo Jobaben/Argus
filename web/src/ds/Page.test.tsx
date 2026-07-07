@@ -34,7 +34,7 @@ describe("Page", () => {
     expect(screen.getByText("just body")).toBeInTheDocument();
   });
 
-  it("caps width by default and uncaps when wide", () => {
+  it("caps width to match the nav bar, wide or not", () => {
     const { container, rerender } = render(
       <Page title="Board">
         <p>x</p>
@@ -46,7 +46,7 @@ describe("Page", () => {
         <p>x</p>
       </Page>,
     );
-    expect((container.firstElementChild as HTMLElement).className).not.toContain("max-w-");
+    expect((container.firstElementChild as HTMLElement).className).toContain("max-w-[1600px]");
   });
 
   it("renders the heading at board scale when wide", () => {

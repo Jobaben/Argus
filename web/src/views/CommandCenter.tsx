@@ -181,7 +181,7 @@ function StepTile({
       <span className={`absolute inset-y-0 left-0 w-[3px] ${RAIL[token]}`} />
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="truncate text-tile-name font-bold leading-tight">{step.name}</div>
+          <div className="break-words text-tile-name font-bold leading-tight">{step.name}</div>
           <div className="mt-0.5 font-mono text-id text-ink-faint">
             {step.runId ? `job ${step.runId}` : "job ——"}
           </div>
@@ -194,7 +194,7 @@ function StepTile({
         </div>
       )}
       {activity && (
-        <div className="truncate font-mono text-meter text-ink-dim" title={activity}>
+        <div className="break-words font-mono text-meter text-ink-dim">
           <span aria-hidden="true">▸ </span>
           {activity}
         </div>
@@ -256,7 +256,7 @@ function PhaseColumn({
         <span className="font-mono text-[10px] text-ink-faint">
           {String(index + 1).padStart(2, "0")}
         </span>
-        <span className="truncate font-mono text-label font-bold uppercase tracking-[0.14em] text-ink-dim">
+        <span className="min-w-0 break-words font-mono text-label font-bold uppercase tracking-[0.14em] text-ink-dim">
           {pill.name}
         </span>
         <span className="ml-auto rounded-full border border-line px-2 font-mono text-label text-ink-faint">
@@ -303,7 +303,7 @@ function Row({
   return (
     <article className="rounded-tile border border-line bg-gradient-to-b from-surface-2 to-surface px-4 py-3.5">
       <div className="flex items-center gap-3">
-        <span className="truncate text-[15px] font-extrabold tracking-[0.02em] text-ink">
+        <span className="min-w-0 break-words text-[15px] font-extrabold tracking-[0.02em] text-ink">
           {row.name}
         </span>
         <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint">

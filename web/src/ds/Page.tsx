@@ -15,14 +15,14 @@ export function Page({
   title?: ReactNode;
   crumbs?: Crumb[];
   actions?: ReactNode;
-  /** Full-width board layout: no max-width cap, board-scale heading. */
+  /** Board layout: board-scale heading. Width stays capped to match the nav bar. */
   wide?: boolean;
   children: ReactNode;
 }) {
   const hasCrumbs = crumbs != null && crumbs.length > 0;
   const hasHeader = title != null || hasCrumbs || actions != null;
   return (
-    <div className={`${wide ? "" : "mx-auto max-w-[1600px]"} px-6 py-8`}>
+    <div className="mx-auto max-w-[1600px] px-6 py-8">
       {hasHeader && (
         <header className="mb-6 flex items-start justify-between gap-4">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
