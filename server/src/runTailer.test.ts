@@ -157,6 +157,23 @@ test("untrack drops state; a missing log file is tolerated", async () => {
   await tailer.stop();
 });
 
+test("untrack during an in-flight read suppresses its broadcast", async () => {
+  const { createRunTailer, logPath } = await loadTailer();
+  const sent: unknown[] = [];
+  const tailer = createRunTailer({
+    broadcast: (m: unknown) => sent.push(m),
+    now: () => new Date(),
+    flushMs: 5,
+    watch: false,
+  });
+  writeFileSync(logPath("r6"), toolLine("x"));
+  tailer.track("r6", "inst-7"); // poke starts an async read
+  tailer.untrack("r6"); // state removed while the read is in flight
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(sent.length, 0);
+  await tailer.stop();
+});
+
 test("broadcast batches events and flushes on the throttle timer", async () => {
   const { createRunTailer, logPath } = await loadTailer();
   const sent: { events: unknown[] }[] = [];

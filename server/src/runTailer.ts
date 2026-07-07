@@ -156,7 +156,11 @@ export function createRunTailer(deps: TailerDeps): RunTailer {
       return; // log not created yet; the watcher's add event retries
     }
     try {
+      // untrack()/re-track() may have replaced st in the map while we
+      // awaited open(); bail rather than mutate an orphaned state object.
+      if (runs.get(id) !== st) return;
       const size = (await handle.stat()).size;
+      if (runs.get(id) !== st) return; // re-check: stale after stat()'s await
       if (!st.primed) {
         st.primed = true;
         if (size > LOG_CAP_BYTES) {
@@ -173,6 +177,7 @@ export function createRunTailer(deps: TailerDeps): RunTailer {
       if (size === st.offset) return;
       const buf = Buffer.alloc(size - st.offset);
       await handle.read({ buffer: buf, position: st.offset });
+      if (runs.get(id) !== st) return; // re-check: stale after read()'s await
       st.offset = size;
       // Keep the partial tail as BYTES (not a decoded string) so a UTF-8
       // code point split across reads can't be garbled.
@@ -219,8 +224,10 @@ export function createRunTailer(deps: TailerDeps): RunTailer {
     void readOnce(id)
       .catch((e) => console.error(`[argus] tail read for run ${id} failed:`, e))
       .finally(() => {
+        // Compare by identity, not just presence: untrack+re-track during the
+        // read may have put a *different* state object under the same id.
         const cur = runs.get(id);
-        if (!cur) return;
+        if (cur !== st) return;
         cur.reading = false;
         if (cur.dirty) {
           cur.dirty = false;
