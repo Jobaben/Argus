@@ -75,7 +75,7 @@ beforeEach(() => {
 });
 
 describe("CommandCenter", () => {
-  it("renders one card per active instance when a pipeline overlaps", () => {
+  it("renders one pipeline card with a phase grid per instance when overlapping", () => {
     const e = entry("sprint-pr", "running", ["running", "pending"]);
     const newest = { ...e.latest!, id: "11111111-aaaa" };
     const older = {
@@ -89,9 +89,13 @@ describe("CommandCenter", () => {
     ];
     mockOverview.overview = [e];
     render(<CommandCenter />);
-    expect(screen.getAllByText("sprint-pr")).toHaveLength(2);
+    // one pipeline tile, not one per instance
+    expect(screen.getAllByText("sprint-pr")).toHaveLength(1);
+    // each instance keeps its own labelled phase grid inside the card
     expect(screen.getByText("#11111111")).toBeInTheDocument();
     expect(screen.getByText("#22222222")).toBeInTheDocument();
+    expect(screen.getAllByText("Phase0")).toHaveLength(2);
+    expect(screen.getAllByText("Phase1")).toHaveLength(2);
   });
 
   it("renders a row per pipeline", () => {

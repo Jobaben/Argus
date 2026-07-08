@@ -290,7 +290,7 @@ function PhaseColumn({
   );
 }
 
-function Row({
+function PhaseGrid({
   row,
   approve,
   revise,
@@ -305,53 +305,113 @@ function Row({
 }) {
   const reviseLabel = row.failure?.kind === "restarted" ? "Retry" : "Revise";
   return (
+    /* Every phase must be visible at once: equal-width columns share the
+       row, shrinking and word-wrapping instead of scrolling horizontally.
+       Columns subgrid into shared header/divider/body rows so the tallest
+       wrapped title sets one header height and tile tops align. */
+    <div
+      className="mt-3.5 grid gap-x-3.5 gap-y-2.5 pb-1"
+      style={{ gridTemplateColumns: `repeat(${row.phases.length}, minmax(0, 1fr))` }}
+    >
+      {row.phases.map((pill, i) => (
+        <PhaseColumn
+          key={pill.id}
+          pill={pill}
+          index={i}
+          instanceId={row.instanceId}
+          gate={row.gate}
+          approve={approve}
+          revise={revise}
+          reviseLabel={reviseLabel}
+          liveActivity={liveActivity}
+          now={now}
+        />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * One card per pipeline. With a single instance the header carries its badge,
+ * cost and freshness exactly as before. With several concurrent instances the
+ * card stays singular: each instance contributes only its own labelled phase
+ * grid, headed by the short instance id, badge and per-instance meter.
+ */
+function Row({
+  rows,
+  approve,
+  revise,
+  liveActivity,
+  now,
+}: {
+  rows: OverviewRow[];
+  approve: (id: string) => Promise<unknown>;
+  revise: (id: string, note?: string) => Promise<unknown>;
+  liveActivity: Map<string, LiveActivity>;
+  now: number;
+}) {
+  const first = rows[0];
+  const multi = rows.length > 1;
+  return (
     <article className="rounded-tile border border-line bg-gradient-to-b from-surface-2 to-surface px-4 py-3.5">
       <div className="flex items-center gap-3">
         <span className="min-w-0 break-words text-[15px] font-extrabold tracking-[0.02em] text-ink">
-          {row.name}
+          {first.name}
         </span>
-        {row.instanceLabel && (
-          <span className="font-mono text-[10px] text-ink-faint">#{row.instanceLabel}</span>
-        )}
         <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint">
-          {row.phases.length} phases
+          {first.phases.length} phases
         </span>
-        <StatusPill status={row.badge} />
-        {row.cost && (
-          <Meter
-            level="row"
-            tokens={row.cost.tokens}
-            usd={row.cost.usd}
-            title="Total tokens and dollar cost of the latest run, including revised attempts"
-          />
+        {multi ? (
+          <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint">
+            {rows.length} instances
+          </span>
+        ) : (
+          <>
+            <StatusPill status={first.badge} />
+            {first.cost && (
+              <Meter
+                level="row"
+                tokens={first.cost.tokens}
+                usd={first.cost.usd}
+                title="Total tokens and dollar cost of the latest run, including revised attempts"
+              />
+            )}
+            <span className="ml-auto font-mono text-[10px]">
+              <TimeAgo iso={first.updatedAt} />
+            </span>
+          </>
         )}
-        <span className="ml-auto font-mono text-[10px]">
-          <TimeAgo iso={row.updatedAt} />
-        </span>
       </div>
-      {/* Every phase must be visible at once: equal-width columns share the
-          row, shrinking and word-wrapping instead of scrolling horizontally.
-          Columns subgrid into shared header/divider/body rows so the tallest
-          wrapped title sets one header height and tile tops align. */}
-      <div
-        className="mt-3.5 grid gap-x-3.5 gap-y-2.5 pb-1"
-        style={{ gridTemplateColumns: `repeat(${row.phases.length}, minmax(0, 1fr))` }}
-      >
-        {row.phases.map((pill, i) => (
-          <PhaseColumn
-            key={pill.id}
-            pill={pill}
-            index={i}
-            instanceId={row.instanceId}
-            gate={row.gate}
+      {rows.map((row) => (
+        <div key={row.instanceId ?? row.pipelineId}>
+          {multi && (
+            <div className="mt-3 flex items-center gap-3 border-t border-line pt-3">
+              <span className="font-mono text-[10px] text-ink-faint">
+                #{row.instanceLabel ?? row.instanceId}
+              </span>
+              <StatusPill status={row.badge} size="sm" />
+              {row.cost && (
+                <Meter
+                  level="row"
+                  tokens={row.cost.tokens}
+                  usd={row.cost.usd}
+                  title="Total tokens and dollar cost of the latest run, including revised attempts"
+                />
+              )}
+              <span className="ml-auto font-mono text-[10px]">
+                <TimeAgo iso={row.updatedAt} />
+              </span>
+            </div>
+          )}
+          <PhaseGrid
+            row={row}
             approve={approve}
             revise={revise}
-            reviseLabel={reviseLabel}
             liveActivity={liveActivity}
             now={now}
           />
-        ))}
-      </div>
+        </div>
+      ))}
     </article>
   );
 }
@@ -359,6 +419,17 @@ function Row({
 export default function CommandCenter() {
   const { overview, loading, error, approve, revise } = useOverview();
   const rows = useMemo(() => overview.flatMap(toOverviewRows), [overview]);
+  // One card per pipeline: concurrent instances of the same pipeline share a
+  // card and contribute a phase grid each.
+  const groups = useMemo(() => {
+    const byPipeline = new Map<string, OverviewRow[]>();
+    for (const r of rows) {
+      const g = byPipeline.get(r.pipelineId);
+      if (g) g.push(r);
+      else byPipeline.set(r.pipelineId, [r]);
+    }
+    return [...byPipeline.values()];
+  }, [rows]);
   const announcement = useBoardAnnouncer(rows);
   const liveActivity = useRunActivity();
   const anyWorking = useMemo(
@@ -413,10 +484,10 @@ export default function CommandCenter() {
         </EmptyState>
       ) : (
         <div className="flex flex-col gap-3">
-          {rows.map((row) => (
+          {groups.map((group) => (
             <Row
-              key={row.instanceId ?? row.pipelineId}
-              row={row}
+              key={group[0].pipelineId}
+              rows={group}
               approve={approve}
               revise={revise}
               liveActivity={liveActivity}
