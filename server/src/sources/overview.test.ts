@@ -141,6 +141,22 @@ test("joins run cost/tokens onto steps and totals the instance spend", () => {
   assert.deepEqual(out[0].cost, { usd: 0.25, tokens: 1000 });
 });
 
+test("joins the run's model onto steps; null when the run reported none", () => {
+  const i = inst("i1", "a", "running", "2026-06-30T10:00:00.000Z");
+  i.phases[0].steps = [
+    { name: "s1", runId: "r1", status: "succeeded" },
+    { name: "s2", runId: "r2", status: "running" },
+  ];
+  const runs = [
+    { ...run("r1", "i1", null, null), model: "opus" },
+    run("r2", "i1", null, null),
+  ];
+  const out = buildOverview([def("a")], [i], runs);
+  const steps = out[0].latest!.phases[0].steps;
+  assert.equal(steps[0].model, "opus");
+  assert.equal(steps[1].model, null);
+});
+
 test("instance total includes runs from superseded revise attempts", () => {
   const i = inst("i1", "a", "running", "2026-06-30T10:00:00.000Z");
   i.phases[0].steps = [{ name: "s1", runId: "r2", status: "running" }];

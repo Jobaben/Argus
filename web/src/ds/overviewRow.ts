@@ -18,6 +18,9 @@ export interface StepPill {
   costUsd: number | null;
   /** Total tokens of the step's run, when reported. */
   tokens: number | null;
+  /** Model running the step: the run's recorded model when a run exists,
+   *  otherwise the definition's step/pipeline model. Null = CLI default. */
+  model: string | null;
   /** Latest live-activity label, while the step is running. */
   currentActivity: string | null;
   /** Run start time (ISO) for the elapsed ticker. */
@@ -57,6 +60,8 @@ export interface OverviewRow {
   failure: { step: string | null; reason: string | null; kind: string | null } | null;
   /** Total spend of the latest run (all attempts); null when unknown. */
   cost: OverviewCost | null;
+  /** The definition's pipeline-level model; null = CLI default. */
+  model: string | null;
   /** Short instance id, set only when the pipeline has several concurrent
    *  instances on the board so their otherwise-identical cards can be told apart. */
   instanceLabel: string | null;
@@ -89,14 +94,23 @@ const FALLBACK_STEP_STATUS: Record<PhaseStatus, DsStatus> = {
   aborted: "stopped",
 };
 
-function stepPills(phase: PhaseProgress, def: PhaseDef | undefined): StepPill[] {
+function stepPills(
+  phase: PhaseProgress,
+  def: PhaseDef | undefined,
+  defaultModel: string | null,
+): StepPill[] {
+  // Definition model for a step, by position (progress steps are created from
+  // the definition's step list in order).
+  const defModel = (i: number) => def?.steps[i]?.model ?? defaultModel;
   if (phase.steps.length > 0) {
-    return phase.steps.map((s) => ({
+    return phase.steps.map((s, i) => ({
       name: s.name,
       runId: s.runId,
       status: STEP_STATUS_TO_DS[s.status],
       costUsd: s.costUsd ?? null,
       tokens: s.tokens ?? null,
+      // Absent = no run record joined yet; fall back to the definition.
+      model: s.model !== undefined ? s.model : defModel(i),
       currentActivity: s.currentActivity ?? null,
       startedAt: s.startedAt ?? null,
       durationMs: s.durationMs ?? null,
@@ -108,6 +122,7 @@ function stepPills(phase: PhaseProgress, def: PhaseDef | undefined): StepPill[] 
     status: FALLBACK_STEP_STATUS[phase.status],
     costUsd: null,
     tokens: null,
+    model: s.model ?? defaultModel,
     currentActivity: null,
     startedAt: null,
     durationMs: null,
@@ -179,6 +194,7 @@ function instanceRow(
     steps: stepPills(
       p,
       definition.phases.find((d) => d.id === p.id),
+      definition.model ?? null,
     ),
     reason: p.status === "failed" ? extractReason(p.payload) : null,
   }));
@@ -193,6 +209,7 @@ function instanceRow(
     gate: gateFor(instance),
     failure: failureFor(instance),
     cost,
+    model: definition.model ?? null,
     instanceLabel: null,
   };
 }
@@ -217,6 +234,7 @@ export function toOverviewRow(entry: OverviewEntry): OverviewRow {
           status: "idle" as const,
           costUsd: null,
           tokens: null,
+          model: s.model ?? definition.model ?? null,
           currentActivity: null,
           startedAt: null,
           durationMs: null,
@@ -227,6 +245,7 @@ export function toOverviewRow(entry: OverviewEntry): OverviewRow {
       gate: null,
       failure: null,
       cost: null,
+      model: definition.model ?? null,
       instanceLabel: null,
     };
   }

@@ -162,11 +162,15 @@ function StepTile({
   reason,
   live,
   now,
+  rowModel,
 }: {
   step: StepPill;
   reason: string | null;
   live: LiveActivity | null;
   now: number;
+  /** Pipeline-level model shown in the card header; the tile only repeats a
+   *  model when its own differs from this. */
+  rowModel: string | null;
 }) {
   const token = STATUS[step.status].token;
   const working = step.status === "working";
@@ -186,6 +190,9 @@ function StepTile({
           <div className="break-words text-tile-name font-bold leading-tight">{step.name}</div>
           <div className="mt-0.5 font-mono text-id text-ink-faint">
             {step.runId ? `job ${step.runId}` : "job ——"}
+            {step.model && step.model !== rowModel && (
+              <span title="Model running this step"> · {step.model}</span>
+            )}
           </div>
         </div>
         <StatusPill status={step.status} size="sm" />
@@ -256,6 +263,7 @@ function PhaseCell({
   reviseLabel,
   liveActivity,
   now,
+  rowModel,
 }: {
   pill: PhasePill;
   instanceId: string | null;
@@ -265,6 +273,7 @@ function PhaseCell({
   reviseLabel?: string;
   liveActivity: Map<string, LiveActivity>;
   now: number;
+  rowModel: string | null;
 }) {
   return (
     <div className="flex min-w-0 flex-col gap-2.5">
@@ -275,6 +284,7 @@ function PhaseCell({
           reason={step.status === "failed" ? pill.reason : null}
           live={step.runId ? (liveActivity.get(step.runId) ?? null) : null}
           now={now}
+          rowModel={rowModel}
         />
       ))}
       {instanceId && gate?.phaseId === pill.id && (
@@ -321,6 +331,14 @@ function Row({
         <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint">
           {first.phases.length} phases
         </span>
+        {first.model && (
+          <span
+            title="Model running this pipeline (steps that differ say so on their tile)"
+            className="rounded-full border border-line px-2 font-mono text-[10px] text-ink-dim"
+          >
+            {first.model}
+          </span>
+        )}
         {multi ? (
           <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint">
             {rows.length} instances
@@ -392,6 +410,7 @@ function Row({
                 reviseLabel={row.failure?.kind === "restarted" ? "Retry" : "Revise"}
                 liveActivity={liveActivity}
                 now={now}
+                rowModel={row.model}
               />
             ))}
           </Fragment>

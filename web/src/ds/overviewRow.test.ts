@@ -124,7 +124,7 @@ describe("toOverviewRow", () => {
       latest: inst("running", ["succeeded", "running"]),
     });
     expect(row.phases[1].steps).toEqual([
-      { name: "red-green", runId: "r1", status: "working", costUsd: null, tokens: null, currentActivity: null, startedAt: null, durationMs: null },
+      { name: "red-green", runId: "r1", status: "working", costUsd: null, tokens: null, model: null, currentActivity: null, startedAt: null, durationMs: null },
     ]);
   });
 
@@ -135,8 +135,43 @@ describe("toOverviewRow", () => {
     });
     // phase 0 reported no steps; fall back to the definition's step, done since the phase succeeded
     expect(row.phases[0].steps).toEqual([
-      { name: "s", runId: null, status: "done", costUsd: null, tokens: null, currentActivity: null, startedAt: null, durationMs: null },
+      { name: "s", runId: null, status: "done", costUsd: null, tokens: null, model: null, currentActivity: null, startedAt: null, durationMs: null },
     ]);
+  });
+
+  it("carries the definition's pipeline model onto the row and its step pills", () => {
+    const row = toOverviewRow({
+      definition: def({ model: "sonnet" }),
+      latest: inst("running", ["succeeded", "running"]),
+    });
+    expect(row.model).toBe("sonnet");
+    // no run model joined yet → definition model fills in
+    expect(row.phases[1].steps[0].model).toBe("sonnet");
+    // definition-fallback pills too
+    expect(row.phases[0].steps[0].model).toBe("sonnet");
+  });
+
+  it("prefers the run's joined model, and a step definition override, over the pipeline model", () => {
+    const definition = def({ model: "sonnet" });
+    definition.phases[0].steps = [{ name: "s", prompt: "x", model: "opus" }];
+    const latest = inst("running", ["pending", "running"]);
+    latest.phases[1].steps = [{ name: "red-green", runId: "r1", status: "running", model: "haiku" }];
+    const row = toOverviewRow({ definition, latest });
+    expect(row.phases[1].steps[0].model).toBe("haiku"); // run record wins
+    expect(row.phases[0].steps[0].model).toBe("opus"); // step override beats pipeline model
+  });
+
+  it("keeps a joined null model (run reported none) instead of the definition's", () => {
+    const definition = def({ model: "sonnet" });
+    const latest = inst("running", ["pending", "running"]);
+    latest.phases[1].steps = [{ name: "red-green", runId: "r1", status: "running", model: null }];
+    const row = toOverviewRow({ definition, latest });
+    expect(row.phases[1].steps[0].model).toBeNull();
+  });
+
+  it("row model is null when the definition has none", () => {
+    const row = toOverviewRow({ definition: def(), latest: null });
+    expect(row.model).toBeNull();
   });
 
   it("carries step cost/tokens and the entry's instance total onto the row", () => {

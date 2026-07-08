@@ -55,6 +55,7 @@ function enrichSteps(
           ...s,
           costUsd: run.costUsd ?? null,
           tokens: run.tokens ?? null,
+          model: run.model ?? null,
           startedAt: run.startedAt ?? null,
           durationMs: run.durationMs ?? null,
           ...(act ? { currentActivity: act.label, activityAt: act.at } : {}),

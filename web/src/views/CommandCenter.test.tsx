@@ -361,6 +361,40 @@ describe("CommandCenter", () => {
     expect(screen.getByText(/2m 8s/)).toBeInTheDocument();
   });
 
+  it("shows the pipeline's model in the card header", () => {
+    const e = entry("pipe", "running", ["running"]);
+    e.definition.model = "sonnet";
+    mockOverview.overview = [e];
+    render(<CommandCenter />);
+    expect(screen.getByTitle(/model running this pipeline/i)).toHaveTextContent("sonnet");
+  });
+
+  it("shows a step's model on its tile only when it differs from the pipeline's", () => {
+    const e = entry("pipe", "running", ["running"]);
+    e.definition.model = "sonnet";
+    e.latest!.phases[0].steps = [{ name: "step-x", runId: "r", status: "running", model: "opus" }];
+    mockOverview.overview = [e];
+    render(<CommandCenter />);
+    expect(screen.getByTitle(/model running this step/i)).toHaveTextContent("opus");
+  });
+
+  it("does not repeat the pipeline model on step tiles", () => {
+    const e = entry("pipe", "running", ["running"]);
+    e.definition.model = "sonnet";
+    e.latest!.phases[0].steps = [
+      { name: "step-x", runId: "r", status: "running", model: "sonnet" },
+    ];
+    mockOverview.overview = [e];
+    render(<CommandCenter />);
+    expect(screen.queryByTitle(/model running this step/i)).toBeNull();
+  });
+
+  it("shows no model chip when the pipeline has none", () => {
+    mockOverview.overview = [entry("pipe", "running", ["running"])];
+    render(<CommandCenter />);
+    expect(screen.queryByTitle(/model running this pipeline/i)).toBeNull();
+  });
+
   it("renders a running step without activity exactly as before", () => {
     mockOverview.overview = [entry("pipe", "running", ["running"])];
     render(<CommandCenter />);

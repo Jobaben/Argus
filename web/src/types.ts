@@ -112,6 +112,8 @@ export interface StepProgress {
   costUsd?: number | null;
   /** Total tokens of the step's run, joined server-side from the run record. */
   tokens?: number | null;
+  /** Model the step's run was started with, joined server-side from the run record. */
+  model?: string | null;
   /** Latest activity label from the run tailer; only set while running. */
   currentActivity?: string | null;
   /** Arrival timestamp of that activity. */
