@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useOverview } from "../useOverview";
 import { useRunActivity } from "../useRunActivity";
 import type { LiveActivity } from "../useRunActivity";
@@ -231,9 +231,24 @@ function StepTile({
   );
 }
 
-function PhaseColumn({
+function PhaseHeader({ pill, index }: { pill: PhasePill; index: number }) {
+  return (
+    <div className="flex items-baseline gap-2 self-start px-0.5">
+      <span className="font-mono text-[10px] text-ink-faint">
+        {String(index + 1).padStart(2, "0")}
+      </span>
+      <span className="min-w-0 break-words font-mono text-label font-bold uppercase tracking-[0.14em] text-ink-dim">
+        {pill.name}
+      </span>
+      <span className="ml-auto rounded-full border border-line px-2 font-mono text-label text-ink-faint">
+        {pill.steps.length}
+      </span>
+    </div>
+  );
+}
+
+function PhaseCell({
   pill,
-  index,
   instanceId,
   gate,
   approve,
@@ -243,7 +258,6 @@ function PhaseColumn({
   now,
 }: {
   pill: PhasePill;
-  index: number;
   instanceId: string | null;
   gate: OverviewGate | null;
   approve: (id: string) => Promise<unknown>;
@@ -253,80 +267,25 @@ function PhaseColumn({
   now: number;
 }) {
   return (
-    <section className="grid min-w-0 grid-rows-subgrid row-span-3">
-      <div className="flex items-baseline gap-2 self-start px-0.5">
-        <span className="font-mono text-[10px] text-ink-faint">
-          {String(index + 1).padStart(2, "0")}
-        </span>
-        <span className="min-w-0 break-words font-mono text-label font-bold uppercase tracking-[0.14em] text-ink-dim">
-          {pill.name}
-        </span>
-        <span className="ml-auto rounded-full border border-line px-2 font-mono text-label text-ink-faint">
-          {pill.steps.length}
-        </span>
-      </div>
-      <div className="h-[2px] rounded-full bg-line" />
-      <div className="flex min-w-0 flex-col gap-2.5">
-        {pill.steps.map((step, i) => (
-          <StepTile
-            key={`${step.name}-${i}`}
-            step={step}
-            reason={step.status === "failed" ? pill.reason : null}
-            live={step.runId ? (liveActivity.get(step.runId) ?? null) : null}
-            now={now}
-          />
-        ))}
-        {instanceId && gate?.phaseId === pill.id && (
-          <Gate
-            instanceId={instanceId}
-            canApprove={gate.canApprove}
-            approve={approve}
-            revise={revise}
-            reviseLabel={reviseLabel}
-          />
-        )}
-      </div>
-    </section>
-  );
-}
-
-function PhaseGrid({
-  row,
-  approve,
-  revise,
-  liveActivity,
-  now,
-}: {
-  row: OverviewRow;
-  approve: (id: string) => Promise<unknown>;
-  revise: (id: string, note?: string) => Promise<unknown>;
-  liveActivity: Map<string, LiveActivity>;
-  now: number;
-}) {
-  const reviseLabel = row.failure?.kind === "restarted" ? "Retry" : "Revise";
-  return (
-    /* Every phase must be visible at once: equal-width columns share the
-       row, shrinking and word-wrapping instead of scrolling horizontally.
-       Columns subgrid into shared header/divider/body rows so the tallest
-       wrapped title sets one header height and tile tops align. */
-    <div
-      className="mt-3.5 grid gap-x-3.5 gap-y-2.5 pb-1"
-      style={{ gridTemplateColumns: `repeat(${row.phases.length}, minmax(0, 1fr))` }}
-    >
-      {row.phases.map((pill, i) => (
-        <PhaseColumn
-          key={pill.id}
-          pill={pill}
-          index={i}
-          instanceId={row.instanceId}
-          gate={row.gate}
-          approve={approve}
-          revise={revise}
-          reviseLabel={reviseLabel}
-          liveActivity={liveActivity}
+    <div className="flex min-w-0 flex-col gap-2.5">
+      {pill.steps.map((step, i) => (
+        <StepTile
+          key={`${step.name}-${i}`}
+          step={step}
+          reason={step.status === "failed" ? pill.reason : null}
+          live={step.runId ? (liveActivity.get(step.runId) ?? null) : null}
           now={now}
         />
       ))}
+      {instanceId && gate?.phaseId === pill.id && (
+        <Gate
+          instanceId={instanceId}
+          canApprove={gate.canApprove}
+          approve={approve}
+          revise={revise}
+          reviseLabel={reviseLabel}
+        />
+      )}
     </div>
   );
 }
@@ -334,8 +293,9 @@ function PhaseGrid({
 /**
  * One card per pipeline. With a single instance the header carries its badge,
  * cost and freshness exactly as before. With several concurrent instances the
- * card stays singular: each instance contributes only its own labelled phase
- * grid, headed by the short instance id, badge and per-instance meter.
+ * card stays singular: the phase titles render once, and each instance
+ * contributes only its own row of step tiles under those shared columns,
+ * headed by the short instance id, badge and per-instance meter.
  */
 function Row({
   rows,
@@ -382,36 +342,61 @@ function Row({
           </>
         )}
       </div>
-      {rows.map((row) => (
-        <div key={row.instanceId ?? row.pipelineId}>
-          {multi && (
-            <div className="mt-3 flex items-center gap-3 border-t border-line pt-3">
-              <span className="font-mono text-[10px] text-ink-faint">
-                #{row.instanceLabel ?? row.instanceId}
-              </span>
-              <StatusPill status={row.badge} size="sm" />
-              {row.cost && (
-                <Meter
-                  level="row"
-                  tokens={row.cost.tokens}
-                  usd={row.cost.usd}
-                  title="Total tokens and dollar cost of the latest run, including revised attempts"
-                />
-              )}
-              <span className="ml-auto font-mono text-[10px]">
-                <TimeAgo iso={row.updatedAt} />
-              </span>
-            </div>
-          )}
-          <PhaseGrid
-            row={row}
-            approve={approve}
-            revise={revise}
-            liveActivity={liveActivity}
-            now={now}
-          />
-        </div>
-      ))}
+      {/* Every phase must be visible at once: equal-width columns share the
+          row, shrinking and word-wrapping instead of scrolling horizontally.
+          One flat grid per card keeps every instance's tiles under the same
+          shared phase headers, so titles render once and columns stay aligned. */}
+      <div
+        className="mt-3.5 grid gap-x-3.5 gap-y-2.5 pb-1"
+        style={{ gridTemplateColumns: `repeat(${first.phases.length}, minmax(0, 1fr))` }}
+      >
+        {first.phases.map((pill, i) => (
+          <PhaseHeader key={pill.id} pill={pill} index={i} />
+        ))}
+        {first.phases.map((pill) => (
+          <div key={pill.id} className="h-[2px] rounded-full bg-line" />
+        ))}
+        {rows.map((row, rowIndex) => (
+          <Fragment key={row.instanceId ?? row.pipelineId}>
+            {multi && (
+              <div
+                className={`col-span-full flex items-center gap-3 ${
+                  rowIndex > 0 ? "mt-1 border-t border-line pt-2.5" : ""
+                }`}
+              >
+                <span className="font-mono text-[10px] text-ink-faint">
+                  #{row.instanceLabel ?? row.instanceId}
+                </span>
+                <StatusPill status={row.badge} size="sm" />
+                {row.cost && (
+                  <Meter
+                    level="row"
+                    tokens={row.cost.tokens}
+                    usd={row.cost.usd}
+                    title="Total tokens and dollar cost of the latest run, including revised attempts"
+                  />
+                )}
+                <span className="ml-auto font-mono text-[10px]">
+                  <TimeAgo iso={row.updatedAt} />
+                </span>
+              </div>
+            )}
+            {row.phases.map((pill) => (
+              <PhaseCell
+                key={pill.id}
+                pill={pill}
+                instanceId={row.instanceId}
+                gate={row.gate}
+                approve={approve}
+                revise={revise}
+                reviseLabel={row.failure?.kind === "restarted" ? "Retry" : "Revise"}
+                liveActivity={liveActivity}
+                now={now}
+              />
+            ))}
+          </Fragment>
+        ))}
+      </div>
     </article>
   );
 }

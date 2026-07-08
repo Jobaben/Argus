@@ -91,11 +91,32 @@ describe("CommandCenter", () => {
     render(<CommandCenter />);
     // one pipeline tile, not one per instance
     expect(screen.getAllByText("sprint-pr")).toHaveLength(1);
-    // each instance keeps its own labelled phase grid inside the card
+    // phase titles render once, shared by every instance
+    expect(screen.getAllByText("Phase0")).toHaveLength(1);
+    expect(screen.getAllByText("Phase1")).toHaveLength(1);
+    // each instance keeps its own labelled row of step tiles
     expect(screen.getByText("#11111111")).toBeInTheDocument();
     expect(screen.getByText("#22222222")).toBeInTheDocument();
-    expect(screen.getAllByText("Phase0")).toHaveLength(2);
-    expect(screen.getAllByText("Phase1")).toHaveLength(2);
+    expect(screen.getAllByText("step-x")).toHaveLength(2);
+  });
+
+  it("shows every concurrently-stopped instance as stopped", () => {
+    const e = entry("sprint-pr", "aborted", ["aborted", "pending"]);
+    const newest = { ...e.latest!, id: "11111111-aaaa", status: "aborted" as const };
+    const older = {
+      ...e.latest!,
+      id: "22222222-bbbb",
+      status: "aborted" as const,
+      phases: e.latest!.phases.map((p) => ({ ...p })),
+    };
+    e.active = [
+      { instance: newest, cost: { usd: null, tokens: null } },
+      { instance: older, cost: { usd: null, tokens: null } },
+    ];
+    mockOverview.overview = [e];
+    render(<CommandCenter />);
+    // one "Stopped" pill per instance row plus one per aborted step tile
+    expect(screen.getAllByText("Stopped")).toHaveLength(4);
   });
 
   it("renders a row per pipeline", () => {

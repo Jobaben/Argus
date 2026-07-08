@@ -14,9 +14,10 @@ export interface OverviewEntry {
   /** Total spend of the latest instance across all its runs (including
    *  superseded revise attempts). Null when there is no instance. */
   cost: OverviewCost | null;
-  /** Every non-terminal instance (running / awaiting-approval), newest-first.
-   *  With overlapPolicy "allow" a pipeline can have several at once; `latest`
-   *  alone would hide all but the newest. */
+  /** Instances sharing the board, newest-first: every non-terminal one
+   *  (running / awaiting-approval) plus terminal ones whose lifetime
+   *  overlapped the latest instance, so a just-stopped sibling stays visible
+   *  beside its peers. Empty when only the lone `latest` instance remains. */
   active: { instance: PipelineInstance; cost: OverviewCost }[];
 }
 
@@ -90,24 +91,35 @@ export function buildOverview(
   runs: Run[] = [],
   activity?: Map<string, ActivityEvent>,
 ): OverviewEntry[] {
-  const latestByPipeline = new Map<string, PipelineInstance>();
-  const activeByPipeline = new Map<string, PipelineInstance[]>();
+  const byPipeline = new Map<string, PipelineInstance[]>();
   for (const i of instances) {
-    if (!latestByPipeline.has(i.pipelineId)) latestByPipeline.set(i.pipelineId, i);
-    if (i.status === "running" || i.status === "awaiting-approval") {
-      const list = activeByPipeline.get(i.pipelineId) ?? [];
-      list.push(i);
-      activeByPipeline.set(i.pipelineId, list);
-    }
+    const list = byPipeline.get(i.pipelineId);
+    if (list) list.push(i);
+    else byPipeline.set(i.pipelineId, [i]);
   }
+  const nonTerminal = (i: PipelineInstance) =>
+    i.status === "running" || i.status === "awaiting-approval";
+  // The board's concurrent generation: non-terminal instances plus terminal
+  // ones that overlapped the latest instance's lifetime (ended at/after its
+  // start), so a just-stopped sibling stays visible beside its peers. A lone
+  // latest instance keeps the classic single-card fallback (empty active).
+  const boardInstances = (list: PipelineInstance[]): PipelineInstance[] => {
+    const latest = list[0];
+    if (!latest) return [];
+    const overlapping = list.filter(
+      (i) => nonTerminal(i) || (i.endedAt !== null && i.endedAt >= latest.createdAt),
+    );
+    return overlapping.length > 1 ? overlapping : list.filter(nonTerminal);
+  };
   const byRunId = new Map(runs.map((r) => [r.id, r]));
   const entries: OverviewEntry[] = definitions.map((definition) => {
-    const latest = latestByPipeline.get(definition.id) ?? null;
+    const list = byPipeline.get(definition.id) ?? [];
+    const latest = list[0] ?? null;
     return {
       definition,
       latest: latest ? enrichSteps(latest, byRunId, activity) : null,
       cost: latest ? instanceCost(latest.id, runs) : null,
-      active: (activeByPipeline.get(definition.id) ?? []).map((i) => ({
+      active: boardInstances(list).map((i) => ({
         instance: enrichSteps(i, byRunId, activity),
         cost: instanceCost(i.id, runs),
       })),

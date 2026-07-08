@@ -194,7 +194,9 @@ export interface OverviewEntry {
   /** Total spend of the latest instance across all its runs (including
    *  superseded revise attempts). Null/absent when there is no instance. */
   cost?: OverviewCost | null;
-  /** Every non-terminal instance (running / awaiting-approval), newest-first.
-   *  With overlapPolicy "allow" a pipeline can have several at once. */
+  /** Instances sharing the board, newest-first: every non-terminal one
+   *  (running / awaiting-approval) plus terminal ones whose lifetime
+   *  overlapped the latest instance, so a just-stopped sibling stays visible
+   *  beside its peers. Empty when only the lone latest instance remains. */
   active?: { instance: PipelineInstance; cost: OverviewCost }[];
 }
