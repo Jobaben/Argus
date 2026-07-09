@@ -11,6 +11,7 @@ import { readInventory } from "./sources/inventory.js";
 import { readTasks } from "./sources/tasks.js";
 import { searchTranscripts } from "./sources/search.js";
 import { readCron } from "./sources/cron.js";
+import { buildChronicle } from "./sources/chronicle.js";
 import {
   createSchedule,
   deleteSchedule,
@@ -148,6 +149,18 @@ export function createApp(deps: AppDeps): Hono {
     c.json({ results: await searchTranscripts(c.req.query("q") ?? "") }),
   );
   app.get("/api/cron", async (c) => c.json(await readCron()));
+
+  // Cross-source timeline: runs + agents + sessions as packed swimlanes.
+  app.get("/api/chronicle", async (c) => {
+    const hoursRaw = Number(c.req.query("hours"));
+    const hours = Number.isFinite(hoursRaw) ? Math.min(336, Math.max(1, hoursRaw)) : 24;
+    const [runs, agents, sessions] = await Promise.all([
+      readRuns(),
+      readAgents(),
+      readSessions(150),
+    ]);
+    return c.json(buildChronicle({ runs, agents, sessions }, new Date(), hours * 3_600_000));
+  });
 
   app.get("/api/schedules", async (c) =>
     c.json({ schedules: await readSchedulesWithNext(new Date()) }),

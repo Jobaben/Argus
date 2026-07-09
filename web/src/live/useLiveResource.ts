@@ -18,6 +18,10 @@ export interface LiveResourceOptions<T> {
   initial: T;
   /** Fallback poll interval (ms) used ONLY while the socket is down. 0 disables. */
   pollMs?: number;
+  /** Keep polling even while the socket is live. For resources that mix pushed
+   *  sources with time-decaying ones (e.g. the Chronicle's session activity),
+   *  where a healthy socket still can't signal every change. */
+  pollAlways?: boolean;
 }
 
 /**
@@ -36,7 +40,7 @@ export function useLiveResource<T>(
   path: string | null,
   opts: LiveResourceOptions<T>,
 ): LiveResourceState<T> & { refresh: () => void } {
-  const { events, select, initial, pollMs = 10000 } = opts;
+  const { events, select, initial, pollMs = 10000, pollAlways = false } = opts;
   const [data, setData] = useState<T>(initial);
   const [loading, setLoading] = useState(path != null);
   const [error, setError] = useState<string | null>(null);
@@ -108,7 +112,7 @@ export function useLiveResource<T>(
       onStatus: (isLive) => {
         if (!mounted.current) return;
         setLive(isLive);
-        if (!hasEvents) return; // keep polling; socket carries no signal for us
+        if (!hasEvents || pollAlways) return; // keep polling; socket alone can't keep us fresh
         if (isLive) stopPoll();
         else startPoll();
       },
@@ -119,7 +123,7 @@ export function useLiveResource<T>(
       stopPoll();
       unsubscribe();
     };
-  }, [path, refresh, pollMs]);
+  }, [path, refresh, pollMs, pollAlways]);
 
   return { data, loading, error, live, refresh };
 }

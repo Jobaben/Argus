@@ -21,9 +21,7 @@ export async function readTotals(now: () => Date = () => new Date()): Promise<To
     usd: typeof raw.usd === "number" && Number.isFinite(raw.usd) ? raw.usd : 0,
     tokens: typeof raw.tokens === "number" && Number.isFinite(raw.tokens) ? raw.tokens : 0,
     runsCounted:
-      typeof raw.runsCounted === "number" && Number.isFinite(raw.runsCounted)
-        ? raw.runsCounted
-        : 0,
+      typeof raw.runsCounted === "number" && Number.isFinite(raw.runsCounted) ? raw.runsCounted : 0,
     since: typeof raw.since === "string" ? raw.since : now().toISOString(),
   };
 }

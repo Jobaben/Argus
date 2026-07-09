@@ -1,0 +1,37 @@
+<!-- @dsCard group="Components" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<style>
+  :root {
+    --ground:#0a0f16; --ground-2:#0c121b; --surface-2:#16212e; --line:rgb(146 180 217 / .14);
+    --ink:#eaf2fb; --ink-dim:#9db0c6; --ink-faint:#8b9db4;
+    --mono:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,monospace;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--ground); min-height:100vh;
+    display:flex; align-items:center; justify-content:center; padding:30px; }
+  .seg { display:inline-flex; align-items:center; gap:2px; border:1px solid var(--line);
+    border-radius:8px; background:var(--ground-2); padding:2px; }
+  .seg button { border:0; border-radius:6px; background:transparent; color:var(--ink-faint);
+    cursor:pointer; padding:5px 10px; font-family:var(--mono); font-size:11px; font-weight:700;
+    text-transform:uppercase; letter-spacing:.1em; }
+  .seg button[aria-checked="true"] { background:var(--surface-2); color:var(--ink); }
+  .seg button:hover { color:var(--ink-dim); }
+  .seg button[aria-checked="true"]:hover { color:var(--ink); }
+</style>
+</head>
+<body>
+  <!-- Segmented control: mutually exclusive view options, one always selected.
+       Radio-group semantics (role="radiogroup" + aria-checked). Born as the
+       Chronicle's time-window picker. -->
+  <div class="seg" role="radiogroup" aria-label="Time window">
+    <button role="radio" aria-checked="false">1h</button>
+    <button role="radio" aria-checked="false">6h</button>
+    <button role="radio" aria-checked="true">24h</button>
+    <button role="radio" aria-checked="false">3d</button>
+    <button role="radio" aria-checked="false">7d</button>
+  </div>
+</body>
+</html>

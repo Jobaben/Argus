@@ -147,10 +147,7 @@ test("joins the run's model onto steps; null when the run reported none", () => 
     { name: "s1", runId: "r1", status: "succeeded" },
     { name: "s2", runId: "r2", status: "running" },
   ];
-  const runs = [
-    { ...run("r1", "i1", null, null), model: "opus" },
-    run("r2", "i1", null, null),
-  ];
+  const runs = [{ ...run("r1", "i1", null, null), model: "opus" }, run("r2", "i1", null, null)];
   const out = buildOverview([def("a")], [i], runs);
   const steps = out[0].latest!.phases[0].steps;
   assert.equal(steps[0].model, "opus");
@@ -214,11 +211,25 @@ test("finished steps get durationMs but no activity", () => {
   const i = inst("i1", "a", "running", "2026-06-30T10:00:00.000Z");
   i.phases[0].steps = [{ name: "s", runId: "r1", status: "succeeded" }];
   const run = {
-    id: "r1", scheduleId: "pipeline:a", scheduleName: "a · P1", prompt: "x", cwd: "/",
-    status: "succeeded", trigger: "scheduled", queuedAt: "2026-06-30T10:00:00.000Z",
-    startedAt: "2026-06-30T10:00:00.000Z", endedAt: "2026-06-30T10:02:08.000Z",
-    durationMs: 128000, pid: 1, exitCode: 0, sessionId: "s", project: null,
-    resultSummary: null, error: null, instanceId: "i1", phaseId: "p1",
+    id: "r1",
+    scheduleId: "pipeline:a",
+    scheduleName: "a · P1",
+    prompt: "x",
+    cwd: "/",
+    status: "succeeded",
+    trigger: "scheduled",
+    queuedAt: "2026-06-30T10:00:00.000Z",
+    startedAt: "2026-06-30T10:00:00.000Z",
+    endedAt: "2026-06-30T10:02:08.000Z",
+    durationMs: 128000,
+    pid: 1,
+    exitCode: 0,
+    sessionId: "s",
+    project: null,
+    resultSummary: null,
+    error: null,
+    instanceId: "i1",
+    phaseId: "p1",
   } as Run;
   const activity = new Map([
     ["r1", { at: "2026-06-30T10:01:00.000Z", kind: "done" as const, label: "finished" }],

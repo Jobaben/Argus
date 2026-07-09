@@ -148,7 +148,10 @@ export function probeCommand(
       return { ok: false, reason: `timed out after ${timeoutMs}ms (killed with ${res.signal})` };
     }
     if (res.status !== 0) {
-      const stderr = String(res.stderr ?? "").trim().split("\n")[0]?.slice(0, 120);
+      const stderr = String(res.stderr ?? "")
+        .trim()
+        .split("\n")[0]
+        ?.slice(0, 120);
       return {
         ok: false,
         reason: `exited with code ${res.status}${stderr ? `: ${stderr}` : ""}`,

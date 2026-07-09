@@ -124,7 +124,17 @@ describe("toOverviewRow", () => {
       latest: inst("running", ["succeeded", "running"]),
     });
     expect(row.phases[1].steps).toEqual([
-      { name: "red-green", runId: "r1", status: "working", costUsd: null, tokens: null, model: null, currentActivity: null, startedAt: null, durationMs: null },
+      {
+        name: "red-green",
+        runId: "r1",
+        status: "working",
+        costUsd: null,
+        tokens: null,
+        model: null,
+        currentActivity: null,
+        startedAt: null,
+        durationMs: null,
+      },
     ]);
   });
 
@@ -135,7 +145,17 @@ describe("toOverviewRow", () => {
     });
     // phase 0 reported no steps; fall back to the definition's step, done since the phase succeeded
     expect(row.phases[0].steps).toEqual([
-      { name: "s", runId: null, status: "done", costUsd: null, tokens: null, model: null, currentActivity: null, startedAt: null, durationMs: null },
+      {
+        name: "s",
+        runId: null,
+        status: "done",
+        costUsd: null,
+        tokens: null,
+        model: null,
+        currentActivity: null,
+        startedAt: null,
+        durationMs: null,
+      },
     ]);
   });
 
@@ -155,7 +175,9 @@ describe("toOverviewRow", () => {
     const definition = def({ model: "sonnet" });
     definition.phases[0].steps = [{ name: "s", prompt: "x", model: "opus" }];
     const latest = inst("running", ["pending", "running"]);
-    latest.phases[1].steps = [{ name: "red-green", runId: "r1", status: "running", model: "haiku" }];
+    latest.phases[1].steps = [
+      { name: "red-green", runId: "r1", status: "running", model: "haiku" },
+    ];
     const row = toOverviewRow({ definition, latest });
     expect(row.phases[1].steps[0].model).toBe("haiku"); // run record wins
     expect(row.phases[0].steps[0].model).toBe("opus"); // step override beats pipeline model
