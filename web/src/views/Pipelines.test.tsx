@@ -120,6 +120,71 @@ describe("Pipelines tab", () => {
     );
   });
 
+  it("shows 'Stop all (n)' and aborts every active instance when several overlap", async () => {
+    const user = userEvent.setup();
+    const pAllow: PipelineDefinition = { ...p1, overlapPolicy: "allow" };
+    const i1 = instance("running");
+    const i2 = { ...instance("running"), id: "i2" };
+    const fetchMock = routedFetch(
+      [
+        {
+          definition: pAllow,
+          latest: i2,
+          active: [
+            { instance: i2, cost: { usd: null, tokens: null } },
+            { instance: i1, cost: { usd: null, tokens: null } },
+          ],
+        },
+      ],
+      [pAllow],
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<Pipelines />);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /stop all \(2\)/i })).toBeTruthy(),
+    );
+    await user.click(screen.getByRole("button", { name: /stop all \(2\)/i }));
+    await waitFor(() => {
+      for (const id of ["i1", "i2"]) {
+        expect(
+          fetchMock.mock.calls.some(
+            ([url, init]) =>
+              String(url).includes(`/api/instances/${id}/abort`) &&
+              (init as RequestInit | undefined)?.method === "POST",
+          ),
+        ).toBe(true);
+      }
+    });
+  });
+
+  it("shows both Run now and Stop for a running pipeline with overlap=allow", async () => {
+    const pAllow: PipelineDefinition = { ...p1, overlapPolicy: "allow" };
+    vi.stubGlobal("fetch", routedFetch([{ definition: pAllow, latest: instance("running") }], [pAllow]));
+    render(<Pipelines />);
+    await waitFor(() => expect(screen.getByRole("button", { name: /^stop$/i })).toBeTruthy());
+    expect(screen.getByRole("button", { name: /run now/i })).toBeTruthy();
+  });
+
+  it("posts to the start endpoint from Run now while running with overlap=allow", async () => {
+    const user = userEvent.setup();
+    const pAllow: PipelineDefinition = { ...p1, overlapPolicy: "allow" };
+    const fetchMock = routedFetch([{ definition: pAllow, latest: instance("running") }], [pAllow]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Pipelines />);
+    await waitFor(() => expect(screen.getByRole("button", { name: /run now/i })).toBeTruthy());
+    await user.click(screen.getByRole("button", { name: /run now/i }));
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url).includes("/api/pipelines/p1/start") &&
+            (init as RequestInit | undefined)?.method === "POST",
+        ),
+      ).toBe(true),
+    );
+  });
+
   it("shows Run now (not Stop) for an idle pipeline", async () => {
     vi.stubGlobal("fetch", routedFetch([{ definition: p1, latest: null }]));
     render(<Pipelines />);

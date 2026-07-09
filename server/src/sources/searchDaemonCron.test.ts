@@ -1,6 +1,6 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -51,6 +51,25 @@ test("searchTranscripts: honors the result limit", async () => {
   const { searchTranscripts } = await load("search");
   const results = await searchTranscripts("needle", 2);
   assert.equal(results.length, 2);
+});
+
+test("searchTranscripts: newest transcripts rank first", async () => {
+  // "a-old" sorts first alphabetically; only mtime ordering puts "b-new" first.
+  seedTranscript("-p", "a-old", [{ type: "user", message: { role: "user", content: "token in old" } }]);
+  seedTranscript("-p", "b-new", [{ type: "user", message: { role: "user", content: "token in new" } }]);
+  const now = Date.now();
+  utimesSync(
+    path.join(home, "projects", "-p", "a-old.jsonl"),
+    new Date(now - 60_000),
+    new Date(now - 60_000),
+  );
+  utimesSync(path.join(home, "projects", "-p", "b-new.jsonl"), new Date(now), new Date(now));
+  const { searchTranscripts } = await load("search");
+  const results = await searchTranscripts("token");
+  assert.deepEqual(
+    results.map((r: { sessionId: string }) => r.sessionId),
+    ["b-new", "a-old"],
+  );
 });
 
 test("readDaemon: empty when no roster file", async () => {

@@ -1,5 +1,44 @@
 import { describe, it, expect } from "vitest";
-import { formatDuration, formatMs, parseRunLog, sparklinePoints } from "./format";
+import {
+  formatCost,
+  formatDuration,
+  formatElapsed,
+  formatMs,
+  formatTokens,
+  formatUsd,
+  parseRunLog,
+  sparklinePoints,
+} from "./format";
+
+describe("formatUsd", () => {
+  it("renders cents with two decimals", () => {
+    expect(formatUsd(1.5)).toBe("$1.50");
+  });
+  it("renders sub-cent values with four decimals", () => {
+    expect(formatUsd(0.0042)).toBe("$0.0042");
+  });
+});
+
+describe("formatTokens", () => {
+  it("compacts thousands and millions", () => {
+    expect(formatTokens(950)).toBe("950");
+    expect(formatTokens(1500)).toBe("1.5k");
+    expect(formatTokens(2_500_000)).toBe("2.5M");
+  });
+});
+
+describe("formatCost", () => {
+  it("joins tokens and dollars", () => {
+    expect(formatCost(1500, 0.42)).toBe("1.5k tok · $0.42");
+  });
+  it("renders whichever metric is known", () => {
+    expect(formatCost(1500, null)).toBe("1.5k tok");
+    expect(formatCost(null, 0.42)).toBe("$0.42");
+  });
+  it("is null when neither metric is known", () => {
+    expect(formatCost(null, undefined)).toBeNull();
+  });
+});
 
 describe("formatDuration", () => {
   it("renders minutes under an hour", () => {
@@ -110,5 +149,20 @@ describe("sparklinePoints", () => {
   });
   it("returns empty string for empty input", () => {
     expect(sparklinePoints([], 100, 26)).toBe("");
+  });
+});
+
+describe("formatElapsed", () => {
+  it("renders mm:ss under an hour", () => {
+    expect(formatElapsed(0)).toBe("00:00");
+    expect(formatElapsed(252_000)).toBe("04:12");
+    expect(formatElapsed(59 * 60_000 + 59_000)).toBe("59:59");
+  });
+  it("renders h:mm:ss from an hour up", () => {
+    expect(formatElapsed(3_723_000)).toBe("1:02:03");
+  });
+  it("is defensive about garbage", () => {
+    expect(formatElapsed(-5)).toBe("—");
+    expect(formatElapsed(Number.NaN)).toBe("—");
   });
 });

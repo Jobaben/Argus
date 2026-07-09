@@ -7,6 +7,24 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- Command Center cost surfacing: every step tile shows its run's tokens and
+  dollar cost, each pipeline row shows the latest run's total (Σ chip, all
+  revise attempts included), and the page header shows the grand total across
+  every pipeline. `GET /api/overview` now joins `costUsd`/`tokens` onto each
+  step and returns a per-instance `cost` total.
+- Boot-time cost backfill: terminal runs recorded before cost capture existed
+  are patched once from their log envelopes, so historical steps show spend
+  immediately after upgrading.
+- UX/A11y wave (independently re-audited 9 → 10): a polite live region
+  announces pipeline status transitions and gate action outcomes; per-route
+  `document.title`; global high-contrast `:focus-visible` outline;
+  skip-to-content link + focusable `<main>` landmark; `aria-expanded` /
+  `aria-pressed` on expanders and sub-tabs; labeled custom-model input;
+  SetupBanner apply failures surfaced with `role="alert"` and a busy label;
+  Search states and connection pill in live regions; Stats hour bars exposed
+  as labeled images; "Inventory" named consistently; actionable Command
+  Center empty state; dead Vite scaffolding CSS removed.
+
 - Auto-setup on boot: every fixable prerequisite (signal hook file, Stop and
   PreToolUse registration, data directories) is installed automatically at
   server start; the log reports what was installed and what still needs a
@@ -18,6 +36,10 @@ All notable changes to Argus are documented here. The format follows
 
 ### Fixed
 
+- Pipeline step runs completed by the live tracking path never captured
+  cost/tokens/result from the CLI's JSON envelope (only restart-adopted runs
+  did); the completion handler now parses the log tail like the reconcile
+  path.
 - `applyAll`/`preflight` no longer risk clobbering a corrupt-but-recoverable
   `settings.json`: writes now refuse when the file exists but does not parse
   (checks still report it as `settings-parse: error`).

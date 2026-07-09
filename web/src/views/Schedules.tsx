@@ -6,6 +6,8 @@ import {
   AlertStrip,
   EmptyState,
   StatusPill,
+  formatTokens,
+  formatUsd,
   parseRunLog,
   runDsStatus,
   Page,
@@ -125,16 +127,6 @@ function ScheduleForm({
       </div>
     </div>
   );
-}
-
-function formatUsd(v: number): string {
-  return v >= 0.01 ? `$${v.toFixed(2)}` : `$${v.toFixed(4)}`;
-}
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return String(n);
 }
 
 function RunRow({ run, onCancel }: { run: Run; onCancel?: (runId: string) => Promise<unknown> }) {
@@ -406,6 +398,7 @@ export default function Schedules() {
         <button
           type="button"
           onClick={() => setSubTab("schedules")}
+          aria-pressed={subTab === "schedules"}
           className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
             subTab === "schedules" ? "bg-surface-2 text-ink" : "text-ink-dim hover:text-ink"
           }`}
@@ -415,6 +408,7 @@ export default function Schedules() {
         <button
           type="button"
           onClick={() => setSubTab("cron")}
+          aria-pressed={subTab === "cron"}
           className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
             subTab === "cron" ? "bg-surface-2 text-ink" : "text-ink-dim hover:text-ink"
           }`}

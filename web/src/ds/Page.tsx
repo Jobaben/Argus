@@ -9,11 +9,14 @@ export function Page({
   title,
   crumbs,
   actions,
+  wide = false,
   children,
 }: {
   title?: ReactNode;
   crumbs?: Crumb[];
   actions?: ReactNode;
+  /** Board layout: board-scale heading. Width stays capped to match the nav bar. */
+  wide?: boolean;
   children: ReactNode;
 }) {
   const hasCrumbs = crumbs != null && crumbs.length > 0;
@@ -32,7 +35,11 @@ export function Page({
               </span>
             ))}
             {title != null && (
-              <h1 className="text-xl font-bold tracking-tight text-ink">{title}</h1>
+              <h1
+                className={`${wide ? "text-board-title" : "text-xl"} font-bold tracking-tight text-ink`}
+              >
+                {title}
+              </h1>
             )}
           </div>
           {actions != null && <div className="flex shrink-0 items-center gap-2">{actions}</div>}

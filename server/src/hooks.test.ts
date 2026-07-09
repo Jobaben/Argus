@@ -39,22 +39,33 @@ test("Stop hook defaults to completed without a failure sentinel", () => {
   assert.equal(resolveType(undefined, null), "completed");
 });
 
-test("Stop hook reports failed when background tasks are still in flight", () => {
-  // The premature-stop bug: agent yields expecting re-invocation, but claude -p
-  // tears the process down at Stop and the background work never finishes.
+test("Stop hook defers when background tasks are still in flight", () => {
+  // The process is not torn down at Stop: Claude keeps it alive and fires Stop
+  // again once the background work finishes, and that later Stop drives the real
+  // outcome. Deferring (no signal) avoids failing a run that is still working.
   const waiting = {
     last_assistant_message: "I'll wait for the agents to finish before finalizing.",
     background_tasks: [{ id: "a1", type: "subagent", status: "running" }],
   };
-  assert.equal(resolveType(undefined, waiting), "failed");
+  assert.equal(resolveType(undefined, waiting), "deferred");
 });
 
-test("Stop hook overrides a premature success claim with unfinished background work", () => {
+test("Stop hook defers a premature success claim with unfinished background work", () => {
+  // No sentinel failure line, so the success claim doesn't force failed; the
+  // in-flight work defers the decision to the later terminal Stop.
   const claimed = {
     last_assistant_message: "Done. ARGUS_OUTCOME: succeeded",
     background_tasks: [{ status: "queued" }],
   };
-  assert.equal(resolveType(undefined, claimed), "failed");
+  assert.equal(resolveType(undefined, claimed), "deferred");
+});
+
+test("Stop hook: an explicit failure sentinel wins over in-flight background work", () => {
+  const failed = {
+    last_assistant_message: "ARGUS_OUTCOME: failed — Jira never flipped",
+    background_tasks: [{ status: "running" }],
+  };
+  assert.equal(resolveType(undefined, failed), "failed");
 });
 
 test("Stop hook ignores finished background tasks", () => {

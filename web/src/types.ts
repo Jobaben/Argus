@@ -94,14 +94,34 @@ export interface ScheduleInput {
 
 export type InstanceStatus = "running" | "awaiting-approval" | "failed" | "succeeded" | "aborted";
 
-export type PhaseStatus = "pending" | "running" | "awaiting-approval" | "succeeded" | "failed";
+export type PhaseStatus =
+  | "pending"
+  | "running"
+  | "awaiting-approval"
+  | "succeeded"
+  | "failed"
+  | "aborted";
 
-export type StepStatus = "pending" | "running" | "succeeded" | "failed";
+export type StepStatus = "pending" | "running" | "succeeded" | "failed" | "aborted";
 
 export interface StepProgress {
   name: string;
   runId: string | null;
   status: StepStatus;
+  /** USD cost of the step's run, joined server-side from the run record. */
+  costUsd?: number | null;
+  /** Total tokens of the step's run, joined server-side from the run record. */
+  tokens?: number | null;
+  /** Model the step's run was started with, joined server-side from the run record. */
+  model?: string | null;
+  /** Latest activity label from the run tailer; only set while running. */
+  currentActivity?: string | null;
+  /** Arrival timestamp of that activity. */
+  activityAt?: string | null;
+  /** Run start time, joined from the run record. */
+  startedAt?: string | null;
+  /** Final run duration, joined from the run record when it ended. */
+  durationMs?: number | null;
 }
 
 export interface PhaseProgress {
@@ -164,7 +184,21 @@ export interface PipelineInstance {
   endedAt: string | null;
 }
 
+/** Aggregated spend for one instance. Null field = no run reported that metric. */
+export interface OverviewCost {
+  usd: number | null;
+  tokens: number | null;
+}
+
 export interface OverviewEntry {
   definition: PipelineDefinition;
   latest: PipelineInstance | null;
+  /** Total spend of the latest instance across all its runs (including
+   *  superseded revise attempts). Null/absent when there is no instance. */
+  cost?: OverviewCost | null;
+  /** Instances sharing the board, newest-first: every non-terminal one
+   *  (running / awaiting-approval) plus terminal ones whose lifetime
+   *  overlapped the latest instance, so a just-stopped sibling stays visible
+   *  beside its peers. Empty when only the lone latest instance remains. */
+  active?: { instance: PipelineInstance; cost: OverviewCost }[];
 }

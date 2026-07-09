@@ -33,4 +33,28 @@ describe("Page", () => {
     );
     expect(screen.getByText("just body")).toBeInTheDocument();
   });
+
+  it("caps width to match the nav bar, wide or not", () => {
+    const { container, rerender } = render(
+      <Page title="Board">
+        <p>x</p>
+      </Page>,
+    );
+    expect((container.firstElementChild as HTMLElement).className).toContain("max-w-[1600px]");
+    rerender(
+      <Page title="Board" wide>
+        <p>x</p>
+      </Page>,
+    );
+    expect((container.firstElementChild as HTMLElement).className).toContain("max-w-[1600px]");
+  });
+
+  it("renders the heading at board scale when wide", () => {
+    render(
+      <Page title="Board" wide>
+        <p>x</p>
+      </Page>,
+    );
+    expect(screen.getByRole("heading", { name: "Board" }).className).toContain("text-board-title");
+  });
 });

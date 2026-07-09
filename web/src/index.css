@@ -51,6 +51,18 @@
   --font-sans: "Hellix", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
   --font-mono: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
 
+  /* Type scale — foundations/type + agent-tile component spec */
+  --text-glance: 54px;
+  --text-glance-sm: 24px;
+  --text-board-title: 22px;
+  --text-body: 14.5px;
+  --text-tile-name: 14.5px;
+  --text-detail: 12.5px;
+  --text-telemetry: 12px;
+  --text-label: 11px;
+  --text-id: 10.5px;
+  --text-meter: 10px;
+
   /* Radius */
   --radius-tile: 12px;
   --radius-panel: 14px;
@@ -104,6 +116,13 @@ body {
     transform: scale(2.4);
     opacity: 0;
   }
+}
+
+/* One consistent, high-contrast focus indicator everywhere; the eye accent
+   clears AA against every surface and never doubles up with hover borders. */
+:focus-visible {
+  outline: 2px solid var(--color-eye);
+  outline-offset: 2px;
 }
 
 @media (prefers-reduced-motion: reduce) {

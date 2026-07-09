@@ -85,8 +85,11 @@ export const OUTCOME_CONTRACT =
 export function buildClaudeArgs(run: Run): string[] {
   const args = [
     "-p",
+    // stream-json turns the fd-backed log into a live NDJSON transcript the
+    // run tailer can follow; the CLI requires --verbose alongside it in -p mode.
     "--output-format",
-    "json",
+    "stream-json",
+    "--verbose",
     "--session-id",
     run.sessionId ?? randomUUID(),
     "--append-system-prompt",
@@ -142,6 +145,11 @@ export interface EngineDeps {
   preflight?: () => Promise<{ ok: boolean; reasons: string[] }>;
   /** Kills a run's process tree; injectable for tests. Defaults to killRunProcess. */
   kill?: (pid: number) => Promise<boolean> | boolean;
+  /** Live-activity tailer; told when step runs start and end. */
+  tailer?: {
+    track(runId: string, instanceId: string): void;
+    untrack(runId: string): void;
+  };
 }
 
 export interface ActionResult {
@@ -259,6 +267,7 @@ export function createEngine(deps: EngineDeps): Engine {
     }
     run.pid = handle.pid;
     await writeRun(run);
+    deps.tailer?.track(run.id, inst.id);
     return handle;
   }
 
@@ -279,16 +288,27 @@ export function createEngine(deps: EngineDeps): Engine {
     void handle.done
       .then(async (res) => {
         release();
+        // The CLI's JSON result envelope is the last line of the log; harvest
+        // cost/tokens/result from it so every completed step reports its spend
+        // (not only runs finalized by the adopted-run reconcile path).
+        const got = await readRun(run.id);
+        const envelope = got ? parseRunEnvelope(got.log) : null;
         await patchRun(run.id, {
           status: res.code === 0 ? "succeeded" : "failed",
           endedAt: nowISO(),
           durationMs: deps.now().getTime() - new Date(startedAt).getTime(),
           exitCode: res.code,
+          resultSummary: envelope?.result ?? got?.run.resultSummary ?? null,
+          costUsd: envelope?.costUsd ?? got?.run.costUsd ?? null,
+          tokens: envelope?.tokens ?? got?.run.tokens ?? null,
           error: res.code === 0 ? null : `exit code ${res.code}`,
         });
+        deps.tailer?.untrack(run.id);
+        deps.onChange?.();
       })
       .catch((e) => {
         release();
+        deps.tailer?.untrack(run.id);
         console.error(`[argus] step run ${run.id} completion handler failed:`, e);
       });
   }
@@ -307,6 +327,7 @@ export function createEngine(deps: EngineDeps): Engine {
           /* already gone */
         }
       }
+      deps.tailer?.untrack(s.runId);
     }
   }
 
@@ -320,6 +341,7 @@ export function createEngine(deps: EngineDeps): Engine {
         if (!got || got.run.status !== "running" || !isAlive(got.run.pid)) continue;
         await sem.acquire();
         adopted.set(s.runId, { instanceId: inst.id });
+        deps.tailer?.track(s.runId, inst.id);
       }
     }
   }
@@ -464,6 +486,7 @@ export function createEngine(deps: EngineDeps): Engine {
         if (!got || got.run.status !== "running") {
           adopted.delete(runId);
           sem.release();
+          deps.tailer?.untrack(runId);
           continue;
         }
         if (isAlive(got.run.pid)) continue;
@@ -490,6 +513,7 @@ export function createEngine(deps: EngineDeps): Engine {
         });
         adopted.delete(runId);
         sem.release();
+        deps.tailer?.untrack(runId);
         deps.onChange?.();
       } catch (e) {
         // Keep the run adopted; retried next tick.
@@ -553,6 +577,7 @@ export function createEngine(deps: EngineDeps): Engine {
               nowISO(),
             );
             await writeInstance(instance);
+            deps.tailer?.untrack(s.runId);
             if (instance.status === "failed") deps.onFailure?.(instance);
             deps.onChange?.();
             current = instance;

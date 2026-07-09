@@ -40,6 +40,34 @@ by fresh agents reading the actual code — "state of the art, minor polish only
 Verified end-to-end in Chromium and via the API suite; `npm run check`,
 `npm run build`, and the CI coverage gate are all green.
 
+### UX/A11y 9 → 10 wave (verified)
+
+A goal-directed wave took **UX/A11y from 9 to a re-audited 10** (the rubric
+caps at 10 — an "11" does not exist on this scale). A fresh adversarial
+auditor scored the code before and after, named every gap, and re-verified
+each fix line-by-line:
+
+- **Live monitoring made perceivable to screen readers** (the prior sole
+  blocker): a polite live region announces pipeline badge transitions (needs
+  approval / failed / completed / resumed), and every gate action announces
+  its accepted/failed outcome (`role="status"` / `role="alert"`).
+- Global high-contrast `:focus-visible` indicator; skip-to-content link that
+  coexists with the hash router; `<main>` landmark focusable; per-route
+  `document.title`.
+- `aria-expanded` on Inventory/AgentDetail expanders, `aria-pressed` on
+  Scheduler sub-tabs, labeled custom-model input, SetupBanner apply failures
+  surfaced (`role="alert"` + busy label), Search states in live regions,
+  Stats bars exposed via `role="img"` labels, consistent "Inventory" naming,
+  actionable empty states, dead scaffolding CSS deleted.
+- **Cost visibility (Product):** every Command Center step tile shows its
+  run's tokens + USD, each row a Σ latest-run total (revise attempts
+  included), the header a grand total — server-joined from run records, with
+  a one-time boot backfill for pre-feature runs, all screen-reader labeled.
+
+Remaining non-defect judgment call named by the auditor: sub-10px px-unit
+text on the dense board (AA contrast and zoom-scaling verified; standard
+dense-dashboard tradeoff).
+
 ### The remaining "9 → 10" polish (diminishing returns)
 
 Each dimension's auditor named what separates a demanding 9 from a flawless 10 —
@@ -56,8 +84,9 @@ all incremental hardening, none a correctness or gating failure:
   70/58/58, web gate added at 50/75/50 (both just under actual, enforced in CI);
   Dependabot + CodeQL workflows added. A pre-commit hook was deliberately
   skipped — commits are reviewed manually and CI enforces format/lint._
-- **UX/A11y** — the conditional custom-model input relies on a placeholder only
-  (out of scope: internal tool, a11y de-prioritized by the owner).
+- ~~**UX/A11y** — the conditional custom-model input relies on a placeholder only
+  (out of scope: internal tool, a11y de-prioritized by the owner).~~ _Closed in
+  the 9 → 10 wave above (labeled, plus the full gap list the re-audit named)._
 - ~~**Architecture** — three instance handlers bypass the shared jsonBody helper;
   a couple of validation/patch idioms remain copied.~~ _Closed: signal/approve/
   revise parse through jsonBody; PUT/PATCH pipelines share one handler; engine
