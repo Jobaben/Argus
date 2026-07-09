@@ -82,6 +82,27 @@ test("accumulateRun adds tokens even when only tokens are present", async () => 
   assert.equal(t.runsCounted, 1);
 });
 
+test("accumulateRun serializes concurrent calls for distinct runs (no lost update)", async () => {
+  const { totals, runs } = await fresh();
+  await runs.writeRun(makeRun({ id: "rA", scheduleId: "s1" }));
+  await runs.writeRun(makeRun({ id: "rB", scheduleId: "s1", costUsd: 0.25, tokens: 500 }));
+  await Promise.all([totals.accumulateRun("rA", CLOCK), totals.accumulateRun("rB", CLOCK)]);
+  const t = await totals.readTotals();
+  assert.equal(t.usd, 0.75);
+  assert.equal(t.tokens, 1500);
+  assert.equal(t.runsCounted, 2);
+});
+
+test("accumulateRun serializes concurrent calls for the same run (folds exactly once)", async () => {
+  const { totals, runs } = await fresh();
+  await runs.writeRun(makeRun({}));
+  await Promise.all([totals.accumulateRun("r1", CLOCK), totals.accumulateRun("r1", CLOCK)]);
+  const t = await totals.readTotals();
+  assert.equal(t.usd, 0.5);
+  assert.equal(t.tokens, 1000);
+  assert.equal(t.runsCounted, 1);
+});
+
 test("resetTotals zeroes counters and re-stamps since", async () => {
   const { totals, runs } = await fresh();
   await runs.writeRun(makeRun({}));

@@ -8,11 +8,12 @@ export interface Totals {
 }
 
 /** All-time token/cost total across every completed run. Refreshes when runs
- *  finish (they emit "pipelines:changed") and when the total is reset
+ *  finish (they emit "pipelines:changed"), when a standalone scheduler run
+ *  completes ("schedules:changed"), and when the total is reset
  *  ("totals:changed"). */
 export function useTotals() {
   const { data, loading, error, refresh } = useLiveResource<Totals | null>("/api/totals", {
-    events: ["pipelines:changed", "totals:changed"],
+    events: ["pipelines:changed", "totals:changed", "schedules:changed"],
     select: (j) => j as Totals,
     initial: null,
     pollMs: 60000,

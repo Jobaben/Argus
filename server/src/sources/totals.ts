@@ -30,11 +30,27 @@ export async function readTotals(now: () => Date = () => new Date()): Promise<To
 
 /**
  * Fold a run's reported cost into the all-time totals exactly once. Reads the
- * run fresh (not a captured copy) and gates on `countedInTotals`, so it is safe
- * against the several concurrent terminal-write paths: a run counts at most
- * once regardless of how many times its completion is written.
+ * run fresh (not a captured copy) and gates on `countedInTotals`. The
+ * read-modify-write spans several `await` points, so calls are serialized
+ * through a module-level promise chain (see `accumulateChain` below): each
+ * call's full read-modify-write completes before the next one starts,
+ * regardless of how many concurrent completion handlers (pipeline engine,
+ * scheduler) invoke it at once. A run still counts at most once.
  */
-export async function accumulateRun(runId: string, now: () => Date = () => new Date()): Promise<void> {
+let accumulateChain: Promise<void> = Promise.resolve();
+
+export function accumulateRun(runId: string, now: () => Date = () => new Date()): Promise<void> {
+  const next = accumulateChain.then(() => accumulateRunInner(runId, now));
+  // Keep the chain alive even if one call rejects, so a single failure
+  // doesn't wedge all later accumulations.
+  accumulateChain = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  return next;
+}
+
+async function accumulateRunInner(runId: string, now: () => Date): Promise<void> {
   const got = await readRun(runId);
   if (!got) return;
   const run = got.run;
