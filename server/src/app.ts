@@ -32,6 +32,7 @@ import {
   PipelineValidationError,
 } from "./sources/pipelines.js";
 import { readInstance, readInstances } from "./sources/instances.js";
+import { readTotals, resetTotals } from "./sources/totals.js";
 import { buildOverview } from "./sources/overview.js";
 import { PreflightError, type Engine } from "./pipelineEngine.js";
 import type { PipelineSignal } from "./sources/pipelineTypes.js";
@@ -127,6 +128,14 @@ export function createApp(deps: AppDeps): Hono {
   app.get("/api/activity", async (c) => c.json({ activity: await readActivity() }));
   app.get("/api/projects", async (c) => c.json({ projects: await readProjects() }));
   app.get("/api/stats", async (c) => c.json(await readStats()));
+  app.get("/api/totals", async (c) => c.json(await readTotals()));
+
+  app.post("/api/totals/reset", async (c) => {
+    const totals = await resetTotals(() => new Date());
+    broadcast({ type: "totals:changed" });
+    return c.json(totals);
+  });
+
   app.get("/api/inventory", async (c) => c.json(await readInventory()));
   app.get("/api/tasks", async (c) => c.json({ tasks: await readTasks() }));
   app.get("/api/search", async (c) =>

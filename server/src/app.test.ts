@@ -159,3 +159,28 @@ test("pipeline start overlap returns 409 (engine returns null)", async () => {
   });
   assert.equal(res.status, 409);
 });
+
+test("GET /api/totals returns the current totals shape", async () => {
+  const res = await makeApp().request("/api/totals", { headers: loopback });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { usd: number; tokens: number; since: string };
+  assert.equal(typeof body.usd, "number");
+  assert.equal(typeof body.tokens, "number");
+  assert.equal(typeof body.since, "string");
+});
+
+test("POST /api/totals/reset zeroes totals and broadcasts", async () => {
+  const messages: unknown[] = [];
+  const app = createApp({
+    config,
+    engine: fakeEngine,
+    broadcast: (m) => messages.push(m),
+    serveWeb: false,
+  });
+  const res = await app.request("/api/totals/reset", { method: "POST", headers: sameOrigin });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { usd: number; tokens: number };
+  assert.equal(body.usd, 0);
+  assert.equal(body.tokens, 0);
+  assert.ok(messages.some((m) => (m as { type?: string }).type === "totals:changed"));
+});
