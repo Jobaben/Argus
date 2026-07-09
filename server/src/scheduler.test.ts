@@ -64,7 +64,13 @@ test("a completed scheduler run folds its cost into the totals", async () => {
     deps({
       spawn: () => ({
         pid: 999,
-        done: Promise.resolve({ code: 0, result: "done", error: null, costUsd: 0.123, tokens: 150 }),
+        done: Promise.resolve({
+          code: 0,
+          result: "done",
+          error: null,
+          costUsd: 0.123,
+          tokens: 150,
+        }),
       }),
     }),
   );

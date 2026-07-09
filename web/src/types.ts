@@ -95,12 +95,7 @@ export interface ScheduleInput {
 export type InstanceStatus = "running" | "awaiting-approval" | "failed" | "succeeded" | "aborted";
 
 export type PhaseStatus =
-  | "pending"
-  | "running"
-  | "awaiting-approval"
-  | "succeeded"
-  | "failed"
-  | "aborted";
+  "pending" | "running" | "awaiting-approval" | "succeeded" | "failed" | "aborted";
 
 export type StepStatus = "pending" | "running" | "succeeded" | "failed" | "aborted";
 
@@ -182,6 +177,44 @@ export interface PipelineInstance {
   createdAt: string;
   updatedAt: string;
   endedAt: string | null;
+}
+
+export type ChronicleKind = "run" | "agent" | "session";
+export type ChronicleStatus = "working" | "done" | "failed" | "queued" | "idle";
+
+export interface ChronicleSpan {
+  id: string;
+  kind: ChronicleKind;
+  label: string;
+  status: ChronicleStatus;
+  startedAt: string;
+  /** Null while the work is still in flight — drawn through "now". */
+  endedAt: string | null;
+  href: string | null;
+  detail: string | null;
+  costUsd: number | null;
+  tokens: number | null;
+}
+
+export interface ChronicleGroup {
+  key: string;
+  label: string;
+  kind: ChronicleKind;
+  /** Spans packed into rows such that spans within a row never overlap. */
+  rows: ChronicleSpan[][];
+}
+
+export interface Chronicle {
+  windowStart: string;
+  windowEnd: string;
+  groups: ChronicleGroup[];
+  totals: {
+    spans: number;
+    active: number;
+    failed: number;
+    costUsd: number | null;
+    tokens: number | null;
+  };
 }
 
 /** Aggregated spend for one instance. Null field = no run reported that metric. */

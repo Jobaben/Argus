@@ -95,8 +95,48 @@ All `/api/*` routes and the `/ws` upgrade are gated:
 | `GET /api/tasks`                 | task-queue directories                                      |
 | `GET /api/search?q=`             | substring matches across transcripts                        |
 | `GET /api/cron`                  | `{ available: false, reason, howTo }` — see ARCHITECTURE §6 |
+| `GET /api/chronicle?hours=N`     | cross-source timeline (see below)                           |
 
 For exact DTO shapes see the corresponding `server/src/sources/*.ts` reader.
+
+### `GET /api/chronicle?hours=N`
+
+Merges scheduler runs, background agents, and sessions into one windowed
+timeline. `hours` is clamped to `[1, 336]`, default `24`. Spans are grouped
+into swimlanes (one per schedule / project, one shared agents lane) and packed
+into rows so spans within a row never overlap; groups with in-flight work sort
+first. `endedAt: null` means still in flight — render through `windowEnd`.
+
+```json
+{
+  "windowStart": "2026-07-08T20:00:00.000Z",
+  "windowEnd": "2026-07-09T20:00:00.000Z",
+  "groups": [
+    {
+      "key": "run:sched-1",
+      "label": "Nightly triage",
+      "kind": "run",
+      "rows": [
+        [
+          {
+            "id": "run:r1",
+            "kind": "run",
+            "label": "Nightly triage",
+            "status": "done",
+            "startedAt": "…",
+            "endedAt": "…",
+            "href": "#/schedules",
+            "detail": "triaged 14 issues",
+            "costUsd": 0.42,
+            "tokens": 52000
+          }
+        ]
+      ]
+    }
+  ],
+  "totals": { "spans": 7, "active": 1, "failed": 1, "costUsd": 0.47, "tokens": 60000 }
+}
+```
 
 ## Scheduler
 

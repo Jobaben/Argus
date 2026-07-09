@@ -50,7 +50,15 @@ function segments(
 }
 
 /** Cost/token meter per the DS run-meter spec: step foot, row header, board glance. */
-export function Meter({ tokens, usd, durationMs, level, label, divider = false, title }: MeterProps) {
+export function Meter({
+  tokens,
+  usd,
+  durationMs,
+  level,
+  label,
+  divider = false,
+  title,
+}: MeterProps) {
   if (tokens == null && usd == null && durationMs == null) return null;
 
   if (level === "board") {

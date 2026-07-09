@@ -47,8 +47,7 @@ function PipelineCard({
   abort: (id: string) => Promise<unknown>;
 }) {
   const abortable = live.activeIds.length > 0;
-  const stopLabel =
-    live.activeIds.length > 1 ? `Stop all (${live.activeIds.length})` : "Stop";
+  const stopLabel = live.activeIds.length > 1 ? `Stop all (${live.activeIds.length})` : "Stop";
   const stopPrompt =
     live.activeIds.length > 1
       ? `Stop all ${live.activeIds.length} running instances of "${def.name}"? In-progress work will be discarded.`

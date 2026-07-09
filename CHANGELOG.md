@@ -7,6 +7,24 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **The Chronicle** — a cross-source timeline view (new "Chronicle" tab):
+  every scheduler run, background agent, and interactive session in a chosen
+  window (1h–7d) rendered as swimlane spans on one time axis. Overlapping
+  spans pack into extra rows; in-flight work draws open-ended into a "now"
+  line with a pulse; bars deep-link to the run's session, the agent detail,
+  or the transcript. Backed by `GET /api/chronicle?hours=N`, which merges the
+  three sources server-side into packed, attention-sorted groups plus window
+  totals (spans, in-flight, failed, run spend).
+- Design-system additions for it: a reusable `SegmentedControl` (radio-group
+  semantics) and pure timeline layout math (`spanGeometry`/`axisTicks`), both
+  covered by tests.
+- `useLiveResource` gained `pollAlways` for resources that mix pushed sources
+  with time-decaying ones (the Chronicle's session-activity status can change
+  with no file event).
+- `design/` — repo-side sources for the claude.ai/design "Argus Design
+  System" project, with card conventions and an incremental DesignSync
+  workflow documented; the Chronicle timeline and segmented-control cards
+  were published to the shared project.
 - Command Center cost surfacing: every step tile shows its run's tokens and
   dollar cost, each pipeline row shows the latest run's total (Σ chip, all
   revise attempts included), and the page header shows the grand total across

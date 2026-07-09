@@ -160,6 +160,29 @@ test("pipeline start overlap returns 409 (engine returns null)", async () => {
   assert.equal(res.status, 409);
 });
 
+test("GET /api/chronicle returns a windowed, empty-safe timeline", async () => {
+  const res = await makeApp().request("/api/chronicle?hours=6", { headers: loopback });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as {
+    windowStart: string;
+    windowEnd: string;
+    groups: unknown[];
+    totals: { spans: number };
+  };
+  assert.deepEqual(body.groups, []);
+  assert.equal(body.totals.spans, 0);
+  const spanMs = new Date(body.windowEnd).getTime() - new Date(body.windowStart).getTime();
+  assert.equal(spanMs, 6 * 3_600_000);
+});
+
+test("GET /api/chronicle clamps a bogus hours param to the default", async () => {
+  const res = await makeApp().request("/api/chronicle?hours=banana", { headers: loopback });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { windowStart: string; windowEnd: string };
+  const spanMs = new Date(body.windowEnd).getTime() - new Date(body.windowStart).getTime();
+  assert.equal(spanMs, 24 * 3_600_000);
+});
+
 test("GET /api/totals returns the current totals shape", async () => {
   const res = await makeApp().request("/api/totals", { headers: loopback });
   assert.equal(res.status, 200);

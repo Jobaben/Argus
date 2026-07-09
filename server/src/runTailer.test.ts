@@ -9,9 +9,7 @@ const AT = "2026-07-07T10:00:00.000Z";
 
 test("system init line becomes an init event", () => {
   const line = JSON.stringify({ type: "system", subtype: "init", session_id: "s" });
-  assert.deepEqual(deriveActivity(line, AT), [
-    { at: AT, kind: "init", label: "session started" },
-  ]);
+  assert.deepEqual(deriveActivity(line, AT), [{ at: AT, kind: "init", label: "session started" }]);
 });
 
 test("result line becomes a done event", () => {
@@ -25,7 +23,12 @@ test("assistant tool_use blocks become tool events with per-tool summaries", () 
     message: {
       content: [
         { type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } },
-        { type: "tool_use", id: "t2", name: "Read", input: { file_path: "C:\\GIT\\argus\\server\\src\\app.ts" } },
+        {
+          type: "tool_use",
+          id: "t2",
+          name: "Read",
+          input: { file_path: "C:\\GIT\\argus\\server\\src\\app.ts" },
+        },
         { type: "tool_use", id: "t3", name: "Edit", input: { file_path: "/home/u/proj/foo.ts" } },
         { type: "tool_use", id: "t4", name: "Task", input: { description: "review the diff" } },
         { type: "tool_use", id: "t5", name: "Grep", input: { pattern: "x" } },
@@ -52,8 +55,14 @@ test("assistant text blocks become text events, clipped to 80 chars", () => {
 });
 
 test("whitespace-only text blocks, user lines, and unknown types yield nothing", () => {
-  const blank = JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "  \n " }] } });
-  const user = JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t1" }] } });
+  const blank = JSON.stringify({
+    type: "assistant",
+    message: { content: [{ type: "text", text: "  \n " }] },
+  });
+  const user = JSON.stringify({
+    type: "user",
+    message: { content: [{ type: "tool_result", tool_use_id: "t1" }] },
+  });
   assert.deepEqual(deriveActivity(blank, AT), []);
   assert.deepEqual(deriveActivity(user, AT), []);
   assert.deepEqual(deriveActivity('{"type":"stream_event","event":{}}', AT), []);
@@ -67,7 +76,11 @@ test("malformed JSON yields nothing", () => {
 test("multi-line bash commands collapse to one line in the label", () => {
   const line = JSON.stringify({
     type: "assistant",
-    message: { content: [{ type: "tool_use", id: "t", name: "Bash", input: { command: "npm ci\nnpm test" } }] },
+    message: {
+      content: [
+        { type: "tool_use", id: "t", name: "Bash", input: { command: "npm ci\nnpm test" } },
+      ],
+    },
   });
   assert.equal(deriveActivity(line, AT)[0].label, "Bash: npm ci npm test");
 });
@@ -124,7 +137,12 @@ test("tailer reads appended lines incrementally and exposes the latest event", a
 
 test("a partial trailing line is buffered until its newline arrives", async () => {
   const { createRunTailer, logPath } = await loadTailer();
-  const tailer = createRunTailer({ broadcast: () => {}, now: () => new Date(), flushMs: 5, watch: false });
+  const tailer = createRunTailer({
+    broadcast: () => {},
+    now: () => new Date(),
+    flushMs: 5,
+    watch: false,
+  });
   const full = toolLine("split across reads");
   writeFileSync(logPath("r2"), full.slice(0, 25)); // mid-JSON, no newline
   tailer.track("r2", "inst-2");
@@ -138,7 +156,12 @@ test("a partial trailing line is buffered until its newline arrives", async () =
 
 test("tracking a run with an existing log rebuilds from disk (adopt path)", async () => {
   const { createRunTailer, logPath } = await loadTailer();
-  const tailer = createRunTailer({ broadcast: () => {}, now: () => new Date(), flushMs: 5, watch: false });
+  const tailer = createRunTailer({
+    broadcast: () => {},
+    now: () => new Date(),
+    flushMs: 5,
+    watch: false,
+  });
   writeFileSync(logPath("r3"), toolLine("first") + toolLine("second"));
   tailer.track("r3", "inst-3");
   await waitFor(() => tailer.latest().get("r3")?.label === "Bash: second");
@@ -147,7 +170,12 @@ test("tracking a run with an existing log rebuilds from disk (adopt path)", asyn
 
 test("untrack drops state; a missing log file is tolerated", async () => {
   const { createRunTailer, logPath } = await loadTailer();
-  const tailer = createRunTailer({ broadcast: () => {}, now: () => new Date(), flushMs: 5, watch: false });
+  const tailer = createRunTailer({
+    broadcast: () => {},
+    now: () => new Date(),
+    flushMs: 5,
+    watch: false,
+  });
   tailer.track("no-log-yet", "inst-4"); // file does not exist — must not throw
   writeFileSync(logPath("r4"), toolLine("x"));
   tailer.track("r4", "inst-5");

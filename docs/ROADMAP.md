@@ -21,6 +21,11 @@ Fanned out in parallel; each is an isolated source + view + tab:
 - **Cron** — honest empty-state (limitation documented).
 - **UI kit** — shared presentational primitives.
 - **Integration** — tab navigation (hash routing), route registration, build + smoke test.
+- **Chronicle** ✅ (2026-07-09) — cross-source swimlane timeline: runs +
+  agents + sessions merged into packed lanes over a 1h–7d window
+  (`/api/chronicle`, Chronicle tab); design-system cards (chronicle-timeline,
+  segmented-control) published to the shared claude.ai/design project from
+  `design/`.
 
 ## v0.3 — Single-port + packaging
 

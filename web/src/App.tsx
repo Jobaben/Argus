@@ -15,6 +15,7 @@ import Search from "./views/Search";
 import Schedules from "./views/Schedules";
 import AgentDetail from "./views/AgentDetail";
 import CommandCenter from "./views/CommandCenter";
+import Chronicle from "./views/Chronicle";
 import Pipelines from "./views/Pipelines";
 import SetupBanner from "./views/SetupBanner";
 
@@ -73,6 +74,7 @@ type TabRole = "destination" | "utility" | "overflow" | "drilldown";
 
 const TAB_META: { id: string; label: string; role: TabRole }[] = [
   { id: "command", label: "Command Center", role: "destination" },
+  { id: "chronicle", label: "Chronicle", role: "destination" },
   { id: "schedules", label: "Scheduler", role: "destination" },
   { id: "pipelines", label: "Pipelines", role: "destination" },
   { id: "search", label: "Search", role: "utility" },
@@ -117,6 +119,8 @@ export default function App() {
 
   const renderActive = () => {
     switch (active) {
+      case "chronicle":
+        return <Chronicle />;
       case "schedules":
         return <Schedules />;
       case "pipelines":
