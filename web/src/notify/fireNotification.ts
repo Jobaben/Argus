@@ -12,7 +12,9 @@ export interface NotifyDeps {
 }
 
 export function notificationTitle(event: TerminalEvent): string {
-  return event.status === "failed" ? `Agent failed: ${event.name}` : `Agent finished: ${event.name}`;
+  return event.status === "failed"
+    ? `Agent failed: ${event.name}`
+    : `Agent finished: ${event.name}`;
 }
 
 /**

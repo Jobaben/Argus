@@ -32,7 +32,9 @@ describe("detectTransitions", () => {
   it("emits when an agent transitions into done", () => {
     const prev = snapshotStatuses([agent("a", "working")]);
     const events = detectTransitions(prev, [agent("a", "done", "Fixer")]);
-    expect(events).toEqual([{ short: "a", name: "Fixer", status: "done", at: "2026-07-09T00:00:00Z" }]);
+    expect(events).toEqual([
+      { short: "a", name: "Fixer", status: "done", at: "2026-07-09T00:00:00Z" },
+    ]);
   });
 
   it("emits when an agent transitions into failed", () => {

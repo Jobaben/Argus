@@ -3,7 +3,12 @@ import { randomUUID } from "node:crypto";
 import { claudeHome } from "./claudeHome.js";
 import { readAgents, readTimeline } from "./sources/jobs.js";
 import { readDaemon } from "./sources/daemon.js";
-import { readSessions, readSession, readSessionTail, sessionToMarkdown } from "./sources/sessions.js";
+import {
+  readSessions,
+  readSession,
+  readSessionTail,
+  sessionToMarkdown,
+} from "./sources/sessions.js";
 import { readActivity } from "./sources/history.js";
 import { readProjects } from "./sources/projects.js";
 import { readStats } from "./sources/stats.js";

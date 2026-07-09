@@ -2,7 +2,12 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { ToastRegion, type ToastItem } from "./Toast";
 
-const toast: ToastItem = { id: "t1", tone: "fail", title: "Agent failed: Builder", detail: "abc123" };
+const toast: ToastItem = {
+  id: "t1",
+  tone: "fail",
+  title: "Agent failed: Builder",
+  detail: "abc123",
+};
 
 describe("ToastRegion", () => {
   it("renders nothing when empty", () => {
