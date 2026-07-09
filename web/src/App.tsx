@@ -100,6 +100,11 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
+  useEffect(() => {
+    const label = TAB_META.find((t) => t.id === active)?.label ?? "Command Center";
+    document.title = `${label} — Argus`;
+  }, [active]);
+
   const destinations: NavTab[] = TAB_META.filter((t) => t.role === "destination").map((t) => ({
     id: t.id,
     label: t.label,
@@ -148,6 +153,18 @@ export default function App() {
 
   return (
     <div className="min-h-screen">
+      {/* A plain fragment href would be swallowed by the hash router, so the
+          skip link moves focus itself. */}
+      <a
+        href="#main"
+        onClick={(e) => {
+          e.preventDefault();
+          document.getElementById("main")?.focus();
+        }}
+        className="sr-only rounded-md bg-surface-2 px-3 py-2 text-sm text-ink focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50"
+      >
+        Skip to content
+      </a>
       <NavBar
         destinations={destinations}
         overflow={overflow}
@@ -155,7 +172,9 @@ export default function App() {
         live={agentsState.live}
       />
       <SetupBanner />
-      <main>{renderActive()}</main>
+      <main id="main" tabIndex={-1} className="outline-none">
+        {renderActive()}
+      </main>
     </div>
   );
 }

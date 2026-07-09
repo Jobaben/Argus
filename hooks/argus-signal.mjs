@@ -13,10 +13,12 @@
 //     concluded it failed/was blocked report that, instead of being rubber-
 //     stamped as a success.
 //   * A run that stops while background tasks/subagents are still in flight is
-//     also reported "failed": `claude -p` tears the process down at Stop, so
-//     that deferred work never finishes. Without this guard such a run (e.g. one
-//     that ended saying "I'll wait for the agents to finish") gets rubber-
-//     stamped completed and the next phase inherits its empty output.
+//     reported "deferred": the process is NOT torn down — Claude keeps it alive
+//     and fires Stop again once the deferred work finishes, and that later Stop
+//     drives the real outcome. Emitting no signal now avoids terminalizing a run
+//     that is still working (the premature-fail bug). If the process instead
+//     dies with work unfinished, the engine's healing pass fails the phase on
+//     process exit, so abandoned work is never rubber-stamped completed.
 //
 // Reads ARGUS_SIGNAL_URL / ARGUS_INSTANCE_ID / ARGUS_PHASE_ID / ARGUS_RUN_ID /
 // ARGUS_SIGNAL_TOKEN from the environment the engine injected. No-ops when not
@@ -92,8 +94,11 @@ export function buildReason(payload) {
 
 /**
  * Resolve the signal type. An explicit CLI arg always wins; otherwise the
- * agent's final message (from the Stop payload) decides completed vs failed,
- * and a run that stops with background work still in flight is failed too.
+ * agent's final message (from the Stop payload) decides completed vs failed.
+ * A run that stops with background work still in flight resolves "deferred" —
+ * no signal is sent, so the later terminal Stop (or the engine's healing pass
+ * on process exit) decides the real outcome. An explicit failure sentinel still
+ * wins over deferral, so an agent that concludes it failed reports that at once.
  */
 export function resolveType(argType, payload) {
   if (argType) return argType;
@@ -102,7 +107,7 @@ export function resolveType(argType, payload) {
       ? payload.last_assistant_message
       : "";
   if (OUTCOME_RE.test(msg)) return "failed";
-  if (hasPendingBackgroundWork(payload)) return "failed";
+  if (hasPendingBackgroundWork(payload)) return "deferred";
   return "completed";
 }
 
@@ -121,6 +126,11 @@ function main() {
       /* keep raw text */
     }
     const type = resolveType(argType, payload);
+    // "deferred": the run stopped with background work still in flight. Send no
+    // signal — the process stays alive and a later Stop (or the engine's healing
+    // pass on process exit) drives the real outcome. Terminalizing here would
+    // fail a run that is still working.
+    if (type === "deferred") process.exit(0);
     if (type === "failed") {
       const reason = buildReason(payload);
       payload =

@@ -19,6 +19,41 @@ export function formatMs(ms: number): string {
   return `${m}m ${s}s`;
 }
 
+/** Ticking clock for a live elapsed duration: "04:12", "1:02:03". */
+export function formatElapsed(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  const total = Math.floor(ms / 1000);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const mm = String(m).padStart(2, "0");
+  const ss = String(s).padStart(2, "0");
+  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+/** Dollar cost with enough precision for sub-cent agent runs. */
+export function formatUsd(v: number): string {
+  return v >= 0.01 ? `$${v.toFixed(2)}` : `$${v.toFixed(4)}`;
+}
+
+/** Compact token count: 1234 → "1.2k", 2500000 → "2.5M". */
+export function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
+
+/** "12.3k tok · $0.42" from whichever of the two metrics is known; null when neither is. */
+export function formatCost(
+  tokens: number | null | undefined,
+  usd: number | null | undefined,
+): string | null {
+  const parts: string[] = [];
+  if (tokens != null) parts.push(`${formatTokens(tokens)} tok`);
+  if (usd != null) parts.push(formatUsd(usd));
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
 export interface RunLogField {
   label: string;
   value: string;

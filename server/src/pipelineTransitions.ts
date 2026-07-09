@@ -192,6 +192,15 @@ export function applyAbort(inst: PipelineInstance, nowISO: string): PipelineInst
   if (inst.status === "succeeded" || inst.status === "failed" || inst.status === "aborted") {
     throw new Error("instance is already terminal");
   }
+  // Close out the in-flight phase too: leaving steps "running" would render a
+  // working tile (with a live elapsed ticker) inside a stopped instance.
+  const phase = inst.phases[inst.currentPhaseIndex];
+  if (phase && (phase.status === "running" || phase.status === "awaiting-approval")) {
+    phase.status = "aborted";
+    for (const s of phase.steps) {
+      if (s.status === "running" || s.status === "pending") s.status = "aborted";
+    }
+  }
   inst.status = "aborted";
   inst.endedAt = nowISO;
   touch(inst, nowISO);

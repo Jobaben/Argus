@@ -5,7 +5,7 @@ import { claudeHome } from "./claudeHome.js";
 import { watchAgents, watchSchedules, watchExtensions } from "./watch.js";
 import { readRuns, killRunProcess } from "./sources/runs.js";
 import { createEngine, defaultPipelineSpawn } from "./pipelineEngine.js";
-import { startScheduler, isAlive } from "./scheduler.js";
+import { startScheduler, isAlive, backfillRunCosts } from "./scheduler.js";
 import {
   applyAll as applyPrereqs,
   checkAll as checkPrereqs,
@@ -16,6 +16,7 @@ import { isUpgradeAllowed } from "./security.js";
 import { VERSION } from "./version.js";
 import { buildPipelineFailurePayload, buildRunFailurePayload, postWebhook } from "./notify.js";
 import { createApp } from "./app.js";
+import { createRunTailer } from "./runTailer.js";
 
 const config = loadConfig();
 const PORT = config.port;
@@ -31,6 +32,8 @@ function broadcast(message: unknown) {
   }
 }
 
+const tailer = createRunTailer({ broadcast, now: () => new Date() });
+
 const engine = createEngine({
   now: () => new Date(),
   newId: () => randomUUID(),
@@ -38,6 +41,7 @@ const engine = createEngine({
   signalUrlBase: `http://127.0.0.1:${PORT}`,
   maxConcurrent: config.maxConcurrentRuns,
   tickMs: config.schedulerTickMs,
+  tailer,
   onChange: () => broadcast({ type: "pipelines:changed" }),
   onFailure: (inst) =>
     void postWebhook(
@@ -47,7 +51,7 @@ const engine = createEngine({
   preflight: () => preflightPrereqs(),
 });
 
-const app = createApp({ config, engine, broadcast });
+const app = createApp({ config, engine, broadcast, activity: () => tailer.latest() });
 
 const server = serve({ fetch: app.fetch, port: PORT, hostname: config.host }, (info) => {
   console.log(`[argus] v${VERSION} on http://${config.host}:${info.port}`);
@@ -117,6 +121,14 @@ const stopWatching = watchAgents(() => broadcast({ type: "agents:changed" }));
 const stopWatchingSchedules = watchSchedules(() => broadcast({ type: "schedules:changed" }));
 const stopWatchingExtensions = watchExtensions(() => broadcast({ type: "inventory:changed" }));
 void engine.adopt().catch((e) => console.error("[argus] run adoption failed:", e));
+void backfillRunCosts()
+  .then((n) => {
+    if (n > 0) {
+      console.log(`[argus] backfilled cost/tokens for ${n} pre-existing run(s)`);
+      broadcast({ type: "pipelines:changed" });
+    }
+  })
+  .catch((e) => console.error("[argus] run cost backfill failed:", e));
 const scheduler = startScheduler({
   onChange: () => broadcast({ type: "schedules:changed" }),
   onTick: () => engine.reconcile(),
@@ -142,6 +154,7 @@ async function shutdown() {
   await stopWatchingSchedules();
   await stopWatchingExtensions();
   await scheduler.stop();
+  await tailer.stop();
   await killLiveRuns();
   if (wss) {
     for (const client of wss.clients) client.terminate();

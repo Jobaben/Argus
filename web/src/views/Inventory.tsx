@@ -53,9 +53,11 @@ function InventorySection<T>({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
         className="mb-3 flex w-full items-center gap-x-3 text-left"
       >
         <span
+          aria-hidden="true"
           className="text-ink-faint transition-transform"
           style={{ transform: open ? "rotate(90deg)" : "none" }}
         >
@@ -87,7 +89,7 @@ export default function Inventory() {
   const { inventory, loading, error } = useInventory();
 
   return (
-    <Page title="Extensions">
+    <Page title="Inventory">
       <p className="mb-6 text-sm text-ink-faint">
         Agents, commands, skills, and plugins installed under ~/.claude
       </p>

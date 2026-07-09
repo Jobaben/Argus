@@ -397,12 +397,13 @@ test("buildClaudeArgs appends the contract to the system prompt", () => {
   assert.equal(args[i + 1], OUTCOME_CONTRACT);
 });
 
-test("buildClaudeArgs keeps -p, json output, and the session id", () => {
+test("buildClaudeArgs keeps -p, stream-json output with --verbose, and the session id", () => {
   const run = { sessionId: "sess-abc" } as Parameters<typeof buildClaudeArgs>[0];
   const args = buildClaudeArgs(run);
   assert.ok(args.includes("-p"));
   const oi = args.indexOf("--output-format");
-  assert.equal(args[oi + 1], "json");
+  assert.equal(args[oi + 1], "stream-json");
+  assert.ok(args.includes("--verbose"), "stream-json in -p mode requires --verbose");
   const si = args.indexOf("--session-id");
   assert.equal(args[si + 1], "sess-abc");
 });
@@ -611,6 +612,34 @@ test("adopt ignores dead-pid runs and leaves the slot free", async () => {
   assert.equal(rec2.calls.length, 1); // slot was free → spawned immediately
 });
 
+test("a completed step harvests cost/tokens/result from its log envelope", async () => {
+  const { engine, pipelines } = await load();
+  const runsSrc = await import(`./sources/runs.js?${Math.random()}`);
+  await seedPipeline(pipelines, {
+    phases: [
+      { id: "only", name: "Only", cwd: home, gated: false, steps: [{ name: "s", prompt: "p" }] },
+    ],
+  });
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  await e.start("p1", "manual");
+  const runId = rec.calls[0].runId;
+
+  mkdirSync(path.join(home, "argus", "runs"), { recursive: true });
+  writeFileSync(
+    runsSrc.runLogPath(runId),
+    '{"type":"result","subtype":"success","is_error":false,"result":"all good","total_cost_usd":0.07,"usage":{"input_tokens":900,"output_tokens":100}}\n',
+    "utf8",
+  );
+  rec.dones[0].resolve({ code: 0 });
+
+  await waitFor(async () => (await runsSrc.readRun(runId))?.run.status === "succeeded");
+  const after = await runsSrc.readRun(runId);
+  assert.equal(after!.run.costUsd, 0.07);
+  assert.equal(after!.run.tokens, 1000);
+  assert.equal(after!.run.resultSummary, "all good");
+});
+
 test("reconcile finalizes an adopted run whose process died, from the log envelope", async () => {
   const { engine, pipelines } = await load();
   const runsSrc = await import(`./sources/runs.js?${Math.random()}`);
@@ -681,4 +710,25 @@ test("reconcile finalizes an adopted run with no parseable envelope as failed", 
   const after = await runsSrc.readRun(runId);
   assert.equal(after!.run.status, "failed");
   assert.equal(after!.run.error, "ended while detached; no parseable result");
+});
+
+test("engine tracks a step run at spawn and untracks it on completion", async () => {
+  const { engine, pipelines } = await load();
+  await seedPipeline(pipelines);
+  const rec = recordingSpawn();
+  const tracked: { runId: string; instanceId: string }[] = [];
+  const untracked: string[] = [];
+  const tailer = {
+    track: (runId: string, instanceId: string) => tracked.push({ runId, instanceId }),
+    untrack: (runId: string) => untracked.push(runId),
+  };
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn, tailer }));
+  const inst = await e.start("p1", "manual");
+  assert.equal(tracked.length, 1);
+  assert.equal(tracked[0].runId, rec.calls[0].runId);
+  assert.equal(tracked[0].instanceId, inst!.id);
+  assert.equal(untracked.length, 0);
+  rec.dones[0].resolve({ code: 0 });
+  await waitFor(() => untracked.length === 1);
+  assert.equal(untracked[0], rec.calls[0].runId);
 });

@@ -33,7 +33,29 @@ authenticated.
 
 ---
 
-## 1. Agents — _the home view_
+## 0. Command Center — _pipelines at a glance (home)_
+
+**Purpose:** one row per pipeline, attention-first (awaiting approval → failed
+→ running → done), with a column per phase and a tile per step. Approve/Revise
+gates appear inline on the row that needs you.
+
+**Cost:** every metric shows **both tokens and dollars**, as reported by each
+step's `claude -p` result envelope:
+
+- **Step tile** — that run's spend (e.g. `29.8k tok · $4.22`).
+- **Row Σ chip** — the latest run's total, including superseded revise
+  attempts (money spent on a retried phase still counts).
+- **Total spend** (page header) — the grand total across every pipeline's
+  latest run on the board.
+
+A metric appears once at least one run reports it; steps that are still
+running (or predate cost capture and left no envelope) show nothing. Runs from
+before this feature are backfilled automatically from their logs at server
+start.
+
+---
+
+## 1. Agents — _the status board for background jobs_
 
 **Purpose:** the at-a-glance status board for all your background Claude Code
 jobs (agents launched to run in the background).

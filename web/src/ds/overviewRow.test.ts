@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toOverviewRow } from "./overviewRow";
+import { toOverviewRow, toOverviewRows } from "./overviewRow";
 import type {
   OverviewEntry,
   PipelineDefinition,
@@ -123,7 +123,9 @@ describe("toOverviewRow", () => {
       definition: def(),
       latest: inst("running", ["succeeded", "running"]),
     });
-    expect(row.phases[1].steps).toEqual([{ name: "red-green", runId: "r1", status: "working" }]);
+    expect(row.phases[1].steps).toEqual([
+      { name: "red-green", runId: "r1", status: "working", costUsd: null, tokens: null, model: null, currentActivity: null, startedAt: null, durationMs: null },
+    ]);
   });
 
   it("tiles phases without step progress from the definition", () => {
@@ -132,7 +134,60 @@ describe("toOverviewRow", () => {
       latest: inst("running", ["succeeded", "running"]),
     });
     // phase 0 reported no steps; fall back to the definition's step, done since the phase succeeded
-    expect(row.phases[0].steps).toEqual([{ name: "s", runId: null, status: "done" }]);
+    expect(row.phases[0].steps).toEqual([
+      { name: "s", runId: null, status: "done", costUsd: null, tokens: null, model: null, currentActivity: null, startedAt: null, durationMs: null },
+    ]);
+  });
+
+  it("carries the definition's pipeline model onto the row and its step pills", () => {
+    const row = toOverviewRow({
+      definition: def({ model: "sonnet" }),
+      latest: inst("running", ["succeeded", "running"]),
+    });
+    expect(row.model).toBe("sonnet");
+    // no run model joined yet → definition model fills in
+    expect(row.phases[1].steps[0].model).toBe("sonnet");
+    // definition-fallback pills too
+    expect(row.phases[0].steps[0].model).toBe("sonnet");
+  });
+
+  it("prefers the run's joined model, and a step definition override, over the pipeline model", () => {
+    const definition = def({ model: "sonnet" });
+    definition.phases[0].steps = [{ name: "s", prompt: "x", model: "opus" }];
+    const latest = inst("running", ["pending", "running"]);
+    latest.phases[1].steps = [{ name: "red-green", runId: "r1", status: "running", model: "haiku" }];
+    const row = toOverviewRow({ definition, latest });
+    expect(row.phases[1].steps[0].model).toBe("haiku"); // run record wins
+    expect(row.phases[0].steps[0].model).toBe("opus"); // step override beats pipeline model
+  });
+
+  it("keeps a joined null model (run reported none) instead of the definition's", () => {
+    const definition = def({ model: "sonnet" });
+    const latest = inst("running", ["pending", "running"]);
+    latest.phases[1].steps = [{ name: "red-green", runId: "r1", status: "running", model: null }];
+    const row = toOverviewRow({ definition, latest });
+    expect(row.phases[1].steps[0].model).toBeNull();
+  });
+
+  it("row model is null when the definition has none", () => {
+    const row = toOverviewRow({ definition: def(), latest: null });
+    expect(row.model).toBeNull();
+  });
+
+  it("carries step cost/tokens and the entry's instance total onto the row", () => {
+    const latest = inst("running", ["succeeded", "running"]);
+    latest.phases[1].steps = [
+      { name: "red-green", runId: "r1", status: "running", costUsd: 0.42, tokens: 1500 },
+    ];
+    const row = toOverviewRow({ definition: def(), latest, cost: { usd: 0.42, tokens: 1500 } });
+    expect(row.phases[1].steps[0].costUsd).toBe(0.42);
+    expect(row.phases[1].steps[0].tokens).toBe(1500);
+    expect(row.cost).toEqual({ usd: 0.42, tokens: 1500 });
+  });
+
+  it("leaves cost null when the entry has none", () => {
+    const row = toOverviewRow({ definition: def(), latest: null });
+    expect(row.cost).toBeNull();
   });
 
   it("exposes the failure reason on the failed phase pill", () => {
@@ -237,5 +292,88 @@ describe("toOverviewRow", () => {
       latest: inst("aborted", ["succeeded", "succeeded"]),
     });
     expect(row.badge).toBe("stopped");
+  });
+
+  it("carries activity and timing fields through to step pills", () => {
+    const latest = inst("running", ["running", "pending"]);
+    latest.phases[0].steps = [
+      {
+        name: "red-green",
+        runId: "r1",
+        status: "running",
+        currentActivity: "Bash: npm test",
+        activityAt: "2026-06-30T10:05:00.000Z",
+        startedAt: "2026-06-30T10:00:00.000Z",
+        durationMs: null,
+      },
+    ];
+    const row = toOverviewRow({ definition: def(), latest });
+    const pill = row.phases[0].steps[0];
+    expect(pill.currentActivity).toBe("Bash: npm test");
+    expect(pill.startedAt).toBe("2026-06-30T10:00:00.000Z");
+    expect(pill.durationMs).toBeNull();
+  });
+
+  it("defaults activity and timing to null on definition-fallback pills", () => {
+    const latest = inst("running", ["pending", "pending"]); // no step progress → fallback path
+    const row = toOverviewRow({ definition: def(), latest });
+    const pill = row.phases[0].steps[0];
+    expect(pill.currentActivity).toBeNull();
+    expect(pill.startedAt).toBeNull();
+    expect(pill.durationMs).toBeNull();
+  });
+
+  it("maps aborted phases and steps to the stopped pill", () => {
+    const latest = inst("aborted", ["aborted", "pending"]);
+    latest.phases[0].steps = [{ name: "red-green", runId: "r1", status: "aborted" }];
+    const row = toOverviewRow({ definition: def(), latest });
+    expect(row.phases[0].status).toBe("stopped");
+    expect(row.phases[0].steps[0].status).toBe("stopped");
+  });
+});
+
+describe("toOverviewRows", () => {
+  it("returns one row per active instance, labelled when there are several", () => {
+    const a = { ...inst("running", ["running", "pending"]), id: "aaaa1111-1" };
+    const b = { ...inst("awaiting-approval", ["awaiting-approval", "pending"]), id: "bbbb2222-2" };
+    const rows = toOverviewRows({
+      definition: def(),
+      latest: a,
+      active: [
+        { instance: a, cost: { usd: 1, tokens: 10 } },
+        { instance: b, cost: { usd: 2, tokens: 20 } },
+      ],
+    });
+    expect(rows.map((r) => r.instanceId)).toEqual(["aaaa1111-1", "bbbb2222-2"]);
+    expect(rows.map((r) => r.badge)).toEqual(["working", "await"]);
+    expect(rows.map((r) => r.instanceLabel)).toEqual(["aaaa1111", "bbbb2222"]);
+    expect(rows[1].cost).toEqual({ usd: 2, tokens: 20 });
+  });
+
+  it("omits the label for a single active instance", () => {
+    const a = inst("running", ["running", "pending"]);
+    const rows = toOverviewRows({
+      definition: def(),
+      latest: a,
+      active: [{ instance: a, cost: { usd: null, tokens: null } }],
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].instanceLabel).toBeNull();
+  });
+
+  it("falls back to the latest-instance row when nothing is active", () => {
+    const rows = toOverviewRows({
+      definition: def(),
+      latest: inst("aborted", ["succeeded", "succeeded"]),
+      active: [],
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].badge).toBe("stopped");
+  });
+
+  it("falls back when active is absent (older server payloads)", () => {
+    const rows = toOverviewRows({ definition: def(), latest: null });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].badge).toBe("idle");
   });
 });

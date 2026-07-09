@@ -14,14 +14,14 @@
     "test:coverage": "tsx --test --experimental-test-coverage --test-coverage-lines=70 --test-coverage-functions=58 --test-coverage-branches=58 \"src/**/*.test.ts\""
   },
   "dependencies": {
-    "@hono/node-server": "^1.13.7",
+    "@hono/node-server": "^2.0.8",
     "chokidar": "^4.0.3",
     "hono": "^4.6.14",
     "ws": "^8.18.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/node": "^22.10.2",
+    "@types/node": "^26.1.0",
     "@types/ws": "^8.5.13",
     "eslint": "^10.3.0",
     "globals": "^17.6.0",
