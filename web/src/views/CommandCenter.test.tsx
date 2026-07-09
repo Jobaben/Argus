@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import type { OverviewEntry, InstanceStatus, PhaseStatus } from "../types";
 import CommandCenter from "./CommandCenter";
 
@@ -254,7 +254,7 @@ describe("CommandCenter", () => {
     expect(btn).not.toBeDisabled();
   });
 
-  it("shows step cost, per-pipeline total, and the grand total", () => {
+  it("shows step cost and per-pipeline total", () => {
     const a = entry("scheduler-prune", "running", ["running"]);
     a.latest!.phases[0].steps = [
       { name: "step-x", runId: "r", status: "running", costUsd: 0.42, tokens: 1500 },
@@ -416,5 +416,6 @@ describe("CommandCenter", () => {
     expect(resetTotals).not.toHaveBeenCalled(); // first click only arms confirmation
     fireEvent.click(screen.getByRole("button", { name: /confirm reset/i }));
     expect(resetTotals).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByRole("button", { name: /confirm reset/i })).toBeNull());
   });
 });
