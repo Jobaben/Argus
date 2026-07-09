@@ -16,17 +16,17 @@
   "dependencies": {
     "@hono/node-server": "^2.0.8",
     "chokidar": "^4.0.3",
-    "hono": "^4.6.14",
+    "hono": "^4.12.28",
     "ws": "^8.18.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/node": "^26.1.0",
+    "@types/node": "^26.1.1",
     "@types/ws": "^8.5.13",
-    "eslint": "^10.3.0",
-    "globals": "^17.6.0",
-    "tsx": "^4.19.2",
+    "eslint": "^10.6.0",
+    "globals": "^17.7.0",
+    "tsx": "^4.23.0",
     "typescript": "^5.7.2",
-    "typescript-eslint": "^8.59.2"
+    "typescript-eslint": "^8.63.0"
   }
 }
