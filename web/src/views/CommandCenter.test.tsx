@@ -75,7 +75,7 @@ beforeEach(() => {
 });
 
 describe("CommandCenter", () => {
-  it("renders one card per active instance when a pipeline overlaps", () => {
+  it("renders one pipeline card with a phase grid per instance when overlapping", () => {
     const e = entry("sprint-pr", "running", ["running", "pending"]);
     const newest = { ...e.latest!, id: "11111111-aaaa" };
     const older = {
@@ -89,9 +89,34 @@ describe("CommandCenter", () => {
     ];
     mockOverview.overview = [e];
     render(<CommandCenter />);
-    expect(screen.getAllByText("sprint-pr")).toHaveLength(2);
+    // one pipeline tile, not one per instance
+    expect(screen.getAllByText("sprint-pr")).toHaveLength(1);
+    // phase titles render once, shared by every instance
+    expect(screen.getAllByText("Phase0")).toHaveLength(1);
+    expect(screen.getAllByText("Phase1")).toHaveLength(1);
+    // each instance keeps its own labelled row of step tiles
     expect(screen.getByText("#11111111")).toBeInTheDocument();
     expect(screen.getByText("#22222222")).toBeInTheDocument();
+    expect(screen.getAllByText("step-x")).toHaveLength(2);
+  });
+
+  it("shows every concurrently-stopped instance as stopped", () => {
+    const e = entry("sprint-pr", "aborted", ["aborted", "pending"]);
+    const newest = { ...e.latest!, id: "11111111-aaaa", status: "aborted" as const };
+    const older = {
+      ...e.latest!,
+      id: "22222222-bbbb",
+      status: "aborted" as const,
+      phases: e.latest!.phases.map((p) => ({ ...p })),
+    };
+    e.active = [
+      { instance: newest, cost: { usd: null, tokens: null } },
+      { instance: older, cost: { usd: null, tokens: null } },
+    ];
+    mockOverview.overview = [e];
+    render(<CommandCenter />);
+    // one "Stopped" pill per instance row plus one per aborted step tile
+    expect(screen.getAllByText("Stopped")).toHaveLength(4);
   });
 
   it("renders a row per pipeline", () => {
@@ -334,6 +359,40 @@ describe("CommandCenter", () => {
     mockOverview.overview = [e];
     render(<CommandCenter />);
     expect(screen.getByText(/2m 8s/)).toBeInTheDocument();
+  });
+
+  it("shows the pipeline's model in the card header", () => {
+    const e = entry("pipe", "running", ["running"]);
+    e.definition.model = "sonnet";
+    mockOverview.overview = [e];
+    render(<CommandCenter />);
+    expect(screen.getByTitle(/model running this pipeline/i)).toHaveTextContent("sonnet");
+  });
+
+  it("shows a step's model on its tile only when it differs from the pipeline's", () => {
+    const e = entry("pipe", "running", ["running"]);
+    e.definition.model = "sonnet";
+    e.latest!.phases[0].steps = [{ name: "step-x", runId: "r", status: "running", model: "opus" }];
+    mockOverview.overview = [e];
+    render(<CommandCenter />);
+    expect(screen.getByTitle(/model running this step/i)).toHaveTextContent("opus");
+  });
+
+  it("does not repeat the pipeline model on step tiles", () => {
+    const e = entry("pipe", "running", ["running"]);
+    e.definition.model = "sonnet";
+    e.latest!.phases[0].steps = [
+      { name: "step-x", runId: "r", status: "running", model: "sonnet" },
+    ];
+    mockOverview.overview = [e];
+    render(<CommandCenter />);
+    expect(screen.queryByTitle(/model running this step/i)).toBeNull();
+  });
+
+  it("shows no model chip when the pipeline has none", () => {
+    mockOverview.overview = [entry("pipe", "running", ["running"])];
+    render(<CommandCenter />);
+    expect(screen.queryByTitle(/model running this pipeline/i)).toBeNull();
   });
 
   it("renders a running step without activity exactly as before", () => {

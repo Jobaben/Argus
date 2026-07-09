@@ -1,6 +1,7 @@
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { paths } from "../claudeHome.js";
+import { cached } from "./cache.js";
 
 export interface Project {
   id: string;
@@ -76,8 +77,14 @@ async function toProject(id: string): Promise<Project> {
   };
 }
 
-/** Reads every project directory, newest activity first. */
+/** Reads every project directory, newest activity first. Stats every session
+ *  file, so a short-TTL single-flight cache collapses the refetch burst a
+ *  single live broadcast triggers (same pattern as readSessions). */
 export async function readProjects(): Promise<Project[]> {
+  return cached("projects", 1500, readProjectsRaw);
+}
+
+async function readProjectsRaw(): Promise<Project[]> {
   let dirs: string[];
   try {
     const entries = await readdir(paths.projects(), { withFileTypes: true });

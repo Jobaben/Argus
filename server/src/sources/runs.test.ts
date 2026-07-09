@@ -62,6 +62,17 @@ test("readRuns returns newest first and filters by schedule", async () => {
   );
 });
 
+test("readRuns reflects rewrites on repeated reads (memo never serves stale)", async () => {
+  const m = await fresh();
+  const base = makeRun("m1", "s1", new Date(2026, 5, 22, 10, 0).toISOString());
+  await m.writeRun(base);
+  assert.equal((await m.readRuns())[0].status, "succeeded");
+  // Second read (memo warm) then an in-process rewrite — must show the update.
+  await m.readRuns();
+  await m.writeRun({ ...base, status: "failed" });
+  assert.equal((await m.readRuns())[0].status, "failed");
+});
+
 test("pruneRuns keeps only the newest N of a schedule", async () => {
   const m = await fresh();
   for (let i = 0; i < 5; i++) {

@@ -1,5 +1,5 @@
 import { createReadStream } from "node:fs";
-import { readdir } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import path from "node:path";
 import { paths } from "../claudeHome.js";
@@ -8,6 +8,9 @@ import { decodeProjectLabel } from "./sessions.js";
 const DEFAULT_LIMIT = 100;
 const SNIPPET_PAD = 60;
 const SNIPPET_MAX = 200;
+// How many transcripts are scanned at once. Recent files usually satisfy the
+// limit, so batches keep the early exit while overlapping file I/O.
+const SCAN_CONCURRENCY = 8;
 
 export interface SearchResult {
   project: string;
@@ -56,7 +59,7 @@ function makeSnippet(text: string, lowerQ: string): string {
 }
 
 async function listTranscriptFiles(): Promise<
-  { project: string; sessionId: string; file: string }[]
+  { project: string; sessionId: string; file: string; mtime: number }[]
 > {
   let projectDirs: string[];
   try {
@@ -71,11 +74,18 @@ async function listTranscriptFiles(): Promise<
       const dir = path.join(paths.projects(), project);
       try {
         const files = (await readdir(dir)).filter((f) => f.endsWith(".jsonl"));
-        return files.map((f) => ({
-          project,
-          sessionId: f.replace(/\.jsonl$/, ""),
-          file: path.join(dir, f),
-        }));
+        return Promise.all(
+          files.map(async (f) => {
+            const file = path.join(dir, f);
+            let mtime = 0;
+            try {
+              mtime = (await stat(file)).mtimeMs;
+            } catch {
+              /* unreadable; sinks to the end of the scan order */
+            }
+            return { project, sessionId: f.replace(/\.jsonl$/, ""), file, mtime };
+          }),
+        );
       } catch {
         return [];
       }
@@ -124,19 +134,39 @@ async function scanFile(
 /**
  * Case-insensitive plain-substring search across every transcript.
  *
- * Files are read line by line so a single huge transcript never has to fit in
- * memory; non-matching lines are rejected by a cheap raw-string check before
- * any JSON parsing happens.
+ * Transcripts are scanned newest-first (recent sessions are both the likeliest
+ * matches and the most relevant results) in small concurrent batches, stopping
+ * as soon as the limit is reached — so a query that hits in recent files never
+ * pays for the long tail of old transcripts. Files are read line by line so a
+ * single huge transcript never has to fit in memory; non-matching lines are
+ * rejected by a cheap raw-string check before any JSON parsing happens.
  */
 export async function searchTranscripts(q: string, limit = DEFAULT_LIMIT): Promise<SearchResult[]> {
   const lowerQ = q.trim().toLowerCase();
   if (!lowerQ) return [];
 
   const files = await listTranscriptFiles();
+  files.sort((a, b) => b.mtime - a.mtime);
+
   const out: SearchResult[] = [];
-  for (const entry of files) {
-    if (out.length >= limit) break;
-    await scanFile(entry, lowerQ, out, limit);
+  for (let i = 0; i < files.length && out.length < limit; i += SCAN_CONCURRENCY) {
+    const remaining = limit - out.length;
+    const batch = files.slice(i, i + SCAN_CONCURRENCY);
+    // Each file collects into its own array; merging in batch order keeps the
+    // result order deterministic (newest file first) despite concurrent reads.
+    const perFile = await Promise.all(
+      batch.map(async (entry) => {
+        const found: SearchResult[] = [];
+        await scanFile(entry, lowerQ, found, remaining);
+        return found;
+      }),
+    );
+    for (const found of perFile) {
+      for (const r of found) {
+        if (out.length >= limit) break;
+        out.push(r);
+      }
+    }
   }
   return out;
 }

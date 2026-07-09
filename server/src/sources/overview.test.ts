@@ -141,6 +141,22 @@ test("joins run cost/tokens onto steps and totals the instance spend", () => {
   assert.deepEqual(out[0].cost, { usd: 0.25, tokens: 1000 });
 });
 
+test("joins the run's model onto steps; null when the run reported none", () => {
+  const i = inst("i1", "a", "running", "2026-06-30T10:00:00.000Z");
+  i.phases[0].steps = [
+    { name: "s1", runId: "r1", status: "succeeded" },
+    { name: "s2", runId: "r2", status: "running" },
+  ];
+  const runs = [
+    { ...run("r1", "i1", null, null), model: "opus" },
+    run("r2", "i1", null, null),
+  ];
+  const out = buildOverview([def("a")], [i], runs);
+  const steps = out[0].latest!.phases[0].steps;
+  assert.equal(steps[0].model, "opus");
+  assert.equal(steps[1].model, null);
+});
+
 test("instance total includes runs from superseded revise attempts", () => {
   const i = inst("i1", "a", "running", "2026-06-30T10:00:00.000Z");
   i.phases[0].steps = [{ name: "s1", runId: "r2", status: "running" }];
@@ -232,9 +248,45 @@ test("active lists every running/awaiting instance newest-first, with per-instan
 });
 
 test("active is empty when the only instance is terminal", () => {
-  const out = buildOverview([def("a")], [inst("i1", "a", "aborted", "2026-06-30T10:00:00.000Z")]);
+  const i1 = inst("i1", "a", "aborted", "2026-06-30T10:00:00.000Z");
+  i1.endedAt = "2026-06-30T10:05:00.000Z";
+  const out = buildOverview([def("a")], [i1]);
   assert.deepEqual(out[0].active, []);
   assert.equal(out[0].latest?.id, "i1");
+});
+
+test("a stopped instance stays on the board while an overlapping sibling runs", () => {
+  const i2 = inst("i2", "a", "running", "2026-06-30T11:00:00.000Z");
+  const i1 = inst("i1", "a", "aborted", "2026-06-30T10:00:00.000Z");
+  i1.endedAt = "2026-06-30T11:30:00.000Z"; // stopped after i2 started
+  const out = buildOverview([def("a")], [i2, i1]);
+  assert.deepEqual(
+    out[0].active.map((a) => a.instance.id),
+    ["i2", "i1"],
+  );
+});
+
+test("concurrently-stopped instances all stay on the board", () => {
+  const i2 = inst("i2", "a", "aborted", "2026-06-30T11:00:00.000Z");
+  i2.endedAt = "2026-06-30T11:31:00.000Z";
+  const i1 = inst("i1", "a", "aborted", "2026-06-30T10:00:00.000Z");
+  i1.endedAt = "2026-06-30T11:30:00.000Z"; // both overlapped i2's lifetime
+  const out = buildOverview([def("a")], [i2, i1]);
+  assert.deepEqual(
+    out[0].active.map((a) => a.instance.id),
+    ["i2", "i1"],
+  );
+});
+
+test("terminal instances from a previous era stay off the board", () => {
+  const i2 = inst("i2", "a", "running", "2026-06-30T11:00:00.000Z");
+  const i1 = inst("i1", "a", "aborted", "2026-06-30T09:00:00.000Z");
+  i1.endedAt = "2026-06-30T10:00:00.000Z"; // ended before i2 started
+  const out = buildOverview([def("a")], [i2, i1]);
+  assert.deepEqual(
+    out[0].active.map((a) => a.instance.id),
+    ["i2"],
+  );
 });
 
 test("breaks ties by updatedAt desc then definition name", () => {
