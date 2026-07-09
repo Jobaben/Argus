@@ -55,8 +55,12 @@ test("searchTranscripts: honors the result limit", async () => {
 
 test("searchTranscripts: newest transcripts rank first", async () => {
   // "a-old" sorts first alphabetically; only mtime ordering puts "b-new" first.
-  seedTranscript("-p", "a-old", [{ type: "user", message: { role: "user", content: "token in old" } }]);
-  seedTranscript("-p", "b-new", [{ type: "user", message: { role: "user", content: "token in new" } }]);
+  seedTranscript("-p", "a-old", [
+    { type: "user", message: { role: "user", content: "token in old" } },
+  ]);
+  seedTranscript("-p", "b-new", [
+    { type: "user", message: { role: "user", content: "token in new" } },
+  ]);
   const now = Date.now();
   utimesSync(
     path.join(home, "projects", "-p", "a-old.jsonl"),

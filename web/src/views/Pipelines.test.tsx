@@ -160,7 +160,10 @@ describe("Pipelines tab", () => {
 
   it("shows both Run now and Stop for a running pipeline with overlap=allow", async () => {
     const pAllow: PipelineDefinition = { ...p1, overlapPolicy: "allow" };
-    vi.stubGlobal("fetch", routedFetch([{ definition: pAllow, latest: instance("running") }], [pAllow]));
+    vi.stubGlobal(
+      "fetch",
+      routedFetch([{ definition: pAllow, latest: instance("running") }], [pAllow]),
+    );
     render(<Pipelines />);
     await waitFor(() => expect(screen.getByRole("button", { name: /^stop$/i })).toBeTruthy());
     expect(screen.getByRole("button", { name: /run now/i })).toBeTruthy();

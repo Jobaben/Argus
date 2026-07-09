@@ -27,7 +27,13 @@ const mockTotals: { totals: { usd: number; tokens: number; since: string } | nul
   totals: { usd: 12.5, tokens: 340000, since: "2026-07-01T00:00:00.000Z" },
 };
 vi.mock("../useTotals", () => ({
-  useTotals: () => ({ ...mockTotals, loading: false, error: null, reset: resetTotals, refresh: vi.fn() }),
+  useTotals: () => ({
+    ...mockTotals,
+    loading: false,
+    error: null,
+    reset: resetTotals,
+    refresh: vi.fn(),
+  }),
 }));
 
 function entry(name: string, status: InstanceStatus, phaseStatuses: PhaseStatus[]): OverviewEntry {
@@ -416,6 +422,8 @@ describe("CommandCenter", () => {
     expect(resetTotals).not.toHaveBeenCalled(); // first click only arms confirmation
     fireEvent.click(screen.getByRole("button", { name: /confirm reset/i }));
     expect(resetTotals).toHaveBeenCalledTimes(1);
-    await waitFor(() => expect(screen.queryByRole("button", { name: /confirm reset/i })).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /confirm reset/i })).toBeNull(),
+    );
   });
 });
