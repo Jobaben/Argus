@@ -312,6 +312,55 @@ export async function readSession(project: string, id: string): Promise<SessionD
   return cached(`session:${project}:${id}`, 1500, () => readSessionRaw(project, id));
 }
 
+export interface SessionTail {
+  id: string;
+  project: string;
+  projectLabel: string;
+  title: string;
+  model: string | null;
+  firstActivity: string | null;
+  lastActivity: string | null;
+  /** Messages with index strictly greater than the requested `after`. */
+  messages: SessionMessage[];
+  /** Index of the last message on disk; the client passes it back as `after`. */
+  lastIndex: number;
+}
+
+/**
+ * Incremental slice of a transcript for the live-tail view: the same canonical,
+ * defensively-parsed messages as {@link readSession} (malformed JSONL lines are
+ * skipped upstream in `readJsonl`), returning only those newer than `after`.
+ *
+ * Reads fresh via `readSessionRaw` rather than the short-TTL `readSession`
+ * cache: freshness is the whole point of a live tail, and nothing invalidates
+ * that cache on a file write, so a cache hit within the 1500ms window would
+ * silently hide just-appended messages — most damagingly the final message
+ * before a session goes idle. The list-scan cache is unaffected.
+ */
+export async function readSessionTail(
+  project: string,
+  id: string,
+  after: number,
+): Promise<SessionTail | null> {
+  const detail = await readSessionRaw(project, id);
+  if (!detail) return null;
+  const messages = detail.messages.filter((m) => m.index > after);
+  const lastIndex = detail.messages.length
+    ? detail.messages[detail.messages.length - 1].index
+    : after;
+  return {
+    id: detail.id,
+    project: detail.project,
+    projectLabel: detail.projectLabel,
+    title: detail.title,
+    model: detail.model,
+    firstActivity: detail.firstActivity,
+    lastActivity: detail.lastActivity,
+    messages,
+    lastIndex,
+  };
+}
+
 /** Render a session transcript as portable Markdown for export/download. */
 export function sessionToMarkdown(session: SessionDetail): string {
   const lines: string[] = [

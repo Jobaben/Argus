@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useAgents } from "./useAgents";
 import type { Agent, AgentStatus } from "./types";
-import { AgentTile, HealthCounter, EmptyState, Page } from "./ds";
+import { AgentTile, HealthCounter, EmptyState, Page, ToastRegion } from "./ds";
+import { useAgentNotifications } from "./notify/useAgentNotifications";
 import { NavBar } from "./NavBar";
 import type { NavTab } from "./NavBar";
 import type { MoreItem } from "./ds";
@@ -93,6 +94,7 @@ function currentTabId(): string {
 export default function App() {
   const [active, setActive] = useState<string>(currentTabId);
   const agentsState = useAgents();
+  const { toasts, dismiss } = useAgentNotifications(agentsState.agents);
 
   useEffect(() => {
     const onHash = () => setActive(currentTabId());
@@ -175,6 +177,7 @@ export default function App() {
       <main id="main" tabIndex={-1} className="outline-none">
         {renderActive()}
       </main>
+      <ToastRegion toasts={toasts} onDismiss={dismiss} />
     </div>
   );
 }

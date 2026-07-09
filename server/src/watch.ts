@@ -42,6 +42,12 @@ export function watchSchedules(onChange: () => void): () => Promise<void> {
   return makeWatcher([paths.argus()], onChange);
 }
 
+/** Watches the transcript files so the live-tail transcript view can stream
+ *  appended messages as a running agent writes them. */
+export function watchSessions(onChange: () => void): () => Promise<void> {
+  return makeWatcher([paths.projects()], onChange);
+}
+
 /** Watches the installed extensions + usage stats so the Inventory and Stats
  *  views can be push-driven and stop their background polling while live. */
 export function watchExtensions(onChange: () => void): () => Promise<void> {

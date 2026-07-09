@@ -1,4 +1,6 @@
-import { useSession, useSessions, type SessionMessage, type SessionSummary } from "../useSessions";
+import { useEffect, useRef } from "react";
+import { useSessions, type SessionMessage, type SessionSummary } from "../useSessions";
+import { useSessionTail } from "../useSessionTail";
 import { useHashRoute } from "../useHashRoute";
 import { AlertStrip, EmptyState, Page } from "../ds";
 
@@ -80,25 +82,56 @@ function MessageRow({ message }: { message: SessionMessage }) {
 }
 
 function SessionTranscript({ project, id }: { project: string; id: string }) {
-  const { session: detail, loading, error } = useSession(project, id);
+  const { header, messages, following, setFollowing, loading, error } = useSessionTail(project, id);
+  const endRef = useRef<HTMLDivElement | null>(null);
 
-  const toolUses = detail?.messages.filter((m) => m.toolName).length ?? 0;
+  // Keep the newest message in view while following; a paused reader is left
+  // wherever they scrolled to.
+  useEffect(() => {
+    if (following) endRef.current?.scrollIntoView?.({ block: "end", behavior: "smooth" });
+  }, [messages, following]);
+
+  const toolUses = messages.filter((m) => m.toolName).length;
   return (
     <Page
-      title={detail?.title ?? "Transcript"}
+      title={header?.title ?? "Transcript"}
       crumbs={[
         { label: "Command Center", href: "#/command" },
         { label: "Sessions", href: "#/sessions" },
       ]}
       actions={
-        detail ? (
-          <a
-            href={`/api/sessions/${encodeURIComponent(project)}/${encodeURIComponent(id)}/export`}
-            className="rounded-lg border border-line bg-surface px-3 py-1.5 text-sm text-ink-dim transition hover:border-ink-faint/40 hover:text-ink"
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setFollowing(!following)}
+            aria-pressed={following}
+            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm transition ${
+              following
+                ? "border-ok/40 bg-ok/10 text-ok"
+                : "border-line bg-surface text-ink-dim hover:border-ink-faint/40 hover:text-ink"
+            }`}
           >
-            ↓ Export Markdown
-          </a>
-        ) : null
+            {following ? (
+              <>
+                <span className="relative flex h-2 w-2" aria-hidden>
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-ok opacity-75" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-ok" />
+                </span>
+                Following
+              </>
+            ) : (
+              <>▶ Follow live</>
+            )}
+          </button>
+          {header && (
+            <a
+              href={`/api/sessions/${encodeURIComponent(project)}/${encodeURIComponent(id)}/export`}
+              className="rounded-lg border border-line bg-surface px-3 py-1.5 text-sm text-ink-dim transition hover:border-ink-faint/40 hover:text-ink"
+            >
+              ↓ Export Markdown
+            </a>
+          )}
+        </div>
       }
     >
       <a
@@ -107,14 +140,14 @@ function SessionTranscript({ project, id }: { project: string; id: string }) {
       >
         ← Back to sessions
       </a>
-      {detail && (
+      {header && (
         <div className="mb-6">
-          <p className="truncate font-mono text-xs text-ink-faint">{detail.projectLabel}</p>
+          <p className="truncate font-mono text-xs text-ink-faint">{header.projectLabel}</p>
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-faint">
-            <span>{detail.messages.length} msgs</span>
+            <span>{messages.length} msgs</span>
             <span>· {toolUses} tools</span>
-            {detail.model && <span>· {detail.model}</span>}
-            <span>· last activity {timeAgo(detail.lastActivity)}</span>
+            {header.model && <span>· {header.model}</span>}
+            <span>· last activity {timeAgo(header.lastActivity)}</span>
           </div>
         </div>
       )}
@@ -127,13 +160,14 @@ function SessionTranscript({ project, id }: { project: string; id: string }) {
 
       {loading ? (
         <p className="text-ink-faint">Loading transcript…</p>
-      ) : !detail || detail.messages.length === 0 ? (
+      ) : messages.length === 0 ? (
         <EmptyState>No displayable messages in this session.</EmptyState>
       ) : (
         <div className="flex flex-col gap-3">
-          {detail.messages.map((m) => (
+          {messages.map((m) => (
             <MessageRow key={m.index} message={m} />
           ))}
+          <div ref={endRef} aria-hidden />
         </div>
       )}
     </Page>

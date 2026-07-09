@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { claudeHome } from "./claudeHome.js";
 import { readAgents, readTimeline } from "./sources/jobs.js";
 import { readDaemon } from "./sources/daemon.js";
-import { readSessions, readSession, sessionToMarkdown } from "./sources/sessions.js";
+import { readSessions, readSession, readSessionTail, sessionToMarkdown } from "./sources/sessions.js";
 import { readActivity } from "./sources/history.js";
 import { readProjects } from "./sources/projects.js";
 import { readStats } from "./sources/stats.js";
@@ -116,6 +116,12 @@ export function createApp(deps: AppDeps): Hono {
   app.get("/api/sessions/:project/:id", async (c) =>
     c.json(await readSession(c.req.param("project"), c.req.param("id"))),
   );
+  app.get("/api/sessions/:project/:id/tail", async (c) => {
+    const raw = Number(c.req.query("after") ?? "-1");
+    const after = Number.isFinite(raw) ? raw : -1;
+    const tail = await readSessionTail(c.req.param("project"), c.req.param("id"), after);
+    return tail ? c.json(tail) : c.json({ error: "not found" }, 404);
+  });
   app.get("/api/sessions/:project/:id/export", async (c) => {
     const session = await readSession(c.req.param("project"), c.req.param("id"));
     if (!session) return c.json({ error: "not found" }, 404);

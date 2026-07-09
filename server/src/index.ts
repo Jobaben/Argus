@@ -2,7 +2,7 @@ import { serve } from "@hono/node-server";
 import { WebSocketServer } from "ws";
 import { randomUUID } from "node:crypto";
 import { claudeHome } from "./claudeHome.js";
-import { watchAgents, watchSchedules, watchExtensions } from "./watch.js";
+import { watchAgents, watchSchedules, watchExtensions, watchSessions } from "./watch.js";
 import { readRuns, killRunProcess } from "./sources/runs.js";
 import { createEngine, defaultPipelineSpawn } from "./pipelineEngine.js";
 import { startScheduler, isAlive, backfillRunCosts } from "./scheduler.js";
@@ -120,6 +120,7 @@ wss.on("connection", (ws) => {
 const stopWatching = watchAgents(() => broadcast({ type: "agents:changed" }));
 const stopWatchingSchedules = watchSchedules(() => broadcast({ type: "schedules:changed" }));
 const stopWatchingExtensions = watchExtensions(() => broadcast({ type: "inventory:changed" }));
+const stopWatchingSessions = watchSessions(() => broadcast({ type: "sessions:changed" }));
 void engine.adopt().catch((e) => console.error("[argus] run adoption failed:", e));
 void backfillRunCosts()
   .then((n) => {
@@ -153,6 +154,7 @@ async function shutdown() {
   await stopWatching();
   await stopWatchingSchedules();
   await stopWatchingExtensions();
+  await stopWatchingSessions();
   await scheduler.stop();
   await tailer.stop();
   await killLiveRuns();

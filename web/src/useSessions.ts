@@ -35,10 +35,10 @@ export interface SessionDetail {
   messages: SessionMessage[];
 }
 
-/** Loads the recent-sessions list, refreshing on "agents:changed". */
+/** Loads the recent-sessions list, refreshing when agents or transcripts change. */
 export function useSessions() {
   const { data, loading, error, refresh } = useLiveResource<SessionSummary[]>("/api/sessions", {
-    events: ["agents:changed"],
+    events: ["agents:changed", "sessions:changed"],
     select: (j) => (j as { sessions?: SessionSummary[] }).sessions ?? [],
     initial: [],
   });
