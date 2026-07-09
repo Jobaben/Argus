@@ -22,6 +22,14 @@ vi.mock("../useRunActivity", () => ({
   useRunActivity: () => mockActivity,
 }));
 
+const resetTotals = vi.fn(() => Promise.resolve());
+const mockTotals: { totals: { usd: number; tokens: number; since: string } | null } = {
+  totals: { usd: 12.5, tokens: 340000, since: "2026-07-01T00:00:00.000Z" },
+};
+vi.mock("../useTotals", () => ({
+  useTotals: () => ({ ...mockTotals, loading: false, error: null, reset: resetTotals, refresh: vi.fn() }),
+}));
+
 function entry(name: string, status: InstanceStatus, phaseStatuses: PhaseStatus[]): OverviewEntry {
   return {
     definition: {
@@ -68,10 +76,12 @@ function entry(name: string, status: InstanceStatus, phaseStatuses: PhaseStatus[
 beforeEach(() => {
   approve.mockClear();
   revise.mockClear();
+  resetTotals.mockClear();
   mockOverview.overview = [];
   mockOverview.loading = false;
   mockOverview.error = null;
   mockActivity.clear();
+  mockTotals.totals = { usd: 12.5, tokens: 340000, since: "2026-07-01T00:00:00.000Z" };
 });
 
 describe("CommandCenter", () => {
@@ -263,14 +273,10 @@ describe("CommandCenter", () => {
     expect(rowMeters[0]).toHaveTextContent("run total");
     expect(rowMeters[0]).toHaveTextContent("1.5k tok · $0.42");
     expect(rowMeters[1]).toHaveTextContent("3.5k tok · $1.08");
-    // grand total glance in the page header
-    expect(screen.getByText("Total spend")).toBeInTheDocument();
-    expect(screen.getByTitle(/every pipeline's latest run/i)).toHaveTextContent(
-      "5.0k tok · $1.50",
-    );
   });
 
-  it("hides all cost UI when no run reported spend", () => {
+  it("hides the board total when useTotals has nothing yet", () => {
+    mockTotals.totals = null;
     mockOverview.overview = [entry("scheduler-prune", "running", ["running"])];
     render(<CommandCenter />);
     expect(screen.queryByText("Total spend")).toBeNull();
@@ -399,5 +405,16 @@ describe("CommandCenter", () => {
     mockOverview.overview = [entry("pipe", "running", ["running"])];
     render(<CommandCenter />);
     expect(screen.queryByText(/▸/)).not.toBeInTheDocument();
+  });
+
+  it("shows the all-time total and resets only after confirmation", async () => {
+    render(<CommandCenter />);
+    // The board meter shows the all-time figure from useTotals, not a row sum.
+    expect(screen.getByText(/340/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /reset total/i }));
+    expect(resetTotals).not.toHaveBeenCalled(); // first click only arms confirmation
+    fireEvent.click(screen.getByRole("button", { name: /confirm reset/i }));
+    expect(resetTotals).toHaveBeenCalledTimes(1);
   });
 });

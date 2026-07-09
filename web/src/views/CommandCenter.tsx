@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { useOverview } from "../useOverview";
 import { useRunActivity } from "../useRunActivity";
 import type { LiveActivity } from "../useRunActivity";
+import { useTotals } from "../useTotals";
 import {
   toOverviewRows,
   formatElapsed,
@@ -420,8 +421,69 @@ function Row({
   );
 }
 
+/** Board-level all-time total with a two-click confirming reset (reset is
+ *  irreversible, so a bare click must not fire it). */
+function BoardTotal({
+  totals,
+  reset,
+}: {
+  totals: { usd: number; tokens: number; since: string } | null;
+  reset: () => Promise<void>;
+}) {
+  const [arming, setArming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  if (!totals) return null;
+  const sinceLabel = new Date(totals.since).toLocaleString();
+  return (
+    <div className="flex items-center gap-3">
+      <Meter
+        level="board"
+        tokens={totals.tokens}
+        usd={totals.usd}
+        title={`All-time tokens and dollar cost across every completed run since ${sinceLabel}`}
+      />
+      {arming ? (
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => {
+              setBusy(true);
+              void reset().finally(() => {
+                setBusy(false);
+                setArming(false);
+              });
+            }}
+            disabled={busy}
+            className="rounded-md border border-fail bg-fail/10 px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-fail disabled:opacity-40"
+          >
+            Confirm reset
+          </button>
+          <button
+            type="button"
+            onClick={() => setArming(false)}
+            disabled={busy}
+            className="rounded-md border border-line px-2 py-1 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-dim disabled:opacity-40"
+          >
+            Cancel
+          </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setArming(true)}
+          title="Reset the all-time total"
+          className="rounded-md border border-line px-2 py-1 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint"
+        >
+          Reset total
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function CommandCenter() {
   const { overview, loading, error, approve, revise } = useOverview();
+  const { totals, reset } = useTotals();
   const rows = useMemo(() => overview.flatMap(toOverviewRows), [overview]);
   // One card per pipeline: concurrent instances of the same pipeline share a
   // card and contribute a phase grid each.
@@ -441,33 +503,9 @@ export default function CommandCenter() {
     [rows],
   );
   const now = useNow(anyWorking);
-  // Grand total across everything on the board: sum whichever metrics were
-  // reported; a metric stays null (hidden) until at least one run reports it.
-  const total = useMemo(() => {
-    let usd: number | null = null;
-    let tokens: number | null = null;
-    for (const r of rows) {
-      if (r.cost?.usd != null) usd = (usd ?? 0) + r.cost.usd;
-      if (r.cost?.tokens != null) tokens = (tokens ?? 0) + r.cost.tokens;
-    }
-    return { usd, tokens };
-  }, [rows]);
 
   return (
-    <Page
-      wide
-      title="Command Center"
-      actions={
-        total.usd == null && total.tokens == null ? undefined : (
-          <Meter
-            level="board"
-            tokens={total.tokens}
-            usd={total.usd}
-            title="Combined tokens and dollar cost of every pipeline's latest run"
-          />
-        )
-      }
-    >
+    <Page wide title="Command Center" actions={<BoardTotal totals={totals} reset={reset} />}>
       <div aria-live="polite" role="status" className="sr-only">
         {announcement}
       </div>
