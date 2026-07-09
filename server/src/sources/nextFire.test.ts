@@ -243,6 +243,55 @@ test("windowed: nextFireTime rolls to the next allowed weekday", () => {
   assert.deepEqual(nextFireTime(trig, at(2026, 5, 22, 15, 0)), at(2026, 5, 23, 12, 0));
 });
 
+const overnight = {
+  kind: "windowed" as const,
+  startTime: "23:00",
+  endTime: "06:00",
+  everyMinutes: 30,
+};
+
+test("windowed overnight: previousFireTime finds points after midnight in yesterday's window", () => {
+  // 01:40 on the 22nd sits inside the window that opened 23:00 on the 21st.
+  assert.deepEqual(
+    previousFireTime(overnight, at(2026, 5, 20, 0, 0), at(2026, 5, 22, 1, 40)),
+    at(2026, 5, 22, 1, 30),
+  );
+});
+
+test("windowed overnight: previousFireTime works before midnight too", () => {
+  assert.deepEqual(
+    previousFireTime(overnight, at(2026, 5, 20, 0, 0), at(2026, 5, 22, 23, 40)),
+    at(2026, 5, 22, 23, 30),
+  );
+});
+
+test("windowed overnight: daytime gap clamps to the last point before endTime", () => {
+  // 12:00 is outside the window; the most recent point is 05:30 this morning.
+  assert.deepEqual(
+    previousFireTime(overnight, at(2026, 5, 20, 0, 0), at(2026, 5, 22, 12, 0)),
+    at(2026, 5, 22, 5, 30),
+  );
+});
+
+test("windowed overnight: nextFireTime continues the after-midnight tail", () => {
+  assert.deepEqual(nextFireTime(overnight, at(2026, 5, 22, 1, 40)), at(2026, 5, 22, 2, 0));
+});
+
+test("windowed overnight: nextFireTime rolls from the daytime gap to tonight's open", () => {
+  assert.deepEqual(nextFireTime(overnight, at(2026, 5, 22, 12, 0)), at(2026, 5, 22, 23, 0));
+});
+
+test("windowed overnight: weekday filter binds to the window's start day", () => {
+  // Monday-only (2026-06-22 is a Monday): Tuesday 01:00 belongs to Monday's window.
+  const trig = { ...overnight, weekdays: [1] };
+  assert.deepEqual(
+    previousFireTime(trig, at(2026, 5, 20, 0, 0), at(2026, 5, 23, 1, 0)),
+    at(2026, 5, 23, 1, 0),
+  );
+  // Monday 01:00 belongs to Sunday's window, which the filter excludes.
+  assert.equal(previousFireTime(trig, at(2026, 5, 20, 0, 0), at(2026, 5, 22, 1, 0)), null);
+});
+
 test("windowed: nextFireAfter delegates to the daily grid", () => {
   const trig = {
     kind: "windowed" as const,

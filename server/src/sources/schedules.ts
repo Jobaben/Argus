@@ -60,8 +60,8 @@ export function validateTrigger(t: unknown, opts?: { allowWindowed?: boolean }):
     if (!hhmm.test(trig.startTime ?? "") || !hhmm.test(trig.endTime ?? "")) {
       throw new ScheduleValidationError('windowed trigger needs startTime/endTime "HH:MM"');
     }
-    if (hhmmToMin(trig.startTime as string) >= hhmmToMin(trig.endTime as string)) {
-      throw new ScheduleValidationError("windowed trigger needs endTime after startTime");
+    if (hhmmToMin(trig.startTime as string) === hhmmToMin(trig.endTime as string)) {
+      throw new ScheduleValidationError("windowed trigger needs endTime different from startTime");
     }
     if (!Number.isFinite(trig.everyMinutes) || (trig.everyMinutes ?? 0) < 1) {
       throw new ScheduleValidationError("windowed trigger needs everyMinutes >= 1");

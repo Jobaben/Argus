@@ -3,8 +3,9 @@ export type TriggerKind = "interval" | "daily" | "weekly" | "windowed";
 /** When a schedule fires. `everyMinutes` for interval and windowed cadence;
  * `time` ("HH:MM", local) for daily/weekly; `weekday` (0=Sun..6=Sat) for weekly;
  * `startTime`/`endTime` ("HH:MM", local, end exclusive) bound the windowed daily
- * window; `weekdays` optionally restricts windowed to those days (empty/omitted =
- * every day). */
+ * window — an endTime before startTime wraps past midnight into the next day;
+ * `weekdays` optionally restricts windowed to the days the window opens on
+ * (empty/omitted = every day). */
 export interface Trigger {
   kind: TriggerKind;
   everyMinutes?: number;

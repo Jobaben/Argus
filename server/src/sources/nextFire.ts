@@ -12,8 +12,10 @@ function atTime(ref: Date, h: number, mi: number): Date {
   return new Date(ref.getFullYear(), ref.getMonth(), ref.getDate(), h, mi, 0, 0);
 }
 
-/** The clock grid for a windowed trigger on the calendar day of `ref`.
- * Returns null when the window is invalid (missing/zero cadence or end<=start). */
+/** The clock grid for a windowed trigger whose window opens on the calendar day
+ * of `ref`. An overnight window (endTime before startTime) ends on the next
+ * calendar day. Returns null when the window is invalid (missing/zero cadence
+ * or end == start). */
 function windowGrid(trigger: Trigger, ref: Date): { start: Date; end: Date; step: number } | null {
   const step = (trigger.everyMinutes ?? 0) * 60000;
   if (step <= 0) return null;
@@ -21,8 +23,16 @@ function windowGrid(trigger: Trigger, ref: Date): { start: Date; end: Date; step
   const [eh, em] = parseHHMM(trigger.endTime);
   const start = atTime(ref, sh, sm);
   const end = atTime(ref, eh, em);
-  if (end.getTime() <= start.getTime()) return null;
+  if (end.getTime() === start.getTime()) return null;
+  if (end.getTime() < start.getTime()) end.setDate(end.getDate() + 1);
   return { start, end, step };
+}
+
+/** Whether the window spills past midnight into the next calendar day. */
+function windowWraps(trigger: Trigger): boolean {
+  const [sh, sm] = parseHHMM(trigger.startTime);
+  const [eh, em] = parseHHMM(trigger.endTime);
+  return eh * 60 + em < sh * 60 + sm;
 }
 
 /** Whether a windowed trigger may fire on the weekday of `d`
@@ -36,15 +46,23 @@ function weekdayAllowed(trigger: Trigger, d: Date): boolean {
 /** The most recent scheduled instant at or before `now`, or null if none. */
 export function previousFireTime(trigger: Trigger, anchor: Date, now: Date): Date | null {
   if (trigger.kind === "windowed") {
-    if (!weekdayAllowed(trigger, now)) return null;
-    const g = windowGrid(trigger, now);
-    if (!g) return null;
-    // Last grid index strictly inside [start, end) — the trailing partial slot is dropped.
-    const maxK = Math.ceil((g.end.getTime() - g.start.getTime()) / g.step) - 1;
-    const nowK = Math.floor((now.getTime() - g.start.getTime()) / g.step);
-    const k = Math.min(maxK, nowK);
-    if (k < 0) return null;
-    return new Date(g.start.getTime() + k * g.step);
+    // An overnight window that opened yesterday can still cover `now`, so check
+    // today's window first (more recent when it applies), then yesterday's.
+    // The weekdays filter binds to the day the window opens.
+    const offsets = windowWraps(trigger) ? [0, -1] : [0];
+    for (const dayOffset of offsets) {
+      const ref = new Date(now.getFullYear(), now.getMonth(), now.getDate() + dayOffset);
+      if (!weekdayAllowed(trigger, ref)) continue;
+      const g = windowGrid(trigger, ref);
+      if (!g) return null;
+      // Last grid index strictly inside [start, end) — the trailing partial slot is dropped.
+      const maxK = Math.ceil((g.end.getTime() - g.start.getTime()) / g.step) - 1;
+      const nowK = Math.floor((now.getTime() - g.start.getTime()) / g.step);
+      const k = Math.min(maxK, nowK);
+      if (k < 0) continue;
+      return new Date(g.start.getTime() + k * g.step);
+    }
+    return null;
   }
   if (trigger.kind === "interval") {
     const step = (trigger.everyMinutes ?? 0) * 60000;
@@ -77,7 +95,9 @@ export function nextFireTime(trigger: Trigger, from: Date): Date | null {
   if (trigger.kind === "windowed") {
     const step = (trigger.everyMinutes ?? 0) * 60000;
     if (step <= 0) return null;
-    for (let dayOffset = 0; dayOffset <= 8; dayOffset++) {
+    // An overnight window that opened yesterday can still have points after `from`.
+    const firstOffset = windowWraps(trigger) ? -1 : 0;
+    for (let dayOffset = firstOffset; dayOffset <= 8; dayOffset++) {
       const ref = new Date(
         from.getFullYear(),
         from.getMonth(),

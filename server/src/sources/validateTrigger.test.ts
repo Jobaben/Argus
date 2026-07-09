@@ -38,11 +38,24 @@ test("windowed omits weekdays when empty (means every day)", () => {
   assert.deepEqual(t, { kind: "windowed", startTime: "09:00", endTime: "17:00", everyMinutes: 30 });
 });
 
-test("windowed rejects endTime <= startTime", () => {
+test("windowed accepts an overnight window (endTime before startTime wraps midnight)", () => {
+  const t = validateTrigger(
+    { kind: "windowed", startTime: "23:00", endTime: "06:00", everyMinutes: 30 },
+    { allowWindowed: true },
+  );
+  assert.deepEqual(t, {
+    kind: "windowed",
+    startTime: "23:00",
+    endTime: "06:00",
+    everyMinutes: 30,
+  });
+});
+
+test("windowed rejects endTime equal to startTime", () => {
   assert.throws(
     () =>
       validateTrigger(
-        { kind: "windowed", startTime: "14:00", endTime: "12:00", everyMinutes: 30 },
+        { kind: "windowed", startTime: "12:00", endTime: "12:00", everyMinutes: 30 },
         { allowWindowed: true },
       ),
     ScheduleValidationError,
