@@ -57,6 +57,9 @@ export interface Run {
   costUsd?: number | null;
   /** Total tokens (input+output) reported by the CLI result envelope, if present. */
   tokens?: number | null;
+  /** Set once the run's cost has been folded into the all-time totals; guards
+   *  against double-counting across the several terminal-write paths. */
+  countedInTotals?: boolean;
   /** Work-level conclusion from the pipeline signal, distinct from the
    *  exit-code-derived `status`. Null/absent for non-pipeline or unsignalled runs. */
   outcome?: "succeeded" | "failed" | "blocked" | null;
