@@ -5,3 +5,5 @@ server/dist
 package-lock.json
 coverage
 *.log
+# design cards mirror the remote claude.ai/design project byte-for-byte
+design/**/*.html

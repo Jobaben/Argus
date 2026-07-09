@@ -101,7 +101,7 @@ in brief:
 | Group             | Endpoints                                                                                                                                                                                                                                     |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Health / setup    | `GET /api/health`, `GET /api/setup`, `POST /api/setup/apply`                                                                                                                                                                                  |
-| Monitoring (read) | `GET /api/agents`, `/agents/:short/timeline`, `/daemon`, `/sessions`, `/sessions/:project/:id`, `/activity`, `/projects`, `/stats`, `/inventory`, `/tasks`, `/search`, `/cron`                                                                |
+| Monitoring (read) | `GET /api/agents`, `/agents/:short/timeline`, `/daemon`, `/sessions`, `/sessions/:project/:id`, `/activity`, `/projects`, `/stats`, `/inventory`, `/tasks`, `/search`, `/cron`, `/chronicle`                                                  |
 | Scheduler         | `GET/POST /api/schedules`, `PUT/DELETE /api/schedules/:id`, `POST /api/schedules/:id/run`, `POST /api/runs/:id/cancel`, `GET /api/runs`, `/runs/:id`                                                                                          |
 | Pipelines         | `GET/POST /api/pipelines`, `PUT/PATCH/DELETE /api/pipelines/:id`, `POST /api/pipelines/:id/start`, `GET /api/pipelines/:id/instances`, `GET /api/overview`, `GET /api/instances/:id`, `POST /api/instances/:id/{signal,approve,revise,abort}` |
 | Live push         | `WS /ws` — `{type:"agents:changed"｜"schedules:changed"｜"pipelines:changed"｜"inventory:changed"}`                                                                                                                                           |
@@ -109,7 +109,9 @@ in brief:
 ## Status
 
 **v0.2** — monitoring (agents, sessions, activity, projects, stats, search,
-inventory), the Scheduler (create / run-now / cancel / history), and multi-phase
-Pipelines (human-gated approve / revise / abort) all ship. The server is
+inventory), the Scheduler (create / run-now / cancel / history), multi-phase
+Pipelines (human-gated approve / revise / abort), and the **Chronicle** — a
+cross-source swimlane timeline of every run, agent, and session
+(`GET /api/chronicle`, Chronicle tab) — all ship. The server is
 loopback-hardened, single-port packageable (`npm run build && npm start`), and
 Docker-ready. See [docs/SCORECARD.md](docs/SCORECARD.md) for the quality rubric.
