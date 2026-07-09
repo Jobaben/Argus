@@ -640,6 +640,35 @@ test("a completed step harvests cost/tokens/result from its log envelope", async
   assert.equal(after!.run.resultSummary, "all good");
 });
 
+test("a completed step folds its cost into the all-time totals", async () => {
+  const { engine, pipelines } = await load();
+  const runsSrc = await import(`./sources/runs.js?${Math.random()}`);
+  const totals = await import(`./sources/totals.js?${Math.random()}`);
+  await seedPipeline(pipelines, {
+    phases: [
+      { id: "only", name: "Only", cwd: home, gated: false, steps: [{ name: "s", prompt: "p" }] },
+    ],
+  });
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  await e.start("p1", "manual");
+  const runId = rec.calls[0].runId;
+
+  mkdirSync(path.join(home, "argus", "runs"), { recursive: true });
+  writeFileSync(
+    runsSrc.runLogPath(runId),
+    '{"type":"result","subtype":"success","is_error":false,"result":"all good","total_cost_usd":0.07,"usage":{"input_tokens":900,"output_tokens":100}}\n',
+    "utf8",
+  );
+  rec.dones[0].resolve({ code: 0 });
+
+  await waitFor(async () => (await runsSrc.readRun(runId))?.run.countedInTotals === true);
+  const t = await totals.readTotals();
+  assert.equal(t.usd, 0.07);
+  assert.equal(t.tokens, 1000);
+  assert.equal(t.runsCounted, 1);
+});
+
 test("reconcile finalizes an adopted run whose process died, from the log envelope", async () => {
   const { engine, pipelines } = await load();
   const runsSrc = await import(`./sources/runs.js?${Math.random()}`);

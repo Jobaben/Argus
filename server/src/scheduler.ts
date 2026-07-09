@@ -3,6 +3,7 @@ import { createWriteStream } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { graceMsFor, shouldFire } from "./sources/nextFire.js";
 import { markScheduleRan, readSchedules } from "./sources/schedules.js";
+import { accumulateRun } from "./sources/totals.js";
 import {
   RUN_KEEP,
   encodeProject,
@@ -298,6 +299,7 @@ export async function fireRun(
       };
       await writeRun(finished);
       await pruneRuns(schedule.id, RUN_KEEP);
+      await accumulateRun(finished.id, deps.now);
       if (finished.status === "failed") deps.onFailure?.(finished);
       deps.onChange?.();
     })

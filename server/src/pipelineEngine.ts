@@ -10,6 +10,7 @@ import {
   writeRun,
 } from "./sources/runs.js";
 import { markPipelineStarted, readPipelines } from "./sources/pipelines.js";
+import { accumulateRun } from "./sources/totals.js";
 import {
   INSTANCE_KEEP,
   pruneInstances,
@@ -303,6 +304,7 @@ export function createEngine(deps: EngineDeps): Engine {
           tokens: envelope?.tokens ?? got?.run.tokens ?? null,
           error: res.code === 0 ? null : `exit code ${res.code}`,
         });
+        await accumulateRun(run.id, deps.now);
         deps.tailer?.untrack(run.id);
         deps.onChange?.();
       })
@@ -511,6 +513,7 @@ export function createEngine(deps: EngineDeps): Engine {
               ? null
               : (parsed.result ?? "run reported is_error"),
         });
+        await accumulateRun(runId, deps.now);
         adopted.delete(runId);
         sem.release();
         deps.tailer?.untrack(runId);

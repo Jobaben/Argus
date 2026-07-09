@@ -18,6 +18,14 @@ async function load() {
   return { scheduler, schedules, runs };
 }
 
+async function waitFor(cond: () => boolean | Promise<boolean>, timeoutMs = 2000): Promise<void> {
+  const start = Date.now();
+  while (!(await cond())) {
+    if (Date.now() - start > timeoutMs) throw new Error("waitFor timed out");
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
 let counter = 0;
 const deps = (over: Record<string, unknown>) => ({
   now: () => new Date(2026, 5, 22, 11, 1),
@@ -42,6 +50,28 @@ test("tick fires a due schedule and records a succeeded run", async () => {
   assert.equal(list[0].status, "succeeded");
   const after = (await schedules.readSchedules())[0];
   assert.equal(after.lastRunId, list[0].id);
+});
+
+test("a completed scheduler run folds its cost into the totals", async () => {
+  const { scheduler, schedules } = await load();
+  const totals = await import(`./sources/totals.js?${Math.random()}`);
+  await schedules.createSchedule(
+    { name: "n", prompt: "p", cwd: home, trigger: { kind: "interval", everyMinutes: 60 } },
+    new Date(2026, 5, 22, 10, 0),
+    "s1",
+  );
+  await scheduler.tick(
+    deps({
+      spawn: () => ({
+        pid: 999,
+        done: Promise.resolve({ code: 0, result: "done", error: null, costUsd: 0.123, tokens: 150 }),
+      }),
+    }),
+  );
+  await waitFor(async () => (await totals.readTotals()).runsCounted === 1);
+  const t = await totals.readTotals();
+  assert.equal(t.usd, 0.123);
+  assert.equal(t.runsCounted, 1);
 });
 
 test("overlap=skip records a skipped run when a prior run is alive", async () => {
