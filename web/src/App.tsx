@@ -19,6 +19,8 @@ import CommandCenter from "./views/CommandCenter";
 import Chronicle from "./views/Chronicle";
 import Pipelines from "./views/Pipelines";
 import SetupBanner from "./views/SetupBanner";
+import Users from "./views/Users";
+import { useAuth } from "./useAuth";
 
 function AgentsView({
   agents,
@@ -83,6 +85,7 @@ const TAB_META: { id: string; label: string; role: TabRole }[] = [
   { id: "inventory", label: "Inventory", role: "overflow" },
   { id: "projects", label: "Projects", role: "overflow" },
   { id: "tasks", label: "Tasks", role: "overflow" },
+  { id: "users", label: "Users", role: "overflow" },
   { id: "agents", label: "Agents", role: "drilldown" },
   { id: "sessions", label: "Sessions", role: "drilldown" },
   { id: "activity", label: "Activity", role: "drilldown" },
@@ -96,6 +99,7 @@ function currentTabId(): string {
 export default function App() {
   const [active, setActive] = useState<string>(currentTabId);
   const agentsState = useAgents();
+  const auth = useAuth();
   const { toasts, dismiss } = useAgentNotifications(agentsState.agents);
 
   useEffect(() => {
@@ -113,7 +117,9 @@ export default function App() {
     id: t.id,
     label: t.label,
   }));
-  const overflow: MoreItem[] = TAB_META.filter((t) => t.role === "overflow").map((t) => ({
+  const overflow: MoreItem[] = TAB_META.filter(
+    (t) => t.role === "overflow" && (t.id !== "users" || auth.status?.role === "root"),
+  ).map((t) => ({
     id: t.id,
     label: t.label,
     href: `#/${t.id}`,
@@ -137,6 +143,8 @@ export default function App() {
         return <Projects />;
       case "tasks":
         return <Tasks />;
+      case "users":
+        return <Users />;
       case "agents":
         return (
           <AgentsView
