@@ -14,6 +14,8 @@ import Inventory from "./views/Inventory";
 import Tasks from "./views/Tasks";
 import Search from "./views/Search";
 import Schedules from "./views/Schedules";
+import Monitors from "./views/Monitors";
+import Issues from "./views/Issues";
 import AgentDetail from "./views/AgentDetail";
 import CommandCenter from "./views/CommandCenter";
 import Chronicle from "./views/Chronicle";
@@ -79,6 +81,8 @@ const TAB_META: { id: string; label: string; role: TabRole }[] = [
   { id: "command", label: "Command Center", role: "destination" },
   { id: "chronicle", label: "Chronicle", role: "destination" },
   { id: "schedules", label: "Scheduler", role: "destination" },
+  { id: "monitors", label: "Monitors", role: "destination" },
+  { id: "issues", label: "Issues", role: "destination" },
   { id: "pipelines", label: "Pipelines", role: "destination" },
   { id: "search", label: "Search", role: "utility" },
   { id: "stats", label: "Stats", role: "overflow" },
@@ -131,6 +135,10 @@ export default function App() {
         return <Chronicle />;
       case "schedules":
         return <Schedules />;
+      case "monitors":
+        return <Monitors />;
+      case "issues":
+        return <Issues />;
       case "pipelines":
         return <Pipelines />;
       case "search":

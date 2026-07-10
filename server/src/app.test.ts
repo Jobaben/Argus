@@ -540,3 +540,116 @@ test("POST /api/totals/reset zeroes totals and broadcasts", async () => {
   assert.equal(body.tokens, 0);
   assert.ok(messages.some((m) => (m as { type?: string }).type === "totals:changed"));
 });
+
+test("GET /api/monitors reflects schedule health from runs on disk", async () => {
+  const app = makeApp();
+  await app.request("/api/schedules", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({
+      name: "Watcher",
+      prompt: "p",
+      cwd: home,
+      trigger: { kind: "interval", everyMinutes: 60 },
+    }),
+  });
+  const res = await app.request("/api/monitors", { headers: loopback });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as {
+    monitors: { name: string; status: string }[];
+    summary: Record<string, number>;
+  };
+  assert.equal(body.monitors.length, 1);
+  assert.equal(body.monitors[0].name, "Watcher");
+  assert.equal(body.monitors[0].status, "pending"); // brand new, nothing owed yet
+  assert.equal(body.summary.pending, 1);
+});
+
+function writeFailedRun(id: string, error: string) {
+  mkdirSync(path.join(home, "argus", "runs"), { recursive: true });
+  const iso = new Date().toISOString();
+  writeFileSync(
+    path.join(home, "argus", "runs", `${id}.json`),
+    JSON.stringify({
+      id,
+      scheduleId: "s1",
+      scheduleName: "Watcher",
+      prompt: "p",
+      cwd: "/tmp",
+      status: "failed",
+      trigger: "scheduled",
+      queuedAt: iso,
+      startedAt: iso,
+      endedAt: iso,
+      durationMs: 5,
+      pid: null,
+      exitCode: 1,
+      sessionId: null,
+      project: null,
+      resultSummary: null,
+      error,
+    }),
+  );
+}
+
+test("issues: grouped listing, triage lifecycle, and broadcast", async () => {
+  const messages: unknown[] = [];
+  const app = createApp({
+    config,
+    engine: fakeEngine,
+    broadcast: (m) => messages.push(m),
+    serveWeb: false,
+  });
+  writeFailedRun("f1", "timeout after 42s");
+  writeFailedRun("f2", "timeout after 7s");
+
+  const list = (await (await app.request("/api/issues", { headers: loopback })).json()) as {
+    issues: { fingerprint: string; count: number; state: string }[];
+    summary: { open: number };
+  };
+  assert.equal(list.issues.length, 1);
+  assert.equal(list.issues[0].count, 2);
+  assert.equal(list.summary.open, 1);
+  const fp = list.issues[0].fingerprint;
+
+  const detail = (await (await app.request(`/api/issues/${fp}`, { headers: loopback })).json()) as {
+    occurrences: unknown[];
+  };
+  assert.equal(detail.occurrences.length, 2);
+
+  const resolve = await app.request(`/api/issues/${fp}/resolve`, {
+    method: "POST",
+    headers: sameOrigin,
+  });
+  assert.equal(resolve.status, 200);
+  assert.ok(messages.some((m) => (m as { type?: string }).type === "issues:changed"));
+
+  const after = (await (await app.request("/api/issues", { headers: loopback })).json()) as {
+    issues: { state: string }[];
+  };
+  assert.equal(after.issues[0].state, "resolved");
+
+  const reopen = await app.request(`/api/issues/${fp}/reopen`, {
+    method: "POST",
+    headers: sameOrigin,
+  });
+  assert.equal(reopen.status, 200);
+  const reopened = (await (await app.request("/api/issues", { headers: loopback })).json()) as {
+    issues: { state: string }[];
+  };
+  assert.equal(reopened.issues[0].state, "open");
+});
+
+test("issue triage on unknown or malformed fingerprints is a clean 4xx", async () => {
+  const app = makeApp();
+  const unknown = await app.request("/api/issues/aaaaaaaaaaaaaaaa/resolve", {
+    method: "POST",
+    headers: sameOrigin,
+  });
+  assert.equal(unknown.status, 404);
+  const malformed = await app.request("/api/issues/..%2fevil/reopen", {
+    method: "POST",
+    headers: sameOrigin,
+  });
+  assert.equal(malformed.status, 400);
+});

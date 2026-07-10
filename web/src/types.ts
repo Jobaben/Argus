@@ -83,6 +83,57 @@ export interface Run {
   outcome?: "succeeded" | "failed" | "blocked" | null;
 }
 
+export type MonitorStatus = "up" | "late" | "down" | "failing" | "paused" | "pending";
+
+export interface Heartbeat {
+  runId: string;
+  status: RunStatus;
+  outcome?: "succeeded" | "failed" | "blocked" | null;
+  at: string;
+  durationMs: number | null;
+}
+
+export interface MonitorHealth {
+  scheduleId: string;
+  name: string;
+  enabled: boolean;
+  status: MonitorStatus;
+  uptimePct: number | null;
+  lastRunAt: string | null;
+  lastRunStatus: RunStatus | null;
+  expectedAt: string | null;
+  nextExpected: string | null;
+  graceMs: number;
+  heartbeats: Heartbeat[];
+}
+
+export type MonitorsSummary = Record<MonitorStatus, number>;
+
+export type IssueState = "open" | "resolved" | "ignored";
+
+export interface Issue {
+  fingerprint: string;
+  title: string;
+  count: number;
+  firstSeen: string;
+  lastSeen: string;
+  schedules: string[];
+  state: IssueState;
+  lastRunId: string;
+}
+
+export interface IssueOccurrence {
+  runId: string;
+  scheduleId: string;
+  scheduleName: string;
+  at: string;
+  status: RunStatus;
+  outcome: "succeeded" | "failed" | "blocked" | null;
+  error: string;
+}
+
+export type IssuesSummary = Record<IssueState, number>;
+
 export interface ScheduleInput {
   name: string;
   prompt: string;

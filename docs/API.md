@@ -178,6 +178,60 @@ first. `endedAt: null` means still in flight — render through `windowEnd`.
 | `GET /api/runs/:id`                | one run plus the tail of its log                                   |
 | `POST /api/runs/:id/cancel`        | kill a running run → `200`, `409` if not running, `404` if unknown |
 
+## Monitors
+
+### `GET /api/monitors`
+
+Healthchecks-style dead-man's-switch health per schedule, derived from
+schedules + runs on every read (no new state). A monitor goes `late`, then
+`down`, when an expected slot passes without a covering run — including when
+the Argus server itself was not running at the time. Grace is 10% of the
+trigger period, clamped to `[5 min, 60 min]`. `heartbeats` are the last 30
+runs, oldest → newest; `uptimePct` is succeeded / (succeeded + failed) over
+them. Statuses: `up | late | down | failing | paused | pending` (`failing` =
+ran on time but the last completed run failed).
+
+```json
+{
+  "monitors": [
+    {
+      "scheduleId": "…",
+      "name": "Nightly triage",
+      "enabled": true,
+      "status": "down",
+      "uptimePct": 96.7,
+      "lastRunAt": "…",
+      "lastRunStatus": "succeeded",
+      "expectedAt": "…",
+      "nextExpected": "…",
+      "graceMs": 360000,
+      "heartbeats": [{ "runId": "…", "status": "succeeded", "at": "…", "durationMs": 92000 }]
+    }
+  ],
+  "summary": { "up": 3, "late": 0, "down": 1, "failing": 0, "paused": 1, "pending": 0 }
+}
+```
+
+## Issues
+
+Sentry-style grouping of failed runs (status `failed`/`interrupted`, or
+outcome `failed`/`blocked`) by a fingerprint of the normalized error text —
+digits, hex ids, UUIDs and timestamps collapse so "timeout after 42s" and
+"timeout after 7s" are one issue. Issues derive from runs on every read; the
+only persisted state is triage, in `~/.claude/argus/issues.json`.
+
+| Method + path                           | Effect                                                  |
+| --------------------------------------- | ------------------------------------------------------- |
+| `GET /api/issues`                       | `{ issues, summary: {open, resolved, ignored} }`        |
+| `GET /api/issues/:fingerprint`          | one issue plus occurrences (newest first, capped 50)    |
+| `POST /api/issues/:fingerprint/resolve` | mark resolved — auto-reopens if a newer failure arrives |
+| `POST /api/issues/:fingerprint/ignore`  | mute permanently (until reopened)                       |
+| `POST /api/issues/:fingerprint/reopen`  | drop the triage record → back to `open`                 |
+
+Triage mutations broadcast `issues:changed` on `/ws`. Like schedule CRUD,
+they sit behind the transport-level guards but need no admin session — triage
+cannot execute anything.
+
 ## Pipelines (v0.3)
 
 | Method + path                      | Effect                                                                            |

@@ -29,6 +29,7 @@ export const paths = {
   runsDir: () => path.join(claudeHome(), "argus", "runs"),
   pipelinesFile: () => path.join(claudeHome(), "argus", "pipelines.json"),
   totalsFile: () => path.join(claudeHome(), "argus", "totals.json"),
+  issuesFile: () => path.join(claudeHome(), "argus", "issues.json"),
   authFile: () => path.join(claudeHome(), "argus", "auth.json"),
   usersFile: () => path.join(claudeHome(), "argus", "users.json"),
   instancesDir: () => path.join(claudeHome(), "argus", "instances"),

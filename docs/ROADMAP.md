@@ -26,6 +26,14 @@ Fanned out in parallel; each is an isolated source + view + tab:
   (`/api/chronicle`, Chronicle tab); design-system cards (chronicle-timeline,
   segmented-control) published to the shared claude.ai/design project from
   `design/`.
+- **Monitors** ✅ (2026-07-10) — Healthchecks/Uptime-Kuma-inspired dead-man's
+  switch per schedule: up/late/down/failing derivation with period-scaled
+  grace, heartbeat bars, uptime % (`/api/monitors`, Monitors tab). Catches
+  the slot where nothing ran — invisible to a runs list.
+- **Issues** ✅ (2026-07-10) — Sentry-inspired failure grouping: failed runs
+  fingerprinted by normalized error, with resolve/ignore triage and
+  auto-reopen on regression (`/api/issues`, Issues tab; triage state in
+  `~/.claude/argus/issues.json`).
 
 ## v0.3 — Single-port + packaging
 

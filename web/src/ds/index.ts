@@ -13,6 +13,7 @@ export type { MeterProps } from "./Meter";
 export { ConnectionPill } from "./ConnectionPill";
 export { HealthCounter } from "./HealthCounter";
 export { Sparkline } from "./Sparkline";
+export { HeartbeatBar } from "./HeartbeatBar";
 export { AgentTile } from "./AgentTile";
 export { SchedulerRow } from "./SchedulerRow";
 export { AlertStrip } from "./AlertStrip";

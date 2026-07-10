@@ -28,6 +28,15 @@ import {
   readSchedules,
 } from "./sources/schedules.js";
 import { readRun, readRuns, cancelRun } from "./sources/runs.js";
+import { buildMonitors } from "./sources/monitors.js";
+import {
+  buildIssues,
+  issueOccurrences,
+  readTriage,
+  setTriage,
+  clearTriage,
+  IssueValidationError,
+} from "./sources/issues.js";
 import {
   createPipeline,
   deletePipeline,
@@ -429,6 +438,58 @@ export function createApp(deps: AppDeps): Hono {
     if (outcome === "not-found") return c.json({ error: "not found" }, 404);
     if (outcome === "not-running") return c.json({ error: "run is not running" }, 409);
     broadcast({ type: "schedules:changed" });
+    return c.json({ ok: true });
+  });
+
+  // Dead-man's-switch health per schedule: catches the slot where nothing ran.
+  app.get("/api/monitors", async (c) => {
+    const [schedules, runs] = await Promise.all([readSchedules(), readRuns()]);
+    return c.json(buildMonitors(schedules, runs, new Date()));
+  });
+
+  // Failed runs grouped by error fingerprint, Sentry-style.
+  app.get("/api/issues", async (c) => {
+    const [runs, triage] = await Promise.all([readRuns(), readTriage()]);
+    const issues = buildIssues(runs, triage);
+    const summary = { open: 0, resolved: 0, ignored: 0 };
+    for (const i of issues) summary[i.state]++;
+    return c.json({ issues, summary });
+  });
+
+  app.get("/api/issues/:fingerprint", async (c) => {
+    const fp = c.req.param("fingerprint");
+    const [runs, triage] = await Promise.all([readRuns(), readTriage()]);
+    const issue = buildIssues(runs, triage).find((i) => i.fingerprint === fp);
+    if (!issue) return c.json({ error: "not found" }, 404);
+    return c.json({ issue, occurrences: issueOccurrences(runs, fp) });
+  });
+
+  const triageHandler = (state: "resolved" | "ignored") => async (c: Context) => {
+    // Plain `Context` can't infer the :fingerprint param type; missing → "" → 404.
+    const fp = c.req.param("fingerprint") ?? "";
+    try {
+      const [runs, triage] = await Promise.all([readRuns(), readTriage()]);
+      const issue = buildIssues(runs, triage).find((i) => i.fingerprint === fp);
+      if (!issue) return c.json({ error: "not found" }, 404);
+      await setTriage(fp, state, issue.lastSeen, new Date());
+    } catch (e) {
+      return fail(c, e, IssueValidationError);
+    }
+    broadcast({ type: "issues:changed" });
+    return c.json({ ok: true });
+  };
+  app.post("/api/issues/:fingerprint/resolve", triageHandler("resolved"));
+  app.post("/api/issues/:fingerprint/ignore", triageHandler("ignored"));
+
+  app.post("/api/issues/:fingerprint/reopen", async (c) => {
+    try {
+      if (!(await clearTriage(c.req.param("fingerprint")))) {
+        return c.json({ error: "not found" }, 404);
+      }
+    } catch (e) {
+      return fail(c, e, IssueValidationError);
+    }
+    broadcast({ type: "issues:changed" });
     return c.json({ ok: true });
   });
 

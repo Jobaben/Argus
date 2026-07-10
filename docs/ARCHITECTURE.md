@@ -12,7 +12,7 @@ never mutates those files, so it is safe to run alongside live sessions and
 cannot corrupt the state it observes.
 
 Argus does **own and write** its own state, all confined to `~/.claude/argus/`
-(schedules, pipelines, per-run records and instances) plus, when the user
+(schedules, pipelines, per-run records, instances and issue triage) plus, when the user
 applies setup fixes, its signal hook under `~/.claude/hooks/` and a hook entry
 in `settings.json`. All Argus writes go through an atomic tmp+rename writer and
 are serialized per file/instance by a keyed mutex.
