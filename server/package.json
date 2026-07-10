@@ -6,7 +6,7 @@
   "main": "src/index.ts",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js",
+    "start": "ARGUS_HOST=0.0.0.0 ARGUS_ALLOWED_HOSTS=10.59.1.53 node dist/index.js",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test \"src/**/*.test.ts\"",
     "build": "tsc -p tsconfig.build.json",
