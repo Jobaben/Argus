@@ -59,8 +59,8 @@ function instance(status: InstanceStatus): PipelineInstance {
   };
 }
 
-type AuthStatus = { configured: boolean; authenticated: boolean; username: string | null };
-const ADMIN: AuthStatus = { configured: true, authenticated: true, username: "admin" };
+type AuthStatus = { configured: boolean; authenticated: boolean; username: string | null; role: "root" | "member" | null };
+const ADMIN: AuthStatus = { configured: true, authenticated: true, username: "admin", role: "root" };
 
 /** Routes fetch by URL: /api/overview → overview entries, /api/pipelines → defs,
  *  /api/auth/status → auth (admin by default), anything else → {}. */
@@ -212,14 +212,14 @@ describe("Pipelines tab", () => {
 });
 
 describe("Pipelines admin gate", () => {
-  const anon: AuthStatus = { configured: true, authenticated: false, username: null };
-  const firstRun: AuthStatus = { configured: false, authenticated: false, username: null };
+  const anon: AuthStatus = { configured: true, authenticated: false, username: null, role: null };
+  const firstRun: AuthStatus = { configured: false, authenticated: false, username: null, role: null };
 
   it("hides edit/run controls and shows the login form when signed out", async () => {
     vi.stubGlobal("fetch", routedFetch([{ definition: p1, latest: null }], [p1], anon));
     render(<Pipelines />);
     await waitFor(() => expect(screen.getByText("Nightly")).toBeTruthy());
-    expect(screen.getByRole("form", { name: /admin login/i })).toBeTruthy();
+    expect(screen.getByRole("form", { name: /^login$/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /sign in/i })).toBeTruthy();
     for (const name of [/run now/i, /^edit$/i, /^delete$/i, /new pipeline/i]) {
       expect(screen.queryByRole("button", { name })).toBeNull();
@@ -230,7 +230,7 @@ describe("Pipelines admin gate", () => {
     vi.stubGlobal("fetch", routedFetch([], [], firstRun));
     render(<Pipelines />);
     await waitFor(() =>
-      expect(screen.getByRole("form", { name: /create admin account/i })).toBeTruthy(),
+      expect(screen.getByRole("form", { name: /create the root account/i })).toBeTruthy(),
     );
     expect(screen.getByRole("button", { name: /create & sign in/i })).toBeTruthy();
   });

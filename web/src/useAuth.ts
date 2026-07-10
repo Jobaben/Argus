@@ -2,13 +2,14 @@ import { useCallback } from "react";
 import { useLiveResource } from "./live/useLiveResource";
 
 export interface AuthStatus {
-  /** Whether an admin account has been created (first-run setup done). */
+  /** Whether any account exists (first-run bootstrap done). */
   configured: boolean;
   authenticated: boolean;
   username: string | null;
+  role: "root" | "member" | null;
 }
 
-async function postJson(path: string, body: unknown): Promise<void> {
+export async function postJson(path: string, body: unknown): Promise<void> {
   const res = await fetch(path, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -21,10 +22,10 @@ async function postJson(path: string, body: unknown): Promise<void> {
 }
 
 /**
- * Admin session state for the pipeline control surface. The session itself is
- * an HttpOnly cookie the server sets on login/setup — this hook only tracks
- * whether one exists (via /api/auth/status, polled so an expired session is
- * eventually noticed) and exposes the transitions.
+ * Account session state for the pipeline control surface. The session itself
+ * is an HttpOnly cookie the server sets on login/bootstrap — this hook only
+ * tracks whether one exists (via /api/auth/status, polled so an expired
+ * session is eventually noticed) and exposes the transitions.
  */
 export function useAuth() {
   const { data, loading, error, refresh } = useLiveResource<AuthStatus | null>("/api/auth/status", {
@@ -34,6 +35,7 @@ export function useAuth() {
         configured: body.configured === true,
         authenticated: body.authenticated === true,
         username: body.username ?? null,
+        role: body.role ?? null,
       };
     },
     initial: null,
@@ -56,10 +58,14 @@ export function useAuth() {
     [refresh],
   );
 
+  const register = useCallback(async (username: string, password: string) => {
+    await postJson("/api/auth/register", { username, password });
+  }, []);
+
   const logout = useCallback(async () => {
     await postJson("/api/auth/logout", {});
     refresh();
   }, [refresh]);
 
-  return { status: data, loading, error, refresh, login, setup, logout };
+  return { status: data, loading, error, refresh, login, setup, register, logout };
 }

@@ -206,6 +206,7 @@ export default function Pipelines() {
             configured={auth.status.configured}
             onLogin={auth.login}
             onSetup={auth.setup}
+            onRegister={auth.register}
           />
         </div>
       )}
