@@ -373,6 +373,38 @@ test("post-bootstrap registration from a non-loopback address lands pending", as
   assert.equal((await users.find("alice"))?.status, "pending");
 });
 
+test("registration is capped at 20 pending accounts, and freeing a slot re-opens it", async () => {
+  const { app } = makeAuthApp();
+  const register = (username: string) =>
+    app.request("/api/auth/register", {
+      method: "POST",
+      headers: { ...loopback, "content-type": "application/json" },
+      body: JSON.stringify({ username, password: "some password 123" }),
+    });
+
+  const boot = await register("Josha");
+  assert.equal(boot.status, 201);
+  const rootCookie = boot.headers.get("set-cookie")!.split(";")[0];
+
+  for (let i = 0; i < 20; i++) {
+    const res = await register(`pending${i}`);
+    assert.equal(res.status, 201, `pending${i}`);
+  }
+
+  const overflow = await register("overflow");
+  assert.equal(overflow.status, 429);
+
+  // Root clears one pending account, freeing a slot.
+  const reject = await app.request("/api/users/pending0/reject", {
+    method: "POST",
+    headers: { ...loopback, cookie: rootCookie },
+  });
+  assert.equal(reject.status, 200);
+
+  const afterReject = await register("newcomer");
+  assert.equal(afterReject.status, 201);
+});
+
 test("duplicate registration is a 409", async () => {
   const { app } = makeAuthApp();
   const mk = (username: string) =>

@@ -158,6 +158,8 @@ export function createApp(deps: AppDeps): Hono {
   });
 
   const LOOPBACK_ADDRS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+  // Unauthenticated endpoint — cap queue growth/DoS from unbounded self-registration.
+  const MAX_PENDING_REGISTRATIONS = 20;
 
   // Self-registration. The very first account is the bootstrap case: it can
   // only be created from the server's own machine (closing the network race
@@ -183,6 +185,13 @@ export function createApp(deps: AppDeps): Hono {
         }
         await users.register(username, password, { role: "root", status: "active" });
       } else {
+        const pending = (await users.list()).filter((u) => u.status === "pending").length;
+        if (pending >= MAX_PENDING_REGISTRATIONS) {
+          return c.json(
+            { error: "too many pending registrations — ask the root user to clear the queue" },
+            429,
+          );
+        }
         await users.register(username, password);
       }
     } catch (e) {
