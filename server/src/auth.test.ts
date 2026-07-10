@@ -77,6 +77,25 @@ test("a correct password on a pending account does not count toward lockout", as
   assert.ok(res.ok, "lockout must not have tripped");
 });
 
+test("a pending-account login does not reset the lockout counter", async () => {
+  const c = clock();
+  const auth = createAuthService({ store, now: c.now });
+  const { username, password } = await activeUser();
+  await store.register("attacker", "attacker password");
+
+  for (let i = 0; i < MAX_LOGIN_FAILURES - 1; i++) {
+    await auth.login(username, "wrong password!!");
+  }
+  // Correct password on a pending account must not clear the counter…
+  assert.deepEqual(await auth.login("attacker", "attacker password"), {
+    ok: false,
+    reason: "pending-approval",
+  });
+  // …so the next failure trips the lockout.
+  await auth.login(username, "wrong password!!");
+  assert.deepEqual(await auth.login(username, password), { ok: false, reason: "locked" });
+});
+
 test("sessions expire after the TTL", async () => {
   const c = clock();
   const auth = createAuthService({ store, now: c.now });

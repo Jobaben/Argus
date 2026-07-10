@@ -126,9 +126,9 @@ export function createAuthService(
         if (consecutiveFailures >= MAX_LOGIN_FAILURES) lockedUntil = t + LOCKOUT_MS;
         return { ok: false, reason: "bad-credentials" };
       }
+      if (rec.status === "pending") return { ok: false, reason: "pending-approval" };
       consecutiveFailures = 0;
       lockedUntil = 0;
-      if (rec.status === "pending") return { ok: false, reason: "pending-approval" };
       return {
         ok: true,
         username: rec.username,

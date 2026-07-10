@@ -342,6 +342,37 @@ test("after bootstrap, registration creates a pending account that cannot log in
   assert.equal(((await login.json()) as { code?: string }).code, "pending_approval");
 });
 
+test("post-bootstrap registration from a non-loopback address lands pending", async () => {
+  let remote = "127.0.0.1";
+  const users = createUserStore();
+  const auth = createAuthService({ store: users });
+  const app = createApp({
+    config,
+    engine: fakeEngine,
+    broadcast: () => {},
+    serveWeb: false,
+    users,
+    auth,
+    remoteAddr: () => remote,
+  });
+  const boot = await app.request("/api/auth/register", {
+    method: "POST",
+    headers: { ...loopback, "content-type": "application/json" },
+    body: JSON.stringify({ username: "Josha", password: "root password here" }),
+  });
+  assert.equal(boot.status, 201);
+
+  remote = "10.59.1.99";
+  const reg = await app.request("/api/auth/register", {
+    method: "POST",
+    headers: { ...loopback, "content-type": "application/json" },
+    body: JSON.stringify({ username: "alice", password: "alice password!" }),
+  });
+  assert.equal(reg.status, 201);
+  assert.deepEqual(await reg.json(), { ok: true, pending: true });
+  assert.equal((await users.find("alice"))?.status, "pending");
+});
+
 test("duplicate registration is a 409", async () => {
   const { app } = makeAuthApp();
   const mk = (username: string) =>
