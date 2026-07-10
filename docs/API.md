@@ -76,6 +76,33 @@ All `/api/*` routes and the `/ws` upgrade are gated:
 - When `ARGUS_TOKEN` is set, every request must send it as
   `Authorization: Bearer <token>` or `X-Argus-Token: <token>` — else `401`.
 
+### Admin authentication (pipelines)
+
+Editing or running a pipeline executes agents with the user's credentials, so
+those routes additionally require an **admin session**. Credentials are chosen
+on first run and stored in `~/.claude/argus/auth.json` as a salted **scrypt
+hash** (never plaintext, file mode `0600`). Sessions are 256-bit random tokens
+delivered as an `HttpOnly; SameSite=Strict` cookie (`argus_session`), held
+in memory server-side (a restart signs everyone out) and expiring after 12 h.
+Five consecutive bad logins lock the login route for 30 s. Non-browser clients
+may send the session token as `X-Argus-Session` instead of the cookie.
+
+| Method + path           | Effect                                                                                              |
+| ----------------------- | --------------------------------------------------------------------------------------------------- |
+| `GET /api/auth/status`  | `{ configured, authenticated, username }`                                                           |
+| `POST /api/auth/setup`  | first-run only: create the admin `{ username, password≥8 }` → `201` + cookie; `409` once one exists |
+| `POST /api/auth/login`  | `{ username, password }` → `200` + cookie; `401` bad credentials; `429` locked                      |
+| `POST /api/auth/logout` | invalidate the current session                                                                      |
+
+Admin-gated routes (all others are unaffected): `POST/PUT/PATCH/DELETE
+/api/pipelines*`, `POST /api/pipelines/:id/start`, and `POST
+/api/instances/:id/{approve,revise,abort}`. Unauthenticated calls get `401`
+with `code: "auth_required"` (or `"auth_setup_required"` before first-run
+setup). `POST /api/instances/:id/signal` is **not** admin-gated — it is called
+by headless agent hooks and authenticates with its own per-instance token. To
+reset a forgotten password, delete `~/.claude/argus/auth.json` (local file
+access is the trust root) and run first-time setup again.
+
 ### `GET /api/health`
 
 ```json
@@ -156,17 +183,17 @@ first. `endedAt: null` means still in flight — render through `windowEnd`.
 | Method + path                      | Effect                                                                            |
 | ---------------------------------- | --------------------------------------------------------------------------------- |
 | `GET /api/pipelines`               | list pipeline definitions                                                         |
-| `POST /api/pipelines`              | create a definition (validated)                                                   |
-| `PUT /api/pipelines/:id`           | replace a definition                                                              |
-| `DELETE /api/pipelines/:id`        | delete a definition                                                               |
-| `POST /api/pipelines/:id/start`    | start an instance manually → `202`, or `409` on overlap                           |
+| `POST /api/pipelines`              | create a definition (validated) — **admin**                                       |
+| `PUT /api/pipelines/:id`           | replace a definition — **admin**                                                  |
+| `DELETE /api/pipelines/:id`        | delete a definition — **admin**                                                   |
+| `POST /api/pipelines/:id/start`    | start an instance manually → `202`, or `409` on overlap — **admin**               |
 | `GET /api/pipelines/:id/instances` | instances for a pipeline (newest first)                                           |
 | `GET /api/overview`                | command-center rows: `{ definition, latest, cost }` per pipeline, attention-first |
 | `GET /api/instances/:id`           | full pipeline instance                                                            |
 | `POST /api/instances/:id/signal`   | ingest a signal `{ phaseId, runId, type, token, payload? }`; `403` on bad token   |
-| `POST /api/instances/:id/approve`  | advance past a gate (optional `{ answers }`)                                      |
-| `POST /api/instances/:id/revise`   | re-run the current phase (optional `{ note }`)                                    |
-| `POST /api/instances/:id/abort`    | abort the instance                                                                |
+| `POST /api/instances/:id/approve`  | advance past a gate (optional `{ answers }`) — **admin**                          |
+| `POST /api/instances/:id/revise`   | re-run the current phase (optional `{ note }`) — **admin**                        |
+| `POST /api/instances/:id/abort`    | abort the instance — **admin**                                                    |
 | `GET /api/setup`                   | prerequisite status `{ ok, prereqs[] }`                                           |
 | `POST /api/setup/apply`            | install fixable prerequisites, then re-check → `{ ok, prereqs[] }`                |
 

@@ -1,9 +1,11 @@
 import { useMemo, useState } from "react";
 import { usePipelines } from "../usePipelines";
 import { useOverview } from "../useOverview";
+import { useAuth } from "../useAuth";
 import type { PipelineDefinition, PipelineInput, Trigger } from "../types";
 import { AlertStrip, EmptyState, Page, StatusPill, toOverviewRows, type DsStatus } from "../ds";
 import { PipelineForm, EMPTY_PIPELINE } from "./PipelineForm";
+import { AdminAuthPanel } from "./AdminAuthPanel";
 
 function triggerSummary(t: Trigger | null): string {
   if (t === null) return "manual";
@@ -32,6 +34,7 @@ function toInput(def: PipelineDefinition): PipelineInput {
 function PipelineCard({
   def,
   live,
+  admin,
   onEdit,
   setEnabled,
   remove,
@@ -40,6 +43,8 @@ function PipelineCard({
 }: {
   def: PipelineDefinition;
   live: { badge: DsStatus; activeIds: string[] };
+  /** Edit/run controls only render for an authenticated admin. */
+  admin: boolean;
   onEdit: () => void;
   setEnabled: (id: string, enabled: boolean) => Promise<unknown>;
   remove: (id: string) => Promise<unknown>;
@@ -68,53 +73,55 @@ function PipelineCard({
         </div>
       </header>
 
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        {(!abortable || def.overlapPolicy === "allow") && (
+      {!admin ? null : (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {(!abortable || def.overlapPolicy === "allow") && (
+            <button
+              type="button"
+              onClick={() => void runNow(def.id)}
+              className="rounded-lg bg-ok/15 px-2.5 py-1 text-xs text-ok ring-1 ring-ok/30 hover:bg-ok/25"
+            >
+              Run now
+            </button>
+          )}
+          {abortable && (
+            <button
+              type="button"
+              onClick={() => {
+                if (confirm(stopPrompt)) {
+                  for (const id of live.activeIds) void abort(id);
+                }
+              }}
+              className="rounded-lg bg-fail/15 px-2.5 py-1 text-xs text-fail ring-1 ring-fail/30 hover:bg-fail/25"
+            >
+              {stopLabel}
+            </button>
+          )}
           <button
             type="button"
-            onClick={() => void runNow(def.id)}
-            className="rounded-lg bg-ok/15 px-2.5 py-1 text-xs text-ok ring-1 ring-ok/30 hover:bg-ok/25"
+            onClick={() => void setEnabled(def.id, !def.enabled)}
+            className="rounded-lg border border-line px-2.5 py-1 text-xs text-ink-dim hover:text-ink"
           >
-            Run now
+            {def.enabled ? "Disable" : "Enable"}
           </button>
-        )}
-        {abortable && (
+          <button
+            type="button"
+            onClick={onEdit}
+            className="rounded-lg border border-line px-2.5 py-1 text-xs text-ink-dim hover:text-ink"
+          >
+            Edit
+          </button>
           <button
             type="button"
             onClick={() => {
-              if (confirm(stopPrompt)) {
-                for (const id of live.activeIds) void abort(id);
-              }
+              if (confirm(`Delete pipeline "${def.name}"?`)) void remove(def.id);
             }}
-            className="rounded-lg bg-fail/15 px-2.5 py-1 text-xs text-fail ring-1 ring-fail/30 hover:bg-fail/25"
+            className="rounded-lg border border-fail/20 px-2.5 py-1 text-xs text-fail hover:bg-fail/10"
           >
-            {stopLabel}
+            Delete
           </button>
-        )}
-        <button
-          type="button"
-          onClick={() => void setEnabled(def.id, !def.enabled)}
-          className="rounded-lg border border-line px-2.5 py-1 text-xs text-ink-dim hover:text-ink"
-        >
-          {def.enabled ? "Disable" : "Enable"}
-        </button>
-        <button
-          type="button"
-          onClick={onEdit}
-          className="rounded-lg border border-line px-2.5 py-1 text-xs text-ink-dim hover:text-ink"
-        >
-          Edit
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            if (confirm(`Delete pipeline "${def.name}"?`)) void remove(def.id);
-          }}
-          className="rounded-lg border border-fail/20 px-2.5 py-1 text-xs text-fail hover:bg-fail/10"
-        >
-          Delete
-        </button>
-      </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -122,6 +129,8 @@ function PipelineCard({
 export default function Pipelines() {
   const { pipelines, loading, error, create, update, remove, setEnabled, runNow } = usePipelines();
   const { overview, abort } = useOverview();
+  const auth = useAuth();
+  const isAdmin = auth.status?.authenticated === true;
   const liveByPipeline = useMemo(() => {
     const m = new Map<string, { badge: DsStatus; activeIds: string[] }>();
     for (const entry of overview) {
@@ -147,6 +156,9 @@ export default function Pipelines() {
       await fn(id);
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e));
+      // A 401 here means the session expired server-side — re-check so the
+      // login panel replaces the (now useless) admin controls.
+      void auth.refresh();
     }
   };
 
@@ -154,14 +166,26 @@ export default function Pipelines() {
     <Page
       title="Pipelines"
       actions={
-        mode.kind === "none" ? (
-          <button
-            type="button"
-            onClick={() => setMode({ kind: "new" })}
-            className="rounded-lg bg-ok/20 px-3 py-1.5 text-sm text-ok ring-1 ring-ok/30 hover:bg-ok/30"
-          >
-            + New pipeline
-          </button>
+        isAdmin ? (
+          <div className="flex items-center gap-2">
+            {mode.kind === "none" && (
+              <button
+                type="button"
+                onClick={() => setMode({ kind: "new" })}
+                className="rounded-lg bg-ok/20 px-3 py-1.5 text-sm text-ok ring-1 ring-ok/30 hover:bg-ok/30"
+              >
+                + New pipeline
+              </button>
+            )}
+            <span className="text-xs text-ink-faint">{auth.status?.username}</span>
+            <button
+              type="button"
+              onClick={() => void auth.logout()}
+              className="rounded-lg border border-line px-2.5 py-1 text-xs text-ink-dim hover:text-ink"
+            >
+              Sign out
+            </button>
+          </div>
         ) : null
       }
     >
@@ -173,6 +197,16 @@ export default function Pipelines() {
       {actionError && (
         <div className="mb-6">
           <AlertStrip subject="Couldn't complete that" message={actionError} />
+        </div>
+      )}
+
+      {auth.status && !isAdmin && (
+        <div className="mb-6">
+          <AdminAuthPanel
+            configured={auth.status.configured}
+            onLogin={auth.login}
+            onSetup={auth.setup}
+          />
         </div>
       )}
 
@@ -216,6 +250,7 @@ export default function Pipelines() {
               key={p.id}
               def={p}
               live={liveByPipeline.get(p.id) ?? { badge: "idle", activeIds: [] }}
+              admin={isAdmin}
               onEdit={() => setMode({ kind: "edit", id: p.id })}
               setEnabled={guarded((id) => setEnabled(id, !p.enabled))}
               remove={guarded(remove)}

@@ -6,6 +6,7 @@ import path from "node:path";
 import { createApp } from "./app.js";
 import { createEngine } from "./pipelineEngine.js";
 import type { ArgusConfig } from "./config.js";
+import type { AuthService } from "./auth.js";
 
 let home: string;
 beforeEach(() => {
@@ -28,6 +29,17 @@ const config: ArgusConfig = {
 // deterministic awaiting/running state for the HTTP assertions.
 const hangingSpawn = () => ({ pid: 4242, done: new Promise<{ code: number | null }>(() => {}) });
 
+// Always-authenticated stub: these tests exercise the engine's HTTP contract;
+// the admin gate itself is covered in app.test.ts / auth.test.ts.
+const openAuth: AuthService = {
+  isConfigured: async () => true,
+  status: async () => ({ configured: true, username: "admin" }),
+  setup: async () => {},
+  login: async () => ({ ok: true, token: "t", expiresAt: "", username: "admin" }),
+  verify: () => "admin",
+  logout: () => {},
+};
+
 function appWith(over: Partial<Parameters<typeof createEngine>[0]> = {}) {
   const engine = createEngine({
     now: () => new Date(),
@@ -37,7 +49,7 @@ function appWith(over: Partial<Parameters<typeof createEngine>[0]> = {}) {
     maxConcurrent: 4,
     ...over,
   });
-  const app = createApp({ config, engine, broadcast: () => {}, serveWeb: false });
+  const app = createApp({ config, engine, broadcast: () => {}, serveWeb: false, auth: openAuth });
   return { app, engine };
 }
 

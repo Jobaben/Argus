@@ -16,6 +16,7 @@ import { isUpgradeAllowed } from "./security.js";
 import { VERSION } from "./version.js";
 import { buildPipelineFailurePayload, buildRunFailurePayload, postWebhook } from "./notify.js";
 import { createApp } from "./app.js";
+import { createAuthService } from "./auth.js";
 import { createRunTailer } from "./runTailer.js";
 
 const config = loadConfig();
@@ -51,11 +52,20 @@ const engine = createEngine({
   preflight: () => preflightPrereqs(),
 });
 
-const app = createApp({ config, engine, broadcast, activity: () => tailer.latest() });
+const auth = createAuthService();
+const app = createApp({ config, engine, broadcast, auth, activity: () => tailer.latest() });
 
 const server = serve({ fetch: app.fetch, port: PORT, hostname: config.host }, (info) => {
   console.log(`[argus] v${VERSION} on http://${config.host}:${info.port}`);
   console.log(`[argus] watching ${claudeHome()}`);
+  void auth.isConfigured().then((configured) => {
+    if (!configured) {
+      console.log(
+        "[argus] no admin account yet — pipeline editing/running is locked until " +
+          "you create one from the Pipelines tab.",
+      );
+    }
+  });
   if (config.host !== "127.0.0.1" && config.host !== "localhost" && !config.token) {
     console.warn(
       "[argus] WARNING: bound to a non-loopback host without ARGUS_TOKEN — " +
