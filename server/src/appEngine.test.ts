@@ -33,11 +33,11 @@ const hangingSpawn = () => ({ pid: 4242, done: new Promise<{ code: number | null
 // the admin gate itself is covered in app.test.ts / auth.test.ts.
 const openAuth: AuthService = {
   isConfigured: async () => true,
-  status: async () => ({ configured: true, username: "admin" }),
-  setup: async () => {},
-  login: async () => ({ ok: true, token: "t", expiresAt: "", username: "admin" }),
-  verify: () => "admin",
+  status: async () => ({ configured: true, username: "admin", role: "root" }),
+  login: async () => ({ ok: false, reason: "bad-credentials" }),
+  verify: () => ({ username: "admin", role: "root" }),
   logout: () => {},
+  revokeSessions: () => {},
 };
 
 function appWith(over: Partial<Parameters<typeof createEngine>[0]> = {}) {

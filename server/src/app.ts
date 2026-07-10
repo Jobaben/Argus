@@ -47,15 +47,23 @@ import { defaultSpawn, fireRun, isAlive } from "./scheduler.js";
 import type { ArgusConfig } from "./config.js";
 import { securityMiddleware } from "./security.js";
 import { setCookie, deleteCookie } from "hono/cookie";
+import { getConnInfo } from "@hono/node-server/conninfo";
 import {
   createAuthService,
   requireAdmin,
+  requireRoot,
   sessionToken,
   AuthValidationError,
   SESSION_COOKIE,
   SESSION_TTL_MS,
   type AuthService,
 } from "./auth.js";
+import {
+  createUserStore,
+  DuplicateUsernameError,
+  UnknownUserError,
+  type UserStore,
+} from "./userStore.js";
 import { VERSION } from "./version.js";
 import { mountWebApp } from "./static.js";
 import { buildRunFailurePayload, postWebhook } from "./notify.js";
@@ -71,6 +79,10 @@ export interface AppDeps {
   activity?: () => Map<string, ActivityEvent>;
   /** Admin auth for pipeline edit/run routes. Defaults to the real service. */
   auth?: AuthService;
+  /** User accounts backing auth. Defaults to the real store. */
+  users?: UserStore;
+  /** Socket peer address, injectable for tests. Defaults to the node-server conninfo. */
+  remoteAddr?: (c: Context) => string | null;
 }
 
 /**
@@ -81,7 +93,17 @@ export interface AppDeps {
  */
 export function createApp(deps: AppDeps): Hono {
   const { config, engine, broadcast } = deps;
-  const auth = deps.auth ?? createAuthService();
+  const users = deps.users ?? createUserStore();
+  const auth = deps.auth ?? createAuthService({ store: users });
+  const remoteAddr =
+    deps.remoteAddr ??
+    ((c: Context) => {
+      try {
+        return getConnInfo(c).remote.address ?? null;
+      } catch {
+        return null; // no socket (e.g. app.request in tests) — fail closed
+      }
+    });
   const app = new Hono();
 
   const notifyRunFailed = (run: Parameters<typeof buildRunFailurePayload>[0]) =>
@@ -131,27 +153,56 @@ export function createApp(deps: AppDeps): Hono {
     });
 
   app.get("/api/auth/status", async (c) => {
-    const { configured, username } = await auth.status(sessionToken(c));
-    return c.json({ configured, authenticated: username !== null, username });
+    const { configured, username, role } = await auth.status(sessionToken(c));
+    return c.json({ configured, authenticated: username !== null, username, role });
   });
 
-  // First-run creation of the admin account; refuses once one exists, and
-  // logs the new admin straight in so the UI needs no second round-trip.
-  app.post("/api/auth/setup", async (c) => {
+  const LOOPBACK_ADDRS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+
+  // Self-registration. The very first account is the bootstrap case: it can
+  // only be created from the server's own machine (closing the network race
+  // for root) and is logged straight in. Everyone after that lands pending
+  // until root approves them on the Users page.
+  const handleRegister = async (c: Context) => {
     const body = await jsonBody(c);
     if (!body.ok) return body.res;
     const { username, password } = (body.value ?? {}) as Record<string, unknown>;
+
+    const bootstrap = (await users.count()) === 0;
     try {
-      await auth.setup(username, password);
+      if (bootstrap) {
+        const addr = remoteAddr(c);
+        if (!addr || !LOOPBACK_ADDRS.has(addr)) {
+          return c.json(
+            {
+              error: "the first account (root) can only be created from localhost",
+              code: "bootstrap_localhost_only",
+            },
+            403,
+          );
+        }
+        await users.register(username, password, { role: "root", status: "active" });
+      } else {
+        await users.register(username, password);
+      }
     } catch (e) {
-      if (e instanceof AuthValidationError) return c.json({ error: e.message }, 409);
+      if (e instanceof DuplicateUsernameError) return c.json({ error: e.message }, 409);
+      if (e instanceof AuthValidationError) return c.json({ error: e.message }, 400);
       throw e;
     }
+
+    if (!bootstrap) return c.json({ ok: true, pending: true }, 201);
     const res = await auth.login(username, password);
     if (!res.ok) return c.json({ error: "setup succeeded but login failed" }, 500);
     setSessionCookie(c, res.token);
-    return c.json({ ok: true, username: res.username, expiresAt: res.expiresAt }, 201);
-  });
+    return c.json(
+      { ok: true, username: res.username, role: res.role, expiresAt: res.expiresAt },
+      201,
+    );
+  };
+  app.post("/api/auth/register", handleRegister);
+  // Kept as an alias so an already-open first-run UI keeps working.
+  app.post("/api/auth/setup", handleRegister);
 
   app.post("/api/auth/login", async (c) => {
     const body = await jsonBody(c);
@@ -164,6 +215,9 @@ export function createApp(deps: AppDeps): Hono {
       }
       if (res.reason === "not-configured") {
         return c.json({ error: "no admin account yet", code: "auth_setup_required" }, 401);
+      }
+      if (res.reason === "pending-approval") {
+        return c.json({ error: "account awaiting root approval", code: "pending_approval" }, 403);
       }
       return c.json({ error: "invalid username or password" }, 401);
     }
@@ -178,6 +232,41 @@ export function createApp(deps: AppDeps): Hono {
   });
 
   const admin = requireAdmin(auth);
+
+  // ── User administration (root only) ────────────────────────────────────────
+  const root = requireRoot(auth);
+  app.use("/api/users", root);
+  app.use("/api/users/:username/approve", root);
+  app.use("/api/users/:username/reject", root);
+
+  app.get("/api/users", async (c) => c.json({ users: await users.list() }));
+
+  app.post("/api/users/:username/approve", async (c) => {
+    try {
+      await users.approve(c.req.param("username"));
+    } catch (e) {
+      if (e instanceof UnknownUserError) return c.json({ error: e.message }, 404);
+      throw e;
+    }
+    return c.json({ ok: true });
+  });
+
+  app.post("/api/users/:username/reject", async (c) => {
+    const target = c.req.param("username");
+    const self = auth.verify(sessionToken(c));
+    if (self && self.username.toLowerCase() === target.toLowerCase()) {
+      return c.json({ error: "root cannot remove itself" }, 400);
+    }
+    try {
+      await users.remove(target);
+    } catch (e) {
+      if (e instanceof UnknownUserError) return c.json({ error: e.message }, 404);
+      throw e;
+    }
+    auth.revokeSessions(target);
+    return c.json({ ok: true });
+  });
+
   // Pipeline definitions: mutations only — reads stay open for the dashboard.
   app.on(["POST", "PUT", "PATCH", "DELETE"], "/api/pipelines", admin);
   app.on(["POST", "PUT", "PATCH", "DELETE"], "/api/pipelines/:id", admin);

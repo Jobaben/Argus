@@ -7,6 +7,7 @@ import { createApp } from "./app.js";
 import type { ArgusConfig } from "./config.js";
 import type { Engine } from "./pipelineEngine.js";
 import { createAuthService, type AuthService } from "./auth.js";
+import { createUserStore } from "./userStore.js";
 
 let home: string;
 beforeEach(() => {
@@ -36,24 +37,43 @@ const fakeEngine: Engine = {
   adopt: async () => {},
 };
 
-// Always-authenticated stub for tests that target other routes' behavior.
+// Always-authenticated root stub for tests that target other routes' behavior.
 const openAuth: AuthService = {
   isConfigured: async () => true,
-  status: async () => ({ configured: true, username: "admin" }),
-  setup: async () => {},
-  login: async () => ({ ok: true, token: "t", expiresAt: "", username: "admin" }),
-  verify: () => "admin",
+  status: async () => ({ configured: true, username: "test", role: "root" }),
+  login: async () => ({ ok: false, reason: "bad-credentials" }),
+  verify: () => ({ username: "test", role: "root" }),
   logout: () => {},
+  revokeSessions: () => {},
 };
 
 function makeApp(over: Partial<ArgusConfig> = {}, auth: AuthService = openAuth) {
+  const users = createUserStore();
   return createApp({
     config: { ...config, ...over },
     engine: fakeEngine,
     broadcast: () => {},
     serveWeb: false,
+    users,
+    remoteAddr: () => "127.0.0.1",
     auth,
   });
+}
+
+/** For auth-flow tests that need the real auth service backed by the same store. */
+function makeAuthApp(remote = "127.0.0.1") {
+  const users = createUserStore();
+  const auth = createAuthService({ store: users });
+  const app = createApp({
+    config,
+    engine: fakeEngine,
+    broadcast: () => {},
+    serveWeb: false,
+    users,
+    auth,
+    remoteAddr: () => remote,
+  });
+  return { app, users, auth };
 }
 
 const loopback = { host: "localhost:7777" };
@@ -241,7 +261,7 @@ test("pipeline mutations are 401 before an admin account exists", async () => {
 });
 
 test("setup → authenticated mutation → logout → 401 again", async () => {
-  const app = realAuthApp();
+  const { app } = makeAuthApp();
 
   const setup = await app.request("/api/auth/setup", {
     method: "POST",
@@ -266,6 +286,7 @@ test("setup → authenticated mutation → logout → 401 again", async () => {
     configured: true,
     authenticated: true,
     username: "usha",
+    role: "root",
   });
 
   const logout = await app.request("/api/auth/logout", {
@@ -280,57 +301,150 @@ test("setup → authenticated mutation → logout → 401 again", async () => {
   assert.equal(after.status, 401);
 });
 
-test("second setup is refused; login validates credentials", async () => {
-  const app = realAuthApp();
-  const creds = { username: "usha", password: "correct horse battery" };
-  const first = await app.request("/api/auth/setup", {
+test("bootstrap register is refused from a non-loopback socket", async () => {
+  const { app } = makeAuthApp("10.59.1.99");
+  const res = await app.request("/api/auth/register", {
     method: "POST",
-    headers: sameOrigin,
-    body: JSON.stringify(creds),
+    headers: { ...loopback, "content-type": "application/json" },
+    body: JSON.stringify({ username: "attacker", password: "attacker password" }),
   });
-  assert.equal(first.status, 201);
-
-  const again = await app.request("/api/auth/setup", {
-    method: "POST",
-    headers: sameOrigin,
-    body: JSON.stringify({ username: "mallory", password: "evil password!" }),
-  });
-  assert.equal(again.status, 409);
-
-  const bad = await app.request("/api/auth/login", {
-    method: "POST",
-    headers: sameOrigin,
-    body: JSON.stringify({ username: "usha", password: "wrong password" }),
-  });
-  assert.equal(bad.status, 401);
-
-  const good = await app.request("/api/auth/login", {
-    method: "POST",
-    headers: sameOrigin,
-    body: JSON.stringify(creds),
-  });
-  assert.equal(good.status, 200);
-  const cookie = sessionCookie(good);
-  const gated = await app.request("/api/pipelines/p1/start", {
-    method: "POST",
-    headers: { ...sameOrigin, cookie },
-  });
-  assert.equal(gated.status, 409);
+  assert.equal(res.status, 403);
+  const body = (await res.json()) as { code?: string };
+  assert.equal(body.code, "bootstrap_localhost_only");
 });
 
-test("weak setup password is rejected with 409 and no account is created", async () => {
+test("after bootstrap, registration creates a pending account that cannot log in", async () => {
+  const { app } = makeAuthApp();
+  // Bootstrap root from loopback.
+  const boot = await app.request("/api/auth/register", {
+    method: "POST",
+    headers: { ...loopback, "content-type": "application/json" },
+    body: JSON.stringify({ username: "Josha", password: "root password here" }),
+  });
+  assert.equal(boot.status, 201);
+
+  // Second registration — now from anywhere — lands pending.
+  const reg = await app.request("/api/auth/register", {
+    method: "POST",
+    headers: { ...loopback, "content-type": "application/json" },
+    body: JSON.stringify({ username: "alice", password: "alice password!" }),
+  });
+  assert.equal(reg.status, 201);
+  assert.deepEqual(await reg.json(), { ok: true, pending: true });
+
+  // Pending accounts are told to wait, not let in.
+  const login = await app.request("/api/auth/login", {
+    method: "POST",
+    headers: { ...loopback, "content-type": "application/json" },
+    body: JSON.stringify({ username: "alice", password: "alice password!" }),
+  });
+  assert.equal(login.status, 403);
+  assert.equal(((await login.json()) as { code?: string }).code, "pending_approval");
+});
+
+test("duplicate registration is a 409", async () => {
+  const { app } = makeAuthApp();
+  const mk = (username: string) =>
+    app.request("/api/auth/register", {
+      method: "POST",
+      headers: { ...loopback, "content-type": "application/json" },
+      body: JSON.stringify({ username, password: "some password 123" }),
+    });
+  await mk("Josha");
+  await mk("alice");
+  const dup = await mk("ALICE");
+  assert.equal(dup.status, 409);
+});
+
+test("root can list, approve, and reject users; members cannot", async () => {
+  const { app } = makeAuthApp();
+  const boot = await app.request("/api/auth/register", {
+    method: "POST",
+    headers: { ...loopback, "content-type": "application/json" },
+    body: JSON.stringify({ username: "Josha", password: "root password here" }),
+  });
+  const rootCookie = boot.headers.get("set-cookie")!.split(";")[0];
+  await app.request("/api/auth/register", {
+    method: "POST",
+    headers: { ...loopback, "content-type": "application/json" },
+    body: JSON.stringify({ username: "alice", password: "alice password!" }),
+  });
+
+  // Unauthenticated list → 401.
+  assert.equal((await app.request("/api/users", { headers: loopback })).status, 401);
+
+  // Root sees the pending account.
+  const list = await app.request("/api/users", {
+    headers: { ...loopback, cookie: rootCookie },
+  });
+  assert.equal(list.status, 200);
+  const { users: rows } = (await list.json()) as {
+    users: { username: string; status: string }[];
+  };
+  assert.deepEqual(
+    rows.map((u) => [u.username, u.status]),
+    [
+      ["Josha", "active"],
+      ["alice", "pending"],
+    ],
+  );
+
+  // Approve → alice can log in, but as a member she can't touch /api/users.
+  const approve = await app.request("/api/users/alice/approve", {
+    method: "POST",
+    headers: { ...loopback, cookie: rootCookie },
+  });
+  assert.equal(approve.status, 200);
+  const aliceLogin = await app.request("/api/auth/login", {
+    method: "POST",
+    headers: { ...loopback, "content-type": "application/json" },
+    body: JSON.stringify({ username: "alice", password: "alice password!" }),
+  });
+  assert.equal(aliceLogin.status, 200);
+  const aliceCookie = aliceLogin.headers.get("set-cookie")!.split(";")[0];
+  const memberList = await app.request("/api/users", {
+    headers: { ...loopback, cookie: aliceCookie },
+  });
+  assert.equal(memberList.status, 403);
+
+  // Reject kills the account AND its live session.
+  const reject = await app.request("/api/users/alice/reject", {
+    method: "POST",
+    headers: { ...loopback, cookie: rootCookie },
+  });
+  assert.equal(reject.status, 200);
+  const afterReject = await app.request("/api/auth/status", {
+    headers: { ...loopback, cookie: aliceCookie },
+  });
+  assert.equal(((await afterReject.json()) as { authenticated: boolean }).authenticated, false);
+
+  // Root cannot remove itself; unknown users are 404.
+  const self = await app.request("/api/users/Josha/reject", {
+    method: "POST",
+    headers: { ...loopback, cookie: rootCookie },
+  });
+  assert.equal(self.status, 400);
+  const missing = await app.request("/api/users/nobody/approve", {
+    method: "POST",
+    headers: { ...loopback, cookie: rootCookie },
+  });
+  assert.equal(missing.status, 404);
+});
+
+test("weak setup password is rejected with 400 and no account is created", async () => {
   const app = realAuthApp();
   const res = await app.request("/api/auth/setup", {
     method: "POST",
     headers: sameOrigin,
     body: JSON.stringify({ username: "usha", password: "short" }),
   });
-  assert.equal(res.status, 409);
+  assert.equal(res.status, 400);
   const status = await app.request("/api/auth/status", { headers: loopback });
   assert.deepEqual(await status.json(), {
     configured: false,
     authenticated: false,
     username: null,
+    role: null,
   });
 });
 
