@@ -22,6 +22,16 @@ surface is a privileged single-user control plane: loopback-bound by default,
 with a Host allowlist (anti DNS-rebind), an Origin check on mutations (anti
 CSRF), and an optional bearer token — all applied to the WebSocket upgrade too.
 
+On top of those transport-level layers, **editing or running pipelines requires
+an admin login** (`server/src/auth.ts`). The admin account is created on first
+run from the Pipelines tab; the password is persisted only as a salted scrypt
+hash in `~/.claude/argus/auth.json` (mode 0600), and sessions are random
+256-bit tokens in an `HttpOnly; SameSite=Strict` cookie, kept server-side as
+SHA-256 digests in memory (12 h TTL, restart = signed out, brute-force
+lockout on the login route). Reads stay open so the dashboard works without a
+login; the agent-facing signal endpoint keeps its own per-instance token
+instead. See docs/API.md § Admin authentication.
+
 ```
 ┌────────────────────┐   read-only (chokidar watch)  ┌─────────────────────┐
 │  Claude's state     │ ───────────────────────────▶ │  server (Hono+ws)   │

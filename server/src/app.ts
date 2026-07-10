@@ -46,6 +46,16 @@ import type { ActivityEvent } from "./runTailer.js";
 import { defaultSpawn, fireRun, isAlive } from "./scheduler.js";
 import type { ArgusConfig } from "./config.js";
 import { securityMiddleware } from "./security.js";
+import { setCookie, deleteCookie } from "hono/cookie";
+import {
+  createAuthService,
+  requireAdmin,
+  sessionToken,
+  AuthValidationError,
+  SESSION_COOKIE,
+  SESSION_TTL_MS,
+  type AuthService,
+} from "./auth.js";
 import { VERSION } from "./version.js";
 import { mountWebApp } from "./static.js";
 import { buildRunFailurePayload, postWebhook } from "./notify.js";
@@ -59,6 +69,8 @@ export interface AppDeps {
   serveWeb?: boolean;
   /** Latest activity per running step run, from the run tailer. */
   activity?: () => Map<string, ActivityEvent>;
+  /** Admin auth for pipeline edit/run routes. Defaults to the real service. */
+  auth?: AuthService;
 }
 
 /**
@@ -69,6 +81,7 @@ export interface AppDeps {
  */
 export function createApp(deps: AppDeps): Hono {
   const { config, engine, broadcast } = deps;
+  const auth = deps.auth ?? createAuthService();
   const app = new Hono();
 
   const notifyRunFailed = (run: Parameters<typeof buildRunFailurePayload>[0]) =>
@@ -104,6 +117,77 @@ export function createApp(deps: AppDeps): Hono {
   app.get("/api/health", (c) =>
     c.json({ ok: true, version: VERSION, claudeHome: claudeHome(), service: "argus" }),
   );
+
+  // ── Admin auth ────────────────────────────────────────────────────────────
+  // Editing or running a pipeline executes agents with the user's credentials,
+  // so those routes require an admin session on top of the host/origin layers.
+
+  const setSessionCookie = (c: Context, token: string) =>
+    setCookie(c, SESSION_COOKIE, token, {
+      httpOnly: true,
+      sameSite: "Strict",
+      path: "/",
+      maxAge: Math.floor(SESSION_TTL_MS / 1000),
+    });
+
+  app.get("/api/auth/status", async (c) => {
+    const { configured, username } = await auth.status(sessionToken(c));
+    return c.json({ configured, authenticated: username !== null, username });
+  });
+
+  // First-run creation of the admin account; refuses once one exists, and
+  // logs the new admin straight in so the UI needs no second round-trip.
+  app.post("/api/auth/setup", async (c) => {
+    const body = await jsonBody(c);
+    if (!body.ok) return body.res;
+    const { username, password } = (body.value ?? {}) as Record<string, unknown>;
+    try {
+      await auth.setup(username, password);
+    } catch (e) {
+      if (e instanceof AuthValidationError) return c.json({ error: e.message }, 409);
+      throw e;
+    }
+    const res = await auth.login(username, password);
+    if (!res.ok) return c.json({ error: "setup succeeded but login failed" }, 500);
+    setSessionCookie(c, res.token);
+    return c.json({ ok: true, username: res.username, expiresAt: res.expiresAt }, 201);
+  });
+
+  app.post("/api/auth/login", async (c) => {
+    const body = await jsonBody(c);
+    if (!body.ok) return body.res;
+    const { username, password } = (body.value ?? {}) as Record<string, unknown>;
+    const res = await auth.login(username, password);
+    if (!res.ok) {
+      if (res.reason === "locked") {
+        return c.json({ error: "too many failed attempts — try again shortly" }, 429);
+      }
+      if (res.reason === "not-configured") {
+        return c.json({ error: "no admin account yet", code: "auth_setup_required" }, 401);
+      }
+      return c.json({ error: "invalid username or password" }, 401);
+    }
+    setSessionCookie(c, res.token);
+    return c.json({ ok: true, username: res.username, expiresAt: res.expiresAt });
+  });
+
+  app.post("/api/auth/logout", (c) => {
+    auth.logout(sessionToken(c));
+    deleteCookie(c, SESSION_COOKIE, { path: "/" });
+    return c.json({ ok: true });
+  });
+
+  const admin = requireAdmin(auth);
+  // Pipeline definitions: mutations only — reads stay open for the dashboard.
+  app.on(["POST", "PUT", "PATCH", "DELETE"], "/api/pipelines", admin);
+  app.on(["POST", "PUT", "PATCH", "DELETE"], "/api/pipelines/:id", admin);
+  app.use("/api/pipelines/:id/start", admin);
+  // Instance gate controls run/steer pipelines. /signal is NOT admin-gated:
+  // it is called by headless agent hooks and carries its own per-instance
+  // token, verified by the engine.
+  app.use("/api/instances/:id/approve", admin);
+  app.use("/api/instances/:id/revise", admin);
+  app.use("/api/instances/:id/abort", admin);
 
   app.get("/api/setup", async (c) =>
     c.json(await import("./setup/prereqs.js").then((m) => m.checkAll())),

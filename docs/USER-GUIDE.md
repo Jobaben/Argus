@@ -39,6 +39,15 @@ authenticated.
 → running → done), with a column per phase and a tile per step. Approve/Revise
 gates appear inline on the row that needs you.
 
+**Admin login:** viewing is open, but editing or running pipelines (create,
+edit, delete, Run now, Approve/Revise/Stop) requires signing in as admin. On
+first launch, open the **Pipelines** tab and create the admin account (username
+
+- password, min 8 characters) — the password is stored only as a salted scrypt
+  hash, never in plaintext. Sessions last 12 hours; sign out from the Pipelines
+  tab. Forgot the password? Delete `~/.claude/argus/auth.json` on the machine
+  running Argus and set it up again.
+
 **Cost:** every metric shows **both tokens and dollars**, as reported by each
 step's `claude -p` result envelope:
 

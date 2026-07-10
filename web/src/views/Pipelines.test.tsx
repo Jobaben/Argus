@@ -59,10 +59,19 @@ function instance(status: InstanceStatus): PipelineInstance {
   };
 }
 
-/** Routes fetch by URL: /api/overview → overview entries, /api/pipelines → defs, anything else → {}. */
-function routedFetch(overview: OverviewEntry[], pipelines: PipelineDefinition[] = [p1]) {
+type AuthStatus = { configured: boolean; authenticated: boolean; username: string | null };
+const ADMIN: AuthStatus = { configured: true, authenticated: true, username: "admin" };
+
+/** Routes fetch by URL: /api/overview → overview entries, /api/pipelines → defs,
+ *  /api/auth/status → auth (admin by default), anything else → {}. */
+function routedFetch(
+  overview: OverviewEntry[],
+  pipelines: PipelineDefinition[] = [p1],
+  auth: AuthStatus = ADMIN,
+) {
   return vi.fn((input: RequestInfo | URL, _init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
+    if (url.includes("/api/auth/status")) return Promise.resolve(okJson(auth));
     if (url.includes("/api/overview")) return Promise.resolve(okJson({ overview }));
     if (url.includes("/api/pipelines")) return Promise.resolve(okJson({ pipelines }));
     return Promise.resolve(okJson({}));
@@ -199,5 +208,58 @@ describe("Pipelines tab", () => {
     vi.stubGlobal("fetch", routedFetch([{ definition: p1, latest: instance("aborted") }]));
     render(<Pipelines />);
     await waitFor(() => expect(screen.getByText(/stopped/i)).toBeTruthy());
+  });
+});
+
+describe("Pipelines admin gate", () => {
+  const anon: AuthStatus = { configured: true, authenticated: false, username: null };
+  const firstRun: AuthStatus = { configured: false, authenticated: false, username: null };
+
+  it("hides edit/run controls and shows the login form when signed out", async () => {
+    vi.stubGlobal("fetch", routedFetch([{ definition: p1, latest: null }], [p1], anon));
+    render(<Pipelines />);
+    await waitFor(() => expect(screen.getByText("Nightly")).toBeTruthy());
+    expect(screen.getByRole("form", { name: /admin login/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /sign in/i })).toBeTruthy();
+    for (const name of [/run now/i, /^edit$/i, /^delete$/i, /new pipeline/i]) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    }
+  });
+
+  it("offers first-run account creation when no admin exists yet", async () => {
+    vi.stubGlobal("fetch", routedFetch([], [], firstRun));
+    render(<Pipelines />);
+    await waitFor(() =>
+      expect(screen.getByRole("form", { name: /create admin account/i })).toBeTruthy(),
+    );
+    expect(screen.getByRole("button", { name: /create & sign in/i })).toBeTruthy();
+  });
+
+  it("posts credentials to /api/auth/login on submit", async () => {
+    const user = userEvent.setup();
+    const fetchMock = routedFetch([], [], anon);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Pipelines />);
+    await waitFor(() => expect(screen.getByRole("button", { name: /sign in/i })).toBeTruthy());
+    await user.type(screen.getByPlaceholderText("Username"), "usha");
+    await user.type(screen.getByPlaceholderText("Password"), "correct horse");
+    await user.click(screen.getByRole("button", { name: /sign in/i }));
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url).includes("/api/auth/login") &&
+            (init as RequestInit | undefined)?.method === "POST" &&
+            String((init as RequestInit | undefined)?.body).includes('"usha"'),
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it("shows a Sign out button with the username when signed in", async () => {
+    vi.stubGlobal("fetch", routedFetch([{ definition: p1, latest: null }]));
+    render(<Pipelines />);
+    await waitFor(() => expect(screen.getByRole("button", { name: /sign out/i })).toBeTruthy());
+    expect(screen.getByText("admin")).toBeTruthy();
   });
 });
