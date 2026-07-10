@@ -17,6 +17,7 @@ import { VERSION } from "./version.js";
 import { buildPipelineFailurePayload, buildRunFailurePayload, postWebhook } from "./notify.js";
 import { createApp } from "./app.js";
 import { createAuthService } from "./auth.js";
+import { createUserStore } from "./userStore.js";
 import { createRunTailer } from "./runTailer.js";
 
 const config = loadConfig();
@@ -52,8 +53,9 @@ const engine = createEngine({
   preflight: () => preflightPrereqs(),
 });
 
-const auth = createAuthService();
-const app = createApp({ config, engine, broadcast, auth, activity: () => tailer.latest() });
+const users = createUserStore();
+const auth = createAuthService({ store: users });
+const app = createApp({ config, engine, broadcast, auth, users, activity: () => tailer.latest() });
 
 const server = serve({ fetch: app.fetch, port: PORT, hostname: config.host }, (info) => {
   console.log(`[argus] v${VERSION} on http://${config.host}:${info.port}`);
