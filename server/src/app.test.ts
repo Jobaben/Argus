@@ -653,3 +653,39 @@ test("issue triage on unknown or malformed fingerprints is a clean 4xx", async (
   });
   assert.equal(malformed.status, 400);
 });
+
+test("briefing: digest shape, ack round-trip, and broadcast", async () => {
+  const messages: unknown[] = [];
+  const app = createApp({
+    config,
+    engine: fakeEngine,
+    broadcast: (m) => messages.push(m),
+    serveWeb: false,
+  });
+  writeFailedRun("b1", "kaboom");
+
+  const first = (await (await app.request("/api/briefing", { headers: loopback })).json()) as {
+    since: string;
+    attention: { kind: string }[];
+    attentionCount: number;
+    window: { totalRuns: number; failures: { id: string }[] };
+  };
+  assert.equal(first.window.totalRuns, 1);
+  assert.equal(first.window.failures[0].id, "b1");
+  assert.ok(first.attention.some((a) => a.kind === "issue-open"));
+  // No ack yet: since defaults to ~24h back.
+  assert.ok(Date.now() - Date.parse(first.since) > 23 * 3_600_000);
+
+  const ack = await app.request("/api/briefing/ack", { method: "POST", headers: sameOrigin });
+  assert.equal(ack.status, 200);
+  const ackBody = (await ack.json()) as { ok: boolean; ackAt: string };
+  assert.equal(ackBody.ok, true);
+  assert.ok(messages.some((m) => (m as { type?: string }).type === "briefing:changed"));
+
+  const second = (await (await app.request("/api/briefing", { headers: loopback })).json()) as {
+    since: string;
+    window: { totalRuns: number };
+  };
+  assert.equal(second.since, ackBody.ackAt);
+  assert.equal(second.window.totalRuns, 0); // the failed run predates the ack
+});

@@ -47,6 +47,12 @@ import {
   PipelineValidationError,
 } from "./sources/pipelines.js";
 import { readInstance, readInstances } from "./sources/instances.js";
+import {
+  buildBriefing,
+  clampSince,
+  readBriefingAck,
+  writeBriefingAck,
+} from "./sources/briefing.js";
 import { readTotals, resetTotals } from "./sources/totals.js";
 import { buildOverview } from "./sources/overview.js";
 import { PreflightError, type Engine } from "./pipelineEngine.js";
@@ -491,6 +497,30 @@ export function createApp(deps: AppDeps): Hono {
     }
     broadcast({ type: "issues:changed" });
     return c.json({ ok: true });
+  });
+
+  // "While you were away": attention items + digest since the last ack.
+  app.get("/api/briefing", async (c) => {
+    const now = new Date();
+    const [runs, schedules, triage, instances, ackAt] = await Promise.all([
+      readRuns(),
+      readSchedules(),
+      readTriage(),
+      readInstances(),
+      readBriefingAck(),
+    ]);
+    const { monitors } = buildMonitors(schedules, runs, now);
+    const issues = buildIssues(runs, triage);
+    return c.json(
+      buildBriefing({ runs, monitors, issues, instances }, clampSince(ackAt, now), now),
+    );
+  });
+
+  // Mark caught up. Argus-owned, low-risk state — ungated like issue triage.
+  app.post("/api/briefing/ack", async (c) => {
+    const ackAt = await writeBriefingAck(new Date());
+    broadcast({ type: "briefing:changed" });
+    return c.json({ ok: true, ackAt });
   });
 
   app.get("/api/pipelines", async (c) => c.json({ pipelines: await readPipelines() }));
