@@ -2,15 +2,17 @@
 
 **What Argus is:** a dashboard and control plane over your local `~/.claude`
 folder. It watches the files Claude Code already writes (background jobs,
-transcripts, history, stats) and turns them into a live web view.
+transcripts, history, stats) and turns them into a live web view — and it can
+fire its own scheduled and pipelined `claude -p` runs on top.
 
 Argus **never modifies the state Claude Code owns** — it treats jobs,
 transcripts, history and daemon files as strictly read-only. It _does_ own and
 write its own state under `~/.claude/argus/` (schedules, pipelines, run
-records) and, when you apply setup fixes, its signal hooks under
-`~/.claude/hooks/` and a hook entry in `settings.json`. So the monitoring tabs
-(Agents, Sessions, Activity, Projects, Stats, Search) are observe-only, while
-the Scheduler and Pipelines tabs let you create, run, revise, and cancel work.
+records, issue triage, accounts) and, when you apply setup fixes, its signal
+hooks under `~/.claude/hooks/` and a hook entry in `settings.json`. The
+monitoring tabs (Agents, Sessions, Activity, Projects, Stats, Search,
+Inventory, Tasks) are observe-only, while the Scheduler, Pipelines, Issues and
+Users tabs let you create, run, revise, triage and cancel work.
 
 **Security note:** because Argus can launch `claude -p` agents with your
 credentials, the server binds to loopback (`127.0.0.1`) only and rejects
@@ -18,297 +20,615 @@ cross-origin and unknown-Host requests. If you deliberately expose it on
 another interface (`ARGUS_HOST`), set `ARGUS_TOKEN` so the surface is
 authenticated.
 
-## Global UI (applies to every tab)
+Every feature below has its own section: what it's for, what you see, what you
+can do, and where the data comes from.
+
+## Contents
+
+| #   | Feature                              | Route          | What it answers                           |
+| --- | ------------------------------------ | -------------- | ----------------------------------------- |
+| 0   | [Global UI](#global-ui)              | —              | nav, live dot, auto-refresh, setup banner |
+| 1   | [Command Center](#1-command-center)  | `#/command`    | how are my pipelines doing right now?     |
+| 2   | [Chronicle](#2-chronicle)            | `#/chronicle`  | what ran when, across every source?       |
+| 3   | [Scheduler](#3-scheduler)            | `#/schedules`  | fire `claude -p` on a schedule            |
+| 4   | [Monitors](#4-monitors)              | `#/monitors`   | did my schedules actually run?            |
+| 5   | [Issues](#5-issues)                  | `#/issues`     | why are runs failing, grouped by cause?   |
+| 6   | [Pipelines](#6-pipelines)            | `#/pipelines`  | author multi-phase, human-gated flows     |
+| 7   | [Users & sign-in](#7-users--sign-in) | `#/users`      | who may run/edit pipelines?               |
+| 8   | [Search](#8-search)                  | `#/search`     | where did I say/see _that_?               |
+| 9   | [Agents](#9-agents)                  | `#/agents`     | what's running / done / failed right now? |
+| 10  | [Agent Detail](#10-agent-detail)     | `#/agent/<id>` | how did _this_ agent get here?            |
+| 11  | [Sessions](#11-sessions)             | `#/sessions`   | what was actually said in a conversation? |
+| 12  | [Activity](#12-activity)             | `#/activity`   | what have I prompted lately, everywhere?  |
+| 13  | [Projects](#13-projects)             | `#/projects`   | which folders are active, and when?       |
+| 14  | [Stats](#14-stats)                   | `#/stats`      | what's my usage / cost / token spend?     |
+| 15  | [Inventory](#15-inventory)           | `#/inventory`  | what's installed and available?           |
+| 16  | [Tasks](#16-tasks)                   | `#/tasks`      | what task workspaces exist / are locked?  |
+| 17  | [Cron panel](#17-cron-panel)         | Scheduler tab  | why native cron routines can't be shown   |
+
+---
+
+## Global UI
+
+Applies to every tab.
 
 - **The "Argus" logo + colored dot** (top-left): the dot is the live-connection
   indicator. **Green = "live"** (WebSocket to the server is connected); **gray =
   "reconnecting…"** (socket dropped, falling back to polling). It reflects
   Argus's link to its own server, not the health of your agents.
-- **Auto-refresh:** the server pushes a "something changed" ping over a WebSocket
-  whenever a watched file mutates, and the UI re-fetches. If the socket drops,
-  each tab also polls on a timer (most tabs 10s; Stats 30s; Search on keystroke;
-  Cron once). You rarely need to refresh the browser.
-- **Routing** is hash-based (`#/agents`, `#/detail`, `#/search`…), so tabs are
-  bookmarkable and the back button works.
+- **Navigation** is split by role: the six **destination** tabs (Command
+  Center, Chronicle, Scheduler, Monitors, Issues, Pipelines) sit in the bar;
+  the 🔍 icon opens **Search**; the **⋯ More** menu holds the reference tabs
+  (Stats, Inventory, Projects, Tasks, Users). Drill-down views (Agents,
+  Detail, Sessions, Activity) are reached through links and breadcrumbs.
+- **Auto-refresh:** the server pushes a "something changed" ping over a
+  WebSocket whenever a watched file mutates, and the UI re-fetches. If the
+  socket drops, each tab also polls on a timer (most tabs 10s; Stats 30s;
+  Search on keystroke). You rarely need to refresh the browser.
+- **Routing** is hash-based (`#/command`, `#/agents`, `#/search`…), so tabs
+  are bookmarkable and the back button works. An unknown hash lands on the
+  Command Center.
+- **Setup banner:** when a prerequisite is missing — the signal Stop hook, the
+  gate PreToolUse hook, Argus data directories, `claude`/`node` on PATH, or a
+  parseable `pipelines.json`/`settings.json` — a red **"Setup incomplete"**
+  strip appears above every tab listing each check as ✓ / ⚠ / ✗. If anything
+  auto-fixable is wrong, an **Apply fixes** button repairs it in one click
+  (`POST /api/setup/apply`). The banner disappears entirely once everything
+  passes. The hooks matter: without the Stop hook pipelines can't detect step
+  completion, and without the gate hook a gated phase can't pause for you.
 
 ---
 
-## 0. Command Center — _pipelines at a glance (home)_
+## 1. Command Center
 
-**Purpose:** one row per pipeline, attention-first (awaiting approval → failed
-→ running → done), with a column per phase and a tile per step. Approve/Revise
-gates appear inline on the row that needs you.
+_Pipelines at a glance — the home tab._ Route: `#/command`
 
-**Admin login:** viewing is open, but editing or running pipelines (create,
-edit, delete, Run now, Approve/Revise/Stop) requires signing in as admin. On
-first launch, open the **Pipelines** tab and create the admin account (username
+![Command Center](screenshots/command-center.png)
 
-- password, min 8 characters) — the password is stored only as a salted scrypt
-  hash, never in plaintext. Sessions last 12 hours; sign out from the Pipelines
-  tab. Forgot the password? Delete `~/.claude/argus/auth.json` on the machine
-  running Argus and set it up again.
+**Purpose:** one card per pipeline, attention-first, with a column per phase
+and a tile per step. Approve/Revise gates appear inline on the row that needs
+you — this is the wall you keep open on a second monitor.
 
-**Cost:** every metric shows **both tokens and dollars**, as reported by each
-step's `claude -p` result envelope:
+**What you see:**
 
-- **Step tile** — that run's spend (e.g. `29.8k tok · $4.22`).
-- **Row Σ chip** — the latest run's total, including superseded revise
-  attempts (money spent on a retried phase still counts).
-- **Total spend** (page header) — the grand total across every pipeline's
-  latest run on the board.
+- A **card per pipeline**: name, phase count, the pipeline's **model chip**
+  (e.g. `fable`, `opus`), an aggregated **status pill** (`awaiting approval`
+  wins over `failed` over `working`…), the latest run's **Σ cost** (tokens +
+  USD, including superseded revise attempts), and a freshness stamp.
+- Under the header, **one column per phase** (numbered `01`, `02`, … with a
+  step-count badge), and under each phase its **step tiles**: step name,
+  `job <runId>`, a status pill, the failure reason if it failed, a live
+  activity line and animated sweep bar while working, and a per-step meter —
+  duration, tokens, dollars (e.g. `2m 19s · 23.5k tok · $1.09`).
+- If two instances of one pipeline run concurrently, the card splits into
+  labeled sub-sections, one per instance.
+- **Total spend** (top-right): the all-time board total. **Reset total** is a
+  two-click armed confirm — the reset is irreversible.
 
-A metric appears once at least one run reports it; steps that are still
-running (or predate cost capture and left no envelope) show nothing. Runs from
-before this feature are backfilled automatically from their logs at server
-start.
+**What you can do:**
+
+- **Approve** (green) a gated phase that's awaiting you — the pipeline resumes.
+- **Revise** (labeled **Retry** after a crash-restart) — optionally attach a
+  revise note, hit **Send**, and the phase restarts with your feedback.
+- Both actions require a signed-in, approved account (see
+  [Users & sign-in](#7-users--sign-in)); the buttons render for everyone but
+  the server answers 401 unless you're authenticated.
+
+**Cost semantics:** a metric appears once at least one run reports it via the
+`claude -p` result envelope; steps still running (or predating cost capture)
+show nothing. Money spent on a retried phase still counts toward the row Σ.
+
+**Where the data comes from:** `GET /api/overview` (re-fetched on the
+`pipelines:changed` WS ping), `GET /api/totals` + `POST /api/totals/reset`,
+gate actions `POST /api/instances/:id/approve` / `/revise`.
 
 ---
 
-## 1. Agents — _the status board for background jobs_
+## 2. Chronicle
 
-**Purpose:** the at-a-glance status board for all your background Claude Code
-jobs (agents launched to run in the background).
+_Everything that ran, on one timeline._ Route: `#/chronicle`
+
+![Chronicle](screenshots/chronicle.png)
+
+**Purpose:** a swimlane timeline that merges **scheduler runs**, **background
+agents**, and **sessions** into a single windowed view — see a day of activity
+in one glance, spot overlaps, and click into anything.
+
+**What you see:**
+
+- A **time-window switch** (top-right): **1H / 6H / 24H / 3D / 7D** (default
+  24H). This is the zoom — there's no free pan; the window always ends at
+  `now` (bold marker on the right edge).
+- Four counters: **Spans**, **In flight** (still running), **Failed**, and
+  **Run spend** (USD reported by scheduler runs in the window).
+- One **swimlane per group**, labeled with a kind badge — `SCHED` (a
+  schedule's runs), `AGENT` (background agents), `SESSION` (one lane per
+  project) — followed by rows of **span bars** colored by status
+  (working/done/failed/queued). Still-running spans render open-ended with a
+  pulsing dot at `now`. Hover a bar for label, start→end, status and cost.
+- Empty state: _"Nothing happened in this window. Widen it, or launch an
+  agent and watch it appear."_
+
+**What you can do:** switch the window; click a span to jump to its source
+(e.g. a schedule's card in the Scheduler).
+
+**Where the data comes from:** `GET /api/chronicle?hours=N` (1–336), merging
+the scheduler's run records with `~/.claude/jobs/` and
+`~/.claude/projects/*/​*.jsonl`.
+
+---
+
+## 3. Scheduler
+
+_Recurring `claude -p` runs, owned by Argus._ Route: `#/schedules`
+
+![Scheduler](screenshots/scheduler.png)
+
+**Purpose:** define headless prompts that Argus fires on a trigger — nightly
+audits, periodic report generators, cleanup jobs — then watch their run
+history and logs without leaving the page. Two sub-tabs: **Schedules** (this
+section) and **Cron** (see [Cron panel](#17-cron-panel)).
+
+**Creating a schedule** — click **+ New schedule**:
+
+![New schedule form](screenshots/scheduler-form.png)
+
+- **Name** — how it appears everywhere (cards, Chronicle, Monitors).
+- **Prompt for `claude -p`** — the full prompt the headless agent receives.
+- **Working directory** — absolute path the agent runs in.
+- **Trigger** — one of: **every N minutes** (interval), **daily at HH:MM**,
+  **weekly on a day at HH:MM**, or **windowed** (every N minutes, but only
+  between a start and end time on selected weekdays — e.g. "every 30 min,
+  09:00–13:00, Mon–Fri"). Overlap policy defaults to _skip if still running_.
+- **Save schedule** stays disabled until name, prompt and working directory
+  are filled.
+
+**What each schedule card shows:** the trigger summary and its **next fire
+time**, the working directory, a pulsing "running" indicator while a run is
+in flight, and the **last five runs** — status pill, start time, duration,
+cost and tokens if reported, and a `manual` tag on run-now firings.
+
+**What you can do:**
+
+- **Run now** — fire immediately, regardless of the trigger.
+- **Enable / Disable** — pause the trigger without deleting anything.
+- **Edit** / **Delete** (with confirm).
+- **Expand a run** to see its error or result summary, a link to the full
+  **transcript** in Sessions, and a **live-tailing log** (refreshes every 3s
+  while running). A running run has a **Cancel** button.
+
+**Where the data comes from:** Argus's own state —
+`~/.claude/argus/schedules.json` and run records under `~/.claude/argus/runs/`
+via `GET/POST /api/schedules`, `PUT/DELETE /api/schedules/:id`,
+`POST /api/schedules/:id/run`, `GET /api/runs`, `POST /api/runs/:id/cancel`.
+
+---
+
+## 4. Monitors
+
+_A dead-man's switch over your schedules._ Route: `#/monitors`
+
+![Monitors](screenshots/monitors.png)
+
+**Purpose:** answer "did my schedules actually run?" — not "what did Argus
+launch," but "did the expected slot pass with nothing landing," which also
+catches the case where **Argus itself was asleep** at fire time. Every
+schedule you create gets a monitor automatically; there's nothing to author
+here.
+
+**What you see:**
+
+- A six-tile summary: **Up / Late / Down / Failing / Pending / Paused**.
+- One **monitor card** per schedule: its name (links back to the Scheduler),
+  a status pill, a **heartbeat bar** of the last 30 runs (one tick per run,
+  colored by outcome), and a stats line — **uptime %** (succeeded vs failed
+  over the last 30), **last run** time, and either the **next** expected time
+  or, when late/down, the slot that was **expected** and missed.
+- Cards that are `down` or `failing` get a red border so they jump out.
+
+**Status meanings:** `up` — last expected slot ran; `late` — a slot is
+overdue but within grace (10% of the trigger period, clamped 5–60 min);
+`down` — a slot passed grace with no run; `failing` — runs happen on time but
+the latest one failed; `pending` — no run yet; `paused` — the schedule is
+disabled.
+
+**What you can do:** it's deliberately read-only — fix problems in the
+Scheduler or Issues tabs.
+
+**Where the data comes from:** `GET /api/monitors`, derived on every read
+from schedules + run records (no separate state to go stale).
+
+---
+
+## 5. Issues
+
+_Failed runs grouped by root cause._ Route: `#/issues`
+
+![Issues](screenshots/issues.png)
+
+**Purpose:** Sentry-style grouping — twenty timeouts read as **one issue with
+×20**, not twenty rows. Each distinct failure fingerprint (normalized error)
+becomes one card.
+
+**What you see:**
+
+- Summary tiles: **Open / Ignored / Resolved**.
+- One **issue card** per fingerprint: the error title (monospace), an
+  **×N occurrence badge**, a state badge, which schedules it affects, and
+  first/last-seen times. Open issues get a red border.
+- Expanding a card loads its **occurrences** — per-run time, schedule name,
+  and the exact error text (up to the latest 50).
+
+**What you can do (the triage lifecycle):**
+
+- **Resolve** — mark it fixed. If a _newer_ failure with the same fingerprint
+  arrives later, the issue **auto-reopens** — resolved means "fixed going
+  forward", not "hide forever".
+- **Ignore** — mute it (known-noisy failures). Stays ignored until you reopen.
+- **Reopen** — available on resolved/ignored issues; drops the triage record.
+
+**Where the data comes from:** `GET /api/issues` +
+`GET /api/issues/:fingerprint`, derived from run records on every read; only
+your triage decisions persist (`~/.claude/argus/issues.json`).
+
+---
+
+## 6. Pipelines
+
+_Author multi-phase, human-gated agent flows._ Route: `#/pipelines`
+
+![Pipelines](screenshots/pipelines.png)
+
+**Purpose:** define pipelines — ordered **phases**, each with a working
+directory and one or more **steps** (a step = one `claude -p` run with its own
+prompt) — then launch them manually or on a trigger and watch them on the
+[Command Center](#1-command-center). A phase can be **gated**: the pipeline
+pauses there until a human approves or revises.
+
+**What you see:** one card per pipeline with its trigger summary, phase
+count, a `disabled` tag when paused, and a live status pill aggregated from
+running instances. When you're **signed out**, the **Login** panel appears
+here (see [Users & sign-in](#7-users--sign-in)) — viewing is open, but every
+mutating action requires a signed-in, root-approved account.
+
+**The pipeline form** (+ New pipeline / Edit):
+
+- **Name**, **trigger** (manual — i.e. no trigger — or interval / daily /
+  weekly / windowed), **overlap policy** (skip if running / allow overlap),
+  and a pipeline-default **model** (Opus, Sonnet, Haiku, custom, or inherit
+  the CLI default).
+- An ordered list of **phases** — each with a name, a working directory, and
+  a **"Requires human approval (gated)"** checkbox.
+- Inside each phase, ordered **steps** — each with a name, an optional
+  per-step **model override**, and its prompt. Reorder or remove phases and
+  steps freely; **Save** stays disabled until every phase has a name, cwd and
+  at least one complete step.
+
+**What you can do (signed in):**
+
+- **Run now** — start an instance (hidden while one is running unless overlap
+  is allowed).
+- **Stop / Stop all (N)** — abort active instances (with confirm).
+- **Enable / Disable**, **Edit**, **Delete** (with confirm).
+- Approving/revising a **gated phase** happens on the Command Center, inline
+  on the paused row.
+
+**How steps complete:** the Stop-hook and gate-hook installed by Setup let
+each spawned agent signal "step finished" / "needs input" back to Argus
+(`POST /api/instances/:id/signal`, authenticated by a per-instance token —
+this is the one instance endpoint that doesn't need a login).
+
+**Where the data comes from:** `~/.claude/argus/pipelines.json` and instance
+records under `~/.claude/argus/instances/` via `GET/POST /api/pipelines`,
+`PUT/PATCH/DELETE /api/pipelines/:id`, `POST /api/pipelines/:id/start`,
+`GET /api/overview`, `POST /api/instances/:id/{approve,revise,abort}`.
+
+---
+
+## 7. Users & sign-in
+
+_Who may run and edit pipelines._ Route: `#/users` (root only) + the login
+panel on the Pipelines tab
+
+![Users](screenshots/users.png)
+
+**Purpose:** Argus's mutating pipeline surface is account-gated with a
+two-role model: **root** (the first account, manages users) and **members**
+(can run/edit pipelines once approved).
+
+**The three auth flows** (all on the Pipelines tab's panel):
+
+1. **First launch — create the root account.** On an unconfigured server the
+   panel offers a one-time root bootstrap (username + password, min 8 chars).
+   This is **localhost-only**, enforced server-side. The password is stored
+   only as a salted scrypt hash — never plaintext.
+2. **Login** — username + password; the session is an HttpOnly cookie. Sign
+   out from the same panel (your username + **Sign out** appear when
+   authenticated).
+3. **Request an account** — anyone on the machine can register; the account
+   lands **pending** until root approves it.
+
+**The Users tab** (visible in ⋯ More only to root): all accounts, **pending
+first** — each with username, role, and an "awaiting approval" tag. Root can
+**Approve** or **Reject** a pending registration, and **Remove** an active
+member (never yourself). Non-root visitors see only an explanatory notice
+(that's the screenshot above).
+
+**Forgot the root password?** Delete `~/.claude/argus/auth.json` on the
+machine running Argus and bootstrap again.
+
+**Where the data comes from:** `GET /api/auth/status`,
+`POST /api/auth/{setup,login,register,logout}`, `GET /api/users`,
+`POST /api/users/:username/{approve,reject}`; state in
+`~/.claude/argus/auth.json`.
+
+---
+
+## 8. Search
+
+_Full-text across all transcripts._ Route: `#/search` (the 🔍 in the nav)
+
+![Search](screenshots/search.png)
+
+**Purpose:** find any text anywhere in your session history — a phrase, a
+file name, an error message — when you don't remember which session it was in.
+
+**What you see:** a search box; as you type (debounced ~300ms), a live match
+count and results. Each result shows a role badge (user/assistant), the
+project, the session's short id, and a **snippet centered on the match** with
+your terms highlighted. Helper states cover "Type to search", "Searching…"
+and "No matches".
+
+**How to use it:** just type — case-insensitive substring matching, capped at
+100 matches. Click a result to open that transcript.
+
+**Where the data comes from:** `GET /api/search?q=`, scanning every
+`~/.claude/projects/<project>/<session>.jsonl` per query.
+
+---
+
+## 9. Agents
+
+_The status board for background jobs._ Route: `#/agents`
+
+![Agents](screenshots/agents.png)
+
+**Purpose:** the at-a-glance board for all background Claude Code jobs.
 
 **What you see:**
 
 - A **summary row**: total agents, how many are **live**, **working**, and
   **failed**.
-- A grid of **agent cards**, each with: the agent's name, its short ID (the
-  stable 8-char identifier), a color-coded **status pill**
-  (`working / done / failed / idle / queued / unknown`), a pulsing green
-  **"live"** dot if it's currently running, the detail line (what it's doing
-  now), a green **result** box if it has finished output, and a footer of
-  metadata — working directory, launch template, tempo (`active`/`idle`),
-  in-flight task count, and last-update time.
+- A grid of **agent cards**: name, short id, a color-coded status pill
+  (`working / done / failed / idle / queued`), a pulsing green **live** dot if
+  it's running right now, the current detail line, a result box when there's
+  finished output, and a footer — folder, tempo, and last-update time.
 
 **How to use it:** scan colors to triage — green pulse = running now, red =
-failed, gray = idle/done. **Click any card** to jump to the **Detail** tab for
-that agent.
+failed. **Click any card** to open that agent's [Detail](#10-agent-detail).
 
-**Where the data comes from:** `/api/agents`, which merges
-`~/.claude/jobs/<short>/state.json` (the metadata) with
-`~/.claude/daemon/roster.json` (liveness — an agent is "live" only if its short
-ID is an active worker in the roster).
+**Where the data comes from:** `GET /api/agents`, merging
+`~/.claude/jobs/<short>/state.json` with `~/.claude/daemon/roster.json`
+(an agent is "live" only if it's an active worker in the roster).
 
 ---
 
-## 2. Detail — _single-agent deep dive + timeline_
+## 10. Agent Detail
 
-**Purpose:** everything about one agent, including the chronological trail of how
-it got to its current state. This is where a card click lands you
-(`#/agent/<short>`); opening the tab with nothing selected shows a "no agent
-selected" prompt.
+_Single-agent deep dive + timeline._ Route: `#/agent/<short>`
+
+![Agent Detail](screenshots/agent-detail.png)
+
+**Purpose:** everything about one agent, including the chronological trail of
+how it got to its current state. A card click on Agents lands here.
 
 **What you see:**
 
-- A **metadata card**: name, short ID, status pill, live dot, current detail and
-  result text, plus a full field list — folder, full CWD, template, tempo,
-  session ID, CLI version, PID, in-flight/queued task counts, and Created /
-  Updated / First-terminal timestamps (shown as relative times like "5m ago").
-- A **timeline** below it: every recorded state transition, newest first, each
-  with a status-colored dot, status pill, timestamp, and an optional detail line.
-  Entries with long narration have a **"Show details"** toggle to expand the
-  full text inline.
+- A **metadata card**: name, short id, status pill, live dot, current
+  detail/result text, and the full field list — folder, full CWD, template,
+  tempo, session id, PID, task counts, and created/updated timestamps as
+  relative times.
+- A **timeline**: every recorded state transition, newest first, with a
+  status-colored dot, pill, timestamp and optional detail line; long entries
+  get a "Show details" expander. Agents that predate timeline capture show an
+  honest "no timeline entries recorded" note instead.
 
-**How to use it:** read the timeline bottom-to-top to follow an agent's life
-story — when it started working, what milestones it hit, when/why it finished or
-failed. Use the **"All agents"** breadcrumb to go back.
+**How to use it:** read the timeline bottom-to-top to follow the agent's life
+story. Use the breadcrumb to go back to Agents.
 
-**Where the data comes from:** `/api/agents/:short/timeline`, reading
-`~/.claude/jobs/<short>/timeline.jsonl` (one event per line). The timeline shows
-even for agents no longer in the main list.
+**Where the data comes from:** `GET /api/agents/:short/timeline`, reading
+`~/.claude/jobs/<short>/timeline.jsonl`. Works even for agents no longer in
+the main list.
 
 ---
 
-## 3. Sessions — _browse & read transcripts_
+## 11. Sessions
+
+_Browse & read transcripts._ Route: `#/sessions`
+
+![Sessions](screenshots/sessions.png)
 
 **Purpose:** read the actual conversation transcripts of your Claude Code
 sessions across all projects.
 
-**What you see:**
+**What you see:** cards sorted by most-recent activity — title (from the
+first user prompt or AI-generated), project, message count, tool-use count,
+the model used, and last-activity time.
 
-- **List view:** cards sorted by most-recent activity, each showing a title
-  (from the first user prompt or an AI-generated title), the project label,
-  message count, tool-use count, the model used, and last-activity time.
-- **Transcript view** (after clicking a card): a back button, a header repeating
-  the session summary, and the **full message stream in chronological order** —
-  each message with a role pill (user/assistant), a tool-name badge where a tool
-  was invoked, a red error badge if the step errored, a timestamp, and the
-  message body.
+**Clicking a card opens the transcript:**
 
-**How to use it:** find a past session by title/project, click in, and scroll the
-conversation. Read-only — good for reviewing what an agent or you actually did.
-Use **back** to return to the list.
+![Session transcript](screenshots/session-transcript.png)
 
-**Where the data comes from:** `/api/sessions` (list) and
-`/api/sessions/:project/:id` (one transcript), reading
+- The full message stream in order — each message with a role pill
+  (user/assistant), a tool badge where a tool was invoked, a red error badge
+  on failed steps, and a timestamp.
+- **Following** (top-right): auto-scrolls to the newest message as a live
+  session grows — Argus doubles as a live viewer for running sessions.
+- **Export Markdown**: download the whole transcript as a `.md` file.
+- **Back to sessions** returns to the list.
+
+**Where the data comes from:** `GET /api/sessions` and
+`GET /api/sessions/:project/:id`, reading
 `~/.claude/projects/<encoded-project>/<session-id>.jsonl`.
 
 ---
 
-## 4. Activity — _global prompt feed_
+## 12. Activity
 
-**Purpose:** a single chronological stream of recent prompts/commands issued
-across **all** projects and sessions — your "what have I been doing lately"
-firehose.
+_Global prompt feed._ Route: `#/activity`
+
+![Activity](screenshots/activity.png)
+
+**Purpose:** a single chronological stream of recent prompts issued across
+**all** projects and sessions — your "what have I been doing lately" firehose.
 
 **What you see:** a newest-first list; each row shows the project name, a
-relative timestamp, and the prompt text (truncated to ~240 chars).
+relative timestamp, and the prompt text (truncated to ~240 chars). Read-only.
 
-**How to use it:** skim it as a recent-activity log spanning everything,
-regardless of which project or session it belonged to. Read-only.
-
-**Where the data comes from:** `/api/activity`, reading `~/.claude/history.jsonl`
-(the global append-only prompt log), most recent ~100 entries.
+**Where the data comes from:** `GET /api/activity`, reading
+`~/.claude/history.jsonl` (most recent ~100 entries).
 
 ---
 
-## 5. Projects — _working directories overview_
+## 13. Projects
 
-**Purpose:** a directory-level roll-up — every project folder Claude Code has
-worked in, with how much activity each has.
+_Working-directories overview._ Route: `#/projects`
 
-**What you see:** a grid of project cards, each with the short folder name, the
-full decoded path (hover for the whole thing), a **session-count** badge, and the
-last-activity timestamp.
+![Projects](screenshots/projects.png)
 
-**How to use it:** see which repos/folders are most active and when each was last
-touched. Informational only — there's no drill-in action from here (use
-Sessions/Search to read content).
+**Purpose:** a directory-level roll-up — every folder Claude Code has worked
+in, with how much activity each has.
 
-**Where the data comes from:** `/api/projects`, scanning the subdirectories under
-`~/.claude/projects/` (one encoded dir per project path), counting `.jsonl`
-session files and reading the newest modified time.
+**What you see:** a grid of project cards — short folder name, the full
+decoded path, a **session-count** badge, and last-activity time. Paths from
+other operating systems (e.g. a Windows `C:\GIT\…` history read on Linux)
+decode correctly — Argus keys off the encoded names, not absolute paths.
 
----
+**How to use it:** see which repos are most active and when each was last
+touched. Informational only — drill into content via Sessions or Search.
 
-## 6. Search — _full-text across all transcripts_
-
-**Purpose:** find any text anywhere in your session history — a phrase someone
-said, a file name, an error message.
-
-**What you see:** a search box; as you type, a live result count and a list of
-matches. Each result shows a type badge (user/assistant), the project label, the
-first 8 chars of the session ID, and a **snippet** centered on the match with
-your query terms **highlighted in yellow**. Helper states tell you "Type to
-search", "Searching…", or "No matches".
-
-**How to use it:** just type — results update live (debounced ~300ms), capped at
-100 matches, case-insensitive substring matching. This is the fastest way to
-relocate a conversation when you don't remember which session it was in.
-
-**Where the data comes from:** `/api/search?q=`, scanning every
-`~/.claude/projects/<project>/<session>.jsonl` line by line per query (no
-background polling — it queries on each keystroke).
+**Where the data comes from:** `GET /api/projects`, scanning
+`~/.claude/projects/` subdirectories.
 
 ---
 
-## 7. Stats — _usage analytics_
+## 14. Stats
+
+_Usage analytics._ Route: `#/stats`
+
+![Stats](screenshots/stats.png)
 
 **Purpose:** aggregate usage analytics across all your Claude Code activity.
 
 **What you see:**
 
-- **Headline metric cards:** total sessions, messages, tool calls, total tokens,
-  output tokens, cache reads, active days, models used (compact `k/M/B`
-  formatting). Plus, when available: total cost (USD), longest session duration,
-  and first-session date.
-- **By-model breakdown:** one row per model (with the `claude-`/date noise
-  stripped), total tokens, a horizontal bar, and an
-  input/output/cache-read/cache-creation/web-search split — sorted by token
-  volume.
-- **Activity-by-hour chart:** 24 bars showing which hours of the day you're most
-  active.
-- **Recent daily activity:** a last-30-days table with per-day token and message
-  counts and a bar for relative volume.
+- **Headline cards:** total sessions, messages, tool calls, total tokens,
+  output tokens, cache reads, active days, models used — plus, when the CLI
+  reports them, total cost, longest session, and first-session date.
+- **By-model breakdown:** tokens per model with an
+  input/output/cache-read/cache-creation split, sorted by volume.
+- **Activity-by-hour:** 24 bars showing when you work.
+- **Recent daily activity:** a last-30-days table of per-day volume.
 
-**How to use it:** understand cost and consumption — which models dominate your
-token spend, when you work, and trend over the last month. Read-only.
-
-**Where the data comes from:** `/api/stats`, reading the pre-computed
-`~/.claude/stats/stats-cache.json`. (Shape varies by CLI version, so some
-secondary metrics appear only if present.)
+**Where the data comes from:** `GET /api/stats`, reading the pre-computed
+`~/.claude/stats/stats-cache.json` (shape varies by CLI version; secondary
+metrics appear only if present).
 
 ---
 
-## 8. Inventory — _installed extensions catalog_
+## 15. Inventory
+
+_Installed extensions catalog._ Route: `#/inventory`
+
+![Inventory](screenshots/inventory.png)
 
 **Purpose:** see everything installed into your Claude Code environment — the
 agents, commands, skills, and plugins available to you.
 
-**What you see:** four collapsible, color-accented sections, each with a count
-badge:
+**What you see:** four collapsible, color-accented sections with count badges —
+**Agents**, **Commands**, **Skills**, **Plugins** (with marketplace and
+version) — each item showing its name and description from frontmatter.
 
-- **Agents** (emerald) — from `~/.claude/agents/*.md`
-- **Commands** (sky) — from `~/.claude/commands/*.md`
-- **Skills** (amber) — from `~/.claude/skills/*.md`
-- **Plugins** (rose) — from `~/.claude/plugins/installed_plugins.json`, showing
-  marketplace and version
+**How to use it:** a reference catalog — "what do I have and what does each
+do." No install/remove actions.
 
-Each item shows its name and description (pulled from markdown frontmatter,
-falling back to the filename and first prose line).
-
-**How to use it:** click section headers to expand/collapse. It's a reference
-catalog — "what do I have available and what does each do." No install/remove
-actions.
-
-**Where the data comes from:** `/api/inventory`.
+**Where the data comes from:** `GET /api/inventory`, reading
+`~/.claude/agents/`, `commands/`, `skills/`, and
+`plugins/installed_plugins.json`.
 
 ---
 
-## 9. Tasks — _task-queue workspace inventory_
+## 16. Tasks
+
+_Task-queue workspace inventory._ Route: `#/tasks`
+
+![Tasks](screenshots/tasks.png)
 
 **Purpose:** a low-level view of Claude Code's internal task directories (the
-in-session task queue's working folders).
+in-session task queue's working folders) — mostly diagnostic.
 
-**What you see:** a list of task rows, each with the task UUID, a **highwatermark**
-badge (e.g. "hwm 42") if present, the file count in the directory, a **lock
-status** (amber = locked, emerald = open), and the last-updated time.
+**What you see:** one row per task workspace — its id, a **highwatermark**
+badge (progress marker) if present, the file count, a **lock status** (red =
+locked/in use, green = open), and last-updated time. Read-only.
 
-**How to use it:** mostly diagnostic — see which task workspaces exist, which are
-currently locked (in use), and their progress marker. This is metadata, not task
-content. Read-only.
-
-**Where the data comes from:** `/api/tasks`, scanning `~/.claude/tasks/<uuid>/`
-for `.lock` and `.highwatermark` files and directory mtime.
+**Where the data comes from:** `GET /api/tasks`, scanning
+`~/.claude/tasks/<id>/` for `.lock` / `.highwatermark` files.
 
 ---
 
-## 10. Cron — _honest empty state by design_
+## 17. Cron panel
 
-**Purpose:** to explain why scheduled/recurring routines **can't** be shown as a
-live table — and what would be needed to surface them.
+_An honest empty state, by design._ Found under **Scheduler → Cron** sub-tab
+(there is deliberately no `#/cron` route).
+
+![Cron panel](screenshots/cron.png)
+
+**Purpose:** explain why Claude Code's **native cron routines** can't be shown
+as a live table — and what would be needed to surface them.
 
 **What you see:**
 
-- A **"not watchable"** panel explaining that cron routines aren't stored on disk.
-- A **"path forward"** panel describing how a polling host process _could_
-  publish them to a file Argus could then watch.
-- An **on-disk scan** result: Argus name-matches anything in `~/.claude` that
-  looks schedule-related (`cron`/`routine`/`schedul`) and lists candidates as
-  _hints only_ (usually "nothing found").
+- A **"not watchable"** panel: cron routines are session-scoped — they live
+  inside a running Claude session, enumerable only via the in-session
+  `CronList` tool, and are never persisted under `~/.claude`. A pure
+  file-watcher fundamentally cannot see them.
+- A **"path forward"** panel: a polling host could publish them to a file
+  (e.g. `cron/routines.json`) that Argus would then watch like any source.
+- An **on-disk scan**: Argus name-matches anything schedule-related under
+  `~/.claude` and lists candidates as hints — usually "nothing found, as
+  expected."
 
-**Why it's like this:** Claude Code's scheduled routines are **session-scoped** —
-they exist only inside a running Claude session and are enumerable solely via the
-in-session `CronList` tool. A pure file-watcher fundamentally cannot see them, so
-Argus is deliberately honest about the limitation rather than faking a table.
+Don't confuse this with **Argus's own Scheduler** (section 3), which is fully
+on-disk and fully supported — this panel is only about Claude Code's
+harness-managed routines.
 
-**Where the data comes from:** `/api/cron`, which returns
-`{ available: false, reason, howTo }` plus any filename hints.
+**Where the data comes from:** `GET /api/cron`, returning
+`{ available: false, reason, howTo }` plus filename hints.
 
 ---
 
 ## Quick mental model
 
-| Tab           | Answers the question                      | Source file(s)                             |
-| ------------- | ----------------------------------------- | ------------------------------------------ |
-| **Agents**    | What's running / done / failed right now? | `jobs/*/state.json` + `daemon/roster.json` |
-| **Detail**    | How did _this_ agent get here?            | `jobs/<short>/timeline.jsonl`              |
-| **Sessions**  | What was actually said in a conversation? | `projects/*/*.jsonl`                       |
-| **Activity**  | What have I prompted lately, everywhere?  | `history.jsonl`                            |
-| **Projects**  | Which folders are active, and when?       | `projects/*/`                              |
-| **Search**    | Where did I say/see _that_?               | all `projects/*/*.jsonl`                   |
-| **Stats**     | What's my usage / cost / token spend?     | `stats/stats-cache.json`                   |
-| **Inventory** | What's installed and available?           | `agents/ commands/ skills/ plugins/`       |
-| **Tasks**     | What task workspaces exist / are locked?  | `tasks/<uuid>/`                            |
-| **Cron**      | Why can't I see scheduled routines?       | none (session-scoped)                      |
+| Tab                | Answers the question                      | Source                                      |
+| ------------------ | ----------------------------------------- | ------------------------------------------- |
+| **Command Center** | How are my pipelines doing right now?     | `argus/pipelines.json` + `argus/instances/` |
+| **Chronicle**      | What ran when, across everything?         | runs + jobs + transcripts, merged           |
+| **Scheduler**      | What fires on a timer, and how did it go? | `argus/schedules.json` + `argus/runs/`      |
+| **Monitors**       | Did the expected runs actually land?      | derived from schedules + runs               |
+| **Issues**         | Why are runs failing, grouped by cause?   | derived from runs + `argus/issues.json`     |
+| **Pipelines**      | What multi-phase flows are defined?       | `argus/pipelines.json`                      |
+| **Users**          | Who may run/edit pipelines?               | `argus/auth.json`                           |
+| **Search**         | Where did I say/see _that_?               | all `projects/*/*.jsonl`                    |
+| **Agents**         | What's running / done / failed right now? | `jobs/*/state.json` + `daemon/roster.json`  |
+| **Detail**         | How did _this_ agent get here?            | `jobs/<short>/timeline.jsonl`               |
+| **Sessions**       | What was actually said in a conversation? | `projects/*/*.jsonl`                        |
+| **Activity**       | What have I prompted lately, everywhere?  | `history.jsonl`                             |
+| **Projects**       | Which folders are active, and when?       | `projects/*/`                               |
+| **Stats**          | What's my usage / cost / token spend?     | `stats/stats-cache.json`                    |
+| **Inventory**      | What's installed and available?           | `agents/ commands/ skills/ plugins/`        |
+| **Tasks**          | What task workspaces exist / are locked?  | `tasks/<id>/`                               |
+| **Cron panel**     | Why can't I see native cron routines?     | none (session-scoped)                       |
+
+_Screenshots in this guide live in [`docs/screenshots/`](screenshots/) and
+were captured from a live instance. To refresh them after a UI change, run the
+app and re-capture at 1440×900._

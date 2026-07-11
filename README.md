@@ -6,6 +6,10 @@ Argus reads Claude Code's local state under `~/.claude` and surfaces it as a
 live web dashboard — what's running now, what finished, what failed, and the
 progress trail behind each one.
 
+📖 **[User Guide](docs/USER-GUIDE.md)** — every feature, with screenshots:
+Command Center, Chronicle, Scheduler, Monitors, Issues, Pipelines, Users,
+Search, and all the monitoring tabs.
+
 ## Stack
 
 - **server** — Node 22 + TypeScript, [Hono](https://hono.dev) HTTP API,
