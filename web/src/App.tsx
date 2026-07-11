@@ -22,6 +22,8 @@ import Chronicle from "./views/Chronicle";
 import Pipelines from "./views/Pipelines";
 import SetupBanner from "./views/SetupBanner";
 import Users from "./views/Users";
+import Briefing from "./views/Briefing";
+import { useBriefing } from "./useBriefing";
 import { useAuth } from "./useAuth";
 
 function AgentsView({
@@ -79,6 +81,7 @@ type TabRole = "destination" | "utility" | "overflow" | "drilldown";
 
 const TAB_META: { id: string; label: string; role: TabRole }[] = [
   { id: "command", label: "Command Center", role: "destination" },
+  { id: "briefing", label: "Briefing", role: "destination" },
   { id: "chronicle", label: "Chronicle", role: "destination" },
   { id: "schedules", label: "Scheduler", role: "destination" },
   { id: "monitors", label: "Monitors", role: "destination" },
@@ -104,6 +107,7 @@ export default function App() {
   const [active, setActive] = useState<string>(currentTabId);
   const agentsState = useAgents();
   const auth = useAuth();
+  const briefingState = useBriefing();
   const { toasts, dismiss } = useAgentNotifications(agentsState.agents);
 
   useEffect(() => {
@@ -120,6 +124,7 @@ export default function App() {
   const destinations: NavTab[] = TAB_META.filter((t) => t.role === "destination").map((t) => ({
     id: t.id,
     label: t.label,
+    badge: t.id === "briefing" ? (briefingState.briefing?.attentionCount ?? 0) : undefined,
   }));
   const overflow: MoreItem[] = TAB_META.filter(
     (t) => t.role === "overflow" && (t.id !== "users" || auth.status?.role === "root"),
@@ -131,6 +136,15 @@ export default function App() {
 
   const renderActive = () => {
     switch (active) {
+      case "briefing":
+        return (
+          <Briefing
+            briefing={briefingState.briefing}
+            loading={briefingState.loading}
+            error={briefingState.error}
+            ack={briefingState.ack}
+          />
+        );
       case "chronicle":
         return <Chronicle />;
       case "schedules":

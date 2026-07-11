@@ -26,3 +26,21 @@ describe("NavBar", () => {
     expect(screen.getByText("Live")).toBeInTheDocument();
   });
 });
+
+describe("NavBar badge", () => {
+  it("renders a count chip on tabs with a badge and omits it at zero", () => {
+    render(
+      <NavBar
+        destinations={[
+          { id: "briefing", label: "Briefing", badge: 3 },
+          { id: "command", label: "Command Center", badge: 0 },
+        ]}
+        overflow={overflow}
+        activeId="command"
+        live
+      />,
+    );
+    expect(screen.getByText("3")).toBeInTheDocument();
+    expect(screen.queryByText("0")).toBeNull();
+  });
+});

@@ -4,6 +4,8 @@ import type { MoreItem } from "./ds";
 export interface NavTab {
   id: string;
   label: string;
+  /** Attention count rendered as a chip after the label; hidden when 0/absent. */
+  badge?: number;
 }
 
 export function NavBar({
@@ -43,6 +45,11 @@ export function NavBar({
               }`}
             >
               {t.label}
+              {t.badge != null && t.badge > 0 && (
+                <span className="ml-1.5 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-fail/15 px-1.5 py-0.5 font-mono text-[10px] font-bold leading-none text-fail">
+                  {t.badge}
+                </span>
+              )}
             </a>
           ))}
         </div>

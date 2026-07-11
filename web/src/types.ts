@@ -286,3 +286,33 @@ export interface OverviewEntry {
    *  beside its peers. Empty when only the lone latest instance remains. */
   active?: { instance: PipelineInstance; cost: OverviewCost }[];
 }
+
+// ── Briefing ("while you were away") ─────────────────────────────────────────
+
+export type AttentionKind = "monitor-down" | "gate-waiting" | "monitor-failing" | "issue-open";
+
+export interface AttentionItem {
+  kind: AttentionKind;
+  id: string;
+  title: string;
+  detail: string;
+  at: string | null;
+}
+
+export interface BriefingWindow {
+  totalRuns: number;
+  byStatus: Record<RunStatus, number>;
+  costUsd: number;
+  tokens: number;
+  failures: Run[];
+  newIssues: Issue[];
+  finishedPipelines: PipelineInstance[];
+}
+
+export interface Briefing {
+  since: string;
+  generatedAt: string;
+  attention: AttentionItem[];
+  attentionCount: number;
+  window: BriefingWindow;
+}
