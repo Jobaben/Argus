@@ -25,6 +25,7 @@ export interface ScheduleInput {
   trigger: Trigger;
   enabled?: boolean;
   overlapPolicy?: "skip" | "allow";
+  catchUp?: boolean;
 }
 
 const hhmmToMin = (s: string): number => {
@@ -112,6 +113,7 @@ export function validateInput(raw: unknown): ScheduleInput {
     trigger,
     enabled,
     overlapPolicy,
+    catchUp: Boolean(r.catchUp),
   };
 }
 
@@ -145,6 +147,7 @@ export function validatePatch(raw: unknown): Partial<ScheduleInput> {
   if ("trigger" in r) patch.trigger = validateTrigger(r.trigger);
   if ("enabled" in r) patch.enabled = Boolean(r.enabled);
   if ("overlapPolicy" in r) patch.overlapPolicy = r.overlapPolicy === "allow" ? "allow" : "skip";
+  if ("catchUp" in r) patch.catchUp = Boolean(r.catchUp);
   return patch;
 }
 
@@ -176,6 +179,7 @@ export async function createSchedule(
     trigger: input.trigger,
     enabled: input.enabled ?? true,
     overlapPolicy: input.overlapPolicy ?? "skip",
+    catchUp: input.catchUp ?? false,
     createdAt: iso,
     updatedAt: iso,
     lastRunAt: null,
@@ -206,6 +210,7 @@ export async function updateSchedule(
       ...("trigger" in patch ? { trigger: patch.trigger! } : {}),
       ...("enabled" in patch ? { enabled: patch.enabled! } : {}),
       ...("overlapPolicy" in patch ? { overlapPolicy: patch.overlapPolicy! } : {}),
+      ...("catchUp" in patch ? { catchUp: patch.catchUp! } : {}),
       updatedAt: now.toISOString(),
     };
     list[idx] = merged;

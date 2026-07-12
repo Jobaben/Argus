@@ -46,6 +46,7 @@ export interface Schedule {
   trigger: Trigger;
   enabled: boolean;
   overlapPolicy: "skip" | "allow";
+  catchUp?: boolean;
   createdAt: string;
   updatedAt: string;
   lastRunAt: string | null;
@@ -141,6 +142,7 @@ export interface ScheduleInput {
   trigger: Trigger;
   enabled?: boolean;
   overlapPolicy?: "skip" | "allow";
+  catchUp?: boolean;
 }
 
 export type InstanceStatus = "running" | "awaiting-approval" | "failed" | "succeeded" | "aborted";

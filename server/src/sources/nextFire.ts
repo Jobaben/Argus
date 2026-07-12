@@ -170,5 +170,7 @@ export function shouldFire(schedule: Schedule, now: Date, graceMs: number): bool
   if (schedule.lastRunAt && new Date(schedule.lastRunAt).getTime() >= prev.getTime()) {
     return false;
   }
-  return now.getTime() - prev.getTime() <= graceMs;
+  // catchUp: a slot missed beyond grace still fires (once — `prev` is only the
+  // latest slot, and firing re-anchors lastRunAt past it).
+  return schedule.catchUp === true || now.getTime() - prev.getTime() <= graceMs;
 }

@@ -304,3 +304,45 @@ test("windowed: nextFireAfter delegates to the daily grid", () => {
     at(2026, 5, 22, 12, 30),
   );
 });
+
+test("shouldFire: catchUp fires a slot missed beyond grace (Argus was down)", () => {
+  // Same scenario as the missed-window test above, but the schedule opted in.
+  const s = baseSchedule({
+    trigger: { kind: "daily", time: "02:00" },
+    createdAt: at(2026, 5, 20, 0, 0).toISOString(),
+    lastRunAt: at(2026, 5, 21, 2, 0).toISOString(),
+    catchUp: true,
+  });
+  assert.equal(shouldFire(s, at(2026, 5, 22, 9, 0), graceMsFor(30000)), true);
+});
+
+test("shouldFire: catchUp does not re-fire a slot already covered", () => {
+  const s = baseSchedule({
+    trigger: { kind: "daily", time: "02:00" },
+    createdAt: at(2026, 5, 20, 0, 0).toISOString(),
+    lastRunAt: at(2026, 5, 22, 9, 0).toISOString(),
+    catchUp: true,
+  });
+  assert.equal(shouldFire(s, at(2026, 5, 22, 10, 0), graceMsFor(30000)), false);
+});
+
+test("shouldFire: catchUp never backfills a slot that predates creation", () => {
+  const s = baseSchedule({
+    trigger: { kind: "daily", time: "09:00" },
+    createdAt: at(2026, 5, 22, 9, 5).toISOString(),
+    lastRunAt: null,
+    catchUp: true,
+  });
+  assert.equal(shouldFire(s, at(2026, 5, 22, 15, 0), graceMsFor(30000)), false);
+});
+
+test("shouldFire: catchUp still respects enabled=false", () => {
+  const s = baseSchedule({
+    trigger: { kind: "daily", time: "02:00" },
+    createdAt: at(2026, 5, 20, 0, 0).toISOString(),
+    lastRunAt: at(2026, 5, 21, 2, 0).toISOString(),
+    catchUp: true,
+    enabled: false,
+  });
+  assert.equal(shouldFire(s, at(2026, 5, 22, 9, 0), graceMsFor(30000)), false);
+});

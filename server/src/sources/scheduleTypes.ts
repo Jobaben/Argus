@@ -24,6 +24,11 @@ export interface Schedule {
   trigger: Trigger;
   enabled: boolean;
   overlapPolicy: "skip" | "allow";
+  /** Anacron-style recovery: when the latest slot was missed beyond the firing
+   *  grace (machine asleep, Argus down), fire it once on the next tick instead
+   *  of dropping it. Absent = false, so pre-existing schedules keep the old
+   *  skip-on-miss behavior. */
+  catchUp?: boolean;
   createdAt: string;
   updatedAt: string;
   lastRunAt: string | null;

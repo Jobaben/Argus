@@ -128,3 +128,25 @@ test("validatePatch rejects a non-existent cwd when cwd is present", async () =>
     (e: Error) => e.name === "ScheduleValidationError",
   );
 });
+
+test("catchUp round-trips through validateInput, create, and patch", async () => {
+  const m = await fresh();
+  const input = m.validateInput({ ...getInput(), catchUp: true });
+  assert.equal(input.catchUp, true);
+  const created = await m.createSchedule(input, new Date(2026, 5, 22, 10, 0), "id-1");
+  assert.equal(created.catchUp, true);
+
+  const patch = m.validatePatch({ catchUp: false });
+  assert.deepEqual(patch, { catchUp: false });
+  const updated = await m.updateSchedule("id-1", patch, new Date(2026, 5, 22, 11, 0));
+  assert.equal(updated?.catchUp, false);
+});
+
+test("catchUp defaults to false when omitted", async () => {
+  const m = await fresh();
+  const input = m.validateInput(getInput());
+  const created = await m.createSchedule(input, new Date(2026, 5, 22, 10, 0), "id-1");
+  assert.equal(created.catchUp, false);
+  // A patch without catchUp must not touch it.
+  assert.equal("catchUp" in m.validatePatch({ enabled: true }), false);
+});

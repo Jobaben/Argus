@@ -107,6 +107,22 @@ function ScheduleForm({
         onChange={(t) => setForm({ ...form, trigger: t ?? { kind: "daily", time: "02:00" } })}
       />
 
+      <label className="flex items-start gap-2 text-xs text-ink-dim">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={form.catchUp ?? false}
+          onChange={(e) => setForm({ ...form, catchUp: e.target.checked })}
+        />
+        <span>
+          <span className="font-medium">Catch up a missed run on recovery</span>
+          <span className="block text-ink-faint">
+            If the machine was asleep (or Argus was down) when a slot came due, fire it once when
+            Argus is back instead of skipping to the next slot.
+          </span>
+        </span>
+      </label>
+
       <div className="flex items-center gap-2 pt-1">
         <button
           type="button"
@@ -302,6 +318,14 @@ function ScheduleCard({
           <h3 className="truncate text-base font-semibold text-ink">{schedule.name}</h3>
           <p className="mt-0.5 text-xs text-ink-faint">
             {triggerSummary(schedule.trigger)} · next {when(schedule.nextRun)}
+            {schedule.catchUp && (
+              <span
+                className="ml-2 rounded-md border border-line px-1.5 py-0.5 text-[11px] text-ink-dim"
+                title="A slot missed while Argus was down fires once on recovery"
+              >
+                catch-up
+              </span>
+            )}
           </p>
           <p className="mt-0.5 truncate font-mono text-xs text-ink-faint">{schedule.cwd}</p>
         </div>
