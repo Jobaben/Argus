@@ -232,6 +232,26 @@ Triage mutations broadcast `issues:changed` on `/ws`. Like schedule CRUD,
 they sit behind the transport-level guards but need no admin session — triage
 cannot execute anything.
 
+## Briefing
+
+The "while you were away" digest: state-now attention items (down/failing
+monitors, gated pipeline phases awaiting approval, open issues) plus a
+windowed summary of runs, spend, failures, first-seen issues and finished
+pipelines since the last acknowledgement. A pure derivation over runs,
+schedules, issue triage and instances; the only persisted state is the
+acknowledgement timestamp, in `~/.claude/argus/briefing.json`.
+
+| Method + path            | Effect                                                                  |
+| ------------------------ | ----------------------------------------------------------------------- |
+| `GET /api/briefing`      | `{ since, generatedAt, attention, attentionCount, window }`             |
+| `POST /api/briefing/ack` | stamp now as caught-up → `{ ok, ackAt }`, broadcasts `briefing:changed` |
+
+The window is `max(ackAt, now − 7 d)`, defaulting to the last 24 h when no
+acknowledgement exists. `window` carries `totalRuns`, `byStatus`, `costUsd`,
+`tokens`, and capped newest-first lists `failures`, `newIssues` (first seen in
+window) and `finishedPipelines`. Like issue triage, `ack` needs no admin
+session — it cannot execute anything.
+
 ## Pipelines (v0.3)
 
 | Method + path                      | Effect                                                                            |

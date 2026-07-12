@@ -34,6 +34,12 @@ Fanned out in parallel; each is an isolated source + view + tab:
   fingerprinted by normalized error, with resolve/ignore triage and
   auto-reopen on regression (`/api/issues`, Issues tab; triage state in
   `~/.claude/argus/issues.json`).
+- **Briefing** ✅ (2026-07-12) — "while you were away" digest: state-now
+  attention cards (down/failing monitors, waiting gates, open issues) with a
+  nav badge, plus a windowed summary (runs, spend, failures, first-seen
+  issues, finished pipelines) since the last **Mark caught up**
+  (`/api/briefing` + `/ack`, Briefing tab; ack in
+  `~/.claude/argus/briefing.json`).
 
 ## v0.3 — Single-port + packaging
 

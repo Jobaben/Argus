@@ -7,6 +7,16 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Briefing** — a "while you were away" digest (new "Briefing" tab, first
+  after Command Center): state-now attention cards (down/failing monitors,
+  pipeline phases awaiting approval, open issues) each deep-linking to the
+  owning tab, plus a windowed digest since your last **Mark caught up** —
+  run outcomes, token/dollar spend, failures, first-seen issues, and finished
+  pipelines. The nav tab carries a red attention-count badge visible from any
+  tab. Backed by `GET /api/briefing` (pure derivation over runs, schedules,
+  issue triage, and instances; window defaults to 24 h, capped at 7 days) and
+  `POST /api/briefing/ack` (acknowledgement stored in Argus-owned
+  `~/.claude/argus/briefing.json`, broadcast as `briefing:changed`).
 - **The Chronicle** — a cross-source timeline view (new "Chronicle" tab):
   every scheduler run, background agent, and interactive session in a chosen
   window (1h–7d) rendered as swimlane spans on one time axis. Overlapping

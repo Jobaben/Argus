@@ -87,10 +87,7 @@ function buildAttention(input: BriefingInput): AttentionItem[] {
       kind: m.status === "down" ? "monitor-down" : "monitor-failing",
       id: m.scheduleId,
       title: m.name,
-      detail:
-        m.status === "down"
-          ? "expected a run, none arrived"
-          : `last run ${m.lastRunStatus ?? "failed"}`,
+      detail: m.status === "down" ? "expected a run, none arrived" : "last completed run failed",
       at: m.status === "down" ? m.expectedAt : m.lastRunAt,
     };
     (m.status === "down" ? down : failing).push(item);

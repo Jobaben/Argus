@@ -7,8 +7,8 @@ live web dashboard — what's running now, what finished, what failed, and the
 progress trail behind each one.
 
 📖 **[User Guide](docs/USER-GUIDE.md)** — every feature, with screenshots:
-Command Center, Chronicle, Scheduler, Monitors, Issues, Pipelines, Users,
-Search, and all the monitoring tabs.
+Command Center, Briefing, Chronicle, Scheduler, Monitors, Issues, Pipelines,
+Users, Search, and all the monitoring tabs.
 
 ## Stack
 

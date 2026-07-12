@@ -29,22 +29,23 @@ can do, and where the data comes from.
 | --- | ------------------------------------ | -------------- | ----------------------------------------- |
 | 0   | [Global UI](#global-ui)              | —              | nav, live dot, auto-refresh, setup banner |
 | 1   | [Command Center](#1-command-center)  | `#/command`    | how are my pipelines doing right now?     |
-| 2   | [Chronicle](#2-chronicle)            | `#/chronicle`  | what ran when, across every source?       |
-| 3   | [Scheduler](#3-scheduler)            | `#/schedules`  | fire `claude -p` on a schedule            |
-| 4   | [Monitors](#4-monitors)              | `#/monitors`   | did my schedules actually run?            |
-| 5   | [Issues](#5-issues)                  | `#/issues`     | why are runs failing, grouped by cause?   |
-| 6   | [Pipelines](#6-pipelines)            | `#/pipelines`  | author multi-phase, human-gated flows     |
-| 7   | [Users & sign-in](#7-users--sign-in) | `#/users`      | who may run/edit pipelines?               |
-| 8   | [Search](#8-search)                  | `#/search`     | where did I say/see _that_?               |
-| 9   | [Agents](#9-agents)                  | `#/agents`     | what's running / done / failed right now? |
-| 10  | [Agent Detail](#10-agent-detail)     | `#/agent/<id>` | how did _this_ agent get here?            |
-| 11  | [Sessions](#11-sessions)             | `#/sessions`   | what was actually said in a conversation? |
-| 12  | [Activity](#12-activity)             | `#/activity`   | what have I prompted lately, everywhere?  |
-| 13  | [Projects](#13-projects)             | `#/projects`   | which folders are active, and when?       |
-| 14  | [Stats](#14-stats)                   | `#/stats`      | what's my usage / cost / token spend?     |
-| 15  | [Inventory](#15-inventory)           | `#/inventory`  | what's installed and available?           |
-| 16  | [Tasks](#16-tasks)                   | `#/tasks`      | what task workspaces exist / are locked?  |
-| 17  | [Cron panel](#17-cron-panel)         | Scheduler tab  | why native cron routines can't be shown   |
+| 2   | [Briefing](#2-briefing)              | `#/briefing`   | what happened while I was away?           |
+| 3   | [Chronicle](#3-chronicle)            | `#/chronicle`  | what ran when, across every source?       |
+| 4   | [Scheduler](#4-scheduler)            | `#/schedules`  | fire `claude -p` on a schedule            |
+| 5   | [Monitors](#5-monitors)              | `#/monitors`   | did my schedules actually run?            |
+| 6   | [Issues](#6-issues)                  | `#/issues`     | why are runs failing, grouped by cause?   |
+| 7   | [Pipelines](#7-pipelines)            | `#/pipelines`  | author multi-phase, human-gated flows     |
+| 8   | [Users & sign-in](#8-users--sign-in) | `#/users`      | who may run/edit pipelines?               |
+| 9   | [Search](#9-search)                  | `#/search`     | where did I say/see _that_?               |
+| 10  | [Agents](#10-agents)                 | `#/agents`     | what's running / done / failed right now? |
+| 11  | [Agent Detail](#11-agent-detail)     | `#/agent/<id>` | how did _this_ agent get here?            |
+| 12  | [Sessions](#12-sessions)             | `#/sessions`   | what was actually said in a conversation? |
+| 13  | [Activity](#13-activity)             | `#/activity`   | what have I prompted lately, everywhere?  |
+| 14  | [Projects](#14-projects)             | `#/projects`   | which folders are active, and when?       |
+| 15  | [Stats](#15-stats)                   | `#/stats`      | what's my usage / cost / token spend?     |
+| 16  | [Inventory](#16-inventory)           | `#/inventory`  | what's installed and available?           |
+| 17  | [Tasks](#17-tasks)                   | `#/tasks`      | what task workspaces exist / are locked?  |
+| 18  | [Cron panel](#18-cron-panel)         | Scheduler tab  | why native cron routines can't be shown   |
 
 ---
 
@@ -56,8 +57,9 @@ Applies to every tab.
   indicator. **Green = "live"** (WebSocket to the server is connected); **gray =
   "reconnecting…"** (socket dropped, falling back to polling). It reflects
   Argus's link to its own server, not the health of your agents.
-- **Navigation** is split by role: the six **destination** tabs (Command
-  Center, Chronicle, Scheduler, Monitors, Issues, Pipelines) sit in the bar;
+- **Navigation** is split by role: the seven **destination** tabs (Command
+  Center, Briefing, Chronicle, Scheduler, Monitors, Issues, Pipelines) sit in
+  the bar;
   the 🔍 icon opens **Search**; the **⋯ More** menu holds the reference tabs
   (Stats, Inventory, Projects, Tasks, Users). Drill-down views (Agents,
   Detail, Sessions, Activity) are reached through links and breadcrumbs.
@@ -111,7 +113,7 @@ you — this is the wall you keep open on a second monitor.
 - **Revise** (labeled **Retry** after a crash-restart) — optionally attach a
   revise note, hit **Send**, and the phase restarts with your feedback.
 - Both actions require a signed-in, approved account (see
-  [Users & sign-in](#7-users--sign-in)); the buttons render for everyone but
+  [Users & sign-in](#8-users--sign-in)); the buttons render for everyone but
   the server answers 401 unless you're authenticated.
 
 **Cost semantics:** a metric appears once at least one run reports it via the
@@ -124,7 +126,67 @@ gate actions `POST /api/instances/:id/approve` / `/revise`.
 
 ---
 
-## 2. Chronicle
+## 2. Briefing
+
+_The "while you were away" digest — read this first after time away._
+Route: `#/briefing`
+
+![Briefing](screenshots/briefing.png)
+
+**Purpose:** Argus exists so agents can run unattended — which means you're
+usually not looking when things happen. The Briefing answers the two questions
+you'd otherwise tour four tabs for: **what needs me right now**, and **what
+happened since I last caught up**.
+
+**The attention badge:** the Briefing tab shows a red count chip in the nav
+bar whenever something needs you (visible from any tab). The count is the
+number of attention cards below.
+
+**Needs your attention** — state-now cards, most severe first, each
+deep-linking to the tab where you act on it:
+
+- **Monitor down** (→ Monitors): a schedule's expected run never arrived —
+  the dead-man's switch fired.
+- **Awaiting approval** (→ Pipelines): a gated pipeline phase is paused
+  waiting for your Approve/Revise.
+- **Monitor failing** (→ Monitors): the schedule runs, but its last completed
+  run failed.
+- **Open issue** (→ Issues): an unresolved failure group, with its occurrence
+  count and affected schedules.
+
+**While you were away** — everything below is scoped to the window since your
+last acknowledgement (or the last 24 h if you've never acknowledged; capped at
+7 days):
+
+- The header line totals the window: **runs · tokens · cost**.
+- A run-outcome strip: succeeded / failed / interrupted / cancelled / skipped
+  / still running counts.
+- **Failures** — the windowed failed runs (schedule, first error line, when),
+  newest first.
+- **New issues** — failure groups whose _first_ occurrence is inside the
+  window, i.e. genuinely new breakage, not an old known issue recurring.
+- **Pipelines finished** — instances that reached a terminal state in the
+  window.
+
+![Briefing digest sections](screenshots/briefing-digest.png)
+
+**Mark caught up** (top right): stamps now as your acknowledgement point and
+resets the window — the digest empties, and tomorrow's briefing starts from
+this moment. Attention cards are unaffected (a down monitor stays down until
+it actually recovers). The acknowledgement is stored in Argus-owned
+`~/.claude/argus/briefing.json`.
+
+**All caught up:** when nothing needs attention and nothing ran in the
+window, the tab says so and gets out of the way.
+
+**Where the data comes from:** `GET /api/briefing` (a pure derivation over
+runs + schedules + issue triage + pipeline instances; re-fetched on the
+`schedules:changed`, `pipelines:changed`, `issues:changed` and
+`briefing:changed` WS pings), `POST /api/briefing/ack`.
+
+---
+
+## 3. Chronicle
 
 _Everything that ran, on one timeline._ Route: `#/chronicle`
 
@@ -158,7 +220,7 @@ the scheduler's run records with `~/.claude/jobs/` and
 
 ---
 
-## 3. Scheduler
+## 4. Scheduler
 
 _Recurring `claude -p` runs, owned by Argus._ Route: `#/schedules`
 
@@ -167,7 +229,7 @@ _Recurring `claude -p` runs, owned by Argus._ Route: `#/schedules`
 **Purpose:** define headless prompts that Argus fires on a trigger — nightly
 audits, periodic report generators, cleanup jobs — then watch their run
 history and logs without leaving the page. Two sub-tabs: **Schedules** (this
-section) and **Cron** (see [Cron panel](#17-cron-panel)).
+section) and **Cron** (see [Cron panel](#18-cron-panel)).
 
 **Creating a schedule** — click **+ New schedule**:
 
@@ -204,7 +266,7 @@ via `GET/POST /api/schedules`, `PUT/DELETE /api/schedules/:id`,
 
 ---
 
-## 4. Monitors
+## 5. Monitors
 
 _A dead-man's switch over your schedules._ Route: `#/monitors`
 
@@ -240,7 +302,7 @@ from schedules + run records (no separate state to go stale).
 
 ---
 
-## 5. Issues
+## 6. Issues
 
 _Failed runs grouped by root cause._ Route: `#/issues`
 
@@ -273,7 +335,7 @@ your triage decisions persist (`~/.claude/argus/issues.json`).
 
 ---
 
-## 6. Pipelines
+## 7. Pipelines
 
 _Author multi-phase, human-gated agent flows._ Route: `#/pipelines`
 
@@ -288,7 +350,7 @@ pauses there until a human approves or revises.
 **What you see:** one card per pipeline with its trigger summary, phase
 count, a `disabled` tag when paused, and a live status pill aggregated from
 running instances. When you're **signed out**, the **Login** panel appears
-here (see [Users & sign-in](#7-users--sign-in)) — viewing is open, but every
+here (see [Users & sign-in](#8-users--sign-in)) — viewing is open, but every
 mutating action requires a signed-in, root-approved account.
 
 **The pipeline form** (+ New pipeline / Edit):
@@ -325,7 +387,7 @@ records under `~/.claude/argus/instances/` via `GET/POST /api/pipelines`,
 
 ---
 
-## 7. Users & sign-in
+## 8. Users & sign-in
 
 _Who may run and edit pipelines._ Route: `#/users` (root only) + the login
 panel on the Pipelines tab
@@ -364,7 +426,7 @@ machine running Argus and bootstrap again.
 
 ---
 
-## 8. Search
+## 9. Search
 
 _Full-text across all transcripts._ Route: `#/search` (the 🔍 in the nav)
 
@@ -387,7 +449,7 @@ and "No matches".
 
 ---
 
-## 9. Agents
+## 10. Agents
 
 _The status board for background jobs._ Route: `#/agents`
 
@@ -405,7 +467,7 @@ _The status board for background jobs._ Route: `#/agents`
   finished output, and a footer — folder, tempo, and last-update time.
 
 **How to use it:** scan colors to triage — green pulse = running now, red =
-failed. **Click any card** to open that agent's [Detail](#10-agent-detail).
+failed. **Click any card** to open that agent's [Detail](#11-agent-detail).
 
 **Where the data comes from:** `GET /api/agents`, merging
 `~/.claude/jobs/<short>/state.json` with `~/.claude/daemon/roster.json`
@@ -413,7 +475,7 @@ failed. **Click any card** to open that agent's [Detail](#10-agent-detail).
 
 ---
 
-## 10. Agent Detail
+## 11. Agent Detail
 
 _Single-agent deep dive + timeline._ Route: `#/agent/<short>`
 
@@ -442,7 +504,7 @@ the main list.
 
 ---
 
-## 11. Sessions
+## 12. Sessions
 
 _Browse & read transcripts._ Route: `#/sessions`
 
@@ -473,7 +535,7 @@ the model used, and last-activity time.
 
 ---
 
-## 12. Activity
+## 13. Activity
 
 _Global prompt feed._ Route: `#/activity`
 
@@ -490,7 +552,7 @@ relative timestamp, and the prompt text (truncated to ~240 chars). Read-only.
 
 ---
 
-## 13. Projects
+## 14. Projects
 
 _Working-directories overview._ Route: `#/projects`
 
@@ -512,7 +574,7 @@ touched. Informational only — drill into content via Sessions or Search.
 
 ---
 
-## 14. Stats
+## 15. Stats
 
 _Usage analytics._ Route: `#/stats`
 
@@ -536,7 +598,7 @@ metrics appear only if present).
 
 ---
 
-## 15. Inventory
+## 16. Inventory
 
 _Installed extensions catalog._ Route: `#/inventory`
 
@@ -558,7 +620,7 @@ do." No install/remove actions.
 
 ---
 
-## 16. Tasks
+## 17. Tasks
 
 _Task-queue workspace inventory._ Route: `#/tasks`
 
@@ -576,7 +638,7 @@ locked/in use, green = open), and last-updated time. Read-only.
 
 ---
 
-## 17. Cron panel
+## 18. Cron panel
 
 _An honest empty state, by design._ Found under **Scheduler → Cron** sub-tab
 (there is deliberately no `#/cron` route).
