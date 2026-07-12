@@ -63,3 +63,20 @@ test("postWebhook swallows fetch errors", async () => {
     globalThis.fetch = origFetch;
   }
 });
+
+test("monitor alert payload maps event, title, detail, id", async () => {
+  const { buildMonitorAlertPayload } = await import("./notify.js");
+  const p = buildMonitorAlertPayload({
+    event: "monitor.down",
+    scheduleId: "s1",
+    name: "Nightly audit",
+    status: "down",
+    at: "2026-07-12T08:00:00Z",
+    detail: "no run covered the slot expected at 2026-07-12T02:00:00Z",
+  });
+  assert.equal(p.event, "monitor.down");
+  assert.equal(p.id, "s1");
+  assert.equal(p.at, "2026-07-12T08:00:00Z");
+  assert.match(p.title, /Monitor down: Nightly audit/);
+  assert.match(p.detail, /expected at/);
+});

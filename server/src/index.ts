@@ -14,7 +14,14 @@ import {
 import { loadConfig } from "./config.js";
 import { isUpgradeAllowed } from "./security.js";
 import { VERSION } from "./version.js";
-import { buildPipelineFailurePayload, buildRunFailurePayload, postWebhook } from "./notify.js";
+import {
+  buildMonitorAlertPayload,
+  buildPipelineFailurePayload,
+  buildRunFailurePayload,
+  postWebhook,
+} from "./notify.js";
+import { createMonitorWatcher } from "./monitorWatcher.js";
+import { readSchedules } from "./sources/schedules.js";
 import { createApp } from "./app.js";
 import { createAuthService } from "./auth.js";
 import { createUserStore } from "./userStore.js";
@@ -142,9 +149,24 @@ void backfillRunCosts()
     }
   })
   .catch((e) => console.error("[argus] run cost backfill failed:", e));
+// Monitor health is derived on read, so nothing observes it changing — the
+// watcher re-derives it each tick and pushes down/failing/recovered
+// transitions to the webhook and every connected dashboard.
+const monitorWatcher = createMonitorWatcher({
+  now: () => new Date(),
+  readSchedules,
+  readRuns,
+  onAlert: (alert) => {
+    void postWebhook(config.webhookUrl, buildMonitorAlertPayload(alert));
+    broadcast({ type: "monitors:alert", alert });
+  },
+});
 const scheduler = startScheduler({
   onChange: () => broadcast({ type: "schedules:changed" }),
-  onTick: () => engine.reconcile(),
+  onTick: async () => {
+    await engine.reconcile();
+    await monitorWatcher.check();
+  },
   onFailure: (run) =>
     void postWebhook(config.webhookUrl, buildRunFailurePayload(run, new Date().toISOString())),
 });

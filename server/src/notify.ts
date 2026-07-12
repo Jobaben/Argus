@@ -1,5 +1,6 @@
 import type { Run } from "./sources/scheduleTypes.js";
 import type { PipelineInstance } from "./sources/pipelineTypes.js";
+import type { MonitorAlert } from "./sources/monitorAlerts.js";
 
 /**
  * Unattended runs are the whole point of Argus (overnight `claude -p`), so a
@@ -10,7 +11,7 @@ import type { PipelineInstance } from "./sources/pipelineTypes.js";
  * The payload builders are pure so they can be asserted without a network.
  */
 export interface FailurePayload {
-  event: "run.failed" | "pipeline.failed";
+  event: "run.failed" | "pipeline.failed" | MonitorAlert["event"];
   at: string;
   title: string;
   detail: string;
@@ -35,6 +36,22 @@ export function buildPipelineFailurePayload(inst: PipelineInstance, at: string):
     title: `Pipeline failed: ${inst.pipelineName}`,
     detail: phase ? `phase "${phase.name}" did not complete` : "pipeline did not complete",
     id: inst.id,
+  };
+}
+
+const MONITOR_TITLES: Record<MonitorAlert["event"], string> = {
+  "monitor.down": "Monitor down",
+  "monitor.failing": "Monitor failing",
+  "monitor.recovered": "Monitor recovered",
+};
+
+export function buildMonitorAlertPayload(alert: MonitorAlert): FailurePayload {
+  return {
+    event: alert.event,
+    at: alert.at,
+    title: `${MONITOR_TITLES[alert.event]}: ${alert.name}`,
+    detail: alert.detail,
+    id: alert.scheduleId,
   };
 }
 

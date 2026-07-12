@@ -1,11 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import type { Agent } from "../types";
 import { detectTransitions, snapshotStatuses, type StatusSnapshot } from "./detectTransitions";
 import { fireNotification, notificationTitle } from "./fireNotification";
-import type { ToastItem } from "../ds/Toast";
-
-const TOAST_TTL_MS = 8000;
-const MAX_TOASTS = 4;
+import { useToastQueue } from "./useToastQueue";
 
 function currentPermission(): NotificationPermission | "unsupported" {
   return typeof Notification === "undefined" ? "unsupported" : Notification.permission;
@@ -19,19 +16,8 @@ function currentPermission(): NotificationPermission | "unsupported" {
  * keeps a page load from replaying every already-finished agent.
  */
 export function useAgentNotifications(agents: Agent[]) {
-  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const { toasts, push, dismiss } = useToastQueue();
   const prevRef = useRef<StatusSnapshot | null>(null);
-  const seqRef = useRef(0);
-  const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
-
-  const dismiss = useCallback((id: string) => {
-    setToasts((ts) => ts.filter((t) => t.id !== id));
-    const timer = timers.current.get(id);
-    if (timer) {
-      clearTimeout(timer);
-      timers.current.delete(id);
-    }
-  }, []);
 
   // Ask once, lazily, only if the browser supports notifications and the user
   // has not already decided. A denial simply leaves the in-app toast fallback.
@@ -55,32 +41,16 @@ export function useAgentNotifications(agents: Agent[]) {
       }
     };
 
-    const fresh: ToastItem[] = events.map((e) => {
+    for (const e of events) {
       fireNotification(e, { permission, spawn });
-      return {
-        id: `${e.short}:${e.status}:${seqRef.current++}`,
+      push({
+        key: `${e.short}:${e.status}`,
         tone: e.status === "failed" ? "fail" : "ok",
         title: notificationTitle(e),
         detail: e.short,
-      };
-    });
-
-    setToasts((ts) => [...ts, ...fresh].slice(-MAX_TOASTS));
-    for (const t of fresh) {
-      timers.current.set(
-        t.id,
-        setTimeout(() => dismiss(t.id), TOAST_TTL_MS),
-      );
+      });
     }
-  }, [agents, dismiss]);
-
-  useEffect(() => {
-    const active = timers.current;
-    return () => {
-      for (const timer of active.values()) clearTimeout(timer);
-      active.clear();
-    };
-  }, []);
+  }, [agents, push]);
 
   return { toasts, dismiss };
 }

@@ -3,6 +3,7 @@ import { useAgents } from "./useAgents";
 import type { Agent, AgentStatus } from "./types";
 import { AgentTile, HealthCounter, EmptyState, Page, ToastRegion } from "./ds";
 import { useAgentNotifications } from "./notify/useAgentNotifications";
+import { useMonitorAlerts } from "./notify/useMonitorAlerts";
 import { NavBar } from "./NavBar";
 import type { NavTab } from "./NavBar";
 import type { MoreItem } from "./ds";
@@ -108,7 +109,15 @@ export default function App() {
   const agentsState = useAgents();
   const auth = useAuth();
   const briefingState = useBriefing();
-  const { toasts, dismiss } = useAgentNotifications(agentsState.agents);
+  const agentToasts = useAgentNotifications(agentsState.agents);
+  const monitorToasts = useMonitorAlerts();
+  // One region, two sources. Ids are unique per queue and dismissing an
+  // unknown id is a no-op, so routing a dismiss to both queues is safe.
+  const toasts = [...agentToasts.toasts, ...monitorToasts.toasts];
+  const dismiss = (id: string) => {
+    agentToasts.dismiss(id);
+    monitorToasts.dismiss(id);
+  };
 
   useEffect(() => {
     const onHash = () => setActive(currentTabId());
