@@ -67,6 +67,12 @@ Applies to every tab.
   WebSocket whenever a watched file mutates, and the UI re-fetches. If the
   socket drops, each tab also polls on a timer (most tabs 10s; Stats 30s;
   Search on keystroke). You rarely need to refresh the browser.
+- **Notifications:** a bottom-right **toast stack** (max 4, auto-dismiss
+  after 8s) fires from any tab when a background agent finishes or fails and
+  when a **monitor alert** arrives (down / failing / recovered — see
+  [Monitors](#5-monitors)). If you grant the browser's notification
+  permission (asked once), the same events also fire **native OS
+  notifications**, so you hear about failures with the tab in the background.
 - **Routing** is hash-based (`#/command`, `#/agents`, `#/search`…), so tabs
   are bookmarkable and the back button works. An unknown hash lands on the
   Command Center.
@@ -242,13 +248,23 @@ section) and **Cron** (see [Cron panel](#18-cron-panel)).
   **weekly on a day at HH:MM**, or **windowed** (every N minutes, but only
   between a start and end time on selected weekdays — e.g. "every 30 min,
   09:00–13:00, Mon–Fri"). Overlap policy defaults to _skip if still running_.
+- **Catch up a missed run on recovery** — off by default. Normally a slot
+  only fires within a short grace window (a few minutes), so if the machine
+  was asleep or Argus wasn't running when a slot came due, that slot is
+  silently skipped and the schedule waits for the next one. Tick this and the
+  missed slot fires **once**, as soon as Argus is back — anacron-style. Only
+  the most recent missed slot is run: an every-15-minutes schedule that
+  slept through the night catches up with one run, not thirty. Ideal for
+  "morning briefing"-type dailies on a laptop; leave it off for jobs where a
+  stale run is worse than no run.
 - **Save schedule** stays disabled until name, prompt and working directory
   are filled.
 
 **What each schedule card shows:** the trigger summary and its **next fire
-time**, the working directory, a pulsing "running" indicator while a run is
-in flight, and the **last five runs** — status pill, start time, duration,
-cost and tokens if reported, and a `manual` tag on run-now firings.
+time** (plus a **catch-up** chip when missed-run recovery is on), the working
+directory, a pulsing "running" indicator while a run is in flight, and the
+**last five runs** — status pill, start time, duration, cost and tokens if
+reported, and a `manual` tag on run-now firings.
 
 **What you can do:**
 
@@ -294,11 +310,30 @@ overdue but within grace (10% of the trigger period, clamped 5–60 min);
 the latest one failed; `pending` — no run yet; `paused` — the schedule is
 disabled.
 
-**What you can do:** it's deliberately read-only — fix problems in the
-Scheduler or Issues tabs.
+**Alerts — the switch actually pages you.** Detection alone isn't enough for
+a page you don't have open, so the server re-checks every monitor on its
+scheduler tick (~30s) and pushes an alert the moment one **transitions**:
+
+- **Monitor down** — a slot passed its grace with no covering run.
+- **Monitor failing** — runs are landing on time, but the latest one failed.
+- **Monitor recovered** — a down/failing monitor came back up (a catch-up
+  run, a fixed prompt, the next slot succeeding…).
+
+Each alert reaches you three ways: an **in-app toast** (bottom-right, any
+tab), a **native OS notification** if you've granted the browser permission
+(Argus asks once), and a **webhook POST** when `ARGUS_WEBHOOK_URL` is set —
+the same JSON channel that already carries run/pipeline failures, so one
+Slack/mail bridge covers everything. Only observed transitions alert: on a
+fresh server boot the first check is a silent baseline, so restarting Argus
+never replays a storm of already-known-down alerts (the Briefing tab is the
+place that shows current bad state).
+
+**What you can do:** the tab itself is deliberately read-only — fix problems
+in the Scheduler or Issues tabs.
 
 **Where the data comes from:** `GET /api/monitors`, derived on every read
-from schedules + run records (no separate state to go stale).
+from schedules + run records (no separate state to go stale); alerts arrive
+as `monitors:alert` frames on `/ws`.
 
 ---
 

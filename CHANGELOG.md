@@ -7,6 +7,26 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Catch-up for missed schedules** — anacron-style, opt-in per schedule
+  ("Catch up a missed run on recovery" in the Scheduler form, `catchUp` on
+  the API). A slot that came due while the machine was asleep or Argus was
+  down normally expires with the firing grace and is skipped; with catch-up
+  on, the most recent missed slot fires **once** on the next scheduler tick.
+  Exactly one recovery run per outage regardless of how many slots were
+  missed, never a slot from before the schedule existed, and the catch-up
+  run also satisfies the schedule's monitor. Cards show a "catch-up" chip.
+- **Monitor alerts** — the dead-man's switch now pages you instead of only
+  coloring a tab. The server re-derives monitor health each scheduler tick
+  and, on an observed transition, emits `monitor.down` / `monitor.failing` /
+  `monitor.recovered`: POSTed to `ARGUS_WEBHOOK_URL` (same payload shape as
+  `run.failed`/`pipeline.failed`) and pushed as a payload-carrying
+  `monitors:alert` WS frame that the web app surfaces as an in-app toast
+  plus a native OS notification (under the already-requested permission).
+  The first check after boot is a silent baseline — restarting Argus never
+  replays known-bad state — and `late` never alerts (that's grace working).
+  The agent-notification toast queue was extracted into a shared
+  `useToastQueue` so both sources render through one capped,
+  auto-dismissing region.
 - **Briefing** — a "while you were away" digest (new "Briefing" tab, first
   after Command Center): state-now attention cards (down/failing monitors,
   pipeline phases awaiting approval, open issues) each deep-linking to the

@@ -77,6 +77,7 @@ docker run --rm -p 7777:7777 \
 | `ARGUS_ALLOWED_ORIGINS`     | _(none)_    | Extra Origins to accept for cross-origin browser requests. |
 | `ARGUS_MAX_CONCURRENT_RUNS` | `4`         | Cap on concurrently spawned pipeline steps.                |
 | `ARGUS_SCHED_TICK_MS`       | `30000`     | Scheduler / reconcile tick interval.                       |
+| `ARGUS_WEBHOOK_URL`         | _(unset)_   | POST target for failure + monitor alerts (Slack, mail, …). |
 
 ## Data sources
 

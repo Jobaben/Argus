@@ -62,9 +62,12 @@ On connect: `{ "type": "hello" }`. On any watched change (debounced ~150ms) the
 server pushes one of `{ "type": "agents:changed" }`, `{ "type":
 "schedules:changed" }`, `{ "type": "pipelines:changed" }`, or `{ "type":
 "inventory:changed" }` (installed extensions + usage stats). The client
-re-fetches the relevant list — frames carry no payload by design (the server
-stays the single source of truth). The upgrade is subject to the same
-host/origin/token checks as the REST surface.
+re-fetches the relevant list — change frames carry no payload by design (the
+server stays the single source of truth). The one payload-carrying frame is
+`{ "type": "monitors:alert", "alert": … }` (see
+[Monitor alerts](#monitor-alerts)), which describes a transient event rather
+than state. The upgrade is subject to the same host/origin/token checks as
+the REST surface.
 
 ## Security
 
@@ -178,6 +181,13 @@ first. `endedAt: null` means still in flight — render through `windowEnd`.
 | `GET /api/runs/:id`                | one run plus the tail of its log                                   |
 | `POST /api/runs/:id/cancel`        | kill a running run → `200`, `409` if not running, `404` if unknown |
 
+Create/patch body fields: `name`, `prompt`, `cwd` (must exist), `trigger`,
+`enabled` (default `true`), `overlapPolicy` (`skip`|`allow`, default `skip`),
+and `catchUp` (boolean, default `false`) — when `true`, a slot missed beyond
+the firing grace (machine asleep, Argus down) fires **once** on the next
+scheduler tick instead of being skipped; only the most recent missed slot is
+run.
+
 ## Monitors
 
 ### `GET /api/monitors`
@@ -211,6 +221,32 @@ ran on time but the last completed run failed).
   "summary": { "up": 3, "late": 0, "down": 1, "failing": 0, "paused": 1, "pending": 0 }
 }
 ```
+
+### Monitor alerts
+
+The server re-derives monitor health on every scheduler tick and diffs it
+against the previous tick. Each observed transition into `down` or `failing`,
+and each recovery to `up` from one of those, is pushed as a `monitors:alert`
+frame on `/ws` **and** POSTed to `ARGUS_WEBHOOK_URL` (when set) with event
+`monitor.down` / `monitor.failing` / `monitor.recovered`, in the same payload
+shape as the existing `run.failed` / `pipeline.failed` webhook events:
+
+```json
+{
+  "type": "monitors:alert",
+  "alert": {
+    "event": "monitor.down",
+    "scheduleId": "…",
+    "name": "Nightly triage",
+    "status": "down",
+    "at": "2026-07-12T08:00:30.000Z",
+    "detail": "no run covered the slot expected at 2026-07-12T02:00:00.000Z"
+  }
+}
+```
+
+The first check after boot is a silent baseline (no replay of already-bad
+monitors), and `late` never alerts — that's the grace period doing its job.
 
 ## Issues
 
@@ -317,8 +353,9 @@ the web UI's setup banner installs the fixable ones with `POST /api/setup/apply`
 
 ## Configuration
 
-| Env var             | Default     | Effect                                         |
-| ------------------- | ----------- | ---------------------------------------------- |
-| `ARGUS_PORT`        | `7777`      | server port (proxy target)                     |
-| `ARGUS_CLAUDE_HOME` | `~/.claude` | directory to read/watch                        |
-| `CLAUDE_CONFIG_DIR` | —           | fallback override if `ARGUS_CLAUDE_HOME` unset |
+| Env var             | Default     | Effect                                                                                            |
+| ------------------- | ----------- | ------------------------------------------------------------------------------------------------- |
+| `ARGUS_PORT`        | `7777`      | server port (proxy target)                                                                        |
+| `ARGUS_CLAUDE_HOME` | `~/.claude` | directory to read/watch                                                                           |
+| `CLAUDE_CONFIG_DIR` | —           | fallback override if `ARGUS_CLAUDE_HOME` unset                                                    |
+| `ARGUS_WEBHOOK_URL` | —           | POST target for `run.failed`, `pipeline.failed`, and `monitor.*` events (Slack/mail bridge, etc.) |

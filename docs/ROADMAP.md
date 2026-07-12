@@ -34,6 +34,13 @@ Fanned out in parallel; each is an isolated source + view + tab:
   fingerprinted by normalized error, with resolve/ignore triage and
   auto-reopen on regression (`/api/issues`, Issues tab; triage state in
   `~/.claude/argus/issues.json`).
+- **Schedule catch-up** ✅ (2026-07-12) — anacron-style opt-in `catchUp` per
+  schedule: a slot missed beyond the firing grace (laptop asleep, Argus down)
+  fires once on recovery instead of being dropped; one run per outage.
+- **Monitor alerts** ✅ (2026-07-12) — server-side transition detection over
+  the Monitors derivation on each scheduler tick: `monitor.down` / `.failing`
+  / `.recovered` → `ARGUS_WEBHOOK_URL` + payload-carrying `monitors:alert` WS
+  frame → in-app toast + native OS notification.
 - **Briefing** ✅ (2026-07-12) — "while you were away" digest: state-now
   attention cards (down/failing monitors, waiting gates, open issues) with a
   nav badge, plus a windowed summary (runs, spend, failures, first-seen
