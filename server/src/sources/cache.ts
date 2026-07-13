@@ -55,6 +55,13 @@ export function cached<T>(
   return value;
 }
 
+/** Drop one key immediately. For sources whose writes happen in-process (runs,
+ *  instances), eager invalidation on write keeps read-after-write exact while
+ *  the TTL still collapses the broadcast-driven refetch stampede. */
+export function invalidate(key: string): void {
+  entries.delete(key);
+}
+
 export function invalidateCaches(): void {
   entries.clear();
 }

@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { paths } from "../claudeHome.js";
 import { atomicWriteJson } from "./atomicWrite.js";
+import { cached, invalidate } from "./cache.js";
 import type { Run } from "./scheduleTypes.js";
 
 export const LOG_CAP_BYTES = 1_048_576; // 1 MB
@@ -41,11 +42,24 @@ function memoSet(id: string, mtime: number, run: Run): void {
   }
 }
 
+// The directory scan (readdir + a stat per file) is cached under a short TTL:
+// one broadcast makes several routes (/api/runs, /monitors, /issues, /briefing,
+// /overview, /chronicle) call readRuns() near-simultaneously, and reconcile/
+// monitor checks repeat it within one scheduler tick. Keyed by directory so
+// tests with per-test homes never collide; writes invalidate eagerly, so
+// read-after-write stays exact.
+const SCAN_TTL_MS = 1500;
+
+function scanKey(): string {
+  return `runs:${paths.runsDir()}`;
+}
+
 export async function writeRun(run: Run): Promise<void> {
   await atomicWriteJson(runJsonPath(run.id), run);
   // Eager eviction: atomic rename gives a fresh mtime, but dropping the entry
   // makes staleness impossible even on filesystems with coarse mtime resolution.
   parseMemo.delete(run.id);
+  invalidate(scanKey());
 }
 
 /**
@@ -79,7 +93,7 @@ async function readRunFile(id: string): Promise<Run | null> {
   }
 }
 
-export async function readRuns(opts: { scheduleId?: string; limit?: number } = {}): Promise<Run[]> {
+async function scanRuns(): Promise<Run[]> {
   let names: string[];
   try {
     names = (await readdir(paths.runsDir())).filter((f) => f.endsWith(".json"));
@@ -89,8 +103,13 @@ export async function readRuns(opts: { scheduleId?: string; limit?: number } = {
   const runs = (await Promise.all(names.map((f) => readRunFile(f.replace(/\.json$/, ""))))).filter(
     (r): r is Run => r !== null,
   );
-  let out = runs.sort((a, b) => b.queuedAt.localeCompare(a.queuedAt));
-  if (opts.scheduleId) out = out.filter((r) => r.scheduleId === opts.scheduleId);
+  return runs.sort((a, b) => b.queuedAt.localeCompare(a.queuedAt));
+}
+
+export async function readRuns(opts: { scheduleId?: string; limit?: number } = {}): Promise<Run[]> {
+  const all = await cached(scanKey(), SCAN_TTL_MS, scanRuns);
+  // Never hand callers the cached array itself: some sort/splice in place.
+  let out = opts.scheduleId ? all.filter((r) => r.scheduleId === opts.scheduleId) : [...all];
   if (opts.limit && opts.limit > 0) out = out.slice(0, opts.limit);
   return out;
 }
@@ -186,4 +205,5 @@ export async function pruneRuns(scheduleId: string, keep: number): Promise<void>
     ]),
   );
   for (const r of drop) parseMemo.delete(r.id);
+  if (drop.length > 0) invalidate(scanKey());
 }

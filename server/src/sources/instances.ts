@@ -2,6 +2,7 @@ import { readFile, readdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { paths } from "../claudeHome.js";
 import { atomicWriteJson } from "./atomicWrite.js";
+import { cached, invalidate } from "./cache.js";
 import type { PipelineInstance } from "./pipelineTypes.js";
 
 export const INSTANCE_KEEP = 50;
@@ -43,12 +44,23 @@ async function readParsed(id: string): Promise<PipelineInstance | null> {
   }
 }
 
+// Directory-scan cache, mirroring runs.ts: reconcile() calls readInstances once
+// per pipeline definition every tick and /api/overview + /api/briefing fan out
+// per broadcast — all within milliseconds, over the same directory. Keyed by
+// directory; writes invalidate eagerly, so read-after-write stays exact.
+const SCAN_TTL_MS = 1500;
+
+function scanKey(): string {
+  return `instances:${paths.instancesDir()}`;
+}
+
 export async function writeInstance(inst: PipelineInstance): Promise<void> {
   await atomicWriteJson(instancePath(inst.id), inst);
   // Drop any memo entry so the next read re-stats — atomic rename gives the
   // file a fresh mtime, but eager eviction makes staleness impossible even on
   // filesystems with coarse mtime resolution.
   parseMemo.delete(inst.id);
+  invalidate(scanKey());
 }
 
 export async function readInstance(id: string): Promise<PipelineInstance | null> {
@@ -56,9 +68,7 @@ export async function readInstance(id: string): Promise<PipelineInstance | null>
   return readParsed(id);
 }
 
-export async function readInstances(
-  opts: { pipelineId?: string; limit?: number } = {},
-): Promise<PipelineInstance[]> {
+async function scanInstances(): Promise<PipelineInstance[]> {
   let names: string[];
   try {
     names = (await readdir(paths.instancesDir())).filter((f) => f.endsWith(".json"));
@@ -68,8 +78,15 @@ export async function readInstances(
   const all = (await Promise.all(names.map((f) => readParsed(f.replace(/\.json$/, ""))))).filter(
     (i): i is PipelineInstance => i !== null,
   );
-  let out = all.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  if (opts.pipelineId) out = out.filter((i) => i.pipelineId === opts.pipelineId);
+  return all.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export async function readInstances(
+  opts: { pipelineId?: string; limit?: number } = {},
+): Promise<PipelineInstance[]> {
+  const all = await cached(scanKey(), SCAN_TTL_MS, scanInstances);
+  // Never hand callers the cached array itself: some sort/splice in place.
+  let out = opts.pipelineId ? all.filter((i) => i.pipelineId === opts.pipelineId) : [...all];
   if (opts.limit && opts.limit > 0) out = out.slice(0, opts.limit);
   return out;
 }
@@ -83,4 +100,5 @@ export async function pruneInstances(pipelineId: string, keep: number): Promise<
       parseMemo.delete(i.id);
     }),
   );
+  if (drop.length > 0) invalidate(scanKey());
 }

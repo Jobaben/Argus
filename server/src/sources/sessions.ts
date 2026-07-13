@@ -1,6 +1,7 @@
-import { readdir, stat } from "node:fs/promises";
+import { open, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { paths } from "../claudeHome.js";
+import { KeyedMutex } from "../mutex.js";
 import { readJsonl } from "./readJson.js";
 import { cached } from "./cache.js";
 
@@ -326,38 +327,188 @@ export interface SessionTail {
   lastIndex: number;
 }
 
+// Per-file incremental tail state, mirroring runTailer's byte-offset approach:
+// the live-tail poll fires on every transcript append (150ms-debounced watcher
+// broadcast), so re-reading the whole file per poll is O(file size × polls)
+// exactly when the file is largest and hottest. Instead, keep the parsed state
+// and consume only appended bytes. `size` always sits on a consumed-line
+// boundary; a trailing partial line (writer mid-append) stays unconsumed and is
+// re-read on the next poll. A shrunken file, or a same-size mtime change, means
+// a rewrite — reparse from byte 0. Bounded LRU: only actively-watched sessions
+// occupy entries, but each holds a full parsed transcript, so keep it small.
+const TAIL_MEMO_MAX = 8;
+
+interface TailState {
+  size: number;
+  mtimeMs: number;
+  lineCount: number;
+  aiTitle: string | null;
+  userTitle: string | null;
+  model: string | null;
+  firstActivity: string | null;
+  lastActivity: string | null;
+  messages: SessionMessage[];
+}
+
+const tailMemo = new Map<string, TailState>();
+// Two concurrent tails of the same file (e.g. two browser tabs on one session)
+// would otherwise interleave at the await points and ingest the same appended
+// bytes twice, corrupting the memoized state. Serialize per file.
+const tailLocks = new KeyedMutex();
+
+function newTailState(): TailState {
+  return {
+    size: 0,
+    mtimeMs: 0,
+    lineCount: 0,
+    aiTitle: null,
+    userTitle: null,
+    model: null,
+    firstActivity: null,
+    lastActivity: null,
+    messages: [],
+  };
+}
+
+// Folds one parsed JSONL line into the state, reproducing what summarize() +
+// deriveTitle() + the message mapping in readSessionRaw derive from a full
+// parse: `aiTitle ?? userTitle` matches deriveTitle's precedence because an
+// ai-title anywhere in the file beats user text regardless of order.
+function ingestParsed(state: TailState, parsed: unknown): void {
+  state.lineCount++;
+  if (!parsed || typeof parsed !== "object") return;
+  const line = parsed as RawLine;
+  if (line.timestamp) {
+    if (!state.firstActivity) state.firstActivity = line.timestamp;
+    state.lastActivity = line.timestamp;
+  }
+  if (!state.aiTitle && line.type === "ai-title" && line.aiTitle?.trim()) {
+    state.aiTitle = truncate(line.aiTitle.trim(), TITLE_MAX);
+  }
+  if (!state.userTitle && line.type === "user" && !line.isMeta) {
+    const text = extractText(line.message?.content).trim();
+    if (text && !text.startsWith("<")) {
+      state.userTitle = truncate(text.replace(/\s+/g, " "), TITLE_MAX);
+    }
+  }
+  if (!isMessageLine(line.type)) return;
+  if (line.message?.model) state.model = line.message.model;
+  state.messages.push(normalizeMessage(line, state.messages.length));
+}
+
+function ingestChunk(state: TailState, chunk: string): void {
+  for (const line of chunk.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      ingestParsed(state, JSON.parse(trimmed));
+    } catch {
+      // skip malformed line (mirrors readJsonl)
+    }
+  }
+}
+
+async function readByteRange(file: string, start: number, end: number): Promise<Buffer> {
+  const handle = await open(file, "r");
+  try {
+    const { buffer } = await handle.read({ buffer: Buffer.alloc(end - start), position: start });
+    return buffer;
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Consumes bytes [state.size, size) into the state. Splitting at the newline
+ *  byte is UTF-8-safe (0x0A never occurs inside a multi-byte sequence). */
+async function ingestAppendedBytes(state: TailState, file: string, size: number): Promise<void> {
+  const buf = await readByteRange(file, state.size, size);
+  const nl = buf.lastIndexOf(0x0a);
+  const head = nl === -1 ? null : buf.subarray(0, nl + 1);
+  const rest = buf.subarray(nl + 1);
+  if (head) {
+    ingestChunk(state, head.toString("utf8"));
+    state.size += head.length;
+  }
+  if (rest.length === 0) return;
+  // No trailing newline: either a complete final line (consume it — matches
+  // the full-parse behavior of surfacing it immediately) or a writer caught
+  // mid-append (leave it; it will be re-read once completed).
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rest.toString("utf8").trim());
+  } catch {
+    return;
+  }
+  ingestParsed(state, parsed);
+  state.size += rest.length;
+}
+
 /**
  * Incremental slice of a transcript for the live-tail view: the same canonical,
  * defensively-parsed messages as {@link readSession} (malformed JSONL lines are
- * skipped upstream in `readJsonl`), returning only those newer than `after`.
+ * skipped), returning only those newer than `after`.
  *
- * Reads fresh via `readSessionRaw` rather than the short-TTL `readSession`
- * cache: freshness is the whole point of a live tail, and nothing invalidates
- * that cache on a file write, so a cache hit within the 1500ms window would
+ * Deliberately does not use the short-TTL `readSession` cache: freshness is the
+ * whole point of a live tail, and a cache hit within the 1500ms window would
  * silently hide just-appended messages — most damagingly the final message
- * before a session goes idle. The list-scan cache is unaffected.
+ * before a session goes idle. Freshness comes from the stat + appended-bytes
+ * read instead; an unchanged file costs one stat.
  */
 export async function readSessionTail(
   project: string,
   id: string,
   after: number,
 ): Promise<SessionTail | null> {
-  const detail = await readSessionRaw(project, id);
-  if (!detail) return null;
-  const messages = detail.messages.filter((m) => m.index > after);
-  const lastIndex = detail.messages.length
-    ? detail.messages[detail.messages.length - 1].index
-    : after;
+  const file = resolveSessionPath(project, id);
+  if (!file) return null;
+  return tailLocks.withLock(file, () => readSessionTailLocked(file, project, id, after));
+}
+
+async function readSessionTailLocked(
+  file: string,
+  project: string,
+  id: string,
+  after: number,
+): Promise<SessionTail | null> {
+  let st;
+  try {
+    st = await stat(file);
+  } catch {
+    tailMemo.delete(file);
+    return null;
+  }
+
+  let state = tailMemo.get(file);
+  if (
+    state &&
+    (st.size < state.size || (st.size === state.size && st.mtimeMs !== state.mtimeMs))
+  ) {
+    state = undefined; // truncated or rewritten in place — reparse from scratch
+  }
+  if (!state) state = newTailState();
+  if (st.size > state.size) await ingestAppendedBytes(state, file, st.size);
+  state.mtimeMs = st.mtimeMs;
+
+  tailMemo.delete(file);
+  tailMemo.set(file, state); // re-insert to refresh LRU recency
+  if (tailMemo.size > TAIL_MEMO_MAX) {
+    tailMemo.delete(tailMemo.keys().next().value as string);
+  }
+
+  // Parity with readSessionRaw: a file with no parseable lines is "not found".
+  if (state.lineCount === 0) return null;
+
+  const messages = state.messages.slice(Math.max(0, after + 1));
   return {
-    id: detail.id,
-    project: detail.project,
-    projectLabel: detail.projectLabel,
-    title: detail.title,
-    model: detail.model,
-    firstActivity: detail.firstActivity,
-    lastActivity: detail.lastActivity,
+    id,
+    project,
+    projectLabel: decodeProjectLabel(project),
+    title: state.aiTitle ?? state.userTitle ?? `Session ${id.slice(0, 8)}`,
+    model: state.model,
+    firstActivity: state.firstActivity,
+    lastActivity: state.lastActivity,
     messages,
-    lastIndex,
+    lastIndex: state.messages.length ? state.messages.length - 1 : after,
   };
 }
 
