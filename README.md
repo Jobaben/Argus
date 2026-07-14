@@ -48,12 +48,25 @@ Override the watched directory or port:
 ARGUS_CLAUDE_HOME=/path/to/.claude ARGUS_PORT=7777 npm run dev
 ```
 
-### Production (single port)
+### The `argus` command (single port)
 
 ```bash
-npm run build     # bundles the web UI and compiles the server to JS
-npm start         # serves the UI + API together on :7777
+npm i -g .        # or `npm link` — puts `argus` on your PATH
+argus --open      # build check, UI + API on :7777, opens your browser
 ```
+
+`argus` makes sure a production build exists (building one on first run),
+then serves the UI and API together on one port. Flags: `--open`,
+`--port <n>`, `--rebuild`, `--version`, `--help`; every `ARGUS_*` variable
+below is honoured. To install on another machine:
+
+```bash
+git clone https://github.com/Jobaben/Argus.git && cd Argus
+npm ci && npm i -g .
+```
+
+Without a global install, the same thing is `npm run build && npm start`
+(or `node bin/argus.mjs`).
 
 Or with Docker (mount your `~/.claude`, publish the port, set a token):
 

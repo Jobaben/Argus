@@ -5,6 +5,15 @@ All notable changes to Argus are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`argus` CLI** (`bin/argus.mjs`, wired as the package `bin`): one command
+  that checks for a production build (building UI + server on first run),
+  then starts the single-port server. `--open` launches your browser once
+  `/api/health` answers; `--port <n>`, `--rebuild`, `--version`, `--help`;
+  all `ARGUS_*` environment variables pass through. Install with
+  `npm i -g .` (or `npm link`) from a clone — see the README quick start.
+
 ## [0.3.0] - 2026-07-14
 
 ### Added

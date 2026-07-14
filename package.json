@@ -4,6 +4,9 @@
   "private": true,
   "description": "Argus — the all-seeing monitor for your Claude Code agents, jobs, history and results.",
   "type": "module",
+  "bin": {
+    "argus": "bin/argus.mjs"
+  },
   "engines": {
     "node": ">=22"
   },
