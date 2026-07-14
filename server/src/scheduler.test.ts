@@ -258,3 +258,80 @@ test("parseRunEnvelope harvests the result line from a stream-json NDJSON transc
   assert.equal(env.tokens, 150);
   assert.equal(env.isError, false);
 });
+
+test("fireOneOff records a run in the oneoff bucket without touching schedules", async () => {
+  const { scheduler, schedules, runs } = await load();
+  const run = await scheduler.fireOneOff(
+    { name: "Quick audit", prompt: "audit", cwd: home, model: "haiku" },
+    deps({}),
+  );
+  assert.equal(run.scheduleId, "oneoff");
+  assert.equal(run.scheduleName, "Quick audit");
+  assert.equal(run.trigger, "manual");
+  assert.equal(run.model, "haiku");
+  await waitFor(
+    async () => (await runs.readRuns({ scheduleId: "oneoff" }))[0]?.status !== "running",
+  );
+  const list = await runs.readRuns({ scheduleId: "oneoff" });
+  assert.equal(list.length, 1);
+  assert.equal(list[0].status, "succeeded");
+  assert.equal(list[0].resultSummary, "done");
+  assert.equal((await schedules.readSchedules()).length, 0);
+});
+
+test("a failed one-off run reaches onFailure and stays in the bucket", async () => {
+  const { scheduler, runs } = await load();
+  const failures: string[] = [];
+  await scheduler.fireOneOff(
+    { name: "boom", prompt: "p", cwd: home },
+    deps({
+      spawn: () => ({
+        pid: 1,
+        done: Promise.resolve({ code: 3, result: null, error: "exit code 3" }),
+      }),
+      onFailure: (r: { scheduleName: string }) => failures.push(r.scheduleName),
+    }),
+  );
+  await waitFor(() => failures.length === 1);
+  const list = await runs.readRuns({ scheduleId: "oneoff" });
+  assert.equal(list[0].status, "failed");
+  assert.equal(list[0].error, "exit code 3");
+});
+
+test("tick skips a due schedule while the budget hard stop is engaged", async () => {
+  const { scheduler, schedules, runs } = await load();
+  const budget = await import(`./sources/budget.js?${Math.random()}`);
+  const now = new Date(2026, 5, 22, 11, 1);
+  await budget.updateBudgetConfig({ dailyUsd: 1, blockScheduled: true }, now);
+  await budget.recordRunSpend({ endedAt: now.toISOString(), queuedAt: "", costUsd: 2 }, () => now);
+  await schedules.createSchedule(
+    { name: "n", prompt: "p", cwd: home, trigger: { kind: "interval", everyMinutes: 60 } },
+    new Date(2026, 5, 22, 10, 0),
+    "s1",
+  );
+  let spawned = 0;
+  await scheduler.tick(deps({ spawn: () => (spawned++, { pid: 1, done: new Promise(() => {}) }) }));
+  assert.equal(spawned, 0);
+  const list = await runs.readRuns({ scheduleId: "s1" });
+  assert.equal(list.length, 1);
+  assert.equal(list[0].status, "skipped");
+  assert.match(list[0].error ?? "", /budget/);
+  // The slot counts as covered, so the next tick doesn't re-skip it.
+  await scheduler.tick(deps({}));
+  assert.equal((await runs.readRuns({ scheduleId: "s1" })).length, 1);
+});
+
+test("tick fires normally when the budget is alert-only (blockScheduled off)", async () => {
+  const { scheduler, schedules, runs } = await load();
+  const budget = await import(`./sources/budget.js?${Math.random()}`);
+  const now = new Date(2026, 5, 22, 11, 1);
+  await budget.updateBudgetConfig({ dailyUsd: 1 }, now);
+  await budget.recordRunSpend({ endedAt: now.toISOString(), queuedAt: "", costUsd: 2 }, () => now);
+  await schedules.createSchedule(
+    { name: "n", prompt: "p", cwd: home, trigger: { kind: "interval", everyMinutes: 60 } },
+    new Date(2026, 5, 22, 10, 0),
+    "s1",
+  );
+  await scheduler.tick(deps({}));
+  await waitFor(async () => (await runs.readRuns({ scheduleId: "s1" }))[0]?.status === "succeeded");
+});

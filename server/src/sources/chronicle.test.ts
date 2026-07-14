@@ -256,3 +256,30 @@ test("invalid timestamps are skipped instead of crashing", () => {
   assert.equal(out.totals.spans, 0);
   assert.deepEqual(out.groups, []);
 });
+
+test("one-off launches share a single lane labeled 'One-off runs'", () => {
+  const out = buildChronicle(
+    {
+      runs: [
+        run("r1", { scheduleId: "oneoff", scheduleName: "Quick audit" }),
+        run("r2", {
+          scheduleId: "oneoff",
+          scheduleName: "Fix lint",
+          startedAt: "2026-07-09T11:00:00.000Z",
+          endedAt: "2026-07-09T11:05:00.000Z",
+        }),
+      ],
+      agents: [],
+      sessions: [],
+    },
+    NOW,
+    24 * HOUR,
+  );
+  const group = out.groups.find((g) => g.key === "run:oneoff");
+  assert.equal(group?.label, "One-off runs");
+  const labels = group!.rows
+    .flat()
+    .map((s) => s.label)
+    .sort();
+  assert.deepEqual(labels, ["Fix lint", "Quick audit"]);
+});

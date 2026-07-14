@@ -1,6 +1,7 @@
 import type { Run } from "./sources/scheduleTypes.js";
 import type { PipelineInstance } from "./sources/pipelineTypes.js";
 import type { MonitorAlert } from "./sources/monitorAlerts.js";
+import type { BudgetAlert } from "./sources/budgetAlerts.js";
 
 /**
  * Unattended runs are the whole point of Argus (overnight `claude -p`), so a
@@ -11,7 +12,7 @@ import type { MonitorAlert } from "./sources/monitorAlerts.js";
  * The payload builders are pure so they can be asserted without a network.
  */
 export interface FailurePayload {
-  event: "run.failed" | "pipeline.failed" | MonitorAlert["event"];
+  event: "run.failed" | "pipeline.failed" | MonitorAlert["event"] | BudgetAlert["event"];
   at: string;
   title: string;
   detail: string;
@@ -52,6 +53,22 @@ export function buildMonitorAlertPayload(alert: MonitorAlert): FailurePayload {
     title: `${MONITOR_TITLES[alert.event]}: ${alert.name}`,
     detail: alert.detail,
     id: alert.scheduleId,
+  };
+}
+
+const BUDGET_TITLES: Record<BudgetAlert["event"], string> = {
+  "budget.warning": "Budget warning",
+  "budget.exceeded": "Budget exceeded",
+  "budget.cleared": "Budget back under limit",
+};
+
+export function buildBudgetAlertPayload(alert: BudgetAlert): FailurePayload {
+  return {
+    event: alert.event,
+    at: alert.at,
+    title: BUDGET_TITLES[alert.event],
+    detail: alert.detail,
+    id: "budget",
   };
 }
 

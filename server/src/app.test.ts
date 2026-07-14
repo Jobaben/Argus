@@ -689,3 +689,55 @@ test("briefing: digest shape, ack round-trip, and broadcast", async () => {
   assert.equal(second.since, ackBody.ackAt);
   assert.equal(second.window.totalRuns, 0); // the failed run predates the ack
 });
+
+test("POST /api/launch rejects invalid bodies with 400", async () => {
+  const app = makeApp();
+  const bad = await app.request("/api/launch", {
+    method: "POST",
+    headers: { host: "127.0.0.1:7777", "content-type": "application/json" },
+    body: JSON.stringify({ cwd: home }),
+  });
+  assert.equal(bad.status, 400);
+  assert.match(((await bad.json()) as { error: string }).error, /prompt/);
+
+  const noCwd = await app.request("/api/launch", {
+    method: "POST",
+    headers: { host: "127.0.0.1:7777", "content-type": "application/json" },
+    body: JSON.stringify({ prompt: "p", cwd: "/definitely/not/a/dir" }),
+  });
+  assert.equal(noCwd.status, 400);
+});
+
+test("GET /api/budget returns config, status and a 30-day ledger", async () => {
+  const app = makeApp();
+  const res = await app.request("/api/budget", { headers: { host: "127.0.0.1:7777" } });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as {
+    config: { dailyUsd: number | null };
+    status: { state: string };
+    days: unknown[];
+  };
+  assert.equal(body.config.dailyUsd, null);
+  assert.equal(body.status.state, "unset");
+  assert.equal(body.days.length, 30);
+});
+
+test("PUT /api/budget persists limits and rejects bad ones", async () => {
+  const app = makeApp();
+  const put = await app.request("/api/budget", {
+    method: "PUT",
+    headers: { host: "127.0.0.1:7777", "content-type": "application/json" },
+    body: JSON.stringify({ dailyUsd: 25, blockScheduled: true }),
+  });
+  assert.equal(put.status, 200);
+  const updated = (await put.json()) as { config: { dailyUsd: number; blockScheduled: boolean } };
+  assert.equal(updated.config.dailyUsd, 25);
+  assert.equal(updated.config.blockScheduled, true);
+
+  const bad = await app.request("/api/budget", {
+    method: "PUT",
+    headers: { host: "127.0.0.1:7777", "content-type": "application/json" },
+    body: JSON.stringify({ dailyUsd: -3 }),
+  });
+  assert.equal(bad.status, 400);
+});

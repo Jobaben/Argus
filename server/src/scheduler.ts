@@ -14,6 +14,8 @@ import {
   runLogPath,
   writeRun,
 } from "./sources/runs.js";
+import { isSpendBlocked } from "./sources/budget.js";
+import { ONEOFF_SCHEDULE_ID, type LaunchInput } from "./sources/launch.js";
 import type { Run, RunStatus, Schedule } from "./sources/scheduleTypes.js";
 
 /** Builds a terminal run record for a schedule that never spawned a process
@@ -203,9 +205,11 @@ export function isAlive(pid: number | null): boolean {
  */
 export const defaultSpawn: SpawnFn = (run, logPath) => {
   const out = createWriteStream(logPath, { flags: "a" });
+  const args = ["-p", "--output-format", "json", "--session-id", run.sessionId ?? randomUUID()];
+  if (run.model && run.model.trim()) args.push("--model", run.model);
   const child = nodeSpawn(
     "claude",
-    ["-p", "--output-format", "json", "--session-id", run.sessionId ?? randomUUID()],
+    args,
     // detached makes the child a POSIX process-group leader so killRunProcess
     // can signal the whole tree with kill(-pid); irrelevant under win32 taskkill.
     { cwd: run.cwd, shell: process.platform === "win32", detached: process.platform !== "win32" },
@@ -246,20 +250,19 @@ export const defaultSpawn: SpawnFn = (run, logPath) => {
   return { pid: child.pid ?? null, done };
 };
 
-/** Creates a run record, spawns it, and updates the record on completion. */
-export async function fireRun(
-  schedule: Schedule,
+/** Builds the initial "running" run record shared by scheduled and one-off firings. */
+function newRun(
+  spec: { scheduleId: string; scheduleName: string; prompt: string; cwd: string; model?: string },
   trigger: "scheduled" | "manual",
+  startedAt: Date,
   deps: SchedulerDeps,
-): Promise<Run> {
-  const startedAt = deps.now();
-  const sessionId = deps.newId();
-  const run: Run = {
+): Run {
+  return {
     id: deps.newId(),
-    scheduleId: schedule.id,
-    scheduleName: schedule.name,
-    prompt: schedule.prompt,
-    cwd: schedule.cwd,
+    scheduleId: spec.scheduleId,
+    scheduleName: spec.scheduleName,
+    prompt: spec.prompt,
+    cwd: spec.cwd,
     status: "running",
     trigger,
     queuedAt: startedAt.toISOString(),
@@ -268,14 +271,18 @@ export async function fireRun(
     durationMs: null,
     pid: null,
     exitCode: null,
-    sessionId,
-    project: encodeProject(schedule.cwd),
+    sessionId: deps.newId(),
+    ...(spec.model ? { model: spec.model } : {}),
+    project: encodeProject(spec.cwd),
     resultSummary: null,
     error: null,
   };
-  await writeRun(run);
-  await markScheduleRan(schedule.id, run.id, run.queuedAt);
+}
 
+/** Spawns a prepared run record and tracks it to its terminal state: records
+ * the pid, then on completion writes the outcome, prunes the run's bucket,
+ * folds cost into the totals and fires the failure/change callbacks. */
+async function spawnAndTrack(run: Run, startedAt: Date, deps: SchedulerDeps): Promise<Run> {
   const handle = deps.spawn(run, runLogPath(run.id));
   run.pid = handle.pid;
   await writeRun(run);
@@ -298,7 +305,7 @@ export async function fireRun(
         tokens: res.tokens,
       };
       await writeRun(finished);
-      await pruneRuns(schedule.id, RUN_KEEP);
+      await pruneRuns(run.scheduleId, RUN_KEEP);
       await accumulateRun(finished.id, deps.now);
       if (finished.status === "failed") deps.onFailure?.(finished);
       deps.onChange?.();
@@ -308,13 +315,72 @@ export async function fireRun(
   return run;
 }
 
-/** One scheduler pass: fire every due schedule, honouring overlap policy. */
+/** Creates a run record, spawns it, and updates the record on completion. */
+export async function fireRun(
+  schedule: Schedule,
+  trigger: "scheduled" | "manual",
+  deps: SchedulerDeps,
+): Promise<Run> {
+  const startedAt = deps.now();
+  const run = newRun(
+    {
+      scheduleId: schedule.id,
+      scheduleName: schedule.name,
+      prompt: schedule.prompt,
+      cwd: schedule.cwd,
+    },
+    trigger,
+    startedAt,
+    deps,
+  );
+  await writeRun(run);
+  await markScheduleRan(schedule.id, run.id, run.queuedAt);
+  return spawnAndTrack(run, startedAt, deps);
+}
+
+/** Fires a one-off run (the Launch tab): no schedule is created or touched;
+ * the run lands in the shared `oneoff` bucket and completes like any other. */
+export async function fireOneOff(input: LaunchInput, deps: SchedulerDeps): Promise<Run> {
+  const startedAt = deps.now();
+  const run = newRun(
+    {
+      scheduleId: ONEOFF_SCHEDULE_ID,
+      scheduleName: input.name,
+      prompt: input.prompt,
+      cwd: input.cwd,
+      model: input.model,
+    },
+    "manual",
+    startedAt,
+    deps,
+  );
+  await writeRun(run);
+  return spawnAndTrack(run, startedAt, deps);
+}
+
+/** One scheduler pass: fire every due schedule, honouring the budget hard
+ * stop and the overlap policy. */
 export async function tick(deps: SchedulerDeps): Promise<void> {
   const now = deps.now();
   const grace = graceMsFor(deps.tickMs);
   const schedules = await readSchedules();
+  // One read per tick: the same verdict applies to every schedule due in it.
+  let budgetBlocked: boolean | null = null;
   for (const schedule of schedules) {
     if (!shouldFire(schedule, now, grace)) continue;
+
+    budgetBlocked ??= await isSpendBlocked(now);
+    if (budgetBlocked) {
+      const iso = now.toISOString();
+      const id = deps.newId();
+      await writeRun(
+        ephemeralRun(schedule, id, "skipped", iso, null, "skipped: spend budget exceeded"),
+      );
+      await markScheduleRan(schedule.id, id, iso);
+      await pruneRuns(schedule.id, RUN_KEEP);
+      deps.onChange?.();
+      continue;
+    }
 
     if (schedule.overlapPolicy === "skip") {
       const alive = (await readRuns({ scheduleId: schedule.id })).some(

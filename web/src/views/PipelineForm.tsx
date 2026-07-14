@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { PhaseDef, PhaseStep, PipelineInput } from "../types";
-import { AlertStrip, TriggerFields } from "../ds";
+import { AlertStrip, ModelSelect, TriggerFields } from "../ds";
 
 const FIELD =
   "w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink placeholder-ink-faint";
@@ -36,61 +36,6 @@ function move<T>(arr: T[], from: number, to: number): T[] {
   const [item] = next.splice(from, 1);
   next.splice(to, 0, item);
   return next;
-}
-
-const MODEL_ALIASES = ["opus", "sonnet", "haiku"];
-
-function ModelSelect({
-  label,
-  ariaLabel,
-  value,
-  onChange,
-}: {
-  label: string;
-  ariaLabel?: string;
-  value?: string;
-  onChange: (v: string | undefined) => void;
-}) {
-  const isCustom = !!value && !MODEL_ALIASES.includes(value);
-  const [custom, setCustom] = useState(isCustom);
-  const selectValue = custom ? "custom" : (value ?? "");
-  return (
-    <div className="flex items-center gap-1">
-      <select
-        aria-label={ariaLabel ?? label}
-        className={`${FIELD} w-auto`}
-        value={selectValue}
-        onChange={(e) => {
-          const v = e.target.value;
-          if (v === "custom") {
-            setCustom(true);
-            onChange(undefined);
-          } else {
-            setCustom(false);
-            onChange(v === "" ? undefined : v);
-          }
-        }}
-      >
-        <option value="">{label}</option>
-        <option value="opus">Opus</option>
-        <option value="sonnet">Sonnet</option>
-        <option value="haiku">Haiku</option>
-        <option value="custom">Custom…</option>
-      </select>
-      {custom && (
-        <input
-          className={`${FIELD} w-40`}
-          aria-label={`Custom model id (${ariaLabel ?? label})`}
-          placeholder="model id"
-          value={isCustom ? value : ""}
-          onChange={(e) => {
-            const t = e.target.value.trim();
-            onChange(t === "" ? undefined : t);
-          }}
-        />
-      )}
-    </div>
-  );
 }
 
 export function PipelineForm({
@@ -172,6 +117,7 @@ export function PipelineForm({
           <option value="allow">Allow overlap</option>
         </select>
         <ModelSelect
+          fieldClass={FIELD}
           label="Default model (inherit CLI)"
           value={form.model}
           onChange={(m) => setForm({ ...form, model: m })}
@@ -250,6 +196,7 @@ export function PipelineForm({
                       onChange={(e) => setStep(pi, si, { name: e.target.value })}
                     />
                     <ModelSelect
+                      fieldClass={FIELD}
                       label="Use pipeline default"
                       ariaLabel={`Use pipeline default (phase ${pi + 1} step ${si + 1})`}
                       value={step.model}

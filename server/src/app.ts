@@ -54,11 +54,21 @@ import {
   writeBriefingAck,
 } from "./sources/briefing.js";
 import { readTotals, resetTotals } from "./sources/totals.js";
+import {
+  BudgetValidationError,
+  buildBudgetStatus,
+  readBudgetConfig,
+  readSpendLedger,
+  recentDays,
+  updateBudgetConfig,
+  validateBudgetPatch,
+} from "./sources/budget.js";
 import { buildOverview } from "./sources/overview.js";
 import { PreflightError, type Engine } from "./pipelineEngine.js";
 import type { PipelineSignal } from "./sources/pipelineTypes.js";
 import type { ActivityEvent } from "./runTailer.js";
-import { defaultSpawn, fireRun, isAlive } from "./scheduler.js";
+import { defaultSpawn, fireOneOff, fireRun, isAlive } from "./scheduler.js";
+import { LaunchValidationError, validateLaunchInput } from "./sources/launch.js";
 import type { ArgusConfig } from "./config.js";
 import { securityMiddleware } from "./security.js";
 import { setCookie, deleteCookie } from "hono/cookie";
@@ -345,6 +355,31 @@ export function createApp(deps: AppDeps): Hono {
     return c.json(totals);
   });
 
+  // Spend guardrails: limits + derived state + a chart-ready 30-day ledger.
+  app.get("/api/budget", async (c) => {
+    const now = new Date();
+    const [budgetConfig, ledger] = await Promise.all([readBudgetConfig(), readSpendLedger()]);
+    return c.json({
+      config: budgetConfig,
+      status: buildBudgetStatus(budgetConfig, ledger, now),
+      days: recentDays(ledger, now, 30),
+    });
+  });
+
+  app.put("/api/budget", async (c) => {
+    const body = await jsonBody(c);
+    if (!body.ok) return body.res;
+    try {
+      const now = new Date();
+      const updated = await updateBudgetConfig(validateBudgetPatch(body.value), now);
+      const ledger = await readSpendLedger();
+      broadcast({ type: "budget:changed" });
+      return c.json({ config: updated, status: buildBudgetStatus(updated, ledger, now) });
+    } catch (e) {
+      return fail(c, e, BudgetValidationError);
+    }
+  });
+
   app.get("/api/inventory", async (c) => c.json(await readInventory()));
   app.get("/api/tasks", async (c) => c.json({ tasks: await readTasks() }));
   app.get("/api/search", async (c) =>
@@ -423,6 +458,25 @@ export function createApp(deps: AppDeps): Hono {
       return c.json(run, 202);
     } catch (e) {
       return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+    }
+  });
+
+  // One-off launch: fire a single `claude -p` run right now, no schedule needed.
+  app.post("/api/launch", async (c) => {
+    const body = await jsonBody(c);
+    if (!body.ok) return body.res;
+    try {
+      const run = await fireOneOff(validateLaunchInput(body.value), {
+        now: () => new Date(),
+        spawn: defaultSpawn,
+        tickMs: config.schedulerTickMs,
+        newId: () => randomUUID(),
+        onChange: () => broadcast({ type: "schedules:changed" }),
+        onFailure: notifyRunFailed,
+      });
+      return c.json(run, 202);
+    } catch (e) {
+      return fail(c, e, LaunchValidationError);
     }
   });
 

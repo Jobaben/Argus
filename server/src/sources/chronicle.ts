@@ -1,4 +1,5 @@
 import type { Agent } from "./types.js";
+import { ONEOFF_SCHEDULE_ID } from "./launch.js";
 import type { Run } from "./scheduleTypes.js";
 import type { SessionSummary } from "./sessions.js";
 
@@ -217,7 +218,10 @@ export function buildChronicle(input: ChronicleInput, now: Date, windowMs: numbe
     if (span && overlapsWindow(span, startMs, nowMs)) {
       spans.push({
         groupKey: `run:${run.scheduleId}`,
-        groupLabel: run.scheduleName || "Scheduler",
+        // One-off launches share a bucket id, so a per-run name would mislabel
+        // the whole lane with whichever run happened to come first.
+        groupLabel:
+          run.scheduleId === ONEOFF_SCHEDULE_ID ? "One-off runs" : run.scheduleName || "Scheduler",
         kind: "run",
         span,
       });

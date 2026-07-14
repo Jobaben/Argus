@@ -145,6 +145,49 @@ export interface ScheduleInput {
   catchUp?: boolean;
 }
 
+/** One-off run fired from the Launch tab (POST /api/launch). */
+export interface LaunchInput {
+  name?: string;
+  prompt: string;
+  cwd: string;
+  model?: string;
+}
+
+export interface BudgetConfig {
+  dailyUsd: number | null;
+  monthlyUsd: number | null;
+  blockScheduled: boolean;
+  updatedAt: string | null;
+}
+
+export type BudgetState = "unset" | "ok" | "warning" | "exceeded";
+
+export interface BudgetWindow {
+  spentUsd: number;
+  limitUsd: number | null;
+  ratio: number | null;
+}
+
+export interface BudgetStatus {
+  state: BudgetState;
+  today: BudgetWindow;
+  month: BudgetWindow;
+  blockScheduled: boolean;
+}
+
+export interface BudgetDay {
+  date: string;
+  usd: number;
+  tokens: number;
+  runs: number;
+}
+
+export interface BudgetResponse {
+  config: BudgetConfig;
+  status: BudgetStatus;
+  days: BudgetDay[];
+}
+
 export type InstanceStatus = "running" | "awaiting-approval" | "failed" | "succeeded" | "aborted";
 
 export type PhaseStatus =

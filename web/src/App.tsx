@@ -3,6 +3,7 @@ import { useAgents } from "./useAgents";
 import type { Agent, AgentStatus } from "./types";
 import { AgentTile, HealthCounter, EmptyState, Page, ToastRegion } from "./ds";
 import { useAgentNotifications } from "./notify/useAgentNotifications";
+import { useBudgetAlerts } from "./notify/useBudgetAlerts";
 import { useMonitorAlerts } from "./notify/useMonitorAlerts";
 import { NavBar } from "./NavBar";
 import type { NavTab } from "./NavBar";
@@ -14,6 +15,8 @@ import Stats from "./views/Stats";
 import Inventory from "./views/Inventory";
 import Tasks from "./views/Tasks";
 import Search from "./views/Search";
+import Budget from "./views/Budget";
+import Launch from "./views/Launch";
 import Schedules from "./views/Schedules";
 import Monitors from "./views/Monitors";
 import Issues from "./views/Issues";
@@ -84,10 +87,12 @@ const TAB_META: { id: string; label: string; role: TabRole }[] = [
   { id: "command", label: "Command Center", role: "destination" },
   { id: "briefing", label: "Briefing", role: "destination" },
   { id: "chronicle", label: "Chronicle", role: "destination" },
+  { id: "launch", label: "Launch", role: "destination" },
   { id: "schedules", label: "Scheduler", role: "destination" },
   { id: "monitors", label: "Monitors", role: "destination" },
   { id: "issues", label: "Issues", role: "destination" },
   { id: "pipelines", label: "Pipelines", role: "destination" },
+  { id: "budget", label: "Budget", role: "destination" },
   { id: "search", label: "Search", role: "utility" },
   { id: "stats", label: "Stats", role: "overflow" },
   { id: "inventory", label: "Inventory", role: "overflow" },
@@ -111,12 +116,14 @@ export default function App() {
   const briefingState = useBriefing();
   const agentToasts = useAgentNotifications(agentsState.agents);
   const monitorToasts = useMonitorAlerts();
-  // One region, two sources. Ids are unique per queue and dismissing an
-  // unknown id is a no-op, so routing a dismiss to both queues is safe.
-  const toasts = [...agentToasts.toasts, ...monitorToasts.toasts];
+  const budgetToasts = useBudgetAlerts();
+  // One region, three sources. Ids are unique per queue and dismissing an
+  // unknown id is a no-op, so routing a dismiss to every queue is safe.
+  const toasts = [...agentToasts.toasts, ...monitorToasts.toasts, ...budgetToasts.toasts];
   const dismiss = (id: string) => {
     agentToasts.dismiss(id);
     monitorToasts.dismiss(id);
+    budgetToasts.dismiss(id);
   };
 
   useEffect(() => {
@@ -156,6 +163,8 @@ export default function App() {
         );
       case "chronicle":
         return <Chronicle />;
+      case "launch":
+        return <Launch />;
       case "schedules":
         return <Schedules />;
       case "monitors":
@@ -164,6 +173,8 @@ export default function App() {
         return <Issues />;
       case "pipelines":
         return <Pipelines />;
+      case "budget":
+        return <Budget />;
       case "search":
         return <Search />;
       case "stats":

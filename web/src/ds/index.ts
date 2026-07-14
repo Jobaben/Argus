@@ -25,6 +25,7 @@ export * from "./rail";
 export { MoreMenu } from "./MoreMenu";
 export type { MoreItem } from "./MoreMenu";
 export { TriggerFields } from "./TriggerFields";
+export { ModelSelect } from "./ModelSelect";
 export { SegmentedControl } from "./SegmentedControl";
 export type { Segment } from "./SegmentedControl";
 export * from "./chronicleLayout";

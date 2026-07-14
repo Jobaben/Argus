@@ -1,5 +1,6 @@
 import { paths } from "../claudeHome.js";
 import { atomicWriteJson } from "./atomicWrite.js";
+import { recordRunSpend } from "./budget.js";
 import { readJson } from "./readJson.js";
 import { readRun, patchRun } from "./runs.js";
 
@@ -66,6 +67,8 @@ async function accumulateRunInner(runId: string, now: () => Date): Promise<void>
     since: current.since,
   };
   await atomicWriteJson(paths.totalsFile(), next);
+  // Same exactly-once gate covers the per-day spend ledger (budget guardrails).
+  await recordRunSpend(run, now);
   await patchRun(runId, { countedInTotals: true });
 }
 
