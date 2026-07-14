@@ -47,6 +47,17 @@ Fanned out in parallel; each is an isolated source + view + tab:
   issues, finished pipelines) since the last **Mark caught up**
   (`/api/briefing` + `/ack`, Briefing tab; ack in
   `~/.claude/argus/briefing.json`).
+- **Launch** ✅ (2026-07-13) — one-off `claude -p` runs from the dashboard
+  (`POST /api/launch`, Launch tab): prompt + cwd + optional name/model, no
+  schedule authored; runs land in the shared `oneoff` bucket with live log,
+  cancel and a Reuse refire loop, and flow into Chronicle/Issues/Briefing
+  like any other run. `--model` support added to the scheduler spawn.
+- **Budget** ✅ (2026-07-13) — spend guardrails (`GET/PUT /api/budget`,
+  Budget tab): per-day spend ledger fed at the totals choke point, daily +
+  monthly USD limits with warning at 80%, `budget.warning/exceeded/cleared`
+  transition alerts (webhook + `budget:alert` WS → toast/native), and an
+  opt-in hard stop that records due slots as skipped runs while over budget
+  (manual actions never blocked).
 
 ## v0.3 — Single-port + packaging
 

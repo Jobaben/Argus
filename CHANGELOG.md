@@ -7,6 +7,33 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Launch — one-off runs** (new "Launch" tab, `POST /api/launch`): fire a
+  single `claude -p` run straight from the dashboard — prompt, working
+  directory, optional name (defaults to the prompt's first line) and optional
+  model (`--model` now supported by the scheduler spawn) — without authoring
+  a schedule. One-off runs live in a shared `oneoff` bucket (pruned to the
+  usual 50-run window, listed via `GET /api/runs?scheduleId=oneoff`), render
+  with the same expandable rows as schedule runs (live-tailing log, cancel,
+  transcript link) plus a **Reuse** button that refills the form, and flow
+  everywhere runs already go: one "One-off runs" Chronicle lane, Issues
+  fingerprinting, the Briefing digest, totals and the budget ledger. The run
+  row and model picker were extracted into shared components
+  (`views/RunRow`, `ds/ModelSelect`) instead of being duplicated.
+- **Budget — spend guardrails** (new "Budget" tab, `GET/PUT /api/budget`):
+  every completed run's reported cost is folded into a per-local-day ledger
+  (`~/.claude/argus/spend.json`) at the same exactly-once point as the
+  all-time totals, so scheduled, manual, one-off and pipeline-step runs all
+  count and the numbers survive run-record pruning. Set a daily and/or
+  monthly USD limit (`~/.claude/argus/budget.json`): the tab shows
+  today/this-month meters, a 30-day spend chart and a state pill
+  (`ok`/`warning` ≥ 80%/`exceeded`), and the server emits
+  `budget.warning` / `budget.exceeded` / `budget.cleared` transition alerts
+  each scheduler tick — webhook + `budget:alert` WS frame → in-app toast and
+  native notification, with boot-baseline suppression like monitor alerts.
+  An opt-in hard stop (`blockScheduled`) records due schedule slots as
+  `skipped` runs ("skipped: spend budget exceeded") instead of firing while
+  over budget; manual runs, launches and pipeline starts are never blocked,
+  and firing resumes automatically once spend drops under every limit.
 - **Catch-up for missed schedules** — anacron-style, opt-in per schedule
   ("Catch up a missed run on recovery" in the Scheduler form, `catchUp` on
   the API). A slot that came due while the machine was asleep or Argus was

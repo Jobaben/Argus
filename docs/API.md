@@ -60,12 +60,14 @@ Background jobs joined with daemon liveness, newest/live first.
 
 On connect: `{ "type": "hello" }`. On any watched change (debounced ~150ms) the
 server pushes one of `{ "type": "agents:changed" }`, `{ "type":
-"schedules:changed" }`, `{ "type": "pipelines:changed" }`, or `{ "type":
-"inventory:changed" }` (installed extensions + usage stats). The client
-re-fetches the relevant list — change frames carry no payload by design (the
-server stays the single source of truth). The one payload-carrying frame is
+"schedules:changed" }`, `{ "type": "pipelines:changed" }`, `{ "type":
+"budget:changed" }` (limits edited), or `{ "type": "inventory:changed" }`
+(installed extensions + usage stats). The client re-fetches the relevant
+list — change frames carry no payload by design (the server stays the single
+source of truth). The payload-carrying frames are
 `{ "type": "monitors:alert", "alert": … }` (see
-[Monitor alerts](#monitor-alerts)), which describes a transient event rather
+[Monitor alerts](#monitor-alerts)) and `{ "type": "budget:alert", "alert": … }`
+(see [Budget alerts](#budget-alerts)), which describe transient events rather
 than state. The upgrade is subject to the same host/origin/token checks as
 the REST surface.
 
@@ -188,6 +190,21 @@ the firing grace (machine asleep, Argus down) fires **once** on the next
 scheduler tick instead of being skipped; only the most recent missed slot is
 run.
 
+### `POST /api/launch`
+
+Fire a single one-off `claude -p` run right now — no schedule is created or
+touched. Body: `prompt` (required), `cwd` (required, must exist), `name`
+(optional — defaults to the prompt's first line, ellipsized at 60 chars), and
+`model` (optional model alias/id, passed to the CLI as `--model`). Returns
+`202` with the created run record, `400` on validation failure.
+
+One-off runs carry `scheduleId: "oneoff"` and share that bucket: list them
+with `GET /api/runs?scheduleId=oneoff` (pruned to the same 50-run window a
+schedule gets), read/cancel them through the standard run endpoints, and they
+appear as a single "One-off runs" lane in `GET /api/chronicle`. A failed
+launch fingerprints into Issues and posts the `run.failed` webhook like any
+other run; reported cost feeds the totals and the budget ledger.
+
 ## Monitors
 
 ### `GET /api/monitors`
@@ -247,6 +264,68 @@ shape as the existing `run.failed` / `pipeline.failed` webhook events:
 
 The first check after boot is a silent baseline (no replay of already-bad
 monitors), and `late` never alerts — that's the grace period doing its job.
+
+## Budget
+
+Spend guardrails over every costed run. Two Argus-owned files back it:
+`~/.claude/argus/budget.json` (limits) and `~/.claude/argus/spend.json` (a
+per-local-day ledger, written exactly once per completed run at the same
+serialized point that feeds `/api/totals`, so it counts scheduled, manual,
+one-off and pipeline-step runs alike and survives run-record pruning; pruned
+to the newest 366 day-keys).
+
+| Method + path     | Effect                                                       |
+| ----------------- | ------------------------------------------------------------ |
+| `GET /api/budget` | limits + derived status + a zero-filled last-30-day ledger   |
+| `PUT /api/budget` | patch limits → `200` with the new config + status, `400` bad |
+
+`PUT` body fields (all optional): `dailyUsd` and `monthlyUsd` (positive
+number, or `null` to clear), `blockScheduled` (boolean — while any limit is
+exceeded, due schedule slots are recorded as `skipped` runs
+("skipped: spend budget exceeded") instead of firing; manual runs, launches
+and pipeline starts are never blocked). Broadcasts `budget:changed`.
+
+```json
+{
+  "config": { "dailyUsd": 10, "monthlyUsd": 150, "blockScheduled": true, "updatedAt": "…" },
+  "status": {
+    "state": "warning",
+    "today": { "spentUsd": 8.55, "limitUsd": 10, "ratio": 0.855 },
+    "month": { "spentUsd": 49.35, "limitUsd": 150, "ratio": 0.329 },
+    "blockScheduled": true
+  },
+  "days": [{ "date": "2026-07-13", "usd": 8.55, "tokens": 726750, "runs": 12 }]
+}
+```
+
+`state` is the worst window: `unset` (no limits) | `ok` | `warning` (≥ 80% of
+a limit) | `exceeded` (≥ 100%). Windows follow the server's local calendar
+day/month, matching schedule triggers.
+
+### Budget alerts
+
+The server re-derives the budget state on every scheduler tick and diffs it
+against the previous tick. Each observed transition is pushed as a
+`budget:alert` frame on `/ws` **and** POSTed to `ARGUS_WEBHOOK_URL` (when
+set) with event `budget.warning` / `budget.exceeded` / `budget.cleared`, in
+the same payload shape as the other webhook events:
+
+```json
+{
+  "type": "budget:alert",
+  "alert": {
+    "event": "budget.exceeded",
+    "state": "exceeded",
+    "at": "2026-07-13T08:00:30.000Z",
+    "detail": "today $12.40 of $10.00 — scheduled runs are paused"
+  }
+}
+```
+
+The first check after boot is a silent baseline (no replay of a
+known-exceeded budget), and `exceeded → warning` stays quiet — you already
+heard about the breach; `budget.cleared` fires once spend is back under every
+limit.
 
 ## Issues
 

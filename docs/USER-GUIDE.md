@@ -11,8 +11,9 @@ write its own state under `~/.claude/argus/` (schedules, pipelines, run
 records, issue triage, accounts) and, when you apply setup fixes, its signal
 hooks under `~/.claude/hooks/` and a hook entry in `settings.json`. The
 monitoring tabs (Agents, Sessions, Activity, Projects, Stats, Search,
-Inventory, Tasks) are observe-only, while the Scheduler, Pipelines, Issues and
-Users tabs let you create, run, revise, triage and cancel work.
+Inventory, Tasks) are observe-only, while the Launch, Scheduler, Pipelines,
+Issues, Budget and Users tabs let you create, run, revise, triage, cap and
+cancel work.
 
 **Security note:** because Argus can launch `claude -p` agents with your
 credentials, the server binds to loopback (`127.0.0.1`) only and rejects
@@ -25,27 +26,29 @@ can do, and where the data comes from.
 
 ## Contents
 
-| #   | Feature                              | Route          | What it answers                           |
-| --- | ------------------------------------ | -------------- | ----------------------------------------- |
-| 0   | [Global UI](#global-ui)              | —              | nav, live dot, auto-refresh, setup banner |
-| 1   | [Command Center](#1-command-center)  | `#/command`    | how are my pipelines doing right now?     |
-| 2   | [Briefing](#2-briefing)              | `#/briefing`   | what happened while I was away?           |
-| 3   | [Chronicle](#3-chronicle)            | `#/chronicle`  | what ran when, across every source?       |
-| 4   | [Scheduler](#4-scheduler)            | `#/schedules`  | fire `claude -p` on a schedule            |
-| 5   | [Monitors](#5-monitors)              | `#/monitors`   | did my schedules actually run?            |
-| 6   | [Issues](#6-issues)                  | `#/issues`     | why are runs failing, grouped by cause?   |
-| 7   | [Pipelines](#7-pipelines)            | `#/pipelines`  | author multi-phase, human-gated flows     |
-| 8   | [Users & sign-in](#8-users--sign-in) | `#/users`      | who may run/edit pipelines?               |
-| 9   | [Search](#9-search)                  | `#/search`     | where did I say/see _that_?               |
-| 10  | [Agents](#10-agents)                 | `#/agents`     | what's running / done / failed right now? |
-| 11  | [Agent Detail](#11-agent-detail)     | `#/agent/<id>` | how did _this_ agent get here?            |
-| 12  | [Sessions](#12-sessions)             | `#/sessions`   | what was actually said in a conversation? |
-| 13  | [Activity](#13-activity)             | `#/activity`   | what have I prompted lately, everywhere?  |
-| 14  | [Projects](#14-projects)             | `#/projects`   | which folders are active, and when?       |
-| 15  | [Stats](#15-stats)                   | `#/stats`      | what's my usage / cost / token spend?     |
-| 16  | [Inventory](#16-inventory)           | `#/inventory`  | what's installed and available?           |
-| 17  | [Tasks](#17-tasks)                   | `#/tasks`      | what task workspaces exist / are locked?  |
-| 18  | [Cron panel](#18-cron-panel)         | Scheduler tab  | why native cron routines can't be shown   |
+| #   | Feature                               | Route          | What it answers                           |
+| --- | ------------------------------------- | -------------- | ----------------------------------------- |
+| 0   | [Global UI](#global-ui)               | —              | nav, live dot, auto-refresh, setup banner |
+| 1   | [Command Center](#1-command-center)   | `#/command`    | how are my pipelines doing right now?     |
+| 2   | [Briefing](#2-briefing)               | `#/briefing`   | what happened while I was away?           |
+| 3   | [Chronicle](#3-chronicle)             | `#/chronicle`  | what ran when, across every source?       |
+| 4   | [Launch](#4-launch)                   | `#/launch`     | fire one `claude -p` run right now        |
+| 5   | [Scheduler](#5-scheduler)             | `#/schedules`  | fire `claude -p` on a schedule            |
+| 6   | [Monitors](#6-monitors)               | `#/monitors`   | did my schedules actually run?            |
+| 7   | [Issues](#7-issues)                   | `#/issues`     | why are runs failing, grouped by cause?   |
+| 8   | [Pipelines](#8-pipelines)             | `#/pipelines`  | author multi-phase, human-gated flows     |
+| 9   | [Budget](#9-budget)                   | `#/budget`     | how much am I spending — and cap it       |
+| 10  | [Users & sign-in](#10-users--sign-in) | `#/users`      | who may run/edit pipelines?               |
+| 11  | [Search](#11-search)                  | `#/search`     | where did I say/see _that_?               |
+| 12  | [Agents](#12-agents)                  | `#/agents`     | what's running / done / failed right now? |
+| 13  | [Agent Detail](#13-agent-detail)      | `#/agent/<id>` | how did _this_ agent get here?            |
+| 14  | [Sessions](#14-sessions)              | `#/sessions`   | what was actually said in a conversation? |
+| 15  | [Activity](#15-activity)              | `#/activity`   | what have I prompted lately, everywhere?  |
+| 16  | [Projects](#16-projects)              | `#/projects`   | which folders are active, and when?       |
+| 17  | [Stats](#17-stats)                    | `#/stats`      | what's my usage / cost / token spend?     |
+| 18  | [Inventory](#18-inventory)            | `#/inventory`  | what's installed and available?           |
+| 19  | [Tasks](#19-tasks)                    | `#/tasks`      | what task workspaces exist / are locked?  |
+| 20  | [Cron panel](#20-cron-panel)          | Scheduler tab  | why native cron routines can't be shown   |
 
 ---
 
@@ -57,9 +60,9 @@ Applies to every tab.
   indicator. **Green = "live"** (WebSocket to the server is connected); **gray =
   "reconnecting…"** (socket dropped, falling back to polling). It reflects
   Argus's link to its own server, not the health of your agents.
-- **Navigation** is split by role: the seven **destination** tabs (Command
-  Center, Briefing, Chronicle, Scheduler, Monitors, Issues, Pipelines) sit in
-  the bar;
+- **Navigation** is split by role: the nine **destination** tabs (Command
+  Center, Briefing, Chronicle, Launch, Scheduler, Monitors, Issues, Pipelines,
+  Budget) sit in the bar;
   the 🔍 icon opens **Search**; the **⋯ More** menu holds the reference tabs
   (Stats, Inventory, Projects, Tasks, Users). Drill-down views (Agents,
   Detail, Sessions, Activity) are reached through links and breadcrumbs.
@@ -68,9 +71,11 @@ Applies to every tab.
   socket drops, each tab also polls on a timer (most tabs 10s; Stats 30s;
   Search on keystroke). You rarely need to refresh the browser.
 - **Notifications:** a bottom-right **toast stack** (max 4, auto-dismiss
-  after 8s) fires from any tab when a background agent finishes or fails and
+  after 8s) fires from any tab when a background agent finishes or fails,
   when a **monitor alert** arrives (down / failing / recovered — see
-  [Monitors](#5-monitors)). If you grant the browser's notification
+  [Monitors](#6-monitors)), and when a **budget alert** arrives (crossing
+  80%, crossing a limit, or dropping back under — see [Budget](#9-budget)).
+  If you grant the browser's notification
   permission (asked once), the same events also fire **native OS
   notifications**, so you hear about failures with the tab in the background.
 - **Routing** is hash-based (`#/command`, `#/agents`, `#/search`…), so tabs
@@ -119,7 +124,7 @@ you — this is the wall you keep open on a second monitor.
 - **Revise** (labeled **Retry** after a crash-restart) — optionally attach a
   revise note, hit **Send**, and the phase restarts with your feedback.
 - Both actions require a signed-in, approved account (see
-  [Users & sign-in](#8-users--sign-in)); the buttons render for everyone but
+  [Users & sign-in](#10-users--sign-in)); the buttons render for everyone but
   the server answers 401 unless you're authenticated.
 
 **Cost semantics:** a metric appears once at least one run reports it via the
@@ -226,7 +231,50 @@ the scheduler's run records with `~/.claude/jobs/` and
 
 ---
 
-## 4. Scheduler
+## 4. Launch
+
+_Fire one `claude -p` run right now._ Route: `#/launch`
+
+![Launch](screenshots/launch.png)
+
+**Purpose:** not everything deserves a schedule. Launch fires a **single
+one-off run** — a quick audit, a report, a cleanup — straight from the
+dashboard: prompt, working directory, go. No schedule object is created and
+nothing recurs.
+
+**The form:**
+
+- **Prompt for `claude -p`** and a **working directory** (absolute path,
+  must exist) — the only two required fields; **▶ Launch** stays disabled
+  until both are filled.
+- **Name** (optional) — how the run is titled everywhere; left empty it
+  defaults to the prompt's first line (ellipsized at 60 chars).
+- **Model** — inherit the CLI default, pick an alias (Opus / Sonnet / Haiku),
+  or type a custom model id; passed to the agent as `--model`.
+
+**Recent one-off runs** — the last 20 launches, newest first, each titled and
+expandable exactly like a schedule's run rows: status pill, start time,
+duration, cost and tokens once reported, the error or result summary, a link
+to the **transcript** in Sessions, and a **live-tailing log** (refreshes every
+3s while running). A running launch has a **Cancel** button, and every row has
+**Reuse** — it copies that run's prompt, directory, name and model back into
+the form for a tweak-and-refire loop.
+
+**Where one-off runs show up:** everywhere runs go. They share the `oneoff`
+run bucket (pruned to the same 50-run window a schedule gets), appear as a
+single **"One-off runs"** lane in the [Chronicle](#3-chronicle), a failed
+launch groups into [Issues](#7-issues) and lands in the
+[Briefing](#2-briefing)'s failure digest, and reported cost counts toward the
+[Budget](#9-budget) and the Command Center's total spend. They never touch
+[Monitors](#6-monitors) — there is no expected slot for a one-off.
+
+**Where the data comes from:** `POST /api/launch` (`202` with the run
+record), then the standard run surface — `GET /api/runs?scheduleId=oneoff`,
+`GET /api/runs/:id`, `POST /api/runs/:id/cancel`.
+
+---
+
+## 5. Scheduler
 
 _Recurring `claude -p` runs, owned by Argus._ Route: `#/schedules`
 
@@ -235,7 +283,7 @@ _Recurring `claude -p` runs, owned by Argus._ Route: `#/schedules`
 **Purpose:** define headless prompts that Argus fires on a trigger — nightly
 audits, periodic report generators, cleanup jobs — then watch their run
 history and logs without leaving the page. Two sub-tabs: **Schedules** (this
-section) and **Cron** (see [Cron panel](#18-cron-panel)).
+section) and **Cron** (see [Cron panel](#20-cron-panel)).
 
 **Creating a schedule** — click **+ New schedule**:
 
@@ -282,7 +330,7 @@ via `GET/POST /api/schedules`, `PUT/DELETE /api/schedules/:id`,
 
 ---
 
-## 5. Monitors
+## 6. Monitors
 
 _A dead-man's switch over your schedules._ Route: `#/monitors`
 
@@ -337,7 +385,7 @@ as `monitors:alert` frames on `/ws`.
 
 ---
 
-## 6. Issues
+## 7. Issues
 
 _Failed runs grouped by root cause._ Route: `#/issues`
 
@@ -370,7 +418,7 @@ your triage decisions persist (`~/.claude/argus/issues.json`).
 
 ---
 
-## 7. Pipelines
+## 8. Pipelines
 
 _Author multi-phase, human-gated agent flows._ Route: `#/pipelines`
 
@@ -385,7 +433,7 @@ pauses there until a human approves or revises.
 **What you see:** one card per pipeline with its trigger summary, phase
 count, a `disabled` tag when paused, and a live status pill aggregated from
 running instances. When you're **signed out**, the **Login** panel appears
-here (see [Users & sign-in](#8-users--sign-in)) — viewing is open, but every
+here (see [Users & sign-in](#10-users--sign-in)) — viewing is open, but every
 mutating action requires a signed-in, root-approved account.
 
 **The pipeline form** (+ New pipeline / Edit):
@@ -422,7 +470,63 @@ records under `~/.claude/argus/instances/` via `GET/POST /api/pipelines`,
 
 ---
 
-## 8. Users & sign-in
+## 9. Budget
+
+_Spend guardrails over every unattended dollar._ Route: `#/budget`
+
+![Budget](screenshots/budget.png)
+
+**Purpose:** Argus's whole point is spending your API credits while you're
+not looking — schedules, pipelines and one-off launches all report what each
+run cost. The Budget tab turns those reports into a **per-day ledger** and
+lets you put a ceiling on it: get alerted when you approach or cross a limit,
+and optionally **pause scheduled firings** until you're back under.
+
+**What you see:**
+
+- A **state pill** (top right): `no limits set` / `under budget` /
+  `approaching limit` (≥ 80% of any limit) / `over budget`.
+- **Today** and **This month** cards: spent so far, the limit, a colored
+  progress bar (green → amber at 80% → red at the limit), and the remaining
+  or overage amount. Both windows follow your local calendar, like schedule
+  triggers do.
+- **Last 30 days** — a spend bar chart; hover a bar for the day's dollars
+  and run count.
+- **Limits** — the config form: a daily USD limit, a monthly USD limit
+  (either may be empty = no limit), and the hard-stop checkbox.
+
+**The hard stop** ("Pause scheduled runs while over budget"): while any limit
+is exceeded, due schedule slots are **skipped** instead of fired — each skip
+is recorded as a `skipped` run ("skipped: spend budget exceeded") so the
+Scheduler shows exactly what didn't happen, and the slot still counts as
+covered for [Monitors](#6-monitors) (a budget pause is not an outage). Firing
+resumes by itself the moment spend drops under every limit — a new day, a new
+month, or a raised ceiling. **Manual actions are never blocked**: Run now,
+Launch and pipeline starts always work — a human clicking a button is its own
+authorization.
+
+**Alerts:** the server re-checks the budget on its scheduler tick (~30s) and
+pushes a transition alert the moment the state changes — **Budget warning**
+(crossed 80%), **Budget exceeded** (crossed a limit; the alert says whether
+scheduled runs are paused), **Budget back under limit**. Each reaches you the
+same three ways as monitor alerts: in-app toast, native OS notification (if
+granted), and an `ARGUS_WEBHOOK_URL` POST (`budget.warning` /
+`budget.exceeded` / `budget.cleared`). Only observed transitions alert — a
+restart never replays a known-exceeded state.
+
+**How spend is counted:** each completed run's cost (reported by the
+`claude -p` result envelope) is folded into the day it ended, at the same
+exactly-once point that feeds the all-time totals — so scheduled, manual,
+one-off and pipeline-step runs all count, and the ledger survives run-record
+pruning. Runs that report no cost (older CLIs, crashed spawns) add nothing.
+
+**Where the data comes from:** Argus-owned `~/.claude/argus/budget.json`
+(limits) and `~/.claude/argus/spend.json` (ledger) via `GET /api/budget` and
+`PUT /api/budget`; alerts arrive as `budget:alert` frames on `/ws`.
+
+---
+
+## 10. Users & sign-in
 
 _Who may run and edit pipelines._ Route: `#/users` (root only) + the login
 panel on the Pipelines tab
@@ -461,7 +565,7 @@ machine running Argus and bootstrap again.
 
 ---
 
-## 9. Search
+## 11. Search
 
 _Full-text across all transcripts._ Route: `#/search` (the 🔍 in the nav)
 
@@ -484,7 +588,7 @@ and "No matches".
 
 ---
 
-## 10. Agents
+## 12. Agents
 
 _The status board for background jobs._ Route: `#/agents`
 
@@ -502,7 +606,7 @@ _The status board for background jobs._ Route: `#/agents`
   finished output, and a footer — folder, tempo, and last-update time.
 
 **How to use it:** scan colors to triage — green pulse = running now, red =
-failed. **Click any card** to open that agent's [Detail](#11-agent-detail).
+failed. **Click any card** to open that agent's [Detail](#13-agent-detail).
 
 **Where the data comes from:** `GET /api/agents`, merging
 `~/.claude/jobs/<short>/state.json` with `~/.claude/daemon/roster.json`
@@ -510,7 +614,7 @@ failed. **Click any card** to open that agent's [Detail](#11-agent-detail).
 
 ---
 
-## 11. Agent Detail
+## 13. Agent Detail
 
 _Single-agent deep dive + timeline._ Route: `#/agent/<short>`
 
@@ -539,7 +643,7 @@ the main list.
 
 ---
 
-## 12. Sessions
+## 14. Sessions
 
 _Browse & read transcripts._ Route: `#/sessions`
 
@@ -570,7 +674,7 @@ the model used, and last-activity time.
 
 ---
 
-## 13. Activity
+## 15. Activity
 
 _Global prompt feed._ Route: `#/activity`
 
@@ -587,7 +691,7 @@ relative timestamp, and the prompt text (truncated to ~240 chars). Read-only.
 
 ---
 
-## 14. Projects
+## 16. Projects
 
 _Working-directories overview._ Route: `#/projects`
 
@@ -609,7 +713,7 @@ touched. Informational only — drill into content via Sessions or Search.
 
 ---
 
-## 15. Stats
+## 17. Stats
 
 _Usage analytics._ Route: `#/stats`
 
@@ -633,7 +737,7 @@ metrics appear only if present).
 
 ---
 
-## 16. Inventory
+## 18. Inventory
 
 _Installed extensions catalog._ Route: `#/inventory`
 
@@ -655,7 +759,7 @@ do." No install/remove actions.
 
 ---
 
-## 17. Tasks
+## 19. Tasks
 
 _Task-queue workspace inventory._ Route: `#/tasks`
 
@@ -673,7 +777,7 @@ locked/in use, green = open), and last-updated time. Read-only.
 
 ---
 
-## 18. Cron panel
+## 20. Cron panel
 
 _An honest empty state, by design._ Found under **Scheduler → Cron** sub-tab
 (there is deliberately no `#/cron` route).
@@ -695,7 +799,7 @@ as a live table — and what would be needed to surface them.
   `~/.claude` and lists candidates as hints — usually "nothing found, as
   expected."
 
-Don't confuse this with **Argus's own Scheduler** (section 3), which is fully
+Don't confuse this with **Argus's own Scheduler** (section 5), which is fully
 on-disk and fully supported — this panel is only about Claude Code's
 harness-managed routines.
 
@@ -710,10 +814,12 @@ harness-managed routines.
 | ------------------ | ----------------------------------------- | ------------------------------------------- |
 | **Command Center** | How are my pipelines doing right now?     | `argus/pipelines.json` + `argus/instances/` |
 | **Chronicle**      | What ran when, across everything?         | runs + jobs + transcripts, merged           |
+| **Launch**         | Fire one `claude -p` run right now        | `argus/runs/` (the `oneoff` bucket)         |
 | **Scheduler**      | What fires on a timer, and how did it go? | `argus/schedules.json` + `argus/runs/`      |
 | **Monitors**       | Did the expected runs actually land?      | derived from schedules + runs               |
 | **Issues**         | Why are runs failing, grouped by cause?   | derived from runs + `argus/issues.json`     |
 | **Pipelines**      | What multi-phase flows are defined?       | `argus/pipelines.json`                      |
+| **Budget**         | How much am I spending — and cap it       | `argus/budget.json` + `argus/spend.json`    |
 | **Users**          | Who may run/edit pipelines?               | `argus/auth.json`                           |
 | **Search**         | Where did I say/see _that_?               | all `projects/*/*.jsonl`                    |
 | **Agents**         | What's running / done / failed right now? | `jobs/*/state.json` + `daemon/roster.json`  |
