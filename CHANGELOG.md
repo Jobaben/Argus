@@ -5,6 +5,8 @@ All notable changes to Argus are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-14
+
 ### Added
 
 - **Launch — one-off runs** (new "Launch" tab, `POST /api/launch`): fire a
@@ -136,6 +138,11 @@ All notable changes to Argus are documented here. The format follows
 - The three instance-action handlers (`signal`, `approve`, `revise`) parse
   bodies through the shared `jsonBody` helper; pipeline PUT/PATCH share one
   update handler; engine gate replies share one response mapper.
+
+### Removed
+
+- Leftover Vite scaffold assets (`web/src/assets/hero.png`, `react.svg`,
+  `vite.svg`) — never referenced by the app.
 
 ## [0.2.0]
 
