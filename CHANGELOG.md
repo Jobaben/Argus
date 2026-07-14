@@ -5,6 +5,8 @@ All notable changes to Argus are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-14
+
 ### Added
 
 - **`argus` CLI** (`bin/argus.mjs`, wired as the package `bin`): one command
