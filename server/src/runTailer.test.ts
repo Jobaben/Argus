@@ -54,6 +54,50 @@ test("assistant text blocks become text events, clipped to 80 chars", () => {
   assert.ok(e.label.endsWith("…"));
 });
 
+test("subagent lines (parent_tool_use_id set) get subagent-prefixed labels", () => {
+  const line = JSON.stringify({
+    type: "assistant",
+    parent_tool_use_id: "toolu_01",
+    message: {
+      content: [
+        { type: "text", text: "checking the diff" },
+        { type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } },
+      ],
+    },
+  });
+  assert.deepEqual(
+    deriveActivity(line, AT).map((e) => [e.kind, e.label]),
+    [
+      ["text", "Subagent: checking the diff"],
+      ["tool", "Subagent: Bash: npm test"],
+    ],
+  );
+});
+
+test("subagent labels stay clipped to 80 chars including the prefix", () => {
+  const line = JSON.stringify({
+    type: "assistant",
+    parent_tool_use_id: "toolu_02",
+    message: { content: [{ type: "text", text: "x".repeat(200) }] },
+  });
+  const [e] = deriveActivity(line, AT);
+  assert.equal(e.label.length, 80);
+  assert.ok(e.label.startsWith("Subagent: "));
+  assert.ok(e.label.endsWith("…"));
+});
+
+test("a null parent_tool_use_id keeps main-agent labels unprefixed", () => {
+  const line = JSON.stringify({
+    type: "assistant",
+    parent_tool_use_id: null,
+    message: { content: [{ type: "text", text: "hi" }] },
+  });
+  assert.deepEqual(
+    deriveActivity(line, AT).map((e) => e.label),
+    ["hi"],
+  );
+});
+
 test("whitespace-only text blocks, user lines, and unknown types yield nothing", () => {
   const blank = JSON.stringify({
     type: "assistant",

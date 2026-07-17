@@ -66,6 +66,10 @@ export function deriveActivity(line: string, at: string): ActivityEvent[] {
   if (obj.type !== "assistant") return [];
   const message = obj.message as Record<string, unknown> | undefined;
   const content = Array.isArray(message?.content) ? (message.content as unknown[]) : [];
+  // Subagent messages (forwarded when CLAUDE_CODE_FORWARD_SUBAGENT_TEXT is set
+  // at spawn) carry the spawning Task tool_use id; mark their labels so the
+  // Command Center distinguishes them from the main agent's output.
+  const prefix = typeof obj.parent_tool_use_id === "string" ? "Subagent: " : "";
   const events: ActivityEvent[] = [];
   for (const raw of content) {
     const block = raw as Record<string, unknown>;
@@ -73,10 +77,12 @@ export function deriveActivity(line: string, at: string): ActivityEvent[] {
       events.push({
         at,
         kind: "tool",
-        label: summarizeToolUse(block.name, (block.input ?? {}) as Record<string, unknown>),
+        label: clip(
+          prefix + summarizeToolUse(block.name, (block.input ?? {}) as Record<string, unknown>),
+        ),
       });
     } else if (block?.type === "text" && typeof block.text === "string" && block.text.trim()) {
-      events.push({ at, kind: "text", label: clip(block.text) });
+      events.push({ at, kind: "text", label: clip(prefix + block.text) });
     }
   }
   return events;

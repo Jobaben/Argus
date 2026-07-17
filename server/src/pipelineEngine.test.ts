@@ -109,6 +109,15 @@ test("start spawns phase 0's step with signal env injected", async () => {
   assert.ok(rec.calls[0].env.ARGUS_SIGNAL_URL.includes(inst!.id));
 });
 
+test("step env opts the CLI into forwarding subagent text to the stream log", async () => {
+  const { engine, pipelines } = await load();
+  await seedPipeline(pipelines);
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  await e.start("p1", "manual");
+  assert.equal(rec.calls[0].env.CLAUDE_CODE_FORWARD_SUBAGENT_TEXT, "1");
+});
+
 test("a needs-input signal pauses the instance for approval", async () => {
   const { engine, pipelines, instances } = await load();
   await seedPipeline(pipelines);

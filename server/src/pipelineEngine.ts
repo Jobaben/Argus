@@ -257,6 +257,11 @@ export function createEngine(deps: EngineDeps): Engine {
       ARGUS_RUN_ID: run.id,
       ARGUS_STEP_NAME: run.scheduleName,
       ARGUS_SIGNAL_TOKEN: inst.signalToken,
+      // Opt the CLI into forwarding subagent text/thinking into the stream-json
+      // log so the tailer can surface subagent activity. Env var instead of the
+      // equivalent --forward-subagent-text flag: older CLIs ignore the var but
+      // would reject the unknown flag.
+      CLAUDE_CODE_FORWARD_SUBAGENT_TEXT: "1",
     };
     let handle: { pid: number | null; done: Promise<{ code: number | null }> };
     try {
