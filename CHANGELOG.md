@@ -90,6 +90,15 @@ All notable changes to Argus are documented here. The format follows
   budget in CI.
 - **Per-route error boundaries**: an unexpected shape in one view no longer
   blanks the whole dashboard.
+- **The run and instance read paths no longer re-scan on every write.** Both
+  directories were memoised behind a 500-entry LRU, which is the pathological
+  policy for the access pattern they serve: a full-directory scan touches every
+  file once in order, so past the cap each entry was evicted just before the next
+  scan asked for it. Retention is now by scan membership (one shared
+  `createFileMemo`), and a write **patches** the cached scan rather than dropping
+  it — re-reading the one file that changed instead of forcing the next reader to
+  re-stat the directory. Measured over 1200 run records: a warm rescan 163 → 57ms,
+  and the write-then-read cycle a live run performs continuously 142 → 1.5ms.
 - Motion that carries information only: counters roll when they change (snapping
   on first paint, huge jumps and reduced motion), and the row that just changed
   status flashes.

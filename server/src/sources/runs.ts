@@ -4,7 +4,8 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { paths } from "../claudeHome.js";
 import { atomicWriteJson } from "./atomicWrite.js";
-import { cached, invalidate } from "./cache.js";
+import { cached, invalidate, patchCached } from "./cache.js";
+import { createFileMemo } from "./fileMemo.js";
 import type { Run } from "./scheduleTypes.js";
 
 export const LOG_CAP_BYTES = 1_048_576; // 1 MB
@@ -27,20 +28,10 @@ function runJsonPath(id: string): string {
   return path.join(paths.runsDir(), `${id}.json`);
 }
 
-// mtime-keyed parse memo, mirroring instances.ts. readRuns() re-scans the whole
-// directory on every scheduler tick and every /api/overview refetch; an
-// unchanged run file (the common case — most runs are terminal) costs a stat
-// instead of a read + JSON.parse. Bounded LRU: hits refresh recency.
-const PARSE_MEMO_MAX = 500;
-const parseMemo = new Map<string, { mtime: number; run: Run }>();
-
-function memoSet(id: string, mtime: number, run: Run): void {
-  parseMemo.delete(id);
-  parseMemo.set(id, { mtime, run });
-  if (parseMemo.size > PARSE_MEMO_MAX) {
-    parseMemo.delete(parseMemo.keys().next().value as string);
-  }
-}
+/** See {@link createFileMemo} for why retention is by scan membership. Runs
+ *  outnumber instances — RUN_KEEP per schedule, per pipeline bucket and for
+ *  one-offs — so this is the directory where the old 500-entry cap bit first. */
+const parseMemo = createFileMemo<Run>();
 
 // The directory scan (readdir + a stat per file) is cached under a short TTL:
 // one broadcast makes several routes (/api/runs, /monitors, /issues, /briefing,
@@ -54,11 +45,30 @@ function scanKey(): string {
   return `runs:${paths.runsDir()}`;
 }
 
+/** The scan result with one run replaced (or inserted), still newest-first. */
+function upsert(all: Run[], run: Run): Run[] {
+  const next = all.filter((r) => r.id !== run.id);
+  const at = next.findIndex((r) => r.queuedAt.localeCompare(run.queuedAt) < 0);
+  next.splice(at === -1 ? next.length : at, 0, run);
+  return next;
+}
+
 export async function writeRun(run: Run): Promise<void> {
   await atomicWriteJson(runJsonPath(run.id), run);
   // Eager eviction: atomic rename gives a fresh mtime, but dropping the entry
   // makes staleness impossible even on filesystems with coarse mtime resolution.
-  parseMemo.delete(run.id);
+  parseMemo.forget(run.id);
+
+  // Patch the cached scan rather than dropping it. A live run is written on
+  // queue, start and completion, and every pipeline step writes twice more —
+  // each of which used to force the next reader (the board, monitors, issues,
+  // the briefing, the Chronicle) to re-stat the whole runs directory.
+  //
+  // Read back from disk rather than caching `run` itself: callers keep mutating
+  // the object after handing it here, and a cache holding that reference would
+  // change under them.
+  const fresh = await readRunFile(run.id);
+  if (fresh && patchCached<Run[]>(scanKey(), (all) => upsert(all, fresh))) return;
   invalidate(scanKey());
 }
 
@@ -80,13 +90,10 @@ async function readRunFile(id: string): Promise<Run | null> {
   const file = runJsonPath(id);
   try {
     const st = await stat(file);
-    const hit = parseMemo.get(id);
-    if (hit && hit.mtime === st.mtimeMs) {
-      memoSet(id, hit.mtime, hit.run); // refresh LRU recency
-      return hit.run;
-    }
+    const hit = parseMemo.get(id, st.mtimeMs);
+    if (hit) return hit;
     const run = JSON.parse(await readFile(file, "utf8")) as Run;
-    memoSet(id, st.mtimeMs, run);
+    parseMemo.set(id, st.mtimeMs, run);
     return run;
   } catch {
     return null;
@@ -98,11 +105,14 @@ async function scanRuns(): Promise<Run[]> {
   try {
     names = (await readdir(paths.runsDir())).filter((f) => f.endsWith(".json"));
   } catch {
+    // The directory has gone away; forget what we had rather than serving it.
+    parseMemo.retain(new Set());
     return [];
   }
-  const runs = (await Promise.all(names.map((f) => readRunFile(f.replace(/\.json$/, ""))))).filter(
-    (r): r is Run => r !== null,
-  );
+  const ids = names.map((f) => f.replace(/\.json$/, "")).sort();
+  const runs = (await Promise.all(ids.map(readRunFile))).filter((r): r is Run => r !== null);
+  // Sorted ids, so the ceiling admits the same subset every scan.
+  parseMemo.retain(new Set(ids));
   return runs.sort((a, b) => b.queuedAt.localeCompare(a.queuedAt));
 }
 
@@ -204,6 +214,6 @@ export async function pruneRuns(scheduleId: string, keep: number): Promise<void>
       rm(runLogPath(r.id), { force: true }),
     ]),
   );
-  for (const r of drop) parseMemo.delete(r.id);
+  for (const r of drop) parseMemo.forget(r.id);
   if (drop.length > 0) invalidate(scanKey());
 }

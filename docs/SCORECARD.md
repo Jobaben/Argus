@@ -195,3 +195,31 @@ same class of defect.
   its data comes from and what to do next, with the action inline.
 - **Coverage gates ratcheted** from 72/73/82/72 to 77/76/84/77 (lines / functions
   / branches / statements).
+
+### The read path, measured rather than assumed
+
+The backlog carried an item claiming `/api/overview` and friends read and parsed
+every retained instance on every poll. Benchmarked against generated fixtures,
+that turned out to be half right and half wrong, in an instructive way.
+
+An mtime-keyed memo already avoided the parses — but it was a 500-entry LRU, and
+an LRU is the worst possible policy for a full-directory scan: the scan touches
+every file exactly once in order, so past the cap it evicts each entry just
+before the next scan asks for it. Measured, the mitigation **inverted** at the
+scale it existed for — a warm scan cost 25ms at 400 files and 130ms at 1000.
+
+The second cost was invisible in the write-up entirely: every write dropped the
+directory-scan cache, so one changed step forced the next reader to re-stat the
+whole directory, and a running pipeline writes constantly.
+
+| Over 1200 run records        | before | after |
+| ---------------------------- | ------ | ----- |
+| warm rescan                  | 163ms  | 57ms  |
+| write, then five routes read | 142ms  | 1.5ms |
+
+Both fixes are policy changes with no storage-format change and no migration:
+retain by scan membership, and patch the cached scan on write instead of
+discarding it. The index the backlog proposed would cut the remaining 57ms
+further, but the cycle that actually runs continuously is now 1.5ms, so it is no
+longer worth a migration — the backlog entry says so now instead of implying an
+unpaid debt.

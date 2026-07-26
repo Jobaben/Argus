@@ -165,6 +165,31 @@ while an unrecognised frame _type_ is still forwarded for forward compatibility.
 | Tasks             | `tasks/<uuid>/`                             | `.highwatermark`, `.lock`                                                          |
 | Cron              | — (not on disk)                             | session-scoped; see §6                                                             |
 
+### Reading a directory of records, cheaply
+
+Runs and pipeline instances are each a directory of small JSON files, and nearly
+every route touches one or both. Three layers keep that affordable, in increasing
+order of subtlety:
+
+1. **A short-TTL single-flight scan cache** (1500ms, keyed by directory). One
+   broadcast makes six routes call `readRuns()` within milliseconds; they share
+   one scan. The TTL is what bounds staleness from writes Argus did not make.
+2. **An mtime-keyed parse memo** (`sources/fileMemo.ts`), so an unchanged file
+   costs a `stat` rather than a read plus `JSON.parse`. Retention is by **scan
+   membership, not recency** — an LRU is the wrong policy here, because a
+   full-directory scan touches every file once in order and therefore evicts each
+   entry just before the next scan wants it. Memory is bounded by what pruning
+   leaves on disk; the ceiling is a runaway guard.
+3. **Write-patching.** A write updates the cached scan in place (re-reading only
+   the file it changed) instead of dropping it. Without this, a running pipeline —
+   which writes on every step transition — forced every reader to re-stat the
+   whole directory between transitions. The patch deliberately does not refresh
+   the entry's timestamp, so it cannot extend the TTL window in which an external
+   edit goes unseen.
+
+Read-after-write stays exact throughout: the write's own patch (or, on a miss, an
+invalidation) lands before it returns.
+
 ## 6. The cron boundary (known limitation)
 
 Scheduled routines are **not persisted to `~/.claude`**. They are session-scoped
