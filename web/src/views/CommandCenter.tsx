@@ -1,5 +1,10 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useOverview } from "../useOverview";
+import { useInsight } from "../useInsight";
+import { useRuns } from "../useRuns";
+import { SituationStrip } from "./SituationStrip";
+import { ActivityRail } from "./ActivityRail";
+import { StepDrawer, type StepSelection } from "./StepDrawer";
 import { useRunActivity } from "../useRunActivity";
 import type { LiveActivity } from "../useRunActivity";
 import { useTotals } from "../useTotals";
@@ -168,6 +173,7 @@ function StepTile({
   live,
   now,
   rowModel,
+  onOpen,
 }: {
   step: StepPill;
   reason: string | null;
@@ -176,6 +182,8 @@ function StepTile({
   /** Pipeline-level model shown in the card header; the tile only repeats a
    *  model when its own differs from this. */
   rowModel: string | null;
+  /** Opens this step's drawer. */
+  onOpen: () => void;
 }) {
   const token = STATUS[step.status].token;
   const working = step.status === "working";
@@ -196,15 +204,25 @@ function StepTile({
     >
       <span className={`absolute inset-y-0 left-0 w-[3px] ${RAIL[token]}`} />
       <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="break-words text-tile-name font-bold leading-tight">{step.name}</div>
+        {/* The name is the activator rather than the whole tile: a tile-sized
+            button would swallow the gate's Approve/Revise controls inside it,
+            and a nested interactive element is invalid. */}
+        <button
+          type="button"
+          onClick={onOpen}
+          className="min-w-0 flex-1 text-left"
+          title="Open this step's run, log and cost"
+        >
+          <div className="break-words text-tile-name font-bold leading-tight underline decoration-transparent decoration-dotted underline-offset-[3px] transition duration-(--duration-quick) hover:decoration-ink-faint">
+            {step.name}
+          </div>
           <div className="mt-0.5 font-mono text-id text-ink-faint">
             {step.runId ? `job ${step.runId}` : "job ——"}
             {step.model && step.model !== rowModel && (
               <span title="Model running this step"> · {step.model}</span>
             )}
           </div>
-        </div>
+        </button>
         <StatusPill status={step.status} size="sm" />
       </div>
       {reason && (
@@ -274,6 +292,7 @@ function PhaseCell({
   liveActivity,
   now,
   rowModel,
+  onOpenStep,
 }: {
   pill: PhasePill;
   instanceId: string | null;
@@ -284,19 +303,24 @@ function PhaseCell({
   liveActivity: Map<string, LiveActivity>;
   now: number;
   rowModel: string | null;
+  onOpenStep: (step: StepPill, phaseName: string, reason: string | null) => void;
 }) {
   return (
     <div className="flex min-w-0 flex-col gap-2.5">
-      {pill.steps.map((step, i) => (
-        <StepTile
-          key={`${step.name}-${i}`}
-          step={step}
-          reason={step.status === "failed" ? pill.reason : null}
-          live={step.runId ? (liveActivity.get(step.runId) ?? null) : null}
-          now={now}
-          rowModel={rowModel}
-        />
-      ))}
+      {pill.steps.map((step, i) => {
+        const reason = step.status === "failed" ? pill.reason : null;
+        return (
+          <StepTile
+            key={`${step.name}-${i}`}
+            step={step}
+            reason={reason}
+            live={step.runId ? (liveActivity.get(step.runId) ?? null) : null}
+            now={now}
+            rowModel={rowModel}
+            onOpen={() => onOpenStep(step, pill.name, reason)}
+          />
+        );
+      })}
       {instanceId && gate?.phaseId === pill.id && (
         <Gate
           instanceId={instanceId}
@@ -324,6 +348,7 @@ function Row({
   liveActivity,
   now,
   index,
+  onOpenStep,
 }: {
   rows: OverviewRow[];
   approve: (id: string) => Promise<unknown>;
@@ -332,6 +357,7 @@ function Row({
   now: number;
   /** Position in the board, for the entrance stagger. */
   index: number;
+  onOpenStep: (selection: StepSelection) => void;
 }) {
   const first = rows[0];
   const multi = rows.length > 1;
@@ -430,6 +456,9 @@ function Row({
                 liveActivity={liveActivity}
                 now={now}
                 rowModel={row.model}
+                onOpenStep={(step, phaseName, reason) =>
+                  onOpenStep({ step, pipelineName: row.name, phaseName, reason })
+                }
               />
             ))}
           </Fragment>
@@ -502,6 +531,9 @@ function BoardTotal({
 export default function CommandCenter() {
   const { overview, loading, error, approve, revise } = useOverview();
   const { totals, reset } = useTotals();
+  const { situation, loading: situationLoading } = useInsight();
+  const { runs, loading: runsLoading, cancelRun } = useRuns();
+  const [selected, setSelected] = useState<StepSelection | null>(null);
   const rows = useMemo(() => overview.flatMap(toOverviewRows), [overview]);
   // One card per pipeline: concurrent instances of the same pipeline share a
   // card and contribute a phase grid each.
@@ -527,6 +559,7 @@ export default function CommandCenter() {
       <div aria-live="polite" role="status" className="sr-only">
         {announcement}
       </div>
+      <SituationStrip situation={situation} loading={situationLoading} />
       {error && (
         <div className="mb-6 rounded-tile border border-fail/30 bg-fail/10 px-4 py-3 text-sm text-fail">
           Couldn't reach the Argus server: {error}
@@ -548,20 +581,28 @@ export default function CommandCenter() {
           tab.
         </EmptyState>
       ) : (
-        <div className="flex flex-col gap-3">
-          {groups.map((group, i) => (
-            <Row
-              key={group[0].pipelineId}
-              index={i}
-              rows={group}
-              approve={approve}
-              revise={revise}
-              liveActivity={liveActivity}
-              now={now}
-            />
-          ))}
+        // The rail sits beside the board on a wide display and below it on a
+        // narrow one — the board needs the horizontal room more than the rail
+        // does, so the rail is what moves.
+        <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="flex min-w-0 flex-col gap-3">
+            {groups.map((group, i) => (
+              <Row
+                key={group[0].pipelineId}
+                index={i}
+                rows={group}
+                approve={approve}
+                revise={revise}
+                liveActivity={liveActivity}
+                now={now}
+                onOpenStep={setSelected}
+              />
+            ))}
+          </div>
+          <ActivityRail rows={rows} liveActivity={liveActivity} runs={runs} loading={runsLoading} />
         </div>
       )}
+      <StepDrawer selection={selected} onClose={() => setSelected(null)} onCancelRun={cancelRun} />
     </Page>
   );
 }

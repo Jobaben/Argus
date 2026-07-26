@@ -33,6 +33,10 @@ export function formatElapsed(ms: number): string {
 
 /** Dollar cost with enough precision for sub-cent agent runs. */
 export function formatUsd(v: number): string {
+  // Sub-cent amounts are real — a cheap step can cost $0.0004 — so they get four
+  // decimals. Exactly zero does not: "$0.0000" reads as a precision claim about
+  // nothing, and it is what the spend meter shows before the first run of the day.
+  if (v === 0) return "$0.00";
   return v >= 0.01 ? `$${v.toFixed(2)}` : `$${v.toFixed(4)}`;
 }
 
@@ -153,4 +157,25 @@ export function sparklinePoints(values: number[], width = 100, height = 26): str
 
 function round(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/**
+ * A countdown to a future instant: "in 45s", "in 12m", "in 2h 10m", "in 3d 4h".
+ *
+ * Never renders a negative duration. A schedule whose slot has passed but which
+ * has not fired yet reads "due now" — the raw arithmetic would have produced
+ * the "-7138s ago" that used to appear on late monitors.
+ */
+export function formatCountdown(ms: number): string {
+  if (!Number.isFinite(ms)) return "—";
+  if (ms <= 0) return "due now";
+  const totalMinutes = Math.floor(ms / 60_000);
+  if (totalMinutes < 1) return `in ${Math.max(1, Math.round(ms / 1000))}s`;
+  if (totalMinutes < 60) return `in ${totalMinutes}m`;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours < 24) return minutes === 0 ? `in ${hours}h` : `in ${hours}h ${minutes}m`;
+  const days = Math.floor(hours / 24);
+  const restHours = hours % 24;
+  return restHours === 0 ? `in ${days}d` : `in ${days}d ${restHours}h`;
 }

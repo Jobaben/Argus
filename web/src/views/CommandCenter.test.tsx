@@ -339,7 +339,8 @@ describe("CommandCenter", () => {
     ];
     mockOverview.overview = [e];
     render(<CommandCenter />);
-    expect(screen.getByText(/Bash: npm test/)).toBeInTheDocument();
+    // The tile and the activity rail both report it, which is the point.
+    expect(screen.getAllByText(/Bash: npm test/).length).toBeGreaterThan(0);
   });
 
   it("prefers the live WS activity over the overview snapshot", () => {
@@ -350,7 +351,7 @@ describe("CommandCenter", () => {
     mockActivity.set("r", { label: "Bash: npm test", at: "2026-06-30T10:00:00.000Z" });
     mockOverview.overview = [e];
     render(<CommandCenter />);
-    expect(screen.getByText(/Bash: npm test/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Bash: npm test/).length).toBeGreaterThan(0);
     expect(screen.queryByText(/Bash: npm ci/)).not.toBeInTheDocument();
   });
 

@@ -6,6 +6,7 @@ import {
   formatMs,
   formatTokens,
   formatUsd,
+  formatCountdown,
   parseRunLog,
   sparklinePoints,
 } from "./format";
@@ -69,6 +70,50 @@ describe("formatMs", () => {
   it("returns a dash for invalid input", () => {
     expect(formatMs(-1)).toBe("—");
     expect(formatMs(Number.NaN)).toBe("—");
+  });
+});
+
+describe("formatUsd", () => {
+  it("shows two decimals for a cent or more", () => {
+    expect(formatUsd(1)).toBe("$1.00");
+    expect(formatUsd(0.42)).toBe("$0.42");
+    expect(formatUsd(118.4249)).toBe("$118.42");
+  });
+
+  it("shows four decimals for a real sub-cent cost", () => {
+    expect(formatUsd(0.0004)).toBe("$0.0004");
+    expect(formatUsd(0.009)).toBe("$0.0090");
+  });
+
+  it("shows plain zero rather than a false precision claim", () => {
+    // The spend meter renders this before the first run of the day.
+    expect(formatUsd(0)).toBe("$0.00");
+  });
+});
+
+describe("formatCountdown", () => {
+  it("counts down in the largest sensible unit", () => {
+    expect(formatCountdown(45_000)).toBe("in 45s");
+    expect(formatCountdown(12 * 60_000)).toBe("in 12m");
+    expect(formatCountdown(2 * 3_600_000 + 10 * 60_000)).toBe("in 2h 10m");
+    expect(formatCountdown(3 * 3_600_000)).toBe("in 3h");
+    expect(formatCountdown(3 * 86_400_000 + 4 * 3_600_000)).toBe("in 3d 4h");
+    expect(formatCountdown(2 * 86_400_000)).toBe("in 2d");
+  });
+
+  it("never renders a negative duration", () => {
+    // A slot that has passed but not fired used to render "-7138s ago".
+    expect(formatCountdown(0)).toBe("due now");
+    expect(formatCountdown(-7_138_000)).toBe("due now");
+  });
+
+  it("degrades on a non-finite input", () => {
+    expect(formatCountdown(Number.NaN)).toBe("—");
+    expect(formatCountdown(Number.POSITIVE_INFINITY)).toBe("—");
+  });
+
+  it("rounds a sub-second wait up to a second, never to zero", () => {
+    expect(formatCountdown(400)).toBe("in 1s");
   });
 });
 

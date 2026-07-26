@@ -14,6 +14,7 @@ export {
   SkeletonText,
   SkeletonTile,
 } from "./Skeleton";
+export { Drawer } from "./Drawer";
 export { Page } from "./Page";
 export type { Crumb } from "./Page";
 export { TimeAgo } from "./TimeAgo";

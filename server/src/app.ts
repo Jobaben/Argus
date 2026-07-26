@@ -65,6 +65,7 @@ import {
 } from "./sources/budget.js";
 import { buildOverview } from "./sources/overview.js";
 import { buildPalette } from "./sources/palette.js";
+import { buildSituation } from "./sources/insight.js";
 import { PreflightError, type Engine } from "./pipelineEngine.js";
 import type { PipelineSignal } from "./sources/pipelineTypes.js";
 import type { ActivityEvent } from "./runTailer.js";
@@ -649,6 +650,39 @@ export function createApp(deps: AppDeps): Hono {
   app.get("/api/overview", async (c) => {
     const [defs, insts, runs] = await Promise.all([readPipelines(), readInstances(), readRuns()]);
     return c.json({ overview: buildOverview(defs, insts, runs, deps.activity?.()) });
+  });
+
+  // The board's situation strip: counts, spend against the budget, what fires
+  // next, and a 24h throughput sparkline. All derived from the shared caches.
+  app.get("/api/insight", async (c) => {
+    const now = new Date();
+    const [runs, instances, pipelines, schedules, triage, agents, config, ledger] =
+      await Promise.all([
+        readRuns(),
+        readInstances(),
+        readPipelines(),
+        readSchedulesWithNext(now),
+        readTriage(),
+        readAgents(),
+        readBudgetConfig(),
+        readSpendLedger(),
+      ]);
+    const { monitors } = buildMonitors(schedules, runs, now);
+    return c.json(
+      buildSituation(
+        {
+          runs,
+          instances,
+          pipelines,
+          schedules,
+          monitors,
+          issues: buildIssues(runs, triage),
+          agents,
+          budget: buildBudgetStatus(config, ledger, now),
+        },
+        now,
+      ),
+    );
   });
 
   // The command palette's search index: one request instead of the seven view
