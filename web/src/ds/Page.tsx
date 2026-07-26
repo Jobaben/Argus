@@ -24,7 +24,10 @@ export function Page({
   return (
     <div className="mx-auto max-w-[1600px] px-6 py-8">
       {hasHeader && (
-        <header className="mb-6 flex items-start justify-between gap-4">
+        // Wraps rather than overlapping: on a phone the title and its actions
+        // (a spend total, a window picker) cannot share one line, and
+        // `justify-between` without wrapping let them collide.
+        <header className="mb-6 flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             {crumbs?.map((c) => (
               <span key={c.href} className="flex items-center gap-2 text-sm text-ink-faint">

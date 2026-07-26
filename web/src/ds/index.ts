@@ -18,6 +18,7 @@ export { Drawer } from "./Drawer";
 export { Page } from "./Page";
 export type { Crumb } from "./Page";
 export { TimeAgo } from "./TimeAgo";
+export { useClock, CLOCK_TICK_MS } from "./clock";
 export { StatusPill } from "./StatusPill";
 export { Meter } from "./Meter";
 export type { MeterProps } from "./Meter";

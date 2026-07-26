@@ -11,7 +11,7 @@ import {
   SkeletonTile,
   formatUsd,
 } from "../ds";
-import { axisTicks, spanGeometry } from "../ds/chronicleLayout";
+import { axisTicks, shortenLanePath, spanGeometry } from "../ds/chronicleLayout";
 
 const WINDOWS = [
   { value: "1", label: "1h" },
@@ -64,7 +64,9 @@ function SpanBar({
 }) {
   const geo = spanGeometry(span.startedAt, span.endedAt, windowStartMs, windowEndMs);
   if (!geo) return null;
-  const wide = geo.width > 7;
+  // Below this the label is unreadable anyway and just muddies the bar's colour,
+  // which is the primary signal. 4% ≈ 55px on a 1400px panel.
+  const wide = geo.width > 4;
   const body = (
     <>
       {geo.openEnded && (
@@ -106,15 +108,24 @@ function GroupLanes({
   windowStartMs: number;
   windowEndMs: number;
 }) {
+  const spanCount = group.rows.reduce((n, row) => n + row.length, 0);
   return (
     <div className="flex border-t border-line/60">
-      <div className="w-44 shrink-0 py-1.5 pr-3">
+      <div className="flex w-52 shrink-0 items-baseline gap-1.5 py-1.5 pr-3">
         <span
-          className={`mr-1.5 inline-block rounded px-1 py-px font-mono text-[9px] font-bold tracking-[0.1em] ${KIND_BADGE[group.kind]}`}
+          className={`shrink-0 rounded px-1 py-px font-mono text-[9px] font-bold tracking-[0.1em] ${KIND_BADGE[group.kind]}`}
         >
           {KIND_LABEL[group.kind]}
         </span>
-        <span className="break-words text-xs font-semibold text-ink-dim">{group.label}</span>
+        <span
+          className="min-w-0 flex-1 truncate text-xs font-semibold text-ink-dim"
+          title={group.label}
+        >
+          {shortenLanePath(group.label)}
+        </span>
+        <span className="shrink-0 font-mono text-[10px] text-ink-faint" title="Spans in this lane">
+          {spanCount}
+        </span>
       </div>
       <div className="min-w-0 flex-1 py-1">
         {group.rows.map((row, i) => (
@@ -188,9 +199,35 @@ export default function Chronicle() {
         </EmptyState>
       ) : (
         <div className="rounded-panel border border-line bg-surface px-4 pb-3 pt-2">
+          {/* On a wide window most bars are too short to label, so their colour
+              carries the meaning — which means the colours have to be stated. */}
+          <div className="mb-1 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[10px] text-ink-faint">
+            {(
+              [
+                ["done", "succeeded"],
+                ["failed", "failed"],
+                ["working", "in flight"],
+                ["queued", "queued"],
+                ["idle", "idle"],
+              ] as const
+            ).map(([status, label]) => (
+              <span key={status} className="flex items-center gap-1.5">
+                <span aria-hidden="true" className={`h-2 w-3 rounded-sm border ${BAR[status]}`} />
+                {label}
+              </span>
+            ))}
+            <span className="ml-auto flex items-center gap-1.5">
+              <span
+                aria-hidden="true"
+                className="h-1.5 w-1.5 rounded-full bg-eye shadow-[0_0_8px_1px_var(--color-eye)]"
+              />
+              still running
+            </span>
+          </div>
+
           {/* Axis */}
           <div className="flex" aria-hidden>
-            <div className="w-44 shrink-0" />
+            <div className="w-52 shrink-0" />
             <div className="relative h-6 min-w-0 flex-1">
               {ticks.map((t) => (
                 <span
@@ -210,7 +247,7 @@ export default function Chronicle() {
           {/* Lanes with tick gridlines behind them */}
           <div className="relative">
             <div className="pointer-events-none absolute inset-0 flex" aria-hidden>
-              <div className="w-44 shrink-0" />
+              <div className="w-52 shrink-0" />
               <div className="relative min-w-0 flex-1">
                 {ticks.map(
                   (t) =>

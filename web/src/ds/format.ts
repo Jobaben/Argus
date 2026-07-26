@@ -160,22 +160,52 @@ function round(n: number): number {
 }
 
 /**
+ * The largest sensible unit of a positive duration: "45s", "12m", "2h 10m",
+ * "3d 4h". Shared by the countdown and relative-time formatters so a schedule
+ * reads the same whether it is 5 minutes away or 5 minutes late.
+ */
+function coarseDuration(ms: number): string {
+  const totalMinutes = Math.floor(ms / 60_000);
+  if (totalMinutes < 1) return `${Math.max(1, Math.round(ms / 1000))}s`;
+  if (totalMinutes < 60) return `${totalMinutes}m`;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours < 24) return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
+  const days = Math.floor(hours / 24);
+  const restHours = hours % 24;
+  return restHours === 0 ? `${days}d` : `${days}d ${restHours}h`;
+}
+
+/**
  * A countdown to a future instant: "in 45s", "in 12m", "in 2h 10m", "in 3d 4h".
  *
- * Never renders a negative duration. A schedule whose slot has passed but which
- * has not fired yet reads "due now" — the raw arithmetic would have produced
- * the "-7138s ago" that used to appear on late monitors.
+ * Never renders a negative duration. A slot that has passed but not fired yet
+ * reads "due now" — the raw arithmetic is what produced the "-7138s ago" that
+ * used to appear on late monitors.
  */
 export function formatCountdown(ms: number): string {
   if (!Number.isFinite(ms)) return "—";
   if (ms <= 0) return "due now";
-  const totalMinutes = Math.floor(ms / 60_000);
-  if (totalMinutes < 1) return `in ${Math.max(1, Math.round(ms / 1000))}s`;
-  if (totalMinutes < 60) return `in ${totalMinutes}m`;
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  if (hours < 24) return minutes === 0 ? `in ${hours}h` : `in ${hours}h ${minutes}m`;
-  const days = Math.floor(hours / 24);
-  const restHours = hours % 24;
-  return restHours === 0 ? `in ${days}d` : `in ${days}d ${restHours}h`;
+  return `in ${coarseDuration(ms)}`;
+}
+
+/**
+ * Relative time in **either** direction: "3h ago" for the past, "in 3h" for the
+ * future, "just now" for either side of the present moment.
+ *
+ * The bidirectionality is the point. The same component renders "last run" and
+ * "next expected", and treating every instant as past turned a monitor's next
+ * slot into `-7138s ago` — a number that looks like corruption and taught the
+ * reader to distrust the row.
+ */
+export function formatRelativeTime(
+  iso: string | null | undefined,
+  now: number = Date.now(),
+): string {
+  if (!iso) return "—";
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "—";
+  const delta = then - now;
+  if (Math.abs(delta) < 10_000) return "just now";
+  return delta > 0 ? `in ${coarseDuration(delta)}` : `${coarseDuration(-delta)} ago`;
 }

@@ -369,10 +369,11 @@ function Row({
       style={{ animationDelay: staggerDelay(index) }}
       className="rounded-tile border border-line bg-gradient-to-b from-surface-2 to-surface px-4 py-3.5 motion-safe:animate-[slide-up_var(--duration-base)_var(--ease-out-expo)_both]"
     >
-      <div className="flex items-center gap-3">
-        <span className="min-w-0 break-words text-[15px] font-extrabold tracking-[0.02em] text-ink">
-          {first.name}
-        </span>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        {/* `break-words` here used to hyphenate the pipeline name one letter per
+            line once the row ran out of space on a phone. Wrapping the row
+            instead keeps the name intact. */}
+        <span className="text-[15px] font-extrabold tracking-[0.02em] text-ink">{first.name}</span>
         <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint">
           {first.phases.length} phases
         </span>
@@ -405,64 +406,70 @@ function Row({
           </>
         )}
       </div>
-      {/* Every phase must be visible at once: equal-width columns share the
-          row, shrinking and word-wrapping instead of scrolling horizontally.
-          One flat grid per card keeps every instance's tiles under the same
-          shared phase headers, so titles render once and columns stay aligned. */}
-      <div
-        className="mt-3.5 grid gap-x-3.5 gap-y-2.5 pb-1"
-        style={{ gridTemplateColumns: `repeat(${first.phases.length}, minmax(0, 1fr))` }}
-      >
-        {first.phases.map((pill, i) => (
-          <PhaseHeader key={pill.id} pill={pill} index={i} />
-        ))}
-        {first.phases.map((pill) => (
-          <div key={pill.id} className="h-[2px] rounded-full bg-line" />
-        ))}
-        {rows.map((row, rowIndex) => (
-          <Fragment key={row.instanceId ?? row.pipelineId}>
-            {multi && (
-              <div
-                className={`col-span-full flex items-center gap-3 ${
-                  rowIndex > 0 ? "mt-1 border-t border-line pt-2.5" : ""
-                }`}
-              >
-                <span className="font-mono text-[10px] text-ink-faint">
-                  #{row.instanceLabel ?? row.instanceId}
-                </span>
-                <StatusPill status={row.badge} size="sm" />
-                {row.cost && (
-                  <Meter
-                    level="row"
-                    tokens={row.cost.tokens}
-                    usd={row.cost.usd}
-                    title="Total tokens and dollar cost of the latest run, including revised attempts"
-                  />
-                )}
-                <span className="ml-auto font-mono text-[10px]">
-                  <TimeAgo iso={row.updatedAt} />
-                </span>
-              </div>
-            )}
-            {row.phases.map((pill) => (
-              <PhaseCell
-                key={pill.id}
-                pill={pill}
-                instanceId={row.instanceId}
-                gate={row.gate}
-                approve={approve}
-                revise={revise}
-                reviseLabel={row.failure?.kind === "restarted" ? "Retry" : "Revise"}
-                liveActivity={liveActivity}
-                now={now}
-                rowModel={row.model}
-                onOpenStep={(step, phaseName, reason) =>
-                  onOpenStep({ step, pipelineName: row.name, phaseName, reason })
-                }
-              />
-            ))}
-          </Fragment>
-        ))}
+      {/* One flat grid per card keeps every instance's tiles under the same
+          shared phase headers, so titles render once and columns stay aligned.
+          Columns share the row equally *until* a column would fall below 200px,
+          at which point the card scrolls horizontally instead. The old
+          `minmax(0, 1fr)` had no floor, so a 4-phase board on a 390px phone gave
+          each phase ~60px and rendered its title one letter per line. Every
+          phase still fits at any desktop width; below that, a Kanban-style
+          scroll beats an illegible one. */}
+      <div className="-mx-1 overflow-x-auto px-1">
+        <div
+          className="mt-3.5 grid min-w-full gap-x-3.5 gap-y-2.5 pb-1"
+          style={{ gridTemplateColumns: `repeat(${first.phases.length}, minmax(200px, 1fr))` }}
+        >
+          {first.phases.map((pill, i) => (
+            <PhaseHeader key={pill.id} pill={pill} index={i} />
+          ))}
+          {first.phases.map((pill) => (
+            <div key={pill.id} className="h-[2px] rounded-full bg-line" />
+          ))}
+          {rows.map((row, rowIndex) => (
+            <Fragment key={row.instanceId ?? row.pipelineId}>
+              {multi && (
+                <div
+                  className={`col-span-full flex items-center gap-3 ${
+                    rowIndex > 0 ? "mt-1 border-t border-line pt-2.5" : ""
+                  }`}
+                >
+                  <span className="font-mono text-[10px] text-ink-faint">
+                    #{row.instanceLabel ?? row.instanceId}
+                  </span>
+                  <StatusPill status={row.badge} size="sm" />
+                  {row.cost && (
+                    <Meter
+                      level="row"
+                      tokens={row.cost.tokens}
+                      usd={row.cost.usd}
+                      title="Total tokens and dollar cost of the latest run, including revised attempts"
+                    />
+                  )}
+                  <span className="ml-auto font-mono text-[10px]">
+                    <TimeAgo iso={row.updatedAt} />
+                  </span>
+                </div>
+              )}
+              {row.phases.map((pill) => (
+                <PhaseCell
+                  key={pill.id}
+                  pill={pill}
+                  instanceId={row.instanceId}
+                  gate={row.gate}
+                  approve={approve}
+                  revise={revise}
+                  reviseLabel={row.failure?.kind === "restarted" ? "Retry" : "Revise"}
+                  liveActivity={liveActivity}
+                  now={now}
+                  rowModel={row.model}
+                  onOpenStep={(step, phaseName, reason) =>
+                    onOpenStep({ step, pipelineName: row.name, phaseName, reason })
+                  }
+                />
+              ))}
+            </Fragment>
+          ))}
+        </div>
       </div>
     </article>
   );

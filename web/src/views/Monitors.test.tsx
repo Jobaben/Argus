@@ -80,12 +80,23 @@ describe("Monitors", () => {
     expect(screen.getAllByRole("img", { name: /Last 2 runs/ }).length).toBeGreaterThan(0);
   });
 
-  it("shows the overdue expectation for a down monitor", () => {
+  it("says how overdue a down monitor is, not merely when the slot was", () => {
+    // A slot two hours in the past used to render as "Next: -7138s ago".
+    const twoHoursAgo = new Date(Date.now() - 2 * 3_600_000 - 5 * 60_000).toISOString();
+    mockState.monitors = [monitor({ status: "down", expectedAt: twoHoursAgo, nextExpected: null })];
+    render(<Monitors />);
+    expect(screen.getByText(/Overdue by/)).toBeInTheDocument();
+    expect(screen.getByText("2h 5m")).toBeInTheDocument();
+  });
+
+  it("shows the next slot as a forward-looking time for a healthy monitor", () => {
+    const inThirtyMinutes = new Date(Date.now() + 30 * 60_000).toISOString();
     mockState.monitors = [
-      monitor({ status: "down", expectedAt: "2026-07-10T06:30:00.000Z", nextExpected: null }),
+      monitor({ status: "up", expectedAt: null, nextExpected: inThirtyMinutes }),
     ];
     render(<Monitors />);
-    expect(screen.getByText(/Expected/)).toBeInTheDocument();
+    expect(screen.getByText(/Next run:/)).toBeInTheDocument();
+    expect(screen.getByText(/in (29|30)m/)).toBeInTheDocument();
   });
 
   it("surfaces a fetch error", () => {

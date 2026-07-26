@@ -8,6 +8,8 @@ import {
   Page,
   SkeletonGrid,
   TimeAgo,
+  formatDuration,
+  useClock,
 } from "../ds";
 import type { ColorToken } from "../ds";
 import { useMonitors } from "../useMonitors";
@@ -39,6 +41,20 @@ function MonitorPill({ status }: { status: MonitorStatus }) {
     >
       {label}
     </span>
+  );
+}
+
+/** How long ago a missed slot was due, as a bare duration that keeps growing. */
+function Overdue({ iso }: { iso: string | null }) {
+  const now = useClock();
+  if (!iso) return <strong className="font-mono">—</strong>;
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return <strong className="font-mono">—</strong>;
+  const ms = now - at.getTime();
+  return (
+    <strong className="font-mono" title={`Slot was due at ${at.toLocaleString()}`}>
+      {ms <= 0 ? "moments" : formatDuration(ms)}
+    </strong>
   );
 }
 
@@ -75,14 +91,17 @@ function MonitorCard({ monitor }: { monitor: MonitorHealth }) {
         <span>
           Last run: <TimeAgo iso={monitor.lastRunAt} />
         </span>
+        {/* A late or down monitor's headline is *how overdue* it is, not when the
+            slot was — "overdue by 2h" is the number you act on. A healthy one
+            shows the next slot instead. */}
         {monitor.status === "down" || monitor.status === "late" ? (
-          <span className="text-fail">
-            Expected <TimeAgo iso={monitor.expectedAt} />
+          <span className={monitor.status === "down" ? "text-fail" : "text-await"}>
+            Overdue by <Overdue iso={monitor.expectedAt} />
           </span>
         ) : (
           monitor.nextExpected && (
             <span>
-              Next: <TimeAgo iso={monitor.nextExpected} />
+              Next run: <TimeAgo iso={monitor.nextExpected} />
             </span>
           )
         )}

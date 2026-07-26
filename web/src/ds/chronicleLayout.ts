@@ -13,7 +13,16 @@ export interface SpanGeometry {
   openEnded: boolean;
 }
 
-const MIN_WIDTH_PCT = 0.6;
+/**
+ * Floor on a span's rendered width, as a percentage of the panel.
+ *
+ * A 40-second run inside a 7-day window is ~0.03% wide — mathematically correct
+ * and completely unusable: you cannot see it, and you certainly cannot hover it
+ * for its tooltip. 1.2% is ~16px on a 1400px panel, which is a real target.
+ * The cost is that very short spans look equal in length; the tooltip carries
+ * the true duration.
+ */
+const MIN_WIDTH_PCT = 1.2;
 
 function clampPct(n: number): number {
   return Math.min(100, Math.max(0, n));
@@ -72,4 +81,19 @@ export function axisTicks(windowStartMs: number, windowEndMs: number, count = 6)
     ticks.push({ pct, label: tickLabel(at, range) });
   }
   return ticks;
+}
+
+/**
+ * Shortens a lane label to its trailing path segments.
+ *
+ * Lane labels are mostly project paths, and a path is identified by its *tail*
+ * — `home/mtrushbad/GIT/spectacle` matters as "GIT/spectacle". Wrapping the
+ * whole thing broke words mid-token ("wareh / ouse") and cost two lines per
+ * lane; truncating from the front keeps the identifying part and stays on one.
+ * The full label remains available as a tooltip.
+ */
+export function shortenLanePath(label: string, segments = 2): string {
+  const parts = label.split("/").filter(Boolean);
+  if (parts.length <= segments) return label;
+  return `…/${parts.slice(-segments).join("/")}`;
 }

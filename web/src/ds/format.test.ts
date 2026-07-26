@@ -7,6 +7,7 @@ import {
   formatTokens,
   formatUsd,
   formatCountdown,
+  formatRelativeTime,
   parseRunLog,
   sparklinePoints,
 } from "./format";
@@ -114,6 +115,37 @@ describe("formatCountdown", () => {
 
   it("rounds a sub-second wait up to a second, never to zero", () => {
     expect(formatCountdown(400)).toBe("in 1s");
+  });
+});
+
+describe("formatRelativeTime", () => {
+  const now = new Date("2026-07-07T12:00:00.000Z").getTime();
+  const at = (ms: number) => new Date(now + ms).toISOString();
+
+  it("reads the past as 'ago'", () => {
+    expect(formatRelativeTime(at(-45_000), now)).toBe("45s ago");
+    expect(formatRelativeTime(at(-12 * 60_000), now)).toBe("12m ago");
+    expect(formatRelativeTime(at(-3 * 3_600_000), now)).toBe("3h ago");
+    expect(formatRelativeTime(at(-2 * 86_400_000), now)).toBe("2d ago");
+  });
+
+  it("reads the future as 'in', instead of a negative 'ago'", () => {
+    // The regression: a monitor's next expected slot rendered "-7138s ago".
+    expect(formatRelativeTime(at(45_000), now)).toBe("in 45s");
+    expect(formatRelativeTime(at(7_138_000), now)).toBe("in 1h 58m");
+    expect(formatRelativeTime(at(50_328_000), now)).toBe("in 13h 58m");
+  });
+
+  it("collapses either side of the present into 'just now'", () => {
+    expect(formatRelativeTime(at(0), now)).toBe("just now");
+    expect(formatRelativeTime(at(-5_000), now)).toBe("just now");
+    expect(formatRelativeTime(at(5_000), now)).toBe("just now");
+  });
+
+  it("degrades on a missing or unparseable timestamp", () => {
+    expect(formatRelativeTime(null, now)).toBe("—");
+    expect(formatRelativeTime(undefined, now)).toBe("—");
+    expect(formatRelativeTime("not-a-date", now)).toBe("—");
   });
 });
 
