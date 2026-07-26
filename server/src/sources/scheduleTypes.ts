@@ -1,72 +1,16 @@
-export type TriggerKind = "interval" | "daily" | "weekly" | "windowed";
+/**
+ * Schedule-domain types — all wire shapes, so they live in `@argus/contracts`
+ * and are re-exported here for the scheduler, the engine and the sources that
+ * already import them from this path.
+ */
 
-/** When a schedule fires. `everyMinutes` for interval and windowed cadence;
- * `time` ("HH:MM", local) for daily/weekly; `weekday` (0=Sun..6=Sat) for weekly;
- * `startTime`/`endTime` ("HH:MM", local, end exclusive) bound the windowed daily
- * window — an endTime before startTime wraps past midnight into the next day;
- * `weekdays` optionally restricts windowed to the days the window opens on
- * (empty/omitted = every day). */
-export interface Trigger {
-  kind: TriggerKind;
-  everyMinutes?: number;
-  time?: string;
-  weekday?: number;
-  startTime?: string;
-  endTime?: string;
-  weekdays?: number[];
-}
-
-export interface Schedule {
-  id: string;
-  name: string;
-  prompt: string;
-  cwd: string;
-  trigger: Trigger;
-  enabled: boolean;
-  overlapPolicy: "skip" | "allow";
-  /** Anacron-style recovery: when the latest slot was missed beyond the firing
-   *  grace (machine asleep, Argus down), fire it once on the next tick instead
-   *  of dropping it. Absent = false, so pre-existing schedules keep the old
-   *  skip-on-miss behavior. */
-  catchUp?: boolean;
-  createdAt: string;
-  updatedAt: string;
-  lastRunAt: string | null;
-  lastRunId: string | null;
-}
-
-export type RunStatus =
-  "running" | "succeeded" | "failed" | "skipped" | "interrupted" | "cancelled";
-
-export interface Run {
-  id: string;
-  scheduleId: string;
-  scheduleName: string;
-  prompt: string;
-  cwd: string;
-  status: RunStatus;
-  trigger: "scheduled" | "manual";
-  queuedAt: string;
-  startedAt: string | null;
-  endedAt: string | null;
-  durationMs: number | null;
-  pid: number | null;
-  exitCode: number | null;
-  sessionId: string | null;
-  model?: string;
-  project: string | null;
-  resultSummary: string | null;
-  error: string | null;
-  instanceId?: string;
-  phaseId?: string;
-  /** Total USD cost reported by `claude -p --output-format json`, if present. */
-  costUsd?: number | null;
-  /** Total tokens (input+output) reported by the CLI result envelope, if present. */
-  tokens?: number | null;
-  /** Set once the run's cost has been folded into the all-time totals; guards
-   *  against double-counting across the several terminal-write paths. */
-  countedInTotals?: boolean;
-  /** Work-level conclusion from the pipeline signal, distinct from the
-   *  exit-code-derived `status`. Null/absent for non-pipeline or unsignalled runs. */
-  outcome?: "succeeded" | "failed" | "blocked" | null;
-}
+export type {
+  Run,
+  RunOutcome,
+  RunStatus,
+  Schedule,
+  ScheduleInput,
+  ScheduleWithNext,
+  Trigger,
+  TriggerKind,
+} from "@argus/contracts";

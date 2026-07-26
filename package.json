@@ -11,6 +11,7 @@
     "node": ">=22"
   },
   "workspaces": [
+    "contracts",
     "server",
     "web"
   ],
@@ -21,8 +22,8 @@
     "build": "npm -w web run build && npm -w server run build",
     "start": "npm -w server run start",
     "test": "npm -w server run test && npm -w web run test",
-    "typecheck": "npm -w server run typecheck && npm -w web run typecheck",
-    "lint": "npm -w server run lint && npm -w web run lint",
+    "typecheck": "npm -w contracts run typecheck && npm -w server run typecheck && npm -w web run typecheck",
+    "lint": "npm -w contracts run lint && npm -w server run lint && npm -w web run lint",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check": "npm run typecheck && npm run lint && npm run test"

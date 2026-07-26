@@ -9,13 +9,9 @@ import { open } from "node:fs/promises";
 import path from "node:path";
 import chokidar, { type FSWatcher } from "chokidar";
 import { LOG_CAP_BYTES, runLogPath } from "./sources/runs.js";
+import type { ActivityEvent } from "@argus/contracts";
 
-export interface ActivityEvent {
-  /** Arrival timestamp, stamped when Argus read the line (events carry none). */
-  at: string;
-  kind: "init" | "tool" | "text" | "done";
-  label: string;
-}
+export type { ActivityEvent } from "@argus/contracts";
 
 const LABEL_MAX = 80;
 

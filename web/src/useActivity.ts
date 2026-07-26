@@ -1,11 +1,8 @@
 import { useLiveResource } from "./live/useLiveResource";
 
-export interface Activity {
-  ts: string;
-  text: string;
-  project: string;
-  cwd: string;
-}
+import type { Activity } from "@argus/contracts";
+
+export type { Activity };
 
 /** Loads the prompt-history activity feed, refreshing on "agents:changed". */
 export function useActivity() {

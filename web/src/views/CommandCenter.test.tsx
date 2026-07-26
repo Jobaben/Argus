@@ -38,6 +38,8 @@ vi.mock("../useTotals", () => ({
 
 function entry(name: string, status: InstanceStatus, phaseStatuses: PhaseStatus[]): OverviewEntry {
   return {
+    cost: null,
+    active: [],
     definition: {
       id: name,
       name,
@@ -195,6 +197,8 @@ describe("CommandCenter", () => {
   it("shows the failed step and reason on a failed pipeline", () => {
     mockOverview.overview = [
       {
+        cost: null,
+        active: [],
         definition: {
           id: "auth-refactor",
           name: "auth-refactor",

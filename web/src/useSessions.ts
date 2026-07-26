@@ -1,39 +1,9 @@
 import { useMemo } from "react";
 import { useLiveResource } from "./live/useLiveResource";
 
-export interface SessionSummary {
-  id: string;
-  project: string;
-  projectLabel: string;
-  title: string;
-  messageCount: number;
-  toolUseCount: number;
-  model: string | null;
-  firstActivity: string | null;
-  lastActivity: string | null;
-}
+import type { SessionDetail, SessionMessage, SessionSummary } from "@argus/contracts";
 
-export interface SessionMessage {
-  index: number;
-  type: string;
-  role: string | null;
-  timestamp: string | null;
-  model: string | null;
-  text: string | null;
-  toolName: string | null;
-  isError: boolean;
-}
-
-export interface SessionDetail {
-  id: string;
-  project: string;
-  projectLabel: string;
-  title: string;
-  model: string | null;
-  firstActivity: string | null;
-  lastActivity: string | null;
-  messages: SessionMessage[];
-}
+export type { SessionDetail, SessionMessage, SessionSummary };
 
 /** Loads the recent-sessions list, refreshing when agents or transcripts change. */
 export function useSessions() {

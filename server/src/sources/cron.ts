@@ -2,21 +2,9 @@ import { readdir, stat } from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import path from "node:path";
 import { paths } from "../claudeHome.js";
+import type { CronDiskHint, CronStatus } from "@argus/contracts";
 
-export interface CronDiskHint {
-  /** Path (relative to the Claude home root) where the hint was found. */
-  path: string;
-  /** Why this entry is only a hint and not an authoritative cron source. */
-  note: string;
-}
-
-export interface CronStatus {
-  available: false;
-  reason: string;
-  howTo: string;
-  /** Anything on disk that looked schedule-related, with caveats. */
-  diskHints: CronDiskHint[];
-}
+export type { CronDiskHint, CronStatus } from "@argus/contracts";
 
 const SCHEDULE_PATTERN = /cron|routine|schedul/i;
 

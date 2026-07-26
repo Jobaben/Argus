@@ -1,15 +1,9 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { paths } from "../claudeHome.js";
+import type { Task } from "@argus/contracts";
 
-/** A single task directory under `~/.claude/tasks/<uuid>/`. */
-export interface Task {
-  id: string;
-  highwatermark: number | null;
-  locked: boolean;
-  fileCount: number;
-  updatedAt: string | null;
-}
+export type { Task } from "@argus/contracts";
 
 async function listTaskDirs(): Promise<string[]> {
   try {

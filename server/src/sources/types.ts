@@ -1,4 +1,16 @@
-export type AgentStatus = "working" | "done" | "failed" | "idle" | "queued" | "unknown";
+/**
+ * Agent-domain types.
+ *
+ * The wire shapes (`Agent`, `AgentStatus`, `TimelineEntry`, `DaemonWorker`)
+ * live in `@argus/contracts` so the web imports the same declarations; they are
+ * re-exported here because every source module already reaches for them via
+ * this path. What stays local is the *on-disk* shape — `JobState` is Claude
+ * Code's file format, which Argus reads but never serves.
+ */
+
+import type { AgentStatus } from "@argus/contracts";
+
+export type { Agent, AgentStatus, DaemonWorker, TimelineEntry } from "@argus/contracts";
 
 /** A background job's persisted state (`jobs/<short>/state.json`). */
 export interface JobState {
@@ -18,43 +30,4 @@ export interface JobState {
   updatedAt?: string;
   firstTerminalAt?: string;
   backend?: string;
-}
-
-/** One entry in `jobs/<short>/timeline.jsonl`. */
-export interface TimelineEntry {
-  at: string;
-  state?: AgentStatus;
-  detail?: string;
-  text?: string;
-}
-
-/** A live worker as reported by `daemon/roster.json`. */
-export interface DaemonWorker {
-  pid?: number;
-  sessionId?: string;
-  cliVersion?: string;
-  startedAt?: number;
-  attempt?: number;
-  cwd?: string;
-}
-
-/** The unified agent record Argus exposes to the UI. */
-export interface Agent {
-  short: string;
-  sessionId: string | null;
-  name: string;
-  status: AgentStatus;
-  tempo: string | null;
-  detail: string | null;
-  result: string | null;
-  template: string | null;
-  cwd: string | null;
-  cliVersion: string | null;
-  inFlight: { tasks: number; queued: number; kinds: string[] } | null;
-  createdAt: string | null;
-  updatedAt: string | null;
-  firstTerminalAt: string | null;
-  /** True when this job is currently present in the daemon roster. */
-  live: boolean;
-  pid: number | null;
 }

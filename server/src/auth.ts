@@ -66,9 +66,7 @@ function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-export function createAuthService(
-  deps: { store?: UserStore; now?: () => Date } = {},
-): AuthService {
+export function createAuthService(deps: { store?: UserStore; now?: () => Date } = {}): AuthService {
   const store = deps.store ?? createUserStore();
   const now = deps.now ?? (() => new Date());
   // token sha256 → session. In-memory by design: restart = logged out.

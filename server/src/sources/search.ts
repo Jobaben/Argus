@@ -4,6 +4,7 @@ import { createInterface } from "node:readline";
 import path from "node:path";
 import { paths } from "../claudeHome.js";
 import { decodeProjectLabel } from "./sessions.js";
+import type { SearchResult } from "@argus/contracts";
 
 const DEFAULT_LIMIT = 100;
 const SNIPPET_PAD = 60;
@@ -12,13 +13,7 @@ const SNIPPET_MAX = 200;
 // limit, so batches keep the early exit while overlapping file I/O.
 const SCAN_CONCURRENCY = 8;
 
-export interface SearchResult {
-  project: string;
-  projectLabel: string;
-  sessionId: string;
-  snippet: string;
-  type: string;
-}
+export type { SearchResult } from "@argus/contracts";
 
 interface RawContentItem {
   type?: string;

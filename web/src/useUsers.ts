@@ -2,12 +2,10 @@ import { useCallback } from "react";
 import { useLiveResource } from "./live/useLiveResource";
 import { postJson } from "./useAuth";
 
-export interface UserRow {
-  username: string;
-  role: "root" | "member";
-  status: "pending" | "active";
-  createdAt: string;
-}
+import type { UserSummary } from "@argus/contracts";
+
+/** Named `UserRow` in the UI; `UserSummary` on the wire. */
+export type UserRow = UserSummary;
 
 /** Root-only account list with approve/reject transitions. */
 export function useUsers() {

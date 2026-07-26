@@ -1,5 +1,6 @@
 import { nextFireAfter, previousFireTime } from "./nextFire.js";
-import type { Run, RunStatus, Schedule, Trigger } from "./scheduleTypes.js";
+import type { Run, Schedule, Trigger } from "./scheduleTypes.js";
+import type { Heartbeat, MonitorHealth, MonitorsSummary, MonitorStatus } from "@argus/contracts";
 
 /**
  * Monitors: a Healthchecks.io-style dead-man's switch over schedules, plus
@@ -8,34 +9,7 @@ import type { Run, RunStatus, Schedule, Trigger } from "./scheduleTypes.js";
  * a monitor's job is to notice the slot where nothing did.
  */
 
-export type MonitorStatus = "up" | "late" | "down" | "failing" | "paused" | "pending";
-
-export interface Heartbeat {
-  runId: string;
-  status: RunStatus;
-  outcome?: "succeeded" | "failed" | "blocked" | null;
-  at: string;
-  durationMs: number | null;
-}
-
-export interface MonitorHealth {
-  scheduleId: string;
-  name: string;
-  enabled: boolean;
-  status: MonitorStatus;
-  /** succeeded / (succeeded + failed) over the retained heartbeats, 0–100. */
-  uptimePct: number | null;
-  lastRunAt: string | null;
-  lastRunStatus: RunStatus | null;
-  /** The slot the monitor is judging (last expected fire), if any. */
-  expectedAt: string | null;
-  nextExpected: string | null;
-  graceMs: number;
-  /** Oldest → newest, capped at HEARTBEAT_KEEP. */
-  heartbeats: Heartbeat[];
-}
-
-export type MonitorsSummary = Record<MonitorStatus, number>;
+export type { Heartbeat, MonitorHealth, MonitorsSummary, MonitorStatus } from "@argus/contracts";
 
 export const HEARTBEAT_KEEP = 30;
 

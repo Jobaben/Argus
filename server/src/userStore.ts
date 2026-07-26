@@ -1,14 +1,10 @@
-import {
-  randomBytes,
-  scrypt as scryptCb,
-  timingSafeEqual,
-  type ScryptOptions,
-} from "node:crypto";
+import { randomBytes, scrypt as scryptCb, timingSafeEqual, type ScryptOptions } from "node:crypto";
 import { chmod } from "node:fs/promises";
 import { paths } from "./claudeHome.js";
 import { readJson } from "./sources/readJson.js";
 import { atomicWriteJson } from "./sources/atomicWrite.js";
 import { KeyedMutex } from "./mutex.js";
+import type { Role, UserStatus, UserSummary } from "@argus/contracts";
 
 /**
  * Multi-user account store for the pipeline control surface.
@@ -24,9 +20,6 @@ import { KeyedMutex } from "./mutex.js";
  * root user, closing the door it used to guard without a manual step.
  */
 
-export type Role = "root" | "member";
-export type UserStatus = "pending" | "active";
-
 export const MIN_PASSWORD_LENGTH = 8;
 
 // OWASP password-storage recommendation for scrypt; persisted per record so
@@ -37,6 +30,10 @@ export class AuthValidationError extends Error {}
 export class DuplicateUsernameError extends AuthValidationError {}
 export class UnknownUserError extends Error {}
 
+export type { Role, UserStatus, UserSummary } from "@argus/contracts";
+
+/** A user as persisted in Argus-owned users.json — the hash never leaves the
+ *  server, so this is deliberately not part of the wire contract. */
 export interface UserRecord {
   username: string;
   role: Role;
@@ -49,13 +46,6 @@ export interface UserRecord {
   params: { N: number; r: number; p: number; keyLen: number };
   createdAt: string;
   updatedAt: string;
-}
-
-export interface UserSummary {
-  username: string;
-  role: Role;
-  status: UserStatus;
-  createdAt: string;
 }
 
 interface UsersFile {
@@ -92,11 +82,7 @@ export interface UserStore {
   remove(username: string): Promise<void>;
 }
 
-function scrypt(
-  password: string,
-  salt: Buffer,
-  params: typeof SCRYPT,
-): Promise<Buffer> {
+function scrypt(password: string, salt: Buffer, params: typeof SCRYPT): Promise<Buffer> {
   const opts: ScryptOptions = {
     N: params.N,
     r: params.r,
@@ -106,9 +92,7 @@ function scrypt(
     maxmem: 128 * params.N * params.r * 2,
   };
   return new Promise((resolve, reject) =>
-    scryptCb(password, salt, params.keyLen, opts, (err, key) =>
-      err ? reject(err) : resolve(key),
-    ),
+    scryptCb(password, salt, params.keyLen, opts, (err, key) => (err ? reject(err) : resolve(key))),
   );
 }
 
@@ -146,9 +130,7 @@ function validateUsername(username: unknown): string {
 
 function validatePassword(password: unknown): string {
   if (typeof password !== "string" || password.length < MIN_PASSWORD_LENGTH) {
-    throw new AuthValidationError(
-      `password must be at least ${MIN_PASSWORD_LENGTH} characters`,
-    );
+    throw new AuthValidationError(`password must be at least ${MIN_PASSWORD_LENGTH} characters`);
   }
   if (password.length > 1024) throw new AuthValidationError("password is too long");
   return password;
@@ -253,9 +235,7 @@ export function createUserStore(deps: { now?: () => Date } = {}): UserStore {
       mutex.withLock("users", async () => {
         const file = await load();
         if (!byName(file.users, username)) throw new UnknownUserError("no such user");
-        file.users = file.users.filter(
-          (u) => u.username.toLowerCase() !== username.toLowerCase(),
-        );
+        file.users = file.users.filter((u) => u.username.toLowerCase() !== username.toLowerCase());
         await persist(file);
       }),
   };

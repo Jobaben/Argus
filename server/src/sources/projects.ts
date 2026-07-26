@@ -2,13 +2,9 @@ import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { paths } from "../claudeHome.js";
 import { cached } from "./cache.js";
+import type { Project } from "@argus/contracts";
 
-export interface Project {
-  id: string;
-  label: string;
-  sessionCount: number;
-  lastActivity: string | null;
-}
+export type { Project } from "@argus/contracts";
 
 /**
  * Decodes an encoded project-dir name back into a friendly path.

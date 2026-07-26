@@ -1,0 +1,101 @@
+/** Triggers, schedules, run records and one-off launches. */
+
+export type TriggerKind = "interval" | "daily" | "weekly" | "windowed";
+
+/** When a schedule fires. `everyMinutes` for interval and windowed cadence;
+ * `time` ("HH:MM", local) for daily/weekly; `weekday` (0=Sun..6=Sat) for weekly;
+ * `startTime`/`endTime` ("HH:MM", local, end exclusive) bound the windowed daily
+ * window — an endTime before startTime wraps past midnight into the next day;
+ * `weekdays` optionally restricts windowed to the days the window opens on
+ * (empty/omitted = every day). */
+export interface Trigger {
+  kind: TriggerKind;
+  everyMinutes?: number;
+  time?: string;
+  weekday?: number;
+  startTime?: string;
+  endTime?: string;
+  weekdays?: number[];
+}
+
+export interface Schedule {
+  id: string;
+  name: string;
+  prompt: string;
+  cwd: string;
+  trigger: Trigger;
+  enabled: boolean;
+  overlapPolicy: "skip" | "allow";
+  /** Anacron-style recovery: when the latest slot was missed beyond the firing
+   *  grace (machine asleep, Argus down), fire it once on the next tick instead
+   *  of dropping it. Absent = false, so pre-existing schedules keep the old
+   *  skip-on-miss behavior. */
+  catchUp?: boolean;
+  createdAt: string;
+  updatedAt: string;
+  lastRunAt: string | null;
+  lastRunId: string | null;
+}
+
+/** A schedule joined with its next computed firing instant. */
+export interface ScheduleWithNext extends Schedule {
+  nextRun: string | null;
+}
+
+/** The client-authored half of a schedule (POST/PUT body). */
+export interface ScheduleInput {
+  name: string;
+  prompt: string;
+  cwd: string;
+  trigger: Trigger;
+  enabled?: boolean;
+  overlapPolicy?: "skip" | "allow";
+  catchUp?: boolean;
+}
+
+export type RunStatus =
+  "running" | "succeeded" | "failed" | "skipped" | "interrupted" | "cancelled";
+
+/** Work-level conclusion from a pipeline signal, distinct from the
+ *  exit-code-derived run `status`. */
+export type RunOutcome = "succeeded" | "failed" | "blocked";
+
+export interface Run {
+  id: string;
+  scheduleId: string;
+  scheduleName: string;
+  prompt: string;
+  cwd: string;
+  status: RunStatus;
+  trigger: "scheduled" | "manual";
+  queuedAt: string;
+  startedAt: string | null;
+  endedAt: string | null;
+  durationMs: number | null;
+  pid: number | null;
+  exitCode: number | null;
+  sessionId: string | null;
+  model?: string;
+  project: string | null;
+  resultSummary: string | null;
+  error: string | null;
+  instanceId?: string;
+  phaseId?: string;
+  /** Total USD cost reported by `claude -p --output-format json`, if present. */
+  costUsd?: number | null;
+  /** Total tokens (input+output) reported by the CLI result envelope, if present. */
+  tokens?: number | null;
+  /** Set once the run's cost has been folded into the all-time totals; guards
+   *  against double-counting across the several terminal-write paths. */
+  countedInTotals?: boolean;
+  /** Null/absent for non-pipeline or unsignalled runs. */
+  outcome?: RunOutcome | null;
+}
+
+/** One-off run fired from the Launch tab (POST /api/launch). */
+export interface LaunchInput {
+  name?: string;
+  prompt: string;
+  cwd: string;
+  model?: string;
+}

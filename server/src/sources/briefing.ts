@@ -6,6 +6,7 @@ import type { Issue } from "./issues.js";
 import type { MonitorHealth } from "./monitors.js";
 import type { PipelineInstance } from "./pipelineTypes.js";
 import type { Run, RunStatus } from "./scheduleTypes.js";
+import type { AttentionItem, Briefing } from "@argus/contracts";
 
 /**
  * Briefing: the "while you were away" digest. Argus's whole point is
@@ -16,33 +17,7 @@ import type { Run, RunStatus } from "./scheduleTypes.js";
  * state is the acknowledgement timestamp in Argus-owned briefing.json.
  */
 
-export type AttentionKind = "monitor-down" | "gate-waiting" | "monitor-failing" | "issue-open";
-
-export interface AttentionItem {
-  kind: AttentionKind;
-  id: string;
-  title: string;
-  detail: string;
-  at: string | null;
-}
-
-export interface BriefingWindow {
-  totalRuns: number;
-  byStatus: Record<RunStatus, number>;
-  costUsd: number;
-  tokens: number;
-  failures: Run[];
-  newIssues: Issue[];
-  finishedPipelines: PipelineInstance[];
-}
-
-export interface Briefing {
-  since: string;
-  generatedAt: string;
-  attention: AttentionItem[];
-  attentionCount: number;
-  window: BriefingWindow;
-}
+export type { AttentionItem, AttentionKind, Briefing, BriefingWindow } from "@argus/contracts";
 
 export interface BriefingInput {
   runs: Run[];

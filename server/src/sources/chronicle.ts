@@ -2,6 +2,13 @@ import type { Agent } from "./types.js";
 import { ONEOFF_SCHEDULE_ID } from "./launch.js";
 import type { Run } from "./scheduleTypes.js";
 import type { SessionSummary } from "./sessions.js";
+import type {
+  Chronicle,
+  ChronicleGroup,
+  ChronicleKind,
+  ChronicleSpan,
+  ChronicleStatus,
+} from "@argus/contracts";
 
 /**
  * The Chronicle is Argus's cross-source timeline: every scheduler run,
@@ -10,44 +17,13 @@ import type { SessionSummary } from "./sessions.js";
  * to render with pure percentage math.
  */
 
-export type ChronicleKind = "run" | "agent" | "session";
-export type ChronicleStatus = "working" | "done" | "failed" | "queued" | "idle";
-
-export interface ChronicleSpan {
-  id: string;
-  kind: ChronicleKind;
-  label: string;
-  status: ChronicleStatus;
-  startedAt: string;
-  /** Null while the work is still in flight — the client draws it to "now". */
-  endedAt: string | null;
-  /** Hash-route deep link into the relevant Argus view, when one exists. */
-  href: string | null;
-  detail: string | null;
-  costUsd: number | null;
-  tokens: number | null;
-}
-
-export interface ChronicleGroup {
-  key: string;
-  label: string;
-  kind: ChronicleKind;
-  /** Spans packed into rows such that spans within a row never overlap. */
-  rows: ChronicleSpan[][];
-}
-
-export interface Chronicle {
-  windowStart: string;
-  windowEnd: string;
-  groups: ChronicleGroup[];
-  totals: {
-    spans: number;
-    active: number;
-    failed: number;
-    costUsd: number | null;
-    tokens: number | null;
-  };
-}
+export type {
+  Chronicle,
+  ChronicleGroup,
+  ChronicleKind,
+  ChronicleSpan,
+  ChronicleStatus,
+} from "@argus/contracts";
 
 /** A session with no event in this long is considered closed, not in flight. */
 const SESSION_ACTIVE_MS = 2 * 60_000;

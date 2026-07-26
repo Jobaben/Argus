@@ -54,7 +54,11 @@ export function AdminAuthPanel({
     }
   };
 
-  const title = !configured ? "Create the root account" : registering ? "Request an account" : "Login";
+  const title = !configured
+    ? "Create the root account"
+    : registering
+      ? "Request an account"
+      : "Login";
 
   return (
     <form

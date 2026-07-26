@@ -59,16 +59,35 @@ function instance(status: InstanceStatus): PipelineInstance {
   };
 }
 
-type AuthStatus = { configured: boolean; authenticated: boolean; username: string | null; role: "root" | "member" | null };
-const ADMIN: AuthStatus = { configured: true, authenticated: true, username: "admin", role: "root" };
+type AuthStatus = {
+  configured: boolean;
+  authenticated: boolean;
+  username: string | null;
+  role: "root" | "member" | null;
+};
+const ADMIN: AuthStatus = {
+  configured: true,
+  authenticated: true,
+  username: "admin",
+  role: "root",
+};
 
 /** Routes fetch by URL: /api/overview → overview entries, /api/pipelines → defs,
  *  /api/auth/status → auth (admin by default), anything else → {}. */
+/** The server always sends `cost` and `active`; these fixtures describe the
+ *  definition/instance shape only, so they are completed here. */
+type EntryFixture = Omit<OverviewEntry, "cost" | "active"> & Partial<OverviewEntry>;
+
 function routedFetch(
-  overview: OverviewEntry[],
+  overviewFixtures: EntryFixture[],
   pipelines: PipelineDefinition[] = [p1],
   auth: AuthStatus = ADMIN,
 ) {
+  const overview: OverviewEntry[] = overviewFixtures.map((e) => ({
+    cost: null,
+    active: [],
+    ...e,
+  }));
   return vi.fn((input: RequestInfo | URL, _init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
     if (url.includes("/api/auth/status")) return Promise.resolve(okJson(auth));
@@ -213,7 +232,12 @@ describe("Pipelines tab", () => {
 
 describe("Pipelines admin gate", () => {
   const anon: AuthStatus = { configured: true, authenticated: false, username: null, role: null };
-  const firstRun: AuthStatus = { configured: false, authenticated: false, username: null, role: null };
+  const firstRun: AuthStatus = {
+    configured: false,
+    authenticated: false,
+    username: null,
+    role: null,
+  };
 
   it("hides edit/run controls and shows the login form when signed out", async () => {
     vi.stubGlobal("fetch", routedFetch([{ definition: p1, latest: null }], [p1], anon));

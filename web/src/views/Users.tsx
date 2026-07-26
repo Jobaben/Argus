@@ -74,8 +74,7 @@ export default function Users() {
     <Page title="Users">
       {auth.status && !isRoot ? (
         <EmptyState>
-          Only the root user can manage accounts. Registrations wait here until root approves
-          them.
+          Only the root user can manage accounts. Registrations wait here until root approves them.
         </EmptyState>
       ) : (
         <>

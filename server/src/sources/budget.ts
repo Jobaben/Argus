@@ -1,6 +1,7 @@
 import { paths } from "../claudeHome.js";
 import { atomicWriteJson } from "./atomicWrite.js";
 import { readJson } from "./readJson.js";
+import type { BudgetConfig, BudgetState, BudgetStatus, BudgetWindow } from "@argus/contracts";
 
 /**
  * Spend guardrails: Argus fires `claude -p` agents unattended, i.e. it spends
@@ -28,16 +29,17 @@ export class BudgetValidationError extends Error {
   }
 }
 
-export interface BudgetConfig {
-  /** USD ceiling per local calendar day; null = no daily limit. */
-  dailyUsd: number | null;
-  /** USD ceiling per local calendar month; null = no monthly limit. */
-  monthlyUsd: number | null;
-  /** When true, scheduled firings are skipped while a limit is exceeded. */
-  blockScheduled: boolean;
-  updatedAt: string | null;
-}
+export type {
+  BudgetConfig,
+  BudgetDay,
+  BudgetResponse,
+  BudgetState,
+  BudgetStatus,
+  BudgetWindow,
+} from "@argus/contracts";
 
+/** One day of the on-disk spend ledger (`spend.json`); the served shape is
+ *  `BudgetDay`, which carries the date as a field rather than a map key. */
 export interface SpendDay {
   usd: number;
   tokens: number;
@@ -46,22 +48,6 @@ export interface SpendDay {
 
 export interface SpendLedger {
   days: Record<string, SpendDay>;
-}
-
-export type BudgetState = "unset" | "ok" | "warning" | "exceeded";
-
-export interface BudgetWindow {
-  spentUsd: number;
-  limitUsd: number | null;
-  /** spent/limit, null when no limit is set. */
-  ratio: number | null;
-}
-
-export interface BudgetStatus {
-  state: BudgetState;
-  today: BudgetWindow;
-  month: BudgetWindow;
-  blockScheduled: boolean;
 }
 
 /** Local calendar date key (YYYY-MM-DD) — budgets follow the user's wall

@@ -1,11 +1,9 @@
 import { useCallback } from "react";
 import { useLiveResource } from "./live/useLiveResource";
 
-export interface Totals {
-  usd: number;
-  tokens: number;
-  since: string;
-}
+import type { Totals } from "@argus/contracts";
+
+export type { Totals };
 
 /** All-time token/cost total across every completed run. Refreshes when runs
  *  finish (they emit "pipelines:changed"), when a standalone scheduler run

@@ -7,6 +7,12 @@
     "types": ["vite/client"],
     "skipLibCheck": true,
 
+    /* Correctness. This workspace shipped without `strict` for its whole
+       history, so every nullable API field was silently treated as non-null
+       and every implicit `any` passed review. */
+    "strict": true,
+    "noUncheckedIndexedAccess": false,
+
     /* Bundler mode */
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,

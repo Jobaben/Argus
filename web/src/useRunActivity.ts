@@ -1,15 +1,10 @@
 import { useEffect, useState } from "react";
 import { subscribeLive } from "./live/liveSocket";
 
+/** The newest activity line seen for a run — what the step tile shows. */
 export interface LiveActivity {
   label: string;
   at: string;
-}
-
-interface RunActivityMessage {
-  type?: string;
-  runId?: string;
-  events?: { at: string; kind: string; label: string }[];
 }
 
 /**
@@ -24,14 +19,10 @@ export function useRunActivity(): Map<string, LiveActivity> {
     () =>
       subscribeLive({
         onMessage: (msg) => {
-          const m = msg as RunActivityMessage;
-          if (m.type !== "run:activity" || !m.runId || !m.events?.length) return;
-          const last = m.events[m.events.length - 1];
-          setActivity((prev) => {
-            const next = new Map(prev);
-            next.set(m.runId!, { label: last.label, at: last.at });
-            return next;
-          });
+          if (msg.type !== "run:activity" || !msg.runId || msg.events.length === 0) return;
+          const last = msg.events[msg.events.length - 1];
+          const runId = msg.runId;
+          setActivity((prev) => new Map(prev).set(runId, { label: last.label, at: last.at }));
         },
       }),
     [],

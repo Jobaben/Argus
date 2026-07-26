@@ -4,6 +4,7 @@ import { paths } from "../claudeHome.js";
 import { KeyedMutex } from "../mutex.js";
 import { readJsonl } from "./readJson.js";
 import { cached } from "./cache.js";
+import type { SessionDetail, SessionMessage, SessionSummary, SessionTail } from "@argus/contracts";
 
 const DEFAULT_LIMIT = 60;
 const TITLE_MAX = 100;
@@ -38,39 +39,7 @@ interface RawLine {
   message?: RawMessage;
 }
 
-export interface SessionSummary {
-  id: string;
-  project: string;
-  projectLabel: string;
-  title: string;
-  messageCount: number;
-  toolUseCount: number;
-  model: string | null;
-  firstActivity: string | null;
-  lastActivity: string | null;
-}
-
-export interface SessionMessage {
-  index: number;
-  type: string;
-  role: string | null;
-  timestamp: string | null;
-  model: string | null;
-  text: string | null;
-  toolName: string | null;
-  isError: boolean;
-}
-
-export interface SessionDetail {
-  id: string;
-  project: string;
-  projectLabel: string;
-  title: string;
-  model: string | null;
-  firstActivity: string | null;
-  lastActivity: string | null;
-  messages: SessionMessage[];
-}
+export type { SessionDetail, SessionMessage, SessionSummary, SessionTail } from "@argus/contracts";
 
 /**
  * Turns an encoded project directory name back into something readable.
@@ -313,20 +282,6 @@ export async function readSession(project: string, id: string): Promise<SessionD
   return cached(`session:${project}:${id}`, 1500, () => readSessionRaw(project, id));
 }
 
-export interface SessionTail {
-  id: string;
-  project: string;
-  projectLabel: string;
-  title: string;
-  model: string | null;
-  firstActivity: string | null;
-  lastActivity: string | null;
-  /** Messages with index strictly greater than the requested `after`. */
-  messages: SessionMessage[];
-  /** Index of the last message on disk; the client passes it back as `after`. */
-  lastIndex: number;
-}
-
 // Per-file incremental tail state, mirroring runTailer's byte-offset approach:
 // the live-tail poll fires on every transcript append (150ms-debounced watcher
 // broadcast), so re-reading the whole file per poll is O(file size × polls)
@@ -479,10 +434,7 @@ async function readSessionTailLocked(
   }
 
   let state = tailMemo.get(file);
-  if (
-    state &&
-    (st.size < state.size || (st.size === state.size && st.mtimeMs !== state.mtimeMs))
-  ) {
+  if (state && (st.size < state.size || (st.size === state.size && st.mtimeMs !== state.mtimeMs))) {
     state = undefined; // truncated or rewritten in place — reparse from scratch
   }
   if (!state) state = newTailState();

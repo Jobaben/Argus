@@ -6,16 +6,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { claudeHome, paths } from "../claudeHome.js";
 import { atomicWriteJson } from "../sources/atomicWrite.js";
+import type { PrereqResult, PrereqStatus } from "@argus/contracts";
 
-export type PrereqStatus = "ok" | "missing" | "outdated" | "error";
-
-export interface PrereqResult {
-  id: string;
-  label: string;
-  status: PrereqStatus;
-  fixable: boolean;
-  detail?: string;
-}
+export type { PrereqResult, PrereqStatus } from "@argus/contracts";
 
 interface Prerequisite {
   id: string;

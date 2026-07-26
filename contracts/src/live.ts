@@ -1,0 +1,76 @@
+/**
+ * The WebSocket frame contract.
+ *
+ * Two kinds of frame travel over `/ws`:
+ *
+ * - **Change pings** (`*:changed`) are deliberately payload-free. They mean
+ *   "this domain moved, re-fetch it" — the server stays the single source of
+ *   truth and a pushed body can never diverge from a fresh `GET`.
+ * - **Payload frames** carry data the client cannot re-derive from a GET: an
+ *   alert transition (which exists only at the instant it happens) and run
+ *   activity (a tail delta, not a resource).
+ *
+ * Before this union both ends typed frames as `unknown` and matched on string
+ * literals, so a renamed event silently stopped waking the view that needed it.
+ */
+
+import type { ActivityEvent } from "./agents.js";
+import type { BudgetState } from "./budget.js";
+import type { MonitorStatus } from "./monitors.js";
+
+/** Every payload-free "re-fetch this domain" ping. */
+export type LiveChangeEvent =
+  | "agents:changed"
+  | "schedules:changed"
+  | "pipelines:changed"
+  | "issues:changed"
+  | "briefing:changed"
+  | "budget:changed"
+  | "totals:changed"
+  | "inventory:changed"
+  | "sessions:changed";
+
+export type MonitorAlertEvent = "monitor.down" | "monitor.failing" | "monitor.recovered";
+
+export interface MonitorAlert {
+  event: MonitorAlertEvent;
+  scheduleId: string;
+  name: string;
+  status: MonitorStatus;
+  at: string;
+  detail: string;
+}
+
+export type BudgetAlertEvent = "budget.warning" | "budget.exceeded" | "budget.cleared";
+
+export interface BudgetAlert {
+  event: BudgetAlertEvent;
+  state: BudgetState;
+  at: string;
+  detail: string;
+}
+
+export interface LiveChangeFrame {
+  type: LiveChangeEvent;
+}
+
+export interface RunActivityFrame {
+  type: "run:activity";
+  runId: string;
+  instanceId?: string;
+  events: ActivityEvent[];
+}
+
+export interface MonitorAlertFrame {
+  type: "monitors:alert";
+  alert: MonitorAlert;
+}
+
+export interface BudgetAlertFrame {
+  type: "budget:alert";
+  alert: BudgetAlert;
+}
+
+export type LiveFrame = LiveChangeFrame | RunActivityFrame | MonitorAlertFrame | BudgetAlertFrame;
+
+export type LiveFrameType = LiveFrame["type"];

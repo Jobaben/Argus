@@ -1,12 +1,8 @@
 import { useLiveResource } from "./live/useLiveResource";
 
-export interface Task {
-  id: string;
-  highwatermark: number | null;
-  locked: boolean;
-  fileCount: number;
-  updatedAt: string | null;
-}
+import type { Task } from "@argus/contracts";
+
+export type { Task };
 
 /** Loads the task-directory list. No push event, so polls on a 10s timer. */
 export function useTasks() {

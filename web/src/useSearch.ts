@@ -1,12 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 
-export interface SearchResult {
-  project: string;
-  projectLabel: string;
-  sessionId: string;
-  snippet: string;
-  type: string;
-}
+import type { SearchResult } from "@argus/contracts";
+
+export type { SearchResult };
 
 interface SearchState {
   results: SearchResult[];

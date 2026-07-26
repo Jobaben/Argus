@@ -3,27 +3,9 @@ import path from "node:path";
 import { claudeHome } from "../claudeHome.js";
 import { readJson } from "./readJson.js";
 import { cached } from "./cache.js";
+import type { Inventory, InventoryItem, PluginItem } from "@argus/contracts";
 
-/** A markdown-defined item (agent, command, or skill) with parsed frontmatter. */
-export interface InventoryItem {
-  name: string;
-  description: string;
-}
-
-/** An installed plugin, derived from `plugins/installed_plugins.json`. */
-export interface PluginItem {
-  name: string;
-  description: string;
-  version: string;
-  marketplace: string;
-}
-
-export interface Inventory {
-  agents: InventoryItem[];
-  commands: InventoryItem[];
-  skills: InventoryItem[];
-  plugins: PluginItem[];
-}
+export type { Inventory, InventoryItem, PluginItem } from "@argus/contracts";
 
 /**
  * Parses a leading YAML frontmatter block (between `---` fences) into a flat

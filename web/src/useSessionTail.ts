@@ -1,22 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { subscribeLive } from "./live/liveSocket";
 import { mergeTail } from "./live/mergeTail";
-import type { SessionMessage } from "./useSessions";
+import type { SessionMessage, SessionTail } from "@argus/contracts";
 
-export interface SessionTailHeader {
-  id: string;
-  project: string;
-  projectLabel: string;
-  title: string;
-  model: string | null;
-  firstActivity: string | null;
-  lastActivity: string | null;
-}
-
-interface SessionTailResponse extends SessionTailHeader {
-  messages: SessionMessage[];
-  lastIndex: number;
-}
+/** The transcript metadata a tail response carries, without the message delta. */
+export type SessionTailHeader = Omit<SessionTail, "messages" | "lastIndex">;
 
 /** Poll cadence used only while following AND the shared socket is down; a live
  *  socket drives updates via the "sessions:changed" ping instead. */
@@ -63,7 +51,7 @@ export function useSessionTail(project: string | null, id: string | null): Sessi
     try {
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const { messages: incoming, lastIndex, ...rest } = (await res.json()) as SessionTailResponse;
+      const { messages: incoming, lastIndex, ...rest } = (await res.json()) as SessionTail;
       if (!mounted.current || epoch !== epochRef.current) return;
       setHeader(rest);
       if (typeof lastIndex === "number") lastIndexRef.current = lastIndex;
