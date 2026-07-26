@@ -6,7 +6,8 @@ import { paths } from "../claudeHome.js";
 import { decodeProjectLabel } from "./sessions.js";
 import type { SearchResult } from "@argus/contracts";
 
-const DEFAULT_LIMIT = 100;
+/** The scan cap. Exported so the route can tell the client what it applied. */
+export const SEARCH_LIMIT = 100;
 const SNIPPET_PAD = 60;
 const SNIPPET_MAX = 200;
 // How many transcripts are scanned at once. Recent files usually satisfy the
@@ -136,7 +137,7 @@ async function scanFile(
  * single huge transcript never has to fit in memory; non-matching lines are
  * rejected by a cheap raw-string check before any JSON parsing happens.
  */
-export async function searchTranscripts(q: string, limit = DEFAULT_LIMIT): Promise<SearchResult[]> {
+export async function searchTranscripts(q: string, limit = SEARCH_LIMIT): Promise<SearchResult[]> {
   const lowerQ = q.trim().toLowerCase();
   if (!lowerQ) return [];
 

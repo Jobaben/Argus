@@ -70,4 +70,28 @@ describe("Users view", () => {
     render(<Users />);
     expect(await screen.findByText(/only the root user/i)).toBeTruthy();
   });
+
+  it("points a signed-out reader at the form instead of dead-ending", async () => {
+    // The sign-in form lives on the Pipelines tab; this page gave no way to know.
+    mockFetch({
+      "/api/auth/status": () =>
+        okJson({ configured: true, authenticated: false, username: null, role: null }),
+      "/api/users": () => okJson({ users: [] }),
+    });
+    render(<Users />);
+    await waitFor(() => expect(screen.getByText(/Sign in as root/)).toBeTruthy());
+    const link = screen.getByRole("link", { name: /Sign in on the Pipelines tab/ });
+    expect(link.getAttribute("href")).toBe("#/pipelines");
+  });
+
+  it("tells a signed-in non-root user why they cannot act, with no dead link", async () => {
+    mockFetch({
+      "/api/auth/status": () =>
+        okJson({ configured: true, authenticated: true, username: "sam", role: "member" }),
+      "/api/users": () => okJson({ users: [] }),
+    });
+    render(<Users />);
+    await waitFor(() => expect(screen.getByText(/Only the root user/)).toBeTruthy());
+    expect(screen.queryByRole("link", { name: /Sign in/ })).toBeNull();
+  });
 });

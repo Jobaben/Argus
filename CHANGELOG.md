@@ -59,6 +59,11 @@ All notable changes to Argus are documented here. The format follows
 - **Month-end spend projection** on Budget, from the elapsed daily rate, with the
   day a limit is projected to be crossed — plus a daily-limit line on the 30-day
   chart and the days that broke it drawn in red.
+- **Pipeline cards say where the latest run got to.** One chip per phase, coloured
+  by state, plus last activity, phase and step counts, spend and the failing
+  step's reason. The list previously said "4 phases" and stopped, so finding which
+  phase a pipeline was stuck in meant going to the board and locating its card —
+  from data this list was already fetching for its status pill.
 
 ### Changed
 
@@ -166,6 +171,22 @@ All notable changes to Argus are documented here. The format follows
 - **A schedule paused with a computed next slot claimed it would fire.** The
   header's "next" now skips disabled schedules and the row says so outright.
 - "1 tools" on a session card.
+- **`every 360 min` survived in two more places.** The trigger phrasing existed in
+  three copies that had drifted: only one humanised a cadence, only one handled a
+  manual (null) trigger. There is now one `formatTrigger`, so a trigger reads the
+  same on the Scheduler, on the Pipelines list and in the palette.
+- **Search presented a ceiling as a count.** The scan stops at 100 matches and
+  exits early — deliberately, so a common word does not read every transcript on
+  disk — but the UI said "100 matches", which a reader takes literally. The
+  response now carries `limit` and `truncated`, and the UI says "first 100
+  matches — narrow the query".
+- **The Users page was a dead end when signed out.** It said only root can manage
+  accounts and stopped; the sign-in form is on the Pipelines tab, which nothing
+  said. It now links there.
+- **An awaiting-approval pipeline showed a live "running" pulse.** Waiting for a
+  human is stopped, not working.
+- **`Plugins 0` wore a red badge.** The inventory accents are per-category, not
+  severity, so a zero now renders neutral instead of looking like an alert.
 - **Rebuilding the UI under a running Argus produced a blank page.** `index.html`
   was read once at boot and served forever, so after a rebuild the cached HTML
   kept naming content-hashed chunks that no longer existed: every asset 404'd and

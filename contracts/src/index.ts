@@ -93,6 +93,7 @@ export type {
   PluginItem,
   Project,
   SearchResult,
+  SearchResponse,
   SessionDetail,
   SessionMessage,
   SessionSummary,

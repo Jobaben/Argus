@@ -16,7 +16,7 @@ const testConfig: InlineConfig = {
     exclude: ["src/**/*.test.*", "src/test/**", "src/main.tsx", "src/vite-env.d.ts"],
     // Ratcheted to just under the current numbers, so coverage can only go
     // up: a change that drops it fails CI rather than quietly eroding.
-    thresholds: { lines: 77, functions: 76, branches: 84, statements: 77 },
+    thresholds: { lines: 80, functions: 76, branches: 85, statements: 80 },
   },
 };
 

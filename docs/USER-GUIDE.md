@@ -525,11 +525,17 @@ prompt) — then launch them manually or on a trigger and watch them on the
 [Command Center](#1-command-center). A phase can be **gated**: the pipeline
 pauses there until a human approves or revises.
 
-**What you see:** one card per pipeline with its trigger summary, phase
-count, a `disabled` tag when paused, and a live status pill aggregated from
-running instances. When you're **signed out**, the **Login** panel appears
-here (see [Users & sign-in](#10-users--sign-in)) — viewing is open, but every
-mutating action requires a signed-in, root-approved account.
+**What you see:** one card per pipeline, and the card says where its latest run
+got to: the trigger, phase and step counts, when it last did anything, the spend
+of that run, the model, a **paused** badge when disabled, and a live status pill.
+Under that, **one chip per phase** coloured by state — so which phase is running,
+which is waiting on you and which failed is answerable without leaving the list.
+A failed run names the step and the first line of its reason. A pipeline that has
+never run still shows its phases, greyed, because that is what it is going to do.
+
+When you're **signed out**, the **Login** panel appears here (see
+[Users & sign-in](#10-users--sign-in)) — viewing is open, but every mutating
+action requires a signed-in, root-approved account.
 
 **The pipeline form** (+ New pipeline / Edit):
 
@@ -678,14 +684,19 @@ _Full-text across all transcripts._ Route: `#/search` (the 🔍 in the nav)
 **Purpose:** find any text anywhere in your session history — a phrase, a
 file name, an error message — when you don't remember which session it was in.
 
-**What you see:** a search box; as you type (debounced ~300ms), a live match
-count and results. Each result shows a role badge (user/assistant), the
-project, the session's short id, and a **snippet centered on the match** with
-your terms highlighted. Helper states cover "Type to search", "Searching…"
-and "No matches".
+**What you see:** a search box; as you type (debounced ~300ms), a match count and
+results. Each result shows a role badge (user/assistant), the project, the
+session's short id, and a **snippet centered on the match** with your terms
+highlighted.
 
-**How to use it:** just type — case-insensitive substring matching, capped at
-100 matches. Click a result to open that transcript.
+The count is honest about being a cap. The scan reads newest transcripts first and
+stops at 100 matches, so a common word never reads your whole history — when it
+stops early the line reads **"first 100 matches — narrow the query"** rather than
+"100 matches", which would be a number you could reasonably take literally.
+
+**How to use it:** just type — case-insensitive substring matching, not fuzzy. For
+finding a pipeline, schedule or session _by name_, `⌘K` is the better tool; this
+one is for text inside a conversation. Click a result to open that transcript.
 
 **Where the data comes from:** `GET /api/search?q=`, scanning every
 `~/.claude/projects/<project>/<session>.jsonl` per query.

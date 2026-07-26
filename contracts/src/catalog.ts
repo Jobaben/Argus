@@ -153,6 +153,21 @@ export interface SearchResult {
   type: string;
 }
 
+/**
+ * A search response, which says when it stopped early.
+ *
+ * The scan is capped and exits as soon as the cap is reached — that is what
+ * keeps a common word from reading every transcript on disk. Without saying so,
+ * "100 matches" reads as a count when it is a ceiling.
+ */
+export interface SearchResponse {
+  results: SearchResult[];
+  /** The cap that was applied. */
+  limit: number;
+  /** True when the scan stopped at the cap and more matches may exist. */
+  truncated: boolean;
+}
+
 export interface CronDiskHint {
   /** Path (relative to the Claude home root) where the hint was found. */
   path: string;

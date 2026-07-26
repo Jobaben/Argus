@@ -64,8 +64,12 @@ function InventorySection<T>({
           ›
         </span>
         <h3 className="text-sm font-semibold text-ink">{title}</h3>
+        {/* The accents are per-category, not severity — so a zero must not wear
+            one, or "Plugins 0" reads as a red alert about nothing. */}
         <span
-          className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ${ACCENT[accent]}`}
+          className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ${
+            items.length === 0 ? "bg-ground-2 text-ink-faint ring-line" : ACCENT[accent]
+          }`}
         >
           {items.length}
         </span>

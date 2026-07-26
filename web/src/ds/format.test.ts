@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   formatCadence,
   formatCost,
+  formatTrigger,
   formatDuration,
   formatElapsed,
   formatMs,
@@ -250,5 +251,48 @@ describe("formatCadence", () => {
     expect(formatCadence(0)).toBe("\u2014");
     expect(formatCadence(-30)).toBe("\u2014");
     expect(formatCadence(Number.NaN)).toBe("\u2014");
+  });
+});
+
+describe("formatTrigger", () => {
+  it("names a manual pipeline rather than printing nothing", () => {
+    expect(formatTrigger(null)).toBe("manual");
+    expect(formatTrigger(undefined)).toBe("manual");
+  });
+
+  it("humanises an interval, which two of the three old copies did not", () => {
+    expect(formatTrigger({ kind: "interval", everyMinutes: 360 })).toBe("every 6h");
+    expect(formatTrigger({ kind: "interval", everyMinutes: 90 })).toBe("every 90m");
+  });
+
+  it("reads a daily and a weekly trigger as a person would say it", () => {
+    expect(formatTrigger({ kind: "daily", time: "02:30" })).toBe("daily at 02:30");
+    expect(formatTrigger({ kind: "weekly", weekday: 1, time: "08:00" })).toBe(
+      "weekly Mon at 08:00",
+    );
+  });
+
+  it("defaults a weekly trigger with no weekday to Sunday, matching the engine", () => {
+    expect(formatTrigger({ kind: "weekly", time: "08:00" })).toBe("weekly Sun at 08:00");
+  });
+
+  it("spells out a window, and says every day when unrestricted", () => {
+    expect(
+      formatTrigger({
+        kind: "windowed",
+        everyMinutes: 120,
+        startTime: "09:00",
+        endTime: "18:00",
+        weekdays: [1, 2],
+      }),
+    ).toBe("every 2h, 09:00–18:00, Mon, Tue");
+    expect(
+      formatTrigger({ kind: "windowed", everyMinutes: 30, startTime: "09:00", endTime: "13:00" }),
+    ).toBe("every 30m, 09:00–13:00, every day");
+  });
+
+  it("does not invent a time it was not given", () => {
+    expect(formatTrigger({ kind: "daily" })).toBe("daily at \u2014");
+    expect(formatTrigger({ kind: "interval" })).toBe("every \u2014");
   });
 });

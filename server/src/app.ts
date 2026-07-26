@@ -14,7 +14,7 @@ import { readProjects } from "./sources/projects.js";
 import { readStats } from "./sources/stats.js";
 import { readInventory } from "./sources/inventory.js";
 import { readTasks } from "./sources/tasks.js";
-import { searchTranscripts } from "./sources/search.js";
+import { SEARCH_LIMIT, searchTranscripts } from "./sources/search.js";
 import { readCron } from "./sources/cron.js";
 import { buildChronicle } from "./sources/chronicle.js";
 import {
@@ -392,9 +392,12 @@ export function createApp(deps: AppDeps): Hono {
 
   app.get("/api/inventory", async (c) => c.json(await readInventory()));
   app.get("/api/tasks", async (c) => c.json({ tasks: await readTasks() }));
-  app.get("/api/search", async (c) =>
-    c.json({ results: await searchTranscripts(c.req.query("q") ?? "") }),
-  );
+  // The scan stops at SEARCH_LIMIT, so the response says so rather than letting
+  // a ceiling be read as a count.
+  app.get("/api/search", async (c) => {
+    const results = await searchTranscripts(c.req.query("q") ?? "");
+    return c.json({ results, limit: SEARCH_LIMIT, truncated: results.length >= SEARCH_LIMIT });
+  });
   app.get("/api/cron", async (c) => c.json(await readCron()));
 
   // Cross-source timeline: runs + agents + sessions as packed swimlanes.

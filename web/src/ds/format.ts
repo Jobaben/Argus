@@ -1,3 +1,5 @@
+import type { Trigger } from "../types";
+
 export function formatDuration(ms: number): string {
   if (ms <= 0) return "now";
   const totalMin = Math.round(ms / 60_000);
@@ -202,4 +204,35 @@ export function formatRelativeTime(
   const delta = then - now;
   if (Math.abs(delta) < 10_000) return "just now";
   return delta > 0 ? `in ${coarseDuration(delta)}` : `${coarseDuration(-delta)} ago`;
+}
+
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/**
+ * A schedule or pipeline trigger in one readable clause: "manual", "every 6h",
+ * "daily at 02:30", "weekly Mon at 08:00", "every 2h, 09:00–18:00, Mon, Tue".
+ *
+ * One function because there were three, and they had drifted: two still printed
+ * "every 360 min" after the third learned to say "every 6h", and only one handled
+ * a null trigger. The same trigger has to read the same way on the Scheduler, on
+ * the Pipelines list and in the palette, or the reader has to learn the app twice.
+ */
+export function formatTrigger(trigger: Trigger | null | undefined): string {
+  if (!trigger) return "manual";
+  const every = formatCadence(trigger.everyMinutes);
+  switch (trigger.kind) {
+    case "interval":
+      return `every ${every}`;
+    case "daily":
+      return `daily at ${trigger.time ?? "—"}`;
+    case "weekly":
+      return `weekly ${WEEKDAYS[trigger.weekday ?? 0]} at ${trigger.time ?? "—"}`;
+    case "windowed": {
+      const days =
+        trigger.weekdays && trigger.weekdays.length > 0
+          ? trigger.weekdays.map((d) => WEEKDAYS[d]).join(", ")
+          : "every day";
+      return `every ${every}, ${trigger.startTime ?? "—"}–${trigger.endTime ?? "—"}, ${days}`;
+    }
+  }
 }

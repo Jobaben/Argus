@@ -74,7 +74,25 @@ export default function Users() {
     <Page title="Users">
       {auth.status && !isRoot ? (
         <EmptyState>
-          Only the root user can manage accounts. Registrations wait here until root approves them.
+          <p className="text-sm text-ink-dim">
+            {auth.status.authenticated
+              ? "Only the root user can manage accounts."
+              : "Sign in as root to manage accounts."}
+          </p>
+          <p className="mx-auto mt-2 max-w-md text-xs">
+            A new account is created immediately but stays locked until root approves it here, so a
+            registration alone grants nothing.
+          </p>
+          {/* The sign-in form lives on the Pipelines tab, which a reader landing
+              here has no way of knowing — this page was otherwise a dead end. */}
+          {!auth.status.authenticated && (
+            <a
+              href="#/pipelines"
+              className="mt-4 inline-block rounded-lg border border-line px-3 py-1.5 text-sm text-ink-dim transition hover:border-ink-faint/40 hover:text-ink"
+            >
+              Sign in on the Pipelines tab →
+            </a>
+          )}
         </EmptyState>
       ) : (
         <>

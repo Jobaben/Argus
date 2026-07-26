@@ -174,11 +174,31 @@ access is the trust root) and run first-time setup again.
 | `GET /api/stats`                 | usage aggregates from `stats-cache.json`                    |
 | `GET /api/inventory`             | installed agents / commands / skills / plugins              |
 | `GET /api/tasks`                 | task-queue directories                                      |
-| `GET /api/search?q=`             | substring matches across transcripts                        |
+| `GET /api/search?q=`             | `{ results, limit, truncated }` — see below                 |
 | `GET /api/cron`                  | `{ available: false, reason, howTo }` — see ARCHITECTURE §6 |
 | `GET /api/chronicle?hours=N`     | cross-source timeline (see below)                           |
 
 For exact DTO shapes see the corresponding `server/src/sources/*.ts` reader.
+
+### `GET /api/search?q=`
+
+Case-insensitive substring search over transcript message text, newest files
+first, stopping as soon as `limit` matches are found — so a common word never
+reads every transcript on disk.
+
+```json
+{
+  "results": [
+    { "project": "…", "projectLabel": "…", "sessionId": "…", "snippet": "…", "type": "assistant" }
+  ],
+  "limit": 100,
+  "truncated": true
+}
+```
+
+`truncated` is the point: the scan exits at the cap, so `results.length === limit`
+is a ceiling rather than a count, and a client that renders it as a count is
+lying. Argus's own UI says "first 100 matches — narrow the query" when it is set.
 
 ### `GET /api/chronicle?hours=N`
 

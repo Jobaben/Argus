@@ -196,6 +196,17 @@ same class of defect.
 - **Coverage gates ratcheted** from 72/73/82/72 to 77/76/84/77 (lines / functions
   / branches / statements).
 
+### Third pass: the views neither earlier pass opened
+
+| Defect                                                                                         | Why it survived two passes                                                  |
+| ---------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| A pipeline card showed a name, a trigger and a phase count — nothing about the run it just did | It read the overview for its status pill and threw the rest of the row away |
+| `every 360 min` in two of three trigger formatters, and only one handled a manual trigger      | Three copies of one function; fixing the visible one left the others        |
+| Search reported "100 matches" for a scan that stops at 100                                     | The cap lived in the server and the client had no way to know it applied    |
+| The Users page dead-ended when signed out — the sign-in form is on another tab, unmentioned    | Correct for root, and root is who the page was tested as                    |
+| An awaiting-approval pipeline showed a live "running" pulse                                    | `abortable` covers awaiting _and_ running, and reusing it read as "active"  |
+| `Plugins 0` in a red badge                                                                     | The accents are per-category; nothing checked how a zero reads in one       |
+
 ### The read path, measured rather than assumed
 
 The backlog carried an item claiming `/api/overview` and friends read and parsed

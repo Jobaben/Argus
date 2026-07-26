@@ -286,4 +286,124 @@ describe("Pipelines admin gate", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: /sign out/i })).toBeTruthy());
     expect(screen.getByText("admin")).toBeTruthy();
   });
+
+  it("shows where the latest run got to, per phase", async () => {
+    // The list used to say "4 phases" and stop, so finding the phase a pipeline
+    // was stuck in meant going to the board and locating its card.
+    const twoPhase: PipelineDefinition = {
+      ...p1,
+      phases: [
+        { id: "a", name: "Gather", cwd: "/", gated: false, steps: [{ name: "s1", prompt: "p" }] },
+        {
+          id: "b",
+          name: "Verify",
+          cwd: "/",
+          gated: false,
+          steps: [
+            { name: "s2", prompt: "p" },
+            { name: "s3", prompt: "p" },
+          ],
+        },
+      ],
+    };
+    const inst: PipelineInstance = {
+      ...instance("running"),
+      currentPhaseIndex: 1,
+      phases: [
+        {
+          id: "a",
+          name: "Gather",
+          gated: false,
+          status: "succeeded",
+          steps: [{ name: "s1", runId: "r1", status: "succeeded" }],
+          attempt: 1,
+          payload: null,
+        },
+        {
+          id: "b",
+          name: "Verify",
+          gated: false,
+          status: "running",
+          steps: [
+            { name: "s2", runId: "r2", status: "running" },
+            { name: "s3", runId: null, status: "pending" },
+          ],
+          attempt: 1,
+          payload: null,
+        },
+      ],
+    };
+    vi.stubGlobal("fetch", routedFetch([{ definition: twoPhase, latest: inst }], [twoPhase]));
+    render(<Pipelines />);
+    await waitFor(() => expect(screen.getByText("Gather")).toBeTruthy());
+    expect(screen.getByText("Verify")).toBeTruthy();
+    expect(screen.getByTitle(/2\. Verify — working/)).toBeTruthy();
+    expect(screen.getByText(/2 phases, 3 steps/)).toBeTruthy();
+  });
+
+  it("says a pipeline has never run instead of showing an empty phase strip", async () => {
+    vi.stubGlobal("fetch", routedFetch([{ definition: p1, latest: null }]));
+    render(<Pipelines />);
+    await waitFor(() => expect(screen.getByText("Nightly")).toBeTruthy());
+    expect(screen.getByText(/Never run/)).toBeTruthy();
+  });
+
+  it("marks a paused pipeline rather than leaving 'disabled' as loose text", async () => {
+    const off = { ...p1, enabled: false };
+    vi.stubGlobal("fetch", routedFetch([{ definition: off, latest: null }], [off]));
+    render(<Pipelines />);
+    await waitFor(() => expect(screen.getByText("paused")).toBeTruthy());
+  });
+
+  it("names the failing step and its reason on the card", async () => {
+    const failed: PipelineInstance = {
+      ...instance("failed"),
+      phases: [
+        {
+          id: "a",
+          name: "x",
+          gated: false,
+          status: "failed",
+          steps: [{ name: "s", runId: "r1", status: "failed" }],
+          attempt: 1,
+          payload: { kind: "failure", reason: "prereq missing: gh\nstack…" },
+        },
+      ],
+    };
+    vi.stubGlobal("fetch", routedFetch([{ definition: p1, latest: failed }]));
+    render(<Pipelines />);
+    await waitFor(() => expect(screen.getByText(/prereq missing: gh/)).toBeTruthy());
+  });
+
+  it("teaches what a pipeline is when there are none", async () => {
+    vi.stubGlobal("fetch", routedFetch([], []));
+    render(<Pipelines />);
+    await waitFor(() => expect(screen.getByText(/no pipelines yet/i)).toBeTruthy());
+    expect(screen.getByText(/pauses the pipeline there until a/i)).toBeTruthy();
+  });
+
+  it("does not pulse a pipeline that is only waiting for a human", async () => {
+    // awaiting-approval is stopped, not running; a live pulse there claims work
+    // is happening when the pipeline is idle by design.
+    const gated: PipelineInstance = {
+      ...instance("awaiting-approval"),
+      phases: [
+        {
+          id: "a",
+          name: "x",
+          gated: true,
+          status: "awaiting-approval",
+          steps: [{ name: "s", runId: "r1", status: "succeeded" }],
+          attempt: 1,
+          payload: null,
+        },
+      ],
+    };
+    vi.stubGlobal("fetch", routedFetch([{ definition: p1, latest: gated }]));
+    render(<Pipelines />);
+    await waitFor(() => expect(screen.getByText(/needs approval/i)).toBeTruthy());
+    expect(screen.queryByTitle("A run is in flight")).toBeNull();
+    // Stopping it is still offered — an awaiting instance can be aborted.
+    expect(screen.getByRole("button", { name: /^stop$/i })).toBeTruthy();
+  });
 });

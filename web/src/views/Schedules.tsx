@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useSchedules } from "../useSchedules";
 import { useRuns } from "../useRuns";
-import type { Run, ScheduleInput, ScheduleWithNext, Trigger } from "../types";
+import type { Run, ScheduleInput, ScheduleWithNext } from "../types";
 import {
   AlertStrip,
   EmptyState,
@@ -10,8 +10,8 @@ import {
   SkeletonRows,
   TimeAgo,
   TriggerFields,
-  formatCadence,
   formatCountdown,
+  formatTrigger,
   formatMs,
   useClock,
   useTicker,
@@ -24,19 +24,6 @@ import {
   type ScheduleHealth,
   type ScheduleState,
 } from "./scheduleHealth";
-
-function triggerSummary(t: Trigger): string {
-  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const every = formatCadence(t.everyMinutes);
-  if (t.kind === "interval") return `every ${every}`;
-  if (t.kind === "daily") return `daily at ${t.time}`;
-  if (t.kind === "windowed") {
-    const when =
-      t.weekdays && t.weekdays.length > 0 ? t.weekdays.map((d) => days[d]).join(", ") : "every day";
-    return `every ${every}, ${t.startTime}–${t.endTime}, ${when}`;
-  }
-  return `weekly ${days[t.weekday ?? 0]} at ${t.time}`;
-}
 
 /**
  * Countdown to this schedule's next firing, on its own second-resolution clock.
@@ -367,7 +354,7 @@ function ScheduleCard({
             )}
           </div>
           <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-faint">
-            <span className="text-ink-dim">{triggerSummary(schedule.trigger)}</span>
+            <span className="text-ink-dim">{formatTrigger(schedule.trigger)}</span>
             <span aria-hidden="true">·</span>
             {schedule.enabled ? (
               <NextFireLabel at={schedule.nextRun} />
