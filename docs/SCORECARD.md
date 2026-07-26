@@ -177,6 +177,9 @@ same class of defect.
 | A paused schedule advertised a countdown to a slot it would ignore                                    | `nextRun` is computed regardless of `enabled`; the UI trusted it             |
 | Monitors and Issues counted their subsets but gave no way to see them                                 | The counters were read-only by design, and the design was the defect         |
 | `1 tools` on a session card                                                                           | Pluralisation was never centralised                                          |
+| Rebuilding the UI under a running server served boot-time HTML naming chunks that no longer existed   | Nobody rebuilds while serving during a test; found by doing exactly that     |
+| `EADDRINUSE` reached the keep-the-daemon-alive handler, so a port collision hung instead of exiting   | The handler is right for its purpose; startup was never routed around it     |
+| Usage stats rendered six zeros when the token-telemetry half was absent                               | Both halves are real fields; nothing distinguished absent from measured      |
 
 ### What the second pass added
 

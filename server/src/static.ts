@@ -40,6 +40,35 @@ function serveFile(c: Context, dir: string, requestPath: string): Response | nul
 }
 
 /**
+ * `index.html`, re-read when the file on disk changes.
+ *
+ * It used to be read once at boot and served forever, which broke the ordinary
+ * upgrade path: rebuild the UI under a running Argus (a `git pull` away) and the
+ * cached HTML kept naming content-hashed chunks that no longer existed, so every
+ * asset 404'd and the app was a blank page until someone thought to restart the
+ * server. Keyed on mtime + size, so the steady state is one `stat` per
+ * navigation — the same cost the asset route already pays — and a rebuild is
+ * picked up on the next reload.
+ */
+function indexReader(dir: string): () => string {
+  const file = path.join(dir, "index.html");
+  let cached: { key: string; html: string } | null = null;
+  return () => {
+    let key: string;
+    try {
+      const stats = statSync(file);
+      key = `${stats.mtimeMs}:${stats.size}`;
+    } catch {
+      // The build was removed mid-flight. Whatever we last read beats a 500.
+      if (cached) return cached.html;
+      throw new Error(`web build is missing ${file}`);
+    }
+    if (cached?.key !== key) cached = { key, html: readFileSync(file, "utf8") };
+    return cached.html;
+  };
+}
+
+/**
  * Mount the built single-page app on the same origin as the API, so `npm start`
  * serves the whole product on one port. No-op when there is no build.
  * Non-/api routes fall back to index.html (the app uses hash routing).
@@ -51,7 +80,10 @@ function serveFile(c: Context, dir: string, requestPath: string): Response | nul
 export function mountWebApp(app: Hono): string | null {
   const dir = resolveWebDir();
   if (!dir) return null;
-  const index = readFileSync(path.join(dir, "index.html"), "utf8");
+  const readIndex = indexReader(dir);
+  // Read once at mount so a misconfigured ARGUS_WEB_DIR still fails at boot
+  // rather than on the first navigation.
+  readIndex();
   app.get("/assets/*", (c) => serveFile(c, dir, c.req.path) ?? c.notFound());
   app.get("/vite.svg", (c) => serveFile(c, dir, c.req.path) ?? c.notFound());
   app.get("/favicon.ico", (c) => serveFile(c, dir, c.req.path) ?? c.notFound());
@@ -60,7 +92,7 @@ export function mountWebApp(app: Hono): string | null {
   app.get("*", (c) => {
     const p = c.req.path;
     if (p.startsWith("/api") || p === "/ws") return c.notFound();
-    return c.html(index);
+    return c.html(readIndex());
   });
   return dir;
 }

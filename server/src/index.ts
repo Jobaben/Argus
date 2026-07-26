@@ -11,7 +11,7 @@ import {
   checkAll as checkPrereqs,
   preflight as preflightPrereqs,
 } from "./setup/prereqs.js";
-import { assertBindIsSafe, loadConfig } from "./config.js";
+import { assertBindIsSafe, describeListenError, loadConfig } from "./config.js";
 import { isUpgradeAllowed } from "./security.js";
 import { VERSION } from "./version.js";
 import {
@@ -222,6 +222,19 @@ async function shutdown() {
 }
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
+
+// A failure to bind is fatal and must say so with an exit code: the catch-all
+// handler below exists to keep the daemon alive through a stray rejection, which
+// is exactly the wrong response to "the port is taken".
+server.on("error", (err: NodeJS.ErrnoException) => {
+  const fatal = describeListenError(err, config.host, PORT);
+  if (fatal === null) {
+    log.error("server error", { err });
+    return;
+  }
+  log.error(fatal);
+  process.exit(1);
+});
 
 // A background rejection or thrown timer must not silently take down the
 // daemon or leave it wedged: log and keep serving.

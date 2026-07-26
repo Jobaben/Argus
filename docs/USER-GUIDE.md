@@ -835,9 +835,13 @@ _Usage analytics._ Route: `#/stats`
 
 **What you see:**
 
-- **Headline cards:** total sessions, messages, tool calls, total tokens,
-  output tokens, cache reads, active days, models used — plus, when the CLI
-  reports them, total cost, longest session, and first-session date.
+- **Headline cards in two groups.** Sessions, messages, tool calls and active
+  days come from the transcripts Argus reads itself; tokens, cache reads and
+  models used come from Claude Code's own usage telemetry. When the second group
+  is absent — a fresh install, or a CLI version whose cache shape this build does
+  not parse — it says so in one line instead of rendering four zeros beside real
+  numbers, because "0 tokens across 184 sessions" is not a measurement. Total
+  cost, longest session and first-session date appear when the CLI reports them.
 - **By-model breakdown:** tokens per model with an
   input/output/cache-read/cache-creation split, sorted by volume.
 - **Activity-by-hour:** 24 bars showing when you work.

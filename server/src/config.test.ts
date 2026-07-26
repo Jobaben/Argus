@@ -1,6 +1,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { assertBindIsSafe, ConfigError, isExposedBind, loadConfig } from "./config.js";
+import {
+  assertBindIsSafe,
+  ConfigError,
+  describeListenError,
+  isExposedBind,
+  loadConfig,
+} from "./config.js";
 import type { ArgusConfig } from "./config.js";
 
 function config(over: Partial<ArgusConfig> = {}): ArgusConfig {
@@ -69,5 +75,33 @@ describe("loadConfig", () => {
     } finally {
       if (previous !== undefined) process.env.ARGUS_HOST = previous;
     }
+  });
+});
+
+describe("describeListenError", () => {
+  it("names the fix for a port that is already taken", () => {
+    // This used to reach the catch-all uncaughtException handler, which is meant
+    // to keep the daemon alive — so Argus logged one internal-looking line and
+    // then sat there with nothing bound and no exit code.
+    const message = describeListenError({ code: "EADDRINUSE" }, "127.0.0.1", 7777);
+    assert.match(message ?? "", /already in use/);
+    assert.match(message ?? "", /ARGUS_PORT/);
+  });
+
+  it("explains a privileged port and a bogus host", () => {
+    assert.match(describeListenError({ code: "EACCES" }, "127.0.0.1", 80) ?? "", /privileges/);
+    assert.match(
+      describeListenError({ code: "EADDRNOTAVAIL" }, "10.0.0.9", 7777) ?? "",
+      /not an address on this machine/,
+    );
+  });
+
+  it("says nothing about an error that is not a startup failure", () => {
+    // Anything else must stay non-fatal, or a transient socket error would take
+    // the daemon down.
+    assert.equal(describeListenError({ code: "ECONNRESET" }, "127.0.0.1", 7777), null);
+    assert.equal(describeListenError(new Error("boom"), "127.0.0.1", 7777), null);
+    assert.equal(describeListenError(null, "127.0.0.1", 7777), null);
+    assert.equal(describeListenError(undefined, "127.0.0.1", 7777), null);
   });
 });

@@ -157,6 +157,21 @@ All notable changes to Argus are documented here. The format follows
 - **A schedule paused with a computed next slot claimed it would fire.** The
   header's "next" now skips disabled schedules and the row says so outright.
 - "1 tools" on a session card.
+- **Rebuilding the UI under a running Argus produced a blank page.** `index.html`
+  was read once at boot and served forever, so after a rebuild the cached HTML
+  kept naming content-hashed chunks that no longer existed: every asset 404'd and
+  the app was white until someone restarted the server. It is now re-read when the
+  file on disk changes — one `stat` per navigation, the same cost the asset route
+  already paid.
+- **A port collision logged an internal error and then hung.** `EADDRINUSE`
+  reached the catch-all `uncaughtException` handler, whose job is to keep the
+  daemon alive through a stray rejection — the opposite of what "the port is
+  taken" needs. Argus now prints which port and how to change it, and exits 1, so
+  the CLI and any supervisor can tell it failed.
+- **Usage stats printed six confident zeros** for tokens, cost and models when
+  Claude Code's usage telemetry was absent, beside real session counts read from
+  the transcripts — indistinguishable from having genuinely used zero tokens
+  across 184 sessions. The two halves are now separate, and a missing one says so.
 
 ## [0.4.0] - 2026-07-14
 

@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { useStats, type DailyStat, type ModelStat, type PeakHour } from "../useStats";
 import { AlertStrip, EmptyState, Loading, Page, SkeletonCounters, SkeletonGrid } from "../ds";
+import { hasSessionData, hasTokenData } from "./statsGroups";
 
 function compact(n: number): string {
   if (!Number.isFinite(n)) return "0";
@@ -139,16 +140,33 @@ export default function Stats() {
         <EmptyState>No usage stats found yet.</EmptyState>
       ) : (
         <div className="flex flex-col gap-8">
-          <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-            <Stat label="Sessions" value={compact(stats.headline.totalSessions)} />
-            <Stat label="Messages" value={compact(stats.headline.totalMessages)} />
-            <Stat label="Tool calls" value={compact(stats.headline.totalToolCalls)} />
-            <Stat label="Total tokens" value={compact(stats.headline.totalTokens)} />
-            <Stat label="Output tokens" value={compact(stats.headline.totalOutputTokens)} />
-            <Stat label="Cache reads" value={compact(stats.headline.totalCacheReadTokens)} />
-            <Stat label="Active days" value={`${stats.headline.activeDays}`} />
-            <Stat label="Models used" value={`${stats.headline.modelsUsed}`} />
-          </section>
+          {hasSessionData(stats.headline) && (
+            <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+              <Stat label="Sessions" value={compact(stats.headline.totalSessions)} />
+              <Stat label="Messages" value={compact(stats.headline.totalMessages)} />
+              <Stat label="Tool calls" value={compact(stats.headline.totalToolCalls)} />
+              <Stat label="Active days" value={`${stats.headline.activeDays}`} />
+            </section>
+          )}
+
+          {/* Tokens, cost and model counts come from Claude Code's own usage
+              telemetry rather than the transcripts, so it can be absent while the
+              session counts above are real. Six zeros in that case would read as
+              "you have used no tokens in 184 sessions", which never happens. */}
+          {hasTokenData(stats.headline) ? (
+            <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+              <Stat label="Total tokens" value={compact(stats.headline.totalTokens)} />
+              <Stat label="Output tokens" value={compact(stats.headline.totalOutputTokens)} />
+              <Stat label="Cache reads" value={compact(stats.headline.totalCacheReadTokens)} />
+              <Stat label="Models used" value={`${stats.headline.modelsUsed}`} />
+            </section>
+          ) : (
+            <p className="rounded-xl border border-dashed border-line px-4 py-3 text-xs text-ink-faint">
+              No token or cost telemetry yet. Argus reads it from Claude Code&apos;s own usage
+              cache; it appears here once the CLI has written a usage report. The session counts
+              above come from the transcripts and do not depend on it.
+            </p>
+          )}
 
           {(stats.headline.totalCostUSD > 0 || stats.longestSession) && (
             <section className="grid grid-cols-2 gap-3 sm:grid-cols-3">

@@ -88,3 +88,27 @@ export function loadConfig(): ArgusConfig {
     webhookUrl: process.env.ARGUS_WEBHOOK_URL?.trim() || null,
   };
 }
+
+/**
+ * The actionable message for a listen error that Argus cannot recover from, or
+ * null when the error is not a startup failure.
+ *
+ * These used to fall through to the catch-all `uncaughtException` handler, whose
+ * whole purpose is the opposite — keep the daemon alive through a stray rejection
+ * — so a port collision logged one internal-looking line and then sat there: no
+ * socket bound, nothing served, and an exit code that never came, so neither the
+ * `argus` CLI nor a supervisor could tell it had failed.
+ */
+export function describeListenError(err: unknown, host: string, port: number): string | null {
+  const code = (err as NodeJS.ErrnoException | null)?.code;
+  switch (code) {
+    case "EADDRINUSE":
+      return `port ${port} is already in use — another Argus, or another program, has it. Stop that process, or start this one on a different port with ARGUS_PORT=<n>.`;
+    case "EACCES":
+      return `not allowed to bind ${host}:${port}. Ports below 1024 need elevated privileges; pick a higher one with ARGUS_PORT=<n>.`;
+    case "EADDRNOTAVAIL":
+      return `${host} is not an address on this machine. Set ARGUS_HOST to an interface that exists (127.0.0.1 for local-only).`;
+    default:
+      return null;
+  }
+}
