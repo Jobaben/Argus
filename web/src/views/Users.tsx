@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useAuth } from "../useAuth";
 import { useUsers, type UserRow } from "../useUsers";
-import { AlertStrip, EmptyState, Page } from "../ds";
+import { AlertStrip, EmptyState, Loading, Page, SkeletonRows } from "../ds";
 
 function UserCard({
   user,
@@ -88,7 +88,11 @@ export default function Users() {
               <AlertStrip subject="Couldn't complete that" message={actionError} />
             </div>
           )}
-          {!loading && users.length === 0 ? (
+          {loading && users.length === 0 ? (
+            <Loading label="accounts">
+              <SkeletonRows count={2} />
+            </Loading>
+          ) : users.length === 0 ? (
             <EmptyState>No accounts yet.</EmptyState>
           ) : (
             <div className="grid gap-2">

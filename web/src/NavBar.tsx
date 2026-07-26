@@ -64,7 +64,7 @@ function MobileNav({
         <span aria-hidden="true" className="font-mono leading-none">
           {open ? "✕" : "☰"}
         </span>
-        <span className="max-w-[9rem] truncate">{activeLabel ?? "Menu"}</span>
+        <span className="max-w-[6.5rem] truncate sm:max-w-[9rem]">{activeLabel ?? "Menu"}</span>
         {!open && attention > 0 && <Badge count={attention} />}
       </button>
 
@@ -144,10 +144,12 @@ export function NavBar({
       aria-label="Primary"
       className="sticky top-0 z-30 border-b border-line bg-ground/80 backdrop-blur"
     >
-      <div className="relative mx-auto flex max-w-[1600px] items-center gap-3 px-4 py-2.5 sm:px-6">
+      <div className="relative mx-auto flex max-w-[1600px] items-center gap-2 px-3 py-2.5 sm:gap-3 sm:px-6">
+        {/* The wordmark is the least load-bearing thing in the bar, so it is what
+            gives up room first on a phone. */}
         <span className="flex shrink-0 items-center gap-2 text-sm font-bold">
           <IrisMark size={18} />{" "}
-          <span>
+          <span className="hidden sm:inline">
             ARG<span className="text-eye">U</span>S
           </span>
         </span>
@@ -172,7 +174,7 @@ export function NavBar({
           ))}
         </div>
 
-        <div className="ml-auto flex shrink-0 items-center gap-2">
+        <div className="ml-auto flex min-w-0 shrink items-center gap-1.5 sm:gap-2">
           {/* The palette is the fastest path to anything in Argus, so it gets a
               real affordance with its shortcut on it — not a bare icon nobody
               would guess is keyboard-driven. It collapses to the icon alone on

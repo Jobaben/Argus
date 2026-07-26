@@ -1,6 +1,14 @@
 import { Fragment, useEffect, useState } from "react";
 import type { Run } from "../types";
-import { StatusPill, formatTokens, formatUsd, parseRunLog, runDsStatus } from "../ds";
+import {
+  Loading,
+  SkeletonText,
+  StatusPill,
+  formatTokens,
+  formatUsd,
+  parseRunLog,
+  runDsStatus,
+} from "../ds";
 
 function when(iso: string | null): string {
   if (!iso) return "—";
@@ -26,12 +34,12 @@ export function RunRow({
   const isRunning = run.status === "running";
   return (
     <li className="rounded-lg border border-line bg-surface">
-      <div className="flex w-full items-center gap-3 px-3 py-2">
+      <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">
         <button
           type="button"
           onClick={() => setOpen((o) => !o)}
           aria-expanded={open}
-          className="flex flex-1 items-center gap-3 text-left"
+          className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 text-left"
         >
           <StatusPill status={runDsStatus(run)} />
           <span className="text-xs text-ink-dim">{when(run.startedAt ?? run.queuedAt)}</span>
@@ -128,7 +136,13 @@ function RunLog({ id, running }: { id: string; running: boolean }) {
     };
   }, [id, running]);
 
-  if (log === null) return <p className="text-xs text-ink-faint">loading…</p>;
+  if (log === null) {
+    return (
+      <Loading label="the run log">
+        <SkeletonText lines={3} />
+      </Loading>
+    );
+  }
   if (failed) return <p className="text-xs text-ink-faint">Couldn't load the run log.</p>;
 
   const parsed = parseRunLog(log);

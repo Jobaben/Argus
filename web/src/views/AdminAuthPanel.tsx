@@ -78,8 +78,11 @@ export function AdminAuthPanel({
       </p>
 
       <div className="mt-3 grid gap-2">
+        {/* A placeholder is not a label: it disappears the moment you type, and
+            a screen reader gets nothing to announce the field by. */}
         <input
           className={FIELD}
+          aria-label="Username"
           placeholder="Username"
           autoComplete="username"
           value={username}
@@ -89,6 +92,7 @@ export function AdminAuthPanel({
         <input
           className={FIELD}
           type="password"
+          aria-label="Password"
           placeholder={configured && !registering ? "Password" : "Password (min 8 characters)"}
           autoComplete={configured && !registering ? "current-password" : "new-password"}
           value={password}

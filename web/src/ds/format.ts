@@ -139,26 +139,6 @@ export function parseRunLog(raw: string): ParsedRunLog {
   return { kind: "envelope", fields, truncated };
 }
 
-export function sparklinePoints(values: number[], width = 100, height = 26): string {
-  const n = values.length;
-  if (n === 0) return "";
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const span = max - min;
-  return values
-    .map((v, i) => {
-      const x = n === 1 ? 0 : (i / (n - 1)) * width;
-      // y inverted: max -> 0 (top), min -> height (bottom); flat -> midline
-      const y = span === 0 ? height / 2 : height - ((v - min) / span) * height;
-      return `${round(x)},${round(y)}`;
-    })
-    .join(" ");
-}
-
-function round(n: number): number {
-  return Math.round(n * 100) / 100;
-}
-
 /**
  * The largest sensible unit of a positive duration: "45s", "12m", "2h 10m",
  * "3d 4h". Shared by the countdown and relative-time formatters so a schedule

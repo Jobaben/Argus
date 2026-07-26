@@ -9,7 +9,6 @@ import {
   formatCountdown,
   formatRelativeTime,
   parseRunLog,
-  sparklinePoints,
 } from "./format";
 
 describe("formatUsd", () => {
@@ -214,18 +213,6 @@ describe("parseRunLog", () => {
   it("preserves the truncation flag even when the remaining log is empty", () => {
     const parsed = parseRunLog("…(truncated)…\n   ");
     expect(parsed.kind).toBe("empty");
-  });
-});
-
-describe("sparklinePoints", () => {
-  it("maps a flat series to the vertical mid-line", () => {
-    expect(sparklinePoints([5, 5, 5], 100, 26)).toBe("0,13 50,13 100,13");
-  });
-  it("puts the max at the top (y=0) and min at the bottom", () => {
-    expect(sparklinePoints([0, 10], 100, 26)).toBe("0,26 100,0");
-  });
-  it("returns empty string for empty input", () => {
-    expect(sparklinePoints([], 100, 26)).toBe("");
   });
 });
 

@@ -1,4 +1,15 @@
-import { Card, EmptyState, Page, Section, TimeAgo, formatTokens, formatUsd } from "../ds";
+import {
+  Card,
+  EmptyState,
+  Loading,
+  Page,
+  Section,
+  SkeletonGrid,
+  SkeletonText,
+  TimeAgo,
+  formatTokens,
+  formatUsd,
+} from "../ds";
 import type { AttentionKind, Briefing as BriefingData, RunStatus } from "../types";
 
 /** Where each attention kind sends the user to act on it. */
@@ -82,7 +93,10 @@ export default function Briefing({
       )}
 
       {loading && briefing == null ? (
-        <p className="text-ink-faint">Assembling your briefing…</p>
+        <Loading label="your briefing">
+          <SkeletonText lines={1} className="mb-6 max-w-sm" />
+          <SkeletonGrid count={4} columns={2} lines={2} />
+        </Loading>
       ) : briefing == null ? null : (
         <>
           <p className="mb-6 text-sm text-ink-dim">

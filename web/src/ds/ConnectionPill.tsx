@@ -45,7 +45,9 @@ export function ConnectionPill({ live }: { live: boolean }) {
               ? "Offline: connecting to the Argus server"
               : `Offline: retrying in ${remaining} seconds`
         }
-        className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 font-mono text-xs font-semibold uppercase tracking-[0.08em] transition-colors duration-(--duration-base) ${
+        // The label is the first thing to go on a narrow bar: the dot's colour
+        // already carries the state, and the words live in the accessible name.
+        className={`inline-flex items-center gap-2 rounded-full border px-2 py-1.5 font-mono text-xs font-semibold uppercase tracking-[0.08em] transition-colors duration-(--duration-base) sm:px-3.5 ${
           connected ? "border-ok/40 bg-ok/10 text-ok" : "border-fail/40 bg-fail/10 text-fail"
         }`}
       >
@@ -55,12 +57,12 @@ export function ConnectionPill({ live }: { live: boolean }) {
           )}
         </span>
         {connected ? (
-          "Live"
+          <span className="hidden sm:inline">Live</span>
         ) : (
           <>
-            <span>Offline</span>
+            <span className="hidden sm:inline">Offline</span>
             {remaining !== null && remaining > 0 && (
-              <span className="font-normal normal-case tracking-normal text-fail/70">
+              <span className="hidden font-normal normal-case tracking-normal text-fail/70 md:inline">
                 · retrying in {remaining}s
               </span>
             )}
