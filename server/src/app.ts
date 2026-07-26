@@ -64,6 +64,7 @@ import {
   validateBudgetPatch,
 } from "./sources/budget.js";
 import { buildOverview } from "./sources/overview.js";
+import { buildPalette } from "./sources/palette.js";
 import { PreflightError, type Engine } from "./pipelineEngine.js";
 import type { PipelineSignal } from "./sources/pipelineTypes.js";
 import type { ActivityEvent } from "./runTailer.js";
@@ -648,6 +649,49 @@ export function createApp(deps: AppDeps): Hono {
   app.get("/api/overview", async (c) => {
     const [defs, insts, runs] = await Promise.all([readPipelines(), readInstances(), readRuns()]);
     return c.json({ overview: buildOverview(defs, insts, runs, deps.activity?.()) });
+  });
+
+  // The command palette's search index: one request instead of the seven view
+  // payloads the client would otherwise join by hand. Every read below is
+  // already served from the shared caches, so this costs little more than the
+  // busiest single view.
+  app.get("/api/palette", async (c) => {
+    const now = new Date();
+    const [defs, instances, schedules, runs, triage, agents, projects, sessions] =
+      await Promise.all([
+        readPipelines(),
+        readInstances(),
+        readSchedulesWithNext(now),
+        readRuns(),
+        readTriage(),
+        readAgents(),
+        readProjects(),
+        readSessions(),
+      ]);
+    const { monitors } = buildMonitors(schedules, runs, now);
+    const issues = buildIssues(runs, triage);
+    // Newest instance per pipeline — the one whose badge and gate the palette
+    // should reflect.
+    const latestByPipeline = new Map<string, (typeof instances)[number]>();
+    for (const inst of instances) {
+      const seen = latestByPipeline.get(inst.pipelineId);
+      if (!seen || inst.createdAt > seen.createdAt) latestByPipeline.set(inst.pipelineId, inst);
+    }
+    return c.json(
+      buildPalette(
+        {
+          pipelines: defs,
+          latestByPipeline,
+          schedules,
+          monitors,
+          issues,
+          agents,
+          projects,
+          sessions,
+        },
+        now,
+      ),
+    );
   });
 
   app.get("/api/instances/:id", async (c) => {

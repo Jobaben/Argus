@@ -79,6 +79,8 @@ export type {
   ThroughputBucket,
 } from "./insight.js";
 
+export type { PaletteEntry, PaletteIndex, PaletteKind, PaletteSeverity } from "./palette.js";
+
 export type {
   Activity,
   CronDiskHint,

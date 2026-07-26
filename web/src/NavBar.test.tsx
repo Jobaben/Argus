@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { NavBar } from "./NavBar";
 
 const destinations = [
@@ -10,7 +10,15 @@ const overflow = [{ id: "stats", label: "Stats", href: "#/stats" }];
 
 describe("NavBar", () => {
   it("renders the two destinations and drops the old monitoring strip", () => {
-    render(<NavBar destinations={destinations} overflow={overflow} activeId="command" live />);
+    render(
+      <NavBar
+        destinations={destinations}
+        overflow={overflow}
+        activeId="command"
+        live
+        onOpenPalette={() => {}}
+      />,
+    );
     expect(screen.getByRole("link", { name: "Command Center" })).toHaveAttribute(
       "href",
       "#/command",
@@ -20,9 +28,22 @@ describe("NavBar", () => {
     expect(screen.queryByRole("link", { name: "Inventory" })).toBeNull();
   });
 
-  it("exposes search and the connection state", () => {
-    render(<NavBar destinations={destinations} overflow={overflow} activeId="command" live />);
-    expect(screen.getByRole("link", { name: "Search" })).toHaveAttribute("href", "#/search");
+  it("exposes the command palette and the connection state", () => {
+    const onOpenPalette = vi.fn();
+    render(
+      <NavBar
+        destinations={destinations}
+        overflow={overflow}
+        activeId="command"
+        live
+        onOpenPalette={onOpenPalette}
+      />,
+    );
+    // The palette replaced the old search link: it reaches search *and*
+    // everything else, and it advertises its own shortcut.
+    const button = screen.getByRole("button", { name: /command palette/i });
+    fireEvent.click(button);
+    expect(onOpenPalette).toHaveBeenCalledTimes(1);
     expect(screen.getByText("Live")).toBeInTheDocument();
   });
 });
@@ -38,6 +59,7 @@ describe("NavBar badge", () => {
         overflow={overflow}
         activeId="command"
         live
+        onOpenPalette={() => {}}
       />,
     );
     expect(screen.getByText("3")).toBeInTheDocument();

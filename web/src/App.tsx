@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAgents } from "./useAgents";
 import type { Agent, AgentStatus } from "./types";
 import { AgentTile, HealthCounter, EmptyState, Page, ToastRegion } from "./ds";
@@ -29,6 +29,15 @@ import Users from "./views/Users";
 import Briefing from "./views/Briefing";
 import { useBriefing } from "./useBriefing";
 import { useAuth } from "./useAuth";
+import {
+  CommandPalette,
+  NAV_CHORDS,
+  ShortcutHelp,
+  useGlobalKeys,
+  usePalette,
+  usePaletteState,
+  useShellBindings,
+} from "./cmd";
 
 function AgentsView({
   agents,
@@ -109,11 +118,25 @@ function currentTabId(): string {
   return window.location.hash.replace(/^#\/?/, "").split("/")[0] || "command";
 }
 
+/**
+ * POSTs a palette action and throws the server's own error message, so the
+ * palette can report "an instance is already running" rather than "HTTP 409".
+ */
+async function postAction(path: string): Promise<void> {
+  const res = await fetch(path, { method: "POST" });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+}
+
 export default function App() {
   const [active, setActive] = useState<string>(currentTabId);
   const agentsState = useAgents();
   const auth = useAuth();
   const briefingState = useBriefing();
+  const palette = usePaletteState();
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const agentToasts = useAgentNotifications(agentsState.agents);
   const monitorToasts = useMonitorAlerts();
   const budgetToasts = useBudgetAlerts();
@@ -137,11 +160,15 @@ export default function App() {
     document.title = `${label} — Argus`;
   }, [active]);
 
-  const destinations: NavTab[] = TAB_META.filter((t) => t.role === "destination").map((t) => ({
-    id: t.id,
-    label: t.label,
-    badge: t.id === "briefing" ? (briefingState.briefing?.attentionCount ?? 0) : undefined,
-  }));
+  const destinations: NavTab[] = useMemo(
+    () =>
+      TAB_META.filter((t) => t.role === "destination").map((t) => ({
+        id: t.id,
+        label: t.label,
+        badge: t.id === "briefing" ? (briefingState.briefing?.attentionCount ?? 0) : undefined,
+      })),
+    [briefingState.briefing?.attentionCount],
+  );
   const overflow: MoreItem[] = TAB_META.filter(
     (t) => t.role === "overflow" && (t.id !== "users" || auth.status?.role === "root"),
   ).map((t) => ({
@@ -149,6 +176,66 @@ export default function App() {
     label: t.label,
     href: `#/${t.id}`,
   }));
+
+  // ── The command layer ─────────────────────────────────────────────────────
+  // Everything reachable by mouse is reachable by keyboard through these two
+  // surfaces, and both are built from the same nav metadata as the bar itself.
+
+  const closeOverlays = useCallback(() => {
+    palette.hide();
+    setShortcutsOpen(false);
+  }, [palette]);
+
+  const shellActions = useMemo(
+    () => ({
+      openPalette: palette.show,
+      openShortcuts: () => setShortcutsOpen(true),
+      closeOverlays,
+      overlayOpen: () => palette.open || shortcutsOpen,
+      navigate: (tabId: string) => {
+        window.location.hash = `#/${tabId}`;
+      },
+    }),
+    [palette.show, palette.open, shortcutsOpen, closeOverlays],
+  );
+
+  // Palette entries are the same destinations, annotated with the chord that
+  // also reaches them — so the palette teaches its own shortcuts.
+  const paletteDestinations = useMemo(
+    () =>
+      TAB_META.filter((t) => t.role === "destination" || t.role === "overflow" || t.id === "search")
+        .filter((t) => t.id !== "users" || auth.status?.role === "root")
+        .map((t) => ({
+          id: t.id,
+          label: t.label,
+          chord: NAV_CHORDS[t.id] ? `g ${NAV_CHORDS[t.id]}` : undefined,
+        })),
+    [auth.status?.role],
+  );
+
+  // Chord targets are not the same set as nav destinations: Agents is a
+  // drill-down with no tab of its own, but `g a` should still reach it.
+  const chordTargets = useMemo(
+    () => TAB_META.filter((t) => NAV_CHORDS[t.id]).map((t) => ({ id: t.id, label: t.label })),
+    [],
+  );
+  const bindings = useShellBindings(chordTargets, shellActions);
+  useGlobalKeys(bindings);
+
+  const paletteCtx = useMemo(
+    () => ({
+      destinations: paletteDestinations,
+      canAdmin: auth.status?.authenticated === true,
+      approveGate: (instanceId: string) => postAction(`/api/instances/${instanceId}/approve`),
+      runSchedule: (scheduleId: string) => postAction(`/api/schedules/${scheduleId}/run`),
+      markCaughtUp: async () => {
+        await briefingState.ack();
+      },
+      showShortcuts: () => setShortcutsOpen(true),
+    }),
+    [paletteDestinations, auth.status?.authenticated, briefingState],
+  );
+  const { commands, loading: paletteLoading } = usePalette(palette.open, paletteCtx);
 
   const renderActive = () => {
     switch (active) {
@@ -226,12 +313,24 @@ export default function App() {
         overflow={overflow}
         activeId={active}
         live={agentsState.live}
+        onOpenPalette={palette.show}
       />
       <SetupBanner />
       <main id="main" tabIndex={-1} className="outline-none">
         {renderActive()}
       </main>
       <ToastRegion toasts={toasts} onDismiss={dismiss} />
+      <CommandPalette
+        open={palette.open}
+        onClose={palette.hide}
+        commands={commands}
+        loading={paletteLoading}
+      />
+      <ShortcutHelp
+        open={shortcutsOpen}
+        onClose={() => setShortcutsOpen(false)}
+        bindings={bindings}
+      />
     </div>
   );
 }

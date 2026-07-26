@@ -13,13 +13,21 @@ export function NavBar({
   overflow,
   activeId,
   live,
+  onOpenPalette,
 }: {
   destinations: NavTab[];
   overflow: MoreItem[];
   activeId: string;
   live: boolean;
+  onOpenPalette: () => void;
 }) {
   const overflowActive = overflow.some((o) => o.id === activeId);
+  // ⌘ on Apple, Ctrl elsewhere — showing the wrong one is worse than showing
+  // none, since the hint is the only place most users learn the shortcut.
+  const modLabel =
+    typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform)
+      ? "⌘K"
+      : "Ctrl K";
   return (
     <nav
       aria-label="Primary"
@@ -54,16 +62,27 @@ export function NavBar({
           ))}
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-2">
-          <a
-            href="#/search"
-            aria-label="Search"
-            aria-current={activeId === "search" ? "page" : undefined}
-            className={`flex h-8 w-8 items-center justify-center rounded-md text-base transition ${
-              activeId === "search" ? "bg-surface-2 text-ink" : "text-ink-dim hover:text-ink"
-            }`}
+          {/* The palette is the fastest path to anything in Argus, so it gets a
+              real affordance with its shortcut on it — not a bare icon nobody
+              would guess is keyboard-driven. It collapses to the icon alone on
+              narrow viewports. */}
+          <button
+            type="button"
+            onClick={onOpenPalette}
+            aria-label={`Open the command palette (${modLabel})`}
+            className="group flex h-8 items-center gap-2 rounded-md border border-line px-2 text-ink-dim transition duration-(--duration-quick) hover:border-ink-faint/40 hover:text-ink sm:pr-1.5"
           >
-            ⌕
-          </a>
+            <span aria-hidden="true" className="text-base leading-none">
+              ⌕
+            </span>
+            <span className="hidden text-sm sm:inline">Jump to…</span>
+            <kbd
+              aria-hidden="true"
+              className="hidden rounded border border-line bg-ground-2 px-1.5 py-0.5 font-mono text-[10px] text-ink-faint transition duration-(--duration-quick) group-hover:text-ink-dim sm:inline"
+            >
+              {modLabel}
+            </kbd>
+          </button>
           <MoreMenu items={overflow} active={overflowActive} activeId={activeId} />
           <ConnectionPill live={live} />
         </div>

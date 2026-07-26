@@ -77,6 +77,11 @@ export type {
   SituationCounts,
   NextFire,
   ThroughputBucket,
+  // Command palette
+  PaletteEntry,
+  PaletteIndex,
+  PaletteKind,
+  PaletteSeverity,
   // Live protocol
   LiveFrame,
   LiveFrameType,
