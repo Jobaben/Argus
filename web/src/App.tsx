@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAgents } from "./useAgents";
 import type { Agent, AgentStatus } from "./types";
-import { AgentTile, HealthCounter, EmptyState, Page, ToastRegion } from "./ds";
+import {
+  AgentTile,
+  EmptyState,
+  HealthCounter,
+  Loading,
+  Page,
+  SkeletonGrid,
+  ToastRegion,
+  staggerDelay,
+} from "./ds";
 import { useAgentNotifications } from "./notify/useAgentNotifications";
 import { useBudgetAlerts } from "./notify/useBudgetAlerts";
 import { useMonitorAlerts } from "./notify/useMonitorAlerts";
@@ -74,13 +83,20 @@ function AgentsView({
       )}
 
       {loading ? (
-        <p className="text-ink-faint">Loading agents…</p>
+        <Loading label="agents">
+          <SkeletonGrid count={4} columns={2} lines={2} />
+        </Loading>
       ) : agents.length === 0 ? (
         <EmptyState>No background agents found yet. Launch one and it'll appear here.</EmptyState>
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          {agents.map((a) => (
-            <a key={a.short} href={`#/agent/${encodeURIComponent(a.short)}`} className="block">
+          {agents.map((a, i) => (
+            <a
+              key={a.short}
+              href={`#/agent/${encodeURIComponent(a.short)}`}
+              style={{ animationDelay: staggerDelay(i) }}
+              className="block rounded-tile transition-transform duration-(--duration-quick) hover:-translate-y-0.5 motion-safe:animate-[slide-up_var(--duration-base)_var(--ease-out-expo)_both]"
+            >
               <AgentTile agent={a} />
             </a>
           ))}
@@ -317,7 +333,12 @@ export default function App() {
       />
       <SetupBanner />
       <main id="main" tabIndex={-1} className="outline-none">
-        {renderActive()}
+        {/* Keyed on the route so switching destinations reads as a deliberate
+            transition rather than a flicker. Opacity only — a moving page would
+            fight the staggered content inside it. */}
+        <div key={active} className="motion-safe:animate-[fade-in_var(--duration-base)_ease-out]">
+          {renderActive()}
+        </div>
       </main>
       <ToastRegion toasts={toasts} onDismiss={dismiss} />
       <CommandPalette

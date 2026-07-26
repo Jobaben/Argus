@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useLaunch } from "../useLaunch";
 import type { LaunchInput, Run } from "../types";
-import { AlertStrip, EmptyState, ModelSelect, Page } from "../ds";
+import { AlertStrip, EmptyState, Loading, ModelSelect, Page, SkeletonRows } from "../ds";
 import { RunRow } from "./RunRow";
 
 const FIELD =
@@ -144,7 +144,9 @@ export default function Launch() {
         Recent one-off runs
       </h2>
       {loading ? (
-        <p className="text-ink-faint">Loading runs…</p>
+        <Loading label="runs">
+          <SkeletonRows count={4} />
+        </Loading>
       ) : runs.length === 0 ? (
         <EmptyState>Nothing launched yet. Fill in the form and hit Launch.</EmptyState>
       ) : (

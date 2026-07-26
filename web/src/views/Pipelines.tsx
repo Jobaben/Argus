@@ -3,7 +3,16 @@ import { usePipelines } from "../usePipelines";
 import { useOverview } from "../useOverview";
 import { useAuth } from "../useAuth";
 import type { PipelineDefinition, PipelineInput, Trigger } from "../types";
-import { AlertStrip, EmptyState, Page, StatusPill, toOverviewRows, type DsStatus } from "../ds";
+import {
+  AlertStrip,
+  EmptyState,
+  Loading,
+  Page,
+  SkeletonRows,
+  StatusPill,
+  toOverviewRows,
+  type DsStatus,
+} from "../ds";
 import { PipelineForm, EMPTY_PIPELINE } from "./PipelineForm";
 import { AdminAuthPanel } from "./AdminAuthPanel";
 
@@ -239,7 +248,9 @@ export default function Pipelines() {
       )}
 
       {loading ? (
-        <p className="text-ink-faint">Loading pipelines…</p>
+        <Loading label="pipelines">
+          <SkeletonRows count={3} />
+        </Loading>
       ) : pipelines.length === 0 && mode.kind === "none" ? (
         <EmptyState>
           No pipelines yet. Create one and it'll appear on the Command Center wall.

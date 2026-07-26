@@ -1,7 +1,15 @@
 import { useState } from "react";
 import { useBudget } from "../useBudget";
 import type { BudgetConfig, BudgetDay, BudgetState, BudgetWindow } from "../types";
-import { AlertStrip, EmptyState, Page, formatUsd } from "../ds";
+import {
+  AlertStrip,
+  EmptyState,
+  Loading,
+  Page,
+  SkeletonCounters,
+  SkeletonTile,
+  formatUsd,
+} from "../ds";
 
 const FIELD =
   "w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink placeholder-ink-faint";
@@ -204,7 +212,12 @@ export default function Budget() {
       )}
 
       {loading && !budget ? (
-        <p className="text-ink-faint">Loading budget…</p>
+        <Loading label="budget">
+          <SkeletonCounters count={3} />
+          <div className="mt-8">
+            <SkeletonTile lines={4} />
+          </div>
+        </Loading>
       ) : budget ? (
         <>
           <section className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2">

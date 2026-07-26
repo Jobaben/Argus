@@ -1,7 +1,16 @@
 import { useMemo, useState } from "react";
 import { useChronicle } from "../useChronicle";
 import type { ChronicleGroup, ChronicleKind, ChronicleSpan, ChronicleStatus } from "../types";
-import { EmptyState, HealthCounter, Page, SegmentedControl, formatUsd } from "../ds";
+import {
+  EmptyState,
+  HealthCounter,
+  Loading,
+  Page,
+  SegmentedControl,
+  SkeletonCounters,
+  SkeletonTile,
+  formatUsd,
+} from "../ds";
 import { axisTicks, spanGeometry } from "../ds/chronicleLayout";
 
 const WINDOWS = [
@@ -167,7 +176,12 @@ export default function Chronicle() {
       )}
 
       {loading && !hasData ? (
-        <p className="text-ink-faint">Loading the chronicle…</p>
+        <Loading label="the chronicle">
+          <SkeletonCounters count={4} />
+          <div className="mt-6">
+            <SkeletonTile lines={8} />
+          </div>
+        </Loading>
       ) : !hasData ? (
         <EmptyState>
           Nothing happened in this window. Widen it, or launch an agent and watch it appear.

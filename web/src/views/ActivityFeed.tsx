@@ -1,4 +1,4 @@
-import { AlertStrip, EmptyState, Page } from "../ds";
+import { AlertStrip, EmptyState, Loading, Page, SkeletonRows } from "../ds";
 import { useActivity, type Activity } from "../useActivity";
 
 function timeAgo(iso: string): string {
@@ -50,7 +50,9 @@ export default function ActivityFeed() {
       )}
 
       {loading ? (
-        <p className="text-ink-faint">Loading activity…</p>
+        <Loading label="activity">
+          <SkeletonRows count={6} />
+        </Loading>
       ) : activity.length === 0 ? (
         <EmptyState>No prompt history found yet.</EmptyState>
       ) : (

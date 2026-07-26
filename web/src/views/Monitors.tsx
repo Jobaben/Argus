@@ -1,4 +1,14 @@
-import { AlertStrip, Card, EmptyState, HealthCounter, HeartbeatBar, Page, TimeAgo } from "../ds";
+import {
+  AlertStrip,
+  Card,
+  EmptyState,
+  HealthCounter,
+  HeartbeatBar,
+  Loading,
+  Page,
+  SkeletonGrid,
+  TimeAgo,
+} from "../ds";
 import type { ColorToken } from "../ds";
 import { useMonitors } from "../useMonitors";
 import type { MonitorHealth, MonitorStatus } from "../types";
@@ -111,7 +121,9 @@ export default function Monitors() {
       )}
 
       {loading ? (
-        <p className="text-ink-faint">Loading monitors…</p>
+        <Loading label="monitors">
+          <SkeletonGrid count={4} columns={2} lines={2} />
+        </Loading>
       ) : monitors.length === 0 ? (
         <EmptyState>
           No monitors yet. Every schedule you create in the Scheduler gets one automatically.

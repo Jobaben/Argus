@@ -1,4 +1,4 @@
-import { AlertStrip, EmptyState, Page } from "../ds";
+import { AlertStrip, EmptyState, Loading, Page, SkeletonRows } from "../ds";
 import { useTasks, type Task } from "../useTasks";
 
 function timeAgo(iso: string | null): string {
@@ -58,7 +58,9 @@ export default function Tasks() {
       )}
 
       {loading ? (
-        <p className="text-ink-faint">Loading tasks…</p>
+        <Loading label="tasks">
+          <SkeletonRows count={3} />
+        </Loading>
       ) : tasks.length === 0 ? (
         <EmptyState>No task directories found yet.</EmptyState>
       ) : (

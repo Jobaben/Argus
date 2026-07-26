@@ -297,6 +297,51 @@ describe("useLiveResource — failure handling", () => {
   });
 });
 
+describe("useLiveResource — loading state", () => {
+  it("stays loading until data actually arrives", async () => {
+    let release: ((r: Response) => void) | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() => new Promise<Response>((res) => (release = res))),
+    );
+    const { result } = renderHook(() => useLiveResource("/api/things", NUMS));
+    expect(result.current.loading).toBe(true);
+    await act(async () => {
+      release?.(okJson({ items: [1] }, '"tag-1"'));
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+  });
+
+  it("keeps loading true when the first request is aborted before it settles", async () => {
+    // The regression this guards: React's StrictMode mounts, unmounts and
+    // remounts an effect, aborting the first fetch. Treating that as "settled"
+    // dropped the view to `loading: false` with no data — so a board with
+    // pipelines rendered its "no pipelines yet" empty state instead of a
+    // skeleton, on every dev mount and every path change.
+    const controllers: AbortSignal[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+        if (init?.signal) controllers.push(init.signal);
+        return new Promise<Response>((_res, rej) => {
+          init?.signal?.addEventListener("abort", () => rej(new Error("AbortError")));
+        });
+      }),
+    );
+
+    const { result, rerender } = renderHook(({ p }) => useLiveResource(p, NUMS), {
+      initialProps: { p: "/api/things" as string | null },
+    });
+    expect(result.current.loading).toBe(true);
+
+    // Changing the path tears down the first request mid-flight.
+    rerender({ p: "/api/other" });
+    await waitFor(() => expect(controllers[0]?.aborted).toBe(true));
+    expect(result.current.loading).toBe(true);
+    expect(result.current.error).toBeNull();
+  });
+});
+
 describe("retryDelay", () => {
   it("doubles per attempt and stays within the jitter window", () => {
     expect(retryDelay(1, () => 0)).toBe(500);

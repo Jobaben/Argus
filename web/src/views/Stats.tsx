@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useStats, type DailyStat, type ModelStat, type PeakHour } from "../useStats";
-import { AlertStrip, EmptyState, Page } from "../ds";
+import { AlertStrip, EmptyState, Loading, Page, SkeletonCounters, SkeletonGrid } from "../ds";
 
 function compact(n: number): string {
   if (!Number.isFinite(n)) return "0";
@@ -129,7 +129,12 @@ export default function Stats() {
       )}
 
       {loading ? (
-        <p className="text-ink-faint">Loading stats…</p>
+        <Loading label="stats">
+          <SkeletonCounters count={4} />
+          <div className="mt-8">
+            <SkeletonGrid count={2} columns={2} lines={4} />
+          </div>
+        </Loading>
       ) : !stats || !stats.available ? (
         <EmptyState>No usage stats found yet.</EmptyState>
       ) : (

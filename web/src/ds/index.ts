@@ -4,6 +4,16 @@ export { IrisMark } from "./IrisMark";
 export { Card } from "./Card";
 export { Section } from "./Section";
 export { EmptyState } from "./EmptyState";
+export {
+  Loading,
+  Skeleton,
+  SkeletonBoardCard,
+  SkeletonCounters,
+  SkeletonGrid,
+  SkeletonRows,
+  SkeletonText,
+  SkeletonTile,
+} from "./Skeleton";
 export { Page } from "./Page";
 export type { Crumb } from "./Page";
 export { TimeAgo } from "./TimeAgo";
@@ -22,6 +32,7 @@ export type { ToastItem } from "./Toast";
 export { ActivityEvent } from "./ActivityEvent";
 export * from "./overviewRow";
 export * from "./rail";
+export { useCountUp, useChangeFlash, staggerDelay, prefersReducedMotion } from "./motion";
 export { MoreMenu } from "./MoreMenu";
 export type { MoreItem } from "./MoreMenu";
 export { TriggerFields } from "./TriggerFields";

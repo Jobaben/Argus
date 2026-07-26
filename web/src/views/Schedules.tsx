@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useSchedules } from "../useSchedules";
 import { useRuns } from "../useRuns";
 import type { ScheduleInput, ScheduleWithNext, Trigger } from "../types";
-import { AlertStrip, EmptyState, Page, TriggerFields } from "../ds";
+import { AlertStrip, EmptyState, Loading, Page, SkeletonRows, TriggerFields } from "../ds";
 import { CronPanel } from "./Cron";
 import { RunRow } from "./RunRow";
 
@@ -335,7 +335,9 @@ export default function Schedules() {
           )}
 
           {loading ? (
-            <p className="text-ink-faint">Loading schedules…</p>
+            <Loading label="schedules">
+              <SkeletonRows count={4} />
+            </Loading>
           ) : schedules.length === 0 && mode.kind === "none" ? (
             <EmptyState>No schedules yet. Create one and Argus will fire it on time.</EmptyState>
           ) : (

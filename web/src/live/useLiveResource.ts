@@ -187,7 +187,11 @@ export function useLiveResource<T>(
       } finally {
         state.inFlight = false;
         state.abort = null;
-        if (mounted.current) setLoadingOnce(false);
+        // An *aborted* request settled nothing: no data arrived, so the view is
+        // still loading. Clearing the flag here would drop a first-load view
+        // straight to its empty state — which is exactly what happened on every
+        // React StrictMode double-mount and on every path change.
+        if (mounted.current && !controller.signal.aborted) setLoadingOnce(false);
         if (state.pending) {
           state.pending = false;
           void refreshRef.current();

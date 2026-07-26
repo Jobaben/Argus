@@ -1,4 +1,4 @@
-import { AlertStrip, Card, EmptyState, Page } from "../ds";
+import { AlertStrip, Card, EmptyState, Loading, Page, SkeletonGrid } from "../ds";
 import { useProjects, type Project } from "../useProjects";
 
 function timeAgo(iso: string | null): string {
@@ -54,7 +54,9 @@ export default function Projects() {
       )}
 
       {loading ? (
-        <p className="text-ink-faint">Loading projects…</p>
+        <Loading label="projects">
+          <SkeletonGrid count={4} columns={2} lines={2} />
+        </Loading>
       ) : projects.length === 0 ? (
         <EmptyState>No projects found yet.</EmptyState>
       ) : (

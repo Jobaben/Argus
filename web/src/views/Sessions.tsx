@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { useSessions, type SessionMessage, type SessionSummary } from "../useSessions";
 import { useSessionTail } from "../useSessionTail";
 import { useHashRoute } from "../useHashRoute";
-import { AlertStrip, EmptyState, Page } from "../ds";
+import { AlertStrip, EmptyState, Loading, Page, SkeletonGrid, SkeletonText } from "../ds";
 
 function timeAgo(iso: string | null): string {
   if (!iso) return "—";
@@ -159,7 +159,9 @@ function SessionTranscript({ project, id }: { project: string; id: string }) {
       )}
 
       {loading ? (
-        <p className="text-ink-faint">Loading transcript…</p>
+        <Loading label="the transcript">
+          <SkeletonText lines={6} />
+        </Loading>
       ) : messages.length === 0 ? (
         <EmptyState>No displayable messages in this session.</EmptyState>
       ) : (
@@ -197,7 +199,9 @@ export default function Sessions() {
       )}
 
       {loading ? (
-        <p className="text-ink-faint">Loading sessions…</p>
+        <Loading label="sessions">
+          <SkeletonGrid count={4} columns={2} lines={3} />
+        </Loading>
       ) : sessions.length === 0 ? (
         <EmptyState>No sessions found yet.</EmptyState>
       ) : (

@@ -1,5 +1,14 @@
 import { useState } from "react";
-import { AlertStrip, Card, EmptyState, HealthCounter, Page, TimeAgo } from "../ds";
+import {
+  AlertStrip,
+  Card,
+  EmptyState,
+  HealthCounter,
+  Loading,
+  Page,
+  SkeletonRows,
+  TimeAgo,
+} from "../ds";
 import { useIssues } from "../useIssues";
 import type { Issue, IssueOccurrence, IssueState } from "../types";
 
@@ -118,7 +127,11 @@ function IssueCard({
         (failed ? (
           <p className="mt-3 text-xs text-fail">Couldn't load occurrences: {failed}</p>
         ) : occurrences === null ? (
-          <p className="mt-3 text-xs text-ink-faint">Loading occurrences…</p>
+          <Loading label="occurrences">
+            <div className="mt-3">
+              <SkeletonRows count={2} />
+            </div>
+          </Loading>
         ) : (
           <Occurrences list={occurrences} />
         ))}
@@ -163,7 +176,9 @@ export default function Issues() {
       )}
 
       {loading ? (
-        <p className="text-ink-faint">Loading issues…</p>
+        <Loading label="issues">
+          <SkeletonRows count={4} />
+        </Loading>
       ) : issues.length === 0 ? (
         <EmptyState>No failures on record. When scheduled runs fail, they group here.</EmptyState>
       ) : (

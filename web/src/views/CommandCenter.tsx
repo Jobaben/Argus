@@ -4,17 +4,21 @@ import { useRunActivity } from "../useRunActivity";
 import type { LiveActivity } from "../useRunActivity";
 import { useTotals } from "../useTotals";
 import {
-  toOverviewRows,
-  formatElapsed,
-  STATUS,
-  RAIL,
-  TILE_SKIN,
-  TILE_DETAIL,
-  StatusPill,
-  TimeAgo,
   EmptyState,
-  Page,
+  Loading,
   Meter,
+  Page,
+  RAIL,
+  STATUS,
+  SkeletonBoardCard,
+  StatusPill,
+  TILE_DETAIL,
+  TILE_SKIN,
+  TimeAgo,
+  formatElapsed,
+  staggerDelay,
+  toOverviewRows,
+  useChangeFlash,
 } from "../ds";
 import type { OverviewRow, OverviewGate, PhasePill, StepPill, DsStatus } from "../ds";
 
@@ -179,11 +183,16 @@ function StepTile({
   const elapsed =
     working && step.startedAt ? formatElapsed(now - new Date(step.startedAt).getTime()) : null;
   const finished = step.status === "done" || step.status === "failed";
+  // A board that swaps a status silently makes you doubt you saw it. A brief
+  // ring on the tile that just moved answers "what changed?" at a glance.
+  const justChanged = useChangeFlash(step.status);
   const hasMeter =
     step.tokens != null || step.costUsd != null || (finished && step.durationMs != null);
   return (
     <article
-      className={`relative flex flex-col gap-[7px] overflow-hidden rounded-tile border bg-gradient-to-b to-surface pb-2.5 pl-3.5 pr-3 pt-[11px] ${TILE_SKIN[token]}`}
+      className={`relative flex flex-col gap-[7px] overflow-hidden rounded-tile border bg-gradient-to-b to-surface pb-2.5 pl-3.5 pr-3 pt-[11px] transition-shadow duration-(--duration-slow) ${
+        TILE_SKIN[token]
+      } ${justChanged ? "shadow-[0_0_0_1px_var(--color-eye),0_0_24px_-4px_var(--color-eye)]" : ""}`}
     >
       <span className={`absolute inset-y-0 left-0 w-[3px] ${RAIL[token]}`} />
       <div className="flex items-start justify-between gap-2">
@@ -314,17 +323,26 @@ function Row({
   revise,
   liveActivity,
   now,
+  index,
 }: {
   rows: OverviewRow[];
   approve: (id: string) => Promise<unknown>;
   revise: (id: string, note?: string) => Promise<unknown>;
   liveActivity: Map<string, LiveActivity>;
   now: number;
+  /** Position in the board, for the entrance stagger. */
+  index: number;
 }) {
   const first = rows[0];
   const multi = rows.length > 1;
   return (
-    <article className="rounded-tile border border-line bg-gradient-to-b from-surface-2 to-surface px-4 py-3.5">
+    <article
+      // Staggered so the board reads as assembling top-down rather than
+      // flashing in all at once; capped in `staggerDelay` so a long board still
+      // finishes fast.
+      style={{ animationDelay: staggerDelay(index) }}
+      className="rounded-tile border border-line bg-gradient-to-b from-surface-2 to-surface px-4 py-3.5 motion-safe:animate-[slide-up_var(--duration-base)_var(--ease-out-expo)_both]"
+    >
       <div className="flex items-center gap-3">
         <span className="min-w-0 break-words text-[15px] font-extrabold tracking-[0.02em] text-ink">
           {first.name}
@@ -515,7 +533,12 @@ export default function CommandCenter() {
         </div>
       )}
       {loading ? (
-        <p className="text-ink-faint">Loading pipelines…</p>
+        <Loading label="the board">
+          <div className="flex flex-col gap-3">
+            <SkeletonBoardCard phases={4} />
+            <SkeletonBoardCard phases={3} />
+          </div>
+        </Loading>
       ) : rows.length === 0 ? (
         <EmptyState>
           No pipelines defined yet. Create one in the{" "}
@@ -526,9 +549,10 @@ export default function CommandCenter() {
         </EmptyState>
       ) : (
         <div className="flex flex-col gap-3">
-          {groups.map((group) => (
+          {groups.map((group, i) => (
             <Row
               key={group[0].pipelineId}
+              index={i}
               rows={group}
               approve={approve}
               revise={revise}

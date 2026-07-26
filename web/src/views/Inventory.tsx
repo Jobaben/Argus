@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertStrip, EmptyState, Page } from "../ds";
+import { AlertStrip, EmptyState, Loading, Page, SkeletonGrid } from "../ds";
 import { useInventory, type InventoryItem, type PluginItem } from "../useInventory";
 
 type AccentToken = "ok" | "queue" | "run" | "await" | "fail";
@@ -101,7 +101,9 @@ export default function Inventory() {
       )}
 
       {loading ? (
-        <p className="text-ink-faint">Loading inventory…</p>
+        <Loading label="inventory">
+          <SkeletonGrid count={4} columns={2} lines={3} />
+        </Loading>
       ) : !inventory ? (
         <EmptyState>No extensions found yet.</EmptyState>
       ) : (
