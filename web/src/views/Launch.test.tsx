@@ -98,6 +98,33 @@ describe("Launch", () => {
     expect(screen.getByPlaceholderText("Quick repo audit")).toHaveValue("Quick audit");
   });
 
+  it("keeps the working directory and model after a launch", async () => {
+    // Firing several prompts at the same repo is the common case; retyping an
+    // absolute path each time was the most tedious thing on this page.
+    const user = userEvent.setup();
+    render(<Launch />);
+    await user.type(screen.getByPlaceholderText(/Summarize the open TODOs/), "first");
+    await user.type(screen.getByPlaceholderText("/home/you/project"), "/tmp/repo");
+    await user.selectOptions(screen.getByLabelText("Model (inherit CLI)"), "haiku");
+    await user.click(screen.getByRole("button", { name: /launch/i }));
+
+    expect(screen.getByPlaceholderText(/Summarize the open TODOs/)).toHaveValue("");
+    expect(screen.getByPlaceholderText("/home/you/project")).toHaveValue("/tmp/repo");
+    expect(screen.getByLabelText("Model (inherit CLI)")).toHaveValue("haiku");
+  });
+
+  it("totals the cost of the listed runs, and stays silent when none is priced", () => {
+    mockState.runs = [run({ id: "a", costUsd: 0.42 }), run({ id: "b", costUsd: 0.08 })];
+    render(<Launch />);
+    expect(screen.getByText("$0.50 across 2 runs")).toBeInTheDocument();
+  });
+
+  it("does not claim a run cost nothing when no cost was reported", () => {
+    mockState.runs = [run()];
+    render(<Launch />);
+    expect(screen.queryByText(/across 1 run/)).toBeNull();
+  });
+
   it("shows the empty state when nothing has been launched", () => {
     render(<Launch />);
     expect(screen.getByText(/Nothing launched yet/)).toBeInTheDocument();

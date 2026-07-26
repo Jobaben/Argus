@@ -319,8 +319,13 @@ nothing recurs.
 - **Model** — inherit the CLI default, pick an alias (Opus / Sonnet / Haiku),
   or type a custom model id; passed to the agent as `--model`.
 
-**Recent one-off runs** — the last 20 launches, newest first, each titled and
-expandable exactly like a schedule's run rows: status pill, start time,
+After a launch the form keeps the **working directory and model** and clears the
+prompt and name, so firing several prompts at one repo does not mean retyping an
+absolute path each time.
+
+**Recent one-off runs** — the last 20 launches, newest first, with a count of how
+many are in flight and the total reported cost of the list. Each is titled and
+expandable exactly like a schedule's run rows: status pill, relative start time,
 duration, cost and tokens once reported, the error or result summary, a link
 to the **transcript** in Sessions, and a **live-tailing log** (refreshes every
 3s while running). A running launch has a **Cancel** button, and every row has
@@ -375,11 +380,30 @@ section) and **Cron** (see [Cron panel](#20-cron-panel)).
 - **Save schedule** stays disabled until name, prompt and working directory
   are filled.
 
-**What each schedule card shows:** the trigger summary and its **next fire
-time** (plus a **catch-up** chip when missed-run recovery is on), the working
-directory, a pulsing "running" indicator while a run is in flight, and the
-**last five runs** — status pill, start time, duration, cost and tokens if
-reported, and a `manual` tag on run-now firings.
+**The summary strip** above the list answers "is my scheduler healthy?"
+without reading a card: how many schedules exist, how many are **failing** or
+**paused**, how many runs reached a verdict in the last 24 hours and how many of
+those failed, and which schedule fires **next**, with a live countdown. The
+failing and paused counts are buttons — press one to filter the list to exactly
+those schedules, press it again (or **Show all**) to go back. A count with
+nothing behind it is not shown at all, so anything visible there is worth
+reading.
+
+**What each schedule card shows:** a state badge — **failing**, **running**,
+**paused**, **healthy** or **never run** — then the humanised trigger ("every
+6h", "daily at 02:30"), a countdown to the next firing, when it last ran, the
+median duration of the runs listed below, and a **catch-up** chip when
+missed-run recovery is on. Below that the working directory, and the **last five
+runs** — status pill, relative start time (hover for the exact instant),
+duration, cost and tokens if reported, and a `manual` tag on run-now firings —
+with a `3/5 passed` ratio beside them.
+
+A schedule that has failed **more than once in a row** says so in a red band,
+with the first line of the most recent error, because one failure is already
+visible in the row below and a streak is a different problem. A **paused**
+schedule says "will not fire" rather than showing a countdown to a slot it will
+ignore, and one with no history at all explains how to test it without waiting
+for a slot.
 
 **What you can do:**
 
@@ -411,7 +435,10 @@ here.
 
 **What you see:**
 
-- A six-tile summary: **Up / Late / Down / Failing / Pending / Paused**.
+- A six-tile summary in escalation order: **Down / Failing / Late / Up /
+  Pending / Paused**. Any tile with a non-zero count is a **filter** — press
+  "2 Down" to narrow the list to just those two, press it again or **Show all**
+  to restore. An empty tile is inert: pressing it could only blank the list.
 - One **monitor card** per schedule: its name (links back to the Scheduler),
   a status pill, a **heartbeat bar** of the last 30 runs (one tick per run,
   colored by outcome), and a stats line — **uptime %** (succeeded vs failed
@@ -464,7 +491,8 @@ becomes one card.
 
 **What you see:**
 
-- Summary tiles: **Open / Ignored / Resolved**.
+- Summary tiles: **Open / Ignored / Resolved** — each a filter for its own
+  subset, so two open issues among thirty resolved ones are one click away.
 - One **issue card** per fingerprint: the error title (monospace), an
   **×N occurrence badge**, a state badge, which schedules it affects, and
   first/last-seen times. Open issues get a red border.
@@ -557,8 +585,17 @@ and optionally **pause scheduled firings** until you're back under.
   progress bar (green → amber at 80% → red at the limit), and the remaining
   or overage amount. Both windows follow your local calendar, like schedule
   triggers do.
-- **Last 30 days** — a spend bar chart; hover a bar for the day's dollars
-  and run count.
+- On **This month**, a **projection**: what the month is on course to cost at the
+  rate it has been going, and — when a monthly limit is set and the rate would
+  cross it — roughly which day. The rate is the plain mean over elapsed days
+  (hover for it), not a trend fit: it is the arithmetic you would do yourself,
+  which makes it the arithmetic you can check. A month with no spend yet gets no
+  projection rather than a confident `$0.00`.
+- **Last 30 days** — a spend bar chart; hover a bar for the day's dollars and run
+  count. When a **daily** limit is set, it is drawn as a dashed line across the
+  chart and any day that broke it is red, with a count underneath. The last bar
+  is today, ringed to say so — a partly-finished day should not read as a quiet
+  one.
 - **Limits** — the config form: a daily USD limit, a monthly USD limit
   (either may be empty = no limit), and the hard-stop checkbox.
 
@@ -719,9 +756,17 @@ _Browse & read transcripts._ Route: `#/sessions`
 **Purpose:** read the actual conversation transcripts of your Claude Code
 sessions across all projects.
 
-**What you see:** cards sorted by most-recent activity — title (from the
-first user prompt or AI-generated), project, message count, tool-use count,
-the model used, and last-activity time.
+**What you see:** a count of transcripts and the projects they span, then cards
+**grouped by day** — Today, Yesterday, the weekday within the last week, the date
+beyond it — each with a title (from the first user prompt or AI-generated),
+project, message count, tool-use count, the model used, and last-activity time.
+A transcript with no usable timestamp lands in a trailing "Undated" group rather
+than being dropped.
+
+**Filter transcripts** (top-right) searches titles, project paths and model names
+with the same fuzzy subsequence matching the command palette uses, so `ftm` finds
+"Fix the migration". While you are filtering, the day headings step aside and
+results come back in relevance order, freshest first among equal matches.
 
 **Clicking a card opens the transcript:**
 

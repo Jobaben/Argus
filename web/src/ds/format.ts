@@ -9,6 +9,20 @@ export function formatDuration(ms: number): string {
   return `${mins}m`;
 }
 
+/**
+ * A cadence in minutes reduced to its largest whole unit: 360 → "6h", 1440 →
+ * "1d", 90 → "90m".
+ *
+ * "every 360 min" is arithmetic the reader has to finish; "every 6h" is the
+ * thing they meant when they typed it.
+ */
+export function formatCadence(minutes: number | null | undefined): string {
+  if (minutes == null || !Number.isFinite(minutes) || minutes <= 0) return "—";
+  if (minutes % 1440 === 0) return `${minutes / 1440}d`;
+  if (minutes % 60 === 0) return `${minutes / 60}h`;
+  return `${minutes}m`;
+}
+
 /** Human-readable elapsed time for millisecond-scale run metrics. */
 export function formatMs(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return "—";

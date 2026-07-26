@@ -102,6 +102,12 @@ built underneath. See the changelog for the itemised list.
 - **Fit and finish** — shape-matched skeletons everywhere, bidirectional relative
   time (fixing `-7138s ago`), a shared clock so labels stay current, a legible
   Chronicle, a usable phone layout, a notification log behind the bell.
+- **Second pass over the remaining views** — the Scheduler leads with a verdict
+  per schedule, a health strip and humanised time; Monitors and Issues turn their
+  counters into filters; Sessions groups by day and searches with the palette's
+  matcher; Budget projects the month and marks the days that broke the daily
+  limit; Launch keeps the directory between firings. The derivations behind all of
+  it (`scheduleHealth`, `projectMonth`, `sessionList`) are pure and tested.
 
 ## Quality backlog
 

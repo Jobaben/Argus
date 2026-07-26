@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  formatCadence,
   formatCost,
   formatDuration,
   formatElapsed,
@@ -228,5 +229,26 @@ describe("formatElapsed", () => {
   it("is defensive about garbage", () => {
     expect(formatElapsed(-5)).toBe("—");
     expect(formatElapsed(Number.NaN)).toBe("—");
+  });
+});
+
+describe("formatCadence", () => {
+  it("reduces a cadence to its largest whole unit", () => {
+    expect(formatCadence(360)).toBe("6h");
+    expect(formatCadence(1440)).toBe("1d");
+    expect(formatCadence(2880)).toBe("2d");
+    expect(formatCadence(60)).toBe("1h");
+  });
+  it("keeps minutes when they do not divide cleanly", () => {
+    expect(formatCadence(90)).toBe("90m");
+    expect(formatCadence(7)).toBe("7m");
+  });
+  it("refuses to describe a cadence it does not have", () => {
+    // A trigger of a kind without `everyMinutes` reaches this with undefined.
+    expect(formatCadence(undefined)).toBe("\u2014");
+    expect(formatCadence(null)).toBe("\u2014");
+    expect(formatCadence(0)).toBe("\u2014");
+    expect(formatCadence(-30)).toBe("\u2014");
+    expect(formatCadence(Number.NaN)).toBe("\u2014");
   });
 });

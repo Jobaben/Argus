@@ -41,6 +41,24 @@ All notable changes to Argus are documented here. The format follows
   "Loading…" text, each paired with a polite live-region announcement.
 - **Mobile navigation sheet** replacing the nine-tab strip below `md`, listing
   every destination at once with its attention badge.
+- **Scheduler health.** Each schedule leads with a verdict — paused, failing,
+  running, healthy, never-run — and carries its next firing as a live countdown,
+  when it last ran, its median duration, and a pass ratio over the runs shown. A
+  failure _streak_ is stated with the first line of its error, because one
+  failure is visible in a row and three consecutive ones are a different problem.
+  Above the list: how many schedules exist, how many are failing or paused, what
+  fired in the last 24 hours and what fires next — every count a filter for its
+  own subset.
+- **Filterable health counters** on Monitors and Issues: pressing "3 Down" or
+  "2 Open" narrows the list in place, so "which ones?" is answered without
+  leaving the page. A counter with nothing behind it stays inert rather than
+  offering to blank the list.
+- **Session search and day grouping**: the transcript index groups under Today /
+  Yesterday / weekday / date and filters with the same fuzzy matcher the palette
+  uses, over titles, project paths and model names.
+- **Month-end spend projection** on Budget, from the elapsed daily rate, with the
+  day a limit is projected to be crossed — plus a daily-limit line on the 30-day
+  chart and the days that broke it drawn in red.
 
 ### Changed
 
@@ -75,6 +93,16 @@ All notable changes to Argus are documented here. The format follows
 - Motion that carries information only: counters roll when they change (snapping
   on first paint, huge jumps and reduced motion), and the row that just changed
   status flashes.
+- **The Scheduler loads its runs once instead of once per card.** Each schedule
+  card called `GET /api/runs?scheduleId=…` itself, so twelve schedules meant
+  thirteen requests and thirteen live polls — and still no aggregate view, since
+  nothing held all the runs at once. The view fetches `/api/runs` once and groups.
+- **The Launch form keeps the working directory and model** after firing, and
+  clears only the prompt and name. Firing several prompts at one repo is the
+  common case; retyping an absolute path each time was not.
+- **Empty states teach instead of just reporting.** Schedules, Monitors, Issues,
+  Launch, Sessions and the spend chart each explain what the thing is, where its
+  data comes from and what to do next, with the action inline where there is one.
 
 ### Security
 
@@ -119,6 +147,16 @@ All notable changes to Argus are documented here. The format follows
 - `formatUsd(0)` rendered `$0.0000`, a precision claim about nothing.
 - A malformed `run:activity` batch could render as `undefined` deep in a view;
   frame payloads are now validated once in the socket.
+- **Four more copies of the frozen `timeAgo`** survived the first pass, in
+  Sessions, Projects, Tasks and Activity — each reading the clock during render
+  and never revisiting it. All four now use the shared clock.
+- **The Scheduler spoke in absolute timestamps**: `7/26/2026, 4:00:10 PM` for a
+  run, `next 7/27/2026, 2:30:00 AM` for a slot, `60s` for a duration and
+  `every 360 min` for a cadence. Runs read "2h ago" with the instant on hover,
+  slots count down, and a cadence reduces to its largest unit ("every 6h").
+- **A schedule paused with a computed next slot claimed it would fire.** The
+  header's "next" now skips disabled schedules and the row says so outright.
+- "1 tools" on a session card.
 
 ## [0.4.0] - 2026-07-14
 

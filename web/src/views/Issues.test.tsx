@@ -100,4 +100,29 @@ describe("Issues", () => {
     render(<Issues />);
     expect(screen.getByText(/Couldn't load issues: boom/)).toBeInTheDocument();
   });
+
+  it("filters to one state when its counter is pressed", () => {
+    // With thirty resolved issues, the two open ones were needles in a haystack.
+    mockState.issues = [
+      issue({ fingerprint: "open1", title: "still broken", state: "open" }),
+      issue({ fingerprint: "done1", title: "was fixed", state: "resolved" }),
+    ];
+    mockState.summary = { open: 1, resolved: 1, ignored: 0 };
+    render(<Issues />);
+    expect(screen.getByText("was fixed")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "1 Open" }));
+    expect(screen.queryByText("was fixed")).not.toBeInTheDocument();
+    expect(screen.getByText("still broken")).toBeInTheDocument();
+    expect(screen.getByText(/Showing 1 open of 2/)).toBeInTheDocument();
+  });
+
+  it("leaves a zero counter inert", () => {
+    mockState.issues = [issue()];
+    mockState.summary = { open: 1, resolved: 0, ignored: 0 };
+    render(<Issues />);
+    // The two empty tiles are not controls; the open tile and the two triage
+    // buttons on the card are.
+    expect(screen.queryAllByRole("button", { name: /Ignored|Resolved/ })).toHaveLength(0);
+  });
 });

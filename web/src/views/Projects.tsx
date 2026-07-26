@@ -1,18 +1,5 @@
-import { AlertStrip, Card, EmptyState, Loading, Page, SkeletonGrid } from "../ds";
+import { AlertStrip, Card, EmptyState, Loading, Page, SkeletonGrid, TimeAgo } from "../ds";
 import { useProjects, type Project } from "../useProjects";
-
-function timeAgo(iso: string | null): string {
-  if (!iso) return "—";
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return "—";
-  const secs = Math.round((Date.now() - then) / 1000);
-  if (secs < 60) return `${secs}s ago`;
-  const mins = Math.round(secs / 60);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.round(hrs / 24)}d ago`;
-}
 
 function lastSegment(label: string): string {
   const seg = label.split(/[\\/]/).filter(Boolean).pop();
@@ -32,7 +19,9 @@ function ProjectCard({ project }: { project: Project }) {
         <span className="inline-flex items-center rounded-md bg-ok/12 px-2 py-0.5 font-medium text-ok ring-1 ring-ok/20">
           {project.sessionCount} {project.sessionCount === 1 ? "session" : "sessions"}
         </span>
-        <span className="ml-auto shrink-0">{timeAgo(project.lastActivity)}</span>
+        <span className="ml-auto shrink-0">
+          <TimeAgo iso={project.lastActivity} />
+        </span>
       </div>
     </Card>
   );

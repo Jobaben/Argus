@@ -158,6 +158,37 @@ test:
 
 ### Test coverage
 
-486 server + 422 web tests, up from 419 + 259 at the start of the wave — every
-new module tested, and every defect above pinned by a test that names the failure
-mode rather than the fix.
+493 server + 498 web tests, up from 419 + 259 at the start of the wave — every new
+module tested, and every defect above pinned by a test that names the failure mode
+rather than the fix.
+
+### Second pass: the views the first one only skeletonised
+
+The first pass rebuilt the Command Center and gave every other view a skeleton, a
+relative clock and a phone layout — which left seven of them structurally
+unchanged underneath. A second pass went back through them, and found more of the
+same class of defect.
+
+| Defect                                                                                                | Why it survived the first pass                                               |
+| ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Four more copies of the frozen, render-time `timeAgo` in Sessions, Projects, Tasks and Activity       | The first pass fixed the shared `TimeAgo`; nobody grepped for private copies |
+| Each Scheduler card fetched its own `/api/runs?scheduleId=…` — N+1 requests and N+1 live polls        | Correct per card, and no view held enough state to notice                    |
+| The Scheduler spoke in absolute timestamps and raw minutes (`every 360 min`, `7/26/2026, 4:00:10 PM`) | The formatters existed by then; this view was never rewired to them          |
+| A paused schedule advertised a countdown to a slot it would ignore                                    | `nextRun` is computed regardless of `enabled`; the UI trusted it             |
+| Monitors and Issues counted their subsets but gave no way to see them                                 | The counters were read-only by design, and the design was the defect         |
+| `1 tools` on a session card                                                                           | Pluralisation was never centralised                                          |
+
+### What the second pass added
+
+- **Derived health, as pure functions with tests.** `scheduleHealth`,
+  `summarizeSchedules`, `projectMonth`, `groupSessionsByDay` and `filterSessions`
+  live outside their components, so the precedence rules ("what does this row
+  _say_?") and the arithmetic ("when do I hit the ceiling?") are testable without
+  a DOM. All three modules are at 100% line coverage.
+- **Counters that are controls.** A non-zero count on Monitors, Issues and the
+  Scheduler filters the list in place; a zero one stays inert, because pressing it
+  could only blank the list.
+- **Empty states that teach.** Six of them now explain what the thing is, where
+  its data comes from and what to do next, with the action inline.
+- **Coverage gates ratcheted** from 72/73/82/72 to 77/76/84/77 (lines / functions
+  / branches / statements).

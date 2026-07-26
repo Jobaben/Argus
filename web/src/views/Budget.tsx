@@ -9,7 +9,9 @@ import {
   SkeletonCounters,
   SkeletonTile,
   formatUsd,
+  useClock,
 } from "../ds";
+import { projectMonth } from "./budgetProjection";
 
 const FIELD =
   "w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink placeholder-ink-faint";
@@ -29,7 +31,50 @@ function barTone(ratio: number | null): string {
   return "bg-ok";
 }
 
-function WindowCard({ label, window: w }: { label: string; window: BudgetWindow }) {
+/**
+ * The month's trajectory, in the one sentence the number needs.
+ *
+ * Only shown when it changes a decision: with a limit, whether the current rate
+ * clears it and when it would not; without one, what the month is on course to
+ * cost. A projection from no spend at all is omitted rather than rendered as $0.
+ */
+function Projection({ window: w, now }: { window: BudgetWindow; now: number }) {
+  const p = projectMonth(w, new Date(now));
+  if (!p) return null;
+  const rate = `${formatUsd(p.perDayUsd)}/day over ${p.daysElapsed} ${
+    p.daysElapsed === 1 ? "day" : "days"
+  }`;
+  return (
+    <p
+      className={`mt-2 text-xs ${p.overLimit ? "text-fail" : "text-ink-faint"}`}
+      title={`Projected from ${rate}, straight-lined across all ${p.daysInMonth} days of the month`}
+    >
+      On course for <strong className="font-mono">{formatUsd(p.projectedUsd)}</strong> this month
+      {p.exhaustsOn && (
+        <>
+          {" · "}
+          limit reached around{" "}
+          <strong className="font-mono">
+            {p.exhaustsOn.toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+          </strong>
+        </>
+      )}
+    </p>
+  );
+}
+
+function WindowCard({
+  label,
+  window: w,
+  project = false,
+  now,
+}: {
+  label: string;
+  window: BudgetWindow;
+  /** Adds the month-end projection. Meaningless on the daily window. */
+  project?: boolean;
+  now: number;
+}) {
   const pct = w.ratio === null ? 0 : Math.min(1, w.ratio) * 100;
   return (
     <div className="rounded-xl border border-line bg-surface p-4">
@@ -53,30 +98,75 @@ function WindowCard({ label, window: w }: { label: string; window: BudgetWindow 
           {w.ratio != null && ` · ${Math.round(w.ratio * 100)}%`}
         </p>
       )}
+      {project && <Projection window={w} now={now} />}
     </div>
   );
 }
 
-function SpendChart({ days }: { days: BudgetDay[] }) {
+/**
+ * The daily ledger as bars, with the two facts a reader is actually looking for
+ * marked rather than left in tooltips: which days broke the daily limit, and
+ * where the limit sits relative to the peak.
+ */
+function SpendChart({ days, dailyLimit }: { days: BudgetDay[]; dailyLimit: number | null }) {
   const max = Math.max(...days.map((d) => d.usd), 0);
   if (max === 0) {
-    return <EmptyState>No spend recorded in the last 30 days.</EmptyState>;
+    return (
+      <EmptyState>
+        <p className="text-sm text-ink-dim">No spend recorded in the last 30 days.</p>
+        <p className="mt-2 text-xs">
+          Costs land here as runs report them — a scheduled firing, a pipeline phase or a Launch,
+          any of which the CLI prices in its result envelope.
+        </p>
+      </EmptyState>
+    );
   }
+  // A zero or absent ceiling is not a ceiling; collapse both to null once.
+  const limit = dailyLimit != null && dailyLimit > 0 ? dailyLimit : null;
+  const over = limit === null ? [] : days.filter((d) => d.usd > limit);
   return (
     <div className="rounded-xl border border-line bg-surface p-4">
-      <div className="flex h-28 items-end gap-1">
-        {days.map((d) => (
+      <div className="relative flex h-28 items-end gap-1">
+        {/* A limit above the peak would pin to the ceiling and imply the bars
+            nearly reached it; only drawn when it is inside the plotted range. */}
+        {limit !== null && limit < max && (
           <div
-            key={d.date}
-            title={`${d.date} · ${formatUsd(d.usd)} · ${d.runs} run${d.runs === 1 ? "" : "s"}`}
-            className="flex-1 rounded-t bg-eye/60 transition hover:bg-eye"
-            style={{ height: `${d.usd === 0 ? 2 : Math.max(4, (d.usd / max) * 100)}%` }}
-          />
-        ))}
+            className="pointer-events-none absolute inset-x-0 border-t border-dashed border-run/60"
+            style={{ bottom: `${(limit / max) * 100}%` }}
+            aria-hidden="true"
+          >
+            <span className="absolute -top-4 right-0 font-mono text-[9px] text-run">
+              daily limit {formatUsd(limit)}
+            </span>
+          </div>
+        )}
+        {days.map((d, i) => {
+          const broke = limit !== null && d.usd > limit;
+          // The ledger's last day is always today, and today is only partly over
+          // — worth marking so a low final bar doesn't read as a quiet day.
+          const isToday = i === days.length - 1;
+          return (
+            <div
+              key={d.date}
+              title={`${isToday ? "Today, " : ""}${d.date} · ${formatUsd(d.usd)} · ${d.runs} run${
+                d.runs === 1 ? "" : "s"
+              }${broke ? " · over the daily limit" : ""}`}
+              className={`flex-1 rounded-t transition ${
+                broke ? "bg-fail/80 hover:bg-fail" : "bg-eye/60 hover:bg-eye"
+              } ${isToday ? "ring-1 ring-ink-faint/50" : ""}`}
+              style={{ height: `${d.usd === 0 ? 2 : Math.max(4, (d.usd / max) * 100)}%` }}
+            />
+          );
+        })}
       </div>
-      <div className="mt-2 flex justify-between text-[10px] text-ink-faint">
+      <div className="mt-2 flex items-baseline justify-between text-[10px] text-ink-faint">
         <span>{days[0]?.date}</span>
-        <span>{days[days.length - 1]?.date}</span>
+        {over.length > 0 && (
+          <span className="text-fail">
+            {over.length} {over.length === 1 ? "day" : "days"} over the daily limit
+          </span>
+        )}
+        <span>today</span>
       </div>
     </div>
   );
@@ -186,6 +276,9 @@ function BudgetForm({
 
 export default function Budget() {
   const { budget, loading, error, save } = useBudget();
+  // The shared clock, so the projection's "days elapsed" rolls over at midnight
+  // without reading the wall clock during render.
+  const now = useClock();
   const state = budget?.status.state ?? "unset";
 
   return (
@@ -221,15 +314,15 @@ export default function Budget() {
       ) : budget ? (
         <>
           <section className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <WindowCard label="Today" window={budget.status.today} />
-            <WindowCard label="This month" window={budget.status.month} />
+            <WindowCard label="Today" window={budget.status.today} now={now} />
+            <WindowCard label="This month" window={budget.status.month} project now={now} />
           </section>
 
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-ink-dim">
             Last 30 days
           </h2>
           <div className="mb-8">
-            <SpendChart days={budget.days} />
+            <SpendChart days={budget.days} dailyLimit={budget.config.dailyUsd} />
           </div>
 
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-ink-dim">

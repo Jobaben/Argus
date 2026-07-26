@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { MonitorHealth, MonitorsSummary } from "../types";
 import Monitors from "./Monitors";
 
@@ -97,6 +98,32 @@ describe("Monitors", () => {
     render(<Monitors />);
     expect(screen.getByText(/Next run:/)).toBeInTheDocument();
     expect(screen.getByText(/in (29|30)m/)).toBeInTheDocument();
+  });
+
+  it("filters to one status when its counter is pressed", async () => {
+    const user = userEvent.setup();
+    mockState.monitors = [
+      monitor(),
+      monitor({ scheduleId: "s2", name: "Backup", status: "down", uptimePct: 50 }),
+    ];
+    mockState.summary = { up: 1, late: 0, down: 1, failing: 0, paused: 0, pending: 0 };
+    render(<Monitors />);
+
+    await user.click(screen.getByRole("button", { name: /down/i }));
+    expect(screen.queryByText("Nightly triage")).not.toBeInTheDocument();
+    expect(screen.getByText("Backup")).toBeInTheDocument();
+    expect(screen.getByText(/Showing 1 down monitor of 2/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Show all/ }));
+    expect(screen.getByText("Nightly triage")).toBeInTheDocument();
+  });
+
+  it("leaves an empty counter inert, so pressing it cannot blank the list", () => {
+    mockState.monitors = [monitor()];
+    mockState.summary = { up: 1, late: 0, down: 0, failing: 0, paused: 0, pending: 0 };
+    render(<Monitors />);
+    // "Up" has one behind it and is a control; the five empty ones are not.
+    expect(screen.getAllByRole("button").length).toBe(1);
   });
 
   it("surfaces a fetch error", () => {
