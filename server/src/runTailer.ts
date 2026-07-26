@@ -10,6 +10,7 @@ import path from "node:path";
 import chokidar, { type FSWatcher } from "chokidar";
 import { LOG_CAP_BYTES, runLogPath } from "./sources/runs.js";
 import type { ActivityEvent } from "@argus/contracts";
+import { log } from "./log.js";
 
 export type { ActivityEvent } from "@argus/contracts";
 
@@ -135,7 +136,7 @@ export function createRunTailer(deps: TailerDeps): RunTailer {
           .watch([], { ignoreInitial: false })
           .on("add", onFsEvent)
           .on("change", onFsEvent)
-          .on("error", (e) => console.error("[argus] run tail watcher error:", e));
+          .on("error", (e: unknown) => log.error("run tail watcher error", { err: e }));
 
   function scheduleFlush(id: string, st: TrackedRun): void {
     if (st.pending.length === 0 || st.flushTimer) return;
@@ -225,7 +226,7 @@ export function createRunTailer(deps: TailerDeps): RunTailer {
     }
     st.reading = true;
     void readOnce(id)
-      .catch((e) => console.error(`[argus] tail read for run ${id} failed:`, e))
+      .catch((e: unknown) => log.error("tail read failed", { runId: id, err: e }))
       .finally(() => {
         // Compare by identity, not just presence: untrack+re-track during the
         // read may have put a *different* state object under the same id.

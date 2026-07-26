@@ -71,6 +71,9 @@ import { defaultSpawn, fireOneOff, fireRun, isAlive } from "./scheduler.js";
 import { LaunchValidationError, validateLaunchInput } from "./sources/launch.js";
 import type { ArgusConfig } from "./config.js";
 import { securityMiddleware } from "./security.js";
+import { conditionalGet } from "./httpCache.js";
+import { requestLog } from "./requestLog.js";
+import { log } from "./log.js";
 import { setCookie, deleteCookie } from "hono/cookie";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import {
@@ -159,7 +162,12 @@ export function createApp(deps: AppDeps): Hono {
     );
   }
 
+  // Order matters: the request id must exist before anything can log with it,
+  // and the ETag layer wraps the handler's body, so it sits inside the security
+  // gate (a rejected request never gets a tag) but outside every route.
+  app.use("/api/*", requestLog());
   app.use("/api/*", securityMiddleware(config));
+  app.use("/api/*", conditionalGet());
 
   app.get("/api/health", (c) =>
     c.json({ ok: true, version: VERSION, claudeHome: claudeHome(), service: "argus" }),
@@ -687,7 +695,10 @@ export function createApp(deps: AppDeps): Hono {
   if (deps.serveWeb !== false) mountWebApp(app);
 
   app.onError((err, c) => {
-    console.error(`[argus] ${c.req.method} ${c.req.path} failed:`, err);
+    // Prefer the request-scoped logger so the line carries the same reqId the
+    // client saw in its response header.
+    const logger = c.get("log") ?? log;
+    logger.error("unhandled route error", { method: c.req.method, path: c.req.path, err });
     return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
   });
   app.notFound((c) => c.json({ error: "not found" }, 404));

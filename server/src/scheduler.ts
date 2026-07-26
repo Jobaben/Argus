@@ -17,6 +17,7 @@ import {
 import { isSpendBlocked } from "./sources/budget.js";
 import { ONEOFF_SCHEDULE_ID, type LaunchInput } from "./sources/launch.js";
 import type { Run, RunStatus, Schedule } from "./sources/scheduleTypes.js";
+import { log } from "./log.js";
 
 /** Builds a terminal run record for a schedule that never spawned a process
  * (skipped due to overlap, or failed before/at spawn). */
@@ -310,7 +311,7 @@ async function spawnAndTrack(run: Run, startedAt: Date, deps: SchedulerDeps): Pr
       if (finished.status === "failed") deps.onFailure?.(finished);
       deps.onChange?.();
     })
-    .catch((e) => console.error(`[argus] run ${run.id} completion handler failed:`, e));
+    .catch((e: unknown) => log.error("run completion handler failed", { runId: run.id, err: e }));
 
   return run;
 }
@@ -430,7 +431,7 @@ export async function tick(deps: SchedulerDeps): Promise<void> {
     try {
       await deps.onTick();
     } catch (e) {
-      console.error("[argus] pipeline reconcile failed:", e);
+      log.error("pipeline reconcile failed", { err: e });
     }
   }
 }
@@ -476,12 +477,12 @@ export function startScheduler(overrides: Partial<SchedulerDeps> = {}): {
   // doesn't let recovery writes continue past stop.
   const recovery = recoverInterruptedRuns(deps)
     .then(() => deps.onChange?.())
-    .catch((e) => console.error("[argus] interrupted-run recovery failed:", e));
+    .catch((e: unknown) => log.error("interrupted-run recovery failed", { err: e }));
 
   const runTick = () => {
     if (stopped || inFlight) return;
     inFlight = tick(deps)
-      .catch((e) => console.error("[argus] scheduler tick failed:", e))
+      .catch((e: unknown) => log.error("scheduler tick failed", { err: e }))
       .finally(() => {
         inFlight = null;
       });

@@ -2,6 +2,7 @@ import type { Run } from "./sources/scheduleTypes.js";
 import type { PipelineInstance } from "./sources/pipelineTypes.js";
 import type { MonitorAlert } from "./sources/monitorAlerts.js";
 import type { BudgetAlert } from "./sources/budgetAlerts.js";
+import { log } from "./log.js";
 
 /**
  * Unattended runs are the whole point of Argus (overnight `claude -p`), so a
@@ -82,6 +83,6 @@ export async function postWebhook(url: string | null, payload: FailurePayload): 
       body: JSON.stringify(payload),
     });
   } catch (e) {
-    console.error("[argus] failure webhook POST failed:", e instanceof Error ? e.message : e);
+    log.error("failure webhook POST failed", { err: e });
   }
 }

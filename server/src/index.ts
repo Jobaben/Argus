@@ -28,6 +28,7 @@ import { createApp } from "./app.js";
 import { createAuthService } from "./auth.js";
 import { createUserStore } from "./userStore.js";
 import { createRunTailer } from "./runTailer.js";
+import { log } from "./log.js";
 
 const config = loadConfig();
 const PORT = config.port;
@@ -67,20 +68,22 @@ const auth = createAuthService({ store: users });
 const app = createApp({ config, engine, broadcast, auth, users, activity: () => tailer.latest() });
 
 const server = serve({ fetch: app.fetch, port: PORT, hostname: config.host }, (info) => {
-  console.log(`[argus] v${VERSION} on http://${config.host}:${info.port}`);
-  console.log(`[argus] watching ${claudeHome()}`);
+  log.info("argus listening", {
+    version: VERSION,
+    url: `http://${config.host}:${info.port}`,
+    claudeHome: claudeHome(),
+  });
   void auth.isConfigured().then((configured) => {
     if (!configured) {
-      console.log(
-        "[argus] no admin account yet — pipeline editing/running is locked until " +
-          "you create one from the Pipelines tab.",
+      log.info(
+        "no admin account yet — pipeline editing/running is locked until you create one from the Pipelines tab",
       );
     }
   });
   if (config.host !== "127.0.0.1" && config.host !== "localhost" && !config.token) {
-    console.warn(
-      "[argus] WARNING: bound to a non-loopback host without ARGUS_TOKEN — " +
-        "anyone who can reach this port can execute agents. Set ARGUS_TOKEN.",
+    log.warn(
+      "bound to a non-loopback host without ARGUS_TOKEN — anyone who can reach this port can execute agents",
+      { host: config.host, fix: "set ARGUS_TOKEN" },
     );
   }
   // Self-setup on boot: auto-install every fixable prerequisite (hook file,
@@ -93,7 +96,9 @@ const server = serve({ fetch: app.fetch, port: PORT, hostname: config.host }, (i
       const after = await applyPrereqs();
       const fixed = broken.filter((b) => after.prereqs.find((a) => a.id === b.id)?.status === "ok");
       if (fixed.length > 0) {
-        console.log(`[argus] auto-setup: installed ${fixed.map((f) => f.label).join(", ")}`);
+        log.info("auto-setup installed prerequisites", {
+          installed: fixed.map((f) => f.label).join(", "),
+        });
       }
       return after;
     })
@@ -103,10 +108,10 @@ const server = serve({ fetch: app.fetch, port: PORT, hostname: config.host }, (i
           .filter((p) => p.status !== "ok")
           .map((p) => `${p.label} (${p.status})`)
           .join(", ");
-        console.log(`[argus] setup incomplete — ${bad}. Open the UI for details.`);
+        log.warn("setup incomplete — open the UI for details", { pending: bad });
       }
     })
-    .catch((e) => console.error("[argus] auto-setup failed:", e));
+    .catch((e: unknown) => log.error("auto-setup failed", { err: e }));
 });
 
 // Live updates: push a "changed" ping whenever watched state mutates. The
@@ -142,15 +147,15 @@ const stopWatching = watchAgents(() => broadcast({ type: "agents:changed" }));
 const stopWatchingSchedules = watchSchedules(() => broadcast({ type: "schedules:changed" }));
 const stopWatchingExtensions = watchExtensions(() => broadcast({ type: "inventory:changed" }));
 const stopWatchingSessions = watchSessions(() => broadcast({ type: "sessions:changed" }));
-void engine.adopt().catch((e) => console.error("[argus] run adoption failed:", e));
+void engine.adopt().catch((e: unknown) => log.error("run adoption failed", { err: e }));
 void backfillRunCosts()
   .then((n) => {
     if (n > 0) {
-      console.log(`[argus] backfilled cost/tokens for ${n} pre-existing run(s)`);
+      log.info("backfilled cost/tokens for pre-existing runs", { runs: n });
       broadcast({ type: "pipelines:changed" });
     }
   })
-  .catch((e) => console.error("[argus] run cost backfill failed:", e));
+  .catch((e: unknown) => log.error("run cost backfill failed", { err: e }));
 // Monitor health is derived on read, so nothing observes it changing — the
 // watcher re-derives it each tick and pushes down/failing/recovered
 // transitions to the webhook and every connected dashboard.
@@ -217,8 +222,8 @@ process.on("SIGTERM", shutdown);
 // A background rejection or thrown timer must not silently take down the
 // daemon or leave it wedged: log and keep serving.
 process.on("unhandledRejection", (reason) => {
-  console.error("[argus] unhandledRejection:", reason);
+  log.error("unhandledRejection", { err: reason });
 });
 process.on("uncaughtException", (err) => {
-  console.error("[argus] uncaughtException:", err);
+  log.error("uncaughtException", { err });
 });

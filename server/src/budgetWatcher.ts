@@ -5,6 +5,7 @@ import {
   type BudgetState,
 } from "./sources/budget.js";
 import { detectBudgetAlert, type BudgetAlert } from "./sources/budgetAlerts.js";
+import { log } from "./log.js";
 
 export interface BudgetWatcherDeps {
   now: () => Date;
@@ -32,11 +33,11 @@ export function createBudgetWatcher(deps: BudgetWatcherDeps): { check: () => Pro
           try {
             deps.onAlert(alert);
           } catch (e) {
-            console.error("[argus] budget alert handler failed:", e);
+            log.error("budget alert handler failed", { err: e });
           }
         }
       } catch (e) {
-        console.error("[argus] budget check failed:", e);
+        log.error("budget check failed", { err: e });
       }
     },
   };

@@ -1,3 +1,4 @@
+import { log } from "./log.js";
 /**
  * Central, validated runtime configuration. Every environment variable Argus
  * honours is parsed here exactly once, with sane fallbacks, so a typo like
@@ -10,7 +11,7 @@ function intFromEnv(name: string, fallback: number, min = 1): number {
   if (raw === undefined || raw.trim() === "") return fallback;
   const n = Number(raw);
   if (!Number.isFinite(n) || !Number.isInteger(n) || n < min) {
-    console.warn(`[argus] ${name}="${raw}" is not an integer >= ${min}; using ${fallback}`);
+    log.warn("ignoring invalid environment value", { name, value: raw, min, using: fallback });
     return fallback;
   }
   return n;

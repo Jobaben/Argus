@@ -1,6 +1,7 @@
 import chokidar from "chokidar";
 import path from "node:path";
 import { claudeHome, paths } from "./claudeHome.js";
+import { log } from "./log.js";
 
 /**
  * Watch a set of paths and invoke `onChange` (trailing-debounced ~150ms)
@@ -24,7 +25,7 @@ function makeWatcher(targets: string[], onChange: () => void): () => Promise<voi
     .on("change", fire)
     .on("unlink", fire)
     .on("addDir", fire)
-    .on("error", (e) => console.error("[argus] watcher error:", e));
+    .on("error", (e: unknown) => log.error("watcher error", { err: e }));
 
   return async () => {
     if (timer) clearTimeout(timer);
