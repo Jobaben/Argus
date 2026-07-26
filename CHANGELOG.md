@@ -187,6 +187,10 @@ All notable changes to Argus are documented here. The format follows
   human is stopped, not working.
 - **`Plugins 0` wore a red badge.** The inventory accents are per-category, not
   severity, so a zero now renders neutral instead of looking like an alert.
+- **The Briefing's failure rows were the only dead ones on the page.** Attention
+  cards, new issues and finished pipelines all linked to what they described;
+  failures did not. A failure now opens its run's transcript, or Issues when the
+  run has none.
 - **Rebuilding the UI under a running Argus produced a blank page.** `index.html`
   was read once at boot and served forever, so after a rebuild the cached HTML
   kept naming content-hashed chunks that no longer existed: every asset 404'd and
