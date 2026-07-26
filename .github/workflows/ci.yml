@@ -35,3 +35,5 @@ jobs:
         run: npm -w web run test:coverage
       - name: Build (web + server)
         run: npm run build
+      - name: Initial-payload budget
+        run: node scripts/check-bundle-size.mjs

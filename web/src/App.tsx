@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import { useAgents } from "./useAgents";
 import type { Agent, AgentStatus } from "./types";
 import {
@@ -18,25 +18,40 @@ import { useMonitorAlerts } from "./notify/useMonitorAlerts";
 import { NavBar } from "./NavBar";
 import type { NavTab } from "./NavBar";
 import type { MoreItem } from "./ds";
-import Sessions from "./views/Sessions";
-import ActivityFeed from "./views/ActivityFeed";
-import Projects from "./views/Projects";
-import Stats from "./views/Stats";
-import Inventory from "./views/Inventory";
-import Tasks from "./views/Tasks";
-import Search from "./views/Search";
-import Budget from "./views/Budget";
-import Launch from "./views/Launch";
-import Schedules from "./views/Schedules";
-import Monitors from "./views/Monitors";
-import Issues from "./views/Issues";
-import AgentDetail from "./views/AgentDetail";
 import CommandCenter from "./views/CommandCenter";
-import Chronicle from "./views/Chronicle";
-import Pipelines from "./views/Pipelines";
 import SetupBanner from "./views/SetupBanner";
-import Users from "./views/Users";
-import Briefing from "./views/Briefing";
+
+/**
+ * Every view except the landing one is a separate chunk.
+ *
+ * The whole app used to ship as one 374 KB bundle: opening the Command Center
+ * downloaded and parsed the Chronicle's timeline maths, the pipeline editor, the
+ * stats charts and the transcript reader, none of which most sessions ever look
+ * at. The Command Center stays eager because it *is* the first paint — lazy
+ * would trade a smaller bundle for a slower landing, which is the wrong way
+ * round.
+ *
+ * Chunks are fetched on navigation, and the Suspense fallback below is the same
+ * skeleton language the views use, so a cold jump to a tab looks like loading
+ * rather than like nothing happening.
+ */
+const Briefing = lazy(() => import("./views/Briefing"));
+const Chronicle = lazy(() => import("./views/Chronicle"));
+const Launch = lazy(() => import("./views/Launch"));
+const Schedules = lazy(() => import("./views/Schedules"));
+const Monitors = lazy(() => import("./views/Monitors"));
+const Issues = lazy(() => import("./views/Issues"));
+const Pipelines = lazy(() => import("./views/Pipelines"));
+const Budget = lazy(() => import("./views/Budget"));
+const Search = lazy(() => import("./views/Search"));
+const Stats = lazy(() => import("./views/Stats"));
+const Inventory = lazy(() => import("./views/Inventory"));
+const Projects = lazy(() => import("./views/Projects"));
+const Tasks = lazy(() => import("./views/Tasks"));
+const Users = lazy(() => import("./views/Users"));
+const Sessions = lazy(() => import("./views/Sessions"));
+const ActivityFeed = lazy(() => import("./views/ActivityFeed"));
+const AgentDetail = lazy(() => import("./views/AgentDetail"));
 import { useBriefing } from "./useBriefing";
 import { useAuth } from "./useAuth";
 import {
@@ -130,6 +145,18 @@ const TAB_META: { id: string; label: string; role: TabRole }[] = [
   { id: "activity", label: "Activity", role: "drilldown" },
   { id: "agent", label: "Detail", role: "drilldown" },
 ];
+
+/** The Suspense fallback for a route whose chunk is still downloading. Shaped
+ *  like a page, so the layout does not jump when the real view arrives. */
+function ViewLoading({ label }: { label: string }) {
+  return (
+    <Page title={label}>
+      <Loading label={label}>
+        <SkeletonGrid count={4} columns={2} lines={3} />
+      </Loading>
+    </Page>
+  );
+}
 
 function currentTabId(): string {
   return window.location.hash.replace(/^#\/?/, "").split("/")[0] || "command";
@@ -345,7 +372,7 @@ export default function App() {
           {/* Scoped per route: a bad shape in one view costs that view, not the
               nav, the palette and every other tab. */}
           <ErrorBoundary label={activeLabel} resetKey={active}>
-            {renderActive()}
+            <Suspense fallback={<ViewLoading label={activeLabel} />}>{renderActive()}</Suspense>
           </ErrorBoundary>
         </div>
       </main>
