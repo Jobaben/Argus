@@ -145,7 +145,7 @@ describe("liveSocket lifecycle", () => {
     const first = collect();
     sockets[0].open();
     const seen: boolean[] = [];
-    const stop = subscribeLive({ onStatus: (live) => seen.push(live) });
+    const stop = subscribeLive({ onStatus: ({ live }) => seen.push(live) });
     expect(seen).toEqual([true]);
     stop();
     first.stop();

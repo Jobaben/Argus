@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useOverview } from "../useOverview";
 import { useInsight } from "../useInsight";
 import { useRuns } from "../useRuns";
@@ -24,19 +24,9 @@ import {
   staggerDelay,
   toOverviewRows,
   useChangeFlash,
+  useTicker,
 } from "../ds";
 import type { OverviewRow, OverviewGate, PhasePill, StepPill, DsStatus } from "../ds";
-
-/** One clock for every running tile; only ticks while something is working. */
-function useNow(active: boolean): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!active) return;
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, [active]);
-  return now;
-}
 
 /**
  * The board re-renders in place as pipelines change state, which is invisible
@@ -559,7 +549,8 @@ export default function CommandCenter() {
     () => rows.some((r) => r.phases.some((p) => p.steps.some((s) => s.status === "working"))),
     [rows],
   );
-  const now = useNow(anyWorking);
+  // One clock for every running tile; idle boards do not tick.
+  const now = useTicker(anyWorking);
 
   return (
     <Page wide title="Command Center" actions={<BoardTotal totals={totals} reset={reset} />}>

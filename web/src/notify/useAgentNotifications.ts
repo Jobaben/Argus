@@ -48,6 +48,7 @@ export function useAgentNotifications(agents: Agent[]) {
         tone: e.status === "failed" ? "fail" : "ok",
         title: notificationTitle(e),
         detail: e.short,
+        href: `#/agent/${encodeURIComponent(e.short)}`,
       });
     }
   }, [agents, push]);

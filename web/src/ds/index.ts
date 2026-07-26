@@ -15,10 +15,11 @@ export {
   SkeletonTile,
 } from "./Skeleton";
 export { Drawer } from "./Drawer";
+export { ErrorBoundary } from "./ErrorBoundary";
 export { Page } from "./Page";
 export type { Crumb } from "./Page";
 export { TimeAgo } from "./TimeAgo";
-export { useClock, CLOCK_TICK_MS } from "./clock";
+export { useClock, useTicker, CLOCK_TICK_MS } from "./clock";
 export { StatusPill } from "./StatusPill";
 export { Meter } from "./Meter";
 export type { MeterProps } from "./Meter";

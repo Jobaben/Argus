@@ -254,7 +254,7 @@ export function useLiveResource<T>(
         const want = eventsRef.current;
         if (want && want.length > 0 && want.includes(msg.type)) void refresh();
       },
-      onStatus: (isLive) => {
+      onStatus: ({ live: isLive }) => {
         if (!mounted.current) return;
         setLive(isLive);
         if (!hasEvents || pollAlways) return; // keep polling; socket alone can't keep us fresh

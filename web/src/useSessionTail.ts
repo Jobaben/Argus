@@ -111,7 +111,7 @@ export function useSessionTail(project: string | null, id: string | null): Sessi
       onMessage: (msg) => {
         if (msg.type === "sessions:changed") void fetchTail();
       },
-      onStatus: (isLive) => {
+      onStatus: ({ live: isLive }) => {
         if (!mounted.current) return;
         setLive(isLive);
         if (isLive) stopPoll();

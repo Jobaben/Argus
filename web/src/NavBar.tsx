@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ConnectionPill, IrisMark, MoreMenu } from "./ds";
 import type { MoreItem } from "./ds";
+import { NotificationCenter } from "./notify/NotificationCenter";
 
 export interface NavTab {
   id: string;
@@ -198,6 +199,7 @@ export function NavBar({
           <span className="hidden md:inline">
             <MoreMenu items={overflow} active={overflowActive} activeId={activeId} />
           </span>
+          <NotificationCenter />
           <ConnectionPill live={live} />
         </div>
       </div>

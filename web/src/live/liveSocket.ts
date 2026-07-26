@@ -14,19 +14,51 @@ import type { LiveFrame } from "@argus/contracts";
 export type { LiveFrame };
 
 type MessageListener = (msg: LiveFrame) => void;
-type StatusListener = (live: boolean) => void;
+
+/**
+ * What the client knows about the connection.
+ *
+ * `attempt` and `retryAt` exist so the UI can be specific: "Offline — retrying
+ * in 8s" is actionable, while "Reconnecting…" forever is indistinguishable from
+ * a bug precisely when the server is genuinely down.
+ */
+export interface LiveStatus {
+  live: boolean;
+  /** Consecutive failed connection attempts; 0 once connected. */
+  attempt: number;
+  /** Epoch ms of the next reconnect attempt, if one is scheduled. */
+  retryAt: number | null;
+}
+
+type StatusListener = (status: LiveStatus) => void;
 
 interface Subscriber {
   onMessage?: MessageListener;
   onStatus?: StatusListener;
 }
 
-const RECONNECT_MS = 2000;
+/**
+ * Reconnect backoff.
+ *
+ * A flat 2s retry hammers a server that is genuinely down — forever, from every
+ * open tab. Doubling to a 30s ceiling with jitter matches the fetch layer's
+ * policy, and the visibility/online hooks below mean the long tail of the
+ * backoff is never what the user waits on: returning to the tab reconnects
+ * immediately.
+ */
+const RECONNECT_BASE_MS = 1000;
+const RECONNECT_MAX_MS = 30_000;
+
+export function reconnectDelay(attempt: number, random: () => number = Math.random): number {
+  const ceiling = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** Math.max(0, attempt - 1));
+  return Math.round(ceiling * (0.5 + random() * 0.5));
+}
 
 let socket: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-let connected = false;
+let status: LiveStatus = { live: false, attempt: 0, retryAt: null };
 const subscribers = new Set<Subscriber>();
+let wakeHooksInstalled = false;
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
@@ -82,9 +114,9 @@ function wsUrl(): string {
   return `${proto}://${location.host}/ws`;
 }
 
-function setStatus(live: boolean) {
-  connected = live;
-  for (const s of subscribers) s.onStatus?.(live);
+function publish(next: Partial<LiveStatus>) {
+  status = { ...status, ...next };
+  for (const s of subscribers) s.onStatus?.(status);
 }
 
 function connect() {
@@ -97,7 +129,7 @@ function connect() {
     return;
   }
   socket = ws;
-  ws.onopen = () => setStatus(true);
+  ws.onopen = () => publish({ live: true, attempt: 0, retryAt: null });
   ws.onmessage = (ev: MessageEvent) => {
     const msg = parseFrame(String(ev.data));
     if (!msg) return;
@@ -105,7 +137,7 @@ function connect() {
   };
   ws.onclose = () => {
     if (socket === ws) socket = null;
-    setStatus(false);
+    publish({ live: false });
     scheduleReconnect();
   };
   ws.onerror = () => {
@@ -119,10 +151,42 @@ function connect() {
 
 function scheduleReconnect() {
   if (reconnectTimer || subscribers.size === 0) return;
+  const attempt = status.attempt + 1;
+  const delay = reconnectDelay(attempt);
+  publish({ attempt, retryAt: Date.now() + delay });
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     connect();
-  }, RECONNECT_MS);
+  }, delay);
+}
+
+/**
+ * Reconnects now, cancelling any pending backoff.
+ *
+ * Called when the tab becomes visible or the browser reports it is back online,
+ * and exposed for a manual retry. Without it, returning to a tab that backed
+ * off to 30s means up to half a minute of stale data while the server has been
+ * healthy the whole time.
+ */
+export function reconnectNow(): void {
+  if (status.live || subscribers.size === 0) return;
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  publish({ retryAt: null });
+  connect();
+}
+
+function installWakeHooks() {
+  if (wakeHooksInstalled || typeof window === "undefined") return;
+  wakeHooksInstalled = true;
+  // Deliberately never removed: they are cheap, idempotent, and this module
+  // lives for the page's lifetime.
+  window.addEventListener("online", reconnectNow);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") reconnectNow();
+  });
 }
 
 function teardownIfIdle() {
@@ -140,15 +204,16 @@ function teardownIfIdle() {
       /* ignore */
     }
   }
-  connected = false;
+  status = { live: false, attempt: 0, retryAt: null };
 }
 
 /** Subscribe to live messages and connection status. Returns an unsubscribe. */
 export function subscribeLive(sub: Subscriber): () => void {
   subscribers.add(sub);
+  installWakeHooks();
   // Report the current status immediately so a late subscriber isn't stuck
   // "reconnecting" until the next transition.
-  sub.onStatus?.(connected);
+  sub.onStatus?.(status);
   connect();
   return () => {
     subscribers.delete(sub);
@@ -158,5 +223,10 @@ export function subscribeLive(sub: Subscriber): () => void {
 
 /** Current connection state — exposed mainly for tests. */
 export function isLive(): boolean {
-  return connected;
+  return status.live;
+}
+
+/** The full connection status, including backoff progress. */
+export function liveStatus(): LiveStatus {
+  return status;
 }

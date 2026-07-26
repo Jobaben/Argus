@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 /**
  * One ticking clock for every relative timestamp in the app.
@@ -63,6 +63,26 @@ function getSnapshot(): number {
  */
 export function useClock(): number {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+/**
+ * A private, faster clock for the few places that need sub-tick precision: a
+ * running step's elapsed time, a countdown to the next firing, a reconnect
+ * timer. Pass `active: false` to stop the interval entirely — an idle board
+ * should not be ticking once a second for nothing.
+ *
+ * Distinct from {@link useClock} on purpose. This one is per-component and
+ * un-quantised, which is what makes it precise and also what makes it
+ * inappropriate for the dozens of "3m ago" labels the shared clock serves.
+ */
+export function useTicker(active = true, intervalMs = 1000): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    const timer = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(timer);
+  }, [active, intervalMs]);
+  return now;
 }
 
 /** Exposed for tests: forces a tick without waiting for the interval. */

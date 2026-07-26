@@ -1,6 +1,5 @@
-import { useEffect, useState } from "react";
 import type { Situation, ThroughputBucket } from "../types";
-import { Skeleton, formatCountdown, formatUsd, useCountUp } from "../ds";
+import { Skeleton, formatCountdown, formatUsd, useCountUp, useTicker } from "../ds";
 
 /**
  * The one-line answer to "does anything need me?"
@@ -62,12 +61,7 @@ function Stat({
  * make one label tick.
  */
 function NextFire({ at, name, kind }: { at: string; name: string; kind: string }) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, []);
-
+  const now = useTicker();
   const ms = new Date(at).getTime() - now;
   return (
     <span

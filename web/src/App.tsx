@@ -4,6 +4,7 @@ import type { Agent, AgentStatus } from "./types";
 import {
   AgentTile,
   EmptyState,
+  ErrorBoundary,
   HealthCounter,
   Loading,
   Page,
@@ -171,10 +172,14 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
+  const activeLabel = useMemo(
+    () => TAB_META.find((t) => t.id === active)?.label ?? "Command Center",
+    [active],
+  );
+
   useEffect(() => {
-    const label = TAB_META.find((t) => t.id === active)?.label ?? "Command Center";
-    document.title = `${label} — Argus`;
-  }, [active]);
+    document.title = `${activeLabel} — Argus`;
+  }, [activeLabel]);
 
   const destinations: NavTab[] = useMemo(
     () =>
@@ -337,7 +342,11 @@ export default function App() {
             transition rather than a flicker. Opacity only — a moving page would
             fight the staggered content inside it. */}
         <div key={active} className="motion-safe:animate-[fade-in_var(--duration-base)_ease-out]">
-          {renderActive()}
+          {/* Scoped per route: a bad shape in one view costs that view, not the
+              nav, the palette and every other tab. */}
+          <ErrorBoundary label={activeLabel} resetKey={active}>
+            {renderActive()}
+          </ErrorBoundary>
         </div>
       </main>
       <ToastRegion toasts={toasts} onDismiss={dismiss} />
