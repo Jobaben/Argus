@@ -56,20 +56,52 @@ can do, and where the data comes from.
 
 Applies to every tab.
 
-- **The "Argus" logo + colored dot** (top-left): the dot is the live-connection
-  indicator. **Green = "live"** (WebSocket to the server is connected); **gray =
-  "reconnecting…"** (socket dropped, falling back to polling). It reflects
-  Argus's link to its own server, not the health of your agents.
+![Command palette](screenshots/command-palette.png)
+
+_`⌘K` from anywhere: three characters find the schedule, its live monitor
+health, the issues it raised, and the action that fires it now._
+
+![Keyboard shortcuts](screenshots/shortcuts.png)
+
+- **Command palette — `⌘K` / `Ctrl K`.** The fastest way to anything. Type a few
+  characters and it fuzzy-matches across every destination, pipeline, schedule,
+  failing monitor, open issue, background agent, project and recent transcript —
+  "dpa" finds _Dependency audit_, "rt" finds _Release train_. It also carries
+  **actions**: approve a pipeline waiting at a gate, run a schedule now, mark the
+  Briefing caught up. `↑`/`↓` move, `Enter` runs, `Esc` closes; the rows you use
+  float to the top next time you open it with an empty query. An action that
+  talks to the server keeps the palette open long enough to report a failure
+  rather than closing over it. The **Jump to… ⌘K** button in the bar opens the
+  same thing.
+- **Keyboard shortcuts — `?`.** Lists every binding, and only the ones currently
+  available. `g` then a letter jumps: `g c` Command Center, `g b` Briefing,
+  `g h` Chronicle, `g l` Launch, `g s` Scheduler, `g m` Monitors, `g i` Issues,
+  `g p` Pipelines, `g u` Budget, `g a` Agents. `/` goes to transcript search.
+  Single-letter shortcuts never fire while you are typing in a field.
+- **The connection pill** (top-right) reflects Argus's link to its own server,
+  not the health of your agents. **Green "Live"** = the WebSocket is connected.
+  **Red "Offline · retrying in 8s"** = it dropped, with the actual countdown to
+  the next attempt and a **Retry** button for when you know you have just fixed
+  the server. Reconnects back off to 30s but happen immediately when you return
+  to the tab, so coming back never means waiting one out.
+- **Notification bell** (top-right): every alert raised _this session_, newest
+  first, with an unread count — because a toast lasts eight seconds and most of
+  them fire while you are in another tab. Each entry links to the view it is
+  about; opening the panel marks them read. For what changed while Argus ran
+  without you at all, use [Briefing](#2-briefing).
 - **Navigation** is split by role: the nine **destination** tabs (Command
   Center, Briefing, Chronicle, Launch, Scheduler, Monitors, Issues, Pipelines,
-  Budget) sit in the bar;
-  the 🔍 icon opens **Search**; the **⋯ More** menu holds the reference tabs
+  Budget) sit in the bar; the **⋯ More** menu holds the reference tabs
   (Stats, Inventory, Projects, Tasks, Users). Drill-down views (Agents,
-  Detail, Sessions, Activity) are reached through links and breadcrumbs.
+  Detail, Sessions, Activity) are reached through links, breadcrumbs and the
+  palette. On a phone the bar collapses to a **menu** naming your current
+  destination, listing every tab at once with its attention badge.
 - **Auto-refresh:** the server pushes a "something changed" ping over a
-  WebSocket whenever a watched file mutates, and the UI re-fetches. If the
-  socket drops, each tab also polls on a timer (most tabs 10s; Stats 30s;
-  Search on keystroke). You rarely need to refresh the browser.
+  WebSocket whenever a watched file mutates, and the UI re-fetches. Those
+  re-fetches are conditional, so a ping that did not change what you are looking
+  at costs a few bytes and repaints nothing. If the socket drops, each tab polls
+  on a timer instead; while a fetch is failing the last good values stay on
+  screen rather than blanking. You rarely need to refresh the browser.
 - **Notifications:** a bottom-right **toast stack** (max 4, auto-dismiss
   after 8s) fires from any tab when a background agent finishes or fails,
   when a **monitor alert** arrives (down / failing / recovered — see
@@ -78,6 +110,13 @@ Applies to every tab.
   If you grant the browser's notification
   permission (asked once), the same events also fire **native OS
   notifications**, so you hear about failures with the tab in the background.
+  Everything that toasts is also kept in the bell above.
+- **Loading** shows a skeleton shaped like the content that is coming, so the
+  layout is settled before it lands. Relative timestamps ("3m ago") keep
+  themselves current instead of freezing at first render.
+- **When a view breaks**, only that view breaks: it is replaced by a message
+  naming it and a **Try again** button, while the nav, the palette and every
+  other tab keep working.
 - **Routing** is hash-based (`#/command`, `#/agents`, `#/search`…), so tabs
   are bookmarkable and the back button works. An unknown hash lands on the
   Command Center.
@@ -104,6 +143,19 @@ you — this is the wall you keep open on a second monitor.
 
 **What you see:**
 
+- A **situation strip** across the top, answering "does anything need me?"
+  without reading the board: counts for gates awaiting you, failures, runs in
+  flight, live agents, down/failing monitors and open issues — each a link to the
+  view that explains it. It shows **only what is true**: a metric with nothing to
+  report is omitted rather than drawn as a grey zero, and when there is genuinely
+  nothing it says so. On the right: the next scheduled firing with a live
+  countdown, today's spend against your daily limit as a bar, and a 24-hour
+  histogram of run outcomes (failures stacked in red over successes).
+- A **live activity rail** down the right: **Live** shows what is running right
+  now with each step's current tool call — including scheduled runs and one-off
+  launches, which have no card on the board — and **Recent** lists the last
+  completed runs with outcome, duration and cost. On a narrow screen it moves
+  below the board.
 - A **card per pipeline**: name, phase count, the pipeline's **model chip**
   (e.g. `fable`, `opus`), an aggregated **status pill** (`awaiting approval`
   wins over `failed` over `working`…), the latest run's **Σ cost** (tokens +
@@ -121,19 +173,34 @@ you — this is the wall you keep open on a second monitor.
 **What you can do:**
 
 - **Approve** (green) a gated phase that's awaiting you — the pipeline resumes.
+  `⌘K` → "approve" reaches the same action without finding the card first.
 - **Revise** (labeled **Retry** after a crash-restart) — optionally attach a
   revise note, hit **Send**, and the phase restarts with your feedback.
 - Both actions require a signed-in, approved account (see
   [Users & sign-in](#10-users--sign-in)); the buttons render for everyone but
   the server answers 401 unless you're authenticated.
+- **Click a step's name** to open its drawer, over the board rather than away
+  from it: the run id, model, start time, duration, tokens, cost, the failure
+  reason if it failed, a link to the transcript, **Cancel run** while it is
+  still going, and the run log — tailing live while the step works.
+- A tile that has just changed status flashes briefly, so a transition you
+  weren't watching for doesn't pass unnoticed.
+
+![Step drawer](screenshots/step-drawer.png)
+
+_A step's drawer opens over the board, so inspecting one run doesn't cost you the
+view of the other eleven._
 
 **Cost semantics:** a metric appears once at least one run reports it via the
 `claude -p` result envelope; steps still running (or predating cost capture)
 show nothing. Money spent on a retried phase still counts toward the row Σ.
 
 **Where the data comes from:** `GET /api/overview` (re-fetched on the
-`pipelines:changed` WS ping), `GET /api/totals` + `POST /api/totals/reset`,
-gate actions `POST /api/instances/:id/approve` / `/revise`.
+`pipelines:changed` WS ping), `GET /api/insight` for the situation strip,
+`GET /api/runs` for the rail, `GET /api/runs/:id` for the drawer's log,
+`GET /api/totals` + `POST /api/totals/reset`, gate actions
+`POST /api/instances/:id/approve` / `/revise`, and
+`POST /api/runs/:id/cancel`.
 
 ---
 

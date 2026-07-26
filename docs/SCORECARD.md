@@ -110,3 +110,54 @@ benefits from:
 
 Scores are re-verified after each improvement wave; see git history for the
 per-wave deltas.
+
+## Experience & engineering wave (2026-07-26)
+
+No new scores are claimed here: the numbers above came from independent
+adversarial audits, and this wave has not had one. What follows is the factual
+record of what changed, so a future audit has something to check.
+
+**Where the previous audits were satisfied but the app was not.** Every
+dimension above scored 9–10 against its rubric, and the app still took a tab
+tour to answer "does anything need me?". The gap was not in the rubric's
+categories; it was that the categories were being met _locally_ — each view
+correct on its own — with no measure of the experience of using the whole thing.
+That is what this wave went after.
+
+### Defects the work surfaced
+
+These were live in the audited-at-9.0 build. Each is now covered by a regression
+test:
+
+| Defect                                                                                                                             | Why the audits missed it                                                      |
+| ---------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `AgentStatus` passed the on-disk string straight through, so a newer CLI's state would fall through every exhaustive client switch | The union _looked_ authoritative; nothing tested a value outside it           |
+| WS frames were untyped on both ends — a renamed event silently stops waking a view                                                 | Both sides matched string literals that happened to agree                     |
+| An aborted fetch cleared `loading`, so a first load could render the _empty state_                                                 | Only visible when a load outlasts a blink; StrictMode makes it routine in dev |
+| `TimeAgo` assumed the past, printing `-7138s ago` for a monitor's next slot                                                        | Visible only with a future timestamp and a late monitor                       |
+| Relative timestamps never updated after first render                                                                               | Requires watching one screen for minutes                                      |
+| The board gave each phase ~60px at 390px wide — one letter per line                                                                | Never opened on a phone                                                       |
+| Sub-minute Chronicle spans were 0.03% wide: invisible and unhoverable                                                              | Correct maths, unusable result                                                |
+| `web` had never been compiled with `strict`                                                                                        | It happened to compile clean, so nothing complained                           |
+
+### Structural changes
+
+- **One contract, not two copies.** ~25 DTOs were declared twice with nothing
+  forcing agreement; they now live in a types-only `@argus/contracts` workspace
+  imported by both sides, with CI enforcing that it emits no runtime.
+- **The push model got cheap.** Conditional (`ETag`) reads with a genuinely
+  zero-re-render `304` path, single-flight coalescing, and jittered backoff on
+  both the fetch layer and the socket.
+- **One logger, one clock, one socket, one fetch primitive.** 25 ad-hoc
+  `console.error` calls became a structured logger with per-request ids; three
+  private one-second timers and a dozen render-time `Date.now()` calls became one
+  shared clock plus an explicit `useTicker`.
+- **Failure is scoped.** Per-route error boundaries; a bad shape costs one view.
+- **The initial payload is budgeted.** A lazy chunk per route (105.7 → 91.5 kB
+  gzip) with a CI gate so it cannot drift back.
+
+### Test coverage
+
+486 server + 422 web tests, up from 419 + 259 at the start of the wave — every
+new module tested, and every defect above pinned by a test that names the failure
+mode rather than the fix.

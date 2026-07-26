@@ -11,7 +11,7 @@ import {
   checkAll as checkPrereqs,
   preflight as preflightPrereqs,
 } from "./setup/prereqs.js";
-import { loadConfig } from "./config.js";
+import { assertBindIsSafe, loadConfig } from "./config.js";
 import { isUpgradeAllowed } from "./security.js";
 import { VERSION } from "./version.js";
 import {
@@ -31,6 +31,16 @@ import { createRunTailer } from "./runTailer.js";
 import { log } from "./log.js";
 
 const config = loadConfig();
+
+// Fail before opening a socket, not after: a process that has already bound an
+// unauthenticated public port has already lost.
+try {
+  assertBindIsSafe(config);
+} catch (e) {
+  log.error(e instanceof Error ? e.message : String(e));
+  process.exit(1);
+}
+
 const PORT = config.port;
 
 // broadcast is wired to the WebSocket server created below; it's referenced by
@@ -80,12 +90,6 @@ const server = serve({ fetch: app.fetch, port: PORT, hostname: config.host }, (i
       );
     }
   });
-  if (config.host !== "127.0.0.1" && config.host !== "localhost" && !config.token) {
-    log.warn(
-      "bound to a non-loopback host without ARGUS_TOKEN — anyone who can reach this port can execute agents",
-      { host: config.host, fix: "set ARGUS_TOKEN" },
-    );
-  }
   // Self-setup on boot: auto-install every fixable prerequisite (hook file,
   // Stop/PreToolUse registration, data dirs) so pipelines work out of the box;
   // report anything that still needs a human (missing CLI, corrupt files).

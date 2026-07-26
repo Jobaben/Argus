@@ -79,8 +79,36 @@ Fanned out in parallel; each is an isolated source + view + tab:
 - Tauri shell: tray icon + native notifications when a background agent
   completes or fails.
 
+## Experience & engineering wave (2026-07-26)
+
+Not a feature release — a pass over how the whole thing _feels_ and how it is
+built underneath. See the changelog for the itemised list.
+
+- **Command layer** — `⌘K` palette over navigation, entities and actions
+  (`GET /api/palette`); `g`-chord destinations; a `?` cheatsheet rendered from
+  the same bindings the listener dispatches from.
+- **Board** — a situation strip (`GET /api/insight`), a live activity rail that
+  includes the runs the board does not own, and a step drawer with a tailing log.
+- **One contract** — `@argus/contracts`: every wire DTO declared once, imported
+  by both workspaces, types-only and CI-enforced. Replaced ~25 duplicated shapes;
+  surfaced two real defects (an unvalidated `AgentStatus`, untyped WS frames).
+- **Live layer** — `ETag`/`304` conditional reads with zero-re-render no-ops,
+  single-flight coalescing, jittered backoff on both fetch and socket, reconnect
+  on tab-visible.
+- **Ops** — one structured logger (text or JSON lines), `x-request-id` on every
+  response, per-route error boundaries.
+- **Performance** — a lazy chunk per route (initial payload 105.7 → 91.5 kB
+  gzip) with a size budget in CI.
+- **Fit and finish** — shape-matched skeletons everywhere, bidirectional relative
+  time (fixing `-7138s ago`), a shared clock so labels stay current, a legible
+  Chronicle, a usable phone layout, a notification log behind the bell.
+
 ## Quality backlog
 
+- **`/api/palette` and `/api/insight` read the same sources as the busiest view**
+  — acceptable today (both are served from the shared short-TTL caches), but if
+  the instance/run directories grow they inherit the same unfiltered-scan cost as
+  `/api/overview` below.
 - **`/api/overview` instance-storage index** — the overview route calls
   `readInstances()` unfiltered, reading and JSON-parsing every retained instance
   file (~`INSTANCE_KEEP`×N) on every 10s poll and WS push, though `buildOverview`

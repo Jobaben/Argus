@@ -42,6 +42,40 @@ export interface ArgusConfig {
   webhookUrl: string | null;
 }
 
+const LOOPBACK_BINDS = new Set(["127.0.0.1", "::1", "localhost"]);
+
+/** True when this bind address is reachable from outside the machine. */
+export function isExposedBind(host: string): boolean {
+  return !LOOPBACK_BINDS.has(host.trim().toLowerCase());
+}
+
+export class ConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConfigError";
+  }
+}
+
+/**
+ * Refuses an unauthenticated bind to a non-loopback interface.
+ *
+ * Argus spawns `claude -p` with the user's credentials, so an exposed port with
+ * no token is remote code execution for anyone on the network. The README has
+ * always called `ARGUS_TOKEN` "mandatory" in that case — it was only a warning,
+ * which meant the documented promise and the actual behaviour disagreed, and the
+ * one you find out about is whichever one bites you.
+ */
+export function assertBindIsSafe(config: ArgusConfig): void {
+  if (!isExposedBind(config.host) || config.token) return;
+  throw new ConfigError(
+    `refusing to bind ${config.host} without ARGUS_TOKEN.\n` +
+      "  Argus can execute agents with your credentials, so an exposed port needs a\n" +
+      "  shared secret. Either:\n" +
+      "    • set ARGUS_TOKEN=$(openssl rand -hex 16) and pass it as a bearer token, or\n" +
+      "    • drop ARGUS_HOST to keep the loopback-only default (127.0.0.1).",
+  );
+}
+
 export function loadConfig(): ArgusConfig {
   return {
     port: intFromEnv("ARGUS_PORT", 7777),
