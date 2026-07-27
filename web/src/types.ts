@@ -77,6 +77,14 @@ export type {
   SituationCounts,
   NextFire,
   ThroughputBucket,
+  // Flight Recorder
+  Recording,
+  RecorderEvent,
+  RecorderEventKind,
+  RecorderLane,
+  RecorderLaneSummary,
+  RecorderTotals,
+  RecorderUnavailable,
   // Command palette
   PaletteEntry,
   PaletteIndex,

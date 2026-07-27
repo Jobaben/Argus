@@ -98,15 +98,27 @@ export function RunRow({
               {run.resultSummary}
             </p>
           )}
-          {run.sessionId && run.project && (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            {/* The recorder is the first stop for "what did it actually do?",
+                so it leads; the raw transcript stays one click away for anyone
+                who wants the unabridged JSONL. */}
             <a
-              href={`#/sessions/${encodeURIComponent(run.project)}/${encodeURIComponent(run.sessionId)}`}
-              className="inline-block font-mono text-xs text-queue hover:underline"
-              title="Open this run's transcript"
+              href={`#/run/${encodeURIComponent(run.id)}`}
+              className="inline-block font-mono text-xs text-eye hover:underline"
+              title="Replay this run on the Flight Recorder"
             >
-              transcript: {run.sessionId.slice(0, 8)}
+              ▶ replay
             </a>
-          )}
+            {run.sessionId && run.project && (
+              <a
+                href={`#/sessions/${encodeURIComponent(run.project)}/${encodeURIComponent(run.sessionId)}`}
+                className="inline-block font-mono text-xs text-queue hover:underline"
+                title="Open this run's transcript"
+              >
+                transcript: {run.sessionId.slice(0, 8)}
+              </a>
+            )}
+          </div>
           <RunLog id={run.id} running={isRunning} />
         </div>
       )}

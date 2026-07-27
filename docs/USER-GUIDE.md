@@ -26,29 +26,30 @@ can do, and where the data comes from.
 
 ## Contents
 
-| #   | Feature                               | Route          | What it answers                           |
-| --- | ------------------------------------- | -------------- | ----------------------------------------- |
-| 0   | [Global UI](#global-ui)               | —              | nav, live dot, auto-refresh, setup banner |
-| 1   | [Command Center](#1-command-center)   | `#/command`    | how are my pipelines doing right now?     |
-| 2   | [Briefing](#2-briefing)               | `#/briefing`   | what happened while I was away?           |
-| 3   | [Chronicle](#3-chronicle)             | `#/chronicle`  | what ran when, across every source?       |
-| 4   | [Launch](#4-launch)                   | `#/launch`     | fire one `claude -p` run right now        |
-| 5   | [Scheduler](#5-scheduler)             | `#/schedules`  | fire `claude -p` on a schedule            |
-| 6   | [Monitors](#6-monitors)               | `#/monitors`   | did my schedules actually run?            |
-| 7   | [Issues](#7-issues)                   | `#/issues`     | why are runs failing, grouped by cause?   |
-| 8   | [Pipelines](#8-pipelines)             | `#/pipelines`  | author multi-phase, human-gated flows     |
-| 9   | [Budget](#9-budget)                   | `#/budget`     | how much am I spending — and cap it       |
-| 10  | [Users & sign-in](#10-users--sign-in) | `#/users`      | who may run/edit pipelines?               |
-| 11  | [Search](#11-search)                  | `#/search`     | where did I say/see _that_?               |
-| 12  | [Agents](#12-agents)                  | `#/agents`     | what's running / done / failed right now? |
-| 13  | [Agent Detail](#13-agent-detail)      | `#/agent/<id>` | how did _this_ agent get here?            |
-| 14  | [Sessions](#14-sessions)              | `#/sessions`   | what was actually said in a conversation? |
-| 15  | [Activity](#15-activity)              | `#/activity`   | what have I prompted lately, everywhere?  |
-| 16  | [Projects](#16-projects)              | `#/projects`   | which folders are active, and when?       |
-| 17  | [Stats](#17-stats)                    | `#/stats`      | what's my usage / cost / token spend?     |
-| 18  | [Inventory](#18-inventory)            | `#/inventory`  | what's installed and available?           |
-| 19  | [Tasks](#19-tasks)                    | `#/tasks`      | what task workspaces exist / are locked?  |
-| 20  | [Cron panel](#20-cron-panel)          | Scheduler tab  | why native cron routines can't be shown   |
+| #   | Feature                                | Route          | What it answers                           |
+| --- | -------------------------------------- | -------------- | ----------------------------------------- |
+| 0   | [Global UI](#global-ui)                | —              | nav, live dot, auto-refresh, setup banner |
+| 1   | [Command Center](#1-command-center)    | `#/command`    | how are my pipelines doing right now?     |
+| 2   | [Briefing](#2-briefing)                | `#/briefing`   | what happened while I was away?           |
+| 3   | [Chronicle](#3-chronicle)              | `#/chronicle`  | what ran when, across every source?       |
+| 4   | [Launch](#4-launch)                    | `#/launch`     | fire one `claude -p` run right now        |
+| 5   | [Scheduler](#5-scheduler)              | `#/schedules`  | fire `claude -p` on a schedule            |
+| 6   | [Monitors](#6-monitors)                | `#/monitors`   | did my schedules actually run?            |
+| 7   | [Issues](#7-issues)                    | `#/issues`     | why are runs failing, grouped by cause?   |
+| 8   | [Pipelines](#8-pipelines)              | `#/pipelines`  | author multi-phase, human-gated flows     |
+| 9   | [Budget](#9-budget)                    | `#/budget`     | how much am I spending — and cap it       |
+| 10  | [Users & sign-in](#10-users--sign-in)  | `#/users`      | who may run/edit pipelines?               |
+| 11  | [Search](#11-search)                   | `#/search`     | where did I say/see _that_?               |
+| 12  | [Agents](#12-agents)                   | `#/agents`     | what's running / done / failed right now? |
+| 13  | [Agent Detail](#13-agent-detail)       | `#/agent/<id>` | how did _this_ agent get here?            |
+| 14  | [Sessions](#14-sessions)               | `#/sessions`   | what was actually said in a conversation? |
+| 15  | [Activity](#15-activity)               | `#/activity`   | what have I prompted lately, everywhere?  |
+| 16  | [Projects](#16-projects)               | `#/projects`   | which folders are active, and when?       |
+| 17  | [Stats](#17-stats)                     | `#/stats`      | what's my usage / cost / token spend?     |
+| 18  | [Inventory](#18-inventory)             | `#/inventory`  | what's installed and available?           |
+| 19  | [Tasks](#19-tasks)                     | `#/tasks`      | what task workspaces exist / are locked?  |
+| 20  | [Cron panel](#20-cron-panel)           | Scheduler tab  | why native cron routines can't be shown   |
+| 21  | [Flight Recorder](#21-flight-recorder) | `#/run/<id>`   | what was it doing at minute four?         |
 
 ---
 
@@ -935,29 +936,87 @@ harness-managed routines.
 
 ---
 
+## 21. Flight Recorder
+
+_Any run, replayed as a scrubbable timeline._ Route: `#/run/<runId>` (and
+`#/run/<runId>/<ms>` for a specific moment)
+
+**Purpose:** a transcript is a JSONL wall — thousands of lines where the one
+that matters looks exactly like the ones that don't. The Flight Recorder is the
+same information as a **recording**: every tool call, file diff, token burst
+and cost tick placed on one time axis, with a playhead you can drag.
+
+**How to get there:** expand any run row (Scheduler, Launch, Issues
+occurrences) and click **▶ replay**.
+
+**What you see:**
+
+- **Totals** — tool calls, file edits, errors, tokens, cost for the whole run.
+- **Lane strips** — one density band per lane (Agent, Tools, Files,
+  Tokens & cost) showing _where_ the activity was. Dense stretches read as
+  solid; quiet stretches read as gaps. A vertical line marks the playhead.
+- **The scrubber** — a range slider over the run's full duration. Its
+  accessible value announces both the clock position and the event under the
+  playhead.
+- **The event list** — a 41-row window that follows the playhead. Click any
+  row to seek to it.
+- **The now panel** — the one event you are parked on, in full: the command,
+  the message, the error body, the file path with `+added / −removed`, the
+  token burst and running spend.
+
+**What you can do:**
+
+- **Play / pause** at 1×, 5×, 20× or 100×. Playback stops at the end rather
+  than looping.
+- **Step** to the previous/next event. A cluster of events sharing one instant
+  is stepped over in one press, so the clock always moves.
+- **Jump to failure** — on a failed run, lands on the _errored tool call_, not
+  the terminal "it failed" marker. Keyboard: `f`.
+- **Copy link to moment** — the URL carries the scrubber position, so a link
+  to a recording is a link to minute four of it.
+- Keyboard throughout: `space` play/pause, `←`/`→` step, `f` jump to failure.
+
+**Honest limits, stated in the UI:**
+
+- **Cost is apportioned, not measured.** The CLI reports one `total_cost_usd`
+  for the whole run; per-event dollars are that figure split by token share.
+  The view says so under the track.
+- **Long runs are trimmed.** Past 2,000 events the earliest ones are dropped
+  (the end of a run is where failures live). Offsets stay absolute, so the
+  track simply starts partway in — and says that it did.
+- **No transcript, no timeline.** A skipped run, a run with no session, or a
+  pruned transcript gets an empty state that explains which of those it is.
+
+**Where the data comes from:** `GET /api/runs/:id/recording`, derived on every
+read from the run record plus `projects/<project>/<sessionId>.jsonl`. Nothing
+is persisted — the transcript stays the source of truth.
+
+---
+
 ## Quick mental model
 
-| Tab                | Answers the question                      | Source                                      |
-| ------------------ | ----------------------------------------- | ------------------------------------------- |
-| **Command Center** | How are my pipelines doing right now?     | `argus/pipelines.json` + `argus/instances/` |
-| **Chronicle**      | What ran when, across everything?         | runs + jobs + transcripts, merged           |
-| **Launch**         | Fire one `claude -p` run right now        | `argus/runs/` (the `oneoff` bucket)         |
-| **Scheduler**      | What fires on a timer, and how did it go? | `argus/schedules.json` + `argus/runs/`      |
-| **Monitors**       | Did the expected runs actually land?      | derived from schedules + runs               |
-| **Issues**         | Why are runs failing, grouped by cause?   | derived from runs + `argus/issues.json`     |
-| **Pipelines**      | What multi-phase flows are defined?       | `argus/pipelines.json`                      |
-| **Budget**         | How much am I spending — and cap it       | `argus/budget.json` + `argus/spend.json`    |
-| **Users**          | Who may run/edit pipelines?               | `argus/auth.json`                           |
-| **Search**         | Where did I say/see _that_?               | all `projects/*/*.jsonl`                    |
-| **Agents**         | What's running / done / failed right now? | `jobs/*/state.json` + `daemon/roster.json`  |
-| **Detail**         | How did _this_ agent get here?            | `jobs/<short>/timeline.jsonl`               |
-| **Sessions**       | What was actually said in a conversation? | `projects/*/*.jsonl`                        |
-| **Activity**       | What have I prompted lately, everywhere?  | `history.jsonl`                             |
-| **Projects**       | Which folders are active, and when?       | `projects/*/`                               |
-| **Stats**          | What's my usage / cost / token spend?     | `stats/stats-cache.json`                    |
-| **Inventory**      | What's installed and available?           | `agents/ commands/ skills/ plugins/`        |
-| **Tasks**          | What task workspaces exist / are locked?  | `tasks/<id>/`                               |
-| **Cron panel**     | Why can't I see native cron routines?     | none (session-scoped)                       |
+| Tab                 | Answers the question                      | Source                                      |
+| ------------------- | ----------------------------------------- | ------------------------------------------- |
+| **Command Center**  | How are my pipelines doing right now?     | `argus/pipelines.json` + `argus/instances/` |
+| **Chronicle**       | What ran when, across everything?         | runs + jobs + transcripts, merged           |
+| **Launch**          | Fire one `claude -p` run right now        | `argus/runs/` (the `oneoff` bucket)         |
+| **Scheduler**       | What fires on a timer, and how did it go? | `argus/schedules.json` + `argus/runs/`      |
+| **Monitors**        | Did the expected runs actually land?      | derived from schedules + runs               |
+| **Issues**          | Why are runs failing, grouped by cause?   | derived from runs + `argus/issues.json`     |
+| **Pipelines**       | What multi-phase flows are defined?       | `argus/pipelines.json`                      |
+| **Budget**          | How much am I spending — and cap it       | `argus/budget.json` + `argus/spend.json`    |
+| **Users**           | Who may run/edit pipelines?               | `argus/auth.json`                           |
+| **Search**          | Where did I say/see _that_?               | all `projects/*/*.jsonl`                    |
+| **Agents**          | What's running / done / failed right now? | `jobs/*/state.json` + `daemon/roster.json`  |
+| **Detail**          | How did _this_ agent get here?            | `jobs/<short>/timeline.jsonl`               |
+| **Sessions**        | What was actually said in a conversation? | `projects/*/*.jsonl`                        |
+| **Activity**        | What have I prompted lately, everywhere?  | `history.jsonl`                             |
+| **Projects**        | Which folders are active, and when?       | `projects/*/`                               |
+| **Stats**           | What's my usage / cost / token spend?     | `stats/stats-cache.json`                    |
+| **Inventory**       | What's installed and available?           | `agents/ commands/ skills/ plugins/`        |
+| **Tasks**           | What task workspaces exist / are locked?  | `tasks/<id>/`                               |
+| **Cron panel**      | Why can't I see native cron routines?     | none (session-scoped)                       |
+| **Flight Recorder** | What was it doing at minute four?         | run record + `projects/*/<session>.jsonl`   |
 
 _Screenshots in this guide live in [`docs/screenshots/`](screenshots/) and
 were captured from a live instance. To refresh them after a UI change, run the

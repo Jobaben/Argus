@@ -6,9 +6,11 @@ import { readDaemon } from "./sources/daemon.js";
 import {
   readSessions,
   readSession,
+  readSessionLines,
   readSessionTail,
   sessionToMarkdown,
 } from "./sources/sessions.js";
+import { buildRecording } from "./sources/recorder.js";
 import { readActivity } from "./sources/history.js";
 import { readProjects } from "./sources/projects.js";
 import { readStats } from "./sources/stats.js";
@@ -504,6 +506,17 @@ export function createApp(deps: AppDeps): Hono {
   app.get("/api/runs/:id", async (c) => {
     const got = await readRun(c.req.param("id"));
     return got ? c.json(got) : c.json({ error: "not found" }, 404);
+  });
+
+  // The Flight Recorder: the run's transcript replayed as a scrubbable causal
+  // timeline. Derived on every read — the transcript stays the source of truth.
+  app.get("/api/runs/:id/recording", async (c) => {
+    const got = await readRun(c.req.param("id"));
+    if (!got) return c.json({ error: "not found" }, 404);
+    const { run } = got;
+    const lines =
+      run.project && run.sessionId ? await readSessionLines(run.project, run.sessionId) : [];
+    return c.json(buildRecording(run, lines, new Date()));
   });
 
   app.post("/api/runs/:id/cancel", async (c) => {

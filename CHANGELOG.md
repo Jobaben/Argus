@@ -7,6 +7,21 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Flight Recorder** (`#/run/<id>`, `GET /api/runs/:id/recording`): any run
+  opens as a scrubbable causal timeline instead of a JSONL wall. Every tool
+  call, file diff, token burst and cost tick is placed on one clock rooted at
+  the run's start; `tool_use` and `tool_result` are joined by id so a call is a
+  span with a duration and an error flag, not two unrelated lines. Play at
+  1×–100×, step event by event (a same-instant cluster is one press, so the
+  clock always moves), and **jump to failure** — which lands on the errored
+  tool call, not the terminal "it failed" marker. The scrubber position lives in
+  the URL, so a link to a recording is a link to a _moment_ in it. Derived on
+  every read and never persisted, so it cannot drift from the transcript.
+  Honest about its limits in the UI: per-event cost is the run's single
+  reported total apportioned by token share, long runs are trimmed to the most
+  recent 2,000 events with absolute offsets preserved, and a run with no
+  transcript gets an empty state that says which of the four reasons applies.
+
 - **Command palette (`⌘K` / `Ctrl K`)** over navigation, entities and actions:
   fuzzy search across every destination, pipeline, schedule, failing monitor,
   open issue, agent, project and recent transcript, plus the actions worth doing

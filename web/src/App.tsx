@@ -52,6 +52,7 @@ const Users = lazy(() => import("./views/Users"));
 const Sessions = lazy(() => import("./views/Sessions"));
 const ActivityFeed = lazy(() => import("./views/ActivityFeed"));
 const AgentDetail = lazy(() => import("./views/AgentDetail"));
+const FlightRecorder = lazy(() => import("./views/FlightRecorder"));
 import { useBriefing } from "./useBriefing";
 import { useAuth } from "./useAuth";
 import {
@@ -144,6 +145,7 @@ const TAB_META: { id: string; label: string; role: TabRole }[] = [
   { id: "sessions", label: "Sessions", role: "drilldown" },
   { id: "activity", label: "Activity", role: "drilldown" },
   { id: "agent", label: "Detail", role: "drilldown" },
+  { id: "run", label: "Flight Recorder", role: "drilldown" },
 ];
 
 /** The Suspense fallback for a route whose chunk is still downloading. Shaped
@@ -336,6 +338,8 @@ export default function App() {
         return <ActivityFeed />;
       case "agent":
         return <AgentDetail />;
+      case "run":
+        return <FlightRecorder />;
       case "command":
       default:
         return <CommandCenter />;

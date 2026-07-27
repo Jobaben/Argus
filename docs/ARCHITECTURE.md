@@ -164,6 +164,28 @@ while an unrecognised frame _type_ is still forwarded for forward compatibility.
 | Inventory         | `agents/ commands/ skills/ plugins/`        | installed extensions (md frontmatter)                                              |
 | Tasks             | `tasks/<uuid>/`                             | `.highwatermark`, `.lock`                                                          |
 | Cron              | — (not on disk)                             | session-scoped; see §6                                                             |
+| Flight Recorder   | run record + `projects/<proj>/<id>.jsonl`   | derived per read; never persisted (see below)                                      |
+
+### Derivation over storage: the Flight Recorder
+
+`sources/recorder.ts` is the shape every derived feature here should take:
+a single pure function, `(run, transcript lines, now) → Recording`, with the
+route in `app.ts` doing nothing but the reading. Three consequences are worth
+naming, because they are the reasons to prefer this shape over a materialized
+timeline table:
+
+- **It cannot drift.** There is no second copy to fall out of sync with the
+  transcript, and no migration when the derivation improves — the next read is
+  the new version.
+- **It is entirely testable without a filesystem.** The recorder's regression
+  suite feeds it hand-built line arrays: out-of-order timestamps, orphaned tool
+  results, malformed JSON, a transcript past the event cap.
+- **It degrades rather than throws.** Every shape check treats the transcript as
+  untrusted input, because a newer CLI writing an unfamiliar line must cost the
+  timeline one event, not the whole route.
+
+The cost is recomputation per read, which the ETag layer absorbs: an unchanged
+run answers `304` with no body, so an open recording on a quiet board is free.
 
 ### Reading a directory of records, cheaply
 

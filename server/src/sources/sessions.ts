@@ -228,6 +228,73 @@ function resolveSessionPath(project: string, id: string): string | null {
   return resolved;
 }
 
+/**
+ * How much of a transcript a raw-line read will pull into memory.
+ *
+ * A long agentic run can leave a transcript in the hundreds of megabytes — tool
+ * results are inlined verbatim — and a route that parses all of it per request
+ * is a memory spike waiting for the wrong run to be opened. Consumers of these
+ * lines are all bounded anyway (the recorder keeps 2,000 events), so reading the
+ * *tail* is not a loss: it is the same trim, done before the allocation instead
+ * of after.
+ */
+export const RAW_LINES_CAP_BYTES = 8 * 1024 * 1024;
+
+/**
+ * The unparsed transcript lines for one session, in file order, from at most
+ * the last {@link RAW_LINES_CAP_BYTES} of the file.
+ *
+ * Exposed for derivations that need more than the display-normalized
+ * `SessionDetail` carries — the Flight Recorder reads tool inputs, per-message
+ * usage and tool-result errors, none of which survive normalization. Returns
+ * an empty array for an unreadable or path-rejected session, same as every
+ * other reader here: a missing transcript is an empty timeline, not an error.
+ */
+export async function readSessionLines(project: string, id: string): Promise<unknown[]> {
+  const file = resolveSessionPath(project, id);
+  if (!file) return [];
+
+  let size: number;
+  try {
+    size = (await stat(file)).size;
+  } catch {
+    return [];
+  }
+  if (size <= RAW_LINES_CAP_BYTES) return readJsonl<unknown>(file);
+
+  let text: string;
+  try {
+    const handle = await open(file, "r");
+    try {
+      const start = size - RAW_LINES_CAP_BYTES;
+      const { buffer } = await handle.read({
+        buffer: Buffer.alloc(RAW_LINES_CAP_BYTES),
+        position: start,
+      });
+      // The tail starts at a byte offset that lands mid-line; drop everything
+      // before the first newline so parsing begins on a line boundary.
+      const decoded = buffer.toString("utf8");
+      const nl = decoded.indexOf("\n");
+      text = nl === -1 ? "" : decoded.slice(nl + 1);
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return [];
+  }
+
+  const out: unknown[] = [];
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      out.push(JSON.parse(line));
+    } catch {
+      // skip malformed line
+    }
+  }
+  return out;
+}
+
 function normalizeMessage(line: RawLine, index: number): SessionMessage {
   const content = line.message?.content;
   let toolName: string | null = null;

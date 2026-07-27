@@ -250,6 +250,7 @@ first. `endedAt: null` means still in flight — render through `windowEnd`.
 | `POST /api/schedules/:id/run`      | fire now → `202`, or `409` when `overlap=skip` and a run is live   |
 | `GET /api/runs?scheduleId=&limit=` | run history (newest first)                                         |
 | `GET /api/runs/:id`                | one run plus the tail of its log                                   |
+| `GET /api/runs/:id/recording`      | the run as a Flight Recorder timeline (see below)                  |
 | `POST /api/runs/:id/cancel`        | kill a running run → `200`, `409` if not running, `404` if unknown |
 
 Create/patch body fields: `name`, `prompt`, `cwd` (must exist), `trigger`,
@@ -273,6 +274,72 @@ schedule gets), read/cancel them through the standard run endpoints, and they
 appear as a single "One-off runs" lane in `GET /api/chronicle`. A failed
 launch fingerprints into Issues and posts the `run.failed` webhook like any
 other run; reported cost feeds the totals and the budget ledger.
+
+### `GET /api/runs/:id/recording`
+
+The Flight Recorder timeline for one run: `404` if the run is unknown, else a
+`Recording`.
+
+Derived on every read from the run record plus its transcript
+(`projects/<project>/<sessionId>.jsonl`). Nothing is persisted, so a recording
+can never drift from the transcript it came from.
+
+```jsonc
+{
+  "runId": "…",
+  "scheduleName": "Nightly triage",
+  "status": "failed",
+  "outcome": null,
+  "sessionId": "…",
+  "project": "-repo",
+  "startedAt": "2026-07-01T10:00:00.000Z",
+  "endedAt": "2026-07-01T10:01:30.000Z",
+  "durationMs": 90000,
+  "events": [
+    {
+      "id": "e12",
+      "atMs": 60000, // offset from the origin, monotonic
+      "at": "2026-07-01T10:01:00.000Z",
+      "lane": "tool", // agent | tool | file | spend
+      "kind": "tool", // start|prompt|thinking|text|tool|file|usage|error|end
+      "label": "Bash: npm run build",
+      "detail": "…", // command / message / error body, clipped
+      "durationMs": 4200, // tool_use → tool_result latency
+      "tool": "Bash",
+      "errored": true,
+    },
+  ],
+  "lanes": [{ "lane": "tool", "label": "Tools", "count": 2 }],
+  "failureIndex": 12, // index into `events`, or null
+  "totals": { "tools": 2, "files": 0, "errors": 1, "tokens": 1200, "costUsd": 0.42 },
+  "costEstimated": true,
+  "truncated": false,
+  "unavailable": null, // "no-session" | "no-transcript" | "empty-transcript" | "not-started"
+}
+```
+
+Semantics worth knowing before you build on it:
+
+- **One clock.** `atMs` is an offset from the run's `startedAt` (falling back
+  to the first transcript timestamp), clamped non-decreasing. Transcripts from
+  resumed sessions can carry out-of-order stamps; the recorder never lets the
+  axis go backwards.
+- **Spans, not lines.** A `tool_use` block and the `tool_result` answering it
+  are joined by `tool_use_id`; the call carries the resulting `durationMs` and
+  `errored` flag. An orphaned errored result still emits its own event.
+- **Cost is apportioned.** The CLI reports one `total_cost_usd` per run, so
+  per-event `costUsd` is that total split by token share and the response sets
+  `costEstimated: true`. With no reported cost, no per-event dollars are
+  invented.
+- **Bounded.** At most 2,000 events; past that the _earliest_ are dropped and
+  `truncated` is `true`. Offsets stay absolute, so surviving events keep their
+  real position on the axis.
+- **File events** carry `path`, `added` and `removed` line counts derived from
+  the tool input (`Edit`, `MultiEdit`, `Write`, `NotebookEdit`). A `Write`
+  reports `removed: 0` because the transcript never says what it replaced.
+
+`failureIndex` prefers the last _errored tool call_ over the terminal marker —
+it is meant to answer "where did it go wrong", not "did it".
 
 ## Monitors
 

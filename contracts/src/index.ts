@@ -82,6 +82,16 @@ export type {
 export type { PaletteEntry, PaletteIndex, PaletteKind, PaletteSeverity } from "./palette.js";
 
 export type {
+  RecorderEvent,
+  RecorderEventKind,
+  RecorderLane,
+  RecorderLaneSummary,
+  RecorderTotals,
+  RecorderUnavailable,
+  Recording,
+} from "./recorder.js";
+
+export type {
   Activity,
   CronDiskHint,
   CronStatus,
