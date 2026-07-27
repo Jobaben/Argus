@@ -15,6 +15,7 @@ import { assertBindIsSafe, describeListenError, loadConfig } from "./config.js";
 import { isUpgradeAllowed } from "./security.js";
 import { VERSION } from "./version.js";
 import {
+  buildAnomalyPayload,
   buildBudgetAlertPayload,
   buildMonitorAlertPayload,
   buildPipelineFailurePayload,
@@ -23,6 +24,7 @@ import {
 } from "./notify.js";
 import { createBudgetWatcher } from "./budgetWatcher.js";
 import { createMonitorWatcher } from "./monitorWatcher.js";
+import { createWatchtowerWatcher } from "./watchtowerWatcher.js";
 import { readSchedules } from "./sources/schedules.js";
 import { createApp } from "./app.js";
 import { createAuthService } from "./auth.js";
@@ -181,12 +183,24 @@ const budgetWatcher = createBudgetWatcher({
     broadcast({ type: "budget:alert", alert });
   },
 });
+// Watchtower learns each schedule's and phase's normal envelope from history
+// and reports the runs that leave it. Like the two watchers above, the envelope
+// is derived on read, so the transition only exists if something diffs it.
+const watchtowerWatcher = createWatchtowerWatcher({
+  now: () => new Date(),
+  readRuns,
+  onAnomaly: (anomaly) => {
+    void postWebhook(config.webhookUrl, buildAnomalyPayload(anomaly));
+    broadcast({ type: "watchtower:anomaly", anomaly });
+  },
+});
 const scheduler = startScheduler({
   onChange: () => broadcast({ type: "schedules:changed" }),
   onTick: async () => {
     await engine.reconcile();
     await monitorWatcher.check();
     await budgetWatcher.check();
+    await watchtowerWatcher.check();
   },
   onFailure: (run) =>
     void postWebhook(config.webhookUrl, buildRunFailurePayload(run, new Date().toISOString())),

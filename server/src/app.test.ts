@@ -741,3 +741,129 @@ test("PUT /api/budget persists limits and rejects bad ones", async () => {
   });
   assert.equal(bad.status, 400);
 });
+
+/** A completed run on disk, with whichever metrics the test cares about. */
+function writeRunRecord(id: string, over: Record<string, unknown>) {
+  mkdirSync(path.join(home, "argus", "runs"), { recursive: true });
+  const iso = new Date().toISOString();
+  writeFileSync(
+    path.join(home, "argus", "runs", `${id}.json`),
+    JSON.stringify({
+      id,
+      scheduleId: "s1",
+      scheduleName: "Nightly triage",
+      prompt: "p",
+      cwd: "/tmp",
+      status: "succeeded",
+      trigger: "scheduled",
+      queuedAt: iso,
+      startedAt: iso,
+      endedAt: iso,
+      durationMs: 60_000,
+      pid: null,
+      exitCode: 0,
+      sessionId: null,
+      project: null,
+      resultSummary: null,
+      error: null,
+      costUsd: 0.1,
+      tokens: 1000,
+      ...over,
+    }),
+  );
+}
+
+test("watchtower: a warm envelope with nothing out of place reports no anomalies", async () => {
+  const app = makeApp();
+  for (let i = 0; i < 12; i++) {
+    writeRunRecord(`w${i}`, { durationMs: 60_000 + (i % 3) * 500, costUsd: 0.1 });
+  }
+
+  const warm = (await (await app.request("/api/watchtower", { headers: loopback })).json()) as {
+    baselines: { key: string; warmupRemaining: number }[];
+    anomalies: unknown[];
+    summary: { ready: number };
+  };
+  assert.equal(warm.baselines.length, 1);
+  assert.equal(warm.baselines[0].key, "schedule:s1");
+  assert.equal(warm.baselines[0].warmupRemaining, 0);
+  assert.equal(warm.summary.ready, 1);
+  assert.equal(warm.anomalies.length, 0);
+});
+
+test("watchtower: a spike past warm-up is reported as a multiple, not a z-score", async () => {
+  const app = makeApp();
+  for (let i = 0; i < 12; i++) {
+    writeRunRecord(`w${i}`, { durationMs: 60_000 + (i % 3) * 500, costUsd: 0.1 });
+  }
+  writeRunRecord("spike", { costUsd: 4.2 });
+
+  const body = (await (await app.request("/api/watchtower", { headers: loopback })).json()) as {
+    anomalies: { metric: string; detail: string; severity: string }[];
+  };
+  const cost = body.anomalies.find((a) => a.metric === "cost");
+  assert.ok(cost, "the spike was reported");
+  assert.match(cost.detail, /× median cost/);
+  assert.equal(cost.severity, "critical");
+});
+
+test("watchtower: reset forgets prior history, restore brings it back, both broadcast", async () => {
+  const messages: unknown[] = [];
+  const app = createApp({
+    config,
+    engine: fakeEngine,
+    broadcast: (m) => messages.push(m),
+    serveWeb: false,
+  });
+  for (let i = 0; i < 12; i++) writeRunRecord(`w${i}`, {});
+
+  const reset = await app.request("/api/watchtower/schedule%3As1/reset", {
+    method: "POST",
+    headers: sameOrigin,
+  });
+  assert.equal(reset.status, 200);
+  assert.ok(messages.some((m) => (m as { type?: string }).type === "watchtower:changed"));
+
+  const emptied = (await (await app.request("/api/watchtower", { headers: loopback })).json()) as {
+    baselines: unknown[];
+  };
+  assert.equal(emptied.baselines.length, 0, "every sample predates the reset");
+
+  const restore = await app.request("/api/watchtower/schedule%3As1/reset", {
+    method: "DELETE",
+    headers: sameOrigin,
+  });
+  assert.equal(restore.status, 200);
+  const restored = (await (await app.request("/api/watchtower", { headers: loopback })).json()) as {
+    baselines: unknown[];
+  };
+  assert.equal(restored.baselines.length, 1);
+
+  const again = await app.request("/api/watchtower/schedule%3As1/reset", {
+    method: "DELETE",
+    headers: sameOrigin,
+  });
+  assert.equal(again.status, 404, "clearing a reset that is not there is a clean 404");
+});
+
+test("watchtower: a key that could escape its namespace is a clean 400", async () => {
+  const app = makeApp();
+  const res = await app.request("/api/watchtower/..%2fevil/reset", {
+    method: "POST",
+    headers: sameOrigin,
+  });
+  assert.equal(res.status, 400);
+});
+
+test("briefing surfaces a critical anomaly as an attention item", async () => {
+  const app = makeApp();
+  for (let i = 0; i < 12; i++) writeRunRecord(`w${i}`, { durationMs: 60_000 + (i % 3) * 500 });
+  writeRunRecord("spike", { costUsd: 4.2 });
+
+  const body = (await (await app.request("/api/briefing", { headers: loopback })).json()) as {
+    attention: { kind: string; detail: string }[];
+    window: { anomalies: { metric: string }[] };
+  };
+  assert.ok(body.attention.some((a) => a.kind === "anomaly"));
+  assert.ok(body.window.anomalies.some((a) => a.metric === "cost"));
+});

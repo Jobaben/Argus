@@ -165,6 +165,7 @@ while an unrecognised frame _type_ is still forwarded for forward compatibility.
 | Tasks             | `tasks/<uuid>/`                             | `.highwatermark`, `.lock`                                                          |
 | Cron              | — (not on disk)                             | session-scoped; see §6                                                             |
 | Flight Recorder   | run record + `projects/<proj>/<id>.jsonl`   | derived per read; never persisted (see below)                                      |
+| Watchtower        | runs + `argus/watchtower.json`              | envelopes derived per read; only reset markers persist                             |
 
 ### Derivation over storage: the Flight Recorder
 
@@ -211,6 +212,28 @@ order of subtlety:
 
 Read-after-write stays exact throughout: the write's own patch (or, on a miss, an
 invalidation) lands before it returns.
+
+### Derived state has no transitions — so something has to diff it
+
+Monitor health, budget state and Watchtower envelopes are all computed on read.
+That is the right shape for correctness (see above) and the wrong shape for
+alerting: nothing ever _observes_ a derived value changing, so "the monitor went
+down" and "this run left its envelope" are events that do not exist until
+someone compares two derivations.
+
+Each of the three therefore has a watcher (`monitorWatcher`, `budgetWatcher`,
+`watchtowerWatcher`) that re-derives on the scheduler tick and diffs against the
+previous pass. They share three rules, learned the hard way:
+
+1. **The first pass after boot is a silent baseline.** Otherwise a restart
+   replays every currently-bad state into the bell as though it just happened.
+2. **A throwing handler must not stop the remaining alerts**, and a failed read
+   must not wedge the tick. Both are caught per-item.
+3. **Identity beats state where it can.** Monitor alerts must diff statuses,
+   because a status is a mutable property of a schedule. Anomaly ids are
+   deterministic (`key|metric|runId`), so Watchtower needs only a bounded set of
+   ids already seen — no persisted alert log, and no chance of re-alerting
+   because a baseline shifted slightly underneath an old run.
 
 ## 6. The cron boundary (known limitation)
 

@@ -50,6 +50,7 @@ can do, and where the data comes from.
 | 19  | [Tasks](#19-tasks)                     | `#/tasks`      | what task workspaces exist / are locked?  |
 | 20  | [Cron panel](#20-cron-panel)           | Scheduler tab  | why native cron routines can't be shown   |
 | 21  | [Flight Recorder](#21-flight-recorder) | `#/run/<id>`   | what was it doing at minute four?         |
+| 22  | [Watchtower](#22-watchtower)           | `#/watchtower` | did it run the way it _usually_ runs?     |
 
 ---
 
@@ -990,6 +991,68 @@ occurrences) and click **▶ replay**.
 **Where the data comes from:** `GET /api/runs/:id/recording`, derived on every
 read from the run record plus `projects/<project>/<sessionId>.jsonl`. Nothing
 is persisted — the transcript stays the source of truth.
+
+---
+
+## 22. Watchtower
+
+_Learned envelopes, and the runs that leave them._ Route: `#/watchtower`
+(`g w`)
+
+**Purpose:** Monitors answer "did it run". Issues answer "did it fail".
+Neither catches the run that **succeeded**, took nine minutes instead of two,
+and burned four dollars instead of forty cents. Watchtower learns what each
+schedule — and each pipeline _phase_ — normally costs, and flags the runs that
+leave that envelope.
+
+**What you see:**
+
+- Four counters: **Envelopes** (warm and judging), **Warming up**,
+  **Anomalies** (last 14 days), **Critical**.
+- **Anomalies** first, because they are the news. Each states the multiple in
+  words — "3.2× median cost ($0.42 vs $0.13 over 24 runs)" — with a
+  **▶ replay this run** link straight into the
+  [Flight Recorder](#21-flight-recorder), and the robust z-score in a tooltip
+  for anyone who wants it.
+- **Learned envelopes** second, because they are the evidence: per unit of
+  work, the median and 5th–95th percentile of duration, cost and tokens, drawn
+  as a bar with the median marked, plus how many samples it was learned from.
+
+**What you can do:**
+
+- **Reset baseline** — "learn from here". Runs before that moment stop
+  counting for that key. Use it after a deliberate change (a new model, a
+  bigger prompt) that makes the old envelope wrong.
+- **Restore full history** — undo the reset.
+- Filter anomalies to **Critical** only.
+
+**How it decides — and why it is quiet:**
+
+- **Envelopes learn from successful runs only.** A crash that died in two
+  seconds is not evidence about how long the work takes. Failures are still
+  _judged_ against the envelope; they just don't shape it.
+- **A z-score and a ratio must both agree.** Robust z alone fires constantly
+  on tight distributions — a schedule that always costs $0.01 has near-zero
+  spread, so $0.012 is "twenty sigma". Requiring a real multiple too means
+  anything flagged is something you would also call unusual.
+- **Identical samples report no z at all.** When every run is the same to the
+  penny the spread is exactly zero and z is undefined, not enormous. Those
+  cases fall back to the ratio and say `zScore: null` rather than claiming a
+  precision the data doesn't support.
+- **Nothing fires before 8 successful runs.** A median of three runs is a
+  rumour. The envelope is shown while it warms, with the shortfall on the card.
+- **Both directions matter.** A run that finished in a tenth of the usual time
+  usually did a tenth of the usual work.
+
+**Where it shows up elsewhere:** critical anomalies become
+[Briefing](#2-briefing) attention items (warn-level ones appear in the digest
+under "Ran, but not the way it usually runs"), the Command Center strip gains
+an **anomalies** count, and every newly-observed anomaly fires a toast, a bell
+entry and the `anomaly.detected` webhook.
+
+**Where the data comes from:** `GET /api/watchtower`, derived on every read
+from run records. The only persisted state is your reset markers
+(`~/.claude/argus/watchtower.json`).
 
 ---
 

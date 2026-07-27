@@ -241,6 +241,7 @@ describe("buildSituation — counts", () => {
       monitorsFailing: 0,
       openIssues: 0,
       liveAgents: 0,
+      anomalies: 0,
     });
   });
 });

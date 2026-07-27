@@ -7,6 +7,25 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Watchtower** (`#/watchtower`, `GET /api/watchtower`): learned envelopes per
+  schedule and per pipeline _phase_, and the runs that leave them. Monitors say
+  "did it run", Issues say "did it fail"; this catches the run that succeeded,
+  took nine minutes instead of two and cost four dollars instead of forty cents.
+  Robust statistics only — median and MAD, no dependency and no training step —
+  and anomalies are stated as the multiple a human can act on ("3.2× median
+  cost"), not as a z-score. Deliberately quiet: envelopes learn from successful
+  runs only (a crash that died in two seconds is not evidence about how long the
+  work takes), a z-score _and_ a ratio must both agree before anything fires, an
+  identical-sample distribution reports `zScore: null` rather than pretending
+  0.012 vs 0.010 is twenty sigma, and nothing fires at all under eight
+  successful samples. Baselines are visible, show their sample count, and are
+  resettable ("learn from here") and restorable. Newly-observed anomalies push a
+  typed `watchtower:anomaly` frame to the toast stack and bell, POST an
+  `anomaly.detected` webhook, become Briefing attention items when critical, and
+  add an anomalies count to the Command Center strip. Detection diffs derived
+  state between scheduler ticks, so the first pass after a restart is a silent
+  baseline and deterministic anomaly ids mean a run never alerts twice.
+
 - **Flight Recorder** (`#/run/<id>`, `GET /api/runs/:id/recording`): any run
   opens as a scrubbable causal timeline instead of a JSONL wall. Every tool
   call, file diff, token burst and cost tick is placed on one clock rooted at

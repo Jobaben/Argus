@@ -17,6 +17,7 @@ function briefing(over: Partial<BriefingData> = {}): BriefingData {
       failures: [],
       newIssues: [],
       finishedPipelines: [],
+      anomalies: [],
     },
     ...over,
   };
@@ -124,6 +125,7 @@ describe("Briefing", () => {
           },
         ],
         finishedPipelines: [],
+        anomalies: [],
       },
     });
     render(<Briefing briefing={data} loading={false} error={null} ack={async () => {}} />);
@@ -159,6 +161,7 @@ describe("Briefing", () => {
             tokens: 0,
             newIssues: [],
             finishedPipelines: [],
+            anomalies: [],
             failures: [
               { ...failedRun, id: "a", sessionId: "sess-1", project: "-home-me-api" },
               { ...failedRun, id: "b", sessionId: null, project: null },

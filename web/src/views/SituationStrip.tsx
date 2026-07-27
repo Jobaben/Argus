@@ -205,6 +205,7 @@ export function SituationStrip({
       { count: c.monitorsDown, label: "down", tone: "bad", href: "#/monitors" },
       { count: c.monitorsFailing, label: "failing", tone: "bad", href: "#/monitors" },
       { count: c.openIssues, label: "open issues", tone: "attention", href: "#/issues" },
+      { count: c.anomalies, label: "anomalies", tone: "attention", href: "#/watchtower" },
     ] satisfies { count: number; label: string; tone: Tone; href: string }[]
   ).filter((s) => s.count > 0);
 

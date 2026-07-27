@@ -1,6 +1,9 @@
 export interface ToastItem {
   id: string;
-  tone: "ok" | "fail";
+  /** `info` is for things worth seeing but not worth alarm — a warn-level
+   *  anomaly, say. Painting those the same red as a failed run is how a colour
+   *  stops carrying information. */
+  tone: "ok" | "fail" | "info";
   title: string;
   detail?: string;
 }
@@ -8,6 +11,11 @@ export interface ToastItem {
 const TONE: Record<ToastItem["tone"], { border: string; badge: string; label: string }> = {
   ok: { border: "border-ok/40", badge: "border-ok/50 bg-ok/20 text-ok", label: "Done" },
   fail: { border: "border-fail/45", badge: "border-fail/50 bg-fail/20 text-fail", label: "Failed" },
+  info: {
+    border: "border-queue/40",
+    badge: "border-queue/50 bg-queue/20 text-queue",
+    label: "Notice",
+  },
 };
 
 function Toast({ toast, onDismiss }: { toast: ToastItem; onDismiss: (id: string) => void }) {

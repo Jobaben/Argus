@@ -3,8 +3,10 @@
 import type { Issue } from "./issues.js";
 import type { PipelineInstance } from "./pipelines.js";
 import type { Run, RunStatus } from "./schedules.js";
+import type { Anomaly } from "./watchtower.js";
 
-export type AttentionKind = "monitor-down" | "gate-waiting" | "monitor-failing" | "issue-open";
+export type AttentionKind =
+  "monitor-down" | "gate-waiting" | "monitor-failing" | "issue-open" | "anomaly";
 
 export interface AttentionItem {
   kind: AttentionKind;
@@ -22,6 +24,8 @@ export interface BriefingWindow {
   failures: Run[];
   newIssues: Issue[];
   finishedPipelines: PipelineInstance[];
+  /** Runs that left their learned envelope in the window, newest first. */
+  anomalies: Anomaly[];
 }
 
 export interface Briefing {

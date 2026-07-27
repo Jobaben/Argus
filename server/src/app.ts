@@ -65,6 +65,13 @@ import {
   updateBudgetConfig,
   validateBudgetPatch,
 } from "./sources/budget.js";
+import {
+  buildWatchtower,
+  clearBaselineReset,
+  readResets,
+  resetBaseline,
+  WatchtowerValidationError,
+} from "./sources/watchtower.js";
 import { buildOverview } from "./sources/overview.js";
 import { buildPalette } from "./sources/palette.js";
 import { buildSituation } from "./sources/insight.js";
@@ -579,20 +586,51 @@ export function createApp(deps: AppDeps): Hono {
     return c.json({ ok: true });
   });
 
+  // Learned envelopes per schedule/phase, plus the runs that left them.
+  app.get("/api/watchtower", async (c) => {
+    const [runs, resets] = await Promise.all([readRuns(), readResets()]);
+    return c.json(buildWatchtower(runs, resets, new Date()));
+  });
+
+  // "Learn from here." Argus-owned, low-risk state — ungated like issue triage.
+  app.post("/api/watchtower/:key/reset", async (c) => {
+    try {
+      const record = await resetBaseline(c.req.param("key") ?? "", new Date());
+      broadcast({ type: "watchtower:changed" });
+      return c.json({ ok: true, ...record });
+    } catch (e) {
+      return fail(c, e, WatchtowerValidationError);
+    }
+  });
+
+  app.delete("/api/watchtower/:key/reset", async (c) => {
+    try {
+      if (!(await clearBaselineReset(c.req.param("key") ?? ""))) {
+        return c.json({ error: "not found" }, 404);
+      }
+    } catch (e) {
+      return fail(c, e, WatchtowerValidationError);
+    }
+    broadcast({ type: "watchtower:changed" });
+    return c.json({ ok: true });
+  });
+
   // "While you were away": attention items + digest since the last ack.
   app.get("/api/briefing", async (c) => {
     const now = new Date();
-    const [runs, schedules, triage, instances, ackAt] = await Promise.all([
+    const [runs, schedules, triage, instances, ackAt, resets] = await Promise.all([
       readRuns(),
       readSchedules(),
       readTriage(),
       readInstances(),
       readBriefingAck(),
+      readResets(),
     ]);
     const { monitors } = buildMonitors(schedules, runs, now);
     const issues = buildIssues(runs, triage);
+    const { anomalies } = buildWatchtower(runs, resets, now);
     return c.json(
-      buildBriefing({ runs, monitors, issues, instances }, clampSince(ackAt, now), now),
+      buildBriefing({ runs, monitors, issues, instances, anomalies }, clampSince(ackAt, now), now),
     );
   });
 
@@ -672,7 +710,7 @@ export function createApp(deps: AppDeps): Hono {
   // next, and a 24h throughput sparkline. All derived from the shared caches.
   app.get("/api/insight", async (c) => {
     const now = new Date();
-    const [runs, instances, pipelines, schedules, triage, agents, config, ledger] =
+    const [runs, instances, pipelines, schedules, triage, agents, config, ledger, resets] =
       await Promise.all([
         readRuns(),
         readInstances(),
@@ -682,6 +720,7 @@ export function createApp(deps: AppDeps): Hono {
         readAgents(),
         readBudgetConfig(),
         readSpendLedger(),
+        readResets(),
       ]);
     const { monitors } = buildMonitors(schedules, runs, now);
     return c.json(
@@ -695,6 +734,7 @@ export function createApp(deps: AppDeps): Hono {
           issues: buildIssues(runs, triage),
           agents,
           budget: buildBudgetStatus(config, ledger, now),
+          anomalies: buildWatchtower(runs, resets, now).anomalies,
         },
         now,
       ),

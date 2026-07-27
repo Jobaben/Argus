@@ -14,6 +14,7 @@ function situation(over: Partial<Situation> = {}): Situation {
       monitorsFailing: 0,
       openIssues: 0,
       liveAgents: 0,
+      anomalies: 0,
     },
     spend: {
       state: "ok",
@@ -59,6 +60,7 @@ describe("SituationStrip", () => {
             monitorsFailing: 0,
             openIssues: 0,
             liveAgents: 0,
+            anomalies: 0,
           },
         })}
         loading={false}
@@ -82,6 +84,7 @@ describe("SituationStrip", () => {
             monitorsFailing: 0,
             openIssues: 2,
             liveAgents: 0,
+            anomalies: 0,
           },
         })}
         loading={false}

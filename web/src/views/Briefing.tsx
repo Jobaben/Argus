@@ -18,6 +18,7 @@ const KIND_META: Record<AttentionKind, { href: string; label: string; tone: "fai
   "gate-waiting": { href: "#/pipelines", label: "Awaiting approval", tone: "await" },
   "monitor-failing": { href: "#/monitors", label: "Monitor failing", tone: "fail" },
   "issue-open": { href: "#/issues", label: "Open issue", tone: "fail" },
+  anomaly: { href: "#/watchtower", label: "Anomaly", tone: "await" },
 };
 
 const TONE_CLASS = {
@@ -45,7 +46,10 @@ function AttentionCard({ item }: { item: BriefingData["attention"][number] }) {
   const meta = KIND_META[item.kind];
   return (
     <a href={meta.href} className="block">
-      <Card className={item.kind === "gate-waiting" ? "border-await/40" : "border-fail/40"}>
+      {/* Border follows the kind's own tone rather than a special case for
+          gates: with anomalies added there are now two amber kinds, and the
+          old `kind === "gate-waiting"` test would have drawn one of them red. */}
+      <Card className={meta.tone === "await" ? "border-await/40" : "border-fail/40"}>
         <div className="flex items-center gap-3">
           <span
             className={`inline-flex shrink-0 items-center rounded-full border px-2.5 py-0.5 font-mono text-[10px] font-bold uppercase tracking-[0.13em] ${TONE_CLASS[meta.tone]}`}
@@ -203,6 +207,32 @@ export default function Briefing({
                             <span className="shrink-0 font-mono text-xs text-fail">×{i.count}</span>
                             <span className="ml-auto shrink-0 text-xs text-ink-faint">
                               first seen <TimeAgo iso={i.firstSeen} />
+                            </span>
+                          </div>
+                        </Card>
+                      </a>
+                    ))}
+                  </div>
+                </Section>
+              )}
+
+              {briefing.window.anomalies.length > 0 && (
+                <Section title="Ran, but not the way it usually runs">
+                  <div className="flex flex-col gap-2">
+                    {briefing.window.anomalies.map((a) => (
+                      <a key={a.id} href="#/watchtower" className="block">
+                        <Card>
+                          <div className="flex items-center gap-3 text-sm">
+                            <span className="shrink-0 font-semibold text-ink">{a.name}</span>
+                            <span
+                              className={`truncate font-mono text-xs ${
+                                a.severity === "critical" ? "text-fail" : "text-await"
+                              }`}
+                            >
+                              {a.detail}
+                            </span>
+                            <span className="ml-auto shrink-0 text-xs text-ink-faint">
+                              <TimeAgo iso={a.at} />
                             </span>
                           </div>
                         </Card>

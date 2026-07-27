@@ -463,6 +463,105 @@ known-exceeded budget), and `exceeded → warning` stays quiet — you already
 heard about the breach; `budget.cleared` fires once spend is back under every
 limit.
 
+## Watchtower
+
+### `GET /api/watchtower`
+
+Learned envelopes per unit of work, plus the runs that left them. Derived on
+every read from run records; the only persisted state is reset markers.
+
+```jsonc
+{
+  "generatedAt": "2026-07-20T12:00:00.000Z",
+  "baselines": [
+    {
+      "key": "schedule:s1",          // or "phase:pipeline:<id>:<phaseId>"
+      "scope": "schedule",           // schedule | phase
+      "name": "Nightly triage",
+      "samples": 24,                 // successful runs the envelope was learned from
+      "warmupRemaining": 0,          // >0 means the envelope exists but will not fire
+      "since": "2026-07-01T…",
+      "resetAt": null,
+      "duration": {
+        "metric": "duration",
+        "median": 61000,
+        "mad": 900,                  // median absolute deviation, unscaled
+        "p05": 55000,
+        "p95": 70000,
+        "min": 54000,
+        "max": 71000,
+        "samples": 24,
+      },
+      "cost": { … },                 // null when the runs never reported it
+      "tokens": { … },
+    },
+  ],
+  "anomalies": [
+    {
+      "id": "schedule:s1|cost|<runId>", // deterministic → de-duplication needs no state
+      "key": "schedule:s1",
+      "scope": "schedule",
+      "name": "Nightly triage",
+      "runId": "…",
+      "scheduleId": "s1",
+      "metric": "cost",              // duration | cost | tokens
+      "direction": "high",           // high | low
+      "severity": "critical",        // warn | critical
+      "value": 0.42,
+      "median": 0.1,
+      "ratio": 4.2,
+      "zScore": 21.6,                // null when the sample spread is degenerate
+      "at": "2026-07-20T11:00:00.000Z",
+      "detail": "4.2× median cost ($0.42 vs $0.10 over 24 runs)",
+    },
+  ],
+  "summary": { "ready": 1, "warming": 0, "anomalies": 1, "critical": 1 },
+  "warmupRuns": 8,
+}
+```
+
+The detection rule, stated once so consumers can reason about it:
+
+- Envelopes are learned from **successful runs only**; failures are judged
+  against the envelope but never shape it.
+- A value is anomalous when the **robust z-score** (`(value − median) /
+(1.4826 × MAD)`) clears ±3.5 **and** the ratio to the median clears 1.5×
+  (high) or 0.5× (low). Both must agree — z alone fires constantly on tight
+  distributions.
+- When every sample is identical the MAD is zero and z is undefined: those
+  cases report `zScore: null` and use a ratio-only threshold of 2× / 0.5×.
+- `severity` is `critical` at ≥3× (or |z| ≥ 7), else `warn`.
+- Nothing fires under 8 successful samples; the shortfall is `warmupRemaining`.
+- Window: samples are the most recent 100 runs per key; anomalies are the most
+  recent 100 within 14 days.
+
+### `POST /api/watchtower/:key/reset`
+
+"Learn from here." Runs before now stop counting for `key`, for both the
+envelope and the evaluation. Returns `{ ok: true, key, resetAt }`, or `400` for
+a key outside `[A-Za-z0-9][A-Za-z0-9:_-]{0,199}`. Broadcasts
+`watchtower:changed`.
+
+### `DELETE /api/watchtower/:key/reset`
+
+Drops the reset marker, restoring the full history. `404` when there was none.
+Broadcasts `watchtower:changed`.
+
+### Anomaly alerts
+
+Newly-observed anomalies push a payload frame rather than a change ping — an
+anomaly happens once and cannot be re-derived as "new":
+
+```json
+{ "type": "watchtower:anomaly", "anomaly": { "…": "as above" } }
+```
+
+Detection is a diff between scheduler ticks, so the first pass after a restart
+is a **silent baseline** — a reboot never replays two weeks of anomalies into
+the bell. Ids are deterministic, so the same run never alerts twice. When
+`ARGUS_WEBHOOK_URL` is set, the same transition POSTs an `anomaly.detected`
+payload.
+
 ## Issues
 
 Sentry-style grouping of failed runs (status `failed`/`interrupted`, or

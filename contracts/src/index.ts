@@ -124,6 +124,20 @@ export type {
 } from "./admin.js";
 
 export type {
+  Anomaly,
+  AnomalyDirection,
+  AnomalyEvent,
+  AnomalyMetric,
+  AnomalySeverity,
+  Baseline,
+  BaselineScope,
+  MetricBaseline,
+  WatchtowerReport,
+  WatchtowerSummary,
+} from "./watchtower.js";
+
+export type {
+  AnomalyAlertFrame,
   BudgetAlert,
   BudgetAlertEvent,
   BudgetAlertFrame,

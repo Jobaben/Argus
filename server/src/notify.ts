@@ -2,6 +2,7 @@ import type { Run } from "./sources/scheduleTypes.js";
 import type { PipelineInstance } from "./sources/pipelineTypes.js";
 import type { MonitorAlert } from "./sources/monitorAlerts.js";
 import type { BudgetAlert } from "./sources/budgetAlerts.js";
+import type { Anomaly } from "./sources/watchtower.js";
 import { log } from "./log.js";
 
 /**
@@ -13,7 +14,12 @@ import { log } from "./log.js";
  * The payload builders are pure so they can be asserted without a network.
  */
 export interface FailurePayload {
-  event: "run.failed" | "pipeline.failed" | MonitorAlert["event"] | BudgetAlert["event"];
+  event:
+    | "run.failed"
+    | "pipeline.failed"
+    | "anomaly.detected"
+    | MonitorAlert["event"]
+    | BudgetAlert["event"];
   at: string;
   title: string;
   detail: string;
@@ -70,6 +76,18 @@ export function buildBudgetAlertPayload(alert: BudgetAlert): FailurePayload {
     title: BUDGET_TITLES[alert.event],
     detail: alert.detail,
     id: "budget",
+  };
+}
+
+export function buildAnomalyPayload(anomaly: Anomaly): FailurePayload {
+  return {
+    event: "anomaly.detected",
+    at: anomaly.at,
+    // The severity is in the title because a webhook consumer routing on text
+    // shouldn't have to parse a multiple out of the detail line to triage.
+    title: `Anomaly (${anomaly.severity}): ${anomaly.name}`,
+    detail: anomaly.detail,
+    id: anomaly.runId,
   };
 }
 

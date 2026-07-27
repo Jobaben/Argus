@@ -77,6 +77,16 @@ export type {
   SituationCounts,
   NextFire,
   ThroughputBucket,
+  // Watchtower
+  Anomaly,
+  AnomalyDirection,
+  AnomalyMetric,
+  AnomalySeverity,
+  Baseline,
+  BaselineScope,
+  MetricBaseline,
+  WatchtowerReport,
+  WatchtowerSummary,
   // Flight Recorder
   Recording,
   RecorderEvent,
