@@ -11,6 +11,14 @@ import {
   sessionToMarkdown,
 } from "./sources/sessions.js";
 import { buildRecording } from "./sources/recorder.js";
+import {
+  isAutopsyEligible,
+  performAutopsy,
+  readAutopsy,
+  readFailureClasses,
+  type AutopsyDeps,
+} from "./sources/autopsy.js";
+import { analysisEnabled, createAnalysisRunner, type AnalysisRunner } from "./sources/analysis.js";
 import { readActivity } from "./sources/history.js";
 import { readProjects } from "./sources/projects.js";
 import { readStats } from "./sources/stats.js";
@@ -122,6 +130,8 @@ export interface AppDeps {
   users?: UserStore;
   /** Socket peer address, injectable for tests. Defaults to the node-server conninfo. */
   remoteAddr?: (c: Context) => string | null;
+  /** Bounded `claude -p` analysis runner (Autopsy). Defaults to the real one. */
+  analysis?: AnalysisRunner;
 }
 
 /**
@@ -147,6 +157,15 @@ export function createApp(deps: AppDeps): Hono {
 
   const notifyRunFailed = (run: Parameters<typeof buildRunFailurePayload>[0]) =>
     void postWebhook(config.webhookUrl, buildRunFailurePayload(run, new Date().toISOString()));
+
+  // One runner for every bounded `claude -p` analysis pass this app performs,
+  // so they share a single concurrency and spend gate. Injectable for tests.
+  const analysis = deps.analysis ?? createAnalysisRunner();
+  const autopsyDeps: AutopsyDeps = {
+    runner: analysis,
+    now: () => new Date(),
+    readLines: readSessionLines,
+  };
 
   // Parse a JSON body, or short-circuit with a 400. Returns a discriminated
   // result so the handler can `if (!parsed.ok) return parsed.res`.
@@ -327,6 +346,9 @@ export function createApp(deps: AppDeps): Hono {
   // Instance gate controls run/steer pipelines. /signal is NOT admin-gated:
   // it is called by headless agent hooks and carries its own per-instance
   // token, verified by the engine.
+  // Producing a postmortem spawns an agent; relaunching spawns a real run.
+  app.on(["POST"], "/api/runs/:id/autopsy", admin);
+  app.on(["POST"], "/api/runs/:id/relaunch", admin);
   app.use("/api/instances/:id/approve", admin);
   app.use("/api/instances/:id/revise", admin);
   app.use("/api/instances/:id/abort", admin);
@@ -542,8 +564,12 @@ export function createApp(deps: AppDeps): Hono {
 
   // Failed runs grouped by error fingerprint, Sentry-style.
   app.get("/api/issues", async (c) => {
-    const [runs, triage] = await Promise.all([readRuns(), readTriage()]);
-    const issues = buildIssues(runs, triage);
+    const [runs, triage, classes] = await Promise.all([
+      readRuns(),
+      readTriage(),
+      readFailureClasses(),
+    ]);
+    const issues = buildIssues(runs, triage, { classes });
     const summary = { open: 0, resolved: 0, ignored: 0 };
     for (const i of issues) summary[i.state]++;
     return c.json({ issues, summary });
@@ -551,18 +577,28 @@ export function createApp(deps: AppDeps): Hono {
 
   app.get("/api/issues/:fingerprint", async (c) => {
     const fp = c.req.param("fingerprint");
-    const [runs, triage] = await Promise.all([readRuns(), readTriage()]);
-    const issue = buildIssues(runs, triage).find((i) => i.fingerprint === fp);
+    const [runs, triage, classes] = await Promise.all([
+      readRuns(),
+      readTriage(),
+      readFailureClasses(),
+    ]);
+    const issue = buildIssues(runs, triage, { classes }).find((i) => i.fingerprint === fp);
     if (!issue) return c.json({ error: "not found" }, 404);
-    return c.json({ issue, occurrences: issueOccurrences(runs, fp) });
+    // The whole member set, so a clustered issue lists every occurrence rather
+    // than only the ones sharing its representative fingerprint.
+    return c.json({ issue, occurrences: issueOccurrences(runs, issue.members) });
   });
 
   const triageHandler = (state: "resolved" | "ignored") => async (c: Context) => {
     // Plain `Context` can't infer the :fingerprint param type; missing → "" → 404.
     const fp = c.req.param("fingerprint") ?? "";
     try {
-      const [runs, triage] = await Promise.all([readRuns(), readTriage()]);
-      const issue = buildIssues(runs, triage).find((i) => i.fingerprint === fp);
+      const [runs, triage, classes] = await Promise.all([
+        readRuns(),
+        readTriage(),
+        readFailureClasses(),
+      ]);
+      const issue = buildIssues(runs, triage, { classes }).find((i) => i.fingerprint === fp);
       if (!issue) return c.json({ error: "not found" }, 404);
       await setTriage(fp, state, issue.lastSeen, new Date());
     } catch (e) {
@@ -584,6 +620,81 @@ export function createApp(deps: AppDeps): Hono {
     }
     broadcast({ type: "issues:changed" });
     return c.json({ ok: true });
+  });
+
+  // ── Autopsy ───────────────────────────────────────────────────────────────
+  // The postmortem is a read; *producing* one spawns an agent and *relaunching*
+  // spawns a real run, so both of those sit behind the admin gate alongside the
+  // pipeline routes.
+
+  app.get("/api/runs/:id/autopsy", async (c) => {
+    const got = await readRun(c.req.param("id"));
+    if (!got) return c.json({ error: "not found" }, 404);
+    const eligible = isAutopsyEligible(got.run);
+    const autopsy = await readAutopsy(got.run.id);
+    return c.json({
+      autopsy,
+      eligible,
+      unavailable: eligible
+        ? autopsy
+          ? null
+          : analysisEnabled()
+            ? null
+            : "postmortems are disabled (ARGUS_ANALYSIS=off)"
+        : "this run did not fail, so there is nothing to explain",
+    });
+  });
+
+  app.post("/api/runs/:id/autopsy", async (c) => {
+    const got = await readRun(c.req.param("id"));
+    if (!got) return c.json({ error: "not found" }, 404);
+    if (!isAutopsyEligible(got.run)) {
+      return c.json({ error: "this run did not fail, so there is nothing to explain" }, 409);
+    }
+    const autopsy = await performAutopsy(got.run, autopsyDeps);
+    broadcast({ type: "issues:changed" });
+    return c.json({ autopsy, eligible: true, unavailable: null });
+  });
+
+  /**
+   * Relaunch with the fix: a one-off run using the autopsy's proposed prompt.
+   *
+   * The delta is never applied silently to the schedule — a model's rewrite of
+   * a prompt that spends money unattended is a suggestion, not a migration. It
+   * fires once, as a one-off, so the operator can read the result and then
+   * decide whether to edit the schedule themselves.
+   */
+  app.post("/api/runs/:id/relaunch", async (c) => {
+    const got = await readRun(c.req.param("id"));
+    if (!got) return c.json({ error: "not found" }, 404);
+    const body = await jsonBody(c);
+    const override = optionalField<string>(body, "prompt");
+    const autopsy = await readAutopsy(got.run.id);
+    const prompt = (override ?? autopsy?.promptDelta ?? "").trim();
+    if (!prompt) {
+      return c.json({ error: "no proposed prompt to relaunch with" }, 409);
+    }
+    try {
+      const run = await fireOneOff(
+        validateLaunchInput({
+          name: `Relaunch: ${got.run.scheduleName}`,
+          prompt,
+          cwd: got.run.cwd,
+          ...(got.run.model ? { model: got.run.model } : {}),
+        }),
+        {
+          now: () => new Date(),
+          spawn: defaultSpawn,
+          tickMs: config.schedulerTickMs,
+          newId: () => randomUUID(),
+          onChange: () => broadcast({ type: "schedules:changed" }),
+          onFailure: notifyRunFailed,
+        },
+      );
+      return c.json(run, 202);
+    } catch (e) {
+      return fail(c, e, LaunchValidationError);
+    }
   });
 
   // Learned envelopes per schedule/phase, plus the runs that left them.
@@ -618,16 +729,17 @@ export function createApp(deps: AppDeps): Hono {
   // "While you were away": attention items + digest since the last ack.
   app.get("/api/briefing", async (c) => {
     const now = new Date();
-    const [runs, schedules, triage, instances, ackAt, resets] = await Promise.all([
+    const [runs, schedules, triage, instances, ackAt, resets, classes] = await Promise.all([
       readRuns(),
       readSchedules(),
       readTriage(),
       readInstances(),
       readBriefingAck(),
       readResets(),
+      readFailureClasses(),
     ]);
     const { monitors } = buildMonitors(schedules, runs, now);
-    const issues = buildIssues(runs, triage);
+    const issues = buildIssues(runs, triage, { classes });
     const { anomalies } = buildWatchtower(runs, resets, now);
     return c.json(
       buildBriefing({ runs, monitors, issues, instances, anomalies }, clampSince(ackAt, now), now),
@@ -710,7 +822,7 @@ export function createApp(deps: AppDeps): Hono {
   // next, and a 24h throughput sparkline. All derived from the shared caches.
   app.get("/api/insight", async (c) => {
     const now = new Date();
-    const [runs, instances, pipelines, schedules, triage, agents, config, ledger, resets] =
+    const [runs, instances, pipelines, schedules, triage, agents, config, ledger, resets, classes] =
       await Promise.all([
         readRuns(),
         readInstances(),
@@ -721,6 +833,7 @@ export function createApp(deps: AppDeps): Hono {
         readBudgetConfig(),
         readSpendLedger(),
         readResets(),
+        readFailureClasses(),
       ]);
     const { monitors } = buildMonitors(schedules, runs, now);
     return c.json(
@@ -731,7 +844,7 @@ export function createApp(deps: AppDeps): Hono {
           pipelines,
           schedules,
           monitors,
-          issues: buildIssues(runs, triage),
+          issues: buildIssues(runs, triage, { classes }),
           agents,
           budget: buildBudgetStatus(config, ledger, now),
           anomalies: buildWatchtower(runs, resets, now).anomalies,
@@ -747,7 +860,7 @@ export function createApp(deps: AppDeps): Hono {
   // busiest single view.
   app.get("/api/palette", async (c) => {
     const now = new Date();
-    const [defs, instances, schedules, runs, triage, agents, projects, sessions] =
+    const [defs, instances, schedules, runs, triage, agents, projects, sessions, classes] =
       await Promise.all([
         readPipelines(),
         readInstances(),
@@ -757,9 +870,10 @@ export function createApp(deps: AppDeps): Hono {
         readAgents(),
         readProjects(),
         readSessions(),
+        readFailureClasses(),
       ]);
     const { monitors } = buildMonitors(schedules, runs, now);
-    const issues = buildIssues(runs, triage);
+    const issues = buildIssues(runs, triage, { classes });
     // Newest instance per pipeline — the one whose badge and gate the palette
     // should reflect.
     const latestByPipeline = new Map<string, (typeof instances)[number]>();

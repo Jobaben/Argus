@@ -7,6 +7,33 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Autopsy** — every failed run gets an automatic postmortem. A bounded
+  `claude -p` pass returns a failure class from a closed taxonomy, a confidence
+  figure, one paragraph of prose, the transcript span where it went wrong, and a
+  proposed replacement prompt with one-click **Relaunch with fix** behind the
+  admin gate. The relaunch fires a one-off and never edits the schedule — a
+  model's rewrite of a prompt that spends money unattended is a suggestion, not
+  a migration, and the UI says so next to the button. Nothing the model returns
+  is trusted verbatim: the class must be in the taxonomy, confidence is clamped,
+  the cited span is clamped into the recording's real duration (so "the failure
+  was at forty minutes" on a two-minute run cannot send the scrubber off the end
+  of the track), and an answer with no explanation is rejected. The panel shows
+  the span's own quote next to a **scrub to** control, so the claim is checkable
+  against the timeline right below it, and shows what the postmortem cost.
+- **Issue clustering upgraded from string equality to similarity.** With
+  postmortems available, differently-worded errors that describe the same
+  problem merge into one issue marked "N wordings merged", driven by Autopsy's
+  failure class plus token overlap of the normalized messages. Two _different_
+  known classes never merge however alike the words. The string fingerprint is
+  kept as the fallback: with no postmortems, grouping is byte-for-byte what it
+  always was.
+- **One audited place that asks a model a question** (`sources/analysis.ts`),
+  shared by every model-backed feature: one pass at a time (claimed
+  synchronously, so two callers cannot both see an idle runner), a hard timeout
+  that kills the process _group_, an output cap, metering into the spend ledger
+  even on failure, and a refusal to start under the budget hard stop.
+  `ARGUS_ANALYSIS=off` disables it; `ARGUS_ANALYSIS_MODEL` picks the model.
+
 - **Watchtower** (`#/watchtower`, `GET /api/watchtower`): learned envelopes per
   schedule and per pipeline _phase_, and the runs that leave them. Monitors say
   "did it run", Issues say "did it fail"; this catches the run that succeeded,

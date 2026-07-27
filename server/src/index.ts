@@ -25,6 +25,9 @@ import {
 import { createBudgetWatcher } from "./budgetWatcher.js";
 import { createMonitorWatcher } from "./monitorWatcher.js";
 import { createWatchtowerWatcher } from "./watchtowerWatcher.js";
+import { createAutopsyWatcher } from "./autopsyWatcher.js";
+import { createAnalysisRunner } from "./sources/analysis.js";
+import { readSessionLines } from "./sources/sessions.js";
 import { readSchedules } from "./sources/schedules.js";
 import { createApp } from "./app.js";
 import { createAuthService } from "./auth.js";
@@ -77,7 +80,19 @@ const engine = createEngine({
 
 const users = createUserStore();
 const auth = createAuthService({ store: users });
-const app = createApp({ config, engine, broadcast, auth, users, activity: () => tailer.latest() });
+// One runner for every bounded `claude -p` analysis pass in the process — the
+// on-demand routes and the background watcher share its concurrency and spend
+// gate, so "one pass at a time" means one, not one per caller.
+const analysis = createAnalysisRunner();
+const app = createApp({
+  config,
+  engine,
+  broadcast,
+  auth,
+  users,
+  analysis,
+  activity: () => tailer.latest(),
+});
 
 const server = serve({ fetch: app.fetch, port: PORT, hostname: config.host }, (info) => {
   log.info("argus listening", {
@@ -194,6 +209,15 @@ const watchtowerWatcher = createWatchtowerWatcher({
     broadcast({ type: "watchtower:anomaly", anomaly });
   },
 });
+// Every failed run gets a postmortem, one per tick so a backlog drains rather
+// than arriving as a spend spike.
+const autopsyWatcher = createAutopsyWatcher({
+  runner: analysis,
+  now: () => new Date(),
+  readLines: readSessionLines,
+  readRuns,
+  onAutopsy: () => broadcast({ type: "issues:changed" }),
+});
 const scheduler = startScheduler({
   onChange: () => broadcast({ type: "schedules:changed" }),
   onTick: async () => {
@@ -201,6 +225,7 @@ const scheduler = startScheduler({
     await monitorWatcher.check();
     await budgetWatcher.check();
     await watchtowerWatcher.check();
+    await autopsyWatcher.check();
   },
   onFailure: (run) =>
     void postWebhook(config.webhookUrl, buildRunFailurePayload(run, new Date().toISOString())),

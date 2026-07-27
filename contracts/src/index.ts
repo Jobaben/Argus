@@ -124,6 +124,14 @@ export type {
 } from "./admin.js";
 
 export type {
+  Autopsy,
+  AutopsyResponse,
+  AutopsySpan,
+  AutopsyStatus,
+  FailureClass,
+} from "./autopsy.js";
+
+export type {
   Anomaly,
   AnomalyDirection,
   AnomalyEvent,

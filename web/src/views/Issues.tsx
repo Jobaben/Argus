@@ -10,7 +10,22 @@ import {
   TimeAgo,
 } from "../ds";
 import { useIssues } from "../useIssues";
-import type { Issue, IssueOccurrence, IssueState } from "../types";
+import type { FailureClass, Issue, IssueOccurrence, IssueState } from "../types";
+
+/** Autopsy's taxonomy, spelled for humans. */
+const CLASS_LABEL: Record<FailureClass, string> = {
+  "prompt-ambiguity": "Ambiguous prompt",
+  "missing-context": "Missing context",
+  "tool-error": "Tool error",
+  "permission-denied": "Permission denied",
+  environment: "Environment",
+  timeout: "Timeout",
+  "rate-limit": "Rate limit",
+  "model-refusal": "Model declined",
+  "bad-output-format": "Bad output format",
+  infrastructure: "Infrastructure",
+  other: "Unclassified",
+};
 
 const STATE_BADGE: Record<IssueState, string> = {
   open: "text-fail bg-fail/14",
@@ -46,9 +61,16 @@ function Occurrences({ list }: { list: IssueOccurrence[] }) {
             <TimeAgo iso={o.at} />
           </span>
           <span className="shrink-0 font-medium text-ink">{o.scheduleName}</span>
-          <span className="truncate font-mono text-ink-faint" title={o.error}>
+          <span className="min-w-0 flex-1 truncate font-mono text-ink-faint" title={o.error}>
             {o.error}
           </span>
+          <a
+            href={`#/run/${encodeURIComponent(o.runId)}`}
+            className="shrink-0 font-mono text-eye hover:underline"
+            title="Replay this run, with its postmortem"
+          >
+            ▶ replay
+          </a>
         </li>
       ))}
     </ul>
@@ -93,6 +115,14 @@ function IssueCard({
             {issue.title}
           </span>
         </button>
+        {issue.failureClass && (
+          <span
+            className="inline-flex shrink-0 items-center rounded-full border border-await/40 bg-await/12 px-2 py-0.5 font-mono text-[10px] font-bold uppercase tracking-[0.1em] text-await"
+            title="Autopsy's diagnosis for this issue"
+          >
+            {CLASS_LABEL[issue.failureClass]}
+          </span>
+        )}
         <span className="inline-flex shrink-0 items-center rounded-md bg-fail/12 px-2 py-0.5 font-mono text-xs font-bold text-fail ring-1 ring-fail/20">
           ×{issue.count}
         </span>
@@ -109,6 +139,14 @@ function IssueCard({
         <span>
           Last seen <TimeAgo iso={issue.lastSeen} />
         </span>
+        {issue.members.length > 1 && (
+          <span
+            title="Differently-worded errors judged to be the same problem, merged by Autopsy's failure class plus message overlap"
+            className="font-mono text-[10px] uppercase tracking-[0.1em] text-queue"
+          >
+            {issue.members.length} wordings merged
+          </span>
+        )}
         <span className="ml-auto flex gap-2">
           {ACTIONS[issue.state].map(({ label, action }) => (
             <button

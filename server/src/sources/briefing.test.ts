@@ -60,6 +60,8 @@ function issue(over: Partial<Issue> = {}): Issue {
     schedules: ["Nightly triage"],
     state: "open",
     lastRunId: "r9",
+    members: ["f".repeat(16)],
+    failureClass: null,
     ...over,
   };
 }

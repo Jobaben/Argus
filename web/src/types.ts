@@ -77,6 +77,12 @@ export type {
   SituationCounts,
   NextFire,
   ThroughputBucket,
+  // Autopsy
+  Autopsy,
+  AutopsyResponse,
+  AutopsySpan,
+  AutopsyStatus,
+  FailureClass,
   // Watchtower
   Anomaly,
   AnomalyDirection,

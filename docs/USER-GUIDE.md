@@ -1056,6 +1056,66 @@ from run records. The only persisted state is your reset markers
 
 ---
 
+## 23. Autopsy
+
+_An automatic postmortem for every failed run._ Appears on the
+[Flight Recorder](#21-flight-recorder) for any failed run, and its verdict
+shows up on [Issues](#7-issues).
+
+**Purpose:** a failed run leaves an error string and a transcript. Turning
+those into "what actually went wrong, where, and what to change" is work
+somebody does by hand at 9am, badly, for the third time this week. Autopsy runs
+the same pass automatically, bounded, and attaches the answer to the run.
+
+**What you see** (on the run's recorder page, above the track):
+
+- A **failure class** from a small closed taxonomy — Ambiguous prompt, Missing
+  context, Tool error, Permission denied, Environment, Timeout, Rate limit,
+  Model declined, Bad output format, Infrastructure, Unclassified.
+- A **confidence** figure. Low confidence is shown, not hidden: an invisible
+  caveat is not a caveat.
+- **One paragraph** of prose explaining what happened. Not a bulleted plan.
+- **Where it went wrong**, quoting the timeline line it is claiming about, with
+  a **▶ scrub to 61.0s** control that moves the playhead there — so the claim is
+  checkable against the track immediately below it.
+- A **proposed prompt**, in full, with one line on what it changes.
+- What the postmortem itself **cost**, so the feature is never invisible spend.
+
+**What you can do:**
+
+- **Analyse this failure** / **Re-analyse** — run the pass now (admin).
+- **Relaunch with fix** — fire the proposed prompt **once, as a one-off**
+  (admin). Your schedule is never edited. A model's rewrite of a prompt that
+  spends money unattended is a suggestion, not a migration; the UI says so next
+  to the button.
+
+**Automatic behaviour and its bounds:**
+
+- Runs that failed in the last 24 hours get a postmortem automatically, **one
+  per scheduler tick**. A machine back from a week asleep drains its backlog
+  over minutes rather than as a spend spike, newest failure first.
+- Older failures are left for the on-demand button.
+- A pass that itself fails is **recorded as failed** with the reason, so the run
+  is not retried forever and you can see it was attempted.
+- Every pass is metered into the same spend ledger real runs use, refuses to
+  start while the budget hard stop is in force, is killed at 90 seconds, and is
+  capped on output. Set `ARGUS_ANALYSIS=off` to disable all of it;
+  `ARGUS_ANALYSIS_MODEL` picks the model (a cheap one by default).
+
+**Issues get smarter too.** With postmortems available, Issues clusters
+_differently-worded_ errors that are the same problem — "registry request timed
+out contacting mirror" and "…contacting upstream proxy" become one row marked
+**2 wordings merged**, carrying the shared failure class. Two errors with
+_different_ known classes never merge, however alike the words. With no
+postmortems, grouping is exactly the string-fingerprint behaviour it has always
+been.
+
+**Where the data comes from:** `GET /api/runs/:id/autopsy`,
+`POST /api/runs/:id/autopsy`, `POST /api/runs/:id/relaunch`. Postmortems live in
+`~/.claude/argus/autopsies.json` (capped at 200).
+
+---
+
 ## Quick mental model
 
 | Tab                 | Answers the question                      | Source                                      |

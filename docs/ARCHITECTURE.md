@@ -166,6 +166,7 @@ while an unrecognised frame _type_ is still forwarded for forward compatibility.
 | Cron              | — (not on disk)                             | session-scoped; see §6                                                             |
 | Flight Recorder   | run record + `projects/<proj>/<id>.jsonl`   | derived per read; never persisted (see below)                                      |
 | Watchtower        | runs + `argus/watchtower.json`              | envelopes derived per read; only reset markers persist                             |
+| Autopsy           | `argus/autopsies.json`                      | bounded `claude -p` verdicts, capped at 200, keyed by run id                       |
 
 ### Derivation over storage: the Flight Recorder
 
@@ -234,6 +235,30 @@ previous pass. They share three rules, learned the hard way:
    deterministic (`key|metric|runId`), so Watchtower needs only a bounded set of
    ids already seen — no persisted alert log, and no chance of re-alerting
    because a baseline shifted slightly underneath an old run.
+
+### One place that asks a model a question
+
+Four features want a bounded `claude -p` pass over Argus's own state: Autopsy's
+postmortem, and (by design) a judge, a diagnostic and a planner. Each is a way
+to accidentally spend unbounded money, run unbounded time, or hand a model
+something it can act on. Rather than four spawn sites with four sets of
+nearly-correct guards, `sources/analysis.ts` owns all of them:
+
+- **Bounded time** — a hard timeout that kills the process _group_, because
+  `claude` spawns children and killing the parent orphans them.
+- **Bounded output** — stdout capped, process killed past the cap.
+- **Bounded concurrency** — one pass at a time, and the slot is claimed
+  _synchronously_, before the first `await`. Taking it after a budget read let
+  two callers both observe an idle runner and both spawn.
+- **Bounded spend** — every pass is metered into the ledger real runs use, even
+  when it fails, and refuses to start under the budget hard stop. Argus
+  explaining an overspend must not be part of the overspend.
+- **No tools** — the prompts inline everything the pass needs, so it never
+  reaches for the repository, and the prompt goes in on stdin so no shell parses
+  it.
+
+`spawn` is a parameter, so the timeout, the output cap, the parse failure and
+the budget refusal are all exercised in tests without a CLI on the box.
 
 ## 6. The cron boundary (known limitation)
 

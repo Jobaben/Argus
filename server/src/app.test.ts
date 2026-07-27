@@ -8,6 +8,7 @@ import type { ArgusConfig } from "./config.js";
 import type { Engine } from "./pipelineEngine.js";
 import { createAuthService, type AuthService } from "./auth.js";
 import { createUserStore } from "./userStore.js";
+import type { AnalysisRunner } from "./sources/analysis.js";
 
 let home: string;
 beforeEach(() => {
@@ -866,4 +867,197 @@ test("briefing surfaces a critical anomaly as an attention item", async () => {
   };
   assert.ok(body.attention.some((a) => a.kind === "anomaly"));
   assert.ok(body.window.anomalies.some((a) => a.metric === "cost"));
+});
+
+// ── Autopsy ─────────────────────────────────────────────────────────────────
+
+const AUTOPSY_ANSWER = JSON.stringify({
+  failureClass: "tool-error",
+  confidence: 0.8,
+  why: "The build invoked a binary that is not installed in this environment, so the step exited non-zero.",
+  span: { fromSeconds: 1, toSeconds: 2, quote: "1.0s tool [ERROR]" },
+  promptDelta: "Install the toolchain first, then build.",
+  deltaRationale: "Makes the missing prerequisite explicit.",
+});
+
+/** An analysis runner that always answers with the given parsed JSON text. */
+function stubAnalysis(answerJson: string): AnalysisRunner {
+  return {
+    inFlight: () => 0,
+    run: async (_req, parse) => {
+      const value = parse(JSON.parse(answerJson));
+      return value === null
+        ? {
+            ok: false,
+            value: null,
+            raw: answerJson,
+            costUsd: 0.001,
+            tokens: 100,
+            durationMs: 5,
+            failure: "unparseable" as const,
+            error: "wrong shape",
+          }
+        : {
+            ok: true,
+            value,
+            raw: answerJson,
+            costUsd: 0.001,
+            tokens: 100,
+            durationMs: 5,
+            failure: null,
+            error: null,
+          };
+    },
+  };
+}
+
+function makeAutopsyApp(answerJson = AUTOPSY_ANSWER) {
+  return createApp({
+    config,
+    engine: fakeEngine,
+    broadcast: () => {},
+    serveWeb: false,
+    users: createUserStore(),
+    remoteAddr: () => "127.0.0.1",
+    auth: openAuth,
+    analysis: stubAnalysis(answerJson),
+  });
+}
+
+test("autopsy: a failed run gets a postmortem on demand and it is then readable", async () => {
+  const app = makeAutopsyApp();
+  writeFailedRun("bad1", "spawn tsc ENOENT");
+
+  const before = (await (
+    await app.request("/api/runs/bad1/autopsy", { headers: loopback })
+  ).json()) as { autopsy: unknown; eligible: boolean };
+  assert.equal(before.autopsy, null);
+  assert.equal(before.eligible, true);
+
+  const made = await app.request("/api/runs/bad1/autopsy", {
+    method: "POST",
+    headers: sameOrigin,
+  });
+  assert.equal(made.status, 200);
+  const body = (await made.json()) as {
+    autopsy: {
+      status: string;
+      failureClass: string;
+      promptDelta: string;
+      span: { fromMs: number };
+    };
+  };
+  assert.equal(body.autopsy.status, "ready");
+  assert.equal(body.autopsy.failureClass, "tool-error");
+  // This run has no transcript, so its recording is zero-length and the model's
+  // "at one second" is clamped rather than pointing off the end of the track.
+  assert.equal(body.autopsy.span.fromMs, 0);
+  assert.match(body.autopsy.promptDelta, /Install the toolchain/);
+
+  const after = (await (
+    await app.request("/api/runs/bad1/autopsy", { headers: loopback })
+  ).json()) as { autopsy: { status: string } | null };
+  assert.equal(after.autopsy?.status, "ready");
+});
+
+test("autopsy: a successful run is not eligible and cannot be forced", async () => {
+  const app = makeAutopsyApp();
+  writeRunRecord("good", {});
+  const read = (await (
+    await app.request("/api/runs/good/autopsy", { headers: loopback })
+  ).json()) as { eligible: boolean; unavailable: string };
+  assert.equal(read.eligible, false);
+  assert.match(read.unavailable, /did not fail/);
+
+  const forced = await app.request("/api/runs/good/autopsy", {
+    method: "POST",
+    headers: sameOrigin,
+  });
+  assert.equal(forced.status, 409);
+});
+
+test("autopsy: an unknown run is a clean 404 on both verbs", async () => {
+  const app = makeAutopsyApp();
+  assert.equal((await app.request("/api/runs/nope/autopsy", { headers: loopback })).status, 404);
+  assert.equal(
+    (await app.request("/api/runs/nope/autopsy", { method: "POST", headers: sameOrigin })).status,
+    404,
+  );
+});
+
+test("autopsy: producing one and relaunching both require an admin session", async () => {
+  const lockedOut: AuthService = {
+    isConfigured: async () => true,
+    status: async () => ({ configured: true, username: null, role: null }),
+    login: async () => ({ ok: false, reason: "bad-credentials" }),
+    verify: () => null,
+    logout: () => {},
+    revokeSessions: () => {},
+  };
+  const app = createApp({
+    config,
+    engine: fakeEngine,
+    broadcast: () => {},
+    serveWeb: false,
+    users: createUserStore(),
+    remoteAddr: () => "127.0.0.1",
+    auth: lockedOut,
+    analysis: stubAnalysis(AUTOPSY_ANSWER),
+  });
+  writeFailedRun("bad2", "boom");
+
+  // Reading stays open — the dashboard works signed out.
+  assert.equal((await app.request("/api/runs/bad2/autopsy", { headers: loopback })).status, 200);
+  assert.equal(
+    (await app.request("/api/runs/bad2/autopsy", { method: "POST", headers: sameOrigin })).status,
+    401,
+  );
+  assert.equal(
+    (await app.request("/api/runs/bad2/relaunch", { method: "POST", headers: sameOrigin })).status,
+    401,
+  );
+});
+
+test("relaunch refuses when there is no proposed prompt to relaunch with", async () => {
+  const app = makeAutopsyApp();
+  writeFailedRun("bad3", "boom");
+  const res = await app.request("/api/runs/bad3/relaunch", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({}),
+  });
+  assert.equal(res.status, 409);
+});
+
+test("issues: a clustered issue's detail lists every member's occurrences", async () => {
+  const app = makeAutopsyApp();
+  // Two differently-worded failures that string grouping keeps apart.
+  writeFailedRun("c1", "registry request timed out contacting mirror");
+  writeFailedRun("c2", "registry request timed out contacting upstream proxy");
+
+  const plain = (await (await app.request("/api/issues", { headers: loopback })).json()) as {
+    issues: { fingerprint: string; count: number; members: string[] }[];
+  };
+  assert.equal(plain.issues.length, 2, "with no autopsies, string grouping stands");
+
+  // Diagnose both as the same class; the pair then clusters.
+  for (const id of ["c1", "c2"]) {
+    const res = await app.request(`/api/runs/${id}/autopsy`, {
+      method: "POST",
+      headers: sameOrigin,
+    });
+    assert.equal(res.status, 200);
+  }
+
+  const clustered = (await (await app.request("/api/issues", { headers: loopback })).json()) as {
+    issues: { fingerprint: string; count: number; members: string[]; failureClass: string }[];
+  };
+  assert.equal(clustered.issues.length, 1);
+  assert.equal(clustered.issues[0].count, 2);
+  assert.equal(clustered.issues[0].failureClass, "tool-error");
+
+  const detail = (await (
+    await app.request(`/api/issues/${clustered.issues[0].fingerprint}`, { headers: loopback })
+  ).json()) as { occurrences: unknown[] };
+  assert.equal(detail.occurrences.length, 2, "both members' occurrences are listed");
 });

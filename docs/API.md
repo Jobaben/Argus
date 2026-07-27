@@ -463,6 +463,96 @@ known-exceeded budget), and `exceeded → warning` stays quiet — you already
 heard about the breach; `budget.cleared` fires once spend is back under every
 limit.
 
+## Autopsy
+
+Bounded `claude -p` postmortems for failed runs. Reading is open; producing one
+spawns an agent and relaunching spawns a real run, so both are **admin-gated**
+alongside the pipeline routes.
+
+| Method + path                 | Effect                                                       |
+| ----------------------------- | ------------------------------------------------------------ |
+| `GET /api/runs/:id/autopsy`   | the run's postmortem, or why it has none                     |
+| `POST /api/runs/:id/autopsy`  | run the pass now (admin) → `200`; `409` if the run succeeded |
+| `POST /api/runs/:id/relaunch` | fire the proposed prompt as a one-off (admin) → `202`        |
+
+### `GET /api/runs/:id/autopsy`
+
+```jsonc
+{
+  "autopsy": {
+    "runId": "…",
+    "status": "ready", // pending | ready | failed | skipped
+    "at": "2026-07-20T12:00:00.000Z",
+    "failureClass": "missing-context",
+    "confidence": 0.75, // clamped to 0–1, null if the pass gave none
+    "why": "One paragraph of prose.",
+    "span": { "fromMs": 61000, "toMs": 75000, "quote": "61.0s tool [ERROR]: Bash: npm ci" },
+    "promptDelta": "A complete replacement prompt, or null.",
+    "deltaRationale": "One sentence, or null.",
+    "costUsd": 0.003,
+    "tokens": 2200,
+    "durationMs": 4200,
+    "error": null, // set when status is not "ready"
+  },
+  "eligible": true, // this run failed and could have one
+  "unavailable": null, // why it can't, when it can't
+}
+```
+
+`failureClass` is a **closed taxonomy**: `prompt-ambiguity`, `missing-context`,
+`tool-error`, `permission-denied`, `environment`, `timeout`, `rate-limit`,
+`model-refusal`, `bad-output-format`, `infrastructure`, `other`. An answer
+outside it is rejected rather than stored — an open-ended class cannot be
+clustered, counted or filtered, which is most of the value.
+
+Nothing the model returns is trusted verbatim: `confidence` is clamped to 0–1,
+`span` is clamped into the recording's real duration (a hallucinated "at forty
+minutes" on a two-minute run becomes the end of the track, not an off-track
+scrubber position), and an answer with no `why` is rejected outright.
+
+### `POST /api/runs/:id/relaunch`
+
+Fires the postmortem's `promptDelta` as a **one-off run** in the failed run's
+`cwd`, inheriting its model. Body may carry `{ "prompt": "…" }` to override.
+`409` when there is no proposed prompt. The schedule is never edited.
+
+### Bounds on every analysis pass
+
+Autopsy shares one bounded runner with the other model-backed features:
+
+- **One pass at a time** across the whole process, claimed synchronously.
+- **90-second timeout**, enforced by killing the process _group_.
+- **256 KB output cap**; past it the process is killed.
+- **Metered into the spend ledger** even when the pass fails — a ledger that
+  only counts successes understates spend exactly when spend is going wrong.
+- **Refused while the budget hard stop is in force**, before spawning.
+- `ARGUS_ANALYSIS=off` disables all of it; `ARGUS_ANALYSIS_MODEL` picks the
+  model (a cheap one by default).
+
+Failed runs from the last 24 hours are autopsied automatically, one per
+scheduler tick, newest first. A pass that fails is stored as `failed` so the run
+is not retried on every tick.
+
+### Issue clustering
+
+With postmortems available, `GET /api/issues` merges differently-worded errors
+that describe the same problem. Each issue carries:
+
+- `members` — every exact-string fingerprint merged into it, including its own.
+  Length 1 is plain string grouping.
+- `failureClass` — the class the members agree on, or null.
+
+The rule: two string groups merge when their normalized-message token overlap
+(Jaccard, stopwords and short fragments dropped) clears **0.5 with a shared
+failure class**, or **0.7 without one**. Two _different_ known classes never
+merge, however similar the wording. The representative fingerprint is the
+lexicographically smallest member, so an issue's identity — and its triage
+record — survives members arriving or ageing out. With no autopsies present the
+output is byte-for-byte what string grouping produced.
+
+`GET /api/issues/:fingerprint` returns occurrences across the whole member set,
+not just the representative.
+
 ## Watchtower
 
 ### `GET /api/watchtower`
