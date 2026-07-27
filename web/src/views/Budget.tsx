@@ -12,6 +12,7 @@ import {
   useClock,
 } from "../ds";
 import { projectMonth } from "./budgetProjection";
+import { LedgerPanels } from "./LedgerPanels";
 
 const FIELD =
   "w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink placeholder-ink-faint";
@@ -324,6 +325,11 @@ export default function Budget() {
           <div className="mb-8">
             <SpendChart days={budget.days} dailyLimit={budget.config.dailyUsd} />
           </div>
+
+          {/* Attribution, forecast and the simulator sit between the raw
+              numbers and the controls: you read where the money went, then
+              decide what to do about it. */}
+          <LedgerPanels />
 
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-ink-dim">
             Limits

@@ -77,6 +77,17 @@ export type {
   SituationCounts,
   NextFire,
   ThroughputBucket,
+  // Ledger
+  Attribution,
+  BudgetAction,
+  BudgetEnforcement,
+  BudgetLadderStep,
+  CostDimension,
+  CostSlice,
+  Forecast,
+  LedgerReport,
+  WhatIfRequest,
+  WhatIfResult,
   // Sentinel
   Diagnosis,
   DiagnosisStatus,

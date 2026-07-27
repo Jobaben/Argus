@@ -105,6 +105,7 @@ import {
   resetBaseline,
   WatchtowerValidationError,
 } from "./sources/watchtower.js";
+import { buildLedger, whatIf, type WhatIfRequest } from "./sources/ledger.js";
 import { buildOverview } from "./sources/overview.js";
 import { buildPalette } from "./sources/palette.js";
 import { buildSituation } from "./sources/insight.js";
@@ -463,6 +464,51 @@ export function createApp(deps: AppDeps): Hono {
     } catch (e) {
       return fail(c, e, BudgetValidationError);
     }
+  });
+
+  // ── Ledger ────────────────────────────────────────────────────────────────
+  // Where the money went, where it is going, and what a change would do. All
+  // reads; the what-if is a POST only because it carries a body.
+
+  app.get("/api/ledger", async (c) => {
+    const now = new Date();
+    const [runs, budgetConfig, ledger] = await Promise.all([
+      readRuns(),
+      readBudgetConfig(),
+      readSpendLedger(),
+    ]);
+    const status = buildBudgetStatus(budgetConfig, ledger, now);
+    return c.json(buildLedger(runs, ledger, budgetConfig, status, now));
+  });
+
+  app.post("/api/ledger/what-if", async (c) => {
+    const body = await jsonBody(c);
+    if (!body.ok) return body.res;
+    const raw = (body.value ?? {}) as Partial<WhatIfRequest>;
+    const dimension = raw.dimension;
+    if (
+      dimension !== "project" &&
+      dimension !== "schedule" &&
+      dimension !== "pipeline" &&
+      dimension !== "model"
+    ) {
+      return c.json({ error: "dimension must be project|schedule|pipeline|model" }, 400);
+    }
+    if (typeof raw.key !== "string" || !raw.key.trim()) {
+      return c.json({ error: "key is required" }, 400);
+    }
+    if (typeof raw.toModel !== "string" || !/^[A-Za-z0-9._ ()-]{1,80}$/.test(raw.toModel)) {
+      return c.json({ error: "toModel is required" }, 400);
+    }
+    const [runs, verdicts] = await Promise.all([readRuns(), readVerdicts()]);
+    const windowFloor = Date.now() - 30 * 86_400_000;
+    const window = runs.filter((r) => {
+      const at = Date.parse(r.endedAt ?? r.startedAt ?? r.queuedAt);
+      return Number.isFinite(at) && at >= windowFloor;
+    });
+    return c.json(
+      whatIf(window, verdicts, { dimension, key: raw.key.trim(), toModel: raw.toModel }, 30),
+    );
   });
 
   app.get("/api/inventory", async (c) => c.json(await readInventory()));

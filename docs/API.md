@@ -463,6 +463,176 @@ known-exceeded budget), and `exceeded → warning` stays quiet — you already
 heard about the breach; `budget.cleared` fires once spend is back under every
 limit.
 
+## Ledger
+
+Cost attribution, the month-end forecast, the what-if simulator and the
+graduated budget policy. Entirely **derived** — the Ledger writes nothing of
+its own; it reads `argus/runs/`, `argus/spend.json`, `argus/budget.json` and
+`argus/verdicts.json`.
+
+One rule shapes every number below: **there is no price list.** Attribution
+sums observed costs, the forecast extrapolates observed days, and the what-if
+compares what two models have actually cost on this machine. The cost of that
+discipline is that some questions have no answer, and the response types say so
+(`unavailable`, `confidence: null`) rather than returning a plausible zero.
+
+### `GET /api/ledger`
+
+ETag'd. Recomputed on read from the last **30 days** of runs.
+
+```json
+{
+  "generatedAt": "2026-07-20T12:00:00.000Z",
+  "windowDays": 30,
+  "bySchedule": {
+    "dimension": "schedule",
+    "slices": [
+      {
+        "key": "nightly-triage",
+        "label": "Nightly triage",
+        "usd": 6.0,
+        "tokens": 90000,
+        "runs": 30,
+        "share": 0.75,
+        "perRunUsd": 0.2
+      }
+    ],
+    "totalUsd": 8.0,
+    "totalTokens": 110000,
+    "runs": 40,
+    "unattributedRuns": 3
+  },
+  "byPipeline": { "dimension": "pipeline", "…": "…" },
+  "byProject": { "dimension": "project", "…": "…" },
+  "byModel": { "dimension": "model", "…": "…" },
+  "forecast": {
+    "samples": 19,
+    "dailyUsd": 5.0,
+    "monthToDateUsd": 95.0,
+    "monthEndUsd": 150.0,
+    "lowUsd": 140.0,
+    "highUsd": 175.0,
+    "confidence": 0.82,
+    "overLimit": false,
+    "note": "On this pace the month ends near $150.00, inside the $200.00 limit."
+  },
+  "enforcement": {
+    "action": null,
+    "atRatio": null,
+    "model": null,
+    "window": null,
+    "detail": "spend is inside the configured limits"
+  }
+}
+```
+
+**Attribution.** Four dimensions, each computed over the same window so their
+totals agree:
+
+| Dimension  | Slice key                               | Runs it cannot place                  |
+| ---------- | --------------------------------------- | ------------------------------------- |
+| `schedule` | schedule id (`oneoff` → "One-off runs") | pipeline step runs                    |
+| `pipeline` | pipeline id                             | schedule and one-off runs             |
+| `project`  | encoded project dir                     | runs with no project                  |
+| `model`    | model name, or `(cli default)`          | none — an unpinned model is an answer |
+
+Only runs with a positive `costUsd` are counted. Slices are sorted by spend,
+capped at **12**, and the tail folds into a single `__other__` row — a total
+that does not add up is worse than a long tail you cannot itemise. `runs` is
+every costed run in the window; `unattributedRuns` is how many of those the
+dimension could not place, so the totals can be checked.
+
+**Forecast.** `dailyUsd` is the **median** of the ledger's past full days —
+median so one runaway backfill day does not set the trend, and past-only because
+a partial today would drag the projection down all morning and let it recover on
+a daily cycle. `lowUsd`/`highUsd` project the 20th and 80th percentile day
+forward. `confidence` is derived from that spread: a statement about how well
+this history extrapolates, not about how right the number is. Under **3** full
+days every projected field is `null` and `note` explains why; between 3 and 10
+the note adds _treat as indicative_.
+
+### `POST /api/ledger/what-if`
+
+```json
+{ "dimension": "schedule", "key": "nightly-triage", "toModel": "haiku" }
+```
+
+`dimension` must be one of the four; `key` must be non-empty; `toModel` must
+match `/^[A-Za-z0-9._ ()-]{1,80}$/`. Anything else is a `400` with an `error`.
+A well-formed request that cannot be answered is a **`200` with `ok: false`** —
+"I don't know" is a result, not a failure:
+
+```json
+{
+  "ok": false,
+  "unavailable": "no runs on \"haiku\" to compare against — Argus estimates from what a model has actually cost here, never from a price list",
+  "label": "Nightly triage",
+  "fromModel": "opus",
+  "toModel": "haiku",
+  "affectedRuns": 30,
+  "currentPerRunUsd": null,
+  "projectedPerRunUsd": null,
+  "monthlySavingUsd": null,
+  "currentMonthlyUsd": null,
+  "projectedMonthlyUsd": null,
+  "verdictDelta": null,
+  "verdictSamples": 0,
+  "summary": ""
+}
+```
+
+Three cases return `ok: false`: the slice has no costed runs, it already runs on
+the target model, or the target model has never run on this machine.
+
+An answerable request returns medians on both sides (one expensive outlier
+should not decide whether a migration looks worthwhile), the slice's observed
+run rate extrapolated to 30 days, and a `summary` like
+`haiku on Nightly triage saves $41.00/mo at -0.2 Verdict`. `verdictDelta` is the
+median score difference **only when both models have Verdict scores**; otherwise
+it is `null` with `verdictSamples: 0`, meaning _unmeasured_ — not "no
+difference".
+
+### The budget ladder
+
+`BudgetConfig` gains an optional `ladder`, set through `PUT /api/budget`:
+
+```json
+{
+  "ladder": [
+    { "atRatio": 0.8, "action": "warn" },
+    { "atRatio": 0.9, "action": "downgrade", "model": "haiku" },
+    { "atRatio": 1.0, "action": "defer" },
+    { "atRatio": 1.25, "action": "stop" }
+  ]
+}
+```
+
+Validated on write: at most 6 steps, `atRatio` in `(0, 2]`, `action` one of
+`warn | downgrade | defer | stop`, and `downgrade` requires a `model`. Steps are
+**stored sorted by threshold**, so the ladder reads top-to-bottom as it engages
+and an author cannot express "stop at 0.9, warn at 1.0" and be surprised. A
+malformed ladder is a `400`; a _corrupt on-disk_ ladder degrades to no ladder
+rather than refusing to serve the budget at all.
+
+The step in force is resolved on every scheduler tick:
+
+- The **highest** matching step wins, not the first. With warn@0.8 /
+  downgrade@0.9 / stop@1.0, a run at 1.05 must be stopped; a first-match reading
+  would only have warned it.
+- **Both windows are evaluated** and the more severe verdict applies — a day
+  that is fine inside a month that is not should still be governed by the month.
+
+Effects apply to `trigger === "scheduled"` runs only; a manual run is a decision
+already made. `defer` writes a `skipped` run instead of firing; `downgrade`
+swaps the model; `warn` and `stop` do what they say. The existing
+`blockScheduled` hard stop still wins over everything.
+
+**Every affected run records it**: `Run.budgetAction`
+(`warn | downgrade | defer | stop`) and, for a downgrade,
+`Run.modelDowngradedFrom`. So "why did Tuesday's run use Haiku?" is answerable
+from the run record itself, rather than by correlating timestamps against a
+policy that has since been edited.
+
 ## Weave — the pipeline DAG
 
 Pipeline phases carry dependency edges, retry policies and artifact names.

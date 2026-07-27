@@ -1,5 +1,6 @@
 /** Triggers, schedules, run records and one-off launches. */
 
+import type { BudgetAction } from "./ledger.js";
 import type { Rubric } from "./verdict.js";
 
 export type TriggerKind = "interval" | "daily" | "weekly" | "windowed";
@@ -97,6 +98,16 @@ export interface Run {
   countedInTotals?: boolean;
   /** Null/absent for non-pipeline or unsignalled runs. */
   outcome?: RunOutcome | null;
+  /**
+   * The budget ladder step that governed this run, when one did.
+   *
+   * Recorded on the run itself so a cheap or missing run is explicable months
+   * later: "why did Tuesday's run use Haiku" is answered by the record, not by
+   * correlating timestamps against a policy that has since been edited.
+   */
+  budgetAction?: BudgetAction;
+  /** Set when `budgetAction` was `downgrade`: the model it would have used. */
+  modelDowngradedFrom?: string;
 }
 
 /** One-off run fired from the Launch tab (POST /api/launch). */

@@ -153,22 +153,23 @@ while an unrecognised frame _type_ is still forwarded for forward compatibility.
 
 ## 5. Data sources map
 
-| Domain            | Path(s)                                       | Shape highlights                                                                   |
-| ----------------- | --------------------------------------------- | ---------------------------------------------------------------------------------- |
-| Background agents | `jobs/<short>/state.json`, `timeline.jsonl`   | `state` (working/done/failed/idle), `tempo`, `detail`, `output.result`, `inFlight` |
-| Live workers      | `daemon/roster.json`, `daemon.status.json`    | `workers[short].pid` → liveness join                                               |
-| Sessions          | `projects/<proj>/<id>.jsonl`                  | typed message stream (`ai-title`, `user`, `assistant`, `tool_use`, …)              |
-| Activity          | `history.jsonl`                               | global prompt log                                                                  |
-| Projects          | `projects/<proj>/`                            | encoded path → label, session counts                                               |
-| Stats             | `stats-cache.json`                            | usage aggregates                                                                   |
-| Inventory         | `agents/ commands/ skills/ plugins/`          | installed extensions (md frontmatter)                                              |
-| Tasks             | `tasks/<uuid>/`                               | `.highwatermark`, `.lock`                                                          |
-| Cron              | — (not on disk)                               | session-scoped; see §6                                                             |
-| Flight Recorder   | run record + `projects/<proj>/<id>.jsonl`     | derived per read; never persisted (see below)                                      |
-| Watchtower        | runs + `argus/watchtower.json`                | envelopes derived per read; only reset markers persist                             |
-| Autopsy           | `argus/autopsies.json`                        | bounded `claude -p` verdicts, capped at 200, keyed by run id                       |
-| Verdict           | `argus/verdicts.json` + rubrics on defs       | rubric scores keyed by run id, capped at 400; trends derived per read              |
-| Sentinel          | `argus/incidents.json`, `argus/sentinel.json` | persisted incidents (so a restart resumes mid-incident) + escalation policy        |
+| Domain            | Path(s)                                         | Shape highlights                                                                     |
+| ----------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Background agents | `jobs/<short>/state.json`, `timeline.jsonl`     | `state` (working/done/failed/idle), `tempo`, `detail`, `output.result`, `inFlight`   |
+| Live workers      | `daemon/roster.json`, `daemon.status.json`      | `workers[short].pid` → liveness join                                                 |
+| Sessions          | `projects/<proj>/<id>.jsonl`                    | typed message stream (`ai-title`, `user`, `assistant`, `tool_use`, …)                |
+| Activity          | `history.jsonl`                                 | global prompt log                                                                    |
+| Projects          | `projects/<proj>/`                              | encoded path → label, session counts                                                 |
+| Stats             | `stats-cache.json`                              | usage aggregates                                                                     |
+| Inventory         | `agents/ commands/ skills/ plugins/`            | installed extensions (md frontmatter)                                                |
+| Tasks             | `tasks/<uuid>/`                                 | `.highwatermark`, `.lock`                                                            |
+| Cron              | — (not on disk)                                 | session-scoped; see §6                                                               |
+| Flight Recorder   | run record + `projects/<proj>/<id>.jsonl`       | derived per read; never persisted (see below)                                        |
+| Watchtower        | runs + `argus/watchtower.json`                  | envelopes derived per read; only reset markers persist                               |
+| Autopsy           | `argus/autopsies.json`                          | bounded `claude -p` verdicts, capped at 200, keyed by run id                         |
+| Verdict           | `argus/verdicts.json` + rubrics on defs         | rubric scores keyed by run id, capped at 400; trends derived per read                |
+| Sentinel          | `argus/incidents.json`, `argus/sentinel.json`   | persisted incidents (so a restart resumes mid-incident) + escalation policy          |
+| Ledger            | runs + `argus/spend.json` + `argus/budget.json` | attribution, forecast and enforcement all derived per read; only the ladder persists |
 
 ### Derivation over storage: the Flight Recorder
 
@@ -327,6 +328,45 @@ Three consequences worth naming, because each was a bug before it was a design:
 
 The whole 735-test suite that predated Weave passes unchanged, which is the
 actual guarantee behind "linear definitions load unchanged".
+
+### No price list: why the Ledger refuses some questions
+
+`sources/ledger.ts` could answer every what-if by shipping a table of
+per-million-token prices. It deliberately does not. A saving computed from a
+price table is indistinguishable, in the UI, from one measured on this machine —
+and it is wrong the week the prices change, silently, in the direction of
+confidence. So the simulator compares what two models **have actually cost
+here**, and when the target model has never run, the result type carries an
+`unavailable` string instead of a number.
+
+The same rule produces three more refusals, each encoded in the types rather
+than in a comment:
+
+- **No forecast under three days** (`MIN_FORECAST_DAYS`). Every projected field
+  is `null` and the note says how many days exist. Three points extrapolate to
+  any figure you like; a confident-looking number derived from two days is worse
+  than no number.
+- **`confidence: null`, and a visible band.** Confidence is computed from the
+  observed p20–p80 spread, so it describes how well _this_ history extrapolates
+  rather than how right the answer is.
+- **`verdictDelta: null` means unmeasured, not zero.** It is only a number when
+  both models have Verdict scores, because "nobody has measured" is the true
+  answer far more often than "no difference".
+
+Two decisions inside the maths are load-bearing enough to name. The daily rate
+is a **median** and **excludes today**: a mean lets one runaway backfill day set
+the trend for a month, and including a partial day makes the projection sag
+every morning and recover every evening — a graph that moves for reasons that
+are not about spending. And in `enforcementFor`, the **highest** matching ladder
+step wins rather than the first; with warn@0.8 / stop@1.0, a first-match reading
+would only warn a run that is 5% over the cap.
+
+Finally, enforcement is written onto the run it affected (`budgetAction`,
+`modelDowngradedFrom`) rather than inferred later. The policy is editable; the
+run record is not. Without that field, "why did Tuesday's run use Haiku?"
+requires correlating a timestamp against a policy that may since have changed,
+which is exactly the class of question a control plane exists to answer
+directly.
 
 ## 6. The cron boundary (known limitation)
 

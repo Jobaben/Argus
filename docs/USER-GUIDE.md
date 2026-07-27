@@ -51,6 +51,11 @@ can do, and where the data comes from.
 | 20  | [Cron panel](#20-cron-panel)           | Scheduler tab  | why native cron routines can't be shown   |
 | 21  | [Flight Recorder](#21-flight-recorder) | `#/run/<id>`   | what was it doing at minute four?         |
 | 22  | [Watchtower](#22-watchtower)           | `#/watchtower` | did it run the way it _usually_ runs?     |
+| 23  | [Autopsy](#23-autopsy)                 | `#/run/<id>`   | why did this run fail, in one paragraph?  |
+| 24  | [Verdict](#24-verdict)                 | `#/run/<id>`   | was the output any _good_?                |
+| 25  | [Sentinel](#25-sentinel)               | `#/sentinel`   | what is on fire, and who has it?          |
+| 26  | [Weave](#26-weave)                     | `#/pipelines`  | fan-out, fan-in, retries, artifacts       |
+| 27  | [Ledger](#27-ledger)                   | `#/budget`     | where did the money go, and where next?   |
 
 ---
 
@@ -1334,6 +1339,126 @@ missing or corrupt journal costs you the history, never the pipeline.
 
 ---
 
+## 27. Ledger
+
+_Where the money went, where it is going, and what a change would do about it._
+Route: `#/budget`, below the spend chart.
+
+**Purpose:** [Budget](#9-budget) answers "how much, and am I near the cap?". The
+Ledger answers the three questions after that: **which work** costs the money,
+**where the month lands** at this pace, and **what would change** if a slice
+moved to a cheaper model.
+
+**The rule the whole feature is built on: nothing here invents a number.**
+There is no embedded price list. Every figure is summed, median-ed or
+extrapolated from runs this machine actually made. The cost of that discipline
+is that some questions have no answer, and the panels say so out loud rather
+than returning a plausible zero.
+
+### Where it went
+
+Spend over the last **30 days**, grouped by one of four dimensions:
+
+- **Schedule** — per named schedule; one-off launches group as _One-off runs_.
+- **Pipeline** — per pipeline (step runs roll up into their pipeline).
+- **Project** — per working directory.
+- **Model** — per model, with runs that pinned nothing shown as _CLI default_,
+  which is a real answer rather than a gap.
+
+Each row carries its dollar total, its **share** of the window, its **cost per
+run** and its token count. Past the twelfth slice the tail folds into a single
+`N more` row rather than being dropped — a total that does not add up is worse
+than a long tail you cannot itemise. The footer reports how many costed runs
+fell **outside** the grouping (a schedule run has no pipeline), so the totals
+can be checked against the chart above.
+
+Runs that reported no cost are not counted at all. A schedule that has never
+fired shows nothing here, which is why the empty state says so.
+
+### Forecast
+
+A projection of **month-end spend**, with the band and the sample count beside
+it rather than a single confident figure:
+
+- The daily rate is a **median**, not a mean, so one runaway backfill day does
+  not set the trend for the rest of the month.
+- **Today is excluded** from the rate. A partial day drags the median down all
+  morning and would make the projection sag and recover on a daily cycle.
+- The band is the 20th–80th percentile day projected forward, so it widens when
+  your days are erratic and narrows when they are not.
+- **Confidence** is derived from that spread — it is a statement about how well
+  this history extrapolates, not about how right the number is.
+- Under **three full days** there is no projection at all, only a note saying
+  why. Three points can be extrapolated into any figure you like. Between three
+  and ten days the note adds _treat as indicative_.
+
+If a monthly limit is set, the note says whether the projection lands inside or
+over it, and the figure turns red when it is over.
+
+### What if…
+
+Every slice has a **what if…** action: _move this work to `haiku` — what
+happens?_ The answer compares the slice's own median cost per run against what
+the target model **has actually cost on this machine**, extrapolated over the
+slice's observed run rate.
+
+- If the target model has **never run here**, the simulator refuses: _no runs on
+  "haiku" to compare against_. It will not quote a price list, because a saving
+  computed from a price table looks identical to a measured one and is wrong the
+  week the prices change.
+- Both sides use medians, so one expensive outlier does not decide whether a
+  migration looks worthwhile.
+- The quality half follows the same rule. If both models have
+  [Verdict](#24-verdict) scores, the median difference is reported with its
+  sample count. If either does not, the answer is **"unmeasured — not zero"**,
+  because "nobody has measured" is the true answer far more often than "no
+  difference".
+
+A complete answer reads like _`haiku` on Nightly triage saves $41.00/mo at −0.2
+Verdict_ — the trade, priced, with both halves measured.
+
+### The policy ladder
+
+A budget limit used to be a cliff: under it, everything runs; over it, nothing
+does. The ladder lets spending **graduate**. Add steps to your budget config,
+each a ratio of a limit and an action:
+
+| Action      | Effect                                                     |
+| ----------- | ---------------------------------------------------------- |
+| `warn`      | Runs proceed; the run records that it ran under a warning. |
+| `downgrade` | Scheduled runs move to the step's `model` (requires one).  |
+| `defer`     | Scheduled slots are skipped; **manual runs still work**.   |
+| `stop`      | Scheduled runs stop.                                       |
+
+Steps are stored sorted by threshold, so the ladder reads top-to-bottom as it
+engages and you cannot express "stop at 0.9, warn at 1.0" and be surprised.
+
+Two rules matter when several steps match:
+
+- The **highest** matching step wins, not the first. With warn@0.8 /
+  downgrade@0.9 / stop@1.0, a run at 105% must be _stopped_ — a first-match
+  reading would only have warned it.
+- **Both windows are checked** and the more severe verdict applies, because a
+  day that is fine inside a month that is not should still be governed by the
+  month.
+
+Only **scheduled** runs are governed. A run you fire by hand is a decision you
+have already made; the ladder does not second-guess it. The hard `stop` from
+[Budget](#9-budget) still blocks everything, ladder or not.
+
+**Every affected run records what happened to it** — `budgetAction` and, for a
+downgrade, `modelDowngradedFrom`. So "why did Tuesday's run use Haiku?" is
+answerable from the run record itself, rather than by correlating timestamps
+against a policy that has since been edited. When a step is in force, the Ledger
+shows a panel naming it and what it is doing.
+
+**Where the data comes from:** `argus/runs/` for attribution and the what-if,
+`argus/spend.json` for the forecast, `argus/budget.json` for the ladder, and
+`argus/verdicts.json` for the quality half. Nothing new is written — the Ledger
+is entirely derived.
+
+---
+
 ## Quick mental model
 
 | Tab                 | Answers the question                      | Source                                      |
@@ -1358,6 +1483,7 @@ missing or corrupt journal costs you the history, never the pipeline.
 | **Tasks**           | What task workspaces exist / are locked?  | `tasks/<id>/`                               |
 | **Cron panel**      | Why can't I see native cron routines?     | none (session-scoped)                       |
 | **Flight Recorder** | What was it doing at minute four?         | run record + `projects/*/<session>.jsonl`   |
+| **Ledger**          | Where did the money go, and where next?   | `argus/runs/` + `argus/spend.json`          |
 
 _Screenshots in this guide live in [`docs/screenshots/`](screenshots/) and
 were captured from a live instance. To refresh them after a UI change, run the

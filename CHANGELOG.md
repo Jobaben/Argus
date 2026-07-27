@@ -7,6 +7,40 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Ledger** (`#/budget`, below the chart): where the money went, where it is
+  going, and what a change would do about it. Spend attributes by **schedule,
+  pipeline, project and model** at per-run grain, with each row carrying its
+  share and its cost per run; the long tail folds into one `N more` row rather
+  than being dropped, and the footer reports how many costed runs the grouping
+  could not place, so the totals can be checked against the chart above. A
+  **month-end forecast** shows its band and its sample count instead of a single
+  confident figure. And a **what-if simulator** answers "move this to Haiku —
+  what happens?" as a priced trade: _`haiku` on Nightly triage saves $41.00/mo
+  at −0.2 Verdict_.
+  The rule underneath all of it: **nothing here invents a number.** There is no
+  embedded price list, because a saving computed from a price table looks
+  identical in the UI to a measured one and is wrong the week the prices change.
+  So the simulator compares what two models have actually cost on this machine
+  and, when the target has never run here, says so rather than guessing. The
+  same discipline produces three more honest refusals: no projection at all
+  under three full days of history, a confidence figure derived from the
+  observed spread rather than asserted, and a quality effect reported as
+  **unmeasured — not zero** unless both models carry Verdict scores. The daily
+  rate is a median and excludes today, so one runaway backfill day cannot set
+  the trend and the projection does not sag every morning and recover every
+  evening.
+  Budget limits also graduate. A **policy ladder** moves spending through
+  `warn → downgrade → defer → stop` at thresholds you set, so approaching a cap
+  narrows what runs instead of dropping a cliff in front of it; deferral still
+  leaves manual runs available, because a run you fire by hand is a decision you
+  have already made. The **highest** matching step wins rather than the first —
+  with warn@0.8 and stop@1.0, first-match would only warn a run 5% over the cap
+  — and both the daily and monthly windows are evaluated, with the more severe
+  verdict applying. Every affected run records what was done to it
+  (`budgetAction`, `modelDowngradedFrom`), so "why did Tuesday's run use Haiku?"
+  is answerable from the run record rather than by correlating a timestamp
+  against a policy that has since been edited.
+
 - **Weave** — pipelines graduate from a list to a typed DAG. Phases declare
   `needs`, so a pipeline can plan once, fan out to build and test in parallel,
   and fan back in to ship when both are done. Cycles and dangling edges are

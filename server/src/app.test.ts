@@ -1551,3 +1551,141 @@ test("weave: an instance's journal is readable, and unknown ids are empty rather
   assert.equal(res.status, 200);
   assert.deepEqual(((await res.json()) as { entries: unknown[] }).entries, []);
 });
+
+// ── Ledger ──────────────────────────────────────────────────────────────────
+
+test("ledger: attributes spend by every dimension and windows the runs", async () => {
+  const app = makeApp();
+  writeRunRecord("l1", { costUsd: 0.6, model: "opus", scheduleId: "s1", scheduleName: "A" });
+  writeRunRecord("l2", { costUsd: 0.4, model: "haiku", scheduleId: "s2", scheduleName: "B" });
+
+  const body = (await (await app.request("/api/ledger", { headers: loopback })).json()) as {
+    windowDays: number;
+    bySchedule: { slices: { key: string; usd: number; share: number }[]; totalUsd: number };
+    byModel: { slices: { key: string }[] };
+    forecast: { note: string };
+    enforcement: { action: string | null };
+  };
+  assert.equal(body.windowDays, 30);
+  assert.equal(body.bySchedule.totalUsd, 1);
+  assert.equal(body.bySchedule.slices[0].key, "s1");
+  assert.equal(body.bySchedule.slices[0].share, 0.6);
+  assert.deepEqual(body.byModel.slices.map((s) => s.key).sort(), ["haiku", "opus"]);
+  assert.match(body.forecast.note, /not enough to project|On this pace/);
+  assert.equal(body.enforcement.action, null);
+});
+
+test("ledger: what-if refuses to guess when the target model has never run here", async () => {
+  const app = makeApp();
+  writeRunRecord("l1", { costUsd: 1, model: "opus", scheduleId: "s1" });
+
+  const res = await app.request("/api/ledger/what-if", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ dimension: "schedule", key: "s1", toModel: "haiku" }),
+  });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { ok: boolean; unavailable: string };
+  assert.equal(body.ok, false);
+  assert.match(body.unavailable, /never from a price list/);
+});
+
+test("ledger: what-if computes the saving from observed costs on both models", async () => {
+  const app = makeApp();
+  writeRunRecord("l1", { costUsd: 1, model: "opus", scheduleId: "s1" });
+  writeRunRecord("l2", { costUsd: 1, model: "opus", scheduleId: "s1" });
+  writeRunRecord("l3", { costUsd: 0.1, model: "haiku", scheduleId: "s2" });
+
+  const body = (await (
+    await app.request("/api/ledger/what-if", {
+      method: "POST",
+      headers: sameOrigin,
+      body: JSON.stringify({ dimension: "schedule", key: "s1", toModel: "haiku" }),
+    })
+  ).json()) as { ok: boolean; monthlySavingUsd: number; summary: string; verdictDelta: null };
+  assert.equal(body.ok, true);
+  assert.ok(body.monthlySavingUsd > 0);
+  assert.equal(body.verdictDelta, null, "nothing has been scored, so quality is unmeasured");
+  assert.match(body.summary, /saves \$/);
+});
+
+test("ledger: a malformed what-if is a clean 400", async () => {
+  const app = makeApp();
+  for (const bad of [
+    { dimension: "nope", key: "s1", toModel: "haiku" },
+    { dimension: "schedule", toModel: "haiku" },
+    { dimension: "schedule", key: "s1" },
+    { dimension: "schedule", key: "s1", toModel: "a/b;rm -rf" },
+  ]) {
+    const res = await app.request("/api/ledger/what-if", {
+      method: "POST",
+      headers: sameOrigin,
+      body: JSON.stringify(bad),
+    });
+    assert.equal(res.status, 400, JSON.stringify(bad));
+  }
+});
+
+test("budget: a ladder round-trips, sorted, and a bad one is a 400", async () => {
+  const app = makeApp();
+  const put = await app.request("/api/budget", {
+    method: "PUT",
+    headers: sameOrigin,
+    body: JSON.stringify({
+      dailyUsd: 10,
+      ladder: [
+        { atRatio: 1, action: "stop" },
+        { atRatio: 0.8, action: "warn" },
+        { atRatio: 0.9, action: "downgrade", model: "haiku" },
+      ],
+    }),
+  });
+  assert.equal(put.status, 200);
+  const body = (await put.json()) as { config: { ladder: { action: string }[] } };
+  assert.deepEqual(
+    body.config.ladder.map((s) => s.action),
+    ["warn", "downgrade", "stop"],
+    "sorted by threshold, so it reads as it engages",
+  );
+
+  const bad = await app.request("/api/budget", {
+    method: "PUT",
+    headers: sameOrigin,
+    body: JSON.stringify({ ladder: [{ atRatio: 0.9, action: "downgrade" }] }),
+  });
+  assert.equal(bad.status, 400);
+  assert.match(((await bad.json()) as { error: string }).error, /needs a model/);
+});
+
+test("budget: the ladder's enforcement is reported on the ledger once spend crosses it", async () => {
+  const app = makeApp();
+  // A $1 limit with $2 spent today: the top step is in force.
+  writeRunRecord("l1", { costUsd: 2 });
+  mkdirSync(path.join(home, "argus"), { recursive: true });
+  const today = new Date();
+  const key = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  writeFileSync(
+    path.join(home, "argus", "spend.json"),
+    JSON.stringify({ days: { [key]: { usd: 2, tokens: 100, runs: 1 } } }),
+  );
+  writeFileSync(
+    path.join(home, "argus", "budget.json"),
+    JSON.stringify({
+      dailyUsd: 1,
+      monthlyUsd: null,
+      blockScheduled: false,
+      ladder: [
+        { atRatio: 0.8, action: "warn" },
+        { atRatio: 1, action: "defer" },
+      ],
+      updatedAt: null,
+    }),
+  );
+
+  const body = (await (await app.request("/api/ledger", { headers: loopback })).json()) as {
+    enforcement: { action: string; window: string; detail: string };
+  };
+  assert.equal(body.enforcement.action, "defer", "the highest matching step, not the first");
+  assert.equal(body.enforcement.window, "daily");
+  assert.match(body.enforcement.detail, /deferred/);
+});

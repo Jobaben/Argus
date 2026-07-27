@@ -1,6 +1,7 @@
 import { paths } from "../claudeHome.js";
 import { atomicWriteJson } from "./atomicWrite.js";
 import { readJson } from "./readJson.js";
+import { LedgerValidationError, enforcementFor, validateLadder } from "./ledger.js";
 import type { BudgetConfig, BudgetState, BudgetStatus, BudgetWindow } from "@argus/contracts";
 
 /**
@@ -71,15 +72,27 @@ function asLimit(v: unknown): number | null {
 export async function readBudgetConfig(): Promise<BudgetConfig> {
   const raw = await readJson<Partial<BudgetConfig> | null>(paths.budgetFile(), null);
   if (!raw || typeof raw !== "object") return { ...DEFAULT_CONFIG };
+  // A corrupt ladder on disk degrades to "no ladder" rather than failing every
+  // read; the PUT path is where a bad one is rejected loudly.
+  const ladder = safeLadder(raw.ladder);
   return {
     dailyUsd: asLimit(raw.dailyUsd),
     monthlyUsd: asLimit(raw.monthlyUsd),
     blockScheduled: raw.blockScheduled === true,
+    ...(ladder ? { ladder } : {}),
     updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : null,
   };
 }
 
 /** Validates a PUT body: limits are positive numbers or null (= no limit). */
+function safeLadder(raw: unknown) {
+  try {
+    return validateLadder(raw);
+  } catch {
+    return undefined;
+  }
+}
+
 export function validateBudgetPatch(raw: unknown): Partial<BudgetConfig> {
   if (!raw || typeof raw !== "object") throw new BudgetValidationError("body required");
   const r = raw as Record<string, unknown>;
@@ -100,6 +113,13 @@ export function validateBudgetPatch(raw: unknown): Partial<BudgetConfig> {
       throw new BudgetValidationError("blockScheduled must be a boolean");
     }
     patch.blockScheduled = r.blockScheduled;
+  }
+  if ("ladder" in r) {
+    try {
+      patch.ladder = validateLadder(r.ladder) ?? [];
+    } catch (e) {
+      throw new BudgetValidationError(e instanceof LedgerValidationError ? e.message : String(e));
+    }
   }
   return patch;
 }
@@ -226,8 +246,34 @@ export function recentDays(
 /** True when the hard stop should hold back scheduled firings right now. */
 export async function isSpendBlocked(now: Date): Promise<boolean> {
   const config = await readBudgetConfig();
-  if (!config.blockScheduled) return false;
   if (config.dailyUsd == null && config.monthlyUsd == null) return false;
   const ledger = await readSpendLedger();
-  return buildBudgetStatus(config, ledger, now).state === "exceeded";
+  const status = buildBudgetStatus(config, ledger, now);
+  // The ladder *adds* steps below the cliff; it never removes the cliff. Either
+  // authority can stop a firing:
+  //
+  //   - the ladder's own `stop` step, which can sit above or below 1.0, and
+  //   - the original `blockScheduled`, which stops everything once a limit is
+  //     exceeded.
+  //
+  // Letting the ladder replace `blockScheduled` was the tempting reading, and
+  // it is wrong: adding a warn-only ladder would then silently disarm a hard
+  // stop the user had explicitly asked for. A new feature must not weaken an
+  // existing safety setting by being configured at all.
+  if (enforcementFor(config.ladder, status).action === "stop") return true;
+  if (!config.blockScheduled) return false;
+  return status.state === "exceeded";
+}
+
+/**
+ * The graduated action in force right now.
+ *
+ * Read once per scheduler tick; every schedule due in that tick gets the same
+ * verdict, which is both cheaper and more coherent than re-reading the ledger
+ * between two firings a millisecond apart.
+ */
+export async function currentEnforcement(now: Date) {
+  const config = await readBudgetConfig();
+  const ledger = await readSpendLedger();
+  return enforcementFor(config.ladder, buildBudgetStatus(config, ledger, now));
 }

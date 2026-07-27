@@ -1,5 +1,7 @@
 /** Spend guardrails: configured limits, current status, daily ledger. */
 
+import type { BudgetLadderStep } from "./ledger.js";
+
 export interface BudgetConfig {
   /** USD ceiling per local calendar day; null = no daily limit. */
   dailyUsd: number | null;
@@ -7,6 +9,12 @@ export interface BudgetConfig {
   monthlyUsd: number | null;
   /** When true, scheduled firings are skipped while a limit is exceeded. */
   blockScheduled: boolean;
+  /**
+   * Graduated response as spend climbs: warn → downgrade the model → defer
+   * slots → hard stop. Absent means the old all-or-nothing `blockScheduled`
+   * behaviour, which stays the default.
+   */
+  ladder?: BudgetLadderStep[];
   updatedAt: string | null;
 }
 
