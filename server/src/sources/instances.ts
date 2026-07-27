@@ -2,7 +2,8 @@ import { readFile, readdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { paths } from "../claudeHome.js";
 import { atomicWriteJson } from "./atomicWrite.js";
-import { cached, invalidate } from "./cache.js";
+import { cached, invalidate, patchCached } from "./cache.js";
+import { createFileMemo } from "./fileMemo.js";
 import type { PipelineInstance } from "./pipelineTypes.js";
 
 export const INSTANCE_KEEP = 50;
@@ -13,31 +14,17 @@ function instancePath(id: string): string {
   return path.join(paths.instancesDir(), `${id}.json`);
 }
 
-// mtime-keyed parse memo. /api/overview and the instances list re-scan the
-// whole directory on every poll; an unchanged file (the common case) costs a
-// stat instead of a read + JSON.parse. Bounded LRU: hits refresh recency.
-const PARSE_MEMO_MAX = 500;
-const parseMemo = new Map<string, { mtime: number; inst: PipelineInstance }>();
-
-function memoSet(id: string, mtime: number, inst: PipelineInstance): void {
-  parseMemo.delete(id);
-  parseMemo.set(id, { mtime, inst });
-  if (parseMemo.size > PARSE_MEMO_MAX) {
-    parseMemo.delete(parseMemo.keys().next().value as string);
-  }
-}
+/** See {@link createFileMemo} for why retention is by scan membership. */
+const parseMemo = createFileMemo<PipelineInstance>();
 
 async function readParsed(id: string): Promise<PipelineInstance | null> {
   const file = instancePath(id);
   try {
     const st = await stat(file);
-    const hit = parseMemo.get(id);
-    if (hit && hit.mtime === st.mtimeMs) {
-      memoSet(id, hit.mtime, hit.inst); // refresh LRU recency
-      return hit.inst;
-    }
+    const hit = parseMemo.get(id, st.mtimeMs);
+    if (hit) return hit;
     const inst = JSON.parse(await readFile(file, "utf8")) as PipelineInstance;
-    memoSet(id, st.mtimeMs, inst);
+    parseMemo.set(id, st.mtimeMs, inst);
     return inst;
   } catch {
     return null;
@@ -54,12 +41,32 @@ function scanKey(): string {
   return `instances:${paths.instancesDir()}`;
 }
 
+/** The scan result with one instance replaced (or inserted), still newest-first. */
+function upsert(all: PipelineInstance[], inst: PipelineInstance): PipelineInstance[] {
+  const next = all.filter((i) => i.id !== inst.id);
+  const at = next.findIndex((i) => i.createdAt.localeCompare(inst.createdAt) < 0);
+  next.splice(at === -1 ? next.length : at, 0, inst);
+  return next;
+}
+
 export async function writeInstance(inst: PipelineInstance): Promise<void> {
   await atomicWriteJson(instancePath(inst.id), inst);
   // Drop any memo entry so the next read re-stats — atomic rename gives the
   // file a fresh mtime, but eager eviction makes staleness impossible even on
   // filesystems with coarse mtime resolution.
-  parseMemo.delete(inst.id);
+  parseMemo.forget(inst.id);
+
+  // Patch the cached scan rather than dropping it. A running pipeline writes on
+  // every step transition, and each write used to force the next reader — the
+  // board, the palette, the briefing, the engine's own reconcile pass — to
+  // re-stat the entire directory. Re-reading the one file that changed is the
+  // work the write already implies.
+  //
+  // Read back from disk rather than caching `inst` itself: callers keep mutating
+  // the object after handing it here, and a cache holding that reference would
+  // change under them.
+  const fresh = await readParsed(inst.id);
+  if (fresh && patchCached<PipelineInstance[]>(scanKey(), (all) => upsert(all, fresh))) return;
   invalidate(scanKey());
 }
 
@@ -73,11 +80,16 @@ async function scanInstances(): Promise<PipelineInstance[]> {
   try {
     names = (await readdir(paths.instancesDir())).filter((f) => f.endsWith(".json"));
   } catch {
+    // The directory has gone away; forget what we had rather than serving it.
+    parseMemo.retain(new Set());
     return [];
   }
-  const all = (await Promise.all(names.map((f) => readParsed(f.replace(/\.json$/, ""))))).filter(
+  const ids = names.map((f) => f.replace(/\.json$/, "")).sort();
+  const all = (await Promise.all(ids.map(readParsed))).filter(
     (i): i is PipelineInstance => i !== null,
   );
+  // Sorted ids, so the ceiling admits the same subset every scan.
+  parseMemo.retain(new Set(ids));
   return all.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
@@ -97,7 +109,7 @@ export async function pruneInstances(pipelineId: string, keep: number): Promise<
   await Promise.all(
     drop.map(async (i) => {
       await rm(instancePath(i.id), { force: true });
-      parseMemo.delete(i.id);
+      parseMemo.forget(i.id);
     }),
   );
   if (drop.length > 0) invalidate(scanKey());

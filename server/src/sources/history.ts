@@ -1,6 +1,7 @@
 import { open } from "node:fs/promises";
 import { paths } from "../claudeHome.js";
 import { cached } from "./cache.js";
+import type { Activity } from "@argus/contracts";
 
 /** One raw line in `history.jsonl`. */
 interface HistoryEntry {
@@ -10,13 +11,7 @@ interface HistoryEntry {
   sessionId?: string;
 }
 
-/** A normalized activity item exposed by the API. */
-export interface Activity {
-  ts: string;
-  text: string;
-  project: string;
-  cwd: string;
-}
+export type { Activity } from "@argus/contracts";
 
 // history.jsonl is append-only and only the newest `limit` entries are served,
 // so read a bounded tail instead of the whole file (which grows without bound).

@@ -5,6 +5,208 @@ All notable changes to Argus are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Command palette (`⌘K` / `Ctrl K`)** over navigation, entities and actions:
+  fuzzy search across every destination, pipeline, schedule, failing monitor,
+  open issue, agent, project and recent transcript, plus the actions worth doing
+  from a keyboard — approve a waiting gate, run a schedule now, mark the Briefing
+  caught up. Matching is subsequence-based and scored by where the hits land
+  (word initials, adjacent runs, early position), and it highlights exactly what
+  it matched on. Backed by one purpose-built index, `GET /api/palette`, instead
+  of the seven view payloads a client-side join would need. Recently-run commands
+  float to the top of an _empty_ query only; once you type, ranking is purely
+  relevance.
+- **Keyboard layer with a `?` cheatsheet**: `g c` / `g b` / `g h` / `g l` /
+  `g s` / `g m` / `g i` / `g p` / `g u` / `g a` for destinations, `/` for
+  search. Bindings are data and the overlay renders the same array the listener
+  dispatches from, so a shortcut that exists is documented and an unavailable one
+  is not advertised. Chords disarm on an unknown second key rather than falling
+  through, and nothing single-letter fires while a text field has focus.
+- **Command Center situation strip** (`GET /api/insight`): gates awaiting you,
+  failures, runs in flight, live agents, down/failing monitors, open issues,
+  today's spend against the daily limit, the next scheduled firing with a live
+  countdown, and a 24-hour run-outcome histogram. Shows only what is true — a
+  metric with nothing to report is omitted rather than drawn as a zero.
+- **Live activity rail** on the board: what is running now with each step's
+  current tool call (including scheduled and one-off runs, which have no card),
+  over the last completed runs with outcome, duration and cost.
+- **Step drawer**: clicking a step opens its run — id, model, timings, tokens,
+  cost, failure reason, transcript link, cancel — with the log tailing live,
+  over the board rather than away from it.
+- **Notification bell** keeping every alert raised this session, with an unread
+  count and a link per entry, because a toast lasts eight seconds and most fire
+  while you are in another tab.
+- **Shape-matched loading skeletons** in all eighteen views, replacing
+  "Loading…" text, each paired with a polite live-region announcement.
+- **Mobile navigation sheet** replacing the nine-tab strip below `md`, listing
+  every destination at once with its attention badge.
+- **Scheduler health.** Each schedule leads with a verdict — paused, failing,
+  running, healthy, never-run — and carries its next firing as a live countdown,
+  when it last ran, its median duration, and a pass ratio over the runs shown. A
+  failure _streak_ is stated with the first line of its error, because one
+  failure is visible in a row and three consecutive ones are a different problem.
+  Above the list: how many schedules exist, how many are failing or paused, what
+  fired in the last 24 hours and what fires next — every count a filter for its
+  own subset.
+- **Filterable health counters** on Monitors and Issues: pressing "3 Down" or
+  "2 Open" narrows the list in place, so "which ones?" is answered without
+  leaving the page. A counter with nothing behind it stays inert rather than
+  offering to blank the list.
+- **Session search and day grouping**: the transcript index groups under Today /
+  Yesterday / weekday / date and filters with the same fuzzy matcher the palette
+  uses, over titles, project paths and model names.
+- **Month-end spend projection** on Budget, from the elapsed daily rate, with the
+  day a limit is projected to be crossed — plus a daily-limit line on the 30-day
+  chart and the days that broke it drawn in red.
+- **Pipeline cards say where the latest run got to.** One chip per phase, coloured
+  by state, plus last activity, phase and step counts, spend and the failing
+  step's reason. The list previously said "4 phases" and stopped, so finding which
+  phase a pipeline was stuck in meant going to the board and locating its card —
+  from data this list was already fetching for its status pill.
+
+### Changed
+
+- **New `@argus/contracts` workspace**: every DTO that crosses the HTTP/WebSocket
+  boundary is declared once and imported by both sides, replacing ~25
+  hand-duplicated copies (330 lines in `web/src/types.ts` alone, plus a dozen
+  inlined in hooks). Types-only by construction — nothing is emitted, and
+  `scripts/check-contracts-runtime.mjs` fails CI if that changes. WebSocket
+  frames are now a typed discriminated union rather than string literals matched
+  on both ends.
+- **Conditional reads.** Every `GET` carries a strong `ETag`; the client sends it
+  back and an unchanged resource returns `304`, which it handles without touching
+  state — so a no-op broadcast costs ~100 bytes and zero re-renders instead of a
+  full re-parse and re-render of the board.
+- **Single-flight, coalesced refetches** with jittered exponential backoff (to
+  30s) in both the fetch layer and the socket, replacing per-frame fetches that
+  could land out of order and a flat 2s reconnect that hammered a downed server
+  forever. The socket also reconnects immediately on tab-visible or
+  browser-online.
+- **One structured logger** replacing 25 ad-hoc `console.error("[argus] …")`
+  calls: level-gated, `key=value` text or JSON lines (`ARGUS_LOG_FORMAT=json`),
+  with `Error` objects serialized properly. Every request carries an
+  `x-request-id`, echoed back and honoured from a proxy, so a UI report ties to
+  the exact server line.
+- **`strict` is on in the web workspace**, which it had never been.
+- **Every route is a lazy chunk** except the landing one: initial payload
+  105.7 → 91.5 kB gzip, other routes 1–4 kB each, with
+  `scripts/check-bundle-size.mjs` holding the initial gzipped payload under a
+  budget in CI.
+- **Per-route error boundaries**: an unexpected shape in one view no longer
+  blanks the whole dashboard.
+- **The run and instance read paths no longer re-scan on every write.** Both
+  directories were memoised behind a 500-entry LRU, which is the pathological
+  policy for the access pattern they serve: a full-directory scan touches every
+  file once in order, so past the cap each entry was evicted just before the next
+  scan asked for it. Retention is now by scan membership (one shared
+  `createFileMemo`), and a write **patches** the cached scan rather than dropping
+  it — re-reading the one file that changed instead of forcing the next reader to
+  re-stat the directory. Measured over 1200 run records: a warm rescan 163 → 57ms,
+  and the write-then-read cycle a live run performs continuously 142 → 1.5ms.
+- Motion that carries information only: counters roll when they change (snapping
+  on first paint, huge jumps and reduced motion), and the row that just changed
+  status flashes.
+- **The Scheduler loads its runs once instead of once per card.** Each schedule
+  card called `GET /api/runs?scheduleId=…` itself, so twelve schedules meant
+  thirteen requests and thirteen live polls — and still no aggregate view, since
+  nothing held all the runs at once. The view fetches `/api/runs` once and groups.
+- **The Launch form keeps the working directory and model** after firing, and
+  clears only the prompt and name. Firing several prompts at one repo is the
+  common case; retyping an absolute path each time was not.
+- **Empty states teach instead of just reporting.** Schedules, Monitors, Issues,
+  Launch, Sessions and the spend chart each explain what the thing is, where its
+  data comes from and what to do next, with the action inline where there is one.
+
+### Security
+
+- **An unauthenticated non-loopback bind is now refused, not warned about.** The
+  README has always called `ARGUS_TOKEN` "mandatory" when `ARGUS_HOST` points at
+  a non-loopback interface, but the code only logged a warning and carried on —
+  so the documented promise and the actual behaviour disagreed. Argus now exits
+  with an explanation instead of opening a port that can execute agents with the
+  user's credentials.
+- **`npm start` no longer overrides the loopback default.** It carried a
+  hardcoded `ARGUS_HOST=0.0.0.0 ARGUS_ALLOWED_HOSTS=10.59.1.53`, which meant
+  anyone running the documented production command got a LAN-exposed control
+  plane with no token — the exact case the paragraph above exists to prevent. Set
+  the variables explicitly (with a token) if you want that bind.
+
+### Fixed
+
+- **`AgentStatus` was an assertion, not a guarantee.** The server passed the
+  `state` string straight off disk into the union, so a value from a newer CLI
+  would reach the client and fall through every exhaustive switch. Unrecognised
+  states now normalize to `"unknown"` (job status _and_ timeline entries), and
+  `"stopped"` — which the UI already handled but the server's union omitted — is
+  part of the contract.
+- **`Next: -7138s ago` on a late monitor.** `TimeAgo` assumed every instant was
+  in the past, so a future one rendered as a negative duration. Relative time now
+  works in both directions, and a late or down monitor leads with "Overdue by
+  2h 5m".
+- **Relative timestamps never updated** — computed at render and frozen until
+  something unrelated re-rendered, so a quiet dashboard misreported how old its
+  data was. They now share one module-level clock.
+- **An aborted request cleared `loading`**, so a first load (or any React
+  StrictMode double-mount) could drop to the _empty state_ — "No pipelines
+  defined yet" on a board with pipelines — until the cancelled fetch returned.
+- **The board was unusable on a phone**: unbounded `1fr` phase columns gave each
+  phase ~60px at 390px wide and rendered its title one letter per line. Columns
+  now have a 200px floor and the card scrolls horizontally below that.
+- **The Chronicle was unreadable at wide windows**: lane labels wrapped mid-word
+  across two lines, sub-minute spans were 0.03% wide (invisible and impossible to
+  hover), and almost nothing was labelled. Labels truncate to their identifying
+  tail with the full path as a tooltip, spans have a ~16px floor, and a legend
+  states what the colours mean.
+- `formatUsd(0)` rendered `$0.0000`, a precision claim about nothing.
+- A malformed `run:activity` batch could render as `undefined` deep in a view;
+  frame payloads are now validated once in the socket.
+- **Four more copies of the frozen `timeAgo`** survived the first pass, in
+  Sessions, Projects, Tasks and Activity — each reading the clock during render
+  and never revisiting it. All four now use the shared clock.
+- **The Scheduler spoke in absolute timestamps**: `7/26/2026, 4:00:10 PM` for a
+  run, `next 7/27/2026, 2:30:00 AM` for a slot, `60s` for a duration and
+  `every 360 min` for a cadence. Runs read "2h ago" with the instant on hover,
+  slots count down, and a cadence reduces to its largest unit ("every 6h").
+- **A schedule paused with a computed next slot claimed it would fire.** The
+  header's "next" now skips disabled schedules and the row says so outright.
+- "1 tools" on a session card.
+- **`every 360 min` survived in two more places.** The trigger phrasing existed in
+  three copies that had drifted: only one humanised a cadence, only one handled a
+  manual (null) trigger. There is now one `formatTrigger`, so a trigger reads the
+  same on the Scheduler, on the Pipelines list and in the palette.
+- **Search presented a ceiling as a count.** The scan stops at 100 matches and
+  exits early — deliberately, so a common word does not read every transcript on
+  disk — but the UI said "100 matches", which a reader takes literally. The
+  response now carries `limit` and `truncated`, and the UI says "first 100
+  matches — narrow the query".
+- **The Users page was a dead end when signed out.** It said only root can manage
+  accounts and stopped; the sign-in form is on the Pipelines tab, which nothing
+  said. It now links there.
+- **An awaiting-approval pipeline showed a live "running" pulse.** Waiting for a
+  human is stopped, not working.
+- **`Plugins 0` wore a red badge.** The inventory accents are per-category, not
+  severity, so a zero now renders neutral instead of looking like an alert.
+- **The Briefing's failure rows were the only dead ones on the page.** Attention
+  cards, new issues and finished pipelines all linked to what they described;
+  failures did not. A failure now opens its run's transcript, or Issues when the
+  run has none.
+- **Rebuilding the UI under a running Argus produced a blank page.** `index.html`
+  was read once at boot and served forever, so after a rebuild the cached HTML
+  kept naming content-hashed chunks that no longer existed: every asset 404'd and
+  the app was white until someone restarted the server. It is now re-read when the
+  file on disk changes — one `stat` per navigation, the same cost the asset route
+  already paid.
+- **A port collision logged an internal error and then hung.** `EADDRINUSE`
+  reached the catch-all `uncaughtException` handler, whose job is to keep the
+  daemon alive through a stray rejection — the opposite of what "the port is
+  taken" needs. Argus now prints which port and how to change it, and exits 1, so
+  the CLI and any supervisor can tell it failed.
+- **Usage stats printed six confident zeros** for tokens, cost and models when
+  Claude Code's usage telemetry was absent, beside real session counts read from
+  the transcripts — indistinguishable from having genuinely used zero tokens
+  across 184 sessions. The two halves are now separate, and a missing one says so.
+
 ## [0.4.0] - 2026-07-14
 
 ### Added

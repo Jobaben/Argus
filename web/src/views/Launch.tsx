@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useLaunch } from "../useLaunch";
 import type { LaunchInput, Run } from "../types";
-import { AlertStrip, EmptyState, ModelSelect, Page } from "../ds";
+import { AlertStrip, EmptyState, Loading, ModelSelect, Page, SkeletonRows, formatUsd } from "../ds";
 import { RunRow } from "./RunRow";
 
 const FIELD =
@@ -91,6 +91,12 @@ function LaunchForm({
 export default function Launch() {
   const { runs, loading, error, launch, cancelRun } = useLaunch();
   const [form, setForm] = useState<LaunchInput>(EMPTY);
+  const live = runs.filter((r) => r.status === "running").length;
+  // Null rather than $0.00 when nothing reported a cost: an unpriced list and a
+  // free one are different facts.
+  const spend = runs.some((r) => r.costUsd != null)
+    ? runs.reduce((sum, r) => sum + (r.costUsd ?? 0), 0)
+    : null;
 
   const rerunButton = (run: Run) => (
     <button
@@ -135,18 +141,50 @@ export default function Launch() {
               ...(input.name?.trim() ? { name: input.name.trim() } : {}),
               ...(input.model ? { model: input.model } : {}),
             });
-            setForm(EMPTY);
+            // Keep the directory and model, clear what was one-shot. People fire
+            // several prompts at the same repo in a row; making them retype an
+            // absolute path each time was the single most tedious thing here.
+            setForm({ ...EMPTY, cwd: input.cwd, ...(input.model ? { model: input.model } : {}) });
           }}
         />
       </div>
 
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-ink-dim">
-        Recent one-off runs
-      </h2>
-      {loading ? (
-        <p className="text-ink-faint">Loading runs…</p>
+      <div className="mb-3 flex flex-wrap items-baseline gap-x-4 gap-y-1">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-dim">
+          Recent one-off runs
+        </h2>
+        {live > 0 && (
+          <span className="inline-flex items-center gap-1.5 text-xs text-run">
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-run opacity-75" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-run" />
+            </span>
+            {live} in flight
+          </span>
+        )}
+        {spend != null && (
+          <span
+            className="ml-auto font-mono text-xs text-ink-faint"
+            title="Total reported cost of the runs listed below"
+          >
+            {formatUsd(spend)} across {runs.length} {runs.length === 1 ? "run" : "runs"}
+          </span>
+        )}
+      </div>
+      {loading && runs.length === 0 ? (
+        <Loading label="runs">
+          <SkeletonRows count={4} />
+        </Loading>
       ) : runs.length === 0 ? (
-        <EmptyState>Nothing launched yet. Fill in the form and hit Launch.</EmptyState>
+        <EmptyState>
+          <p className="text-sm text-ink-dim">Nothing launched yet.</p>
+          <p className="mx-auto mt-2 max-w-md text-xs">
+            A one-off run is the same machinery a schedule uses, fired once: the log tails live, the
+            cost is metered against your budget, and the transcript is kept. Use{" "}
+            <strong className="text-ink-dim">Reuse</strong> on any past run to load its prompt back
+            into the form.
+          </p>
+        </EmptyState>
       ) : (
         <ul className="space-y-1.5">
           {runs.map((r) => (

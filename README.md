@@ -12,12 +12,18 @@ Users, Search, and all the monitoring tabs.
 
 ## Stack
 
+- **contracts** — every DTO that crosses the HTTP/WebSocket boundary, declared
+  once and imported by both sides, so a field added on the server cannot drift
+  from the client that reads it. Types only: nothing is emitted, and CI enforces
+  that.
 - **server** — Node 22 + TypeScript, [Hono](https://hono.dev) HTTP API,
   `chokidar` file-watcher, `ws` WebSocket for live push. It treats the state
   Claude Code owns (jobs, transcripts, history) as strictly read-only, and
   writes only its **own** state under `~/.claude/argus/` (schedules, pipelines,
   run records) plus, on request, signal hooks under `~/.claude/hooks/`.
-- **web** — Vite 8 + React 19 + Tailwind CSS v4.
+- **web** — Vite 8 + React 19 + Tailwind CSS v4. One shared socket, one
+  live-resource primitive with conditional (`ETag`) reads, one clock, and a lazy
+  chunk per route under a CI-enforced size budget.
 
 OS-agnostic: it keys off `os.homedir()` and the encoded project-dir names, never
 the absolute paths embedded in the data files (those can be from another OS).
@@ -30,8 +36,23 @@ is a privileged single-user control plane:
 - Binds to **loopback (`127.0.0.1`) only** by default — never the LAN.
 - **Host-header allowlist** blocks DNS-rebinding; **Origin checks** on all
   mutating requests block drive-by CSRF; both apply to the WebSocket upgrade.
-- Set **`ARGUS_TOKEN`** to require a bearer token — mandatory if you override
-  `ARGUS_HOST` to expose a non-loopback interface.
+- Set **`ARGUS_TOKEN`** to require a bearer token. This is **enforced**, not
+  advised: with `ARGUS_HOST` pointed at a non-loopback interface and no token,
+  the server refuses to start rather than opening an unauthenticated port that
+  can execute agents with your credentials.
+
+## Getting around
+
+`⌘K` (`Ctrl K`) opens the command palette: fuzzy search over every destination,
+pipeline, schedule, failing monitor, open issue, agent, project and recent
+transcript — plus the actions worth doing from a keyboard, like approving a
+pipeline waiting at a gate or firing a schedule now. Three characters and Enter
+usually gets there.
+
+`?` lists every keyboard shortcut. `g` then a letter jumps to a destination
+(`g c` Command Center, `g b` Briefing, `g h` Chronicle, `g l` Launch, `g s`
+Scheduler, `g m` Monitors, `g i` Issues, `g p` Pipelines, `g u` Budget, `g a`
+Agents); `/` goes to transcript search.
 
 ## Quick start
 
@@ -80,17 +101,17 @@ docker run --rm -p 7777:7777 \
 
 ### Configuration
 
-| Variable                    | Default     | Purpose                                                    |
-| --------------------------- | ----------- | ---------------------------------------------------------- |
-| `ARGUS_CLAUDE_HOME`         | `~/.claude` | Directory Argus watches.                                   |
-| `ARGUS_PORT`                | `7777`      | HTTP/WS port.                                              |
-| `ARGUS_HOST`                | `127.0.0.1` | Bind interface. Non-loopback requires `ARGUS_TOKEN`.       |
-| `ARGUS_TOKEN`               | _(unset)_   | Bearer token required on every request when set.           |
-| `ARGUS_ALLOWED_HOSTS`       | _(none)_    | Extra Host values to accept (behind a proxy).              |
-| `ARGUS_ALLOWED_ORIGINS`     | _(none)_    | Extra Origins to accept for cross-origin browser requests. |
-| `ARGUS_MAX_CONCURRENT_RUNS` | `4`         | Cap on concurrently spawned pipeline steps.                |
-| `ARGUS_SCHED_TICK_MS`       | `30000`     | Scheduler / reconcile tick interval.                       |
-| `ARGUS_WEBHOOK_URL`         | _(unset)_   | POST target for failure + monitor alerts (Slack, mail, …). |
+| Variable                    | Default     | Purpose                                                                                 |
+| --------------------------- | ----------- | --------------------------------------------------------------------------------------- |
+| `ARGUS_CLAUDE_HOME`         | `~/.claude` | Directory Argus watches.                                                                |
+| `ARGUS_PORT`                | `7777`      | HTTP/WS port.                                                                           |
+| `ARGUS_HOST`                | `127.0.0.1` | Bind interface. A non-loopback bind **requires** `ARGUS_TOKEN` — Argus exits otherwise. |
+| `ARGUS_TOKEN`               | _(unset)_   | Bearer token required on every request when set.                                        |
+| `ARGUS_ALLOWED_HOSTS`       | _(none)_    | Extra Host values to accept (behind a proxy).                                           |
+| `ARGUS_ALLOWED_ORIGINS`     | _(none)_    | Extra Origins to accept for cross-origin browser requests.                              |
+| `ARGUS_MAX_CONCURRENT_RUNS` | `4`         | Cap on concurrently spawned pipeline steps.                                             |
+| `ARGUS_SCHED_TICK_MS`       | `30000`     | Scheduler / reconcile tick interval.                                                    |
+| `ARGUS_WEBHOOK_URL`         | _(unset)_   | POST target for failure + monitor alerts (Slack, mail, …).                              |
 
 ## Data sources
 

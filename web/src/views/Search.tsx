@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useSearch, type SearchResult } from "../useSearch";
-import { AlertStrip, EmptyState, Page } from "../ds";
+import { AlertStrip, EmptyState, Loading, Page, SkeletonRows } from "../ds";
 
 const TYPE_STYLE: Record<string, string> = {
   user: "bg-queue/12 text-queue ring-queue/30",
@@ -56,7 +56,7 @@ function ResultRow({ result, query }: { result: SearchResult; query: string }) {
 
 export default function Search() {
   const [input, setInput] = useState("");
-  const { results, loading, error } = useSearch(input);
+  const { results, loading, error, truncated } = useSearch(input);
   const trimmed = input.trim();
 
   return (
@@ -86,19 +86,43 @@ export default function Search() {
       )}
 
       {!trimmed ? (
-        <EmptyState>Type to search across transcripts.</EmptyState>
+        <EmptyState>
+          <p className="text-sm text-ink-dim">Type to search across transcripts.</p>
+          <p className="mx-auto mt-2 max-w-md text-xs">
+            Plain-text, case-insensitive, over the message text of every session Claude Code has
+            written — yours and Argus&apos;s own scheduled runs. Newest transcripts are read first,
+            so a recent phrase comes back immediately.
+          </p>
+        </EmptyState>
       ) : loading ? (
-        <p role="status" className="text-ink-faint">
-          Searching…
-        </p>
+        <Loading label="matches">
+          <SkeletonRows count={4} />
+        </Loading>
       ) : results.length === 0 ? (
         <div role="status">
-          <EmptyState>No matches for "{trimmed}".</EmptyState>
+          <EmptyState>
+            <p className="text-sm text-ink-dim">No matches for &ldquo;{trimmed}&rdquo;.</p>
+            <p className="mt-2 text-xs">
+              The search is literal, not fuzzy — try a shorter fragment, or ⌘K to jump to a
+              pipeline, schedule or session by name.
+            </p>
+          </EmptyState>
         </div>
       ) : (
         <>
+          {/* The scan stops at a cap; saying "100 matches" would turn a ceiling
+              into a count the reader would take literally. */}
           <p role="status" className="mb-3 text-xs text-ink-faint">
-            {results.length} match{results.length === 1 ? "" : "es"}
+            {truncated ? (
+              <>
+                first <span className="text-ink-dim">{results.length}</span> matches — narrow the
+                query to see the most relevant ones
+              </>
+            ) : (
+              <>
+                {results.length} match{results.length === 1 ? "" : "es"}
+              </>
+            )}
           </p>
           <div className="flex flex-col gap-3">
             {results.map((r, i) => (

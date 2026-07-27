@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { axisTicks, spanGeometry, tickLabel } from "./chronicleLayout";
+import { axisTicks, shortenLanePath, spanGeometry, tickLabel } from "./chronicleLayout";
 
 const START = Date.parse("2026-07-09T00:00:00.000Z");
 const END = Date.parse("2026-07-09T10:00:00.000Z"); // 10h window
@@ -60,5 +60,25 @@ describe("tickLabel", () => {
     expect(tickLabel(at, 7 * 24 * 3_600_000)).toMatch(
       /^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) \d{2}:\d{2}$/,
     );
+  });
+});
+
+describe("shortenLanePath", () => {
+  it("keeps the identifying tail of a path", () => {
+    expect(shortenLanePath("home/mtrushbad/GIT/spectacle")).toBe("…/GIT/spectacle");
+  });
+
+  it("leaves a short label alone", () => {
+    expect(shortenLanePath("Background agents")).toBe("Background agents");
+    expect(shortenLanePath("GIT/spectacle")).toBe("GIT/spectacle");
+  });
+
+  it("honours a custom segment count", () => {
+    expect(shortenLanePath("a/b/c/d", 1)).toBe("…/d");
+    expect(shortenLanePath("a/b/c/d", 3)).toBe("…/b/c/d");
+  });
+
+  it("ignores empty segments from leading or doubled separators", () => {
+    expect(shortenLanePath("/a/b//c")).toBe("…/b/c");
   });
 });

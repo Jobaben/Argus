@@ -7,9 +7,7 @@ const noop = async () => {};
 
 describe("AdminAuthPanel", () => {
   it("renders the bootstrap form when unconfigured", () => {
-    render(
-      <AdminAuthPanel configured={false} onLogin={noop} onSetup={noop} onRegister={noop} />,
-    );
+    render(<AdminAuthPanel configured={false} onLogin={noop} onSetup={noop} onRegister={noop} />);
     expect(screen.getByRole("form", { name: /create the root account/i })).toBeTruthy();
   });
 

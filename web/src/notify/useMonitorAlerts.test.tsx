@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import type { LiveMessage } from "../live/liveSocket";
+import type { LiveFrame } from "../live/liveSocket";
 
-const subs = new Set<{ onMessage?: (msg: LiveMessage) => void }>();
+const subs = new Set<{ onMessage?: (msg: LiveFrame) => void }>();
 vi.mock("../live/liveSocket", () => ({
-  subscribeLive: (sub: { onMessage?: (msg: LiveMessage) => void }) => {
+  subscribeLive: (sub: { onMessage?: (msg: LiveFrame) => void }) => {
     subs.add(sub);
     return () => subs.delete(sub);
   },
@@ -13,7 +13,7 @@ vi.mock("../live/liveSocket", () => ({
 import { useMonitorAlerts } from "./useMonitorAlerts";
 
 const emit = (msg: unknown) => {
-  for (const s of subs) s.onMessage?.(msg as LiveMessage);
+  for (const s of subs) s.onMessage?.(msg as LiveFrame);
 };
 
 const downAlert = {

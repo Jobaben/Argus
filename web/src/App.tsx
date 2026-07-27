@@ -1,34 +1,68 @@
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import { useAgents } from "./useAgents";
 import type { Agent, AgentStatus } from "./types";
-import { AgentTile, HealthCounter, EmptyState, Page, ToastRegion } from "./ds";
+import {
+  AgentTile,
+  EmptyState,
+  ErrorBoundary,
+  HealthCounter,
+  Loading,
+  Page,
+  SkeletonGrid,
+  ToastRegion,
+  staggerDelay,
+} from "./ds";
 import { useAgentNotifications } from "./notify/useAgentNotifications";
 import { useBudgetAlerts } from "./notify/useBudgetAlerts";
 import { useMonitorAlerts } from "./notify/useMonitorAlerts";
 import { NavBar } from "./NavBar";
 import type { NavTab } from "./NavBar";
 import type { MoreItem } from "./ds";
-import Sessions from "./views/Sessions";
-import ActivityFeed from "./views/ActivityFeed";
-import Projects from "./views/Projects";
-import Stats from "./views/Stats";
-import Inventory from "./views/Inventory";
-import Tasks from "./views/Tasks";
-import Search from "./views/Search";
-import Budget from "./views/Budget";
-import Launch from "./views/Launch";
-import Schedules from "./views/Schedules";
-import Monitors from "./views/Monitors";
-import Issues from "./views/Issues";
-import AgentDetail from "./views/AgentDetail";
 import CommandCenter from "./views/CommandCenter";
-import Chronicle from "./views/Chronicle";
-import Pipelines from "./views/Pipelines";
 import SetupBanner from "./views/SetupBanner";
-import Users from "./views/Users";
-import Briefing from "./views/Briefing";
+
+/**
+ * Every view except the landing one is a separate chunk.
+ *
+ * The whole app used to ship as one 374 KB bundle: opening the Command Center
+ * downloaded and parsed the Chronicle's timeline maths, the pipeline editor, the
+ * stats charts and the transcript reader, none of which most sessions ever look
+ * at. The Command Center stays eager because it *is* the first paint — lazy
+ * would trade a smaller bundle for a slower landing, which is the wrong way
+ * round.
+ *
+ * Chunks are fetched on navigation, and the Suspense fallback below is the same
+ * skeleton language the views use, so a cold jump to a tab looks like loading
+ * rather than like nothing happening.
+ */
+const Briefing = lazy(() => import("./views/Briefing"));
+const Chronicle = lazy(() => import("./views/Chronicle"));
+const Launch = lazy(() => import("./views/Launch"));
+const Schedules = lazy(() => import("./views/Schedules"));
+const Monitors = lazy(() => import("./views/Monitors"));
+const Issues = lazy(() => import("./views/Issues"));
+const Pipelines = lazy(() => import("./views/Pipelines"));
+const Budget = lazy(() => import("./views/Budget"));
+const Search = lazy(() => import("./views/Search"));
+const Stats = lazy(() => import("./views/Stats"));
+const Inventory = lazy(() => import("./views/Inventory"));
+const Projects = lazy(() => import("./views/Projects"));
+const Tasks = lazy(() => import("./views/Tasks"));
+const Users = lazy(() => import("./views/Users"));
+const Sessions = lazy(() => import("./views/Sessions"));
+const ActivityFeed = lazy(() => import("./views/ActivityFeed"));
+const AgentDetail = lazy(() => import("./views/AgentDetail"));
 import { useBriefing } from "./useBriefing";
 import { useAuth } from "./useAuth";
+import {
+  CommandPalette,
+  NAV_CHORDS,
+  ShortcutHelp,
+  useGlobalKeys,
+  usePalette,
+  usePaletteState,
+  useShellBindings,
+} from "./cmd";
 
 function AgentsView({
   agents,
@@ -65,13 +99,20 @@ function AgentsView({
       )}
 
       {loading ? (
-        <p className="text-ink-faint">Loading agents…</p>
+        <Loading label="agents">
+          <SkeletonGrid count={4} columns={2} lines={2} />
+        </Loading>
       ) : agents.length === 0 ? (
         <EmptyState>No background agents found yet. Launch one and it'll appear here.</EmptyState>
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          {agents.map((a) => (
-            <a key={a.short} href={`#/agent/${encodeURIComponent(a.short)}`} className="block">
+          {agents.map((a, i) => (
+            <a
+              key={a.short}
+              href={`#/agent/${encodeURIComponent(a.short)}`}
+              style={{ animationDelay: staggerDelay(i) }}
+              className="block rounded-tile transition-transform duration-(--duration-quick) hover:-translate-y-0.5 motion-safe:animate-[slide-up_var(--duration-base)_var(--ease-out-expo)_both]"
+            >
               <AgentTile agent={a} />
             </a>
           ))}
@@ -105,8 +146,32 @@ const TAB_META: { id: string; label: string; role: TabRole }[] = [
   { id: "agent", label: "Detail", role: "drilldown" },
 ];
 
+/** The Suspense fallback for a route whose chunk is still downloading. Shaped
+ *  like a page, so the layout does not jump when the real view arrives. */
+function ViewLoading({ label }: { label: string }) {
+  return (
+    <Page title={label}>
+      <Loading label={label}>
+        <SkeletonGrid count={4} columns={2} lines={3} />
+      </Loading>
+    </Page>
+  );
+}
+
 function currentTabId(): string {
   return window.location.hash.replace(/^#\/?/, "").split("/")[0] || "command";
+}
+
+/**
+ * POSTs a palette action and throws the server's own error message, so the
+ * palette can report "an instance is already running" rather than "HTTP 409".
+ */
+async function postAction(path: string): Promise<void> {
+  const res = await fetch(path, { method: "POST" });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
 }
 
 export default function App() {
@@ -114,6 +179,8 @@ export default function App() {
   const agentsState = useAgents();
   const auth = useAuth();
   const briefingState = useBriefing();
+  const palette = usePaletteState();
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const agentToasts = useAgentNotifications(agentsState.agents);
   const monitorToasts = useMonitorAlerts();
   const budgetToasts = useBudgetAlerts();
@@ -132,16 +199,24 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  useEffect(() => {
-    const label = TAB_META.find((t) => t.id === active)?.label ?? "Command Center";
-    document.title = `${label} — Argus`;
-  }, [active]);
+  const activeLabel = useMemo(
+    () => TAB_META.find((t) => t.id === active)?.label ?? "Command Center",
+    [active],
+  );
 
-  const destinations: NavTab[] = TAB_META.filter((t) => t.role === "destination").map((t) => ({
-    id: t.id,
-    label: t.label,
-    badge: t.id === "briefing" ? (briefingState.briefing?.attentionCount ?? 0) : undefined,
-  }));
+  useEffect(() => {
+    document.title = `${activeLabel} — Argus`;
+  }, [activeLabel]);
+
+  const destinations: NavTab[] = useMemo(
+    () =>
+      TAB_META.filter((t) => t.role === "destination").map((t) => ({
+        id: t.id,
+        label: t.label,
+        badge: t.id === "briefing" ? (briefingState.briefing?.attentionCount ?? 0) : undefined,
+      })),
+    [briefingState.briefing?.attentionCount],
+  );
   const overflow: MoreItem[] = TAB_META.filter(
     (t) => t.role === "overflow" && (t.id !== "users" || auth.status?.role === "root"),
   ).map((t) => ({
@@ -149,6 +224,66 @@ export default function App() {
     label: t.label,
     href: `#/${t.id}`,
   }));
+
+  // ── The command layer ─────────────────────────────────────────────────────
+  // Everything reachable by mouse is reachable by keyboard through these two
+  // surfaces, and both are built from the same nav metadata as the bar itself.
+
+  const closeOverlays = useCallback(() => {
+    palette.hide();
+    setShortcutsOpen(false);
+  }, [palette]);
+
+  const shellActions = useMemo(
+    () => ({
+      openPalette: palette.show,
+      openShortcuts: () => setShortcutsOpen(true),
+      closeOverlays,
+      overlayOpen: () => palette.open || shortcutsOpen,
+      navigate: (tabId: string) => {
+        window.location.hash = `#/${tabId}`;
+      },
+    }),
+    [palette.show, palette.open, shortcutsOpen, closeOverlays],
+  );
+
+  // Palette entries are the same destinations, annotated with the chord that
+  // also reaches them — so the palette teaches its own shortcuts.
+  const paletteDestinations = useMemo(
+    () =>
+      TAB_META.filter((t) => t.role === "destination" || t.role === "overflow" || t.id === "search")
+        .filter((t) => t.id !== "users" || auth.status?.role === "root")
+        .map((t) => ({
+          id: t.id,
+          label: t.label,
+          chord: NAV_CHORDS[t.id] ? `g ${NAV_CHORDS[t.id]}` : undefined,
+        })),
+    [auth.status?.role],
+  );
+
+  // Chord targets are not the same set as nav destinations: Agents is a
+  // drill-down with no tab of its own, but `g a` should still reach it.
+  const chordTargets = useMemo(
+    () => TAB_META.filter((t) => NAV_CHORDS[t.id]).map((t) => ({ id: t.id, label: t.label })),
+    [],
+  );
+  const bindings = useShellBindings(chordTargets, shellActions);
+  useGlobalKeys(bindings);
+
+  const paletteCtx = useMemo(
+    () => ({
+      destinations: paletteDestinations,
+      canAdmin: auth.status?.authenticated === true,
+      approveGate: (instanceId: string) => postAction(`/api/instances/${instanceId}/approve`),
+      runSchedule: (scheduleId: string) => postAction(`/api/schedules/${scheduleId}/run`),
+      markCaughtUp: async () => {
+        await briefingState.ack();
+      },
+      showShortcuts: () => setShortcutsOpen(true),
+    }),
+    [paletteDestinations, auth.status?.authenticated, briefingState],
+  );
+  const { commands, loading: paletteLoading } = usePalette(palette.open, paletteCtx);
 
   const renderActive = () => {
     switch (active) {
@@ -226,12 +361,33 @@ export default function App() {
         overflow={overflow}
         activeId={active}
         live={agentsState.live}
+        onOpenPalette={palette.show}
       />
       <SetupBanner />
       <main id="main" tabIndex={-1} className="outline-none">
-        {renderActive()}
+        {/* Keyed on the route so switching destinations reads as a deliberate
+            transition rather than a flicker. Opacity only — a moving page would
+            fight the staggered content inside it. */}
+        <div key={active} className="motion-safe:animate-[fade-in_var(--duration-base)_ease-out]">
+          {/* Scoped per route: a bad shape in one view costs that view, not the
+              nav, the palette and every other tab. */}
+          <ErrorBoundary label={activeLabel} resetKey={active}>
+            <Suspense fallback={<ViewLoading label={activeLabel} />}>{renderActive()}</Suspense>
+          </ErrorBoundary>
+        </div>
       </main>
       <ToastRegion toasts={toasts} onDismiss={dismiss} />
+      <CommandPalette
+        open={palette.open}
+        onClose={palette.hide}
+        commands={commands}
+        loading={paletteLoading}
+      />
+      <ShortcutHelp
+        open={shortcutsOpen}
+        onClose={() => setShortcutsOpen(false)}
+        bindings={bindings}
+      />
     </div>
   );
 }

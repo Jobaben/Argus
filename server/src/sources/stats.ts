@@ -1,6 +1,7 @@
 import path from "node:path";
 import { claudeHome } from "../claudeHome.js";
 import { readJson } from "./readJson.js";
+import type { DailyStat, ModelStat, PeakHour, StatsResult } from "@argus/contracts";
 
 interface RawDailyActivity {
   date?: string;
@@ -44,55 +45,7 @@ interface RawStatsCache {
   totalSpeculationTimeSavedMs?: number;
 }
 
-export interface ModelStat {
-  model: string;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheCreationTokens: number;
-  totalTokens: number;
-  webSearchRequests: number;
-  costUSD: number;
-}
-
-export interface DailyStat {
-  date: string;
-  messages: number;
-  sessions: number;
-  toolCalls: number;
-  tokens: number;
-}
-
-export interface PeakHour {
-  hour: number;
-  count: number;
-}
-
-export interface StatsResult {
-  available: boolean;
-  lastComputedDate: string | null;
-  firstSessionDate: string | null;
-  headline: {
-    totalSessions: number;
-    totalMessages: number;
-    totalToolCalls: number;
-    totalTokens: number;
-    totalOutputTokens: number;
-    totalCacheReadTokens: number;
-    totalCostUSD: number;
-    activeDays: number;
-    modelsUsed: number;
-  };
-  longestSession: {
-    sessionId: string | null;
-    durationMs: number;
-    messageCount: number;
-    timestamp: string | null;
-  } | null;
-  models: ModelStat[];
-  daily: DailyStat[];
-  peakHours: PeakHour[];
-}
+export type { DailyStat, ModelStat, PeakHour, StatsResult } from "@argus/contracts";
 
 function num(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;

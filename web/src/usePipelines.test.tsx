@@ -26,7 +26,7 @@ describe("usePipelines", () => {
     const { result } = renderHook(() => usePipelines());
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.pipelines).toHaveLength(1);
-    expect(fetchMock).toHaveBeenCalledWith("/api/pipelines");
+    expect(fetchMock).toHaveBeenCalledWith("/api/pipelines", expect.anything());
   });
 
   it("create POSTs the input to /api/pipelines", async () => {

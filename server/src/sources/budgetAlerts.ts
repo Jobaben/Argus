@@ -1,4 +1,5 @@
 import type { BudgetState, BudgetStatus, BudgetWindow } from "./budget.js";
+import type { BudgetAlert } from "@argus/contracts";
 
 /**
  * Transition detection for budget alerting, mirroring the monitor alerts:
@@ -7,14 +8,7 @@ import type { BudgetState, BudgetStatus, BudgetWindow } from "./budget.js";
  * Argus never replays an already-known breach.
  */
 
-export type BudgetAlertEvent = "budget.warning" | "budget.exceeded" | "budget.cleared";
-
-export interface BudgetAlert {
-  event: BudgetAlertEvent;
-  state: BudgetState;
-  at: string;
-  detail: string;
-}
+export type { BudgetAlert, BudgetAlertEvent } from "@argus/contracts";
 
 const SEVERITY: Record<BudgetState, number> = { unset: 0, ok: 0, warning: 1, exceeded: 2 };
 

@@ -1,23 +1,8 @@
 import { useLiveResource } from "./live/useLiveResource";
 
-export interface InventoryItem {
-  name: string;
-  description: string;
-}
+import type { Inventory, InventoryItem, PluginItem } from "@argus/contracts";
 
-export interface PluginItem {
-  name: string;
-  description: string;
-  version: string;
-  marketplace: string;
-}
-
-export interface Inventory {
-  agents: InventoryItem[];
-  commands: InventoryItem[];
-  skills: InventoryItem[];
-  plugins: PluginItem[];
-}
+export type { Inventory, InventoryItem, PluginItem };
 
 /** Loads the extensions inventory, refreshing on "inventory:changed" (the
  *  server watches the extension dirs), with a slow poll fallback. */

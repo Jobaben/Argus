@@ -1,4 +1,17 @@
-import { AlertStrip, Card, EmptyState, HealthCounter, HeartbeatBar, Page, TimeAgo } from "../ds";
+import { useState } from "react";
+import {
+  AlertStrip,
+  Card,
+  EmptyState,
+  HealthCounter,
+  HeartbeatBar,
+  Loading,
+  Page,
+  SkeletonGrid,
+  TimeAgo,
+  formatDuration,
+  useClock,
+} from "../ds";
 import type { ColorToken } from "../ds";
 import { useMonitors } from "../useMonitors";
 import type { MonitorHealth, MonitorStatus } from "../types";
@@ -29,6 +42,20 @@ function MonitorPill({ status }: { status: MonitorStatus }) {
     >
       {label}
     </span>
+  );
+}
+
+/** How long ago a missed slot was due, as a bare duration that keeps growing. */
+function Overdue({ iso }: { iso: string | null }) {
+  const now = useClock();
+  if (!iso) return <strong className="font-mono">—</strong>;
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return <strong className="font-mono">—</strong>;
+  const ms = now - at.getTime();
+  return (
+    <strong className="font-mono" title={`Slot was due at ${at.toLocaleString()}`}>
+      {ms <= 0 ? "moments" : formatDuration(ms)}
+    </strong>
   );
 }
 
@@ -65,14 +92,17 @@ function MonitorCard({ monitor }: { monitor: MonitorHealth }) {
         <span>
           Last run: <TimeAgo iso={monitor.lastRunAt} />
         </span>
+        {/* A late or down monitor's headline is *how overdue* it is, not when the
+            slot was — "overdue by 2h" is the number you act on. A healthy one
+            shows the next slot instead. */}
         {monitor.status === "down" || monitor.status === "late" ? (
-          <span className="text-fail">
-            Expected <TimeAgo iso={monitor.expectedAt} />
+          <span className={monitor.status === "down" ? "text-fail" : "text-await"}>
+            Overdue by <Overdue iso={monitor.expectedAt} />
           </span>
         ) : (
           monitor.nextExpected && (
             <span>
-              Next: <TimeAgo iso={monitor.nextExpected} />
+              Next run: <TimeAgo iso={monitor.nextExpected} />
             </span>
           )
         )}
@@ -81,8 +111,20 @@ function MonitorCard({ monitor }: { monitor: MonitorHealth }) {
   );
 }
 
+/** The counter tiles, in escalation order, each one a filter for its own subset. */
+const COUNTERS: { status: MonitorStatus; label: string; alarming?: boolean }[] = [
+  { status: "down", label: "Down", alarming: true },
+  { status: "failing", label: "Failing", alarming: true },
+  { status: "late", label: "Late" },
+  { status: "up", label: "Up" },
+  { status: "pending", label: "Pending" },
+  { status: "paused", label: "Paused" },
+];
+
 export default function Monitors() {
   const { monitors, summary, loading, error } = useMonitors();
+  const [filter, setFilter] = useState<MonitorStatus | null>(null);
+  const shown = filter === null ? monitors : monitors.filter((m) => m.status === filter);
 
   return (
     <Page title="Monitors" crumbs={[{ label: "Scheduler", href: "#/schedules" }]}>
@@ -92,16 +134,30 @@ export default function Monitors() {
       </p>
 
       <section className="mb-8 grid grid-cols-3 gap-3 sm:grid-cols-6">
-        <HealthCounter label="Up" value={summary.up} tone="live" />
-        <HealthCounter label="Late" value={summary.late} tone={summary.late ? "run" : undefined} />
-        <HealthCounter label="Down" value={summary.down} tone={summary.down ? "fail" : undefined} />
-        <HealthCounter
-          label="Failing"
-          value={summary.failing}
-          tone={summary.failing ? "fail" : undefined}
-        />
-        <HealthCounter label="Pending" value={summary.pending} />
-        <HealthCounter label="Paused" value={summary.paused} />
+        {COUNTERS.map(({ status, label, alarming }) => {
+          const value = summary[status];
+          return (
+            <HealthCounter
+              key={status}
+              label={label}
+              value={value}
+              tone={
+                alarming && value > 0
+                  ? "fail"
+                  : status === "late" && value > 0
+                    ? "run"
+                    : status === "up"
+                      ? "live"
+                      : undefined
+              }
+              selected={filter === status}
+              // A tile with nothing behind it is not a filter — pressing it would
+              // clear the list and tell the reader nothing.
+              onClick={value > 0 ? () => setFilter(filter === status ? null : status) : undefined}
+              title={value > 0 ? `Show only the ${label.toLowerCase()} monitors` : undefined}
+            />
+          );
+        })}
       </section>
 
       {error && (
@@ -110,15 +166,41 @@ export default function Monitors() {
         </div>
       )}
 
-      {loading ? (
-        <p className="text-ink-faint">Loading monitors…</p>
+      {filter !== null && (
+        <div className="mb-4 flex items-center gap-3 text-xs text-ink-faint">
+          <span>
+            Showing {shown.length} {PILL[filter].label.toLowerCase()}{" "}
+            {shown.length === 1 ? "monitor" : "monitors"} of {monitors.length}
+          </span>
+          <button
+            type="button"
+            onClick={() => setFilter(null)}
+            className="text-queue underline hover:text-ink"
+          >
+            Show all
+          </button>
+        </div>
+      )}
+
+      {loading && monitors.length === 0 ? (
+        <Loading label="monitors">
+          <SkeletonGrid count={4} columns={2} lines={2} />
+        </Loading>
       ) : monitors.length === 0 ? (
         <EmptyState>
-          No monitors yet. Every schedule you create in the Scheduler gets one automatically.
+          <p className="text-sm text-ink-dim">No monitors yet.</p>
+          <p className="mx-auto mt-2 max-w-md text-xs">
+            Every schedule gets one automatically: Argus records the slots it expected, so a run
+            that never happened is as visible as one that failed.{" "}
+            <a href="#/schedules" className="text-queue underline hover:text-ink">
+              Create a schedule
+            </a>{" "}
+            and its monitor appears here.
+          </p>
         </EmptyState>
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          {monitors.map((m) => (
+          {shown.map((m) => (
             <MonitorCard key={m.scheduleId} monitor={m} />
           ))}
         </div>

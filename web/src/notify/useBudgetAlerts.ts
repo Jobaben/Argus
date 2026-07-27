@@ -46,6 +46,7 @@ export function useBudgetAlerts() {
           tone: alert.event === "budget.cleared" ? "ok" : "fail",
           title,
           detail: alert.detail,
+          href: "#/budget",
         });
         if (typeof Notification !== "undefined" && Notification.permission === "granted") {
           try {

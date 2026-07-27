@@ -6,14 +6,15 @@
   "main": "src/index.ts",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "start": "ARGUS_HOST=0.0.0.0 ARGUS_ALLOWED_HOSTS=10.59.1.53 node dist/index.js",
+    "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test \"src/**/*.test.ts\"",
     "build": "tsc -p tsconfig.build.json",
     "lint": "eslint .",
-    "test:coverage": "tsx --test --experimental-test-coverage --test-coverage-lines=70 --test-coverage-functions=58 --test-coverage-branches=58 \"src/**/*.test.ts\""
+    "test:coverage": "tsx --test --experimental-test-coverage --test-coverage-lines=73 --test-coverage-functions=59 --test-coverage-branches=61 \"src/**/*.test.ts\""
   },
   "dependencies": {
+    "@argus/contracts": "*",
     "@hono/node-server": "^2.0.8",
     "chokidar": "^4.0.3",
     "hono": "^4.6.14",

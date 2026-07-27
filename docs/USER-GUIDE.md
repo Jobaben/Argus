@@ -56,20 +56,52 @@ can do, and where the data comes from.
 
 Applies to every tab.
 
-- **The "Argus" logo + colored dot** (top-left): the dot is the live-connection
-  indicator. **Green = "live"** (WebSocket to the server is connected); **gray =
-  "reconnecting…"** (socket dropped, falling back to polling). It reflects
-  Argus's link to its own server, not the health of your agents.
+![Command palette](screenshots/command-palette.png)
+
+_`⌘K` from anywhere: three characters find the schedule, its live monitor
+health, the issues it raised, and the action that fires it now._
+
+![Keyboard shortcuts](screenshots/shortcuts.png)
+
+- **Command palette — `⌘K` / `Ctrl K`.** The fastest way to anything. Type a few
+  characters and it fuzzy-matches across every destination, pipeline, schedule,
+  failing monitor, open issue, background agent, project and recent transcript —
+  "dpa" finds _Dependency audit_, "rt" finds _Release train_. It also carries
+  **actions**: approve a pipeline waiting at a gate, run a schedule now, mark the
+  Briefing caught up. `↑`/`↓` move, `Enter` runs, `Esc` closes; the rows you use
+  float to the top next time you open it with an empty query. An action that
+  talks to the server keeps the palette open long enough to report a failure
+  rather than closing over it. The **Jump to… ⌘K** button in the bar opens the
+  same thing.
+- **Keyboard shortcuts — `?`.** Lists every binding, and only the ones currently
+  available. `g` then a letter jumps: `g c` Command Center, `g b` Briefing,
+  `g h` Chronicle, `g l` Launch, `g s` Scheduler, `g m` Monitors, `g i` Issues,
+  `g p` Pipelines, `g u` Budget, `g a` Agents. `/` goes to transcript search.
+  Single-letter shortcuts never fire while you are typing in a field.
+- **The connection pill** (top-right) reflects Argus's link to its own server,
+  not the health of your agents. **Green "Live"** = the WebSocket is connected.
+  **Red "Offline · retrying in 8s"** = it dropped, with the actual countdown to
+  the next attempt and a **Retry** button for when you know you have just fixed
+  the server. Reconnects back off to 30s but happen immediately when you return
+  to the tab, so coming back never means waiting one out.
+- **Notification bell** (top-right): every alert raised _this session_, newest
+  first, with an unread count — because a toast lasts eight seconds and most of
+  them fire while you are in another tab. Each entry links to the view it is
+  about; opening the panel marks them read. For what changed while Argus ran
+  without you at all, use [Briefing](#2-briefing).
 - **Navigation** is split by role: the nine **destination** tabs (Command
   Center, Briefing, Chronicle, Launch, Scheduler, Monitors, Issues, Pipelines,
-  Budget) sit in the bar;
-  the 🔍 icon opens **Search**; the **⋯ More** menu holds the reference tabs
+  Budget) sit in the bar; the **⋯ More** menu holds the reference tabs
   (Stats, Inventory, Projects, Tasks, Users). Drill-down views (Agents,
-  Detail, Sessions, Activity) are reached through links and breadcrumbs.
+  Detail, Sessions, Activity) are reached through links, breadcrumbs and the
+  palette. On a phone the bar collapses to a **menu** naming your current
+  destination, listing every tab at once with its attention badge.
 - **Auto-refresh:** the server pushes a "something changed" ping over a
-  WebSocket whenever a watched file mutates, and the UI re-fetches. If the
-  socket drops, each tab also polls on a timer (most tabs 10s; Stats 30s;
-  Search on keystroke). You rarely need to refresh the browser.
+  WebSocket whenever a watched file mutates, and the UI re-fetches. Those
+  re-fetches are conditional, so a ping that did not change what you are looking
+  at costs a few bytes and repaints nothing. If the socket drops, each tab polls
+  on a timer instead; while a fetch is failing the last good values stay on
+  screen rather than blanking. You rarely need to refresh the browser.
 - **Notifications:** a bottom-right **toast stack** (max 4, auto-dismiss
   after 8s) fires from any tab when a background agent finishes or fails,
   when a **monitor alert** arrives (down / failing / recovered — see
@@ -78,6 +110,13 @@ Applies to every tab.
   If you grant the browser's notification
   permission (asked once), the same events also fire **native OS
   notifications**, so you hear about failures with the tab in the background.
+  Everything that toasts is also kept in the bell above.
+- **Loading** shows a skeleton shaped like the content that is coming, so the
+  layout is settled before it lands. Relative timestamps ("3m ago") keep
+  themselves current instead of freezing at first render.
+- **When a view breaks**, only that view breaks: it is replaced by a message
+  naming it and a **Try again** button, while the nav, the palette and every
+  other tab keep working.
 - **Routing** is hash-based (`#/command`, `#/agents`, `#/search`…), so tabs
   are bookmarkable and the back button works. An unknown hash lands on the
   Command Center.
@@ -104,6 +143,19 @@ you — this is the wall you keep open on a second monitor.
 
 **What you see:**
 
+- A **situation strip** across the top, answering "does anything need me?"
+  without reading the board: counts for gates awaiting you, failures, runs in
+  flight, live agents, down/failing monitors and open issues — each a link to the
+  view that explains it. It shows **only what is true**: a metric with nothing to
+  report is omitted rather than drawn as a grey zero, and when there is genuinely
+  nothing it says so. On the right: the next scheduled firing with a live
+  countdown, today's spend against your daily limit as a bar, and a 24-hour
+  histogram of run outcomes (failures stacked in red over successes).
+- A **live activity rail** down the right: **Live** shows what is running right
+  now with each step's current tool call — including scheduled runs and one-off
+  launches, which have no card on the board — and **Recent** lists the last
+  completed runs with outcome, duration and cost. On a narrow screen it moves
+  below the board.
 - A **card per pipeline**: name, phase count, the pipeline's **model chip**
   (e.g. `fable`, `opus`), an aggregated **status pill** (`awaiting approval`
   wins over `failed` over `working`…), the latest run's **Σ cost** (tokens +
@@ -121,19 +173,34 @@ you — this is the wall you keep open on a second monitor.
 **What you can do:**
 
 - **Approve** (green) a gated phase that's awaiting you — the pipeline resumes.
+  `⌘K` → "approve" reaches the same action without finding the card first.
 - **Revise** (labeled **Retry** after a crash-restart) — optionally attach a
   revise note, hit **Send**, and the phase restarts with your feedback.
 - Both actions require a signed-in, approved account (see
   [Users & sign-in](#10-users--sign-in)); the buttons render for everyone but
   the server answers 401 unless you're authenticated.
+- **Click a step's name** to open its drawer, over the board rather than away
+  from it: the run id, model, start time, duration, tokens, cost, the failure
+  reason if it failed, a link to the transcript, **Cancel run** while it is
+  still going, and the run log — tailing live while the step works.
+- A tile that has just changed status flashes briefly, so a transition you
+  weren't watching for doesn't pass unnoticed.
+
+![Step drawer](screenshots/step-drawer.png)
+
+_A step's drawer opens over the board, so inspecting one run doesn't cost you the
+view of the other eleven._
 
 **Cost semantics:** a metric appears once at least one run reports it via the
 `claude -p` result envelope; steps still running (or predating cost capture)
 show nothing. Money spent on a retried phase still counts toward the row Σ.
 
 **Where the data comes from:** `GET /api/overview` (re-fetched on the
-`pipelines:changed` WS ping), `GET /api/totals` + `POST /api/totals/reset`,
-gate actions `POST /api/instances/:id/approve` / `/revise`.
+`pipelines:changed` WS ping), `GET /api/insight` for the situation strip,
+`GET /api/runs` for the rail, `GET /api/runs/:id` for the drawer's log,
+`GET /api/totals` + `POST /api/totals/reset`, gate actions
+`POST /api/instances/:id/approve` / `/revise`, and
+`POST /api/runs/:id/cancel`.
 
 ---
 
@@ -252,8 +319,13 @@ nothing recurs.
 - **Model** — inherit the CLI default, pick an alias (Opus / Sonnet / Haiku),
   or type a custom model id; passed to the agent as `--model`.
 
-**Recent one-off runs** — the last 20 launches, newest first, each titled and
-expandable exactly like a schedule's run rows: status pill, start time,
+After a launch the form keeps the **working directory and model** and clears the
+prompt and name, so firing several prompts at one repo does not mean retyping an
+absolute path each time.
+
+**Recent one-off runs** — the last 20 launches, newest first, with a count of how
+many are in flight and the total reported cost of the list. Each is titled and
+expandable exactly like a schedule's run rows: status pill, relative start time,
 duration, cost and tokens once reported, the error or result summary, a link
 to the **transcript** in Sessions, and a **live-tailing log** (refreshes every
 3s while running). A running launch has a **Cancel** button, and every row has
@@ -308,11 +380,30 @@ section) and **Cron** (see [Cron panel](#20-cron-panel)).
 - **Save schedule** stays disabled until name, prompt and working directory
   are filled.
 
-**What each schedule card shows:** the trigger summary and its **next fire
-time** (plus a **catch-up** chip when missed-run recovery is on), the working
-directory, a pulsing "running" indicator while a run is in flight, and the
-**last five runs** — status pill, start time, duration, cost and tokens if
-reported, and a `manual` tag on run-now firings.
+**The summary strip** above the list answers "is my scheduler healthy?"
+without reading a card: how many schedules exist, how many are **failing** or
+**paused**, how many runs reached a verdict in the last 24 hours and how many of
+those failed, and which schedule fires **next**, with a live countdown. The
+failing and paused counts are buttons — press one to filter the list to exactly
+those schedules, press it again (or **Show all**) to go back. A count with
+nothing behind it is not shown at all, so anything visible there is worth
+reading.
+
+**What each schedule card shows:** a state badge — **failing**, **running**,
+**paused**, **healthy** or **never run** — then the humanised trigger ("every
+6h", "daily at 02:30"), a countdown to the next firing, when it last ran, the
+median duration of the runs listed below, and a **catch-up** chip when
+missed-run recovery is on. Below that the working directory, and the **last five
+runs** — status pill, relative start time (hover for the exact instant),
+duration, cost and tokens if reported, and a `manual` tag on run-now firings —
+with a `3/5 passed` ratio beside them.
+
+A schedule that has failed **more than once in a row** says so in a red band,
+with the first line of the most recent error, because one failure is already
+visible in the row below and a streak is a different problem. A **paused**
+schedule says "will not fire" rather than showing a countdown to a slot it will
+ignore, and one with no history at all explains how to test it without waiting
+for a slot.
 
 **What you can do:**
 
@@ -344,7 +435,10 @@ here.
 
 **What you see:**
 
-- A six-tile summary: **Up / Late / Down / Failing / Pending / Paused**.
+- A six-tile summary in escalation order: **Down / Failing / Late / Up /
+  Pending / Paused**. Any tile with a non-zero count is a **filter** — press
+  "2 Down" to narrow the list to just those two, press it again or **Show all**
+  to restore. An empty tile is inert: pressing it could only blank the list.
 - One **monitor card** per schedule: its name (links back to the Scheduler),
   a status pill, a **heartbeat bar** of the last 30 runs (one tick per run,
   colored by outcome), and a stats line — **uptime %** (succeeded vs failed
@@ -397,7 +491,8 @@ becomes one card.
 
 **What you see:**
 
-- Summary tiles: **Open / Ignored / Resolved**.
+- Summary tiles: **Open / Ignored / Resolved** — each a filter for its own
+  subset, so two open issues among thirty resolved ones are one click away.
 - One **issue card** per fingerprint: the error title (monospace), an
   **×N occurrence badge**, a state badge, which schedules it affects, and
   first/last-seen times. Open issues get a red border.
@@ -430,11 +525,17 @@ prompt) — then launch them manually or on a trigger and watch them on the
 [Command Center](#1-command-center). A phase can be **gated**: the pipeline
 pauses there until a human approves or revises.
 
-**What you see:** one card per pipeline with its trigger summary, phase
-count, a `disabled` tag when paused, and a live status pill aggregated from
-running instances. When you're **signed out**, the **Login** panel appears
-here (see [Users & sign-in](#10-users--sign-in)) — viewing is open, but every
-mutating action requires a signed-in, root-approved account.
+**What you see:** one card per pipeline, and the card says where its latest run
+got to: the trigger, phase and step counts, when it last did anything, the spend
+of that run, the model, a **paused** badge when disabled, and a live status pill.
+Under that, **one chip per phase** coloured by state — so which phase is running,
+which is waiting on you and which failed is answerable without leaving the list.
+A failed run names the step and the first line of its reason. A pipeline that has
+never run still shows its phases, greyed, because that is what it is going to do.
+
+When you're **signed out**, the **Login** panel appears here (see
+[Users & sign-in](#10-users--sign-in)) — viewing is open, but every mutating
+action requires a signed-in, root-approved account.
 
 **The pipeline form** (+ New pipeline / Edit):
 
@@ -490,8 +591,17 @@ and optionally **pause scheduled firings** until you're back under.
   progress bar (green → amber at 80% → red at the limit), and the remaining
   or overage amount. Both windows follow your local calendar, like schedule
   triggers do.
-- **Last 30 days** — a spend bar chart; hover a bar for the day's dollars
-  and run count.
+- On **This month**, a **projection**: what the month is on course to cost at the
+  rate it has been going, and — when a monthly limit is set and the rate would
+  cross it — roughly which day. The rate is the plain mean over elapsed days
+  (hover for it), not a trend fit: it is the arithmetic you would do yourself,
+  which makes it the arithmetic you can check. A month with no spend yet gets no
+  projection rather than a confident `$0.00`.
+- **Last 30 days** — a spend bar chart; hover a bar for the day's dollars and run
+  count. When a **daily** limit is set, it is drawn as a dashed line across the
+  chart and any day that broke it is red, with a count underneath. The last bar
+  is today, ringed to say so — a partly-finished day should not read as a quiet
+  one.
 - **Limits** — the config form: a daily USD limit, a monthly USD limit
   (either may be empty = no limit), and the hard-stop checkbox.
 
@@ -574,14 +684,19 @@ _Full-text across all transcripts._ Route: `#/search` (the 🔍 in the nav)
 **Purpose:** find any text anywhere in your session history — a phrase, a
 file name, an error message — when you don't remember which session it was in.
 
-**What you see:** a search box; as you type (debounced ~300ms), a live match
-count and results. Each result shows a role badge (user/assistant), the
-project, the session's short id, and a **snippet centered on the match** with
-your terms highlighted. Helper states cover "Type to search", "Searching…"
-and "No matches".
+**What you see:** a search box; as you type (debounced ~300ms), a match count and
+results. Each result shows a role badge (user/assistant), the project, the
+session's short id, and a **snippet centered on the match** with your terms
+highlighted.
 
-**How to use it:** just type — case-insensitive substring matching, capped at
-100 matches. Click a result to open that transcript.
+The count is honest about being a cap. The scan reads newest transcripts first and
+stops at 100 matches, so a common word never reads your whole history — when it
+stops early the line reads **"first 100 matches — narrow the query"** rather than
+"100 matches", which would be a number you could reasonably take literally.
+
+**How to use it:** just type — case-insensitive substring matching, not fuzzy. For
+finding a pipeline, schedule or session _by name_, `⌘K` is the better tool; this
+one is for text inside a conversation. Click a result to open that transcript.
 
 **Where the data comes from:** `GET /api/search?q=`, scanning every
 `~/.claude/projects/<project>/<session>.jsonl` per query.
@@ -652,9 +767,17 @@ _Browse & read transcripts._ Route: `#/sessions`
 **Purpose:** read the actual conversation transcripts of your Claude Code
 sessions across all projects.
 
-**What you see:** cards sorted by most-recent activity — title (from the
-first user prompt or AI-generated), project, message count, tool-use count,
-the model used, and last-activity time.
+**What you see:** a count of transcripts and the projects they span, then cards
+**grouped by day** — Today, Yesterday, the weekday within the last week, the date
+beyond it — each with a title (from the first user prompt or AI-generated),
+project, message count, tool-use count, the model used, and last-activity time.
+A transcript with no usable timestamp lands in a trailing "Undated" group rather
+than being dropped.
+
+**Filter transcripts** (top-right) searches titles, project paths and model names
+with the same fuzzy subsequence matching the command palette uses, so `ftm` finds
+"Fix the migration". While you are filtering, the day headings step aside and
+results come back in relevance order, freshest first among equal matches.
 
 **Clicking a card opens the transcript:**
 
@@ -723,9 +846,13 @@ _Usage analytics._ Route: `#/stats`
 
 **What you see:**
 
-- **Headline cards:** total sessions, messages, tool calls, total tokens,
-  output tokens, cache reads, active days, models used — plus, when the CLI
-  reports them, total cost, longest session, and first-session date.
+- **Headline cards in two groups.** Sessions, messages, tool calls and active
+  days come from the transcripts Argus reads itself; tokens, cache reads and
+  models used come from Claude Code's own usage telemetry. When the second group
+  is absent — a fresh install, or a CLI version whose cache shape this build does
+  not parse — it says so in one line instead of rendering four zeros beside real
+  numbers, because "0 tokens across 184 sessions" is not a measurement. Total
+  cost, longest session and first-session date appear when the CLI reports them.
 - **By-model breakdown:** tokens per model with an
   input/output/cache-read/cache-creation split, sorted by volume.
 - **Activity-by-hour:** 24 bars showing when you work.

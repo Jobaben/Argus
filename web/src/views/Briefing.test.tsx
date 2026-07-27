@@ -22,6 +22,26 @@ function briefing(over: Partial<BriefingData> = {}): BriefingData {
   };
 }
 
+const failedRun = {
+  id: "r1",
+  scheduleId: "s1",
+  scheduleName: "Nightly triage",
+  prompt: "p",
+  cwd: "/tmp",
+  status: "failed" as const,
+  trigger: "scheduled" as const,
+  queuedAt: "2026-07-11T02:00:00.000Z",
+  startedAt: "2026-07-11T02:00:00.000Z",
+  endedAt: "2026-07-11T02:05:00.000Z",
+  durationMs: 300000,
+  pid: null,
+  exitCode: 1,
+  sessionId: null,
+  project: null,
+  resultSummary: null,
+  error: "timeout after 42s",
+};
+
 describe("Briefing", () => {
   it("renders the all-clear state when nothing needs attention and the window is calm", () => {
     render(<Briefing briefing={briefing()} loading={false} error={null} ack={async () => {}} />);
@@ -117,5 +137,42 @@ describe("Briefing", () => {
     render(<Briefing briefing={briefing()} loading={false} error={null} ack={ack} />);
     fireEvent.click(screen.getByRole("button", { name: /mark caught up/i }));
     expect(ack).toHaveBeenCalledOnce();
+  });
+
+  it("links a failure to the run's transcript, and to Issues when there is none", () => {
+    // Every other row on the page linked to the thing it described; the failures
+    // list — the most actionable one — was dead.
+    render(
+      <Briefing
+        briefing={briefing({
+          window: {
+            totalRuns: 2,
+            byStatus: {
+              running: 0,
+              succeeded: 0,
+              failed: 2,
+              skipped: 0,
+              interrupted: 0,
+              cancelled: 0,
+            },
+            costUsd: 0,
+            tokens: 0,
+            newIssues: [],
+            finishedPipelines: [],
+            failures: [
+              { ...failedRun, id: "a", sessionId: "sess-1", project: "-home-me-api" },
+              { ...failedRun, id: "b", sessionId: null, project: null },
+            ],
+          },
+        })}
+        loading={false}
+        error={null}
+        ack={async () => {}}
+      />,
+    );
+    const links = screen.getAllByRole("link");
+    const hrefs = links.map((l) => l.getAttribute("href"));
+    expect(hrefs).toContain("#/sessions/-home-me-api/sess-1");
+    expect(hrefs).toContain("#/issues");
   });
 });

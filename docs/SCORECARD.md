@@ -110,3 +110,127 @@ benefits from:
 
 Scores are re-verified after each improvement wave; see git history for the
 per-wave deltas.
+
+## Experience & engineering wave (2026-07-26)
+
+No new scores are claimed here: the numbers above came from independent
+adversarial audits, and this wave has not had one. What follows is the factual
+record of what changed, so a future audit has something to check.
+
+**Where the previous audits were satisfied but the app was not.** Every
+dimension above scored 9–10 against its rubric, and the app still took a tab
+tour to answer "does anything need me?". The gap was not in the rubric's
+categories; it was that the categories were being met _locally_ — each view
+correct on its own — with no measure of the experience of using the whole thing.
+That is what this wave went after.
+
+### Defects the work surfaced
+
+These were live in the audited-at-9.0 build. Each is now covered by a regression
+test:
+
+| Defect                                                                                                                             | Why the audits missed it                                                      |
+| ---------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `AgentStatus` passed the on-disk string straight through, so a newer CLI's state would fall through every exhaustive client switch | The union _looked_ authoritative; nothing tested a value outside it           |
+| WS frames were untyped on both ends — a renamed event silently stops waking a view                                                 | Both sides matched string literals that happened to agree                     |
+| An aborted fetch cleared `loading`, so a first load could render the _empty state_                                                 | Only visible when a load outlasts a blink; StrictMode makes it routine in dev |
+| `TimeAgo` assumed the past, printing `-7138s ago` for a monitor's next slot                                                        | Visible only with a future timestamp and a late monitor                       |
+| Relative timestamps never updated after first render                                                                               | Requires watching one screen for minutes                                      |
+| The board gave each phase ~60px at 390px wide — one letter per line                                                                | Never opened on a phone                                                       |
+| Sub-minute Chronicle spans were 0.03% wide: invisible and unhoverable                                                              | Correct maths, unusable result                                                |
+| `web` had never been compiled with `strict`                                                                                        | It happened to compile clean, so nothing complained                           |
+
+### Structural changes
+
+- **One contract, not two copies.** ~25 DTOs were declared twice with nothing
+  forcing agreement; they now live in a types-only `@argus/contracts` workspace
+  imported by both sides, with CI enforcing that it emits no runtime.
+- **The push model got cheap.** Conditional (`ETag`) reads with a genuinely
+  zero-re-render `304` path, single-flight coalescing, and jittered backoff on
+  both the fetch layer and the socket.
+- **One logger, one clock, one socket, one fetch primitive.** 25 ad-hoc
+  `console.error` calls became a structured logger with per-request ids; three
+  private one-second timers and a dozen render-time `Date.now()` calls became one
+  shared clock plus an explicit `useTicker`.
+- **Failure is scoped.** Per-route error boundaries; a bad shape costs one view.
+- **The initial payload is budgeted.** A lazy chunk per route (105.7 → 91.5 kB
+  gzip) with a CI gate so it cannot drift back.
+
+### Test coverage
+
+493 server + 498 web tests, up from 419 + 259 at the start of the wave — every new
+module tested, and every defect above pinned by a test that names the failure mode
+rather than the fix.
+
+### Second pass: the views the first one only skeletonised
+
+The first pass rebuilt the Command Center and gave every other view a skeleton, a
+relative clock and a phone layout — which left seven of them structurally
+unchanged underneath. A second pass went back through them, and found more of the
+same class of defect.
+
+| Defect                                                                                                | Why it survived the first pass                                               |
+| ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Four more copies of the frozen, render-time `timeAgo` in Sessions, Projects, Tasks and Activity       | The first pass fixed the shared `TimeAgo`; nobody grepped for private copies |
+| Each Scheduler card fetched its own `/api/runs?scheduleId=…` — N+1 requests and N+1 live polls        | Correct per card, and no view held enough state to notice                    |
+| The Scheduler spoke in absolute timestamps and raw minutes (`every 360 min`, `7/26/2026, 4:00:10 PM`) | The formatters existed by then; this view was never rewired to them          |
+| A paused schedule advertised a countdown to a slot it would ignore                                    | `nextRun` is computed regardless of `enabled`; the UI trusted it             |
+| Monitors and Issues counted their subsets but gave no way to see them                                 | The counters were read-only by design, and the design was the defect         |
+| `1 tools` on a session card                                                                           | Pluralisation was never centralised                                          |
+| Rebuilding the UI under a running server served boot-time HTML naming chunks that no longer existed   | Nobody rebuilds while serving during a test; found by doing exactly that     |
+| `EADDRINUSE` reached the keep-the-daemon-alive handler, so a port collision hung instead of exiting   | The handler is right for its purpose; startup was never routed around it     |
+| Usage stats rendered six zeros when the token-telemetry half was absent                               | Both halves are real fields; nothing distinguished absent from measured      |
+
+### What the second pass added
+
+- **Derived health, as pure functions with tests.** `scheduleHealth`,
+  `summarizeSchedules`, `projectMonth`, `groupSessionsByDay` and `filterSessions`
+  live outside their components, so the precedence rules ("what does this row
+  _say_?") and the arithmetic ("when do I hit the ceiling?") are testable without
+  a DOM. All three modules are at 100% line coverage.
+- **Counters that are controls.** A non-zero count on Monitors, Issues and the
+  Scheduler filters the list in place; a zero one stays inert, because pressing it
+  could only blank the list.
+- **Empty states that teach.** Six of them now explain what the thing is, where
+  its data comes from and what to do next, with the action inline.
+- **Coverage gates ratcheted** from 72/73/82/72 to 77/76/84/77 (lines / functions
+  / branches / statements).
+
+### Third pass: the views neither earlier pass opened
+
+| Defect                                                                                         | Why it survived two passes                                                  |
+| ---------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| A pipeline card showed a name, a trigger and a phase count — nothing about the run it just did | It read the overview for its status pill and threw the rest of the row away |
+| `every 360 min` in two of three trigger formatters, and only one handled a manual trigger      | Three copies of one function; fixing the visible one left the others        |
+| Search reported "100 matches" for a scan that stops at 100                                     | The cap lived in the server and the client had no way to know it applied    |
+| The Users page dead-ended when signed out — the sign-in form is on another tab, unmentioned    | Correct for root, and root is who the page was tested as                    |
+| An awaiting-approval pipeline showed a live "running" pulse                                    | `abortable` covers awaiting _and_ running, and reusing it read as "active"  |
+| `Plugins 0` in a red badge                                                                     | The accents are per-category; nothing checked how a zero reads in one       |
+
+### The read path, measured rather than assumed
+
+The backlog carried an item claiming `/api/overview` and friends read and parsed
+every retained instance on every poll. Benchmarked against generated fixtures,
+that turned out to be half right and half wrong, in an instructive way.
+
+An mtime-keyed memo already avoided the parses — but it was a 500-entry LRU, and
+an LRU is the worst possible policy for a full-directory scan: the scan touches
+every file exactly once in order, so past the cap it evicts each entry just
+before the next scan asks for it. Measured, the mitigation **inverted** at the
+scale it existed for — a warm scan cost 25ms at 400 files and 130ms at 1000.
+
+The second cost was invisible in the write-up entirely: every write dropped the
+directory-scan cache, so one changed step forced the next reader to re-stat the
+whole directory, and a running pipeline writes constantly.
+
+| Over 1200 run records        | before | after |
+| ---------------------------- | ------ | ----- |
+| warm rescan                  | 163ms  | 57ms  |
+| write, then five routes read | 142ms  | 1.5ms |
+
+Both fixes are policy changes with no storage-format change and no migration:
+retain by scan membership, and patch the cached scan on write instead of
+discarding it. The index the backlog proposed would cut the remaining 57ms
+further, but the cycle that actually runs continuously is now 1.5ms, so it is no
+longer worth a migration — the backlog entry says so now instead of implying an
+unpaid debt.

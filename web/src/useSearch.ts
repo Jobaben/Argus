@@ -1,17 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 
-export interface SearchResult {
-  project: string;
-  projectLabel: string;
-  sessionId: string;
-  snippet: string;
-  type: string;
-}
+import type { SearchResponse, SearchResult } from "@argus/contracts";
+
+export type { SearchResult };
 
 interface SearchState {
   results: SearchResult[];
   loading: boolean;
   error: string | null;
+  /** True when the server stopped at its cap, so more matches may exist. */
+  truncated: boolean;
 }
 
 const DEBOUNCE_MS = 300;
@@ -22,6 +20,7 @@ const DEBOUNCE_MS = 300;
  */
 export function useSearch(query: string): SearchState {
   const [results, setResults] = useState<SearchResult[]>([]);
+  const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestId = useRef(0);
@@ -33,6 +32,7 @@ export function useSearch(query: string): SearchState {
       // state to the (external) debounced query input, not a cascading render.
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setResults([]);
+      setTruncated(false);
       setLoading(false);
       setError(null);
       return;
@@ -47,9 +47,10 @@ export function useSearch(query: string): SearchState {
           signal: controller.signal,
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = (await res.json()) as { results: SearchResult[] };
+        const data = (await res.json()) as SearchResponse;
         if (id !== requestId.current) return;
-        setResults(data.results);
+        setResults(data.results ?? []);
+        setTruncated(data.truncated === true);
         setError(null);
       } catch (e) {
         if (controller.signal.aborted || id !== requestId.current) return;
@@ -65,5 +66,5 @@ export function useSearch(query: string): SearchState {
     };
   }, [query]);
 
-  return { results, loading, error };
+  return { results, loading, error, truncated };
 }

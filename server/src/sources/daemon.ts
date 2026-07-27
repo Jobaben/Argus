@@ -1,6 +1,7 @@
 import { paths } from "../claudeHome.js";
 import { readJson } from "./readJson.js";
 import type { DaemonWorker } from "./types.js";
+import type { DaemonSnapshot } from "@argus/contracts";
 
 interface RosterFile {
   supervisorPid?: number;
@@ -14,11 +15,7 @@ interface StatusFile {
   workers?: Record<string, unknown>;
 }
 
-export interface DaemonSnapshot {
-  supervisorPid: number | null;
-  updatedAt: number | null;
-  workers: Record<string, DaemonWorker>;
-}
+export type { DaemonSnapshot } from "@argus/contracts";
 
 /** Reads the daemon roster — the set of workers currently alive. */
 export async function readDaemon(): Promise<DaemonSnapshot> {

@@ -1,363 +1,93 @@
-export type AgentStatus = "working" | "done" | "failed" | "idle" | "queued" | "stopped" | "unknown";
+/**
+ * The wire shapes the UI consumes, re-exported from `@argus/contracts`.
+ *
+ * This file used to hold a hand-maintained *copy* of every server DTO, which
+ * nothing forced to stay in sync. It is now a thin barrel so the existing
+ * `./types` import path keeps working while the declarations live in exactly
+ * one place — a server-side field change now fails `npm run typecheck` here
+ * instead of silently diverging.
+ *
+ * UI-only types (`DsStatus`, the overview row model, …) stay in `src/ds`.
+ */
 
-export interface Agent {
-  short: string;
-  sessionId: string | null;
-  name: string;
-  status: AgentStatus;
-  tempo: string | null;
-  detail: string | null;
-  result: string | null;
-  template: string | null;
-  cwd: string | null;
-  cliVersion: string | null;
-  inFlight: { tasks: number; queued: number; kinds: string[] } | null;
-  createdAt: string | null;
-  updatedAt: string | null;
-  firstTerminalAt: string | null;
-  live: boolean;
-  pid: number | null;
-}
-
-export interface TimelineEntry {
-  at: string;
-  state?: AgentStatus;
-  detail?: string;
-  text?: string;
-}
-
-export type TriggerKind = "interval" | "daily" | "weekly" | "windowed";
-
-export interface Trigger {
-  kind: TriggerKind;
-  everyMinutes?: number;
-  time?: string;
-  weekday?: number;
-  startTime?: string;
-  endTime?: string;
-  weekdays?: number[];
-}
-
-export interface Schedule {
-  id: string;
-  name: string;
-  prompt: string;
-  cwd: string;
-  trigger: Trigger;
-  enabled: boolean;
-  overlapPolicy: "skip" | "allow";
-  catchUp?: boolean;
-  createdAt: string;
-  updatedAt: string;
-  lastRunAt: string | null;
-  lastRunId: string | null;
-}
-
-export interface ScheduleWithNext extends Schedule {
-  nextRun: string | null;
-}
-
-export type RunStatus =
-  "running" | "succeeded" | "failed" | "skipped" | "interrupted" | "cancelled";
-
-export interface Run {
-  id: string;
-  scheduleId: string;
-  scheduleName: string;
-  prompt: string;
-  cwd: string;
-  status: RunStatus;
-  trigger: "scheduled" | "manual";
-  queuedAt: string;
-  startedAt: string | null;
-  endedAt: string | null;
-  durationMs: number | null;
-  pid: number | null;
-  exitCode: number | null;
-  sessionId: string | null;
-  model?: string;
-  project: string | null;
-  resultSummary: string | null;
-  error: string | null;
-  costUsd?: number | null;
-  tokens?: number | null;
-  outcome?: "succeeded" | "failed" | "blocked" | null;
-}
-
-export type MonitorStatus = "up" | "late" | "down" | "failing" | "paused" | "pending";
-
-export interface Heartbeat {
-  runId: string;
-  status: RunStatus;
-  outcome?: "succeeded" | "failed" | "blocked" | null;
-  at: string;
-  durationMs: number | null;
-}
-
-export interface MonitorHealth {
-  scheduleId: string;
-  name: string;
-  enabled: boolean;
-  status: MonitorStatus;
-  uptimePct: number | null;
-  lastRunAt: string | null;
-  lastRunStatus: RunStatus | null;
-  expectedAt: string | null;
-  nextExpected: string | null;
-  graceMs: number;
-  heartbeats: Heartbeat[];
-}
-
-export type MonitorsSummary = Record<MonitorStatus, number>;
-
-export type IssueState = "open" | "resolved" | "ignored";
-
-export interface Issue {
-  fingerprint: string;
-  title: string;
-  count: number;
-  firstSeen: string;
-  lastSeen: string;
-  schedules: string[];
-  state: IssueState;
-  lastRunId: string;
-}
-
-export interface IssueOccurrence {
-  runId: string;
-  scheduleId: string;
-  scheduleName: string;
-  at: string;
-  status: RunStatus;
-  outcome: "succeeded" | "failed" | "blocked" | null;
-  error: string;
-}
-
-export type IssuesSummary = Record<IssueState, number>;
-
-export interface ScheduleInput {
-  name: string;
-  prompt: string;
-  cwd: string;
-  trigger: Trigger;
-  enabled?: boolean;
-  overlapPolicy?: "skip" | "allow";
-  catchUp?: boolean;
-}
-
-/** One-off run fired from the Launch tab (POST /api/launch). */
-export interface LaunchInput {
-  name?: string;
-  prompt: string;
-  cwd: string;
-  model?: string;
-}
-
-export interface BudgetConfig {
-  dailyUsd: number | null;
-  monthlyUsd: number | null;
-  blockScheduled: boolean;
-  updatedAt: string | null;
-}
-
-export type BudgetState = "unset" | "ok" | "warning" | "exceeded";
-
-export interface BudgetWindow {
-  spentUsd: number;
-  limitUsd: number | null;
-  ratio: number | null;
-}
-
-export interface BudgetStatus {
-  state: BudgetState;
-  today: BudgetWindow;
-  month: BudgetWindow;
-  blockScheduled: boolean;
-}
-
-export interface BudgetDay {
-  date: string;
-  usd: number;
-  tokens: number;
-  runs: number;
-}
-
-export interface BudgetResponse {
-  config: BudgetConfig;
-  status: BudgetStatus;
-  days: BudgetDay[];
-}
-
-export type InstanceStatus = "running" | "awaiting-approval" | "failed" | "succeeded" | "aborted";
-
-export type PhaseStatus =
-  "pending" | "running" | "awaiting-approval" | "succeeded" | "failed" | "aborted";
-
-export type StepStatus = "pending" | "running" | "succeeded" | "failed" | "aborted";
-
-export interface StepProgress {
-  name: string;
-  runId: string | null;
-  status: StepStatus;
-  /** USD cost of the step's run, joined server-side from the run record. */
-  costUsd?: number | null;
-  /** Total tokens of the step's run, joined server-side from the run record. */
-  tokens?: number | null;
-  /** Model the step's run was started with, joined server-side from the run record. */
-  model?: string | null;
-  /** Latest activity label from the run tailer; only set while running. */
-  currentActivity?: string | null;
-  /** Arrival timestamp of that activity. */
-  activityAt?: string | null;
-  /** Run start time, joined from the run record. */
-  startedAt?: string | null;
-  /** Final run duration, joined from the run record when it ended. */
-  durationMs?: number | null;
-}
-
-export interface PhaseProgress {
-  id: string;
-  name: string;
-  gated: boolean;
-  status: PhaseStatus;
-  steps: StepProgress[];
-  attempt: number;
-  payload: unknown | null;
-}
-
-export interface PhaseStep {
-  name: string;
-  prompt: string;
-  model?: string;
-}
-
-export interface PhaseDef {
-  id: string;
-  name: string;
-  cwd: string;
-  steps: PhaseStep[];
-  gated: boolean;
-}
-
-export interface PipelineDefinition {
-  id: string;
-  name: string;
-  phases: PhaseDef[];
-  trigger: Trigger | null;
-  enabled: boolean;
-  overlapPolicy: "skip" | "allow";
-  model?: string;
-  lastStartedAt: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface PipelineInput {
-  name: string;
-  phases: PhaseDef[];
-  trigger: Trigger | null;
-  enabled?: boolean;
-  overlapPolicy?: "skip" | "allow";
-  model?: string;
-}
-
-export interface PipelineInstance {
-  id: string;
-  pipelineId: string;
-  pipelineName: string;
-  status: InstanceStatus;
-  currentPhaseIndex: number;
-  phases: PhaseProgress[];
-  trigger: "manual" | "scheduled";
-  signalToken: string;
-  createdAt: string;
-  updatedAt: string;
-  endedAt: string | null;
-}
-
-export type ChronicleKind = "run" | "agent" | "session";
-export type ChronicleStatus = "working" | "done" | "failed" | "queued" | "idle";
-
-export interface ChronicleSpan {
-  id: string;
-  kind: ChronicleKind;
-  label: string;
-  status: ChronicleStatus;
-  startedAt: string;
-  /** Null while the work is still in flight — drawn through "now". */
-  endedAt: string | null;
-  href: string | null;
-  detail: string | null;
-  costUsd: number | null;
-  tokens: number | null;
-}
-
-export interface ChronicleGroup {
-  key: string;
-  label: string;
-  kind: ChronicleKind;
-  /** Spans packed into rows such that spans within a row never overlap. */
-  rows: ChronicleSpan[][];
-}
-
-export interface Chronicle {
-  windowStart: string;
-  windowEnd: string;
-  groups: ChronicleGroup[];
-  totals: {
-    spans: number;
-    active: number;
-    failed: number;
-    costUsd: number | null;
-    tokens: number | null;
-  };
-}
-
-/** Aggregated spend for one instance. Null field = no run reported that metric. */
-export interface OverviewCost {
-  usd: number | null;
-  tokens: number | null;
-}
-
-export interface OverviewEntry {
-  definition: PipelineDefinition;
-  latest: PipelineInstance | null;
-  /** Total spend of the latest instance across all its runs (including
-   *  superseded revise attempts). Null/absent when there is no instance. */
-  cost?: OverviewCost | null;
-  /** Instances sharing the board, newest-first: every non-terminal one
-   *  (running / awaiting-approval) plus terminal ones whose lifetime
-   *  overlapped the latest instance, so a just-stopped sibling stays visible
-   *  beside its peers. Empty when only the lone latest instance remains. */
-  active?: { instance: PipelineInstance; cost: OverviewCost }[];
-}
-
-// ── Briefing ("while you were away") ─────────────────────────────────────────
-
-export type AttentionKind = "monitor-down" | "gate-waiting" | "monitor-failing" | "issue-open";
-
-export interface AttentionItem {
-  kind: AttentionKind;
-  id: string;
-  title: string;
-  detail: string;
-  at: string | null;
-}
-
-export interface BriefingWindow {
-  totalRuns: number;
-  byStatus: Record<RunStatus, number>;
-  costUsd: number;
-  tokens: number;
-  failures: Run[];
-  newIssues: Issue[];
-  finishedPipelines: PipelineInstance[];
-}
-
-export interface Briefing {
-  since: string;
-  generatedAt: string;
-  attention: AttentionItem[];
-  attentionCount: number;
-  window: BriefingWindow;
-}
+export type {
+  // Agents
+  Agent,
+  AgentStatus,
+  DaemonSnapshot,
+  DaemonWorker,
+  TimelineEntry,
+  ActivityEvent,
+  // Schedules and runs
+  Trigger,
+  TriggerKind,
+  Schedule,
+  ScheduleWithNext,
+  ScheduleInput,
+  Run,
+  RunStatus,
+  RunOutcome,
+  LaunchInput,
+  // Pipelines
+  PhaseStep,
+  PhaseDef,
+  PipelineDefinition,
+  PipelineInput,
+  PipelineInstance,
+  PipelineSignal,
+  InstanceStatus,
+  PhaseStatus,
+  PhaseProgress,
+  PhaseFailurePayload,
+  StepStatus,
+  StepProgress,
+  SignalType,
+  OverviewCost,
+  OverviewEntry,
+  // Monitors
+  MonitorStatus,
+  MonitorHealth,
+  MonitorsSummary,
+  Heartbeat,
+  // Issues
+  Issue,
+  IssueOccurrence,
+  IssueState,
+  IssuesSummary,
+  // Budget
+  BudgetConfig,
+  BudgetState,
+  BudgetStatus,
+  BudgetWindow,
+  BudgetDay,
+  BudgetResponse,
+  // Chronicle
+  Chronicle,
+  ChronicleGroup,
+  ChronicleKind,
+  ChronicleSpan,
+  ChronicleStatus,
+  // Briefing
+  Briefing,
+  BriefingWindow,
+  AttentionItem,
+  AttentionKind,
+  // Insight
+  Situation,
+  SituationCounts,
+  NextFire,
+  ThroughputBucket,
+  // Command palette
+  PaletteEntry,
+  PaletteIndex,
+  PaletteKind,
+  PaletteSeverity,
+  // Live protocol
+  LiveFrame,
+  LiveFrameType,
+  LiveChangeEvent,
+  MonitorAlert,
+  MonitorAlertEvent,
+  BudgetAlert,
+  BudgetAlertEvent,
+} from "@argus/contracts";

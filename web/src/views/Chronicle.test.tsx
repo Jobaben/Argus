@@ -83,7 +83,10 @@ describe("Chronicle", () => {
     withData();
     render(<Chronicle />);
     expect(screen.getByText("Nightly triage")).toBeInTheDocument();
-    expect(screen.getByText("home/user/proj")).toBeInTheDocument();
+    // A path lane is shortened to its identifying tail, with the full path kept
+    // as a tooltip rather than wrapped across two lines.
+    expect(screen.getByText("…/user/proj")).toBeInTheDocument();
+    expect(screen.getByTitle("home/user/proj")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Span a, done" })).toHaveAttribute(
       "href",
       "#/schedules",

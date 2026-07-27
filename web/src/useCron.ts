@@ -1,16 +1,8 @@
 import { useLiveResource } from "./live/useLiveResource";
 
-export interface CronDiskHint {
-  path: string;
-  note: string;
-}
+import type { CronDiskHint, CronStatus } from "@argus/contracts";
 
-export interface CronStatus {
-  available: false;
-  reason: string;
-  howTo: string;
-  diskHints: CronDiskHint[];
-}
+export type { CronDiskHint, CronStatus };
 
 /**
  * Loads the cron availability status. Cron routines never touch disk and have

@@ -1,25 +1,9 @@
 import type { PipelineDefinition, PipelineInstance, InstanceStatus } from "./pipelineTypes.js";
 import type { Run } from "./scheduleTypes.js";
 import type { ActivityEvent } from "../runTailer.js";
+import type { OverviewCost, OverviewEntry } from "@argus/contracts";
 
-/** Aggregated spend for one instance. Null field = no run reported that metric. */
-export interface OverviewCost {
-  usd: number | null;
-  tokens: number | null;
-}
-
-export interface OverviewEntry {
-  definition: PipelineDefinition;
-  latest: PipelineInstance | null;
-  /** Total spend of the latest instance across all its runs (including
-   *  superseded revise attempts). Null when there is no instance. */
-  cost: OverviewCost | null;
-  /** Instances sharing the board, newest-first: every non-terminal one
-   *  (running / awaiting-approval) plus terminal ones whose lifetime
-   *  overlapped the latest instance, so a just-stopped sibling stays visible
-   *  beside its peers. Empty when only the lone `latest` instance remains. */
-  active: { instance: PipelineInstance; cost: OverviewCost }[];
-}
+export type { OverviewCost, OverviewEntry } from "@argus/contracts";
 
 // Lower rank sorts first: states needing human action come first
 // (awaiting-approval, then failed — both are paused awaiting a human), then

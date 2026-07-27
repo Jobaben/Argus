@@ -1,3 +1,5 @@
+import type { Trigger } from "../types";
+
 export function formatDuration(ms: number): string {
   if (ms <= 0) return "now";
   const totalMin = Math.round(ms / 60_000);
@@ -7,6 +9,20 @@ export function formatDuration(ms: number): string {
   if (days > 0) return `${days}d ${hours}h`;
   if (hours > 0) return `${hours}h ${mins}m`;
   return `${mins}m`;
+}
+
+/**
+ * A cadence in minutes reduced to its largest whole unit: 360 → "6h", 1440 →
+ * "1d", 90 → "90m".
+ *
+ * "every 360 min" is arithmetic the reader has to finish; "every 6h" is the
+ * thing they meant when they typed it.
+ */
+export function formatCadence(minutes: number | null | undefined): string {
+  if (minutes == null || !Number.isFinite(minutes) || minutes <= 0) return "—";
+  if (minutes % 1440 === 0) return `${minutes / 1440}d`;
+  if (minutes % 60 === 0) return `${minutes / 60}h`;
+  return `${minutes}m`;
 }
 
 /** Human-readable elapsed time for millisecond-scale run metrics. */
@@ -33,6 +49,10 @@ export function formatElapsed(ms: number): string {
 
 /** Dollar cost with enough precision for sub-cent agent runs. */
 export function formatUsd(v: number): string {
+  // Sub-cent amounts are real — a cheap step can cost $0.0004 — so they get four
+  // decimals. Exactly zero does not: "$0.0000" reads as a precision claim about
+  // nothing, and it is what the spend meter shows before the first run of the day.
+  if (v === 0) return "$0.00";
   return v >= 0.01 ? `$${v.toFixed(2)}` : `$${v.toFixed(4)}`;
 }
 
@@ -135,22 +155,84 @@ export function parseRunLog(raw: string): ParsedRunLog {
   return { kind: "envelope", fields, truncated };
 }
 
-export function sparklinePoints(values: number[], width = 100, height = 26): string {
-  const n = values.length;
-  if (n === 0) return "";
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const span = max - min;
-  return values
-    .map((v, i) => {
-      const x = n === 1 ? 0 : (i / (n - 1)) * width;
-      // y inverted: max -> 0 (top), min -> height (bottom); flat -> midline
-      const y = span === 0 ? height / 2 : height - ((v - min) / span) * height;
-      return `${round(x)},${round(y)}`;
-    })
-    .join(" ");
+/**
+ * The largest sensible unit of a positive duration: "45s", "12m", "2h 10m",
+ * "3d 4h". Shared by the countdown and relative-time formatters so a schedule
+ * reads the same whether it is 5 minutes away or 5 minutes late.
+ */
+function coarseDuration(ms: number): string {
+  const totalMinutes = Math.floor(ms / 60_000);
+  if (totalMinutes < 1) return `${Math.max(1, Math.round(ms / 1000))}s`;
+  if (totalMinutes < 60) return `${totalMinutes}m`;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours < 24) return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
+  const days = Math.floor(hours / 24);
+  const restHours = hours % 24;
+  return restHours === 0 ? `${days}d` : `${days}d ${restHours}h`;
 }
 
-function round(n: number): number {
-  return Math.round(n * 100) / 100;
+/**
+ * A countdown to a future instant: "in 45s", "in 12m", "in 2h 10m", "in 3d 4h".
+ *
+ * Never renders a negative duration. A slot that has passed but not fired yet
+ * reads "due now" — the raw arithmetic is what produced the "-7138s ago" that
+ * used to appear on late monitors.
+ */
+export function formatCountdown(ms: number): string {
+  if (!Number.isFinite(ms)) return "—";
+  if (ms <= 0) return "due now";
+  return `in ${coarseDuration(ms)}`;
+}
+
+/**
+ * Relative time in **either** direction: "3h ago" for the past, "in 3h" for the
+ * future, "just now" for either side of the present moment.
+ *
+ * The bidirectionality is the point. The same component renders "last run" and
+ * "next expected", and treating every instant as past turned a monitor's next
+ * slot into `-7138s ago` — a number that looks like corruption and taught the
+ * reader to distrust the row.
+ */
+export function formatRelativeTime(
+  iso: string | null | undefined,
+  now: number = Date.now(),
+): string {
+  if (!iso) return "—";
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "—";
+  const delta = then - now;
+  if (Math.abs(delta) < 10_000) return "just now";
+  return delta > 0 ? `in ${coarseDuration(delta)}` : `${coarseDuration(-delta)} ago`;
+}
+
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/**
+ * A schedule or pipeline trigger in one readable clause: "manual", "every 6h",
+ * "daily at 02:30", "weekly Mon at 08:00", "every 2h, 09:00–18:00, Mon, Tue".
+ *
+ * One function because there were three, and they had drifted: two still printed
+ * "every 360 min" after the third learned to say "every 6h", and only one handled
+ * a null trigger. The same trigger has to read the same way on the Scheduler, on
+ * the Pipelines list and in the palette, or the reader has to learn the app twice.
+ */
+export function formatTrigger(trigger: Trigger | null | undefined): string {
+  if (!trigger) return "manual";
+  const every = formatCadence(trigger.everyMinutes);
+  switch (trigger.kind) {
+    case "interval":
+      return `every ${every}`;
+    case "daily":
+      return `daily at ${trigger.time ?? "—"}`;
+    case "weekly":
+      return `weekly ${WEEKDAYS[trigger.weekday ?? 0]} at ${trigger.time ?? "—"}`;
+    case "windowed": {
+      const days =
+        trigger.weekdays && trigger.weekdays.length > 0
+          ? trigger.weekdays.map((d) => WEEKDAYS[d]).join(", ")
+          : "every day";
+      return `every ${every}, ${trigger.startTime ?? "—"}–${trigger.endTime ?? "—"}, ${days}`;
+    }
+  }
 }

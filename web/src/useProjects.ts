@@ -1,11 +1,8 @@
 import { useLiveResource } from "./live/useLiveResource";
 
-export interface Project {
-  id: string;
-  label: string;
-  sessionCount: number;
-  lastActivity: string | null;
-}
+import type { Project } from "@argus/contracts";
+
+export type { Project };
 
 /** Loads the project overview, refreshing on "agents:changed". */
 export function useProjects() {

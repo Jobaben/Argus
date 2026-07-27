@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertStrip, EmptyState, Page } from "../ds";
+import { AlertStrip, EmptyState, Loading, Page, SkeletonGrid } from "../ds";
 import { useInventory, type InventoryItem, type PluginItem } from "../useInventory";
 
 type AccentToken = "ok" | "queue" | "run" | "await" | "fail";
@@ -64,8 +64,12 @@ function InventorySection<T>({
           ›
         </span>
         <h3 className="text-sm font-semibold text-ink">{title}</h3>
+        {/* The accents are per-category, not severity — so a zero must not wear
+            one, or "Plugins 0" reads as a red alert about nothing. */}
         <span
-          className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ${ACCENT[accent]}`}
+          className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ${
+            items.length === 0 ? "bg-ground-2 text-ink-faint ring-line" : ACCENT[accent]
+          }`}
         >
           {items.length}
         </span>
@@ -101,7 +105,9 @@ export default function Inventory() {
       )}
 
       {loading ? (
-        <p className="text-ink-faint">Loading inventory…</p>
+        <Loading label="inventory">
+          <SkeletonGrid count={4} columns={2} lines={3} />
+        </Loading>
       ) : !inventory ? (
         <EmptyState>No extensions found yet.</EmptyState>
       ) : (

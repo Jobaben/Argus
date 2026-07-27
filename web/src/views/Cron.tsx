@@ -1,6 +1,6 @@
 import { useCron } from "../useCron";
 import type { CronDiskHint } from "../useCron";
-import { AlertStrip, EmptyState } from "../ds";
+import { AlertStrip, EmptyState, Loading, SkeletonText } from "../ds";
 
 function HintRow({ hint }: { hint: CronDiskHint }) {
   return (
@@ -23,7 +23,9 @@ export function CronPanel() {
       )}
 
       {loading ? (
-        <p className="text-ink-faint">Loading…</p>
+        <Loading label="cron status">
+          <SkeletonText lines={3} />
+        </Loading>
       ) : !cron ? (
         <EmptyState>No cron status available.</EmptyState>
       ) : (

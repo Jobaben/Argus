@@ -1,4 +1,5 @@
 import type { MonitorHealth, MonitorStatus } from "./monitors.js";
+import type { MonitorAlert } from "@argus/contracts";
 
 /**
  * Transition detection for monitor alerting. Monitor status is a pure
@@ -10,16 +11,7 @@ import type { MonitorHealth, MonitorStatus } from "./monitors.js";
  * first seen already in a bad state — only a *watched* transition does.
  */
 
-export type MonitorAlertEvent = "monitor.down" | "monitor.failing" | "monitor.recovered";
-
-export interface MonitorAlert {
-  event: MonitorAlertEvent;
-  scheduleId: string;
-  name: string;
-  status: MonitorStatus;
-  at: string;
-  detail: string;
-}
+export type { MonitorAlert, MonitorAlertEvent } from "@argus/contracts";
 
 export type MonitorSnapshot = Map<string, MonitorStatus>;
 

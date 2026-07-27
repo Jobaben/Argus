@@ -1,18 +1,5 @@
-import { AlertStrip, EmptyState, Page } from "../ds";
+import { AlertStrip, EmptyState, Loading, Page, SkeletonRows, TimeAgo } from "../ds";
 import { useTasks, type Task } from "../useTasks";
-
-function timeAgo(iso: string | null): string {
-  if (!iso) return "—";
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return "—";
-  const secs = Math.round((Date.now() - then) / 1000);
-  if (secs < 60) return `${secs}s ago`;
-  const mins = Math.round(secs / 60);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.round(hrs / 24)}d ago`;
-}
 
 function TaskRow({ task }: { task: Task }) {
   return (
@@ -37,8 +24,8 @@ function TaskRow({ task }: { task: Task }) {
         {task.locked ? "locked" : "open"}
       </span>
 
-      <span className="w-20 shrink-0 text-right text-xs text-ink-faint">
-        {timeAgo(task.updatedAt)}
+      <span className="w-24 shrink-0 text-right text-xs">
+        <TimeAgo iso={task.updatedAt} />
       </span>
     </div>
   );
@@ -58,7 +45,9 @@ export default function Tasks() {
       )}
 
       {loading ? (
-        <p className="text-ink-faint">Loading tasks…</p>
+        <Loading label="tasks">
+          <SkeletonRows count={3} />
+        </Loading>
       ) : tasks.length === 0 ? (
         <EmptyState>No task directories found yet.</EmptyState>
       ) : (

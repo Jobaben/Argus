@@ -1,13 +1,16 @@
 import { describe, it, expect } from "vitest";
 import {
+  formatCadence,
   formatCost,
+  formatTrigger,
   formatDuration,
   formatElapsed,
   formatMs,
   formatTokens,
   formatUsd,
+  formatCountdown,
+  formatRelativeTime,
   parseRunLog,
-  sparklinePoints,
 } from "./format";
 
 describe("formatUsd", () => {
@@ -69,6 +72,81 @@ describe("formatMs", () => {
   it("returns a dash for invalid input", () => {
     expect(formatMs(-1)).toBe("—");
     expect(formatMs(Number.NaN)).toBe("—");
+  });
+});
+
+describe("formatUsd", () => {
+  it("shows two decimals for a cent or more", () => {
+    expect(formatUsd(1)).toBe("$1.00");
+    expect(formatUsd(0.42)).toBe("$0.42");
+    expect(formatUsd(118.4249)).toBe("$118.42");
+  });
+
+  it("shows four decimals for a real sub-cent cost", () => {
+    expect(formatUsd(0.0004)).toBe("$0.0004");
+    expect(formatUsd(0.009)).toBe("$0.0090");
+  });
+
+  it("shows plain zero rather than a false precision claim", () => {
+    // The spend meter renders this before the first run of the day.
+    expect(formatUsd(0)).toBe("$0.00");
+  });
+});
+
+describe("formatCountdown", () => {
+  it("counts down in the largest sensible unit", () => {
+    expect(formatCountdown(45_000)).toBe("in 45s");
+    expect(formatCountdown(12 * 60_000)).toBe("in 12m");
+    expect(formatCountdown(2 * 3_600_000 + 10 * 60_000)).toBe("in 2h 10m");
+    expect(formatCountdown(3 * 3_600_000)).toBe("in 3h");
+    expect(formatCountdown(3 * 86_400_000 + 4 * 3_600_000)).toBe("in 3d 4h");
+    expect(formatCountdown(2 * 86_400_000)).toBe("in 2d");
+  });
+
+  it("never renders a negative duration", () => {
+    // A slot that has passed but not fired used to render "-7138s ago".
+    expect(formatCountdown(0)).toBe("due now");
+    expect(formatCountdown(-7_138_000)).toBe("due now");
+  });
+
+  it("degrades on a non-finite input", () => {
+    expect(formatCountdown(Number.NaN)).toBe("—");
+    expect(formatCountdown(Number.POSITIVE_INFINITY)).toBe("—");
+  });
+
+  it("rounds a sub-second wait up to a second, never to zero", () => {
+    expect(formatCountdown(400)).toBe("in 1s");
+  });
+});
+
+describe("formatRelativeTime", () => {
+  const now = new Date("2026-07-07T12:00:00.000Z").getTime();
+  const at = (ms: number) => new Date(now + ms).toISOString();
+
+  it("reads the past as 'ago'", () => {
+    expect(formatRelativeTime(at(-45_000), now)).toBe("45s ago");
+    expect(formatRelativeTime(at(-12 * 60_000), now)).toBe("12m ago");
+    expect(formatRelativeTime(at(-3 * 3_600_000), now)).toBe("3h ago");
+    expect(formatRelativeTime(at(-2 * 86_400_000), now)).toBe("2d ago");
+  });
+
+  it("reads the future as 'in', instead of a negative 'ago'", () => {
+    // The regression: a monitor's next expected slot rendered "-7138s ago".
+    expect(formatRelativeTime(at(45_000), now)).toBe("in 45s");
+    expect(formatRelativeTime(at(7_138_000), now)).toBe("in 1h 58m");
+    expect(formatRelativeTime(at(50_328_000), now)).toBe("in 13h 58m");
+  });
+
+  it("collapses either side of the present into 'just now'", () => {
+    expect(formatRelativeTime(at(0), now)).toBe("just now");
+    expect(formatRelativeTime(at(-5_000), now)).toBe("just now");
+    expect(formatRelativeTime(at(5_000), now)).toBe("just now");
+  });
+
+  it("degrades on a missing or unparseable timestamp", () => {
+    expect(formatRelativeTime(null, now)).toBe("—");
+    expect(formatRelativeTime(undefined, now)).toBe("—");
+    expect(formatRelativeTime("not-a-date", now)).toBe("—");
   });
 });
 
@@ -140,18 +218,6 @@ describe("parseRunLog", () => {
   });
 });
 
-describe("sparklinePoints", () => {
-  it("maps a flat series to the vertical mid-line", () => {
-    expect(sparklinePoints([5, 5, 5], 100, 26)).toBe("0,13 50,13 100,13");
-  });
-  it("puts the max at the top (y=0) and min at the bottom", () => {
-    expect(sparklinePoints([0, 10], 100, 26)).toBe("0,26 100,0");
-  });
-  it("returns empty string for empty input", () => {
-    expect(sparklinePoints([], 100, 26)).toBe("");
-  });
-});
-
 describe("formatElapsed", () => {
   it("renders mm:ss under an hour", () => {
     expect(formatElapsed(0)).toBe("00:00");
@@ -164,5 +230,69 @@ describe("formatElapsed", () => {
   it("is defensive about garbage", () => {
     expect(formatElapsed(-5)).toBe("—");
     expect(formatElapsed(Number.NaN)).toBe("—");
+  });
+});
+
+describe("formatCadence", () => {
+  it("reduces a cadence to its largest whole unit", () => {
+    expect(formatCadence(360)).toBe("6h");
+    expect(formatCadence(1440)).toBe("1d");
+    expect(formatCadence(2880)).toBe("2d");
+    expect(formatCadence(60)).toBe("1h");
+  });
+  it("keeps minutes when they do not divide cleanly", () => {
+    expect(formatCadence(90)).toBe("90m");
+    expect(formatCadence(7)).toBe("7m");
+  });
+  it("refuses to describe a cadence it does not have", () => {
+    // A trigger of a kind without `everyMinutes` reaches this with undefined.
+    expect(formatCadence(undefined)).toBe("\u2014");
+    expect(formatCadence(null)).toBe("\u2014");
+    expect(formatCadence(0)).toBe("\u2014");
+    expect(formatCadence(-30)).toBe("\u2014");
+    expect(formatCadence(Number.NaN)).toBe("\u2014");
+  });
+});
+
+describe("formatTrigger", () => {
+  it("names a manual pipeline rather than printing nothing", () => {
+    expect(formatTrigger(null)).toBe("manual");
+    expect(formatTrigger(undefined)).toBe("manual");
+  });
+
+  it("humanises an interval, which two of the three old copies did not", () => {
+    expect(formatTrigger({ kind: "interval", everyMinutes: 360 })).toBe("every 6h");
+    expect(formatTrigger({ kind: "interval", everyMinutes: 90 })).toBe("every 90m");
+  });
+
+  it("reads a daily and a weekly trigger as a person would say it", () => {
+    expect(formatTrigger({ kind: "daily", time: "02:30" })).toBe("daily at 02:30");
+    expect(formatTrigger({ kind: "weekly", weekday: 1, time: "08:00" })).toBe(
+      "weekly Mon at 08:00",
+    );
+  });
+
+  it("defaults a weekly trigger with no weekday to Sunday, matching the engine", () => {
+    expect(formatTrigger({ kind: "weekly", time: "08:00" })).toBe("weekly Sun at 08:00");
+  });
+
+  it("spells out a window, and says every day when unrestricted", () => {
+    expect(
+      formatTrigger({
+        kind: "windowed",
+        everyMinutes: 120,
+        startTime: "09:00",
+        endTime: "18:00",
+        weekdays: [1, 2],
+      }),
+    ).toBe("every 2h, 09:00–18:00, Mon, Tue");
+    expect(
+      formatTrigger({ kind: "windowed", everyMinutes: 30, startTime: "09:00", endTime: "13:00" }),
+    ).toBe("every 30m, 09:00–13:00, every day");
+  });
+
+  it("does not invent a time it was not given", () => {
+    expect(formatTrigger({ kind: "daily" })).toBe("daily at \u2014");
+    expect(formatTrigger({ kind: "interval" })).toBe("every \u2014");
   });
 });

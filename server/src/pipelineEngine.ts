@@ -35,6 +35,7 @@ import type {
   PipelineInstance,
   PipelineSignal,
 } from "./sources/pipelineTypes.js";
+import { log } from "./log.js";
 
 /** Thrown by start() when the pre-run guard finds a critical prerequisite still broken. */
 export class PreflightError extends Error {
@@ -316,7 +317,7 @@ export function createEngine(deps: EngineDeps): Engine {
       .catch((e) => {
         release();
         deps.tailer?.untrack(run.id);
-        console.error(`[argus] step run ${run.id} completion handler failed:`, e);
+        log.error("step run completion handler failed", { runId: run.id, err: e });
       });
   }
 
@@ -408,7 +409,7 @@ export function createEngine(deps: EngineDeps): Engine {
             if (!fresh || fresh.status !== "running" || fresh.currentPhaseIndex !== idx) return;
             await startPhase(def, fresh, idx);
           })
-          .catch((e) => console.error(`[argus] deferred phase start for ${instanceId} failed:`, e));
+          .catch((e: unknown) => log.error("deferred phase start failed", { instanceId, err: e }));
       }
       if (instance.status === "failed") deps.onFailure?.(instance);
       deps.onChange?.();
@@ -525,7 +526,7 @@ export function createEngine(deps: EngineDeps): Engine {
         deps.onChange?.();
       } catch (e) {
         // Keep the run adopted; retried next tick.
-        console.error("[argus] finalize of adopted run failed:", e);
+        log.error("finalize of adopted run failed", { err: e });
       }
     }
 

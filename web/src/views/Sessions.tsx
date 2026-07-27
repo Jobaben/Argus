@@ -1,21 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSessions, type SessionMessage, type SessionSummary } from "../useSessions";
 import { useSessionTail } from "../useSessionTail";
 import { useHashRoute } from "../useHashRoute";
-import { AlertStrip, EmptyState, Page } from "../ds";
-
-function timeAgo(iso: string | null): string {
-  if (!iso) return "—";
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return "—";
-  const secs = Math.round((Date.now() - then) / 1000);
-  if (secs < 60) return `${secs}s ago`;
-  const mins = Math.round(secs / 60);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.round(hrs / 24)}d ago`;
-}
+import { AlertStrip, EmptyState, Loading, Page, SkeletonGrid, SkeletonText, TimeAgo } from "../ds";
+import { filterSessions, groupSessionsByDay } from "./sessionList";
 
 function sessionHref(project: string, id: string): string {
   return `#/sessions/${encodeURIComponent(project)}/${encodeURIComponent(id)}`;
@@ -31,14 +19,20 @@ function SessionCard({ session }: { session: SessionSummary }) {
       <p className="mt-1 truncate font-mono text-xs text-ink-faint">{session.projectLabel}</p>
 
       <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-faint">
-        <span className="text-ink-dim">{session.messageCount} msgs</span>
-        <span>· {session.toolUseCount} tools</span>
+        <span className="text-ink-dim">
+          {session.messageCount} {session.messageCount === 1 ? "msg" : "msgs"}
+        </span>
+        <span>
+          · {session.toolUseCount} {session.toolUseCount === 1 ? "tool" : "tools"}
+        </span>
         {session.model && (
           <span className="rounded-full bg-queue/12 px-2 py-0.5 text-queue ring-1 ring-queue/30">
             {session.model}
           </span>
         )}
-        <span className="ml-auto">{timeAgo(session.lastActivity)}</span>
+        <span className="ml-auto shrink-0">
+          <TimeAgo iso={session.lastActivity} />
+        </span>
       </div>
     </a>
   );
@@ -70,7 +64,9 @@ function MessageRow({ message }: { message: SessionMessage }) {
             error
           </span>
         )}
-        <span className="ml-auto text-ink-faint">{timeAgo(message.timestamp)}</span>
+        <span className="ml-auto shrink-0">
+          <TimeAgo iso={message.timestamp} />
+        </span>
       </header>
       {message.text && (
         <pre className="mt-3 whitespace-pre-wrap break-words font-sans text-sm text-ink-dim">
@@ -144,10 +140,16 @@ function SessionTranscript({ project, id }: { project: string; id: string }) {
         <div className="mb-6">
           <p className="truncate font-mono text-xs text-ink-faint">{header.projectLabel}</p>
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-faint">
-            <span>{messages.length} msgs</span>
-            <span>· {toolUses} tools</span>
+            <span>
+              {messages.length} {messages.length === 1 ? "msg" : "msgs"}
+            </span>
+            <span>
+              · {toolUses} {toolUses === 1 ? "tool" : "tools"}
+            </span>
             {header.model && <span>· {header.model}</span>}
-            <span>· last activity {timeAgo(header.lastActivity)}</span>
+            <span className="flex items-center gap-1">
+              · last activity <TimeAgo iso={header.lastActivity} />
+            </span>
           </div>
         </div>
       )}
@@ -159,7 +161,9 @@ function SessionTranscript({ project, id }: { project: string; id: string }) {
       )}
 
       {loading ? (
-        <p className="text-ink-faint">Loading transcript…</p>
+        <Loading label="the transcript">
+          <SkeletonText lines={6} />
+        </Loading>
       ) : messages.length === 0 ? (
         <EmptyState>No displayable messages in this session.</EmptyState>
       ) : (
@@ -168,6 +172,124 @@ function SessionTranscript({ project, id }: { project: string; id: string }) {
             <MessageRow key={m.index} message={m} />
           ))}
           <div ref={endRef} aria-hidden />
+        </div>
+      )}
+    </Page>
+  );
+}
+
+function SessionGrid({ sessions }: { sessions: SessionSummary[] }) {
+  return (
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+      {sessions.map((s) => (
+        <SessionCard key={`${s.project}/${s.id}`} session={s} />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The transcript index.
+ *
+ * Two changes make it usable past the first screen: the same fuzzy search the
+ * palette uses, and day headings. Recency order alone answers "what did I just
+ * do" and nothing else — "the one from Tuesday about the migration" needed
+ * scrolling and guessing.
+ */
+function SessionList({
+  sessions,
+  loading,
+  error,
+}: {
+  sessions: SessionSummary[];
+  loading: boolean;
+  error: string | null;
+}) {
+  const [query, setQuery] = useState("");
+  const searching = query.trim().length > 0;
+  const matches = useMemo(() => filterSessions(sessions, query), [sessions, query]);
+  // Grouping is for browsing. Once you are searching, rank order is the answer
+  // and day headings would fight it.
+  const groups = useMemo(
+    () => (searching ? [] : groupSessionsByDay(sessions)),
+    [sessions, searching],
+  );
+  const projects = useMemo(() => new Set(sessions.map((s) => s.project)).size, [sessions]);
+
+  return (
+    <Page title="Sessions" crumbs={[{ label: "Command Center", href: "#/command" }]}>
+      <div className="mb-6 flex flex-wrap items-center gap-x-4 gap-y-3">
+        <p className="text-sm text-ink-faint">
+          {loading && sessions.length === 0
+            ? "Recent Claude Code transcripts across all projects"
+            : searching
+              ? `${matches.length} of ${sessions.length} ${
+                  sessions.length === 1 ? "transcript" : "transcripts"
+                }`
+              : `${sessions.length} ${
+                  sessions.length === 1 ? "transcript" : "transcripts"
+                } across ${projects} ${projects === 1 ? "project" : "projects"}`}
+        </p>
+        {sessions.length > 0 && (
+          <label className="ml-auto flex min-w-[16rem] items-center gap-2 rounded-lg border border-line bg-surface px-3 py-1.5">
+            <span aria-hidden="true" className="text-xs text-ink-faint">
+              ⌕
+            </span>
+            <input
+              type="search"
+              aria-label="Filter sessions by title, project or model"
+              placeholder="Filter transcripts"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              className="w-full bg-transparent text-sm text-ink placeholder-ink-faint outline-none"
+            />
+          </label>
+        )}
+      </div>
+
+      {error && (
+        <div className="mb-6">
+          <AlertStrip subject="Error" message={`Couldn't reach the Argus server: ${error}`} />
+        </div>
+      )}
+
+      {loading && sessions.length === 0 ? (
+        <Loading label="sessions">
+          <SkeletonGrid count={4} columns={2} lines={3} />
+        </Loading>
+      ) : sessions.length === 0 ? (
+        <EmptyState>
+          <p className="text-sm text-ink-dim">No transcripts yet.</p>
+          <p className="mx-auto mt-2 max-w-md text-xs">
+            Argus reads Claude Code&apos;s own session files under{" "}
+            <code className="font-mono text-ink-dim">~/.claude/projects</code>. Run{" "}
+            <code className="font-mono text-ink-dim">claude</code> in any directory, or fire a
+            schedule, and the transcript will show up here — searchable, exportable, and live while
+            it runs.
+          </p>
+        </EmptyState>
+      ) : searching ? (
+        matches.length === 0 ? (
+          <EmptyState>
+            <p className="text-sm text-ink-dim">Nothing matches “{query.trim()}”.</p>
+            <p className="mt-2 text-xs">
+              The filter matches session titles, project paths and model names.
+            </p>
+          </EmptyState>
+        ) : (
+          <SessionGrid sessions={matches} />
+        )
+      ) : (
+        <div className="flex flex-col gap-8">
+          {groups.map((group) => (
+            <section key={group.key}>
+              <h2 className="mb-3 flex items-baseline gap-2 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-faint">
+                {group.label}
+                <span className="text-ink-faint/60">{group.sessions.length}</span>
+              </h2>
+              <SessionGrid sessions={group.sessions} />
+            </section>
+          ))}
         </div>
       )}
     </Page>
@@ -183,30 +305,5 @@ export default function Sessions() {
   if (segments[0] === "sessions" && segments[1] && segments[2]) {
     return <SessionTranscript project={segments[1]} id={segments[2]} />;
   }
-
-  return (
-    <Page title="Sessions" crumbs={[{ label: "Command Center", href: "#/command" }]}>
-      <p className="mb-6 text-sm text-ink-faint">
-        Recent Claude Code transcripts across all projects
-      </p>
-
-      {error && (
-        <div className="mb-6">
-          <AlertStrip subject="Error" message={`Couldn't reach the Argus server: ${error}`} />
-        </div>
-      )}
-
-      {loading ? (
-        <p className="text-ink-faint">Loading sessions…</p>
-      ) : sessions.length === 0 ? (
-        <EmptyState>No sessions found yet.</EmptyState>
-      ) : (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          {sessions.map((s) => (
-            <SessionCard key={`${s.project}/${s.id}`} session={s} />
-          ))}
-        </div>
-      )}
-    </Page>
-  );
+  return <SessionList sessions={sessions} loading={loading} error={error} />;
 }

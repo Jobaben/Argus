@@ -79,16 +79,46 @@ Fanned out in parallel; each is an isolated source + view + tab:
 - Tauri shell: tray icon + native notifications when a background agent
   completes or fails.
 
+## Experience & engineering wave (2026-07-26)
+
+Not a feature release — a pass over how the whole thing _feels_ and how it is
+built underneath. See the changelog for the itemised list.
+
+- **Command layer** — `⌘K` palette over navigation, entities and actions
+  (`GET /api/palette`); `g`-chord destinations; a `?` cheatsheet rendered from
+  the same bindings the listener dispatches from.
+- **Board** — a situation strip (`GET /api/insight`), a live activity rail that
+  includes the runs the board does not own, and a step drawer with a tailing log.
+- **One contract** — `@argus/contracts`: every wire DTO declared once, imported
+  by both workspaces, types-only and CI-enforced. Replaced ~25 duplicated shapes;
+  surfaced two real defects (an unvalidated `AgentStatus`, untyped WS frames).
+- **Live layer** — `ETag`/`304` conditional reads with zero-re-render no-ops,
+  single-flight coalescing, jittered backoff on both fetch and socket, reconnect
+  on tab-visible.
+- **Ops** — one structured logger (text or JSON lines), `x-request-id` on every
+  response, per-route error boundaries.
+- **Performance** — a lazy chunk per route (initial payload 105.7 → 91.5 kB
+  gzip) with a size budget in CI.
+- **Fit and finish** — shape-matched skeletons everywhere, bidirectional relative
+  time (fixing `-7138s ago`), a shared clock so labels stay current, a legible
+  Chronicle, a usable phone layout, a notification log behind the bell.
+- **Second pass over the remaining views** — the Scheduler leads with a verdict
+  per schedule, a health strip and humanised time; Monitors and Issues turn their
+  counters into filters; Sessions groups by day and searches with the palette's
+  matcher; Budget projects the month and marks the days that broke the daily
+  limit; Launch keeps the directory between firings. The derivations behind all of
+  it (`scheduleHealth`, `projectMonth`, `sessionList`) are pure and tested.
+
 ## Quality backlog
 
-- **`/api/overview` instance-storage index** — the overview route calls
-  `readInstances()` unfiltered, reading and JSON-parsing every retained instance
-  file (~`INSTANCE_KEEP`×N) on every 10s poll and WS push, though `buildOverview`
-  keeps only the newest per pipeline. Add a latest-instance index (or
-  timestamp-sortable instance filenames) so the route reads N files, not 50×N.
-  Negligible at current scale; deferred from the Command Center wiring review
-  (2026-06-30). Touches `sources/instances.ts` storage format + the engine's
-  write/prune paths, so it warrants its own task.
+- **A scan is still O(files on disk), even when warm.** Retention-by-membership
+  and write-patching removed the two costs that mattered (see the changelog), so
+  what remains is one `readdir` plus a `stat` per file whenever the 1500ms TTL
+  expires or an external process touches the directory — 57ms at 1200 runs. A
+  latest-per-key index would make the hot callers O(pipelines) instead, but it is
+  a storage-format change with a migration, and the measured cycle is now 1.5ms,
+  so it is no longer the bottleneck it was written up as. Revisit only if a real
+  install shows the rescan mattering.
 - `deriveName` should consult `nameSource` to avoid raw-prompt titles.
 - Transcript parser hardening across all 20 observed message types.
 - Resolve the 2 npm criticals; drop leftover Vite demo assets.

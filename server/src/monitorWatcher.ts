@@ -6,6 +6,7 @@ import {
   type MonitorSnapshot,
 } from "./sources/monitorAlerts.js";
 import type { Run, Schedule } from "./sources/scheduleTypes.js";
+import { log } from "./log.js";
 
 export interface MonitorWatcherDeps {
   now: () => Date;
@@ -34,11 +35,11 @@ export function createMonitorWatcher(deps: MonitorWatcherDeps): { check: () => P
           try {
             deps.onAlert(alert);
           } catch (e) {
-            console.error("[argus] monitor alert handler failed:", e);
+            log.error("monitor alert handler failed", { err: e });
           }
         }
       } catch (e) {
-        console.error("[argus] monitor check failed:", e);
+        log.error("monitor check failed", { err: e });
       }
     },
   };

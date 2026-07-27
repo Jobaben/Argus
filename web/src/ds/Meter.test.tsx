@@ -9,8 +9,10 @@ describe("Meter", () => {
   });
 
   it("renders zero values when reported", () => {
+    // Zero cost renders as plain "$0.00": four decimals are for a real sub-cent
+    // amount, not for nothing.
     render(<Meter level="step" tokens={0} usd={0} title="zero" />);
-    expect(screen.getByTitle("zero")).toHaveTextContent("0 tok · $0.0000");
+    expect(screen.getByTitle("zero")).toHaveTextContent("0 tok · $0.00");
   });
 
   it("joins duration, tokens and cost at step level", () => {

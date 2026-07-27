@@ -27,9 +27,13 @@ jobs:
         run: npm run format:check
       - name: Test
         run: npm test
+      - name: Contract is types-only (no runtime emitted)
+        run: node scripts/check-contracts-runtime.mjs
       - name: Server coverage gate
         run: npm -w server run test:coverage
       - name: Web coverage gate
         run: npm -w web run test:coverage
       - name: Build (web + server)
         run: npm run build
+      - name: Initial-payload budget
+        run: node scripts/check-bundle-size.mjs

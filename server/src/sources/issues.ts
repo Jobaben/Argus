@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { paths } from "../claudeHome.js";
 import { createJsonArrayStore } from "./jsonArrayStore.js";
 import type { Run } from "./scheduleTypes.js";
+import type { Issue, IssueOccurrence, IssueState } from "@argus/contracts";
 
 /**
  * Issues: Sentry-style grouping of failed runs. Twenty failures with the same
@@ -10,37 +11,15 @@ import type { Run } from "./scheduleTypes.js";
  * (resolve/ignore), in Argus-owned issues.json.
  */
 
-export type IssueState = "open" | "resolved" | "ignored";
+export type { Issue, IssueOccurrence, IssuesSummary, IssueState } from "@argus/contracts";
 
+/** Triage as persisted in Argus-owned issues.json — on-disk only, never served. */
 export interface TriageRecord {
   fingerprint: string;
   state: "resolved" | "ignored";
   at: string;
   /** lastSeen at the moment of triage — a newer failure means regression. */
   lastSeenAtTriage: string;
-}
-
-export interface Issue {
-  fingerprint: string;
-  /** Representative raw error (first line of the newest occurrence). */
-  title: string;
-  count: number;
-  firstSeen: string;
-  lastSeen: string;
-  /** Distinct schedule names affected, most recent first. */
-  schedules: string[];
-  state: IssueState;
-  lastRunId: string;
-}
-
-export interface IssueOccurrence {
-  runId: string;
-  scheduleId: string;
-  scheduleName: string;
-  at: string;
-  status: Run["status"];
-  outcome: Run["outcome"] | null;
-  error: string;
 }
 
 export const OCCURRENCE_CAP = 50;

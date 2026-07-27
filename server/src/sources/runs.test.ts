@@ -180,3 +180,66 @@ test("readRun's tail starts at a line boundary even when the naive byte offset l
   assert.equal(env.costUsd, 0.05);
   assert.equal(env.tokens, 30);
 });
+
+test("a write patches the cached scan instead of discarding it", async () => {
+  // A live run is written on queue, start and completion, and each pipeline step
+  // writes more than that. Every write used to drop the directory-scan cache, so
+  // the next reader — monitors, issues, the briefing, the Chronicle, the board —
+  // re-stat'ed every retained run file.
+  const m = await fresh();
+  for (let i = 0; i < 6; i++) {
+    await m.writeRun(makeRun(`r${i}`, "s1", new Date(2026, 5, 30, 9, i).toISOString()));
+  }
+  assert.equal((await m.readRuns()).length, 6);
+
+  await m.writeRun({
+    ...makeRun("r3", "s1", new Date(2026, 5, 30, 9, 3).toISOString()),
+    status: "failed" as const,
+  });
+  const after = await m.readRuns();
+  assert.equal(after.length, 6, "no duplicate, no loss");
+  assert.equal(after.find((r: { id: string }) => r.id === "r3")?.status, "failed");
+  assert.deepEqual(
+    after.map((r: { id: string }) => r.id),
+    ["r5", "r4", "r3", "r2", "r1", "r0"],
+    "still newest-first",
+  );
+});
+
+test("a brand-new run appears in an already-warm scan", async () => {
+  const m = await fresh();
+  await m.writeRun(makeRun("old", "s1", new Date(2026, 5, 30, 9, 0).toISOString()));
+  await m.readRuns(); // warm the scan cache
+  await m.writeRun(makeRun("new", "s1", new Date(2026, 5, 30, 10, 0).toISOString()));
+  assert.deepEqual(
+    (await m.readRuns()).map((r: { id: string }) => r.id),
+    ["new", "old"],
+  );
+});
+
+test("the memo serves a whole directory of repeat reads, not just its tail", async () => {
+  const m = await fresh();
+  const count = 40;
+  for (let i = 0; i < count; i++) {
+    await m.writeRun(
+      makeRun(`r${String(i).padStart(3, "0")}`, "s1", new Date(2026, 5, 30, 9, i).toISOString()),
+    );
+  }
+  const first = await m.readRuns();
+  const second = await m.readRuns();
+  // Object identity proves every entry came from the memo rather than a re-parse.
+  for (let i = 0; i < count; i++) assert.equal(second[i], first[i], `entry ${i}`);
+});
+
+test("a pruned run is not served from the memo afterwards", async () => {
+  const m = await fresh();
+  await m.writeRun(makeRun("keep", "s1", new Date(2026, 5, 30, 10, 0).toISOString()));
+  await m.writeRun(makeRun("drop", "s1", new Date(2026, 5, 30, 9, 0).toISOString()));
+  await m.readRuns();
+  await m.pruneRuns("s1", 1);
+  assert.deepEqual(
+    (await m.readRuns()).map((r: { id: string }) => r.id),
+    ["keep"],
+  );
+  assert.equal(await m.readRun("drop"), null);
+});

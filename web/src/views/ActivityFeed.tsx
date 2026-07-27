@@ -1,18 +1,5 @@
-import { AlertStrip, EmptyState, Page } from "../ds";
+import { AlertStrip, EmptyState, Loading, Page, SkeletonRows, TimeAgo } from "../ds";
 import { useActivity, type Activity } from "../useActivity";
-
-function timeAgo(iso: string): string {
-  if (!iso) return "—";
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return "—";
-  const secs = Math.round((Date.now() - then) / 1000);
-  if (secs < 60) return `${secs}s ago`;
-  const mins = Math.round(secs / 60);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.round(hrs / 24)}d ago`;
-}
 
 function truncate(text: string, max = 240): string {
   return text.length > max ? `${text.slice(0, max).trimEnd()}…` : text;
@@ -27,7 +14,9 @@ function ActivityRow({ item }: { item: Activity }) {
             {item.project}
           </span>
         )}
-        <span className="ml-auto shrink-0">{timeAgo(item.ts)}</span>
+        <span className="ml-auto shrink-0">
+          <TimeAgo iso={item.ts} />
+        </span>
       </div>
       <p className="mt-2 whitespace-pre-wrap break-words text-sm text-ink-dim">
         {truncate(item.text)}
@@ -50,7 +39,9 @@ export default function ActivityFeed() {
       )}
 
       {loading ? (
-        <p className="text-ink-faint">Loading activity…</p>
+        <Loading label="activity">
+          <SkeletonRows count={6} />
+        </Loading>
       ) : activity.length === 0 ? (
         <EmptyState>No prompt history found yet.</EmptyState>
       ) : (

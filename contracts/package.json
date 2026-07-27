@@ -1,0 +1,24 @@
+{
+  "name": "@argus/contracts",
+  "version": "0.4.0",
+  "private": true,
+  "type": "module",
+  "description": "The wire contract between the Argus server and web — types only, no runtime.",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.3.0",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.59.2"
+  }
+}

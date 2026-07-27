@@ -1,33 +1,32 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useOverview } from "../useOverview";
+import { useInsight } from "../useInsight";
+import { useRuns } from "../useRuns";
+import { SituationStrip } from "./SituationStrip";
+import { ActivityRail } from "./ActivityRail";
+import { StepDrawer, type StepSelection } from "./StepDrawer";
 import { useRunActivity } from "../useRunActivity";
 import type { LiveActivity } from "../useRunActivity";
 import { useTotals } from "../useTotals";
 import {
-  toOverviewRows,
-  formatElapsed,
-  STATUS,
-  RAIL,
-  TILE_SKIN,
-  TILE_DETAIL,
-  StatusPill,
-  TimeAgo,
   EmptyState,
-  Page,
+  Loading,
   Meter,
+  Page,
+  RAIL,
+  STATUS,
+  SkeletonBoardCard,
+  StatusPill,
+  TILE_DETAIL,
+  TILE_SKIN,
+  TimeAgo,
+  formatElapsed,
+  staggerDelay,
+  toOverviewRows,
+  useChangeFlash,
+  useTicker,
 } from "../ds";
 import type { OverviewRow, OverviewGate, PhasePill, StepPill, DsStatus } from "../ds";
-
-/** One clock for every running tile; only ticks while something is working. */
-function useNow(active: boolean): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!active) return;
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, [active]);
-  return now;
-}
 
 /**
  * The board re-renders in place as pipelines change state, which is invisible
@@ -164,6 +163,7 @@ function StepTile({
   live,
   now,
   rowModel,
+  onOpen,
 }: {
   step: StepPill;
   reason: string | null;
@@ -172,6 +172,8 @@ function StepTile({
   /** Pipeline-level model shown in the card header; the tile only repeats a
    *  model when its own differs from this. */
   rowModel: string | null;
+  /** Opens this step's drawer. */
+  onOpen: () => void;
 }) {
   const token = STATUS[step.status].token;
   const working = step.status === "working";
@@ -179,23 +181,38 @@ function StepTile({
   const elapsed =
     working && step.startedAt ? formatElapsed(now - new Date(step.startedAt).getTime()) : null;
   const finished = step.status === "done" || step.status === "failed";
+  // A board that swaps a status silently makes you doubt you saw it. A brief
+  // ring on the tile that just moved answers "what changed?" at a glance.
+  const justChanged = useChangeFlash(step.status);
   const hasMeter =
     step.tokens != null || step.costUsd != null || (finished && step.durationMs != null);
   return (
     <article
-      className={`relative flex flex-col gap-[7px] overflow-hidden rounded-tile border bg-gradient-to-b to-surface pb-2.5 pl-3.5 pr-3 pt-[11px] ${TILE_SKIN[token]}`}
+      className={`relative flex flex-col gap-[7px] overflow-hidden rounded-tile border bg-gradient-to-b to-surface pb-2.5 pl-3.5 pr-3 pt-[11px] transition-shadow duration-(--duration-slow) ${
+        TILE_SKIN[token]
+      } ${justChanged ? "shadow-[0_0_0_1px_var(--color-eye),0_0_24px_-4px_var(--color-eye)]" : ""}`}
     >
       <span className={`absolute inset-y-0 left-0 w-[3px] ${RAIL[token]}`} />
       <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="break-words text-tile-name font-bold leading-tight">{step.name}</div>
+        {/* The name is the activator rather than the whole tile: a tile-sized
+            button would swallow the gate's Approve/Revise controls inside it,
+            and a nested interactive element is invalid. */}
+        <button
+          type="button"
+          onClick={onOpen}
+          className="min-w-0 flex-1 text-left"
+          title="Open this step's run, log and cost"
+        >
+          <div className="break-words text-tile-name font-bold leading-tight underline decoration-transparent decoration-dotted underline-offset-[3px] transition duration-(--duration-quick) hover:decoration-ink-faint">
+            {step.name}
+          </div>
           <div className="mt-0.5 font-mono text-id text-ink-faint">
             {step.runId ? `job ${step.runId}` : "job ——"}
             {step.model && step.model !== rowModel && (
               <span title="Model running this step"> · {step.model}</span>
             )}
           </div>
-        </div>
+        </button>
         <StatusPill status={step.status} size="sm" />
       </div>
       {reason && (
@@ -265,6 +282,7 @@ function PhaseCell({
   liveActivity,
   now,
   rowModel,
+  onOpenStep,
 }: {
   pill: PhasePill;
   instanceId: string | null;
@@ -275,19 +293,24 @@ function PhaseCell({
   liveActivity: Map<string, LiveActivity>;
   now: number;
   rowModel: string | null;
+  onOpenStep: (step: StepPill, phaseName: string, reason: string | null) => void;
 }) {
   return (
     <div className="flex min-w-0 flex-col gap-2.5">
-      {pill.steps.map((step, i) => (
-        <StepTile
-          key={`${step.name}-${i}`}
-          step={step}
-          reason={step.status === "failed" ? pill.reason : null}
-          live={step.runId ? (liveActivity.get(step.runId) ?? null) : null}
-          now={now}
-          rowModel={rowModel}
-        />
-      ))}
+      {pill.steps.map((step, i) => {
+        const reason = step.status === "failed" ? pill.reason : null;
+        return (
+          <StepTile
+            key={`${step.name}-${i}`}
+            step={step}
+            reason={reason}
+            live={step.runId ? (liveActivity.get(step.runId) ?? null) : null}
+            now={now}
+            rowModel={rowModel}
+            onOpen={() => onOpenStep(step, pill.name, reason)}
+          />
+        );
+      })}
       {instanceId && gate?.phaseId === pill.id && (
         <Gate
           instanceId={instanceId}
@@ -314,21 +337,33 @@ function Row({
   revise,
   liveActivity,
   now,
+  index,
+  onOpenStep,
 }: {
   rows: OverviewRow[];
   approve: (id: string) => Promise<unknown>;
   revise: (id: string, note?: string) => Promise<unknown>;
   liveActivity: Map<string, LiveActivity>;
   now: number;
+  /** Position in the board, for the entrance stagger. */
+  index: number;
+  onOpenStep: (selection: StepSelection) => void;
 }) {
   const first = rows[0];
   const multi = rows.length > 1;
   return (
-    <article className="rounded-tile border border-line bg-gradient-to-b from-surface-2 to-surface px-4 py-3.5">
-      <div className="flex items-center gap-3">
-        <span className="min-w-0 break-words text-[15px] font-extrabold tracking-[0.02em] text-ink">
-          {first.name}
-        </span>
+    <article
+      // Staggered so the board reads as assembling top-down rather than
+      // flashing in all at once; capped in `staggerDelay` so a long board still
+      // finishes fast.
+      style={{ animationDelay: staggerDelay(index) }}
+      className="rounded-tile border border-line bg-gradient-to-b from-surface-2 to-surface px-4 py-3.5 motion-safe:animate-[slide-up_var(--duration-base)_var(--ease-out-expo)_both]"
+    >
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        {/* `break-words` here used to hyphenate the pipeline name one letter per
+            line once the row ran out of space on a phone. Wrapping the row
+            instead keeps the name intact. */}
+        <span className="text-[15px] font-extrabold tracking-[0.02em] text-ink">{first.name}</span>
         <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint">
           {first.phases.length} phases
         </span>
@@ -361,61 +396,70 @@ function Row({
           </>
         )}
       </div>
-      {/* Every phase must be visible at once: equal-width columns share the
-          row, shrinking and word-wrapping instead of scrolling horizontally.
-          One flat grid per card keeps every instance's tiles under the same
-          shared phase headers, so titles render once and columns stay aligned. */}
-      <div
-        className="mt-3.5 grid gap-x-3.5 gap-y-2.5 pb-1"
-        style={{ gridTemplateColumns: `repeat(${first.phases.length}, minmax(0, 1fr))` }}
-      >
-        {first.phases.map((pill, i) => (
-          <PhaseHeader key={pill.id} pill={pill} index={i} />
-        ))}
-        {first.phases.map((pill) => (
-          <div key={pill.id} className="h-[2px] rounded-full bg-line" />
-        ))}
-        {rows.map((row, rowIndex) => (
-          <Fragment key={row.instanceId ?? row.pipelineId}>
-            {multi && (
-              <div
-                className={`col-span-full flex items-center gap-3 ${
-                  rowIndex > 0 ? "mt-1 border-t border-line pt-2.5" : ""
-                }`}
-              >
-                <span className="font-mono text-[10px] text-ink-faint">
-                  #{row.instanceLabel ?? row.instanceId}
-                </span>
-                <StatusPill status={row.badge} size="sm" />
-                {row.cost && (
-                  <Meter
-                    level="row"
-                    tokens={row.cost.tokens}
-                    usd={row.cost.usd}
-                    title="Total tokens and dollar cost of the latest run, including revised attempts"
-                  />
-                )}
-                <span className="ml-auto font-mono text-[10px]">
-                  <TimeAgo iso={row.updatedAt} />
-                </span>
-              </div>
-            )}
-            {row.phases.map((pill) => (
-              <PhaseCell
-                key={pill.id}
-                pill={pill}
-                instanceId={row.instanceId}
-                gate={row.gate}
-                approve={approve}
-                revise={revise}
-                reviseLabel={row.failure?.kind === "restarted" ? "Retry" : "Revise"}
-                liveActivity={liveActivity}
-                now={now}
-                rowModel={row.model}
-              />
-            ))}
-          </Fragment>
-        ))}
+      {/* One flat grid per card keeps every instance's tiles under the same
+          shared phase headers, so titles render once and columns stay aligned.
+          Columns share the row equally *until* a column would fall below 200px,
+          at which point the card scrolls horizontally instead. The old
+          `minmax(0, 1fr)` had no floor, so a 4-phase board on a 390px phone gave
+          each phase ~60px and rendered its title one letter per line. Every
+          phase still fits at any desktop width; below that, a Kanban-style
+          scroll beats an illegible one. */}
+      <div className="-mx-1 overflow-x-auto px-1">
+        <div
+          className="mt-3.5 grid min-w-full gap-x-3.5 gap-y-2.5 pb-1"
+          style={{ gridTemplateColumns: `repeat(${first.phases.length}, minmax(200px, 1fr))` }}
+        >
+          {first.phases.map((pill, i) => (
+            <PhaseHeader key={pill.id} pill={pill} index={i} />
+          ))}
+          {first.phases.map((pill) => (
+            <div key={pill.id} className="h-[2px] rounded-full bg-line" />
+          ))}
+          {rows.map((row, rowIndex) => (
+            <Fragment key={row.instanceId ?? row.pipelineId}>
+              {multi && (
+                <div
+                  className={`col-span-full flex items-center gap-3 ${
+                    rowIndex > 0 ? "mt-1 border-t border-line pt-2.5" : ""
+                  }`}
+                >
+                  <span className="font-mono text-[10px] text-ink-faint">
+                    #{row.instanceLabel ?? row.instanceId}
+                  </span>
+                  <StatusPill status={row.badge} size="sm" />
+                  {row.cost && (
+                    <Meter
+                      level="row"
+                      tokens={row.cost.tokens}
+                      usd={row.cost.usd}
+                      title="Total tokens and dollar cost of the latest run, including revised attempts"
+                    />
+                  )}
+                  <span className="ml-auto font-mono text-[10px]">
+                    <TimeAgo iso={row.updatedAt} />
+                  </span>
+                </div>
+              )}
+              {row.phases.map((pill) => (
+                <PhaseCell
+                  key={pill.id}
+                  pill={pill}
+                  instanceId={row.instanceId}
+                  gate={row.gate}
+                  approve={approve}
+                  revise={revise}
+                  reviseLabel={row.failure?.kind === "restarted" ? "Retry" : "Revise"}
+                  liveActivity={liveActivity}
+                  now={now}
+                  rowModel={row.model}
+                  onOpenStep={(step, phaseName, reason) =>
+                    onOpenStep({ step, pipelineName: row.name, phaseName, reason })
+                  }
+                />
+              ))}
+            </Fragment>
+          ))}
+        </div>
       </div>
     </article>
   );
@@ -484,6 +528,9 @@ function BoardTotal({
 export default function CommandCenter() {
   const { overview, loading, error, approve, revise } = useOverview();
   const { totals, reset } = useTotals();
+  const { situation, loading: situationLoading } = useInsight();
+  const { runs, loading: runsLoading, cancelRun } = useRuns();
+  const [selected, setSelected] = useState<StepSelection | null>(null);
   const rows = useMemo(() => overview.flatMap(toOverviewRows), [overview]);
   // One card per pipeline: concurrent instances of the same pipeline share a
   // card and contribute a phase grid each.
@@ -502,20 +549,27 @@ export default function CommandCenter() {
     () => rows.some((r) => r.phases.some((p) => p.steps.some((s) => s.status === "working"))),
     [rows],
   );
-  const now = useNow(anyWorking);
+  // One clock for every running tile; idle boards do not tick.
+  const now = useTicker(anyWorking);
 
   return (
     <Page wide title="Command Center" actions={<BoardTotal totals={totals} reset={reset} />}>
       <div aria-live="polite" role="status" className="sr-only">
         {announcement}
       </div>
+      <SituationStrip situation={situation} loading={situationLoading} />
       {error && (
         <div className="mb-6 rounded-tile border border-fail/30 bg-fail/10 px-4 py-3 text-sm text-fail">
           Couldn't reach the Argus server: {error}
         </div>
       )}
       {loading ? (
-        <p className="text-ink-faint">Loading pipelines…</p>
+        <Loading label="the board">
+          <div className="flex flex-col gap-3">
+            <SkeletonBoardCard phases={4} />
+            <SkeletonBoardCard phases={3} />
+          </div>
+        </Loading>
       ) : rows.length === 0 ? (
         <EmptyState>
           No pipelines defined yet. Create one in the{" "}
@@ -525,19 +579,28 @@ export default function CommandCenter() {
           tab.
         </EmptyState>
       ) : (
-        <div className="flex flex-col gap-3">
-          {groups.map((group) => (
-            <Row
-              key={group[0].pipelineId}
-              rows={group}
-              approve={approve}
-              revise={revise}
-              liveActivity={liveActivity}
-              now={now}
-            />
-          ))}
+        // The rail sits beside the board on a wide display and below it on a
+        // narrow one — the board needs the horizontal room more than the rail
+        // does, so the rail is what moves.
+        <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="flex min-w-0 flex-col gap-3">
+            {groups.map((group, i) => (
+              <Row
+                key={group[0].pipelineId}
+                index={i}
+                rows={group}
+                approve={approve}
+                revise={revise}
+                liveActivity={liveActivity}
+                now={now}
+                onOpenStep={setSelected}
+              />
+            ))}
+          </div>
+          <ActivityRail rows={rows} liveActivity={liveActivity} runs={runs} loading={runsLoading} />
         </div>
       )}
+      <StepDrawer selection={selected} onClose={() => setSelected(null)} onCancelRun={cancelRun} />
     </Page>
   );
 }

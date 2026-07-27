@@ -3,13 +3,9 @@ import { atomicWriteJson } from "./atomicWrite.js";
 import { recordRunSpend } from "./budget.js";
 import { readJson } from "./readJson.js";
 import { readRun, patchRun } from "./runs.js";
+import type { Totals } from "@argus/contracts";
 
-export interface Totals {
-  usd: number;
-  tokens: number;
-  runsCounted: number;
-  since: string;
-}
+export type { Totals } from "@argus/contracts";
 
 function zero(now: () => Date): Totals {
   return { usd: 0, tokens: 0, runsCounted: 0, since: now().toISOString() };

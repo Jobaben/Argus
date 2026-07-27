@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ToastItem } from "../ds/Toast";
+import { logNotification } from "./notificationLog";
 
 const TOAST_TTL_MS = 8000;
 const MAX_TOASTS = 4;
@@ -9,10 +10,14 @@ const MAX_TOASTS = 4;
  * auto-dismiss after a TTL, timers cleaned on unmount. Sources (agent
  * transitions, monitor alerts) decide *what* to toast; this owns *how* toasts
  * live and die so the behavior stays identical across sources.
+ *
+ * Every push is also appended to the notification log. Doing it here rather
+ * than in each source means the log cannot fall behind the toasts: anything
+ * worth interrupting someone for is, by construction, worth recording.
  */
 export function useToastQueue(): {
   toasts: ToastItem[];
-  push: (toast: Omit<ToastItem, "id"> & { key: string }) => void;
+  push: (toast: Omit<ToastItem, "id"> & { key: string; href?: string }) => void;
   dismiss: (id: string) => void;
 } {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
@@ -29,9 +34,10 @@ export function useToastQueue(): {
   }, []);
 
   const push = useCallback(
-    ({ key, ...toast }: Omit<ToastItem, "id"> & { key: string }) => {
+    ({ key, href, ...toast }: Omit<ToastItem, "id"> & { key: string; href?: string }) => {
       const id = `${key}:${seqRef.current++}`;
       setToasts((ts) => [...ts, { ...toast, id }].slice(-MAX_TOASTS));
+      logNotification({ tone: toast.tone, title: toast.title, detail: toast.detail, href });
       timers.current.set(
         id,
         setTimeout(() => dismiss(id), TOAST_TTL_MS),

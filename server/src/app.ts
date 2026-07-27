@@ -14,7 +14,7 @@ import { readProjects } from "./sources/projects.js";
 import { readStats } from "./sources/stats.js";
 import { readInventory } from "./sources/inventory.js";
 import { readTasks } from "./sources/tasks.js";
-import { searchTranscripts } from "./sources/search.js";
+import { SEARCH_LIMIT, searchTranscripts } from "./sources/search.js";
 import { readCron } from "./sources/cron.js";
 import { buildChronicle } from "./sources/chronicle.js";
 import {
@@ -64,6 +64,8 @@ import {
   validateBudgetPatch,
 } from "./sources/budget.js";
 import { buildOverview } from "./sources/overview.js";
+import { buildPalette } from "./sources/palette.js";
+import { buildSituation } from "./sources/insight.js";
 import { PreflightError, type Engine } from "./pipelineEngine.js";
 import type { PipelineSignal } from "./sources/pipelineTypes.js";
 import type { ActivityEvent } from "./runTailer.js";
@@ -71,6 +73,9 @@ import { defaultSpawn, fireOneOff, fireRun, isAlive } from "./scheduler.js";
 import { LaunchValidationError, validateLaunchInput } from "./sources/launch.js";
 import type { ArgusConfig } from "./config.js";
 import { securityMiddleware } from "./security.js";
+import { conditionalGet } from "./httpCache.js";
+import { requestLog } from "./requestLog.js";
+import { log } from "./log.js";
 import { setCookie, deleteCookie } from "hono/cookie";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import {
@@ -159,7 +164,12 @@ export function createApp(deps: AppDeps): Hono {
     );
   }
 
+  // Order matters: the request id must exist before anything can log with it,
+  // and the ETag layer wraps the handler's body, so it sits inside the security
+  // gate (a rejected request never gets a tag) but outside every route.
+  app.use("/api/*", requestLog());
   app.use("/api/*", securityMiddleware(config));
+  app.use("/api/*", conditionalGet());
 
   app.get("/api/health", (c) =>
     c.json({ ok: true, version: VERSION, claudeHome: claudeHome(), service: "argus" }),
@@ -382,9 +392,12 @@ export function createApp(deps: AppDeps): Hono {
 
   app.get("/api/inventory", async (c) => c.json(await readInventory()));
   app.get("/api/tasks", async (c) => c.json({ tasks: await readTasks() }));
-  app.get("/api/search", async (c) =>
-    c.json({ results: await searchTranscripts(c.req.query("q") ?? "") }),
-  );
+  // The scan stops at SEARCH_LIMIT, so the response says so rather than letting
+  // a ceiling be read as a count.
+  app.get("/api/search", async (c) => {
+    const results = await searchTranscripts(c.req.query("q") ?? "");
+    return c.json({ results, limit: SEARCH_LIMIT, truncated: results.length >= SEARCH_LIMIT });
+  });
   app.get("/api/cron", async (c) => c.json(await readCron()));
 
   // Cross-source timeline: runs + agents + sessions as packed swimlanes.
@@ -642,6 +655,82 @@ export function createApp(deps: AppDeps): Hono {
     return c.json({ overview: buildOverview(defs, insts, runs, deps.activity?.()) });
   });
 
+  // The board's situation strip: counts, spend against the budget, what fires
+  // next, and a 24h throughput sparkline. All derived from the shared caches.
+  app.get("/api/insight", async (c) => {
+    const now = new Date();
+    const [runs, instances, pipelines, schedules, triage, agents, config, ledger] =
+      await Promise.all([
+        readRuns(),
+        readInstances(),
+        readPipelines(),
+        readSchedulesWithNext(now),
+        readTriage(),
+        readAgents(),
+        readBudgetConfig(),
+        readSpendLedger(),
+      ]);
+    const { monitors } = buildMonitors(schedules, runs, now);
+    return c.json(
+      buildSituation(
+        {
+          runs,
+          instances,
+          pipelines,
+          schedules,
+          monitors,
+          issues: buildIssues(runs, triage),
+          agents,
+          budget: buildBudgetStatus(config, ledger, now),
+        },
+        now,
+      ),
+    );
+  });
+
+  // The command palette's search index: one request instead of the seven view
+  // payloads the client would otherwise join by hand. Every read below is
+  // already served from the shared caches, so this costs little more than the
+  // busiest single view.
+  app.get("/api/palette", async (c) => {
+    const now = new Date();
+    const [defs, instances, schedules, runs, triage, agents, projects, sessions] =
+      await Promise.all([
+        readPipelines(),
+        readInstances(),
+        readSchedulesWithNext(now),
+        readRuns(),
+        readTriage(),
+        readAgents(),
+        readProjects(),
+        readSessions(),
+      ]);
+    const { monitors } = buildMonitors(schedules, runs, now);
+    const issues = buildIssues(runs, triage);
+    // Newest instance per pipeline — the one whose badge and gate the palette
+    // should reflect.
+    const latestByPipeline = new Map<string, (typeof instances)[number]>();
+    for (const inst of instances) {
+      const seen = latestByPipeline.get(inst.pipelineId);
+      if (!seen || inst.createdAt > seen.createdAt) latestByPipeline.set(inst.pipelineId, inst);
+    }
+    return c.json(
+      buildPalette(
+        {
+          pipelines: defs,
+          latestByPipeline,
+          schedules,
+          monitors,
+          issues,
+          agents,
+          projects,
+          sessions,
+        },
+        now,
+      ),
+    );
+  });
+
   app.get("/api/instances/:id", async (c) => {
     const inst = await readInstance(c.req.param("id"));
     return inst ? c.json(inst) : c.json({ error: "not found" }, 404);
@@ -687,7 +776,10 @@ export function createApp(deps: AppDeps): Hono {
   if (deps.serveWeb !== false) mountWebApp(app);
 
   app.onError((err, c) => {
-    console.error(`[argus] ${c.req.method} ${c.req.path} failed:`, err);
+    // Prefer the request-scoped logger so the line carries the same reqId the
+    // client saw in its response header.
+    const logger = c.get("log") ?? log;
+    logger.error("unhandled route error", { method: c.req.method, path: c.req.path, err });
     return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
   });
   app.notFound((c) => c.json({ error: "not found" }, 404));

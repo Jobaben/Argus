@@ -93,4 +93,47 @@ describe("Budget", () => {
     expect(screen.getByText("over budget")).toBeInTheDocument();
     expect(screen.getByText(/\$2\.00 over/)).toBeInTheDocument();
   });
+
+  it("projects the month and names the day a limit would be crossed", () => {
+    // Whether the current rate clears the ceiling is the question the page is
+    // opened to answer; it used to be arithmetic over a 30-bar chart.
+    mockState.budget = response({
+      // Deliberately far past the pace, so the crossing day lands inside the
+      // month whatever today's date is — the projection is date-dependent and
+      // the assertion must not be.
+      config: { dailyUsd: null, monthlyUsd: 5, blockScheduled: false, updatedAt: null },
+      status: {
+        state: "exceeded",
+        today: { spentUsd: 2, limitUsd: null, ratio: null },
+        month: { spentUsd: 40, limitUsd: 5, ratio: 8 },
+        blockScheduled: false,
+      },
+    });
+    render(<Budget />);
+    expect(screen.getByText(/On course for/)).toBeInTheDocument();
+    expect(screen.getByText(/limit reached around/)).toBeInTheDocument();
+  });
+
+  it("says nothing about a month with no spend to project from", () => {
+    mockState.budget = response({
+      status: {
+        state: "ok",
+        today: { spentUsd: 0, limitUsd: 10, ratio: 0 },
+        month: { spentUsd: 0, limitUsd: 50, ratio: 0 },
+        blockScheduled: false,
+      },
+    });
+    render(<Budget />);
+    expect(screen.queryByText(/On course for/)).toBeNull();
+  });
+
+  it("marks the days that broke the daily limit", () => {
+    mockState.budget = response({
+      config: { dailyUsd: 5, monthlyUsd: null, blockScheduled: false, updatedAt: null },
+    });
+    render(<Budget />);
+    // One of the two ledger days spent $8.50 against a $5 ceiling.
+    expect(screen.getByText("1 day over the daily limit")).toBeInTheDocument();
+    expect(screen.getByTitle(/2026-07-13 .* over the daily limit/)).toBeInTheDocument();
+  });
 });

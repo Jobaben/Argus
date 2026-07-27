@@ -53,6 +53,22 @@ test("searchTranscripts: honors the result limit", async () => {
   assert.equal(results.length, 2);
 });
 
+test("SEARCH_LIMIT is the exported cap the route reports, not a private constant", async () => {
+  // The route has to tell the client which ceiling it applied, or "100 matches"
+  // reads as a count when it is a limit.
+  const { SEARCH_LIMIT, searchTranscripts } = await load("search");
+  assert.equal(typeof SEARCH_LIMIT, "number");
+  assert.ok(SEARCH_LIMIT > 0);
+
+  const lines = Array.from({ length: SEARCH_LIMIT + 5 }, (_, i) => ({
+    type: "user",
+    message: { role: "user", content: `needle ${i}` },
+  }));
+  seedTranscript("-p", "s1", lines);
+  const results = await searchTranscripts("needle");
+  assert.equal(results.length, SEARCH_LIMIT, "the default scan stops at the cap");
+});
+
 test("searchTranscripts: newest transcripts rank first", async () => {
   // "a-old" sorts first alphabetically; only mtime ordering puts "b-new" first.
   seedTranscript("-p", "a-old", [

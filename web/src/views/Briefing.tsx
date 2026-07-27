@@ -1,4 +1,15 @@
-import { Card, EmptyState, Page, Section, TimeAgo, formatTokens, formatUsd } from "../ds";
+import {
+  Card,
+  EmptyState,
+  Loading,
+  Page,
+  Section,
+  SkeletonGrid,
+  SkeletonText,
+  TimeAgo,
+  formatTokens,
+  formatUsd,
+} from "../ds";
 import type { AttentionKind, Briefing as BriefingData, RunStatus } from "../types";
 
 /** Where each attention kind sends the user to act on it. */
@@ -22,6 +33,13 @@ const STATUS_ORDER: { key: RunStatus; label: string; className: string }[] = [
   { key: "skipped", label: "skipped", className: "text-idle" },
   { key: "running", label: "still running", className: "text-run" },
 ];
+
+/** Where a failed run's row goes: its transcript when it has one, else Issues. */
+function failureHref(run: BriefingData["window"]["failures"][number]): string {
+  return run.sessionId && run.project
+    ? `#/sessions/${encodeURIComponent(run.project)}/${encodeURIComponent(run.sessionId)}`
+    : "#/issues";
+}
 
 function AttentionCard({ item }: { item: BriefingData["attention"][number] }) {
   const meta = KIND_META[item.kind];
@@ -82,7 +100,10 @@ export default function Briefing({
       )}
 
       {loading && briefing == null ? (
-        <p className="text-ink-faint">Assembling your briefing…</p>
+        <Loading label="your briefing">
+          <SkeletonText lines={1} className="mb-6 max-w-sm" />
+          <SkeletonGrid count={4} columns={2} lines={2} />
+        </Loading>
       ) : briefing == null ? null : (
         <>
           <p className="mb-6 text-sm text-ink-dim">
@@ -145,20 +166,27 @@ export default function Briefing({
               {briefing.window.failures.length > 0 && (
                 <Section title="Failures">
                   <div className="flex flex-col gap-2">
+                    {/* Every other row on this page is a link to the thing it
+                        describes; these were not, which made the most actionable
+                        list here the only dead one. A failed run's transcript is
+                        where you find out why, so that is the destination when
+                        there is one; Issues, which groups it, is the fallback. */}
                     {briefing.window.failures.map((r) => (
-                      <Card key={r.id}>
-                        <div className="flex items-center gap-3 text-sm">
-                          <span className="font-semibold text-ink">{r.scheduleName}</span>
-                          <span className="truncate text-ink-dim" title={r.error ?? undefined}>
-                            {(r.error ?? r.resultSummary ?? "failed").split("\n")[0]}
-                          </span>
-                          {(r.endedAt ?? r.startedAt) && (
-                            <span className="ml-auto shrink-0 text-xs text-ink-faint">
-                              <TimeAgo iso={(r.endedAt ?? r.startedAt)!} />
+                      <a key={r.id} href={failureHref(r)} className="block">
+                        <Card>
+                          <div className="flex items-center gap-3 text-sm">
+                            <span className="font-semibold text-ink">{r.scheduleName}</span>
+                            <span className="truncate text-ink-dim" title={r.error ?? undefined}>
+                              {(r.error ?? r.resultSummary ?? "failed").split("\n")[0]}
                             </span>
-                          )}
-                        </div>
-                      </Card>
+                            {(r.endedAt ?? r.startedAt) && (
+                              <span className="ml-auto shrink-0 text-xs text-ink-faint">
+                                <TimeAgo iso={(r.endedAt ?? r.startedAt)!} />
+                              </span>
+                            )}
+                          </div>
+                        </Card>
+                      </a>
                     ))}
                   </div>
                 </Section>

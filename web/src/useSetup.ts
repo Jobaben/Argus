@@ -1,12 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-export interface PrereqResult {
-  id: string;
-  label: string;
-  status: "ok" | "missing" | "outdated" | "error";
-  fixable: boolean;
-  detail?: string;
-}
+import type { PrereqResult } from "@argus/contracts";
+
+export type { PrereqResult };
 
 interface SetupState {
   ok: boolean;

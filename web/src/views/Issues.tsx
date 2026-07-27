@@ -1,5 +1,14 @@
 import { useState } from "react";
-import { AlertStrip, Card, EmptyState, HealthCounter, Page, TimeAgo } from "../ds";
+import {
+  AlertStrip,
+  Card,
+  EmptyState,
+  HealthCounter,
+  Loading,
+  Page,
+  SkeletonRows,
+  TimeAgo,
+} from "../ds";
 import { useIssues } from "../useIssues";
 import type { Issue, IssueOccurrence, IssueState } from "../types";
 
@@ -118,7 +127,11 @@ function IssueCard({
         (failed ? (
           <p className="mt-3 text-xs text-fail">Couldn't load occurrences: {failed}</p>
         ) : occurrences === null ? (
-          <p className="mt-3 text-xs text-ink-faint">Loading occurrences…</p>
+          <Loading label="occurrences">
+            <div className="mt-3">
+              <SkeletonRows count={2} />
+            </div>
+          </Loading>
         ) : (
           <Occurrences list={occurrences} />
         ))}
@@ -129,6 +142,14 @@ function IssueCard({
 export default function Issues() {
   const { issues, summary, loading, error, triage, loadOccurrences } = useIssues();
   const [triageError, setTriageError] = useState<string | null>(null);
+  const [filter, setFilter] = useState<IssueState | null>(null);
+  const shown = filter === null ? issues : issues.filter((i) => i.state === filter);
+
+  const counters: { state: IssueState; label: string; tone?: "fail" | "live" }[] = [
+    { state: "open", label: "Open", tone: summary.open > 0 ? "fail" : undefined },
+    { state: "ignored", label: "Ignored" },
+    { state: "resolved", label: "Resolved", tone: "live" },
+  ];
 
   const onTriage = async (fp: string, action: "resolve" | "ignore" | "reopen") => {
     try {
@@ -146,9 +167,19 @@ export default function Issues() {
       </p>
 
       <section className="mb-8 grid grid-cols-3 gap-3 sm:max-w-md">
-        <HealthCounter label="Open" value={summary.open} tone={summary.open ? "fail" : undefined} />
-        <HealthCounter label="Ignored" value={summary.ignored} />
-        <HealthCounter label="Resolved" value={summary.resolved} tone="live" />
+        {counters.map(({ state, label, tone }) => (
+          <HealthCounter
+            key={state}
+            label={label}
+            value={summary[state]}
+            tone={tone}
+            selected={filter === state}
+            onClick={
+              summary[state] > 0 ? () => setFilter(filter === state ? null : state) : undefined
+            }
+            title={summary[state] > 0 ? `Show only the ${label.toLowerCase()} issues` : undefined}
+          />
+        ))}
       </section>
 
       {error && (
@@ -162,13 +193,37 @@ export default function Issues() {
         </div>
       )}
 
-      {loading ? (
-        <p className="text-ink-faint">Loading issues…</p>
+      {filter !== null && (
+        <div className="mb-4 flex items-center gap-3 text-xs text-ink-faint">
+          <span>
+            Showing {shown.length} {filter} of {issues.length}
+          </span>
+          <button
+            type="button"
+            onClick={() => setFilter(null)}
+            className="text-queue underline hover:text-ink"
+          >
+            Show all
+          </button>
+        </div>
+      )}
+
+      {loading && issues.length === 0 ? (
+        <Loading label="issues">
+          <SkeletonRows count={4} />
+        </Loading>
       ) : issues.length === 0 ? (
-        <EmptyState>No failures on record. When scheduled runs fail, they group here.</EmptyState>
+        <EmptyState>
+          <p className="text-sm text-ink-dim">No failures on record.</p>
+          <p className="mx-auto mt-2 max-w-md text-xs">
+            When a scheduled run fails, Argus fingerprints its error and groups every recurrence
+            under one issue — so twenty timeouts are one thing to fix, with the first and last
+            sighting and every affected schedule attached.
+          </p>
+        </EmptyState>
       ) : (
         <div className="space-y-4">
-          {issues.map((i) => (
+          {shown.map((i) => (
             <IssueCard
               key={i.fingerprint}
               issue={i}

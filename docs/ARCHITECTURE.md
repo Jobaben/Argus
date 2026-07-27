@@ -50,25 +50,51 @@ instead. See docs/API.md § Admin authentication.
 
 ## 2. Workspaces
 
-| Workspace | Runtime                         | Responsibility                                               |
-| --------- | ------------------------------- | ------------------------------------------------------------ |
-| `server/` | Node 22 + TS (tsx)              | Read `~/.claude`, expose REST + WebSocket, watch for changes |
-| `web/`    | Vite 8 + React 19 + Tailwind v4 | Tabbed dashboard, live refresh                               |
+| Workspace    | Runtime                         | Responsibility                                               |
+| ------------ | ------------------------------- | ------------------------------------------------------------ |
+| `contracts/` | Types only, no runtime          | Every DTO that crosses the HTTP/WS boundary, declared once   |
+| `server/`    | Node 22 + TS (tsx)              | Read `~/.claude`, expose REST + WebSocket, watch for changes |
+| `web/`       | Vite 8 + React 19 + Tailwind v4 | Tabbed dashboard, live refresh                               |
 
 Dev: `npm run dev` → server `:7777`, web `:5757` (Vite proxies `/api` and `/ws`
 to the server). One command, two processes via `concurrently`.
+
+### The contract workspace
+
+`@argus/contracts` holds every boundary-crossing shape — agents, schedules and
+runs, pipelines and instances, monitors, issues, budget, chronicle, briefing,
+the palette index, the situation strip, and the WebSocket frame union. Both other
+workspaces import it, so a producer change that breaks a consumer fails
+`npm run typecheck` instead of drifting silently. Before it existed the same ~25
+DTOs were declared twice, and nothing forced the copies to agree.
+
+It is **types-only** by construction: every export erases at compile time, so
+there is no build step, no runtime dependency, and nothing for the server's
+compiled `dist/` to resolve. `scripts/check-contracts-runtime.mjs` compiles the
+package for real and fails CI if any file emits runtime code — which is also why
+its `index.ts` spells out `export type` instead of `export *`.
+
+Server-internal shapes stay in `server/src`: on-disk file formats (`JobState`,
+`SpendLedger`, `TriageRecord`), engine state, and validation inputs are not
+contracts, because the web cannot observe them.
 
 ## 3. Server layering (SOLID)
 
 ```
 src/
   claudeHome.ts        — single source of truth for path resolution
+  log.ts               — one structured logger (text or JSON lines)
+  httpCache.ts         — ETag / If-None-Match for every read
+  requestLog.ts        — per-request id + timing, as a Hono middleware
   sources/             — one module per data domain (SRP)
     readJson.ts        — readJson / readJsonl primitives (DRY)
-    types.ts           — shared domain types
+    types.ts           — re-exports the agent contract + the on-disk JobState
     jobs.ts daemon.ts sessions.ts history.ts projects.ts
     stats.ts inventory.ts tasks.ts search.ts cron.ts
+    insight.ts         — the board situation (derived)
+    palette.ts         — the command palette index (derived)
   watch.ts             — chokidar → debounced change callback
+  app.ts               — the Hono app factory (testable, no side effects)
   index.ts             — composition root: wires sources to routes + ws
 ```
 
@@ -90,16 +116,40 @@ embedded path. Path splitting tolerates both separators: `split(/[\\/]/)`.
 
 ## 4. Live update protocol
 
-`watch.ts` watches `jobs/`, `daemon/roster.json`, `daemon.status.json` (and, as
-features land, `history.jsonl` / `projects/`). Changes are **debounced ~150ms**
-and emit a single `{type:"agents:changed"}` frame over `/ws`. The client treats
-the socket as a _dumb tap_: a frame means "something changed, re-fetch" — the
-server stays the single source of truth and payloads never diverge from a fresh
-`GET`. A 10s polling fallback keeps the UI correct if the socket drops, with
-auto-reconnect (2s backoff).
+`watch.ts` watches `jobs/`, `daemon/roster.json`, `daemon.status.json`,
+`history.jsonl` and `projects/`. Changes are **debounced ~150ms** and emit a
+single change frame over `/ws`. The client treats the socket as a _dumb tap_: a
+frame means "something changed, re-fetch" — the server stays the single source of
+truth and payloads never diverge from a fresh `GET`. A polling fallback keeps the
+UI correct while the socket is down.
 
 This "ping, then re-fetch" design (vs. pushing diffs) is deliberate: it keeps the
-server stateless per-connection and makes every view trivially correct.
+server stateless per-connection and makes every view trivially correct. Three
+things make it cheap enough to lean on:
+
+1. **Conditional GETs.** Every read carries a strong `ETag`; the next fetch sends
+   it back as `If-None-Match`. A broadcast that did not actually change _this_
+   resource returns `304` with no body, and the client skips its state update —
+   so a no-op ping costs a ~100-byte round trip and zero re-renders. (Getting to
+   _actually_ zero required one subtlety: React still renders a component once
+   before bailing out of a same-value `setState`, so the 304 path is not allowed
+   to touch state at all, not even to re-clear an already-null error.)
+2. **Single-flight coalescing.** The engine emits a frame per step transition. A
+   fetch per frame let an older response land after a newer one and win; an
+   in-flight request now absorbs the burst and re-runs exactly once after it
+   settles.
+3. **Jittered backoff, both layers.** Failed fetches and dropped sockets both
+   double to a 30s ceiling with jitter rather than retrying in lockstep forever,
+   and the socket reconnects immediately on tab-visible or browser-online — so
+   the long tail of the backoff is never what the user waits on. While a fetch is
+   failing the last good value stays on screen, marked stale, rather than being
+   blanked.
+
+Two frame types carry payloads because they cannot be re-derived from a `GET`:
+alert transitions (which exist only at the instant they happen) and run-activity
+tail deltas. Payload validation lives in one place in the client socket, so a
+truncated batch is dropped rather than rendering as `undefined` deep in a view,
+while an unrecognised frame _type_ is still forwarded for forward compatibility.
 
 ## 5. Data sources map
 
@@ -114,6 +164,31 @@ server stateless per-connection and makes every view trivially correct.
 | Inventory         | `agents/ commands/ skills/ plugins/`        | installed extensions (md frontmatter)                                              |
 | Tasks             | `tasks/<uuid>/`                             | `.highwatermark`, `.lock`                                                          |
 | Cron              | — (not on disk)                             | session-scoped; see §6                                                             |
+
+### Reading a directory of records, cheaply
+
+Runs and pipeline instances are each a directory of small JSON files, and nearly
+every route touches one or both. Three layers keep that affordable, in increasing
+order of subtlety:
+
+1. **A short-TTL single-flight scan cache** (1500ms, keyed by directory). One
+   broadcast makes six routes call `readRuns()` within milliseconds; they share
+   one scan. The TTL is what bounds staleness from writes Argus did not make.
+2. **An mtime-keyed parse memo** (`sources/fileMemo.ts`), so an unchanged file
+   costs a `stat` rather than a read plus `JSON.parse`. Retention is by **scan
+   membership, not recency** — an LRU is the wrong policy here, because a
+   full-directory scan touches every file once in order and therefore evicts each
+   entry just before the next scan wants it. Memory is bounded by what pruning
+   leaves on disk; the ceiling is a runaway guard.
+3. **Write-patching.** A write updates the cached scan in place (re-reading only
+   the file it changed) instead of dropping it. Without this, a running pipeline —
+   which writes on every step transition — forced every reader to re-stat the
+   whole directory between transitions. The patch deliberately does not refresh
+   the entry's timestamp, so it cannot extend the TTL window in which an external
+   edit goes unseen.
+
+Read-after-write stays exact throughout: the write's own patch (or, on a miss, an
+invalidation) lands before it returns.
 
 ## 6. The cron boundary (known limitation)
 
@@ -133,7 +208,35 @@ half-written `state.json` caught mid-flush simply yields the previous value on
 the next debounce tick. The dashboard surfaces server-unreachable as a banner,
 never a blank screen.
 
-## 8. Deployment shape
+## 8. Client architecture
+
+```
+web/src/
+  cmd/          — the command layer: palette, fuzzy ranking, keyboard map
+  ds/           — presentational primitives, skeletons, motion, the shared clock
+  live/         — one shared socket + one live-resource primitive
+  notify/       — toasts, native notifications, the session notification log
+  views/        — one file per route
+```
+
+Three rules hold it together:
+
+- **One socket, one fetch primitive.** Every view's data comes from
+  `useLiveResource`; nothing else opens a connection or owns a poll timer.
+- **One clock.** Relative timestamps read a single module-level clock through
+  `useSyncExternalStore` (quantised so the snapshot is stable between ticks)
+  rather than each computing `Date.now()` at render — which was both impure and
+  the reason "3m ago" never updated. `useTicker` is the per-second escape hatch
+  for countdowns and elapsed timers, and it stops when nothing is running.
+- **Failure is scoped.** Each route renders inside an error boundary keyed on the
+  route, so an unexpected shape in one view costs that view, not the nav, the
+  palette and every other tab.
+
+Every route except the landing one is a lazy chunk, and
+`scripts/check-bundle-size.mjs` holds the initial gzipped payload under a budget
+in CI.
+
+## 9. Deployment shape
 
 Single user, localhost. `npm run build` produces a static `web/dist` the server
 can serve directly (future: mount static + collapse to one port). OS-agnostic by

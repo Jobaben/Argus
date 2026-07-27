@@ -1,13 +1,9 @@
 import { useCallback } from "react";
 import { useLiveResource } from "./live/useLiveResource";
 
-export interface AuthStatus {
-  /** Whether any account exists (first-run bootstrap done). */
-  configured: boolean;
-  authenticated: boolean;
-  username: string | null;
-  role: "root" | "member" | null;
-}
+import type { AuthStatus } from "@argus/contracts";
+
+export type { AuthStatus };
 
 export async function postJson(path: string, body: unknown): Promise<void> {
   const res = await fetch(path, {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toOverviewRow, toOverviewRows } from "./overviewRow";
+import { toOverviewRow as mapRow, toOverviewRows as mapRows } from "./overviewRow";
 import type {
   OverviewEntry,
   PipelineDefinition,
@@ -7,6 +7,14 @@ import type {
   InstanceStatus,
   PhaseStatus,
 } from "../types";
+
+// The server always sends `cost` and `active`; these fixtures care about the
+// definition/instance shape only, so they are completed at the call boundary
+// rather than repeated in every literal below.
+type EntryFixture = Omit<OverviewEntry, "cost" | "active"> & Partial<OverviewEntry>;
+const complete = (e: EntryFixture): OverviewEntry => ({ cost: null, active: [], ...e });
+const toOverviewRow = (e: EntryFixture) => mapRow(complete(e));
+const toOverviewRows = (e: EntryFixture) => mapRows(complete(e));
 
 function failedInst(payload: unknown, stepStatuses: ("failed" | "succeeded")[]): PipelineInstance {
   return {
@@ -93,7 +101,7 @@ function inst(status: InstanceStatus, phaseStatuses: PhaseStatus[]): PipelineIns
 
 describe("toOverviewRow", () => {
   it("maps phase statuses to DsStatus pills", () => {
-    const entry: OverviewEntry = {
+    const entry: EntryFixture = {
       definition: def(),
       latest: inst("running", ["succeeded", "running"]),
     };

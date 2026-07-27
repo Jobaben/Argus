@@ -11,6 +11,41 @@ best-effort: a missing/unreadable source yields an empty collection, not a 500.
 - List endpoints return `{ <plural>: [...] }`; detail endpoints return the entity.
 - Identifiers: agents use the daemon `short`; sessions use `(project, sessionId)`
   where `project` is the encoded `projects/` dir name.
+- **Every shape here is declared once**, in the `@argus/contracts` workspace, and
+  imported by both the server that produces it and the web client that consumes
+  it. A field added or removed on one side fails `npm run typecheck` on the
+  other. Treat this document as prose _about_ those declarations, not as a second
+  source of truth.
+
+### Conditional reads (ETag)
+
+Every `200` JSON response to a `GET` carries a strong `ETag` and
+`Cache-Control: no-cache` (that is "you may store this, but revalidate before
+reuse" — never serve a monitoring payload from cache unasked). Send the tag back
+as `If-None-Match` and an unchanged resource answers `304` with no body:
+
+```
+$ curl -sD - -o /dev/null localhost:7777/api/agents | grep -i etag
+etag: "4jMRIzvVs_jHjFJll3LWvvqNwkP"
+
+$ curl -s -o /dev/null -w '%{http_code} %{size_download}\n' \
+    -H 'If-None-Match: "4jMRIzvVs_jHjFJll3LWvvqNwkP"' localhost:7777/api/agents
+304 0
+```
+
+This matters because Argus is push-driven: one `pipelines:changed` broadcast
+wakes several views at once, and most of those re-fetches find nothing changed.
+The web client keeps the tag per resource and skips its state update entirely on
+a `304`, so a no-op broadcast costs a ~100-byte round trip and zero re-renders.
+
+### Request ids
+
+Every response carries `x-request-id`. An inbound `x-request-id` is honoured (so
+a proxy's trace id wins), capped at 64 characters. Server-side log lines for the
+request — including anything the error boundary writes — carry the same id, so a
+UI report can be tied to the exact line. Successful reads log at `debug` (off by
+default); `4xx` logs at `warn`, `5xx` at `error`. `ARGUS_LOG_LEVEL` and
+`ARGUS_LOG_FORMAT=json` control the output.
 
 ## Core (v0.1)
 
@@ -61,15 +96,29 @@ Background jobs joined with daemon liveness, newest/live first.
 On connect: `{ "type": "hello" }`. On any watched change (debounced ~150ms) the
 server pushes one of `{ "type": "agents:changed" }`, `{ "type":
 "schedules:changed" }`, `{ "type": "pipelines:changed" }`, `{ "type":
-"budget:changed" }` (limits edited), or `{ "type": "inventory:changed" }`
+"issues:changed" }`, `{ "type": "briefing:changed" }`, `{ "type":
+"totals:changed" }`, `{ "type": "budget:changed" }` (limits edited),
+`{ "type": "sessions:changed" }`, or `{ "type": "inventory:changed" }`
 (installed extensions + usage stats). The client re-fetches the relevant
 list — change frames carry no payload by design (the server stays the single
 source of truth). The payload-carrying frames are
 `{ "type": "monitors:alert", "alert": … }` (see
-[Monitor alerts](#monitor-alerts)) and `{ "type": "budget:alert", "alert": … }`
-(see [Budget alerts](#budget-alerts)), which describe transient events rather
-than state. The upgrade is subject to the same host/origin/token checks as
-the REST surface.
+[Monitor alerts](#monitor-alerts)), `{ "type": "budget:alert", "alert": … }`
+(see [Budget alerts](#budget-alerts)) and
+`{ "type": "run:activity", "runId": …, "events": [...] }` (a tail delta from the
+run tailer) — all three describe transient events rather than state, so they
+cannot be re-derived from a `GET`. The frame union is declared in
+`@argus/contracts` (`LiveFrame`), so a renamed event breaks the build rather than
+silently failing to wake a view.
+
+The client validates the payload of the frames that carry one and drops a
+malformed batch, but forwards a frame _type_ it does not recognise — so a newer
+server can add frames without a client release.
+
+The upgrade is subject to the same host/origin/token checks as the REST surface.
+The client reconnects with exponential backoff (1s doubling to a 30s ceiling,
+jittered) and immediately when the tab becomes visible or the browser reports it
+is back online.
 
 ## Security
 
@@ -125,11 +174,31 @@ access is the trust root) and run first-time setup again.
 | `GET /api/stats`                 | usage aggregates from `stats-cache.json`                    |
 | `GET /api/inventory`             | installed agents / commands / skills / plugins              |
 | `GET /api/tasks`                 | task-queue directories                                      |
-| `GET /api/search?q=`             | substring matches across transcripts                        |
+| `GET /api/search?q=`             | `{ results, limit, truncated }` — see below                 |
 | `GET /api/cron`                  | `{ available: false, reason, howTo }` — see ARCHITECTURE §6 |
 | `GET /api/chronicle?hours=N`     | cross-source timeline (see below)                           |
 
 For exact DTO shapes see the corresponding `server/src/sources/*.ts` reader.
+
+### `GET /api/search?q=`
+
+Case-insensitive substring search over transcript message text, newest files
+first, stopping as soon as `limit` matches are found — so a common word never
+reads every transcript on disk.
+
+```json
+{
+  "results": [
+    { "project": "…", "projectLabel": "…", "sessionId": "…", "snippet": "…", "type": "assistant" }
+  ],
+  "limit": 100,
+  "truncated": true
+}
+```
+
+`truncated` is the point: the scan exits at the cap, so `results.length === limit`
+is a ceiling rather than a count, and a client that renders it as a count is
+lying. Argus's own UI says "first 100 matches — narrow the query" when it is set.
 
 ### `GET /api/chronicle?hours=N`
 
@@ -429,6 +498,86 @@ the web UI's setup banner installs the fixable ones with `POST /api/setup/apply`
 | --------------------------- | -------------------------------------------------------------- |
 | `ARGUS_STEP_NAME`           | label of the running step, injected into the run's environment |
 | `ARGUS_MAX_CONCURRENT_RUNS` | cap on concurrent `claude -p` processes (default 4)            |
+
+## Derived views
+
+Two endpoints exist purely to save the client from assembling something out of
+five other payloads. Both are pure derivations over state the server already
+reads — nothing extra is persisted for either.
+
+### `GET /api/insight`
+
+The Command Center's situation strip: what is in flight, what is blocked on a
+human, what it is costing, and what fires next.
+
+```json
+{
+  "generatedAt": "2026-07-07T10:30:00.000Z",
+  "counts": {
+    "runsInFlight": 1,
+    "gatesWaiting": 1,
+    "failedInstances": 0,
+    "monitorsDown": 0,
+    "monitorsFailing": 2,
+    "openIssues": 3,
+    "liveAgents": 2
+  },
+  "spend": {
+    "state": "ok",
+    "today": { "spentUsd": 3.5, "limitUsd": 25, "ratio": 0.14 },
+    "month": { "spentUsd": 80, "limitUsd": 400, "ratio": 0.2 }
+  },
+  "nextFire": {
+    "id": "sch_dep_audit",
+    "name": "Dependency audit",
+    "kind": "schedule",
+    "at": "2026-07-07T12:00:00.000Z"
+  },
+  "throughput": [{ "at": "2026-07-06T11:00:00.000Z", "succeeded": 2, "failed": 0 }]
+}
+```
+
+- `gatesWaiting` counts **instances**, not phases: an instance has one current
+  phase, so counting phases would double-count a re-run gate.
+- `nextFire` compares schedules (which arrive with `nextRun` computed) against
+  pipeline definitions (whose triggers are projected from the same anchor the
+  scheduler uses), so it agrees with what will actually fire.
+- `throughput` is always 24 hour-aligned buckets, oldest first. Fixed-length and
+  hour-aligned on purpose: a sparkline whose axis slides with the clock
+  flickers, and an empty hour is itself the signal.
+
+### `GET /api/palette`
+
+The command palette's search index — one request instead of the seven view
+payloads the client would otherwise join by hand. Deliberately lossy: enough to
+find a thing and go to it, never enough to render a view from.
+
+```json
+{
+  "generatedAt": "2026-07-07T10:30:00.000Z",
+  "entries": [
+    {
+      "kind": "pipeline",
+      "id": "pl_release_train",
+      "title": "Release train",
+      "subtitle": "4 phases · daily 23:00",
+      "href": "#/command",
+      "badge": "needs approval",
+      "severity": "warn",
+      "keywords": ["pl_release_train", "pipeline", "Gather changes"],
+      "gateInstanceId": "inst_release_1"
+    }
+  ]
+}
+```
+
+`kind` is one of `pipeline | schedule | monitor | issue | agent | project |
+session`. `severity` (`none | info | warn | error`) is presentation-neutral: the
+server knows a monitor is down, the client decides what red means. `keywords` are
+searchable but never rendered. `gateInstanceId` and `runnableScheduleId` are what
+let the palette offer an action rather than only a jump. Healthy monitors are
+omitted (their schedule row already represents them) and transcripts are capped,
+so the index cannot grow into a session list.
 
 ## Configuration
 

@@ -62,6 +62,30 @@ export function invalidate(key: string): void {
   entries.delete(key);
 }
 
+/**
+ * Rewrite a cached value in place, keeping its original timestamp. Returns false
+ * when the key is not cached, so the caller can fall back to a full reload.
+ *
+ * For a source whose writes happen in-process, dropping the key is correct but
+ * expensive: one changed instance made the next reader re-scan a directory of a
+ * thousand. Patching keeps the entry and derives the new value from the old one.
+ * The timestamp is deliberately *not* refreshed — the TTL still bounds staleness
+ * from changes Argus did not make, so a patch cannot extend the window in which
+ * an external edit goes unseen.
+ */
+export function patchCached<T>(key: string, patch: (value: T) => T): boolean {
+  const hit = entries.get(key) as Entry<T> | undefined;
+  if (!hit) return false;
+  const value = hit.value.then(patch);
+  entries.set(key, { at: hit.at, ttlMs: hit.ttlMs, value });
+  // Same rule as a failed load: a rejected value must not be cached for the rest
+  // of the TTL, and must not sit around as an unhandled rejection either.
+  void value.catch(() => {
+    if (entries.get(key)?.value === value) entries.delete(key);
+  });
+  return true;
+}
+
 export function invalidateCaches(): void {
   entries.clear();
 }

@@ -2,7 +2,17 @@ import { useEffect, useMemo, useState } from "react";
 import { useAgents } from "../useAgents";
 import { useTimeline } from "../useTimeline";
 import type { Agent, AgentStatus, TimelineEntry } from "../types";
-import { AlertStrip, EmptyState, Page, StatusPill, TimeAgo, toDsStatus } from "../ds";
+import {
+  AlertStrip,
+  EmptyState,
+  Loading,
+  Page,
+  SkeletonRows,
+  SkeletonTile,
+  StatusPill,
+  TimeAgo,
+  toDsStatus,
+} from "../ds";
 
 const DOT_STYLE: Record<AgentStatus, string> = {
   working: "bg-run ring-run/30",
@@ -198,7 +208,9 @@ export default function AgentDetail({ short: shortProp }: { short?: string } = {
       {agent ? (
         <AgentMeta agent={agent} />
       ) : agentsLoading ? (
-        <p className="text-ink-faint">Loading agent…</p>
+        <Loading label="the agent">
+          <SkeletonTile lines={3} />
+        </Loading>
       ) : (
         <div className="rounded-xl border border-line bg-surface p-4">
           <h2 className="text-lg font-semibold text-ink">Unknown agent</h2>
@@ -214,7 +226,9 @@ export default function AgentDetail({ short: shortProp }: { short?: string } = {
           Timeline
         </h3>
         {timelineLoading ? (
-          <p className="text-ink-faint">Loading timeline…</p>
+          <Loading label="the timeline">
+            <SkeletonRows count={4} />
+          </Loading>
         ) : ordered.length === 0 ? (
           <EmptyState>No timeline entries recorded for this agent yet.</EmptyState>
         ) : (

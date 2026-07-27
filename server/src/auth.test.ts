@@ -3,12 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import {
-  createAuthService,
-  MAX_LOGIN_FAILURES,
-  LOCKOUT_MS,
-  SESSION_TTL_MS,
-} from "./auth.js";
+import { createAuthService, MAX_LOGIN_FAILURES, LOCKOUT_MS, SESSION_TTL_MS } from "./auth.js";
 import { createUserStore, type UserStore } from "./userStore.js";
 
 let home: string;
