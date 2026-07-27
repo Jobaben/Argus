@@ -1,5 +1,7 @@
 /** Triggers, schedules, run records and one-off launches. */
 
+import type { Rubric } from "./verdict.js";
+
 export type TriggerKind = "interval" | "daily" | "weekly" | "windowed";
 
 /** When a schedule fires. `everyMinutes` for interval and windowed cadence;
@@ -31,6 +33,9 @@ export interface Schedule {
    *  of dropping it. Absent = false, so pre-existing schedules keep the old
    *  skip-on-miss behavior. */
   catchUp?: boolean;
+  /** Opt-in quality rubric. When set, each completed run is scored by a
+   *  bounded judge pass and the score trends on the schedule's card. */
+  rubric?: Rubric;
   createdAt: string;
   updatedAt: string;
   lastRunAt: string | null;
@@ -51,6 +56,8 @@ export interface ScheduleInput {
   enabled?: boolean;
   overlapPolicy?: "skip" | "allow";
   catchUp?: boolean;
+  /** Null clears an existing rubric; absent leaves it alone on a PATCH. */
+  rubric?: Rubric | null;
 }
 
 export type RunStatus =

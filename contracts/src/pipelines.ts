@@ -1,6 +1,7 @@
 /** Pipeline definitions, running instances, and the board overview. */
 
 import type { Trigger } from "./schedules.js";
+import type { AutoApprove, Rubric } from "./verdict.js";
 
 export interface PhaseStep {
   name: string;
@@ -14,6 +15,11 @@ export interface PhaseDef {
   cwd: string;
   steps: PhaseStep[];
   gated: boolean;
+  /** Opt-in quality rubric for this phase's output. */
+  rubric?: Rubric;
+  /** On a gated phase: let the gate open itself when the verdict clears the
+   *  bar. Requires `rubric`; without one there is nothing to clear. */
+  autoApprove?: AutoApprove;
 }
 
 export interface PipelineDefinition {

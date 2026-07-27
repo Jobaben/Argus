@@ -14,6 +14,7 @@ import {
   runDsStatus,
 } from "../ds";
 import { AutopsyPanel } from "./AutopsyPanel";
+import { VerdictPanel } from "./VerdictPanel";
 import { useHashRoute } from "../useHashRoute";
 import { useRecording } from "../useRecording";
 import type { RecorderEvent, RecorderLane, RecorderUnavailable, Recording } from "../types";
@@ -433,8 +434,9 @@ export default function FlightRecorder() {
       {/* The postmortem sits above the track on purpose: on a failed run it is
           the summary, and the span it cites is checkable against the timeline
           immediately below it. */}
-      <section className="mb-6">
+      <section className="mb-6 space-y-4">
         <AutopsyPanel runId={runId} onSeek={seek} />
+        <VerdictPanel runId={runId} />
       </section>
 
       {recording.events.length === 0 ? (

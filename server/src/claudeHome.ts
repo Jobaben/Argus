@@ -35,6 +35,7 @@ export const paths = {
   briefingFile: () => path.join(claudeHome(), "argus", "briefing.json"),
   watchtowerFile: () => path.join(claudeHome(), "argus", "watchtower.json"),
   autopsyFile: () => path.join(claudeHome(), "argus", "autopsies.json"),
+  verdictFile: () => path.join(claudeHome(), "argus", "verdicts.json"),
   authFile: () => path.join(claudeHome(), "argus", "auth.json"),
   usersFile: () => path.join(claudeHome(), "argus", "users.json"),
   instancesDir: () => path.join(claudeHome(), "argus", "instances"),

@@ -19,6 +19,14 @@ import {
   type AutopsyDeps,
 } from "./sources/autopsy.js";
 import { analysisEnabled, createAnalysisRunner, type AnalysisRunner } from "./sources/analysis.js";
+import {
+  buildVerdictTrends,
+  failingVerdicts,
+  performVerdict,
+  readVerdict,
+  readVerdicts,
+} from "./sources/verdict.js";
+import { rubricFor } from "./verdictWatcher.js";
 import { readActivity } from "./sources/history.js";
 import { readProjects } from "./sources/projects.js";
 import { readStats } from "./sources/stats.js";
@@ -166,6 +174,18 @@ export function createApp(deps: AppDeps): Hono {
     now: () => new Date(),
     readLines: readSessionLines,
   };
+
+  /**
+   * The two model-derived inputs to issue grouping, read together.
+   *
+   * Every route that builds issues needs both — a diagnosis to cluster by and
+   * the quality regressions that belong in the same triage surface as crashes —
+   * so reading them in one place keeps the four call sites from drifting.
+   */
+  async function issueContext() {
+    const [classes, verdicts] = await Promise.all([readFailureClasses(), readVerdicts()]);
+    return { classes, verdicts: failingVerdicts(verdicts) };
+  }
 
   // Parse a JSON body, or short-circuit with a 400. Returns a discriminated
   // result so the handler can `if (!parsed.ok) return parsed.res`.
@@ -348,6 +368,7 @@ export function createApp(deps: AppDeps): Hono {
   // token, verified by the engine.
   // Producing a postmortem spawns an agent; relaunching spawns a real run.
   app.on(["POST"], "/api/runs/:id/autopsy", admin);
+  app.on(["POST"], "/api/runs/:id/verdict", admin);
   app.on(["POST"], "/api/runs/:id/relaunch", admin);
   app.use("/api/instances/:id/approve", admin);
   app.use("/api/instances/:id/revise", admin);
@@ -564,12 +585,8 @@ export function createApp(deps: AppDeps): Hono {
 
   // Failed runs grouped by error fingerprint, Sentry-style.
   app.get("/api/issues", async (c) => {
-    const [runs, triage, classes] = await Promise.all([
-      readRuns(),
-      readTriage(),
-      readFailureClasses(),
-    ]);
-    const issues = buildIssues(runs, triage, { classes });
+    const [runs, triage, ctx] = await Promise.all([readRuns(), readTriage(), issueContext()]);
+    const issues = buildIssues(runs, triage, ctx);
     const summary = { open: 0, resolved: 0, ignored: 0 };
     for (const i of issues) summary[i.state]++;
     return c.json({ issues, summary });
@@ -577,28 +594,20 @@ export function createApp(deps: AppDeps): Hono {
 
   app.get("/api/issues/:fingerprint", async (c) => {
     const fp = c.req.param("fingerprint");
-    const [runs, triage, classes] = await Promise.all([
-      readRuns(),
-      readTriage(),
-      readFailureClasses(),
-    ]);
-    const issue = buildIssues(runs, triage, { classes }).find((i) => i.fingerprint === fp);
+    const [runs, triage, ctx] = await Promise.all([readRuns(), readTriage(), issueContext()]);
+    const issue = buildIssues(runs, triage, ctx).find((i) => i.fingerprint === fp);
     if (!issue) return c.json({ error: "not found" }, 404);
     // The whole member set, so a clustered issue lists every occurrence rather
     // than only the ones sharing its representative fingerprint.
-    return c.json({ issue, occurrences: issueOccurrences(runs, issue.members) });
+    return c.json({ issue, occurrences: issueOccurrences(runs, issue.members, ctx) });
   });
 
   const triageHandler = (state: "resolved" | "ignored") => async (c: Context) => {
     // Plain `Context` can't infer the :fingerprint param type; missing → "" → 404.
     const fp = c.req.param("fingerprint") ?? "";
     try {
-      const [runs, triage, classes] = await Promise.all([
-        readRuns(),
-        readTriage(),
-        readFailureClasses(),
-      ]);
-      const issue = buildIssues(runs, triage, { classes }).find((i) => i.fingerprint === fp);
+      const [runs, triage, ctx] = await Promise.all([readRuns(), readTriage(), issueContext()]);
+      const issue = buildIssues(runs, triage, ctx).find((i) => i.fingerprint === fp);
       if (!issue) return c.json({ error: "not found" }, 404);
       await setTriage(fp, state, issue.lastSeen, new Date());
     } catch (e) {
@@ -620,6 +629,61 @@ export function createApp(deps: AppDeps): Hono {
     }
     broadcast({ type: "issues:changed" });
     return c.json({ ok: true });
+  });
+
+  // ── Verdict ───────────────────────────────────────────────────────────────
+  // Reading a score is open; producing one spawns an agent, so it is gated.
+
+  app.get("/api/verdicts", async (c) => {
+    const [verdicts, schedules, pipelines] = await Promise.all([
+      readVerdicts(),
+      readSchedules(),
+      readPipelines(),
+    ]);
+    // Thresholds live on the definitions, not on the stored verdicts: an author
+    // who tightens the bar should see the new line on the old history.
+    const minScores = new Map<string, number | null>();
+    for (const s of schedules) {
+      minScores.set(`schedule:${s.id}`, s.rubric?.minScore ?? null);
+    }
+    for (const p of pipelines) {
+      for (const phase of p.phases) {
+        minScores.set(`phase:pipeline:${p.id}:${phase.id}`, phase.rubric?.minScore ?? null);
+      }
+    }
+    return c.json(buildVerdictTrends(verdicts, minScores, new Date()));
+  });
+
+  app.get("/api/runs/:id/verdict", async (c) => {
+    const got = await readRun(c.req.param("id"));
+    if (!got) return c.json({ error: "not found" }, 404);
+    const [schedules, pipelines] = await Promise.all([readSchedules(), readPipelines()]);
+    const rubric = rubricFor(got.run, schedules, pipelines);
+    return c.json({
+      verdict: await readVerdict(got.run.id),
+      rubric,
+      unavailable: rubric
+        ? analysisEnabled()
+          ? null
+          : "scoring is disabled (ARGUS_ANALYSIS=off)"
+        : "no rubric is declared for this unit of work",
+    });
+  });
+
+  app.post("/api/runs/:id/verdict", async (c) => {
+    const got = await readRun(c.req.param("id"));
+    if (!got) return c.json({ error: "not found" }, 404);
+    const [schedules, pipelines] = await Promise.all([readSchedules(), readPipelines()]);
+    const rubric = rubricFor(got.run, schedules, pipelines);
+    if (!rubric) {
+      return c.json({ error: "no rubric is declared for this unit of work" }, 409);
+    }
+    const verdict = await performVerdict(got.run, rubric, {
+      runner: analysis,
+      now: () => new Date(),
+    });
+    broadcast({ type: "issues:changed" });
+    return c.json({ verdict, rubric, unavailable: null });
   });
 
   // ── Autopsy ───────────────────────────────────────────────────────────────
@@ -729,17 +793,17 @@ export function createApp(deps: AppDeps): Hono {
   // "While you were away": attention items + digest since the last ack.
   app.get("/api/briefing", async (c) => {
     const now = new Date();
-    const [runs, schedules, triage, instances, ackAt, resets, classes] = await Promise.all([
+    const [runs, schedules, triage, instances, ackAt, resets, ctx] = await Promise.all([
       readRuns(),
       readSchedules(),
       readTriage(),
       readInstances(),
       readBriefingAck(),
       readResets(),
-      readFailureClasses(),
+      issueContext(),
     ]);
     const { monitors } = buildMonitors(schedules, runs, now);
-    const issues = buildIssues(runs, triage, { classes });
+    const issues = buildIssues(runs, triage, ctx);
     const { anomalies } = buildWatchtower(runs, resets, now);
     return c.json(
       buildBriefing({ runs, monitors, issues, instances, anomalies }, clampSince(ackAt, now), now),
@@ -822,7 +886,7 @@ export function createApp(deps: AppDeps): Hono {
   // next, and a 24h throughput sparkline. All derived from the shared caches.
   app.get("/api/insight", async (c) => {
     const now = new Date();
-    const [runs, instances, pipelines, schedules, triage, agents, config, ledger, resets, classes] =
+    const [runs, instances, pipelines, schedules, triage, agents, config, ledger, resets, ctx] =
       await Promise.all([
         readRuns(),
         readInstances(),
@@ -833,7 +897,7 @@ export function createApp(deps: AppDeps): Hono {
         readBudgetConfig(),
         readSpendLedger(),
         readResets(),
-        readFailureClasses(),
+        issueContext(),
       ]);
     const { monitors } = buildMonitors(schedules, runs, now);
     return c.json(
@@ -844,7 +908,7 @@ export function createApp(deps: AppDeps): Hono {
           pipelines,
           schedules,
           monitors,
-          issues: buildIssues(runs, triage, { classes }),
+          issues: buildIssues(runs, triage, ctx),
           agents,
           budget: buildBudgetStatus(config, ledger, now),
           anomalies: buildWatchtower(runs, resets, now).anomalies,
@@ -860,7 +924,7 @@ export function createApp(deps: AppDeps): Hono {
   // busiest single view.
   app.get("/api/palette", async (c) => {
     const now = new Date();
-    const [defs, instances, schedules, runs, triage, agents, projects, sessions, classes] =
+    const [defs, instances, schedules, runs, triage, agents, projects, sessions, ctx] =
       await Promise.all([
         readPipelines(),
         readInstances(),
@@ -870,10 +934,10 @@ export function createApp(deps: AppDeps): Hono {
         readAgents(),
         readProjects(),
         readSessions(),
-        readFailureClasses(),
+        issueContext(),
       ]);
     const { monitors } = buildMonitors(schedules, runs, now);
-    const issues = buildIssues(runs, triage, { classes });
+    const issues = buildIssues(runs, triage, ctx);
     // Newest instance per pipeline — the one whose badge and gate the palette
     // should reflect.
     const latestByPipeline = new Map<string, (typeof instances)[number]>();

@@ -124,6 +124,18 @@ export type {
 } from "./admin.js";
 
 export type {
+  AutoApprove,
+  CriterionScore,
+  Rubric,
+  RubricCriterion,
+  Verdict,
+  VerdictPoint,
+  VerdictReport,
+  VerdictStatus,
+  VerdictTrend,
+} from "./verdict.js";
+
+export type {
   Autopsy,
   AutopsyResponse,
   AutopsySpan,

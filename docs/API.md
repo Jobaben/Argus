@@ -463,6 +463,124 @@ known-exceeded budget), and `exceeded → warning` stays quiet — you already
 heard about the breach; `budget.cleared` fires once spend is back under every
 limit.
 
+## Verdict
+
+Opt-in rubric scoring. Reading is open; producing a score spawns an agent, so
+it is **admin-gated**.
+
+| Method + path                | Effect                                                  |
+| ---------------------------- | ------------------------------------------------------- |
+| `GET /api/verdicts`          | score trends per schedule and phase                     |
+| `GET /api/runs/:id/verdict`  | one run's score, its rubric, or why it has neither      |
+| `POST /api/runs/:id/verdict` | score now (admin) → `200`; `409` when no rubric applies |
+
+### Declaring a rubric
+
+A rubric hangs off a **schedule** (`rubric` on the create/patch body) or a
+**pipeline phase** (`rubric` on the phase). Both are optional; absent means no
+scoring at all.
+
+```jsonc
+{
+  "goal": "A triage summary that names every new failure and proposes one next step each.",
+  "criteria": [
+    { "id": "coverage", "label": "Names every new failure", "weight": 2 },
+    { "id": "actionable", "label": "Proposes a concrete next step" },
+  ],
+  "minScore": 6, // optional: below this is a regression
+}
+```
+
+Validation is strict and the errors are `400`, not `500`: `goal` required,
+1–10 criteria, ids matching `[a-z0-9][a-z0-9_-]{0,40}` and unique, weights > 0,
+`minScore` in 0–10. On a schedule, `"rubric": null` removes an existing one.
+
+A **gated** phase may additionally declare `"autoApprove": { "verdict": 8 }`.
+It requires a rubric on the same phase (there is nothing to clear otherwise) and
+is refused on an ungated phase — both are `400`.
+
+### `GET /api/runs/:id/verdict`
+
+```jsonc
+{
+  "verdict": {
+    "runId": "…",
+    "phaseId": null,
+    "status": "ready", // ready | failed | skipped
+    "at": "2026-07-20T12:00:00.000Z",
+    "score": 7.3, // weighted, computed server-side from your weights
+    "criteria": [{ "id": "coverage", "label": "…", "score": 8, "note": "…" }],
+    "summary": "…",
+    "regression": false,
+    "minScore": 6,
+    "costUsd": 0.001,
+    "tokens": 900,
+    "durationMs": 3100,
+    "error": null,
+  },
+  "rubric": { "…": "the rubric in force, or null" },
+  "unavailable": null,
+}
+```
+
+What the server does **not** trust from the judge:
+
+- The **overall score** — it is computed from the author's weights. Asking a
+  model for a weighted average and believing it lets a judge that scored every
+  criterion 3/10 hand back an 8.
+- **Criteria the rubric never mentioned** — dropped.
+- **Out-of-range scores** — clamped to 0–10.
+- **Labels** — taken from the rubric, so renaming one keeps the history joined
+  by id.
+- A response scoring **none** of the rubric's criteria is a failure, not a zero.
+
+### `GET /api/verdicts`
+
+```jsonc
+{
+  "generatedAt": "…",
+  "trends": [
+    {
+      "key": "schedule:s1", // or "phase:pipeline:<id>:<phaseId>" — Watchtower's key space
+      "scope": "schedule",
+      "name": "Nightly triage",
+      "points": [{ "runId": "…", "at": "…", "score": 8, "regression": false }],
+      "latest": 5,
+      "median": 6.5,
+      "delta": -3, // latest vs the median of everything BEFORE it
+      "minScore": 6, // read live from the definition, not the stored score
+      "regressions": 1,
+    },
+  ],
+  "summary": { "scored": 12, "regressions": 1, "average": 7.1 },
+}
+```
+
+`delta` compares against the prior median rather than the previous run, so one
+noisy judgement is not a collapse and one good run is not a recovery. Thresholds
+come from the live definition, so tightening the bar redraws the line against
+existing history.
+
+### Regressions become issues
+
+A run whose score falls below `minScore` is grouped in `GET /api/issues`
+alongside crashes, titled `quality below the bar for <name>: scored X/10
+against a minimum of Y`. A failure of the _work_ belongs in the same triage
+surface as a failure of the process, not in a parallel list nobody checks.
+
+### Auto-approving gates
+
+Scoring and gate-opening both run on the scheduler tick, not in the pipeline
+engine's signal path — a 90-second model call under the instance lock, inside a
+request a child process is blocked on, is how a gate becomes a deadlock. The
+cost is up to one tick of latency. The rules:
+
+- No verdict yet → the gate **waits**. Silence is not approval.
+- Any judged step **below** the bar → the gate waits for a human, indefinitely.
+- Every judged step at or above the bar → approved, logged, and broadcast.
+  The phase's **worst** step decides; averaging would let one excellent step
+  carry a bad one through a gate set to catch exactly that.
+
 ## Autopsy
 
 Bounded `claude -p` postmortems for failed runs. Reading is open; producing one

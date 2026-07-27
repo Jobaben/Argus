@@ -7,6 +7,24 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Verdict** — opt-in rubric scoring for schedules and pipeline phases. Exit
+  code 0 means the process ended, not that the work was good; a rubric says what
+  good means for one unit of work and a bounded judge pass scores each output
+  against it, 0–10 per criterion. The overall score is **computed from the
+  author's weights**, not taken from the model — asking a judge for a weighted
+  average and believing it lets one that scored every criterion 3/10 hand back
+  an 8. Criteria the rubric never mentioned are dropped, scores are clamped,
+  labels come from the rubric (so renaming one keeps the trend), and a response
+  scoring none of the real criteria is a failure rather than a zero. Scores
+  trend on Watchtower with a delta against the _prior median_ rather than the
+  previous run, and a score below the author's threshold opens an issue in the
+  same triage surface as a crash. Gated phases may declare
+  `autoApprove: { verdict: N }`: every judged step must clear the bar — the
+  phase's worst step decides, not the average — and a gate with no verdict yet
+  waits, because silence is not approval. Judging and gate-opening run on the
+  scheduler tick rather than in the engine's signal path, where a 90-second
+  model call under the instance lock would be a deadlock rather than a delay.
+
 - **Autopsy** — every failed run gets an automatic postmortem. A bounded
   `claude -p` pass returns a failure class from a closed taxonomy, a confidence
   figure, one paragraph of prose, the transcript span where it went wrong, and a

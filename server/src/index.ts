@@ -26,6 +26,9 @@ import { createBudgetWatcher } from "./budgetWatcher.js";
 import { createMonitorWatcher } from "./monitorWatcher.js";
 import { createWatchtowerWatcher } from "./watchtowerWatcher.js";
 import { createAutopsyWatcher } from "./autopsyWatcher.js";
+import { createVerdictWatcher } from "./verdictWatcher.js";
+import { readPipelines } from "./sources/pipelines.js";
+import { readInstances } from "./sources/instances.js";
 import { createAnalysisRunner } from "./sources/analysis.js";
 import { readSessionLines } from "./sources/sessions.js";
 import { readSchedules } from "./sources/schedules.js";
@@ -218,6 +221,24 @@ const autopsyWatcher = createAutopsyWatcher({
   readRuns,
   onAutopsy: () => broadcast({ type: "issues:changed" }),
 });
+// Rubric scoring, and the gates that open themselves on a good enough score.
+// Out here rather than in the engine: a 90-second model call inside the signal
+// path — which holds the instance lock while a child process blocks on the
+// response — is how a gate becomes a deadlock.
+const verdictWatcher = createVerdictWatcher({
+  runner: analysis,
+  now: () => new Date(),
+  readRuns,
+  readSchedules,
+  readPipelines,
+  readInstances,
+  approve: (instanceId) => engine.approve(instanceId),
+  onVerdict: () => broadcast({ type: "issues:changed" }),
+  onAutoApprove: (instanceId, score) => {
+    log.info("gate auto-approved on verdict", { instanceId, score });
+    broadcast({ type: "pipelines:changed" });
+  },
+});
 const scheduler = startScheduler({
   onChange: () => broadcast({ type: "schedules:changed" }),
   onTick: async () => {
@@ -226,6 +247,7 @@ const scheduler = startScheduler({
     await budgetWatcher.check();
     await watchtowerWatcher.check();
     await autopsyWatcher.check();
+    await verdictWatcher.check();
   },
   onFailure: (run) =>
     void postWebhook(config.webhookUrl, buildRunFailurePayload(run, new Date().toISOString())),

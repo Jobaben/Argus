@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { Anomaly, Baseline, MetricBaseline, WatchtowerReport } from "../types";
+import type { Anomaly, Baseline, MetricBaseline, VerdictTrend, WatchtowerReport } from "../types";
 import Watchtower from "./Watchtower";
 
 const reset = vi.fn(async () => {});
@@ -15,6 +15,21 @@ const state: { report: WatchtowerReport; loading: boolean; error: string | null 
 
 vi.mock("../useWatchtower", () => ({
   useWatchtower: () => ({ ...state, refresh: vi.fn(), reset, restore }),
+}));
+
+const trendState: { trends: VerdictTrend[] } = { trends: [] };
+
+vi.mock("../useVerdict", () => ({
+  useVerdictTrends: () => ({
+    report: {
+      generatedAt: "",
+      trends: trendState.trends,
+      summary: { scored: 0, regressions: 0, average: null },
+    },
+    loading: false,
+    error: null,
+    refresh: vi.fn(),
+  }),
 }));
 
 function emptyReport(): WatchtowerReport {
@@ -78,6 +93,7 @@ beforeEach(() => {
   state.error = null;
   reset.mockClear();
   restore.mockClear();
+  trendState.trends = [];
 });
 
 describe("Watchtower", () => {
@@ -210,5 +226,45 @@ describe("Watchtower", () => {
     render(<Watchtower />);
     const card = screen.getByText("Release › build").closest("div");
     expect(within(card!.parentElement!).getByText("phase")).toBeInTheDocument();
+  });
+});
+
+describe("Watchtower — quality trends", () => {
+  it("shows a score trend line with its delta against the median", () => {
+    trendState.trends = [
+      {
+        key: "schedule:s1",
+        scope: "schedule",
+        name: "Nightly triage",
+        points: [
+          { runId: "r1", at: "2026-07-19T12:00:00.000Z", score: 8, regression: false },
+          { runId: "r2", at: "2026-07-20T12:00:00.000Z", score: 5, regression: true },
+        ],
+        latest: 5,
+        median: 6.5,
+        delta: -3,
+        minScore: 6,
+        regressions: 1,
+      },
+    ];
+    state.report = {
+      ...emptyReport(),
+      baselines: [baseline()],
+      summary: { ready: 1, warming: 0, anomalies: 0, critical: 0 },
+    };
+    render(<Watchtower />);
+    expect(screen.getByText("Quality trends")).toBeInTheDocument();
+    expect(screen.getByText(/-3.0 vs median/)).toBeInTheDocument();
+    expect(screen.getByText(/1 below the bar/)).toBeInTheDocument();
+  });
+
+  it("no rubric anywhere means no quality section at all, not an empty one", () => {
+    state.report = {
+      ...emptyReport(),
+      baselines: [baseline()],
+      summary: { ready: 1, warming: 0, anomalies: 0, critical: 0 },
+    };
+    render(<Watchtower />);
+    expect(screen.queryByText("Quality trends")).not.toBeInTheDocument();
   });
 });

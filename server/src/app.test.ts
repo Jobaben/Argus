@@ -1061,3 +1061,203 @@ test("issues: a clustered issue's detail lists every member's occurrences", asyn
   ).json()) as { occurrences: unknown[] };
   assert.equal(detail.occurrences.length, 2, "both members' occurrences are listed");
 });
+
+// ── Verdict ─────────────────────────────────────────────────────────────────
+
+const RUBRIC = {
+  goal: "Names every failure and proposes one next step each.",
+  criteria: [
+    { id: "coverage", label: "Names every new failure", weight: 2 },
+    { id: "actionable", label: "Proposes a concrete next step" },
+  ],
+  minScore: 6,
+};
+
+const VERDICT_ANSWER = JSON.stringify({
+  criteria: [
+    { id: "coverage", score: 8, note: "Both named." },
+    { id: "actionable", score: 6, note: "One missing." },
+  ],
+  summary: "Solid but incomplete.",
+});
+
+function writeSchedule(over: Record<string, unknown>) {
+  mkdirSync(path.join(home, "argus"), { recursive: true });
+  const iso = new Date().toISOString();
+  writeFileSync(
+    path.join(home, "argus", "schedules.json"),
+    JSON.stringify([
+      {
+        id: "s1",
+        name: "Nightly triage",
+        prompt: "p",
+        cwd: home,
+        trigger: { kind: "interval", everyMinutes: 60 },
+        enabled: true,
+        overlapPolicy: "skip",
+        createdAt: iso,
+        updatedAt: iso,
+        lastRunAt: null,
+        lastRunId: null,
+        ...over,
+      },
+    ]),
+  );
+}
+
+test("verdict: a run under a rubric is scored, and the score is computed from the weights", async () => {
+  const app = makeAutopsyApp(VERDICT_ANSWER);
+  writeSchedule({ rubric: RUBRIC });
+  writeRunRecord("scored", { resultSummary: "Two failures found." });
+
+  const before = (await (
+    await app.request("/api/runs/scored/verdict", { headers: loopback })
+  ).json()) as { verdict: unknown; rubric: { goal: string } | null };
+  assert.equal(before.verdict, null);
+  assert.ok(before.rubric);
+
+  const made = await app.request("/api/runs/scored/verdict", {
+    method: "POST",
+    headers: sameOrigin,
+  });
+  assert.equal(made.status, 200);
+  const body = (await made.json()) as {
+    verdict: { status: string; score: number; regression: boolean; criteria: unknown[] };
+  };
+  assert.equal(body.verdict.status, "ready");
+  // (8*2 + 6*1) / 3 = 7.3 — ours, not the model's.
+  assert.equal(body.verdict.score, 7.3);
+  assert.equal(body.verdict.regression, false);
+  assert.equal(body.verdict.criteria.length, 2);
+});
+
+test("verdict: a run with no rubric says so, and cannot be forced", async () => {
+  const app = makeAutopsyApp(VERDICT_ANSWER);
+  writeSchedule({});
+  writeRunRecord("unscored", {});
+
+  const read = (await (
+    await app.request("/api/runs/unscored/verdict", { headers: loopback })
+  ).json()) as { rubric: unknown; unavailable: string };
+  assert.equal(read.rubric, null);
+  assert.match(read.unavailable, /no rubric/);
+
+  const forced = await app.request("/api/runs/unscored/verdict", {
+    method: "POST",
+    headers: sameOrigin,
+  });
+  assert.equal(forced.status, 409);
+});
+
+test("verdict: scoring requires an admin session; reading does not", async () => {
+  const lockedOut: AuthService = {
+    isConfigured: async () => true,
+    status: async () => ({ configured: true, username: null, role: null }),
+    login: async () => ({ ok: false, reason: "bad-credentials" }),
+    verify: () => null,
+    logout: () => {},
+    revokeSessions: () => {},
+  };
+  const app = createApp({
+    config,
+    engine: fakeEngine,
+    broadcast: () => {},
+    serveWeb: false,
+    users: createUserStore(),
+    remoteAddr: () => "127.0.0.1",
+    auth: lockedOut,
+    analysis: stubAnalysis(VERDICT_ANSWER),
+  });
+  writeSchedule({ rubric: RUBRIC });
+  writeRunRecord("gated", {});
+
+  assert.equal((await app.request("/api/runs/gated/verdict", { headers: loopback })).status, 200);
+  assert.equal(
+    (await app.request("/api/runs/gated/verdict", { method: "POST", headers: sameOrigin })).status,
+    401,
+  );
+});
+
+test("verdict: trends carry the live threshold, not the one stored with the score", async () => {
+  const app = makeAutopsyApp(VERDICT_ANSWER);
+  writeSchedule({ rubric: RUBRIC });
+  writeRunRecord("t1", {});
+  await app.request("/api/runs/t1/verdict", { method: "POST", headers: sameOrigin });
+
+  // The author tightens the bar after the fact.
+  writeSchedule({ rubric: { ...RUBRIC, minScore: 9 } });
+  const body = (await (await app.request("/api/verdicts", { headers: loopback })).json()) as {
+    trends: { key: string; latest: number; minScore: number }[];
+    summary: { scored: number };
+  };
+  assert.equal(body.trends.length, 1);
+  assert.equal(body.trends[0].key, "schedule:s1");
+  assert.equal(body.trends[0].minScore, 9, "the new line applies to the old history");
+  assert.equal(body.summary.scored, 1);
+});
+
+test("verdict: a quality regression opens an issue even though the run exited 0", async () => {
+  const low = JSON.stringify({
+    criteria: [
+      { id: "coverage", score: 2, note: "misses most" },
+      { id: "actionable", score: 1, note: "none" },
+    ],
+  });
+  const app = makeAutopsyApp(low);
+  writeSchedule({ rubric: RUBRIC });
+  writeRunRecord("bad-quality", { status: "succeeded", exitCode: 0, error: null });
+
+  const before = (await (await app.request("/api/issues", { headers: loopback })).json()) as {
+    issues: unknown[];
+  };
+  assert.equal(before.issues.length, 0, "a clean exit is not an issue on its own");
+
+  await app.request("/api/runs/bad-quality/verdict", { method: "POST", headers: sameOrigin });
+
+  const after = (await (await app.request("/api/issues", { headers: loopback })).json()) as {
+    issues: { title: string; count: number }[];
+  };
+  assert.equal(after.issues.length, 1);
+  assert.match(after.issues[0].title, /quality below the bar for Nightly triage/);
+});
+
+test("schedules: an invalid rubric is a clean 400, not a 500", async () => {
+  const app = makeApp();
+  const res = await app.request("/api/schedules", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({
+      name: "n",
+      prompt: "p",
+      cwd: home,
+      trigger: { kind: "interval", everyMinutes: 60 },
+      rubric: { goal: "g", criteria: [{ id: "Bad Id", label: "x" }] },
+    }),
+  });
+  assert.equal(res.status, 400);
+  assert.match(((await res.json()) as { error: string }).error, /slug/);
+});
+
+test("pipelines: autoApprove without a rubric on the same phase is a clean 400", async () => {
+  const app = makeApp();
+  const res = await app.request("/api/pipelines", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({
+      name: "p",
+      trigger: null,
+      phases: [
+        {
+          id: "build",
+          name: "Build",
+          cwd: home,
+          gated: true,
+          steps: [{ name: "s", prompt: "p" }],
+          autoApprove: { verdict: 8 },
+        },
+      ],
+    }),
+  });
+  assert.equal(res.status, 400);
+  assert.match(((await res.json()) as { error: string }).error, /needs a rubric/);
+});

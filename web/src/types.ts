@@ -77,6 +77,16 @@ export type {
   SituationCounts,
   NextFire,
   ThroughputBucket,
+  // Verdict
+  AutoApprove,
+  CriterionScore,
+  Rubric,
+  RubricCriterion,
+  Verdict,
+  VerdictPoint,
+  VerdictReport,
+  VerdictStatus,
+  VerdictTrend,
   // Autopsy
   Autopsy,
   AutopsyResponse,

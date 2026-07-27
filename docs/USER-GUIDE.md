@@ -1116,6 +1116,80 @@ been.
 
 ---
 
+## 24. Verdict
+
+_Was the output any good?_ Declared on a schedule (Scheduler → **Score the
+output against a rubric**) or a pipeline phase; shown on the run's
+[Flight Recorder](#21-flight-recorder) page and trended on
+[Watchtower](#22-watchtower).
+
+**Purpose:** exit code 0 means the process ended. It does not mean the work was
+any good, and for an agent that is exactly the gap — a run can succeed loudly
+while producing a summary that misses the point. A **rubric** lets you say what
+good means for this unit of work, and each completed run's output is scored
+against it by a bounded judge pass.
+
+**Opt-in, always.** No rubric, no scoring, no cost, no UI. A schedule without
+one behaves exactly as before.
+
+**Writing a rubric** (in the schedule form):
+
+- **What does good look like here?** — one sentence, in your words.
+- **Criteria** — each has an `id`, a label and an optional weight. The **id
+  keys the history**: rename a label freely, change an id and the trend starts
+  over. Ids are slugified as you type, so you can't enter one the server would
+  reject.
+- **Regression threshold** (optional) — a run scoring below it **opens an
+  issue**, even though the process exited fine. Leave it empty to measure
+  without ever failing anything.
+- **Auto-approve this gate at** (gated pipeline phases only) — see below.
+
+**What you see on a run:**
+
+- The overall score out of 10, next to the bar it is judged against — a number
+  with no threshold beside it means nothing.
+- The **per-criterion breakdown**, which is the actionable part: "7.3" tells
+  you nothing, "coverage 8, actionable 4" tells you which half was missed.
+- One sentence of summary, and what the scoring pass cost.
+
+**What you see on Watchtower** (**Quality trends**): a bar sparkline per unit of
+work, the latest score, and its **delta against the median of everything
+before it** — one noisy judgement should not read as a collapse, and one good
+run after a bad week should not read as a recovery. Runs below the bar are
+drawn red.
+
+**How the number is arrived at, and why you can trust it:**
+
+- The **overall score is computed from your weights**, not taken from the
+  model. A judge that scores every criterion 3/10 will still cheerfully hand
+  back an 8 overall if you ask it for one.
+- A score for a criterion your rubric never mentioned is **dropped**. A judge
+  that invents a criterion is not evidence about your rubric.
+- Scores are clamped to 0–10, and labels come from your rubric, not the answer.
+- A response that scores none of your criteria is a **failure, not a zero**.
+
+**Gates that open themselves.** A gated phase with a rubric may declare
+**auto-approve at N**. When every judged step of the phase scores at least N,
+the gate passes unattended. Two properties matter and hold: a gate with **no
+verdict yet waits** (silence is not approval), and a gate whose verdict came
+back _below_ the bar waits for a human, forever. Auto-approval only ever skips
+the wait for work that has already been judged good — and it is the phase's
+**worst** step that decides, not the average, because averaging lets one
+excellent step carry a bad one through the gate you set to catch it.
+
+**Bounds:** completed runs under a rubric are judged automatically, **one per
+scheduler tick**, newest first, skipping anything older than 24 hours. Every
+pass shares the same guardrails as [Autopsy](#23-autopsy) — one at a time,
+90-second timeout, metered into the spend ledger, refused under the budget hard
+stop, and switched off entirely by `ARGUS_ANALYSIS=off`.
+
+**Where the data comes from:** `GET /api/runs/:id/verdict`,
+`POST /api/runs/:id/verdict` (admin), `GET /api/verdicts`. Scores live in
+`~/.claude/argus/verdicts.json`; rubrics live on the schedule or pipeline
+definition.
+
+---
+
 ## Quick mental model
 
 | Tab                 | Answers the question                      | Source                                      |

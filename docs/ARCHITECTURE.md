@@ -167,6 +167,7 @@ while an unrecognised frame _type_ is still forwarded for forward compatibility.
 | Flight Recorder   | run record + `projects/<proj>/<id>.jsonl`   | derived per read; never persisted (see below)                                      |
 | Watchtower        | runs + `argus/watchtower.json`              | envelopes derived per read; only reset markers persist                             |
 | Autopsy           | `argus/autopsies.json`                      | bounded `claude -p` verdicts, capped at 200, keyed by run id                       |
+| Verdict           | `argus/verdicts.json` + rubrics on defs     | rubric scores keyed by run id, capped at 400; trends derived per read              |
 
 ### Derivation over storage: the Flight Recorder
 
@@ -259,6 +260,22 @@ nearly-correct guards, `sources/analysis.ts` owns all of them:
 
 `spawn` is a parameter, so the timeout, the output cap, the parse failure and
 the budget refusal are all exercised in tests without a CLI on the box.
+
+### Where model-backed side effects are allowed to live
+
+Verdict can auto-approve a pipeline gate, which is the most consequential thing
+a model does in Argus. It deliberately does **not** happen inside the engine.
+
+The engine's signal path runs under the instance lock, inside an HTTP handler
+that the signalling child process is still blocked on, and that child may hold
+the last concurrency slot. A 90-second model call there is not slow — it is a
+deadlock. So the judge and the gate-opener sit in a watcher on the scheduler
+tick, calling the engine's ordinary `approve()` from outside. The cost is up to
+one tick of latency; the benefit is that the engine's locking story is unchanged
+and a hung analysis pass cannot wedge a pipeline.
+
+The same reasoning applies to Autopsy: the postmortem never runs in the run
+completion handler, only in a watcher afterwards.
 
 ## 6. The cron boundary (known limitation)
 

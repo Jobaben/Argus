@@ -65,11 +65,13 @@ export function normalizeError(raw: string): string {
     .slice(0, 200);
 }
 
+/** The 16-hex group id for an already-chosen error message. */
+export function fingerprintText(error: string): string {
+  return createHash("sha256").update(normalizeError(error)).digest("hex").slice(0, 16);
+}
+
 export function fingerprintOf(run: Run): string {
-  return createHash("sha256")
-    .update(normalizeError(rawError(run)))
-    .digest("hex")
-    .slice(0, 16);
+  return fingerprintText(rawError(run));
 }
 
 const runAt = (r: Run): string => r.endedAt ?? r.startedAt ?? r.queuedAt;
@@ -169,14 +171,34 @@ function agreedClass(groups: StringGroup[]): FailureClass | null {
 export interface IssueOptions {
   /** Autopsy failure class per run id. Absent = pure string grouping. */
   classes?: Map<string, FailureClass>;
+  /**
+   * Runs whose Verdict fell below the author's bar, with the message to group
+   * them under.
+   *
+   * A quality regression is a failure of the *work* even though the process
+   * exited fine, so it belongs in the same triage surface as a crash rather
+   * than in a parallel list nobody checks. Absent = only process failures.
+   */
+  verdicts?: Map<string, string>;
+}
+
+/** The error text a run is grouped under, preferring a quality regression's
+ *  message over the process error (there usually isn't one). */
+function errorFor(run: Run, verdicts?: Map<string, string>): string {
+  return verdicts?.get(run.id) ?? rawError(run);
+}
+
+/** Whether a run belongs in Issues at all: it crashed, or it missed the bar. */
+function isIssueWorthy(run: Run, verdicts?: Map<string, string>): boolean {
+  return isFailure(run) || verdicts?.has(run.id) === true;
 }
 
 /** Group failures into issues. `runs` in readRuns order (newest first). */
 export function buildIssues(runs: Run[], triage: TriageRecord[], opts: IssueOptions = {}): Issue[] {
   const byFp = new Map<string, Run[]>();
   for (const r of runs) {
-    if (!isFailure(r)) continue;
-    const fp = fingerprintOf(r);
+    if (!isIssueWorthy(r, opts.verdicts)) continue;
+    const fp = fingerprintText(errorFor(r, opts.verdicts));
     const list = byFp.get(fp);
     if (list) list.push(r);
     else byFp.set(fp, [r]);
@@ -189,7 +211,7 @@ export function buildIssues(runs: Run[], triage: TriageRecord[], opts: IssueOpti
     .map(([fingerprint, group]) => ({
       fingerprint,
       runs: group,
-      tokens: errorTokens(normalizeError(rawError(group[0]))),
+      tokens: errorTokens(normalizeError(errorFor(group[0], opts.verdicts))),
       failureClass: dominantClass(group, opts.classes),
     }));
 
@@ -214,7 +236,7 @@ export function buildIssues(runs: Run[], triage: TriageRecord[], opts: IssueOpti
     const lastSeen = runAt(newest);
     issues.push({
       fingerprint,
-      title: rawError(newest).split("\n")[0].slice(0, 300),
+      title: errorFor(newest, opts.verdicts).split("\n")[0].slice(0, 300),
       count: all.length,
       firstSeen: runAt(oldest),
       lastSeen,
@@ -259,10 +281,14 @@ function dominantClass(
 export function issueOccurrences(
   runs: Run[],
   fingerprints: string | readonly string[],
+  opts: IssueOptions = {},
 ): IssueOccurrence[] {
   const wanted = new Set(typeof fingerprints === "string" ? [fingerprints] : fingerprints);
   return runs
-    .filter((r) => isFailure(r) && wanted.has(fingerprintOf(r)))
+    .filter(
+      (r) =>
+        isIssueWorthy(r, opts.verdicts) && wanted.has(fingerprintText(errorFor(r, opts.verdicts))),
+    )
     .slice(0, OCCURRENCE_CAP)
     .map((r) => ({
       runId: r.id,
@@ -271,7 +297,7 @@ export function issueOccurrences(
       at: runAt(r),
       status: r.status,
       outcome: r.outcome ?? null,
-      error: rawError(r).slice(0, 500),
+      error: errorFor(r, opts.verdicts).slice(0, 500),
     }));
 }
 

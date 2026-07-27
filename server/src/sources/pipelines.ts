@@ -4,6 +4,7 @@ import { validateTrigger } from "./schedules.js";
 import { createJsonArrayStore } from "./jsonArrayStore.js";
 import type { PhaseDef, PhaseStep, PipelineDefinition } from "./pipelineTypes.js";
 import type { Trigger } from "./scheduleTypes.js";
+import { RubricValidationError, validateAutoApprove, validateRubric } from "./verdict.js";
 
 // The crash-safe, mutex-serialized single-file store (shared with schedules).
 const store = createJsonArrayStore<PipelineDefinition>({
@@ -78,7 +79,34 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
     throw new PipelineValidationError(`phase ${i}: needs at least one step`);
   }
   const steps = p.steps.map((s) => validateStep(s, `phase ${i}`));
-  return { id: p.id.trim(), name: p.name.trim(), cwd: p.cwd, steps, gated: Boolean(p.gated) };
+  const gated = Boolean(p.gated);
+
+  // Rubric errors surface as pipeline validation errors so the route's existing
+  // 400 mapping covers them instead of letting them escape as a 500.
+  let rubric, autoApprove;
+  try {
+    rubric = validateRubric(p.rubric);
+    autoApprove = validateAutoApprove(p.autoApprove, rubric !== undefined);
+  } catch (e) {
+    throw new PipelineValidationError(
+      `phase ${i}: ${e instanceof RubricValidationError ? e.message : String(e)}`,
+    );
+  }
+  if (autoApprove && !gated) {
+    throw new PipelineValidationError(
+      `phase ${i}: autoApprove only means something on a gated phase`,
+    );
+  }
+
+  return {
+    id: p.id.trim(),
+    name: p.name.trim(),
+    cwd: p.cwd,
+    steps,
+    gated,
+    ...(rubric ? { rubric } : {}),
+    ...(autoApprove ? { autoApprove } : {}),
+  };
 }
 
 export function validatePipelineInput(raw: unknown): PipelineInput {

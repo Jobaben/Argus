@@ -2,7 +2,9 @@ import { existsSync, statSync } from "node:fs";
 import { paths } from "../claudeHome.js";
 import { nextFireAfter, parseHHMM } from "./nextFire.js";
 import { createJsonArrayStore } from "./jsonArrayStore.js";
+import { RubricValidationError, validateRubric } from "./verdict.js";
 import type { Schedule, Trigger } from "./scheduleTypes.js";
+import type { Rubric } from "@argus/contracts";
 
 // The crash-safe, mutex-serialized single-file store lives in one shared place.
 const store = createJsonArrayStore<Schedule>({
@@ -26,6 +28,18 @@ export interface ScheduleInput {
   enabled?: boolean;
   overlapPolicy?: "skip" | "allow";
   catchUp?: boolean;
+  /** Null clears an existing rubric; absent leaves it untouched on a PATCH. */
+  rubric?: Rubric | null;
+}
+
+/** Rubric errors surface as schedule validation errors, so the route's existing
+ *  400 mapping covers them rather than escaping as a 500. */
+function rubricOrThrow(raw: unknown): Rubric | undefined {
+  try {
+    return validateRubric(raw);
+  } catch (e) {
+    throw new ScheduleValidationError(e instanceof RubricValidationError ? e.message : String(e));
+  }
 }
 
 const hhmmToMin = (s: string): number => {
@@ -114,6 +128,7 @@ export function validateInput(raw: unknown): ScheduleInput {
     enabled,
     overlapPolicy,
     catchUp: Boolean(r.catchUp),
+    ...(r.rubric === undefined ? {} : { rubric: rubricOrThrow(r.rubric) ?? null }),
   };
 }
 
@@ -148,6 +163,7 @@ export function validatePatch(raw: unknown): Partial<ScheduleInput> {
   if ("enabled" in r) patch.enabled = Boolean(r.enabled);
   if ("overlapPolicy" in r) patch.overlapPolicy = r.overlapPolicy === "allow" ? "allow" : "skip";
   if ("catchUp" in r) patch.catchUp = Boolean(r.catchUp);
+  if ("rubric" in r) patch.rubric = rubricOrThrow(r.rubric) ?? null;
   return patch;
 }
 
@@ -180,6 +196,7 @@ export async function createSchedule(
     enabled: input.enabled ?? true,
     overlapPolicy: input.overlapPolicy ?? "skip",
     catchUp: input.catchUp ?? false,
+    ...(input.rubric ? { rubric: input.rubric } : {}),
     createdAt: iso,
     updatedAt: iso,
     lastRunAt: null,
@@ -213,6 +230,12 @@ export async function updateSchedule(
       ...("catchUp" in patch ? { catchUp: patch.catchUp! } : {}),
       updatedAt: now.toISOString(),
     };
+    // `rubric: null` is the documented way to remove one, and spreading a null
+    // would leave the key present-and-null on disk rather than gone.
+    if ("rubric" in patch) {
+      if (patch.rubric) merged.rubric = patch.rubric;
+      else delete merged.rubric;
+    }
     list[idx] = merged;
     await writeSchedules(list);
     return merged;

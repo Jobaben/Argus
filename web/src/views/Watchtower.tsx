@@ -14,6 +14,8 @@ import {
   formatUsd,
 } from "../ds";
 import { useWatchtower } from "../useWatchtower";
+import { useVerdictTrends } from "../useVerdict";
+import { VerdictSparkline } from "./VerdictPanel";
 import type { Anomaly, AnomalyMetric, Baseline, MetricBaseline } from "../types";
 
 /**
@@ -216,6 +218,57 @@ function BaselineCard({
 
 type Filter = "all" | "critical";
 
+/**
+ * Quality trends live on this page rather than one of their own.
+ *
+ * Watchtower answers "did it behave the way it usually does"; Verdict answers
+ * "was the result any good". Same reader, same glance, two halves of the same
+ * question — and a rubric that nobody declared costs an empty section rather
+ * than a whole empty tab.
+ */
+function QualityTrends() {
+  const { report } = useVerdictTrends();
+  if (report.trends.length === 0) return null;
+  return (
+    <Section title="Quality trends">
+      <ul className="space-y-2">
+        {report.trends.map((t) => (
+          <li
+            key={t.key}
+            className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-line bg-surface px-3 py-2"
+          >
+            <span
+              className="min-w-40 flex-1 truncate text-sm font-semibold text-ink"
+              title={t.name}
+            >
+              {t.name}
+            </span>
+            <VerdictSparkline points={t.points} minScore={t.minScore} />
+            <span className="font-mono text-sm font-bold text-ink">
+              {t.latest?.toFixed(1) ?? "—"}
+              <span className="text-[10px] font-normal text-ink-faint">/10</span>
+            </span>
+            {t.delta != null && t.delta !== 0 && (
+              <span
+                className={`font-mono text-[11px] ${t.delta < 0 ? "text-fail" : "text-ok"}`}
+                title="Latest score against the median of everything before it"
+              >
+                {t.delta > 0 ? "+" : ""}
+                {t.delta.toFixed(1)} vs median
+              </span>
+            )}
+            {t.regressions > 0 && (
+              <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-fail">
+                {t.regressions} below the bar
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </Section>
+  );
+}
+
 export default function Watchtower() {
   const { report, loading, error, reset, restore } = useWatchtower();
   const [filter, setFilter] = useState<Filter>("all");
@@ -311,6 +364,8 @@ export default function Watchtower() {
               </ul>
             )}
           </Section>
+
+          <QualityTrends />
 
           <Section title="Learned envelopes">
             <p className="mb-3 max-w-prose text-sm text-ink-faint">

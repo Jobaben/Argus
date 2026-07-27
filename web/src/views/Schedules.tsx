@@ -9,6 +9,7 @@ import {
   Page,
   SkeletonRows,
   TimeAgo,
+  RubricFields,
   TriggerFields,
   formatCountdown,
   formatTrigger,
@@ -269,6 +270,12 @@ function ScheduleForm({
           </span>
         </span>
       </label>
+
+      <RubricFields
+        fieldClass={field}
+        value={form.rubric}
+        onChange={(rubric) => setForm({ ...form, rubric })}
+      />
 
       <div className="flex items-center gap-2 pt-1">
         <button
