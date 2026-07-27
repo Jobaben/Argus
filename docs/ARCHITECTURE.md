@@ -297,6 +297,37 @@ So its previous state is the incident file, and the consequences follow:
   then re-reads under the lock before attaching, so a human's edit during the
   pass survives.
 
+### Replacing a cursor with a graph, without a second executor
+
+The pipeline engine used to walk `currentPhaseIndex`. Weave replaced that with a
+DAG, and the refactor was shaped around one rule: **there must not be a linear
+executor and a general executor**, because the two would drift and the linear one
+is the one every existing pipeline depends on.
+
+So a linear pipeline is _defined_ as a DAG in which each phase needs its
+predecessor (`sources/dag.ts`, `resolveNeeds`), and every transition funnels
+through a single `settle()` in `pipelineTransitions.ts`, which computes
+readiness, terminality and the current index in one place. The engine's
+`startPhase` became `startPhases`; nothing else about its locking, slots or
+process handling changed.
+
+Three consequences worth naming, because each was a bug before it was a design:
+
+- **Failure is not immediately terminal.** With a fan-out, flipping the instance
+  to `failed` the moment one branch fails renders a stopped pipeline with a live
+  process still writing into it. The failure lands on the phase; the instance
+  settles when nothing can progress.
+- **Kill scope became explicit.** `killPhaseRuns` takes phase ids rather than
+  deriving them from "what is live", because abort must reach phases it has
+  _already_ marked terminal while revise must **not** reach a sibling branch
+  that is legitimately running.
+- **Deferred launches re-resolve by id.** The post-signal launch happens under a
+  fresh lock acquisition; an abort landing in that window changes which indices
+  mean what, so the wave is re-resolved by phase id before spawning.
+
+The whole 735-test suite that predated Weave passes unchanged, which is the
+actual guarantee behind "linear definitions load unchanged".
+
 ## 6. The cron boundary (known limitation)
 
 Scheduled routines are **not persisted to `~/.claude`**. They are session-scoped

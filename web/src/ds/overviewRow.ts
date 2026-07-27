@@ -37,6 +37,18 @@ export interface PhasePill {
   steps: StepPill[];
   /** Failure reason from the phase payload, when the phase failed. */
   reason: string | null;
+  /** Whether the phase waits for a human. */
+  gated: boolean;
+  /**
+   * Phase ids this one waited for, carried through from the instance so the
+   * board can draw the graph without also fetching the definition — which may
+   * since have been edited into a different shape than the one that ran.
+   */
+  needs: string[];
+  /** Attempt index (0 = first). Bumped by a revise and by an automatic retry. */
+  attempt: number;
+  /** When an automatic retry is due, while one is queued. */
+  retryAt: string | null;
 }
 
 /**
@@ -197,6 +209,10 @@ function instanceRow(
       definition.model ?? null,
     ),
     reason: p.status === "failed" ? extractReason(p.payload) : null,
+    gated: p.gated,
+    needs: p.needs ?? [],
+    attempt: p.attempt,
+    retryAt: p.retryAt ?? null,
   }));
 
   return {
@@ -223,10 +239,10 @@ export function toOverviewRow(entry: OverviewEntry): OverviewRow {
       name: definition.name,
       badge: "idle",
       updatedAt: null,
-      phases: definition.phases.map((p) => ({
+      phases: definition.phases.map((p, i) => ({
         id: p.id,
         name: p.name,
-        status: "idle",
+        status: "idle" as const,
         activeStep: null,
         steps: p.steps.map((s) => ({
           name: s.name,
@@ -240,6 +256,17 @@ export function toOverviewRow(entry: OverviewEntry): OverviewRow {
           durationMs: null,
         })),
         reason: null,
+        gated: p.gated,
+        // A pipeline that has never run has no instance to carry resolved
+        // edges, so they are resolved from the definition here — same rule as
+        // the server: no phase declaring `needs` means linear.
+        needs: definition.phases.some((x) => x.needs !== undefined)
+          ? (p.needs ?? [])
+          : i === 0
+            ? []
+            : [definition.phases[i - 1].id],
+        attempt: 0,
+        retryAt: null,
       })),
       instanceId: null,
       gate: null,

@@ -1254,6 +1254,86 @@ in `~/.claude/argus/sentinel.json`.
 
 ---
 
+## 26. Weave
+
+_Pipelines as a typed graph: fan-out, fan-in, retries, artifacts._ Authored on
+[Pipelines](#8-pipelines); rendered on the [Command Center](#1-command-center).
+
+**Purpose:** a pipeline used to be a list — phase 1, then 2, then 3. Real work
+branches: plan once, then build and test in parallel, then ship when both are
+done. Weave makes the dependency graph explicit.
+
+**Every pipeline you already have keeps working, unchanged.** A definition where
+no phase declares `needs` is _linear_, and each phase implicitly waits for the
+one before it. That is not a compatibility shim — it is the degenerate shape of
+the general rule, so the executor has no separate linear path that could drift.
+
+**Declaring the graph** (per phase, in the pipeline definition):
+
+- **`needs: ["plan"]`** — the phase ids this one waits for. Declaring `needs`
+  on _any_ phase makes the whole graph explicit: phases without it become
+  roots, rather than silently inheriting a predecessor. A mixed reading would
+  make the same definition mean two things depending on where you looked.
+- **`retry: { attempts, backoffSeconds, retryOn }`** — see below.
+- **`produces: "plan"`** — publish this phase's payload as an artifact.
+
+**Cycles and dangling edges are rejected when you save**, naming the phases
+involved. Without that check, a bad graph is not an error — it is an instance
+that starts and then simply never finishes.
+
+**What you see:** when a pipeline actually branches, its card draws a **graph**:
+one column per stage, phases that can run together stacked in a column, and each
+phase listing what it waits for. A linear pipeline draws no graph — one column
+per phase says "graph" and shows nothing the phase pills didn't. An instance
+that carries no dependency information at all also draws nothing: absent edges
+mean _unknown_, not _parallel_.
+
+**How branches behave:**
+
+- Both branches of a fan-out start together; a fan-in waits for **every**
+  dependency, not the first one to finish.
+- A gate in one branch does **not** stop the other. The board points at the
+  gate, because that is what needs a human.
+- A failed branch does not terminalize the instance while a sibling is still
+  running — that would render a stopped pipeline with a live process still
+  writing into it. The failure is recorded on the phase; the instance settles to
+  failed once nothing is left that could progress.
+- **Revise** touches only the phase you revised; a sibling that is legitimately
+  running is not silently aborted. **Abort** stops everything.
+
+**Retries.** A phase may declare `attempts`, a `backoffSeconds` that doubles
+each time (capped at an hour), and which failures are worth retrying:
+
+- `spawn` — the process never started,
+- `exit-code` — it exited non-zero,
+- `signal` — the agent _reported_ failure.
+
+The default is `["spawn", "exit-code"]`, and the omission is deliberate: an
+agent that signalled failure has considered the work and reported on it, so
+re-running the same prompt mostly just spends the money twice. Retries are
+_scheduled_ (a timestamp on the phase) rather than held in a timer, so a backoff
+survives a restart. A **revise** resets the retry budget — otherwise a phase
+that had exhausted its retries could never be revised again.
+
+**Artifacts.** A phase with `produces: "plan"` publishes its payload; any later
+phase can interpolate `{{artifacts.plan}}` in a step prompt. The older
+`{{previous.payload}}` still works and means "my dependency's payload" — which
+for a linear pipeline is exactly what it always meant. A phase with two
+dependencies has no single "previous", which is why such phases should name
+artifacts. An unknown artifact interpolates to nothing rather than leaving a
+literal `{{artifacts.foo}}` in the prompt, which the model would try to make
+sense of.
+
+**The journal.** Every instance keeps an append-only history at
+`~/.claude/argus/journals/<id>.jsonl` — started, phase started, step spawned,
+signalled, failed, retry scheduled, retrying, revised, ended. The instance file
+is _state_ and is rewritten in place, so it can tell you a phase failed but
+never that it failed, retried, failed again and was revised. Read it at
+`GET /api/instances/:id/journal`. It is evidence, never the source of truth: a
+missing or corrupt journal costs you the history, never the pipeline.
+
+---
+
 ## Quick mental model
 
 | Tab                 | Answers the question                      | Source                                      |

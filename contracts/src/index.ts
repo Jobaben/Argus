@@ -36,6 +36,8 @@ export type {
   OverviewEntry,
   PhaseDef,
   PhaseFailurePayload,
+  RetryableClass,
+  RetryPolicy,
   PhaseProgress,
   PhaseStatus,
   PhaseStep,

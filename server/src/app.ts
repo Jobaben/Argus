@@ -43,6 +43,7 @@ import {
   SentinelValidationError,
 } from "./sources/sentinel.js";
 import { performDiagnosis } from "./sources/diagnose.js";
+import { readJournal } from "./sources/journal.js";
 import { readActivity } from "./sources/history.js";
 import { readProjects } from "./sources/projects.js";
 import { readStats } from "./sources/stats.js";
@@ -1090,6 +1091,17 @@ export function createApp(deps: AppDeps): Hono {
       ),
     );
   });
+
+  /**
+   * The instance's journal: what happened, in order.
+   *
+   * The instance record is state and is rewritten in place, so it can say a
+   * phase failed but never that it failed, retried, failed again and was
+   * revised. This is the history.
+   */
+  app.get("/api/instances/:id/journal", async (c) =>
+    c.json({ entries: await readJournal(c.req.param("id")) }),
+  );
 
   app.get("/api/instances/:id", async (c) => {
     const inst = await readInstance(c.req.param("id"));

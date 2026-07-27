@@ -4,6 +4,7 @@ import { useInsight } from "../useInsight";
 import { useRuns } from "../useRuns";
 import { SituationStrip } from "./SituationStrip";
 import { ActivityRail } from "./ActivityRail";
+import { PhaseGraph } from "./PhaseGraph";
 import { StepDrawer, type StepSelection } from "./StepDrawer";
 import { useRunActivity } from "../useRunActivity";
 import type { LiveActivity } from "../useRunActivity";
@@ -440,6 +441,9 @@ function Row({
                   </span>
                 </div>
               )}
+              {/* The shape, when there is one to see. A linear pipeline renders
+                  nothing here — the phase cells below already are the shape. */}
+              <PhaseGraph phases={row.phases} />
               {row.phases.map((pill) => (
                 <PhaseCell
                   key={pill.id}

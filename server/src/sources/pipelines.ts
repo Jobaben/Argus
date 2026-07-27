@@ -5,6 +5,7 @@ import { createJsonArrayStore } from "./jsonArrayStore.js";
 import type { PhaseDef, PhaseStep, PipelineDefinition } from "./pipelineTypes.js";
 import type { Trigger } from "./scheduleTypes.js";
 import { RubricValidationError, validateAutoApprove, validateRubric } from "./verdict.js";
+import { DagValidationError, validateDag } from "./dag.js";
 
 // The crash-safe, mutex-serialized single-file store (shared with schedules).
 const store = createJsonArrayStore<PipelineDefinition>({
@@ -98,14 +99,71 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
     );
   }
 
+  // Dependency edges. `needs: []` is meaningful (an explicit root), so the
+  // key's *presence* is what switches the whole graph from linear-implicit to
+  // explicit — see resolveNeeds.
+  let needs: string[] | undefined;
+  if (p.needs !== undefined) {
+    if (!Array.isArray(p.needs) || p.needs.some((n) => typeof n !== "string" || !n.trim())) {
+      throw new PipelineValidationError(`phase ${i}: needs must be a list of phase ids`);
+    }
+    needs = p.needs.map((n) => (n as string).trim());
+  }
+
+  const retry = validateRetry(p.retry, i);
+
+  let produces: string | undefined;
+  if (p.produces !== undefined && p.produces !== null) {
+    if (typeof p.produces !== "string" || !/^[A-Za-z0-9_-]{1,40}$/.test(p.produces)) {
+      throw new PipelineValidationError(
+        `phase ${i}: produces must be a short name of letters, digits, - or _`,
+      );
+    }
+    produces = p.produces;
+  }
+
   return {
     id: p.id.trim(),
     name: p.name.trim(),
     cwd: p.cwd,
     steps,
     gated,
+    ...(needs === undefined ? {} : { needs }),
+    ...(retry ? { retry } : {}),
+    ...(produces ? { produces } : {}),
     ...(rubric ? { rubric } : {}),
     ...(autoApprove ? { autoApprove } : {}),
+  };
+}
+
+const RETRYABLE: readonly string[] = ["spawn", "exit-code", "signal"];
+
+function validateRetry(raw: unknown, i: number) {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object")
+    throw new PipelineValidationError(`phase ${i}: retry must be an object`);
+  const r = raw as Record<string, unknown>;
+  const attempts = Number(r.attempts);
+  if (!Number.isInteger(attempts) || attempts < 1 || attempts > 10) {
+    throw new PipelineValidationError(`phase ${i}: retry.attempts must be an integer 1-10`);
+  }
+  const backoffSeconds = r.backoffSeconds === undefined ? 30 : Number(r.backoffSeconds);
+  if (!Number.isFinite(backoffSeconds) || backoffSeconds < 0 || backoffSeconds > 3600) {
+    throw new PipelineValidationError(`phase ${i}: retry.backoffSeconds must be 0-3600`);
+  }
+  let retryOn: string[] | undefined;
+  if (r.retryOn !== undefined) {
+    if (!Array.isArray(r.retryOn) || r.retryOn.some((c) => !RETRYABLE.includes(String(c)))) {
+      throw new PipelineValidationError(
+        `phase ${i}: retry.retryOn must be a list of ${RETRYABLE.join(" | ")}`,
+      );
+    }
+    retryOn = [...new Set(r.retryOn.map(String))];
+  }
+  return {
+    attempts,
+    backoffSeconds,
+    ...(retryOn ? { retryOn: retryOn as ("spawn" | "exit-code" | "signal")[] } : {}),
   };
 }
 
@@ -118,6 +176,14 @@ export function validatePipelineInput(raw: unknown): PipelineInput {
     throw new PipelineValidationError("pipeline needs at least one phase");
   }
   const phases = r.phases.map((p, i) => validatePhase(p, i));
+  // A cycle or a dangling edge is a 400 at authoring time. Without this it is
+  // an instance that starts and then simply never finishes, which is how a DAG
+  // executor fails when nobody checks.
+  try {
+    validateDag(phases);
+  } catch (e) {
+    throw new PipelineValidationError(e instanceof DagValidationError ? e.message : String(e));
+  }
   const trigger = r.trigger == null ? null : validateTrigger(r.trigger, { allowWindowed: true });
   const overlapPolicy = r.overlapPolicy === "allow" ? "allow" : "skip";
   const enabled = r.enabled === undefined ? true : Boolean(r.enabled);

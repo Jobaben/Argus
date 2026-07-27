@@ -1456,3 +1456,98 @@ test("sentinel: incident actions require an admin session; reading does not", as
     401,
   );
 });
+
+// ── Weave ───────────────────────────────────────────────────────────────────
+
+const dagPhase = (id: string, over: Record<string, unknown> = {}) => ({
+  id,
+  name: id,
+  cwd: home,
+  gated: false,
+  steps: [{ name: "s", prompt: "p" }],
+  ...over,
+});
+
+async function postPipeline(app: ReturnType<typeof makeApp>, phases: unknown[]) {
+  return app.request("/api/pipelines", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ name: "P", trigger: null, phases }),
+  });
+}
+
+test("weave: a valid diamond is accepted and its edges round-trip", async () => {
+  const app = makeApp();
+  const res = await postPipeline(app, [
+    dagPhase("plan"),
+    dagPhase("build", { needs: ["plan"] }),
+    dagPhase("test", { needs: ["plan"] }),
+    dagPhase("ship", { needs: ["build", "test"], produces: "release" }),
+  ]);
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as {
+    phases: { id: string; needs?: string[]; produces?: string }[];
+  };
+  assert.deepEqual(body.phases[3].needs, ["build", "test"]);
+  assert.equal(body.phases[3].produces, "release");
+});
+
+test("weave: a cycle is a clean 400 at authoring time, not a run that never finishes", async () => {
+  const app = makeApp();
+  const res = await postPipeline(app, [
+    dagPhase("a", { needs: ["b"] }),
+    dagPhase("b", { needs: ["a"] }),
+  ]);
+  assert.equal(res.status, 400);
+  assert.match(((await res.json()) as { error: string }).error, /cycle/);
+});
+
+test("weave: a dependency that does not exist is named in the error", async () => {
+  const app = makeApp();
+  const res = await postPipeline(app, [dagPhase("a"), dagPhase("b", { needs: ["ghost"] })]);
+  assert.equal(res.status, 400);
+  assert.match(((await res.json()) as { error: string }).error, /needs "ghost"/);
+});
+
+test("weave: retry policies are validated, and a bad one is a 400", async () => {
+  const app = makeApp();
+  const ok = await postPipeline(app, [
+    dagPhase("a", { retry: { attempts: 3, backoffSeconds: 15, retryOn: ["exit-code"] } }),
+  ]);
+  assert.equal(ok.status, 201);
+  const body = (await ok.json()) as { phases: { retry: { attempts: number } }[] };
+  assert.equal(body.phases[0].retry.attempts, 3);
+
+  for (const bad of [
+    { attempts: 0, backoffSeconds: 1 },
+    { attempts: 99, backoffSeconds: 1 },
+    { attempts: 2, backoffSeconds: -1 },
+    { attempts: 2, backoffSeconds: 1, retryOn: ["whenever"] },
+  ]) {
+    const res = await postPipeline(app, [dagPhase("a", { retry: bad })]);
+    assert.equal(res.status, 400, JSON.stringify(bad));
+  }
+});
+
+test("weave: an artifact name that could break interpolation is refused", async () => {
+  const app = makeApp();
+  const res = await postPipeline(app, [dagPhase("a", { produces: "not a name!" })]);
+  assert.equal(res.status, 400);
+});
+
+test("weave: a pre-Weave linear definition is still accepted unchanged", async () => {
+  const app = makeApp();
+  const res = await postPipeline(app, [dagPhase("a"), dagPhase("b"), dagPhase("c")]);
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as { phases: { needs?: string[] }[] };
+  // Nothing is written back onto the definition: the linear reading is applied
+  // at execution time, so the file stays exactly what the author wrote.
+  assert.equal(body.phases[1].needs, undefined);
+});
+
+test("weave: an instance's journal is readable, and unknown ids are empty rather than errors", async () => {
+  const app = makeApp();
+  const res = await app.request("/api/instances/never-existed/journal", { headers: loopback });
+  assert.equal(res.status, 200);
+  assert.deepEqual(((await res.json()) as { entries: unknown[] }).entries, []);
+});

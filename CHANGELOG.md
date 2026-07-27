@@ -7,6 +7,32 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Weave** — pipelines graduate from a list to a typed DAG. Phases declare
+  `needs`, so a pipeline can plan once, fan out to build and test in parallel,
+  and fan back in to ship when both are done. Cycles and dangling edges are
+  rejected when you save, naming the phases involved — without that check a bad
+  graph is not an error but an instance that starts and never finishes. Phases
+  can declare a **retry policy** (attempts, doubling backoff, and which failure
+  classes are worth retrying — `signal` is deliberately excluded by default,
+  because an agent that reported failure has considered the work) and **named
+  artifacts** that later phases interpolate as `{{artifacts.<name>}}`. Every
+  instance keeps an append-only **journal**, because the instance record is
+  state rewritten in place and can never say that a phase failed, retried,
+  failed again and was revised.
+  Linear definitions load unchanged, and not as a compatibility shim: a linear
+  pipeline is _defined_ as a DAG in which each phase needs its predecessor, so
+  there is one executor rather than a general one and a legacy one that could
+  drift. The entire 735-test suite that predated Weave passes untouched.
+  Three things that were bugs before they were design: a failed branch no longer
+  terminalizes the instance while a sibling is still running (that rendered a
+  stopped pipeline with a live process writing into it), kill scope is explicit
+  so a revise cannot silently abort a sibling branch, and deferred launches
+  re-resolve phases by id because an abort landing in the window changes what
+  the indices mean. The board draws the graph when — and only when — there is
+  one to see: a linear pipeline draws none, and an instance carrying no edge
+  information draws none either, because absent edges mean _unknown_, not
+  _parallel_.
+
 - **Sentinel** (`#/sentinel`): incidents, escalation, and a diagnostic that
   proposes but never acts. Monitors, Issues and Watchtower each raise a signal;
   none of them holds the state that makes a signal answerable — who saw it, when

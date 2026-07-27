@@ -23,13 +23,18 @@ import {
   applyAbort,
   applyApprove,
   applyRevise,
-  applyTemplate,
+  applyRetry,
+  retryDelayMs,
+  shouldRetry,
   initInstance,
 } from "./pipelineTransitions.js";
+import { interpolate, livePhases, previousPayloadFor } from "./sources/dag.js";
+import { journal } from "./sources/journal.js";
 import { isAlive, parseRunEnvelope } from "./scheduler.js";
 import { graceMsFor, previousFireTime } from "./sources/nextFire.js";
 import { KeyedMutex } from "./mutex.js";
 import type { Run } from "./sources/scheduleTypes.js";
+import type { RetryableClass } from "./sources/pipelineTypes.js";
 import type {
   PipelineDefinition,
   PipelineInstance,
@@ -187,6 +192,24 @@ export function createEngine(deps: EngineDeps): Engine {
     return (await readPipelines()).find((d) => d.id === pipelineId);
   }
 
+  /**
+   * Launch a wave of ready phases.
+   *
+   * Sequential over the wave rather than `Promise.all`: each phase's launch
+   * writes the instance, and two concurrent writers would race on the same
+   * file. The steps *within* a phase already run concurrently, and the phases
+   * themselves proceed concurrently once launched — this loop only serializes
+   * the handful of milliseconds it takes to record their runIds.
+   */
+  async function startPhases(
+    def: PipelineDefinition,
+    inst: PipelineInstance,
+    indices: number[],
+    noteSuffix = "",
+  ): Promise<void> {
+    for (const i of indices) await startPhase(def, inst, i, noteSuffix);
+  }
+
   async function startPhase(
     def: PipelineDefinition,
     inst: PipelineInstance,
@@ -194,7 +217,9 @@ export function createEngine(deps: EngineDeps): Engine {
     noteSuffix = "",
   ): Promise<void> {
     const phaseDef = def.phases[phaseIndex];
-    const prevPayload = phaseIndex > 0 ? inst.phases[phaseIndex - 1].payload : null;
+    // "Previous" is the phase's own dependency, which for a linear pipeline is
+    // the phase before it — the same value the cursor version produced.
+    const prevPayload = previousPayloadFor(def, inst, phaseDef.id);
     const startedAt = nowISO();
     const planned = phaseDef.steps.map((stepDef) => {
       const runId = deps.newId();
@@ -202,7 +227,7 @@ export function createEngine(deps: EngineDeps): Engine {
         id: runId,
         scheduleId: `pipeline:${inst.pipelineId}`,
         scheduleName: `${inst.pipelineName} · ${phaseDef.name}`,
-        prompt: applyTemplate(stepDef.prompt, prevPayload) + noteSuffix,
+        prompt: interpolate(stepDef.prompt, prevPayload, inst.artifacts ?? {}) + noteSuffix,
         cwd: phaseDef.cwd,
         status: "running",
         trigger: "scheduled",
@@ -230,6 +255,13 @@ export function createEngine(deps: EngineDeps): Engine {
     }));
     inst.phases[phaseIndex].status = "running";
     await writeInstance(inst);
+    void journal(inst.id, {
+      at: startedAt,
+      kind: "phase.started",
+      phaseId: phaseDef.id,
+      attempt: inst.phases[phaseIndex].attempt,
+      detail: `${planned.length} step${planned.length === 1 ? "" : "s"}`,
+    });
 
     // Launch each step: acquire a slot, spawn, and persist the pid. Callers on
     // the HTTP request path (start/approve/revise) await these launches so the
@@ -238,6 +270,13 @@ export function createEngine(deps: EngineDeps): Engine {
     // callers hold no slot of their own.
     for (const { run } of planned) {
       const handle = await launchStep(run, phaseDef, inst);
+      void journal(inst.id, {
+        at: nowISO(),
+        kind: "step.spawned",
+        phaseId: phaseDef.id,
+        runId: run.id,
+        detail: handle ? `pid ${run.pid ?? "unknown"}` : "spawn failed",
+      });
       if (handle) trackStep(run, handle, startedAt);
     }
     deps.onChange?.();
@@ -321,11 +360,20 @@ export function createEngine(deps: EngineDeps): Engine {
       });
   }
 
-  /** Kill any still-alive process spawned for the instance's current phase.
-   *  Used before aborting, and before a revise re-spawns the phase, so a
-   *  straggler run can't keep executing (or later signal) against it. */
-  async function killPhaseRuns(inst: PipelineInstance): Promise<void> {
-    for (const s of inst.phases[inst.currentPhaseIndex]?.steps ?? []) {
+  /**
+   * Kill any still-alive process spawned for the named phases, so a straggler
+   * run can't keep executing (or later signal) against them.
+   *
+   * The phase ids are explicit rather than derived from "what is live" for two
+   * reasons that pull in opposite directions, and both matter with a DAG:
+   * aborting must reach phases the abort has *already* marked terminal, while
+   * revising must **not** reach a sibling branch that is legitimately still
+   * running.
+   */
+  async function killPhaseRuns(inst: PipelineInstance, phaseIds: string[]): Promise<void> {
+    const wanted = new Set(phaseIds);
+    const steps = inst.phases.filter((p) => wanted.has(p.id)).flatMap((p) => p.steps);
+    for (const s of steps) {
       if (!s.runId) continue;
       const got = await readRun(s.runId);
       if (got && isAlive(got.run.pid)) {
@@ -339,11 +387,88 @@ export function createEngine(deps: EngineDeps): Engine {
     }
   }
 
+  /**
+   * Note the failure in the journal and, if the phase's policy allows it,
+   * schedule another attempt.
+   *
+   * The retry is *scheduled* (a timestamp on the phase, persisted) rather than
+   * awaited with a timer. A `setTimeout` would lose the retry on restart and
+   * would hold the instance lock across the backoff; a stored `retryAt` that
+   * the reconcile tick picks up survives a crash and costs nothing while it
+   * waits. The trade is that backoff resolution is one scheduler tick, which
+   * for a policy measured in seconds-to-minutes is not a trade at all.
+   */
+  function noteFailure(
+    def: PipelineDefinition,
+    inst: PipelineInstance,
+    phaseId: string,
+    failure: RetryableClass,
+    reason: string,
+  ): boolean {
+    const phase = inst.phases.find((p) => p.id === phaseId);
+    if (!phase || phase.status !== "failed") return false;
+    void journal(inst.id, {
+      at: nowISO(),
+      kind: "phase.failed",
+      phaseId,
+      attempt: phase.attempt,
+      detail: `${failure}: ${reason}`,
+    });
+
+    const policy = def.phases.find((p) => p.id === phaseId)?.retry;
+    if (!shouldRetry(policy, phase.retries ?? 0, failure)) return false;
+
+    const at = new Date(deps.now().getTime() + retryDelayMs(policy!, phase.retries ?? 0));
+    phase.retryAt = at.toISOString();
+    // The instance is no longer terminal: something is still going to happen.
+    inst.status = "running";
+    inst.endedAt = null;
+    void journal(inst.id, {
+      at: nowISO(),
+      kind: "phase.retry-scheduled",
+      phaseId,
+      attempt: phase.attempt,
+      detail: `attempt ${(phase.retries ?? 0) + 2} of ${policy!.attempts} at ${phase.retryAt}`,
+    });
+    return true;
+  }
+
+  /** Start every retry whose backoff has elapsed. Called from reconcile. */
+  async function runDueRetries(now: Date): Promise<void> {
+    for (const candidate of await readInstances()) {
+      if (candidate.status !== "running" && candidate.status !== "failed") continue;
+      if (!candidate.phases.some((p) => p.retryAt)) continue;
+      const def = await loadDef(candidate.pipelineId);
+      if (!def) continue;
+      await locks.withLock(candidate.id, async () => {
+        const inst = await readInstance(candidate.id);
+        if (!inst) return;
+        const due = inst.phases.filter(
+          (p) => p.status === "failed" && p.retryAt && Date.parse(p.retryAt) <= now.getTime(),
+        );
+        for (const phase of due) {
+          const res = applyRetry(inst, phase.id, nowISO());
+          if (res.startPhases.length === 0) continue;
+          await writeInstance(res.instance);
+          void journal(inst.id, {
+            at: nowISO(),
+            kind: "phase.retrying",
+            phaseId: phase.id,
+            attempt: phase.attempt,
+          });
+          await startPhases(def, res.instance, res.startPhases);
+          deps.onChange?.();
+        }
+      });
+    }
+  }
+
   async function adopt(): Promise<void> {
     for (const inst of await readInstances()) {
       if (inst.status !== "running") continue;
-      const phase = inst.phases[inst.currentPhaseIndex];
-      for (const s of phase?.steps ?? []) {
+      // Every live phase, not just one: a fan-out has several in flight, and an
+      // unadopted run is a process nobody is tracking.
+      for (const s of livePhases(inst).flatMap((i) => inst.phases[i].steps)) {
         if (s.status !== "running" || !s.runId || adopted.has(s.runId)) continue;
         const got = await readRun(s.runId);
         if (!got || got.run.status !== "running" || !isAlive(got.run.pid)) continue;
@@ -367,7 +492,7 @@ export function createEngine(deps: EngineDeps): Engine {
       const pf = await deps.preflight();
       if (!pf.ok) throw new PreflightError(pf.reasons);
     }
-    const { instance, startPhase: idx } = initInstance(
+    const { instance, startPhases: ready } = initInstance(
       def,
       trigger,
       { instanceId: deps.newId(), token: deps.newId() },
@@ -375,7 +500,12 @@ export function createEngine(deps: EngineDeps): Engine {
     );
     await writeInstance(instance);
     await markPipelineStarted(def.id, instance.createdAt);
-    if (idx !== null) await startPhase(def, instance, idx);
+    void journal(instance.id, {
+      at: instance.createdAt,
+      kind: "instance.started",
+      detail: `${def.name} (${trigger})`,
+    });
+    await startPhases(def, instance, ready);
     await pruneInstances(def.id, INSTANCE_KEEP);
     deps.onChange?.();
     return instance;
@@ -389,11 +519,33 @@ export function createEngine(deps: EngineDeps): Engine {
       if (inst.status !== "running") return { ok: true, code: 200 }; // paused/terminal → idempotent ignore
       const def = await loadDef(inst.pipelineId);
       if (!def) return { ok: false, code: 404 };
-      const { instance, startPhase: idx } = advance(def, inst, signal, nowISO());
+      const { instance, startPhases: ready } = advance(def, inst, signal, nowISO());
       await writeInstance(instance);
       const outcome: Run["outcome"] | undefined =
         signal.type === "failed" ? "failed" : signal.type === "completed" ? "succeeded" : undefined;
       if (outcome) await patchRun(signal.runId, { outcome });
+      if (signal.type === "failed") {
+        // An agent that signalled failure has considered the work, so this
+        // class is excluded from the default retry set — but an author who
+        // opted into it gets it.
+        if (noteFailure(def, instance, signal.phaseId, "signal", "the agent signalled failure")) {
+          await writeInstance(instance);
+        }
+      }
+      void journal(instance.id, {
+        at: nowISO(),
+        kind: "phase.signalled",
+        phaseId: signal.phaseId,
+        runId: signal.runId,
+        detail: signal.type,
+      });
+      if (instance.status === "succeeded" || instance.status === "failed") {
+        void journal(instance.id, {
+          at: nowISO(),
+          kind: "instance.ended",
+          detail: instance.status,
+        });
+      }
       // Start the next phase detached: this handler runs on the child's signal
       // POST, and that child may still hold its concurrency slot until its
       // process exits after we respond. Awaiting startPhase here (which acquires
@@ -402,12 +554,19 @@ export function createEngine(deps: EngineDeps): Engine {
       // instance lock and re-verifies liveness before launching, so an abort/
       // revise landing in the transition window can't be clobbered and won't be
       // raced into spawning orphan children (it queues behind, then kills them).
-      if (idx !== null) {
+      if (ready.length > 0) {
+        const wantIds = ready.map((i) => instance.phases[i].id);
         void locks
           .withLock(instanceId, async () => {
             const fresh = await readInstance(instanceId);
-            if (!fresh || fresh.status !== "running" || fresh.currentPhaseIndex !== idx) return;
-            await startPhase(def, fresh, idx);
+            if (!fresh || fresh.status !== "running") return;
+            // Re-resolve by phase *id*: an abort/revise landing in the window
+            // may have changed which phases are live, and launching by a stale
+            // index would spawn the wrong work.
+            const stillWanted = wantIds
+              .map((id) => fresh.phases.findIndex((p) => p.id === id))
+              .filter((i) => i >= 0 && fresh.phases[i].status === "running");
+            await startPhases(def, fresh, stillWanted);
           })
           .catch((e: unknown) => log.error("deferred phase start failed", { instanceId, err: e }));
       }
@@ -430,7 +589,7 @@ export function createEngine(deps: EngineDeps): Engine {
         return { ok: false, code: 409, error: e instanceof Error ? e.message : String(e) };
       }
       await writeInstance(res.instance);
-      if (res.startPhase !== null) await startPhase(def, res.instance, res.startPhase);
+      await startPhases(def, res.instance, res.startPhases);
       deps.onChange?.();
       return { ok: true, code: 200 };
     });
@@ -452,10 +611,15 @@ export function createEngine(deps: EngineDeps): Engine {
       } catch (e) {
         return { ok: false, code: 409, error: e instanceof Error ? e.message : String(e) };
       }
-      await killPhaseRuns(inst);
+      // Only the revised phase: a sibling branch that is legitimately running
+      // is not part of this decision, and killing it would be a silent abort.
+      await killPhaseRuns(
+        inst,
+        res.startPhases.map((i) => res.instance.phases[i].id),
+      );
       await writeInstance(res.instance);
       const suffix = note ? `\n\nRevision note: ${note}` : "";
-      if (res.startPhase !== null) await startPhase(def, res.instance, res.startPhase, suffix);
+      await startPhases(def, res.instance, res.startPhases, suffix);
       deps.onChange?.();
       return { ok: true, code: 200 };
     });
@@ -471,7 +635,12 @@ export function createEngine(deps: EngineDeps): Engine {
       } catch (e) {
         return { ok: false, code: 409, error: e instanceof Error ? e.message : String(e) };
       }
-      await killPhaseRuns(inst);
+      // Everything: an abort stops the whole instance, including branches the
+      // applyAbort above has already marked terminal.
+      await killPhaseRuns(
+        inst,
+        inst.phases.map((p) => p.id),
+      );
       await writeInstance(aborted);
       deps.onChange?.();
       return { ok: true, code: 200 };
@@ -544,7 +713,11 @@ export function createEngine(deps: EngineDeps): Engine {
       await start(def.id, "scheduled");
     }
 
-    // 2. Heal running instances whose current-phase runs ended without signalling.
+    // 2. Start any retry whose backoff has elapsed. Before healing, so a phase
+    //    that just became due is retried rather than re-examined as an orphan.
+    await runDueRetries(now);
+
+    // 3. Heal running instances whose live-phase runs ended without signalling.
     //    Each instance is healed under its lock, re-reading fresh state inside,
     //    so a genuine completion signal landing mid-pass is never clobbered by a
     //    stale "failed" write (the TOCTOU the lock closes).
@@ -556,8 +729,13 @@ export function createEngine(deps: EngineDeps): Engine {
           const inst = await readInstance(candidate.id);
           if (!inst || inst.status !== "running") return;
           let current = inst;
-          const phase = current.phases[current.currentPhaseIndex];
-          for (const s of phase.steps) {
+          // Every live phase: with a fan-out, a died-without-signalling run can
+          // be in any of them, and healing only one would leave the others
+          // showing a working tile forever.
+          const orphans = livePhases(current).flatMap((i) =>
+            current.phases[i].steps.map((s) => ({ phaseId: current.phases[i].id, step: s })),
+          );
+          for (const { phaseId, step: s } of orphans) {
             if (s.status !== "running" || !s.runId) continue;
             const got = await readRun(s.runId);
             const ended =
@@ -577,7 +755,7 @@ export function createEngine(deps: EngineDeps): Engine {
               current,
               {
                 instanceId: current.id,
-                phaseId: phase.id,
+                phaseId,
                 runId: s.runId,
                 type: "failed",
                 token: current.signalToken,
@@ -585,12 +763,16 @@ export function createEngine(deps: EngineDeps): Engine {
               },
               nowISO(),
             );
+            // Class the failure from what the run record shows, so a policy
+            // that retries infrastructure but not judgement can tell them apart.
+            const failureClass: RetryableClass = got?.run.pid == null ? "spawn" : "exit-code";
+            noteFailure(def, instance, phaseId, failureClass, payload.reason);
             await writeInstance(instance);
             deps.tailer?.untrack(s.runId);
             if (instance.status === "failed") deps.onFailure?.(instance);
             deps.onChange?.();
             current = instance;
-            if (current.status !== "running") break;
+            if (current.status !== "running" && current.status !== "awaiting-approval") break;
           }
         });
       }

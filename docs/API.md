@@ -463,6 +463,102 @@ known-exceeded budget), and `exceeded → warning` stays quiet — you already
 heard about the breach; `budget.cleared` fires once spend is back under every
 limit.
 
+## Weave — the pipeline DAG
+
+Pipeline phases carry dependency edges, retry policies and artifact names.
+Everything here is optional, and a definition using none of it is a **linear**
+pipeline that behaves exactly as it did before Weave.
+
+### Phase fields
+
+```jsonc
+{
+  "id": "ship",
+  "name": "Ship",
+  "cwd": "/repo",
+  "gated": false,
+  "steps": [{ "name": "release", "prompt": "Release {{artifacts.plan}}" }],
+
+  "needs": ["build", "test"], // phase ids this one waits for
+  "retry": {
+    "attempts": 3, // 1-10, including the first
+    "backoffSeconds": 30, // 0-3600, doubles each retry, capped at 1h
+    "retryOn": ["spawn", "exit-code"], // default; "signal" is opt-in
+  },
+  "produces": "release", // publish the payload as an artifact
+}
+```
+
+**The linear default.** If **no** phase declares `needs`, each phase implicitly
+needs the one before it. If **any** phase declares it, the graph is taken at
+face value and phases without it are roots. A mixed reading would make the same
+definition mean two different things depending on which phase you looked at.
+Nothing is written back onto the definition — the linear reading is applied at
+execution time, so the stored file stays what the author wrote.
+
+**Validation** happens on create/update and is a `400`, not a runtime hang:
+duplicate ids, self-edges, edges to phases that do not exist, duplicate edges,
+cycles (the message names the phases in the cycle), and a graph where no phase
+can start. `produces` must match `[A-Za-z0-9_-]{1,40}`.
+
+### Execution semantics
+
+- A fan-out starts every newly-ready phase together; a **fan-in waits for every
+  dependency**, not the first to arrive.
+- A gate in one branch does not stop another. `currentPhaseIndex` is redefined
+  as the _most interesting_ live phase — a waiting gate first, then anything
+  running, then the last thing that happened — so existing views keep working.
+- A failed phase does **not** immediately terminate the instance while a sibling
+  is still executing; the instance settles to `failed` when nothing is left that
+  could progress. (`succeeded` requires every phase to have succeeded.)
+- `POST /api/instances/:id/revise` re-runs only the revised phase and kills only
+  that phase's stragglers. `POST /api/instances/:id/abort` stops everything.
+
+### Instance fields
+
+`PhaseProgress` gains `needs` (resolved, so the board can draw the graph without
+the definition — which may since have been edited), `retries`, and `retryAt`.
+`PipelineInstance` gains `artifacts: Record<string, unknown>`.
+
+### Artifacts
+
+A step prompt may interpolate:
+
+- `{{previous.payload}}` — the payload of this phase's dependency. For a linear
+  pipeline this is exactly what it always was.
+- `{{artifacts.<name>}}` — any artifact published by a completed phase.
+
+An unknown artifact interpolates to the empty string rather than being left as a
+literal marker in the prompt.
+
+### `GET /api/instances/:id/journal`
+
+```json
+{
+  "entries": [
+    { "at": "…", "kind": "instance.started", "detail": "Release train (manual)" },
+    { "at": "…", "kind": "phase.started", "phaseId": "build", "attempt": 0, "detail": "2 steps" },
+    { "at": "…", "kind": "step.spawned", "phaseId": "build", "runId": "…", "detail": "pid 4212" },
+    { "at": "…", "kind": "phase.failed", "phaseId": "build", "detail": "exit-code: exit code 1" },
+    {
+      "at": "…",
+      "kind": "phase.retry-scheduled",
+      "phaseId": "build",
+      "detail": "attempt 2 of 3 at …"
+    },
+    { "at": "…", "kind": "phase.retrying", "phaseId": "build", "attempt": 1 }
+  ]
+}
+```
+
+Append-only, one file per instance, capped at 500 returned entries and rotated
+past 512 KB. It exists because the instance record is _state_ and is rewritten
+in place: it can say a phase failed, but never that it failed, retried, failed
+again and was revised. **Nothing reads the journal to decide what to do next** —
+it is evidence, and a missing or corrupt one costs the history, never the
+pipeline. A torn final line (the only failure mode of an append) costs exactly
+one record. An unknown or path-escaping id returns an empty list.
+
 ## Sentinel
 
 Incidents, escalation and the read-only diagnostic. Reading is open; every
