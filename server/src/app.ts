@@ -27,6 +27,22 @@ import {
   readVerdicts,
 } from "./sources/verdict.js";
 import { rubricFor } from "./verdictWatcher.js";
+import {
+  acknowledge,
+  addNote,
+  attachDiagnosis,
+  inQuietHours,
+  readIncidents,
+  readPolicy,
+  resolveByHand,
+  summarize,
+  updatePolicy,
+  validatePolicyPatch,
+  withIncidentLock,
+  writeIncidents,
+  SentinelValidationError,
+} from "./sources/sentinel.js";
+import { performDiagnosis } from "./sources/diagnose.js";
 import { readActivity } from "./sources/history.js";
 import { readProjects } from "./sources/projects.js";
 import { readStats } from "./sources/stats.js";
@@ -369,6 +385,12 @@ export function createApp(deps: AppDeps): Hono {
   // Producing a postmortem spawns an agent; relaunching spawns a real run.
   app.on(["POST"], "/api/runs/:id/autopsy", admin);
   app.on(["POST"], "/api/runs/:id/verdict", admin);
+  // Incident actions mutate shared operator state; diagnosing spawns an agent.
+  app.use("/api/sentinel/policy", admin);
+  app.use("/api/incidents/:id/ack", admin);
+  app.use("/api/incidents/:id/resolve", admin);
+  app.use("/api/incidents/:id/note", admin);
+  app.use("/api/incidents/:id/diagnose", admin);
   app.on(["POST"], "/api/runs/:id/relaunch", admin);
   app.use("/api/instances/:id/approve", admin);
   app.use("/api/instances/:id/revise", admin);
@@ -629,6 +651,113 @@ export function createApp(deps: AppDeps): Hono {
     }
     broadcast({ type: "issues:changed" });
     return c.json({ ok: true });
+  });
+
+  // ── Sentinel ──────────────────────────────────────────────────────────────
+  // Reading incidents is open. Acknowledging, noting and resolving are
+  // operator actions on shared state, and dispatching a diagnostic spawns an
+  // agent — all admin-gated.
+
+  /** Read the incident, mutate it under the store lock, write it back. */
+  async function mutateIncident(
+    id: string,
+    fn: (
+      incident: Awaited<ReturnType<typeof readIncidents>>[number],
+    ) => Promise<Awaited<ReturnType<typeof readIncidents>>[number]>,
+  ) {
+    return withIncidentLock(async () => {
+      const list = await readIncidents();
+      const idx = list.findIndex((i) => i.id === id);
+      if (idx === -1) return null;
+      list[idx] = await fn(list[idx]);
+      await writeIncidents(list);
+      return list[idx];
+    });
+  }
+
+  app.get("/api/sentinel", async (c) => {
+    const now = new Date();
+    const [incidents, policy] = await Promise.all([readIncidents(), readPolicy()]);
+    return c.json({
+      generatedAt: now.toISOString(),
+      policy,
+      incidents,
+      summary: summarize(incidents),
+      inQuietHours: inQuietHours(policy.quietHours, now),
+    });
+  });
+
+  app.put("/api/sentinel/policy", async (c) => {
+    const body = await jsonBody(c);
+    if (!body.ok) return body.res;
+    try {
+      const policy = await updatePolicy(validatePolicyPatch(body.value));
+      broadcast({ type: "sentinel:changed" });
+      return c.json({ policy });
+    } catch (e) {
+      return fail(c, e, SentinelValidationError);
+    }
+  });
+
+  app.post("/api/incidents/:id/ack", async (c) => {
+    const who = auth.verify(sessionToken(c))?.username ?? "admin";
+    const updated = await mutateIncident(c.req.param("id"), async (i) =>
+      acknowledge(i, who, new Date()),
+    );
+    if (!updated) return c.json({ error: "not found" }, 404);
+    broadcast({ type: "sentinel:changed" });
+    return c.json({ incident: updated });
+  });
+
+  app.post("/api/incidents/:id/resolve", async (c) => {
+    const who = auth.verify(sessionToken(c))?.username ?? "admin";
+    const note = optionalField<string>(await jsonBody(c), "note") ?? "";
+    const updated = await mutateIncident(c.req.param("id"), async (i) =>
+      resolveByHand(i, who, note, new Date()),
+    );
+    if (!updated) return c.json({ error: "not found" }, 404);
+    broadcast({ type: "sentinel:changed" });
+    return c.json({ incident: updated });
+  });
+
+  app.post("/api/incidents/:id/note", async (c) => {
+    const who = auth.verify(sessionToken(c))?.username ?? "admin";
+    const note = (optionalField<string>(await jsonBody(c), "note") ?? "").trim();
+    if (!note) return c.json({ error: "note is required" }, 400);
+    const updated = await mutateIncident(c.req.param("id"), async (i) =>
+      addNote(i, who, note.slice(0, 2000), new Date()),
+    );
+    if (!updated) return c.json({ error: "not found" }, 404);
+    broadcast({ type: "sentinel:changed" });
+    return c.json({ incident: updated });
+  });
+
+  /**
+   * Dispatch the read-only diagnostic.
+   *
+   * The pass runs *outside* the store lock — it can take ninety seconds, and
+   * holding the incident store for that long would block acknowledgements —
+   * then re-reads under the lock before attaching, so a human who acknowledged
+   * meanwhile does not lose their edit.
+   */
+  app.post("/api/incidents/:id/diagnose", async (c) => {
+    const id = c.req.param("id");
+    const incident = (await readIncidents()).find((i) => i.id === id);
+    if (!incident) return c.json({ error: "not found" }, 404);
+
+    const diagnosis = await performDiagnosis(incident, {
+      runner: analysis,
+      now: () => new Date(),
+      context: async (i) =>
+        i.scheduleId ? readRuns({ scheduleId: i.scheduleId, limit: 10 }) : readRuns({ limit: 10 }),
+    });
+
+    const updated = await mutateIncident(id, async (i) =>
+      attachDiagnosis(i, diagnosis, new Date()),
+    );
+    if (!updated) return c.json({ error: "not found" }, 404);
+    broadcast({ type: "sentinel:changed" });
+    return c.json({ incident: updated });
   });
 
   // ── Verdict ───────────────────────────────────────────────────────────────

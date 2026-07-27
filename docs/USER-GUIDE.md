@@ -1190,6 +1190,70 @@ definition.
 
 ---
 
+## 25. Sentinel
+
+_Incidents, escalation, and a diagnostic that proposes but never acts._ Route:
+`#/sentinel` (`g n`)
+
+**Purpose:** Monitors, Issues and Watchtower each raise a _signal_. None of them
+holds the state that makes a signal answerable — who saw it, when it was
+acknowledged, whether it escalated, what was found. An **incident** is that
+state: one object per ongoing problem, which assembles its own timeline as the
+problem develops.
+
+**What opens an incident** (deliberately narrow — mirroring every open issue
+here would just make a second inbox):
+
+- a monitor going **down** (critical) or **failing** (warning),
+- an issue you had marked **resolved** failing again — a regression, not
+  routine noise,
+- a **critical** Watchtower anomaly.
+
+**What you see per incident:** status and severity, how long it has been open,
+a live **escalates in…** countdown, every link that leads somewhere useful
+(the monitor, the issue, **▶ replay the run**), and the **timeline** — opened,
+escalated, acknowledged, diagnosed, noted, resolved, reopened — each entry
+attributed to Sentinel or to the person who did it.
+
+**What you can do** (admin):
+
+- **Acknowledge** — stops the escalation clock and records who stopped it.
+- **Resolve** — by hand. If the condition is still live, the next check
+  **reopens** it and says so in the timeline rather than silently undoing you.
+- **Note** — anything worth the next person knowing.
+- **Diagnose** — dispatch the read-only diagnostic (below).
+
+**Escalation and quiet hours** (Policy panel):
+
+- **Levels** — by default: notify, then escalate after 30 unacknowledged
+  minutes. Up to five levels.
+- **Quiet hours** — a local-clock window (wrapping past midnight is the normal
+  case and is handled). Inside it, **the bell is silent but the record still
+  lands**: the timeline, the incident list and the escalation clock all carry
+  on. Dropping the record instead would leave the morning view with a hole
+  exactly where the night's problems were. Criticals can be set to ring anyway.
+
+**The diagnostic — read-only by construction.** "Read-only" here is not a
+permission setting a model could talk its way past: everything the pass may
+consider is **inlined into the prompt** (the incident, its timeline, the recent
+runs of the affected work), so it is never asked to go and look and has nothing
+to look with. What comes back is a **finding** and a **proposal**, rendered as
+"Proposed, not done". Executing it is your click, always. An incident-response
+system that can also change things is one that can cause them.
+
+Auto-dispatch on open is available (**Diagnose new incidents automatically**)
+and **off by default** — spawning agents is never the default. One diagnostic
+per tick, only for freshly-opened incidents, sharing the same bounds as
+[Autopsy](#23-autopsy) and [Verdict](#24-verdict).
+
+**Where the data comes from:** `GET /api/sentinel`,
+`PUT /api/sentinel/policy`, `POST /api/incidents/:id/{ack,resolve,note,diagnose}`.
+Incidents live in `~/.claude/argus/incidents.json` — they _persist_, so a
+restart resumes mid-incident rather than re-opening everything — and the policy
+in `~/.claude/argus/sentinel.json`.
+
+---
+
 ## Quick mental model
 
 | Tab                 | Answers the question                      | Source                                      |

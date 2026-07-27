@@ -3,6 +3,7 @@ import type { PipelineInstance } from "./sources/pipelineTypes.js";
 import type { MonitorAlert } from "./sources/monitorAlerts.js";
 import type { BudgetAlert } from "./sources/budgetAlerts.js";
 import type { Anomaly } from "./sources/watchtower.js";
+import type { IncidentAlert } from "./sources/sentinel.js";
 import { log } from "./log.js";
 
 /**
@@ -18,6 +19,7 @@ export interface FailurePayload {
     | "run.failed"
     | "pipeline.failed"
     | "anomaly.detected"
+    | IncidentAlert["event"]
     | MonitorAlert["event"]
     | BudgetAlert["event"];
   at: string;
@@ -88,6 +90,23 @@ export function buildAnomalyPayload(anomaly: Anomaly): FailurePayload {
     title: `Anomaly (${anomaly.severity}): ${anomaly.name}`,
     detail: anomaly.detail,
     id: anomaly.runId,
+  };
+}
+
+const INCIDENT_TITLES: Record<IncidentAlert["event"], string> = {
+  "incident.opened": "Incident opened",
+  "incident.escalated": "Incident escalated",
+  "incident.acknowledged": "Incident acknowledged",
+  "incident.resolved": "Incident resolved",
+};
+
+export function buildIncidentPayload(alert: IncidentAlert): FailurePayload {
+  return {
+    event: alert.event,
+    at: alert.at,
+    title: `${INCIDENT_TITLES[alert.event]} (${alert.severity}): ${alert.title}`,
+    detail: alert.detail,
+    id: alert.incidentId,
   };
 }
 

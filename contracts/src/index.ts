@@ -124,6 +124,24 @@ export type {
 } from "./admin.js";
 
 export type {
+  Diagnosis,
+  DiagnosisStatus,
+  EscalationLevel,
+  Incident,
+  IncidentAlert,
+  IncidentAlertEvent,
+  IncidentEvent,
+  IncidentEventKind,
+  IncidentSeverity,
+  IncidentSource,
+  IncidentStatus,
+  QuietHours,
+  SentinelPolicy,
+  SentinelState,
+  SentinelSummary,
+} from "./sentinel.js";
+
+export type {
   AutoApprove,
   CriterionScore,
   Rubric,
@@ -158,6 +176,7 @@ export type {
 
 export type {
   AnomalyAlertFrame,
+  IncidentAlertFrame,
   BudgetAlert,
   BudgetAlertEvent,
   BudgetAlertFrame,

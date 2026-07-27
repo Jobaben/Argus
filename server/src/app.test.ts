@@ -1261,3 +1261,198 @@ test("pipelines: autoApprove without a rubric on the same phase is a clean 400",
   assert.equal(res.status, 400);
   assert.match(((await res.json()) as { error: string }).error, /needs a rubric/);
 });
+
+// ── Sentinel ────────────────────────────────────────────────────────────────
+
+function writeIncidentFile(over: Record<string, unknown> = {}) {
+  mkdirSync(path.join(home, "argus"), { recursive: true });
+  const iso = new Date().toISOString();
+  writeFileSync(
+    path.join(home, "argus", "incidents.json"),
+    JSON.stringify([
+      {
+        id: "inc1",
+        key: "monitor:s1",
+        source: "monitor-down",
+        severity: "critical",
+        title: "Nightly triage",
+        detail: "no run covered the expected slot",
+        status: "open",
+        openedAt: iso,
+        updatedAt: iso,
+        acknowledgedAt: null,
+        acknowledgedBy: null,
+        resolvedAt: null,
+        level: 0,
+        nextEscalationAt: null,
+        timeline: [{ at: iso, kind: "opened", detail: "opened", by: "sentinel" }],
+        diagnosis: null,
+        scheduleId: "s1",
+        runId: null,
+        fingerprint: null,
+        ...over,
+      },
+    ]),
+  );
+}
+
+test("sentinel: default policy is served, and updates round-trip", async () => {
+  const app = makeApp();
+  const initial = (await (await app.request("/api/sentinel", { headers: loopback })).json()) as {
+    policy: { enabled: boolean; autoDiagnose: boolean; levels: unknown[] };
+    incidents: unknown[];
+    inQuietHours: boolean;
+  };
+  assert.equal(initial.policy.enabled, true);
+  assert.equal(initial.policy.autoDiagnose, false, "spawning agents is never the default");
+  assert.ok(initial.policy.levels.length >= 2);
+  assert.deepEqual(initial.incidents, []);
+  assert.equal(initial.inQuietHours, false);
+
+  const put = await app.request("/api/sentinel/policy", {
+    method: "PUT",
+    headers: sameOrigin,
+    body: JSON.stringify({ autoDiagnose: true, quietHours: { start: "22:00", end: "07:00" } }),
+  });
+  assert.equal(put.status, 200);
+  const after = (await (await app.request("/api/sentinel", { headers: loopback })).json()) as {
+    policy: { autoDiagnose: boolean; quietHours: { start: string } };
+  };
+  assert.equal(after.policy.autoDiagnose, true);
+  assert.equal(after.policy.quietHours.start, "22:00");
+});
+
+test("sentinel: an unusable policy is a clean 400", async () => {
+  const app = makeApp();
+  const res = await app.request("/api/sentinel/policy", {
+    method: "PUT",
+    headers: sameOrigin,
+    body: JSON.stringify({ quietHours: { start: "99:99", end: "07:00" } }),
+  });
+  assert.equal(res.status, 400);
+});
+
+test("sentinel: acknowledge, note and resolve record who did them", async () => {
+  const app = makeApp();
+  writeIncidentFile();
+
+  const ack = await app.request("/api/incidents/inc1/ack", { method: "POST", headers: sameOrigin });
+  assert.equal(ack.status, 200);
+  const acked = (await ack.json()) as { incident: { status: string; acknowledgedBy: string } };
+  assert.equal(acked.incident.status, "acknowledged");
+  assert.equal(acked.incident.acknowledgedBy, "test");
+
+  const note = await app.request("/api/incidents/inc1/note", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ note: "PATH fixed on the host" }),
+  });
+  assert.equal(note.status, 200);
+  const noted = (await note.json()) as {
+    incident: { timeline: { kind: string; detail: string; by: string }[] };
+  };
+  const last = noted.incident.timeline.at(-1);
+  assert.equal(last?.kind, "note");
+  assert.equal(last?.by, "user:test");
+
+  const resolved = await app.request("/api/incidents/inc1/resolve", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ note: "done" }),
+  });
+  assert.equal(
+    ((await resolved.json()) as { incident: { status: string } }).incident.status,
+    "resolved",
+  );
+});
+
+test("sentinel: an empty note is refused, and an unknown incident is a 404", async () => {
+  const app = makeApp();
+  writeIncidentFile();
+  const empty = await app.request("/api/incidents/inc1/note", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ note: "   " }),
+  });
+  assert.equal(empty.status, 400);
+
+  for (const action of ["ack", "resolve", "note", "diagnose"]) {
+    const res = await app.request(`/api/incidents/nope/${action}`, {
+      method: "POST",
+      headers: sameOrigin,
+      body: JSON.stringify({ note: "x" }),
+    });
+    assert.equal(res.status, 404, `${action} on an unknown incident`);
+  }
+});
+
+test("sentinel: the diagnostic attaches findings and a proposal, and changes nothing else", async () => {
+  const app = makeAutopsyApp(
+    JSON.stringify({
+      findings: "The CLI is not on PATH.",
+      remediation: "Fix PATH and re-run.",
+      confidence: 0.7,
+    }),
+  );
+  writeIncidentFile();
+
+  const res = await app.request("/api/incidents/inc1/diagnose", {
+    method: "POST",
+    headers: sameOrigin,
+  });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as {
+    incident: {
+      status: string;
+      diagnosis: { status: string; findings: string; remediation: string };
+      timeline: { kind: string }[];
+    };
+  };
+  assert.equal(body.incident.diagnosis.status, "ready");
+  assert.match(body.incident.diagnosis.findings, /not on PATH/);
+  assert.match(body.incident.diagnosis.remediation, /Fix PATH/);
+  assert.ok(body.incident.timeline.some((e) => e.kind === "diagnosed"));
+  // A proposal, not an action: the incident is still open and unacknowledged.
+  assert.equal(body.incident.status, "open");
+});
+
+test("sentinel: incident actions require an admin session; reading does not", async () => {
+  const lockedOut: AuthService = {
+    isConfigured: async () => true,
+    status: async () => ({ configured: true, username: null, role: null }),
+    login: async () => ({ ok: false, reason: "bad-credentials" }),
+    verify: () => null,
+    logout: () => {},
+    revokeSessions: () => {},
+  };
+  const app = createApp({
+    config,
+    engine: fakeEngine,
+    broadcast: () => {},
+    serveWeb: false,
+    users: createUserStore(),
+    remoteAddr: () => "127.0.0.1",
+    auth: lockedOut,
+  });
+  writeIncidentFile();
+
+  assert.equal((await app.request("/api/sentinel", { headers: loopback })).status, 200);
+  for (const action of ["ack", "resolve", "note", "diagnose"]) {
+    const res = await app.request(`/api/incidents/inc1/${action}`, {
+      method: "POST",
+      headers: sameOrigin,
+      body: JSON.stringify({ note: "x" }),
+    });
+    assert.equal(res.status, 401, `${action} without a session`);
+  }
+  assert.equal(
+    (
+      await app.request("/api/sentinel/policy", {
+        method: "PUT",
+        headers: sameOrigin,
+        body: JSON.stringify({ enabled: false }),
+      })
+    ).status,
+    401,
+  );
+});

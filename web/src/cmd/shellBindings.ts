@@ -30,6 +30,7 @@ export const NAV_CHORDS: Record<string, string> = {
   schedules: "s",
   monitors: "m",
   watchtower: "w",
+  sentinel: "n",
   issues: "i",
   pipelines: "p",
   budget: "u",

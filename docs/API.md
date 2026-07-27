@@ -463,6 +463,138 @@ known-exceeded budget), and `exceeded → warning` stays quiet — you already
 heard about the breach; `budget.cleared` fires once spend is back under every
 limit.
 
+## Sentinel
+
+Incidents, escalation and the read-only diagnostic. Reading is open; every
+mutation is **admin-gated**.
+
+| Method + path                      | Effect                                              |
+| ---------------------------------- | --------------------------------------------------- |
+| `GET /api/sentinel`                | policy, incidents, summary, whether it is quiet now |
+| `PUT /api/sentinel/policy`         | patch the escalation policy (admin)                 |
+| `POST /api/incidents/:id/ack`      | acknowledge — stops the escalation clock (admin)    |
+| `POST /api/incidents/:id/resolve`  | resolve by hand, optional `{ note }` (admin)        |
+| `POST /api/incidents/:id/note`     | append a note (admin); `400` when empty             |
+| `POST /api/incidents/:id/diagnose` | dispatch the read-only diagnostic (admin)           |
+
+### `GET /api/sentinel`
+
+```jsonc
+{
+  "generatedAt": "…",
+  "policy": {
+    "enabled": true,
+    "levels": [
+      { "afterMinutes": 0, "label": "Notify" },
+      { "afterMinutes": 30, "label": "Escalate — still unacknowledged" },
+    ],
+    "quietHours": null, // or { "start": "22:00", "end": "07:00" }
+    "quietHoursOverrideCritical": true,
+    "autoDiagnose": false,
+  },
+  "incidents": [
+    {
+      "id": "…", // derived from `key`, so a condition never opens twice
+      "key": "monitor:s1", // monitor:<id> | issue:<fingerprint> | anomaly:<key>:<metric>
+      "source": "monitor-down",
+      "severity": "critical",
+      "title": "Nightly triage",
+      "detail": "no run covered the slot expected at 02:00",
+      "status": "open", // open | acknowledged | resolved
+      "openedAt": "…",
+      "acknowledgedAt": null,
+      "acknowledgedBy": null,
+      "resolvedAt": null,
+      "level": 0,
+      "nextEscalationAt": "…", // null once acknowledged or fully climbed
+      "timeline": [{ "at": "…", "kind": "opened", "detail": "…", "by": "sentinel" }],
+      "diagnosis": null,
+      "scheduleId": "s1",
+      "runId": null,
+      "fingerprint": null,
+    },
+  ],
+  "summary": { "open": 1, "acknowledged": 0, "resolved": 3, "critical": 1 },
+  "inQuietHours": false,
+}
+```
+
+### What opens an incident
+
+Deliberately narrow: a monitor **down** (critical) or **failing** (warning), an
+issue that was marked resolved and failed again (a _regression_, critical), or a
+**critical** Watchtower anomaly. Mirroring every open issue would make the
+incident list a second inbox.
+
+### The state machine
+
+Reconciliation is a pure function of (existing incidents, current conditions,
+policy, now), run each scheduler tick:
+
+- A condition with no incident **opens** one. A condition that persists does
+  **not** open a second — a monitor down for six hours is one incident with a
+  six-hour timeline.
+- An **open** incident whose `nextEscalationAt` has passed climbs one level,
+  appends an `escalated` entry, and alerts. Acknowledging clears
+  `nextEscalationAt`, so it stops climbing.
+- A condition that clears **resolves** the incident, once.
+- A condition that comes back **reopens** the same incident (new `reopened`
+  entry, escalation clock restarted) rather than opening a twin — the history of
+  a recurring problem is the useful part.
+- Resolving by hand sticks only while the condition is gone; if it is still
+  live, the next tick reopens it and the timeline says so.
+- Resolved incidents age out after 14 days; timelines cap at 200 entries.
+
+Incidents are **persisted**, unlike the monitor/budget/anomaly watchers' in-memory
+snapshots, so a restart resumes mid-incident instead of re-opening everything.
+
+### Quiet hours
+
+`inQuietHours` is evaluated on the **local** clock and wraps past midnight
+(22:00–07:00 is the union of "after 22:00" and "before 07:00"). Inside the
+window, an alert is marked `suppressed`: it is **not** sent as a
+`sentinel:alert` frame and does not POST the webhook, but the timeline entry,
+the incident and the escalation clock are all unaffected. `quietHoursOverrideCritical`
+(default true) lets criticals ring anyway.
+
+### Alerts
+
+```json
+{ "type": "sentinel:alert", "alert": { "event": "incident.escalated", "…": "…" } }
+```
+
+Events: `incident.opened`, `incident.escalated`, `incident.acknowledged`,
+`incident.resolved`. Suppressed transitions broadcast a payload-free
+`sentinel:changed` instead. With `ARGUS_WEBHOOK_URL` set, the same non-suppressed
+transitions POST a payload whose `event` matches.
+
+### The diagnostic
+
+`POST /api/incidents/:id/diagnose` runs a bounded pass and attaches:
+
+```jsonc
+{
+  "at": "…",
+  "status": "ready", // ready | failed | skipped
+  "findings": "one paragraph, grounded in the incident and its recent runs",
+  "remediation": "the single most useful next step, or null",
+  "confidence": 0.7,
+  "costUsd": 0.001,
+  "tokens": 800,
+  "error": null,
+}
+```
+
+It is **read-only by construction**: everything it may consider is inlined into
+the prompt, so the pass is never asked to go and look and has nothing to look
+with. `remediation` is a proposal — nothing executes it. The pass runs _outside_
+the incident store lock (it can take 90 seconds; holding the store that long
+would block acknowledgements) and re-reads under the lock before attaching, so a
+human acknowledging meanwhile does not lose their edit.
+
+`autoDiagnose` dispatches one diagnostic per tick for freshly-opened incidents
+only. It is **off by default**.
+
 ## Verdict
 
 Opt-in rubric scoring. Reading is open; producing a score spawns an agent, so

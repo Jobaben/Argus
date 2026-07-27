@@ -7,6 +7,27 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Sentinel** (`#/sentinel`): incidents, escalation, and a diagnostic that
+  proposes but never acts. Monitors, Issues and Watchtower each raise a signal;
+  none of them holds the state that makes a signal answerable — who saw it, when
+  it was acknowledged, whether it escalated, what was found. An incident is that
+  state, and it assembles its own timeline as the problem develops. What opens
+  one is deliberately narrow (a monitor down or failing, an issue you had marked
+  resolved coming back, a critical anomaly), because mirroring every open issue
+  would just make a second inbox. A condition that persists never opens a second
+  incident; a condition that recurs **reopens** the same one, because the history
+  of a recurring problem is the useful part. Escalation climbs a policy on a
+  clock until someone acknowledges. Quiet hours suppress **the bell, never the
+  record** — the timeline, the list and the clock all carry on, so the morning
+  view has no hole where the night's problems were. The read-only diagnostic is
+  read-only _by construction_: everything it may consider is inlined into the
+  prompt, so it is never asked to go and look and has nothing to look with, and
+  its remediation renders as "Proposed, not done" with execution always a human's
+  click. Auto-dispatch exists and is off by default. Incidents persist, so a
+  restart resumes mid-incident rather than re-opening everything, and the
+  reconcile-and-persist runs under one store lock so a tick and a human
+  acknowledging cannot lose each other's writes.
+
 - **Verdict** — opt-in rubric scoring for schedules and pipeline phases. Exit
   code 0 means the process ended, not that the work was good; a rubric says what
   good means for one unit of work and a bounded judge pass scores each output

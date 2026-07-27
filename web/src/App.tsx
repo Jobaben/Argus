@@ -16,6 +16,7 @@ import { useAgentNotifications } from "./notify/useAgentNotifications";
 import { useBudgetAlerts } from "./notify/useBudgetAlerts";
 import { useMonitorAlerts } from "./notify/useMonitorAlerts";
 import { useAnomalyAlerts } from "./notify/useAnomalyAlerts";
+import { useIncidentAlerts } from "./notify/useIncidentAlerts";
 import { NavBar } from "./NavBar";
 import type { NavTab } from "./NavBar";
 import type { MoreItem } from "./ds";
@@ -42,6 +43,7 @@ const Launch = lazy(() => import("./views/Launch"));
 const Schedules = lazy(() => import("./views/Schedules"));
 const Monitors = lazy(() => import("./views/Monitors"));
 const Watchtower = lazy(() => import("./views/Watchtower"));
+const Sentinel = lazy(() => import("./views/Sentinel"));
 const Issues = lazy(() => import("./views/Issues"));
 const Pipelines = lazy(() => import("./views/Pipelines"));
 const Budget = lazy(() => import("./views/Budget"));
@@ -135,6 +137,7 @@ const TAB_META: { id: string; label: string; role: TabRole }[] = [
   { id: "schedules", label: "Scheduler", role: "destination" },
   { id: "monitors", label: "Monitors", role: "destination" },
   { id: "watchtower", label: "Watchtower", role: "destination" },
+  { id: "sentinel", label: "Sentinel", role: "destination" },
   { id: "issues", label: "Issues", role: "destination" },
   { id: "pipelines", label: "Pipelines", role: "destination" },
   { id: "budget", label: "Budget", role: "destination" },
@@ -190,19 +193,22 @@ export default function App() {
   const monitorToasts = useMonitorAlerts();
   const budgetToasts = useBudgetAlerts();
   const anomalyToasts = useAnomalyAlerts();
-  // One region, four sources. Ids are unique per queue and dismissing an
+  const incidentToasts = useIncidentAlerts();
+  // One region, five sources. Ids are unique per queue and dismissing an
   // unknown id is a no-op, so routing a dismiss to every queue is safe.
   const toasts = [
     ...agentToasts.toasts,
     ...monitorToasts.toasts,
     ...budgetToasts.toasts,
     ...anomalyToasts.toasts,
+    ...incidentToasts.toasts,
   ];
   const dismiss = (id: string) => {
     agentToasts.dismiss(id);
     monitorToasts.dismiss(id);
     budgetToasts.dismiss(id);
     anomalyToasts.dismiss(id);
+    incidentToasts.dismiss(id);
   };
 
   useEffect(() => {
@@ -318,6 +324,8 @@ export default function App() {
         return <Monitors />;
       case "watchtower":
         return <Watchtower />;
+      case "sentinel":
+        return <Sentinel />;
       case "issues":
         return <Issues />;
       case "pipelines":

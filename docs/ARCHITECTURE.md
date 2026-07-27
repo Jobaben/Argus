@@ -153,21 +153,22 @@ while an unrecognised frame _type_ is still forwarded for forward compatibility.
 
 ## 5. Data sources map
 
-| Domain            | Path(s)                                     | Shape highlights                                                                   |
-| ----------------- | ------------------------------------------- | ---------------------------------------------------------------------------------- |
-| Background agents | `jobs/<short>/state.json`, `timeline.jsonl` | `state` (working/done/failed/idle), `tempo`, `detail`, `output.result`, `inFlight` |
-| Live workers      | `daemon/roster.json`, `daemon.status.json`  | `workers[short].pid` → liveness join                                               |
-| Sessions          | `projects/<proj>/<id>.jsonl`                | typed message stream (`ai-title`, `user`, `assistant`, `tool_use`, …)              |
-| Activity          | `history.jsonl`                             | global prompt log                                                                  |
-| Projects          | `projects/<proj>/`                          | encoded path → label, session counts                                               |
-| Stats             | `stats-cache.json`                          | usage aggregates                                                                   |
-| Inventory         | `agents/ commands/ skills/ plugins/`        | installed extensions (md frontmatter)                                              |
-| Tasks             | `tasks/<uuid>/`                             | `.highwatermark`, `.lock`                                                          |
-| Cron              | — (not on disk)                             | session-scoped; see §6                                                             |
-| Flight Recorder   | run record + `projects/<proj>/<id>.jsonl`   | derived per read; never persisted (see below)                                      |
-| Watchtower        | runs + `argus/watchtower.json`              | envelopes derived per read; only reset markers persist                             |
-| Autopsy           | `argus/autopsies.json`                      | bounded `claude -p` verdicts, capped at 200, keyed by run id                       |
-| Verdict           | `argus/verdicts.json` + rubrics on defs     | rubric scores keyed by run id, capped at 400; trends derived per read              |
+| Domain            | Path(s)                                       | Shape highlights                                                                   |
+| ----------------- | --------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Background agents | `jobs/<short>/state.json`, `timeline.jsonl`   | `state` (working/done/failed/idle), `tempo`, `detail`, `output.result`, `inFlight` |
+| Live workers      | `daemon/roster.json`, `daemon.status.json`    | `workers[short].pid` → liveness join                                               |
+| Sessions          | `projects/<proj>/<id>.jsonl`                  | typed message stream (`ai-title`, `user`, `assistant`, `tool_use`, …)              |
+| Activity          | `history.jsonl`                               | global prompt log                                                                  |
+| Projects          | `projects/<proj>/`                            | encoded path → label, session counts                                               |
+| Stats             | `stats-cache.json`                            | usage aggregates                                                                   |
+| Inventory         | `agents/ commands/ skills/ plugins/`          | installed extensions (md frontmatter)                                              |
+| Tasks             | `tasks/<uuid>/`                               | `.highwatermark`, `.lock`                                                          |
+| Cron              | — (not on disk)                               | session-scoped; see §6                                                             |
+| Flight Recorder   | run record + `projects/<proj>/<id>.jsonl`     | derived per read; never persisted (see below)                                      |
+| Watchtower        | runs + `argus/watchtower.json`                | envelopes derived per read; only reset markers persist                             |
+| Autopsy           | `argus/autopsies.json`                        | bounded `claude -p` verdicts, capped at 200, keyed by run id                       |
+| Verdict           | `argus/verdicts.json` + rubrics on defs       | rubric scores keyed by run id, capped at 400; trends derived per read              |
+| Sentinel          | `argus/incidents.json`, `argus/sentinel.json` | persisted incidents (so a restart resumes mid-incident) + escalation policy        |
 
 ### Derivation over storage: the Flight Recorder
 
@@ -276,6 +277,25 @@ and a hung analysis pass cannot wedge a pipeline.
 
 The same reasoning applies to Autopsy: the postmortem never runs in the run
 completion handler, only in a watcher afterwards.
+
+### The one watcher whose state is on disk
+
+Monitors, budget and Watchtower diff a snapshot held in memory: the first pass
+after boot is silent, and nothing survives a restart. Sentinel cannot work that
+way — an incident is precisely the thing that must outlive a restart, because
+the question it answers is "has anyone dealt with this yet".
+
+So its previous state is the incident file, and the consequences follow:
+
+- The whole reconcile-and-persist is inside **one store lock**, so two ticks —
+  or a tick and a human acknowledging — cannot lose each other's writes.
+- Identity is derived from the condition (`monitor:<id>` → a hash), not
+  generated, so a restart mid-incident reads the same incident rather than
+  opening a second one.
+- The read-only diagnostic runs _outside_ that lock, because it can take ninety
+  seconds and holding the store for that long would block acknowledgements —
+  then re-reads under the lock before attaching, so a human's edit during the
+  pass survives.
 
 ## 6. The cron boundary (known limitation)
 

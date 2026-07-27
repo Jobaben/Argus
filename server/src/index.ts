@@ -16,6 +16,7 @@ import { isUpgradeAllowed } from "./security.js";
 import { VERSION } from "./version.js";
 import {
   buildAnomalyPayload,
+  buildIncidentPayload,
   buildBudgetAlertPayload,
   buildMonitorAlertPayload,
   buildPipelineFailurePayload,
@@ -27,6 +28,13 @@ import { createMonitorWatcher } from "./monitorWatcher.js";
 import { createWatchtowerWatcher } from "./watchtowerWatcher.js";
 import { createAutopsyWatcher } from "./autopsyWatcher.js";
 import { createVerdictWatcher } from "./verdictWatcher.js";
+import { createSentinelWatcher } from "./sentinelWatcher.js";
+import { deriveConditions } from "./sources/sentinel.js";
+import { buildMonitors } from "./sources/monitors.js";
+import { buildIssues, readTriage } from "./sources/issues.js";
+import { buildWatchtower, readResets } from "./sources/watchtower.js";
+import { readFailureClasses } from "./sources/autopsy.js";
+import { failingVerdicts, readVerdicts } from "./sources/verdict.js";
 import { readPipelines } from "./sources/pipelines.js";
 import { readInstances } from "./sources/instances.js";
 import { createAnalysisRunner } from "./sources/analysis.js";
@@ -239,6 +247,56 @@ const verdictWatcher = createVerdictWatcher({
     broadcast({ type: "pipelines:changed" });
   },
 });
+/**
+ * Sentinel turns the signals the other features raise into incidents that can
+ * be acknowledged, escalated and diagnosed. The conditions are assembled here,
+ * from the same derivations the routes serve, so the incident list can never
+ * disagree with the Monitors and Issues pages it came from.
+ */
+const sentinelWatcher = createSentinelWatcher({
+  now: () => new Date(),
+  conditions: async () => {
+    const now = new Date();
+    const [runs, schedules, triage, resets, classes, verdicts] = await Promise.all([
+      readRuns(),
+      readSchedules(),
+      readTriage(),
+      readResets(),
+      readFailureClasses(),
+      readVerdicts(),
+    ]);
+    const { monitors } = buildMonitors(schedules, runs, now);
+    const issues = buildIssues(runs, triage, { classes, verdicts: failingVerdicts(verdicts) });
+    const { anomalies } = buildWatchtower(runs, resets, now);
+    return deriveConditions({
+      monitors,
+      issues,
+      anomalies,
+      // "Resolved, then failed again" is the regression rule Issues already
+      // uses; reading the triage records directly keeps the two in step.
+      resolvedFingerprints: new Set(
+        triage.filter((t) => t.state === "resolved").map((t) => t.fingerprint),
+      ),
+    });
+  },
+  onAlert: (alert) => {
+    if (!alert.suppressed) {
+      void postWebhook(config.webhookUrl, buildIncidentPayload(alert));
+      broadcast({ type: "sentinel:alert", alert });
+    } else {
+      // Quiet hours: the record still lands, the bell stays silent.
+      broadcast({ type: "sentinel:changed" });
+    }
+  },
+  diagnose: {
+    runner: analysis,
+    now: () => new Date(),
+    context: async (incident) =>
+      incident.scheduleId
+        ? readRuns({ scheduleId: incident.scheduleId, limit: 10 })
+        : readRuns({ limit: 10 }),
+  },
+});
 const scheduler = startScheduler({
   onChange: () => broadcast({ type: "schedules:changed" }),
   onTick: async () => {
@@ -248,6 +306,7 @@ const scheduler = startScheduler({
     await watchtowerWatcher.check();
     await autopsyWatcher.check();
     await verdictWatcher.check();
+    await sentinelWatcher.check();
   },
   onFailure: (run) =>
     void postWebhook(config.webhookUrl, buildRunFailurePayload(run, new Date().toISOString())),

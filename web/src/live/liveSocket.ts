@@ -88,7 +88,10 @@ function hasValidPayload(frame: Record<string, unknown>): boolean {
       );
     case "monitors:alert":
     case "budget:alert":
+    case "sentinel:alert":
       return isRecord(frame.alert) && typeof frame.alert.event === "string";
+    case "watchtower:anomaly":
+      return isRecord(frame.anomaly) && typeof frame.anomaly.id === "string";
     default:
       // Change pings are payload-free, and a frame type from a newer server is
       // forwarded unvalidated: it matches no subscriber arm, so ignoring it
