@@ -216,3 +216,16 @@ export type {
   VaultStatus,
   VaultUnavailableReason,
 } from "./vault.js";
+
+export type {
+  AnswerLink,
+  ExecuteResult,
+  ExecuteStatus,
+  MutationKind,
+  OmnibarAnswer,
+  OmnibarMode,
+  OmnibarResponse,
+  Plan,
+  PlanStatus,
+  PlannedMutation,
+} from "./omnibar.js";

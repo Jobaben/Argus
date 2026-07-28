@@ -57,6 +57,7 @@ can do, and where the data comes from.
 | 26  | [Weave](#26-weave)                     | `#/pipelines`  | fan-out, fan-in, retries, artifacts        |
 | 27  | [Ledger](#27-ledger)                   | `#/budget`     | where did the money go, and where next?    |
 | 28  | [The Vault](#28-the-vault)             | `#/stats`      | what happened last quarter, and last year? |
+| 29  | [Omnibar](#29-omnibar)                 | `⌘K`           | say it, see the exact changes, confirm     |
 
 ---
 
@@ -1539,6 +1540,114 @@ database file.
 
 ---
 
+## 29. Omnibar
+
+_Say what you want; read exactly what would change; then confirm._ Lives inside
+the [command palette](#global-ui) — `⌘K`, then type a sentence.
+
+**Purpose:** the palette is already the fastest way to _go_ somewhere. The
+Omnibar makes it the fastest way to _change_ something, without giving up the
+thing that makes a control plane trustworthy — that you can see what is about to
+happen before it does.
+
+### How it behaves
+
+Type two words and the palette does what it always did: fuzzy-jump. Type a
+sentence — three words and twelve characters is the threshold — and it offers to
+interpret it instead.
+
+- **`↵` when nothing matched** compiles the sentence.
+- **`⌘↵` at any time** compiles it even when commands did match, so a phrase that
+  happens to fuzzy-match is not stuck.
+- **`esc`** leaves intent mode and returns to the list. A second `esc` closes the
+  palette. Losing a typed sentence to a stray keypress is a real cost.
+
+The threshold is deliberately conservative in both directions. "nightly triage"
+must stay a search, because jumping is what the palette is for and a planning
+pass costs real money; "pause everything touching Spectacle" should be
+recognisable without learning a prefix character.
+
+### The preview is the whole feature
+
+Compiling shows an explicit table: for every change, what it touches, what it is
+now, and what it becomes.
+
+```
+schedule disable   Nightly triage      enabled → disabled
+schedule disable   Dependency audit    enabled → disabled
+```
+
+Nothing has happened at this point. **Apply** applies all of it; **Cancel**
+applies none of it. There is no third path.
+
+Three properties make that trustworthy rather than merely reassuring:
+
+- **The verbs are a closed set.** Disable or enable a schedule, resolve or ignore
+  an issue, abort a live pipeline instance, set the daily or monthly budget.
+  That is the whole vocabulary, and the server drops anything outside it. The
+  planner cannot invent a capability Argus does not already expose.
+- **The targets must already exist.** Every id is checked against live state, and
+  every label, `before` and `after` you read is computed by the server from the
+  real record — never supplied by the model. A plan cannot describe itself
+  misleadingly, and an invented schedule name is dropped before you see it.
+- **What executes is the plan, not the sentence.** Confirming sends the plan's
+  id. The sentence is never re-interpreted, so the list you approved is the list
+  that runs.
+
+**Warnings** appear under the plan and never block it: a target that was
+dropped, a verb that was not understood, a change that would be a no-op. They
+are information about how your sentence was read.
+
+### Questions are answered, not planned
+
+"When did the nightly triage last run?" is a question, and routing a question
+through a confirm step would be theatre. Those come back as an inline answer
+with deep links into the app. Links are in-app routes only.
+
+### All of it or none of it
+
+Argus's state lives in several independent files, so a true cross-file
+transaction is not available — and claiming one would be the dishonest move.
+What you get instead is a compensating transaction, with four outcomes it will
+tell you apart:
+
+| Outcome         | What happened                                                                             |
+| --------------- | ----------------------------------------------------------------------------------------- |
+| **applied**     | Every change is in effect.                                                                |
+| **stale**       | Nothing was attempted — live state no longer matches the preview.                         |
+| **expired**     | Nothing was attempted — the plan was over five minutes old, or already run.               |
+| **rolled-back** | One change failed; the earlier ones were reversed. Nothing is in effect.                  |
+| **partial**     | A change failed **and** a reversal failed. Some changes are in effect; go and check them. |
+
+`partial` is reported loudly and named exactly, because it is the only case
+where a human has to go and look. Aborting a pipeline is the one action with no
+inverse — a killed process does not come back — so a plan containing an abort
+can only ever be unwound up to that point, and says so.
+
+A plan is **single-use** and expires after five minutes. Plans are not persisted:
+a confirmation surviving a restart would land against state nobody has looked at
+since.
+
+### Safety
+
+Both planning and executing sit behind the **admin login**, like every other
+mutation. Planning spawns a bounded `claude -p` pass through the same runner
+Autopsy and Verdict use — one at a time, ninety-second timeout, output capped,
+metered into the spend ledger, and refused outright while the budget hard stop
+is in force.
+
+A note on trust: your sentence, and the catalogue it is compiled against, both
+contain text Argus did not author — an issue title is whatever a failing run
+printed. That text reaching the planner is fine by construction, because a
+planner cannot do anything except propose verbs from the closed set against ids
+that already exist, and you read the result before it happens. The confirm step
+is not a formality; it is the security model.
+
+**Where the data comes from:** schedules, open issues, live instances and the
+budget config, read fresh for each pass. Pending plans are held in memory only.
+
+---
+
 ## Quick mental model
 
 | Tab                 | Answers the question                       | Source                                      |
@@ -1565,6 +1674,7 @@ database file.
 | **Flight Recorder** | What was it doing at minute four?          | run record + `projects/*/<session>.jsonl`   |
 | **Ledger**          | Where did the money go, and where next?    | `argus/runs/` + `argus/spend.json`          |
 | **The Vault**       | What happened last quarter, and last year? | `argus/vault.sqlite` (a rebuildable cache)  |
+| **Omnibar**         | Say it, see the exact changes, confirm     | schedules + issues + instances + budget     |
 
 _Screenshots in this guide live in [`docs/screenshots/`](screenshots/) and
 were captured from a live instance. To refresh them after a UI change, run the

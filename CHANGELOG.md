@@ -14,6 +14,44 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Omnibar** — the command palette learns to act. Type a sentence into `⌘K`
+  ("pause everything touching Spectacle") and Argus compiles it, through a
+  bounded planning pass, into an explicit table of changes: what it touches,
+  what it is now, what it becomes. Nothing happens until you press Apply, and
+  then all of it happens or none of it does. Questions are answered inline with
+  deep links instead — routing "when did nightly triage last run" through a
+  confirm step would be theatre.
+  The confirm step is not a formality, it is the security model, and three
+  constraints make that true. The **verbs are a closed set** — disable/enable a
+  schedule, resolve/ignore an issue, abort a live instance, set a budget limit —
+  so a planner cannot name a capability Argus does not already expose behind the
+  same admin gate. The **targets are resolved, not accepted**: the model supplies
+  a verb, an id and a value, and every label and before/after you read is
+  computed by the server from the live record, so a plan cannot say "Staging
+  cleanup" while pointing at production. And **execution takes the plan's id,
+  never the sentence**, so the intent is never re-interpreted and the list you
+  approved is the list that runs. Both the sentence and the catalogue it compiles
+  against contain text Argus did not author — an issue title is whatever a
+  failing run printed — and that is fine by construction: the worst a fully
+  compromised planning pass achieves is proposing a wrong-but-legal change that a
+  person then reads and rejects.
+  Applying is a **compensating transaction, and says so** rather than claiming an
+  atomicity several independent JSON files cannot provide. Every mutation is
+  re-validated against live state first, so a schedule someone disabled by hand
+  between preview and confirm stops the whole plan before anything is attempted.
+  Failures unwind in reverse. There are four outcomes rather than a boolean, and
+  the fourth is the point: when a rollback itself fails the system really is
+  part-changed, and `partial` names exactly what is still in effect. Aborting a
+  pipeline has no inverse — a killed process does not come back — and the code
+  says `null` instead of inventing a restart that would make a rollback report
+  claim more than happened.
+  Two words still fuzzy-jump, which is what the palette is for; three words and
+  twelve characters is where it offers to interpret instead, `⌘↵` forces it, and
+  the first `esc` returns to the list rather than throwing away what you typed.
+  Plans are single-use, expire in five minutes, and are held in memory only:
+  surviving a restart sounds like robustness and is a confirmation landing
+  against state nobody has looked at since.
+
 - **The Vault** — an embedded analytical store that remembers what the JSON
   files are forced to forget. Argus prunes: run records keep the newest 50 per
   schedule, the spend ledger keeps a year of days. That retention is right for

@@ -337,6 +337,60 @@ Three consequences worth naming, because each was a bug before it was a design:
 The whole 735-test suite that predated Weave passes unchanged, which is the
 actual guarantee behind "linear definitions load unchanged".
 
+### The confirm step is the security model
+
+`sources/omnibar.ts` is the only place in Argus where a model's output
+influences what the system _does_ rather than what it displays. Three
+constraints, in this order, are what make that acceptable.
+
+**The vocabulary is closed.** `MutationKind` is exhaustive and checked against a
+`Set` on the server; a planner cannot name a verb Argus does not already expose
+behind the same admin gate. The temptation here is a generic
+`{ "endpoint": …, "body": … }` shape, which is strictly more capable and turns
+every future route into an attack surface the day it is added.
+
+**The targets are resolved, not accepted.** The model supplies a verb, an id and
+a value. Everything a human then reads — the label, the `before`, the `after` —
+is computed from the live record. That is not defence in depth for its own sake:
+if the model supplied the label, a plan could say "Staging cleanup" while
+targeting the production schedule, and the preview would be worse than useless.
+
+**Nothing is applied by the planner.** `compileIntent` returns a `Plan`;
+`omnibarExecutor.ts` applies one, and only when handed a plan id that a human
+confirmed. Execution takes the id rather than the sentence, so the intent is
+never re-interpreted and the list that runs is the list that was read.
+
+The consequence worth stating plainly: both the sentence _and_ the catalogue it
+compiles against contain text Argus did not author — an issue title is whatever
+a failing run happened to print. Prompt injection through either is expected and
+uninteresting, because the worst a fully-compromised planning pass achieves is
+proposing a wrong-but-legal change that a person then reads and rejects.
+
+### Compensating, not atomic — and saying so
+
+Argus's state is several independent JSON files, so `executePlan` cannot be a
+transaction and does not claim to be one. It re-validates every mutation against
+live state first (any mismatch aborts before anything is attempted), applies in
+order recording inverses, and unwinds in reverse on failure.
+
+The design decision is in the _result type_. Four statuses instead of
+`ok: boolean`, and the fourth is the reason: when a rollback itself fails, the
+system genuinely is part-changed, and `partial` names exactly what is still in
+effect. Folding that into a generic error would be the most expensive lie this
+feature could tell — it is the one outcome where a human must go and look.
+
+`instance.abort` has no inverse and the code says so with `null` rather than
+inventing a "restart" that would make a rollback report claim more than
+happened. Inverses are their own small union rather than more `PlannedMutation`s
+for the same reason: restoring an issue to `open` has no forward verb, because
+reopening is not something a plan is allowed to propose, and reusing the plan
+vocabulary would have quietly widened it.
+
+Plans live in memory only. Surviving a restart sounds like robustness and is the
+opposite: a confirmation landing against state nobody has looked at since the
+process died. Losing pending plans costs a re-ask and removes a class of
+stale-approval bug.
+
 ### A cache of truth: the Vault's failure model
 
 `vault/` is the first part of Argus that is not a file the user could open in an

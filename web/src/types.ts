@@ -143,6 +143,17 @@ export type {
   PaletteIndex,
   PaletteKind,
   PaletteSeverity,
+  // Omnibar
+  AnswerLink,
+  ExecuteResult,
+  ExecuteStatus,
+  MutationKind,
+  OmnibarAnswer,
+  OmnibarMode,
+  OmnibarResponse,
+  Plan,
+  PlanStatus,
+  PlannedMutation,
   // The Vault
   VaultHitKind,
   VaultIngestResult,

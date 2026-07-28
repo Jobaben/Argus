@@ -114,6 +114,9 @@ import {
   vaultStatus,
 } from "./vault/query.js";
 import { buildOtelExport } from "./vault/otel.js";
+import { compileIntent, MAX_INTENT_CHARS, type OmnibarContext } from "./sources/omnibar.js";
+import { rememberPlan, takePlan } from "./sources/planStore.js";
+import { executePlan } from "./omnibarExecutor.js";
 import { buildOverview } from "./sources/overview.js";
 import { buildPalette } from "./sources/palette.js";
 import { buildSituation } from "./sources/insight.js";
@@ -414,6 +417,8 @@ export function createApp(deps: AppDeps): Hono {
   app.use("/api/instances/:id/approve", admin);
   app.use("/api/instances/:id/revise", admin);
   app.use("/api/instances/:id/abort", admin);
+  app.use("/api/omnibar/plan", admin);
+  app.use("/api/omnibar/execute", admin);
 
   app.get("/api/setup", async (c) =>
     c.json(await import("./setup/prereqs.js").then((m) => m.checkAll())),
@@ -1252,6 +1257,96 @@ export function createApp(deps: AppDeps): Hono {
   app.post("/api/instances/:id/abort", async (c) =>
     engineReply(c, await engine.abort(c.req.param("id"))),
   );
+
+  // ── Omnibar ───────────────────────────────────────────────────────────────
+  // Plan and execute are separate calls on purpose: a plan is a proposal a
+  // human reads, and the only thing that turns it into a change is a second,
+  // explicit request naming the plan's id. Both are admin-gated — planning
+  // spawns an agent, executing mutates.
+
+  /** Everything the planner may name, read fresh for each pass. */
+  async function omnibarContext(now: Date): Promise<OmnibarContext> {
+    const [schedules, runs, triage, ctx, instances, budget] = await Promise.all([
+      readSchedules(),
+      readRuns(),
+      readTriage(),
+      issueContext(),
+      readInstances(),
+      readBudgetConfig(),
+    ]);
+    return { schedules, issues: buildIssues(runs, triage, ctx), instances, budget, now };
+  }
+
+  app.post("/api/omnibar/plan", async (c) => {
+    const body = await jsonBody(c);
+    if (!body.ok) return body.res;
+    const raw = (body.value ?? {}) as { intent?: unknown };
+    if (typeof raw.intent !== "string" || !raw.intent.trim()) {
+      return c.json({ error: "intent is required" }, 400);
+    }
+    if (raw.intent.length > MAX_INTENT_CHARS) {
+      return c.json({ error: `intent is capped at ${MAX_INTENT_CHARS} characters` }, 400);
+    }
+    const now = new Date();
+    const ctx = await omnibarContext(now);
+    const response = await compileIntent(raw.intent, ctx, {
+      runner: analysis,
+      cwd: claudeHome(),
+    });
+    if (response.plan) rememberPlan(response.plan, now);
+    return c.json(response);
+  });
+
+  app.post("/api/omnibar/execute", async (c) => {
+    const body = await jsonBody(c);
+    if (!body.ok) return body.res;
+    const raw = (body.value ?? {}) as { planId?: unknown };
+    if (typeof raw.planId !== "string" || !raw.planId) {
+      return c.json({ error: "planId is required" }, 400);
+    }
+    const now = new Date();
+    const plan = takePlan(raw.planId, now);
+    if (!plan) {
+      return c.json({
+        status: "expired",
+        applied: [],
+        reversed: [],
+        error: null,
+        summary: "That plan has expired or was already run. Ask again to get a fresh one.",
+      });
+    }
+    const ctx = await omnibarContext(now);
+    const result = await executePlan(plan, ctx, {
+      setScheduleEnabled: async (id, enabled) => {
+        if (!(await updateSchedule(id, { enabled }, new Date()))) {
+          throw new Error(`schedule ${id} no longer exists`);
+        }
+      },
+      setIssueState: async (fingerprint, state) => {
+        if (state === "open") {
+          await clearTriage(fingerprint);
+          return;
+        }
+        const issue = ctx.issues.find((i) => i.fingerprint === fingerprint);
+        if (!issue) throw new Error(`issue ${fingerprint} no longer exists`);
+        await setTriage(fingerprint, state, issue.lastSeen, new Date());
+      },
+      abortInstance: async (id) => {
+        const reply = await engine.abort(id);
+        if (!reply.ok) throw new Error(reply.error ?? `could not abort ${id}`);
+      },
+      setBudget: async (patch) => {
+        await updateBudgetConfig(validateBudgetPatch(patch), new Date());
+      },
+    });
+    if (result.applied.length > 0 || result.reversed.length > 0) {
+      broadcast({ type: "schedules:changed" });
+      broadcast({ type: "issues:changed" });
+      broadcast({ type: "budget:changed" });
+      broadcast({ type: "pipelines:changed" });
+    }
+    return c.json(result);
+  });
 
   if (deps.serveWeb !== false) mountWebApp(app);
 

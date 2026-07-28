@@ -633,6 +633,140 @@ swaps the model; `warn` and `stop` do what they say. The existing
 from the run record itself, rather than by correlating timestamps against a
 policy that has since been edited.
 
+## Omnibar
+
+Compiling an English sentence into an explicit, reviewable list of mutations,
+and applying it only on a second, separate request.
+
+Both routes are **admin-gated**: planning spawns an agent, executing mutates.
+Planning goes through the same bounded runner as Autopsy, Verdict and Sentinel's
+diagnostic — one pass at a time, 90-second timeout, output capped, metered into
+the spend ledger, refused while the budget hard stop is in force.
+
+### `POST /api/omnibar/plan`
+
+```json
+{ "intent": "pause everything touching Spectacle" }
+```
+
+`intent` is required and capped at 400 characters; anything else is a `400`.
+Returns either a plan or an answer:
+
+```json
+{
+  "mode": "plan",
+  "answer": null,
+  "plan": {
+    "id": "0f1a…",
+    "status": "ready",
+    "intent": "pause everything touching Spectacle",
+    "mutations": [
+      {
+        "kind": "schedule.disable",
+        "targetId": "s_spectacle_nightly",
+        "targetLabel": "Spectacle nightly",
+        "value": null,
+        "before": "enabled",
+        "after": "disabled"
+      }
+    ],
+    "warnings": ["dropped \"schedule.disable\": no schedule with id s_ghost"],
+    "summary": "Pause the two Spectacle schedules",
+    "createdAt": "2026-07-20T12:00:00.000Z",
+    "expiresAt": "2026-07-20T12:05:00.000Z"
+  }
+}
+```
+
+`status` is `ready` | `empty` | `unavailable` | `refused`. An `unavailable` plan
+still arrives as a plan with an explanatory `summary` (`the spend hard stop is
+in force…`, `another analysis pass is running…`) so the client has exactly one
+shape to render.
+
+**The closed vocabulary.** `kind` is one of:
+
+| Kind                | `value`                     |
+| ------------------- | --------------------------- |
+| `schedule.disable`  | `null`                      |
+| `schedule.enable`   | `null`                      |
+| `issue.resolve`     | `null`                      |
+| `issue.ignore`      | `null`                      |
+| `instance.abort`    | `null`                      |
+| `budget.setDaily`   | dollars, or `null` to clear |
+| `budget.setMonthly` | dollars, or `null` to clear |
+
+Anything else the planner emits is dropped into `warnings`. So is any id that is
+not in the catalogue the planner was given, and any change that would be a
+no-op. **`targetLabel`, `before` and `after` are computed by the server from
+live state** — the model supplies only a verb, an id and a value, which are the
+three things that can be checked. A plan therefore cannot describe itself
+misleadingly.
+
+Duplicate mutations are collapsed: the same change proposed twice is one change,
+because a preview that says "2 changes" for one change makes the confirm step
+worthless.
+
+An answer looks like:
+
+```json
+{
+  "mode": "answer",
+  "plan": null,
+  "answer": {
+    "text": "Nightly triage last ran an hour ago and succeeded.",
+    "links": [{ "label": "Open", "href": "#/schedules" }]
+  }
+}
+```
+
+Links are filtered to in-app hash routes. A planner emitting `https://…` is
+either confused or being used to put a link in front of the user; neither is
+supported.
+
+### `POST /api/omnibar/execute`
+
+```json
+{ "planId": "0f1a…" }
+```
+
+Takes the plan **id**, never the intent — the sentence is never re-interpreted,
+so what runs is the list the user approved. Plans are held in memory, are
+**single-use**, and expire after five minutes. They are not persisted: a
+confirmation surviving a restart would land against state nobody has looked at
+since.
+
+```json
+{
+  "status": "applied",
+  "applied": [{ "kind": "schedule.disable", "…": "…" }],
+  "reversed": [],
+  "error": null,
+  "summary": "2 changes applied."
+}
+```
+
+`status` is one of:
+
+| Status        | Meaning                                                                               |
+| ------------- | ------------------------------------------------------------------------------------- |
+| `applied`     | Every mutation is in effect.                                                          |
+| `stale`       | Nothing attempted; live state no longer matches the preview.                          |
+| `expired`     | Nothing attempted; unknown, expired, or already-run plan.                             |
+| `rolled-back` | One mutation failed; the earlier ones were reversed. Nothing in effect.               |
+| `partial`     | A mutation failed **and** a reversal failed. `applied` lists what is still in effect. |
+
+An unknown or expired `planId` is a **`200` with `status: "expired"`**, not a
+`404` — it is an ordinary outcome of a five-minute offer, and the client renders
+it in the same place as every other result.
+
+**Execution is a compensating transaction, not an atomic one**, and the API says
+so rather than implying otherwise. Argus's state lives in several independent
+files. Every mutation is re-validated against live state first (any mismatch
+stops the whole plan before anything is attempted), applied in order, and
+reversed in reverse order if one fails. `instance.abort` has no inverse — a
+killed process does not come back — so a plan containing one can only be unwound
+up to that point, which is what `partial` reports.
+
 ## The Vault
 
 An embedded analytical store that keeps every run, alert, cost tick and score

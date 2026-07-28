@@ -257,3 +257,106 @@ describe("CommandPalette — mount lifecycle", () => {
     trigger.remove();
   });
 });
+
+describe("CommandPalette — intent mode", () => {
+  const planResponse = {
+    mode: "plan",
+    answer: null,
+    plan: {
+      id: "plan-1",
+      status: "ready",
+      intent: "",
+      mutations: [
+        {
+          kind: "schedule.disable",
+          targetId: "s1",
+          targetLabel: "Dependency audit",
+          value: null,
+          before: "enabled",
+          after: "disabled",
+        },
+      ],
+      warnings: [],
+      summary: "Pause the dependency audit",
+      createdAt: "2026-07-20T12:00:00.000Z",
+      expiresAt: "2026-07-20T12:05:00.000Z",
+    },
+  };
+
+  function stubPlan() {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => planResponse,
+    } as Response);
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("regression: a short query still fuzzy-jumps rather than asking a model", async () => {
+    const fetchMock = stubPlan();
+    const { user } = await open();
+    await user.type(screen.getByRole("combobox"), "monitors");
+    await user.keyboard("{Enter}");
+    // The palette's whole reason to exist is the fast jump. Two words must
+    // never become a paid planning pass.
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(window.location.hash).toBe("#/monitors");
+    vi.unstubAllGlobals();
+  });
+
+  it("a sentence advertises the interpret shortcut", async () => {
+    stubPlan();
+    const { user } = await open();
+    await user.type(screen.getByRole("combobox"), "pause everything touching Spectacle");
+    expect(screen.getByText(/interpret/)).toBeInTheDocument();
+    vi.unstubAllGlobals();
+  });
+
+  it("a sentence that matches nothing teaches the interpret path in the empty state", async () => {
+    stubPlan();
+    const { user } = await open();
+    await user.type(screen.getByRole("combobox"), "zzz qqq wwwwwwwwww");
+    expect(screen.getByText(/reads like an instruction/)).toBeInTheDocument();
+    vi.unstubAllGlobals();
+  });
+
+  it("pressing enter on a sentence compiles it into a preview", async () => {
+    const fetchMock = stubPlan();
+    const { user } = await open();
+    await user.type(screen.getByRole("combobox"), "pause everything touching Spectacle");
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(screen.getByText("Dependency audit")).toBeInTheDocument());
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/omnibar/plan");
+    expect(screen.getByRole("button", { name: /Apply 1 change/ })).toBeInTheDocument();
+    vi.unstubAllGlobals();
+  });
+
+  it("⌘↵ interprets even when commands matched", async () => {
+    const fetchMock = stubPlan();
+    const { user } = await open();
+    await user.type(screen.getByRole("combobox"), "run the dependency audit now");
+    await user.keyboard("{Meta>}{Enter}{/Meta}");
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    vi.unstubAllGlobals();
+  });
+
+  it("regression: escape from intent mode goes back to the list, not away", async () => {
+    stubPlan();
+    const onClose = vi.fn();
+    const { user } = await open(COMMANDS, onClose);
+    await user.type(screen.getByRole("combobox"), "pause everything touching Spectacle");
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(screen.getByText("Dependency audit")).toBeInTheDocument());
+
+    await user.keyboard("{Escape}");
+    // Losing a typed sentence to a stray keypress is a real cost, so the first
+    // Escape returns to the results.
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+});

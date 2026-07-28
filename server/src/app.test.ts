@@ -1828,3 +1828,160 @@ test("vault: a disabled Vault degrades every long view without erroring", async 
     closeVault();
   }
 });
+
+// ── Omnibar ─────────────────────────────────────────────────────────────────
+
+function makeOmnibarApp(answerJson: string, auth: AuthService = openAuth) {
+  return createApp({
+    config,
+    engine: fakeEngine,
+    broadcast: () => {},
+    serveWeb: false,
+    users: createUserStore(),
+    remoteAddr: () => "127.0.0.1",
+    auth,
+    analysis: stubAnalysis(answerJson),
+  });
+}
+
+const PAUSE_PLAN = JSON.stringify({
+  mode: "plan",
+  summary: "Pause the nightly triage",
+  mutations: [{ kind: "schedule.disable", targetId: "s1" }],
+});
+
+async function planFor(app: ReturnType<typeof createApp>, intent: string) {
+  const res = await app.request("/api/omnibar/plan", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ intent }),
+  });
+  return { res, body: (await res.json()) as Record<string, never> };
+}
+
+test("omnibar: a sentence compiles into a preview, and nothing changes yet", async () => {
+  const app = makeOmnibarApp(PAUSE_PLAN);
+  writeSchedule({});
+  const { res, body } = await planFor(app, "pause the nightly triage");
+  assert.equal(res.status, 200);
+  const plan = (body as unknown as { plan: { status: string; mutations: unknown[]; id: string } })
+    .plan;
+  assert.equal(plan.status, "ready");
+  assert.equal(plan.mutations.length, 1);
+
+  // The preview must not have touched anything.
+  const before = (await (await app.request("/api/schedules", { headers: loopback })).json()) as {
+    schedules: { enabled: boolean }[];
+  };
+  assert.equal(before.schedules[0].enabled, true);
+});
+
+test("omnibar: confirming the plan applies it, and the plan is then spent", async () => {
+  const app = makeOmnibarApp(PAUSE_PLAN);
+  writeSchedule({});
+  const { body } = await planFor(app, "pause the nightly triage");
+  const planId = (body as unknown as { plan: { id: string } }).plan.id;
+
+  const exec = await app.request("/api/omnibar/execute", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ planId }),
+  });
+  const result = (await exec.json()) as { status: string; applied: unknown[] };
+  assert.equal(result.status, "applied");
+  assert.equal(result.applied.length, 1);
+
+  const after = (await (await app.request("/api/schedules", { headers: loopback })).json()) as {
+    schedules: { enabled: boolean }[];
+  };
+  assert.equal(after.schedules[0].enabled, false);
+
+  // Single-use: the same id cannot be replayed.
+  const replay = await app.request("/api/omnibar/execute", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ planId }),
+  });
+  assert.equal(((await replay.json()) as { status: string }).status, "expired");
+});
+
+test("omnibar: regression: a plan naming a schedule that does not exist previews nothing", async () => {
+  const app = makeOmnibarApp(
+    JSON.stringify({
+      mode: "plan",
+      summary: "Pause it",
+      mutations: [{ kind: "schedule.disable", targetId: "ghost" }],
+    }),
+  );
+  writeSchedule({});
+  const { body } = await planFor(app, "pause the thing");
+  const plan = (body as unknown as { plan: { status: string; warnings: string[] } }).plan;
+  // The whole trust boundary: an id the planner invented never becomes a
+  // confirmable change.
+  assert.equal(plan.status, "empty");
+  assert.match(plan.warnings[0], /no schedule with id ghost/);
+});
+
+test("omnibar: a question is answered inline, with in-app links only", async () => {
+  const app = makeOmnibarApp(
+    JSON.stringify({
+      mode: "answer",
+      text: "Nightly triage last ran an hour ago.",
+      links: [
+        { label: "Open", href: "#/schedules" },
+        { label: "Off-site", href: "https://example.com" },
+      ],
+    }),
+  );
+  writeSchedule({});
+  const { body } = await planFor(app, "when did nightly triage last run");
+  const answer = body as unknown as { mode: string; answer: { links: unknown[] } };
+  assert.equal(answer.mode, "answer");
+  assert.equal(answer.answer.links.length, 1);
+});
+
+test("omnibar: an unknown or expired plan id is reported, not applied", async () => {
+  const app = makeOmnibarApp(PAUSE_PLAN);
+  const res = await app.request("/api/omnibar/execute", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ planId: "nope" }),
+  });
+  assert.equal(res.status, 200);
+  assert.equal(((await res.json()) as { status: string }).status, "expired");
+});
+
+test("omnibar: malformed requests are clean 400s", async () => {
+  const app = makeOmnibarApp(PAUSE_PLAN);
+  for (const body of [{}, { intent: "" }, { intent: "x".repeat(500) }]) {
+    const res = await app.request("/api/omnibar/plan", {
+      method: "POST",
+      headers: sameOrigin,
+      body: JSON.stringify(body),
+    });
+    assert.equal(res.status, 400, JSON.stringify(body));
+  }
+  const noId = await app.request("/api/omnibar/execute", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({}),
+  });
+  assert.equal(noId.status, 400);
+});
+
+test("omnibar: planning and executing are both behind the admin gate", async () => {
+  const lockedOut: AuthService = {
+    ...openAuth,
+    verify: () => null,
+    status: async () => ({ configured: true, username: null, role: null }),
+  };
+  const app = makeOmnibarApp(PAUSE_PLAN, lockedOut);
+  for (const route of ["/api/omnibar/plan", "/api/omnibar/execute"]) {
+    const res = await app.request(route, {
+      method: "POST",
+      headers: sameOrigin,
+      body: JSON.stringify({ intent: "pause it", planId: "x" }),
+    });
+    assert.equal(res.status, 401, route);
+  }
+});
