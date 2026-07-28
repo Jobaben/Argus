@@ -11,10 +11,12 @@ import {
   checkAll as checkPrereqs,
   preflight as preflightPrereqs,
 } from "./setup/prereqs.js";
-import { assertBindIsSafe, describeListenError, loadConfig } from "./config.js";
+import { assertBindIsSafe, assertPeersAreSafe, describeListenError, loadConfig } from "./config.js";
 import { isUpgradeAllowed } from "./security.js";
 import { VERSION } from "./version.js";
 import {
+  buildAnomalyPayload,
+  buildIncidentPayload,
   buildBudgetAlertPayload,
   buildMonitorAlertPayload,
   buildPipelineFailurePayload,
@@ -23,6 +25,25 @@ import {
 } from "./notify.js";
 import { createBudgetWatcher } from "./budgetWatcher.js";
 import { createMonitorWatcher } from "./monitorWatcher.js";
+import { createWatchtowerWatcher } from "./watchtowerWatcher.js";
+import { createAutopsyWatcher } from "./autopsyWatcher.js";
+import { createVerdictWatcher } from "./verdictWatcher.js";
+import { createSentinelWatcher } from "./sentinelWatcher.js";
+import { createVaultWatcher } from "./vaultWatcher.js";
+import { createPoller } from "./federation/poll.js";
+import { alertEvent, ingestAlert } from "./vault/ingest.js";
+import { readPeers as readFederationPeers } from "./federation/peers.js";
+import { deriveConditions, readIncidents } from "./sources/sentinel.js";
+import { readSpendLedger } from "./sources/budget.js";
+import { buildMonitors } from "./sources/monitors.js";
+import { buildIssues, readTriage } from "./sources/issues.js";
+import { buildWatchtower, readResets } from "./sources/watchtower.js";
+import { readFailureClasses } from "./sources/autopsy.js";
+import { failingVerdicts, readVerdicts } from "./sources/verdict.js";
+import { readPipelines } from "./sources/pipelines.js";
+import { readInstances } from "./sources/instances.js";
+import { createAnalysisRunner } from "./sources/analysis.js";
+import { readSessionLines } from "./sources/sessions.js";
 import { readSchedules } from "./sources/schedules.js";
 import { createApp } from "./app.js";
 import { createAuthService } from "./auth.js";
@@ -36,6 +57,11 @@ const config = loadConfig();
 // unauthenticated public port has already lost.
 try {
   assertBindIsSafe(config);
+  // The same promise, extended to federation: an unpaired remote peer is an
+  // unauthenticated summary exchange in both directions, and a check that
+  // covered only the original feature would be the one people rely on and the
+  // one that is quietly false.
+  assertPeersAreSafe(await readFederationPeers());
 } catch (e) {
   log.error(e instanceof Error ? e.message : String(e));
   process.exit(1);
@@ -75,7 +101,33 @@ const engine = createEngine({
 
 const users = createUserStore();
 const auth = createAuthService({ store: users });
-const app = createApp({ config, engine, broadcast, auth, users, activity: () => tailer.latest() });
+// One runner for every bounded `claude -p` analysis pass in the process — the
+// on-demand routes and the background watcher share its concurrency and spend
+// gate, so "one pass at a time" means one, not one per caller.
+const analysis = createAnalysisRunner();
+/**
+ * Constellation polls its peers on the same tick as everything else.
+ *
+ * Pull, not push: a peer that is asleep or behind NAT is not a failed delivery
+ * to retry, it is a machine that did not answer this round — which is a state
+ * the fleet view already renders. With no peers configured this does nothing at
+ * all, which is what keeps single-machine zero-config.
+ */
+const fleetPoller = createPoller({
+  now: () => new Date(),
+  readPeers: readFederationPeers,
+});
+
+const app = createApp({
+  config,
+  engine,
+  broadcast,
+  auth,
+  users,
+  analysis,
+  activity: () => tailer.latest(),
+  fleet: () => fleetPoller.state(),
+});
 
 const server = serve({ fetch: app.fetch, port: PORT, hostname: config.host }, (info) => {
   log.info("argus listening", {
@@ -163,6 +215,11 @@ void backfillRunCosts()
 // Monitor health is derived on read, so nothing observes it changing — the
 // watcher re-derives it each tick and pushes down/failing/recovered
 // transitions to the webhook and every connected dashboard.
+/** Hand one transition to the Vault, if there is one and it is available. */
+const archive = (event: ReturnType<typeof alertEvent>) => {
+  if (event) ingestAlert(event);
+};
+
 const monitorWatcher = createMonitorWatcher({
   now: () => new Date(),
   readSchedules,
@@ -170,6 +227,18 @@ const monitorWatcher = createMonitorWatcher({
   onAlert: (alert) => {
     void postWebhook(config.webhookUrl, buildMonitorAlertPayload(alert));
     broadcast({ type: "monitors:alert", alert });
+    // Archived as it happens: a monitor transition is derived per tick and
+    // diffed in memory, so this is the only place it is ever written down.
+    archive(
+      alertEvent({
+        kind: alert.event,
+        at: alert.at,
+        severity: alert.event === "monitor.recovered" ? "info" : "warning",
+        subject: alert.name,
+        detail: alert.detail,
+        href: "#/monitors",
+      }),
+    );
   },
 });
 // Budget state is derived on read like monitor health; the watcher pushes
@@ -179,6 +248,122 @@ const budgetWatcher = createBudgetWatcher({
   onAlert: (alert) => {
     void postWebhook(config.webhookUrl, buildBudgetAlertPayload(alert));
     broadcast({ type: "budget:alert", alert });
+    archive(
+      alertEvent({
+        kind: alert.event,
+        at: alert.at,
+        severity: alert.state === "exceeded" ? "critical" : "warning",
+        subject: "Budget",
+        detail: alert.detail,
+        href: "#/budget",
+      }),
+    );
+  },
+});
+// Watchtower learns each schedule's and phase's normal envelope from history
+// and reports the runs that leave it. Like the two watchers above, the envelope
+// is derived on read, so the transition only exists if something diffs it.
+const watchtowerWatcher = createWatchtowerWatcher({
+  now: () => new Date(),
+  readRuns,
+  onAnomaly: (anomaly) => {
+    void postWebhook(config.webhookUrl, buildAnomalyPayload(anomaly));
+    broadcast({ type: "watchtower:anomaly", anomaly });
+  },
+});
+// Every failed run gets a postmortem, one per tick so a backlog drains rather
+// than arriving as a spend spike.
+const autopsyWatcher = createAutopsyWatcher({
+  runner: analysis,
+  now: () => new Date(),
+  readLines: readSessionLines,
+  readRuns,
+  onAutopsy: () => broadcast({ type: "issues:changed" }),
+});
+// Rubric scoring, and the gates that open themselves on a good enough score.
+// Out here rather than in the engine: a 90-second model call inside the signal
+// path — which holds the instance lock while a child process blocks on the
+// response — is how a gate becomes a deadlock.
+const verdictWatcher = createVerdictWatcher({
+  runner: analysis,
+  now: () => new Date(),
+  readRuns,
+  readSchedules,
+  readPipelines,
+  readInstances,
+  approve: (instanceId) => engine.approve(instanceId),
+  onVerdict: () => broadcast({ type: "issues:changed" }),
+  onAutoApprove: (instanceId, score) => {
+    log.info("gate auto-approved on verdict", { instanceId, score });
+    broadcast({ type: "pipelines:changed" });
+  },
+});
+/**
+ * Sentinel turns the signals the other features raise into incidents that can
+ * be acknowledged, escalated and diagnosed. The conditions are assembled here,
+ * from the same derivations the routes serve, so the incident list can never
+ * disagree with the Monitors and Issues pages it came from.
+ */
+const sentinelWatcher = createSentinelWatcher({
+  now: () => new Date(),
+  conditions: async () => {
+    const now = new Date();
+    const [runs, schedules, triage, resets, classes, verdicts] = await Promise.all([
+      readRuns(),
+      readSchedules(),
+      readTriage(),
+      readResets(),
+      readFailureClasses(),
+      readVerdicts(),
+    ]);
+    const { monitors } = buildMonitors(schedules, runs, now);
+    const issues = buildIssues(runs, triage, { classes, verdicts: failingVerdicts(verdicts) });
+    const { anomalies } = buildWatchtower(runs, resets, now);
+    return deriveConditions({
+      monitors,
+      issues,
+      anomalies,
+      // "Resolved, then failed again" is the regression rule Issues already
+      // uses; reading the triage records directly keeps the two in step.
+      resolvedFingerprints: new Set(
+        triage.filter((t) => t.state === "resolved").map((t) => t.fingerprint),
+      ),
+    });
+  },
+  onAlert: (alert) => {
+    if (!alert.suppressed) {
+      void postWebhook(config.webhookUrl, buildIncidentPayload(alert));
+      broadcast({ type: "sentinel:alert", alert });
+    } else {
+      // Quiet hours: the record still lands, the bell stays silent.
+      broadcast({ type: "sentinel:changed" });
+    }
+  },
+  diagnose: {
+    runner: analysis,
+    now: () => new Date(),
+    context: async (incident) =>
+      incident.scheduleId
+        ? readRuns({ scheduleId: incident.scheduleId, limit: 10 })
+        : readRuns({ limit: 10 }),
+  },
+});
+/**
+ * The Vault ingests on the same tick as everything else. It is deliberately
+ * last in the chain: it reads what the passes above have just written, and a
+ * cache that lags the truth by one tick is fine in a way that a truth lagging
+ * its cache would not be.
+ */
+const vaultWatcher = createVaultWatcher({
+  now: () => new Date(),
+  readRuns,
+  readIncidents,
+  readVerdicts,
+  readSpend: readSpendLedger,
+  readAnomalies: async () => {
+    const now = new Date();
+    const [runs, resets] = await Promise.all([readRuns(), readResets()]);
+    return buildWatchtower(runs, resets, now).anomalies;
   },
 });
 const scheduler = startScheduler({
@@ -187,6 +372,12 @@ const scheduler = startScheduler({
     await engine.reconcile();
     await monitorWatcher.check();
     await budgetWatcher.check();
+    await watchtowerWatcher.check();
+    await autopsyWatcher.check();
+    await verdictWatcher.check();
+    await sentinelWatcher.check();
+    await vaultWatcher.check();
+    await fleetPoller.check();
   },
   onFailure: (run) =>
     void postWebhook(config.webhookUrl, buildRunFailurePayload(run, new Date().toISOString())),

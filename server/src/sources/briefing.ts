@@ -6,7 +6,7 @@ import type { Issue } from "./issues.js";
 import type { MonitorHealth } from "./monitors.js";
 import type { PipelineInstance } from "./pipelineTypes.js";
 import type { Run, RunStatus } from "./scheduleTypes.js";
-import type { AttentionItem, Briefing } from "@argus/contracts";
+import type { Anomaly, AttentionItem, Briefing } from "@argus/contracts";
 
 /**
  * Briefing: the "while you were away" digest. Argus's whole point is
@@ -24,6 +24,9 @@ export interface BriefingInput {
   monitors: MonitorHealth[];
   issues: Issue[];
   instances: PipelineInstance[];
+  /** Recent Watchtower anomalies. Optional so callers that predate Watchtower
+   *  — and every existing test — keep working with an empty list. */
+  anomalies?: Anomaly[];
 }
 
 /** A long-abandoned ack must not scan unbounded history or render a useless
@@ -88,7 +91,20 @@ function buildAttention(input: BriefingInput): AttentionItem[] {
       at: i.lastSeen,
     }));
 
-  return [...down, ...gates, ...failing, ...openIssues];
+  // Only *critical* anomalies claim attention. A warn-level anomaly is worth
+  // reading in the digest; waking someone for "1.6× median duration" is how a
+  // briefing badge stops meaning anything.
+  const anomalies: AttentionItem[] = (input.anomalies ?? [])
+    .filter((a) => a.severity === "critical")
+    .map((a) => ({
+      kind: "anomaly" as const,
+      id: a.id,
+      title: a.name,
+      detail: a.detail,
+      at: a.at,
+    }));
+
+  return [...down, ...gates, ...failing, ...anomalies, ...openIssues];
 }
 
 export function buildBriefing(input: BriefingInput, since: Date, now: Date): Briefing {
@@ -119,6 +135,11 @@ export function buildBriefing(input: BriefingInput, since: Date, now: Date): Bri
     .sort((a, b) => (b.endedAt ?? "").localeCompare(a.endedAt ?? ""))
     .slice(0, LIST_CAP);
 
+  const windowAnomalies = (input.anomalies ?? [])
+    .filter((a) => Date.parse(a.at) >= sinceMs)
+    .sort((a, b) => b.at.localeCompare(a.at))
+    .slice(0, LIST_CAP);
+
   const attention = buildAttention(input);
 
   return {
@@ -134,6 +155,7 @@ export function buildBriefing(input: BriefingInput, since: Date, now: Date): Bri
       failures,
       newIssues,
       finishedPipelines,
+      anomalies: windowAnomalies,
     },
   };
 }

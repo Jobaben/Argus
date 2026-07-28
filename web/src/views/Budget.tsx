@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { useMachineFacet } from "../fleet/useMachineFacet";
+import { MachinePicker, PeerBanner } from "../fleet/MachineFacet";
 import { useBudget } from "../useBudget";
 import type { BudgetConfig, BudgetDay, BudgetState, BudgetWindow } from "../types";
 import {
@@ -12,6 +14,7 @@ import {
   useClock,
 } from "../ds";
 import { projectMonth } from "./budgetProjection";
+import { LedgerPanels } from "./LedgerPanels";
 
 const FIELD =
   "w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink placeholder-ink-faint";
@@ -274,7 +277,44 @@ function BudgetForm({
   );
 }
 
+/**
+ * A peer's budget position, from its summary.
+ *
+ * Read-only, and the limits form is deliberately absent: a limit is enforced by
+ * the machine that holds it, so editing it from here would either not work or
+ * would need a whole second write path across the pairing. Naming the machine
+ * and linking to it is the honest answer.
+ */
+function PeerBudget({ facet }: { facet: ReturnType<typeof useMachineFacet> }) {
+  const summary = facet.peer?.summary;
+  if (!summary) return null;
+  const { budget } = summary.facets;
+  const row = (label: string, spent: number, limit: number | null) => (
+    <div className="rounded-tile border border-line bg-surface p-4">
+      <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-faint">{label}</p>
+      <p className="mt-1 font-mono text-2xl font-extrabold text-ink">{formatUsd(spent)}</p>
+      <p className="mt-1 font-mono text-[11px] text-ink-faint">
+        {limit == null ? "no limit set" : `of ${formatUsd(limit)}`}
+      </p>
+    </div>
+  );
+  return (
+    <>
+      <section className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        {row("Today", summary.spendTodayUsd, budget.dailyLimitUsd)}
+        {row("This month", summary.spendMonthUsd, budget.monthlyLimitUsd)}
+      </section>
+      <p className="text-xs text-ink-faint">
+        Limits are enforced by the machine that holds them, so they are shown here and edited there.
+        Attribution, the forecast and the what-if simulator read that machine&apos;s own run history
+        — open its Argus for those.
+      </p>
+    </>
+  );
+}
+
 export default function Budget() {
+  const facet = useMachineFacet();
   const { budget, loading, error, save } = useBudget();
   // The shared clock, so the projection's "days elapsed" rolls over at midnight
   // without reading the wall clock during render.
@@ -298,13 +338,18 @@ export default function Budget() {
         pipeline starts) are never blocked.
       </p>
 
+      <MachinePicker facet={facet} label="Show budget from" />
+      <PeerBanner facet={facet} />
+
       {error && (
         <div className="mb-6">
           <AlertStrip subject="Error" message={`Couldn't reach the Argus server: ${error}`} />
         </div>
       )}
 
-      {loading && !budget ? (
+      {facet.peer ? (
+        <PeerBudget facet={facet} />
+      ) : loading && !budget ? (
         <Loading label="budget">
           <SkeletonCounters count={3} />
           <div className="mt-8">
@@ -324,6 +369,11 @@ export default function Budget() {
           <div className="mb-8">
             <SpendChart days={budget.days} dailyLimit={budget.config.dailyUsd} />
           </div>
+
+          {/* Attribution, forecast and the simulator sit between the raw
+              numbers and the controls: you read where the money went, then
+              decide what to do about it. */}
+          <LedgerPanels />
 
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-ink-dim">
             Limits

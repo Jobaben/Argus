@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { Issue, IssuesSummary } from "../types";
 import Issues from "./Issues";
 
@@ -41,6 +42,8 @@ function issue(over: Partial<Issue> = {}): Issue {
     lastSeen: "2026-07-10T06:00:00.000Z",
     schedules: ["Nightly triage"],
     state: "open",
+    members: ["abcdef0123456789"],
+    failureClass: null,
     lastRunId: "r9",
     ...over,
   };
@@ -124,5 +127,34 @@ describe("Issues", () => {
     // The two empty tiles are not controls; the open tile and the two triage
     // buttons on the card are.
     expect(screen.queryAllByRole("button", { name: /Ignored|Resolved/ })).toHaveLength(0);
+  });
+});
+
+describe("Issues — Autopsy integration", () => {
+  it("shows the failure class Autopsy assigned", () => {
+    mockState.issues = [issue({ failureClass: "rate-limit" })];
+    render(<Issues />);
+    expect(screen.getByText("Rate limit")).toBeInTheDocument();
+  });
+
+  it("says when several wordings were merged into one issue", () => {
+    mockState.issues = [issue({ members: ["aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"] })];
+    render(<Issues />);
+    expect(screen.getByText(/2 wordings merged/i)).toBeInTheDocument();
+  });
+
+  it("a single-wording issue says nothing about merging", () => {
+    mockState.issues = [issue()];
+    render(<Issues />);
+    expect(screen.queryByText(/wordings merged/i)).not.toBeInTheDocument();
+  });
+
+  it("each occurrence links to its own recording", async () => {
+    const user = userEvent.setup();
+    mockState.issues = [issue()];
+    render(<Issues />);
+    await user.click(screen.getByRole("button", { expanded: false }));
+    const link = await screen.findByRole("link", { name: /replay/i });
+    expect(link).toHaveAttribute("href", "#/run/r9");
   });
 });

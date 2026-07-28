@@ -17,6 +17,8 @@
 import type { ActivityEvent } from "./agents.js";
 import type { BudgetState } from "./budget.js";
 import type { MonitorStatus } from "./monitors.js";
+import type { Anomaly } from "./watchtower.js";
+import type { IncidentAlert } from "./sentinel.js";
 
 /** Every payload-free "re-fetch this domain" ping. */
 export type LiveChangeEvent =
@@ -28,7 +30,10 @@ export type LiveChangeEvent =
   | "budget:changed"
   | "totals:changed"
   | "inventory:changed"
-  | "sessions:changed";
+  | "sessions:changed"
+  | "watchtower:changed"
+  | "sentinel:changed"
+  | "fleet:changed";
 
 export type MonitorAlertEvent = "monitor.down" | "monitor.failing" | "monitor.recovered";
 
@@ -71,6 +76,27 @@ export interface BudgetAlertFrame {
   alert: BudgetAlert;
 }
 
-export type LiveFrame = LiveChangeFrame | RunActivityFrame | MonitorAlertFrame | BudgetAlertFrame;
+/** An anomaly exists only at the instant it is first observed — the report it
+ *  came from can be re-fetched, but "this just happened" cannot. */
+export interface AnomalyAlertFrame {
+  type: "watchtower:anomaly";
+  anomaly: Anomaly;
+}
+
+/** An incident transition. Like the other alert frames, it describes a moment
+ *  rather than a state — the incident itself is re-fetchable, "it just
+ *  escalated" is not. */
+export interface IncidentAlertFrame {
+  type: "sentinel:alert";
+  alert: IncidentAlert;
+}
+
+export type LiveFrame =
+  | LiveChangeFrame
+  | RunActivityFrame
+  | MonitorAlertFrame
+  | BudgetAlertFrame
+  | AnomalyAlertFrame
+  | IncidentAlertFrame;
 
 export type LiveFrameType = LiveFrame["type"];

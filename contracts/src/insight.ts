@@ -22,6 +22,8 @@ export interface SituationCounts {
   openIssues: number;
   /** Background agents present in the daemon roster. */
   liveAgents: number;
+  /** Runs that left their learned envelope, in the Watchtower report window. */
+  anomalies: number;
 }
 
 export type NextFireKind = "schedule" | "pipeline";

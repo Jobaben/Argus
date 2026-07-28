@@ -90,6 +90,8 @@ function issue(over: Partial<Issue> = {}): Issue {
     schedules: ["Dependency audit"],
     state: "open",
     lastRunId: "r1",
+    members: ["ffffffffffffffff"],
+    failureClass: null,
     ...over,
   };
 }

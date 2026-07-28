@@ -14,9 +14,10 @@ import {
   runLogPath,
   writeRun,
 } from "./sources/runs.js";
-import { isSpendBlocked } from "./sources/budget.js";
+import { currentEnforcement, isSpendBlocked } from "./sources/budget.js";
 import { ONEOFF_SCHEDULE_ID, type LaunchInput } from "./sources/launch.js";
 import type { Run, RunStatus, Schedule } from "./sources/scheduleTypes.js";
+import type { BudgetEnforcement } from "@argus/contracts";
 import { log } from "./log.js";
 
 /** Builds a terminal run record for a schedule that never spawned a process
@@ -321,6 +322,9 @@ export async function fireRun(
   schedule: Schedule,
   trigger: "scheduled" | "manual",
   deps: SchedulerDeps,
+  /** The budget ladder step in force, when one is. Only softens scheduled runs
+   *  — a human clicking Run now is its own authorization. */
+  enforcement?: BudgetEnforcement,
 ): Promise<Run> {
   const startedAt = deps.now();
   const run = newRun(
@@ -334,6 +338,14 @@ export async function fireRun(
     startedAt,
     deps,
   );
+  if (trigger === "scheduled" && enforcement?.action === "warn") {
+    run.budgetAction = "warn";
+  }
+  if (trigger === "scheduled" && enforcement?.action === "downgrade" && enforcement.model) {
+    run.budgetAction = "downgrade";
+    if (run.model) run.modelDowngradedFrom = run.model;
+    run.model = enforcement.model;
+  }
   await writeRun(run);
   await markScheduleRan(schedule.id, run.id, run.queuedAt);
   return spawnAndTrack(run, startedAt, deps);
@@ -367,6 +379,7 @@ export async function tick(deps: SchedulerDeps): Promise<void> {
   const schedules = await readSchedules();
   // One read per tick: the same verdict applies to every schedule due in it.
   let budgetBlocked: boolean | null = null;
+  let enforcement: Awaited<ReturnType<typeof currentEnforcement>> | null = null;
   for (const schedule of schedules) {
     if (!shouldFire(schedule, now, grace)) continue;
 
@@ -374,9 +387,40 @@ export async function tick(deps: SchedulerDeps): Promise<void> {
     if (budgetBlocked) {
       const iso = now.toISOString();
       const id = deps.newId();
-      await writeRun(
-        ephemeralRun(schedule, id, "skipped", iso, null, "skipped: spend budget exceeded"),
+      const skipped = ephemeralRun(
+        schedule,
+        id,
+        "skipped",
+        iso,
+        null,
+        "skipped: spend budget exceeded",
       );
+      skipped.budgetAction = "stop";
+      await writeRun(skipped);
+      await markScheduleRan(schedule.id, id, iso);
+      await pruneRuns(schedule.id, RUN_KEEP);
+      deps.onChange?.();
+      continue;
+    }
+
+    // Below the hard stop, the ladder can still soften or postpone this firing.
+    // Recorded on the run either way: "why did Tuesday's run use Haiku" has to
+    // be answerable from the record, not by correlating timestamps against a
+    // policy that has since been edited.
+    enforcement ??= await currentEnforcement(now);
+    if (enforcement.action === "defer") {
+      const iso = now.toISOString();
+      const id = deps.newId();
+      const deferred = ephemeralRun(
+        schedule,
+        id,
+        "skipped",
+        iso,
+        null,
+        `deferred: ${enforcement.detail}`,
+      );
+      deferred.budgetAction = "defer";
+      await writeRun(deferred);
       await markScheduleRan(schedule.id, id, iso);
       await pruneRuns(schedule.id, RUN_KEEP);
       deps.onChange?.();
@@ -408,7 +452,7 @@ export async function tick(deps: SchedulerDeps): Promise<void> {
     }
 
     try {
-      await fireRun(schedule, "scheduled", deps);
+      await fireRun(schedule, "scheduled", deps, enforcement ?? undefined);
     } catch (e) {
       // Never let one schedule's failure break the tick.
       const iso = now.toISOString();

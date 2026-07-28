@@ -36,6 +36,8 @@ export type {
   OverviewEntry,
   PhaseDef,
   PhaseFailurePayload,
+  RetryableClass,
+  RetryPolicy,
   PhaseProgress,
   PhaseStatus,
   PhaseStep,
@@ -82,6 +84,16 @@ export type {
 export type { PaletteEntry, PaletteIndex, PaletteKind, PaletteSeverity } from "./palette.js";
 
 export type {
+  RecorderEvent,
+  RecorderEventKind,
+  RecorderLane,
+  RecorderLaneSummary,
+  RecorderTotals,
+  RecorderUnavailable,
+  Recording,
+} from "./recorder.js";
+
+export type {
   Activity,
   CronDiskHint,
   CronStatus,
@@ -114,6 +126,72 @@ export type {
 } from "./admin.js";
 
 export type {
+  Attribution,
+  BudgetAction,
+  BudgetEnforcement,
+  BudgetLadderStep,
+  CostDimension,
+  CostSlice,
+  Forecast,
+  LedgerReport,
+  WhatIfRequest,
+  WhatIfResult,
+} from "./ledger.js";
+
+export type {
+  Diagnosis,
+  DiagnosisStatus,
+  EscalationLevel,
+  Incident,
+  IncidentAlert,
+  IncidentAlertEvent,
+  IncidentEvent,
+  IncidentEventKind,
+  IncidentSeverity,
+  IncidentSource,
+  IncidentStatus,
+  QuietHours,
+  SentinelPolicy,
+  SentinelState,
+  SentinelSummary,
+} from "./sentinel.js";
+
+export type {
+  AutoApprove,
+  CriterionScore,
+  Rubric,
+  RubricCriterion,
+  Verdict,
+  VerdictPoint,
+  VerdictReport,
+  VerdictStatus,
+  VerdictTrend,
+} from "./verdict.js";
+
+export type {
+  Autopsy,
+  AutopsyResponse,
+  AutopsySpan,
+  AutopsyStatus,
+  FailureClass,
+} from "./autopsy.js";
+
+export type {
+  Anomaly,
+  AnomalyDirection,
+  AnomalyEvent,
+  AnomalyMetric,
+  AnomalySeverity,
+  Baseline,
+  BaselineScope,
+  MetricBaseline,
+  WatchtowerReport,
+  WatchtowerSummary,
+} from "./watchtower.js";
+
+export type {
+  AnomalyAlertFrame,
+  IncidentAlertFrame,
   BudgetAlert,
   BudgetAlertEvent,
   BudgetAlertFrame,
@@ -126,3 +204,44 @@ export type {
   MonitorAlertFrame,
   RunActivityFrame,
 } from "./live.js";
+
+export type {
+  VaultHitKind,
+  VaultIngestResult,
+  VaultQuarter,
+  VaultQuartersReport,
+  VaultRowCounts,
+  VaultSearchHit,
+  VaultSearchResponse,
+  VaultStatus,
+  VaultUnavailableReason,
+} from "./vault.js";
+
+export type {
+  AnswerLink,
+  ExecuteResult,
+  ExecuteStatus,
+  MutationKind,
+  OmnibarAnswer,
+  OmnibarMode,
+  OmnibarResponse,
+  Plan,
+  PlanStatus,
+  PlannedMutation,
+} from "./omnibar.js";
+
+export type {
+  FleetMachine,
+  FleetTotals,
+  FleetView,
+  MachineFacets,
+  MachineSummary,
+  PeerBudget,
+  PeerIssue,
+  PeerPipeline,
+  PeerRun,
+  PairingCode,
+  Peer,
+  PeerInput,
+  PeerStatus,
+} from "./constellation.js";

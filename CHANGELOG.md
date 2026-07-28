@@ -5,7 +5,318 @@ All notable changes to Argus are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Sessions tests no longer depend on the hour they run.** The day-grouping
+  fixtures were offsets from `Date.now()`, so "two hours ago" stopped being
+  today between midnight and 02:00 — which is when CI runs. They are anchored to
+  midday now.
+
 ### Added
+
+- **Verdict scores now trend on the schedule cards**, beside the health badge,
+  so quality sits next to liveness where the decision about a schedule is made.
+  Only for schedules that declare a rubric and have been scored — an empty
+  sparkline on every card would advertise the feature at the cost of the page.
+  One trends read for the whole list, not one per card.
+
+- **Live-region parity on Fleet, the Ledger panels and the Vault panels.** All
+  three carry numbers that change under a poll, and a change only visible to
+  someone watching the pixels is not a change that was reported. The Vault's is
+  the load-bearing one: a store that quietly stopped ingesting looks exactly
+  like a quiet month.
+
+- **Constellation** (`#/fleet`): N machines, one lens. Argus watches one
+  `~/.claude`, so anyone running it on a laptop and a build box runs it twice
+  and reads it twice — and the questions that span both, what is failing
+  anywhere and what am I spending in total, have had no home. Now each machine
+  publishes a small summary of itself and pulls its peers', and the Fleet page
+  shows all of them with fleet-wide totals.
+  **Peer-to-peer with no server, and no coordinator to run.** Pull rather than
+  push, because a machine that is asleep or behind NAT is not a failed delivery
+  to retry — it is a peer that did not answer this round, which the fleet view
+  already renders. **Single-machine stays zero-config**: with no peers
+  configured nothing runs, nothing is published, and no federation endpoint
+  answers.
+  **Pairing is mutual and secret-based.** Mint a secret on one machine, add each
+  machine to the other with that same secret, and every exchange between them is
+  encrypted and signed end-to-end — HKDF to two independent keys, AES-256-GCM to
+  encrypt, HMAC-SHA256 over the whole envelope to bind the header, and a
+  timestamp plus nonce so a captured response cannot be replayed to freeze a
+  peer at a healthy moment. TLS on top is an improvement, not a requirement,
+  because "set up certificates between your laptop and your build box" is where
+  a feature like this stops being used.
+  **Refuse-to-boot extends to federation.** Argus already refuses to bind an
+  exposed port without `ARGUS_TOKEN`; it now equally refuses to start with a peer
+  configured over a non-loopback URL and no pairing secret. A security promise
+  that covers the original feature and not the new one is the promise people
+  rely on and the one that is quietly false.
+  **Command Center, Chronicle, Issues and Budget go fleet-wide.** Each gains a
+  machine picker; pick a peer and the page shows that machine, under a banner
+  naming it, dating its figures and linking to its own Argus. Peer mode is
+  read-only by construction — no approve on a peer's board, no triage on its
+  issues, no limits form on its budget, because those are mutations on a machine
+  this one does not own and a button that would either fail or need a second
+  control plane is worse than no button. Chronicle renders a list rather than
+  its packed timeline, because a timeline built from forty sampled runs shows
+  gaps that mean _not sent_ and read as _nothing happened_. **In solo mode none
+  of it appears**: no picker, no banner, no extra request.
+  **What crosses the wire** is headline counts plus a bounded facet list per
+  view — twelve pipelines, twelve issues, forty runs, every string clamped, and
+  the caps re-applied on receipt as well as on send, because a peer is a machine
+  you trust to be yours and not one you trust to be correct. Prompts, working
+  directories and session ids never travel at all. The machine's identity is a
+  locally-minted random id, not your hostname.
+  **Fleet totals say what they are made of.** Every aggregate is labelled _from
+  N of M machines_ and marked as a lower bound when some are not reporting;
+  silently summing whatever is reachable is how "spend is fine" becomes wrong on
+  the day a machine goes quiet. A quiet peer keeps its last card, marked stale,
+  rather than vanishing — and _unpaired_ (a mismatched secret) is kept distinct
+  from _unreachable_ (a dead machine), because they want different fixes.
+
+- **Omnibar** — the command palette learns to act. Type a sentence into `⌘K`
+  ("pause everything touching Spectacle") and Argus compiles it, through a
+  bounded planning pass, into an explicit table of changes: what it touches,
+  what it is now, what it becomes. Nothing happens until you press Apply, and
+  then all of it happens or none of it does. Questions are answered inline with
+  deep links instead — routing "when did nightly triage last run" through a
+  confirm step would be theatre.
+  The confirm step is not a formality, it is the security model, and three
+  constraints make that true. The **verbs are a closed set** — disable/enable a
+  schedule, resolve/ignore an issue, abort a live instance, set a budget limit —
+  so a planner cannot name a capability Argus does not already expose behind the
+  same admin gate. The **targets are resolved, not accepted**: the model supplies
+  a verb, an id and a value, and every label and before/after you read is
+  computed by the server from the live record, so a plan cannot say "Staging
+  cleanup" while pointing at production. And **execution takes the plan's id,
+  never the sentence**, so the intent is never re-interpreted and the list you
+  approved is the list that runs. Both the sentence and the catalogue it compiles
+  against contain text Argus did not author — an issue title is whatever a
+  failing run printed — and that is fine by construction: the worst a fully
+  compromised planning pass achieves is proposing a wrong-but-legal change that a
+  person then reads and rejects.
+  Applying is a **compensating transaction, and says so** rather than claiming an
+  atomicity several independent JSON files cannot provide. Every mutation is
+  re-validated against live state first, so a schedule someone disabled by hand
+  between preview and confirm stops the whole plan before anything is attempted.
+  Failures unwind in reverse. There are four outcomes rather than a boolean, and
+  the fourth is the point: when a rollback itself fails the system really is
+  part-changed, and `partial` names exactly what is still in effect. Aborting a
+  pipeline has no inverse — a killed process does not come back — and the code
+  says `null` instead of inventing a restart that would make a rollback report
+  claim more than happened.
+  Two words still fuzzy-jump, which is what the palette is for; three words and
+  twelve characters is where it offers to interpret instead, `⌘↵` forces it, and
+  the first `esc` returns to the list rather than throwing away what you typed.
+  Plans are single-use, expire in five minutes, and are held in memory only:
+  surviving a restart sounds like robustness and is a confirmation landing
+  against state nobody has looked at since.
+
+- **The Vault** — an embedded analytical store that remembers what the JSON
+  files are forced to forget. Argus prunes: run records keep the newest 50 per
+  schedule, the spend ledger keeps a year of days. That retention is right for
+  files a human might open and wrong for "how did this schedule behave last
+  quarter", so every run, alert, cost tick and Verdict score is also ingested
+  into a local SQLite database. **Stats** gains a quarter view, **Chronicle**
+  gains 90-day and 1-year windows, **Search** gains a second, indexed section
+  over Argus's own run history, and `GET /api/vault/otel` hands the whole thing
+  to your collector as OTLP spans — one span per run, a pipeline as one trace,
+  cost and tokens under the `gen_ai.*` semantic conventions so they land on
+  dashboards that already exist.
+  Zero configuration and zero dependencies: the engine is `node:sqlite`, built
+  into Node 22 — no package to install, no native build, no service to run. A
+  monitoring tool should not arrive with an operations story of its own.
+  It is a **cache of truth, never the source**. Every ingest is an upsert keyed
+  by the record's own identity, so re-running a pass changes nothing and the
+  watermark is an optimisation rather than a correctness requirement — the
+  strictly-advancing cursor that would have been faster is wrong in the case
+  that matters, where a run starting before the cursor and finishing after it
+  is recorded as running forever. A missing, corrupt, disabled or unavailable
+  Vault degrades the long views to their JSON-only behaviour and breaks nothing;
+  a schema it cannot read is moved aside and rebuilt rather than surfaced as a
+  boot failure, because refusing to start would look conservative and cost more
+  than starting fresh does.
+  Search expansion finds terms that **co-occur with your query in this machine's
+  own history** — search `backoff`, also search `quarantine`. Expanded hits are
+  tagged `related` so they can never pass as direct matches, and the terms used
+  are shown. It is not an embedding model and is not described as one: a general
+  model of English is a worse fit for a corpus of your own runs than that
+  corpus's own vocabulary, and it would cost the zero-configuration promise the
+  rest of the feature makes.
+  **Monitor and budget transitions are archived as they happen.** Both are
+  derived on each tick, diffed in memory, pushed to the bell and then forgotten;
+  nothing on disk could answer "how often did this monitor flap last quarter".
+  They are pushed to the Vault rather than polled because by the next tick there
+  is nothing left to poll, content-hashed so a replayed tick cannot report one
+  breach as two, and a failure to archive is swallowed — an alert that cannot be
+  stored must not break the alert.
+  The panel reports its own state — rows held, size, last ingest, and how many
+  runs it is keeping that the JSON files have already pruned. A store that
+  quietly stopped ingesting looks exactly like a quiet month, which is the one
+  failure a history feature must not hide. `ARGUS_VAULT=off` turns it off.
+
+- **Ledger** (`#/budget`, below the chart): where the money went, where it is
+  going, and what a change would do about it. Spend attributes by **schedule,
+  agent, pipeline, project and model** at per-run grain — `agent` being the
+  worker that actually ran, which for a pipeline is one phase, so it answers
+  "which part of the release train costs the money" rather than only "the
+  release train costs money" — with each row carrying its
+  share and its cost per run; the long tail folds into one `N more` row rather
+  than being dropped, and the footer reports how many costed runs the grouping
+  could not place, so the totals can be checked against the chart above. A
+  **month-end forecast** shows its band and its sample count instead of a single
+  confident figure. And a **what-if simulator** answers "move this to Haiku —
+  what happens?" as a priced trade: _`haiku` on Nightly triage saves $41.00/mo
+  at −0.2 Verdict_.
+  The rule underneath all of it: **nothing here invents a number.** There is no
+  embedded price list, because a saving computed from a price table looks
+  identical in the UI to a measured one and is wrong the week the prices change.
+  So the simulator compares what two models have actually cost on this machine
+  and, when the target has never run here, says so rather than guessing. The
+  same discipline produces three more honest refusals: no projection at all
+  under three full days of history, a confidence figure derived from the
+  observed spread rather than asserted, and a quality effect reported as
+  **unmeasured — not zero** unless both models carry Verdict scores. The daily
+  rate is a median and excludes today, so one runaway backfill day cannot set
+  the trend and the projection does not sag every morning and recover every
+  evening.
+  Budget limits also graduate. A **policy ladder** moves spending through
+  `warn → downgrade → defer → stop` at thresholds you set, so approaching a cap
+  narrows what runs instead of dropping a cliff in front of it; deferral still
+  leaves manual runs available, because a run you fire by hand is a decision you
+  have already made. The **highest** matching step wins rather than the first —
+  with warn@0.8 and stop@1.0, first-match would only warn a run 5% over the cap
+  — and both the daily and monthly windows are evaluated, with the more severe
+  verdict applying. Every affected run records what was done to it
+  (`budgetAction`, `modelDowngradedFrom`), so "why did Tuesday's run use Haiku?"
+  is answerable from the run record rather than by correlating a timestamp
+  against a policy that has since been edited.
+
+- **Weave** — pipelines graduate from a list to a typed DAG. Phases declare
+  `needs`, so a pipeline can plan once, fan out to build and test in parallel,
+  and fan back in to ship when both are done. Cycles and dangling edges are
+  rejected when you save, naming the phases involved — without that check a bad
+  graph is not an error but an instance that starts and never finishes. Phases
+  can declare a **retry policy** (attempts, doubling backoff, and which failure
+  classes are worth retrying — `signal` is deliberately excluded by default,
+  because an agent that reported failure has considered the work) and **named
+  artifacts** that later phases interpolate as `{{artifacts.<name>}}`. Every
+  instance keeps an append-only **journal**, because the instance record is
+  state rewritten in place and can never say that a phase failed, retried,
+  failed again and was revised.
+  Linear definitions load unchanged, and not as a compatibility shim: a linear
+  pipeline is _defined_ as a DAG in which each phase needs its predecessor, so
+  there is one executor rather than a general one and a legacy one that could
+  drift. The entire 735-test suite that predated Weave passes untouched.
+  Three things that were bugs before they were design: a failed branch no longer
+  terminalizes the instance while a sibling is still running (that rendered a
+  stopped pipeline with a live process writing into it), kill scope is explicit
+  so a revise cannot silently abort a sibling branch, and deferred launches
+  re-resolve phases by id because an abort landing in the window changes what
+  the indices mean. The board draws the graph when — and only when — there is
+  one to see: a linear pipeline draws none, and an instance carrying no edge
+  information draws none either, because absent edges mean _unknown_, not
+  _parallel_.
+
+- **Sentinel** (`#/sentinel`): incidents, escalation, and a diagnostic that
+  proposes but never acts. Monitors, Issues and Watchtower each raise a signal;
+  none of them holds the state that makes a signal answerable — who saw it, when
+  it was acknowledged, whether it escalated, what was found. An incident is that
+  state, and it assembles its own timeline as the problem develops. What opens
+  one is deliberately narrow (a monitor down or failing, an issue you had marked
+  resolved coming back, a critical anomaly), because mirroring every open issue
+  would just make a second inbox. A condition that persists never opens a second
+  incident; a condition that recurs **reopens** the same one, because the history
+  of a recurring problem is the useful part. Escalation climbs a policy on a
+  clock until someone acknowledges. Quiet hours suppress **the bell, never the
+  record** — the timeline, the list and the clock all carry on, so the morning
+  view has no hole where the night's problems were. The read-only diagnostic is
+  read-only _by construction_: everything it may consider is inlined into the
+  prompt, so it is never asked to go and look and has nothing to look with, and
+  its remediation renders as "Proposed, not done" with execution always a human's
+  click. Auto-dispatch exists and is off by default. Incidents persist, so a
+  restart resumes mid-incident rather than re-opening everything, and the
+  reconcile-and-persist runs under one store lock so a tick and a human
+  acknowledging cannot lose each other's writes.
+
+- **Verdict** — opt-in rubric scoring for schedules and pipeline phases. Exit
+  code 0 means the process ended, not that the work was good; a rubric says what
+  good means for one unit of work and a bounded judge pass scores each output
+  against it, 0–10 per criterion. The overall score is **computed from the
+  author's weights**, not taken from the model — asking a judge for a weighted
+  average and believing it lets one that scored every criterion 3/10 hand back
+  an 8. Criteria the rubric never mentioned are dropped, scores are clamped,
+  labels come from the rubric (so renaming one keeps the trend), and a response
+  scoring none of the real criteria is a failure rather than a zero. Scores
+  trend on Watchtower with a delta against the _prior median_ rather than the
+  previous run, and a score below the author's threshold opens an issue in the
+  same triage surface as a crash. Gated phases may declare
+  `autoApprove: { verdict: N }`: every judged step must clear the bar — the
+  phase's worst step decides, not the average — and a gate with no verdict yet
+  waits, because silence is not approval. Judging and gate-opening run on the
+  scheduler tick rather than in the engine's signal path, where a 90-second
+  model call under the instance lock would be a deadlock rather than a delay.
+
+- **Autopsy** — every failed run gets an automatic postmortem. A bounded
+  `claude -p` pass returns a failure class from a closed taxonomy, a confidence
+  figure, one paragraph of prose, the transcript span where it went wrong, and a
+  proposed replacement prompt with one-click **Relaunch with fix** behind the
+  admin gate. The relaunch fires a one-off and never edits the schedule — a
+  model's rewrite of a prompt that spends money unattended is a suggestion, not
+  a migration, and the UI says so next to the button. Nothing the model returns
+  is trusted verbatim: the class must be in the taxonomy, confidence is clamped,
+  the cited span is clamped into the recording's real duration (so "the failure
+  was at forty minutes" on a two-minute run cannot send the scrubber off the end
+  of the track), and an answer with no explanation is rejected. The panel shows
+  the span's own quote next to a **scrub to** control, so the claim is checkable
+  against the timeline right below it, and shows what the postmortem cost.
+- **Issue clustering upgraded from string equality to similarity.** With
+  postmortems available, differently-worded errors that describe the same
+  problem merge into one issue marked "N wordings merged", driven by Autopsy's
+  failure class plus token overlap of the normalized messages. Two _different_
+  known classes never merge however alike the words. The string fingerprint is
+  kept as the fallback: with no postmortems, grouping is byte-for-byte what it
+  always was.
+- **One audited place that asks a model a question** (`sources/analysis.ts`),
+  shared by every model-backed feature: one pass at a time (claimed
+  synchronously, so two callers cannot both see an idle runner), a hard timeout
+  that kills the process _group_, an output cap, metering into the spend ledger
+  even on failure, and a refusal to start under the budget hard stop.
+  `ARGUS_ANALYSIS=off` disables it; `ARGUS_ANALYSIS_MODEL` picks the model.
+
+- **Watchtower** (`#/watchtower`, `GET /api/watchtower`): learned envelopes per
+  schedule and per pipeline _phase_, and the runs that leave them. Monitors say
+  "did it run", Issues say "did it fail"; this catches the run that succeeded,
+  took nine minutes instead of two and cost four dollars instead of forty cents.
+  Robust statistics only — median and MAD, no dependency and no training step —
+  and anomalies are stated as the multiple a human can act on ("3.2× median
+  cost"), not as a z-score. Deliberately quiet: envelopes learn from successful
+  runs only (a crash that died in two seconds is not evidence about how long the
+  work takes), a z-score _and_ a ratio must both agree before anything fires, an
+  identical-sample distribution reports `zScore: null` rather than pretending
+  0.012 vs 0.010 is twenty sigma, and nothing fires at all under eight
+  successful samples. Baselines are visible, show their sample count, and are
+  resettable ("learn from here") and restorable. Newly-observed anomalies push a
+  typed `watchtower:anomaly` frame to the toast stack and bell, POST an
+  `anomaly.detected` webhook, become Briefing attention items when critical, and
+  add an anomalies count to the Command Center strip. Detection diffs derived
+  state between scheduler ticks, so the first pass after a restart is a silent
+  baseline and deterministic anomaly ids mean a run never alerts twice.
+
+- **Flight Recorder** (`#/run/<id>`, `GET /api/runs/:id/recording`): any run
+  opens as a scrubbable causal timeline instead of a JSONL wall. Every tool
+  call, file diff, token burst and cost tick is placed on one clock rooted at
+  the run's start; `tool_use` and `tool_result` are joined by id so a call is a
+  span with a duration and an error flag, not two unrelated lines. Play at
+  1×–100×, step event by event (a same-instant cluster is one press, so the
+  clock always moves), and **jump to failure** — which lands on the errored
+  tool call, not the terminal "it failed" marker. The scrubber position lives in
+  the URL, so a link to a recording is a link to a _moment_ in it. Derived on
+  every read and never persisted, so it cannot drift from the transcript.
+  Honest about its limits in the UI: per-event cost is the run's single
+  reported total apportioned by token share, long runs are trimmed to the most
+  recent 2,000 events with absolute offsets preserved, and a run with no
+  transcript gets an empty state that says which of the four reasons applies.
 
 - **Command palette (`⌘K` / `Ctrl K`)** over navigation, entities and actions:
   fuzzy search across every destination, pipeline, schedule, failing monitor,

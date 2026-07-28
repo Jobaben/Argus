@@ -26,29 +26,39 @@ can do, and where the data comes from.
 
 ## Contents
 
-| #   | Feature                               | Route          | What it answers                           |
-| --- | ------------------------------------- | -------------- | ----------------------------------------- |
-| 0   | [Global UI](#global-ui)               | —              | nav, live dot, auto-refresh, setup banner |
-| 1   | [Command Center](#1-command-center)   | `#/command`    | how are my pipelines doing right now?     |
-| 2   | [Briefing](#2-briefing)               | `#/briefing`   | what happened while I was away?           |
-| 3   | [Chronicle](#3-chronicle)             | `#/chronicle`  | what ran when, across every source?       |
-| 4   | [Launch](#4-launch)                   | `#/launch`     | fire one `claude -p` run right now        |
-| 5   | [Scheduler](#5-scheduler)             | `#/schedules`  | fire `claude -p` on a schedule            |
-| 6   | [Monitors](#6-monitors)               | `#/monitors`   | did my schedules actually run?            |
-| 7   | [Issues](#7-issues)                   | `#/issues`     | why are runs failing, grouped by cause?   |
-| 8   | [Pipelines](#8-pipelines)             | `#/pipelines`  | author multi-phase, human-gated flows     |
-| 9   | [Budget](#9-budget)                   | `#/budget`     | how much am I spending — and cap it       |
-| 10  | [Users & sign-in](#10-users--sign-in) | `#/users`      | who may run/edit pipelines?               |
-| 11  | [Search](#11-search)                  | `#/search`     | where did I say/see _that_?               |
-| 12  | [Agents](#12-agents)                  | `#/agents`     | what's running / done / failed right now? |
-| 13  | [Agent Detail](#13-agent-detail)      | `#/agent/<id>` | how did _this_ agent get here?            |
-| 14  | [Sessions](#14-sessions)              | `#/sessions`   | what was actually said in a conversation? |
-| 15  | [Activity](#15-activity)              | `#/activity`   | what have I prompted lately, everywhere?  |
-| 16  | [Projects](#16-projects)              | `#/projects`   | which folders are active, and when?       |
-| 17  | [Stats](#17-stats)                    | `#/stats`      | what's my usage / cost / token spend?     |
-| 18  | [Inventory](#18-inventory)            | `#/inventory`  | what's installed and available?           |
-| 19  | [Tasks](#19-tasks)                    | `#/tasks`      | what task workspaces exist / are locked?  |
-| 20  | [Cron panel](#20-cron-panel)          | Scheduler tab  | why native cron routines can't be shown   |
+| #   | Feature                                | Route          | What it answers                            |
+| --- | -------------------------------------- | -------------- | ------------------------------------------ |
+| 0   | [Global UI](#global-ui)                | —              | nav, live dot, auto-refresh, setup banner  |
+| 1   | [Command Center](#1-command-center)    | `#/command`    | how are my pipelines doing right now?      |
+| 2   | [Briefing](#2-briefing)                | `#/briefing`   | what happened while I was away?            |
+| 3   | [Chronicle](#3-chronicle)              | `#/chronicle`  | what ran when, across every source?        |
+| 4   | [Launch](#4-launch)                    | `#/launch`     | fire one `claude -p` run right now         |
+| 5   | [Scheduler](#5-scheduler)              | `#/schedules`  | fire `claude -p` on a schedule             |
+| 6   | [Monitors](#6-monitors)                | `#/monitors`   | did my schedules actually run?             |
+| 7   | [Issues](#7-issues)                    | `#/issues`     | why are runs failing, grouped by cause?    |
+| 8   | [Pipelines](#8-pipelines)              | `#/pipelines`  | author multi-phase, human-gated flows      |
+| 9   | [Budget](#9-budget)                    | `#/budget`     | how much am I spending — and cap it        |
+| 10  | [Users & sign-in](#10-users--sign-in)  | `#/users`      | who may run/edit pipelines?                |
+| 11  | [Search](#11-search)                   | `#/search`     | where did I say/see _that_?                |
+| 12  | [Agents](#12-agents)                   | `#/agents`     | what's running / done / failed right now?  |
+| 13  | [Agent Detail](#13-agent-detail)       | `#/agent/<id>` | how did _this_ agent get here?             |
+| 14  | [Sessions](#14-sessions)               | `#/sessions`   | what was actually said in a conversation?  |
+| 15  | [Activity](#15-activity)               | `#/activity`   | what have I prompted lately, everywhere?   |
+| 16  | [Projects](#16-projects)               | `#/projects`   | which folders are active, and when?        |
+| 17  | [Stats](#17-stats)                     | `#/stats`      | what's my usage / cost / token spend?      |
+| 18  | [Inventory](#18-inventory)             | `#/inventory`  | what's installed and available?            |
+| 19  | [Tasks](#19-tasks)                     | `#/tasks`      | what task workspaces exist / are locked?   |
+| 20  | [Cron panel](#20-cron-panel)           | Scheduler tab  | why native cron routines can't be shown    |
+| 21  | [Flight Recorder](#21-flight-recorder) | `#/run/<id>`   | what was it doing at minute four?          |
+| 22  | [Watchtower](#22-watchtower)           | `#/watchtower` | did it run the way it _usually_ runs?      |
+| 23  | [Autopsy](#23-autopsy)                 | `#/run/<id>`   | why did this run fail, in one paragraph?   |
+| 24  | [Verdict](#24-verdict)                 | `#/run/<id>`   | was the output any _good_?                 |
+| 25  | [Sentinel](#25-sentinel)               | `#/sentinel`   | what is on fire, and who has it?           |
+| 26  | [Weave](#26-weave)                     | `#/pipelines`  | fan-out, fan-in, retries, artifacts        |
+| 27  | [Ledger](#27-ledger)                   | `#/budget`     | where did the money go, and where next?    |
+| 28  | [The Vault](#28-the-vault)             | `#/stats`      | what happened last quarter, and last year? |
+| 29  | [Omnibar](#29-omnibar)                 | `⌘K`           | say it, see the exact changes, confirm     |
+| 30  | [Constellation](#30-constellation)     | `#/fleet`      | N machines, one lens                       |
 
 ---
 
@@ -935,29 +945,884 @@ harness-managed routines.
 
 ---
 
+## 21. Flight Recorder
+
+_Any run, replayed as a scrubbable timeline._ Route: `#/run/<runId>` (and
+`#/run/<runId>/<ms>` for a specific moment)
+
+**Purpose:** a transcript is a JSONL wall — thousands of lines where the one
+that matters looks exactly like the ones that don't. The Flight Recorder is the
+same information as a **recording**: every tool call, file diff, token burst
+and cost tick placed on one time axis, with a playhead you can drag.
+
+**How to get there:** expand any run row (Scheduler, Launch, Issues
+occurrences) and click **▶ replay**.
+
+**What you see:**
+
+- **Totals** — tool calls, file edits, errors, tokens, cost for the whole run.
+- **Lane strips** — one density band per lane (Agent, Tools, Files,
+  Tokens & cost) showing _where_ the activity was. Dense stretches read as
+  solid; quiet stretches read as gaps. A vertical line marks the playhead.
+- **The scrubber** — a range slider over the run's full duration. Its
+  accessible value announces both the clock position and the event under the
+  playhead.
+- **The event list** — a 41-row window that follows the playhead. Click any
+  row to seek to it.
+- **The now panel** — the one event you are parked on, in full: the command,
+  the message, the error body, the file path with `+added / −removed`, the
+  token burst and running spend.
+
+**What you can do:**
+
+- **Play / pause** at 1×, 5×, 20× or 100×. Playback stops at the end rather
+  than looping.
+- **Step** to the previous/next event. A cluster of events sharing one instant
+  is stepped over in one press, so the clock always moves.
+- **Jump to failure** — on a failed run, lands on the _errored tool call_, not
+  the terminal "it failed" marker. Keyboard: `f`.
+- **Copy link to moment** — the URL carries the scrubber position, so a link
+  to a recording is a link to minute four of it.
+- Keyboard throughout: `space` play/pause, `←`/`→` step, `f` jump to failure.
+
+**Honest limits, stated in the UI:**
+
+- **Cost is apportioned, not measured.** The CLI reports one `total_cost_usd`
+  for the whole run; per-event dollars are that figure split by token share.
+  The view says so under the track.
+- **Long runs are trimmed.** Past 2,000 events the earliest ones are dropped
+  (the end of a run is where failures live). Offsets stay absolute, so the
+  track simply starts partway in — and says that it did.
+- **No transcript, no timeline.** A skipped run, a run with no session, or a
+  pruned transcript gets an empty state that explains which of those it is.
+
+**Where the data comes from:** `GET /api/runs/:id/recording`, derived on every
+read from the run record plus `projects/<project>/<sessionId>.jsonl`. Nothing
+is persisted — the transcript stays the source of truth.
+
+---
+
+## 22. Watchtower
+
+_Learned envelopes, and the runs that leave them._ Route: `#/watchtower`
+(`g w`)
+
+**Purpose:** Monitors answer "did it run". Issues answer "did it fail".
+Neither catches the run that **succeeded**, took nine minutes instead of two,
+and burned four dollars instead of forty cents. Watchtower learns what each
+schedule — and each pipeline _phase_ — normally costs, and flags the runs that
+leave that envelope.
+
+**What you see:**
+
+- Four counters: **Envelopes** (warm and judging), **Warming up**,
+  **Anomalies** (last 14 days), **Critical**.
+- **Anomalies** first, because they are the news. Each states the multiple in
+  words — "3.2× median cost ($0.42 vs $0.13 over 24 runs)" — with a
+  **▶ replay this run** link straight into the
+  [Flight Recorder](#21-flight-recorder), and the robust z-score in a tooltip
+  for anyone who wants it.
+- **Learned envelopes** second, because they are the evidence: per unit of
+  work, the median and 5th–95th percentile of duration, cost and tokens, drawn
+  as a bar with the median marked, plus how many samples it was learned from.
+
+**What you can do:**
+
+- **Reset baseline** — "learn from here". Runs before that moment stop
+  counting for that key. Use it after a deliberate change (a new model, a
+  bigger prompt) that makes the old envelope wrong.
+- **Restore full history** — undo the reset.
+- Filter anomalies to **Critical** only.
+
+**How it decides — and why it is quiet:**
+
+- **Envelopes learn from successful runs only.** A crash that died in two
+  seconds is not evidence about how long the work takes. Failures are still
+  _judged_ against the envelope; they just don't shape it.
+- **A z-score and a ratio must both agree.** Robust z alone fires constantly
+  on tight distributions — a schedule that always costs $0.01 has near-zero
+  spread, so $0.012 is "twenty sigma". Requiring a real multiple too means
+  anything flagged is something you would also call unusual.
+- **Identical samples report no z at all.** When every run is the same to the
+  penny the spread is exactly zero and z is undefined, not enormous. Those
+  cases fall back to the ratio and say `zScore: null` rather than claiming a
+  precision the data doesn't support.
+- **Nothing fires before 8 successful runs.** A median of three runs is a
+  rumour. The envelope is shown while it warms, with the shortfall on the card.
+- **Both directions matter.** A run that finished in a tenth of the usual time
+  usually did a tenth of the usual work.
+
+**Where it shows up elsewhere:** critical anomalies become
+[Briefing](#2-briefing) attention items (warn-level ones appear in the digest
+under "Ran, but not the way it usually runs"), the Command Center strip gains
+an **anomalies** count, and every newly-observed anomaly fires a toast, a bell
+entry and the `anomaly.detected` webhook.
+
+**Where the data comes from:** `GET /api/watchtower`, derived on every read
+from run records. The only persisted state is your reset markers
+(`~/.claude/argus/watchtower.json`).
+
+---
+
+## 23. Autopsy
+
+_An automatic postmortem for every failed run._ Appears on the
+[Flight Recorder](#21-flight-recorder) for any failed run, and its verdict
+shows up on [Issues](#7-issues).
+
+**Purpose:** a failed run leaves an error string and a transcript. Turning
+those into "what actually went wrong, where, and what to change" is work
+somebody does by hand at 9am, badly, for the third time this week. Autopsy runs
+the same pass automatically, bounded, and attaches the answer to the run.
+
+**What you see** (on the run's recorder page, above the track):
+
+- A **failure class** from a small closed taxonomy — Ambiguous prompt, Missing
+  context, Tool error, Permission denied, Environment, Timeout, Rate limit,
+  Model declined, Bad output format, Infrastructure, Unclassified.
+- A **confidence** figure. Low confidence is shown, not hidden: an invisible
+  caveat is not a caveat.
+- **One paragraph** of prose explaining what happened. Not a bulleted plan.
+- **Where it went wrong**, quoting the timeline line it is claiming about, with
+  a **▶ scrub to 61.0s** control that moves the playhead there — so the claim is
+  checkable against the track immediately below it.
+- A **proposed prompt**, in full, with one line on what it changes.
+- What the postmortem itself **cost**, so the feature is never invisible spend.
+
+**What you can do:**
+
+- **Analyse this failure** / **Re-analyse** — run the pass now (admin).
+- **Relaunch with fix** — fire the proposed prompt **once, as a one-off**
+  (admin). Your schedule is never edited. A model's rewrite of a prompt that
+  spends money unattended is a suggestion, not a migration; the UI says so next
+  to the button.
+
+**Automatic behaviour and its bounds:**
+
+- Runs that failed in the last 24 hours get a postmortem automatically, **one
+  per scheduler tick**. A machine back from a week asleep drains its backlog
+  over minutes rather than as a spend spike, newest failure first.
+- Older failures are left for the on-demand button.
+- A pass that itself fails is **recorded as failed** with the reason, so the run
+  is not retried forever and you can see it was attempted.
+- Every pass is metered into the same spend ledger real runs use, refuses to
+  start while the budget hard stop is in force, is killed at 90 seconds, and is
+  capped on output. Set `ARGUS_ANALYSIS=off` to disable all of it;
+  `ARGUS_ANALYSIS_MODEL` picks the model (a cheap one by default).
+
+**Issues get smarter too.** With postmortems available, Issues clusters
+_differently-worded_ errors that are the same problem — "registry request timed
+out contacting mirror" and "…contacting upstream proxy" become one row marked
+**2 wordings merged**, carrying the shared failure class. Two errors with
+_different_ known classes never merge, however alike the words. With no
+postmortems, grouping is exactly the string-fingerprint behaviour it has always
+been.
+
+**Where the data comes from:** `GET /api/runs/:id/autopsy`,
+`POST /api/runs/:id/autopsy`, `POST /api/runs/:id/relaunch`. Postmortems live in
+`~/.claude/argus/autopsies.json` (capped at 200).
+
+---
+
+## 24. Verdict
+
+_Was the output any good?_ Declared on a schedule (Scheduler → **Score the
+output against a rubric**) or a pipeline phase; shown on the run's
+[Flight Recorder](#21-flight-recorder) page and trended on
+[Watchtower](#22-watchtower).
+
+**Purpose:** exit code 0 means the process ended. It does not mean the work was
+any good, and for an agent that is exactly the gap — a run can succeed loudly
+while producing a summary that misses the point. A **rubric** lets you say what
+good means for this unit of work, and each completed run's output is scored
+against it by a bounded judge pass.
+
+**Opt-in, always.** No rubric, no scoring, no cost, no UI. A schedule without
+one behaves exactly as before.
+
+**Writing a rubric** (in the schedule form):
+
+- **What does good look like here?** — one sentence, in your words.
+- **Criteria** — each has an `id`, a label and an optional weight. The **id
+  keys the history**: rename a label freely, change an id and the trend starts
+  over. Ids are slugified as you type, so you can't enter one the server would
+  reject.
+- **Regression threshold** (optional) — a run scoring below it **opens an
+  issue**, even though the process exited fine. Leave it empty to measure
+  without ever failing anything.
+- **Auto-approve this gate at** (gated pipeline phases only) — see below.
+
+**What you see on a run:**
+
+- The overall score out of 10, next to the bar it is judged against — a number
+  with no threshold beside it means nothing.
+- The **per-criterion breakdown**, which is the actionable part: "7.3" tells
+  you nothing, "coverage 8, actionable 4" tells you which half was missed.
+- One sentence of summary, and what the scoring pass cost.
+
+**What you see on the schedule card** ([Scheduler](#5-scheduler)): a sparkline
+and the latest score, beside the health badge — so quality sits next to
+liveness, where the decision about a schedule is actually made. It appears only
+once the schedule declares a rubric and something has been scored; Verdict is
+opt-in per definition, and an empty sparkline on every card would advertise the
+feature at the cost of the page.
+
+**What you see on Watchtower** (**Quality trends**): a bar sparkline per unit of
+work, the latest score, and its **delta against the median of everything
+before it** — one noisy judgement should not read as a collapse, and one good
+run after a bad week should not read as a recovery. Runs below the bar are
+drawn red.
+
+**How the number is arrived at, and why you can trust it:**
+
+- The **overall score is computed from your weights**, not taken from the
+  model. A judge that scores every criterion 3/10 will still cheerfully hand
+  back an 8 overall if you ask it for one.
+- A score for a criterion your rubric never mentioned is **dropped**. A judge
+  that invents a criterion is not evidence about your rubric.
+- Scores are clamped to 0–10, and labels come from your rubric, not the answer.
+- A response that scores none of your criteria is a **failure, not a zero**.
+
+**Gates that open themselves.** A gated phase with a rubric may declare
+**auto-approve at N**. When every judged step of the phase scores at least N,
+the gate passes unattended. Two properties matter and hold: a gate with **no
+verdict yet waits** (silence is not approval), and a gate whose verdict came
+back _below_ the bar waits for a human, forever. Auto-approval only ever skips
+the wait for work that has already been judged good — and it is the phase's
+**worst** step that decides, not the average, because averaging lets one
+excellent step carry a bad one through the gate you set to catch it.
+
+**Bounds:** completed runs under a rubric are judged automatically, **one per
+scheduler tick**, newest first, skipping anything older than 24 hours. Every
+pass shares the same guardrails as [Autopsy](#23-autopsy) — one at a time,
+90-second timeout, metered into the spend ledger, refused under the budget hard
+stop, and switched off entirely by `ARGUS_ANALYSIS=off`.
+
+**Where the data comes from:** `GET /api/runs/:id/verdict`,
+`POST /api/runs/:id/verdict` (admin), `GET /api/verdicts`. Scores live in
+`~/.claude/argus/verdicts.json`; rubrics live on the schedule or pipeline
+definition.
+
+---
+
+## 25. Sentinel
+
+_Incidents, escalation, and a diagnostic that proposes but never acts._ Route:
+`#/sentinel` (`g n`)
+
+**Purpose:** Monitors, Issues and Watchtower each raise a _signal_. None of them
+holds the state that makes a signal answerable — who saw it, when it was
+acknowledged, whether it escalated, what was found. An **incident** is that
+state: one object per ongoing problem, which assembles its own timeline as the
+problem develops.
+
+**What opens an incident** (deliberately narrow — mirroring every open issue
+here would just make a second inbox):
+
+- a monitor going **down** (critical) or **failing** (warning),
+- an issue you had marked **resolved** failing again — a regression, not
+  routine noise,
+- a **critical** Watchtower anomaly.
+
+**What you see per incident:** status and severity, how long it has been open,
+a live **escalates in…** countdown, every link that leads somewhere useful
+(the monitor, the issue, **▶ replay the run**), and the **timeline** — opened,
+escalated, acknowledged, diagnosed, noted, resolved, reopened — each entry
+attributed to Sentinel or to the person who did it.
+
+**What you can do** (admin):
+
+- **Acknowledge** — stops the escalation clock and records who stopped it.
+- **Resolve** — by hand. If the condition is still live, the next check
+  **reopens** it and says so in the timeline rather than silently undoing you.
+- **Note** — anything worth the next person knowing.
+- **Diagnose** — dispatch the read-only diagnostic (below).
+
+**Escalation and quiet hours** (Policy panel):
+
+- **Levels** — by default: notify, then escalate after 30 unacknowledged
+  minutes. Up to five levels.
+- **Quiet hours** — a local-clock window (wrapping past midnight is the normal
+  case and is handled). Inside it, **the bell is silent but the record still
+  lands**: the timeline, the incident list and the escalation clock all carry
+  on. Dropping the record instead would leave the morning view with a hole
+  exactly where the night's problems were. Criticals can be set to ring anyway.
+
+**The diagnostic — read-only by construction.** "Read-only" here is not a
+permission setting a model could talk its way past: everything the pass may
+consider is **inlined into the prompt** (the incident, its timeline, the recent
+runs of the affected work), so it is never asked to go and look and has nothing
+to look with. What comes back is a **finding** and a **proposal**, rendered as
+"Proposed, not done". Executing it is your click, always. An incident-response
+system that can also change things is one that can cause them.
+
+Auto-dispatch on open is available (**Diagnose new incidents automatically**)
+and **off by default** — spawning agents is never the default. One diagnostic
+per tick, only for freshly-opened incidents, sharing the same bounds as
+[Autopsy](#23-autopsy) and [Verdict](#24-verdict).
+
+**Where the data comes from:** `GET /api/sentinel`,
+`PUT /api/sentinel/policy`, `POST /api/incidents/:id/{ack,resolve,note,diagnose}`.
+Incidents live in `~/.claude/argus/incidents.json` — they _persist_, so a
+restart resumes mid-incident rather than re-opening everything — and the policy
+in `~/.claude/argus/sentinel.json`.
+
+---
+
+## 26. Weave
+
+_Pipelines as a typed graph: fan-out, fan-in, retries, artifacts._ Authored on
+[Pipelines](#8-pipelines); rendered on the [Command Center](#1-command-center).
+
+**Purpose:** a pipeline used to be a list — phase 1, then 2, then 3. Real work
+branches: plan once, then build and test in parallel, then ship when both are
+done. Weave makes the dependency graph explicit.
+
+**Every pipeline you already have keeps working, unchanged.** A definition where
+no phase declares `needs` is _linear_, and each phase implicitly waits for the
+one before it. That is not a compatibility shim — it is the degenerate shape of
+the general rule, so the executor has no separate linear path that could drift.
+
+**Declaring the graph** (per phase, in the pipeline definition):
+
+- **`needs: ["plan"]`** — the phase ids this one waits for. Declaring `needs`
+  on _any_ phase makes the whole graph explicit: phases without it become
+  roots, rather than silently inheriting a predecessor. A mixed reading would
+  make the same definition mean two things depending on where you looked.
+- **`retry: { attempts, backoffSeconds, retryOn }`** — see below.
+- **`produces: "plan"`** — publish this phase's payload as an artifact.
+
+**Cycles and dangling edges are rejected when you save**, naming the phases
+involved. Without that check, a bad graph is not an error — it is an instance
+that starts and then simply never finishes.
+
+**What you see:** when a pipeline actually branches, its card draws a **graph**:
+one column per stage, phases that can run together stacked in a column, and each
+phase listing what it waits for. A linear pipeline draws no graph — one column
+per phase says "graph" and shows nothing the phase pills didn't. An instance
+that carries no dependency information at all also draws nothing: absent edges
+mean _unknown_, not _parallel_.
+
+**How branches behave:**
+
+- Both branches of a fan-out start together; a fan-in waits for **every**
+  dependency, not the first one to finish.
+- A gate in one branch does **not** stop the other. The board points at the
+  gate, because that is what needs a human.
+- A failed branch does not terminalize the instance while a sibling is still
+  running — that would render a stopped pipeline with a live process still
+  writing into it. The failure is recorded on the phase; the instance settles to
+  failed once nothing is left that could progress.
+- **Revise** touches only the phase you revised; a sibling that is legitimately
+  running is not silently aborted. **Abort** stops everything.
+
+**Retries.** A phase may declare `attempts`, a `backoffSeconds` that doubles
+each time (capped at an hour), and which failures are worth retrying:
+
+- `spawn` — the process never started,
+- `exit-code` — it exited non-zero,
+- `signal` — the agent _reported_ failure.
+
+The default is `["spawn", "exit-code"]`, and the omission is deliberate: an
+agent that signalled failure has considered the work and reported on it, so
+re-running the same prompt mostly just spends the money twice. Retries are
+_scheduled_ (a timestamp on the phase) rather than held in a timer, so a backoff
+survives a restart. A **revise** resets the retry budget — otherwise a phase
+that had exhausted its retries could never be revised again.
+
+**Artifacts.** A phase with `produces: "plan"` publishes its payload; any later
+phase can interpolate `{{artifacts.plan}}` in a step prompt. The older
+`{{previous.payload}}` still works and means "my dependency's payload" — which
+for a linear pipeline is exactly what it always meant. A phase with two
+dependencies has no single "previous", which is why such phases should name
+artifacts. An unknown artifact interpolates to nothing rather than leaving a
+literal `{{artifacts.foo}}` in the prompt, which the model would try to make
+sense of.
+
+**The journal.** Every instance keeps an append-only history at
+`~/.claude/argus/journals/<id>.jsonl` — started, phase started, step spawned,
+signalled, failed, retry scheduled, retrying, revised, ended. The instance file
+is _state_ and is rewritten in place, so it can tell you a phase failed but
+never that it failed, retried, failed again and was revised. Read it at
+`GET /api/instances/:id/journal`. It is evidence, never the source of truth: a
+missing or corrupt journal costs you the history, never the pipeline.
+
+---
+
+## 27. Ledger
+
+_Where the money went, where it is going, and what a change would do about it._
+Route: `#/budget`, below the spend chart.
+
+**Purpose:** [Budget](#9-budget) answers "how much, and am I near the cap?". The
+Ledger answers the three questions after that: **which work** costs the money,
+**where the month lands** at this pace, and **what would change** if a slice
+moved to a cheaper model.
+
+**The rule the whole feature is built on: nothing here invents a number.**
+There is no embedded price list. Every figure is summed, median-ed or
+extrapolated from runs this machine actually made. The cost of that discipline
+is that some questions have no answer, and the panels say so out loud rather
+than returning a plausible zero.
+
+### Where it went
+
+Spend over the last **30 days**, grouped by one of four dimensions:
+
+- **Schedule** — per named schedule; one-off launches group as _One-off runs_.
+- **Agent** — per worker that actually ran. For a pipeline that is one _phase_,
+  so this is the view that says which part of a pipeline costs the money;
+  everything else groups as its schedule.
+- **Pipeline** — per pipeline (step runs roll up into their pipeline).
+- **Project** — per working directory.
+- **Model** — per model, with runs that pinned nothing shown as _CLI default_,
+  which is a real answer rather than a gap.
+
+Each row carries its dollar total, its **share** of the window, its **cost per
+run** and its token count. Past the twelfth slice the tail folds into a single
+`N more` row rather than being dropped — a total that does not add up is worse
+than a long tail you cannot itemise. The footer reports how many costed runs
+fell **outside** the grouping (a schedule run has no pipeline), so the totals
+can be checked against the chart above.
+
+Runs that reported no cost are not counted at all. A schedule that has never
+fired shows nothing here, which is why the empty state says so.
+
+### Forecast
+
+A projection of **month-end spend**, with the band and the sample count beside
+it rather than a single confident figure:
+
+- The daily rate is a **median**, not a mean, so one runaway backfill day does
+  not set the trend for the rest of the month.
+- **Today is excluded** from the rate. A partial day drags the median down all
+  morning and would make the projection sag and recover on a daily cycle.
+- The band is the 20th–80th percentile day projected forward, so it widens when
+  your days are erratic and narrows when they are not.
+- **Confidence** is derived from that spread — it is a statement about how well
+  this history extrapolates, not about how right the number is.
+- Under **three full days** there is no projection at all, only a note saying
+  why. Three points can be extrapolated into any figure you like. Between three
+  and ten days the note adds _treat as indicative_.
+
+If a monthly limit is set, the note says whether the projection lands inside or
+over it, and the figure turns red when it is over.
+
+### What if…
+
+Every slice has a **what if…** action: _move this work to `haiku` — what
+happens?_ The answer compares the slice's own median cost per run against what
+the target model **has actually cost on this machine**, extrapolated over the
+slice's observed run rate.
+
+- If the target model has **never run here**, the simulator refuses: _no runs on
+  "haiku" to compare against_. It will not quote a price list, because a saving
+  computed from a price table looks identical to a measured one and is wrong the
+  week the prices change.
+- Both sides use medians, so one expensive outlier does not decide whether a
+  migration looks worthwhile.
+- The quality half follows the same rule. If both models have
+  [Verdict](#24-verdict) scores, the median difference is reported with its
+  sample count. If either does not, the answer is **"unmeasured — not zero"**,
+  because "nobody has measured" is the true answer far more often than "no
+  difference".
+
+A complete answer reads like _`haiku` on Nightly triage saves $41.00/mo at −0.2
+Verdict_ — the trade, priced, with both halves measured.
+
+### The policy ladder
+
+A budget limit used to be a cliff: under it, everything runs; over it, nothing
+does. The ladder lets spending **graduate**. Add steps to your budget config,
+each a ratio of a limit and an action:
+
+| Action      | Effect                                                     |
+| ----------- | ---------------------------------------------------------- |
+| `warn`      | Runs proceed; the run records that it ran under a warning. |
+| `downgrade` | Scheduled runs move to the step's `model` (requires one).  |
+| `defer`     | Scheduled slots are skipped; **manual runs still work**.   |
+| `stop`      | Scheduled runs stop.                                       |
+
+Steps are stored sorted by threshold, so the ladder reads top-to-bottom as it
+engages and you cannot express "stop at 0.9, warn at 1.0" and be surprised.
+
+Two rules matter when several steps match:
+
+- The **highest** matching step wins, not the first. With warn@0.8 /
+  downgrade@0.9 / stop@1.0, a run at 105% must be _stopped_ — a first-match
+  reading would only have warned it.
+- **Both windows are checked** and the more severe verdict applies, because a
+  day that is fine inside a month that is not should still be governed by the
+  month.
+
+Only **scheduled** runs are governed. A run you fire by hand is a decision you
+have already made; the ladder does not second-guess it. The hard `stop` from
+[Budget](#9-budget) still blocks everything, ladder or not.
+
+**Every affected run records what happened to it** — `budgetAction` and, for a
+downgrade, `modelDowngradedFrom`. So "why did Tuesday's run use Haiku?" is
+answerable from the run record itself, rather than by correlating timestamps
+against a policy that has since been edited. When a step is in force, the Ledger
+shows a panel naming it and what it is doing.
+
+**Where the data comes from:** `argus/runs/` for attribution and the what-if,
+`argus/spend.json` for the forecast, `argus/budget.json` for the ladder, and
+`argus/verdicts.json` for the quality half. Nothing new is written — the Ledger
+is entirely derived.
+
+---
+
+## 28. The Vault
+
+_The store that remembers what the JSON files are forced to forget._ Surfaces
+on [Stats](#17-stats), [Search](#11-search) and [Chronicle](#3-chronicle).
+
+**Purpose:** Argus prunes. Run records keep the newest 50 per schedule, the
+spend ledger keeps a year of days, transcripts age out. That retention is
+correct for files a human might open, and wrong for the question _"how did this
+schedule behave last quarter?"_ The Vault ingests every run, alert, cost tick
+and Verdict score into a local database and answers the long-horizon questions
+from there.
+
+**Zero configuration.** The engine is SQLite, built into Node 22 — no package to
+install, no native build, no server to run. The database lives at
+`~/.claude/argus/vault.sqlite` and appears the first time Argus ticks.
+
+**It is a cache, never the source.** Every ingest is idempotent, the JSON files
+stay authoritative for anything they still hold, and where the two disagree the
+file wins. A Vault that is missing, corrupt, disabled or unavailable degrades
+the long views to their JSON-only behaviour and breaks nothing. If the file is
+ever unreadable, Argus moves it aside and starts a fresh one rather than
+refusing to boot — the only cost is history the JSON files no longer hold, and
+the alternative is every page broken until a human notices.
+
+### What it changes
+
+- **Stats gains a quarter view.** Runs, failures, success rate, median
+  duration, cost, tokens and median Verdict score per calendar quarter, for as
+  far back as the Vault goes. A quarter nothing scored shows `—`, not `0.0`:
+  unmeasured is not the same as terrible.
+- **Chronicle reaches further.** The window picker gains **90d** and **1y**.
+  Past 14 days the JSON files no longer have the answer, so those windows are
+  filled in from the Vault, with live records winning the merge.
+- **Search gains a second index.** A **Run history · indexed** section above the
+  transcript results, answering from every run and alert Argus has recorded —
+  including the ones since pruned. Full-text, prefix-matching, and fast because
+  it is indexed rather than scanned.
+- **OpenTelemetry export.** `GET /api/vault/otel?days=30` returns OTLP/JSON
+  spans for your collector. One span per run; a pipeline's phases share a trace.
+
+### Related terms
+
+Search expands your query with terms that **co-occur with it in this machine's
+own history** — search `backoff` and it may also search `quarantine`, because
+your runs mention them together. Expanded results arrive tagged **related**, and
+the terms used are printed above the results, so an expansion is always visible
+and auditable.
+
+This is not an embedding model, and the UI never calls it one. It is term
+co-occurrence over your own corpus: frequent among the documents your query
+matched, rare across everything else. For a body of your own runs that is both
+cheaper and more useful than a general model of English — it knows your
+vocabulary, which is the vocabulary you are searching in.
+
+### What it shows about itself
+
+Under the quarter table: how many runs, events and scores the Vault holds, how
+large it is, and — the number that says whether the feature is earning its keep
+— **how many runs it is keeping that the JSON files have already pruned**.
+
+A store that quietly stopped ingesting looks exactly like a quiet month, which
+is why the panel reports its own state rather than only its contents. When the
+Vault is unavailable it says so, and why, in place of the table.
+
+### Turning it off
+
+`ARGUS_VAULT=off` disables it entirely. Every long view degrades cleanly: Stats
+drops the quarter table with an explanation, Chronicle's long windows return
+whatever the JSON files still hold, Search falls back to transcripts only, and
+the OTLP export returns an empty document. Nothing errors, and no other feature
+notices.
+
+**Where the data comes from:** ingested on each scheduler tick from
+`argus/runs/`, `argus/incidents.json`, `argus/verdicts.json`, `argus/spend.json`
+and the Watchtower's derived anomalies — plus **monitor and budget transitions,
+archived as they happen**. Those two are the only signals Argus produces that
+are otherwise never written down: both are derived per tick, diffed in memory,
+sent to the bell, and gone. The Vault writes only to its own database file.
+
+---
+
+## 29. Omnibar
+
+_Say what you want; read exactly what would change; then confirm._ Lives inside
+the [command palette](#global-ui) — `⌘K`, then type a sentence.
+
+**Purpose:** the palette is already the fastest way to _go_ somewhere. The
+Omnibar makes it the fastest way to _change_ something, without giving up the
+thing that makes a control plane trustworthy — that you can see what is about to
+happen before it does.
+
+### How it behaves
+
+Type two words and the palette does what it always did: fuzzy-jump. Type a
+sentence — three words and twelve characters is the threshold — and it offers to
+interpret it instead.
+
+- **`↵` when nothing matched** compiles the sentence.
+- **`⌘↵` at any time** compiles it even when commands did match, so a phrase that
+  happens to fuzzy-match is not stuck.
+- **`esc`** leaves intent mode and returns to the list. A second `esc` closes the
+  palette. Losing a typed sentence to a stray keypress is a real cost.
+
+The threshold is deliberately conservative in both directions. "nightly triage"
+must stay a search, because jumping is what the palette is for and a planning
+pass costs real money; "pause everything touching Spectacle" should be
+recognisable without learning a prefix character.
+
+### The preview is the whole feature
+
+Compiling shows an explicit table: for every change, what it touches, what it is
+now, and what it becomes.
+
+```
+schedule disable   Nightly triage      enabled → disabled
+schedule disable   Dependency audit    enabled → disabled
+```
+
+Nothing has happened at this point. **Apply** applies all of it; **Cancel**
+applies none of it. There is no third path.
+
+Three properties make that trustworthy rather than merely reassuring:
+
+- **The verbs are a closed set.** Disable or enable a schedule, resolve or ignore
+  an issue, abort a live pipeline instance, set the daily or monthly budget.
+  That is the whole vocabulary, and the server drops anything outside it. The
+  planner cannot invent a capability Argus does not already expose.
+- **The targets must already exist.** Every id is checked against live state, and
+  every label, `before` and `after` you read is computed by the server from the
+  real record — never supplied by the model. A plan cannot describe itself
+  misleadingly, and an invented schedule name is dropped before you see it.
+- **What executes is the plan, not the sentence.** Confirming sends the plan's
+  id. The sentence is never re-interpreted, so the list you approved is the list
+  that runs.
+
+**Warnings** appear under the plan and never block it: a target that was
+dropped, a verb that was not understood, a change that would be a no-op. They
+are information about how your sentence was read.
+
+### Questions are answered, not planned
+
+"When did the nightly triage last run?" is a question, and routing a question
+through a confirm step would be theatre. Those come back as an inline answer
+with deep links into the app. Links are in-app routes only.
+
+### All of it or none of it
+
+Argus's state lives in several independent files, so a true cross-file
+transaction is not available — and claiming one would be the dishonest move.
+What you get instead is a compensating transaction, with four outcomes it will
+tell you apart:
+
+| Outcome         | What happened                                                                             |
+| --------------- | ----------------------------------------------------------------------------------------- |
+| **applied**     | Every change is in effect.                                                                |
+| **stale**       | Nothing was attempted — live state no longer matches the preview.                         |
+| **expired**     | Nothing was attempted — the plan was over five minutes old, or already run.               |
+| **rolled-back** | One change failed; the earlier ones were reversed. Nothing is in effect.                  |
+| **partial**     | A change failed **and** a reversal failed. Some changes are in effect; go and check them. |
+
+`partial` is reported loudly and named exactly, because it is the only case
+where a human has to go and look. Aborting a pipeline is the one action with no
+inverse — a killed process does not come back — so a plan containing an abort
+can only ever be unwound up to that point, and says so.
+
+A plan is **single-use** and expires after five minutes. Plans are not persisted:
+a confirmation surviving a restart would land against state nobody has looked at
+since.
+
+### Safety
+
+Both planning and executing sit behind the **admin login**, like every other
+mutation. Planning spawns a bounded `claude -p` pass through the same runner
+Autopsy and Verdict use — one at a time, ninety-second timeout, output capped,
+metered into the spend ledger, and refused outright while the budget hard stop
+is in force.
+
+A note on trust: your sentence, and the catalogue it is compiled against, both
+contain text Argus did not author — an issue title is whatever a failing run
+printed. That text reaching the planner is fine by construction, because a
+planner cannot do anything except propose verbs from the closed set against ids
+that already exist, and you read the result before it happens. The confirm step
+is not a formality; it is the security model.
+
+**Where the data comes from:** schedules, open issues, live instances and the
+budget config, read fresh for each pass. Pending plans are held in memory only.
+
+---
+
+## 30. Constellation
+
+_N machines, one lens._ Route: `#/fleet`.
+
+**Purpose:** Argus watches one `~/.claude`. Anyone running it on a laptop and a
+build box runs it twice and reads it twice, and the questions that span both —
+_what is failing anywhere, what am I spending in total_ — have no home.
+Constellation gives them one.
+
+**Single-machine stays zero-config.** With no peers configured nothing here
+runs: Argus makes no outbound requests, publishes no summary, and answers no
+federation endpoint. The page shows one machine and says so, rather than
+implying a fleet is missing.
+
+### Pairing
+
+Pairing is **mutual and secret-based**, and there is no server involved.
+
+1. On machine A: **Fleet → Mint a pairing secret**. It is shown once.
+2. On machine A: add machine B — its name, its Argus URL, and that secret.
+3. On machine B: add machine A — its URL, and **the same secret**.
+
+Each side only answers to pairings it holds, which is what makes step 3 part of
+the protocol rather than a nicety. A secret is 64 hex characters and is never
+readable back through the API once stored.
+
+### Fleet-wide views
+
+Command Center, Chronicle, Issues and Budget each gain a **machine picker** once
+you have a peer. Pick a machine and the page shows that machine instead, with a
+banner naming it, dating its figures and linking to its own Argus.
+
+Peer mode is **read-only by construction**. There is no approve or revise on a
+peer's board, no triage on a peer's issues, no limits form on a peer's budget —
+those are mutations on a machine this one does not own, and a button that would
+either fail or need a second control plane is worse than no button. The link out
+is the honest affordance.
+
+Each view also adapts to what a summary can actually carry. Chronicle shows a
+**list** rather than its packed timeline, because a timeline drawn from a
+sampled forty runs would show gaps that mean _not sent_ and read as _nothing
+happened_ — the one thing a timeline must never say.
+
+**In solo mode none of this appears.** No picker, no banner, no extra request:
+with one machine the four pages are byte-for-byte the pages they were before
+federation existed.
+
+### What crosses the wire
+
+Headline counts — monitors down and failing, open issues, live and gated
+pipelines, runs and failures today, spend today and this month, the version, the
+worst open incident — plus a **bounded facet list per fleet-wide view**: at most
+twelve live pipelines, twelve open issues (loudest first), forty recent runs,
+and the budget's limits. Every string is clamped.
+
+> **A revision of an earlier, stricter choice.** The first version of this
+> feature sent counts only. Counts cannot make four views fleet-wide, and a
+> fleet page that can only say "seven issues somewhere" is a worse product than
+> one that names them.
+
+What makes it safe is not the absence of detail but who receives it: a machine
+you paired with by hand, over a channel sealed with a secret you carried between
+the two. Within that, the bounds hold and three fields never travel at all —
+**prompts, working directories and session ids**, the ones certain to contain
+something written for one machine's eyes. To open a run you open that machine's
+own Argus, which is where it belongs.
+
+Every exchange is **encrypted and signed end-to-end** with keys derived from the
+pairing secret — AES-256-GCM for confidentiality, HMAC-SHA256 over the whole
+envelope for integrity, and a timestamp and nonce so a captured response cannot
+be replayed to freeze a peer at a healthy moment. TLS on top is an improvement,
+not a requirement, which matters because "set up certificates between your
+laptop and your build box" is the step at which a feature like this stops being
+used.
+
+### Reading the fleet
+
+Each machine gets a card: its counts, its spend, its version, and its status.
+
+| Status          | Meaning                                                                                               |
+| --------------- | ----------------------------------------------------------------------------------------------------- |
+| **paired**      | Answering, and the answer verified.                                                                   |
+| **pending**     | Added, not yet reached.                                                                               |
+| **stale**       | Last answer is over five minutes old — the figures shown are that old.                                |
+| **unpaired**    | Reachable, but the pairing did not verify. Usually a secret typed into one machine and not the other. |
+| **unreachable** | No answer at all.                                                                                     |
+
+_unpaired_ and _unreachable_ are kept apart deliberately: a mismatched secret
+and a dead machine are different problems and want different fixes.
+
+A machine that goes quiet **keeps its last card, marked stale**, rather than
+vanishing. "Last known, ten minutes ago" is information; an empty space is not.
+
+**Fleet totals say what they are made of.** Every aggregate is labelled _from N
+of M machines_, and when some are not reporting it says the figures are lower
+bounds. Silently summing whatever happens to be reachable is how "spend is fine"
+becomes wrong on the day a machine goes quiet — which is exactly the day it
+matters.
+
+### This machine's name
+
+A name you choose, shown to peers. The machine's **identity** is a random id
+minted locally on first use — not your hostname, not a MAC address — so nothing
+about this computer travels to a peer that you did not type in yourself.
+
+### Safety
+
+- **Reading the fleet is open**, like every other read. **Pairing, unpairing and
+  renaming are admin-gated**, like every other mutation.
+- **Refuse-to-boot extends to federation.** Argus already refuses to bind an
+  exposed port without `ARGUS_TOKEN`. It now equally refuses to start with a
+  peer configured over a non-loopback URL and no pairing secret — that would be
+  an unauthenticated summary exchange in both directions. A security promise
+  that covers the original feature and not the new one is the promise people
+  rely on and the one that is quietly false.
+- **The peer endpoint authenticates itself** rather than using the shared
+  `ARGUS_TOKEN`. Otherwise pairing would only work by handing every peer the
+  token that unlocks the whole control plane — one shared bearer granting
+  everything, instead of a per-pair secret granting one read. An unpaired caller
+  gets a `401` that reveals nothing: not the machine's id, not its label, not
+  whether any pairing exists.
+- Peers and their secrets live in `~/.claude/argus/peers.json`, mode `0600`,
+  like the admin credentials.
+
+**Practical note:** a peer has to be able to reach this machine, which means
+binding beyond loopback (`ARGUS_HOST`), setting `ARGUS_TOKEN`, and listing the
+peer-facing hostname in `ARGUS_ALLOWED_HOSTS`. Running the fleet over a private
+network — a VPN or a tailnet — is the intended shape.
+
+**Where the data comes from:** each machine's own schedules, monitors, issues,
+instances, incidents and spend, summarised per request and never stored. Peers
+are polled once per scheduler tick, with a four-second timeout and no retries.
+
+---
+
 ## Quick mental model
 
-| Tab                | Answers the question                      | Source                                      |
-| ------------------ | ----------------------------------------- | ------------------------------------------- |
-| **Command Center** | How are my pipelines doing right now?     | `argus/pipelines.json` + `argus/instances/` |
-| **Chronicle**      | What ran when, across everything?         | runs + jobs + transcripts, merged           |
-| **Launch**         | Fire one `claude -p` run right now        | `argus/runs/` (the `oneoff` bucket)         |
-| **Scheduler**      | What fires on a timer, and how did it go? | `argus/schedules.json` + `argus/runs/`      |
-| **Monitors**       | Did the expected runs actually land?      | derived from schedules + runs               |
-| **Issues**         | Why are runs failing, grouped by cause?   | derived from runs + `argus/issues.json`     |
-| **Pipelines**      | What multi-phase flows are defined?       | `argus/pipelines.json`                      |
-| **Budget**         | How much am I spending — and cap it       | `argus/budget.json` + `argus/spend.json`    |
-| **Users**          | Who may run/edit pipelines?               | `argus/auth.json`                           |
-| **Search**         | Where did I say/see _that_?               | all `projects/*/*.jsonl`                    |
-| **Agents**         | What's running / done / failed right now? | `jobs/*/state.json` + `daemon/roster.json`  |
-| **Detail**         | How did _this_ agent get here?            | `jobs/<short>/timeline.jsonl`               |
-| **Sessions**       | What was actually said in a conversation? | `projects/*/*.jsonl`                        |
-| **Activity**       | What have I prompted lately, everywhere?  | `history.jsonl`                             |
-| **Projects**       | Which folders are active, and when?       | `projects/*/`                               |
-| **Stats**          | What's my usage / cost / token spend?     | `stats/stats-cache.json`                    |
-| **Inventory**      | What's installed and available?           | `agents/ commands/ skills/ plugins/`        |
-| **Tasks**          | What task workspaces exist / are locked?  | `tasks/<id>/`                               |
-| **Cron panel**     | Why can't I see native cron routines?     | none (session-scoped)                       |
+| Tab                 | Answers the question                       | Source                                      |
+| ------------------- | ------------------------------------------ | ------------------------------------------- |
+| **Command Center**  | How are my pipelines doing right now?      | `argus/pipelines.json` + `argus/instances/` |
+| **Chronicle**       | What ran when, across everything?          | runs + jobs + transcripts, merged           |
+| **Launch**          | Fire one `claude -p` run right now         | `argus/runs/` (the `oneoff` bucket)         |
+| **Scheduler**       | What fires on a timer, and how did it go?  | `argus/schedules.json` + `argus/runs/`      |
+| **Monitors**        | Did the expected runs actually land?       | derived from schedules + runs               |
+| **Issues**          | Why are runs failing, grouped by cause?    | derived from runs + `argus/issues.json`     |
+| **Pipelines**       | What multi-phase flows are defined?        | `argus/pipelines.json`                      |
+| **Budget**          | How much am I spending — and cap it        | `argus/budget.json` + `argus/spend.json`    |
+| **Users**           | Who may run/edit pipelines?                | `argus/auth.json`                           |
+| **Search**          | Where did I say/see _that_?                | all `projects/*/*.jsonl`                    |
+| **Agents**          | What's running / done / failed right now?  | `jobs/*/state.json` + `daemon/roster.json`  |
+| **Detail**          | How did _this_ agent get here?             | `jobs/<short>/timeline.jsonl`               |
+| **Sessions**        | What was actually said in a conversation?  | `projects/*/*.jsonl`                        |
+| **Activity**        | What have I prompted lately, everywhere?   | `history.jsonl`                             |
+| **Projects**        | Which folders are active, and when?        | `projects/*/`                               |
+| **Stats**           | What's my usage / cost / token spend?      | `stats/stats-cache.json`                    |
+| **Inventory**       | What's installed and available?            | `agents/ commands/ skills/ plugins/`        |
+| **Tasks**           | What task workspaces exist / are locked?   | `tasks/<id>/`                               |
+| **Cron panel**      | Why can't I see native cron routines?      | none (session-scoped)                       |
+| **Flight Recorder** | What was it doing at minute four?          | run record + `projects/*/<session>.jsonl`   |
+| **Ledger**          | Where did the money go, and where next?    | `argus/runs/` + `argus/spend.json`          |
+| **The Vault**       | What happened last quarter, and last year? | `argus/vault.sqlite` (a rebuildable cache)  |
+| **Omnibar**         | Say it, see the exact changes, confirm     | schedules + issues + instances + budget     |
 
 _Screenshots in this guide live in [`docs/screenshots/`](screenshots/) and
 were captured from a live instance. To refresh them after a UI change, run the

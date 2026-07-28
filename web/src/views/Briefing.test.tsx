@@ -17,6 +17,7 @@ function briefing(over: Partial<BriefingData> = {}): BriefingData {
       failures: [],
       newIssues: [],
       finishedPipelines: [],
+      anomalies: [],
     },
     ...over,
   };
@@ -120,10 +121,13 @@ describe("Briefing", () => {
             lastSeen: "2026-07-11T04:05:00.000Z",
             schedules: ["Nightly triage"],
             state: "open",
+            members: ["abcdef0123456789"],
+            failureClass: null,
             lastRunId: "r1",
           },
         ],
         finishedPipelines: [],
+        anomalies: [],
       },
     });
     render(<Briefing briefing={data} loading={false} error={null} ack={async () => {}} />);
@@ -159,6 +163,7 @@ describe("Briefing", () => {
             tokens: 0,
             newIssues: [],
             finishedPipelines: [],
+            anomalies: [],
             failures: [
               { ...failedRun, id: "a", sessionId: "sess-1", project: "-home-me-api" },
               { ...failedRun, id: "b", sessionId: null, project: null },
@@ -174,5 +179,58 @@ describe("Briefing", () => {
     const hrefs = links.map((l) => l.getAttribute("href"));
     expect(hrefs).toContain("#/sessions/-home-me-api/sess-1");
     expect(hrefs).toContain("#/issues");
+  });
+});
+
+describe("Briefing — Watchtower anomalies", () => {
+  it("lists anomalies from the window under their own heading", () => {
+    const data = briefing({
+      window: {
+        ...briefing().window,
+        totalRuns: 3,
+        anomalies: [
+          {
+            id: "schedule:s1|cost|r9",
+            key: "schedule:s1",
+            scope: "schedule",
+            name: "Nightly triage",
+            runId: "r9",
+            scheduleId: "s1",
+            metric: "cost",
+            direction: "high",
+            severity: "critical",
+            value: 0.42,
+            median: 0.1,
+            ratio: 4.2,
+            zScore: 21.6,
+            at: "2026-07-10T06:00:00.000Z",
+            detail: "4.2× median cost ($0.42 vs $0.10 over 20 runs)",
+          },
+        ],
+      },
+    });
+    render(<Briefing briefing={data} loading={false} error={null} ack={async () => {}} />);
+    expect(screen.getByText(/Ran, but not the way it usually runs/i)).toBeInTheDocument();
+    expect(screen.getByText(/4.2× median cost/)).toBeInTheDocument();
+  });
+
+  it("regression: an anomaly attention card is amber, not the failure red", () => {
+    const data = briefing({
+      attention: [
+        {
+          kind: "anomaly",
+          id: "a1",
+          title: "Nightly triage",
+          detail: "4.2× median cost",
+          at: "2026-07-10T06:00:00.000Z",
+        },
+      ],
+      attentionCount: 1,
+    });
+    render(<Briefing briefing={data} loading={false} error={null} ack={async () => {}} />);
+    const label = screen.getByText("Anomaly");
+    expect(label.className).toMatch(/await/);
+    // The card it sits in follows the same tone rather than defaulting to red.
+    expect(label.closest("div.rounded-tile")?.className).toMatch(/border-await/);
   });
 });

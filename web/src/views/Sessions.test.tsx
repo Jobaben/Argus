@@ -16,7 +16,19 @@ vi.mock("../useSessions", () => ({
 
 vi.mock("../useHashRoute", () => ({ useHashRoute: () => ["sessions"] }));
 
-const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
+/**
+ * Anchored to midday rather than offset from `Date.now()`.
+ *
+ * "Two hours ago" is only reliably *today* if the suite does not run between
+ * midnight and 02:00 — which is exactly when CI does. Pinning to noon makes the
+ * day the fixture claims the day it actually lands in, at every hour.
+ */
+const dayAtNoon = (daysAgo: number, hour = 12) => {
+  const d = new Date();
+  d.setDate(d.getDate() - daysAgo);
+  d.setHours(hour, 0, 0, 0);
+  return d.toISOString();
+};
 
 const session = (over: Partial<SessionSummary> = {}): SessionSummary => ({
   id: "s1",
@@ -26,8 +38,8 @@ const session = (over: Partial<SessionSummary> = {}): SessionSummary => ({
   messageCount: 12,
   toolUseCount: 4,
   model: "claude-sonnet-4-5",
-  firstActivity: hoursAgo(3),
-  lastActivity: hoursAgo(2),
+  firstActivity: dayAtNoon(0, 11),
+  lastActivity: dayAtNoon(0),
   ...over,
 });
 
@@ -56,7 +68,7 @@ describe("Sessions", () => {
   it("groups by day so a transcript can be found by when it happened", () => {
     mockState.sessions = [
       session({ id: "now" }),
-      session({ id: "old", lastActivity: hoursAgo(30) }),
+      session({ id: "old", lastActivity: dayAtNoon(1) }),
     ];
     render(<Sessions />);
     expect(screen.getByRole("heading", { name: /Today/ })).toBeInTheDocument();

@@ -8,6 +8,7 @@ import type { ArgusConfig } from "./config.js";
 import type { Engine } from "./pipelineEngine.js";
 import { createAuthService, type AuthService } from "./auth.js";
 import { createUserStore } from "./userStore.js";
+import type { AnalysisRunner } from "./sources/analysis.js";
 
 let home: string;
 beforeEach(() => {
@@ -740,4 +741,1459 @@ test("PUT /api/budget persists limits and rejects bad ones", async () => {
     body: JSON.stringify({ dailyUsd: -3 }),
   });
   assert.equal(bad.status, 400);
+});
+
+/** A completed run on disk, with whichever metrics the test cares about. */
+function writeRunRecord(id: string, over: Record<string, unknown>) {
+  mkdirSync(path.join(home, "argus", "runs"), { recursive: true });
+  const iso = new Date().toISOString();
+  writeFileSync(
+    path.join(home, "argus", "runs", `${id}.json`),
+    JSON.stringify({
+      id,
+      scheduleId: "s1",
+      scheduleName: "Nightly triage",
+      prompt: "p",
+      cwd: "/tmp",
+      status: "succeeded",
+      trigger: "scheduled",
+      queuedAt: iso,
+      startedAt: iso,
+      endedAt: iso,
+      durationMs: 60_000,
+      pid: null,
+      exitCode: 0,
+      sessionId: null,
+      project: null,
+      resultSummary: null,
+      error: null,
+      costUsd: 0.1,
+      tokens: 1000,
+      ...over,
+    }),
+  );
+}
+
+test("watchtower: a warm envelope with nothing out of place reports no anomalies", async () => {
+  const app = makeApp();
+  for (let i = 0; i < 12; i++) {
+    writeRunRecord(`w${i}`, { durationMs: 60_000 + (i % 3) * 500, costUsd: 0.1 });
+  }
+
+  const warm = (await (await app.request("/api/watchtower", { headers: loopback })).json()) as {
+    baselines: { key: string; warmupRemaining: number }[];
+    anomalies: unknown[];
+    summary: { ready: number };
+  };
+  assert.equal(warm.baselines.length, 1);
+  assert.equal(warm.baselines[0].key, "schedule:s1");
+  assert.equal(warm.baselines[0].warmupRemaining, 0);
+  assert.equal(warm.summary.ready, 1);
+  assert.equal(warm.anomalies.length, 0);
+});
+
+test("watchtower: a spike past warm-up is reported as a multiple, not a z-score", async () => {
+  const app = makeApp();
+  for (let i = 0; i < 12; i++) {
+    writeRunRecord(`w${i}`, { durationMs: 60_000 + (i % 3) * 500, costUsd: 0.1 });
+  }
+  writeRunRecord("spike", { costUsd: 4.2 });
+
+  const body = (await (await app.request("/api/watchtower", { headers: loopback })).json()) as {
+    anomalies: { metric: string; detail: string; severity: string }[];
+  };
+  const cost = body.anomalies.find((a) => a.metric === "cost");
+  assert.ok(cost, "the spike was reported");
+  assert.match(cost.detail, /× median cost/);
+  assert.equal(cost.severity, "critical");
+});
+
+test("watchtower: reset forgets prior history, restore brings it back, both broadcast", async () => {
+  const messages: unknown[] = [];
+  const app = createApp({
+    config,
+    engine: fakeEngine,
+    broadcast: (m) => messages.push(m),
+    serveWeb: false,
+  });
+  for (let i = 0; i < 12; i++) writeRunRecord(`w${i}`, {});
+
+  const reset = await app.request("/api/watchtower/schedule%3As1/reset", {
+    method: "POST",
+    headers: sameOrigin,
+  });
+  assert.equal(reset.status, 200);
+  assert.ok(messages.some((m) => (m as { type?: string }).type === "watchtower:changed"));
+
+  const emptied = (await (await app.request("/api/watchtower", { headers: loopback })).json()) as {
+    baselines: unknown[];
+  };
+  assert.equal(emptied.baselines.length, 0, "every sample predates the reset");
+
+  const restore = await app.request("/api/watchtower/schedule%3As1/reset", {
+    method: "DELETE",
+    headers: sameOrigin,
+  });
+  assert.equal(restore.status, 200);
+  const restored = (await (await app.request("/api/watchtower", { headers: loopback })).json()) as {
+    baselines: unknown[];
+  };
+  assert.equal(restored.baselines.length, 1);
+
+  const again = await app.request("/api/watchtower/schedule%3As1/reset", {
+    method: "DELETE",
+    headers: sameOrigin,
+  });
+  assert.equal(again.status, 404, "clearing a reset that is not there is a clean 404");
+});
+
+test("watchtower: a key that could escape its namespace is a clean 400", async () => {
+  const app = makeApp();
+  const res = await app.request("/api/watchtower/..%2fevil/reset", {
+    method: "POST",
+    headers: sameOrigin,
+  });
+  assert.equal(res.status, 400);
+});
+
+test("briefing surfaces a critical anomaly as an attention item", async () => {
+  const app = makeApp();
+  for (let i = 0; i < 12; i++) writeRunRecord(`w${i}`, { durationMs: 60_000 + (i % 3) * 500 });
+  writeRunRecord("spike", { costUsd: 4.2 });
+
+  const body = (await (await app.request("/api/briefing", { headers: loopback })).json()) as {
+    attention: { kind: string; detail: string }[];
+    window: { anomalies: { metric: string }[] };
+  };
+  assert.ok(body.attention.some((a) => a.kind === "anomaly"));
+  assert.ok(body.window.anomalies.some((a) => a.metric === "cost"));
+});
+
+// ── Autopsy ─────────────────────────────────────────────────────────────────
+
+const AUTOPSY_ANSWER = JSON.stringify({
+  failureClass: "tool-error",
+  confidence: 0.8,
+  why: "The build invoked a binary that is not installed in this environment, so the step exited non-zero.",
+  span: { fromSeconds: 1, toSeconds: 2, quote: "1.0s tool [ERROR]" },
+  promptDelta: "Install the toolchain first, then build.",
+  deltaRationale: "Makes the missing prerequisite explicit.",
+});
+
+/** An analysis runner that always answers with the given parsed JSON text. */
+function stubAnalysis(answerJson: string): AnalysisRunner {
+  return {
+    inFlight: () => 0,
+    run: async (_req, parse) => {
+      const value = parse(JSON.parse(answerJson));
+      return value === null
+        ? {
+            ok: false,
+            value: null,
+            raw: answerJson,
+            costUsd: 0.001,
+            tokens: 100,
+            durationMs: 5,
+            failure: "unparseable" as const,
+            error: "wrong shape",
+          }
+        : {
+            ok: true,
+            value,
+            raw: answerJson,
+            costUsd: 0.001,
+            tokens: 100,
+            durationMs: 5,
+            failure: null,
+            error: null,
+          };
+    },
+  };
+}
+
+function makeAutopsyApp(answerJson = AUTOPSY_ANSWER) {
+  return createApp({
+    config,
+    engine: fakeEngine,
+    broadcast: () => {},
+    serveWeb: false,
+    users: createUserStore(),
+    remoteAddr: () => "127.0.0.1",
+    auth: openAuth,
+    analysis: stubAnalysis(answerJson),
+  });
+}
+
+test("autopsy: a failed run gets a postmortem on demand and it is then readable", async () => {
+  const app = makeAutopsyApp();
+  writeFailedRun("bad1", "spawn tsc ENOENT");
+
+  const before = (await (
+    await app.request("/api/runs/bad1/autopsy", { headers: loopback })
+  ).json()) as { autopsy: unknown; eligible: boolean };
+  assert.equal(before.autopsy, null);
+  assert.equal(before.eligible, true);
+
+  const made = await app.request("/api/runs/bad1/autopsy", {
+    method: "POST",
+    headers: sameOrigin,
+  });
+  assert.equal(made.status, 200);
+  const body = (await made.json()) as {
+    autopsy: {
+      status: string;
+      failureClass: string;
+      promptDelta: string;
+      span: { fromMs: number };
+    };
+  };
+  assert.equal(body.autopsy.status, "ready");
+  assert.equal(body.autopsy.failureClass, "tool-error");
+  // This run has no transcript, so its recording is zero-length and the model's
+  // "at one second" is clamped rather than pointing off the end of the track.
+  assert.equal(body.autopsy.span.fromMs, 0);
+  assert.match(body.autopsy.promptDelta, /Install the toolchain/);
+
+  const after = (await (
+    await app.request("/api/runs/bad1/autopsy", { headers: loopback })
+  ).json()) as { autopsy: { status: string } | null };
+  assert.equal(after.autopsy?.status, "ready");
+});
+
+test("autopsy: a successful run is not eligible and cannot be forced", async () => {
+  const app = makeAutopsyApp();
+  writeRunRecord("good", {});
+  const read = (await (
+    await app.request("/api/runs/good/autopsy", { headers: loopback })
+  ).json()) as { eligible: boolean; unavailable: string };
+  assert.equal(read.eligible, false);
+  assert.match(read.unavailable, /did not fail/);
+
+  const forced = await app.request("/api/runs/good/autopsy", {
+    method: "POST",
+    headers: sameOrigin,
+  });
+  assert.equal(forced.status, 409);
+});
+
+test("autopsy: an unknown run is a clean 404 on both verbs", async () => {
+  const app = makeAutopsyApp();
+  assert.equal((await app.request("/api/runs/nope/autopsy", { headers: loopback })).status, 404);
+  assert.equal(
+    (await app.request("/api/runs/nope/autopsy", { method: "POST", headers: sameOrigin })).status,
+    404,
+  );
+});
+
+test("autopsy: producing one and relaunching both require an admin session", async () => {
+  const lockedOut: AuthService = {
+    isConfigured: async () => true,
+    status: async () => ({ configured: true, username: null, role: null }),
+    login: async () => ({ ok: false, reason: "bad-credentials" }),
+    verify: () => null,
+    logout: () => {},
+    revokeSessions: () => {},
+  };
+  const app = createApp({
+    config,
+    engine: fakeEngine,
+    broadcast: () => {},
+    serveWeb: false,
+    users: createUserStore(),
+    remoteAddr: () => "127.0.0.1",
+    auth: lockedOut,
+    analysis: stubAnalysis(AUTOPSY_ANSWER),
+  });
+  writeFailedRun("bad2", "boom");
+
+  // Reading stays open — the dashboard works signed out.
+  assert.equal((await app.request("/api/runs/bad2/autopsy", { headers: loopback })).status, 200);
+  assert.equal(
+    (await app.request("/api/runs/bad2/autopsy", { method: "POST", headers: sameOrigin })).status,
+    401,
+  );
+  assert.equal(
+    (await app.request("/api/runs/bad2/relaunch", { method: "POST", headers: sameOrigin })).status,
+    401,
+  );
+});
+
+test("relaunch refuses when there is no proposed prompt to relaunch with", async () => {
+  const app = makeAutopsyApp();
+  writeFailedRun("bad3", "boom");
+  const res = await app.request("/api/runs/bad3/relaunch", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({}),
+  });
+  assert.equal(res.status, 409);
+});
+
+test("issues: a clustered issue's detail lists every member's occurrences", async () => {
+  const app = makeAutopsyApp();
+  // Two differently-worded failures that string grouping keeps apart.
+  writeFailedRun("c1", "registry request timed out contacting mirror");
+  writeFailedRun("c2", "registry request timed out contacting upstream proxy");
+
+  const plain = (await (await app.request("/api/issues", { headers: loopback })).json()) as {
+    issues: { fingerprint: string; count: number; members: string[] }[];
+  };
+  assert.equal(plain.issues.length, 2, "with no autopsies, string grouping stands");
+
+  // Diagnose both as the same class; the pair then clusters.
+  for (const id of ["c1", "c2"]) {
+    const res = await app.request(`/api/runs/${id}/autopsy`, {
+      method: "POST",
+      headers: sameOrigin,
+    });
+    assert.equal(res.status, 200);
+  }
+
+  const clustered = (await (await app.request("/api/issues", { headers: loopback })).json()) as {
+    issues: { fingerprint: string; count: number; members: string[]; failureClass: string }[];
+  };
+  assert.equal(clustered.issues.length, 1);
+  assert.equal(clustered.issues[0].count, 2);
+  assert.equal(clustered.issues[0].failureClass, "tool-error");
+
+  const detail = (await (
+    await app.request(`/api/issues/${clustered.issues[0].fingerprint}`, { headers: loopback })
+  ).json()) as { occurrences: unknown[] };
+  assert.equal(detail.occurrences.length, 2, "both members' occurrences are listed");
+});
+
+// ── Verdict ─────────────────────────────────────────────────────────────────
+
+const RUBRIC = {
+  goal: "Names every failure and proposes one next step each.",
+  criteria: [
+    { id: "coverage", label: "Names every new failure", weight: 2 },
+    { id: "actionable", label: "Proposes a concrete next step" },
+  ],
+  minScore: 6,
+};
+
+const VERDICT_ANSWER = JSON.stringify({
+  criteria: [
+    { id: "coverage", score: 8, note: "Both named." },
+    { id: "actionable", score: 6, note: "One missing." },
+  ],
+  summary: "Solid but incomplete.",
+});
+
+function writeSchedule(over: Record<string, unknown>) {
+  mkdirSync(path.join(home, "argus"), { recursive: true });
+  const iso = new Date().toISOString();
+  writeFileSync(
+    path.join(home, "argus", "schedules.json"),
+    JSON.stringify([
+      {
+        id: "s1",
+        name: "Nightly triage",
+        prompt: "p",
+        cwd: home,
+        trigger: { kind: "interval", everyMinutes: 60 },
+        enabled: true,
+        overlapPolicy: "skip",
+        createdAt: iso,
+        updatedAt: iso,
+        lastRunAt: null,
+        lastRunId: null,
+        ...over,
+      },
+    ]),
+  );
+}
+
+test("verdict: a run under a rubric is scored, and the score is computed from the weights", async () => {
+  const app = makeAutopsyApp(VERDICT_ANSWER);
+  writeSchedule({ rubric: RUBRIC });
+  writeRunRecord("scored", { resultSummary: "Two failures found." });
+
+  const before = (await (
+    await app.request("/api/runs/scored/verdict", { headers: loopback })
+  ).json()) as { verdict: unknown; rubric: { goal: string } | null };
+  assert.equal(before.verdict, null);
+  assert.ok(before.rubric);
+
+  const made = await app.request("/api/runs/scored/verdict", {
+    method: "POST",
+    headers: sameOrigin,
+  });
+  assert.equal(made.status, 200);
+  const body = (await made.json()) as {
+    verdict: { status: string; score: number; regression: boolean; criteria: unknown[] };
+  };
+  assert.equal(body.verdict.status, "ready");
+  // (8*2 + 6*1) / 3 = 7.3 — ours, not the model's.
+  assert.equal(body.verdict.score, 7.3);
+  assert.equal(body.verdict.regression, false);
+  assert.equal(body.verdict.criteria.length, 2);
+});
+
+test("verdict: a run with no rubric says so, and cannot be forced", async () => {
+  const app = makeAutopsyApp(VERDICT_ANSWER);
+  writeSchedule({});
+  writeRunRecord("unscored", {});
+
+  const read = (await (
+    await app.request("/api/runs/unscored/verdict", { headers: loopback })
+  ).json()) as { rubric: unknown; unavailable: string };
+  assert.equal(read.rubric, null);
+  assert.match(read.unavailable, /no rubric/);
+
+  const forced = await app.request("/api/runs/unscored/verdict", {
+    method: "POST",
+    headers: sameOrigin,
+  });
+  assert.equal(forced.status, 409);
+});
+
+test("verdict: scoring requires an admin session; reading does not", async () => {
+  const lockedOut: AuthService = {
+    isConfigured: async () => true,
+    status: async () => ({ configured: true, username: null, role: null }),
+    login: async () => ({ ok: false, reason: "bad-credentials" }),
+    verify: () => null,
+    logout: () => {},
+    revokeSessions: () => {},
+  };
+  const app = createApp({
+    config,
+    engine: fakeEngine,
+    broadcast: () => {},
+    serveWeb: false,
+    users: createUserStore(),
+    remoteAddr: () => "127.0.0.1",
+    auth: lockedOut,
+    analysis: stubAnalysis(VERDICT_ANSWER),
+  });
+  writeSchedule({ rubric: RUBRIC });
+  writeRunRecord("gated", {});
+
+  assert.equal((await app.request("/api/runs/gated/verdict", { headers: loopback })).status, 200);
+  assert.equal(
+    (await app.request("/api/runs/gated/verdict", { method: "POST", headers: sameOrigin })).status,
+    401,
+  );
+});
+
+test("verdict: trends carry the live threshold, not the one stored with the score", async () => {
+  const app = makeAutopsyApp(VERDICT_ANSWER);
+  writeSchedule({ rubric: RUBRIC });
+  writeRunRecord("t1", {});
+  await app.request("/api/runs/t1/verdict", { method: "POST", headers: sameOrigin });
+
+  // The author tightens the bar after the fact.
+  writeSchedule({ rubric: { ...RUBRIC, minScore: 9 } });
+  const body = (await (await app.request("/api/verdicts", { headers: loopback })).json()) as {
+    trends: { key: string; latest: number; minScore: number }[];
+    summary: { scored: number };
+  };
+  assert.equal(body.trends.length, 1);
+  assert.equal(body.trends[0].key, "schedule:s1");
+  assert.equal(body.trends[0].minScore, 9, "the new line applies to the old history");
+  assert.equal(body.summary.scored, 1);
+});
+
+test("verdict: a quality regression opens an issue even though the run exited 0", async () => {
+  const low = JSON.stringify({
+    criteria: [
+      { id: "coverage", score: 2, note: "misses most" },
+      { id: "actionable", score: 1, note: "none" },
+    ],
+  });
+  const app = makeAutopsyApp(low);
+  writeSchedule({ rubric: RUBRIC });
+  writeRunRecord("bad-quality", { status: "succeeded", exitCode: 0, error: null });
+
+  const before = (await (await app.request("/api/issues", { headers: loopback })).json()) as {
+    issues: unknown[];
+  };
+  assert.equal(before.issues.length, 0, "a clean exit is not an issue on its own");
+
+  await app.request("/api/runs/bad-quality/verdict", { method: "POST", headers: sameOrigin });
+
+  const after = (await (await app.request("/api/issues", { headers: loopback })).json()) as {
+    issues: { title: string; count: number }[];
+  };
+  assert.equal(after.issues.length, 1);
+  assert.match(after.issues[0].title, /quality below the bar for Nightly triage/);
+});
+
+test("schedules: an invalid rubric is a clean 400, not a 500", async () => {
+  const app = makeApp();
+  const res = await app.request("/api/schedules", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({
+      name: "n",
+      prompt: "p",
+      cwd: home,
+      trigger: { kind: "interval", everyMinutes: 60 },
+      rubric: { goal: "g", criteria: [{ id: "Bad Id", label: "x" }] },
+    }),
+  });
+  assert.equal(res.status, 400);
+  assert.match(((await res.json()) as { error: string }).error, /slug/);
+});
+
+test("pipelines: autoApprove without a rubric on the same phase is a clean 400", async () => {
+  const app = makeApp();
+  const res = await app.request("/api/pipelines", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({
+      name: "p",
+      trigger: null,
+      phases: [
+        {
+          id: "build",
+          name: "Build",
+          cwd: home,
+          gated: true,
+          steps: [{ name: "s", prompt: "p" }],
+          autoApprove: { verdict: 8 },
+        },
+      ],
+    }),
+  });
+  assert.equal(res.status, 400);
+  assert.match(((await res.json()) as { error: string }).error, /needs a rubric/);
+});
+
+// ── Sentinel ────────────────────────────────────────────────────────────────
+
+function writeIncidentFile(over: Record<string, unknown> = {}) {
+  mkdirSync(path.join(home, "argus"), { recursive: true });
+  const iso = new Date().toISOString();
+  writeFileSync(
+    path.join(home, "argus", "incidents.json"),
+    JSON.stringify([
+      {
+        id: "inc1",
+        key: "monitor:s1",
+        source: "monitor-down",
+        severity: "critical",
+        title: "Nightly triage",
+        detail: "no run covered the expected slot",
+        status: "open",
+        openedAt: iso,
+        updatedAt: iso,
+        acknowledgedAt: null,
+        acknowledgedBy: null,
+        resolvedAt: null,
+        level: 0,
+        nextEscalationAt: null,
+        timeline: [{ at: iso, kind: "opened", detail: "opened", by: "sentinel" }],
+        diagnosis: null,
+        scheduleId: "s1",
+        runId: null,
+        fingerprint: null,
+        ...over,
+      },
+    ]),
+  );
+}
+
+test("sentinel: default policy is served, and updates round-trip", async () => {
+  const app = makeApp();
+  const initial = (await (await app.request("/api/sentinel", { headers: loopback })).json()) as {
+    policy: { enabled: boolean; autoDiagnose: boolean; levels: unknown[] };
+    incidents: unknown[];
+    inQuietHours: boolean;
+  };
+  assert.equal(initial.policy.enabled, true);
+  assert.equal(initial.policy.autoDiagnose, false, "spawning agents is never the default");
+  assert.ok(initial.policy.levels.length >= 2);
+  assert.deepEqual(initial.incidents, []);
+  assert.equal(initial.inQuietHours, false);
+
+  const put = await app.request("/api/sentinel/policy", {
+    method: "PUT",
+    headers: sameOrigin,
+    body: JSON.stringify({ autoDiagnose: true, quietHours: { start: "22:00", end: "07:00" } }),
+  });
+  assert.equal(put.status, 200);
+  const after = (await (await app.request("/api/sentinel", { headers: loopback })).json()) as {
+    policy: { autoDiagnose: boolean; quietHours: { start: string } };
+  };
+  assert.equal(after.policy.autoDiagnose, true);
+  assert.equal(after.policy.quietHours.start, "22:00");
+});
+
+test("sentinel: an unusable policy is a clean 400", async () => {
+  const app = makeApp();
+  const res = await app.request("/api/sentinel/policy", {
+    method: "PUT",
+    headers: sameOrigin,
+    body: JSON.stringify({ quietHours: { start: "99:99", end: "07:00" } }),
+  });
+  assert.equal(res.status, 400);
+});
+
+test("sentinel: acknowledge, note and resolve record who did them", async () => {
+  const app = makeApp();
+  writeIncidentFile();
+
+  const ack = await app.request("/api/incidents/inc1/ack", { method: "POST", headers: sameOrigin });
+  assert.equal(ack.status, 200);
+  const acked = (await ack.json()) as { incident: { status: string; acknowledgedBy: string } };
+  assert.equal(acked.incident.status, "acknowledged");
+  assert.equal(acked.incident.acknowledgedBy, "test");
+
+  const note = await app.request("/api/incidents/inc1/note", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ note: "PATH fixed on the host" }),
+  });
+  assert.equal(note.status, 200);
+  const noted = (await note.json()) as {
+    incident: { timeline: { kind: string; detail: string; by: string }[] };
+  };
+  const last = noted.incident.timeline.at(-1);
+  assert.equal(last?.kind, "note");
+  assert.equal(last?.by, "user:test");
+
+  const resolved = await app.request("/api/incidents/inc1/resolve", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ note: "done" }),
+  });
+  assert.equal(
+    ((await resolved.json()) as { incident: { status: string } }).incident.status,
+    "resolved",
+  );
+});
+
+test("sentinel: an empty note is refused, and an unknown incident is a 404", async () => {
+  const app = makeApp();
+  writeIncidentFile();
+  const empty = await app.request("/api/incidents/inc1/note", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ note: "   " }),
+  });
+  assert.equal(empty.status, 400);
+
+  for (const action of ["ack", "resolve", "note", "diagnose"]) {
+    const res = await app.request(`/api/incidents/nope/${action}`, {
+      method: "POST",
+      headers: sameOrigin,
+      body: JSON.stringify({ note: "x" }),
+    });
+    assert.equal(res.status, 404, `${action} on an unknown incident`);
+  }
+});
+
+test("sentinel: the diagnostic attaches findings and a proposal, and changes nothing else", async () => {
+  const app = makeAutopsyApp(
+    JSON.stringify({
+      findings: "The CLI is not on PATH.",
+      remediation: "Fix PATH and re-run.",
+      confidence: 0.7,
+    }),
+  );
+  writeIncidentFile();
+
+  const res = await app.request("/api/incidents/inc1/diagnose", {
+    method: "POST",
+    headers: sameOrigin,
+  });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as {
+    incident: {
+      status: string;
+      diagnosis: { status: string; findings: string; remediation: string };
+      timeline: { kind: string }[];
+    };
+  };
+  assert.equal(body.incident.diagnosis.status, "ready");
+  assert.match(body.incident.diagnosis.findings, /not on PATH/);
+  assert.match(body.incident.diagnosis.remediation, /Fix PATH/);
+  assert.ok(body.incident.timeline.some((e) => e.kind === "diagnosed"));
+  // A proposal, not an action: the incident is still open and unacknowledged.
+  assert.equal(body.incident.status, "open");
+});
+
+test("sentinel: incident actions require an admin session; reading does not", async () => {
+  const lockedOut: AuthService = {
+    isConfigured: async () => true,
+    status: async () => ({ configured: true, username: null, role: null }),
+    login: async () => ({ ok: false, reason: "bad-credentials" }),
+    verify: () => null,
+    logout: () => {},
+    revokeSessions: () => {},
+  };
+  const app = createApp({
+    config,
+    engine: fakeEngine,
+    broadcast: () => {},
+    serveWeb: false,
+    users: createUserStore(),
+    remoteAddr: () => "127.0.0.1",
+    auth: lockedOut,
+  });
+  writeIncidentFile();
+
+  assert.equal((await app.request("/api/sentinel", { headers: loopback })).status, 200);
+  for (const action of ["ack", "resolve", "note", "diagnose"]) {
+    const res = await app.request(`/api/incidents/inc1/${action}`, {
+      method: "POST",
+      headers: sameOrigin,
+      body: JSON.stringify({ note: "x" }),
+    });
+    assert.equal(res.status, 401, `${action} without a session`);
+  }
+  assert.equal(
+    (
+      await app.request("/api/sentinel/policy", {
+        method: "PUT",
+        headers: sameOrigin,
+        body: JSON.stringify({ enabled: false }),
+      })
+    ).status,
+    401,
+  );
+});
+
+// ── Weave ───────────────────────────────────────────────────────────────────
+
+const dagPhase = (id: string, over: Record<string, unknown> = {}) => ({
+  id,
+  name: id,
+  cwd: home,
+  gated: false,
+  steps: [{ name: "s", prompt: "p" }],
+  ...over,
+});
+
+async function postPipeline(app: ReturnType<typeof makeApp>, phases: unknown[]) {
+  return app.request("/api/pipelines", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ name: "P", trigger: null, phases }),
+  });
+}
+
+test("weave: a valid diamond is accepted and its edges round-trip", async () => {
+  const app = makeApp();
+  const res = await postPipeline(app, [
+    dagPhase("plan"),
+    dagPhase("build", { needs: ["plan"] }),
+    dagPhase("test", { needs: ["plan"] }),
+    dagPhase("ship", { needs: ["build", "test"], produces: "release" }),
+  ]);
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as {
+    phases: { id: string; needs?: string[]; produces?: string }[];
+  };
+  assert.deepEqual(body.phases[3].needs, ["build", "test"]);
+  assert.equal(body.phases[3].produces, "release");
+});
+
+test("weave: a cycle is a clean 400 at authoring time, not a run that never finishes", async () => {
+  const app = makeApp();
+  const res = await postPipeline(app, [
+    dagPhase("a", { needs: ["b"] }),
+    dagPhase("b", { needs: ["a"] }),
+  ]);
+  assert.equal(res.status, 400);
+  assert.match(((await res.json()) as { error: string }).error, /cycle/);
+});
+
+test("weave: a dependency that does not exist is named in the error", async () => {
+  const app = makeApp();
+  const res = await postPipeline(app, [dagPhase("a"), dagPhase("b", { needs: ["ghost"] })]);
+  assert.equal(res.status, 400);
+  assert.match(((await res.json()) as { error: string }).error, /needs "ghost"/);
+});
+
+test("weave: retry policies are validated, and a bad one is a 400", async () => {
+  const app = makeApp();
+  const ok = await postPipeline(app, [
+    dagPhase("a", { retry: { attempts: 3, backoffSeconds: 15, retryOn: ["exit-code"] } }),
+  ]);
+  assert.equal(ok.status, 201);
+  const body = (await ok.json()) as { phases: { retry: { attempts: number } }[] };
+  assert.equal(body.phases[0].retry.attempts, 3);
+
+  for (const bad of [
+    { attempts: 0, backoffSeconds: 1 },
+    { attempts: 99, backoffSeconds: 1 },
+    { attempts: 2, backoffSeconds: -1 },
+    { attempts: 2, backoffSeconds: 1, retryOn: ["whenever"] },
+  ]) {
+    const res = await postPipeline(app, [dagPhase("a", { retry: bad })]);
+    assert.equal(res.status, 400, JSON.stringify(bad));
+  }
+});
+
+test("weave: an artifact name that could break interpolation is refused", async () => {
+  const app = makeApp();
+  const res = await postPipeline(app, [dagPhase("a", { produces: "not a name!" })]);
+  assert.equal(res.status, 400);
+});
+
+test("weave: a pre-Weave linear definition is still accepted unchanged", async () => {
+  const app = makeApp();
+  const res = await postPipeline(app, [dagPhase("a"), dagPhase("b"), dagPhase("c")]);
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as { phases: { needs?: string[] }[] };
+  // Nothing is written back onto the definition: the linear reading is applied
+  // at execution time, so the file stays exactly what the author wrote.
+  assert.equal(body.phases[1].needs, undefined);
+});
+
+test("weave: an instance's journal is readable, and unknown ids are empty rather than errors", async () => {
+  const app = makeApp();
+  const res = await app.request("/api/instances/never-existed/journal", { headers: loopback });
+  assert.equal(res.status, 200);
+  assert.deepEqual(((await res.json()) as { entries: unknown[] }).entries, []);
+});
+
+// ── Ledger ──────────────────────────────────────────────────────────────────
+
+test("ledger: attributes spend by every dimension and windows the runs", async () => {
+  const app = makeApp();
+  writeRunRecord("l1", { costUsd: 0.6, model: "opus", scheduleId: "s1", scheduleName: "A" });
+  writeRunRecord("l2", { costUsd: 0.4, model: "haiku", scheduleId: "s2", scheduleName: "B" });
+
+  const body = (await (await app.request("/api/ledger", { headers: loopback })).json()) as {
+    windowDays: number;
+    bySchedule: { slices: { key: string; usd: number; share: number }[]; totalUsd: number };
+    byModel: { slices: { key: string }[] };
+    forecast: { note: string };
+    enforcement: { action: string | null };
+  };
+  assert.equal(body.windowDays, 30);
+  assert.equal(body.bySchedule.totalUsd, 1);
+  assert.equal(body.bySchedule.slices[0].key, "s1");
+  assert.equal(body.bySchedule.slices[0].share, 0.6);
+  assert.deepEqual(body.byModel.slices.map((s) => s.key).sort(), ["haiku", "opus"]);
+  assert.match(body.forecast.note, /not enough to project|On this pace/);
+  assert.equal(body.enforcement.action, null);
+});
+
+test("ledger: what-if refuses to guess when the target model has never run here", async () => {
+  const app = makeApp();
+  writeRunRecord("l1", { costUsd: 1, model: "opus", scheduleId: "s1" });
+
+  const res = await app.request("/api/ledger/what-if", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ dimension: "schedule", key: "s1", toModel: "haiku" }),
+  });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { ok: boolean; unavailable: string };
+  assert.equal(body.ok, false);
+  assert.match(body.unavailable, /never from a price list/);
+});
+
+test("ledger: what-if computes the saving from observed costs on both models", async () => {
+  const app = makeApp();
+  writeRunRecord("l1", { costUsd: 1, model: "opus", scheduleId: "s1" });
+  writeRunRecord("l2", { costUsd: 1, model: "opus", scheduleId: "s1" });
+  writeRunRecord("l3", { costUsd: 0.1, model: "haiku", scheduleId: "s2" });
+
+  const body = (await (
+    await app.request("/api/ledger/what-if", {
+      method: "POST",
+      headers: sameOrigin,
+      body: JSON.stringify({ dimension: "schedule", key: "s1", toModel: "haiku" }),
+    })
+  ).json()) as { ok: boolean; monthlySavingUsd: number; summary: string; verdictDelta: null };
+  assert.equal(body.ok, true);
+  assert.ok(body.monthlySavingUsd > 0);
+  assert.equal(body.verdictDelta, null, "nothing has been scored, so quality is unmeasured");
+  assert.match(body.summary, /saves \$/);
+});
+
+test("ledger: a malformed what-if is a clean 400", async () => {
+  const app = makeApp();
+  for (const bad of [
+    { dimension: "nope", key: "s1", toModel: "haiku" },
+    { dimension: "schedule", toModel: "haiku" },
+    { dimension: "schedule", key: "s1" },
+    { dimension: "schedule", key: "s1", toModel: "a/b;rm -rf" },
+  ]) {
+    const res = await app.request("/api/ledger/what-if", {
+      method: "POST",
+      headers: sameOrigin,
+      body: JSON.stringify(bad),
+    });
+    assert.equal(res.status, 400, JSON.stringify(bad));
+  }
+});
+
+test("budget: a ladder round-trips, sorted, and a bad one is a 400", async () => {
+  const app = makeApp();
+  const put = await app.request("/api/budget", {
+    method: "PUT",
+    headers: sameOrigin,
+    body: JSON.stringify({
+      dailyUsd: 10,
+      ladder: [
+        { atRatio: 1, action: "stop" },
+        { atRatio: 0.8, action: "warn" },
+        { atRatio: 0.9, action: "downgrade", model: "haiku" },
+      ],
+    }),
+  });
+  assert.equal(put.status, 200);
+  const body = (await put.json()) as { config: { ladder: { action: string }[] } };
+  assert.deepEqual(
+    body.config.ladder.map((s) => s.action),
+    ["warn", "downgrade", "stop"],
+    "sorted by threshold, so it reads as it engages",
+  );
+
+  const bad = await app.request("/api/budget", {
+    method: "PUT",
+    headers: sameOrigin,
+    body: JSON.stringify({ ladder: [{ atRatio: 0.9, action: "downgrade" }] }),
+  });
+  assert.equal(bad.status, 400);
+  assert.match(((await bad.json()) as { error: string }).error, /needs a model/);
+});
+
+test("budget: the ladder's enforcement is reported on the ledger once spend crosses it", async () => {
+  const app = makeApp();
+  // A $1 limit with $2 spent today: the top step is in force.
+  writeRunRecord("l1", { costUsd: 2 });
+  mkdirSync(path.join(home, "argus"), { recursive: true });
+  const today = new Date();
+  const key = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  writeFileSync(
+    path.join(home, "argus", "spend.json"),
+    JSON.stringify({ days: { [key]: { usd: 2, tokens: 100, runs: 1 } } }),
+  );
+  writeFileSync(
+    path.join(home, "argus", "budget.json"),
+    JSON.stringify({
+      dailyUsd: 1,
+      monthlyUsd: null,
+      blockScheduled: false,
+      ladder: [
+        { atRatio: 0.8, action: "warn" },
+        { atRatio: 1, action: "defer" },
+      ],
+      updatedAt: null,
+    }),
+  );
+
+  const body = (await (await app.request("/api/ledger", { headers: loopback })).json()) as {
+    enforcement: { action: string; window: string; detail: string };
+  };
+  assert.equal(body.enforcement.action, "defer", "the highest matching step, not the first");
+  assert.equal(body.enforcement.window, "daily");
+  assert.match(body.enforcement.detail, /deferred/);
+});
+
+// ── The Vault ───────────────────────────────────────────────────────────────
+
+/** Ingest whatever is currently on disk, the way the tick does. */
+async function fillVault() {
+  const { closeVault } = await import("./vault/db.js");
+  const { ingest } = await import("./vault/ingest.js");
+  const { readRuns } = await import("./sources/runs.js");
+  closeVault();
+  return ingest({
+    runs: await readRuns(),
+    incidents: [],
+    anomalies: [],
+    verdicts: [],
+    spend: { days: {} },
+    now: new Date(),
+  });
+}
+
+test("vault: reports what it holds, and how much of it the JSON files have dropped", async () => {
+  const app = makeApp();
+  writeRunRecord("v1", { costUsd: 0.3, resultSummary: "indexed the widget catalogue" });
+  assert.equal((await fillVault()).ok, true);
+
+  const status = (await (await app.request("/api/vault", { headers: loopback })).json()) as {
+    available: boolean;
+    rows: { runs: number };
+    beyondRetention: number;
+    detail: string;
+  };
+  assert.equal(status.available, true);
+  assert.equal(status.rows.runs, 1);
+  // The run is still on disk, so nothing is beyond retention yet.
+  assert.equal(status.beyondRetention, 0);
+});
+
+test("vault: search finds an ingested run and says what it searched", async () => {
+  const app = makeApp();
+  writeRunRecord("v1", { resultSummary: "indexed the widget catalogue" });
+  await fillVault();
+
+  const res = (await (
+    await app.request("/api/vault/search?q=widget", { headers: loopback })
+  ).json()) as { available: boolean; hits: { ref: string; related: boolean }[] };
+  assert.equal(res.available, true);
+  assert.deepEqual(
+    res.hits.map((h) => h.ref),
+    ["v1"],
+  );
+  assert.equal(res.hits[0].related, false);
+});
+
+test("vault: an empty query is answered, not rejected", async () => {
+  const app = makeApp();
+  const res = await app.request("/api/vault/search", { headers: loopback });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { hits: unknown[]; detail: string };
+  assert.deepEqual(body.hits, []);
+  assert.match(body.detail, /two characters/);
+});
+
+test("vault: quarters aggregate the ingested history", async () => {
+  const app = makeApp();
+  writeRunRecord("v1", { costUsd: 0.25 });
+  await fillVault();
+  const body = (await (await app.request("/api/vault/quarters", { headers: loopback })).json()) as {
+    available: boolean;
+    quarters: { runs: number; costUsd: number }[];
+  };
+  assert.equal(body.available, true);
+  assert.equal(body.quarters.length, 1);
+  assert.equal(body.quarters[0].runs, 1);
+  assert.equal(body.quarters[0].costUsd, 0.25);
+});
+
+test("vault: the OTLP export is a valid document with derived, stable ids", async () => {
+  const app = makeApp();
+  writeRunRecord("v1", {});
+  await fillVault();
+  const first = (await (
+    await app.request("/api/vault/otel?days=30", { headers: loopback })
+  ).json()) as {
+    spans: number;
+    days: number;
+    capped: boolean;
+    resourceSpans: { scopeSpans: { spans: { traceId: string; spanId: string }[] }[] }[];
+  };
+  assert.equal(first.spans, 1);
+  assert.equal(first.days, 30);
+  assert.equal(first.capped, false);
+  const span = first.resourceSpans[0].scopeSpans[0].spans[0];
+  assert.equal(span.traceId.length, 32);
+  assert.equal(span.spanId.length, 16);
+
+  // Exporting twice must be byte-identical, so a collector receiving both
+  // deduplicates rather than double-counting the same run.
+  const second = await (await app.request("/api/vault/otel?days=30", { headers: loopback })).json();
+  assert.deepEqual(second, first);
+});
+
+test("vault: the Chronicle reaches past JSON retention, with live records winning", async () => {
+  const app = makeApp();
+  writeRunRecord("kept", { resultSummary: "still on disk" });
+  await fillVault();
+
+  // The Vault now holds "kept". A long window must not double-count it.
+  const long = (await (
+    await app.request("/api/chronicle?hours=8760", { headers: loopback })
+  ).json()) as { groups: { rows: { id: string }[][] }[] };
+  const ids = long.groups.flatMap((g) => g.rows.flat().map((s) => s.id));
+  assert.equal(ids.filter((id) => id === "run:kept").length, 1);
+});
+
+test("vault: a disabled Vault degrades every long view without erroring", async () => {
+  const app = makeApp();
+  process.env.ARGUS_VAULT = "off";
+  const { closeVault } = await import("./vault/db.js");
+  closeVault();
+  try {
+    const status = (await (await app.request("/api/vault", { headers: loopback })).json()) as {
+      available: boolean;
+      reason: string;
+    };
+    assert.equal(status.available, false);
+    assert.equal(status.reason, "disabled");
+
+    for (const route of ["/api/vault/quarters", "/api/vault/search?q=widget", "/api/vault/otel"]) {
+      assert.equal((await app.request(route, { headers: loopback })).status, 200, route);
+    }
+    // The Chronicle still answers from the JSON files it does have.
+    assert.equal(
+      (await app.request("/api/chronicle?hours=8760", { headers: loopback })).status,
+      200,
+    );
+  } finally {
+    delete process.env.ARGUS_VAULT;
+    closeVault();
+  }
+});
+
+// ── Omnibar ─────────────────────────────────────────────────────────────────
+
+function makeOmnibarApp(answerJson: string, auth: AuthService = openAuth) {
+  return createApp({
+    config,
+    engine: fakeEngine,
+    broadcast: () => {},
+    serveWeb: false,
+    users: createUserStore(),
+    remoteAddr: () => "127.0.0.1",
+    auth,
+    analysis: stubAnalysis(answerJson),
+  });
+}
+
+const PAUSE_PLAN = JSON.stringify({
+  mode: "plan",
+  summary: "Pause the nightly triage",
+  mutations: [{ kind: "schedule.disable", targetId: "s1" }],
+});
+
+async function planFor(app: ReturnType<typeof createApp>, intent: string) {
+  const res = await app.request("/api/omnibar/plan", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ intent }),
+  });
+  return { res, body: (await res.json()) as Record<string, never> };
+}
+
+test("omnibar: a sentence compiles into a preview, and nothing changes yet", async () => {
+  const app = makeOmnibarApp(PAUSE_PLAN);
+  writeSchedule({});
+  const { res, body } = await planFor(app, "pause the nightly triage");
+  assert.equal(res.status, 200);
+  const plan = (body as unknown as { plan: { status: string; mutations: unknown[]; id: string } })
+    .plan;
+  assert.equal(plan.status, "ready");
+  assert.equal(plan.mutations.length, 1);
+
+  // The preview must not have touched anything.
+  const before = (await (await app.request("/api/schedules", { headers: loopback })).json()) as {
+    schedules: { enabled: boolean }[];
+  };
+  assert.equal(before.schedules[0].enabled, true);
+});
+
+test("omnibar: confirming the plan applies it, and the plan is then spent", async () => {
+  const app = makeOmnibarApp(PAUSE_PLAN);
+  writeSchedule({});
+  const { body } = await planFor(app, "pause the nightly triage");
+  const planId = (body as unknown as { plan: { id: string } }).plan.id;
+
+  const exec = await app.request("/api/omnibar/execute", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ planId }),
+  });
+  const result = (await exec.json()) as { status: string; applied: unknown[] };
+  assert.equal(result.status, "applied");
+  assert.equal(result.applied.length, 1);
+
+  const after = (await (await app.request("/api/schedules", { headers: loopback })).json()) as {
+    schedules: { enabled: boolean }[];
+  };
+  assert.equal(after.schedules[0].enabled, false);
+
+  // Single-use: the same id cannot be replayed.
+  const replay = await app.request("/api/omnibar/execute", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ planId }),
+  });
+  assert.equal(((await replay.json()) as { status: string }).status, "expired");
+});
+
+test("omnibar: regression: a plan naming a schedule that does not exist previews nothing", async () => {
+  const app = makeOmnibarApp(
+    JSON.stringify({
+      mode: "plan",
+      summary: "Pause it",
+      mutations: [{ kind: "schedule.disable", targetId: "ghost" }],
+    }),
+  );
+  writeSchedule({});
+  const { body } = await planFor(app, "pause the thing");
+  const plan = (body as unknown as { plan: { status: string; warnings: string[] } }).plan;
+  // The whole trust boundary: an id the planner invented never becomes a
+  // confirmable change.
+  assert.equal(plan.status, "empty");
+  assert.match(plan.warnings[0], /no schedule with id ghost/);
+});
+
+test("omnibar: a question is answered inline, with in-app links only", async () => {
+  const app = makeOmnibarApp(
+    JSON.stringify({
+      mode: "answer",
+      text: "Nightly triage last ran an hour ago.",
+      links: [
+        { label: "Open", href: "#/schedules" },
+        { label: "Off-site", href: "https://example.com" },
+      ],
+    }),
+  );
+  writeSchedule({});
+  const { body } = await planFor(app, "when did nightly triage last run");
+  const answer = body as unknown as { mode: string; answer: { links: unknown[] } };
+  assert.equal(answer.mode, "answer");
+  assert.equal(answer.answer.links.length, 1);
+});
+
+test("omnibar: an unknown or expired plan id is reported, not applied", async () => {
+  const app = makeOmnibarApp(PAUSE_PLAN);
+  const res = await app.request("/api/omnibar/execute", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ planId: "nope" }),
+  });
+  assert.equal(res.status, 200);
+  assert.equal(((await res.json()) as { status: string }).status, "expired");
+});
+
+test("omnibar: malformed requests are clean 400s", async () => {
+  const app = makeOmnibarApp(PAUSE_PLAN);
+  for (const body of [{}, { intent: "" }, { intent: "x".repeat(500) }]) {
+    const res = await app.request("/api/omnibar/plan", {
+      method: "POST",
+      headers: sameOrigin,
+      body: JSON.stringify(body),
+    });
+    assert.equal(res.status, 400, JSON.stringify(body));
+  }
+  const noId = await app.request("/api/omnibar/execute", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({}),
+  });
+  assert.equal(noId.status, 400);
+});
+
+test("omnibar: planning and executing are both behind the admin gate", async () => {
+  const lockedOut: AuthService = {
+    ...openAuth,
+    verify: () => null,
+    status: async () => ({ configured: true, username: null, role: null }),
+  };
+  const app = makeOmnibarApp(PAUSE_PLAN, lockedOut);
+  for (const route of ["/api/omnibar/plan", "/api/omnibar/execute"]) {
+    const res = await app.request(route, {
+      method: "POST",
+      headers: sameOrigin,
+      body: JSON.stringify({ intent: "pause it", planId: "x" }),
+    });
+    assert.equal(res.status, 401, route);
+  }
+});
+
+// ── Constellation ───────────────────────────────────────────────────────────
+
+const PEER_SECRET = "a".repeat(64);
+
+function makeFleetApp(fleet?: Parameters<typeof createApp>[0]["fleet"]) {
+  return createApp({
+    config,
+    engine: fakeEngine,
+    broadcast: () => {},
+    serveWeb: false,
+    users: createUserStore(),
+    remoteAddr: () => "127.0.0.1",
+    auth: openAuth,
+    fleet,
+  });
+}
+
+async function pairPeer(app: ReturnType<typeof createApp>, url = "http://box.local:7777") {
+  const res = await app.request("/api/peers", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ label: "Build box", url, secret: PEER_SECRET }),
+  });
+  return { status: res.status, body: (await res.json()) as { peer?: { id: string } } };
+}
+
+test("fleet: a machine with no peers is solo, and says so", async () => {
+  const app = makeFleetApp();
+  const body = (await (await app.request("/api/fleet", { headers: loopback })).json()) as {
+    soloMode: boolean;
+    machines: { isSelf: boolean; summary: { label: string } | null }[];
+    totals: { machines: number; reporting: number };
+  };
+  assert.equal(body.soloMode, true);
+  assert.equal(body.machines.length, 1);
+  assert.equal(body.machines[0].isSelf, true);
+  assert.equal(body.totals.reporting, 1);
+});
+
+test("fleet: pairing adds a peer, and the secret never comes back", async () => {
+  const app = makeFleetApp();
+  const { status, body } = await pairPeer(app);
+  assert.equal(status, 201);
+  assert.ok(body.peer?.id);
+
+  const fleet = await (await app.request("/api/fleet", { headers: loopback })).text();
+  assert.equal(fleet.includes(PEER_SECRET), false, "a stored secret must never be serialized");
+  const parsed = JSON.parse(fleet) as {
+    soloMode: boolean;
+    machines: { peer: { status: string } }[];
+  };
+  assert.equal(parsed.soloMode, false);
+  assert.equal(parsed.machines[1].peer.status, "pending");
+});
+
+test("fleet: a bad peer is a clean 400, naming what is wrong", async () => {
+  const app = makeFleetApp();
+  for (const [payload, pattern] of [
+    [{ label: "", url: "http://a", secret: PEER_SECRET }, /label/],
+    [{ label: "Box", url: "file:///etc", secret: PEER_SECRET }, /http or https/],
+    [{ label: "Box", url: "http://a", secret: "nope" }, /pairing code/],
+  ] as const) {
+    const res = await app.request("/api/peers", {
+      method: "POST",
+      headers: sameOrigin,
+      body: JSON.stringify(payload),
+    });
+    assert.equal(res.status, 400, JSON.stringify(payload));
+    assert.match(((await res.json()) as { error: string }).error, pattern);
+  }
+});
+
+test("fleet: a peer can be unpaired, and an unknown one is a 404", async () => {
+  const app = makeFleetApp();
+  const { body } = await pairPeer(app);
+  const del = await app.request(`/api/peers/${body.peer!.id}`, {
+    method: "DELETE",
+    headers: sameOrigin,
+  });
+  assert.equal(del.status, 200);
+  assert.equal(
+    (await app.request(`/api/peers/${body.peer!.id}`, { method: "DELETE", headers: sameOrigin }))
+      .status,
+    404,
+  );
+});
+
+test("federation: the summary endpoint refuses anyone who is not paired", async () => {
+  const app = makeFleetApp();
+  // No header at all.
+  assert.equal((await app.request("/api/federation/summary", { headers: loopback })).status, 401);
+  // A header naming a pairing this machine does not hold.
+  const wrong = await app.request("/api/federation/summary", {
+    headers: { ...loopback, "x-argus-pairing": "f".repeat(32) },
+  });
+  assert.equal(wrong.status, 401);
+  // And it leaks nothing about the machine while refusing.
+  const text = await wrong.text();
+  assert.equal(/machineId|label|schedules/.test(text), false);
+});
+
+test("federation: a paired caller gets a sealed summary it can open", async () => {
+  const app = makeFleetApp();
+  await pairPeer(app);
+  const { pairingId, open } = await import("./federation/envelope.js");
+
+  const res = await app.request("/api/federation/summary", {
+    headers: { ...loopback, "x-argus-pairing": pairingId(PEER_SECRET) },
+  });
+  assert.equal(res.status, 200);
+  const envelope = (await res.json()) as Record<string, unknown>;
+  // Sealed end-to-end: the payload is not readable off the wire.
+  assert.equal(JSON.stringify(envelope).includes("schedules"), false);
+  const summary = open(envelope, PEER_SECRET, { now: new Date() }) as { machineId: string };
+  assert.ok(summary.machineId);
+});
+
+test("federation: an envelope sealed for one pairing does not open with another", async () => {
+  const app = makeFleetApp();
+  await pairPeer(app);
+  const { pairingId, open, EnvelopeError } = await import("./federation/envelope.js");
+  const res = await app.request("/api/federation/summary", {
+    headers: { ...loopback, "x-argus-pairing": pairingId(PEER_SECRET) },
+  });
+  const envelope = await res.json();
+  assert.throws(() => open(envelope, "b".repeat(64), { now: new Date() }), EnvelopeError);
+});
+
+test("fleet: peer summaries fold into the totals, with a reporting count", async () => {
+  const app = makeFleetApp(() => ({
+    summaries: new Map(),
+    health: new Map(),
+  }));
+  const body = (await (await app.request("/api/fleet", { headers: loopback })).json()) as {
+    totals: { machines: number; reporting: number };
+  };
+  assert.equal(body.totals.machines, 1);
+  assert.equal(body.totals.reporting, 1);
+});
+
+test("fleet: changing who this machine trusts is behind the admin gate", async () => {
+  const lockedOut: AuthService = {
+    ...openAuth,
+    verify: () => null,
+    status: async () => ({ configured: true, username: null, role: null }),
+  };
+  const app = createApp({
+    config,
+    engine: fakeEngine,
+    broadcast: () => {},
+    serveWeb: false,
+    users: createUserStore(),
+    remoteAddr: () => "127.0.0.1",
+    auth: lockedOut,
+  });
+  // Reading the fleet stays open, like every other read.
+  assert.equal((await app.request("/api/fleet", { headers: loopback })).status, 200);
+  for (const [route, method] of [
+    ["/api/peers", "POST"],
+    ["/api/peers/pair", "POST"],
+    ["/api/fleet/label", "PUT"],
+  ] as const) {
+    const res = await app.request(route, { method, headers: sameOrigin, body: "{}" });
+    assert.equal(res.status, 401, route);
+  }
+});
+
+test("fleet: a pairing code is fresh each time and explains what to do with it", async () => {
+  const app = makeFleetApp();
+  const first = (await (
+    await app.request("/api/peers/pair", { method: "POST", headers: sameOrigin })
+  ).json()) as { secret: string; instructions: string };
+  const second = (await (
+    await app.request("/api/peers/pair", { method: "POST", headers: sameOrigin })
+  ).json()) as { secret: string };
+  assert.match(first.secret, /^[0-9a-f]{64}$/);
+  assert.notEqual(first.secret, second.secret);
+  assert.match(first.instructions, /Both sides need the same/);
+});
+
+test("federation: a paired peer reaches the summary without the shared bearer token", async () => {
+  // Federation is only reachable on an exposed bind, and an exposed bind
+  // requires ARGUS_TOKEN. Without this exemption pairing would only work by
+  // handing every peer the token that unlocks the whole control plane.
+  const app = createApp({
+    config: { ...config, token: "server-token", allowedHosts: ["box.local"] },
+    engine: fakeEngine,
+    broadcast: () => {},
+    serveWeb: false,
+    users: createUserStore(),
+    remoteAddr: () => "127.0.0.1",
+    auth: openAuth,
+  });
+  const peerHost = { host: "box.local:7777" };
+  await app.request("/api/peers", {
+    method: "POST",
+    headers: { ...peerHost, origin: "http://box.local:7777", "x-argus-token": "server-token" },
+    body: JSON.stringify({ label: "Box", url: "http://box.local:7777", secret: PEER_SECRET }),
+  });
+
+  const { pairingId } = await import("./federation/envelope.js");
+  const res = await app.request("/api/federation/summary", {
+    headers: { ...peerHost, "x-argus-pairing": pairingId(PEER_SECRET) },
+  });
+  assert.equal(res.status, 200, "a paired peer is authenticated by its pairing");
+
+  // Every other route still demands the token.
+  assert.equal((await app.request("/api/fleet", { headers: peerHost })).status, 401);
+  // And an unpaired caller still gets nothing, token or no token.
+  assert.equal((await app.request("/api/federation/summary", { headers: peerHost })).status, 401);
 });

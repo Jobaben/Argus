@@ -1,7 +1,17 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { highlight, rank } from "./fuzzy";
 import { groupCommands, type Command } from "./commands";
 import { pushRecent, readRecents, recencyBonus } from "./recents";
+/**
+ * Lazy: the palette itself must open instantly on ⌘K, and intent mode is only
+ * reached once someone deliberately asks for it. Keeping it out of the initial
+ * payload costs a fetch on first use and buys back the space for everyone who
+ * only ever jumps and searches.
+ */
+const OmnibarIntent = lazy(() =>
+  import("./OmnibarIntent").then((m) => ({ default: m.OmnibarIntent })),
+);
+import { looksLikeIntent } from "./intent";
 import type { PaletteSeverity } from "../types";
 
 const SEVERITY_TEXT: Record<PaletteSeverity, string> = {
@@ -39,6 +49,8 @@ function Palette({
   const [recents, setRecents] = useState<string[]>(readRecents);
   const [pending, setPending] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  /** The sentence being compiled, once the user has asked for that. */
+  const [intent, setIntent] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   // Captured at mount: whatever had focus before the palette opened gets it
@@ -145,18 +157,46 @@ function Palette({
         break;
       case "Enter": {
         e.preventDefault();
+        // ⌘↵ asks Argus to interpret the sentence even when commands matched;
+        // a bare ↵ only falls through to intent mode when nothing did, so the
+        // fuzzy-jump the palette exists for is never hijacked.
+        const asIntent = (e.metaKey || e.ctrlKey || flat.length === 0) && looksLikeIntent(query);
+        if (asIntent) {
+          setIntent(query.trim());
+          break;
+        }
         const command = flat[activeIndex];
         if (command && pending === null) runCommand(command);
         break;
       }
-      case "Escape":
-        e.preventDefault();
-        onClose();
-        break;
+      // Escape is handled on the dialog, not here — see `onDialogKeyDown`.
       default:
         break;
     }
   };
+
+  /**
+   * Escape, wherever focus happens to be.
+   *
+   * In intent mode focus moves to the confirm button, so an Escape handler on
+   * the input alone would silently stop working exactly when there is most to
+   * lose. Handling it on the dialog catches both, and the first press only
+   * leaves intent mode: dropping a typed sentence on a stray keypress is a real
+   * cost, and the second press still closes.
+   */
+  const onDialogKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key !== "Escape") return;
+    e.preventDefault();
+    if (intent) setIntent(null);
+    else onClose();
+  };
+
+  useEffect(() => {
+    // Leaving intent mode unmounts whatever had focus inside it (the confirm
+    // button), which would drop focus to the body and leave the palette's own
+    // keys dead. Put the caret back where the user expects it.
+    if (!intent) inputRef.current?.focus();
+  }, [intent]);
 
   // Keep the highlighted row visible when arrowing through a long list.
   useEffect(() => {
@@ -178,6 +218,7 @@ function Palette({
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"
+        onKeyDown={onDialogKeyDown}
         className="flex w-full max-w-[640px] flex-col overflow-hidden rounded-panel border border-line bg-surface shadow-[0_24px_80px_-12px_rgb(0_0_0/0.8)] motion-safe:animate-[rise-in_160ms_cubic-bezier(0.16,1,0.3,1)]"
       >
         <div className="flex items-center gap-3 border-b border-line px-4">
@@ -193,10 +234,10 @@ function Palette({
             }}
             onKeyDown={onKeyDown}
             role="combobox"
-            aria-expanded="true"
+            aria-expanded={!intent}
             aria-controls={listboxId}
             aria-autocomplete="list"
-            aria-activedescendant={flat.length > 0 ? optionId(activeIndex) : undefined}
+            aria-activedescendant={!intent && flat.length > 0 ? optionId(activeIndex) : undefined}
             aria-label="Search commands, pipelines, schedules and transcripts"
             placeholder="Jump to or run anything…"
             autoComplete="off"
@@ -213,97 +254,115 @@ function Palette({
           )}
         </div>
 
-        <div
-          ref={listRef}
-          id={listboxId}
-          role="listbox"
-          aria-label="Results"
-          className="max-h-[52vh] overflow-y-auto py-1.5"
-        >
-          {flat.length === 0 ? (
-            <p className="px-4 py-8 text-center text-sm text-ink-faint">
-              Nothing matches “{query}”.
-            </p>
-          ) : (
-            groups.map((group) => (
-              <div key={group.group} role="group" aria-labelledby={`${listboxId}-${group.group}`}>
-                <div
-                  id={`${listboxId}-${group.group}`}
-                  className="px-4 pb-1 pt-2 font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-faint"
-                >
-                  {group.group}
-                </div>
-                {group.items.map((command) => {
-                  const index = flat.indexOf(command);
-                  const active = index === activeIndex;
-                  return (
-                    <div
-                      key={command.id}
-                      id={optionId(index)}
-                      role="option"
-                      aria-selected={active}
-                      // The input keeps focus, so rows are pointer targets only.
-                      onMouseMove={() => setSelected(index)}
-                      onMouseDown={(e) => {
-                        e.preventDefault(); // don't steal focus from the input
-                        if (pending === null) runCommand(command);
-                      }}
-                      className={`flex cursor-pointer items-center gap-3 px-4 py-2 ${
-                        active ? "bg-surface-2" : ""
-                      }`}
-                    >
-                      <span
-                        aria-hidden="true"
-                        className={`w-4 shrink-0 text-center text-[12px] ${
-                          SEVERITY_TEXT[command.severity ?? "none"]
+        {intent ? (
+          <Suspense
+            fallback={
+              <p className="px-4 py-8 text-center text-sm text-ink-faint" role="status">
+                Working out what that means…
+              </p>
+            }
+          >
+            <OmnibarIntent intent={intent} onClose={onClose} />
+          </Suspense>
+        ) : (
+          <div
+            ref={listRef}
+            id={listboxId}
+            role="listbox"
+            aria-label="Results"
+            className="max-h-[52vh] overflow-y-auto py-1.5"
+          >
+            {flat.length === 0 ? (
+              <div className="px-4 py-8 text-center text-sm text-ink-faint">
+                <p>Nothing matches “{query}”.</p>
+                {looksLikeIntent(query) && (
+                  <p className="mx-auto mt-2 max-w-sm text-xs">
+                    That reads like an instruction — press <kbd className="text-ink-dim">↵</kbd> and
+                    Argus will show you exactly what it would change before changing anything.
+                  </p>
+                )}
+              </div>
+            ) : (
+              groups.map((group) => (
+                <div key={group.group} role="group" aria-labelledby={`${listboxId}-${group.group}`}>
+                  <div
+                    id={`${listboxId}-${group.group}`}
+                    className="px-4 pb-1 pt-2 font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-faint"
+                  >
+                    {group.group}
+                  </div>
+                  {group.items.map((command) => {
+                    const index = flat.indexOf(command);
+                    const active = index === activeIndex;
+                    return (
+                      <div
+                        key={command.id}
+                        id={optionId(index)}
+                        role="option"
+                        aria-selected={active}
+                        // The input keeps focus, so rows are pointer targets only.
+                        onMouseMove={() => setSelected(index)}
+                        onMouseDown={(e) => {
+                          e.preventDefault(); // don't steal focus from the input
+                          if (pending === null) runCommand(command);
+                        }}
+                        className={`flex cursor-pointer items-center gap-3 px-4 py-2 ${
+                          active ? "bg-surface-2" : ""
                         }`}
                       >
-                        {command.icon ?? "·"}
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[13.5px] leading-tight text-ink">
-                          {highlight(command.title, positionsById.get(command.id) ?? []).map(
-                            (segment, i) => (
-                              <span
-                                key={i}
-                                className={segment.match ? "font-bold text-eye" : undefined}
-                              >
-                                {segment.text}
-                              </span>
-                            ),
+                        <span
+                          aria-hidden="true"
+                          className={`w-4 shrink-0 text-center text-[12px] ${
+                            SEVERITY_TEXT[command.severity ?? "none"]
+                          }`}
+                        >
+                          {command.icon ?? "·"}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[13.5px] leading-tight text-ink">
+                            {highlight(command.title, positionsById.get(command.id) ?? []).map(
+                              (segment, i) => (
+                                <span
+                                  key={i}
+                                  className={segment.match ? "font-bold text-eye" : undefined}
+                                >
+                                  {segment.text}
+                                </span>
+                              ),
+                            )}
+                          </span>
+                          {command.subtitle && (
+                            <span className="mt-0.5 block truncate text-[11.5px] text-ink-faint">
+                              {command.subtitle}
+                            </span>
                           )}
                         </span>
-                        {command.subtitle && (
-                          <span className="mt-0.5 block truncate text-[11.5px] text-ink-faint">
-                            {command.subtitle}
-                          </span>
-                        )}
-                      </span>
-                      {pending === command.id ? (
-                        <span
-                          role="status"
-                          className="shrink-0 font-mono text-[10px] uppercase tracking-[0.1em] text-run"
-                        >
-                          working…
-                        </span>
-                      ) : (
-                        command.badge && (
+                        {pending === command.id ? (
                           <span
-                            className={`shrink-0 rounded border border-line px-1.5 py-0.5 font-mono text-[10px] ${
-                              SEVERITY_TEXT[command.severity ?? "none"]
-                            }`}
+                            role="status"
+                            className="shrink-0 font-mono text-[10px] uppercase tracking-[0.1em] text-run"
                           >
-                            {command.badge}
+                            working…
                           </span>
-                        )
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            ))
-          )}
-        </div>
+                        ) : (
+                          command.badge && (
+                            <span
+                              className={`shrink-0 rounded border border-line px-1.5 py-0.5 font-mono text-[10px] ${
+                                SEVERITY_TEXT[command.severity ?? "none"]
+                              }`}
+                            >
+                              {command.badge}
+                            </span>
+                          )
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ))
+            )}
+          </div>
+        )}
 
         {failure && (
           <p
@@ -322,8 +381,13 @@ function Palette({
             <kbd className="text-ink-dim">↵</kbd> run
           </span>
           <span>
-            <kbd className="text-ink-dim">esc</kbd> close
+            <kbd className="text-ink-dim">esc</kbd> {intent ? "back" : "close"}
           </span>
+          {looksLikeIntent(query) && !intent && (
+            <span>
+              <kbd className="text-ink-dim">⌘↵</kbd> interpret
+            </span>
+          )}
           <span className="ml-auto">
             {flat.length} of {commands.length}
           </span>

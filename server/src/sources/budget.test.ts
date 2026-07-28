@@ -141,3 +141,37 @@ test("isSpendBlocked only blocks when blockScheduled is on and a limit is breach
   await budget.updateBudgetConfig({ dailyUsd: 20 }, NOW);
   assert.equal(await budget.isSpendBlocked(NOW), false); // back under
 });
+
+test("regression: adding a ladder never disarms an explicit hard stop", async () => {
+  const budget = await load();
+  await budget.recordRunSpend({ endedAt: NOW.toISOString(), queuedAt: "", costUsd: 12 }, () => NOW);
+  await budget.updateBudgetConfig({ dailyUsd: 10, blockScheduled: true }, NOW);
+  assert.equal(await budget.isSpendBlocked(NOW), true);
+
+  // A ladder that only warns must not become the *sole* authority — the user
+  // still asked for a hard stop, and configuring a softer step cannot revoke it.
+  await budget.updateBudgetConfig({ ladder: [{ atRatio: 0.8, action: "warn" }] }, NOW);
+  assert.equal(await budget.isSpendBlocked(NOW), true);
+});
+
+test("a ladder can stop below the limit, with blockScheduled off", async () => {
+  const budget = await load();
+  await budget.recordRunSpend({ endedAt: NOW.toISOString(), queuedAt: "", costUsd: 9 }, () => NOW);
+  // 90% of the limit: not "exceeded", so blockScheduled alone would allow it.
+  await budget.updateBudgetConfig({ dailyUsd: 10, blockScheduled: false }, NOW);
+  assert.equal(await budget.isSpendBlocked(NOW), false);
+  await budget.updateBudgetConfig({ ladder: [{ atRatio: 0.85, action: "stop" }] }, NOW);
+  assert.equal(await budget.isSpendBlocked(NOW), true);
+});
+
+test("a ladder that tops out below stop does not block on its own", async () => {
+  const budget = await load();
+  await budget.recordRunSpend({ endedAt: NOW.toISOString(), queuedAt: "", costUsd: 12 }, () => NOW);
+  await budget.updateBudgetConfig(
+    { dailyUsd: 10, blockScheduled: false, ladder: [{ atRatio: 0.5, action: "defer" }] },
+    NOW,
+  );
+  // `defer` is the scheduler's business, not the hard stop's: a deferred slot is
+  // recorded as skipped, but a manual run must still be allowed through.
+  assert.equal(await budget.isSpendBlocked(NOW), false);
+});

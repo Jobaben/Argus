@@ -37,6 +37,8 @@ export { useCountUp, useChangeFlash, staggerDelay, prefersReducedMotion } from "
 export { MoreMenu } from "./MoreMenu";
 export type { MoreItem } from "./MoreMenu";
 export { TriggerFields } from "./TriggerFields";
+export { RubricFields } from "./RubricFields";
+export { slugify } from "./slug";
 export { ModelSelect } from "./ModelSelect";
 export { SegmentedControl } from "./SegmentedControl";
 export type { Segment } from "./SegmentedControl";

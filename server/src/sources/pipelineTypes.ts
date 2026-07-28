@@ -14,6 +14,8 @@ export type {
   PipelineDefinition,
   PipelineInstance,
   PipelineSignal,
+  RetryableClass,
+  RetryPolicy,
   SignalType,
   StepProgress,
   StepStatus,

@@ -1,5 +1,8 @@
 /** Triggers, schedules, run records and one-off launches. */
 
+import type { BudgetAction } from "./ledger.js";
+import type { Rubric } from "./verdict.js";
+
 export type TriggerKind = "interval" | "daily" | "weekly" | "windowed";
 
 /** When a schedule fires. `everyMinutes` for interval and windowed cadence;
@@ -31,6 +34,9 @@ export interface Schedule {
    *  of dropping it. Absent = false, so pre-existing schedules keep the old
    *  skip-on-miss behavior. */
   catchUp?: boolean;
+  /** Opt-in quality rubric. When set, each completed run is scored by a
+   *  bounded judge pass and the score trends on the schedule's card. */
+  rubric?: Rubric;
   createdAt: string;
   updatedAt: string;
   lastRunAt: string | null;
@@ -51,6 +57,8 @@ export interface ScheduleInput {
   enabled?: boolean;
   overlapPolicy?: "skip" | "allow";
   catchUp?: boolean;
+  /** Null clears an existing rubric; absent leaves it alone on a PATCH. */
+  rubric?: Rubric | null;
 }
 
 export type RunStatus =
@@ -90,6 +98,16 @@ export interface Run {
   countedInTotals?: boolean;
   /** Null/absent for non-pipeline or unsignalled runs. */
   outcome?: RunOutcome | null;
+  /**
+   * The budget ladder step that governed this run, when one did.
+   *
+   * Recorded on the run itself so a cheap or missing run is explicable months
+   * later: "why did Tuesday's run use Haiku" is answered by the record, not by
+   * correlating timestamps against a policy that has since been edited.
+   */
+  budgetAction?: BudgetAction;
+  /** Set when `budgetAction` was `downgrade`: the model it would have used. */
+  modelDowngradedFrom?: string;
 }
 
 /** One-off run fired from the Launch tab (POST /api/launch). */

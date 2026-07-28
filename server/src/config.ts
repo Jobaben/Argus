@@ -76,6 +76,44 @@ export function assertBindIsSafe(config: ArgusConfig): void {
   );
 }
 
+/**
+ * The same promise, extended to federation.
+ *
+ * A peer is a machine this server will send its own summary to and accept one
+ * from. Over loopback that is a local experiment; over anything else it is a
+ * trust relationship, and one without a pairing secret is not a relationship at
+ * all — it is an open endpoint that will hand a summary to whoever asks and
+ * believe whatever comes back.
+ *
+ * `assertBindIsSafe` refuses an exposed port with no token for the same reason,
+ * and the two checks stay side by side deliberately: a security promise that
+ * covers the original feature and not the new one is the promise people
+ * actually rely on and the one that is quietly false.
+ */
+export function assertPeersAreSafe(peers: { label: string; url: string; secret: string }[]): void {
+  const unsafe = peers.filter((p) => !p.secret && !isLoopbackUrl(p.url));
+  if (unsafe.length === 0) return;
+  throw new ConfigError(
+    `refusing to start with ${unsafe.length} unpaired remote peer(s): ` +
+      `${unsafe.map((p) => p.label || p.url).join(", ")}.\n` +
+      "  A peer over a non-loopback URL needs a pairing secret; without one the\n" +
+      "  summary exchange is unauthenticated in both directions. Either:\n" +
+      "    • pair the machines (Fleet → Pair a machine) and re-add the peer, or\n" +
+      "    • remove the peer from ~/.claude/argus/peers.json.",
+  );
+}
+
+export function isLoopbackUrl(raw: string): boolean {
+  try {
+    const host = new URL(raw).hostname.toLowerCase();
+    return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+  } catch {
+    // An unparseable URL is not loopback. Refusing is the safe reading, and the
+    // peer validator rejects it on the way in anyway.
+    return false;
+  }
+}
+
 export function loadConfig(): ArgusConfig {
   return {
     port: intFromEnv("ARGUS_PORT", 7777),

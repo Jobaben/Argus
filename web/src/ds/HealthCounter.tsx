@@ -6,6 +6,7 @@ const TONE = {
   run: "text-run",
   fail: "text-fail",
   live: "text-eye",
+  queue: "text-queue",
 } as const;
 
 /**

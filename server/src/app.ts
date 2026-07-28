@@ -1,14 +1,50 @@
 import { Hono, type Context } from "hono";
 import { randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 import { claudeHome } from "./claudeHome.js";
 import { readAgents, readTimeline } from "./sources/jobs.js";
 import { readDaemon } from "./sources/daemon.js";
 import {
   readSessions,
   readSession,
+  readSessionLines,
   readSessionTail,
   sessionToMarkdown,
 } from "./sources/sessions.js";
+import { buildRecording } from "./sources/recorder.js";
+import {
+  isAutopsyEligible,
+  performAutopsy,
+  readAutopsy,
+  readFailureClasses,
+  type AutopsyDeps,
+} from "./sources/autopsy.js";
+import { analysisEnabled, createAnalysisRunner, type AnalysisRunner } from "./sources/analysis.js";
+import {
+  buildVerdictTrends,
+  failingVerdicts,
+  performVerdict,
+  readVerdict,
+  readVerdicts,
+} from "./sources/verdict.js";
+import { rubricFor } from "./verdictWatcher.js";
+import {
+  acknowledge,
+  addNote,
+  attachDiagnosis,
+  inQuietHours,
+  readIncidents,
+  readPolicy,
+  resolveByHand,
+  summarize,
+  updatePolicy,
+  validatePolicyPatch,
+  withIncidentLock,
+  writeIncidents,
+  SentinelValidationError,
+} from "./sources/sentinel.js";
+import { performDiagnosis } from "./sources/diagnose.js";
+import { readJournal } from "./sources/journal.js";
 import { readActivity } from "./sources/history.js";
 import { readProjects } from "./sources/projects.js";
 import { readStats } from "./sources/stats.js";
@@ -63,6 +99,39 @@ import {
   updateBudgetConfig,
   validateBudgetPatch,
 } from "./sources/budget.js";
+import {
+  buildWatchtower,
+  clearBaselineReset,
+  readResets,
+  resetBaseline,
+  WatchtowerValidationError,
+} from "./sources/watchtower.js";
+import { buildLedger, whatIf, type WhatIfRequest } from "./sources/ledger.js";
+import {
+  runsAsRecords,
+  runsBetween,
+  vaultQuarters,
+  vaultSearch,
+  vaultStatus,
+} from "./vault/query.js";
+import { buildOtelExport } from "./vault/otel.js";
+import { compileIntent, MAX_INTENT_CHARS, type OmnibarContext } from "./sources/omnibar.js";
+import { rememberPlan, takePlan } from "./sources/planStore.js";
+import { executePlan } from "./omnibarExecutor.js";
+import {
+  addPeer,
+  machineIdentity,
+  publicPeers,
+  readPeers,
+  removePeer,
+  setLabel,
+  PeerValidationError,
+  type PeerHealth,
+} from "./federation/peers.js";
+import { newSecret, pairingId, seal } from "./federation/envelope.js";
+import { buildSummary } from "./federation/summary.js";
+import { buildFleet } from "./federation/fleet.js";
+import type { MachineSummary } from "@argus/contracts";
 import { buildOverview } from "./sources/overview.js";
 import { buildPalette } from "./sources/palette.js";
 import { buildSituation } from "./sources/insight.js";
@@ -98,6 +167,15 @@ import { VERSION } from "./version.js";
 import { mountWebApp } from "./static.js";
 import { buildRunFailurePayload, postWebhook } from "./notify.js";
 
+/** The window the pruned JSON run files can still answer on their own. */
+const JSON_CHRONICLE_HOURS = 336;
+/** Roughly five years — the Chronicle's ceiling once the Vault backs it. */
+const MAX_CHRONICLE_HOURS = 24 * 365 * 5;
+/** Spans per OTLP document. A collector prefers several bounded posts to one
+ *  unbounded one, and an uncapped export is a memory spike waiting for a
+ *  machine with a long history. */
+const OTEL_SPAN_CAP = 5000;
+
 export interface AppDeps {
   config: ArgusConfig;
   engine: Engine;
@@ -105,6 +183,13 @@ export interface AppDeps {
   broadcast: (message: unknown) => void;
   /** Whether to mount the built SPA (skipped in tests). Defaults to true. */
   serveWeb?: boolean;
+  /**
+   * Verified peer summaries and health, from the federation poller.
+   *
+   * Injected rather than imported so the app factory stays free of background
+   * state — and so a test can hand it a fleet without a network.
+   */
+  fleet?: () => { summaries: Map<string, MachineSummary>; health: Map<string, PeerHealth> };
   /** Latest activity per running step run, from the run tailer. */
   activity?: () => Map<string, ActivityEvent>;
   /** Admin auth for pipeline edit/run routes. Defaults to the real service. */
@@ -113,6 +198,8 @@ export interface AppDeps {
   users?: UserStore;
   /** Socket peer address, injectable for tests. Defaults to the node-server conninfo. */
   remoteAddr?: (c: Context) => string | null;
+  /** Bounded `claude -p` analysis runner (Autopsy). Defaults to the real one. */
+  analysis?: AnalysisRunner;
 }
 
 /**
@@ -138,6 +225,27 @@ export function createApp(deps: AppDeps): Hono {
 
   const notifyRunFailed = (run: Parameters<typeof buildRunFailurePayload>[0]) =>
     void postWebhook(config.webhookUrl, buildRunFailurePayload(run, new Date().toISOString()));
+
+  // One runner for every bounded `claude -p` analysis pass this app performs,
+  // so they share a single concurrency and spend gate. Injectable for tests.
+  const analysis = deps.analysis ?? createAnalysisRunner();
+  const autopsyDeps: AutopsyDeps = {
+    runner: analysis,
+    now: () => new Date(),
+    readLines: readSessionLines,
+  };
+
+  /**
+   * The two model-derived inputs to issue grouping, read together.
+   *
+   * Every route that builds issues needs both — a diagnosis to cluster by and
+   * the quality regressions that belong in the same triage surface as crashes —
+   * so reading them in one place keeps the four call sites from drifting.
+   */
+  async function issueContext() {
+    const [classes, verdicts] = await Promise.all([readFailureClasses(), readVerdicts()]);
+    return { classes, verdicts: failingVerdicts(verdicts) };
+  }
 
   // Parse a JSON body, or short-circuit with a 400. Returns a discriminated
   // result so the handler can `if (!parsed.ok) return parsed.res`.
@@ -318,9 +426,25 @@ export function createApp(deps: AppDeps): Hono {
   // Instance gate controls run/steer pipelines. /signal is NOT admin-gated:
   // it is called by headless agent hooks and carries its own per-instance
   // token, verified by the engine.
+  // Producing a postmortem spawns an agent; relaunching spawns a real run.
+  app.on(["POST"], "/api/runs/:id/autopsy", admin);
+  app.on(["POST"], "/api/runs/:id/verdict", admin);
+  // Incident actions mutate shared operator state; diagnosing spawns an agent.
+  app.use("/api/sentinel/policy", admin);
+  app.use("/api/incidents/:id/ack", admin);
+  app.use("/api/incidents/:id/resolve", admin);
+  app.use("/api/incidents/:id/note", admin);
+  app.use("/api/incidents/:id/diagnose", admin);
+  app.on(["POST"], "/api/runs/:id/relaunch", admin);
   app.use("/api/instances/:id/approve", admin);
   app.use("/api/instances/:id/revise", admin);
   app.use("/api/instances/:id/abort", admin);
+  app.use("/api/peers", admin);
+  app.use("/api/peers/pair", admin);
+  app.use("/api/peers/:id", admin);
+  app.use("/api/fleet/label", admin);
+  app.use("/api/omnibar/plan", admin);
+  app.use("/api/omnibar/execute", admin);
 
   app.get("/api/setup", async (c) =>
     c.json(await import("./setup/prereqs.js").then((m) => m.checkAll())),
@@ -390,6 +514,52 @@ export function createApp(deps: AppDeps): Hono {
     }
   });
 
+  // ── Ledger ────────────────────────────────────────────────────────────────
+  // Where the money went, where it is going, and what a change would do. All
+  // reads; the what-if is a POST only because it carries a body.
+
+  app.get("/api/ledger", async (c) => {
+    const now = new Date();
+    const [runs, budgetConfig, ledger] = await Promise.all([
+      readRuns(),
+      readBudgetConfig(),
+      readSpendLedger(),
+    ]);
+    const status = buildBudgetStatus(budgetConfig, ledger, now);
+    return c.json(buildLedger(runs, ledger, budgetConfig, status, now));
+  });
+
+  app.post("/api/ledger/what-if", async (c) => {
+    const body = await jsonBody(c);
+    if (!body.ok) return body.res;
+    const raw = (body.value ?? {}) as Partial<WhatIfRequest>;
+    const dimension = raw.dimension;
+    if (
+      dimension !== "project" &&
+      dimension !== "agent" &&
+      dimension !== "schedule" &&
+      dimension !== "pipeline" &&
+      dimension !== "model"
+    ) {
+      return c.json({ error: "dimension must be project|agent|schedule|pipeline|model" }, 400);
+    }
+    if (typeof raw.key !== "string" || !raw.key.trim()) {
+      return c.json({ error: "key is required" }, 400);
+    }
+    if (typeof raw.toModel !== "string" || !/^[A-Za-z0-9._ ()-]{1,80}$/.test(raw.toModel)) {
+      return c.json({ error: "toModel is required" }, 400);
+    }
+    const [runs, verdicts] = await Promise.all([readRuns(), readVerdicts()]);
+    const windowFloor = Date.now() - 30 * 86_400_000;
+    const window = runs.filter((r) => {
+      const at = Date.parse(r.endedAt ?? r.startedAt ?? r.queuedAt);
+      return Number.isFinite(at) && at >= windowFloor;
+    });
+    return c.json(
+      whatIf(window, verdicts, { dimension, key: raw.key.trim(), toModel: raw.toModel }, 30),
+    );
+  });
+
   app.get("/api/inventory", async (c) => c.json(await readInventory()));
   app.get("/api/tasks", async (c) => c.json({ tasks: await readTasks() }));
   // The scan stops at SEARCH_LIMIT, so the response says so rather than letting
@@ -400,16 +570,61 @@ export function createApp(deps: AppDeps): Hono {
   });
   app.get("/api/cron", async (c) => c.json(await readCron()));
 
-  // Cross-source timeline: runs + agents + sessions as packed swimlanes.
+  /**
+   * Cross-source timeline: runs + agents + sessions as packed swimlanes.
+   *
+   * Past {@link JSON_CHRONICLE_HOURS} the JSON run files no longer hold the
+   * answer — they are pruned to the newest 50 per schedule — so the window is
+   * filled in from the Vault. Live records always win the merge: the Vault is
+   * a cache, and where the two disagree the file is right by definition.
+   */
   app.get("/api/chronicle", async (c) => {
     const hoursRaw = Number(c.req.query("hours"));
-    const hours = Number.isFinite(hoursRaw) ? Math.min(336, Math.max(1, hoursRaw)) : 24;
-    const [runs, agents, sessions] = await Promise.all([
+    const hours = Number.isFinite(hoursRaw)
+      ? Math.min(MAX_CHRONICLE_HOURS, Math.max(1, hoursRaw))
+      : 24;
+    const now = new Date();
+    const [liveRuns, agents, sessions] = await Promise.all([
       readRuns(),
       readAgents(),
       readSessions(150),
     ]);
-    return c.json(buildChronicle({ runs, agents, sessions }, new Date(), hours * 3_600_000));
+    let runs = liveRuns;
+    if (hours > JSON_CHRONICLE_HOURS) {
+      const seen = new Set(liveRuns.map((r) => r.id));
+      const archived = runsAsRecords(
+        runsBetween(now.getTime() - hours * 3_600_000, now.getTime(), 2000),
+      ).filter((r) => !seen.has(r.id));
+      runs = [...liveRuns, ...archived];
+    }
+    return c.json(buildChronicle({ runs, agents, sessions }, now, hours * 3_600_000));
+  });
+
+  // The Vault: what it holds, the long views it enables, and the export.
+  app.get("/api/vault", async (c) => {
+    const runs = await readRuns();
+    return c.json(vaultStatus(runs.map((r) => r.id)));
+  });
+
+  app.get("/api/vault/quarters", (c) => c.json(vaultQuarters()));
+
+  app.get("/api/vault/search", (c) => c.json(vaultSearch((c.req.query("q") ?? "").slice(0, 200))));
+
+  /**
+   * OTLP/JSON spans for a window of runs.
+   *
+   * A plain GET returning a document rather than a push to a collector: Argus
+   * does not know where your collector is, and a monitoring tool that phones
+   * home by default is a worse citizen than one you have to point at something.
+   * `curl … | vector` is the intended shape.
+   */
+  app.get("/api/vault/otel", (c) => {
+    const daysRaw = Number(c.req.query("days"));
+    const days = Number.isFinite(daysRaw) ? Math.min(400, Math.max(1, daysRaw)) : 7;
+    const to = Date.now();
+    const rows = runsBetween(to - days * 86_400_000, to, OTEL_SPAN_CAP);
+    const doc = buildOtelExport(rows);
+    return c.json({ ...doc, days, capped: rows.length >= OTEL_SPAN_CAP });
   });
 
   app.get("/api/schedules", async (c) =>
@@ -506,6 +721,17 @@ export function createApp(deps: AppDeps): Hono {
     return got ? c.json(got) : c.json({ error: "not found" }, 404);
   });
 
+  // The Flight Recorder: the run's transcript replayed as a scrubbable causal
+  // timeline. Derived on every read — the transcript stays the source of truth.
+  app.get("/api/runs/:id/recording", async (c) => {
+    const got = await readRun(c.req.param("id"));
+    if (!got) return c.json({ error: "not found" }, 404);
+    const { run } = got;
+    const lines =
+      run.project && run.sessionId ? await readSessionLines(run.project, run.sessionId) : [];
+    return c.json(buildRecording(run, lines, new Date()));
+  });
+
   app.post("/api/runs/:id/cancel", async (c) => {
     const outcome = await cancelRun(c.req.param("id"), new Date());
     if (outcome === "not-found") return c.json({ error: "not found" }, 404);
@@ -522,8 +748,8 @@ export function createApp(deps: AppDeps): Hono {
 
   // Failed runs grouped by error fingerprint, Sentry-style.
   app.get("/api/issues", async (c) => {
-    const [runs, triage] = await Promise.all([readRuns(), readTriage()]);
-    const issues = buildIssues(runs, triage);
+    const [runs, triage, ctx] = await Promise.all([readRuns(), readTriage(), issueContext()]);
+    const issues = buildIssues(runs, triage, ctx);
     const summary = { open: 0, resolved: 0, ignored: 0 };
     for (const i of issues) summary[i.state]++;
     return c.json({ issues, summary });
@@ -531,18 +757,20 @@ export function createApp(deps: AppDeps): Hono {
 
   app.get("/api/issues/:fingerprint", async (c) => {
     const fp = c.req.param("fingerprint");
-    const [runs, triage] = await Promise.all([readRuns(), readTriage()]);
-    const issue = buildIssues(runs, triage).find((i) => i.fingerprint === fp);
+    const [runs, triage, ctx] = await Promise.all([readRuns(), readTriage(), issueContext()]);
+    const issue = buildIssues(runs, triage, ctx).find((i) => i.fingerprint === fp);
     if (!issue) return c.json({ error: "not found" }, 404);
-    return c.json({ issue, occurrences: issueOccurrences(runs, fp) });
+    // The whole member set, so a clustered issue lists every occurrence rather
+    // than only the ones sharing its representative fingerprint.
+    return c.json({ issue, occurrences: issueOccurrences(runs, issue.members, ctx) });
   });
 
   const triageHandler = (state: "resolved" | "ignored") => async (c: Context) => {
     // Plain `Context` can't infer the :fingerprint param type; missing → "" → 404.
     const fp = c.req.param("fingerprint") ?? "";
     try {
-      const [runs, triage] = await Promise.all([readRuns(), readTriage()]);
-      const issue = buildIssues(runs, triage).find((i) => i.fingerprint === fp);
+      const [runs, triage, ctx] = await Promise.all([readRuns(), readTriage(), issueContext()]);
+      const issue = buildIssues(runs, triage, ctx).find((i) => i.fingerprint === fp);
       if (!issue) return c.json({ error: "not found" }, 404);
       await setTriage(fp, state, issue.lastSeen, new Date());
     } catch (e) {
@@ -566,20 +794,289 @@ export function createApp(deps: AppDeps): Hono {
     return c.json({ ok: true });
   });
 
+  // ── Sentinel ──────────────────────────────────────────────────────────────
+  // Reading incidents is open. Acknowledging, noting and resolving are
+  // operator actions on shared state, and dispatching a diagnostic spawns an
+  // agent — all admin-gated.
+
+  /** Read the incident, mutate it under the store lock, write it back. */
+  async function mutateIncident(
+    id: string,
+    fn: (
+      incident: Awaited<ReturnType<typeof readIncidents>>[number],
+    ) => Promise<Awaited<ReturnType<typeof readIncidents>>[number]>,
+  ) {
+    return withIncidentLock(async () => {
+      const list = await readIncidents();
+      const idx = list.findIndex((i) => i.id === id);
+      if (idx === -1) return null;
+      list[idx] = await fn(list[idx]);
+      await writeIncidents(list);
+      return list[idx];
+    });
+  }
+
+  app.get("/api/sentinel", async (c) => {
+    const now = new Date();
+    const [incidents, policy] = await Promise.all([readIncidents(), readPolicy()]);
+    return c.json({
+      generatedAt: now.toISOString(),
+      policy,
+      incidents,
+      summary: summarize(incidents),
+      inQuietHours: inQuietHours(policy.quietHours, now),
+    });
+  });
+
+  app.put("/api/sentinel/policy", async (c) => {
+    const body = await jsonBody(c);
+    if (!body.ok) return body.res;
+    try {
+      const policy = await updatePolicy(validatePolicyPatch(body.value));
+      broadcast({ type: "sentinel:changed" });
+      return c.json({ policy });
+    } catch (e) {
+      return fail(c, e, SentinelValidationError);
+    }
+  });
+
+  app.post("/api/incidents/:id/ack", async (c) => {
+    const who = auth.verify(sessionToken(c))?.username ?? "admin";
+    const updated = await mutateIncident(c.req.param("id"), async (i) =>
+      acknowledge(i, who, new Date()),
+    );
+    if (!updated) return c.json({ error: "not found" }, 404);
+    broadcast({ type: "sentinel:changed" });
+    return c.json({ incident: updated });
+  });
+
+  app.post("/api/incidents/:id/resolve", async (c) => {
+    const who = auth.verify(sessionToken(c))?.username ?? "admin";
+    const note = optionalField<string>(await jsonBody(c), "note") ?? "";
+    const updated = await mutateIncident(c.req.param("id"), async (i) =>
+      resolveByHand(i, who, note, new Date()),
+    );
+    if (!updated) return c.json({ error: "not found" }, 404);
+    broadcast({ type: "sentinel:changed" });
+    return c.json({ incident: updated });
+  });
+
+  app.post("/api/incidents/:id/note", async (c) => {
+    const who = auth.verify(sessionToken(c))?.username ?? "admin";
+    const note = (optionalField<string>(await jsonBody(c), "note") ?? "").trim();
+    if (!note) return c.json({ error: "note is required" }, 400);
+    const updated = await mutateIncident(c.req.param("id"), async (i) =>
+      addNote(i, who, note.slice(0, 2000), new Date()),
+    );
+    if (!updated) return c.json({ error: "not found" }, 404);
+    broadcast({ type: "sentinel:changed" });
+    return c.json({ incident: updated });
+  });
+
+  /**
+   * Dispatch the read-only diagnostic.
+   *
+   * The pass runs *outside* the store lock — it can take ninety seconds, and
+   * holding the incident store for that long would block acknowledgements —
+   * then re-reads under the lock before attaching, so a human who acknowledged
+   * meanwhile does not lose their edit.
+   */
+  app.post("/api/incidents/:id/diagnose", async (c) => {
+    const id = c.req.param("id");
+    const incident = (await readIncidents()).find((i) => i.id === id);
+    if (!incident) return c.json({ error: "not found" }, 404);
+
+    const diagnosis = await performDiagnosis(incident, {
+      runner: analysis,
+      now: () => new Date(),
+      context: async (i) =>
+        i.scheduleId ? readRuns({ scheduleId: i.scheduleId, limit: 10 }) : readRuns({ limit: 10 }),
+    });
+
+    const updated = await mutateIncident(id, async (i) =>
+      attachDiagnosis(i, diagnosis, new Date()),
+    );
+    if (!updated) return c.json({ error: "not found" }, 404);
+    broadcast({ type: "sentinel:changed" });
+    return c.json({ incident: updated });
+  });
+
+  // ── Verdict ───────────────────────────────────────────────────────────────
+  // Reading a score is open; producing one spawns an agent, so it is gated.
+
+  app.get("/api/verdicts", async (c) => {
+    const [verdicts, schedules, pipelines] = await Promise.all([
+      readVerdicts(),
+      readSchedules(),
+      readPipelines(),
+    ]);
+    // Thresholds live on the definitions, not on the stored verdicts: an author
+    // who tightens the bar should see the new line on the old history.
+    const minScores = new Map<string, number | null>();
+    for (const s of schedules) {
+      minScores.set(`schedule:${s.id}`, s.rubric?.minScore ?? null);
+    }
+    for (const p of pipelines) {
+      for (const phase of p.phases) {
+        minScores.set(`phase:pipeline:${p.id}:${phase.id}`, phase.rubric?.minScore ?? null);
+      }
+    }
+    return c.json(buildVerdictTrends(verdicts, minScores, new Date()));
+  });
+
+  app.get("/api/runs/:id/verdict", async (c) => {
+    const got = await readRun(c.req.param("id"));
+    if (!got) return c.json({ error: "not found" }, 404);
+    const [schedules, pipelines] = await Promise.all([readSchedules(), readPipelines()]);
+    const rubric = rubricFor(got.run, schedules, pipelines);
+    return c.json({
+      verdict: await readVerdict(got.run.id),
+      rubric,
+      unavailable: rubric
+        ? analysisEnabled()
+          ? null
+          : "scoring is disabled (ARGUS_ANALYSIS=off)"
+        : "no rubric is declared for this unit of work",
+    });
+  });
+
+  app.post("/api/runs/:id/verdict", async (c) => {
+    const got = await readRun(c.req.param("id"));
+    if (!got) return c.json({ error: "not found" }, 404);
+    const [schedules, pipelines] = await Promise.all([readSchedules(), readPipelines()]);
+    const rubric = rubricFor(got.run, schedules, pipelines);
+    if (!rubric) {
+      return c.json({ error: "no rubric is declared for this unit of work" }, 409);
+    }
+    const verdict = await performVerdict(got.run, rubric, {
+      runner: analysis,
+      now: () => new Date(),
+    });
+    broadcast({ type: "issues:changed" });
+    return c.json({ verdict, rubric, unavailable: null });
+  });
+
+  // ── Autopsy ───────────────────────────────────────────────────────────────
+  // The postmortem is a read; *producing* one spawns an agent and *relaunching*
+  // spawns a real run, so both of those sit behind the admin gate alongside the
+  // pipeline routes.
+
+  app.get("/api/runs/:id/autopsy", async (c) => {
+    const got = await readRun(c.req.param("id"));
+    if (!got) return c.json({ error: "not found" }, 404);
+    const eligible = isAutopsyEligible(got.run);
+    const autopsy = await readAutopsy(got.run.id);
+    return c.json({
+      autopsy,
+      eligible,
+      unavailable: eligible
+        ? autopsy
+          ? null
+          : analysisEnabled()
+            ? null
+            : "postmortems are disabled (ARGUS_ANALYSIS=off)"
+        : "this run did not fail, so there is nothing to explain",
+    });
+  });
+
+  app.post("/api/runs/:id/autopsy", async (c) => {
+    const got = await readRun(c.req.param("id"));
+    if (!got) return c.json({ error: "not found" }, 404);
+    if (!isAutopsyEligible(got.run)) {
+      return c.json({ error: "this run did not fail, so there is nothing to explain" }, 409);
+    }
+    const autopsy = await performAutopsy(got.run, autopsyDeps);
+    broadcast({ type: "issues:changed" });
+    return c.json({ autopsy, eligible: true, unavailable: null });
+  });
+
+  /**
+   * Relaunch with the fix: a one-off run using the autopsy's proposed prompt.
+   *
+   * The delta is never applied silently to the schedule — a model's rewrite of
+   * a prompt that spends money unattended is a suggestion, not a migration. It
+   * fires once, as a one-off, so the operator can read the result and then
+   * decide whether to edit the schedule themselves.
+   */
+  app.post("/api/runs/:id/relaunch", async (c) => {
+    const got = await readRun(c.req.param("id"));
+    if (!got) return c.json({ error: "not found" }, 404);
+    const body = await jsonBody(c);
+    const override = optionalField<string>(body, "prompt");
+    const autopsy = await readAutopsy(got.run.id);
+    const prompt = (override ?? autopsy?.promptDelta ?? "").trim();
+    if (!prompt) {
+      return c.json({ error: "no proposed prompt to relaunch with" }, 409);
+    }
+    try {
+      const run = await fireOneOff(
+        validateLaunchInput({
+          name: `Relaunch: ${got.run.scheduleName}`,
+          prompt,
+          cwd: got.run.cwd,
+          ...(got.run.model ? { model: got.run.model } : {}),
+        }),
+        {
+          now: () => new Date(),
+          spawn: defaultSpawn,
+          tickMs: config.schedulerTickMs,
+          newId: () => randomUUID(),
+          onChange: () => broadcast({ type: "schedules:changed" }),
+          onFailure: notifyRunFailed,
+        },
+      );
+      return c.json(run, 202);
+    } catch (e) {
+      return fail(c, e, LaunchValidationError);
+    }
+  });
+
+  // Learned envelopes per schedule/phase, plus the runs that left them.
+  app.get("/api/watchtower", async (c) => {
+    const [runs, resets] = await Promise.all([readRuns(), readResets()]);
+    return c.json(buildWatchtower(runs, resets, new Date()));
+  });
+
+  // "Learn from here." Argus-owned, low-risk state — ungated like issue triage.
+  app.post("/api/watchtower/:key/reset", async (c) => {
+    try {
+      const record = await resetBaseline(c.req.param("key") ?? "", new Date());
+      broadcast({ type: "watchtower:changed" });
+      return c.json({ ok: true, ...record });
+    } catch (e) {
+      return fail(c, e, WatchtowerValidationError);
+    }
+  });
+
+  app.delete("/api/watchtower/:key/reset", async (c) => {
+    try {
+      if (!(await clearBaselineReset(c.req.param("key") ?? ""))) {
+        return c.json({ error: "not found" }, 404);
+      }
+    } catch (e) {
+      return fail(c, e, WatchtowerValidationError);
+    }
+    broadcast({ type: "watchtower:changed" });
+    return c.json({ ok: true });
+  });
+
   // "While you were away": attention items + digest since the last ack.
   app.get("/api/briefing", async (c) => {
     const now = new Date();
-    const [runs, schedules, triage, instances, ackAt] = await Promise.all([
+    const [runs, schedules, triage, instances, ackAt, resets, ctx] = await Promise.all([
       readRuns(),
       readSchedules(),
       readTriage(),
       readInstances(),
       readBriefingAck(),
+      readResets(),
+      issueContext(),
     ]);
     const { monitors } = buildMonitors(schedules, runs, now);
-    const issues = buildIssues(runs, triage);
+    const issues = buildIssues(runs, triage, ctx);
+    const { anomalies } = buildWatchtower(runs, resets, now);
     return c.json(
-      buildBriefing({ runs, monitors, issues, instances }, clampSince(ackAt, now), now),
+      buildBriefing({ runs, monitors, issues, instances, anomalies }, clampSince(ackAt, now), now),
     );
   });
 
@@ -659,7 +1156,7 @@ export function createApp(deps: AppDeps): Hono {
   // next, and a 24h throughput sparkline. All derived from the shared caches.
   app.get("/api/insight", async (c) => {
     const now = new Date();
-    const [runs, instances, pipelines, schedules, triage, agents, config, ledger] =
+    const [runs, instances, pipelines, schedules, triage, agents, config, ledger, resets, ctx] =
       await Promise.all([
         readRuns(),
         readInstances(),
@@ -669,6 +1166,8 @@ export function createApp(deps: AppDeps): Hono {
         readAgents(),
         readBudgetConfig(),
         readSpendLedger(),
+        readResets(),
+        issueContext(),
       ]);
     const { monitors } = buildMonitors(schedules, runs, now);
     return c.json(
@@ -679,9 +1178,10 @@ export function createApp(deps: AppDeps): Hono {
           pipelines,
           schedules,
           monitors,
-          issues: buildIssues(runs, triage),
+          issues: buildIssues(runs, triage, ctx),
           agents,
           budget: buildBudgetStatus(config, ledger, now),
+          anomalies: buildWatchtower(runs, resets, now).anomalies,
         },
         now,
       ),
@@ -694,7 +1194,7 @@ export function createApp(deps: AppDeps): Hono {
   // busiest single view.
   app.get("/api/palette", async (c) => {
     const now = new Date();
-    const [defs, instances, schedules, runs, triage, agents, projects, sessions] =
+    const [defs, instances, schedules, runs, triage, agents, projects, sessions, ctx] =
       await Promise.all([
         readPipelines(),
         readInstances(),
@@ -704,9 +1204,10 @@ export function createApp(deps: AppDeps): Hono {
         readAgents(),
         readProjects(),
         readSessions(),
+        issueContext(),
       ]);
     const { monitors } = buildMonitors(schedules, runs, now);
-    const issues = buildIssues(runs, triage);
+    const issues = buildIssues(runs, triage, ctx);
     // Newest instance per pipeline — the one whose badge and gate the palette
     // should reflect.
     const latestByPipeline = new Map<string, (typeof instances)[number]>();
@@ -730,6 +1231,17 @@ export function createApp(deps: AppDeps): Hono {
       ),
     );
   });
+
+  /**
+   * The instance's journal: what happened, in order.
+   *
+   * The instance record is state and is rewritten in place, so it can say a
+   * phase failed but never that it failed, retried, failed again and was
+   * revised. This is the history.
+   */
+  app.get("/api/instances/:id/journal", async (c) =>
+    c.json({ entries: await readJournal(c.req.param("id")) }),
+  );
 
   app.get("/api/instances/:id", async (c) => {
     const inst = await readInstance(c.req.param("id"));
@@ -772,6 +1284,201 @@ export function createApp(deps: AppDeps): Hono {
   app.post("/api/instances/:id/abort", async (c) =>
     engineReply(c, await engine.abort(c.req.param("id"))),
   );
+
+  // ── Constellation ─────────────────────────────────────────────────────────
+  // One published summary, one fleet view, and the pairing that makes both
+  // meaningful. Reading the fleet is open like every other read; changing who
+  // this machine trusts is admin-gated like every other mutation.
+
+  /** This machine's own summary, derived fresh — never cached, never stored. */
+  async function selfSummary(now: Date): Promise<MachineSummary> {
+    const identity = await machineIdentity(hostname());
+    const [schedules, runs, triage, ctx, instances, incidents, budgetConfig, ledger] =
+      await Promise.all([
+        readSchedules(),
+        readRuns(),
+        readTriage(),
+        issueContext(),
+        readInstances(),
+        readIncidents(),
+        readBudgetConfig(),
+        readSpendLedger(),
+      ]);
+    return buildSummary({
+      machineId: identity.machineId,
+      label: identity.label,
+      version: VERSION,
+      schedules: schedules.length,
+      monitors: buildMonitors(schedules, runs, now).monitors,
+      issues: buildIssues(runs, triage, ctx),
+      instances,
+      runs,
+      incidents,
+      budget: buildBudgetStatus(budgetConfig, ledger, now),
+      now,
+    });
+  }
+
+  /**
+   * The peer-facing endpoint.
+   *
+   * Not admin-gated, and not open either: the caller must name a pairing this
+   * machine already holds, and the answer is sealed with that pairing's secret.
+   * An unpaired caller gets a 401 and learns nothing — not the machine's id, not
+   * its label, not whether any pairing exists.
+   */
+  app.get("/api/federation/summary", async (c) => {
+    const claimed = c.req.header("x-argus-pairing") ?? "";
+    if (!claimed) return c.json({ error: "unpaired" }, 401);
+    const peers = await readPeers();
+    const match = peers.find((p) => pairingId(p.secret) === claimed);
+    if (!match) return c.json({ error: "unpaired" }, 401);
+    const now = new Date();
+    const summary = await selfSummary(now);
+    return c.json(seal(summary, match.secret, summary.machineId, now));
+  });
+
+  app.get("/api/fleet", async (c) => {
+    const now = new Date();
+    const [self, peers] = await Promise.all([selfSummary(now), readPeers()]);
+    const state = deps.fleet?.() ?? { summaries: new Map(), health: new Map<string, PeerHealth>() };
+    return c.json(buildFleet(self, publicPeers(peers, state.health), state.summaries, now));
+  });
+
+  /** A fresh pairing secret, shown once. Generating one changes nothing yet. */
+  app.post("/api/peers/pair", async (c) => {
+    const secret = newSecret();
+    const identity = await machineIdentity(hostname());
+    return c.json({
+      secret,
+      instructions:
+        `On the other machine, open Fleet → Add a peer and paste this secret, ` +
+        `then do the same here with that machine's URL. Both sides need the same ` +
+        `secret — that is what makes the pairing mutual. This machine is ` +
+        `"${identity.label}".`,
+    });
+  });
+
+  app.post("/api/peers", async (c) => {
+    const body = await jsonBody(c);
+    if (!body.ok) return body.res;
+    try {
+      const peer = await addPeer(body.value, new Date());
+      broadcast({ type: "fleet:changed" });
+      // The secret goes in and never comes back out.
+      return c.json({ peer: { id: peer.id, label: peer.label, url: peer.url } }, 201);
+    } catch (e) {
+      return fail(c, e, PeerValidationError);
+    }
+  });
+
+  app.delete("/api/peers/:id", async (c) => {
+    if (!(await removePeer(c.req.param("id")))) return c.json({ error: "not found" }, 404);
+    broadcast({ type: "fleet:changed" });
+    return c.json({ ok: true });
+  });
+
+  app.put("/api/fleet/label", async (c) => {
+    const body = await jsonBody(c);
+    if (!body.ok) return body.res;
+    try {
+      const label = await setLabel(String((body.value as { label?: unknown })?.label ?? ""));
+      broadcast({ type: "fleet:changed" });
+      return c.json({ label });
+    } catch (e) {
+      return fail(c, e, PeerValidationError);
+    }
+  });
+
+  // ── Omnibar ───────────────────────────────────────────────────────────────
+  // Plan and execute are separate calls on purpose: a plan is a proposal a
+  // human reads, and the only thing that turns it into a change is a second,
+  // explicit request naming the plan's id. Both are admin-gated — planning
+  // spawns an agent, executing mutates.
+
+  /** Everything the planner may name, read fresh for each pass. */
+  async function omnibarContext(now: Date): Promise<OmnibarContext> {
+    const [schedules, runs, triage, ctx, instances, budget] = await Promise.all([
+      readSchedules(),
+      readRuns(),
+      readTriage(),
+      issueContext(),
+      readInstances(),
+      readBudgetConfig(),
+    ]);
+    return { schedules, issues: buildIssues(runs, triage, ctx), instances, budget, now };
+  }
+
+  app.post("/api/omnibar/plan", async (c) => {
+    const body = await jsonBody(c);
+    if (!body.ok) return body.res;
+    const raw = (body.value ?? {}) as { intent?: unknown };
+    if (typeof raw.intent !== "string" || !raw.intent.trim()) {
+      return c.json({ error: "intent is required" }, 400);
+    }
+    if (raw.intent.length > MAX_INTENT_CHARS) {
+      return c.json({ error: `intent is capped at ${MAX_INTENT_CHARS} characters` }, 400);
+    }
+    const now = new Date();
+    const ctx = await omnibarContext(now);
+    const response = await compileIntent(raw.intent, ctx, {
+      runner: analysis,
+      cwd: claudeHome(),
+    });
+    if (response.plan) rememberPlan(response.plan, now);
+    return c.json(response);
+  });
+
+  app.post("/api/omnibar/execute", async (c) => {
+    const body = await jsonBody(c);
+    if (!body.ok) return body.res;
+    const raw = (body.value ?? {}) as { planId?: unknown };
+    if (typeof raw.planId !== "string" || !raw.planId) {
+      return c.json({ error: "planId is required" }, 400);
+    }
+    const now = new Date();
+    const plan = takePlan(raw.planId, now);
+    if (!plan) {
+      return c.json({
+        status: "expired",
+        applied: [],
+        reversed: [],
+        error: null,
+        summary: "That plan has expired or was already run. Ask again to get a fresh one.",
+      });
+    }
+    const ctx = await omnibarContext(now);
+    const result = await executePlan(plan, ctx, {
+      setScheduleEnabled: async (id, enabled) => {
+        if (!(await updateSchedule(id, { enabled }, new Date()))) {
+          throw new Error(`schedule ${id} no longer exists`);
+        }
+      },
+      setIssueState: async (fingerprint, state) => {
+        if (state === "open") {
+          await clearTriage(fingerprint);
+          return;
+        }
+        const issue = ctx.issues.find((i) => i.fingerprint === fingerprint);
+        if (!issue) throw new Error(`issue ${fingerprint} no longer exists`);
+        await setTriage(fingerprint, state, issue.lastSeen, new Date());
+      },
+      abortInstance: async (id) => {
+        const reply = await engine.abort(id);
+        if (!reply.ok) throw new Error(reply.error ?? `could not abort ${id}`);
+      },
+      setBudget: async (patch) => {
+        await updateBudgetConfig(validateBudgetPatch(patch), new Date());
+      },
+    });
+    if (result.applied.length > 0 || result.reversed.length > 0) {
+      broadcast({ type: "schedules:changed" });
+      broadcast({ type: "issues:changed" });
+      broadcast({ type: "budget:changed" });
+      broadcast({ type: "pipelines:changed" });
+    }
+    return c.json(result);
+  });
 
   if (deps.serveWeb !== false) mountWebApp(app);
 

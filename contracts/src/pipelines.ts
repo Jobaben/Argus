@@ -1,11 +1,31 @@
 /** Pipeline definitions, running instances, and the board overview. */
 
 import type { Trigger } from "./schedules.js";
+import type { AutoApprove, Rubric } from "./verdict.js";
 
 export interface PhaseStep {
   name: string;
   prompt: string;
   model?: string;
+}
+
+/**
+ * Which observable failures are worth another attempt.
+ *
+ * Deliberately not "any": an agent that *signalled* failure has considered the
+ * work and reported on it, and running the same prompt again is unlikely to
+ * change its mind — while a process that never started, or died on a non-zero
+ * exit, plausibly hit something transient.
+ */
+export type RetryableClass = "spawn" | "exit-code" | "signal";
+
+export interface RetryPolicy {
+  /** Total attempts including the first. 1 means no retry. */
+  attempts: number;
+  /** Delay before the first retry. Doubles each subsequent attempt. */
+  backoffSeconds: number;
+  /** Defaults to `["spawn", "exit-code"]` — the transient-looking ones. */
+  retryOn?: RetryableClass[];
 }
 
 export interface PhaseDef {
@@ -14,6 +34,27 @@ export interface PhaseDef {
   cwd: string;
   steps: PhaseStep[];
   gated: boolean;
+  /**
+   * Phase ids this one waits for.
+   *
+   * Absent on **every** phase means the pipeline is linear and each phase
+   * implicitly needs the one before it — which is how every pipeline authored
+   * before Weave keeps working, unchanged, as a degenerate DAG.
+   */
+  needs?: string[];
+  /** Retry policy for this phase's steps. Absent = one attempt. */
+  retry?: RetryPolicy;
+  /**
+   * Publish this phase's payload under a name later phases can interpolate as
+   * `{{artifacts.<name>}}`. Absent = the payload is only visible to the
+   * immediately following phase, as `{{previous.payload}}`.
+   */
+  produces?: string;
+  /** Opt-in quality rubric for this phase's output. */
+  rubric?: Rubric;
+  /** On a gated phase: let the gate open itself when the verdict clears the
+   *  bar. Requires `rubric`; without one there is nothing to clear. */
+  autoApprove?: AutoApprove;
 }
 
 export interface PipelineDefinition {
@@ -72,7 +113,16 @@ export interface PhaseProgress {
   gated: boolean;
   status: PhaseStatus;
   steps: StepProgress[];
+  /** Which attempt of this phase is in flight. Bumped by a revise *and* by an
+   *  automatic retry, so the two read the same on the board. */
   attempt: number;
+  /** Phase ids this one waited for, resolved (so a linear phase shows its
+   *  implicit predecessor). Lets the board draw the graph without the def. */
+  needs?: string[];
+  /** Retries already consumed by the current attempt chain. */
+  retries?: number;
+  /** When the next automatic retry is due, while one is pending. */
+  retryAt?: string | null;
   /** Free-form: a gated phase carries whatever its agent signalled, a failed
    *  phase carries a {@link PhaseFailurePayload}. Narrow before reading. */
   payload: unknown | null;
@@ -98,6 +148,8 @@ export interface PipelineInstance {
   createdAt: string;
   updatedAt: string;
   endedAt: string | null;
+  /** Named payloads published by completed phases, for `{{artifacts.<name>}}`. */
+  artifacts?: Record<string, unknown>;
 }
 
 export type SignalType = "completed" | "needs-input" | "failed";

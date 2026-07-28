@@ -71,7 +71,7 @@ test("applyTemplate substitutes previous payload", () => {
 
 test("initInstance starts phase 0 running and asks to spawn index 0", () => {
   const r = initInstance(def(), "manual", { instanceId: "i1", token: "tok" }, NOW);
-  assert.equal(r.startPhase, 0);
+  assert.deepEqual(r.startPhases, [0]);
   assert.equal(r.instance.status, "running");
   assert.equal(r.instance.phases[0].status, "running");
   assert.equal(r.instance.phases[1].status, "pending");
@@ -80,7 +80,7 @@ test("initInstance starts phase 0 running and asks to spawn index 0", () => {
 test("needs-input pauses for approval, no spawn", () => {
   const inst = started(def());
   const r = advance(def(), inst, sig({ type: "needs-input", payload: "QUESTIONS" }), NOW);
-  assert.equal(r.startPhase, null);
+  assert.deepEqual(r.startPhases, []);
   assert.equal(r.instance.status, "awaiting-approval");
   assert.equal(r.instance.phases[0].payload, "QUESTIONS");
 });
@@ -88,7 +88,7 @@ test("needs-input pauses for approval, no spawn", () => {
 test("completed on a gated phase pauses for approval", () => {
   const inst = started(def());
   const r = advance(def(), inst, sig({ type: "completed" }), NOW);
-  assert.equal(r.startPhase, null);
+  assert.deepEqual(r.startPhases, []);
   assert.equal(r.instance.status, "awaiting-approval");
 });
 
@@ -97,7 +97,7 @@ test("completed on a non-gated phase advances and asks to spawn the next phase",
   d.phases[0].gated = false;
   const inst = started(d);
   const r = advance(d, inst, sig({ type: "completed", payload: "OUT" }), NOW);
-  assert.equal(r.startPhase, 1);
+  assert.deepEqual(r.startPhases, [1]);
   assert.equal(r.instance.currentPhaseIndex, 1);
   assert.equal(r.instance.phases[0].status, "succeeded");
   assert.equal(r.instance.phases[1].status, "running");
@@ -125,7 +125,7 @@ test("completed on the last non-gated phase succeeds the instance", () => {
     sig({ phaseId: "only" }),
     NOW,
   );
-  assert.equal(r.startPhase, null);
+  assert.deepEqual(r.startPhases, []);
   assert.equal(r.instance.status, "succeeded");
   assert.equal(r.instance.endedAt, NOW);
 });
@@ -153,7 +153,7 @@ test("a signal from an untracked run is ignored (dedup of concurrent runs)", () 
     sig({ type: "failed", payload: "boom", runId: "some-other-run" }),
     NOW,
   );
-  assert.equal(r.startPhase, null);
+  assert.deepEqual(r.startPhases, []);
   assert.equal(r.instance.status, "running");
   assert.equal(r.instance.phases[0].status, "running");
   assert.equal(r.instance.phases[0].steps[0].status, "running");
@@ -192,7 +192,7 @@ test("a stale signal for a non-current phase is a no-op (idempotent)", () => {
   const inst = started(d);
   advance(d, inst, sig({ type: "completed" }), NOW); // now on phase 1
   const r = advance(d, inst, sig({ type: "completed" }), NOW); // re-send phase 0 signal
-  assert.equal(r.startPhase, null);
+  assert.deepEqual(r.startPhases, []);
   assert.equal(r.instance.currentPhaseIndex, 1);
 });
 
@@ -200,7 +200,7 @@ test("applyApprove advances past a gate, forwarding answers as payload", () => {
   const inst = started(def());
   advance(def(), inst, sig({ type: "needs-input", payload: "Q" }), NOW); // awaiting-approval
   const r = applyApprove(def(), inst, "MY ANSWERS", NOW);
-  assert.equal(r.startPhase, 1);
+  assert.deepEqual(r.startPhases, [1]);
   assert.equal(r.instance.phases[0].payload, "MY ANSWERS");
   assert.equal(r.instance.status, "running");
 });
@@ -214,7 +214,7 @@ test("applyRevise re-runs the current phase with a bumped attempt", () => {
   const inst = started(def());
   advance(def(), inst, sig({ type: "failed" }), NOW); // failed
   const r = applyRevise(inst, NOW);
-  assert.equal(r.startPhase, 0);
+  assert.deepEqual(r.startPhases, [0]);
   assert.equal(r.instance.phases[0].attempt, 1);
   assert.equal(r.instance.phases[0].status, "running");
   assert.equal(r.instance.phases[0].steps[0].runId, null);

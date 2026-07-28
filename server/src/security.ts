@@ -81,13 +81,31 @@ function bearer(header: string | undefined): string | null {
   return m ? m[1] : null;
 }
 
+/**
+ * The one route that authenticates itself instead of using the shared token.
+ *
+ * Federation is only reachable on an exposed bind, and an exposed bind requires
+ * `ARGUS_TOKEN` — so without this exemption a paired peer would be rejected
+ * before its route ran, and pairing could only work by handing every peer the
+ * token that unlocks the whole control plane. That is a strictly worse trade:
+ * one shared bearer for every machine, granting everything, instead of a
+ * per-pair secret granting one read.
+ *
+ * The exemption is safe because the endpoint's own authentication is stronger
+ * than the one it replaces. The caller must name a pairing this machine already
+ * holds; the response is sealed with that pairing's secret; an unpaired caller
+ * gets a 401 that reveals nothing; and the route is read-only, so the Origin
+ * check it also skips protects nothing here.
+ */
+const SELF_AUTHENTICATING = new Set(["/api/federation/summary"]);
+
 /** Hono middleware enforcing the three-layer model above on every /api route. */
 export function securityMiddleware(cfg: ArgusConfig) {
   return async (c: Context, next: Next) => {
     if (!isHostAllowed(c.req.header("host"), cfg)) {
       return c.json({ error: "forbidden: host not allowed" }, 403);
     }
-    if (cfg.token) {
+    if (cfg.token && !SELF_AUTHENTICATING.has(c.req.path)) {
       const supplied =
         bearer(c.req.header("authorization")) ?? c.req.header("x-argus-token") ?? null;
       if (!safeEqual(supplied, cfg.token)) return c.json({ error: "unauthorized" }, 401);

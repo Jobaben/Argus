@@ -1,9 +1,12 @@
 import { Fragment, useMemo, useState } from "react";
+import { useMachineFacet } from "../fleet/useMachineFacet";
+import { MachinePicker, PeerBanner, PeerEmpty } from "../fleet/MachineFacet";
 import { useOverview } from "../useOverview";
 import { useInsight } from "../useInsight";
 import { useRuns } from "../useRuns";
 import { SituationStrip } from "./SituationStrip";
 import { ActivityRail } from "./ActivityRail";
+import { PhaseGraph } from "./PhaseGraph";
 import { StepDrawer, type StepSelection } from "./StepDrawer";
 import { useRunActivity } from "../useRunActivity";
 import type { LiveActivity } from "../useRunActivity";
@@ -440,6 +443,9 @@ function Row({
                   </span>
                 </div>
               )}
+              {/* The shape, when there is one to see. A linear pipeline renders
+                  nothing here — the phase cells below already are the shape. */}
+              <PhaseGraph phases={row.phases} />
               {row.phases.map((pill) => (
                 <PhaseCell
                   key={pill.id}
@@ -525,7 +531,53 @@ function BoardTotal({
   );
 }
 
+/**
+ * A peer's live pipelines.
+ *
+ * A card, not the board: the board's phase grid is built from step-level state
+ * that a summary does not carry, and drawing an empty grid would say "no steps"
+ * where the truth is "not sent". What a peer does send — which pipelines are
+ * live and which phase each is at — is exactly the question the board answers
+ * at a glance, so that is what this shows.
+ *
+ * No approve or revise buttons. A gate is opened by the machine that owns it;
+ * a button here would either fail or need a second control plane across the
+ * pairing, and the link out is the honest affordance.
+ */
+function PeerBoard({ facet }: { facet: ReturnType<typeof useMachineFacet> }) {
+  const pipelines = facet.peer?.summary?.facets.pipelines ?? [];
+  if (pipelines.length === 0) return <PeerEmpty what="live pipelines" />;
+  return (
+    <ul className="flex flex-col gap-2">
+      {pipelines.map((p) => {
+        const gated = p.status === "awaiting-approval";
+        return (
+          <li
+            key={p.id}
+            className={`flex flex-wrap items-baseline gap-x-3 rounded-tile border bg-surface px-3 py-2 ${
+              gated ? "border-await/40" : "border-line"
+            }`}
+          >
+            <span className="min-w-0 flex-1 truncate text-sm text-ink">{p.name}</span>
+            {p.phase && (
+              <span className="shrink-0 font-mono text-[11px] text-ink-faint">at {p.phase}</span>
+            )}
+            <span
+              className={`shrink-0 font-mono text-[10px] uppercase tracking-[0.1em] ${
+                gated ? "text-await" : "text-run"
+              }`}
+            >
+              {gated ? "needs approval" : p.status}
+            </span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 export default function CommandCenter() {
+  const facet = useMachineFacet();
   const { overview, loading, error, approve, revise } = useOverview();
   const { totals, reset } = useTotals();
   const { situation, loading: situationLoading } = useInsight();
@@ -557,13 +609,17 @@ export default function CommandCenter() {
       <div aria-live="polite" role="status" className="sr-only">
         {announcement}
       </div>
-      <SituationStrip situation={situation} loading={situationLoading} />
+      <MachinePicker facet={facet} label="Show the board from" />
+      <PeerBanner facet={facet} />
+      {!facet.peer && <SituationStrip situation={situation} loading={situationLoading} />}
       {error && (
         <div className="mb-6 rounded-tile border border-fail/30 bg-fail/10 px-4 py-3 text-sm text-fail">
           Couldn't reach the Argus server: {error}
         </div>
       )}
-      {loading ? (
+      {facet.peer ? (
+        <PeerBoard facet={facet} />
+      ) : loading ? (
         <Loading label="the board">
           <div className="flex flex-col gap-3">
             <SkeletonBoardCard phases={4} />

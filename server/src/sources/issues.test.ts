@@ -14,8 +14,11 @@ import {
   setTriage,
   IssueValidationError,
   OCCURRENCE_CAP,
+  errorTokens,
+  jaccard,
 } from "./issues.js";
 import type { Run } from "./scheduleTypes.js";
+import type { FailureClass } from "@argus/contracts";
 
 beforeEach(() => {
   const home = mkdtempSync(path.join(tmpdir(), "argus-issues-"));
@@ -174,4 +177,102 @@ test("setTriage rejects malformed fingerprints", async () => {
     () => setTriage("../evil", "resolved", "x", new Date()),
     IssueValidationError,
   );
+});
+
+// ── Similarity clustering ───────────────────────────────────────────────────
+
+test("errorTokens drops noise words and short fragments", () => {
+  const tokens = errorTokens(normalizeError("Error: npm ci failed with ETIMEDOUT at 42s"));
+  assert.equal(tokens.has("npm"), true);
+  assert.equal(tokens.has("etimedout"), true);
+  assert.equal(tokens.has("error"), false, "'error' is in every message and distinguishes nothing");
+  assert.equal(tokens.has("failed"), false);
+  assert.equal(tokens.has("ci"), false, "two characters is not a signal");
+});
+
+test("jaccard treats an empty token set as dissimilar, not as a wildcard", () => {
+  assert.equal(jaccard(new Set(), new Set(["a"])), 0);
+  assert.equal(jaccard(new Set(["a", "b"]), new Set(["a", "b"])), 1);
+  assert.equal(jaccard(new Set(["a", "b"]), new Set(["b", "c"])), 1 / 3);
+});
+
+test("with no autopsies, clustering reproduces plain string grouping exactly", () => {
+  const runs = [
+    failedRun({ error: "npm ci failed: ETIMEDOUT contacting registry" }),
+    failedRun({ error: "eslint reported 4 problems in src/app.ts" }),
+  ];
+  const issues = buildIssues(runs, []);
+  assert.equal(issues.length, 2, "unrelated errors stay unrelated");
+  for (const i of issues) {
+    assert.equal(i.members.length, 1);
+    assert.equal(i.failureClass, null);
+  }
+});
+
+test("two differently-worded errors with the same failure class merge into one issue", () => {
+  const a = failedRun({ id: "a", error: "registry request timed out contacting mirror" });
+  const b = failedRun({ id: "b", error: "registry request timed out contacting upstream proxy" });
+  // Token overlap here is 0.625: enough to merge when a shared class backs it,
+  // deliberately not enough on words alone.
+  const classes = new Map<string, FailureClass>([
+    ["a", "timeout"],
+    ["b", "timeout"],
+  ]);
+
+  const grouped = buildIssues([a, b], []);
+  assert.equal(grouped.length, 2, "string grouping alone sees two problems");
+
+  const clustered = buildIssues([a, b], [], { classes });
+  assert.equal(clustered.length, 1, "the class plus shared vocabulary merges them");
+  assert.equal(clustered[0].count, 2);
+  assert.equal(clustered[0].members.length, 2);
+  assert.equal(clustered[0].failureClass, "timeout");
+});
+
+test("regression: two different known classes never merge, however alike the words", () => {
+  // Near-identical phrasing, opposite causes. Word overlap alone would merge
+  // these; the class is the stronger signal and must veto.
+  const a = failedRun({ id: "a", error: "request rejected by upstream service quota" });
+  const b = failedRun({ id: "b", error: "request rejected by upstream service policy" });
+  const classes = new Map<string, FailureClass>([
+    ["a", "rate-limit"],
+    ["b", "permission-denied"],
+  ]);
+  const issues = buildIssues([a, b], [], { classes });
+  assert.equal(issues.length, 2);
+});
+
+test("a clustered issue keeps a stable id as members come and go", () => {
+  const a = failedRun({ id: "a", error: "registry request timed out contacting mirror" });
+  const b = failedRun({ id: "b", error: "registry request timed out contacting upstream proxy" });
+  const classes = new Map<string, FailureClass>([
+    ["a", "timeout"],
+    ["b", "timeout"],
+  ]);
+  const both = buildIssues([a, b], [], { classes });
+  // The representative is the lexicographically smallest member, so it does not
+  // move when the other member arrives, ages out, or becomes the larger group.
+  assert.equal(both[0].fingerprint, [...both[0].members].sort()[0]);
+  const reversed = buildIssues([b, a], [], { classes });
+  assert.equal(reversed[0].fingerprint, both[0].fingerprint, "order of input does not matter");
+});
+
+test("issueOccurrences lists every member of a cluster, not just the representative", () => {
+  const a = failedRun({ id: "a", error: "registry request timed out contacting mirror" });
+  const b = failedRun({ id: "b", error: "registry request timed out contacting upstream proxy" });
+  const classes = new Map<string, FailureClass>([
+    ["a", "timeout"],
+    ["b", "timeout"],
+  ]);
+  const issue = buildIssues([a, b], [], { classes })[0];
+  assert.equal(issueOccurrences([a, b], issue.members).length, 2);
+  // The single-fingerprint form still works for callers that have only one.
+  assert.equal(issueOccurrences([a, b], issue.fingerprint).length, 1);
+});
+
+test("a class shared by only one side is not enough on its own", () => {
+  const a = failedRun({ id: "a", error: "disk quota exceeded writing artifact bundle" });
+  const b = failedRun({ id: "b", error: "postgres connection refused on startup" });
+  const classes = new Map<string, FailureClass>([["a", "environment"]]);
+  assert.equal(buildIssues([a, b], [], { classes }).length, 2);
 });

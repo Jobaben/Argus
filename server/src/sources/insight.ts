@@ -39,6 +39,9 @@ export interface SituationInput {
   issues: Issue[];
   agents: Agent[];
   budget: BudgetStatus;
+  /** Watchtower anomalies in the report window. Optional so pre-Watchtower
+   *  callers (and their tests) keep compiling; absent reads as zero. */
+  anomalies?: { severity: string }[];
 }
 
 /** A run the engine believes is executing right now. */
@@ -72,6 +75,7 @@ function countStatuses(input: SituationInput): SituationCounts {
     monitorsFailing,
     openIssues: input.issues.filter((i) => i.state === "open").length,
     liveAgents: input.agents.filter((a) => a.live).length,
+    anomalies: input.anomalies?.length ?? 0,
   };
 }
 

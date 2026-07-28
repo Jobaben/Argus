@@ -1,5 +1,6 @@
 /** Failed runs grouped by normalized error fingerprint, plus triage state. */
 
+import type { FailureClass } from "./autopsy.js";
 import type { RunOutcome, RunStatus } from "./schedules.js";
 
 export type IssueState = "open" | "resolved" | "ignored";
@@ -15,6 +16,16 @@ export interface Issue {
   schedules: string[];
   state: IssueState;
   lastRunId: string;
+  /**
+   * Every exact-string fingerprint merged into this issue, including its own.
+   *
+   * Length 1 means plain string grouping — the original behaviour, and what you
+   * get whenever similarity clustering finds nothing to merge. Longer means two
+   * differently-worded errors were judged to be the same problem.
+   */
+  members: string[];
+  /** Autopsy's failure class, when the members agree on one. */
+  failureClass: FailureClass | null;
 }
 
 export interface IssueOccurrence {

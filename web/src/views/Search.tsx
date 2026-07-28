@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useSearch, type SearchResult } from "../useSearch";
-import { AlertStrip, EmptyState, Loading, Page, SkeletonRows } from "../ds";
+import { useVaultSearch } from "../useVault";
+import { AlertStrip, EmptyState, Loading, Page, SkeletonRows, TimeAgo } from "../ds";
+import type { VaultSearchHit } from "../types";
 
 const TYPE_STYLE: Record<string, string> = {
   user: "bg-queue/12 text-queue ring-queue/30",
@@ -54,6 +56,81 @@ function ResultRow({ result, query }: { result: SearchResult; query: string }) {
   );
 }
 
+/**
+ * The Vault's half of the search page.
+ *
+ * Two indexes answer two different questions, and conflating them would make
+ * both worse: the transcript scan reads what was *said*, the Vault reads what
+ * Argus *did* — and, unlike the scan, it still holds the runs the JSON files
+ * have pruned. They are shown as separate sections for that reason.
+ */
+function VaultHitRow({ hit }: { hit: VaultSearchHit }) {
+  return (
+    <a
+      href={hit.href}
+      className="block rounded-xl border border-line bg-surface p-3 transition hover:border-eye/40"
+    >
+      <div className="flex flex-wrap items-baseline gap-x-2">
+        <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-faint">
+          {hit.kind}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-sm text-ink">{hit.title}</span>
+        {hit.related && (
+          <span
+            className="rounded-full bg-eye/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.1em] text-eye"
+            title="Matched a term that co-occurs with your query in this machine's history, not the query itself"
+          >
+            related
+          </span>
+        )}
+        <span className="font-mono text-[10px] text-ink-faint">
+          <TimeAgo iso={hit.at} />
+        </span>
+      </div>
+      <p className="mt-1 line-clamp-2 text-xs text-ink-dim">{hit.snippet}</p>
+    </a>
+  );
+}
+
+function VaultResults({ query }: { query: string }) {
+  const { response, loading, error } = useVaultSearch(query);
+  if (!query || query.length < 2) return null;
+
+  return (
+    <section className="mb-8">
+      <h2 className="mb-2 font-mono text-[11px] uppercase tracking-[0.16em] text-ink-faint">
+        Run history · indexed
+      </h2>
+      {error ? (
+        <p className="text-xs text-fail">Couldn&apos;t reach the Vault: {error}</p>
+      ) : !response.available && !loading ? (
+        <p className="text-xs text-ink-faint">
+          {response.detail || "The Vault is unavailable, so only transcripts were searched."}
+        </p>
+      ) : loading && response.hits.length === 0 ? (
+        <SkeletonRows count={2} />
+      ) : response.hits.length === 0 ? (
+        <p className="text-xs text-ink-faint">{response.detail}</p>
+      ) : (
+        <>
+          {response.relatedTerms.length > 0 && (
+            <p className="mb-2 text-xs text-ink-faint">
+              Also searched <span className="text-ink-dim">{response.relatedTerms.join(", ")}</span>{" "}
+              — terms that co-occur with your query in this machine&apos;s own history, not a
+              general language model.
+            </p>
+          )}
+          <div className="flex flex-col gap-2">
+            {response.hits.map((h) => (
+              <VaultHitRow key={`${h.kind}:${h.ref}`} hit={h} />
+            ))}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 export default function Search() {
   const [input, setInput] = useState("");
   const { results, loading, error, truncated } = useSearch(input);
@@ -62,7 +139,8 @@ export default function Search() {
   return (
     <Page title="Search">
       <p className="mb-6 text-sm text-ink-faint">
-        Plain-text search across every Claude Code transcript
+        Indexed search over Argus&apos;s own run history, and a plain-text scan of every Claude Code
+        transcript
       </p>
 
       <div className="mb-6">
@@ -85,13 +163,16 @@ export default function Search() {
         </div>
       )}
 
+      <VaultResults query={trimmed} />
+
       {!trimmed ? (
         <EmptyState>
           <p className="text-sm text-ink-dim">Type to search across transcripts.</p>
           <p className="mx-auto mt-2 max-w-md text-xs">
-            Plain-text, case-insensitive, over the message text of every session Claude Code has
-            written — yours and Argus&apos;s own scheduled runs. Newest transcripts are read first,
-            so a recent phrase comes back immediately.
+            Two indexes. The Vault answers from every run and alert Argus has recorded, including
+            the ones the JSON files have since pruned. The transcript scan is plain-text and
+            case-insensitive over the message text of every session Claude Code has written; newest
+            transcripts are read first, so a recent phrase comes back immediately.
           </p>
         </EmptyState>
       ) : loading ? (
