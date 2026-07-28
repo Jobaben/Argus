@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useSchedules } from "../useSchedules";
 import { useRuns } from "../useRuns";
-import type { Run, ScheduleInput, ScheduleWithNext } from "../types";
+import type { Run, ScheduleInput, ScheduleWithNext, VerdictTrend } from "../types";
 import {
   AlertStrip,
   EmptyState,
@@ -17,6 +17,8 @@ import {
   useClock,
   useTicker,
 } from "../ds";
+import { useVerdictTrends } from "../useVerdict";
+import { VerdictSparkline } from "./VerdictPanel";
 import { CronPanel } from "./Cron";
 import { RunRow } from "./RunRow";
 import {
@@ -311,9 +313,41 @@ function typicalDuration(runs: Run[]): number | null {
   return durations[Math.floor(durations.length / 2)];
 }
 
+/**
+ * A schedule's quality trend, on the card.
+ *
+ * Only when the schedule declares a rubric and something has been scored:
+ * Verdict is opt-in per definition, and a sparkline of nothing on every card
+ * would advertise the feature at the cost of the page.
+ */
+function CardVerdict({ trend }: { trend: VerdictTrend | undefined }) {
+  if (!trend || trend.points.length === 0 || trend.latest == null) return null;
+  const worse = trend.delta != null && trend.delta < 0;
+  return (
+    <span
+      className="flex shrink-0 items-center gap-1.5"
+      title={`Verdict ${trend.latest.toFixed(1)}${
+        trend.delta == null
+          ? ""
+          : `, ${trend.delta > 0 ? "+" : ""}${trend.delta.toFixed(1)} on its median`
+      }${trend.regressions > 0 ? ` · ${trend.regressions} below the bar` : ""}`}
+    >
+      <VerdictSparkline points={trend.points} minScore={trend.minScore} />
+      <span
+        className={`font-mono text-[11px] font-bold ${
+          trend.regressions > 0 ? "text-fail" : worse ? "text-await" : "text-ok"
+        }`}
+      >
+        {trend.latest.toFixed(1)}
+      </span>
+    </span>
+  );
+}
+
 function ScheduleCard({
   schedule,
   health,
+  trend,
   onEdit,
   update,
   remove,
@@ -322,6 +356,7 @@ function ScheduleCard({
 }: {
   schedule: ScheduleWithNext;
   health: ScheduleHealth;
+  trend: VerdictTrend | undefined;
   onEdit: () => void;
   update: (id: string, patch: Partial<ScheduleInput>) => Promise<unknown>;
   remove: (id: string) => Promise<unknown>;
@@ -353,6 +388,7 @@ function ScheduleCard({
           <div className="flex min-w-0 items-center gap-2">
             <h3 className="truncate text-base font-semibold text-ink">{schedule.name}</h3>
             <StateBadge state={health.state} />
+            <CardVerdict trend={trend} />
             {running.length > 0 && (
               <span className="relative flex h-2 w-2 shrink-0" title="A run is in flight">
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-run opacity-75" />
@@ -499,6 +535,13 @@ export default function Schedules() {
   // requests and kept thirteen conditional polls alive — and still could not
   // answer an aggregate question, because no one held all the runs at once.
   const { runs } = useRuns();
+  // One trends read for the whole page, like the run list above it: a sparkline
+  // per card must not become a fetch per card.
+  const { report: verdicts } = useVerdictTrends();
+  const trendFor = useMemo(
+    () => new Map(verdicts.trends.map((t) => [t.key, t])),
+    [verdicts.trends],
+  );
   const [mode, setMode] = useState<
     { kind: "none" } | { kind: "new" } | { kind: "edit"; id: string }
   >({ kind: "none" });
@@ -645,6 +688,7 @@ export default function Schedules() {
                   key={s.id}
                   schedule={s}
                   health={h}
+                  trend={trendFor.get(`schedule:${s.id}`)}
                   onEdit={() => setMode({ kind: "edit", id: s.id })}
                   update={update}
                   remove={remove}

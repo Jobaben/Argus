@@ -91,7 +91,10 @@ describe("VaultPanels", () => {
   it("teaches what the long view needs when the Vault is unavailable", () => {
     render(<VaultPanels />);
     expect(screen.getByText(/needs the Vault, and it is unavailable/)).toBeInTheDocument();
-    expect(screen.getByText(/node:sqlite/)).toBeInTheDocument();
+    // Twice by design: once drawn, once in the live region. That duplication
+    // *is* the a11y parity, so the assertion names it rather than working
+    // around it with a narrower query.
+    expect(screen.getAllByText(/node:sqlite/)).toHaveLength(2);
   });
 
   it("an available but empty Vault says it fills in, not that it is broken", () => {
@@ -148,7 +151,22 @@ describe("VaultPanels", () => {
   it("an unavailable Vault under a populated table still explains itself", () => {
     state.report = QUARTERS;
     render(<VaultPanels />);
-    expect(screen.getByText(/Vault unavailable/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Vault unavailable/)).toHaveLength(2);
     expect(screen.getByText(/newest 50 runs per schedule/)).toBeInTheDocument();
+  });
+});
+
+describe("VaultPanels — live region", () => {
+  it("announces what the Vault holds, not only draws it", () => {
+    state.status = online();
+    state.report = QUARTERS;
+    render(<VaultPanels />);
+    // A store that quietly stopped ingesting looks exactly like a quiet month.
+    expect(screen.getByRole("status")).toHaveTextContent(/holding 1,?240 runs/);
+  });
+
+  it("announces unavailability with its reason", () => {
+    render(<VaultPanels />);
+    expect(screen.getByRole("status")).toHaveTextContent(/Vault unavailable: .*node:sqlite/);
   });
 });

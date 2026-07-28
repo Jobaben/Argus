@@ -107,7 +107,9 @@ describe("LedgerPanels", () => {
 
   it("shows the forecast note when there is not enough history, without a fake number", () => {
     render(<LedgerPanels />);
-    expect(screen.getByText(/not enough to project a month yet/)).toBeInTheDocument();
+    // Twice by design: once drawn, once in the live region — that duplication
+    // is the a11y parity, so the assertion names it.
+    expect(screen.getAllByText(/not enough to project a month yet/)).toHaveLength(2);
     expect(screen.getByText("—")).toBeInTheDocument();
   });
 
@@ -187,9 +189,11 @@ describe("LedgerPanels", () => {
     };
     render(<LedgerPanels />);
     // The panel only opens once a slice is targeted, so open it first.
-    expect(screen.queryByText(/never from a price list/)).not.toBeInTheDocument();
+    // The live region carries the reason before the panel is even opened —
+    // that is the point of it — so only the *panel* is absent up front.
+    expect(screen.queryByText(/never from a price list/, { ignore: ".sr-only" })).toBeNull();
     await user.click(screen.getAllByRole("button", { name: /what if/i })[0]);
-    expect(screen.getByText(/never from a price list/)).toBeInTheDocument();
+    expect(screen.getByText(/never from a price list/, { ignore: ".sr-only" })).toBeInTheDocument();
     // No headline, no per-run arrow, no "$0.00 saved" — an unknown is shown as unknown.
     expect(screen.queryByText(/per month/)).not.toBeInTheDocument();
   });

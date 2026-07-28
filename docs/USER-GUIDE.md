@@ -1160,6 +1160,13 @@ one behaves exactly as before.
   you nothing, "coverage 8, actionable 4" tells you which half was missed.
 - One sentence of summary, and what the scoring pass cost.
 
+**What you see on the schedule card** ([Scheduler](#5-scheduler)): a sparkline
+and the latest score, beside the health badge — so quality sits next to
+liveness, where the decision about a schedule is actually made. It appears only
+once the schedule declares a rubric and something has been scored; Verdict is
+opt-in per definition, and an empty sparkline on every card would advertise the
+feature at the cost of the page.
+
 **What you see on Watchtower** (**Quality trends**): a bar sparkline per unit of
 work, the latest score, and its **delta against the median of everything
 before it** — one noisy judgement should not read as a collapse, and one good

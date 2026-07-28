@@ -151,6 +151,13 @@ export function LedgerPanels() {
 
   return (
     <>
+      {/* The forecast moves on a poll and the simulator answers asynchronously;
+          both need to reach a reader who is not watching the pixels. */}
+      <div aria-live="polite" role="status" className="sr-only">
+        {report.forecast.note}
+        {simulation?.ok ? ` ${simulation.summary}` : simulation?.unavailable}
+      </div>
+
       <Section title="Forecast">
         <ForecastPanel forecast={report.forecast} />
       </Section>

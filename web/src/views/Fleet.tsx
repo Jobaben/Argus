@@ -128,8 +128,19 @@ export default function Fleet() {
   const t = fleet.totals;
   const partial = t.reporting < t.machines;
 
+  // Screen-reader parity with the board: a page whose numbers change under a
+  // poll has to say so, or the change is visible only to people watching it.
+  const announcement = fleet.soloMode
+    ? ""
+    : `${t.reporting} of ${t.machines} machines reporting` +
+      (t.monitorsDown > 0 ? `, ${t.monitorsDown} monitors down` : "") +
+      (t.gatedInstances > 0 ? `, ${t.gatedInstances} awaiting approval` : "");
+
   return (
     <Page title="Fleet">
+      <div aria-live="polite" role="status" className="sr-only">
+        {announcement}
+      </div>
       <p className="mb-6 max-w-prose text-sm text-ink-faint">
         Every machine running Argus, in one lens. Summaries are pulled from each peer, encrypted and
         signed end-to-end with a secret the two of you share — no server, no account, nothing to

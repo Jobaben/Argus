@@ -14,6 +14,18 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Verdict scores now trend on the schedule cards**, beside the health badge,
+  so quality sits next to liveness where the decision about a schedule is made.
+  Only for schedules that declare a rubric and have been scored — an empty
+  sparkline on every card would advertise the feature at the cost of the page.
+  One trends read for the whole list, not one per card.
+
+- **Live-region parity on Fleet, the Ledger panels and the Vault panels.** All
+  three carry numbers that change under a poll, and a change only visible to
+  someone watching the pixels is not a change that was reported. The Vault's is
+  the load-bearing one: a store that quietly stopped ingesting looks exactly
+  like a quiet month.
+
 - **Constellation** (`#/fleet`): N machines, one lens. Argus watches one
   `~/.claude`, so anyone running it on a laptop and a build box runs it twice
   and reads it twice — and the questions that span both, what is failing

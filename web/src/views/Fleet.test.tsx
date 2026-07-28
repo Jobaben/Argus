@@ -280,3 +280,23 @@ describe("Fleet", () => {
     expect(screen.getByText(/Reading the fleet…/)).toBeInTheDocument();
   });
 });
+
+describe("Fleet — live region", () => {
+  it("announces how much of the fleet is reporting", () => {
+    state.fleet = fleetOf(
+      [
+        selfMachine(),
+        { peer: peer(), summary: summary({ machineId: "m2", monitorsDown: 2 }), isSelf: false },
+      ],
+      2,
+    );
+    render(<Fleet />);
+    expect(screen.getByRole("status")).toHaveTextContent("2 of 2 machines reporting");
+  });
+
+  it("regression: solo mode announces nothing, like it renders nothing", () => {
+    render(<Fleet />);
+    // Parity cuts both ways: a page with no fleet must not narrate one.
+    expect(screen.getByRole("status")).toHaveTextContent("");
+  });
+});

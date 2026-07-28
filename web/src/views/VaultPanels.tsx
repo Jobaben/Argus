@@ -85,6 +85,13 @@ export function VaultPanels() {
 
   return (
     <Section title="By quarter · the long view">
+      {/* A store that quietly stopped ingesting is the failure this feature
+          must not hide, so its state is announced and not only drawn. */}
+      <div aria-live="polite" role="status" className="sr-only">
+        {status.available
+          ? `Vault holding ${status.rows.runs} runs, ${report.detail}`
+          : `Vault unavailable: ${status.detail}`}
+      </div>
       {loading && report.quarters.length === 0 ? (
         <EmptyState>Reading the Vault…</EmptyState>
       ) : report.quarters.length === 0 ? (
