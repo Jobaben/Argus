@@ -23,6 +23,63 @@
  * refuses an exposed bind without a token.
  */
 
+/** A peer's pipeline instance, as much of it as the board needs. */
+export interface PeerPipeline {
+  id: string;
+  name: string;
+  status: string;
+  /** The phase it is at, when it is at one. */
+  phase: string | null;
+}
+
+/** A peer's open issue, as much of it as the list needs. */
+export interface PeerIssue {
+  fingerprint: string;
+  title: string;
+  count: number;
+  lastSeen: string;
+}
+
+/** A peer's recent run, as much of it as the timeline needs. */
+export interface PeerRun {
+  id: string;
+  label: string;
+  status: string;
+  at: string;
+  durationMs: number | null;
+}
+
+/** A peer's budget position. */
+export interface PeerBudget {
+  state: string;
+  dailyLimitUsd: number | null;
+  monthlyLimitUsd: number | null;
+}
+
+/**
+ * The detail the fleet-wide views need, bounded on every axis.
+ *
+ * A deliberate revision of an earlier, stricter choice. The first version of
+ * this feature sent counts only, on the grounds that a summary crosses a
+ * network — but counts cannot make Command Center, Chronicle, Issues and Budget
+ * fleet-wide, which is the point of federating them, and a fleet view that can
+ * only say "seven issues somewhere" is a worse product than one that names
+ * them.
+ *
+ * What makes it safe is not the absence of detail, it is who receives it: a
+ * summary only ever goes to a machine you explicitly paired with, sealed with a
+ * secret you carried between them by hand. Within that, the bounds still hold —
+ * every list is capped, every string clamped, and prompts, working directories
+ * and session ids never travel at all. Opening a run means opening that
+ * machine's own Argus.
+ */
+export interface MachineFacets {
+  pipelines: PeerPipeline[];
+  issues: PeerIssue[];
+  recentRuns: PeerRun[];
+  budget: PeerBudget;
+}
+
 /** What a summary says about one machine. Small on purpose. */
 export interface MachineSummary {
   /** Stable, locally generated, and not derived from anything identifying. */
@@ -43,6 +100,8 @@ export interface MachineSummary {
   spendMonthUsd: number;
   /** Highest-severity open incident, when there is one. */
   worstIncident: string | null;
+  /** Bounded detail for the fleet-wide views. */
+  facets: MachineFacets;
 }
 
 export type PeerStatus =

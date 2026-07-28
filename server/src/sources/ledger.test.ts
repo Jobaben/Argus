@@ -407,3 +407,61 @@ test("the report windows runs and carries every dimension", () => {
   );
   assert.equal(report.enforcement.action, null);
 });
+
+test("the agent dimension breaks a pipeline into its phases", () => {
+  const runs = [
+    run({ id: "a", scheduleId: "pipeline:p1", scheduleName: "Release train · plan", costUsd: 1 }),
+    run({ id: "b", scheduleId: "pipeline:p1", scheduleName: "Release train · review", costUsd: 6 }),
+    run({ id: "c", scheduleId: "pipeline:p1", scheduleName: "Release train · review", costUsd: 4 }),
+  ].map((r, i) => ({ ...r, phaseId: ["plan", "review", "review"][i] }));
+
+  // The pipeline dimension says "Release train costs $11".
+  const byPipeline = attribute(runs, "pipeline");
+  assert.equal(byPipeline.slices.length, 1);
+  assert.equal(byPipeline.slices[0].usd, 11);
+
+  // The agent dimension says *which part* of it does — usually the question.
+  const byAgent = attribute(runs, "agent");
+  assert.deepEqual(
+    byAgent.slices.map((s) => [s.label, s.usd]),
+    [
+      ["Release train · review", 10],
+      ["Release train · plan", 1],
+    ],
+  );
+});
+
+test("a schedule run is its own agent, and a one-off is named", () => {
+  const byAgent = attribute(
+    [
+      run({ id: "a", scheduleId: "s1", scheduleName: "Nightly triage", costUsd: 2 }),
+      run({ id: "b", scheduleId: "oneoff", scheduleName: "whatever", costUsd: 1 }),
+    ],
+    "agent",
+  );
+  assert.deepEqual(
+    byAgent.slices.map((s) => s.label),
+    ["Nightly triage", "One-off runs"],
+  );
+  // No run is unattributable in this dimension: everything had a worker.
+  assert.equal(byAgent.unattributedRuns, 0);
+});
+
+test("regression: two phases with the same name in different pipelines stay apart", () => {
+  const byAgent = attribute(
+    [
+      {
+        ...run({ id: "a", scheduleId: "pipeline:p1", scheduleName: "Alpha · build", costUsd: 1 }),
+        phaseId: "build",
+      },
+      {
+        ...run({ id: "b", scheduleId: "pipeline:p2", scheduleName: "Beta · build", costUsd: 2 }),
+        phaseId: "build",
+      },
+    ],
+    "agent",
+  );
+  // Keying on the phase id alone would merge every "build" in the install into
+  // one row and quietly attribute one pipeline's cost to another.
+  assert.equal(byAgent.slices.length, 2);
+});

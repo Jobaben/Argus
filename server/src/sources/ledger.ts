@@ -91,6 +91,16 @@ export function sliceOf(run: Run, dimension: CostDimension): { key: string; labe
             label: run.scheduleName.split(" · ")[0],
           }
         : null;
+    case "agent":
+      // The worker that actually ran. A pipeline phase is its own process and
+      // its own cost; rolling it into the pipeline hides which part is
+      // expensive, which is usually the question being asked.
+      return run.phaseId
+        ? { key: `${run.scheduleId}/${run.phaseId}`, label: run.scheduleName }
+        : {
+            key: `agent:${run.scheduleId}`,
+            label: run.scheduleId === ONEOFF ? "One-off runs" : run.scheduleName,
+          };
     case "model":
       // A run with no pinned model used the CLI default, which is a real and
       // reportable answer — just not a model *name* Argus can be sure of.
@@ -510,6 +520,7 @@ export function buildLedger(
     generatedAt: now.toISOString(),
     windowDays,
     byProject: attribute(window, "project"),
+    byAgent: attribute(window, "agent"),
     bySchedule: attribute(window, "schedule"),
     byPipeline: attribute(window, "pipeline"),
     byModel: attribute(window, "model"),

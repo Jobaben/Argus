@@ -17,6 +17,7 @@ import type { Attribution, BudgetAction, CostDimension, Forecast } from "../type
 const DIMENSIONS: { key: CostDimension; label: string; pick: (r: LedgerData) => Attribution }[] = [
   { key: "schedule", label: "Schedule", pick: (r) => r.bySchedule },
   { key: "pipeline", label: "Pipeline", pick: (r) => r.byPipeline },
+  { key: "agent", label: "Agent", pick: (r) => r.byAgent },
   { key: "project", label: "Project", pick: (r) => r.byProject },
   { key: "model", label: "Model", pick: (r) => r.byModel },
 ];

@@ -526,8 +526,11 @@ ETag'd. Recomputed on read from the last **30 days** of runs.
 }
 ```
 
-**Attribution.** Four dimensions, each computed over the same window so their
-totals agree:
+**Attribution.** Five dimensions, each computed over the same window so their
+totals agree. `agent` is the finest grain that still carries real cost data —
+the worker that ran, which for a pipeline is one _phase_. It is not a duplicate
+of `pipeline`: that rolls a pipeline into one row, and this breaks it apart, so
+"the release train costs $40" becomes "the review phase is $34 of it".
 
 | Dimension  | Slice key                               | Runs it cannot place                  |
 | ---------- | --------------------------------------- | ------------------------------------- |
@@ -557,7 +560,7 @@ the note adds _treat as indicative_.
 { "dimension": "schedule", "key": "nightly-triage", "toModel": "haiku" }
 ```
 
-`dimension` must be one of the four; `key` must be non-empty; `toModel` must
+`dimension` must be one of the five; `key` must be non-empty; `toModel` must
 match `/^[A-Za-z0-9._ ()-]{1,80}$/`. Anything else is a `400` with an `error`.
 A well-formed request that cannot be answered is a **`200` with `ok: false`** —
 "I don't know" is a result, not a failure:
@@ -670,7 +673,28 @@ Open, like every other read. Self first, then peers by label.
         "failuresToday": 1,
         "spendTodayUsd": 1.25,
         "spendMonthUsd": 30.4,
-        "worstIncident": "critical: Nightly triage is down"
+        "worstIncident": "critical: Nightly triage is down",
+        "facets": {
+          "pipelines": [
+            {
+              "id": "i1",
+              "name": "Release train",
+              "status": "awaiting-approval",
+              "phase": "review"
+            }
+          ],
+          "issues": [{ "fingerprint": "…", "title": "ECONNREFUSED", "count": 9, "lastSeen": "…" }],
+          "recentRuns": [
+            {
+              "id": "r1",
+              "label": "Nightly triage",
+              "status": "failed",
+              "at": "…",
+              "durationMs": 60000
+            }
+          ],
+          "budget": { "state": "ok", "dailyLimitUsd": 10, "monthlyLimitUsd": null }
+        }
       }
     }
   ],
@@ -691,6 +715,17 @@ quiet keeps its last summary, marked stale, rather than silently shrinking the
 denominator.
 
 `soloMode` is true when no peers are configured.
+
+**`facets`** is the bounded detail the fleet-wide views read — at most **12**
+pipelines, **12** issues (loudest first), **40** recent runs, plus the budget's
+limits, with every string clamped. The caps are re-applied to what a peer sends,
+not only to what this machine sends: a peer is a machine you trust to be yours,
+not one you trust to be correct, and a bug or an older build on the other side
+must not be able to make this one render four thousand rows. A summary with no
+`facets` at all parses to empty ones, so an older peer degrades to "nothing to
+show" rather than throwing.
+
+Three fields never travel: **prompts, working directories and session ids**.
 
 ### `GET /api/federation/summary`
 

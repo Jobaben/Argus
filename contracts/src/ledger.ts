@@ -14,7 +14,17 @@
  */
 
 /** How spend is grouped. */
-export type CostDimension = "project" | "schedule" | "pipeline" | "model";
+/**
+ * The facets spend can be grouped by.
+ *
+ * `agent` is the finest grain that still has real cost data: the individual
+ * worker that executed a run. For a pipeline that is one *phase* — each phase
+ * is its own `claude -p` process — and for everything else it is the schedule
+ * or one-off itself. It is not a duplicate of `pipeline`: that dimension rolls
+ * a whole pipeline into one row, and this one breaks it apart, which is how
+ * "the release train costs $40" becomes "the review phase costs $34 of it".
+ */
+export type CostDimension = "project" | "agent" | "schedule" | "pipeline" | "model";
 
 export interface CostSlice {
   /** Stable identity within the dimension. */
@@ -120,6 +130,7 @@ export interface LedgerReport {
   /** The window the attribution covers, in days. */
   windowDays: number;
   byProject: Attribution;
+  byAgent: Attribution;
   bySchedule: Attribution;
   byPipeline: Attribution;
   byModel: Attribution;

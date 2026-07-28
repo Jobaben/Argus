@@ -47,6 +47,12 @@ function summary(over: Partial<MachineSummary> = {}): MachineSummary {
     spendTodayUsd: 1.25,
     spendMonthUsd: 30,
     worstIncident: null,
+    facets: {
+      pipelines: [],
+      issues: [],
+      recentRuns: [],
+      budget: { state: "ok", dailyLimitUsd: null, monthlyLimitUsd: null },
+    },
     ...over,
   };
 }

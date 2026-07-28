@@ -18,7 +18,7 @@ import {
   PeerValidationError,
   type PeerHealth,
 } from "./peers.js";
-import { buildSummary, parseSummary } from "./summary.js";
+import { buildFacets, buildSummary, parseFacets, parseSummary } from "./summary.js";
 import { buildFleet, fleetTotals } from "./fleet.js";
 import { createPoller } from "./poll.js";
 import { newSecret, pairingId, seal } from "./envelope.js";
@@ -221,6 +221,132 @@ test("regression: a summary off the wire is validated, not trusted", () => {
   assert.equal(hostile.worstIncident!.length, 140);
 });
 
+// ── Facets: the detail the fleet-wide views read ────────────────────────────
+
+test("facets carry labels for each fleet-wide view, and no payloads", () => {
+  const f = buildFacets(
+    summaryInput({
+      instances: [
+        {
+          id: "i1",
+          pipelineName: "Release train",
+          status: "awaiting-approval",
+          phases: [{ id: "review", status: "awaiting-approval" }],
+        },
+        { id: "i2", pipelineName: "Done one", status: "succeeded", phases: [] },
+      ],
+      issues: [
+        { state: "open", fingerprint: "fp1", title: "Loud", count: 9, lastSeen: NOW.toISOString() },
+        {
+          state: "open",
+          fingerprint: "fp2",
+          title: "Quiet",
+          count: 1,
+          lastSeen: NOW.toISOString(),
+        },
+        {
+          state: "resolved",
+          fingerprint: "fp3",
+          title: "Gone",
+          count: 99,
+          lastSeen: NOW.toISOString(),
+        },
+      ],
+      runs: [
+        {
+          id: "r1",
+          scheduleId: "s1",
+          scheduleName: "Nightly triage",
+          prompt: "SECRET PROMPT TEXT",
+          cwd: "/home/me/private",
+          sessionId: "sess-1",
+          status: "succeeded",
+          endedAt: NOW.toISOString(),
+          durationMs: 1000,
+        },
+      ],
+    }),
+  );
+
+  assert.deepEqual(
+    f.pipelines.map((p) => [p.name, p.status, p.phase]),
+    [["Release train", "awaiting-approval", "review"]],
+    "only live pipelines, with the phase they are at",
+  );
+  // Loudest first: an arbitrary twelve would hide the ones worth crossing a
+  // machine boundary for.
+  assert.deepEqual(
+    f.issues.map((i) => i.title),
+    ["Loud", "Quiet"],
+  );
+  assert.equal(f.recentRuns[0].label, "Nightly triage");
+  // The three fields that are certain to hold something written for one
+  // machine's eyes never travel.
+  const text = JSON.stringify(f);
+  assert.equal(text.includes("SECRET PROMPT TEXT"), false);
+  assert.equal(text.includes("/home/me/private"), false);
+  assert.equal(text.includes("sess-1"), false);
+  assert.equal(f.budget.dailyLimitUsd, 10);
+});
+
+test("facet lists are capped at the sender", () => {
+  const many = (n: number, make: (i: number) => unknown) =>
+    Array.from({ length: n }, (_, i) => make(i));
+  const f = buildFacets(
+    summaryInput({
+      instances: many(50, (i) => ({
+        id: `i${i}`,
+        pipelineName: `P${i}`,
+        status: "running",
+        phases: [],
+      })),
+      issues: many(50, (i) => ({
+        state: "open",
+        fingerprint: `fp${i}`,
+        title: `T${i}`,
+        count: i,
+        lastSeen: NOW.toISOString(),
+      })),
+      runs: many(100, (i) => ({
+        id: `r${i}`,
+        scheduleId: "s",
+        scheduleName: "S",
+        endedAt: NOW.toISOString(),
+        status: "succeeded",
+      })),
+    }),
+  );
+  assert.equal(f.pipelines.length, 12);
+  assert.equal(f.issues.length, 12);
+  assert.equal(f.recentRuns.length, 40);
+});
+
+test("regression: the caps are re-applied to what a peer sends, not just to what we send", () => {
+  const hostile = parseFacets({
+    pipelines: Array.from({ length: 4000 }, (_, i) => ({ id: `i${i}`, name: "x".repeat(500) })),
+    issues: Array.from({ length: 4000 }, (_, i) => ({ fingerprint: `f${i}`, count: -5 })),
+    recentRuns: Array.from({ length: 4000 }, (_, i) => ({ id: `r${i}` })),
+    budget: { state: "z".repeat(500), dailyLimitUsd: -3 },
+  });
+  // A peer is a machine you trust to be yours, not one you trust to be correct.
+  // A bug or an older build on the other side must not render 4000 rows here.
+  assert.equal(hostile.pipelines.length, 12);
+  assert.equal(hostile.pipelines[0].name.length, 80);
+  assert.equal(hostile.issues.length, 12);
+  assert.equal(hostile.issues[0].count, 0, "a negative count would skew a total");
+  assert.equal(hostile.recentRuns.length, 40);
+  assert.equal(hostile.budget.state.length, 24);
+  assert.equal(hostile.budget.dailyLimitUsd, null);
+});
+
+test("a summary with no facets at all parses to empty ones", () => {
+  // An older peer, or one mid-upgrade: the views degrade to "nothing to show
+  // from that machine" rather than throwing on `undefined.pipelines`.
+  const parsed = parseSummary({ machineId: "m", generatedAt: NOW.toISOString() })!;
+  assert.deepEqual(parsed.facets.pipelines, []);
+  assert.equal(parsed.facets.budget.state, "unset");
+});
+
 // ── The fleet view ──────────────────────────────────────────────────────────
 
 const machineSummary = (over: Partial<MachineSummary> = {}): MachineSummary => ({
@@ -239,6 +365,12 @@ const machineSummary = (over: Partial<MachineSummary> = {}): MachineSummary => (
   spendTodayUsd: 1.5,
   spendMonthUsd: 20,
   worstIncident: null,
+  facets: {
+    pipelines: [],
+    issues: [],
+    recentRuns: [],
+    budget: { state: "ok", dailyLimitUsd: 10, monthlyLimitUsd: null },
+  },
   ...over,
 });
 

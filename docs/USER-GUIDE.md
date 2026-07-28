@@ -1363,6 +1363,9 @@ than returning a plausible zero.
 Spend over the last **30 days**, grouped by one of four dimensions:
 
 - **Schedule** — per named schedule; one-off launches group as _One-off runs_.
+- **Agent** — per worker that actually ran. For a pipeline that is one _phase_,
+  so this is the view that says which part of a pipeline costs the money;
+  everything else groups as its schedule.
 - **Pipeline** — per pipeline (step runs roll up into their pipeline).
 - **Project** — per working directory.
 - **Model** — per model, with runs that pinned nothing shown as _CLI default_,
@@ -1675,17 +1678,46 @@ Each side only answers to pairings it holds, which is what makes step 3 part of
 the protocol rather than a nicety. A secret is 64 hex characters and is never
 readable back through the API once stored.
 
+### Fleet-wide views
+
+Command Center, Chronicle, Issues and Budget each gain a **machine picker** once
+you have a peer. Pick a machine and the page shows that machine instead, with a
+banner naming it, dating its figures and linking to its own Argus.
+
+Peer mode is **read-only by construction**. There is no approve or revise on a
+peer's board, no triage on a peer's issues, no limits form on a peer's budget —
+those are mutations on a machine this one does not own, and a button that would
+either fail or need a second control plane is worse than no button. The link out
+is the honest affordance.
+
+Each view also adapts to what a summary can actually carry. Chronicle shows a
+**list** rather than its packed timeline, because a timeline drawn from a
+sampled forty runs would show gaps that mean _not sent_ and read as _nothing
+happened_ — the one thing a timeline must never say.
+
+**In solo mode none of this appears.** No picker, no banner, no extra request:
+with one machine the four pages are byte-for-byte the pages they were before
+federation existed.
+
 ### What crosses the wire
 
-A **summary**, and only a summary: counts of monitors down and failing, open
-issues, live and gated pipelines, runs and failures today, spend today and this
-month, the version, and the title of the worst open incident.
+Headline counts — monitors down and failing, open issues, live and gated
+pipelines, runs and failures today, spend today and this month, the version, the
+worst open incident — plus a **bounded facet list per fleet-wide view**: at most
+twelve live pipelines, twelve open issues (loudest first), forty recent runs,
+and the budget's limits. Every string is clamped.
 
-No prompts. No error text. No schedule names, session ids or working
-directories. A peer summary lands on a machine the author of a run may not have
-thought about, and "seven open issues" answers the fleet-level question without
-moving anybody's data. To see the detail you open that machine's own Argus,
-which is where it belongs.
+> **A revision of an earlier, stricter choice.** The first version of this
+> feature sent counts only. Counts cannot make four views fleet-wide, and a
+> fleet page that can only say "seven issues somewhere" is a worse product than
+> one that names them.
+
+What makes it safe is not the absence of detail but who receives it: a machine
+you paired with by hand, over a channel sealed with a secret you carried between
+the two. Within that, the bounds hold and three fields never travel at all —
+**prompts, working directories and session ids**, the ones certain to contain
+something written for one machine's eyes. To open a run you open that machine's
+own Argus, which is where it belongs.
 
 Every exchange is **encrypted and signed end-to-end** with keys derived from the
 pairing secret — AES-256-GCM for confidentiality, HMAC-SHA256 over the whole

@@ -14,6 +14,7 @@ const EMPTY: LedgerReport = {
   generatedAt: "",
   windowDays: 30,
   byProject: { dimension: "project", ...EMPTY_ATTRIBUTION },
+  byAgent: { dimension: "agent", ...EMPTY_ATTRIBUTION },
   bySchedule: { dimension: "schedule", ...EMPTY_ATTRIBUTION },
   byPipeline: { dimension: "pipeline", ...EMPTY_ATTRIBUTION },
   byModel: { dimension: "model", ...EMPTY_ATTRIBUTION },

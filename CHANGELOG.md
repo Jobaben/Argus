@@ -39,10 +39,21 @@ All notable changes to Argus are documented here. The format follows
   configured over a non-loopback URL and no pairing secret. A security promise
   that covers the original feature and not the new one is the promise people
   rely on and the one that is quietly false.
-  **What crosses the wire is counts, and only counts** — no prompts, no error
-  text, no schedule names or session ids. A summary lands on a machine the
-  author of a run may not have thought about, and "seven open issues" answers
-  the fleet question without moving anybody's data. The machine's identity is a
+  **Command Center, Chronicle, Issues and Budget go fleet-wide.** Each gains a
+  machine picker; pick a peer and the page shows that machine, under a banner
+  naming it, dating its figures and linking to its own Argus. Peer mode is
+  read-only by construction — no approve on a peer's board, no triage on its
+  issues, no limits form on its budget, because those are mutations on a machine
+  this one does not own and a button that would either fail or need a second
+  control plane is worse than no button. Chronicle renders a list rather than
+  its packed timeline, because a timeline built from forty sampled runs shows
+  gaps that mean _not sent_ and read as _nothing happened_. **In solo mode none
+  of it appears**: no picker, no banner, no extra request.
+  **What crosses the wire** is headline counts plus a bounded facet list per
+  view — twelve pipelines, twelve issues, forty runs, every string clamped, and
+  the caps re-applied on receipt as well as on send, because a peer is a machine
+  you trust to be yours and not one you trust to be correct. Prompts, working
+  directories and session ids never travel at all. The machine's identity is a
   locally-minted random id, not your hostname.
   **Fleet totals say what they are made of.** Every aggregate is labelled _from
   N of M machines_ and marked as a lower bound when some are not reporting;
@@ -127,7 +138,10 @@ All notable changes to Argus are documented here. The format follows
 
 - **Ledger** (`#/budget`, below the chart): where the money went, where it is
   going, and what a change would do about it. Spend attributes by **schedule,
-  pipeline, project and model** at per-run grain, with each row carrying its
+  agent, pipeline, project and model** at per-run grain — `agent` being the
+  worker that actually ran, which for a pipeline is one phase, so it answers
+  "which part of the release train costs the money" rather than only "the
+  release train costs money" — with each row carrying its
   share and its cost per run; the long tail folds into one `N more` row rather
   than being dropped, and the footer reports how many costed runs the grouping
   could not place, so the totals can be checked against the chart above. A

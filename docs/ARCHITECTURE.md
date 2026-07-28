@@ -392,11 +392,28 @@ machine goes quiet — which is the day the number matters. For the same reason 
 quiet peer keeps its last summary, marked stale, rather than disappearing and
 shrinking the denominator.
 
-The summary itself is counts and nothing else: no prompts, no error text, no
-schedule names or session ids. It crosses a network and lands on a machine the
-author of a run may not have thought about, and "seven open issues" answers the
-fleet-level question without moving anybody's data. The machine's identity is a
-locally-minted UUID rather than a hostname, for the same reason.
+The summary carries headline counts plus a bounded facet list per fleet-wide
+view. That is a deliberate revision of a stricter first version that sent counts
+only — counts cannot make Command Center, Chronicle, Issues and Budget
+fleet-wide, which is the point of federating them, and a page that can only say
+"seven issues somewhere" is a worse product than one that names them.
+
+What makes it safe is not the absence of detail but who receives it: a machine
+paired by hand, over a channel sealed with a secret carried between the two.
+Within that the bounds are structural — twelve pipelines, twelve issues, forty
+runs, every string clamped, **re-applied on receipt as well as on send**, because
+a peer is a machine you trust to be yours and not one you trust to be correct.
+Three fields never travel at all: prompts, working directories and session ids,
+the ones certain to hold something written for one machine's eyes. The machine's
+identity is a locally-minted UUID rather than a hostname, for the same reason.
+
+Peer mode in the four views is read-only by construction — no approve, no
+triage, no limits form. Those are mutations on a machine this server does not
+own, and a control that would either fail or require a second write path across
+the pairing is worse than no control. Chronicle also degrades deliberately: it
+renders a list rather than its packed timeline, because a timeline built from
+forty sampled runs shows gaps that mean _not sent_ and read as _nothing
+happened_.
 
 ### The confirm step is the security model
 

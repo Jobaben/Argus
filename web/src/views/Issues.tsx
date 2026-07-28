@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { useMachineFacet } from "../fleet/useMachineFacet";
+import { MachinePicker, PeerBanner, PeerEmpty } from "../fleet/MachineFacet";
 import {
   AlertStrip,
   Card,
@@ -177,7 +179,35 @@ function IssueCard({
   );
 }
 
+/**
+ * A peer's issues, rendered from its bounded summary.
+ *
+ * Read-only by construction: triage is a mutation on the machine that owns the
+ * issue, and offering the button here would either lie or need a second control
+ * plane. The link out is the honest affordance.
+ */
+function PeerIssues({ facet }: { facet: ReturnType<typeof useMachineFacet> }) {
+  const issues = facet.peer?.summary?.facets.issues ?? [];
+  if (issues.length === 0) return <PeerEmpty what="open issues" />;
+  return (
+    <ul className="divide-y divide-line overflow-hidden rounded-tile border border-line bg-surface">
+      {issues.map((i) => (
+        <li key={i.fingerprint} className="flex flex-wrap items-baseline gap-x-3 px-3 py-2">
+          <span className="min-w-0 flex-1 truncate text-sm text-ink" title={i.title}>
+            {i.title}
+          </span>
+          <span className="shrink-0 font-mono text-[11px] text-ink-faint">
+            {i.count}×{i.lastSeen && " · "}
+            {i.lastSeen && <TimeAgo iso={i.lastSeen} />}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export default function Issues() {
+  const facet = useMachineFacet();
   const { issues, summary, loading, error, triage, loadOccurrences } = useIssues();
   const [triageError, setTriageError] = useState<string | null>(null);
   const [filter, setFilter] = useState<IssueState | null>(null);
@@ -204,72 +234,83 @@ export default function Issues() {
         Failed runs grouped by root cause — twenty timeouts read as one issue, not twenty rows
       </p>
 
-      <section className="mb-8 grid grid-cols-3 gap-3 sm:max-w-md">
-        {counters.map(({ state, label, tone }) => (
-          <HealthCounter
-            key={state}
-            label={label}
-            value={summary[state]}
-            tone={tone}
-            selected={filter === state}
-            onClick={
-              summary[state] > 0 ? () => setFilter(filter === state ? null : state) : undefined
-            }
-            title={summary[state] > 0 ? `Show only the ${label.toLowerCase()} issues` : undefined}
-          />
-        ))}
-      </section>
+      <MachinePicker facet={facet} label="Show issues from" />
+      <PeerBanner facet={facet} />
 
-      {error && (
-        <div className="mb-6">
-          <AlertStrip subject="Issues" message={`Couldn't load issues: ${error}`} />
-        </div>
-      )}
-      {triageError && (
-        <div className="mb-6">
-          <AlertStrip subject="Triage" message={triageError} />
-        </div>
-      )}
-
-      {filter !== null && (
-        <div className="mb-4 flex items-center gap-3 text-xs text-ink-faint">
-          <span>
-            Showing {shown.length} {filter} of {issues.length}
-          </span>
-          <button
-            type="button"
-            onClick={() => setFilter(null)}
-            className="text-queue underline hover:text-ink"
-          >
-            Show all
-          </button>
-        </div>
-      )}
-
-      {loading && issues.length === 0 ? (
-        <Loading label="issues">
-          <SkeletonRows count={4} />
-        </Loading>
-      ) : issues.length === 0 ? (
-        <EmptyState>
-          <p className="text-sm text-ink-dim">No failures on record.</p>
-          <p className="mx-auto mt-2 max-w-md text-xs">
-            When a scheduled run fails, Argus fingerprints its error and groups every recurrence
-            under one issue — so twenty timeouts are one thing to fix, with the first and last
-            sighting and every affected schedule attached.
-          </p>
-        </EmptyState>
+      {facet.peer ? (
+        <PeerIssues facet={facet} />
       ) : (
-        <div className="space-y-4">
-          {shown.map((i) => (
-            <IssueCard
-              key={i.fingerprint}
-              issue={i}
-              onTriage={onTriage}
-              loadOccurrences={loadOccurrences}
-            />
-          ))}
-        </div>
+        <>
+          <section className="mb-8 grid grid-cols-3 gap-3 sm:max-w-md">
+            {counters.map(({ state, label, tone }) => (
+              <HealthCounter
+                key={state}
+                label={label}
+                value={summary[state]}
+                tone={tone}
+                selected={filter === state}
+                onClick={
+                  summary[state] > 0 ? () => setFilter(filter === state ? null : state) : undefined
+                }
+                title={
+                  summary[state] > 0 ? `Show only the ${label.toLowerCase()} issues` : undefined
+                }
+              />
+            ))}
+          </section>
+
+          {error && (
+            <div className="mb-6">
+              <AlertStrip subject="Issues" message={`Couldn't load issues: ${error}`} />
+            </div>
+          )}
+          {triageError && (
+            <div className="mb-6">
+              <AlertStrip subject="Triage" message={triageError} />
+            </div>
+          )}
+
+          {filter !== null && (
+            <div className="mb-4 flex items-center gap-3 text-xs text-ink-faint">
+              <span>
+                Showing {shown.length} {filter} of {issues.length}
+              </span>
+              <button
+                type="button"
+                onClick={() => setFilter(null)}
+                className="text-queue underline hover:text-ink"
+              >
+                Show all
+              </button>
+            </div>
+          )}
+
+          {loading && issues.length === 0 ? (
+            <Loading label="issues">
+              <SkeletonRows count={4} />
+            </Loading>
+          ) : issues.length === 0 ? (
+            <EmptyState>
+              <p className="text-sm text-ink-dim">No failures on record.</p>
+              <p className="mx-auto mt-2 max-w-md text-xs">
+                When a scheduled run fails, Argus fingerprints its error and groups every recurrence
+                under one issue — so twenty timeouts are one thing to fix, with the first and last
+                sighting and every affected schedule attached.
+              </p>
+            </EmptyState>
+          ) : (
+            <div className="space-y-4">
+              {shown.map((i) => (
+                <IssueCard
+                  key={i.fingerprint}
+                  issue={i}
+                  onTriage={onTriage}
+                  loadOccurrences={loadOccurrences}
+                />
+              ))}
+            </div>
+          )}
+        </>
       )}
     </Page>
   );

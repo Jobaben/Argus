@@ -536,11 +536,12 @@ export function createApp(deps: AppDeps): Hono {
     const dimension = raw.dimension;
     if (
       dimension !== "project" &&
+      dimension !== "agent" &&
       dimension !== "schedule" &&
       dimension !== "pipeline" &&
       dimension !== "model"
     ) {
-      return c.json({ error: "dimension must be project|schedule|pipeline|model" }, 400);
+      return c.json({ error: "dimension must be project|agent|schedule|pipeline|model" }, 400);
     }
     if (typeof raw.key !== "string" || !raw.key.trim()) {
       return c.json({ error: "key is required" }, 400);

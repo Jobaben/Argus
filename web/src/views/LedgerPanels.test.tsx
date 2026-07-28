@@ -25,7 +25,7 @@ vi.mock("../useLedger", () => ({
 }));
 
 function emptyReport(): LedgerReport {
-  const none = (dimension: "project" | "schedule" | "pipeline" | "model") => ({
+  const none = (dimension: "project" | "agent" | "schedule" | "pipeline" | "model") => ({
     dimension,
     slices: [],
     totalUsd: 0,
@@ -37,6 +37,7 @@ function emptyReport(): LedgerReport {
     generatedAt: "2026-07-20T12:00:00.000Z",
     windowDays: 30,
     byProject: none("project"),
+    byAgent: none("agent"),
     bySchedule: none("schedule"),
     byPipeline: none("pipeline"),
     byModel: none("model"),
