@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useStats, type DailyStat, type ModelStat, type PeakHour } from "../useStats";
 import { AlertStrip, EmptyState, Loading, Page, SkeletonCounters, SkeletonGrid } from "../ds";
 import { hasSessionData, hasTokenData } from "./statsGroups";
+import { VaultPanels } from "./VaultPanels";
 
 function compact(n: number): string {
   if (!Number.isFinite(n)) return "0";
@@ -229,6 +230,11 @@ export default function Stats() {
           )}
         </div>
       )}
+
+      {/* Stats reads a rolling cache Claude Code maintains; the quarter view
+          below reads the Vault, which keeps every run Argus has ever fired.
+          Two sources, so the section says which one it came from. */}
+      <VaultPanels />
     </Page>
   );
 }

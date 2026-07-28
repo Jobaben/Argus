@@ -19,6 +19,12 @@ const WINDOWS = [
   { value: "24", label: "24h" },
   { value: "72", label: "3d" },
   { value: "168", label: "7d" },
+  // Past 14 days the JSON run files no longer hold the answer — they keep the
+  // newest 50 per schedule — so these windows are served from the Vault. They
+  // are offered regardless: without it the range simply returns what the files
+  // still have, which is the same behaviour Chronicle always had.
+  { value: "2160", label: "90d" },
+  { value: "8760", label: "1y" },
 ] as const;
 
 type WindowValue = (typeof WINDOWS)[number]["value"];

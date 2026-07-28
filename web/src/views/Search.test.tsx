@@ -22,10 +22,13 @@ afterEach(() => {
 });
 
 describe("Search", () => {
-  it("says what it searches before you type anything", () => {
+  it("says what it searches before you type anything, and names both indexes", () => {
     vi.stubGlobal("fetch", vi.fn());
     render(<Search />);
-    expect(screen.getByText(/Plain-text, case-insensitive/)).toBeInTheDocument();
+    expect(screen.getByText(/plain-text and\s+case-insensitive/)).toBeInTheDocument();
+    // The page reads two different stores; conflating them in the copy would
+    // make "no matches" ambiguous about which one came up empty.
+    expect(screen.getByText(/every run and alert Argus has recorded/)).toBeInTheDocument();
   });
 
   it("reports an exact count when the scan was not capped", async () => {
@@ -91,6 +94,9 @@ describe("Search", () => {
     );
     render(<Search />);
     await user.type(screen.getByRole("searchbox"), "boom");
-    await waitFor(() => expect(screen.getByText(/HTTP 500/)).toBeInTheDocument());
+    // Both indexes are behind the same failing fetch, so both report it. The
+    // banner is the transcript scan's; the Vault line is its own.
+    await waitFor(() => expect(screen.getAllByText(/HTTP 500/).length).toBeGreaterThan(0));
+    expect(screen.getByText(/Couldn't reach the Vault/)).toBeInTheDocument();
   });
 });

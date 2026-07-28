@@ -26,36 +26,37 @@ can do, and where the data comes from.
 
 ## Contents
 
-| #   | Feature                                | Route          | What it answers                           |
-| --- | -------------------------------------- | -------------- | ----------------------------------------- |
-| 0   | [Global UI](#global-ui)                | —              | nav, live dot, auto-refresh, setup banner |
-| 1   | [Command Center](#1-command-center)    | `#/command`    | how are my pipelines doing right now?     |
-| 2   | [Briefing](#2-briefing)                | `#/briefing`   | what happened while I was away?           |
-| 3   | [Chronicle](#3-chronicle)              | `#/chronicle`  | what ran when, across every source?       |
-| 4   | [Launch](#4-launch)                    | `#/launch`     | fire one `claude -p` run right now        |
-| 5   | [Scheduler](#5-scheduler)              | `#/schedules`  | fire `claude -p` on a schedule            |
-| 6   | [Monitors](#6-monitors)                | `#/monitors`   | did my schedules actually run?            |
-| 7   | [Issues](#7-issues)                    | `#/issues`     | why are runs failing, grouped by cause?   |
-| 8   | [Pipelines](#8-pipelines)              | `#/pipelines`  | author multi-phase, human-gated flows     |
-| 9   | [Budget](#9-budget)                    | `#/budget`     | how much am I spending — and cap it       |
-| 10  | [Users & sign-in](#10-users--sign-in)  | `#/users`      | who may run/edit pipelines?               |
-| 11  | [Search](#11-search)                   | `#/search`     | where did I say/see _that_?               |
-| 12  | [Agents](#12-agents)                   | `#/agents`     | what's running / done / failed right now? |
-| 13  | [Agent Detail](#13-agent-detail)       | `#/agent/<id>` | how did _this_ agent get here?            |
-| 14  | [Sessions](#14-sessions)               | `#/sessions`   | what was actually said in a conversation? |
-| 15  | [Activity](#15-activity)               | `#/activity`   | what have I prompted lately, everywhere?  |
-| 16  | [Projects](#16-projects)               | `#/projects`   | which folders are active, and when?       |
-| 17  | [Stats](#17-stats)                     | `#/stats`      | what's my usage / cost / token spend?     |
-| 18  | [Inventory](#18-inventory)             | `#/inventory`  | what's installed and available?           |
-| 19  | [Tasks](#19-tasks)                     | `#/tasks`      | what task workspaces exist / are locked?  |
-| 20  | [Cron panel](#20-cron-panel)           | Scheduler tab  | why native cron routines can't be shown   |
-| 21  | [Flight Recorder](#21-flight-recorder) | `#/run/<id>`   | what was it doing at minute four?         |
-| 22  | [Watchtower](#22-watchtower)           | `#/watchtower` | did it run the way it _usually_ runs?     |
-| 23  | [Autopsy](#23-autopsy)                 | `#/run/<id>`   | why did this run fail, in one paragraph?  |
-| 24  | [Verdict](#24-verdict)                 | `#/run/<id>`   | was the output any _good_?                |
-| 25  | [Sentinel](#25-sentinel)               | `#/sentinel`   | what is on fire, and who has it?          |
-| 26  | [Weave](#26-weave)                     | `#/pipelines`  | fan-out, fan-in, retries, artifacts       |
-| 27  | [Ledger](#27-ledger)                   | `#/budget`     | where did the money go, and where next?   |
+| #   | Feature                                | Route          | What it answers                            |
+| --- | -------------------------------------- | -------------- | ------------------------------------------ |
+| 0   | [Global UI](#global-ui)                | —              | nav, live dot, auto-refresh, setup banner  |
+| 1   | [Command Center](#1-command-center)    | `#/command`    | how are my pipelines doing right now?      |
+| 2   | [Briefing](#2-briefing)                | `#/briefing`   | what happened while I was away?            |
+| 3   | [Chronicle](#3-chronicle)              | `#/chronicle`  | what ran when, across every source?        |
+| 4   | [Launch](#4-launch)                    | `#/launch`     | fire one `claude -p` run right now         |
+| 5   | [Scheduler](#5-scheduler)              | `#/schedules`  | fire `claude -p` on a schedule             |
+| 6   | [Monitors](#6-monitors)                | `#/monitors`   | did my schedules actually run?             |
+| 7   | [Issues](#7-issues)                    | `#/issues`     | why are runs failing, grouped by cause?    |
+| 8   | [Pipelines](#8-pipelines)              | `#/pipelines`  | author multi-phase, human-gated flows      |
+| 9   | [Budget](#9-budget)                    | `#/budget`     | how much am I spending — and cap it        |
+| 10  | [Users & sign-in](#10-users--sign-in)  | `#/users`      | who may run/edit pipelines?                |
+| 11  | [Search](#11-search)                   | `#/search`     | where did I say/see _that_?                |
+| 12  | [Agents](#12-agents)                   | `#/agents`     | what's running / done / failed right now?  |
+| 13  | [Agent Detail](#13-agent-detail)       | `#/agent/<id>` | how did _this_ agent get here?             |
+| 14  | [Sessions](#14-sessions)               | `#/sessions`   | what was actually said in a conversation?  |
+| 15  | [Activity](#15-activity)               | `#/activity`   | what have I prompted lately, everywhere?   |
+| 16  | [Projects](#16-projects)               | `#/projects`   | which folders are active, and when?        |
+| 17  | [Stats](#17-stats)                     | `#/stats`      | what's my usage / cost / token spend?      |
+| 18  | [Inventory](#18-inventory)             | `#/inventory`  | what's installed and available?            |
+| 19  | [Tasks](#19-tasks)                     | `#/tasks`      | what task workspaces exist / are locked?   |
+| 20  | [Cron panel](#20-cron-panel)           | Scheduler tab  | why native cron routines can't be shown    |
+| 21  | [Flight Recorder](#21-flight-recorder) | `#/run/<id>`   | what was it doing at minute four?          |
+| 22  | [Watchtower](#22-watchtower)           | `#/watchtower` | did it run the way it _usually_ runs?      |
+| 23  | [Autopsy](#23-autopsy)                 | `#/run/<id>`   | why did this run fail, in one paragraph?   |
+| 24  | [Verdict](#24-verdict)                 | `#/run/<id>`   | was the output any _good_?                 |
+| 25  | [Sentinel](#25-sentinel)               | `#/sentinel`   | what is on fire, and who has it?           |
+| 26  | [Weave](#26-weave)                     | `#/pipelines`  | fan-out, fan-in, retries, artifacts        |
+| 27  | [Ledger](#27-ledger)                   | `#/budget`     | where did the money go, and where next?    |
+| 28  | [The Vault](#28-the-vault)             | `#/stats`      | what happened last quarter, and last year? |
 
 ---
 
@@ -1459,31 +1460,111 @@ is entirely derived.
 
 ---
 
+## 28. The Vault
+
+_The store that remembers what the JSON files are forced to forget._ Surfaces
+on [Stats](#17-stats), [Search](#11-search) and [Chronicle](#3-chronicle).
+
+**Purpose:** Argus prunes. Run records keep the newest 50 per schedule, the
+spend ledger keeps a year of days, transcripts age out. That retention is
+correct for files a human might open, and wrong for the question _"how did this
+schedule behave last quarter?"_ The Vault ingests every run, alert, cost tick
+and Verdict score into a local database and answers the long-horizon questions
+from there.
+
+**Zero configuration.** The engine is SQLite, built into Node 22 — no package to
+install, no native build, no server to run. The database lives at
+`~/.claude/argus/vault.sqlite` and appears the first time Argus ticks.
+
+**It is a cache, never the source.** Every ingest is idempotent, the JSON files
+stay authoritative for anything they still hold, and where the two disagree the
+file wins. A Vault that is missing, corrupt, disabled or unavailable degrades
+the long views to their JSON-only behaviour and breaks nothing. If the file is
+ever unreadable, Argus moves it aside and starts a fresh one rather than
+refusing to boot — the only cost is history the JSON files no longer hold, and
+the alternative is every page broken until a human notices.
+
+### What it changes
+
+- **Stats gains a quarter view.** Runs, failures, success rate, median
+  duration, cost, tokens and median Verdict score per calendar quarter, for as
+  far back as the Vault goes. A quarter nothing scored shows `—`, not `0.0`:
+  unmeasured is not the same as terrible.
+- **Chronicle reaches further.** The window picker gains **90d** and **1y**.
+  Past 14 days the JSON files no longer have the answer, so those windows are
+  filled in from the Vault, with live records winning the merge.
+- **Search gains a second index.** A **Run history · indexed** section above the
+  transcript results, answering from every run and alert Argus has recorded —
+  including the ones since pruned. Full-text, prefix-matching, and fast because
+  it is indexed rather than scanned.
+- **OpenTelemetry export.** `GET /api/vault/otel?days=30` returns OTLP/JSON
+  spans for your collector. One span per run; a pipeline's phases share a trace.
+
+### Related terms
+
+Search expands your query with terms that **co-occur with it in this machine's
+own history** — search `backoff` and it may also search `quarantine`, because
+your runs mention them together. Expanded results arrive tagged **related**, and
+the terms used are printed above the results, so an expansion is always visible
+and auditable.
+
+This is not an embedding model, and the UI never calls it one. It is term
+co-occurrence over your own corpus: frequent among the documents your query
+matched, rare across everything else. For a body of your own runs that is both
+cheaper and more useful than a general model of English — it knows your
+vocabulary, which is the vocabulary you are searching in.
+
+### What it shows about itself
+
+Under the quarter table: how many runs, events and scores the Vault holds, how
+large it is, and — the number that says whether the feature is earning its keep
+— **how many runs it is keeping that the JSON files have already pruned**.
+
+A store that quietly stopped ingesting looks exactly like a quiet month, which
+is why the panel reports its own state rather than only its contents. When the
+Vault is unavailable it says so, and why, in place of the table.
+
+### Turning it off
+
+`ARGUS_VAULT=off` disables it entirely. Every long view degrades cleanly: Stats
+drops the quarter table with an explanation, Chronicle's long windows return
+whatever the JSON files still hold, Search falls back to transcripts only, and
+the OTLP export returns an empty document. Nothing errors, and no other feature
+notices.
+
+**Where the data comes from:** ingested on each scheduler tick from
+`argus/runs/`, `argus/incidents.json`, `argus/verdicts.json`, `argus/spend.json`
+and the Watchtower's derived anomalies. The Vault writes only to its own
+database file.
+
+---
+
 ## Quick mental model
 
-| Tab                 | Answers the question                      | Source                                      |
-| ------------------- | ----------------------------------------- | ------------------------------------------- |
-| **Command Center**  | How are my pipelines doing right now?     | `argus/pipelines.json` + `argus/instances/` |
-| **Chronicle**       | What ran when, across everything?         | runs + jobs + transcripts, merged           |
-| **Launch**          | Fire one `claude -p` run right now        | `argus/runs/` (the `oneoff` bucket)         |
-| **Scheduler**       | What fires on a timer, and how did it go? | `argus/schedules.json` + `argus/runs/`      |
-| **Monitors**        | Did the expected runs actually land?      | derived from schedules + runs               |
-| **Issues**          | Why are runs failing, grouped by cause?   | derived from runs + `argus/issues.json`     |
-| **Pipelines**       | What multi-phase flows are defined?       | `argus/pipelines.json`                      |
-| **Budget**          | How much am I spending — and cap it       | `argus/budget.json` + `argus/spend.json`    |
-| **Users**           | Who may run/edit pipelines?               | `argus/auth.json`                           |
-| **Search**          | Where did I say/see _that_?               | all `projects/*/*.jsonl`                    |
-| **Agents**          | What's running / done / failed right now? | `jobs/*/state.json` + `daemon/roster.json`  |
-| **Detail**          | How did _this_ agent get here?            | `jobs/<short>/timeline.jsonl`               |
-| **Sessions**        | What was actually said in a conversation? | `projects/*/*.jsonl`                        |
-| **Activity**        | What have I prompted lately, everywhere?  | `history.jsonl`                             |
-| **Projects**        | Which folders are active, and when?       | `projects/*/`                               |
-| **Stats**           | What's my usage / cost / token spend?     | `stats/stats-cache.json`                    |
-| **Inventory**       | What's installed and available?           | `agents/ commands/ skills/ plugins/`        |
-| **Tasks**           | What task workspaces exist / are locked?  | `tasks/<id>/`                               |
-| **Cron panel**      | Why can't I see native cron routines?     | none (session-scoped)                       |
-| **Flight Recorder** | What was it doing at minute four?         | run record + `projects/*/<session>.jsonl`   |
-| **Ledger**          | Where did the money go, and where next?   | `argus/runs/` + `argus/spend.json`          |
+| Tab                 | Answers the question                       | Source                                      |
+| ------------------- | ------------------------------------------ | ------------------------------------------- |
+| **Command Center**  | How are my pipelines doing right now?      | `argus/pipelines.json` + `argus/instances/` |
+| **Chronicle**       | What ran when, across everything?          | runs + jobs + transcripts, merged           |
+| **Launch**          | Fire one `claude -p` run right now         | `argus/runs/` (the `oneoff` bucket)         |
+| **Scheduler**       | What fires on a timer, and how did it go?  | `argus/schedules.json` + `argus/runs/`      |
+| **Monitors**        | Did the expected runs actually land?       | derived from schedules + runs               |
+| **Issues**          | Why are runs failing, grouped by cause?    | derived from runs + `argus/issues.json`     |
+| **Pipelines**       | What multi-phase flows are defined?        | `argus/pipelines.json`                      |
+| **Budget**          | How much am I spending — and cap it        | `argus/budget.json` + `argus/spend.json`    |
+| **Users**           | Who may run/edit pipelines?                | `argus/auth.json`                           |
+| **Search**          | Where did I say/see _that_?                | all `projects/*/*.jsonl`                    |
+| **Agents**          | What's running / done / failed right now?  | `jobs/*/state.json` + `daemon/roster.json`  |
+| **Detail**          | How did _this_ agent get here?             | `jobs/<short>/timeline.jsonl`               |
+| **Sessions**        | What was actually said in a conversation?  | `projects/*/*.jsonl`                        |
+| **Activity**        | What have I prompted lately, everywhere?   | `history.jsonl`                             |
+| **Projects**        | Which folders are active, and when?        | `projects/*/`                               |
+| **Stats**           | What's my usage / cost / token spend?      | `stats/stats-cache.json`                    |
+| **Inventory**       | What's installed and available?            | `agents/ commands/ skills/ plugins/`        |
+| **Tasks**           | What task workspaces exist / are locked?   | `tasks/<id>/`                               |
+| **Cron panel**      | Why can't I see native cron routines?      | none (session-scoped)                       |
+| **Flight Recorder** | What was it doing at minute four?          | run record + `projects/*/<session>.jsonl`   |
+| **Ledger**          | Where did the money go, and where next?    | `argus/runs/` + `argus/spend.json`          |
+| **The Vault**       | What happened last quarter, and last year? | `argus/vault.sqlite` (a rebuildable cache)  |
 
 _Screenshots in this guide live in [`docs/screenshots/`](screenshots/) and
 were captured from a live instance. To refresh them after a UI change, run the

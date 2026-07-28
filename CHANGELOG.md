@@ -5,7 +5,50 @@ All notable changes to Argus are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Sessions tests no longer depend on the hour they run.** The day-grouping
+  fixtures were offsets from `Date.now()`, so "two hours ago" stopped being
+  today between midnight and 02:00 — which is when CI runs. They are anchored to
+  midday now.
+
 ### Added
+
+- **The Vault** — an embedded analytical store that remembers what the JSON
+  files are forced to forget. Argus prunes: run records keep the newest 50 per
+  schedule, the spend ledger keeps a year of days. That retention is right for
+  files a human might open and wrong for "how did this schedule behave last
+  quarter", so every run, alert, cost tick and Verdict score is also ingested
+  into a local SQLite database. **Stats** gains a quarter view, **Chronicle**
+  gains 90-day and 1-year windows, **Search** gains a second, indexed section
+  over Argus's own run history, and `GET /api/vault/otel` hands the whole thing
+  to your collector as OTLP spans — one span per run, a pipeline as one trace,
+  cost and tokens under the `gen_ai.*` semantic conventions so they land on
+  dashboards that already exist.
+  Zero configuration and zero dependencies: the engine is `node:sqlite`, built
+  into Node 22 — no package to install, no native build, no service to run. A
+  monitoring tool should not arrive with an operations story of its own.
+  It is a **cache of truth, never the source**. Every ingest is an upsert keyed
+  by the record's own identity, so re-running a pass changes nothing and the
+  watermark is an optimisation rather than a correctness requirement — the
+  strictly-advancing cursor that would have been faster is wrong in the case
+  that matters, where a run starting before the cursor and finishing after it
+  is recorded as running forever. A missing, corrupt, disabled or unavailable
+  Vault degrades the long views to their JSON-only behaviour and breaks nothing;
+  a schema it cannot read is moved aside and rebuilt rather than surfaced as a
+  boot failure, because refusing to start would look conservative and cost more
+  than starting fresh does.
+  Search expansion finds terms that **co-occur with your query in this machine's
+  own history** — search `backoff`, also search `quarantine`. Expanded hits are
+  tagged `related` so they can never pass as direct matches, and the terms used
+  are shown. It is not an embedding model and is not described as one: a general
+  model of English is a worse fit for a corpus of your own runs than that
+  corpus's own vocabulary, and it would cost the zero-configuration promise the
+  rest of the feature makes.
+  The panel reports its own state — rows held, size, last ingest, and how many
+  runs it is keeping that the JSON files have already pruned. A store that
+  quietly stopped ingesting looks exactly like a quiet month, which is the one
+  failure a history feature must not hide. `ARGUS_VAULT=off` turns it off.
 
 - **Ledger** (`#/budget`, below the chart): where the money went, where it is
   going, and what a change would do about it. Spend attributes by **schedule,

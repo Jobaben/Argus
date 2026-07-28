@@ -633,6 +633,167 @@ swaps the model; `warn` and `stop` do what they say. The existing
 from the run record itself, rather than by correlating timestamps against a
 policy that has since been edited.
 
+## The Vault
+
+An embedded analytical store that keeps every run, alert, cost tick and score
+past what the JSON files retain. Backed by SQLite at
+`~/.claude/argus/vault.sqlite`, using `node:sqlite` — built into Node 22, so
+there is nothing to install and nothing to configure.
+
+**It is a rebuildable cache, never a source of truth.** Every ingest is an
+upsert keyed by the record's own identity, the JSON files stay authoritative for
+anything they still hold, and every route below degrades to an `available:
+false` answer rather than an error when the Vault cannot be opened. Set
+`ARGUS_VAULT=off` to disable it; every long view falls back to its JSON-only
+behaviour.
+
+Ingest runs on the scheduler tick, last in the chain, reading what the other
+watchers have just written.
+
+### `GET /api/vault`
+
+ETag'd. What the Vault holds, and whether it is healthy.
+
+```json
+{
+  "available": true,
+  "reason": null,
+  "detail": "the Vault is keeping history past what the JSON files retain",
+  "rows": { "runs": 1240, "events": 88, "spendDays": 200, "scores": 310 },
+  "sizeBytes": 2400000,
+  "oldestRunAt": "2025-08-01T00:00:00.000Z",
+  "newestRunAt": "2026-07-20T00:00:00.000Z",
+  "lastIngestAt": "2026-07-20T12:00:00.000Z",
+  "beyondRetention": 940
+}
+```
+
+`reason` is `no-sqlite` | `open-failed` | `disabled` when `available` is false,
+and `detail` always carries a sentence you can show a user.
+
+`beyondRetention` is how many runs the Vault holds that the JSON files no longer
+do — reported rather than implied, because it is the only figure that says
+whether the feature is earning its keep on this machine.
+
+### `GET /api/vault/quarters`
+
+Calendar-quarter aggregates, newest first. `localtime` boundaries, matching the
+wall clock that schedule triggers and budget windows already use.
+
+```json
+{
+  "available": true,
+  "detail": "4 quarters of history",
+  "quarters": [
+    {
+      "key": "2026-Q2",
+      "label": "2026 Q2",
+      "startAt": "2026-04-01T…",
+      "endAt": "2026-06-30T…",
+      "runs": 400,
+      "succeeded": 380,
+      "failed": 20,
+      "costUsd": 42.5,
+      "tokens": 9000000,
+      "medianDurationMs": 90000,
+      "medianScore": 7.4
+    }
+  ]
+}
+```
+
+`medianDurationMs` and `medianScore` are `null` when nothing in the quarter
+finished or was scored. Not zero — a quarter nobody judged has not been judged
+badly.
+
+### `GET /api/vault/search?q=…`
+
+Indexed full-text search over runs and alerts, with query expansion.
+
+```json
+{
+  "available": true,
+  "detail": "3 direct, 2 related",
+  "query": "backoff",
+  "hits": [
+    {
+      "kind": "run",
+      "ref": "r-2f9c",
+      "at": "2026-07-20T10:05:00.000Z",
+      "title": "Nightly triage",
+      "snippet": "…retry backoff exhausted after 3 attempts…",
+      "href": "#/sessions/-home-u-proj/sess-1",
+      "related": false
+    }
+  ],
+  "relatedTerms": ["quarantine"],
+  "limit": 60,
+  "truncated": false
+}
+```
+
+The query is tokenized to alphanumerics and prefix-matched with `AND`, so
+`spectac` finds `Spectacle` and nothing a user types can reach FTS5's expression
+grammar. A query under two characters is answered with an empty result and an
+explanatory `detail`, not a `400`.
+
+**`relatedTerms`** are terms that co-occur with the query in this machine's own
+corpus — scored tf-idf: frequent among the documents the query matched, rare
+across everything else. Hits reached only through the expansion carry
+`related: true`, and the terms are returned so the expansion is auditable. This
+is deliberately **not** an embedding model, and nothing in the API or the UI
+describes it as one.
+
+### `GET /api/vault/otel?days=N`
+
+OTLP/JSON spans for a window of runs. `days` is clamped to 1–400 (default 7);
+the document is capped at 5000 spans and says so with `capped: true`.
+
+```json
+{
+  "spans": 412,
+  "days": 30,
+  "capped": false,
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [{ "key": "service.name", "value": { "stringValue": "argus" } }]
+      },
+      "scopeSpans": [{ "scope": { "name": "argus.vault" }, "spans": ["…"] }]
+    }
+  ]
+}
+```
+
+- **Ids are derived, not generated** (SHA-256 of the run or instance id), so
+  exporting the same window twice is byte-identical and a collector that
+  receives both deduplicates instead of double-counting.
+- **A pipeline is one trace.** Phase runs share their instance's trace id; a
+  schedule run is its own trace.
+- **Cost and tokens use `gen_ai.*` semantic conventions**, so they land on
+  dashboards a collector already has rather than in Argus-specific fields
+  nothing knows how to chart.
+- **Status is honest.** `1` for succeeded, `2` for failed (including a
+  zero-exit run that _signalled_ failure), and `0` — unset — for skipped,
+  cancelled, interrupted and still-running. Reporting a skipped run as ok
+  inflates every success rate computed downstream.
+
+It is a GET returning a document rather than a push: Argus does not know where
+your collector is, and a monitoring tool that phones home by default is a worse
+citizen than one you have to point at something. `curl … | vector` is the
+intended shape.
+
+### `GET /api/chronicle?hours=N`
+
+`hours` now accepts up to five years (was 336). Past **336 hours** the pruned
+JSON files can no longer answer, so the window is filled in from the Vault, with
+live records winning the merge on id. Vault-sourced spans carry no pid, exit
+code or session id — the Vault stores what it can answer questions about, and
+the fields it never knew are empty rather than guessed.
+
+Without a Vault the long windows simply return what the JSON files still hold,
+which is exactly the behaviour Chronicle always had.
+
 ## Weave — the pipeline DAG
 
 Pipeline phases carry dependency edges, retry policies and artifact names.
@@ -1359,3 +1520,4 @@ so the index cannot grow into a session list.
 | `ARGUS_CLAUDE_HOME` | `~/.claude` | directory to read/watch                                                                           |
 | `CLAUDE_CONFIG_DIR` | —           | fallback override if `ARGUS_CLAUDE_HOME` unset                                                    |
 | `ARGUS_WEBHOOK_URL` | —           | POST target for `run.failed`, `pipeline.failed`, and `monitor.*` events (Slack/mail bridge, etc.) |
+| `ARGUS_VAULT`       | on          | `off` disables the Vault; every long view degrades to its JSON-only behaviour                     |

@@ -17,6 +17,13 @@ applies setup fixes, its signal hook under `~/.claude/hooks/` and a hook entry
 in `settings.json`. All Argus writes go through an atomic tmp+rename writer and
 are serialized per file/instance by a keyed mutex.
 
+The one exception is the Vault's `argus/vault.sqlite`, which uses SQLite's own
+WAL journalling instead. That is not a gap in the rule but the reason for it:
+the atomic writer exists to give JSON files the crash-safety a database already
+has, and wrapping a live database in tmp+rename would remove that guarantee
+rather than add it. It is safe to make the exception there precisely because the
+Vault holds no authoritative state — see §5.
+
 Because it can spawn `claude -p` agents with the user's credentials, the HTTP
 surface is a privileged single-user control plane: loopback-bound by default,
 with a Host allowlist (anti DNS-rebind), an Origin check on mutations (anti
@@ -170,6 +177,7 @@ while an unrecognised frame _type_ is still forwarded for forward compatibility.
 | Verdict           | `argus/verdicts.json` + rubrics on defs         | rubric scores keyed by run id, capped at 400; trends derived per read                |
 | Sentinel          | `argus/incidents.json`, `argus/sentinel.json`   | persisted incidents (so a restart resumes mid-incident) + escalation policy          |
 | Ledger            | runs + `argus/spend.json` + `argus/budget.json` | attribution, forecast and enforcement all derived per read; only the ladder persists |
+| The Vault         | `argus/vault.sqlite`                            | every run/event/score past JSON retention; a rebuildable cache, never the source     |
 
 ### Derivation over storage: the Flight Recorder
 
@@ -328,6 +336,67 @@ Three consequences worth naming, because each was a bug before it was a design:
 
 The whole 735-test suite that predated Weave passes unchanged, which is the
 actual guarantee behind "linear definitions load unchanged".
+
+### A cache of truth: the Vault's failure model
+
+`vault/` is the first part of Argus that is not a file the user could open in an
+editor, and that changes what "correct" means for it. Three rules fall out.
+
+**It never becomes load-bearing.** Every read path returns
+`{ available: false, detail }` instead of throwing, and every caller renders a
+degraded view rather than handling an exception. A Node build without
+`node:sqlite`, a read-only home, a database corrupted by a full disk: each costs
+the long-horizon views and nothing else. The JSON files remain authoritative for
+everything they still hold, and where the two disagree the file wins — that is
+what makes it safe to merge Vault rows into the Chronicle at all.
+
+**A schema it cannot read is moved aside, not surfaced as an error.** Refusing
+to start would be the conservative-looking choice and the wrong one: the Vault
+is rebuildable by construction, so a fresh start costs only what the JSON files
+have already pruned, while _not_ starting breaks every long view until a human
+notices. The old file is kept as `vault.sqlite.corrupt-<ts>`.
+
+**It is not written through the atomic writer, deliberately.** `atomicWrite`
+exists to give JSON files the crash-safety a database already has natively;
+wrapping a live SQLite file in tmp+rename would remove that guarantee rather
+than add it. WAL plus SQLite's own journalling is the stronger primitive, and
+preferring it is safe precisely because the Vault holds no authoritative state.
+
+The ingest pass is idempotent rather than incremental, which is the decision the
+rest of the design rests on. Every write is an upsert keyed by the record's own
+identity — a run is its id, an incident event is a content hash, a spend day is
+its calendar date — so re-running a pass changes nothing and the watermark is an
+optimisation rather than a correctness requirement. A strictly-advancing cursor
+would be faster and wrong in the case that matters most: a run that starts
+before the cursor and _finishes_ after it would be recorded as running forever.
+For the same reason the pass re-reads a one-hour window behind the watermark
+rather than starting at it.
+
+Two smaller decisions are worth naming because both were bugs first. Incident
+timeline events are keyed by a hash of their content, not their index: the
+timeline is capped, so dropping the oldest entry renumbers every survivor and an
+index-keyed id would re-ingest the whole history on every prune. And a
+re-ingested run has its FTS document deleted before the new one is inserted —
+FTS5 has no upsert, so without that the same run matches once more after every
+completed pass.
+
+### "Related", not "semantic"
+
+Search expansion mines terms that co-occur with the query in the user's own
+corpus, scored tf-idf, and the UI says exactly that. The tempting alternative
+was to ship an embedding model and call the feature semantic search. It was
+rejected on two grounds: the dependency (a model file, a runtime, a warm-up)
+contradicts the zero-configuration promise the rest of the Vault makes, and a
+general model of English is a worse fit for a corpus of one machine's runs than
+that corpus's own vocabulary is. Expanded hits are tagged `related` so they can
+never pass as direct matches, and the expansion terms are returned so a reader
+can see why a result appeared.
+
+The implementation detail that keeps it cheap: candidates are gathered from the
+sampled matching documents _first_, and only those terms are looked up in
+`docs_vocab`. Reading the vocabulary table whole and scoring against it is the
+natural way to write it and costs a full scan per search, growing with the
+corpus instead of with the query.
 
 ### No price list: why the Ledger refuses some questions
 

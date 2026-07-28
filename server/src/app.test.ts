@@ -1689,3 +1689,142 @@ test("budget: the ladder's enforcement is reported on the ledger once spend cros
   assert.equal(body.enforcement.window, "daily");
   assert.match(body.enforcement.detail, /deferred/);
 });
+
+// ── The Vault ───────────────────────────────────────────────────────────────
+
+/** Ingest whatever is currently on disk, the way the tick does. */
+async function fillVault() {
+  const { closeVault } = await import("./vault/db.js");
+  const { ingest } = await import("./vault/ingest.js");
+  const { readRuns } = await import("./sources/runs.js");
+  closeVault();
+  return ingest({
+    runs: await readRuns(),
+    incidents: [],
+    anomalies: [],
+    verdicts: [],
+    spend: { days: {} },
+    now: new Date(),
+  });
+}
+
+test("vault: reports what it holds, and how much of it the JSON files have dropped", async () => {
+  const app = makeApp();
+  writeRunRecord("v1", { costUsd: 0.3, resultSummary: "indexed the widget catalogue" });
+  assert.equal((await fillVault()).ok, true);
+
+  const status = (await (await app.request("/api/vault", { headers: loopback })).json()) as {
+    available: boolean;
+    rows: { runs: number };
+    beyondRetention: number;
+    detail: string;
+  };
+  assert.equal(status.available, true);
+  assert.equal(status.rows.runs, 1);
+  // The run is still on disk, so nothing is beyond retention yet.
+  assert.equal(status.beyondRetention, 0);
+});
+
+test("vault: search finds an ingested run and says what it searched", async () => {
+  const app = makeApp();
+  writeRunRecord("v1", { resultSummary: "indexed the widget catalogue" });
+  await fillVault();
+
+  const res = (await (
+    await app.request("/api/vault/search?q=widget", { headers: loopback })
+  ).json()) as { available: boolean; hits: { ref: string; related: boolean }[] };
+  assert.equal(res.available, true);
+  assert.deepEqual(
+    res.hits.map((h) => h.ref),
+    ["v1"],
+  );
+  assert.equal(res.hits[0].related, false);
+});
+
+test("vault: an empty query is answered, not rejected", async () => {
+  const app = makeApp();
+  const res = await app.request("/api/vault/search", { headers: loopback });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { hits: unknown[]; detail: string };
+  assert.deepEqual(body.hits, []);
+  assert.match(body.detail, /two characters/);
+});
+
+test("vault: quarters aggregate the ingested history", async () => {
+  const app = makeApp();
+  writeRunRecord("v1", { costUsd: 0.25 });
+  await fillVault();
+  const body = (await (await app.request("/api/vault/quarters", { headers: loopback })).json()) as {
+    available: boolean;
+    quarters: { runs: number; costUsd: number }[];
+  };
+  assert.equal(body.available, true);
+  assert.equal(body.quarters.length, 1);
+  assert.equal(body.quarters[0].runs, 1);
+  assert.equal(body.quarters[0].costUsd, 0.25);
+});
+
+test("vault: the OTLP export is a valid document with derived, stable ids", async () => {
+  const app = makeApp();
+  writeRunRecord("v1", {});
+  await fillVault();
+  const first = (await (
+    await app.request("/api/vault/otel?days=30", { headers: loopback })
+  ).json()) as {
+    spans: number;
+    days: number;
+    capped: boolean;
+    resourceSpans: { scopeSpans: { spans: { traceId: string; spanId: string }[] }[] }[];
+  };
+  assert.equal(first.spans, 1);
+  assert.equal(first.days, 30);
+  assert.equal(first.capped, false);
+  const span = first.resourceSpans[0].scopeSpans[0].spans[0];
+  assert.equal(span.traceId.length, 32);
+  assert.equal(span.spanId.length, 16);
+
+  // Exporting twice must be byte-identical, so a collector receiving both
+  // deduplicates rather than double-counting the same run.
+  const second = await (await app.request("/api/vault/otel?days=30", { headers: loopback })).json();
+  assert.deepEqual(second, first);
+});
+
+test("vault: the Chronicle reaches past JSON retention, with live records winning", async () => {
+  const app = makeApp();
+  writeRunRecord("kept", { resultSummary: "still on disk" });
+  await fillVault();
+
+  // The Vault now holds "kept". A long window must not double-count it.
+  const long = (await (
+    await app.request("/api/chronicle?hours=8760", { headers: loopback })
+  ).json()) as { groups: { rows: { id: string }[][] }[] };
+  const ids = long.groups.flatMap((g) => g.rows.flat().map((s) => s.id));
+  assert.equal(ids.filter((id) => id === "run:kept").length, 1);
+});
+
+test("vault: a disabled Vault degrades every long view without erroring", async () => {
+  const app = makeApp();
+  process.env.ARGUS_VAULT = "off";
+  const { closeVault } = await import("./vault/db.js");
+  closeVault();
+  try {
+    const status = (await (await app.request("/api/vault", { headers: loopback })).json()) as {
+      available: boolean;
+      reason: string;
+    };
+    assert.equal(status.available, false);
+    assert.equal(status.reason, "disabled");
+
+    for (const route of ["/api/vault/quarters", "/api/vault/search?q=widget", "/api/vault/otel"]) {
+      assert.equal((await app.request(route, { headers: loopback })).status, 200, route);
+    }
+    // The Chronicle still answers from the JSON files it does have.
+    assert.equal(
+      (await app.request("/api/chronicle?hours=8760", { headers: loopback })).status,
+      200,
+    );
+  } finally {
+    delete process.env.ARGUS_VAULT;
+    closeVault();
+  }
+});

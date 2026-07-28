@@ -29,7 +29,9 @@ import { createWatchtowerWatcher } from "./watchtowerWatcher.js";
 import { createAutopsyWatcher } from "./autopsyWatcher.js";
 import { createVerdictWatcher } from "./verdictWatcher.js";
 import { createSentinelWatcher } from "./sentinelWatcher.js";
-import { deriveConditions } from "./sources/sentinel.js";
+import { createVaultWatcher } from "./vaultWatcher.js";
+import { deriveConditions, readIncidents } from "./sources/sentinel.js";
+import { readSpendLedger } from "./sources/budget.js";
 import { buildMonitors } from "./sources/monitors.js";
 import { buildIssues, readTriage } from "./sources/issues.js";
 import { buildWatchtower, readResets } from "./sources/watchtower.js";
@@ -297,6 +299,24 @@ const sentinelWatcher = createSentinelWatcher({
         : readRuns({ limit: 10 }),
   },
 });
+/**
+ * The Vault ingests on the same tick as everything else. It is deliberately
+ * last in the chain: it reads what the passes above have just written, and a
+ * cache that lags the truth by one tick is fine in a way that a truth lagging
+ * its cache would not be.
+ */
+const vaultWatcher = createVaultWatcher({
+  now: () => new Date(),
+  readRuns,
+  readIncidents,
+  readVerdicts,
+  readSpend: readSpendLedger,
+  readAnomalies: async () => {
+    const now = new Date();
+    const [runs, resets] = await Promise.all([readRuns(), readResets()]);
+    return buildWatchtower(runs, resets, now).anomalies;
+  },
+});
 const scheduler = startScheduler({
   onChange: () => broadcast({ type: "schedules:changed" }),
   onTick: async () => {
@@ -307,6 +327,7 @@ const scheduler = startScheduler({
     await autopsyWatcher.check();
     await verdictWatcher.check();
     await sentinelWatcher.check();
+    await vaultWatcher.check();
   },
   onFailure: (run) =>
     void postWebhook(config.webhookUrl, buildRunFailurePayload(run, new Date().toISOString())),

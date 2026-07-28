@@ -204,3 +204,15 @@ export type {
   MonitorAlertFrame,
   RunActivityFrame,
 } from "./live.js";
+
+export type {
+  VaultHitKind,
+  VaultIngestResult,
+  VaultQuarter,
+  VaultQuartersReport,
+  VaultRowCounts,
+  VaultSearchHit,
+  VaultSearchResponse,
+  VaultStatus,
+  VaultUnavailableReason,
+} from "./vault.js";

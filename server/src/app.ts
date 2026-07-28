@@ -106,6 +106,14 @@ import {
   WatchtowerValidationError,
 } from "./sources/watchtower.js";
 import { buildLedger, whatIf, type WhatIfRequest } from "./sources/ledger.js";
+import {
+  runsAsRecords,
+  runsBetween,
+  vaultQuarters,
+  vaultSearch,
+  vaultStatus,
+} from "./vault/query.js";
+import { buildOtelExport } from "./vault/otel.js";
 import { buildOverview } from "./sources/overview.js";
 import { buildPalette } from "./sources/palette.js";
 import { buildSituation } from "./sources/insight.js";
@@ -140,6 +148,15 @@ import {
 import { VERSION } from "./version.js";
 import { mountWebApp } from "./static.js";
 import { buildRunFailurePayload, postWebhook } from "./notify.js";
+
+/** The window the pruned JSON run files can still answer on their own. */
+const JSON_CHRONICLE_HOURS = 336;
+/** Roughly five years — the Chronicle's ceiling once the Vault backs it. */
+const MAX_CHRONICLE_HOURS = 24 * 365 * 5;
+/** Spans per OTLP document. A collector prefers several bounded posts to one
+ *  unbounded one, and an uncapped export is a memory spike waiting for a
+ *  machine with a long history. */
+const OTEL_SPAN_CAP = 5000;
 
 export interface AppDeps {
   config: ArgusConfig;
@@ -521,16 +538,61 @@ export function createApp(deps: AppDeps): Hono {
   });
   app.get("/api/cron", async (c) => c.json(await readCron()));
 
-  // Cross-source timeline: runs + agents + sessions as packed swimlanes.
+  /**
+   * Cross-source timeline: runs + agents + sessions as packed swimlanes.
+   *
+   * Past {@link JSON_CHRONICLE_HOURS} the JSON run files no longer hold the
+   * answer — they are pruned to the newest 50 per schedule — so the window is
+   * filled in from the Vault. Live records always win the merge: the Vault is
+   * a cache, and where the two disagree the file is right by definition.
+   */
   app.get("/api/chronicle", async (c) => {
     const hoursRaw = Number(c.req.query("hours"));
-    const hours = Number.isFinite(hoursRaw) ? Math.min(336, Math.max(1, hoursRaw)) : 24;
-    const [runs, agents, sessions] = await Promise.all([
+    const hours = Number.isFinite(hoursRaw)
+      ? Math.min(MAX_CHRONICLE_HOURS, Math.max(1, hoursRaw))
+      : 24;
+    const now = new Date();
+    const [liveRuns, agents, sessions] = await Promise.all([
       readRuns(),
       readAgents(),
       readSessions(150),
     ]);
-    return c.json(buildChronicle({ runs, agents, sessions }, new Date(), hours * 3_600_000));
+    let runs = liveRuns;
+    if (hours > JSON_CHRONICLE_HOURS) {
+      const seen = new Set(liveRuns.map((r) => r.id));
+      const archived = runsAsRecords(
+        runsBetween(now.getTime() - hours * 3_600_000, now.getTime(), 2000),
+      ).filter((r) => !seen.has(r.id));
+      runs = [...liveRuns, ...archived];
+    }
+    return c.json(buildChronicle({ runs, agents, sessions }, now, hours * 3_600_000));
+  });
+
+  // The Vault: what it holds, the long views it enables, and the export.
+  app.get("/api/vault", async (c) => {
+    const runs = await readRuns();
+    return c.json(vaultStatus(runs.map((r) => r.id)));
+  });
+
+  app.get("/api/vault/quarters", (c) => c.json(vaultQuarters()));
+
+  app.get("/api/vault/search", (c) => c.json(vaultSearch((c.req.query("q") ?? "").slice(0, 200))));
+
+  /**
+   * OTLP/JSON spans for a window of runs.
+   *
+   * A plain GET returning a document rather than a push to a collector: Argus
+   * does not know where your collector is, and a monitoring tool that phones
+   * home by default is a worse citizen than one you have to point at something.
+   * `curl … | vector` is the intended shape.
+   */
+  app.get("/api/vault/otel", (c) => {
+    const daysRaw = Number(c.req.query("days"));
+    const days = Number.isFinite(daysRaw) ? Math.min(400, Math.max(1, daysRaw)) : 7;
+    const to = Date.now();
+    const rows = runsBetween(to - days * 86_400_000, to, OTEL_SPAN_CAP);
+    const doc = buildOtelExport(rows);
+    return c.json({ ...doc, days, capped: rows.length >= OTEL_SPAN_CAP });
   });
 
   app.get("/api/schedules", async (c) =>

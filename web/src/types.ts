@@ -143,6 +143,16 @@ export type {
   PaletteIndex,
   PaletteKind,
   PaletteSeverity,
+  // The Vault
+  VaultHitKind,
+  VaultIngestResult,
+  VaultQuarter,
+  VaultQuartersReport,
+  VaultRowCounts,
+  VaultSearchHit,
+  VaultSearchResponse,
+  VaultStatus,
+  VaultUnavailableReason,
   // Live protocol
   LiveFrame,
   LiveFrameType,
