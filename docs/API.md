@@ -961,6 +961,15 @@ behaviour.
 Ingest runs on the scheduler tick, last in the chain, reading what the other
 watchers have just written.
 
+**Monitor and budget transitions are pushed, not polled.** Both are derived on
+each tick, diffed against the previous tick in memory, sent to the bell and the
+webhook, and then forgotten — there is no file to poll, so the alert handler
+hands them to the Vault as they happen. That makes the Vault the only place
+that can answer "how often did this monitor flap last quarter". Each is
+content-hashed, so a replayed tick cannot report one breach as two, and a
+failure to archive is logged and swallowed: an alert that cannot be stored must
+not break the alert.
+
 ### `GET /api/vault`
 
 ETag'd. What the Vault holds, and whether it is healthy.

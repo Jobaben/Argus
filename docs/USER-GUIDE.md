@@ -1546,8 +1546,10 @@ notices.
 
 **Where the data comes from:** ingested on each scheduler tick from
 `argus/runs/`, `argus/incidents.json`, `argus/verdicts.json`, `argus/spend.json`
-and the Watchtower's derived anomalies. The Vault writes only to its own
-database file.
+and the Watchtower's derived anomalies — plus **monitor and budget transitions,
+archived as they happen**. Those two are the only signals Argus produces that
+are otherwise never written down: both are derived per tick, diffed in memory,
+sent to the bell, and gone. The Vault writes only to its own database file.
 
 ---
 

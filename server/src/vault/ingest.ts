@@ -3,6 +3,7 @@ import type { Anomaly, Incident, Verdict, VaultIngestResult } from "@argus/contr
 import type { Run } from "../sources/scheduleTypes.js";
 import type { SpendLedger } from "../sources/budget.js";
 import { openVault, readMeta, writeMeta, type VaultDb } from "./db.js";
+import { log } from "../log.js";
 
 /**
  * Ingest: moving what the JSON files hold *now* into the store that will still
@@ -177,6 +178,76 @@ export function ingest(input: IngestInput): VaultIngestResult {
       ms: Date.now() - t0,
     };
   }
+}
+
+/**
+ * Record one alert as it happens.
+ *
+ * Monitor and budget transitions are the only signals Argus produces that are
+ * otherwise *never written down*: both are derived on each tick, diffed against
+ * the previous tick in memory, pushed to the bell and the webhook, and then
+ * gone. Nothing on disk can answer "how often did this monitor flap last
+ * quarter", which is exactly the kind of question the Vault exists for.
+ *
+ * Pushed rather than polled, because there is no file to poll — by the next
+ * tick the transition has already been forgotten. Never throws: an alert that
+ * fails to archive must not break the alert.
+ */
+export function ingestAlert(event: VaultEvent): boolean {
+  const handle = openVault();
+  if (!handle) return false;
+  try {
+    handle.db
+      .prepare(
+        `INSERT INTO events (id, at_ms, kind, severity, subject, detail, href)
+         VALUES (?,?,?,?,?,?,?)
+         ON CONFLICT(id) DO UPDATE SET detail = excluded.detail`,
+      )
+      .run(
+        event.id,
+        event.atMs,
+        event.kind,
+        event.severity,
+        event.subject,
+        event.detail,
+        event.href,
+      );
+    const body = [event.subject, event.detail].filter(Boolean).join("\n");
+    if (body) {
+      handle.db.prepare("DELETE FROM docs WHERE ref = ? AND kind = ?").run(event.id, "event");
+      handle.db
+        .prepare("INSERT INTO docs (title, body, kind, ref, at_ms, href) VALUES (?,?,?,?,?,?)")
+        .run(event.subject ?? event.kind, body, "event", event.id, event.atMs, event.href);
+    }
+    return true;
+  } catch (e) {
+    log.warn("vault could not archive an alert", { kind: event.kind, err: e });
+    return false;
+  }
+}
+
+/** A monitor or budget transition, shaped for {@link ingestAlert}. */
+export function alertEvent(input: {
+  kind: string;
+  at: string;
+  severity: string;
+  subject: string;
+  detail: string;
+  href: string;
+}): VaultEvent | null {
+  const at = ms(input.at);
+  if (at == null) return null;
+  return {
+    // Content-hashed like an incident entry: the same transition reported twice
+    // in one tick is one row, and a restart cannot duplicate history.
+    id: eventId(["alert", input.kind, input.at, input.subject]),
+    atMs: at,
+    kind: input.kind,
+    severity: input.severity,
+    subject: input.subject,
+    detail: input.detail,
+    href: input.href,
+  };
 }
 
 /** The watermark from the last successful pass, or null. */

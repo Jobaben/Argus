@@ -31,6 +31,7 @@ import { createVerdictWatcher } from "./verdictWatcher.js";
 import { createSentinelWatcher } from "./sentinelWatcher.js";
 import { createVaultWatcher } from "./vaultWatcher.js";
 import { createPoller } from "./federation/poll.js";
+import { alertEvent, ingestAlert } from "./vault/ingest.js";
 import { readPeers as readFederationPeers } from "./federation/peers.js";
 import { deriveConditions, readIncidents } from "./sources/sentinel.js";
 import { readSpendLedger } from "./sources/budget.js";
@@ -214,6 +215,11 @@ void backfillRunCosts()
 // Monitor health is derived on read, so nothing observes it changing — the
 // watcher re-derives it each tick and pushes down/failing/recovered
 // transitions to the webhook and every connected dashboard.
+/** Hand one transition to the Vault, if there is one and it is available. */
+const archive = (event: ReturnType<typeof alertEvent>) => {
+  if (event) ingestAlert(event);
+};
+
 const monitorWatcher = createMonitorWatcher({
   now: () => new Date(),
   readSchedules,
@@ -221,6 +227,18 @@ const monitorWatcher = createMonitorWatcher({
   onAlert: (alert) => {
     void postWebhook(config.webhookUrl, buildMonitorAlertPayload(alert));
     broadcast({ type: "monitors:alert", alert });
+    // Archived as it happens: a monitor transition is derived per tick and
+    // diffed in memory, so this is the only place it is ever written down.
+    archive(
+      alertEvent({
+        kind: alert.event,
+        at: alert.at,
+        severity: alert.event === "monitor.recovered" ? "info" : "warning",
+        subject: alert.name,
+        detail: alert.detail,
+        href: "#/monitors",
+      }),
+    );
   },
 });
 // Budget state is derived on read like monitor health; the watcher pushes
@@ -230,6 +248,16 @@ const budgetWatcher = createBudgetWatcher({
   onAlert: (alert) => {
     void postWebhook(config.webhookUrl, buildBudgetAlertPayload(alert));
     broadcast({ type: "budget:alert", alert });
+    archive(
+      alertEvent({
+        kind: alert.event,
+        at: alert.at,
+        severity: alert.state === "exceeded" ? "critical" : "warning",
+        subject: "Budget",
+        detail: alert.detail,
+        href: "#/budget",
+      }),
+    );
   },
 });
 // Watchtower learns each schedule's and phase's normal envelope from history

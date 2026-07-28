@@ -380,3 +380,86 @@ test("runsBetween windows the history for the long Chronicle", async () => {
     );
   });
 });
+
+test("a monitor or budget transition is archived as it happens", async () => {
+  await withHome(async () => {
+    const { alertEvent, ingestAlert } = await import("./ingest.js");
+    const event = alertEvent({
+      kind: "monitor.down",
+      at: NOW.toISOString(),
+      severity: "warning",
+      subject: "Nightly triage",
+      detail: "no run in 26 hours",
+      href: "#/monitors",
+    })!;
+    assert.equal(ingestAlert(event), true);
+
+    assert.equal(vaultStatus([]).rows.events, 1);
+    // Monitor and budget transitions are derived per tick and diffed in memory;
+    // without this they are pushed to the bell and then gone, and nothing on
+    // disk can answer "how often did this flap last quarter".
+    const hits = vaultSearch("26 hours").hits;
+    assert.equal(hits.length, 1);
+    assert.equal(hits[0].href, "#/monitors");
+  });
+});
+
+test("regression: the same transition twice is one row", async () => {
+  await withHome(async () => {
+    const { alertEvent, ingestAlert } = await import("./ingest.js");
+    const make = () =>
+      alertEvent({
+        kind: "budget.exceeded",
+        at: NOW.toISOString(),
+        severity: "critical",
+        subject: "Budget",
+        detail: "today $12.40 of $10.00",
+        href: "#/budget",
+      })!;
+    ingestAlert(make());
+    ingestAlert(make());
+    // Content-hashed, so a restart that replays a tick cannot duplicate
+    // history — and a search cannot report one breach as two.
+    assert.equal(vaultStatus([]).rows.events, 1);
+    assert.equal(vaultSearch("12.40").hits.length, 1);
+  });
+});
+
+test("an alert with no usable timestamp is dropped, not stored at the epoch", async () => {
+  await withHome(async () => {
+    const { alertEvent } = await import("./ingest.js");
+    assert.equal(
+      alertEvent({
+        kind: "monitor.down",
+        at: "not a date",
+        severity: "warning",
+        subject: "x",
+        detail: "y",
+        href: "#/monitors",
+      }),
+      null,
+    );
+  });
+});
+
+test("archiving an alert while the Vault is off is a clean false, not a throw", async () => {
+  await withHome(async () => {
+    process.env.ARGUS_VAULT = "off";
+    closeVault();
+    try {
+      const { alertEvent, ingestAlert } = await import("./ingest.js");
+      const event = alertEvent({
+        kind: "monitor.down",
+        at: NOW.toISOString(),
+        severity: "warning",
+        subject: "x",
+        detail: "y",
+        href: "#/monitors",
+      })!;
+      // An alert that fails to archive must not break the alert.
+      assert.equal(ingestAlert(event), false);
+    } finally {
+      delete process.env.ARGUS_VAULT;
+    }
+  });
+});

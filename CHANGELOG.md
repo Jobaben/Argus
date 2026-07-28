@@ -143,6 +143,13 @@ All notable changes to Argus are documented here. The format follows
   model of English is a worse fit for a corpus of your own runs than that
   corpus's own vocabulary, and it would cost the zero-configuration promise the
   rest of the feature makes.
+  **Monitor and budget transitions are archived as they happen.** Both are
+  derived on each tick, diffed in memory, pushed to the bell and then forgotten;
+  nothing on disk could answer "how often did this monitor flap last quarter".
+  They are pushed to the Vault rather than polled because by the next tick there
+  is nothing left to poll, content-hashed so a replayed tick cannot report one
+  breach as two, and a failure to archive is swallowed — an alert that cannot be
+  stored must not break the alert.
   The panel reports its own state — rows held, size, last ingest, and how many
   runs it is keeping that the JSON files have already pruned. A store that
   quietly stopped ingesting looks exactly like a quiet month, which is the one
