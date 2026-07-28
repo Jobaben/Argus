@@ -32,7 +32,8 @@ export type LiveChangeEvent =
   | "inventory:changed"
   | "sessions:changed"
   | "watchtower:changed"
-  | "sentinel:changed";
+  | "sentinel:changed"
+  | "fleet:changed";
 
 export type MonitorAlertEvent = "monitor.down" | "monitor.failing" | "monitor.recovered";
 

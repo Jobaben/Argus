@@ -42,6 +42,7 @@ const Chronicle = lazy(() => import("./views/Chronicle"));
 const Launch = lazy(() => import("./views/Launch"));
 const Schedules = lazy(() => import("./views/Schedules"));
 const Monitors = lazy(() => import("./views/Monitors"));
+const Fleet = lazy(() => import("./views/Fleet"));
 const Watchtower = lazy(() => import("./views/Watchtower"));
 const Sentinel = lazy(() => import("./views/Sentinel"));
 const Issues = lazy(() => import("./views/Issues"));
@@ -141,6 +142,7 @@ const TAB_META: { id: string; label: string; role: TabRole }[] = [
   { id: "issues", label: "Issues", role: "destination" },
   { id: "pipelines", label: "Pipelines", role: "destination" },
   { id: "budget", label: "Budget", role: "destination" },
+  { id: "fleet", label: "Fleet", role: "overflow" },
   { id: "search", label: "Search", role: "utility" },
   { id: "stats", label: "Stats", role: "overflow" },
   { id: "inventory", label: "Inventory", role: "overflow" },
@@ -332,6 +334,8 @@ export default function App() {
         return <Pipelines />;
       case "budget":
         return <Budget />;
+      case "fleet":
+        return <Fleet />;
       case "search":
         return <Search />;
       case "stats":

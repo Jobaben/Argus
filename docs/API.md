@@ -633,6 +633,148 @@ swaps the model; `warn` and `stop` do what they say. The existing
 from the run record itself, rather than by correlating timestamps against a
 policy that has since been edited.
 
+## Constellation
+
+Peer-to-peer federation with no coordinator. Each machine publishes a small
+summary of itself and pulls its peers', over a channel that is encrypted and
+signed end-to-end with a secret the two of them share.
+
+With no peers configured none of this runs: no outbound requests, no summary
+served, nothing published. Federation is opt-in per peer.
+
+State lives in `~/.claude/argus/peers.json`, mode `0600` — it holds long-lived
+shared secrets, and no route ever returns one.
+
+### `GET /api/fleet`
+
+Open, like every other read. Self first, then peers by label.
+
+```json
+{
+  "machines": [
+    {
+      "isSelf": true,
+      "peer": { "id": "…", "label": "Laptop", "url": "", "status": "paired", "…": "…" },
+      "summary": {
+        "machineId": "…",
+        "label": "Laptop",
+        "version": "0.4.0",
+        "generatedAt": "2026-07-20T12:00:00.000Z",
+        "schedules": 3,
+        "monitorsDown": 0,
+        "monitorsFailing": 1,
+        "openIssues": 2,
+        "liveInstances": 1,
+        "gatedInstances": 0,
+        "runsToday": 12,
+        "failuresToday": 1,
+        "spendTodayUsd": 1.25,
+        "spendMonthUsd": 30.4,
+        "worstIncident": "critical: Nightly triage is down"
+      }
+    }
+  ],
+  "totals": { "machines": 3, "reporting": 2, "openIssues": 5, "…": "…" },
+  "soloMode": false,
+  "generatedAt": "2026-07-20T12:00:00.000Z"
+}
+```
+
+`peer.status` is `paired` | `pending` | `stale` | `unauthorized` | `unreachable`.
+`unauthorized` and `unreachable` are distinct because a mismatched secret and a
+dead machine want different fixes.
+
+**`totals.machines` and `totals.reporting` are both returned, and the difference
+is the point.** A total summed over three of five machines is not a fleet total,
+and a client that cannot say so will present it as one. A peer that has gone
+quiet keeps its last summary, marked stale, rather than silently shrinking the
+denominator.
+
+`soloMode` is true when no peers are configured.
+
+### `GET /api/federation/summary`
+
+The peer-facing endpoint. **Not admin-gated, and not open**: the caller must
+send `x-argus-pairing`, a public identifier derived from the shared secret
+(`HMAC("argus-pairing-id", secret)`, first 32 hex characters). If this machine
+holds no pairing by that name the answer is a `401` that reveals nothing — not
+the machine's id, not its label, not whether any pairing exists.
+
+**It is exempt from `ARGUS_TOKEN`.** Federation is only reachable on an exposed
+bind, and an exposed bind requires the token, so without the exemption pairing
+would only work by giving every peer the bearer that unlocks the whole control
+plane — one shared secret granting everything, instead of a per-pair secret
+granting one read. The exemption is safe because the route's own authentication
+is stronger than the one it replaces, and the route is read-only.
+
+The response is an **envelope**, not a summary:
+
+```json
+{
+  "v": 1,
+  "from": "<machineId>",
+  "at": "2026-07-20T12:00:00.000Z",
+  "nonce": "base64",
+  "iv": "base64",
+  "ct": "base64",
+  "tag": "base64",
+  "sig": "base64"
+}
+```
+
+- **HKDF-SHA256** derives two independent keys from the pairing secret, one for
+  encryption and one for the MAC. One key for both is the classic way to make
+  two sound primitives unsound together.
+- **AES-256-GCM** encrypts (`iv`, `ct`, `tag`).
+- **HMAC-SHA256 over `v|from|at|nonce|iv|ct|tag`** is `sig`. GCM already
+  authenticates the ciphertext; this binds the _header_, so `from` and `at`
+  cannot be rewritten in flight.
+- **`at` and `nonce`** make replay detectable. Envelopes outside ±5 minutes are
+  rejected in **both** directions — a far-future timestamp is as much a replay
+  tell as a stale one — and a nonce seen inside the window is refused.
+
+Verification order is signature, then freshness, then decrypt: nothing derived
+from the envelope is used before it verifies.
+
+### Managing peers
+
+All admin-gated.
+
+| Method + path           | Body                     | Effect                                     |
+| ----------------------- | ------------------------ | ------------------------------------------ |
+| `POST /api/peers/pair`  | —                        | mint a pairing secret, shown once          |
+| `POST /api/peers`       | `{ label, url, secret }` | pair a machine → `201`, `400` on bad input |
+| `DELETE /api/peers/:id` | —                        | unpair → `200`, `404` if unknown           |
+| `PUT /api/fleet/label`  | `{ label }`              | rename this machine as peers see it        |
+
+`url` must be an absolute `http`/`https` URL — `file:` and friends are refused
+by name, because a peer URL is somewhere this server makes outbound requests on
+a timer. It is normalized without a trailing slash, so two spellings of one
+machine are not two peers. `secret` must be the 64-character pairing code.
+Adding a peer broadcasts `fleet:changed`.
+
+At most **24 peers**. A fleet larger than that wants a different product.
+
+### Refuse-to-boot
+
+`assertPeersAreSafe` runs alongside `assertBindIsSafe`: Argus refuses to start
+with a peer configured over a **non-loopback URL and no pairing secret**, which
+would be an unauthenticated summary exchange in both directions. Loopback peers
+without a secret are allowed — that is a local experiment, not a trust
+relationship.
+
+### Polling
+
+Peers are pulled once per scheduler tick — pull, not push, so a machine that is
+asleep or behind NAT is a peer that did not answer rather than a delivery to
+retry. One request per peer per tick, a **4-second timeout**, a **64 KB**
+response cap, and no retries. A summary older than **5 minutes** reads as stale.
+
+**Practical note:** a peer must be able to reach this machine, which means
+`ARGUS_HOST` beyond loopback, `ARGUS_TOKEN` set, and the peer-facing hostname in
+`ARGUS_ALLOWED_HOSTS`. Running the fleet over a VPN or tailnet is the intended
+shape.
+
 ## Omnibar
 
 Compiling an English sentence into an explicit, reviewable list of mutations,

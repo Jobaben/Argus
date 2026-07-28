@@ -1985,3 +1985,215 @@ test("omnibar: planning and executing are both behind the admin gate", async () 
     assert.equal(res.status, 401, route);
   }
 });
+
+// ── Constellation ───────────────────────────────────────────────────────────
+
+const PEER_SECRET = "a".repeat(64);
+
+function makeFleetApp(fleet?: Parameters<typeof createApp>[0]["fleet"]) {
+  return createApp({
+    config,
+    engine: fakeEngine,
+    broadcast: () => {},
+    serveWeb: false,
+    users: createUserStore(),
+    remoteAddr: () => "127.0.0.1",
+    auth: openAuth,
+    fleet,
+  });
+}
+
+async function pairPeer(app: ReturnType<typeof createApp>, url = "http://box.local:7777") {
+  const res = await app.request("/api/peers", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ label: "Build box", url, secret: PEER_SECRET }),
+  });
+  return { status: res.status, body: (await res.json()) as { peer?: { id: string } } };
+}
+
+test("fleet: a machine with no peers is solo, and says so", async () => {
+  const app = makeFleetApp();
+  const body = (await (await app.request("/api/fleet", { headers: loopback })).json()) as {
+    soloMode: boolean;
+    machines: { isSelf: boolean; summary: { label: string } | null }[];
+    totals: { machines: number; reporting: number };
+  };
+  assert.equal(body.soloMode, true);
+  assert.equal(body.machines.length, 1);
+  assert.equal(body.machines[0].isSelf, true);
+  assert.equal(body.totals.reporting, 1);
+});
+
+test("fleet: pairing adds a peer, and the secret never comes back", async () => {
+  const app = makeFleetApp();
+  const { status, body } = await pairPeer(app);
+  assert.equal(status, 201);
+  assert.ok(body.peer?.id);
+
+  const fleet = await (await app.request("/api/fleet", { headers: loopback })).text();
+  assert.equal(fleet.includes(PEER_SECRET), false, "a stored secret must never be serialized");
+  const parsed = JSON.parse(fleet) as {
+    soloMode: boolean;
+    machines: { peer: { status: string } }[];
+  };
+  assert.equal(parsed.soloMode, false);
+  assert.equal(parsed.machines[1].peer.status, "pending");
+});
+
+test("fleet: a bad peer is a clean 400, naming what is wrong", async () => {
+  const app = makeFleetApp();
+  for (const [payload, pattern] of [
+    [{ label: "", url: "http://a", secret: PEER_SECRET }, /label/],
+    [{ label: "Box", url: "file:///etc", secret: PEER_SECRET }, /http or https/],
+    [{ label: "Box", url: "http://a", secret: "nope" }, /pairing code/],
+  ] as const) {
+    const res = await app.request("/api/peers", {
+      method: "POST",
+      headers: sameOrigin,
+      body: JSON.stringify(payload),
+    });
+    assert.equal(res.status, 400, JSON.stringify(payload));
+    assert.match(((await res.json()) as { error: string }).error, pattern);
+  }
+});
+
+test("fleet: a peer can be unpaired, and an unknown one is a 404", async () => {
+  const app = makeFleetApp();
+  const { body } = await pairPeer(app);
+  const del = await app.request(`/api/peers/${body.peer!.id}`, {
+    method: "DELETE",
+    headers: sameOrigin,
+  });
+  assert.equal(del.status, 200);
+  assert.equal(
+    (await app.request(`/api/peers/${body.peer!.id}`, { method: "DELETE", headers: sameOrigin }))
+      .status,
+    404,
+  );
+});
+
+test("federation: the summary endpoint refuses anyone who is not paired", async () => {
+  const app = makeFleetApp();
+  // No header at all.
+  assert.equal((await app.request("/api/federation/summary", { headers: loopback })).status, 401);
+  // A header naming a pairing this machine does not hold.
+  const wrong = await app.request("/api/federation/summary", {
+    headers: { ...loopback, "x-argus-pairing": "f".repeat(32) },
+  });
+  assert.equal(wrong.status, 401);
+  // And it leaks nothing about the machine while refusing.
+  const text = await wrong.text();
+  assert.equal(/machineId|label|schedules/.test(text), false);
+});
+
+test("federation: a paired caller gets a sealed summary it can open", async () => {
+  const app = makeFleetApp();
+  await pairPeer(app);
+  const { pairingId, open } = await import("./federation/envelope.js");
+
+  const res = await app.request("/api/federation/summary", {
+    headers: { ...loopback, "x-argus-pairing": pairingId(PEER_SECRET) },
+  });
+  assert.equal(res.status, 200);
+  const envelope = (await res.json()) as Record<string, unknown>;
+  // Sealed end-to-end: the payload is not readable off the wire.
+  assert.equal(JSON.stringify(envelope).includes("schedules"), false);
+  const summary = open(envelope, PEER_SECRET, { now: new Date() }) as { machineId: string };
+  assert.ok(summary.machineId);
+});
+
+test("federation: an envelope sealed for one pairing does not open with another", async () => {
+  const app = makeFleetApp();
+  await pairPeer(app);
+  const { pairingId, open, EnvelopeError } = await import("./federation/envelope.js");
+  const res = await app.request("/api/federation/summary", {
+    headers: { ...loopback, "x-argus-pairing": pairingId(PEER_SECRET) },
+  });
+  const envelope = await res.json();
+  assert.throws(() => open(envelope, "b".repeat(64), { now: new Date() }), EnvelopeError);
+});
+
+test("fleet: peer summaries fold into the totals, with a reporting count", async () => {
+  const app = makeFleetApp(() => ({
+    summaries: new Map(),
+    health: new Map(),
+  }));
+  const body = (await (await app.request("/api/fleet", { headers: loopback })).json()) as {
+    totals: { machines: number; reporting: number };
+  };
+  assert.equal(body.totals.machines, 1);
+  assert.equal(body.totals.reporting, 1);
+});
+
+test("fleet: changing who this machine trusts is behind the admin gate", async () => {
+  const lockedOut: AuthService = {
+    ...openAuth,
+    verify: () => null,
+    status: async () => ({ configured: true, username: null, role: null }),
+  };
+  const app = createApp({
+    config,
+    engine: fakeEngine,
+    broadcast: () => {},
+    serveWeb: false,
+    users: createUserStore(),
+    remoteAddr: () => "127.0.0.1",
+    auth: lockedOut,
+  });
+  // Reading the fleet stays open, like every other read.
+  assert.equal((await app.request("/api/fleet", { headers: loopback })).status, 200);
+  for (const [route, method] of [
+    ["/api/peers", "POST"],
+    ["/api/peers/pair", "POST"],
+    ["/api/fleet/label", "PUT"],
+  ] as const) {
+    const res = await app.request(route, { method, headers: sameOrigin, body: "{}" });
+    assert.equal(res.status, 401, route);
+  }
+});
+
+test("fleet: a pairing code is fresh each time and explains what to do with it", async () => {
+  const app = makeFleetApp();
+  const first = (await (
+    await app.request("/api/peers/pair", { method: "POST", headers: sameOrigin })
+  ).json()) as { secret: string; instructions: string };
+  const second = (await (
+    await app.request("/api/peers/pair", { method: "POST", headers: sameOrigin })
+  ).json()) as { secret: string };
+  assert.match(first.secret, /^[0-9a-f]{64}$/);
+  assert.notEqual(first.secret, second.secret);
+  assert.match(first.instructions, /Both sides need the same/);
+});
+
+test("federation: a paired peer reaches the summary without the shared bearer token", async () => {
+  // Federation is only reachable on an exposed bind, and an exposed bind
+  // requires ARGUS_TOKEN. Without this exemption pairing would only work by
+  // handing every peer the token that unlocks the whole control plane.
+  const app = createApp({
+    config: { ...config, token: "server-token", allowedHosts: ["box.local"] },
+    engine: fakeEngine,
+    broadcast: () => {},
+    serveWeb: false,
+    users: createUserStore(),
+    remoteAddr: () => "127.0.0.1",
+    auth: openAuth,
+  });
+  const peerHost = { host: "box.local:7777" };
+  await app.request("/api/peers", {
+    method: "POST",
+    headers: { ...peerHost, origin: "http://box.local:7777", "x-argus-token": "server-token" },
+    body: JSON.stringify({ label: "Box", url: "http://box.local:7777", secret: PEER_SECRET }),
+  });
+
+  const { pairingId } = await import("./federation/envelope.js");
+  const res = await app.request("/api/federation/summary", {
+    headers: { ...peerHost, "x-argus-pairing": pairingId(PEER_SECRET) },
+  });
+  assert.equal(res.status, 200, "a paired peer is authenticated by its pairing");
+
+  // Every other route still demands the token.
+  assert.equal((await app.request("/api/fleet", { headers: peerHost })).status, 401);
+  // And an unpaired caller still gets nothing, token or no token.
+  assert.equal((await app.request("/api/federation/summary", { headers: peerHost })).status, 401);
+});

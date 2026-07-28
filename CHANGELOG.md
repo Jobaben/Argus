@@ -14,6 +14,43 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Constellation** (`#/fleet`): N machines, one lens. Argus watches one
+  `~/.claude`, so anyone running it on a laptop and a build box runs it twice
+  and reads it twice — and the questions that span both, what is failing
+  anywhere and what am I spending in total, have had no home. Now each machine
+  publishes a small summary of itself and pulls its peers', and the Fleet page
+  shows all of them with fleet-wide totals.
+  **Peer-to-peer with no server, and no coordinator to run.** Pull rather than
+  push, because a machine that is asleep or behind NAT is not a failed delivery
+  to retry — it is a peer that did not answer this round, which the fleet view
+  already renders. **Single-machine stays zero-config**: with no peers
+  configured nothing runs, nothing is published, and no federation endpoint
+  answers.
+  **Pairing is mutual and secret-based.** Mint a secret on one machine, add each
+  machine to the other with that same secret, and every exchange between them is
+  encrypted and signed end-to-end — HKDF to two independent keys, AES-256-GCM to
+  encrypt, HMAC-SHA256 over the whole envelope to bind the header, and a
+  timestamp plus nonce so a captured response cannot be replayed to freeze a
+  peer at a healthy moment. TLS on top is an improvement, not a requirement,
+  because "set up certificates between your laptop and your build box" is where
+  a feature like this stops being used.
+  **Refuse-to-boot extends to federation.** Argus already refuses to bind an
+  exposed port without `ARGUS_TOKEN`; it now equally refuses to start with a peer
+  configured over a non-loopback URL and no pairing secret. A security promise
+  that covers the original feature and not the new one is the promise people
+  rely on and the one that is quietly false.
+  **What crosses the wire is counts, and only counts** — no prompts, no error
+  text, no schedule names or session ids. A summary lands on a machine the
+  author of a run may not have thought about, and "seven open issues" answers
+  the fleet question without moving anybody's data. The machine's identity is a
+  locally-minted random id, not your hostname.
+  **Fleet totals say what they are made of.** Every aggregate is labelled _from
+  N of M machines_ and marked as a lower bound when some are not reporting;
+  silently summing whatever is reachable is how "spend is fine" becomes wrong on
+  the day a machine goes quiet. A quiet peer keeps its last card, marked stale,
+  rather than vanishing — and _unpaired_ (a mismatched secret) is kept distinct
+  from _unreachable_ (a dead machine), because they want different fixes.
+
 - **Omnibar** — the command palette learns to act. Type a sentence into `⌘K`
   ("pause everything touching Spectacle") and Argus compiles it, through a
   bounded planning pass, into an explicit table of changes: what it touches,

@@ -1,5 +1,6 @@
 import { Hono, type Context } from "hono";
 import { randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 import { claudeHome } from "./claudeHome.js";
 import { readAgents, readTimeline } from "./sources/jobs.js";
 import { readDaemon } from "./sources/daemon.js";
@@ -117,6 +118,20 @@ import { buildOtelExport } from "./vault/otel.js";
 import { compileIntent, MAX_INTENT_CHARS, type OmnibarContext } from "./sources/omnibar.js";
 import { rememberPlan, takePlan } from "./sources/planStore.js";
 import { executePlan } from "./omnibarExecutor.js";
+import {
+  addPeer,
+  machineIdentity,
+  publicPeers,
+  readPeers,
+  removePeer,
+  setLabel,
+  PeerValidationError,
+  type PeerHealth,
+} from "./federation/peers.js";
+import { newSecret, pairingId, seal } from "./federation/envelope.js";
+import { buildSummary } from "./federation/summary.js";
+import { buildFleet } from "./federation/fleet.js";
+import type { MachineSummary } from "@argus/contracts";
 import { buildOverview } from "./sources/overview.js";
 import { buildPalette } from "./sources/palette.js";
 import { buildSituation } from "./sources/insight.js";
@@ -168,6 +183,13 @@ export interface AppDeps {
   broadcast: (message: unknown) => void;
   /** Whether to mount the built SPA (skipped in tests). Defaults to true. */
   serveWeb?: boolean;
+  /**
+   * Verified peer summaries and health, from the federation poller.
+   *
+   * Injected rather than imported so the app factory stays free of background
+   * state — and so a test can hand it a fleet without a network.
+   */
+  fleet?: () => { summaries: Map<string, MachineSummary>; health: Map<string, PeerHealth> };
   /** Latest activity per running step run, from the run tailer. */
   activity?: () => Map<string, ActivityEvent>;
   /** Admin auth for pipeline edit/run routes. Defaults to the real service. */
@@ -417,6 +439,10 @@ export function createApp(deps: AppDeps): Hono {
   app.use("/api/instances/:id/approve", admin);
   app.use("/api/instances/:id/revise", admin);
   app.use("/api/instances/:id/abort", admin);
+  app.use("/api/peers", admin);
+  app.use("/api/peers/pair", admin);
+  app.use("/api/peers/:id", admin);
+  app.use("/api/fleet/label", admin);
   app.use("/api/omnibar/plan", admin);
   app.use("/api/omnibar/execute", admin);
 
@@ -1257,6 +1283,111 @@ export function createApp(deps: AppDeps): Hono {
   app.post("/api/instances/:id/abort", async (c) =>
     engineReply(c, await engine.abort(c.req.param("id"))),
   );
+
+  // ── Constellation ─────────────────────────────────────────────────────────
+  // One published summary, one fleet view, and the pairing that makes both
+  // meaningful. Reading the fleet is open like every other read; changing who
+  // this machine trusts is admin-gated like every other mutation.
+
+  /** This machine's own summary, derived fresh — never cached, never stored. */
+  async function selfSummary(now: Date): Promise<MachineSummary> {
+    const identity = await machineIdentity(hostname());
+    const [schedules, runs, triage, ctx, instances, incidents, budgetConfig, ledger] =
+      await Promise.all([
+        readSchedules(),
+        readRuns(),
+        readTriage(),
+        issueContext(),
+        readInstances(),
+        readIncidents(),
+        readBudgetConfig(),
+        readSpendLedger(),
+      ]);
+    return buildSummary({
+      machineId: identity.machineId,
+      label: identity.label,
+      version: VERSION,
+      schedules: schedules.length,
+      monitors: buildMonitors(schedules, runs, now).monitors,
+      issues: buildIssues(runs, triage, ctx),
+      instances,
+      runs,
+      incidents,
+      budget: buildBudgetStatus(budgetConfig, ledger, now),
+      now,
+    });
+  }
+
+  /**
+   * The peer-facing endpoint.
+   *
+   * Not admin-gated, and not open either: the caller must name a pairing this
+   * machine already holds, and the answer is sealed with that pairing's secret.
+   * An unpaired caller gets a 401 and learns nothing — not the machine's id, not
+   * its label, not whether any pairing exists.
+   */
+  app.get("/api/federation/summary", async (c) => {
+    const claimed = c.req.header("x-argus-pairing") ?? "";
+    if (!claimed) return c.json({ error: "unpaired" }, 401);
+    const peers = await readPeers();
+    const match = peers.find((p) => pairingId(p.secret) === claimed);
+    if (!match) return c.json({ error: "unpaired" }, 401);
+    const now = new Date();
+    const summary = await selfSummary(now);
+    return c.json(seal(summary, match.secret, summary.machineId, now));
+  });
+
+  app.get("/api/fleet", async (c) => {
+    const now = new Date();
+    const [self, peers] = await Promise.all([selfSummary(now), readPeers()]);
+    const state = deps.fleet?.() ?? { summaries: new Map(), health: new Map<string, PeerHealth>() };
+    return c.json(buildFleet(self, publicPeers(peers, state.health), state.summaries, now));
+  });
+
+  /** A fresh pairing secret, shown once. Generating one changes nothing yet. */
+  app.post("/api/peers/pair", async (c) => {
+    const secret = newSecret();
+    const identity = await machineIdentity(hostname());
+    return c.json({
+      secret,
+      instructions:
+        `On the other machine, open Fleet → Add a peer and paste this secret, ` +
+        `then do the same here with that machine's URL. Both sides need the same ` +
+        `secret — that is what makes the pairing mutual. This machine is ` +
+        `"${identity.label}".`,
+    });
+  });
+
+  app.post("/api/peers", async (c) => {
+    const body = await jsonBody(c);
+    if (!body.ok) return body.res;
+    try {
+      const peer = await addPeer(body.value, new Date());
+      broadcast({ type: "fleet:changed" });
+      // The secret goes in and never comes back out.
+      return c.json({ peer: { id: peer.id, label: peer.label, url: peer.url } }, 201);
+    } catch (e) {
+      return fail(c, e, PeerValidationError);
+    }
+  });
+
+  app.delete("/api/peers/:id", async (c) => {
+    if (!(await removePeer(c.req.param("id")))) return c.json({ error: "not found" }, 404);
+    broadcast({ type: "fleet:changed" });
+    return c.json({ ok: true });
+  });
+
+  app.put("/api/fleet/label", async (c) => {
+    const body = await jsonBody(c);
+    if (!body.ok) return body.res;
+    try {
+      const label = await setLabel(String((body.value as { label?: unknown })?.label ?? ""));
+      broadcast({ type: "fleet:changed" });
+      return c.json({ label });
+    } catch (e) {
+      return fail(c, e, PeerValidationError);
+    }
+  });
 
   // ── Omnibar ───────────────────────────────────────────────────────────────
   // Plan and execute are separate calls on purpose: a plan is a proposal a

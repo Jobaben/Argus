@@ -11,7 +11,7 @@ import {
   checkAll as checkPrereqs,
   preflight as preflightPrereqs,
 } from "./setup/prereqs.js";
-import { assertBindIsSafe, describeListenError, loadConfig } from "./config.js";
+import { assertBindIsSafe, assertPeersAreSafe, describeListenError, loadConfig } from "./config.js";
 import { isUpgradeAllowed } from "./security.js";
 import { VERSION } from "./version.js";
 import {
@@ -30,6 +30,8 @@ import { createAutopsyWatcher } from "./autopsyWatcher.js";
 import { createVerdictWatcher } from "./verdictWatcher.js";
 import { createSentinelWatcher } from "./sentinelWatcher.js";
 import { createVaultWatcher } from "./vaultWatcher.js";
+import { createPoller } from "./federation/poll.js";
+import { readPeers as readFederationPeers } from "./federation/peers.js";
 import { deriveConditions, readIncidents } from "./sources/sentinel.js";
 import { readSpendLedger } from "./sources/budget.js";
 import { buildMonitors } from "./sources/monitors.js";
@@ -54,6 +56,11 @@ const config = loadConfig();
 // unauthenticated public port has already lost.
 try {
   assertBindIsSafe(config);
+  // The same promise, extended to federation: an unpaired remote peer is an
+  // unauthenticated summary exchange in both directions, and a check that
+  // covered only the original feature would be the one people rely on and the
+  // one that is quietly false.
+  assertPeersAreSafe(await readFederationPeers());
 } catch (e) {
   log.error(e instanceof Error ? e.message : String(e));
   process.exit(1);
@@ -97,6 +104,19 @@ const auth = createAuthService({ store: users });
 // on-demand routes and the background watcher share its concurrency and spend
 // gate, so "one pass at a time" means one, not one per caller.
 const analysis = createAnalysisRunner();
+/**
+ * Constellation polls its peers on the same tick as everything else.
+ *
+ * Pull, not push: a peer that is asleep or behind NAT is not a failed delivery
+ * to retry, it is a machine that did not answer this round — which is a state
+ * the fleet view already renders. With no peers configured this does nothing at
+ * all, which is what keeps single-machine zero-config.
+ */
+const fleetPoller = createPoller({
+  now: () => new Date(),
+  readPeers: readFederationPeers,
+});
+
 const app = createApp({
   config,
   engine,
@@ -105,6 +125,7 @@ const app = createApp({
   users,
   analysis,
   activity: () => tailer.latest(),
+  fleet: () => fleetPoller.state(),
 });
 
 const server = serve({ fetch: app.fetch, port: PORT, hostname: config.host }, (info) => {
@@ -328,6 +349,7 @@ const scheduler = startScheduler({
     await verdictWatcher.check();
     await sentinelWatcher.check();
     await vaultWatcher.check();
+    await fleetPoller.check();
   },
   onFailure: (run) =>
     void postWebhook(config.webhookUrl, buildRunFailurePayload(run, new Date().toISOString())),

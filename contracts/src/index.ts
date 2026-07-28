@@ -229,3 +229,14 @@ export type {
   PlanStatus,
   PlannedMutation,
 } from "./omnibar.js";
+
+export type {
+  FleetMachine,
+  FleetTotals,
+  FleetView,
+  MachineSummary,
+  PairingCode,
+  Peer,
+  PeerInput,
+  PeerStatus,
+} from "./constellation.js";

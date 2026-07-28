@@ -58,6 +58,7 @@ can do, and where the data comes from.
 | 27  | [Ledger](#27-ledger)                   | `#/budget`     | where did the money go, and where next?    |
 | 28  | [The Vault](#28-the-vault)             | `#/stats`      | what happened last quarter, and last year? |
 | 29  | [Omnibar](#29-omnibar)                 | `⌘K`           | say it, see the exact changes, confirm     |
+| 30  | [Constellation](#30-constellation)     | `#/fleet`      | N machines, one lens                       |
 
 ---
 
@@ -1645,6 +1646,112 @@ is not a formality; it is the security model.
 
 **Where the data comes from:** schedules, open issues, live instances and the
 budget config, read fresh for each pass. Pending plans are held in memory only.
+
+---
+
+## 30. Constellation
+
+_N machines, one lens._ Route: `#/fleet`.
+
+**Purpose:** Argus watches one `~/.claude`. Anyone running it on a laptop and a
+build box runs it twice and reads it twice, and the questions that span both —
+_what is failing anywhere, what am I spending in total_ — have no home.
+Constellation gives them one.
+
+**Single-machine stays zero-config.** With no peers configured nothing here
+runs: Argus makes no outbound requests, publishes no summary, and answers no
+federation endpoint. The page shows one machine and says so, rather than
+implying a fleet is missing.
+
+### Pairing
+
+Pairing is **mutual and secret-based**, and there is no server involved.
+
+1. On machine A: **Fleet → Mint a pairing secret**. It is shown once.
+2. On machine A: add machine B — its name, its Argus URL, and that secret.
+3. On machine B: add machine A — its URL, and **the same secret**.
+
+Each side only answers to pairings it holds, which is what makes step 3 part of
+the protocol rather than a nicety. A secret is 64 hex characters and is never
+readable back through the API once stored.
+
+### What crosses the wire
+
+A **summary**, and only a summary: counts of monitors down and failing, open
+issues, live and gated pipelines, runs and failures today, spend today and this
+month, the version, and the title of the worst open incident.
+
+No prompts. No error text. No schedule names, session ids or working
+directories. A peer summary lands on a machine the author of a run may not have
+thought about, and "seven open issues" answers the fleet-level question without
+moving anybody's data. To see the detail you open that machine's own Argus,
+which is where it belongs.
+
+Every exchange is **encrypted and signed end-to-end** with keys derived from the
+pairing secret — AES-256-GCM for confidentiality, HMAC-SHA256 over the whole
+envelope for integrity, and a timestamp and nonce so a captured response cannot
+be replayed to freeze a peer at a healthy moment. TLS on top is an improvement,
+not a requirement, which matters because "set up certificates between your
+laptop and your build box" is the step at which a feature like this stops being
+used.
+
+### Reading the fleet
+
+Each machine gets a card: its counts, its spend, its version, and its status.
+
+| Status          | Meaning                                                                                               |
+| --------------- | ----------------------------------------------------------------------------------------------------- |
+| **paired**      | Answering, and the answer verified.                                                                   |
+| **pending**     | Added, not yet reached.                                                                               |
+| **stale**       | Last answer is over five minutes old — the figures shown are that old.                                |
+| **unpaired**    | Reachable, but the pairing did not verify. Usually a secret typed into one machine and not the other. |
+| **unreachable** | No answer at all.                                                                                     |
+
+_unpaired_ and _unreachable_ are kept apart deliberately: a mismatched secret
+and a dead machine are different problems and want different fixes.
+
+A machine that goes quiet **keeps its last card, marked stale**, rather than
+vanishing. "Last known, ten minutes ago" is information; an empty space is not.
+
+**Fleet totals say what they are made of.** Every aggregate is labelled _from N
+of M machines_, and when some are not reporting it says the figures are lower
+bounds. Silently summing whatever happens to be reachable is how "spend is fine"
+becomes wrong on the day a machine goes quiet — which is exactly the day it
+matters.
+
+### This machine's name
+
+A name you choose, shown to peers. The machine's **identity** is a random id
+minted locally on first use — not your hostname, not a MAC address — so nothing
+about this computer travels to a peer that you did not type in yourself.
+
+### Safety
+
+- **Reading the fleet is open**, like every other read. **Pairing, unpairing and
+  renaming are admin-gated**, like every other mutation.
+- **Refuse-to-boot extends to federation.** Argus already refuses to bind an
+  exposed port without `ARGUS_TOKEN`. It now equally refuses to start with a
+  peer configured over a non-loopback URL and no pairing secret — that would be
+  an unauthenticated summary exchange in both directions. A security promise
+  that covers the original feature and not the new one is the promise people
+  rely on and the one that is quietly false.
+- **The peer endpoint authenticates itself** rather than using the shared
+  `ARGUS_TOKEN`. Otherwise pairing would only work by handing every peer the
+  token that unlocks the whole control plane — one shared bearer granting
+  everything, instead of a per-pair secret granting one read. An unpaired caller
+  gets a `401` that reveals nothing: not the machine's id, not its label, not
+  whether any pairing exists.
+- Peers and their secrets live in `~/.claude/argus/peers.json`, mode `0600`,
+  like the admin credentials.
+
+**Practical note:** a peer has to be able to reach this machine, which means
+binding beyond loopback (`ARGUS_HOST`), setting `ARGUS_TOKEN`, and listing the
+peer-facing hostname in `ARGUS_ALLOWED_HOSTS`. Running the fleet over a private
+network — a VPN or a tailnet — is the intended shape.
+
+**Where the data comes from:** each machine's own schedules, monitors, issues,
+instances, incidents and spend, summarised per request and never stored. Peers
+are polled once per scheduler tick, with a four-second timeout and no retries.
 
 ---
 

@@ -29,6 +29,12 @@ surface is a privileged single-user control plane: loopback-bound by default,
 with a Host allowlist (anti DNS-rebind), an Origin check on mutations (anti
 CSRF), and an optional bearer token — all applied to the WebSocket upgrade too.
 
+One route is exempt from the bearer token and authenticates itself instead:
+`/api/federation/summary`, which requires the caller to name a pairing this
+machine already holds and seals its answer with that pairing's secret. See §5,
+"Federation without a server", for why that is stronger than the check it
+replaces rather than a hole in it.
+
 On top of those transport-level layers, **editing or running pipelines requires
 an admin login** (`server/src/auth.ts`). The admin account is created on first
 run from the Pipelines tab; the password is persisted only as a salted scrypt
@@ -336,6 +342,61 @@ Three consequences worth naming, because each was a bug before it was a design:
 
 The whole 735-test suite that predated Weave passes unchanged, which is the
 actual guarantee behind "linear definitions load unchanged".
+
+### Federation without a server
+
+`federation/` adds peers to a tool whose whole premise is that it needs no
+infrastructure, so the shape was chosen to keep that true. Peer-to-peer with no
+coordinator, **pull** rather than push, and opt-in per peer: with none
+configured the code paths do not run at all, and single-machine stays exactly as
+zero-config as it was.
+
+Pull is what removes the server. A machine that is asleep, behind NAT, or simply
+off is not a failed delivery to retry — it is a peer that did not answer this
+round, which is a state the fleet view already renders. Push would need
+retries, a queue, and somewhere for an undeliverable summary to wait.
+
+**The transport is not trusted.** Peers talk over whatever the user has: a LAN,
+a tailnet, a reverse proxy. So the payload is sealed end-to-end — HKDF-SHA256 to
+two independent keys, AES-256-GCM to encrypt, HMAC-SHA256 over the whole
+envelope to bind the header, and a timestamp plus nonce so a captured response
+cannot be replayed to freeze a peer at a healthy moment. Verification order
+matters and is enforced: signature, then freshness, then decrypt, so nothing
+derived from an envelope is used before it verifies. TLS on top is an
+improvement rather than a requirement, which matters because "set up
+certificates between your laptop and your build box" is where a feature like
+this stops being used.
+
+Three decisions are worth naming because each was a smaller, worse design first.
+
+**The pairing is named by a hash of its secret.** The responder has to know
+which key to seal with. Sending the secret defeats the point; sending the
+caller's own peer id does not work, because that id is local to the caller's
+list and means nothing on the other machine. `HMAC("argus-pairing-id", secret)`
+gives both sides the same name for the pairing without either revealing it, and
+it grants nothing on its own — every byte still has to verify against the secret
+it names.
+
+**The peer endpoint is exempt from `ARGUS_TOKEN`.** Federation is only reachable
+on an exposed bind, and an exposed bind requires the token, so without the
+exemption pairing could only work by handing every peer the bearer that unlocks
+the whole control plane. That is strictly worse: one shared secret granting
+everything, versus a per-pair secret granting one read. The exemption is safe
+because the route's own authentication is stronger than the one it replaces, and
+because it is read-only.
+
+**`totals.reporting` sits next to `totals.machines`.** A number summed over three
+of five machines is not a fleet number. Returning only the sum would make every
+client present it as one, and the failure is silent and lands on the day a
+machine goes quiet — which is the day the number matters. For the same reason a
+quiet peer keeps its last summary, marked stale, rather than disappearing and
+shrinking the denominator.
+
+The summary itself is counts and nothing else: no prompts, no error text, no
+schedule names or session ids. It crosses a network and lands on a machine the
+author of a run may not have thought about, and "seven open issues" answers the
+fleet-level question without moving anybody's data. The machine's identity is a
+locally-minted UUID rather than a hostname, for the same reason.
 
 ### The confirm step is the security model
 

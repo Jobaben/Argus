@@ -143,6 +143,15 @@ export type {
   PaletteIndex,
   PaletteKind,
   PaletteSeverity,
+  // Constellation
+  FleetMachine,
+  FleetTotals,
+  FleetView,
+  MachineSummary,
+  PairingCode,
+  Peer,
+  PeerInput,
+  PeerStatus,
   // Omnibar
   AnswerLink,
   ExecuteResult,
