@@ -715,7 +715,7 @@ All notable changes to Argus are documented here. The format follows
 - `/api/health` reports the version.
 - CI workflow (typecheck, lint, test, build); server ESLint; Prettier and
   EditorConfig; `.nvmrc`.
-- Quality rubric in `docs/SCORECARD.md`.
+- Internal quality rubric (removed from the tree ahead of the public release).
 
 ## [0.1.0]
 

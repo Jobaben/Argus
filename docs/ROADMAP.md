@@ -122,3 +122,23 @@ built underneath. See the changelog for the itemised list.
 - Resolve the 2 npm criticals; drop leftover Vite demo assets.
 - Vitest coverage for each `sources/*` against fixture homes.
 - Virtualized lists for large session/activity sets.
+
+## What's next — real demand decides
+
+Argus v0.4 is feature-complete for a single human on their own machines.
+The next milestone is deliberately **not chosen yet**. Two candidates, both
+real, both non-trivial, and the pinned
+[roadmap issue](https://github.com/Jobaben/Argus/issues/20) exists to let
+actual usage pick between them:
+
+1. **Remote-ingestion adapter** — watch agents that run where you aren't:
+   CI jobs, build boxes, servers. A small shipper tails a remote `~/.claude`
+   and streams it into your local Argus, keeping the local-first trust model
+   (your dashboard, your disk) while widening what it can see.
+2. **Team / fleet edition** — several humans, one pane: shared schedules and
+   pipelines, per-user approval gates, and an audit trail of who approved
+   what. The read-only Constellation federation that ships today is the
+   seed of this.
+
+Vote with a 👍 or a comment on the pinned issue; bugs and feature requests
+go to [GitHub issues](https://github.com/Jobaben/Argus/issues) either way.

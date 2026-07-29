@@ -4,6 +4,7 @@
 FROM node:22-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
+COPY contracts/package.json contracts/
 COPY server/package.json server/
 COPY web/package.json web/
 RUN npm ci
@@ -15,6 +16,7 @@ FROM node:22-slim AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
 COPY package.json package-lock.json ./
+COPY contracts/package.json contracts/
 COPY server/package.json server/
 COPY web/package.json web/
 RUN npm ci --omit=dev --workspace server && npm cache clean --force

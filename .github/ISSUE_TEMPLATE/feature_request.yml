@@ -1,0 +1,30 @@
+name: Feature request
+description: Something Argus should do that it doesn't
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before writing: if your idea is "run this against a remote/CI machine"
+        or "share one Argus across a team", that's the exact fork in the road
+        the pinned **roadmap issue** is deciding — a 👍 and a comment there
+        counts as a vote.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: The situation that made you want this, not just the feature itself.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like Argus to do?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What do you do today instead?
+    validations:
+      required: false
