@@ -28,6 +28,7 @@ export { ConnectionPill } from "./ConnectionPill";
 export { HealthCounter } from "./HealthCounter";
 export { HeartbeatBar } from "./HeartbeatBar";
 export { AgentTile } from "./AgentTile";
+export { SweepBar } from "./SweepBar";
 export { AlertStrip } from "./AlertStrip";
 export { ToastRegion } from "./Toast";
 export type { ToastItem } from "./Toast";

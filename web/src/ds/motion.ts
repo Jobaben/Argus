@@ -39,6 +39,13 @@ export const DURATION = {
   exit: 126,
   exitQuick: 84,
   press: 70,
+  // Ambient cycles. Here because {@link syncedDelay} needs the cycle length to
+  // put several instances of one animation in phase.
+  pulse: 1400,
+  sweep: 1600,
+  ping: 1800,
+  alert: 2200,
+  shimmer: 1600,
 } as const;
 
 /** The easings, same contract as {@link DURATION}. */

@@ -35,7 +35,7 @@ function ShareBar({ share }: { share: number }) {
   return (
     <span
       aria-hidden="true"
-      className="block h-1 rounded-full bg-eye/60"
+      className="block h-1 rounded-full bg-eye/60 transition-[width] duration-(--duration-slow) ease-(--ease-out-expo)"
       style={{ width: `${Math.max(2, Math.round(share * 100))}%` }}
     />
   );

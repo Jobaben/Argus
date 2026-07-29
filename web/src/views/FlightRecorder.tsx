@@ -1,17 +1,19 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Card,
+  createVelocityTracker,
   EmptyState,
-  Loading,
-  Page,
-  SegmentedControl,
-  SkeletonRows,
-  StatusPill,
   formatMs,
   formatTokens,
   formatUsd,
+  Loading,
+  Page,
   prefersReducedMotion,
   runDsStatus,
+  SegmentedControl,
+  settleFrom,
+  SkeletonRows,
+  StatusPill,
 } from "../ds";
 import { AutopsyPanel } from "./AutopsyPanel";
 import { VerdictPanel } from "./VerdictPanel";
@@ -93,17 +95,31 @@ const DensityRow = memo(function DensityRow({ density, bar }: { density: number[
   );
 });
 
-/** One lane's density strip: bounded DOM, shaped like the run. */
+/**
+ * One lane's density strip: bounded DOM, shaped like the run.
+ *
+ * Also the app's most direct-manipulation surface. The strips *look* like a track
+ * you can grab, and until now they were decoration next to a slider — so grabbing
+ * one did nothing, which is the specific kind of dead affordance that makes a UI
+ * feel like a picture of an instrument. `onScrub` makes the lane itself the
+ * control: press anywhere to land there, drag to scrub 1:1 with the pointer.
+ *
+ * The range input stays exactly as it was and remains the accessible control —
+ * this is pointer-only enhancement, added beside the keyboard path rather than in
+ * place of it.
+ */
 function LaneStrip({
   lane,
   events,
   durationMs,
   playheadPct,
+  onScrub,
 }: {
   lane: RecorderLane;
   events: RecorderEvent[];
   durationMs: number;
   playheadPct: number;
+  onScrub: (event: React.PointerEvent<HTMLElement>) => void;
 }) {
   const density = useMemo(
     () => laneDensity(events, lane, durationMs, TRACK_COLUMNS),
@@ -115,13 +131,23 @@ function LaneStrip({
       <span className="w-24 shrink-0 truncate text-right font-mono text-[10px] uppercase tracking-[0.12em] text-ink-faint">
         {style.label}
       </span>
-      <div className="relative h-5 min-w-0 flex-1 overflow-hidden rounded-sm bg-ground-2">
+      <div
+        onPointerDown={onScrub}
+        className="relative h-5 min-w-0 flex-1 cursor-ew-resize touch-none overflow-hidden rounded-sm bg-ground-2"
+      >
         <DensityRow density={density} bar={style.bar} />
+        {/* A transform rather than `left`: the playhead moves every frame during
+            a 100× replay, and `left` would re-lay-out the strip sixty times a
+            second to do it. The translated element is full-width so that a
+            percentage means a percentage *of the track* — on the 1px line itself
+            it would mean 1% of one pixel. */}
         <span
           aria-hidden="true"
-          className="absolute top-0 h-full w-px bg-ink"
-          style={{ left: `${playheadPct}%` }}
-        />
+          className="pointer-events-none absolute inset-y-0 left-0 w-full will-change-transform"
+          style={{ transform: `translateX(${playheadPct}%)` }}
+        >
+          <span className="block h-full w-px bg-ink" />
+        </span>
       </div>
     </div>
   );
@@ -314,6 +340,68 @@ export default function FlightRecorder() {
     setT(Math.max(0, ms));
   }, []);
 
+  /**
+   * Pointer scrubbing on the lane strips, with a momentum settle on release.
+   *
+   * Two halves, and the second is the one that makes it feel like an instrument.
+   * *During* the drag the playhead tracks the pointer exactly — no easing, no
+   * smoothing, because any lag between finger and playhead is felt immediately as
+   * the control being a proxy for the thing rather than the thing. *On release*
+   * the recording keeps moving briefly in the direction of the flick and decays to
+   * rest, so letting go of a fast scrub hands its momentum over instead of
+   * stopping dead at the pixel the pointer happened to leave.
+   *
+   * The glide is deliberately small — capped at 600ms in `settleDuration`, and
+   * clamped to the recording — because this is a seek, not a scroll: overshooting
+   * the moment you were aiming for would be worse than not gliding at all.
+   */
+  const scrub = useCallback(
+    (event: React.PointerEvent<HTMLElement>) => {
+      if (durationMs <= 0 || event.button !== 0) return;
+      const track = event.currentTarget;
+      const rect = track.getBoundingClientRect();
+      if (rect.width <= 0) return;
+      const at = (clientX: number) =>
+        Math.max(0, Math.min(durationMs, ((clientX - rect.left) / rect.width) * durationMs));
+
+      setPlaying(false);
+      const tracker = createVelocityTracker();
+      let last = at(event.clientX);
+      tracker.sample(last, event.timeStamp);
+      setT(last);
+
+      const onMove = (move: PointerEvent) => {
+        last = at(move.clientX);
+        tracker.sample(last, move.timeStamp);
+        setT(last);
+      };
+      const onUp = (up: PointerEvent) => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        window.removeEventListener("pointercancel", onUp);
+        if (prefersReducedMotion()) return;
+        tracker.sample(at(up.clientX), up.timeStamp);
+        // Velocity is in ms-of-recording per ms-of-wall-clock, which is exactly
+        // the unit the glide needs — the track's pixel scale is already baked in.
+        const glide = settleFrom(tracker.velocity());
+        if (glide.ms === 0) return;
+        const from = last;
+        const to = Math.max(0, Math.min(durationMs, from + glide.distance));
+        const started = performance.now();
+        const tick = (now: number) => {
+          const progress = Math.min(1, (now - started) / glide.ms);
+          setT(from + (to - from) * (1 - (1 - progress) ** 3));
+          if (progress < 1) requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onUp);
+    },
+    [durationMs],
+  );
+
   const step = useCallback(
     (dir: 1 | -1) => {
       const next = stepIndex(events, t, dir);
@@ -459,6 +547,7 @@ export default function FlightRecorder() {
                   events={events}
                   durationMs={durationMs}
                   playheadPct={pct}
+                  onScrub={scrub}
                 />
               ))}
             </div>
@@ -483,7 +572,7 @@ export default function FlightRecorder() {
                 type="button"
                 onClick={() => step(-1)}
                 aria-label="Previous event"
-                className="rounded-md border border-line px-2.5 py-1 font-mono text-xs text-ink-dim transition hover:text-ink"
+                className="rounded-md border border-line px-2.5 py-1 font-mono text-xs text-ink-dim transition hover:text-ink motion-safe:active:scale-[0.96]"
               >
                 ◀◀
               </button>
@@ -491,7 +580,7 @@ export default function FlightRecorder() {
                 type="button"
                 onClick={() => setPlaying((p) => !p)}
                 aria-label={playing ? "Pause the replay" : "Play the replay"}
-                className="rounded-md border border-line bg-surface-2 px-3 py-1 font-mono text-xs font-bold text-ink transition hover:border-ink-faint/40"
+                className="rounded-md border border-line bg-surface-2 px-3 py-1 font-mono text-xs font-bold text-ink transition hover:border-ink-faint/40 motion-safe:active:scale-[0.96]"
               >
                 {playing ? "❚❚ Pause" : "▶ Play"}
               </button>
@@ -499,7 +588,7 @@ export default function FlightRecorder() {
                 type="button"
                 onClick={() => step(1)}
                 aria-label="Next event"
-                className="rounded-md border border-line px-2.5 py-1 font-mono text-xs text-ink-dim transition hover:text-ink"
+                className="rounded-md border border-line px-2.5 py-1 font-mono text-xs text-ink-dim transition hover:text-ink motion-safe:active:scale-[0.96]"
               >
                 ▶▶
               </button>
@@ -511,7 +600,7 @@ export default function FlightRecorder() {
                   <button
                     type="button"
                     onClick={jumpToFailure}
-                    className="rounded-md border border-fail/40 bg-fail/10 px-2.5 py-1 font-mono text-[11px] font-bold uppercase tracking-[0.1em] text-fail transition hover:bg-fail/20"
+                    className="rounded-md border border-fail/40 bg-fail/10 px-2.5 py-1 font-mono text-[11px] font-bold uppercase tracking-[0.1em] text-fail transition hover:bg-fail/20 motion-safe:active:scale-[0.96]"
                   >
                     Jump to failure
                   </button>

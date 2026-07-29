@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { formatMs, formatTokens, formatUsd } from "./format";
+import { useCountUp } from "./motion";
 
 export interface MeterProps {
   /** Total tokens; null/undefined = unknown (hidden), 0 = reported zero. */
@@ -49,6 +50,51 @@ function segments(
   return parts.flatMap((p, i) => (i === 0 ? [p] : [" · ", p]));
 }
 
+/**
+ * The board-level glance total, counted rather than swapped.
+ *
+ * This is the one number on the page whose *change* is the information: spend
+ * ticking up is the whole reason a cost meter exists at all, and replacing "$4.10"
+ * with "$4.63" between frames throws that away — you see the new figure and have
+ * to remember the old one to know anything happened. `useCountUp` keeps its own
+ * rules about when not to (first paint, huge jumps), so a page load is not a slot
+ * machine.
+ *
+ * Split into its own component because the row and step levels must *not* count:
+ * a finished step's cost is a fact about the past, and animating a fact reads as
+ * the number still being decided.
+ */
+function BoardMeter({
+  tokens,
+  usd,
+  label,
+  title,
+}: Pick<MeterProps, "tokens" | "usd" | "label" | "title">) {
+  const shownTokens = useCountUp(tokens ?? 0);
+  const shownUsd = useCountUp(usd ?? 0);
+  return (
+    <span className="flex flex-col items-end gap-0.5" title={title}>
+      <span className="font-mono text-meter font-bold uppercase tracking-[0.14em] text-ink-faint">
+        {label ?? "Total spend"}
+      </span>
+      <span className="text-glance-sm font-extrabold leading-none text-ink">
+        {tokens != null && (
+          <>
+            {formatTokens(shownTokens)} <small className={UNIT}>tok</small>
+          </>
+        )}
+        {tokens != null && usd != null && <span className="text-ink-faint"> · </span>}
+        {usd != null && (
+          <>
+            <small className={UNIT}>$</small>
+            {formatUsd(shownUsd).slice(1)}
+          </>
+        )}
+      </span>
+    </span>
+  );
+}
+
 /** Cost/token meter per the DS run-meter spec: step foot, row header, board glance. */
 export function Meter({
   tokens,
@@ -62,27 +108,7 @@ export function Meter({
   if (tokens == null && usd == null && durationMs == null) return null;
 
   if (level === "board") {
-    return (
-      <span className="flex flex-col items-end gap-0.5" title={title}>
-        <span className="font-mono text-meter font-bold uppercase tracking-[0.14em] text-ink-faint">
-          {label ?? "Total spend"}
-        </span>
-        <span className="text-glance-sm font-extrabold leading-none text-ink">
-          {tokens != null && (
-            <>
-              {formatTokens(tokens)} <small className={UNIT}>tok</small>
-            </>
-          )}
-          {tokens != null && usd != null && <span className="text-ink-faint"> · </span>}
-          {usd != null && (
-            <>
-              <small className={UNIT}>$</small>
-              {formatUsd(usd).slice(1)}
-            </>
-          )}
-        </span>
-      </span>
-    );
+    return <BoardMeter tokens={tokens} usd={usd} label={label} title={title} />;
   }
 
   const scale = level === "row" ? "text-label" : "text-meter";

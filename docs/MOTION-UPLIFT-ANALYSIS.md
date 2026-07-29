@@ -3,7 +3,7 @@
 **Scope:** An experience analysis of the Argus web app's look, feel, and
 animation layer, written from the perspective of a lead UX designer (Apple
 fluid-interfaces school) working on a Windows-first product. It proposes the
-major goals required to move the *feel* of the app from its current rubric
+major goals required to move the _feel_ of the app from its current rubric
 grade of **3/10** to **10/10**.
 
 **Hard constraints honored throughout:**
@@ -19,11 +19,18 @@ grade of **3/10** to **10/10**.
 
 This is analysis only. Nothing in the app is changed by this document.
 
+> **Status: delivered.** All four goals below have been implemented. This
+> document is kept as written — the diagnosis and the plan, unedited, so the
+> claims in it stay checkable against the code. For the system as built, and for
+> the two places the implementation departed from what is proposed here (the
+> mechanism for animating meter fills, and the tiered reduced-motion policy), see
+> **[MOTION-SYSTEM.md](MOTION-SYSTEM.md)**.
+
 ---
 
 ## 1. Where the experience stands today
 
-The codebase already has the *skeleton* of a motion system — which is exactly
+The codebase already has the _skeleton_ of a motion system — which is exactly
 why the felt experience underperforms it. The foundation promises a level of
 craft the surfaces don't deliver yet. Grounding facts, by file:
 
@@ -50,7 +57,7 @@ craft the surfaces don't deliver yet. Grounding facts, by file:
 ### 1.2 Why it still feels like a 3/10
 
 The system has **vocabulary but no grammar**. Individual elements know how to
-appear; nothing knows how to *leave*, how to *relate*, or how to *respond*.
+appear; nothing knows how to _leave_, how to _relate_, or how to _respond_.
 Concretely:
 
 1. **Nothing ever exits.** Every overlay in the app unmounts instantly:
@@ -60,7 +67,7 @@ Concretely:
      (`NavBar.tsx:71-117`) — same pattern: animated entrance, teleport exit.
    - **Toasts have no animation at all** (`Toast.tsx`): they pop into the
      bottom-right stack with zero entrance, and when one is dismissed the
-     remaining stack snaps upward instantly. For a *notification* surface —
+     remaining stack snaps upward instantly. For a _notification_ surface —
      whose entire job is to catch the eye gracefully — this is the loudest
      single "unfinished" signal in the app.
 
@@ -81,11 +88,11 @@ Concretely:
 
 4. **The live board doesn't move like a live board.** This is a real-time
    monitoring product — data arrives over a WebSocket — yet rows insert,
-   remove, and reorder as hard jumps. `useChangeFlash` marks *that* a row
+   remove, and reorder as hard jumps. `useChangeFlash` marks _that_ a row
    changed, but a new heartbeat tick simply appears in `HeartbeatBar`, a
    re-sorted fleet snaps to its new order, and a meter's width just becomes
    the new width. The one thing a monitoring dashboard can do that a static
-   report can't — *show change as change* — is mostly unexploited.
+   report can't — _show change as change_ — is mostly unexploited.
 
 5. **Micro-feedback is one-dimensional.** Interactive elements have hover
    color transitions and, on tiles, a hover lift. There are no pressed states
@@ -95,8 +102,8 @@ Concretely:
 
 **Rubric summary:** foundation 7/10, application ~2/10 → experienced feel
 3/10. The good news: because the tokens, the a11y posture, and the visual
-design don't need to change, the entire distance to 10/10 lies in *motion
-application* — the cheapest, most contained kind of uplift there is.
+design don't need to change, the entire distance to 10/10 lies in _motion
+application_ — the cheapest, most contained kind of uplift there is.
 
 ---
 
@@ -113,7 +120,7 @@ of static UI changes.
 
 The single strongest "cheap app" tell on any platform is asymmetric motion:
 surfaces that glide in and blink out. Users don't consciously notice missing
-exits, but they *feel* them — the illusion of a physical interface collapses
+exits, but they _feel_ them — the illusion of a physical interface collapses
 at every dismissal, dozens of times a session. On Windows this is doubly
 visible because Fluent-native apps (and the OS shell itself) animate
 dismissals everywhere; a web dashboard that doesn't reads as foreign chrome.
@@ -125,15 +132,15 @@ rather than ease-out — things leave with urgency and arrive with a settle).
 
 Specific closures, all mechanical:
 
-| Surface | Today | Target |
-| --- | --- | --- |
-| Drawer (`Drawer.tsx`) | slide-in 180ms / unmount 0ms | slide-out-right + scrim fade-out, then unmount |
-| Command palette | rise-in 160ms / unmount 0ms | sink-out (reverse of rise) ~120ms |
-| Shortcut help, MoreMenu, mobile nav sheet | fade/rise in / 0ms out | mirrored exits |
-| Toasts (`Toast.tsx`) | **nothing at all** | slide-up-in with slight overshoot; slide-right-out on dismiss; the remaining stack *re-flows smoothly* instead of snapping |
-| Route content | fade-in only; old view vanishes | true crossfade (old settles out as new arrives) |
-| Skeleton → content | hard swap | skeleton fades under content as content fades over — one continuous surface, no blink |
-| Change flash (`useChangeFlash`) | background pops on, times out | flash decays on a curve, so attention is *released*, not cut |
+| Surface                                   | Today                           | Target                                                                                                                     |
+| ----------------------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Drawer (`Drawer.tsx`)                     | slide-in 180ms / unmount 0ms    | slide-out-right + scrim fade-out, then unmount                                                                             |
+| Command palette                           | rise-in 160ms / unmount 0ms     | sink-out (reverse of rise) ~120ms                                                                                          |
+| Shortcut help, MoreMenu, mobile nav sheet | fade/rise in / 0ms out          | mirrored exits                                                                                                             |
+| Toasts (`Toast.tsx`)                      | **nothing at all**              | slide-up-in with slight overshoot; slide-right-out on dismiss; the remaining stack _re-flows smoothly_ instead of snapping |
+| Route content                             | fade-in only; old view vanishes | true crossfade (old settles out as new arrives)                                                                            |
+| Skeleton → content                        | hard swap                       | skeleton fades under content as content fades over — one continuous surface, no blink                                      |
+| Change flash (`useChangeFlash`)           | background pops on, times out   | flash decays on a curve, so attention is _released_, not cut                                                               |
 
 **Implementation posture (no redesign needed):** the standard
 animate-then-unmount pattern (`onAnimationEnd` → unmount, or the View
@@ -159,21 +166,21 @@ Argus is deep: Command Center → agent tile → agent detail → run → Flight
 Recorder → step drawer, with a palette that teleports anywhere. Today every
 navigation is the same flat crossfade, so the interface has no geography —
 each screen replaces the last like slides in a deck. Great-feeling apps use
-motion to answer, preconsciously, three questions: *where did this come from,
-where did the old thing go, and how do I get back?*
+motion to answer, preconsciously, three questions: _where did this come from,
+where did the old thing go, and how do I get back?_
 
 Three sub-programs, none touching layout or theme:
 
-**2a. Directional grammar for navigation.** Define, once: drilling *down*
+**2a. Directional grammar for navigation.** Define, once: drilling _down_
 (tile → detail, row → recorder) slides content subtly forward (old view
 settles back ~2% scale and dims as new view arrives from ~8px right); going
-*back* reverses it; *lateral* tab switches keep the existing crossfade.
+_back_ reverses it; _lateral_ tab switches keep the existing crossfade.
 Applied at the one route container in `App.tsx:399` plus a
 direction flag derived from the existing `TAB_META` roles
 (`destination`/`drilldown`) — the metadata needed to infer direction already
 exists.
 
-**2b. Shared anchors.** The active-tab pill in `NavBar` should *slide* between
+**2b. Shared anchors.** The active-tab pill in `NavBar` should _slide_ between
 destinations rather than teleport (one absolutely-positioned indicator
 animating `transform`, colors untouched). The drawer should scale its scrim
 fade from the clicked row's side of the screen; the palette's selected result
@@ -181,7 +188,7 @@ should visibly hand off to the destination (even a 120ms highlight carried
 across the transition is enough to close the loop). Where Chromium's View
 Transitions API is available — which on a Windows-first deployment (Edge) is
 effectively everywhere — element-level `view-transition-name`s on the agent
-tile ↔ agent detail header make the tile visibly *become* the page header.
+tile ↔ agent detail header make the tile visibly _become_ the page header.
 Progressive enhancement: browsers without it keep today's crossfade.
 
 **2c. Origin-aware overlays.** `rise-in` currently drops every overlay from
@@ -191,11 +198,11 @@ trigger), the mobile sheet from the nav edge it belongs to, the step drawer
 from the step row's vertical position. Same keyframes, parameterized origin.
 
 **Why this is worth 2 rubric points:** lifecycle symmetry (Goal 1) makes the
-app feel *finished*; spatial grammar makes it feel *designed*. It is also the
+app feel _finished_; spatial grammar makes it feel _designed_. It is also the
 difference between motion as decoration and motion as information — the
 standard the codebase itself sets in `motion.ts`: "animation has to carry
 information, or it is decoration that costs the user time." Direction and
-origin *are* information.
+origin _are_ information.
 
 ---
 
@@ -204,11 +211,11 @@ origin *are* information.
 **From 8 → 9.5. The identity goal.**
 
 This is where Argus can go from "polished dashboard" to "the reason people
-leave it on a second monitor." The product's essence is *live state* — agents
+leave it on a second monitor." The product's essence is _live state_ — agents
 working, runs finishing, monitors failing — and right now state changes are
 rendered as discontinuities: a re-sort snaps, a new row pops, a meter jumps.
 The motion system should make the data feel continuously alive without ever
-becoming noisy. The design intent is a quiet room where *only change moves*.
+becoming noisy. The design intent is a quiet room where _only change moves_.
 
 Concrete choreography, per existing component:
 
@@ -217,7 +224,7 @@ Concrete choreography, per existing component:
   stack: measure, reorder, invert, play — rows glide to their new positions
   (~180ms, `--ease-out-expo`) instead of teleporting. This single technique
   covers the majority of live-update jank, and it composes with the existing
-  `useChangeFlash` (the row glides *and* flashes: what moved, and why).
+  `useChangeFlash` (the row glides _and_ flashes: what moved, and why).
 - **HeartbeatBar arrival** (`HeartbeatBar.tsx`): a new tick should push the
   strip left by one slot with a short settle, the newborn tick scaling in from
   the baseline — the visual signature of "a run just landed," legible from
@@ -226,7 +233,7 @@ Concrete choreography, per existing component:
   a pill going `working → failed` should crossfade its tint over ~180ms rather
   than hard-swap classes; paired with the existing ping-ring on entry to
   `failed`, arrival at a bad state becomes a small, unmistakable event. Colors
-  themselves are untouched — only the *transition between* them is added.
+  themselves are untouched — only the _transition between_ them is added.
 - **Meters and numbers**: `Meter` widths animate to new values (transform
   scaleX, not width); `useCountUp` — currently the app's best motion asset —
   extends to every live numeral (spend, counts, durations) with its existing
@@ -245,11 +252,11 @@ Concrete choreography, per existing component:
 posture):** every choreography above is transform/opacity only; anything
 continuous respects the existing reduced-motion kill switch; change-driven
 motion is rate-limited (a board with 50 updates/second must coalesce, not
-strobe — the `useCountUp` "huge jump snaps" rule generalizes: *high-frequency
-change degrades to steady state, not to chaos*).
+strobe — the `useCountUp` "huge jump snaps" rule generalizes: _high-frequency
+change degrades to steady state, not to chaos_).
 
 **Why this is worth 1.5 rubric points:** it's the goal that makes the motion
-*mean something particular to this product*. Goals 1 and 2 could apply to any
+_mean something particular to this product_. Goals 1 and 2 could apply to any
 app; Goal 3 is Argus's.
 
 ---
@@ -259,7 +266,7 @@ app; Goal 3 is Argus's.
 **From 9.5 → 10. The instrument goal.**
 
 The final grade point is the difference between watching a well-animated app
-and *handling* a responsive one:
+and _handling_ a responsive one:
 
 - **Interruptibility.** Migrate the overlay and list transitions from
   fire-and-forget CSS keyframes to WAAPI-driven (or CSS `linear()` spring)
@@ -284,12 +291,12 @@ and *handling* a responsive one:
 
 ## 3. Sequencing and the rubric path
 
-| Phase | Goal | Rubric | Character of work |
-| --- | --- | --- | --- |
-| 1 | Lifecycle symmetry (exits, toasts, crossfades) | 3 → 6 | Mechanical, low-risk, per-component |
-| 2 | Spatial grammar (direction, shared anchors, origins) | 6 → 8 | One-time grammar + per-surface adoption |
-| 3 | Living-data choreography (FLIP, morphs, shared clock) | 8 → 9.5 | Product-defining, needs guardrails |
-| 4 | Tactility (springs, interruption, pressed states) | 9.5 → 10 | Craft ceiling, progressive enhancement |
+| Phase | Goal                                                  | Rubric   | Character of work                       |
+| ----- | ----------------------------------------------------- | -------- | --------------------------------------- |
+| 1     | Lifecycle symmetry (exits, toasts, crossfades)        | 3 → 6    | Mechanical, low-risk, per-component     |
+| 2     | Spatial grammar (direction, shared anchors, origins)  | 6 → 8    | One-time grammar + per-surface adoption |
+| 3     | Living-data choreography (FLIP, morphs, shared clock) | 8 → 9.5  | Product-defining, needs guardrails      |
+| 4     | Tactility (springs, interruption, pressed states)     | 9.5 → 10 | Craft ceiling, progressive enhancement  |
 
 Cross-cutting, from phase 1 onward:
 
@@ -306,12 +313,12 @@ Cross-cutting, from phase 1 onward:
   motion, transform-based choreography disappears while sub-200ms opacity
   fades may remain; instant state change stays fully legible either way.
 
-## 4. What explicitly does *not* change
+## 4. What explicitly does _not_ change
 
 To keep the mandate unambiguous: no color, token value, layout, spacing,
 typography, icon, copy, component anatomy, navigation structure, or a11y
 behavior changes under any goal above. Focus order, focus traps, `aria-live`
 regions, and `prefers-reduced-motion` semantics are preserved exactly; every
 proposed animation is additive under `motion-safe:` and transform/opacity
-only. The uplift is entirely in *when and how things move* — the app already
+only. The uplift is entirely in _when and how things move_ — the app already
 knows what it looks like.

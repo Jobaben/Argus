@@ -49,7 +49,10 @@ function ModelRow({ model, max }: { model: ModelStat; max: number }) {
         </span>
       </div>
       <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
-        <div className="h-full rounded-full bg-queue/70" style={{ width: `${pct}%` }} />
+        <div
+          className="h-full rounded-full bg-queue/70 transition-[width] duration-(--duration-slow) ease-(--ease-out-expo)"
+          style={{ width: `${pct}%` }}
+        />
       </div>
       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-faint">
         <span>in {compact(model.inputTokens)}</span>
@@ -70,7 +73,10 @@ function DailyRow({ day, max }: { day: DailyStat; max: number }) {
     <div className="flex items-center gap-3 py-1.5 text-xs">
       <span className="w-24 shrink-0 font-mono text-ink-dim">{day.date}</span>
       <div className="h-2 flex-1 overflow-hidden rounded-full bg-surface-2">
-        <div className="h-full rounded-full bg-ok/60" style={{ width: `${pct}%` }} />
+        <div
+          className="h-full rounded-full bg-ok/60 transition-[width] duration-(--duration-slow) ease-(--ease-out-expo)"
+          style={{ width: `${pct}%` }}
+        />
       </div>
       <span className="w-16 shrink-0 text-right text-ink-dim">{compact(day.tokens)}</span>
       <span className="w-20 shrink-0 text-right text-ink-faint">{day.messages} msgs</span>

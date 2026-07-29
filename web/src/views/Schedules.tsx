@@ -15,6 +15,7 @@ import {
   TimeAgo,
   TriggerFields,
   useClock,
+  useFlip,
   useTicker,
 } from "../ds";
 import { useVerdictTrends } from "../useVerdict";
@@ -353,6 +354,7 @@ function ScheduleCard({
   remove,
   runNow,
   cancelRun,
+  ref,
 }: {
   schedule: ScheduleWithNext;
   health: ScheduleHealth;
@@ -362,6 +364,8 @@ function ScheduleCard({
   remove: (id: string) => Promise<unknown>;
   runNow: (id: string) => Promise<unknown>;
   cancelRun: (runId: string) => Promise<unknown>;
+  /** FLIP registration, so the card glides when the list re-orders. */
+  ref?: React.Ref<HTMLDivElement>;
 }) {
   const { running, runs } = health;
   const recent = runs.slice(0, 5);
@@ -382,7 +386,7 @@ function ScheduleCard({
   const failingBorder = health.state === "failing" ? "border-fail/40" : "border-line";
 
   return (
-    <div className={`rounded-xl border bg-surface p-4 ${failingBorder}`}>
+    <div ref={ref} className={`rounded-xl border bg-surface p-4 ${failingBorder}`}>
       <header className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex min-w-0 items-center gap-2">
@@ -529,6 +533,9 @@ function ScheduleCard({
 }
 
 export default function Schedules() {
+  // Rows come and go and change places as health changes; FLIP glides them
+  // there instead of letting the list teleport under the reader.
+  const flip = useFlip();
   const { schedules, loading, error, create, update, remove, runNow, cancelRun } = useSchedules();
   // One run list for every card. Each card used to fetch its own
   // `/api/runs?scheduleId=…`, so a page with twelve schedules opened thirteen
@@ -683,6 +690,7 @@ export default function Schedules() {
                 {shown.map(({ schedule: s, health: h }) => (
                   <ScheduleCard
                     key={s.id}
+                    ref={flip(s.id)}
                     schedule={s}
                     health={h}
                     trend={trendFor.get(`schedule:${s.id}`)}

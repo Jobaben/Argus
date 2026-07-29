@@ -1,0 +1,141 @@
+<!-- @dsCard group="Foundations" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<style>
+  :root {
+    --ground:#0a0f16; --ground-2:#0c121b; --surface:#121b26; --surface-2:#16212e;
+    --line:rgb(146 180 217 / .14);
+    --ink:#eaf2fb; --ink-dim:#9db0c6; --ink-faint:#8b9db4;
+    --eye:#36e3e8; --ok:#2fe6a4; --fail:#ff5765; --run:#ffb224;
+    --mono:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,monospace;
+    --duration-base:180ms; --duration-pulse:1400ms;
+    --ease-out-expo:cubic-bezier(.16,1,.3,1);
+    --ease-spring:cubic-bezier(.34,1.36,.64,1);
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--ground); color:var(--ink); min-height:100vh;
+    display:flex; align-items:center; justify-content:center; padding:30px;
+    font-family:"Segoe UI",system-ui,sans-serif; }
+  .card { width:560px; border:1px solid var(--line); border-radius:14px;
+    background:var(--surface); padding:22px; }
+  h1 { margin:0 0 4px; font-size:15px; }
+  p.lede { margin:0 0 18px; font-size:12.5px; line-height:1.5; color:var(--ink-dim); }
+  h2 { margin:18px 0 8px; font-family:var(--mono); font-size:10px; font-weight:700;
+    text-transform:uppercase; letter-spacing:.16em; color:var(--ink-faint); }
+
+  /* ── FLIP: the row glides to its new position, so a reorder is visible as a
+        reorder rather than as a board you have to diff against your memory. */
+  ul { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; }
+  li { border:1px solid var(--line); border-radius:8px; background:var(--surface-2);
+    padding:8px 12px; font-size:12px; color:var(--ink-dim);
+    display:flex; align-items:center; gap:10px; }
+  li b { color:var(--ink); font-weight:600; }
+  .dot { width:6px; height:6px; border-radius:99px; flex:none; }
+  .dot.ok { background:var(--ok); }
+  .dot.fail { background:var(--fail); }
+  .dot.run { background:var(--run);
+    animation: pulse var(--duration-pulse) ease-in-out infinite; }
+  li .when { margin-left:auto; font-family:var(--mono); font-size:10px; color:var(--ink-faint); }
+
+  /* ── The heartbeat strip: the newborn tick grows off the baseline it is
+        measured against, and the strip slides left by a slot to make room. */
+  .beats { display:flex; align-items:flex-end; gap:3px; height:20px; }
+  .beat { width:6px; height:16px; border-radius:99px; transform-origin:bottom; }
+  .beat.ok { background:var(--ok); }
+  .beat.fail { background:var(--fail); }
+  .beat.idle { background:rgb(124 138 160 / .5); }
+  .beat.new { animation: tick-in var(--duration-base) var(--ease-spring); }
+
+  @keyframes tick-in {
+    from { opacity:0; transform:scaleY(.15); }
+    to   { opacity:1; transform:scaleY(1); }
+  }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.4; } }
+
+  dl { margin:18px 0 0; display:grid; grid-template-columns:auto 1fr; gap:4px 12px;
+    font-family:var(--mono); font-size:10.5px; color:var(--ink-faint); }
+  dt { color:var(--eye); }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation:none !important; transition:none !important; }
+  }
+</style>
+</head>
+<body>
+  <!-- Living-data choreography: how a real-time board shows change *as* change.
+       FLIP lives in web/src/ds/flip.ts; the ambient phase sync is
+       `useSyncedDelay` in web/src/ds/motion.ts; the heartbeat arrival is in
+       web/src/ds/HeartbeatBar.tsx. -->
+  <div class="card">
+    <h1>Living-data choreography</h1>
+    <p class="lede">
+      The one thing a live dashboard can do that a static report cannot is show
+      change <em>as</em> change. A row that teleports to its new position shows
+      nothing: you are left comparing the board against your memory of it a frame
+      ago. Every reorder glides (FLIP), every arrival grows in, and every ambient
+      indicator takes its phase from one shared clock — six things blinking on
+      unrelated rhythms reads as clutter, in phase it reads as one system.
+    </p>
+
+    <h2>Reorder — measure, invert, play</h2>
+    <ul id="rows">
+      <li data-key="a"><span class="dot run"></span><b>nightly-review</b><span class="when">running</span></li>
+      <li data-key="b"><span class="dot ok"></span><b>lint-sweep</b><span class="when">2m ago</span></li>
+      <li data-key="c"><span class="dot fail"></span><b>deploy-canary</b><span class="when">just now</span></li>
+    </ul>
+
+    <h2>A run lands</h2>
+    <div class="beats" id="beats" role="img" aria-label="Last runs">
+      <span class="beat idle"></span>
+      <span class="beat ok"></span>
+      <span class="beat ok"></span>
+      <span class="beat fail"></span>
+      <span class="beat ok"></span>
+      <span class="beat ok"></span>
+    </div>
+
+    <dl>
+      <dt>glide</dt><dd>180ms · ease-out-expo · transform only</dd>
+      <dt>arrival</dt><dd>180ms · ease-spring · scaleY from the baseline</dd>
+      <dt>phase</dt><dd>negative animation-delay off one shared epoch</dd>
+      <dt>guardrail</dt><dd>retarget, never queue; snap a &gt;2000px jump</dd>
+    </dl>
+  </div>
+
+  <script>
+    // A minimal FLIP, the same four steps as ds/flip.ts: remember where the rows
+    // were, let the layout change, translate each row back to where it was, then
+    // animate that offset away.
+    const list = document.getElementById("rows");
+    const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    function shuffleOnce() {
+      const rows = [...list.children];
+      const before = new Map(rows.map((r) => [r, r.getBoundingClientRect().top]));
+      list.appendChild(list.firstElementChild);
+      if (reduced) return;
+      for (const row of rows) {
+        const dy = before.get(row) - row.getBoundingClientRect().top;
+        if (!dy) continue;
+        row.animate(
+          [{ transform: `translateY(${dy}px)` }, { transform: "none" }],
+          { duration: 180, easing: "cubic-bezier(.16,1,.3,1)" },
+        );
+      }
+    }
+
+    const beats = document.getElementById("beats");
+    function land() {
+      const tick = document.createElement("span");
+      tick.className = "beat " + (Math.random() < 0.2 ? "fail" : "ok") + (reduced ? "" : " new");
+      beats.appendChild(tick);
+      if (beats.children.length > 6) beats.firstElementChild.remove();
+    }
+
+    setInterval(shuffleOnce, 2600);
+    setInterval(land, 1800);
+  </script>
+</body>
+</html>

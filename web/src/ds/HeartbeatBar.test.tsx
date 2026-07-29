@@ -54,3 +54,25 @@ describe("HeartbeatBar", () => {
     expect(container.querySelectorAll("span").length).toBe(4);
   });
 });
+
+describe("a run landing", () => {
+  it("does not animate the history in on first paint — only an arrival is an arrival", () => {
+    const { container } = render(<HeartbeatBar beats={[beat("a"), beat("b")]} slots={5} />);
+    const animated = [...container.querySelectorAll("span")].filter((s) =>
+      s.className.includes("tick-in"),
+    );
+    expect(animated).toHaveLength(0);
+  });
+
+  it("grows the newborn tick from the baseline, and only that one", () => {
+    const { container, rerender } = render(<HeartbeatBar beats={[beat("a")]} slots={5} />);
+    rerender(<HeartbeatBar beats={[beat("a"), beat("b")]} slots={5} />);
+    const animated = [...container.querySelectorAll("span")].filter((s) =>
+      s.className.includes("tick-in"),
+    );
+    expect(animated).toHaveLength(1);
+    // Scaling from the middle would make the tick look like it floated in; the
+    // strip is bottom-aligned and a heartbeat grows off its baseline.
+    expect(animated[0].className).toContain("origin-bottom");
+  });
+});

@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { SURFACE, usePresence, useSurfaceMotion } from "./presence";
+import { DURATION, useSyncedDelay } from "./motion";
 
 /**
  * Loading placeholders.
@@ -18,7 +19,17 @@ import { SURFACE, usePresence, useSurfaceMotion } from "./presence";
 /** One shimmering block. Sizes come from the caller so each skeleton can match
  *  the element it is standing in for. */
 export function Skeleton({ className = "" }: { className?: string }) {
-  return <div aria-hidden="true" className={`skeleton rounded ${className}`} />;
+  // In phase with every other shimmer on the page. A grid of twelve placeholders
+  // each starting its sweep whenever it happened to mount looks like static; one
+  // wave crossing all of them looks like a page assembling.
+  const beat = useSyncedDelay(DURATION.shimmer);
+  return (
+    <div
+      aria-hidden="true"
+      style={{ animationDelay: beat }}
+      className={`skeleton rounded ${className}`}
+    />
+  );
 }
 
 /**

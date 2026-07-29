@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, renderHook } from "@testing-library/react";
-import { staggerDelay, useChangeFlash, useCountUp } from "./motion";
+import { staggerDelay, syncedDelay, useChangeFlash, useCountUp, useSyncedDelay } from "./motion";
 
 /** Drives requestAnimationFrame from fake timers so counting is deterministic. */
 function installRaf() {
@@ -156,5 +156,50 @@ describe("staggerDelay", () => {
 
   it("caps, so a long list does not take seconds to finish arriving", () => {
     expect(staggerDelay(100, 28, 240)).toBe("240ms");
+  });
+});
+
+describe("syncedDelay", () => {
+  it("is a negative delay, so the animation starts part-way through its cycle", () => {
+    const delay = syncedDelay(1000, Date.now() + 250);
+    expect(delay).toMatch(/^-\d+ms$/);
+  });
+
+  it("puts two callers in phase whatever they mount", () => {
+    // The whole point: two indicators that started a beat apart still land on the
+    // same point of the cycle, because both measure from one shared origin.
+    const at = Date.now() + 4321;
+    const a = syncedDelay(1000, at);
+    const b = syncedDelay(1000, at + 1000);
+    expect(a).toBe(b);
+  });
+
+  it("stays inside one cycle", () => {
+    const ms = Number(/-(\d+)ms/.exec(syncedDelay(1400, Date.now() + 99_999) ?? "")?.[1]);
+    expect(ms).toBeGreaterThanOrEqual(0);
+    expect(ms).toBeLessThan(1400);
+  });
+
+  it("declines rather than emitting nonsense", () => {
+    expect(syncedDelay(0)).toBeUndefined();
+    expect(syncedDelay(-5)).toBeUndefined();
+    expect(syncedDelay(Number.NaN)).toBeUndefined();
+  });
+
+  it("returns nothing under reduced motion, so callers need no branch", () => {
+    setReducedMotion(true);
+    expect(syncedDelay(1400)).toBeUndefined();
+  });
+});
+
+describe("useSyncedDelay", () => {
+  it("holds the phase for the life of the mount", () => {
+    // Re-writing `animation-delay` mid-cycle *shifts the animation*, so a board
+    // that re-renders on every socket frame would jitter its own indicators.
+    const { result, rerender } = renderHook(() => useSyncedDelay(1400));
+    const first = result.current;
+    rerender();
+    rerender();
+    expect(result.current).toBe(first);
   });
 });

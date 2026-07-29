@@ -1,0 +1,113 @@
+<!-- @dsCard group="Foundations" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<style>
+  :root {
+    --ground:#0a0f16; --ground-2:#0c121b; --surface:#121b26; --surface-2:#16212e;
+    --line:rgb(146 180 217 / .14);
+    --ink:#eaf2fb; --ink-dim:#9db0c6; --ink-faint:#8b9db4; --eye:#36e3e8;
+    --mono:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,monospace;
+
+    /* The motion tokens, exactly as web/src/index.css declares them. */
+    --duration-quick:120ms; --duration-base:180ms; --duration-slow:320ms;
+    --duration-exit:126ms; --duration-exit-quick:84ms; --duration-press:70ms;
+    --ease-out-expo:cubic-bezier(.16,1,.3,1);
+    --ease-in-expo:cubic-bezier(.7,0,.84,0);
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--ground); color:var(--ink); min-height:100vh;
+    display:flex; align-items:center; justify-content:center; padding:30px;
+    font-family:"Segoe UI",system-ui,sans-serif; }
+  .card { width:520px; border:1px solid var(--line); border-radius:14px;
+    background:var(--surface); padding:22px; }
+  h1 { margin:0 0 4px; font-size:15px; }
+  p.lede { margin:0 0 18px; font-size:12.5px; line-height:1.5; color:var(--ink-dim); }
+  .stage { position:relative; height:110px; border:1px solid var(--line); border-radius:10px;
+    background:var(--ground-2); overflow:hidden; display:flex; align-items:center;
+    justify-content:center; }
+  .panel { width:230px; border:1px solid var(--line); border-radius:10px;
+    background:var(--surface-2); padding:12px 14px; font-size:12px; color:var(--ink-dim); }
+
+  /* Entrance: down and slightly small, decelerating hard.
+     Exit: the exact time-reverse, at 0.7× the duration, easing *in*.
+     That asymmetry is the whole rule — things arrive with a settle and leave
+     with urgency, because by the time it is leaving you already asked. */
+  .stage.in  .panel { animation: rise-in  var(--duration-base) var(--ease-out-expo) both; }
+  .stage.out .panel { animation: sink-out var(--duration-exit) var(--ease-in-expo)  both; }
+
+  @keyframes rise-in {
+    from { opacity:0; transform:translateY(-8px) scale(.985); }
+    to   { opacity:1; transform:translateY(0)    scale(1); }
+  }
+  @keyframes sink-out {
+    from { opacity:1; transform:translateY(0)    scale(1); }
+    to   { opacity:0; transform:translateY(-8px) scale(.985); }
+  }
+
+  .row { display:flex; gap:8px; margin-top:14px; }
+  button { flex:1; border:1px solid var(--line); border-radius:8px; background:transparent;
+    color:var(--ink-dim); cursor:pointer; padding:7px 10px; font-family:var(--mono);
+    font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.1em;
+    transition: transform var(--duration-press) var(--ease-out-expo), color var(--duration-quick); }
+  button:hover { color:var(--ink); }
+  dl { margin:16px 0 0; display:grid; grid-template-columns:auto 1fr; gap:4px 12px;
+    font-family:var(--mono); font-size:10.5px; color:var(--ink-faint); }
+  dt { color:var(--eye); }
+
+  @media (prefers-reduced-motion: no-preference) {
+    /* The missing half of a hover: a press is contact, and it is the most-felt
+       micro-interaction on a desktop app. */
+    button:active { transform:scale(.97); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation:none !important; transition:none !important; }
+  }
+</style>
+</head>
+<body>
+  <!-- Motion lifecycle: the paired entrance/exit contract every Argus surface
+       obeys. Implemented by `usePresence` + `useSurfaceMotion` in web/src/ds/
+       presence.ts, which additionally reverses an interrupted transition from
+       wherever it had got to — something a keyframe cannot do, and the reason
+       the real implementation is WAAPI-driven rather than the CSS shown here. -->
+  <div class="card">
+    <h1>Motion lifecycle</h1>
+    <p class="lede">
+      Every surface that enters knows how to leave. The exit is the time-reverse of
+      the entrance at 0.7× the duration, easing in rather than out. A surface that
+      glides in and blinks out is the loudest “unfinished” tell an interface has —
+      and dismissal is the most frequent thing anybody does.
+    </p>
+
+    <div class="stage in" id="stage">
+      <div class="panel">Details · step 3 of 7</div>
+    </div>
+
+    <div class="row">
+      <button type="button" id="open">Open</button>
+      <button type="button" id="close">Dismiss</button>
+    </div>
+
+    <dl>
+      <dt>enter</dt><dd>180ms · ease-out-expo · rise-in</dd>
+      <dt>exit</dt><dd>126ms · ease-in-expo · sink-out (0.7×)</dd>
+      <dt>press</dt><dd>70ms · scale(0.97)</dd>
+      <dt>reduced</dt><dd>instant, both ways — never a faster animation</dd>
+    </dl>
+  </div>
+
+  <script>
+    const stage = document.getElementById("stage");
+    document.getElementById("open").onclick = () => {
+      stage.classList.remove("out");
+      stage.classList.add("in");
+    };
+    document.getElementById("close").onclick = () => {
+      stage.classList.remove("in");
+      stage.classList.add("out");
+    };
+  </script>
+</body>
+</html>

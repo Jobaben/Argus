@@ -22,11 +22,15 @@ import {
   staggerDelay,
   STATUS,
   StatusPill,
+  SweepBar,
   TILE_DETAIL,
   TILE_SKIN,
   TimeAgo,
   toOverviewRows,
   useChangeFlash,
+  useFlip,
+  useSyncedDelay,
+  DURATION,
   useTicker,
 } from "../ds";
 import type { OverviewRow, OverviewGate, PhasePill, StepPill, DsStatus } from "../ds";
@@ -107,7 +111,7 @@ function Gate({
             type="button"
             onClick={() => run(() => approve(instanceId), "Approved — pipeline resuming")}
             disabled={busy}
-            className="rounded-md border border-ok bg-ok/10 px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-ok disabled:opacity-40"
+            className="rounded-md border border-ok bg-ok/10 px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-ok transition-transform duration-(--duration-press) disabled:opacity-40 motion-safe:active:scale-[0.97]"
           >
             Approve
           </button>
@@ -116,7 +120,7 @@ function Gate({
           type="button"
           onClick={() => setNoteOpen((o) => !o)}
           disabled={busy}
-          className="rounded-md border border-await bg-await/10 px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-await disabled:opacity-40"
+          className="rounded-md border border-await bg-await/10 px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-await transition-transform duration-(--duration-press) disabled:opacity-40 motion-safe:active:scale-[0.97]"
         >
           {reviseLabel}
         </button>
@@ -140,7 +144,7 @@ function Gate({
               )
             }
             disabled={busy}
-            className="rounded-md border border-await bg-await/10 px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-await disabled:opacity-40"
+            className="rounded-md border border-await bg-await/10 px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-await transition-transform duration-(--duration-press) disabled:opacity-40 motion-safe:active:scale-[0.97]"
           >
             Send
           </button>
@@ -187,15 +191,25 @@ function StepTile({
   // A board that swaps a status silently makes you doubt you saw it. A brief
   // ring on the tile that just moved answers "what changed?" at a glance.
   const justChanged = useChangeFlash(step.status);
+  const beat = useSyncedDelay(DURATION.pulse);
   const hasMeter =
     step.tokens != null || step.costUsd != null || (finished && step.durationMs != null);
   return (
     <article
-      className={`relative flex flex-col gap-[7px] overflow-hidden rounded-tile border bg-gradient-to-b to-surface pb-2.5 pl-3.5 pr-3 pt-[11px] transition-shadow duration-(--duration-slow) ${
-        TILE_SKIN[token]
-      } ${justChanged ? "shadow-[0_0_0_1px_var(--color-eye),0_0_24px_-4px_var(--color-eye)]" : ""}`}
+      // Fast attack, slow release. One duration for both directions made the
+      // flash fade *in* as slowly as it faded out, which is the wrong way round:
+      // attention should be claimed at once and then released on a curve, not
+      // eased into and cut off.
+      className={`relative flex flex-col gap-[7px] overflow-hidden rounded-tile border bg-gradient-to-b to-surface pb-2.5 pl-3.5 pr-3 pt-[11px] transition-[box-shadow,border-color,background-color] ${
+        justChanged ? "duration-(--duration-quick)" : "duration-(--duration-slow)"
+      } ${TILE_SKIN[token]} ${
+        justChanged ? "shadow-[0_0_0_1px_var(--color-eye),0_0_24px_-4px_var(--color-eye)]" : ""
+      }`}
     >
-      <span className={`absolute inset-y-0 left-0 w-[3px] ${RAIL[token]}`} />
+      <span
+        style={{ animationDelay: beat }}
+        className={`absolute inset-y-0 left-0 w-[3px] ${RAIL[token]}`}
+      />
       <div className="flex items-start justify-between gap-2">
         {/* The name is the activator rather than the whole tile: a tile-sized
             button would swallow the gate's Approve/Revise controls inside it,
@@ -234,11 +248,7 @@ function StepTile({
           {elapsed} <span className="text-ink-faint/70">elapsed</span>
         </div>
       )}
-      {working && (
-        <div className="relative h-[5px] overflow-hidden rounded-full bg-ink-faint/15">
-          <i className="absolute inset-y-0 w-2/5 animate-[sweep_1.6s_ease-in-out_infinite] rounded-full bg-gradient-to-r from-transparent via-run to-transparent" />
-        </div>
-      )}
+      {working && <SweepBar />}
       {hasMeter && (
         <div className="flex items-center gap-2 font-mono text-meter text-ink-faint">
           <Meter
@@ -342,6 +352,7 @@ function Row({
   now,
   index,
   onOpenStep,
+  ref,
 }: {
   rows: OverviewRow[];
   approve: (id: string) => Promise<unknown>;
@@ -351,11 +362,14 @@ function Row({
   /** Position in the board, for the entrance stagger. */
   index: number;
   onOpenStep: (selection: StepSelection) => void;
+  /** FLIP registration, so the card glides when the board re-orders. */
+  ref?: React.Ref<HTMLElement>;
 }) {
   const first = rows[0];
   const multi = rows.length > 1;
   return (
     <article
+      ref={ref}
       // Staggered so the board reads as assembling top-down rather than
       // flashing in all at once; capped in `staggerDelay` so a long board still
       // finishes fast.
@@ -596,6 +610,10 @@ export default function CommandCenter() {
     return [...byPipeline.values()];
   }, [rows]);
   const announcement = useBoardAnnouncer(rows);
+  // The board's order comes from the server and changes as pipelines start,
+  // finish and gate. A card that teleports to its new row shows nothing; one that
+  // glides there shows exactly what moved.
+  const flip = useFlip();
   const liveActivity = useRunActivity();
   const anyWorking = useMemo(
     () => rows.some((r) => r.phases.some((p) => p.steps.some((s) => s.status === "working"))),
@@ -650,6 +668,7 @@ export default function CommandCenter() {
                 {groups.map((group, i) => (
                   <Row
                     key={group[0].pipelineId}
+                    ref={flip(group[0].pipelineId)}
                     index={i}
                     rows={group}
                     approve={approve}

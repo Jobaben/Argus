@@ -138,8 +138,15 @@ export function useSurfaceMotion<T extends HTMLElement>(
   const elRef = useRef<T | null>(null);
   const animRef = useRef<Animation | null>(null);
   const dirRef = useRef<Direction | null>(null);
-  /** Where the surface visually is, 0 = hidden … 1 = shown. */
-  const atRef = useRef(visible ? 1 : 0);
+  /**
+   * Where the surface visually is, 0 = hidden … 1 = shown.
+   *
+   * Zero on mount, *not* `visible ? 1 : 0`. A surface's element only exists
+   * because the surface is opening, so it starts hidden and travels in; seeding
+   * this from `visible` seeks the entrance straight to its end and the surface
+   * simply appears — an entrance that is skipped exactly when it is wanted.
+   */
+  const atRef = useRef(0);
 
   const ref = useCallback(
     (node: T | null) => {

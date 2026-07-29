@@ -92,6 +92,17 @@
      compression reads as lag rather than as contact. */
   --duration-press: 70ms;
 
+  /* Ambient cycle lengths — the infinite "this is live" animations. Tokens
+     rather than the literals that were scattered through class strings
+     (`animate-[pulse_1.4s_…]` in six files), because `syncedDelay()` has to know
+     the cycle to put several of them in phase, and two places holding the same
+     number is how they drift. */
+  --duration-pulse: 1400ms;
+  --duration-sweep: 1600ms;
+  --duration-ping: 1800ms;
+  --duration-alert: 2200ms;
+  --duration-shimmer: 1600ms;
+
   /* A real spring, sampled. `--ease-spring` above is a cubic-bezier imitation
      with no velocity; this is an actual damped oscillator (stiffness 280,
      damping 26, mass 1 — ζ≈0.78, so it overshoots once and settles) sampled
@@ -364,7 +375,7 @@ body {
     rgb(146 180 217 / 0.06) 100%
   );
   background-size: 200% 100%;
-  animation: shimmer 1.6s linear infinite;
+  animation: shimmer var(--duration-shimmer) linear infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {

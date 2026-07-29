@@ -24,12 +24,19 @@ import { fileURLToPath } from "node:url";
 /**
  * Gzipped kilobytes the first paint is allowed to cost.
  *
- * Today's payload is ~99 kB, most of it React itself. The ~11% of headroom is
+ * Today's payload is ~110 kB, most of it React itself. The ~9% of headroom is
  * deliberate: a budget with no slack fails on unrelated work and gets raised
  * reflexively, which is the same as having no budget. This much catches a new
  * dependency landing in the shell without failing on a few more components.
+ *
+ * Raised from 110 by the motion uplift, which spent ~10 kB gzip: about 4 kB of
+ * new stylesheet (the exit and directional keyframes, the view-transition rules,
+ * the sampled spring) and about 6 kB of shell JavaScript (`ds/presence`, `flip`,
+ * `spring`, `gesture`, `direction`, `viewTransition`). None of it can be lazy —
+ * it is what every route's entrance and exit is built from, so a lazy boundary
+ * would make the first navigation the one that does not animate.
  */
-const BUDGET_KB = 110;
+const BUDGET_KB = 120;
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const distDir = path.join(repoRoot, "web", "dist");

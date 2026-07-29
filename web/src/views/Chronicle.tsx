@@ -4,6 +4,7 @@ import { MachinePicker, PeerBanner, PeerEmpty } from "../fleet/MachineFacet";
 import { useChronicle } from "../useChronicle";
 import type { ChronicleGroup, ChronicleKind, ChronicleSpan, ChronicleStatus } from "../types";
 import {
+  DURATION,
   EmptyState,
   formatMs,
   formatUsd,
@@ -14,6 +15,7 @@ import {
   SkeletonCounters,
   SkeletonTile,
   TimeAgo,
+  useSyncedDelay,
 } from "../ds";
 import { axisTicks, shortenLanePath, spanGeometry } from "../ds/chronicleLayout";
 
@@ -72,6 +74,9 @@ function SpanBar({
   windowStartMs: number;
   windowEndMs: number;
 }) {
+  // Every still-running span on the timeline breathes on the same beat. Read
+  // before the early return below, because hooks are not conditional.
+  const beat = useSyncedDelay(DURATION.pulse);
   const geo = spanGeometry(span.startedAt, span.endedAt, windowStartMs, windowEndMs);
   if (!geo) return null;
   // Below this the label is unreadable anyway and just muddies the bar's colour,
@@ -82,7 +87,8 @@ function SpanBar({
       {geo.openEnded && (
         <span
           aria-hidden
-          className="absolute right-1 top-1/2 h-1.5 w-1.5 -translate-y-1/2 animate-[pulse_1.4s_ease-in-out_infinite] rounded-full bg-current shadow-[0_0_8px_1px_currentColor]"
+          style={{ animationDelay: beat }}
+          className="absolute right-1 top-1/2 h-1.5 w-1.5 -translate-y-1/2 animate-[pulse_var(--duration-pulse)_ease-in-out_infinite] rounded-full bg-current shadow-[0_0_8px_1px_currentColor]"
         />
       )}
       {wide && <span className="truncate px-1.5 text-[10px] font-semibold">{span.label}</span>}

@@ -91,7 +91,12 @@ function WindowCard({
         </span>
       </div>
       <div className="mt-3 h-2 overflow-hidden rounded-full bg-ground-2" aria-hidden="true">
-        <div className={`h-full ${barTone(w.ratio)}`} style={{ width: `${pct}%` }} />
+        <div
+          className={`h-full transition-[width] duration-(--duration-slow) ease-(--ease-out-expo) ${barTone(
+            w.ratio,
+          )}`}
+          style={{ width: `${pct}%` }}
+        />
       </div>
       {w.limitUsd != null && (
         <p className="mt-2 text-xs text-ink-faint">

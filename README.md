@@ -23,7 +23,10 @@ Users, Search, and all the monitoring tabs.
   run records) plus, on request, signal hooks under `~/.claude/hooks/`.
 - **web** — Vite 8 + React 19 + Tailwind CSS v4. One shared socket, one
   live-resource primitive with conditional (`ETag`) reads, one clock, and a lazy
-  chunk per route under a CI-enforced size budget.
+  chunk per route under a CI-enforced size budget. Motion is a system rather than
+  a set of flourishes — paired entrances and exits, directional navigation, and
+  live lists that show change as change, all transform/opacity only and enforced
+  as such in CI. See **[the motion system](docs/MOTION-SYSTEM.md)**.
 
 OS-agnostic: it keys off `os.homedir()` and the encoded project-dir names, never
 the absolute paths embedded in the data files (those can be from another OS).

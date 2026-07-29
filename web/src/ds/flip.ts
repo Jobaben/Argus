@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { DURATION, EASE, prefersReducedMotion } from "./motion";
 
 /**
@@ -50,18 +50,38 @@ export function useFlip(options: FlipOptions = {}) {
   const nodes = useRef(new Map<string, HTMLElement>());
   const rects = useRef(new Map<string, DOMRect>());
   const running = useRef(new Map<string, Animation>());
+  /**
+   * One callback per key, for the life of the list.
+   *
+   * Not negotiable, and not an optimisation. React detaches and re-attaches a ref
+   * whose *identity* changed — so a `(node) => …` built fresh each render is
+   * called with `null` on every single render, which is indistinguishable from
+   * the row unmounting. The bookkeeping below would clear the previous rect every
+   * time, and FLIP would then have no "first" to invert from: it would silently
+   * never animate anything. Held in state rather than a ref because this is read
+   * during render, which a ref may not be.
+   */
+  const [callbacks] = useState(() => new Map<string, (node: HTMLElement | null) => void>());
 
-  const register = useCallback((key: string) => {
-    return (node: HTMLElement | null) => {
-      if (node) nodes.current.set(key, node);
-      else {
-        nodes.current.delete(key);
-        rects.current.delete(key);
-        running.current.get(key)?.cancel();
-        running.current.delete(key);
+  const register = (key: string) => {
+    const existing = callbacks.get(key);
+    if (existing) return existing;
+    const callback = (node: HTMLElement | null) => {
+      if (node) {
+        nodes.current.set(key, node);
+        return;
       }
+      // A genuine unmount: forget the position, or a recycled key would animate
+      // in from wherever the old row happened to be.
+      nodes.current.delete(key);
+      rects.current.delete(key);
+      running.current.get(key)?.cancel();
+      running.current.delete(key);
+      callbacks.delete(key);
     };
-  }, []);
+    callbacks.set(key, callback);
+    return callback;
+  };
 
   // Layout effect, not effect: this has to run before the browser paints the new
   // positions, or the row is seen in its new place and then animated from its

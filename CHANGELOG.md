@@ -5,7 +5,83 @@ All notable changes to Argus are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **The motion layer, completed** — all four goals of
+  [`docs/MOTION-UPLIFT-ANALYSIS.md`](docs/MOTION-UPLIFT-ANALYSIS.md), with the
+  delivered system documented in [`docs/MOTION-SYSTEM.md`](docs/MOTION-SYSTEM.md).
+  No colour, size, spacing, copy, component anatomy or accessibility behaviour
+  changed; the whole thing is _when and how_ things move.
+
+  **Everything that enters now leaves.** Every overlay in the app was
+  `open ? <Panel/> : null` — it slid in over 180ms and vanished in zero. Users do
+  not notice a missing exit consciously; they feel it, because dismissal is the
+  most frequent thing they do and the illusion that these are objects collapsed at
+  every one. The drawer, command palette, shortcut sheet, overflow menu, mobile
+  nav sheet and notification popover now have paired entrances and exits, at 0.7×
+  the entrance duration and easing in rather than out. They are also
+  _interruptible_: the transition is driven through the Web Animations API, which
+  — unlike a keyframe — can be asked where it currently is, so ⌘K ⌘K ⌘K follows
+  the keystrokes instead of restarting from opacity zero each time.
+
+  **Toasts had no animation at all**, which for a surface whose entire job is to
+  catch the eye gracefully was the loudest unfinished signal in the product. They
+  arrive on a slight overshoot, leave sideways off the stack's own axis, and the
+  remaining stack closes the gap by gliding rather than snapping upward.
+
+  **The skeleton→content blink is gone.** `Handoff` fades the skeleton out over
+  the content that replaces it, at every in-place loading region — the placeholder
+  exists to say "this is the shape of what is coming", and the old hard swap
+  contradicted that at the moment of arrival.
+
+  **Navigation has a direction.** Drilling into a detail brings the new view in
+  from the right while the old settles back; going back reverses it; a move between
+  peer destinations keeps the crossfade, because it is not a hierarchy move.
+  Derived from the nav roles that already existed, so there is no second table to
+  keep in step. Where the browser has View Transitions the outgoing view is really
+  still on screen for it, and the agent tile you clicked visibly _becomes_ the
+  detail page's heading. The nav's active pill slides between destinations instead
+  of teleporting, and overlays grow out of the control that opened them.
+
+  **The board moves like the live thing it watches.** Reorders glide (FLIP) on the
+  Command Center, the schedule list, monitors, issues, the agent grid, the toast
+  stack and the heartbeat strip. A new heartbeat tick grows off its baseline while
+  the strip slides left by a slot. Status pills crossfade their tint rather than
+  hard-swapping it, and arriving at `failed` rings once. Meter fills animate to
+  their new value and board totals count to it. Every ambient
+  pulse/sweep/ping/shimmer now takes its phase from one shared epoch, so a board
+  with six live indicators shows one rhythm instead of six.
+
+  **It can be handled, not just watched.** A real spring — a sampled damped
+  oscillator, not a cubic-bezier impression of one — so a gesture can hand
+  momentum to an animation. The drawer can be flicked away, with the outcome
+  decided from measured pointer velocity, so a fast two-pixel flick dismisses and
+  a slow drag half-way across does not. The Flight Recorder's lane strips are now
+  the scrubber they always looked like: press to land, drag to track the pointer
+  1:1, release to glide to rest. Pressed states on palette rows, nav pills, menu
+  items, tile links, gate buttons and transport controls.
+
+  **Reduced motion is unchanged, deliberately.** Every animation above is additive
+  under `motion-safe:` or guarded by an explicit `prefersReducedMotion()` check
+  (CSS cannot reach a WAAPI animation or a `::view-transition-*` pseudo-element).
+  The analysis proposed relaxing the global kill switch into a finer tier; that was
+  declined, because it would spend an accessibility guarantee those users have
+  today to buy polish they did not ask for.
+
 ### Fixed
+
+- **`sweep` animated a layout property.** The indeterminate progress strip on
+  every working step tile animated `left` — sixty times a second, per tile, for a
+  decoration — in a file whose own comment claimed every keyframe there was
+  "opacity/transform only". It is a transform now, and
+  `scripts/check-motion-budget.mjs` enforces the claim in CI over both the
+  keyframes and the `transition-[…]` utilities, with a short list of argued
+  exceptions rather than an unchecked convention.
+
+- **Overlay entrances were being skipped.** Found by the first test written
+  against the new presence hook: a surface mounting already-open seeded its
+  progress from "visible", which seeked the entrance straight to its end. The
+  surface simply appeared — an entrance skipped exactly when it was wanted.
 
 - **Sessions tests no longer depend on the hour they run.** The day-grouping
   fixtures were offsets from `Date.now()`, so "two hours ago" stopped being

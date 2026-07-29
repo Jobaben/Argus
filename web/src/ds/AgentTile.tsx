@@ -1,6 +1,7 @@
 import type { Agent } from "../types";
 import { STATUS, toDsStatus, type DsStatus } from "./status";
 import { StatusPill } from "./StatusPill";
+import { SweepBar } from "./SweepBar";
 import { TimeAgo } from "./TimeAgo";
 import { RAIL, TILE_SKIN, TILE_DETAIL } from "./rail";
 
@@ -39,25 +40,21 @@ export function AgentTile({
         </div>
       )}
 
-      {ds === "working" && (
-        <div className="relative h-[5px] overflow-hidden rounded-full bg-ink-faint/15">
-          <i className="absolute inset-y-0 w-2/5 animate-[sweep_1.6s_ease-in-out_infinite] rounded-full bg-gradient-to-r from-transparent via-run to-transparent" />
-        </div>
-      )}
+      {ds === "working" && <SweepBar />}
 
       {ds === "await" && (onApprove || onRevise) && (
         <div className="mt-px flex gap-1.5">
           <button
             type="button"
             onClick={onApprove}
-            className="flex-1 rounded-md border border-ok bg-ok/10 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-ok"
+            className="flex-1 rounded-md border border-ok bg-ok/10 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-ok transition-transform duration-(--duration-press) motion-safe:active:scale-[0.97]"
           >
             Approve
           </button>
           <button
             type="button"
             onClick={onRevise}
-            className="flex-1 rounded-md border border-await bg-await/10 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-await"
+            className="flex-1 rounded-md border border-await bg-await/10 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-await transition-transform duration-(--duration-press) motion-safe:active:scale-[0.97]"
           >
             Revise
           </button>

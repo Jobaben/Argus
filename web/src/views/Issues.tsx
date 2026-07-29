@@ -10,6 +10,7 @@ import {
   Page,
   SkeletonRows,
   TimeAgo,
+  useFlip,
 } from "../ds";
 import { useIssues } from "../useIssues";
 import type { FailureClass, Issue, IssueOccurrence, IssueState } from "../types";
@@ -83,10 +84,12 @@ function IssueCard({
   issue,
   onTriage,
   loadOccurrences,
+  ref,
 }: {
   issue: Issue;
   onTriage: (fp: string, action: "resolve" | "ignore" | "reopen") => Promise<void>;
   loadOccurrences: (fp: string) => Promise<IssueOccurrence[]>;
+  ref?: React.Ref<HTMLDivElement>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [occurrences, setOccurrences] = useState<IssueOccurrence[] | null>(null);
@@ -105,7 +108,7 @@ function IssueCard({
   };
 
   return (
-    <Card className={issue.state === "open" ? "border-fail/30" : undefined}>
+    <Card ref={ref} className={issue.state === "open" ? "border-fail/30" : undefined}>
       <div className="flex items-start gap-3">
         <button
           type="button"
@@ -211,6 +214,9 @@ function PeerIssues({ facet }: { facet: ReturnType<typeof useMachineFacet> }) {
 }
 
 export default function Issues() {
+  // Rows come and go and change places as health changes; FLIP glides them
+  // there instead of letting the list teleport under the reader.
+  const flip = useFlip();
   const facet = useMachineFacet();
   const { issues, summary, loading, error, triage, loadOccurrences } = useIssues();
   const [triageError, setTriageError] = useState<string | null>(null);
@@ -308,6 +314,7 @@ export default function Issues() {
                 {shown.map((i) => (
                   <IssueCard
                     key={i.fingerprint}
+                    ref={flip(i.fingerprint)}
                     issue={i}
                     onTriage={onTriage}
                     loadOccurrences={loadOccurrences}
