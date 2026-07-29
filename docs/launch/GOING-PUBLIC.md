@@ -19,6 +19,43 @@ Rewriting 58 commits' authors _and_ file contents is strictly worse than the
 alternative the goal allows: **squash to a fresh public root**. The
 CHANGELOG.md preserves the release narrative, so no story is lost.
 
+There are two ways to get that root public, and they are not equal.
+
+### Path A (recommended): fresh repository
+
+Flipping _this_ repository public would expose more than its branches: the
+existing pull requests (#1–#19) and their diffs stay browsable, and GitHub
+pins every commit a PR ever referenced via `refs/pull/*` — force-pushing
+`main` does **not** unpin them, and commits force-pushed away can remain
+fetchable by SHA until GitHub support garbage-collects them. Since the
+pre-scrub content (screenshots, real paths, author identities) lives in
+those commits, the only clean cut is a repository that never contained them:
+
+```bash
+# from the final, reviewed tip (this branch, or main after merging it):
+git checkout --orphan public-root
+git -c user.name=Jobaben -c user.email=Jobaben@users.noreply.github.com \
+  commit -m "Argus v0.4.0 — initial public release"
+# rename the old repo (Settings → General, e.g. Argus-private) and keep it
+# private forever; create a brand-new private repo named Jobaben/Argus;
+git remote add public https://github.com/Jobaben/Argus.git
+git push public public-root:main
+```
+
+Then recreate the roadmap issue in the new repo from
+[`ROADMAP-ISSUE.md`](ROADMAP-ISSUE.md) (it becomes #1 — update the three
+links in README.md, docs/ROADMAP.md, and ANNOUNCEMENT.md that point at
+issue #20), and continue with section 3 against the new repo. No PR or
+merge into the old repo's `main` is needed at any point — the orphan commit
+is cut from the reviewed branch tip directly, and the old repo's history
+simply never travels.
+
+### Path B (fallback): squash in place
+
+Only if keeping this exact repository matters more than the residual
+exposure above (old PRs remain browsable; purging force-pushed commits
+requires a GitHub support request):
+
 ```bash
 # from the final, reviewed tip of main:
 git checkout main
@@ -28,14 +65,11 @@ git branch -M public-root main          # replace main locally
 git push --force origin main            # ⚠ owner keystroke: rewrites origin/main
 ```
 
-Before the push, set the identity you want on the public root:
-`git config user.name Jobaben && git config user.email <public email or
-noreply address>`. Enable GitHub's "Keep my email addresses private" and use
-the `…@users.noreply.github.com` address if you don't want any real email in
-the history.
-
-After the force-push, delete all other remote branches (they retain the old
-history) and any tags pointing into it.
+Set the identity you want on the public root first (`git config user.name
+Jobaben && git config user.email <noreply address>`), enable GitHub's "Keep
+my email addresses private", delete all other remote branches and tags after
+the force-push, and ask GitHub support to run garbage collection and drop
+cached views of the old commits.
 
 ## 2. Internal-docs decision log
 
