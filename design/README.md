@@ -14,6 +14,13 @@ that project from here, mirrored at their exact remote paths. Cards authored
 elsewhere are canonical in the remote project and are intentionally **not**
 duplicated in the repo.
 
+Motion is a foundation, not a component, and it has two cards:
+`foundations/motion-lifecycle` (the paired entrance/exit contract every surface
+obeys) and `foundations/motion-choreography` (how a live list shows change as
+change). Both are runnable demos, not diagrams — motion reviewed as a
+screenshot is motion nobody reviewed. See
+[`docs/MOTION-SYSTEM.md`](../docs/MOTION-SYSTEM.md) for the system they card.
+
 ## Card conventions (match the existing remote cards)
 
 - First line: `<!-- @dsCard group="Components" -->` (groups in use:

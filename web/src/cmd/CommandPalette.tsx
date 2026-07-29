@@ -12,7 +12,7 @@ const OmnibarIntent = lazy(() =>
   import("./OmnibarIntent").then((m) => ({ default: m.OmnibarIntent })),
 );
 import { looksLikeIntent } from "./intent";
-import { SURFACE, usePresence, useSurfaceMotion } from "../ds";
+import { DURATION, SURFACE, prefersReducedMotion, usePresence, useSurfaceMotion } from "../ds";
 import type { PaletteSeverity } from "../types";
 
 const SEVERITY_TEXT: Record<PaletteSeverity, string> = {
@@ -55,6 +55,8 @@ function Palette({
   const [recents, setRecents] = useState<string[]>(readRecents);
   const [pending, setPending] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  /** The row that was just chosen, held for one beat as the palette leaves. */
+  const [chosen, setChosen] = useState<string | null>(null);
   /** The sentence being compiled, once the user has asked for that. */
   const [intent, setIntent] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -71,18 +73,44 @@ function Palette({
   // the motion was half-finished. `rise` is the same keyframe pair, played
   // backwards and faster on the way out, and reversible mid-flight: ⌘K ⌘K ⌘K
   // now tracks the keystrokes instead of restarting from opacity zero.
-  const scrimRef = useSurfaceMotion<HTMLDivElement>(visible, SURFACE.scrim);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const scrimMotionRef = useSurfaceMotion<HTMLDivElement>(visible, SURFACE.scrim);
+  const scrimRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      rootRef.current = node;
+      scrimMotionRef(node);
+    },
+    [scrimMotionRef],
+  );
   const dialogRef = useSurfaceMotion<HTMLDivElement>(visible, SURFACE.rise, onExited);
+
+  /**
+   * Hands focus back — but only if focus is still inside the palette.
+   *
+   * Called twice by design: when the palette starts leaving, and on unmount as
+   * the fallback for an abrupt removal with no exit. The guard stops the second
+   * call from yanking the caret back from wherever it has since gone.
+   */
+  const handBackFocus = useCallback(() => {
+    const active = document.activeElement;
+    const inside = active === document.body || (rootRef.current?.contains(active) ?? false);
+    if (inside) restoreFocus.current?.focus?.();
+  }, []);
 
   useEffect(() => {
     // Focus after paint: the input mounts with this overlay.
     const raf = requestAnimationFrame(() => inputRef.current?.focus());
-    const restore = restoreFocus.current;
     return () => {
       cancelAnimationFrame(raf);
-      restore?.focus?.();
+      handBackFocus();
     };
-  }, []);
+  }, [handBackFocus]);
+
+  // Handed back as the palette starts leaving, not once it has gone: the caret
+  // must not sit inside a surface that is already hidden from assistive tech.
+  useEffect(() => {
+    if (!visible) handBackFocus();
+  }, [visible, handBackFocus]);
 
   const ranked = useMemo(() => {
     const matches = rank(query, commands);
@@ -112,8 +140,19 @@ function Palette({
     (command: Command) => {
       setRecents(pushRecent(command.id));
       if (command.href) {
-        window.location.hash = command.href;
-        onClose();
+        // Hand off, rather than cut. The palette can teleport you anywhere, which
+        // is its whole value and also the reason it is the easiest place in the
+        // app to lose your bearings: the surface vanishes and a different page is
+        // simply there. Marking the chosen row and letting it be seen for one
+        // quick beat *while* the palette sinks closes the loop — you watch the
+        // thing you picked become the thing you got.
+        setChosen(command.id);
+        const go = () => {
+          window.location.hash = command.href!;
+          onClose();
+        };
+        if (prefersReducedMotion()) go();
+        else window.setTimeout(go, DURATION.quick);
         return;
       }
       if (!command.run) {
@@ -327,7 +366,11 @@ function Palette({
                         // palette is the app's fastest surface and it is the one
                         // place a click had no physical answer at all.
                         className={`flex cursor-pointer items-center gap-3 px-4 py-2 transition-transform duration-(--duration-press) motion-safe:active:scale-[0.99] ${
-                          active ? "bg-surface-2" : ""
+                          chosen === command.id
+                            ? "bg-eye/15 text-ink"
+                            : active
+                              ? "bg-surface-2"
+                              : ""
                         }`}
                       >
                         <span

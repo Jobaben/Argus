@@ -98,9 +98,9 @@ export function MoreMenu({
             tabIndex={-1}
             onClick={() => close(false)}
             className="fixed inset-0 z-10 cursor-default"
-            // The dismiss shield must go the moment the menu is closing, or a
-            // click aimed at what is behind it lands on a shield for a surface
-            // that is already leaving.
+            // The dismiss shield must stop taking clicks the moment the menu is
+            // closing, or a click aimed at what is behind it lands on a shield
+            // for a surface that is already leaving.
             inert={!open}
             aria-hidden
           />

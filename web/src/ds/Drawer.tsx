@@ -64,14 +64,38 @@ function Panel({
     [motionRef],
   );
 
+  /**
+   * Hands focus back to whatever had it — but only if focus is still in here.
+   *
+   * Handed back when the drawer starts *leaving* rather than when it finishes:
+   * waiting would park the caret inside a subtree that is by then `inert` and
+   * `aria-hidden`, which is worse than either on its own.
+   *
+   * The guard matters because this runs twice by design: once on that
+   * transition, and once on unmount as the fallback for an abrupt removal with
+   * no exit at all. Without it the second call would yank the caret back from
+   * wherever the user had moved it during those 126ms.
+   */
+  const handBackFocus = useCallback(() => {
+    const active = document.activeElement;
+    const inside = active === document.body || (panelRef.current?.contains(active) ?? false);
+    if (inside) restoreFocus.current?.focus?.();
+  }, []);
+
   useEffect(() => {
     const raf = requestAnimationFrame(() => closeRef.current?.focus());
-    const restore = restoreFocus.current;
     return () => {
       cancelAnimationFrame(raf);
-      restore?.focus?.();
+      handBackFocus();
     };
-  }, []);
+  }, [handBackFocus]);
+
+  // Focus goes back when the drawer starts *leaving*, not when it finishes.
+  // Waiting would leave the caret inside a surface that is already
+  // `aria-hidden`, which is the one arrangement worse than either alone.
+  useEffect(() => {
+    if (!visible) handBackFocus();
+  }, [visible, handBackFocus]);
 
   const drag = useDragToDismiss(panelRef, onClose, visible);
 
@@ -104,7 +128,9 @@ function Panel({
       className="fixed inset-0 z-40 flex justify-end bg-ground/60 backdrop-blur-[2px]"
       // A surface on its way out must not be clickable or reachable: it is a
       // picture of a dialog by then, and `inert` says exactly that to the
-      // pointer, the tab order and the accessibility tree at once.
+      // pointer, the tab order and the accessibility tree at once. `aria-hidden`
+      // alongside it because jsdom implements `inert` as an attribute and
+      // nothing more, so tests would still see the leaving surface as live.
       inert={!visible}
       aria-hidden={visible ? undefined : true}
       onMouseDown={(e) => {

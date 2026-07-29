@@ -179,8 +179,8 @@ function StepTile({
   /** Pipeline-level model shown in the card header; the tile only repeats a
    *  model when its own differs from this. */
   rowModel: string | null;
-  /** Opens this step's drawer. */
-  onOpen: () => void;
+  /** Opens this step's drawer, told where on screen the tile was. */
+  onOpen: (originY: number) => void;
 }) {
   const token = STATUS[step.status].token;
   const working = step.status === "working";
@@ -216,7 +216,10 @@ function StepTile({
             and a nested interactive element is invalid. */}
         <button
           type="button"
-          onClick={onOpen}
+          // The tile's own position, so the drawer grows out of the row you
+          // pressed instead of out of the screen edge. Read from the event
+          // rather than measured later: by then the board may have re-sorted.
+          onClick={(e) => onOpen(e.currentTarget.getBoundingClientRect().top)}
           className="min-w-0 flex-1 text-left"
           title="Open this step's run, log and cost"
         >
@@ -306,7 +309,7 @@ function PhaseCell({
   liveActivity: Map<string, LiveActivity>;
   now: number;
   rowModel: string | null;
-  onOpenStep: (step: StepPill, phaseName: string, reason: string | null) => void;
+  onOpenStep: (step: StepPill, phaseName: string, reason: string | null, originY: number) => void;
 }) {
   return (
     <div className="flex min-w-0 flex-col gap-2.5">
@@ -320,7 +323,7 @@ function PhaseCell({
             live={step.runId ? (liveActivity.get(step.runId) ?? null) : null}
             now={now}
             rowModel={rowModel}
-            onOpen={() => onOpenStep(step, pill.name, reason)}
+            onOpen={(originY) => onOpenStep(step, pill.name, reason, originY)}
           />
         );
       })}
@@ -472,8 +475,8 @@ function Row({
                   liveActivity={liveActivity}
                   now={now}
                   rowModel={row.model}
-                  onOpenStep={(step, phaseName, reason) =>
-                    onOpenStep({ step, pipelineName: row.name, phaseName, reason })
+                  onOpenStep={(step, phaseName, reason, originY) =>
+                    onOpenStep({ step, pipelineName: row.name, phaseName, reason, originY })
                   }
                 />
               ))}

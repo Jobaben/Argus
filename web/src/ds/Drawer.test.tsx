@@ -55,7 +55,7 @@ describe("Drawer", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { hidden: true })).toBeNull());
   });
 
-  it("is inert while leaving, so a click aimed past it does not land on it", () => {
+  it("is inert and hidden while leaving, so nothing lands on a surface that is going", () => {
     const { rerender, onClose } = open();
     rerender(
       <Drawer open={false} title="Failing step" onClose={onClose}>
@@ -64,6 +64,8 @@ describe("Drawer", () => {
     );
     const scrim = screen.getByRole("dialog", { hidden: true }).parentElement!;
     expect(scrim).toHaveAttribute("inert");
+    // Both, because jsdom implements `inert` as an attribute and nothing more:
+    // without `aria-hidden` a leaving surface stays visible to role queries.
     expect(scrim).toHaveAttribute("aria-hidden", "true");
   });
 
@@ -78,6 +80,11 @@ describe("Drawer", () => {
   it("grows from the row that opened it when told where that was", () => {
     open({ originY: 420 });
     expect(screen.getByRole("dialog").style.transformOrigin).toBe("right 420px");
+  });
+
+  it("invents no origin when it was not given one — a keyboard selection has no row", () => {
+    open();
+    expect(screen.getByRole("dialog").style.transformOrigin).toBe("");
   });
 
   it("dismisses on a flick, at the speed it was flicked", () => {

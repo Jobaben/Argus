@@ -197,3 +197,7 @@ links, gate buttons, transport controls and dialog buttons.
 - **`scripts/check-motion-budget.mjs`** in CI, per rule 2 above. It also fails on
   a _stale_ exception, because an allowance nobody is exercising is a claim
   nobody is checking.
+- **Two design-system cards**, `design/foundations/motion-lifecycle` and
+  `design/foundations/motion-choreography`, so motion is reviewed the way colour
+  and type already are. Both are runnable rather than illustrated: motion
+  reviewed as a screenshot is motion nobody reviewed.
