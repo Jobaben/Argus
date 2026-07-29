@@ -1,8 +1,17 @@
 {
   "name": "argus",
   "version": "0.4.0",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Jobaben/Argus.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Jobaben/Argus/issues"
+  },
+  "homepage": "https://github.com/Jobaben/Argus#readme",
   "private": true,
-  "description": "Argus — the all-seeing monitor for your Claude Code agents, jobs, history and results.",
+  "description": "Argus \u2014 the all-seeing monitor for your Claude Code agents, jobs, history and results.",
   "type": "module",
   "bin": {
     "argus": "bin/argus.mjs"

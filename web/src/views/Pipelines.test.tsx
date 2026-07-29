@@ -265,7 +265,7 @@ describe("Pipelines admin gate", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<Pipelines />);
     await waitFor(() => expect(screen.getByRole("button", { name: /sign in/i })).toBeTruthy());
-    await user.type(screen.getByPlaceholderText("Username"), "usha");
+    await user.type(screen.getByPlaceholderText("Username"), "ada");
     await user.type(screen.getByPlaceholderText("Password"), "correct horse");
     await user.click(screen.getByRole("button", { name: /sign in/i }));
     await waitFor(() =>
@@ -274,7 +274,7 @@ describe("Pipelines admin gate", () => {
           ([url, init]) =>
             String(url).includes("/api/auth/login") &&
             (init as RequestInit | undefined)?.method === "POST" &&
-            String((init as RequestInit | undefined)?.body).includes('"usha"'),
+            String((init as RequestInit | undefined)?.body).includes('"ada"'),
         ),
       ).toBe(true),
     );

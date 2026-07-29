@@ -5,14 +5,14 @@ describe("looksLikeIntent", () => {
   it("a name or a fragment stays a search", () => {
     // These are what the palette is *for*. Offering to spend a planning pass on
     // them would make the fast path slower and more expensive.
-    for (const q of ["nightly", "nightly triage", "spectacle", "#/budget", "ftm"]) {
+    for (const q of ["nightly", "nightly triage", "starling", "#/budget", "ftm"]) {
       expect(looksLikeIntent(q)).toBe(false);
     }
   });
 
   it("a sentence is offered as an instruction", () => {
     for (const q of [
-      "pause everything touching Spectacle",
+      "pause everything touching Starling",
       "set the daily budget to 5 dollars",
       "resolve the registry timeout issue",
     ]) {

@@ -45,7 +45,7 @@ function run(over: Partial<Run> = {}): Run {
     id: "r1",
     scheduleId: "s1",
     scheduleName: "Nightly triage",
-    prompt: "Triage the failing spectacle integration tests",
+    prompt: "Triage the failing starling integration tests",
     cwd: "/tmp",
     status: "succeeded",
     trigger: "scheduled",
@@ -295,17 +295,17 @@ test("verdict scores land in the quarter view, and unfinished ones do not", asyn
 
 test("search is prefix-matching and cannot be made to inject FTS operators", async () => {
   await withHome(async () => {
-    ingest(baseInput([run({ prompt: "Triage the Spectacle integration suite" })]));
+    ingest(baseInput([run({ prompt: "Triage the Starling integration suite" })]));
 
-    assert.equal(vaultSearch("spectac").hits.length, 1);
+    assert.equal(vaultSearch("starl").hits.length, 1);
 
     // The quotes and the operator are stripped to bare terms, so this asks for
-    // documents containing all of "spectacle", "or", "docs" and "match" — which
+    // documents containing all of "starling", "or", "docs" and "match" — which
     // is nothing. Two things are being asserted: the expression did not reach
     // FTS5's grammar (an unescaped quote is a syntax error, which would show up
     // as a `search failed` detail), and it did not silently widen the query
     // into an OR that matches the whole index.
-    const nasty = vaultSearch('spectacle" OR docs MATCH "');
+    const nasty = vaultSearch('starling" OR docs MATCH "');
     assert.equal(nasty.available, true);
     assert.doesNotMatch(nasty.detail, /search failed/);
     assert.equal(nasty.hits.length, 0);

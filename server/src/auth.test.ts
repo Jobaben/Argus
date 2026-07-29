@@ -20,7 +20,7 @@ function clock(start = 1_700_000_000_000) {
   return { now: () => new Date(t), advance: (ms: number) => (t += ms) };
 }
 
-async function activeUser(username = "usha", password = "correct horse battery") {
+async function activeUser(username = "ada", password = "correct horse battery") {
   await store.register(username, password, { role: "root", status: "active" });
   return { username, password };
 }
@@ -37,12 +37,12 @@ test("login issues a role-carrying session for good credentials", async () => {
   const good = await auth.login(username, password);
   assert.ok(good.ok);
   assert.equal(good.role, "root");
-  assert.deepEqual(auth.verify(good.token), { username: "usha", role: "root" });
+  assert.deepEqual(auth.verify(good.token), { username: "ada", role: "root" });
 });
 
 test("login before any user exists reports not-configured", async () => {
   const auth = createAuthService({ store });
-  assert.deepEqual(await auth.login("usha", "whatever password"), {
+  assert.deepEqual(await auth.login("ada", "whatever password"), {
     ok: false,
     reason: "not-configured",
   });
@@ -139,7 +139,7 @@ test("status reports configured plus the session's identity", async () => {
   assert.ok(res.ok);
   assert.deepEqual(await auth.status(res.token), {
     configured: true,
-    username: "usha",
+    username: "ada",
     role: "root",
   });
 });

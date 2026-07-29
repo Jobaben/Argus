@@ -23,9 +23,7 @@ Fanned out in parallel; each is an isolated source + view + tab:
 - **Integration** — tab navigation (hash routing), route registration, build + smoke test.
 - **Chronicle** ✅ (2026-07-09) — cross-source swimlane timeline: runs +
   agents + sessions merged into packed lanes over a 1h–7d window
-  (`/api/chronicle`, Chronicle tab); design-system cards (chronicle-timeline,
-  segmented-control) published to the shared claude.ai/design project from
-  `design/`.
+  (`/api/chronicle`, Chronicle tab).
 - **Monitors** ✅ (2026-07-10) — Healthchecks/Uptime-Kuma-inspired dead-man's
   switch per schedule: up/late/down/failing derivation with period-scaled
   grace, heartbeat bars, uptime % (`/api/monitors`, Monitors tab). Catches

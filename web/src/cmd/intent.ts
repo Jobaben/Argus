@@ -4,7 +4,7 @@
  * Three words and twelve characters, and the threshold is deliberately
  * conservative in both directions. "nightly triage" must stay a search, because
  * fuzzy-jumping is what the palette is for and a planning pass costs real
- * money; but "pause everything touching Spectacle" should be recognisable as
+ * money; but "pause everything touching Starling" should be recognisable as
  * something to interpret without the user learning a prefix character.
  *
  * Crossing the threshold only *offers* intent mode. Nothing is compiled until

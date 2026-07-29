@@ -109,12 +109,12 @@ describe("StepDrawer", () => {
   });
 
   it("links to the transcript when the run recorded one", async () => {
-    stubRun({ id: "run_0003", log: "", sessionId: "sess-1", project: "-home-me-spectacle" });
+    stubRun({ id: "run_0003", log: "", sessionId: "sess-1", project: "-home-me-starling" });
     render(<StepDrawer selection={selection()} onClose={vi.fn()} />);
     await waitFor(() =>
       expect(screen.getByRole("link", { name: /open transcript/i })).toHaveAttribute(
         "href",
-        "#/sessions/-home-me-spectacle/sess-1",
+        "#/sessions/-home-me-starling/sess-1",
       ),
     );
   });

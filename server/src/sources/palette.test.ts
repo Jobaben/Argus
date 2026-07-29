@@ -50,7 +50,7 @@ function schedule(over: Partial<ScheduleWithNext> = {}): ScheduleWithNext {
     id: "s1",
     name: "Dependency audit",
     prompt: "audit",
-    cwd: "/home/me/spectacle",
+    cwd: "/home/me/starling",
     trigger: { kind: "interval", everyMinutes: 360 },
     enabled: true,
     overlapPolicy: "skip",
@@ -106,7 +106,7 @@ function agent(over: Partial<Agent> = {}): Agent {
     detail: "Rewriting StripeAdapter",
     result: null,
     template: null,
-    cwd: "/home/me/spectacle",
+    cwd: "/home/me/starling",
     cliVersion: null,
     inFlight: null,
     createdAt: NOW.toISOString(),
@@ -121,8 +121,8 @@ function agent(over: Partial<Agent> = {}): Agent {
 function session(over: Partial<SessionSummary> = {}): SessionSummary {
   return {
     id: "sess-1",
-    project: "-home-me-spectacle",
-    projectLabel: "home/me/spectacle",
+    project: "-home-me-starling",
+    projectLabel: "home/me/starling",
     title: "Trace the duplicate-charge report",
     messageCount: 12,
     toolUseCount: 4,
@@ -251,7 +251,7 @@ describe("buildPalette", () => {
 
   it("makes a schedule findable by its working directory", () => {
     const { entries } = buildPalette(input({ schedules: [schedule()] }), NOW);
-    assert.ok(entries[0].keywords?.includes("/home/me/spectacle"));
+    assert.ok(entries[0].keywords?.includes("/home/me/starling"));
   });
 
   it("only lists a monitor that wants attention, so schedules are not duplicated", () => {
@@ -322,7 +322,7 @@ describe("buildPalette", () => {
 
   it("deep-links a transcript the way the Sessions view reads it", () => {
     const { entries } = buildPalette(input({ sessions: [session()] }), NOW);
-    assert.equal(entries[0].href, "#/sessions/-home-me-spectacle/sess-1");
+    assert.equal(entries[0].href, "#/sessions/-home-me-starling/sess-1");
   });
 
   it("caps the transcript tail so the index cannot become a session list", () => {

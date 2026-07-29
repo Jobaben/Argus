@@ -65,12 +65,12 @@ describe("tickLabel", () => {
 
 describe("shortenLanePath", () => {
   it("keeps the identifying tail of a path", () => {
-    expect(shortenLanePath("home/mtrushbad/GIT/spectacle")).toBe("…/GIT/spectacle");
+    expect(shortenLanePath("home/casey/GIT/starling")).toBe("…/GIT/starling");
   });
 
   it("leaves a short label alone", () => {
     expect(shortenLanePath("Background agents")).toBe("Background agents");
-    expect(shortenLanePath("GIT/spectacle")).toBe("GIT/spectacle");
+    expect(shortenLanePath("GIT/starling")).toBe("GIT/starling");
   });
 
   it("honours a custom segment count", () => {

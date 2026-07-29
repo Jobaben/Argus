@@ -87,7 +87,7 @@ export function axisTicks(windowStartMs: number, windowEndMs: number, count = 6)
  * Shortens a lane label to its trailing path segments.
  *
  * Lane labels are mostly project paths, and a path is identified by its *tail*
- * — `home/mtrushbad/GIT/spectacle` matters as "GIT/spectacle". Wrapping the
+ * — `home/casey/GIT/starling` matters as "GIT/starling". Wrapping the
  * whole thing broke words mid-token ("wareh / ouse") and cost two lines per
  * lane; truncating from the front keeps the identifying part and stays on one.
  * The full label remains available as a tooltip.

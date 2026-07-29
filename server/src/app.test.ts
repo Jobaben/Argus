@@ -267,7 +267,7 @@ test("setup → authenticated mutation → logout → 401 again", async () => {
   const setup = await app.request("/api/auth/setup", {
     method: "POST",
     headers: sameOrigin,
-    body: JSON.stringify({ username: "usha", password: "correct horse battery" }),
+    body: JSON.stringify({ username: "ada", password: "correct horse battery" }),
   });
   assert.equal(setup.status, 201);
   const cookieHeader = setup.headers.get("set-cookie") ?? "";
@@ -286,7 +286,7 @@ test("setup → authenticated mutation → logout → 401 again", async () => {
   assert.deepEqual(await status.json(), {
     configured: true,
     authenticated: true,
-    username: "usha",
+    username: "ada",
     role: "root",
   });
 
@@ -500,7 +500,7 @@ test("weak setup password is rejected with 400 and no account is created", async
   const res = await app.request("/api/auth/setup", {
     method: "POST",
     headers: sameOrigin,
-    body: JSON.stringify({ username: "usha", password: "short" }),
+    body: JSON.stringify({ username: "ada", password: "short" }),
   });
   assert.equal(res.status, 400);
   const status = await app.request("/api/auth/status", { headers: loopback });

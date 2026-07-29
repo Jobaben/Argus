@@ -1,9 +1,10 @@
 {
   "name": "@argus/contracts",
   "version": "0.4.0",
+  "license": "Apache-2.0",
   "private": true,
   "type": "module",
-  "description": "The wire contract between the Argus server and web — types only, no runtime.",
+  "description": "The wire contract between the Argus server and web \u2014 types only, no runtime.",
   "types": "./src/index.ts",
   "exports": {
     ".": {

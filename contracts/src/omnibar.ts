@@ -1,7 +1,7 @@
 /**
  * The Omnibar: state a sentence, see exactly what would change, then confirm.
  *
- * "Pause everything touching Spectacle until Monday" is a perfectly clear
+ * "Pause everything touching Starling until Monday" is a perfectly clear
  * instruction and a terrible thing to execute directly. The Omnibar splits it
  * in two: a bounded planning pass turns the sentence into an explicit list of
  * mutations, and nothing is applied until a human reads that list and confirms

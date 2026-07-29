@@ -240,7 +240,7 @@ const STOPWORDS = new Set([
 export function ftsQuery(raw: string): string | null {
   const tokens = tokenize(raw);
   if (tokens.length === 0) return null;
-  // Prefix-matching the tokens keeps "spectac" finding "Spectacle" — which is
+  // Prefix-matching the tokens keeps "starl" finding "Starling" — which is
   // what a search box is expected to do — while the strip-to-alphanumeric above
   // means nothing the user types can reach FTS5's expression grammar.
   return tokens.map((t) => `${t}*`).join(" AND ");

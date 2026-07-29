@@ -66,12 +66,10 @@ can do, and where the data comes from.
 
 Applies to every tab.
 
-![Command palette](screenshots/command-palette.png)
 
 _`⌘K` from anywhere: three characters find the schedule, its live monitor
 health, the issues it raised, and the action that fires it now._
 
-![Keyboard shortcuts](screenshots/shortcuts.png)
 
 - **Command palette — `⌘K` / `Ctrl K`.** The fastest way to anything. Type a few
   characters and it fuzzy-matches across every destination, pipeline, schedule,
@@ -145,7 +143,6 @@ health, the issues it raised, and the action that fires it now._
 
 _Pipelines at a glance — the home tab._ Route: `#/command`
 
-![Command Center](screenshots/command-center.png)
 
 **Purpose:** one card per pipeline, attention-first, with a column per phase
 and a tile per step. Approve/Revise gates appear inline on the row that needs
@@ -196,7 +193,6 @@ you — this is the wall you keep open on a second monitor.
 - A tile that has just changed status flashes briefly, so a transition you
   weren't watching for doesn't pass unnoticed.
 
-![Step drawer](screenshots/step-drawer.png)
 
 _A step's drawer opens over the board, so inspecting one run doesn't cost you the
 view of the other eleven._
@@ -219,7 +215,6 @@ show nothing. Money spent on a retried phase still counts toward the row Σ.
 _The "while you were away" digest — read this first after time away._
 Route: `#/briefing`
 
-![Briefing](screenshots/briefing.png)
 
 **Purpose:** Argus exists so agents can run unattended — which means you're
 usually not looking when things happen. The Briefing answers the two questions
@@ -256,7 +251,6 @@ last acknowledgement (or the last 24 h if you've never acknowledged; capped at
 - **Pipelines finished** — instances that reached a terminal state in the
   window.
 
-![Briefing digest sections](screenshots/briefing-digest.png)
 
 **Mark caught up** (top right): stamps now as your acknowledgement point and
 resets the window — the digest empties, and tomorrow's briefing starts from
@@ -278,7 +272,6 @@ runs + schedules + issue triage + pipeline instances; re-fetched on the
 
 _Everything that ran, on one timeline._ Route: `#/chronicle`
 
-![Chronicle](screenshots/chronicle.png)
 
 **Purpose:** a swimlane timeline that merges **scheduler runs**, **background
 agents**, and **sessions** into a single windowed view — see a day of activity
@@ -312,7 +305,6 @@ the scheduler's run records with `~/.claude/jobs/` and
 
 _Fire one `claude -p` run right now._ Route: `#/launch`
 
-![Launch](screenshots/launch.png)
 
 **Purpose:** not everything deserves a schedule. Launch fires a **single
 one-off run** — a quick audit, a report, a cleanup — straight from the
@@ -360,7 +352,6 @@ record), then the standard run surface — `GET /api/runs?scheduleId=oneoff`,
 
 _Recurring `claude -p` runs, owned by Argus._ Route: `#/schedules`
 
-![Scheduler](screenshots/scheduler.png)
 
 **Purpose:** define headless prompts that Argus fires on a trigger — nightly
 audits, periodic report generators, cleanup jobs — then watch their run
@@ -369,7 +360,6 @@ section) and **Cron** (see [Cron panel](#20-cron-panel)).
 
 **Creating a schedule** — click **+ New schedule**:
 
-![New schedule form](screenshots/scheduler-form.png)
 
 - **Name** — how it appears everywhere (cards, Chronicle, Monitors).
 - **Prompt for `claude -p`** — the full prompt the headless agent receives.
@@ -435,7 +425,6 @@ via `GET/POST /api/schedules`, `PUT/DELETE /api/schedules/:id`,
 
 _A dead-man's switch over your schedules._ Route: `#/monitors`
 
-![Monitors](screenshots/monitors.png)
 
 **Purpose:** answer "did my schedules actually run?" — not "what did Argus
 launch," but "did the expected slot pass with nothing landing," which also
@@ -493,7 +482,6 @@ as `monitors:alert` frames on `/ws`.
 
 _Failed runs grouped by root cause._ Route: `#/issues`
 
-![Issues](screenshots/issues.png)
 
 **Purpose:** Sentry-style grouping — twenty timeouts read as **one issue with
 ×20**, not twenty rows. Each distinct failure fingerprint (normalized error)
@@ -527,7 +515,6 @@ your triage decisions persist (`~/.claude/argus/issues.json`).
 
 _Author multi-phase, human-gated agent flows._ Route: `#/pipelines`
 
-![Pipelines](screenshots/pipelines.png)
 
 **Purpose:** define pipelines — ordered **phases**, each with a working
 directory and one or more **steps** (a step = one `claude -p` run with its own
@@ -585,7 +572,6 @@ records under `~/.claude/argus/instances/` via `GET/POST /api/pipelines`,
 
 _Spend guardrails over every unattended dollar._ Route: `#/budget`
 
-![Budget](screenshots/budget.png)
 
 **Purpose:** Argus's whole point is spending your API credits while you're
 not looking — schedules, pipelines and one-off launches all report what each
@@ -651,7 +637,6 @@ pruning. Runs that report no cost (older CLIs, crashed spawns) add nothing.
 _Who may run and edit pipelines._ Route: `#/users` (root only) + the login
 panel on the Pipelines tab
 
-![Users](screenshots/users.png)
 
 **Purpose:** Argus's mutating pipeline surface is account-gated with a
 two-role model: **root** (the first account, manages users) and **members**
@@ -689,7 +674,6 @@ machine running Argus and bootstrap again.
 
 _Full-text across all transcripts._ Route: `#/search` (the 🔍 in the nav)
 
-![Search](screenshots/search.png)
 
 **Purpose:** find any text anywhere in your session history — a phrase, a
 file name, an error message — when you don't remember which session it was in.
@@ -717,7 +701,6 @@ one is for text inside a conversation. Click a result to open that transcript.
 
 _The status board for background jobs._ Route: `#/agents`
 
-![Agents](screenshots/agents.png)
 
 **Purpose:** the at-a-glance board for all background Claude Code jobs.
 
@@ -743,7 +726,6 @@ failed. **Click any card** to open that agent's [Detail](#13-agent-detail).
 
 _Single-agent deep dive + timeline._ Route: `#/agent/<short>`
 
-![Agent Detail](screenshots/agent-detail.png)
 
 **Purpose:** everything about one agent, including the chronological trail of
 how it got to its current state. A card click on Agents lands here.
@@ -772,7 +754,6 @@ the main list.
 
 _Browse & read transcripts._ Route: `#/sessions`
 
-![Sessions](screenshots/sessions.png)
 
 **Purpose:** read the actual conversation transcripts of your Claude Code
 sessions across all projects.
@@ -791,7 +772,6 @@ results come back in relevance order, freshest first among equal matches.
 
 **Clicking a card opens the transcript:**
 
-![Session transcript](screenshots/session-transcript.png)
 
 - The full message stream in order — each message with a role pill
   (user/assistant), a tool badge where a tool was invoked, a red error badge
@@ -811,7 +791,6 @@ results come back in relevance order, freshest first among equal matches.
 
 _Global prompt feed._ Route: `#/activity`
 
-![Activity](screenshots/activity.png)
 
 **Purpose:** a single chronological stream of recent prompts issued across
 **all** projects and sessions — your "what have I been doing lately" firehose.
@@ -828,7 +807,6 @@ relative timestamp, and the prompt text (truncated to ~240 chars). Read-only.
 
 _Working-directories overview._ Route: `#/projects`
 
-![Projects](screenshots/projects.png)
 
 **Purpose:** a directory-level roll-up — every folder Claude Code has worked
 in, with how much activity each has.
@@ -850,7 +828,6 @@ touched. Informational only — drill into content via Sessions or Search.
 
 _Usage analytics._ Route: `#/stats`
 
-![Stats](screenshots/stats.png)
 
 **Purpose:** aggregate usage analytics across all your Claude Code activity.
 
@@ -878,7 +855,6 @@ metrics appear only if present).
 
 _Installed extensions catalog._ Route: `#/inventory`
 
-![Inventory](screenshots/inventory.png)
 
 **Purpose:** see everything installed into your Claude Code environment — the
 agents, commands, skills, and plugins available to you.
@@ -900,7 +876,6 @@ do." No install/remove actions.
 
 _Task-queue workspace inventory._ Route: `#/tasks`
 
-![Tasks](screenshots/tasks.png)
 
 **Purpose:** a low-level view of Claude Code's internal task directories (the
 in-session task queue's working folders) — mostly diagnostic.
@@ -919,7 +894,6 @@ locked/in use, green = open), and last-updated time. Read-only.
 _An honest empty state, by design._ Found under **Scheduler → Cron** sub-tab
 (there is deliberately no `#/cron` route).
 
-![Cron panel](screenshots/cron.png)
 
 **Purpose:** explain why Claude Code's **native cron routines** can't be shown
 as a live table — and what would be needed to surface them.
@@ -1577,7 +1551,7 @@ interpret it instead.
 
 The threshold is deliberately conservative in both directions. "nightly triage"
 must stay a search, because jumping is what the palette is for and a planning
-pass costs real money; "pause everything touching Spectacle" should be
+pass costs real money; "pause everything touching Starling" should be
 recognisable without learning a prefix character.
 
 ### The preview is the whole feature
@@ -1824,6 +1798,6 @@ are polled once per scheduler tick, with a four-second timeout and no retries.
 | **The Vault**       | What happened last quarter, and last year? | `argus/vault.sqlite` (a rebuildable cache)  |
 | **Omnibar**         | Say it, see the exact changes, confirm     | schedules + issues + instances + budget     |
 
-_Screenshots in this guide live in [`docs/screenshots/`](screenshots/) and
-were captured from a live instance. To refresh them after a UI change, run the
-app and re-capture at 1440×900._
+_Screenshots were removed ahead of the public release because they were
+captured from a real workspace; they will return once re-captured from demo
+data at 1440×900._

@@ -21,7 +21,7 @@ read defensively — Claude Code versions vary and files are written incremental
   "resumeSessionId": "…",
   "daemonShort": "96e07482", // == the dir name <short>
   "cliVersion": "2.1.165",
-  "cwd": "C:\\GIT\\Spectacle", // ⚠ may be a foreign-OS path — display only
+  "cwd": "C:\\GIT\\Starling", // ⚠ may be a foreign-OS path — display only
   "createdAt": "2026-06-05T06:47:44.453Z",
   "updatedAt": "2026-06-08T12:17:04.825Z",
   "firstTerminalAt": "2026-06-05T07:00:37.163Z",
@@ -62,7 +62,7 @@ Keys observed: `at`, `state`, `detail`, `text`. Append-only.
       "cliVersion": "2.1.175",
       "startedAt": 1781249592832,
       "attempt": 1,
-      "cwd": "C:\\GIT\\Replicas\\MotoritOnline",
+      "cwd": "C:\\GIT\\Replicas\\AcmeShop",
       "dispatch": {
         "short": "59b12afc",
         "source": "slash",
@@ -80,9 +80,9 @@ is a lighter `{ supervisorPid, writtenAt, workers }` snapshot.
 
 Dir name = encoded absolute project path. Decoding rules observed:
 
-- `-home-mtrushbad-GIT` → `/home/mtrushbad/GIT`
-- `C--GIT-Spectacle` → `C:\GIT\Spectacle`
-- `C--Users-mtrushbad-OneDrive---Motorit-AB-…` → drive + `---` ≈ space/separator runs
+- `-home-casey-GIT` → `/home/casey/GIT`
+- `C--GIT-Starling` → `C:\GIT\Starling`
+- `C--Users-casey-OneDrive---Acme-Inc-…` → drive + `---` ≈ space/separator runs
 
 Each line has a `type`. Observed distribution in one session:
 

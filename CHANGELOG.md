@@ -75,7 +75,7 @@ All notable changes to Argus are documented here. The format follows
   from _unreachable_ (a dead machine), because they want different fixes.
 
 - **Omnibar** — the command palette learns to act. Type a sentence into `⌘K`
-  ("pause everything touching Spectacle") and Argus compiles it, through a
+  ("pause everything touching Starling") and Argus compiles it, through a
   bounded planning pass, into an explicit table of changes: what it touches,
   what it is now, what it becomes. Nothing happens until you press Apply, and
   then all of it happens or none of it does. Questions are answered inline with
@@ -604,10 +604,8 @@ All notable changes to Argus are documented here. The format follows
 - `useLiveResource` gained `pollAlways` for resources that mix pushed sources
   with time-decaying ones (the Chronicle's session-activity status can change
   with no file event).
-- `design/` — repo-side sources for the claude.ai/design "Argus Design
-  System" project, with card conventions and an incremental DesignSync
-  workflow documented; the Chronicle timeline and segmented-control cards
-  were published to the shared project.
+- Design-system card sources for the Chronicle timeline and segmented
+  control, with card conventions documented.
 - Command Center cost surfacing: every step tile shows its run's tokens and
   dollar cost, each pipeline row shows the latest run's total (Σ chip, all
   revise attempts included), and the page header shows the grand total across

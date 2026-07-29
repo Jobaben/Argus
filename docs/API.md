@@ -823,7 +823,7 @@ the spend ledger, refused while the budget hard stop is in force.
 ### `POST /api/omnibar/plan`
 
 ```json
-{ "intent": "pause everything touching Spectacle" }
+{ "intent": "pause everything touching Starling" }
 ```
 
 `intent` is required and capped at 400 characters; anything else is a `400`.
@@ -836,19 +836,19 @@ Returns either a plan or an answer:
   "plan": {
     "id": "0f1a…",
     "status": "ready",
-    "intent": "pause everything touching Spectacle",
+    "intent": "pause everything touching Starling",
     "mutations": [
       {
         "kind": "schedule.disable",
-        "targetId": "s_spectacle_nightly",
-        "targetLabel": "Spectacle nightly",
+        "targetId": "s_starling_nightly",
+        "targetLabel": "Starling nightly",
         "value": null,
         "before": "enabled",
         "after": "disabled"
       }
     ],
     "warnings": ["dropped \"schedule.disable\": no schedule with id s_ghost"],
-    "summary": "Pause the two Spectacle schedules",
+    "summary": "Pause the two Starling schedules",
     "createdAt": "2026-07-20T12:00:00.000Z",
     "expiresAt": "2026-07-20T12:05:00.000Z"
   }
@@ -1053,7 +1053,7 @@ Indexed full-text search over runs and alerts, with query expansion.
 ```
 
 The query is tokenized to alphanumerics and prefix-matched with `AND`, so
-`spectac` finds `Spectacle` and nothing a user types can reach FTS5's expression
+`starl` finds `Starling` and nothing a user types can reach FTS5's expression
 grammar. A query under two characters is answered with an empty result and an
 explanatory `detail`, not a `400`.
 

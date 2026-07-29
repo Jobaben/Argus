@@ -122,9 +122,9 @@ src/
 
 `claudeHome()` derives the root from `os.homedir()` (or `ARGUS_CLAUDE_HOME` /
 `CLAUDE_CONFIG_DIR`). Data files frequently embed **foreign** absolute paths —
-e.g. a Windows `cwd: C:\GIT\Spectacle` sitting inside a Linux `~/.claude`. Those
+e.g. a Windows `cwd: C:\GIT\Starling` sitting inside a Linux `~/.claude`. Those
 are display-only. Correlation always keys off `sessionId` and the **encoded
-project-dir name** (`-home-mtrushbad-GIT`, `C--GIT-Spectacle`), never the
+project-dir name** (`-home-casey-GIT`, `C--GIT-Starling`), never the
 embedded path. Path splitting tolerates both separators: `split(/[\\/]/)`.
 
 ## 4. Live update protocol

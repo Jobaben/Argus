@@ -308,7 +308,7 @@ describe("CommandPalette — intent mode", () => {
   it("a sentence advertises the interpret shortcut", async () => {
     stubPlan();
     const { user } = await open();
-    await user.type(screen.getByRole("combobox"), "pause everything touching Spectacle");
+    await user.type(screen.getByRole("combobox"), "pause everything touching Starling");
     expect(screen.getByText(/interpret/)).toBeInTheDocument();
     vi.unstubAllGlobals();
   });
@@ -324,7 +324,7 @@ describe("CommandPalette — intent mode", () => {
   it("pressing enter on a sentence compiles it into a preview", async () => {
     const fetchMock = stubPlan();
     const { user } = await open();
-    await user.type(screen.getByRole("combobox"), "pause everything touching Spectacle");
+    await user.type(screen.getByRole("combobox"), "pause everything touching Starling");
     await user.keyboard("{Enter}");
     await waitFor(() => expect(screen.getByText("Dependency audit")).toBeInTheDocument());
     expect(fetchMock.mock.calls[0][0]).toBe("/api/omnibar/plan");
@@ -345,7 +345,7 @@ describe("CommandPalette — intent mode", () => {
     stubPlan();
     const onClose = vi.fn();
     const { user } = await open(COMMANDS, onClose);
-    await user.type(screen.getByRole("combobox"), "pause everything touching Spectacle");
+    await user.type(screen.getByRole("combobox"), "pause everything touching Starling");
     await user.keyboard("{Enter}");
     await waitFor(() => expect(screen.getByText("Dependency audit")).toBeInTheDocument());
 

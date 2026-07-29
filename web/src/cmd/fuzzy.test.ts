@@ -56,7 +56,7 @@ describe("fuzzyMatch", () => {
 
   it("matches across path and kebab separators as word starts", () => {
     expect(fuzzyMatch("ncr", "nightly-code-review")).not.toBeNull();
-    expect(fuzzyMatch("hmg", "home/mtrushbad/GIT")).not.toBeNull();
+    expect(fuzzyMatch("hmg", "home/casey/GIT")).not.toBeNull();
   });
 });
 
@@ -86,7 +86,7 @@ describe("rank", () => {
   const items = [
     { title: "Command Center" },
     { title: "Monitors" },
-    { title: "Dependency audit", subtitle: "every 6h · spectacle" },
+    { title: "Dependency audit", subtitle: "every 6h · starling" },
     { title: "Release train", subtitle: "daily at 23:00" },
     { title: "Morning standup digest", keywords: ["schedule", "docs"] },
   ];
@@ -117,11 +117,11 @@ describe("rank", () => {
   });
 
   it("prefers a title match over a subtitle match of the same text", () => {
-    const ranked = rank("spectacle", [
-      { title: "spectacle" },
-      { title: "Dependency audit", subtitle: "every 6h · spectacle" },
+    const ranked = rank("starling", [
+      { title: "starling" },
+      { title: "Dependency audit", subtitle: "every 6h · starling" },
     ]);
-    expect(ranked[0].item.title).toBe("spectacle");
+    expect(ranked[0].item.title).toBe("starling");
   });
 
   it("returns title positions for highlighting", () => {
