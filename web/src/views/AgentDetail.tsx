@@ -5,13 +5,14 @@ import type { Agent, AgentStatus, TimelineEntry } from "../types";
 import {
   AlertStrip,
   EmptyState,
-  Loading,
+  Handoff,
   Page,
   SkeletonRows,
   SkeletonTile,
   StatusPill,
   TimeAgo,
   toDsStatus,
+  transitionName,
 } from "../ds";
 
 const DOT_STYLE: Record<AgentStatus, string> = {
@@ -194,6 +195,9 @@ export default function AgentDetail({ short: shortProp }: { short?: string } = {
   return (
     <Page
       title={`agent ${short}`}
+      // Pairs with the agent tile on `#/agents`: the tile you clicked morphs into
+      // this heading rather than the two views crossfading past each other.
+      anchor={transitionName("agent", short)}
       crumbs={[
         { label: "Command Center", href: "#/command" },
         { label: "Agents", href: "#/agents" },
@@ -207,41 +211,37 @@ export default function AgentDetail({ short: shortProp }: { short?: string } = {
 
       {agent ? (
         <AgentMeta agent={agent} />
-      ) : agentsLoading ? (
-        <Loading label="the agent">
-          <SkeletonTile lines={3} />
-        </Loading>
       ) : (
-        <div className="rounded-xl border border-line bg-surface p-4">
-          <h2 className="text-lg font-semibold text-ink">Unknown agent</h2>
-          <p className="mt-1 font-mono text-xs text-ink-faint">{short}</p>
-          <p className="mt-2 text-sm text-ink-faint">
-            No matching agent metadata — showing its timeline below if any exists.
-          </p>
-        </div>
+        <Handoff busy={agentsLoading} label="the agent" skeleton={<SkeletonTile lines={3} />}>
+          <div className="rounded-xl border border-line bg-surface p-4">
+            <h2 className="text-lg font-semibold text-ink">Unknown agent</h2>
+            <p className="mt-1 font-mono text-xs text-ink-faint">{short}</p>
+            <p className="mt-2 text-sm text-ink-faint">
+              No matching agent metadata — showing its timeline below if any exists.
+            </p>
+          </div>
+        </Handoff>
       )}
 
       <section className="mt-8">
         <h3 className="mb-4 text-xs font-semibold uppercase tracking-wide text-ink-faint">
           Timeline
         </h3>
-        {timelineLoading ? (
-          <Loading label="the timeline">
-            <SkeletonRows count={4} />
-          </Loading>
-        ) : ordered.length === 0 ? (
-          <EmptyState>No timeline entries recorded for this agent yet.</EmptyState>
-        ) : (
-          <ol className="relative">
-            {ordered.map((entry, i) => (
-              <TimelineItem
-                key={`${entry.at}-${i}`}
-                entry={entry}
-                last={i === ordered.length - 1}
-              />
-            ))}
-          </ol>
-        )}
+        <Handoff busy={timelineLoading} label="the timeline" skeleton={<SkeletonRows count={4} />}>
+          {ordered.length === 0 ? (
+            <EmptyState>No timeline entries recorded for this agent yet.</EmptyState>
+          ) : (
+            <ol className="relative">
+              {ordered.map((entry, i) => (
+                <TimelineItem
+                  key={`${entry.at}-${i}`}
+                  entry={entry}
+                  last={i === ordered.length - 1}
+                />
+              ))}
+            </ol>
+          )}
+        </Handoff>
       </section>
     </Page>
   );

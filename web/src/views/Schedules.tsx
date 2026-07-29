@@ -5,15 +5,15 @@ import type { Run, ScheduleInput, ScheduleWithNext, VerdictTrend } from "../type
 import {
   AlertStrip,
   EmptyState,
-  Loading,
+  formatCountdown,
+  formatMs,
+  formatTrigger,
+  Handoff,
   Page,
+  RubricFields,
   SkeletonRows,
   TimeAgo,
-  RubricFields,
   TriggerFields,
-  formatCountdown,
-  formatTrigger,
-  formatMs,
   useClock,
   useTicker,
 } from "../ds";
@@ -647,57 +647,55 @@ export default function Schedules() {
             />
           )}
 
-          {loading ? (
-            <Loading label="schedules">
-              <SkeletonRows count={4} />
-            </Loading>
-          ) : schedules.length === 0 && mode.kind === "none" ? (
-            <EmptyState>
-              <p className="text-sm text-ink-dim">No schedules yet.</p>
-              <p className="mx-auto mt-2 max-w-md text-xs">
-                A schedule is a prompt, a working directory and a cadence: Argus runs{" "}
-                <code className="font-mono text-ink-dim">claude -p</code> in that directory on time
-                and keeps every run&apos;s transcript, cost and result. A first one worth having is
-                a nightly review of yesterday&apos;s commits.
-              </p>
-              <button
-                type="button"
-                onClick={() => setMode({ kind: "new" })}
-                className="mt-4 rounded-lg bg-ok/20 px-3 py-1.5 text-sm text-ok ring-1 ring-ok/30 hover:bg-ok/30"
-              >
-                Create your first schedule
-              </button>
-            </EmptyState>
-          ) : shown.length === 0 ? (
-            <EmptyState>
-              <p className="text-sm text-ink-dim">
-                No {filter} schedules — which is the answer you wanted.
-              </p>
-              <button
-                type="button"
-                onClick={() => setFilter("all")}
-                className="mt-3 text-xs text-queue underline hover:text-ink"
-              >
-                Show all {schedules.length}
-              </button>
-            </EmptyState>
-          ) : (
-            <div className="grid grid-cols-1 gap-4">
-              {shown.map(({ schedule: s, health: h }) => (
-                <ScheduleCard
-                  key={s.id}
-                  schedule={s}
-                  health={h}
-                  trend={trendFor.get(`schedule:${s.id}`)}
-                  onEdit={() => setMode({ kind: "edit", id: s.id })}
-                  update={update}
-                  remove={remove}
-                  runNow={runNow}
-                  cancelRun={cancelRun}
-                />
-              ))}
-            </div>
-          )}
+          <Handoff busy={loading} label="schedules" skeleton={<SkeletonRows count={4} />}>
+            {schedules.length === 0 && mode.kind === "none" ? (
+              <EmptyState>
+                <p className="text-sm text-ink-dim">No schedules yet.</p>
+                <p className="mx-auto mt-2 max-w-md text-xs">
+                  A schedule is a prompt, a working directory and a cadence: Argus runs{" "}
+                  <code className="font-mono text-ink-dim">claude -p</code> in that directory on
+                  time and keeps every run&apos;s transcript, cost and result. A first one worth
+                  having is a nightly review of yesterday&apos;s commits.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setMode({ kind: "new" })}
+                  className="mt-4 rounded-lg bg-ok/20 px-3 py-1.5 text-sm text-ok ring-1 ring-ok/30 hover:bg-ok/30"
+                >
+                  Create your first schedule
+                </button>
+              </EmptyState>
+            ) : shown.length === 0 ? (
+              <EmptyState>
+                <p className="text-sm text-ink-dim">
+                  No {filter} schedules — which is the answer you wanted.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setFilter("all")}
+                  className="mt-3 text-xs text-queue underline hover:text-ink"
+                >
+                  Show all {schedules.length}
+                </button>
+              </EmptyState>
+            ) : (
+              <div className="grid grid-cols-1 gap-4">
+                {shown.map(({ schedule: s, health: h }) => (
+                  <ScheduleCard
+                    key={s.id}
+                    schedule={s}
+                    health={h}
+                    trend={trendFor.get(`schedule:${s.id}`)}
+                    onEdit={() => setMode({ kind: "edit", id: s.id })}
+                    update={update}
+                    remove={remove}
+                    runNow={runNow}
+                    cancelRun={cancelRun}
+                  />
+                ))}
+              </div>
+            )}
+          </Handoff>
         </>
       )}
     </Page>

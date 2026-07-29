@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useSearch, type SearchResult } from "../useSearch";
 import { useVaultSearch } from "../useVault";
-import { AlertStrip, EmptyState, Loading, Page, SkeletonRows, TimeAgo } from "../ds";
+import { AlertStrip, EmptyState, Handoff, Page, SkeletonRows, TimeAgo } from "../ds";
 import type { VaultSearchHit } from "../types";
 
 const TYPE_STYLE: Record<string, string> = {
@@ -175,42 +175,42 @@ export default function Search() {
             transcripts are read first, so a recent phrase comes back immediately.
           </p>
         </EmptyState>
-      ) : loading ? (
-        <Loading label="matches">
-          <SkeletonRows count={4} />
-        </Loading>
-      ) : results.length === 0 ? (
-        <div role="status">
-          <EmptyState>
-            <p className="text-sm text-ink-dim">No matches for &ldquo;{trimmed}&rdquo;.</p>
-            <p className="mt-2 text-xs">
-              The search is literal, not fuzzy — try a shorter fragment, or ⌘K to jump to a
-              pipeline, schedule or session by name.
-            </p>
-          </EmptyState>
-        </div>
       ) : (
-        <>
-          {/* The scan stops at a cap; saying "100 matches" would turn a ceiling
+        <Handoff busy={loading} label="matches" skeleton={<SkeletonRows count={4} />}>
+          {results.length === 0 ? (
+            <div role="status">
+              <EmptyState>
+                <p className="text-sm text-ink-dim">No matches for &ldquo;{trimmed}&rdquo;.</p>
+                <p className="mt-2 text-xs">
+                  The search is literal, not fuzzy — try a shorter fragment, or ⌘K to jump to a
+                  pipeline, schedule or session by name.
+                </p>
+              </EmptyState>
+            </div>
+          ) : (
+            <>
+              {/* The scan stops at a cap; saying "100 matches" would turn a ceiling
               into a count the reader would take literally. */}
-          <p role="status" className="mb-3 text-xs text-ink-faint">
-            {truncated ? (
-              <>
-                first <span className="text-ink-dim">{results.length}</span> matches — narrow the
-                query to see the most relevant ones
-              </>
-            ) : (
-              <>
-                {results.length} match{results.length === 1 ? "" : "es"}
-              </>
-            )}
-          </p>
-          <div className="flex flex-col gap-3">
-            {results.map((r, i) => (
-              <ResultRow key={`${r.project}/${r.sessionId}/${i}`} result={r} query={trimmed} />
-            ))}
-          </div>
-        </>
+              <p role="status" className="mb-3 text-xs text-ink-faint">
+                {truncated ? (
+                  <>
+                    first <span className="text-ink-dim">{results.length}</span> matches — narrow
+                    the query to see the most relevant ones
+                  </>
+                ) : (
+                  <>
+                    {results.length} match{results.length === 1 ? "" : "es"}
+                  </>
+                )}
+              </p>
+              <div className="flex flex-col gap-3">
+                {results.map((r, i) => (
+                  <ResultRow key={`${r.project}/${r.sessionId}/${i}`} result={r} query={trimmed} />
+                ))}
+              </div>
+            </>
+          )}
+        </Handoff>
       )}
     </Page>
   );

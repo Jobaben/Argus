@@ -6,14 +6,14 @@ import type { PipelineDefinition, PipelineInput } from "../types";
 import {
   AlertStrip,
   EmptyState,
-  Loading,
+  formatCost,
+  formatTrigger,
+  Handoff,
   Page,
   SkeletonRows,
   STATUS,
   StatusPill,
   TimeAgo,
-  formatCost,
-  formatTrigger,
   toOverviewRows,
   type DsStatus,
   type OverviewRow,
@@ -367,39 +367,37 @@ export default function Pipelines() {
         </div>
       )}
 
-      {loading ? (
-        <Loading label="pipelines">
-          <SkeletonRows count={3} />
-        </Loading>
-      ) : pipelines.length === 0 && mode.kind === "none" ? (
-        <EmptyState>
-          <p className="text-sm text-ink-dim">No pipelines yet.</p>
-          <p className="mx-auto mt-2 max-w-lg text-xs">
-            A pipeline is ordered <strong className="text-ink-dim">phases</strong>, each with a
-            working directory and one or more steps — a step being one{" "}
-            <code className="font-mono text-ink-dim">claude -p</code> run. Any phase can be{" "}
-            <strong className="text-ink-dim">gated</strong>, which pauses the pipeline there until a
-            human approves or sends it back with a note. Once created it appears on the Command
-            Center wall, where you approve gates and watch steps as they work.
-          </p>
-        </EmptyState>
-      ) : (
-        <div className="grid grid-cols-1 gap-4">
-          {pipelines.map((p) => (
-            <PipelineCard
-              key={p.id}
-              def={p}
-              live={liveByPipeline.get(p.id) ?? { badge: "idle", activeIds: [], latest: null }}
-              admin={isAdmin}
-              onEdit={() => setMode({ kind: "edit", id: p.id })}
-              setEnabled={guarded((id) => setEnabled(id, !p.enabled))}
-              remove={guarded(remove)}
-              runNow={guarded(runNow)}
-              abort={guarded(abort)}
-            />
-          ))}
-        </div>
-      )}
+      <Handoff busy={loading} label="pipelines" skeleton={<SkeletonRows count={3} />}>
+        {pipelines.length === 0 && mode.kind === "none" ? (
+          <EmptyState>
+            <p className="text-sm text-ink-dim">No pipelines yet.</p>
+            <p className="mx-auto mt-2 max-w-lg text-xs">
+              A pipeline is ordered <strong className="text-ink-dim">phases</strong>, each with a
+              working directory and one or more steps — a step being one{" "}
+              <code className="font-mono text-ink-dim">claude -p</code> run. Any phase can be{" "}
+              <strong className="text-ink-dim">gated</strong>, which pauses the pipeline there until
+              a human approves or sends it back with a note. Once created it appears on the Command
+              Center wall, where you approve gates and watch steps as they work.
+            </p>
+          </EmptyState>
+        ) : (
+          <div className="grid grid-cols-1 gap-4">
+            {pipelines.map((p) => (
+              <PipelineCard
+                key={p.id}
+                def={p}
+                live={liveByPipeline.get(p.id) ?? { badge: "idle", activeIds: [], latest: null }}
+                admin={isAdmin}
+                onEdit={() => setMode({ kind: "edit", id: p.id })}
+                setEnabled={guarded((id) => setEnabled(id, !p.enabled))}
+                remove={guarded(remove)}
+                runNow={guarded(runNow)}
+                abort={guarded(abort)}
+              />
+            ))}
+          </div>
+        )}
+      </Handoff>
     </Page>
   );
 }

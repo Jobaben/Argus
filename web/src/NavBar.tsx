@@ -1,5 +1,13 @@
-import { useEffect, useRef, useState } from "react";
-import { ConnectionPill, IrisMark, MoreMenu } from "./ds";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  ConnectionPill,
+  IrisMark,
+  MoreMenu,
+  SURFACE,
+  prefersReducedMotion,
+  usePresence,
+  useSurfaceMotion,
+} from "./ds";
 import type { MoreItem } from "./ds";
 import { NotificationCenter } from "./notify/NotificationCenter";
 
@@ -40,6 +48,11 @@ function MobileNav({
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const activeLabel = destinations.find((d) => d.id === activeId)?.label;
+  const { present, exited } = usePresence(open);
+  const scrimRef = useSurfaceMotion<HTMLDivElement>(open, SURFACE.scrim);
+  // `top` — the sheet belongs to the bar it drops out of, so that is the edge it
+  // collapses back into rather than shrinking toward its own middle.
+  const sheetRef = useSurfaceMotion<HTMLDivElement>(open, SURFACE.rise, exited, "top center");
 
   // Navigating closes the sheet: the hash change is the confirmation.
   useEffect(() => {
@@ -59,7 +72,7 @@ function MobileNav({
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         aria-label={open ? "Close the menu" : "Open the menu"}
-        className="flex h-8 items-center gap-2 rounded-md border border-line px-2.5 text-sm text-ink-dim transition duration-(--duration-quick) hover:text-ink"
+        className="flex h-8 items-center gap-2 rounded-md border border-line px-2.5 text-sm text-ink-dim transition duration-(--duration-quick) hover:text-ink motion-safe:active:scale-[0.97]"
       >
         <span aria-hidden="true" className="font-mono leading-none">
           {open ? "✕" : "☰"}
@@ -68,15 +81,23 @@ function MobileNav({
         {!open && attention > 0 && <Badge count={attention} />}
       </button>
 
-      {open && (
+      {present && (
         <>
           {/* A full-screen scrim so a tap anywhere outside dismisses, and the
               page behind cannot be scrolled by accident. */}
           <div
-            className="fixed inset-0 top-[49px] z-20 bg-ground/60 backdrop-blur-[2px] motion-safe:animate-[fade-in_var(--duration-quick)_ease-out]"
+            ref={scrimRef}
+            className="fixed inset-0 top-[49px] z-20 bg-ground/60 backdrop-blur-[2px]"
+            inert={!open}
+            aria-hidden={open ? undefined : true}
             onClick={() => setOpen(false)}
           />
-          <div className="absolute inset-x-0 top-full z-30 border-b border-line bg-surface px-3 pb-3 pt-2 shadow-[0_24px_60px_-24px_rgb(0_0_0/0.9)] motion-safe:animate-[rise-in_var(--duration-base)_var(--ease-out-expo)]">
+          <div
+            ref={sheetRef}
+            inert={!open}
+            aria-hidden={open ? undefined : true}
+            className="absolute inset-x-0 top-full z-30 border-b border-line bg-surface px-3 pb-3 pt-2 shadow-[0_24px_60px_-24px_rgb(0_0_0/0.9)]"
+          >
             <ul className="grid grid-cols-2 gap-1.5">
               {destinations.map((t) => (
                 <li key={t.id}>
@@ -84,7 +105,7 @@ function MobileNav({
                     href={`#/${t.id}`}
                     aria-current={t.id === activeId ? "page" : undefined}
                     onClick={() => setOpen(false)}
-                    className={`flex items-center rounded-md px-3 py-2.5 text-sm ${
+                    className={`flex items-center rounded-md px-3 py-2.5 text-sm transition-transform duration-(--duration-press) motion-safe:active:scale-[0.98] ${
                       t.id === activeId ? "bg-surface-2 font-semibold text-ink" : "text-ink-dim"
                     }`}
                   >
@@ -102,7 +123,7 @@ function MobileNav({
                       href={o.href}
                       aria-current={o.id === activeId ? "page" : undefined}
                       onClick={() => setOpen(false)}
-                      className={`inline-flex rounded-md px-2.5 py-1.5 font-mono text-[11px] uppercase tracking-[0.1em] ${
+                      className={`inline-flex rounded-md px-2.5 py-1.5 font-mono text-[11px] uppercase tracking-[0.1em] transition-transform duration-(--duration-press) motion-safe:active:scale-[0.98] ${
                         o.id === activeId ? "bg-surface-2 text-ink" : "text-ink-faint"
                       }`}
                     >
@@ -119,6 +140,51 @@ function MobileNav({
   );
 }
 
+/**
+ * The active-destination pill, as one element that moves.
+ *
+ * It used to be a background colour on whichever tab was current, which meant
+ * the pill *teleported* between tabs — there and then here, with nothing in
+ * between. One absolutely-positioned indicator that slides instead is the
+ * cheapest shared-element transition there is, and it answers "which tab did I
+ * come from?" without the user having to have been watching.
+ *
+ * Measured rather than computed: the tab strip is a horizontal scroller with
+ * variable-width labels and optional badges, so the only honest source for where
+ * the pill goes is where the anchor actually is. Returns null until the first
+ * measurement, so nothing paints in the wrong place.
+ */
+function useActivePill(activeId: string, tabCount: number) {
+  const trackRef = useRef<HTMLDivElement>(null);
+  const [box, setBox] = useState<{ left: number; width: number } | null>(null);
+
+  // Layout effect: the measurement has to land in the same frame as the tab
+  // change, or the pill starts sliding one frame after the label goes bold.
+  useLayoutEffect(() => {
+    const track = trackRef.current;
+    if (!track) return;
+    const measure = () => {
+      const current = track.querySelector<HTMLElement>('[aria-current="page"]');
+      if (!current) {
+        setBox(null);
+        return;
+      }
+      setBox({ left: current.offsetLeft - track.scrollLeft, width: current.offsetWidth });
+    };
+    measure();
+    // The strip scrolls, and it reflows when the window does — both move the
+    // anchor without changing which one is active.
+    track.addEventListener("scroll", measure, { passive: true });
+    window.addEventListener("resize", measure);
+    return () => {
+      track.removeEventListener("scroll", measure);
+      window.removeEventListener("resize", measure);
+    };
+  }, [activeId, tabCount]);
+
+  return { trackRef, box };
+}
+
 export function NavBar({
   destinations,
   overflow,
@@ -133,6 +199,8 @@ export function NavBar({
   onOpenPalette: () => void;
 }) {
   const overflowActive = overflow.some((o) => o.id === activeId);
+  const { trackRef, box: pill } = useActivePill(activeId, destinations.length);
+  const reduced = prefersReducedMotion();
   // ⌘ on Apple, Ctrl elsewhere — showing the wrong one is worse than showing
   // none, since the hint is the only place most users learn the shortcut.
   const modLabel =
@@ -158,14 +226,34 @@ export function NavBar({
 
         {/* Destinations scroll horizontally rather than overflow the bar; below
             `md` the sheet above replaces them entirely. */}
-        <div className="ml-2 hidden min-w-0 items-center gap-1 overflow-x-auto md:flex">
+        <div
+          ref={trackRef}
+          className="relative ml-2 hidden min-w-0 items-center gap-1 overflow-x-auto md:flex"
+        >
+          {/* First in DOM order and unpositioned in z, so it paints *under* the
+              anchors: same pixels the active tab's own background used to draw,
+              now able to travel between them. `width` is transitioned alongside
+              the transform because the tabs are different widths and the pill has
+              to become the new one, not just arrive at it — it is absolutely
+              positioned, so that width change cannot move anything else. */}
+          <span
+            aria-hidden="true"
+            className={`pointer-events-none absolute inset-y-1 rounded-md bg-surface-2 ${
+              reduced ? "" : "transition-[transform,width,opacity] duration-(--duration-base)"
+            } ease-(--ease-out-expo)`}
+            style={
+              pill
+                ? { transform: `translateX(${pill.left}px)`, width: `${pill.width}px`, opacity: 1 }
+                : { opacity: 0, width: 0 }
+            }
+          />
           {destinations.map((t) => (
             <a
               key={t.id}
               href={`#/${t.id}`}
               aria-current={t.id === activeId ? "page" : undefined}
-              className={`relative shrink-0 rounded-md px-3 py-1.5 text-sm font-medium transition duration-(--duration-quick) ${
-                t.id === activeId ? "bg-surface-2 text-ink" : "text-ink-dim hover:text-ink"
+              className={`relative shrink-0 rounded-md px-3 py-1.5 text-sm font-medium transition duration-(--duration-quick) motion-safe:active:scale-[0.97] ${
+                t.id === activeId ? "text-ink" : "text-ink-dim hover:text-ink"
               }`}
             >
               {t.label}
@@ -183,7 +271,7 @@ export function NavBar({
             type="button"
             onClick={onOpenPalette}
             aria-label={`Open the command palette (${modLabel})`}
-            className="group flex h-8 items-center gap-2 rounded-md border border-line px-2 text-ink-dim transition duration-(--duration-quick) hover:border-ink-faint/40 hover:text-ink sm:pr-1.5"
+            className="group flex h-8 items-center gap-2 rounded-md border border-line px-2 text-ink-dim transition duration-(--duration-quick) hover:border-ink-faint/40 hover:text-ink motion-safe:active:scale-[0.97] sm:pr-1.5"
           >
             <span aria-hidden="true" className="text-base leading-none">
               ⌕

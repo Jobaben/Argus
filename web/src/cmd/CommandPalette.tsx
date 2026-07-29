@@ -12,6 +12,7 @@ const OmnibarIntent = lazy(() =>
   import("./OmnibarIntent").then((m) => ({ default: m.OmnibarIntent })),
 );
 import { looksLikeIntent } from "./intent";
+import { SURFACE, usePresence, useSurfaceMotion } from "../ds";
 import type { PaletteSeverity } from "../types";
 
 const SEVERITY_TEXT: Record<PaletteSeverity, string> = {
@@ -38,11 +39,16 @@ function Palette({
   onClose,
   commands,
   loading,
+  visible,
+  onExited,
 }: {
   onClose: () => void;
   commands: Command[];
   /** True while the index is still loading; the list is usable regardless. */
   loading?: boolean;
+  /** The caller's `open`. False starts the exit while this stays mounted. */
+  visible: boolean;
+  onExited: () => void;
 }) {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
@@ -60,6 +66,13 @@ function Palette({
   );
   const listboxId = useId();
   const optionId = (index: number) => `${listboxId}-opt-${index}`;
+  // The palette rose in over 160ms and vanished in zero, and it is the surface
+  // opened and closed most often in the app — so it was also the loudest place
+  // the motion was half-finished. `rise` is the same keyframe pair, played
+  // backwards and faster on the way out, and reversible mid-flight: ⌘K ⌘K ⌘K
+  // now tracks the keystrokes instead of restarting from opacity zero.
+  const scrimRef = useSurfaceMotion<HTMLDivElement>(visible, SURFACE.scrim);
+  const dialogRef = useSurfaceMotion<HTMLDivElement>(visible, SURFACE.rise, onExited);
 
   useEffect(() => {
     // Focus after paint: the input mounts with this overlay.
@@ -208,18 +221,22 @@ function Palette({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-ground/70 px-4 pt-[10vh] backdrop-blur-sm motion-safe:animate-[fade-in_120ms_ease-out]"
+      ref={scrimRef}
+      className="fixed inset-0 z-50 flex items-start justify-center bg-ground/70 px-4 pt-[10vh] backdrop-blur-sm"
+      inert={!visible}
+      aria-hidden={visible ? undefined : true}
       // A click on the backdrop dismisses; a click inside must not bubble to it.
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"
         onKeyDown={onDialogKeyDown}
-        className="flex w-full max-w-[640px] flex-col overflow-hidden rounded-panel border border-line bg-surface shadow-[0_24px_80px_-12px_rgb(0_0_0/0.8)] motion-safe:animate-[rise-in_160ms_cubic-bezier(0.16,1,0.3,1)]"
+        className="flex w-full max-w-[640px] flex-col overflow-hidden rounded-panel border border-line bg-surface shadow-[0_24px_80px_-12px_rgb(0_0_0/0.8)]"
       >
         <div className="flex items-center gap-3 border-b border-line px-4">
           <span aria-hidden="true" className="text-base text-ink-faint">
@@ -306,7 +323,10 @@ function Palette({
                           e.preventDefault(); // don't steal focus from the input
                           if (pending === null) runCommand(command);
                         }}
-                        className={`flex cursor-pointer items-center gap-3 px-4 py-2 ${
+                        // A pressed state on the row, not just a hover tint: the
+                        // palette is the app's fastest surface and it is the one
+                        // place a click had no physical answer at all.
+                        className={`flex cursor-pointer items-center gap-3 px-4 py-2 transition-transform duration-(--duration-press) motion-safe:active:scale-[0.99] ${
                           active ? "bg-surface-2" : ""
                         }`}
                       >
@@ -401,6 +421,9 @@ function Palette({
  * Mount guard. Keeping the open/closed decision here — rather than an early
  * return inside {@link Palette} — means the palette's state *is* fresh every
  * time it opens, with no reset effect to get wrong.
+ *
+ * `usePresence` widens "open" to "open, or still leaving": the difference between
+ * the two is the exit, and the palette used to have none.
  */
 export function CommandPalette(props: {
   open: boolean;
@@ -409,5 +432,7 @@ export function CommandPalette(props: {
   loading?: boolean;
 }) {
   const { open, ...rest } = props;
-  return open ? <Palette {...rest} /> : null;
+  const { present, exited } = usePresence(open);
+  if (!present) return null;
+  return <Palette {...rest} visible={open} onExited={exited} />;
 }

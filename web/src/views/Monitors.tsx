@@ -3,13 +3,13 @@ import {
   AlertStrip,
   Card,
   EmptyState,
+  formatDuration,
+  Handoff,
   HealthCounter,
   HeartbeatBar,
-  Loading,
   Page,
   SkeletonGrid,
   TimeAgo,
-  formatDuration,
   useClock,
 } from "../ds";
 import type { ColorToken } from "../ds";
@@ -182,29 +182,31 @@ export default function Monitors() {
         </div>
       )}
 
-      {loading && monitors.length === 0 ? (
-        <Loading label="monitors">
-          <SkeletonGrid count={4} columns={2} lines={2} />
-        </Loading>
-      ) : monitors.length === 0 ? (
-        <EmptyState>
-          <p className="text-sm text-ink-dim">No monitors yet.</p>
-          <p className="mx-auto mt-2 max-w-md text-xs">
-            Every schedule gets one automatically: Argus records the slots it expected, so a run
-            that never happened is as visible as one that failed.{" "}
-            <a href="#/schedules" className="text-queue underline hover:text-ink">
-              Create a schedule
-            </a>{" "}
-            and its monitor appears here.
-          </p>
-        </EmptyState>
-      ) : (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          {shown.map((m) => (
-            <MonitorCard key={m.scheduleId} monitor={m} />
-          ))}
-        </div>
-      )}
+      <Handoff
+        busy={loading && monitors.length === 0}
+        label="monitors"
+        skeleton={<SkeletonGrid count={4} columns={2} lines={2} />}
+      >
+        {monitors.length === 0 ? (
+          <EmptyState>
+            <p className="text-sm text-ink-dim">No monitors yet.</p>
+            <p className="mx-auto mt-2 max-w-md text-xs">
+              Every schedule gets one automatically: Argus records the slots it expected, so a run
+              that never happened is as visible as one that failed.{" "}
+              <a href="#/schedules" className="text-queue underline hover:text-ink">
+                Create a schedule
+              </a>{" "}
+              and its monitor appears here.
+            </p>
+          </EmptyState>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {shown.map((m) => (
+              <MonitorCard key={m.scheduleId} monitor={m} />
+            ))}
+          </div>
+        )}
+      </Handoff>
     </Page>
   );
 }

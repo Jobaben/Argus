@@ -2,13 +2,13 @@ import { useState } from "react";
 import {
   Card,
   EmptyState,
+  formatCountdown,
+  Handoff,
   HealthCounter,
-  Loading,
   Page,
   Section,
   SkeletonRows,
   TimeAgo,
-  formatCountdown,
   useTicker,
 } from "../ds";
 import { useSentinel } from "../useSentinel";
@@ -398,29 +398,31 @@ export default function Sentinel() {
       </Section>
 
       <Section title={`Live incidents${live.length > 0 ? ` (${live.length})` : ""}`}>
-        {loading && state.incidents.length === 0 ? (
-          <Loading label="incidents">
-            <SkeletonRows count={3} />
-          </Loading>
-        ) : live.length === 0 ? (
-          <EmptyState>
-            Nothing is on fire. Sentinel opens an incident when a monitor goes down or starts
-            failing, when an issue you'd marked resolved comes back, or when a run leaves its
-            learned envelope badly enough to be critical — then escalates it on a clock until
-            somebody acknowledges.
-          </EmptyState>
-        ) : (
-          <div className="space-y-3">
-            {live.map((i) => (
-              <IncidentCard
-                key={i.id}
-                incident={i}
-                busy={busyId === i.id}
-                onAct={(action, body) => void act(i.id, action, body)}
-              />
-            ))}
-          </div>
-        )}
+        <Handoff
+          busy={loading && state.incidents.length === 0}
+          label="incidents"
+          skeleton={<SkeletonRows count={3} />}
+        >
+          {live.length === 0 ? (
+            <EmptyState>
+              Nothing is on fire. Sentinel opens an incident when a monitor goes down or starts
+              failing, when an issue you'd marked resolved comes back, or when a run leaves its
+              learned envelope badly enough to be critical — then escalates it on a clock until
+              somebody acknowledges.
+            </EmptyState>
+          ) : (
+            <div className="space-y-3">
+              {live.map((i) => (
+                <IncidentCard
+                  key={i.id}
+                  incident={i}
+                  busy={busyId === i.id}
+                  onAct={(action, body) => void act(i.id, action, body)}
+                />
+              ))}
+            </div>
+          )}
+        </Handoff>
       </Section>
 
       {resolved.length > 0 && (

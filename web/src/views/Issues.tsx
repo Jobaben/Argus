@@ -5,8 +5,8 @@ import {
   AlertStrip,
   Card,
   EmptyState,
+  Handoff,
   HealthCounter,
-  Loading,
   Page,
   SkeletonRows,
   TimeAgo,
@@ -166,14 +166,18 @@ function IssueCard({
       {expanded &&
         (failed ? (
           <p className="mt-3 text-xs text-fail">Couldn't load occurrences: {failed}</p>
-        ) : occurrences === null ? (
-          <Loading label="occurrences">
-            <div className="mt-3">
-              <SkeletonRows count={2} />
-            </div>
-          </Loading>
         ) : (
-          <Occurrences list={occurrences} />
+          <Handoff
+            busy={occurrences === null}
+            label="occurrences"
+            skeleton={
+              <div className="mt-3">
+                <SkeletonRows count={2} />
+              </div>
+            }
+          >
+            <Occurrences list={occurrences ?? []} />
+          </Handoff>
         ))}
     </Card>
   );
@@ -285,31 +289,33 @@ export default function Issues() {
             </div>
           )}
 
-          {loading && issues.length === 0 ? (
-            <Loading label="issues">
-              <SkeletonRows count={4} />
-            </Loading>
-          ) : issues.length === 0 ? (
-            <EmptyState>
-              <p className="text-sm text-ink-dim">No failures on record.</p>
-              <p className="mx-auto mt-2 max-w-md text-xs">
-                When a scheduled run fails, Argus fingerprints its error and groups every recurrence
-                under one issue — so twenty timeouts are one thing to fix, with the first and last
-                sighting and every affected schedule attached.
-              </p>
-            </EmptyState>
-          ) : (
-            <div className="space-y-4">
-              {shown.map((i) => (
-                <IssueCard
-                  key={i.fingerprint}
-                  issue={i}
-                  onTriage={onTriage}
-                  loadOccurrences={loadOccurrences}
-                />
-              ))}
-            </div>
-          )}
+          <Handoff
+            busy={loading && issues.length === 0}
+            label="issues"
+            skeleton={<SkeletonRows count={4} />}
+          >
+            {issues.length === 0 ? (
+              <EmptyState>
+                <p className="text-sm text-ink-dim">No failures on record.</p>
+                <p className="mx-auto mt-2 max-w-md text-xs">
+                  When a scheduled run fails, Argus fingerprints its error and groups every
+                  recurrence under one issue — so twenty timeouts are one thing to fix, with the
+                  first and last sighting and every affected schedule attached.
+                </p>
+              </EmptyState>
+            ) : (
+              <div className="space-y-4">
+                {shown.map((i) => (
+                  <IssueCard
+                    key={i.fingerprint}
+                    issue={i}
+                    onTriage={onTriage}
+                    loadOccurrences={loadOccurrences}
+                  />
+                ))}
+              </div>
+            )}
+          </Handoff>
         </>
       )}
     </Page>

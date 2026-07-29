@@ -21,6 +21,74 @@ export function prefersReducedMotion(): boolean {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
+/**
+ * The motion tokens, for the animations JavaScript drives.
+ *
+ * `index.css` is still where these are *declared* — every CSS animation reads
+ * them as `var(--duration-base)` and none of them may inline a number. But the
+ * Web Animations API takes milliseconds, not custom properties, so an
+ * interruptible transition has to know the value. Rather than let a `180` appear
+ * at a call site (the drift `CommandPalette.tsx` had already started, with a
+ * hardcoded `160ms` beside the token system), the numbers live here once and
+ * `tokens.test.ts` reads `index.css` and fails if the two disagree.
+ */
+export const DURATION = {
+  quick: 120,
+  base: 180,
+  slow: 320,
+  exit: 126,
+  exitQuick: 84,
+  press: 70,
+} as const;
+
+/** The easings, same contract as {@link DURATION}. */
+export const EASE = {
+  outExpo: "cubic-bezier(0.16, 1, 0.3, 1)",
+  inExpo: "cubic-bezier(0.7, 0, 0.84, 0)",
+  spring: "cubic-bezier(0.34, 1.36, 0.64, 1)",
+} as const;
+
+/**
+ * One shared origin for every free-running ambient animation.
+ *
+ * Not `Date.now()` at render: two indicators mounting a beat apart would still
+ * be out of phase, which is the whole problem. Module load is a fixed point
+ * every caller can measure from.
+ */
+const AMBIENT_EPOCH = Date.now();
+
+/**
+ * A negative `animation-delay` that starts an infinite animation part-way
+ * through, so every indicator using the same cycle length breathes in phase.
+ *
+ * The `pulse` and `sweep` indicators free-ran: each started when its component
+ * mounted, so on a board with six live steps they drifted into six unrelated
+ * rhythms, and six things blinking independently reads as clutter rather than as
+ * liveness. In phase, they read as one system with a pulse.
+ *
+ * Returns `undefined` under reduced motion so callers can spread it into a style
+ * object without a branch.
+ */
+export function syncedDelay(cycleMs: number, nowMs = Date.now()): string | undefined {
+  if (!Number.isFinite(cycleMs) || cycleMs <= 0 || prefersReducedMotion()) return undefined;
+  const phase = (nowMs - AMBIENT_EPOCH) % cycleMs;
+  return `-${Math.round(phase)}ms`;
+}
+
+/**
+ * {@link syncedDelay}, captured once per mount.
+ *
+ * Components must not recompute it per render: `animation-delay` is part of an
+ * animation's timing, so re-writing it mid-cycle *shifts the animation* — a
+ * board that re-renders on every WebSocket frame would jitter its own liveness
+ * indicators. The phase is fixed at mount, which is exactly when the element's
+ * animation starts.
+ */
+export function useSyncedDelay(cycleMs: number): string | undefined {
+  const [delay] = useState(() => syncedDelay(cycleMs));
+  return delay;
+}
+
 /** Cubic ease-out: fast, then settling — the same feel as `--ease-out-expo`. */
 function easeOut(t: number): number {
   return 1 - (1 - t) ** 3;

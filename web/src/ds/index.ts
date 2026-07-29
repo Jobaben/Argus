@@ -5,6 +5,7 @@ export { Card } from "./Card";
 export { Section } from "./Section";
 export { EmptyState } from "./EmptyState";
 export {
+  Handoff,
   Loading,
   Skeleton,
   SkeletonBoardCard,
@@ -33,7 +34,36 @@ export type { ToastItem } from "./Toast";
 export { ActivityEvent } from "./ActivityEvent";
 export * from "./overviewRow";
 export * from "./rail";
-export { useCountUp, useChangeFlash, staggerDelay, prefersReducedMotion } from "./motion";
+export {
+  useCountUp,
+  useChangeFlash,
+  staggerDelay,
+  prefersReducedMotion,
+  syncedDelay,
+  useSyncedDelay,
+  DURATION,
+  EASE,
+} from "./motion";
+export { usePresence, useSurfaceMotion, useListPresence, SURFACE } from "./presence";
+export type { SurfaceMotion, PresentItem } from "./presence";
+export { useFlip } from "./flip";
+export { routeDirection } from "./direction";
+export type { RouteDirection, RouteRole } from "./direction";
+export {
+  startViewTransition,
+  setRouteDirection,
+  supportsViewTransitions,
+  transitionName,
+} from "./viewTransition";
+export {
+  SPRING,
+  springLinear,
+  springValue,
+  springDurationMs,
+  settleFrom,
+  settleDuration,
+} from "./spring";
+export { createVelocityTracker, flickOutcome } from "./gesture";
 export { MoreMenu } from "./MoreMenu";
 export type { MoreItem } from "./MoreMenu";
 export { TriggerFields } from "./TriggerFields";

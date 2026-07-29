@@ -1,4 +1,4 @@
-import { AlertStrip, Card, EmptyState, Loading, Page, SkeletonGrid, TimeAgo } from "../ds";
+import { AlertStrip, Card, EmptyState, Handoff, Page, SkeletonGrid, TimeAgo } from "../ds";
 import { useProjects, type Project } from "../useProjects";
 
 function lastSegment(label: string): string {
@@ -42,19 +42,21 @@ export default function Projects() {
         </div>
       )}
 
-      {loading ? (
-        <Loading label="projects">
-          <SkeletonGrid count={4} columns={2} lines={2} />
-        </Loading>
-      ) : projects.length === 0 ? (
-        <EmptyState>No projects found yet.</EmptyState>
-      ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {projects.map((project) => (
-            <ProjectCard key={project.id} project={project} />
-          ))}
-        </div>
-      )}
+      <Handoff
+        busy={loading}
+        label="projects"
+        skeleton={<SkeletonGrid count={4} columns={2} lines={2} />}
+      >
+        {projects.length === 0 ? (
+          <EmptyState>No projects found yet.</EmptyState>
+        ) : (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {projects.map((project) => (
+              <ProjectCard key={project.id} project={project} />
+            ))}
+          </div>
+        )}
+      </Handoff>
     </Page>
   );
 }

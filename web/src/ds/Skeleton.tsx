@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { SURFACE, usePresence, useSurfaceMotion } from "./presence";
 
 /**
  * Loading placeholders.
@@ -31,6 +32,57 @@ export function Loading({ label, children }: { label: string; children: ReactNod
     <div role="status" aria-busy="true" aria-live="polite">
       <span className="sr-only">Loading {label}…</span>
       {children}
+    </div>
+  );
+}
+
+/**
+ * The skeleton-to-content handoff, as one continuous surface.
+ *
+ * The swap used to be hard: shimmer, blink, content. That blink is a small
+ * betrayal of the skeleton's whole promise — the placeholder is there to say
+ * "this is the shape of what is coming", and then the arrival contradicts it by
+ * discarding the shape and starting over. Fading the skeleton out *over* the
+ * content as the content fades in means the region never goes blank and never
+ * flashes: one surface resolving, which is what was being claimed all along.
+ *
+ * The skeleton is in flow while loading (so the region has the right height from
+ * the start) and absolutely positioned once it is only leaving (so the content
+ * takes over the layout immediately, and the fade cannot push anything around).
+ * It is `aria-hidden` and `inert` for that last 126ms: the announcement belongs
+ * to the load, and the load is over.
+ */
+export function Handoff({
+  busy,
+  label,
+  skeleton,
+  children,
+}: {
+  busy: boolean;
+  /** What is loading, for the live-region announcement. */
+  label: string;
+  skeleton: ReactNode;
+  children: ReactNode;
+}) {
+  const { present, exited } = usePresence(busy);
+  const skeletonRef = useSurfaceMotion<HTMLDivElement>(busy, SURFACE.scrim, exited);
+  return (
+    <div className="relative">
+      {present && (
+        <div
+          ref={skeletonRef}
+          aria-hidden={busy ? undefined : true}
+          inert={!busy}
+          className={busy ? undefined : "pointer-events-none absolute inset-x-0 top-0"}
+        >
+          <Loading label={label}>{skeleton}</Loading>
+        </div>
+      )}
+      {!busy && (
+        <div className="motion-safe:animate-[fade-in_var(--duration-base)_ease-out]">
+          {children}
+        </div>
+      )}
     </div>
   );
 }

@@ -6,11 +6,11 @@ import type { BudgetConfig, BudgetDay, BudgetState, BudgetWindow } from "../type
 import {
   AlertStrip,
   EmptyState,
-  Loading,
+  formatUsd,
+  Handoff,
   Page,
   SkeletonCounters,
   SkeletonTile,
-  formatUsd,
   useClock,
 } from "../ds";
 import { projectMonth } from "./budgetProjection";
@@ -349,38 +349,46 @@ export default function Budget() {
 
       {facet.peer ? (
         <PeerBudget facet={facet} />
-      ) : loading && !budget ? (
-        <Loading label="budget">
-          <SkeletonCounters count={3} />
-          <div className="mt-8">
-            <SkeletonTile lines={4} />
-          </div>
-        </Loading>
-      ) : budget ? (
-        <>
-          <section className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <WindowCard label="Today" window={budget.status.today} now={now} />
-            <WindowCard label="This month" window={budget.status.month} project now={now} />
-          </section>
+      ) : (
+        <Handoff
+          busy={loading && !budget}
+          label="budget"
+          skeleton={
+            <>
+              <SkeletonCounters count={3} />
+              <div className="mt-8">
+                <SkeletonTile lines={4} />
+              </div>
+            </>
+          }
+        >
+          {budget ? (
+            <>
+              <section className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <WindowCard label="Today" window={budget.status.today} now={now} />
+                <WindowCard label="This month" window={budget.status.month} project now={now} />
+              </section>
 
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-ink-dim">
-            Last 30 days
-          </h2>
-          <div className="mb-8">
-            <SpendChart days={budget.days} dailyLimit={budget.config.dailyUsd} />
-          </div>
+              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-ink-dim">
+                Last 30 days
+              </h2>
+              <div className="mb-8">
+                <SpendChart days={budget.days} dailyLimit={budget.config.dailyUsd} />
+              </div>
 
-          {/* Attribution, forecast and the simulator sit between the raw
+              {/* Attribution, forecast and the simulator sit between the raw
               numbers and the controls: you read where the money went, then
               decide what to do about it. */}
-          <LedgerPanels />
+              <LedgerPanels />
 
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-ink-dim">
-            Limits
-          </h2>
-          <BudgetForm initial={budget.config} onSave={save} />
-        </>
-      ) : null}
+              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-ink-dim">
+                Limits
+              </h2>
+              <BudgetForm initial={budget.config} onSave={save} />
+            </>
+          ) : null}
+        </Handoff>
+      )}
     </Page>
   );
 }

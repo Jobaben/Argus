@@ -1,4 +1,4 @@
-import { AlertStrip, EmptyState, Loading, Page, SkeletonRows, TimeAgo } from "../ds";
+import { AlertStrip, EmptyState, Handoff, Page, SkeletonRows, TimeAgo } from "../ds";
 import { useActivity, type Activity } from "../useActivity";
 
 function truncate(text: string, max = 240): string {
@@ -38,19 +38,17 @@ export default function ActivityFeed() {
         </div>
       )}
 
-      {loading ? (
-        <Loading label="activity">
-          <SkeletonRows count={6} />
-        </Loading>
-      ) : activity.length === 0 ? (
-        <EmptyState>No prompt history found yet.</EmptyState>
-      ) : (
-        <ol className="flex flex-col gap-3">
-          {activity.map((item, i) => (
-            <ActivityRow key={`${item.ts}-${i}`} item={item} />
-          ))}
-        </ol>
-      )}
+      <Handoff busy={loading} label="activity" skeleton={<SkeletonRows count={6} />}>
+        {activity.length === 0 ? (
+          <EmptyState>No prompt history found yet.</EmptyState>
+        ) : (
+          <ol className="flex flex-col gap-3">
+            {activity.map((item, i) => (
+              <ActivityRow key={`${item.ts}-${i}`} item={item} />
+            ))}
+          </ol>
+        )}
+      </Handoff>
     </Page>
   );
 }

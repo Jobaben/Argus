@@ -1,17 +1,26 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import { useAgents } from "./useAgents";
 import type { Agent, AgentStatus } from "./types";
+import { flushSync } from "react-dom";
 import {
   AgentTile,
   EmptyState,
   ErrorBoundary,
+  Handoff,
   HealthCounter,
   Loading,
   Page,
+  routeDirection,
+  setRouteDirection,
   SkeletonGrid,
-  ToastRegion,
   staggerDelay,
+  startViewTransition,
+  supportsViewTransitions,
+  ToastRegion,
+  transitionName,
+  useFlip,
 } from "./ds";
+import type { RouteDirection, RouteRole } from "./ds";
 import { useAgentNotifications } from "./notify/useAgentNotifications";
 import { useBudgetAlerts } from "./notify/useBudgetAlerts";
 import { useMonitorAlerts } from "./notify/useMonitorAlerts";
@@ -79,6 +88,9 @@ function AgentsView({
   loading: boolean;
   error: string | null;
 }) {
+  // The fleet re-sorts as agents change status; FLIP glides the tiles to their
+  // new places instead of teleporting them.
+  const flip = useFlip();
   const stats = useMemo(() => {
     const by = (s: AgentStatus) => agents.filter((a) => a.status === s).length;
     return {
@@ -104,33 +116,42 @@ function AgentsView({
         </div>
       )}
 
-      {loading ? (
-        <Loading label="agents">
-          <SkeletonGrid count={4} columns={2} lines={2} />
-        </Loading>
-      ) : agents.length === 0 ? (
-        <EmptyState>No background agents found yet. Launch one and it'll appear here.</EmptyState>
-      ) : (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          {agents.map((a, i) => (
-            <a
-              key={a.short}
-              href={`#/agent/${encodeURIComponent(a.short)}`}
-              style={{ animationDelay: staggerDelay(i) }}
-              className="block rounded-tile transition-transform duration-(--duration-quick) hover:-translate-y-0.5 motion-safe:animate-[slide-up_var(--duration-base)_var(--ease-out-expo)_both]"
-            >
-              <AgentTile agent={a} />
-            </a>
-          ))}
-        </div>
-      )}
+      <Handoff
+        busy={loading}
+        label="agents"
+        skeleton={<SkeletonGrid count={4} columns={2} lines={2} />}
+      >
+        {agents.length === 0 ? (
+          <EmptyState>No background agents found yet. Launch one and it'll appear here.</EmptyState>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {agents.map((a, i) => (
+              <a
+                key={a.short}
+                href={`#/agent/${encodeURIComponent(a.short)}`}
+                ref={flip(a.short)}
+                // The tile and the detail page's header share a transition name, so
+                // where the browser supports it the tile you clicked visibly
+                // *becomes* the page you land on — the strongest available answer to
+                // "where did this come from". Only one element carries any given
+                // name at a time, which is what makes the pairing legal.
+                style={{
+                  animationDelay: staggerDelay(i),
+                  viewTransitionName: transitionName("agent", a.short),
+                }}
+                className="block rounded-tile transition-transform duration-(--duration-quick) hover:-translate-y-0.5 motion-safe:animate-[slide-up_var(--duration-base)_var(--ease-out-expo)_both] motion-safe:active:translate-y-0 motion-safe:active:scale-[0.99]"
+              >
+                <AgentTile agent={a} />
+              </a>
+            ))}
+          </div>
+        )}
+      </Handoff>
     </Page>
   );
 }
 
-type TabRole = "destination" | "utility" | "overflow" | "drilldown";
-
-const TAB_META: { id: string; label: string; role: TabRole }[] = [
+const TAB_META: { id: string; label: string; role: RouteRole }[] = [
   { id: "command", label: "Command Center", role: "destination" },
   { id: "briefing", label: "Briefing", role: "destination" },
   { id: "chronicle", label: "Chronicle", role: "destination" },
@@ -172,6 +193,21 @@ function currentTabId(): string {
   return window.location.hash.replace(/^#\/?/, "").split("/")[0] || "command";
 }
 
+const ROLE_BY_TAB = new Map(TAB_META.map((t) => [t.id, t.role] as const));
+const roleOf = (tabId: string) => ROLE_BY_TAB.get(tabId);
+
+/**
+ * The arriving view's entrance, per direction — the fallback for browsers with
+ * no View Transitions, where only the new view can be animated because the old
+ * one is already gone. Literal class strings so Tailwind can see them; the
+ * values inside are tokens, never numbers.
+ */
+const ROUTE_MOTION: Record<RouteDirection, string> = {
+  forward: "motion-safe:animate-[page-in-forward_var(--duration-base)_var(--ease-out-expo)]",
+  back: "motion-safe:animate-[page-in-back_var(--duration-base)_var(--ease-out-expo)]",
+  lateral: "motion-safe:animate-[fade-in_var(--duration-base)_ease-out]",
+};
+
 /**
  * POSTs a palette action and throws the server's own error message, so the
  * palette can report "an instance is already running" rather than "HTTP 409".
@@ -186,6 +222,7 @@ async function postAction(path: string): Promise<void> {
 
 export default function App() {
   const [active, setActive] = useState<string>(currentTabId);
+  const [direction, setDirection] = useState<RouteDirection>("lateral");
   const agentsState = useAgents();
   const auth = useAuth();
   const briefingState = useBriefing();
@@ -213,11 +250,27 @@ export default function App() {
     incidentToasts.dismiss(id);
   };
 
+  // Navigation, with a direction. Re-registered per route because the listener
+  // needs to know which route it is *leaving*, and one listener swap per
+  // navigation is cheaper than any way of smuggling that in.
   useEffect(() => {
-    const onHash = () => setActive(currentTabId());
+    const onHash = () => {
+      const next = currentTabId();
+      const direction = routeDirection(active, next, roleOf);
+      setRouteDirection(direction);
+      setDirection(direction);
+      // The state change has to be *flushed inside* the callback: the browser
+      // snapshots the DOM the moment it returns, so a scheduled update would be
+      // captured as "nothing changed" and the transition would animate the old
+      // view into itself.
+      startViewTransition(() => flushSync(() => setActive(next)));
+    };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
-  }, []);
+  }, [active]);
+
+  // Capability, not preference: fixed for the document's life.
+  const [vt] = useState(supportsViewTransitions);
 
   const activeLabel = useMemo(
     () => TAB_META.find((t) => t.id === active)?.label ?? "Command Center",
@@ -394,9 +447,16 @@ export default function App() {
       <SetupBanner />
       <main id="main" tabIndex={-1} className="outline-none">
         {/* Keyed on the route so switching destinations reads as a deliberate
-            transition rather than a flicker. Opacity only — a moving page would
-            fight the staggered content inside it. */}
-        <div key={active} className="motion-safe:animate-[fade-in_var(--duration-base)_ease-out]">
+            transition rather than a flicker — and now *directional*: drilling into
+            a detail brings the new view in from the right, going back reverses it,
+            and a move between peer destinations stays the crossfade it was, because
+            it is not a hierarchy move.
+
+            Left to the browser where View Transitions exist: it can animate the
+            outgoing view too, which this container cannot (the old view is
+            unmounted by the time React commits). Applying both would play the same
+            entrance twice at double strength. */}
+        <div key={active} className={vt ? undefined : ROUTE_MOTION[direction]}>
           {/* Scoped per route: a bad shape in one view costs that view, not the
               nav, the palette and every other tab. */}
           <ErrorBoundary label={activeLabel} resetKey={active}>

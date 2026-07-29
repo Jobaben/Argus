@@ -13,18 +13,18 @@ import type { LiveActivity } from "../useRunActivity";
 import { useTotals } from "../useTotals";
 import {
   EmptyState,
-  Loading,
+  formatElapsed,
+  Handoff,
   Meter,
   Page,
   RAIL,
-  STATUS,
   SkeletonBoardCard,
+  staggerDelay,
+  STATUS,
   StatusPill,
   TILE_DETAIL,
   TILE_SKIN,
   TimeAgo,
-  formatElapsed,
-  staggerDelay,
   toOverviewRows,
   useChangeFlash,
   useTicker,
@@ -619,42 +619,56 @@ export default function CommandCenter() {
       )}
       {facet.peer ? (
         <PeerBoard facet={facet} />
-      ) : loading ? (
-        <Loading label="the board">
-          <div className="flex flex-col gap-3">
-            <SkeletonBoardCard phases={4} />
-            <SkeletonBoardCard phases={3} />
-          </div>
-        </Loading>
-      ) : rows.length === 0 ? (
-        <EmptyState>
-          No pipelines defined yet. Create one in the{" "}
-          <a href="#/pipelines" className="text-ink underline decoration-line underline-offset-2">
-            Pipelines
-          </a>{" "}
-          tab.
-        </EmptyState>
       ) : (
-        // The rail sits beside the board on a wide display and below it on a
-        // narrow one — the board needs the horizontal room more than the rail
-        // does, so the rail is what moves.
-        <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_320px]">
-          <div className="flex min-w-0 flex-col gap-3">
-            {groups.map((group, i) => (
-              <Row
-                key={group[0].pipelineId}
-                index={i}
-                rows={group}
-                approve={approve}
-                revise={revise}
+        <Handoff
+          busy={loading}
+          label="the board"
+          skeleton={
+            <div className="flex flex-col gap-3">
+              <SkeletonBoardCard phases={4} />
+              <SkeletonBoardCard phases={3} />
+            </div>
+          }
+        >
+          {rows.length === 0 ? (
+            <EmptyState>
+              No pipelines defined yet. Create one in the{" "}
+              <a
+                href="#/pipelines"
+                className="text-ink underline decoration-line underline-offset-2"
+              >
+                Pipelines
+              </a>{" "}
+              tab.
+            </EmptyState>
+          ) : (
+            // The rail sits beside the board on a wide display and below it on a
+            // narrow one — the board needs the horizontal room more than the rail
+            // does, so the rail is what moves.
+            <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_320px]">
+              <div className="flex min-w-0 flex-col gap-3">
+                {groups.map((group, i) => (
+                  <Row
+                    key={group[0].pipelineId}
+                    index={i}
+                    rows={group}
+                    approve={approve}
+                    revise={revise}
+                    liveActivity={liveActivity}
+                    now={now}
+                    onOpenStep={setSelected}
+                  />
+                ))}
+              </div>
+              <ActivityRail
+                rows={rows}
                 liveActivity={liveActivity}
-                now={now}
-                onOpenStep={setSelected}
+                runs={runs}
+                loading={runsLoading}
               />
-            ))}
-          </div>
-          <ActivityRail rows={rows} liveActivity={liveActivity} runs={runs} loading={runsLoading} />
-        </div>
+            </div>
+          )}
+        </Handoff>
       )}
       <StepDrawer selection={selected} onClose={() => setSelected(null)} onCancelRun={cancelRun} />
     </Page>

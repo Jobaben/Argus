@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import { formatKeys, type Binding } from "./keys";
+import { SURFACE, usePresence, useSurfaceMotion } from "../ds";
 
 /**
  * The `?` overlay.
@@ -22,6 +23,9 @@ export function ShortcutHelp({
   const restoreFocus = useRef<HTMLElement | null>(null);
   const platform =
     typeof navigator === "undefined" ? "" : navigator.platform || navigator.userAgent;
+  const { present, exited } = usePresence(open);
+  const scrimRef = useSurfaceMotion<HTMLDivElement>(open, SURFACE.scrim);
+  const dialogRef = useSurfaceMotion<HTMLDivElement>(open, SURFACE.rise, exited);
 
   const groups = useMemo(() => {
     const visible = bindings.filter((b) => !b.hidden && b.when?.() !== false);
@@ -44,20 +48,24 @@ export function ShortcutHelp({
     return () => cancelAnimationFrame(raf);
   }, [open]);
 
-  if (!open) return null;
+  if (!present) return null;
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-ground/70 px-4 backdrop-blur-sm motion-safe:animate-[fade-in_120ms_ease-out]"
+      ref={scrimRef}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-ground/70 px-4 backdrop-blur-sm"
+      inert={!open}
+      aria-hidden={open ? undefined : true}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="shortcut-help-title"
-        className="w-full max-w-[560px] overflow-hidden rounded-panel border border-line bg-surface shadow-[0_24px_80px_-12px_rgb(0_0_0/0.8)] motion-safe:animate-[rise-in_160ms_var(--ease-out-expo)]"
+        className="w-full max-w-[560px] overflow-hidden rounded-panel border border-line bg-surface shadow-[0_24px_80px_-12px_rgb(0_0_0/0.8)]"
       >
         <div className="flex items-center justify-between border-b border-line px-5 py-3">
           <h2 id="shortcut-help-title" className="text-sm font-bold text-ink">
@@ -67,7 +75,7 @@ export function ShortcutHelp({
             ref={closeRef}
             type="button"
             onClick={onClose}
-            className="rounded-md border border-line px-2 py-1 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-dim transition hover:text-ink"
+            className="rounded-md border border-line px-2 py-1 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-dim transition hover:text-ink motion-safe:active:scale-[0.97]"
           >
             Esc
           </button>
