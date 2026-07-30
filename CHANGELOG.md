@@ -74,9 +74,11 @@ All notable changes to Argus are documented here. The format follows
   every working step tile animated `left` — sixty times a second, per tile, for a
   decoration — in a file whose own comment claimed every keyframe there was
   "opacity/transform only". It is a transform now, and
-  `scripts/check-motion-budget.mjs` enforces the claim in CI over both the
-  keyframes and the `transition-[…]` utilities, with a short list of argued
-  exceptions rather than an unchecked convention.
+  `scripts/check-motion-budget.mjs` enforces the claim in CI over the keyframes in
+  every stylesheet, the `transition-[…]` utilities, and `transition-all` — which
+  is the one spelling that animates layout properties while naming none of them,
+  and so the one a property-name check cannot otherwise see. A short list of
+  argued exceptions, rather than an unchecked convention.
 
 - **Overlay entrances were being skipped.** Found by the first test written
   against the new presence hook: a surface mounting already-open seeded its

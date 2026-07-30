@@ -18,11 +18,16 @@
  *
  * So this checks. Two things:
  *
- *  1. No `@keyframes` in `web/src/index.css` may animate a non-compositor
- *     property.
+ *  1. No `@keyframes` in any stylesheet under `web/src/**` may animate a
+ *     non-compositor property.
  *  2. No `transition-[…]` utility in `web/src/**` may name one, except at the
  *     sites listed in ALLOWED_LAYOUT_TRANSITIONS below — each of which is a
  *     deliberate, argued exception rather than an oversight.
+ *  3. No `transition-all` anywhere. It is the hole rule 2 cannot see: an
+ *     arbitrary-value utility names the properties it animates and so can be
+ *     checked, whereas `transition-all` animates every property that changes —
+ *     `width`, `height`, `top` included — while naming none of them. There are
+ *     none today; this is what keeps it that way.
  *
  * Raising the budget is a normal thing to do. Doing it here, in the commit that
  * needs it, with the reason written down, is the point.
@@ -33,7 +38,6 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const webSrc = path.join(repoRoot, "web", "src");
-const cssFile = path.join(webSrc, "index.css");
 
 /** Everything the compositor can animate on its own, plus the harmless ones. */
 const COMPOSITOR_SAFE = new Set([
@@ -79,33 +83,43 @@ const ALLOWED_LAYOUT_TRANSITIONS = [
 
 const failures = [];
 
+function* walk(dir, match) {
+  for (const entry of readdirSync(dir)) {
+    const full = path.join(dir, entry);
+    if (statSync(full).isDirectory()) yield* walk(full, match);
+    else if (match(entry)) yield full;
+  }
+}
+
+const relativeToWeb = (file) => `web/src/${path.relative(webSrc, file).split(path.sep).join("/")}`;
+
 // ── 1. Keyframes ────────────────────────────────────────────────────────────
-const css = readFileSync(cssFile, "utf8");
-for (const block of css.matchAll(/@keyframes\s+([\w-]+)\s*\{([\s\S]*?)\n\}/g)) {
-  const [, name, body] = block;
-  for (const declaration of body.matchAll(/^\s*([a-z-]+)\s*:/gm)) {
-    const property = declaration[1];
-    if (!COMPOSITOR_SAFE.has(property)) {
-      failures.push(
-        `web/src/index.css  @keyframes ${name} animates \`${property}\`, which is not compositor-only.`,
-      );
+// Every stylesheet, not just `index.css`: a second one is exactly where a
+// non-compositor keyframe would land next, and finding it should not depend on
+// somebody remembering to widen this script at the same time.
+for (const file of walk(webSrc, (entry) => entry.endsWith(".css"))) {
+  const css = readFileSync(file, "utf8");
+  for (const block of css.matchAll(/@keyframes\s+([\w-]+)\s*\{([\s\S]*?)\n\}/g)) {
+    const [, name, body] = block;
+    for (const declaration of body.matchAll(/^\s*([a-z-]+)\s*:/gm)) {
+      const property = declaration[1];
+      if (!COMPOSITOR_SAFE.has(property)) {
+        failures.push(
+          `${relativeToWeb(file)}  @keyframes ${name} animates \`${property}\`, which is not compositor-only.`,
+        );
+      }
     }
   }
 }
 
 // ── 2. Transition utilities ─────────────────────────────────────────────────
-function* walk(dir) {
-  for (const entry of readdirSync(dir)) {
-    const full = path.join(dir, entry);
-    if (statSync(full).isDirectory()) yield* walk(full);
-    else if (/\.tsx?$/.test(entry) && !/\.test\.tsx?$/.test(entry)) yield full;
-  }
-}
 
 const allowed = new Set(ALLOWED_LAYOUT_TRANSITIONS.map((a) => `${a.file}:${a.property}`));
 const usedExceptions = new Set();
 
-for (const file of walk(webSrc)) {
+const isSource = (entry) => /\.tsx?$/.test(entry) && !/\.test\.tsx?$/.test(entry);
+
+for (const file of walk(webSrc, isSource)) {
   const relative = path.relative(webSrc, file).split(path.sep).join("/");
   const source = readFileSync(file, "utf8");
   for (const match of source.matchAll(/transition-\[([a-z,_-]+)\]/g)) {
@@ -123,6 +137,17 @@ for (const file of walk(webSrc)) {
       );
     }
   }
+  // ── 3. `transition-all` ───────────────────────────────────────────────────
+  // No exception list: naming the properties you animate is the whole point, and
+  // `transition-all` is the one utility that refuses to. There is always a
+  // narrower spelling.
+  for (const _ of source.matchAll(/\btransition-all\b/g)) {
+    failures.push(
+      `web/src/${relative}  uses \`transition-all\`, which animates whatever happens to change —\n` +
+        `      layout properties included — and names none of it, so this budget cannot check it.\n` +
+        `      Name the properties instead: \`transition-[opacity,transform]\`.`,
+    );
+  }
 }
 
 // A stale exception is a claim nobody is checking any more; drop it.
@@ -136,7 +161,7 @@ for (const exception of ALLOWED_LAYOUT_TRANSITIONS) {
 }
 
 console.log("Motion property budget:");
-console.log(`  keyframes checked in web/src/index.css`);
+console.log(`  keyframes checked in every web/src/**/*.css`);
 console.log(`  ${ALLOWED_LAYOUT_TRANSITIONS.length} argued layout-transition exceptions`);
 
 if (failures.length > 0) {

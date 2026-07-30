@@ -70,8 +70,11 @@ function BoardMeter({
   label,
   title,
 }: Pick<MeterProps, "tokens" | "usd" | "label" | "title">) {
-  const shownTokens = useCountUp(tokens ?? 0);
-  const shownUsd = useCountUp(usd ?? 0);
+  // Passed through as null rather than `?? 0`: an absent figure must stay absent
+  // for `useCountUp` to know that the first one to arrive is the first, and not
+  // an increment on a zero that was never really there.
+  const shownTokens = useCountUp(tokens);
+  const shownUsd = useCountUp(usd);
   return (
     <span className="flex flex-col items-end gap-0.5" title={title}>
       <span className="font-mono text-meter font-bold uppercase tracking-[0.14em] text-ink-faint">

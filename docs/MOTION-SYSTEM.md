@@ -24,9 +24,11 @@ asymmetry is the loudest "unfinished" tell an interface has, and it is felt at
 every dismissal, which is the most frequent thing anybody does.
 
 **2. Motion is transform and opacity.** Nothing animates a property that costs a
-layout. `scripts/check-motion-budget.mjs` enforces it in CI over both the
-keyframes in `index.css` and the `transition-[…]` utilities in `web/src`, with a
-short list of argued exceptions (meter fills and the nav pill, all absolutely
+layout. `scripts/check-motion-budget.mjs` enforces it in CI over the keyframes in
+every stylesheet under `web/src`, the `transition-[…]` utilities, and
+`transition-all` — which is banned outright, because it animates whatever happens
+to change and names none of it, so a check on property names cannot see it. There
+is a short list of argued exceptions (meter fills and the nav pill, all absolutely
 positioned or clipped leaves that cannot move a sibling). This started as a
 convention and had already decayed once: `sweep`, the strip on every working step
 tile, animated `left` sixty times a second in a file whose own comment claimed

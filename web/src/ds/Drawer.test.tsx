@@ -145,3 +145,41 @@ describe("Drawer", () => {
     expect(onClose).toHaveBeenCalled();
   });
 });
+
+describe("a gesture that outlives the drawer", () => {
+  it("does not report a close after the drawer has gone", async () => {
+    // A flick hands `onClose` to a timer so the panel can finish leaving first. If
+    // the drawer is torn down in between — the route changed, the row it belonged
+    // to vanished — that timer would still fire and close something that closed
+    // long ago, which for a caller that reuses the handler is a spurious dismissal.
+    withWidth(520);
+    const { onClose, unmount } = open();
+    const header = screen.getByRole("heading", { name: "Failing step" }).closest("header")!;
+
+    fireEvent.pointerDown(header, { button: 0, clientX: 0, timeStamp: 0 });
+    fireEvent.pointerMove(window, { clientX: 40, timeStamp: 20 });
+    fireEvent.pointerUp(window, { clientX: 40, timeStamp: 20 });
+
+    unmount();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("stops tracking the pointer once it is gone", () => {
+    // The move listener lives on `window`, so without teardown it keeps firing
+    // after unmount — writing transforms to a detached panel for as long as the
+    // user holds the button down.
+    withWidth(520);
+    const { unmount } = open();
+    const header = screen.getByRole("heading", { name: "Failing step" }).closest("header")!;
+    const panel = screen.getByRole("dialog");
+
+    fireEvent.pointerDown(header, { button: 0, clientX: 100, timeStamp: 0 });
+    fireEvent.pointerMove(window, { clientX: 180, timeStamp: 16 });
+    expect(panel.style.transform).toBe("translateX(80px)");
+
+    unmount();
+    fireEvent.pointerMove(window, { clientX: 300, timeStamp: 32 });
+    expect(panel.style.transform).toBe("translateX(80px)"); // unchanged
+  });
+});

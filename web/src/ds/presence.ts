@@ -61,6 +61,18 @@ export const SURFACE = {
     enterEasing: "ease-out",
     exitEasing: EASE.inExpo,
   },
+  /** An in-place region resolving into another: opacity only, no travel, because
+   *  both states occupy the same box and moving either would be a lie about that.
+   *  The skeleton→content hand-off. Same timing as `scrim` today and deliberately
+   *  not the same entry: the scrim's is chosen against the panel it backs, so
+   *  tuning that must not silently retime every loading region in the app. */
+  fade: {
+    hidden: { opacity: 0 },
+    enterMs: DURATION.quick,
+    exitMs: DURATION.exitQuick,
+    enterEasing: "ease-out",
+    exitEasing: EASE.inExpo,
+  },
   /** An overlay arriving from in front of the page: down and slightly small.
    *  The palette, the shortcut sheet, the mobile nav. */
   rise: {
@@ -286,19 +298,56 @@ export function useListPresence<T>(
   const next = merge(held, items, keyOf, prefersReducedMotion());
   if (differs(held, next)) setHeld(next);
 
-  const leavingKeys = next
-    .filter((e) => e.leaving)
-    .map((e) => e.key)
-    .join(" ");
+  // One timer per departure, kept across renders.
+  //
+  // A single timer keyed on the whole leaving *set* gets restarted by every new
+  // departure, so a list that churns faster than one exit never releases
+  // anything: each departed item stays in the tree, invisible but still in flow,
+  // and the stack shows a gap where it was until the churn stops. A toast burst
+  // does exactly that — `useToastQueue` evicts the oldest on every push past its
+  // cap. Per-key deadlines mean an item leaves `exitMs` after *it* departed,
+  // whatever else is happening around it.
+  const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
 
   useEffect(() => {
-    if (leavingKeys === "") return;
-    const going = new Set(leavingKeys.split(" "));
-    const timer = setTimeout(() => {
-      setHeld((current) => current.filter((e) => !going.has(e.key)));
-    }, exitMs);
-    return () => clearTimeout(timer);
-  }, [leavingKeys, exitMs]);
+    const scheduled = timers.current;
+    const leaving = new Set(next.filter((e) => e.leaving).map((e) => e.key));
+
+    // An item that came back cancels its own departure: `merge` has already
+    // cleared its `leaving`, and firing the deadline anyway would evict a live row.
+    for (const [key, timer] of scheduled) {
+      if (leaving.has(key)) continue;
+      clearTimeout(timer);
+      scheduled.delete(key);
+    }
+
+    for (const key of leaving) {
+      if (scheduled.has(key)) continue;
+      scheduled.set(
+        key,
+        setTimeout(() => {
+          scheduled.delete(key);
+          // Re-checked at fire time as well as cancelled above: together those
+          // mean a returning item cannot be dropped by an in-flight deadline,
+          // whichever order the render and the timeout land in.
+          setHeld((current) => current.filter((e) => e.key !== key || !e.leaving));
+        }, exitMs),
+      );
+    }
+    // No dependency array on purpose: the body is idempotent per key, so it can
+    // run every render. The alternative is encoding the leaving set as a string
+    // to diff — which is what held a literal NUL byte in this file and made every
+    // `grep` over the motion layer skip it as binary.
+  });
+
+  // Unmount only; the effect above owns cancellation for the whole mounted life.
+  useEffect(() => {
+    const scheduled = timers.current;
+    return () => {
+      for (const timer of scheduled.values()) clearTimeout(timer);
+      scheduled.clear();
+    };
+  }, []);
 
   return next;
 }

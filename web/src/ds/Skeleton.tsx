@@ -60,8 +60,9 @@ export function Loading({ label, children }: { label: string; children: ReactNod
  * The skeleton is in flow while loading (so the region has the right height from
  * the start) and absolutely positioned once it is only leaving (so the content
  * takes over the layout immediately, and the fade cannot push anything around).
- * It is `aria-hidden` and `inert` for that last 126ms: the announcement belongs
- * to the load, and the load is over.
+ * It is `aria-hidden` and `inert` for the whole of its exit — `SURFACE.fade`'s
+ * `--duration-exit-quick`: the announcement belongs to the load, and the load is
+ * over.
  */
 export function Handoff({
   busy,
@@ -76,7 +77,7 @@ export function Handoff({
   children: ReactNode;
 }) {
   const { present, exited } = usePresence(busy);
-  const skeletonRef = useSurfaceMotion<HTMLDivElement>(busy, SURFACE.scrim, exited);
+  const skeletonRef = useSurfaceMotion<HTMLDivElement>(busy, SURFACE.fade, exited);
   return (
     <div className="relative">
       {present && (

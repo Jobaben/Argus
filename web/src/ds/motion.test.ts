@@ -101,6 +101,37 @@ describe("useCountUp", () => {
     act(() => raf.advance(16));
     expect(result.current).toBe(7);
   });
+
+  it("treats the first value that *exists* as the first, not a step up from absent", () => {
+    // The rule is "the first value is never animated", and a `?? 0` at the call
+    // site used to defeat it: an absent figure read as a real zero, so the first
+    // one to land counted up from it. Because the 20× snap only catches large
+    // jumps, this fired for every small figure — i.e. every USD amount in the app.
+    const raf = installRaf();
+    const { result, rerender } = renderHook(({ v }: { v: number | null }) => useCountUp(v), {
+      initialProps: { v: null as number | null },
+    });
+    expect(result.current).toBe(0);
+
+    rerender({ v: 0.42 });
+    expect(result.current).toBe(0.42);
+    act(() => raf.advance(16));
+    expect(result.current).toBe(0.42);
+  });
+
+  it("still animates once a real value has been seen", () => {
+    const raf = installRaf();
+    const { result, rerender } = renderHook(({ v }: { v: number | null }) => useCountUp(v), {
+      initialProps: { v: null as number | null },
+    });
+    rerender({ v: 10 }); // the first real figure: snapped
+    rerender({ v: 20 }); // a genuine increment: counted
+    act(() => raf.advance(100));
+    expect(result.current).toBeGreaterThan(10);
+    expect(result.current).toBeLessThan(20);
+    act(() => raf.advance(1000));
+    expect(result.current).toBe(20);
+  });
 });
 
 describe("useChangeFlash", () => {

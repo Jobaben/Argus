@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAgents } from "./useAgents";
 import type { Agent, AgentStatus } from "./types";
 import { flushSync } from "react-dom";
@@ -250,13 +250,22 @@ export default function App() {
     incidentToasts.dismiss(id);
   };
 
-  // Navigation, with a direction. Re-registered per route because the listener
-  // needs to know which route it is *leaving*, and one listener swap per
-  // navigation is cheaper than any way of smuggling that in.
+  // Navigation, with a direction.
+  //
+  // The route being *left* lives in a ref rather than in the effect's closure, so
+  // the listener registers once for the document's life instead of being swapped
+  // on every navigation. That is also the only version that is correct where View
+  // Transitions exist: there the browser calls the update callback *later* — it
+  // snapshots first — so a second hash change can arrive before any render has
+  // happened, and a listener closed over `active` would still measure from the
+  // route before last and call a retreat out of a drill-down lateral. The ref is
+  // updated here, synchronously, so it cannot lag the events it describes.
+  const leavingRef = useRef(active);
   useEffect(() => {
     const onHash = () => {
       const next = currentTabId();
-      const direction = routeDirection(active, next, roleOf);
+      const direction = routeDirection(leavingRef.current, next, roleOf);
+      leavingRef.current = next;
       setRouteDirection(direction);
       setDirection(direction);
       // The state change has to be *flushed inside* the callback: the browser
@@ -267,7 +276,7 @@ export default function App() {
     };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
-  }, [active]);
+  }, []);
 
   // Capability, not preference: fixed for the document's life.
   const [vt] = useState(supportsViewTransitions);

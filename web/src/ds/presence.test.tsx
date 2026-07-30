@@ -149,6 +149,59 @@ describe("useListPresence", () => {
     rerender(<List items={["a"]} />);
     expect(screen.queryByTestId("b")).toBeNull();
   });
+
+  it("gives each departure its own deadline rather than one shared timer", async () => {
+    // The regression this guards: a single timer keyed on the whole leaving set is
+    // restarted by every new departure, so on a list that churns faster than one
+    // exit nothing is ever released. Every departed item stays in the tree —
+    // invisible but still in flow — leaving a gap in the stack until the churn
+    // stops. A toast burst does exactly that, evicting the oldest on every push.
+    reduceMotion(false);
+    vi.useFakeTimers();
+    const { rerender } = render(<List items={["a", "b", "c", "d"]} />);
+
+    rerender(<List items={["b", "c", "d"]} />); // `a` departs at t=0
+    await act(async () => {
+      vi.advanceTimersByTime(DURATION.exit - 20);
+    });
+    rerender(<List items={["c", "d"]} />); // `b` departs 20ms before `a` is due
+
+    // `a` must go on its own schedule, undisturbed by `b` leaving after it.
+    await act(async () => {
+      vi.advanceTimersByTime(21);
+    });
+    expect(screen.queryByTestId("a")).toBeNull();
+    expect(screen.getByTestId("b")).toHaveAttribute("data-leaving", "yes");
+
+    // …and `b` on its own, one exit after *it* departed.
+    await act(async () => {
+      vi.advanceTimersByTime(DURATION.exit);
+    });
+    expect(screen.queryByTestId("b")).toBeNull();
+    expect(screen.getAllByRole("listitem").map((li) => li.textContent)).toEqual(["c", "d"]);
+  });
+
+  it("keeps an item that comes back before its exit finished, in its own place", async () => {
+    // Re-adding a departing item cancels the departure. Without the cancellation
+    // the pending deadline fires against a row that is live again and evicts it,
+    // and `merge` then re-appends it at the end — so a flicker *and* a reorder,
+    // from nothing the user did. `b` is deliberately in the middle: at the end,
+    // being re-appended would be indistinguishable from staying put.
+    reduceMotion(false);
+    vi.useFakeTimers();
+    const { rerender } = render(<List items={["a", "b", "c"]} />);
+
+    rerender(<List items={["a", "c"]} />);
+    expect(screen.getByTestId("b")).toHaveAttribute("data-leaving", "yes");
+    rerender(<List items={["a", "b", "c"]} />);
+    expect(screen.getByTestId("b")).toHaveAttribute("data-leaving", "no");
+
+    await act(async () => {
+      vi.advanceTimersByTime(DURATION.exit * 3);
+    });
+    expect(screen.getByTestId("b")).toBeInTheDocument();
+    expect(screen.getAllByRole("listitem").map((li) => li.textContent)).toEqual(["a", "b", "c"]);
+  });
 });
 
 describe("a surface driven by state rather than props", () => {

@@ -35,16 +35,24 @@ function Toast({
   return (
     <div
       role="status"
+      // A surface on its way out is a picture of a toast: `inert` takes it out of
+      // the pointer's reach, the tab order and the accessibility tree at once, so
+      // a dismissal cannot be clicked twice and a screen reader does not walk
+      // into a notification that is already gone. `aria-hidden` alongside it
+      // because jsdom implements `inert` as an attribute and nothing more — the
+      // same pairing `Drawer` and `Handoff` use.
+      inert={leaving}
+      aria-hidden={leaving ? true : undefined}
       // A notification surface with no animation at all was the loudest
       // unfinished signal in the app: its entire job is to catch the eye
       // gracefully, and it popped into existence. In on a slight overshoot —
       // that settle is what does the catching, without the colour or the motion
       // having to shout. Out sideways, off the stack's own axis, so a dismissal
       // never reads as the toast below it moving up.
-      className={`pointer-events-auto flex items-start gap-3 rounded-panel border ${tone.border} bg-surface px-4 py-3 shadow-[0_8px_30px_rgb(0_0_0/0.25)] ${
+      className={`flex items-start gap-3 rounded-panel border ${tone.border} bg-surface px-4 py-3 shadow-[0_8px_30px_rgb(0_0_0/0.25)] ${
         leaving
-          ? "motion-safe:animate-[toast-out_var(--duration-exit)_var(--ease-in-expo)_forwards]"
-          : "motion-safe:animate-[toast-in_var(--duration-base)_var(--ease-spring)_both]"
+          ? "pointer-events-none motion-safe:animate-[toast-out_var(--duration-exit)_var(--ease-in-expo)_forwards]"
+          : "pointer-events-auto motion-safe:animate-[toast-in_var(--duration-base)_var(--ease-spring)_both]"
       }`}
     >
       <span

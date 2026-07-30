@@ -190,6 +190,25 @@ function useDragToDismiss(
   onClose: () => void,
   visible: boolean,
 ) {
+  /**
+   * Teardown for whatever the current gesture has outstanding.
+   *
+   * A gesture outlives a render: its listeners sit on `window` and its release
+   * hands `onClose` to a timer. If the drawer goes away first — the route
+   * changes, the row it belongs to disappears — the listeners would keep firing
+   * against a detached panel until the pointer happened to come up, and the timer
+   * would still call `onClose` on a drawer that closed long ago. Held in a ref so
+   * unmount can reach it.
+   */
+  const cleanupRef = useRef<(() => void) | null>(null);
+  useEffect(
+    () => () => {
+      cleanupRef.current?.();
+      cleanupRef.current = null;
+    },
+    [],
+  );
+
   return useCallback(
     (event: React.PointerEvent<HTMLElement>) => {
       const panel = panelRef.current;
@@ -197,6 +216,9 @@ function useDragToDismiss(
       if (event.button !== 0 || typeof panel.animate !== "function") return;
       // Let a click on the close button be a click.
       if ((event.target as HTMLElement).closest("button")) return;
+      // A second pointerdown before the first gesture settled: the old one is
+      // over, whatever it still had pending.
+      cleanupRef.current?.();
 
       const startX = event.clientX;
       const width = panel.getBoundingClientRect().width || 1;
@@ -216,11 +238,26 @@ function useDragToDismiss(
         panel.style.opacity = String(Math.max(0.4, 1 - (offset / width) * 0.6));
       };
 
-      const onUp = (up: PointerEvent) => {
+      let releaseTimer: number | null = null;
+      const detachListeners = () => {
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
         window.removeEventListener("pointercancel", onUp);
-        if (!dragging) return;
+      };
+      const teardown = () => {
+        detachListeners();
+        if (releaseTimer !== null) {
+          window.clearTimeout(releaseTimer);
+          releaseTimer = null;
+        }
+      };
+
+      const onUp = (up: PointerEvent) => {
+        detachListeners();
+        if (!dragging) {
+          cleanupRef.current = null;
+          return;
+        }
         tracker.sample(Math.max(0, up.clientX - startX), up.timeStamp);
         const { release, ms } = flickOutcome(offset, tracker.velocity(), width);
         if (release) {
@@ -233,7 +270,13 @@ function useDragToDismiss(
             ],
             { duration: ms, easing: EASE.inExpo, fill: "forwards" },
           );
-          window.setTimeout(onClose, ms);
+          // `cleanupRef` stays pointing at `teardown` until this fires, so an
+          // unmount in the meantime cancels the close rather than firing it late.
+          releaseTimer = window.setTimeout(() => {
+            releaseTimer = null;
+            cleanupRef.current = null;
+            onClose();
+          }, ms);
           return;
         }
         const back = panel.animate(
@@ -247,8 +290,12 @@ function useDragToDismiss(
           panel.style.removeProperty("transform");
           panel.style.removeProperty("opacity");
         };
+        // The gesture refused and nothing is outstanding; the animation is the
+        // element's own and goes with it.
+        cleanupRef.current = null;
       };
 
+      cleanupRef.current = teardown;
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", onUp);
       window.addEventListener("pointercancel", onUp);

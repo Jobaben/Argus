@@ -113,34 +113,50 @@ const COUNT_DURATION_MS = 420;
  * - A **huge** jump snaps. Rolling from 0 to 8.9M reads as a slot machine and
  *   makes the number unreadable for the whole duration.
  * - Non-finite input snaps, so a `NaN` can never wedge the loop.
+ *
+ * `null`/`undefined` means "no value yet" and reads as 0 while staying *first* —
+ * so the first figure that actually arrives is the one that is not animated.
+ * Callers must pass the absent value through rather than coalescing it: a
+ * `value ?? 0` at the call site is a real zero as far as this hook can tell, so
+ * the first real figure counts up from it. That is the load-time slot machine the
+ * rule above exists to prevent, and it fired for anything under the 20× snap
+ * threshold — which is every USD figure in the app.
  */
-export function useCountUp(value: number, durationMs = COUNT_DURATION_MS): number {
-  const [shown, setShown] = useState(value);
-  const fromRef = useRef(value);
+export function useCountUp(
+  value: number | null | undefined,
+  durationMs = COUNT_DURATION_MS,
+): number {
+  const [shown, setShown] = useState(value ?? 0);
+  const fromRef = useRef(value ?? 0);
   const frameRef = useRef<number | null>(null);
   const firstRef = useRef(true);
 
   useEffect(() => {
     const from = fromRef.current;
     const to = value;
-    const snap = () => {
-      fromRef.current = to;
-      setShown(to);
+    const snap = (n: number) => {
+      fromRef.current = n;
+      setShown(n);
     };
 
+    // Still nothing to count: show zero and stay first.
+    if (to == null) {
+      snap(0);
+      return;
+    }
     if (firstRef.current) {
       firstRef.current = false;
-      snap();
+      snap(to);
       return;
     }
     if (!Number.isFinite(to) || !Number.isFinite(from) || from === to || prefersReducedMotion()) {
-      snap();
+      snap(to);
       return;
     }
     // A change of more than ~20× is a different quantity, not an increment.
     const magnitude = Math.abs(to - from);
     if (magnitude > Math.max(1, Math.abs(from)) * 20) {
-      snap();
+      snap(to);
       return;
     }
 

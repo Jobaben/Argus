@@ -53,4 +53,26 @@ describe("the toast lifecycle", () => {
     const frames = /@keyframes toast-out \{([\s\S]*?)\n\}/.exec(css)?.[1] ?? "";
     expect(frames).toContain("translateX");
   });
+
+  it("is inert and unreachable while leaving, so a dismissal cannot be clicked twice", () => {
+    // A leaving toast is a picture of a toast. Left live it stays clickable and
+    // stays in the accessibility tree — a second `onDismiss` for something already
+    // dismissed, and a screen reader walking into a notification that is gone.
+    const onDismiss = vi.fn();
+    const { rerender } = render(<ToastRegion toasts={[toast]} onDismiss={onDismiss} />);
+    rerender(<ToastRegion toasts={[]} onDismiss={onDismiss} />);
+
+    const leaving = screen.getByText("Agent failed: Builder").closest("[role=status]");
+    expect(leaving).toHaveAttribute("inert");
+    expect(leaving).toHaveAttribute("aria-hidden", "true");
+    expect(leaving).toHaveClass("pointer-events-none");
+    expect(onDismiss).not.toHaveBeenCalled();
+  });
+
+  it("is reachable while it is actually there", () => {
+    render(<ToastRegion toasts={[toast]} onDismiss={() => {}} />);
+    const live = screen.getByRole("status");
+    expect(live).not.toHaveAttribute("inert");
+    expect(live).toHaveClass("pointer-events-auto");
+  });
 });
