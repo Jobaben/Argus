@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, renderHook } from "@testing-library/react";
-import { staggerDelay, useChangeFlash, useCountUp } from "./motion";
+import { staggerDelay, syncedDelay, useChangeFlash, useCountUp, useSyncedDelay } from "./motion";
 
 /** Drives requestAnimationFrame from fake timers so counting is deterministic. */
 function installRaf() {
@@ -101,6 +101,37 @@ describe("useCountUp", () => {
     act(() => raf.advance(16));
     expect(result.current).toBe(7);
   });
+
+  it("treats the first value that *exists* as the first, not a step up from absent", () => {
+    // The rule is "the first value is never animated", and a `?? 0` at the call
+    // site used to defeat it: an absent figure read as a real zero, so the first
+    // one to land counted up from it. Because the 20× snap only catches large
+    // jumps, this fired for every small figure — i.e. every USD amount in the app.
+    const raf = installRaf();
+    const { result, rerender } = renderHook(({ v }: { v: number | null }) => useCountUp(v), {
+      initialProps: { v: null as number | null },
+    });
+    expect(result.current).toBe(0);
+
+    rerender({ v: 0.42 });
+    expect(result.current).toBe(0.42);
+    act(() => raf.advance(16));
+    expect(result.current).toBe(0.42);
+  });
+
+  it("still animates once a real value has been seen", () => {
+    const raf = installRaf();
+    const { result, rerender } = renderHook(({ v }: { v: number | null }) => useCountUp(v), {
+      initialProps: { v: null as number | null },
+    });
+    rerender({ v: 10 }); // the first real figure: snapped
+    rerender({ v: 20 }); // a genuine increment: counted
+    act(() => raf.advance(100));
+    expect(result.current).toBeGreaterThan(10);
+    expect(result.current).toBeLessThan(20);
+    act(() => raf.advance(1000));
+    expect(result.current).toBe(20);
+  });
 });
 
 describe("useChangeFlash", () => {
@@ -156,5 +187,50 @@ describe("staggerDelay", () => {
 
   it("caps, so a long list does not take seconds to finish arriving", () => {
     expect(staggerDelay(100, 28, 240)).toBe("240ms");
+  });
+});
+
+describe("syncedDelay", () => {
+  it("is a negative delay, so the animation starts part-way through its cycle", () => {
+    const delay = syncedDelay(1000, Date.now() + 250);
+    expect(delay).toMatch(/^-\d+ms$/);
+  });
+
+  it("puts two callers in phase whatever they mount", () => {
+    // The whole point: two indicators that started a beat apart still land on the
+    // same point of the cycle, because both measure from one shared origin.
+    const at = Date.now() + 4321;
+    const a = syncedDelay(1000, at);
+    const b = syncedDelay(1000, at + 1000);
+    expect(a).toBe(b);
+  });
+
+  it("stays inside one cycle", () => {
+    const ms = Number(/-(\d+)ms/.exec(syncedDelay(1400, Date.now() + 99_999) ?? "")?.[1]);
+    expect(ms).toBeGreaterThanOrEqual(0);
+    expect(ms).toBeLessThan(1400);
+  });
+
+  it("declines rather than emitting nonsense", () => {
+    expect(syncedDelay(0)).toBeUndefined();
+    expect(syncedDelay(-5)).toBeUndefined();
+    expect(syncedDelay(Number.NaN)).toBeUndefined();
+  });
+
+  it("returns nothing under reduced motion, so callers need no branch", () => {
+    setReducedMotion(true);
+    expect(syncedDelay(1400)).toBeUndefined();
+  });
+});
+
+describe("useSyncedDelay", () => {
+  it("holds the phase for the life of the mount", () => {
+    // Re-writing `animation-delay` mid-cycle *shifts the animation*, so a board
+    // that re-renders on every socket frame would jitter its own indicators.
+    const { result, rerender } = renderHook(() => useSyncedDelay(1400));
+    const first = result.current;
+    rerender();
+    rerender();
+    expect(result.current).toBe(first);
   });
 });

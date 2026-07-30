@@ -13,20 +13,24 @@ import type { LiveActivity } from "../useRunActivity";
 import { useTotals } from "../useTotals";
 import {
   EmptyState,
-  Loading,
+  formatElapsed,
+  Handoff,
   Meter,
   Page,
   RAIL,
-  STATUS,
   SkeletonBoardCard,
+  staggerDelay,
+  STATUS,
   StatusPill,
+  SweepBar,
   TILE_DETAIL,
   TILE_SKIN,
   TimeAgo,
-  formatElapsed,
-  staggerDelay,
   toOverviewRows,
   useChangeFlash,
+  useFlip,
+  useSyncedDelay,
+  DURATION,
   useTicker,
 } from "../ds";
 import type { OverviewRow, OverviewGate, PhasePill, StepPill, DsStatus } from "../ds";
@@ -107,7 +111,7 @@ function Gate({
             type="button"
             onClick={() => run(() => approve(instanceId), "Approved — pipeline resuming")}
             disabled={busy}
-            className="rounded-md border border-ok bg-ok/10 px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-ok disabled:opacity-40"
+            className="rounded-md border border-ok bg-ok/10 px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-ok transition-transform duration-(--duration-press) disabled:opacity-40 motion-safe:active:scale-[0.97]"
           >
             Approve
           </button>
@@ -116,7 +120,7 @@ function Gate({
           type="button"
           onClick={() => setNoteOpen((o) => !o)}
           disabled={busy}
-          className="rounded-md border border-await bg-await/10 px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-await disabled:opacity-40"
+          className="rounded-md border border-await bg-await/10 px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-await transition-transform duration-(--duration-press) disabled:opacity-40 motion-safe:active:scale-[0.97]"
         >
           {reviseLabel}
         </button>
@@ -140,7 +144,7 @@ function Gate({
               )
             }
             disabled={busy}
-            className="rounded-md border border-await bg-await/10 px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-await disabled:opacity-40"
+            className="rounded-md border border-await bg-await/10 px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-await transition-transform duration-(--duration-press) disabled:opacity-40 motion-safe:active:scale-[0.97]"
           >
             Send
           </button>
@@ -175,8 +179,8 @@ function StepTile({
   /** Pipeline-level model shown in the card header; the tile only repeats a
    *  model when its own differs from this. */
   rowModel: string | null;
-  /** Opens this step's drawer. */
-  onOpen: () => void;
+  /** Opens this step's drawer, told where on screen the tile was. */
+  onOpen: (originY: number) => void;
 }) {
   const token = STATUS[step.status].token;
   const working = step.status === "working";
@@ -187,22 +191,35 @@ function StepTile({
   // A board that swaps a status silently makes you doubt you saw it. A brief
   // ring on the tile that just moved answers "what changed?" at a glance.
   const justChanged = useChangeFlash(step.status);
+  const beat = useSyncedDelay(DURATION.pulse);
   const hasMeter =
     step.tokens != null || step.costUsd != null || (finished && step.durationMs != null);
   return (
     <article
-      className={`relative flex flex-col gap-[7px] overflow-hidden rounded-tile border bg-gradient-to-b to-surface pb-2.5 pl-3.5 pr-3 pt-[11px] transition-shadow duration-(--duration-slow) ${
-        TILE_SKIN[token]
-      } ${justChanged ? "shadow-[0_0_0_1px_var(--color-eye),0_0_24px_-4px_var(--color-eye)]" : ""}`}
+      // Fast attack, slow release. One duration for both directions made the
+      // flash fade *in* as slowly as it faded out, which is the wrong way round:
+      // attention should be claimed at once and then released on a curve, not
+      // eased into and cut off.
+      className={`relative flex flex-col gap-[7px] overflow-hidden rounded-tile border bg-gradient-to-b to-surface pb-2.5 pl-3.5 pr-3 pt-[11px] transition-[box-shadow,border-color,background-color] ${
+        justChanged ? "duration-(--duration-quick)" : "duration-(--duration-slow)"
+      } ${TILE_SKIN[token]} ${
+        justChanged ? "shadow-[0_0_0_1px_var(--color-eye),0_0_24px_-4px_var(--color-eye)]" : ""
+      }`}
     >
-      <span className={`absolute inset-y-0 left-0 w-[3px] ${RAIL[token]}`} />
+      <span
+        style={{ animationDelay: beat }}
+        className={`absolute inset-y-0 left-0 w-[3px] ${RAIL[token]}`}
+      />
       <div className="flex items-start justify-between gap-2">
         {/* The name is the activator rather than the whole tile: a tile-sized
             button would swallow the gate's Approve/Revise controls inside it,
             and a nested interactive element is invalid. */}
         <button
           type="button"
-          onClick={onOpen}
+          // The tile's own position, so the drawer grows out of the row you
+          // pressed instead of out of the screen edge. Read from the event
+          // rather than measured later: by then the board may have re-sorted.
+          onClick={(e) => onOpen(e.currentTarget.getBoundingClientRect().top)}
           className="min-w-0 flex-1 text-left"
           title="Open this step's run, log and cost"
         >
@@ -234,11 +251,7 @@ function StepTile({
           {elapsed} <span className="text-ink-faint/70">elapsed</span>
         </div>
       )}
-      {working && (
-        <div className="relative h-[5px] overflow-hidden rounded-full bg-ink-faint/15">
-          <i className="absolute inset-y-0 w-2/5 animate-[sweep_1.6s_ease-in-out_infinite] rounded-full bg-gradient-to-r from-transparent via-run to-transparent" />
-        </div>
-      )}
+      {working && <SweepBar />}
       {hasMeter && (
         <div className="flex items-center gap-2 font-mono text-meter text-ink-faint">
           <Meter
@@ -296,7 +309,7 @@ function PhaseCell({
   liveActivity: Map<string, LiveActivity>;
   now: number;
   rowModel: string | null;
-  onOpenStep: (step: StepPill, phaseName: string, reason: string | null) => void;
+  onOpenStep: (step: StepPill, phaseName: string, reason: string | null, originY: number) => void;
 }) {
   return (
     <div className="flex min-w-0 flex-col gap-2.5">
@@ -310,7 +323,7 @@ function PhaseCell({
             live={step.runId ? (liveActivity.get(step.runId) ?? null) : null}
             now={now}
             rowModel={rowModel}
-            onOpen={() => onOpenStep(step, pill.name, reason)}
+            onOpen={(originY) => onOpenStep(step, pill.name, reason, originY)}
           />
         );
       })}
@@ -342,6 +355,7 @@ function Row({
   now,
   index,
   onOpenStep,
+  ref,
 }: {
   rows: OverviewRow[];
   approve: (id: string) => Promise<unknown>;
@@ -351,11 +365,14 @@ function Row({
   /** Position in the board, for the entrance stagger. */
   index: number;
   onOpenStep: (selection: StepSelection) => void;
+  /** FLIP registration, so the card glides when the board re-orders. */
+  ref?: React.Ref<HTMLElement>;
 }) {
   const first = rows[0];
   const multi = rows.length > 1;
   return (
     <article
+      ref={ref}
       // Staggered so the board reads as assembling top-down rather than
       // flashing in all at once; capped in `staggerDelay` so a long board still
       // finishes fast.
@@ -458,8 +475,8 @@ function Row({
                   liveActivity={liveActivity}
                   now={now}
                   rowModel={row.model}
-                  onOpenStep={(step, phaseName, reason) =>
-                    onOpenStep({ step, pipelineName: row.name, phaseName, reason })
+                  onOpenStep={(step, phaseName, reason, originY) =>
+                    onOpenStep({ step, pipelineName: row.name, phaseName, reason, originY })
                   }
                 />
               ))}
@@ -596,6 +613,10 @@ export default function CommandCenter() {
     return [...byPipeline.values()];
   }, [rows]);
   const announcement = useBoardAnnouncer(rows);
+  // The board's order comes from the server and changes as pipelines start,
+  // finish and gate. A card that teleports to its new row shows nothing; one that
+  // glides there shows exactly what moved.
+  const flip = useFlip();
   const liveActivity = useRunActivity();
   const anyWorking = useMemo(
     () => rows.some((r) => r.phases.some((p) => p.steps.some((s) => s.status === "working"))),
@@ -619,42 +640,57 @@ export default function CommandCenter() {
       )}
       {facet.peer ? (
         <PeerBoard facet={facet} />
-      ) : loading ? (
-        <Loading label="the board">
-          <div className="flex flex-col gap-3">
-            <SkeletonBoardCard phases={4} />
-            <SkeletonBoardCard phases={3} />
-          </div>
-        </Loading>
-      ) : rows.length === 0 ? (
-        <EmptyState>
-          No pipelines defined yet. Create one in the{" "}
-          <a href="#/pipelines" className="text-ink underline decoration-line underline-offset-2">
-            Pipelines
-          </a>{" "}
-          tab.
-        </EmptyState>
       ) : (
-        // The rail sits beside the board on a wide display and below it on a
-        // narrow one — the board needs the horizontal room more than the rail
-        // does, so the rail is what moves.
-        <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_320px]">
-          <div className="flex min-w-0 flex-col gap-3">
-            {groups.map((group, i) => (
-              <Row
-                key={group[0].pipelineId}
-                index={i}
-                rows={group}
-                approve={approve}
-                revise={revise}
+        <Handoff
+          busy={loading}
+          label="the board"
+          skeleton={
+            <div className="flex flex-col gap-3">
+              <SkeletonBoardCard phases={4} />
+              <SkeletonBoardCard phases={3} />
+            </div>
+          }
+        >
+          {rows.length === 0 ? (
+            <EmptyState>
+              No pipelines defined yet. Create one in the{" "}
+              <a
+                href="#/pipelines"
+                className="text-ink underline decoration-line underline-offset-2"
+              >
+                Pipelines
+              </a>{" "}
+              tab.
+            </EmptyState>
+          ) : (
+            // The rail sits beside the board on a wide display and below it on a
+            // narrow one — the board needs the horizontal room more than the rail
+            // does, so the rail is what moves.
+            <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_320px]">
+              <div className="flex min-w-0 flex-col gap-3">
+                {groups.map((group, i) => (
+                  <Row
+                    key={group[0].pipelineId}
+                    ref={flip(group[0].pipelineId)}
+                    index={i}
+                    rows={group}
+                    approve={approve}
+                    revise={revise}
+                    liveActivity={liveActivity}
+                    now={now}
+                    onOpenStep={setSelected}
+                  />
+                ))}
+              </div>
+              <ActivityRail
+                rows={rows}
                 liveActivity={liveActivity}
-                now={now}
-                onOpenStep={setSelected}
+                runs={runs}
+                loading={runsLoading}
               />
-            ))}
-          </div>
-          <ActivityRail rows={rows} liveActivity={liveActivity} runs={runs} loading={runsLoading} />
-        </div>
+            </div>
+          )}
+        </Handoff>
       )}
       <StepDrawer selection={selected} onClose={() => setSelected(null)} onCancelRun={cancelRun} />
     </Page>

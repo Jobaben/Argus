@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertStrip, EmptyState, Loading, Page, SkeletonGrid } from "../ds";
+import { AlertStrip, EmptyState, Handoff, Page, SkeletonGrid } from "../ds";
 import { useInventory, type InventoryItem, type PluginItem } from "../useInventory";
 
 type AccentToken = "ok" | "queue" | "run" | "await" | "fail";
@@ -104,48 +104,50 @@ export default function Inventory() {
         </div>
       )}
 
-      {loading ? (
-        <Loading label="inventory">
-          <SkeletonGrid count={4} columns={2} lines={3} />
-        </Loading>
-      ) : !inventory ? (
-        <EmptyState>No extensions found yet.</EmptyState>
-      ) : (
-        <>
-          <InventorySection<InventoryItem>
-            title="Agents"
-            accent="ok"
-            items={inventory.agents}
-            keyOf={(a) => a.name}
-            render={(a) => ({ name: a.name, description: a.description })}
-          />
-          <InventorySection<InventoryItem>
-            title="Commands"
-            accent="queue"
-            items={inventory.commands}
-            keyOf={(c) => c.name}
-            render={(c) => ({ name: c.name, description: c.description })}
-          />
-          <InventorySection<InventoryItem>
-            title="Skills"
-            accent="run"
-            items={inventory.skills}
-            keyOf={(s) => s.name}
-            render={(s) => ({ name: s.name, description: s.description })}
-          />
-          <InventorySection<PluginItem>
-            title="Plugins"
-            accent="fail"
-            items={inventory.plugins}
-            keyOf={(p) => `${p.name}@${p.marketplace}`}
-            render={(p) => ({
-              name: p.name,
-              description: p.description,
-              badge: p.version,
-            })}
-          />
-        </>
-      )}
+      <Handoff
+        busy={loading}
+        label="inventory"
+        skeleton={<SkeletonGrid count={4} columns={2} lines={3} />}
+      >
+        {!inventory ? (
+          <EmptyState>No extensions found yet.</EmptyState>
+        ) : (
+          <>
+            <InventorySection<InventoryItem>
+              title="Agents"
+              accent="ok"
+              items={inventory.agents}
+              keyOf={(a) => a.name}
+              render={(a) => ({ name: a.name, description: a.description })}
+            />
+            <InventorySection<InventoryItem>
+              title="Commands"
+              accent="queue"
+              items={inventory.commands}
+              keyOf={(c) => c.name}
+              render={(c) => ({ name: c.name, description: c.description })}
+            />
+            <InventorySection<InventoryItem>
+              title="Skills"
+              accent="run"
+              items={inventory.skills}
+              keyOf={(s) => s.name}
+              render={(s) => ({ name: s.name, description: s.description })}
+            />
+            <InventorySection<PluginItem>
+              title="Plugins"
+              accent="fail"
+              items={inventory.plugins}
+              keyOf={(p) => `${p.name}@${p.marketplace}`}
+              render={(p) => ({
+                name: p.name,
+                description: p.description,
+                badge: p.version,
+              })}
+            />
+          </>
+        )}
+      </Handoff>
     </Page>
   );
 }

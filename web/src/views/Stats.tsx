@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useStats, type DailyStat, type ModelStat, type PeakHour } from "../useStats";
-import { AlertStrip, EmptyState, Loading, Page, SkeletonCounters, SkeletonGrid } from "../ds";
+import { AlertStrip, EmptyState, Handoff, Page, SkeletonCounters, SkeletonGrid } from "../ds";
 import { hasSessionData, hasTokenData } from "./statsGroups";
 import { VaultPanels } from "./VaultPanels";
 
@@ -49,7 +49,10 @@ function ModelRow({ model, max }: { model: ModelStat; max: number }) {
         </span>
       </div>
       <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
-        <div className="h-full rounded-full bg-queue/70" style={{ width: `${pct}%` }} />
+        <div
+          className="h-full rounded-full bg-queue/70 transition-[width] duration-(--duration-slow) ease-(--ease-out-expo)"
+          style={{ width: `${pct}%` }}
+        />
       </div>
       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-faint">
         <span>in {compact(model.inputTokens)}</span>
@@ -70,7 +73,10 @@ function DailyRow({ day, max }: { day: DailyStat; max: number }) {
     <div className="flex items-center gap-3 py-1.5 text-xs">
       <span className="w-24 shrink-0 font-mono text-ink-dim">{day.date}</span>
       <div className="h-2 flex-1 overflow-hidden rounded-full bg-surface-2">
-        <div className="h-full rounded-full bg-ok/60" style={{ width: `${pct}%` }} />
+        <div
+          className="h-full rounded-full bg-ok/60 transition-[width] duration-(--duration-slow) ease-(--ease-out-expo)"
+          style={{ width: `${pct}%` }}
+        />
       </div>
       <span className="w-16 shrink-0 text-right text-ink-dim">{compact(day.tokens)}</span>
       <span className="w-20 shrink-0 text-right text-ink-faint">{day.messages} msgs</span>
@@ -130,106 +136,112 @@ export default function Stats() {
         </div>
       )}
 
-      {loading ? (
-        <Loading label="stats">
-          <SkeletonCounters count={4} />
-          <div className="mt-8">
-            <SkeletonGrid count={2} columns={2} lines={4} />
-          </div>
-        </Loading>
-      ) : !stats || !stats.available ? (
-        <EmptyState>No usage stats found yet.</EmptyState>
-      ) : (
-        <div className="flex flex-col gap-8">
-          {hasSessionData(stats.headline) && (
-            <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-              <Stat label="Sessions" value={compact(stats.headline.totalSessions)} />
-              <Stat label="Messages" value={compact(stats.headline.totalMessages)} />
-              <Stat label="Tool calls" value={compact(stats.headline.totalToolCalls)} />
-              <Stat label="Active days" value={`${stats.headline.activeDays}`} />
-            </section>
-          )}
+      <Handoff
+        busy={loading}
+        label="stats"
+        skeleton={
+          <>
+            <SkeletonCounters count={4} />
+            <div className="mt-8">
+              <SkeletonGrid count={2} columns={2} lines={4} />
+            </div>
+          </>
+        }
+      >
+        {!stats || !stats.available ? (
+          <EmptyState>No usage stats found yet.</EmptyState>
+        ) : (
+          <div className="flex flex-col gap-8">
+            {hasSessionData(stats.headline) && (
+              <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+                <Stat label="Sessions" value={compact(stats.headline.totalSessions)} />
+                <Stat label="Messages" value={compact(stats.headline.totalMessages)} />
+                <Stat label="Tool calls" value={compact(stats.headline.totalToolCalls)} />
+                <Stat label="Active days" value={`${stats.headline.activeDays}`} />
+              </section>
+            )}
 
-          {/* Tokens, cost and model counts come from Claude Code's own usage
+            {/* Tokens, cost and model counts come from Claude Code's own usage
               telemetry rather than the transcripts, so it can be absent while the
               session counts above are real. Six zeros in that case would read as
               "you have used no tokens in 184 sessions", which never happens. */}
-          {hasTokenData(stats.headline) ? (
-            <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-              <Stat label="Total tokens" value={compact(stats.headline.totalTokens)} />
-              <Stat label="Output tokens" value={compact(stats.headline.totalOutputTokens)} />
-              <Stat label="Cache reads" value={compact(stats.headline.totalCacheReadTokens)} />
-              <Stat label="Models used" value={`${stats.headline.modelsUsed}`} />
-            </section>
-          ) : (
-            <p className="rounded-xl border border-dashed border-line px-4 py-3 text-xs text-ink-faint">
-              No token or cost telemetry yet. Argus reads it from Claude Code&apos;s own usage
-              cache; it appears here once the CLI has written a usage report. The session counts
-              above come from the transcripts and do not depend on it.
-            </p>
-          )}
+            {hasTokenData(stats.headline) ? (
+              <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+                <Stat label="Total tokens" value={compact(stats.headline.totalTokens)} />
+                <Stat label="Output tokens" value={compact(stats.headline.totalOutputTokens)} />
+                <Stat label="Cache reads" value={compact(stats.headline.totalCacheReadTokens)} />
+                <Stat label="Models used" value={`${stats.headline.modelsUsed}`} />
+              </section>
+            ) : (
+              <p className="rounded-xl border border-dashed border-line px-4 py-3 text-xs text-ink-faint">
+                No token or cost telemetry yet. Argus reads it from Claude Code&apos;s own usage
+                cache; it appears here once the CLI has written a usage report. The session counts
+                above come from the transcripts and do not depend on it.
+              </p>
+            )}
 
-          {(stats.headline.totalCostUSD > 0 || stats.longestSession) && (
-            <section className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-              {stats.headline.totalCostUSD > 0 && (
-                <Stat label="Total cost" value={`$${stats.headline.totalCostUSD.toFixed(2)}`} />
-              )}
-              {stats.longestSession && (
-                <Stat
-                  label="Longest session"
-                  value={fmtDuration(stats.longestSession.durationMs)}
-                  hint={`${stats.longestSession.messageCount} msgs`}
-                />
-              )}
-              {stats.firstSessionDate && (
-                <Stat
-                  label="First session"
-                  value={new Date(stats.firstSessionDate).toLocaleDateString()}
-                />
-              )}
-            </section>
-          )}
+            {(stats.headline.totalCostUSD > 0 || stats.longestSession) && (
+              <section className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                {stats.headline.totalCostUSD > 0 && (
+                  <Stat label="Total cost" value={`$${stats.headline.totalCostUSD.toFixed(2)}`} />
+                )}
+                {stats.longestSession && (
+                  <Stat
+                    label="Longest session"
+                    value={fmtDuration(stats.longestSession.durationMs)}
+                    hint={`${stats.longestSession.messageCount} msgs`}
+                  />
+                )}
+                {stats.firstSessionDate && (
+                  <Stat
+                    label="First session"
+                    value={new Date(stats.firstSessionDate).toLocaleDateString()}
+                  />
+                )}
+              </section>
+            )}
 
-          {stats.models.length > 0 && (
-            <section>
-              <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-ink-faint">
-                By model
-              </h3>
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                {stats.models.map((m) => (
-                  <ModelRow key={m.model} model={m} max={maxModelTokens} />
-                ))}
-              </div>
-            </section>
-          )}
+            {stats.models.length > 0 && (
+              <section>
+                <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-ink-faint">
+                  By model
+                </h3>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  {stats.models.map((m) => (
+                    <ModelRow key={m.model} model={m} max={maxModelTokens} />
+                  ))}
+                </div>
+              </section>
+            )}
 
-          {stats.peakHours.length > 0 && (
-            <section>
-              <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-ink-faint">
-                Activity by hour
-              </h3>
-              <div className="flex items-end gap-1 rounded-xl border border-line bg-surface p-4">
-                {stats.peakHours.map((p) => (
-                  <HourBar key={p.hour} peak={p} max={maxHour} />
-                ))}
-              </div>
-            </section>
-          )}
+            {stats.peakHours.length > 0 && (
+              <section>
+                <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-ink-faint">
+                  Activity by hour
+                </h3>
+                <div className="flex items-end gap-1 rounded-xl border border-line bg-surface p-4">
+                  {stats.peakHours.map((p) => (
+                    <HourBar key={p.hour} peak={p} max={maxHour} />
+                  ))}
+                </div>
+              </section>
+            )}
 
-          {recentDaily.length > 0 && (
-            <section>
-              <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-ink-faint">
-                Recent daily activity
-              </h3>
-              <div className="rounded-xl border border-line bg-surface p-4">
-                {recentDaily.map((d) => (
-                  <DailyRow key={d.date} day={d} max={maxDailyTokens} />
-                ))}
-              </div>
-            </section>
-          )}
-        </div>
-      )}
+            {recentDaily.length > 0 && (
+              <section>
+                <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-ink-faint">
+                  Recent daily activity
+                </h3>
+                <div className="rounded-xl border border-line bg-surface p-4">
+                  {recentDaily.map((d) => (
+                    <DailyRow key={d.date} day={d} max={maxDailyTokens} />
+                  ))}
+                </div>
+              </section>
+            )}
+          </div>
+        )}
+      </Handoff>
 
       {/* Stats reads a rolling cache Claude Code maintains; the quarter view
           below reads the Vault, which keeps every run Argus has ever fired.

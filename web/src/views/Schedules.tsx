@@ -5,16 +5,17 @@ import type { Run, ScheduleInput, ScheduleWithNext, VerdictTrend } from "../type
 import {
   AlertStrip,
   EmptyState,
-  Loading,
+  formatCountdown,
+  formatMs,
+  formatTrigger,
+  Handoff,
   Page,
+  RubricFields,
   SkeletonRows,
   TimeAgo,
-  RubricFields,
   TriggerFields,
-  formatCountdown,
-  formatTrigger,
-  formatMs,
   useClock,
+  useFlip,
   useTicker,
 } from "../ds";
 import { useVerdictTrends } from "../useVerdict";
@@ -353,6 +354,7 @@ function ScheduleCard({
   remove,
   runNow,
   cancelRun,
+  ref,
 }: {
   schedule: ScheduleWithNext;
   health: ScheduleHealth;
@@ -362,6 +364,8 @@ function ScheduleCard({
   remove: (id: string) => Promise<unknown>;
   runNow: (id: string) => Promise<unknown>;
   cancelRun: (runId: string) => Promise<unknown>;
+  /** FLIP registration, so the card glides when the list re-orders. */
+  ref?: React.Ref<HTMLDivElement>;
 }) {
   const { running, runs } = health;
   const recent = runs.slice(0, 5);
@@ -382,7 +386,7 @@ function ScheduleCard({
   const failingBorder = health.state === "failing" ? "border-fail/40" : "border-line";
 
   return (
-    <div className={`rounded-xl border bg-surface p-4 ${failingBorder}`}>
+    <div ref={ref} className={`rounded-xl border bg-surface p-4 ${failingBorder}`}>
       <header className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex min-w-0 items-center gap-2">
@@ -529,6 +533,9 @@ function ScheduleCard({
 }
 
 export default function Schedules() {
+  // Rows come and go and change places as health changes; FLIP glides them
+  // there instead of letting the list teleport under the reader.
+  const flip = useFlip();
   const { schedules, loading, error, create, update, remove, runNow, cancelRun } = useSchedules();
   // One run list for every card. Each card used to fetch its own
   // `/api/runs?scheduleId=…`, so a page with twelve schedules opened thirteen
@@ -647,57 +654,56 @@ export default function Schedules() {
             />
           )}
 
-          {loading ? (
-            <Loading label="schedules">
-              <SkeletonRows count={4} />
-            </Loading>
-          ) : schedules.length === 0 && mode.kind === "none" ? (
-            <EmptyState>
-              <p className="text-sm text-ink-dim">No schedules yet.</p>
-              <p className="mx-auto mt-2 max-w-md text-xs">
-                A schedule is a prompt, a working directory and a cadence: Argus runs{" "}
-                <code className="font-mono text-ink-dim">claude -p</code> in that directory on time
-                and keeps every run&apos;s transcript, cost and result. A first one worth having is
-                a nightly review of yesterday&apos;s commits.
-              </p>
-              <button
-                type="button"
-                onClick={() => setMode({ kind: "new" })}
-                className="mt-4 rounded-lg bg-ok/20 px-3 py-1.5 text-sm text-ok ring-1 ring-ok/30 hover:bg-ok/30"
-              >
-                Create your first schedule
-              </button>
-            </EmptyState>
-          ) : shown.length === 0 ? (
-            <EmptyState>
-              <p className="text-sm text-ink-dim">
-                No {filter} schedules — which is the answer you wanted.
-              </p>
-              <button
-                type="button"
-                onClick={() => setFilter("all")}
-                className="mt-3 text-xs text-queue underline hover:text-ink"
-              >
-                Show all {schedules.length}
-              </button>
-            </EmptyState>
-          ) : (
-            <div className="grid grid-cols-1 gap-4">
-              {shown.map(({ schedule: s, health: h }) => (
-                <ScheduleCard
-                  key={s.id}
-                  schedule={s}
-                  health={h}
-                  trend={trendFor.get(`schedule:${s.id}`)}
-                  onEdit={() => setMode({ kind: "edit", id: s.id })}
-                  update={update}
-                  remove={remove}
-                  runNow={runNow}
-                  cancelRun={cancelRun}
-                />
-              ))}
-            </div>
-          )}
+          <Handoff busy={loading} label="schedules" skeleton={<SkeletonRows count={4} />}>
+            {schedules.length === 0 && mode.kind === "none" ? (
+              <EmptyState>
+                <p className="text-sm text-ink-dim">No schedules yet.</p>
+                <p className="mx-auto mt-2 max-w-md text-xs">
+                  A schedule is a prompt, a working directory and a cadence: Argus runs{" "}
+                  <code className="font-mono text-ink-dim">claude -p</code> in that directory on
+                  time and keeps every run&apos;s transcript, cost and result. A first one worth
+                  having is a nightly review of yesterday&apos;s commits.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setMode({ kind: "new" })}
+                  className="mt-4 rounded-lg bg-ok/20 px-3 py-1.5 text-sm text-ok ring-1 ring-ok/30 hover:bg-ok/30"
+                >
+                  Create your first schedule
+                </button>
+              </EmptyState>
+            ) : shown.length === 0 ? (
+              <EmptyState>
+                <p className="text-sm text-ink-dim">
+                  No {filter} schedules — which is the answer you wanted.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setFilter("all")}
+                  className="mt-3 text-xs text-queue underline hover:text-ink"
+                >
+                  Show all {schedules.length}
+                </button>
+              </EmptyState>
+            ) : (
+              <div className="grid grid-cols-1 gap-4">
+                {shown.map(({ schedule: s, health: h }) => (
+                  <ScheduleCard
+                    key={s.id}
+                    ref={flip(s.id)}
+                    schedule={s}
+                    health={h}
+                    trend={trendFor.get(`schedule:${s.id}`)}
+                    onEdit={() => setMode({ kind: "edit", id: s.id })}
+                    update={update}
+                    remove={remove}
+                    runNow={runNow}
+                    cancelRun={cancelRun}
+                  />
+                ))}
+              </div>
+            )}
+          </Handoff>
         </>
       )}
     </Page>

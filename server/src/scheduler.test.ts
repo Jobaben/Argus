@@ -43,8 +43,12 @@ test("tick fires a due schedule and records a succeeded run", async () => {
     "s1",
   );
   await scheduler.tick(deps({}));
-  // let the spawn promise resolve
-  await new Promise((r) => setTimeout(r, 10));
+  // `tick` returns before the run does: completion is handled off the spawn
+  // promise, so the terminal status lands whenever the event loop gets to it.
+  // Waiting a fixed 10ms for that was a coin toss on a loaded machine — wait for
+  // the state itself. Waiting for *terminal* rather than for "succeeded" keeps a
+  // wrong outcome an assertion failure that names it, not a timeout that doesn't.
+  await waitFor(async () => (await runs.readRuns({ scheduleId: "s1" }))[0]?.status !== "running");
   const list = await runs.readRuns({ scheduleId: "s1" });
   assert.equal(list.length, 1);
   assert.equal(list[0].status, "succeeded");
@@ -158,7 +162,7 @@ test("a failed spawn yields a failed run, scheduler does not throw", async () =>
       spawn: () => ({ pid: null, done: Promise.resolve({ code: 1, result: null, error: "boom" }) }),
     }),
   );
-  await new Promise((r) => setTimeout(r, 10));
+  await waitFor(async () => (await runs.readRuns({ scheduleId: "s1" }))[0]?.status !== "running");
   const list = await runs.readRuns({ scheduleId: "s1" });
   assert.equal(list[0].status, "failed");
   assert.equal(list[0].error, "boom");

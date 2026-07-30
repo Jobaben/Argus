@@ -26,6 +26,13 @@ export interface StepSelection {
   phaseName: string;
   /** The failure reason from the phase payload, when the phase failed. */
   reason: string | null;
+  /**
+   * Viewport Y of the step tile this came from, so the drawer grows out of that
+   * row rather than out of an anonymous point at the screen's edge. Optional:
+   * a selection made from the keyboard has no row to grow from, and a drawer
+   * that invented one would be lying about where you were.
+   */
+  originY?: number;
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -143,6 +150,7 @@ export function StepDrawer({
     <Drawer
       open
       onClose={onClose}
+      originY={selection.originY}
       title={step.name}
       subtitle={`${selection.pipelineName} · ${selection.phaseName}`}
       footer={

@@ -126,14 +126,17 @@ describe("CommandPalette — running commands", () => {
   it("navigates on Enter and closes", async () => {
     const { user, onClose } = await open();
     await user.keyboard("monitors{Enter}");
-    expect(window.location.hash).toBe("#/monitors");
+    // The chosen row is marked and held for one beat before the navigation, so
+    // you watch what you picked become what you got rather than the palette
+    // cutting to a different page.
+    await waitFor(() => expect(window.location.hash).toBe("#/monitors"));
     expect(onClose).toHaveBeenCalled();
   });
 
   it("navigates on click", async () => {
     const { user, onClose } = await open();
     await user.click(screen.getByRole("option", { name: /Monitors/ }));
-    expect(window.location.hash).toBe("#/monitors");
+    await waitFor(() => expect(window.location.hash).toBe("#/monitors"));
     expect(onClose).toHaveBeenCalled();
   });
 
@@ -301,7 +304,7 @@ describe("CommandPalette — intent mode", () => {
     // The palette's whole reason to exist is the fast jump. Two words must
     // never become a paid planning pass.
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(window.location.hash).toBe("#/monitors");
+    await waitFor(() => expect(window.location.hash).toBe("#/monitors"));
     vi.unstubAllGlobals();
   });
 
@@ -358,5 +361,18 @@ describe("CommandPalette — intent mode", () => {
     await user.keyboard("{Escape}");
     expect(onClose).toHaveBeenCalled();
     vi.unstubAllGlobals();
+  });
+});
+
+describe("CommandPalette — the hand-off", () => {
+  it("marks the chosen row while it leaves, so the jump has a visible source", async () => {
+    const { user } = await open();
+    await user.keyboard("monitors");
+    await user.click(screen.getAllByRole("option")[0]);
+    // The palette can teleport you anywhere, which is also why it is the easiest
+    // place to lose your bearings. The row you picked is held, marked, for one
+    // quick beat as the surface sinks.
+    expect(screen.getAllByRole("option")[0].className).toContain("bg-eye");
+    await waitFor(() => expect(window.location.hash).toBe("#/monitors"));
   });
 });

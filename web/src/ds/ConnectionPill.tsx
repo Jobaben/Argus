@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { liveStatus, reconnectNow, subscribeLive, type LiveStatus } from "../live/liveSocket";
 import { useTicker } from "./clock";
+import { DURATION, useSyncedDelay } from "./motion";
 
 /**
  * The connection indicator.
@@ -33,6 +34,7 @@ export function ConnectionPill({ live }: { live: boolean }) {
   // prop for the dot so the pill matches whatever the page is showing.
   const connected = live || status.live;
   const remaining = useCountdown(connected ? null : status.retryAt);
+  const beat = useSyncedDelay(DURATION.ping);
 
   return (
     <span className="inline-flex items-center gap-1.5">
@@ -53,7 +55,10 @@ export function ConnectionPill({ live }: { live: boolean }) {
       >
         <span className="relative h-2 w-2 rounded-full bg-current">
           {connected && (
-            <span className="absolute -inset-1 animate-[ping-ring_1.8s_ease-out_infinite] rounded-full bg-current opacity-50" />
+            <span
+              style={{ animationDelay: beat }}
+              className="absolute -inset-1 animate-[ping-ring_var(--duration-ping)_ease-out_infinite] rounded-full bg-current opacity-50"
+            />
           )}
         </span>
         {connected ? (

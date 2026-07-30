@@ -3,14 +3,15 @@ import {
   AlertStrip,
   Card,
   EmptyState,
+  formatDuration,
+  Handoff,
   HealthCounter,
   HeartbeatBar,
-  Loading,
   Page,
   SkeletonGrid,
   TimeAgo,
-  formatDuration,
   useClock,
+  useFlip,
 } from "../ds";
 import type { ColorToken } from "../ds";
 import { useMonitors } from "../useMonitors";
@@ -59,10 +60,16 @@ function Overdue({ iso }: { iso: string | null }) {
   );
 }
 
-function MonitorCard({ monitor }: { monitor: MonitorHealth }) {
+function MonitorCard({
+  monitor,
+  ref,
+}: {
+  monitor: MonitorHealth;
+  ref?: React.Ref<HTMLDivElement>;
+}) {
   const alarming = monitor.status === "down" || monitor.status === "failing";
   return (
-    <Card className={alarming ? "border-fail/40" : undefined}>
+    <Card ref={ref} className={alarming ? "border-fail/40" : undefined}>
       <div className="flex items-center gap-3">
         <a
           href="#/schedules"
@@ -122,6 +129,9 @@ const COUNTERS: { status: MonitorStatus; label: string; alarming?: boolean }[] =
 ];
 
 export default function Monitors() {
+  // Rows come and go and change places as health changes; FLIP glides them
+  // there instead of letting the list teleport under the reader.
+  const flip = useFlip();
   const { monitors, summary, loading, error } = useMonitors();
   const [filter, setFilter] = useState<MonitorStatus | null>(null);
   const shown = filter === null ? monitors : monitors.filter((m) => m.status === filter);
@@ -182,29 +192,31 @@ export default function Monitors() {
         </div>
       )}
 
-      {loading && monitors.length === 0 ? (
-        <Loading label="monitors">
-          <SkeletonGrid count={4} columns={2} lines={2} />
-        </Loading>
-      ) : monitors.length === 0 ? (
-        <EmptyState>
-          <p className="text-sm text-ink-dim">No monitors yet.</p>
-          <p className="mx-auto mt-2 max-w-md text-xs">
-            Every schedule gets one automatically: Argus records the slots it expected, so a run
-            that never happened is as visible as one that failed.{" "}
-            <a href="#/schedules" className="text-queue underline hover:text-ink">
-              Create a schedule
-            </a>{" "}
-            and its monitor appears here.
-          </p>
-        </EmptyState>
-      ) : (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          {shown.map((m) => (
-            <MonitorCard key={m.scheduleId} monitor={m} />
-          ))}
-        </div>
-      )}
+      <Handoff
+        busy={loading && monitors.length === 0}
+        label="monitors"
+        skeleton={<SkeletonGrid count={4} columns={2} lines={2} />}
+      >
+        {monitors.length === 0 ? (
+          <EmptyState>
+            <p className="text-sm text-ink-dim">No monitors yet.</p>
+            <p className="mx-auto mt-2 max-w-md text-xs">
+              Every schedule gets one automatically: Argus records the slots it expected, so a run
+              that never happened is as visible as one that failed.{" "}
+              <a href="#/schedules" className="text-queue underline hover:text-ink">
+                Create a schedule
+              </a>{" "}
+              and its monitor appears here.
+            </p>
+          </EmptyState>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {shown.map((m) => (
+              <MonitorCard key={m.scheduleId} ref={flip(m.scheduleId)} monitor={m} />
+            ))}
+          </div>
+        )}
+      </Handoff>
     </Page>
   );
 }

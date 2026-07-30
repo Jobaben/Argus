@@ -1,4 +1,5 @@
 import { STATUS, type DsStatus, type ColorToken } from "./status";
+import { DURATION, useChangeFlash, useSyncedDelay } from "./motion";
 
 const PILL: Record<ColorToken, string> = {
   run: "text-run bg-run/12",
@@ -27,13 +28,27 @@ export function StatusPill({
   size?: keyof typeof SIZE;
 }) {
   const { token, label } = STATUS[status];
+  const beat = useSyncedDelay(DURATION.pulse);
+  // A status change used to be a hard class swap: `working` was simply replaced
+  // by `failed`, with nothing in between, so on a board you were left comparing
+  // what you see against your memory of a moment ago. Arriving at a *bad* state
+  // is the one transition worth marking as an event, so it also gets a single
+  // ring — the same gesture `ConnectionPill` uses for going live, in reverse.
+  const justFailed = useChangeFlash(status, DURATION.ping) && status === "failed";
   return (
     <span
-      className={`inline-flex items-center rounded-full border border-current font-mono font-bold uppercase ${SIZE[size]} ${PILL[token]}`}
+      className={`relative inline-flex items-center rounded-full border border-current font-mono font-bold uppercase transition-colors duration-(--duration-base) ${SIZE[size]} ${PILL[token]}`}
     >
+      {justFailed && (
+        <span
+          aria-hidden="true"
+          className="absolute inset-0 rounded-full border border-current motion-safe:animate-[ping-ring_var(--duration-ping)_var(--ease-out-expo)]"
+        />
+      )}
       {status === "await" && (
         <span
-          className={`animate-[pulse_1.4s_ease-in-out_infinite] rounded-full bg-current ${DOT[size]}`}
+          style={{ animationDelay: beat }}
+          className={`animate-[pulse_var(--duration-pulse)_ease-in-out_infinite] rounded-full bg-current ${DOT[size]}`}
         />
       )}
       {label}

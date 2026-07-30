@@ -2,16 +2,16 @@ import { useMemo, useState } from "react";
 import {
   Card,
   EmptyState,
+  formatMs,
+  formatTokens,
+  formatUsd,
+  Handoff,
   HealthCounter,
-  Loading,
   Page,
   Section,
   SegmentedControl,
   SkeletonGrid,
   TimeAgo,
-  formatMs,
-  formatTokens,
-  formatUsd,
 } from "../ds";
 import { useWatchtower } from "../useWatchtower";
 import { useVerdictTrends } from "../useVerdict";
@@ -334,60 +334,62 @@ export default function Watchtower() {
         </div>
       )}
 
-      {loading && report.baselines.length === 0 ? (
-        <Loading label="baselines">
-          <SkeletonGrid count={4} columns={2} lines={3} />
-        </Loading>
-      ) : report.baselines.length === 0 ? (
-        <EmptyState>
-          Nothing to learn from yet. Watchtower builds an envelope from each schedule's and each
-          pipeline phase's own successful runs, then flags the ones that leave it — it needs{" "}
-          {report.warmupRuns || 8} successes before it will say anything. Create a schedule and let
-          it run a few times.
-        </EmptyState>
-      ) : (
-        <>
-          <Section title={`Anomalies · last 14 days`}>
-            {anomalies.length === 0 ? (
-              <EmptyState>
-                {report.summary.ready === 0
-                  ? "No envelope is warm yet, so nothing is being judged. Watchtower needs a handful of successful runs per schedule before it will flag anything."
-                  : filter === "critical"
-                    ? "No critical anomalies. Switch to All to see the warnings."
-                    : "Every run has landed inside its learned envelope. That is the good outcome."}
-              </EmptyState>
-            ) : (
-              <ul className="space-y-2">
-                {anomalies.map((a) => (
-                  <AnomalyRow key={a.id} anomaly={a} />
+      <Handoff
+        busy={loading && report.baselines.length === 0}
+        label="baselines"
+        skeleton={<SkeletonGrid count={4} columns={2} lines={3} />}
+      >
+        {report.baselines.length === 0 ? (
+          <EmptyState>
+            Nothing to learn from yet. Watchtower builds an envelope from each schedule's and each
+            pipeline phase's own successful runs, then flags the ones that leave it — it needs{" "}
+            {report.warmupRuns || 8} successes before it will say anything. Create a schedule and
+            let it run a few times.
+          </EmptyState>
+        ) : (
+          <>
+            <Section title={`Anomalies · last 14 days`}>
+              {anomalies.length === 0 ? (
+                <EmptyState>
+                  {report.summary.ready === 0
+                    ? "No envelope is warm yet, so nothing is being judged. Watchtower needs a handful of successful runs per schedule before it will flag anything."
+                    : filter === "critical"
+                      ? "No critical anomalies. Switch to All to see the warnings."
+                      : "Every run has landed inside its learned envelope. That is the good outcome."}
+                </EmptyState>
+              ) : (
+                <ul className="space-y-2">
+                  {anomalies.map((a) => (
+                    <AnomalyRow key={a.id} anomaly={a} />
+                  ))}
+                </ul>
+              )}
+            </Section>
+
+            <QualityTrends />
+
+            <Section title="Learned envelopes">
+              <p className="mb-3 max-w-prose text-sm text-ink-faint">
+                Each envelope is the median and the 5th–95th percentile of that unit of work's own{" "}
+                <strong className="font-semibold text-ink-dim">successful</strong> runs. Failures
+                are judged against the envelope but never shape it — a crash that died in two
+                seconds is not evidence about how long the work takes.
+              </p>
+              <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                {report.baselines.map((b) => (
+                  <BaselineCard
+                    key={b.key}
+                    baseline={b}
+                    busy={busyKey === b.key}
+                    onReset={() => void act(b.key, reset)}
+                    onRestore={() => void act(b.key, restore)}
+                  />
                 ))}
-              </ul>
-            )}
-          </Section>
-
-          <QualityTrends />
-
-          <Section title="Learned envelopes">
-            <p className="mb-3 max-w-prose text-sm text-ink-faint">
-              Each envelope is the median and the 5th–95th percentile of that unit of work's own{" "}
-              <strong className="font-semibold text-ink-dim">successful</strong> runs. Failures are
-              judged against the envelope but never shape it — a crash that died in two seconds is
-              not evidence about how long the work takes.
-            </p>
-            <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-              {report.baselines.map((b) => (
-                <BaselineCard
-                  key={b.key}
-                  baseline={b}
-                  busy={busyKey === b.key}
-                  onReset={() => void act(b.key, reset)}
-                  onRestore={() => void act(b.key, restore)}
-                />
-              ))}
-            </div>
-          </Section>
-        </>
-      )}
+              </div>
+            </Section>
+          </>
+        )}
+      </Handoff>
     </Page>
   );
 }

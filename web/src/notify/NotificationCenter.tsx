@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { TimeAgo } from "../ds";
+import { SURFACE, TimeAgo, usePresence, useSurfaceMotion } from "../ds";
 import {
   clearNotifications,
   markAllRead,
@@ -68,6 +68,10 @@ export function NotificationCenter() {
   const [open, setOpen] = useState(false);
   const unread = unreadCount(log);
   const containerRef = useRef<HTMLDivElement>(null);
+  const { present, exited } = usePresence(open);
+  // Hung off the bell in the top-right corner, so that is the corner it grows
+  // from and shrinks back into.
+  const panelRef = useSurfaceMotion<HTMLDivElement>(open, SURFACE.rise, exited, "top right");
 
   // Opening is the acknowledgement — no separate "mark read" ritual.
   useEffect(() => {
@@ -113,11 +117,14 @@ export function NotificationCenter() {
         )}
       </button>
 
-      {open && (
+      {present && (
         <div
+          ref={panelRef}
           role="dialog"
           aria-label="Notifications"
-          className="absolute right-0 top-full z-40 mt-1.5 flex w-[340px] max-w-[calc(100vw-2rem)] flex-col rounded-panel border border-line bg-surface shadow-[0_24px_60px_-24px_rgb(0_0_0/0.9)] motion-safe:animate-[rise-in_var(--duration-base)_var(--ease-out-expo)]"
+          inert={!open}
+          aria-hidden={open ? undefined : true}
+          className="absolute right-0 top-full z-40 mt-1.5 flex w-[340px] max-w-[calc(100vw-2rem)] flex-col rounded-panel border border-line bg-surface shadow-[0_24px_60px_-24px_rgb(0_0_0/0.9)]"
         >
           <div className="flex items-center justify-between border-b border-line px-3 py-2">
             <h2 className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-faint">

@@ -6,8 +6,10 @@ export const RAIL: Record<ColorToken, string> = {
   fail: "bg-fail shadow-[0_0_16px_2px_var(--color-fail)]",
   queue: "bg-queue",
   idle: "bg-idle",
+  // The pulse cycle is a token, and callers pair it with `useSyncedDelay(DURATION.pulse)`
+  // so every awaiting rail on the board breathes on the same beat.
   await:
-    "bg-await shadow-[0_0_16px_2px_var(--color-await)] animate-[pulse_1.4s_ease-in-out_infinite]",
+    "bg-await shadow-[0_0_16px_2px_var(--color-await)] animate-[pulse_var(--duration-pulse)_ease-in-out_infinite]",
 };
 
 /** Status-tinted border + gradient from-stop for tile surfaces (pairs with `to-surface`). */

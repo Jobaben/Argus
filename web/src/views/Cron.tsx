@@ -1,6 +1,6 @@
 import { useCron } from "../useCron";
 import type { CronDiskHint } from "../useCron";
-import { AlertStrip, EmptyState, Loading, SkeletonText } from "../ds";
+import { AlertStrip, EmptyState, Handoff, SkeletonText } from "../ds";
 
 function HintRow({ hint }: { hint: CronDiskHint }) {
   return (
@@ -22,62 +22,60 @@ export function CronPanel() {
         </div>
       )}
 
-      {loading ? (
-        <Loading label="cron status">
-          <SkeletonText lines={3} />
-        </Loading>
-      ) : !cron ? (
-        <EmptyState>No cron status available.</EmptyState>
-      ) : (
-        <div className="space-y-6">
-          <section className="rounded-xl border border-run/25 bg-run/[0.06] p-5">
-            <div className="flex items-center gap-2">
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-run/15 px-2.5 py-0.5 text-xs font-medium uppercase tracking-wide text-run ring-1 ring-run/30">
-                not watchable
-              </span>
-              <h2 className="text-base font-semibold text-ink">Cron routines aren't on disk</h2>
-            </div>
-            <p className="mt-3 text-sm leading-relaxed text-ink-dim">{cron.reason}</p>
-          </section>
+      <Handoff busy={loading} label="cron status" skeleton={<SkeletonText lines={3} />}>
+        {!cron ? (
+          <EmptyState>No cron status available.</EmptyState>
+        ) : (
+          <div className="space-y-6">
+            <section className="rounded-xl border border-run/25 bg-run/[0.06] p-5">
+              <div className="flex items-center gap-2">
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-run/15 px-2.5 py-0.5 text-xs font-medium uppercase tracking-wide text-run ring-1 ring-run/30">
+                  not watchable
+                </span>
+                <h2 className="text-base font-semibold text-ink">Cron routines aren't on disk</h2>
+              </div>
+              <p className="mt-3 text-sm leading-relaxed text-ink-dim">{cron.reason}</p>
+            </section>
 
-          <section className="rounded-xl border border-queue/20 bg-queue/[0.05] p-5">
-            <div className="flex items-center gap-2">
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-queue/15 px-2.5 py-0.5 text-xs font-medium uppercase tracking-wide text-queue ring-1 ring-queue/30">
-                path forward
-              </span>
-              <h2 className="text-base font-semibold text-ink">
-                How a polling host could surface them
+            <section className="rounded-xl border border-queue/20 bg-queue/[0.05] p-5">
+              <div className="flex items-center gap-2">
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-queue/15 px-2.5 py-0.5 text-xs font-medium uppercase tracking-wide text-queue ring-1 ring-queue/30">
+                  path forward
+                </span>
+                <h2 className="text-base font-semibold text-ink">
+                  How a polling host could surface them
+                </h2>
+              </div>
+              <p className="mt-3 text-sm leading-relaxed text-ink-dim">{cron.howTo}</p>
+            </section>
+
+            <section className="rounded-xl border border-line bg-surface p-5">
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-faint">
+                On-disk scan
               </h2>
-            </div>
-            <p className="mt-3 text-sm leading-relaxed text-ink-dim">{cron.howTo}</p>
-          </section>
-
-          <section className="rounded-xl border border-line bg-surface p-5">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-faint">
-              On-disk scan
-            </h2>
-            {cron.diskHints.length === 0 ? (
-              <p className="mt-3 text-sm text-ink-dim">
-                Scanned the Claude home for any schedule-named store — nothing found, as expected.
-                There is no file to watch.
-              </p>
-            ) : (
-              <>
+              {cron.diskHints.length === 0 ? (
                 <p className="mt-3 text-sm text-ink-dim">
-                  Found {cron.diskHints.length} name-matched{" "}
-                  {cron.diskHints.length === 1 ? "entry" : "entries"}. These are hints only and are
-                  almost certainly unrelated to actual cron routines:
+                  Scanned the Claude home for any schedule-named store — nothing found, as expected.
+                  There is no file to watch.
                 </p>
-                <ul className="mt-3 space-y-2">
-                  {cron.diskHints.map((h) => (
-                    <HintRow key={h.path} hint={h} />
-                  ))}
-                </ul>
-              </>
-            )}
-          </section>
-        </div>
-      )}
+              ) : (
+                <>
+                  <p className="mt-3 text-sm text-ink-dim">
+                    Found {cron.diskHints.length} name-matched{" "}
+                    {cron.diskHints.length === 1 ? "entry" : "entries"}. These are hints only and
+                    are almost certainly unrelated to actual cron routines:
+                  </p>
+                  <ul className="mt-3 space-y-2">
+                    {cron.diskHints.map((h) => (
+                      <HintRow key={h.path} hint={h} />
+                    ))}
+                  </ul>
+                </>
+              )}
+            </section>
+          </div>
+        )}
+      </Handoff>
     </>
   );
 }

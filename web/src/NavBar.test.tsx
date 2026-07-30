@@ -99,3 +99,52 @@ describe("NavBar badge", () => {
     expect(screen.getAllByRole("link", { name: "Stats" }).length).toBeGreaterThan(0);
   });
 });
+
+describe("the active-destination pill", () => {
+  it("is one element that moves, not a background on whichever tab is current", () => {
+    // The pill used to teleport: a `bg-surface-2` class on the active anchor and
+    // nothing in between. A single indicator that slides answers "which tab did I
+    // come from?" without the user having to have been watching.
+    const { container, rerender } = render(
+      <NavBar
+        destinations={destinations}
+        overflow={overflow}
+        activeId="command"
+        live
+        onOpenPalette={() => {}}
+      />,
+    );
+    const pill = container.querySelector('[aria-hidden="true"].absolute.rounded-md.bg-surface-2');
+    expect(pill).not.toBeNull();
+    // And the anchors no longer draw it themselves, or there would be two.
+    for (const link of screen.getAllByRole("link")) {
+      expect(link.className).not.toContain("bg-surface-2");
+    }
+    rerender(
+      <NavBar
+        destinations={destinations}
+        overflow={overflow}
+        activeId="schedules"
+        live
+        onOpenPalette={() => {}}
+      />,
+    );
+    expect(screen.getByRole("link", { name: "Scheduler" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("hides itself when no destination is active, rather than parking on the first one", () => {
+    const { container } = render(
+      <NavBar
+        destinations={destinations}
+        overflow={overflow}
+        activeId="stats"
+        live
+        onOpenPalette={() => {}}
+      />,
+    );
+    const pill = container.querySelector<HTMLElement>(
+      '[aria-hidden="true"].absolute.rounded-md.bg-surface-2',
+    );
+    expect(pill?.style.opacity).toBe("0");
+  });
+});

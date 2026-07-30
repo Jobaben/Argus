@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSessions, type SessionMessage, type SessionSummary } from "../useSessions";
 import { useSessionTail } from "../useSessionTail";
 import { useHashRoute } from "../useHashRoute";
-import { AlertStrip, EmptyState, Loading, Page, SkeletonGrid, SkeletonText, TimeAgo } from "../ds";
+import { AlertStrip, EmptyState, Handoff, Page, SkeletonGrid, SkeletonText, TimeAgo } from "../ds";
 import { filterSessions, groupSessionsByDay } from "./sessionList";
 
 function sessionHref(project: string, id: string): string {
@@ -160,20 +160,18 @@ function SessionTranscript({ project, id }: { project: string; id: string }) {
         </div>
       )}
 
-      {loading ? (
-        <Loading label="the transcript">
-          <SkeletonText lines={6} />
-        </Loading>
-      ) : messages.length === 0 ? (
-        <EmptyState>No displayable messages in this session.</EmptyState>
-      ) : (
-        <div className="flex flex-col gap-3">
-          {messages.map((m) => (
-            <MessageRow key={m.index} message={m} />
-          ))}
-          <div ref={endRef} aria-hidden />
-        </div>
-      )}
+      <Handoff busy={loading} label="the transcript" skeleton={<SkeletonText lines={6} />}>
+        {messages.length === 0 ? (
+          <EmptyState>No displayable messages in this session.</EmptyState>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {messages.map((m) => (
+              <MessageRow key={m.index} message={m} />
+            ))}
+            <div ref={endRef} aria-hidden />
+          </div>
+        )}
+      </Handoff>
     </Page>
   );
 }
@@ -253,45 +251,47 @@ function SessionList({
         </div>
       )}
 
-      {loading && sessions.length === 0 ? (
-        <Loading label="sessions">
-          <SkeletonGrid count={4} columns={2} lines={3} />
-        </Loading>
-      ) : sessions.length === 0 ? (
-        <EmptyState>
-          <p className="text-sm text-ink-dim">No transcripts yet.</p>
-          <p className="mx-auto mt-2 max-w-md text-xs">
-            Argus reads Claude Code&apos;s own session files under{" "}
-            <code className="font-mono text-ink-dim">~/.claude/projects</code>. Run{" "}
-            <code className="font-mono text-ink-dim">claude</code> in any directory, or fire a
-            schedule, and the transcript will show up here — searchable, exportable, and live while
-            it runs.
-          </p>
-        </EmptyState>
-      ) : searching ? (
-        matches.length === 0 ? (
+      <Handoff
+        busy={loading && sessions.length === 0}
+        label="sessions"
+        skeleton={<SkeletonGrid count={4} columns={2} lines={3} />}
+      >
+        {sessions.length === 0 ? (
           <EmptyState>
-            <p className="text-sm text-ink-dim">Nothing matches “{query.trim()}”.</p>
-            <p className="mt-2 text-xs">
-              The filter matches session titles, project paths and model names.
+            <p className="text-sm text-ink-dim">No transcripts yet.</p>
+            <p className="mx-auto mt-2 max-w-md text-xs">
+              Argus reads Claude Code&apos;s own session files under{" "}
+              <code className="font-mono text-ink-dim">~/.claude/projects</code>. Run{" "}
+              <code className="font-mono text-ink-dim">claude</code> in any directory, or fire a
+              schedule, and the transcript will show up here — searchable, exportable, and live
+              while it runs.
             </p>
           </EmptyState>
+        ) : searching ? (
+          matches.length === 0 ? (
+            <EmptyState>
+              <p className="text-sm text-ink-dim">Nothing matches “{query.trim()}”.</p>
+              <p className="mt-2 text-xs">
+                The filter matches session titles, project paths and model names.
+              </p>
+            </EmptyState>
+          ) : (
+            <SessionGrid sessions={matches} />
+          )
         ) : (
-          <SessionGrid sessions={matches} />
-        )
-      ) : (
-        <div className="flex flex-col gap-8">
-          {groups.map((group) => (
-            <section key={group.key}>
-              <h2 className="mb-3 flex items-baseline gap-2 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-faint">
-                {group.label}
-                <span className="text-ink-faint/60">{group.sessions.length}</span>
-              </h2>
-              <SessionGrid sessions={group.sessions} />
-            </section>
-          ))}
-        </div>
-      )}
+          <div className="flex flex-col gap-8">
+            {groups.map((group) => (
+              <section key={group.key}>
+                <h2 className="mb-3 flex items-baseline gap-2 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-faint">
+                  {group.label}
+                  <span className="text-ink-faint/60">{group.sessions.length}</span>
+                </h2>
+                <SessionGrid sessions={group.sessions} />
+              </section>
+            ))}
+          </div>
+        )}
+      </Handoff>
     </Page>
   );
 }

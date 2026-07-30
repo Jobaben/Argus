@@ -10,6 +10,7 @@ export function Page({
   crumbs,
   actions,
   wide = false,
+  anchor,
   children,
 }: {
   title?: ReactNode;
@@ -17,6 +18,14 @@ export function Page({
   actions?: ReactNode;
   /** Board layout: board-scale heading. Width stays capped to match the nav bar. */
   wide?: boolean;
+  /**
+   * A `view-transition-name` for the heading, shared with the tile or row this
+   * page was opened from — so that element visibly *becomes* this page's title
+   * instead of the two crossfading past each other. Pass the name built by
+   * `transitionName()`; both sides must agree, and only one of them can ever be
+   * on screen at a time.
+   */
+  anchor?: string;
   children: ReactNode;
 }) {
   const hasCrumbs = crumbs != null && crumbs.length > 0;
@@ -39,6 +48,7 @@ export function Page({
             ))}
             {title != null && (
               <h1
+                style={anchor ? { viewTransitionName: anchor } : undefined}
                 className={`${wide ? "text-board-title" : "text-xl"} font-bold tracking-tight text-ink`}
               >
                 {title}

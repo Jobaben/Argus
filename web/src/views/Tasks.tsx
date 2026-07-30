@@ -1,4 +1,4 @@
-import { AlertStrip, EmptyState, Loading, Page, SkeletonRows, TimeAgo } from "../ds";
+import { AlertStrip, EmptyState, Handoff, Page, SkeletonRows, TimeAgo } from "../ds";
 import { useTasks, type Task } from "../useTasks";
 
 function TaskRow({ task }: { task: Task }) {
@@ -44,19 +44,17 @@ export default function Tasks() {
         </div>
       )}
 
-      {loading ? (
-        <Loading label="tasks">
-          <SkeletonRows count={3} />
-        </Loading>
-      ) : tasks.length === 0 ? (
-        <EmptyState>No task directories found yet.</EmptyState>
-      ) : (
-        <div className="flex flex-col gap-2">
-          {tasks.map((t) => (
-            <TaskRow key={t.id} task={t} />
-          ))}
-        </div>
-      )}
+      <Handoff busy={loading} label="tasks" skeleton={<SkeletonRows count={3} />}>
+        {tasks.length === 0 ? (
+          <EmptyState>No task directories found yet.</EmptyState>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {tasks.map((t) => (
+              <TaskRow key={t.id} task={t} />
+            ))}
+          </div>
+        )}
+      </Handoff>
     </Page>
   );
 }

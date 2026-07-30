@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { SURFACE, usePresence, useSurfaceMotion } from "./presence";
 
 export interface MoreItem {
   id: string;
@@ -19,6 +20,15 @@ export function MoreMenu({
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const { present, exited } = usePresence(open);
+  // `top right` is the corner the menu hangs from, so it grows out of the button
+  // that opened it rather than out of an anonymous point above the page. Origin
+  // is information: it says *this* control produced this surface.
+  const motionRef = useSurfaceMotion<HTMLDivElement>(open, SURFACE.menu, exited, "top right");
+  const setMenu = (node: HTMLDivElement | null) => {
+    menuRef.current = node;
+    motionRef(node);
+  };
 
   // When the menu opens, move focus to the first item so keyboard users land
   // inside it; Escape closes and returns focus to the trigger.
@@ -75,26 +85,32 @@ export function MoreMenu({
             setOpen(true);
           }
         }}
-        className={`shrink-0 rounded-md px-2.5 py-1.5 text-sm font-medium transition ${
+        className={`shrink-0 rounded-md px-2.5 py-1.5 text-sm font-medium transition motion-safe:active:scale-[0.97] ${
           active || open ? "bg-surface-2 text-ink" : "text-ink-dim hover:text-ink"
         }`}
       >
         ⋯ More
       </button>
-      {open && (
+      {present && (
         <>
           <button
             type="button"
-            aria-hidden
             tabIndex={-1}
             onClick={() => close(false)}
             className="fixed inset-0 z-10 cursor-default"
+            // The dismiss shield must stop taking clicks the moment the menu is
+            // closing, or a click aimed at what is behind it lands on a shield
+            // for a surface that is already leaving.
+            inert={!open}
+            aria-hidden
           />
           <div
-            ref={menuRef}
+            ref={setMenu}
             role="menu"
             aria-label="More pages"
             onKeyDown={onMenuKeyDown}
+            inert={!open}
+            aria-hidden={open ? undefined : true}
             className="absolute right-0 z-20 mt-1 min-w-40 rounded-lg border border-line bg-surface p-1 shadow-lg"
           >
             {items.map((it) => (
@@ -104,7 +120,7 @@ export function MoreMenu({
                 role="menuitem"
                 aria-current={it.id === activeId ? "page" : undefined}
                 onClick={() => close(false)}
-                className={`block rounded-md px-3 py-1.5 text-sm transition hover:bg-surface-2 hover:text-ink focus:bg-surface-2 focus:text-ink focus:outline-none ${
+                className={`block rounded-md px-3 py-1.5 text-sm transition hover:bg-surface-2 hover:text-ink focus:bg-surface-2 focus:text-ink focus:outline-none motion-safe:active:scale-[0.98] ${
                   it.id === activeId ? "text-ink" : "text-ink-dim"
                 }`}
               >

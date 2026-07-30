@@ -5,11 +5,12 @@ import {
   AlertStrip,
   Card,
   EmptyState,
+  Handoff,
   HealthCounter,
-  Loading,
   Page,
   SkeletonRows,
   TimeAgo,
+  useFlip,
 } from "../ds";
 import { useIssues } from "../useIssues";
 import type { FailureClass, Issue, IssueOccurrence, IssueState } from "../types";
@@ -83,10 +84,12 @@ function IssueCard({
   issue,
   onTriage,
   loadOccurrences,
+  ref,
 }: {
   issue: Issue;
   onTriage: (fp: string, action: "resolve" | "ignore" | "reopen") => Promise<void>;
   loadOccurrences: (fp: string) => Promise<IssueOccurrence[]>;
+  ref?: React.Ref<HTMLDivElement>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [occurrences, setOccurrences] = useState<IssueOccurrence[] | null>(null);
@@ -105,7 +108,7 @@ function IssueCard({
   };
 
   return (
-    <Card className={issue.state === "open" ? "border-fail/30" : undefined}>
+    <Card ref={ref} className={issue.state === "open" ? "border-fail/30" : undefined}>
       <div className="flex items-start gap-3">
         <button
           type="button"
@@ -166,14 +169,18 @@ function IssueCard({
       {expanded &&
         (failed ? (
           <p className="mt-3 text-xs text-fail">Couldn't load occurrences: {failed}</p>
-        ) : occurrences === null ? (
-          <Loading label="occurrences">
-            <div className="mt-3">
-              <SkeletonRows count={2} />
-            </div>
-          </Loading>
         ) : (
-          <Occurrences list={occurrences} />
+          <Handoff
+            busy={occurrences === null}
+            label="occurrences"
+            skeleton={
+              <div className="mt-3">
+                <SkeletonRows count={2} />
+              </div>
+            }
+          >
+            <Occurrences list={occurrences ?? []} />
+          </Handoff>
         ))}
     </Card>
   );
@@ -207,6 +214,9 @@ function PeerIssues({ facet }: { facet: ReturnType<typeof useMachineFacet> }) {
 }
 
 export default function Issues() {
+  // Rows come and go and change places as health changes; FLIP glides them
+  // there instead of letting the list teleport under the reader.
+  const flip = useFlip();
   const facet = useMachineFacet();
   const { issues, summary, loading, error, triage, loadOccurrences } = useIssues();
   const [triageError, setTriageError] = useState<string | null>(null);
@@ -285,31 +295,34 @@ export default function Issues() {
             </div>
           )}
 
-          {loading && issues.length === 0 ? (
-            <Loading label="issues">
-              <SkeletonRows count={4} />
-            </Loading>
-          ) : issues.length === 0 ? (
-            <EmptyState>
-              <p className="text-sm text-ink-dim">No failures on record.</p>
-              <p className="mx-auto mt-2 max-w-md text-xs">
-                When a scheduled run fails, Argus fingerprints its error and groups every recurrence
-                under one issue — so twenty timeouts are one thing to fix, with the first and last
-                sighting and every affected schedule attached.
-              </p>
-            </EmptyState>
-          ) : (
-            <div className="space-y-4">
-              {shown.map((i) => (
-                <IssueCard
-                  key={i.fingerprint}
-                  issue={i}
-                  onTriage={onTriage}
-                  loadOccurrences={loadOccurrences}
-                />
-              ))}
-            </div>
-          )}
+          <Handoff
+            busy={loading && issues.length === 0}
+            label="issues"
+            skeleton={<SkeletonRows count={4} />}
+          >
+            {issues.length === 0 ? (
+              <EmptyState>
+                <p className="text-sm text-ink-dim">No failures on record.</p>
+                <p className="mx-auto mt-2 max-w-md text-xs">
+                  When a scheduled run fails, Argus fingerprints its error and groups every
+                  recurrence under one issue — so twenty timeouts are one thing to fix, with the
+                  first and last sighting and every affected schedule attached.
+                </p>
+              </EmptyState>
+            ) : (
+              <div className="space-y-4">
+                {shown.map((i) => (
+                  <IssueCard
+                    key={i.fingerprint}
+                    ref={flip(i.fingerprint)}
+                    issue={i}
+                    onTriage={onTriage}
+                    loadOccurrences={loadOccurrences}
+                  />
+                ))}
+              </div>
+            )}
+          </Handoff>
         </>
       )}
     </Page>

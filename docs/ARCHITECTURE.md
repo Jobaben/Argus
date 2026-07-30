@@ -610,6 +610,13 @@ Three rules hold it together:
 - **Failure is scoped.** Each route renders inside an error boundary keyed on the
   route, so an unexpected shape in one view costs that view, not the nav, the
   palette and every other tab.
+- **One motion system.** Surfaces do not invent their own timings: `ds/presence`
+  owns the entrance/exit lifecycle from one `SURFACE` table, `ds/flip` owns list
+  reordering, and every duration and easing is a token that
+  `ds/tokens.test.ts` checks against `index.css`. Motion is transform/opacity
+  only, enforced by `scripts/check-motion-budget.mjs` in CI — the property budget
+  is to feel what the payload budget is to load time. See
+  [MOTION-SYSTEM.md](MOTION-SYSTEM.md).
 
 Every route except the landing one is a lazy chunk, and
 `scripts/check-bundle-size.mjs` holds the initial gzipped payload under a budget

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useLaunch } from "../useLaunch";
 import type { LaunchInput, Run } from "../types";
-import { AlertStrip, EmptyState, Loading, ModelSelect, Page, SkeletonRows, formatUsd } from "../ds";
+import { AlertStrip, EmptyState, formatUsd, Handoff, ModelSelect, Page, SkeletonRows } from "../ds";
 import { RunRow } from "./RunRow";
 
 const FIELD =
@@ -171,32 +171,34 @@ export default function Launch() {
           </span>
         )}
       </div>
-      {loading && runs.length === 0 ? (
-        <Loading label="runs">
-          <SkeletonRows count={4} />
-        </Loading>
-      ) : runs.length === 0 ? (
-        <EmptyState>
-          <p className="text-sm text-ink-dim">Nothing launched yet.</p>
-          <p className="mx-auto mt-2 max-w-md text-xs">
-            A one-off run is the same machinery a schedule uses, fired once: the log tails live, the
-            cost is metered against your budget, and the transcript is kept. Use{" "}
-            <strong className="text-ink-dim">Reuse</strong> on any past run to load its prompt back
-            into the form.
-          </p>
-        </EmptyState>
-      ) : (
-        <ul className="space-y-1.5">
-          {runs.map((r) => (
-            <li key={r.id} className="space-y-1">
-              <p className="truncate px-1 text-xs font-medium text-ink">{r.scheduleName}</p>
-              <ul>
-                <RunRow run={r} onCancel={cancelRun} extraActions={rerunButton(r)} />
-              </ul>
-            </li>
-          ))}
-        </ul>
-      )}
+      <Handoff
+        busy={loading && runs.length === 0}
+        label="runs"
+        skeleton={<SkeletonRows count={4} />}
+      >
+        {runs.length === 0 ? (
+          <EmptyState>
+            <p className="text-sm text-ink-dim">Nothing launched yet.</p>
+            <p className="mx-auto mt-2 max-w-md text-xs">
+              A one-off run is the same machinery a schedule uses, fired once: the log tails live,
+              the cost is metered against your budget, and the transcript is kept. Use{" "}
+              <strong className="text-ink-dim">Reuse</strong> on any past run to load its prompt
+              back into the form.
+            </p>
+          </EmptyState>
+        ) : (
+          <ul className="space-y-1.5">
+            {runs.map((r) => (
+              <li key={r.id} className="space-y-1">
+                <p className="truncate px-1 text-xs font-medium text-ink">{r.scheduleName}</p>
+                <ul>
+                  <RunRow run={r} onCancel={cancelRun} extraActions={rerunButton(r)} />
+                </ul>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Handoff>
     </Page>
   );
 }

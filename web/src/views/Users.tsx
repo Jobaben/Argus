@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useAuth } from "../useAuth";
 import { useUsers, type UserRow } from "../useUsers";
-import { AlertStrip, EmptyState, Loading, Page, SkeletonRows } from "../ds";
+import { AlertStrip, EmptyState, Handoff, Page, SkeletonRows } from "../ds";
 
 function UserCard({
   user,
@@ -106,25 +106,27 @@ export default function Users() {
               <AlertStrip subject="Couldn't complete that" message={actionError} />
             </div>
           )}
-          {loading && users.length === 0 ? (
-            <Loading label="accounts">
-              <SkeletonRows count={2} />
-            </Loading>
-          ) : users.length === 0 ? (
-            <EmptyState>No accounts yet.</EmptyState>
-          ) : (
-            <div className="grid gap-2">
-              {pendingFirst.map((u) => (
-                <UserCard
-                  key={u.username}
-                  user={u}
-                  self={u.username === auth.status?.username}
-                  onApprove={guarded(approve)}
-                  onReject={guarded(reject)}
-                />
-              ))}
-            </div>
-          )}
+          <Handoff
+            busy={loading && users.length === 0}
+            label="accounts"
+            skeleton={<SkeletonRows count={2} />}
+          >
+            {users.length === 0 ? (
+              <EmptyState>No accounts yet.</EmptyState>
+            ) : (
+              <div className="grid gap-2">
+                {pendingFirst.map((u) => (
+                  <UserCard
+                    key={u.username}
+                    user={u}
+                    self={u.username === auth.status?.username}
+                    onApprove={guarded(approve)}
+                    onReject={guarded(reject)}
+                  />
+                ))}
+              </div>
+            )}
+          </Handoff>
         </>
       )}
     </Page>
