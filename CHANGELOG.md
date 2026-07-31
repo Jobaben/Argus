@@ -70,6 +70,31 @@ All notable changes to Argus are documented here. The format follows
   `ARGUS_CODEX_SANDBOX`, `ARGUS_CLAUDE_ARGS`, `ARGUS_CODEX_ARGS`,
   `ARGUS_CODEX_MODELS` and `ARGUS_ANALYSIS_RUNTIME` environment variables.
 
+### Fixed
+
+- **A test that could leak into the next one, and did on CI.** The engine's
+  "adoption holds the concurrency slot" test deliberately left a `start()`
+  parked on the semaphore and never settled it. Every path in the engine is
+  resolved when it is used, and `beforeEach` repoints `ARGUS_CLAUDE_HOME` at a
+  fresh directory — so a start still in flight across that boundary wrote its
+  instance into the _next_ test's home, where a stray running instance made that
+  test's overlap check refuse to start anything. It failed with no spawn and no
+  explanation, only under load: 50ms is plenty of parked time on an idle box and
+  not always enough on a two-core runner, which is why adding tests elsewhere
+  was enough to surface it. The test now releases the adopted slot the way a
+  real restart does — the reattached run ends, `reconcile` hands the slot on —
+  and awaits the queued start, which also makes it assert the half it never did:
+  that the queued work actually proceeds once the slot frees.
+
+- **Tests no longer read the developer's real `~/.codex`.** Every test file
+  already pinned `ARGUS_CLAUDE_HOME` to a temp directory; nothing pinned the
+  Codex home, and once the Sessions list, transcript search and the setup
+  prerequisites learned to read it, a machine that actually uses Codex would
+  fail assertions about "one session in this temp home" — on that machine only.
+  A `--import` preload on the test scripts defaults the variable to a throwaway
+  directory, so isolation holds for every file at once and cannot be forgotten
+  by the next test that needs it.
+
 ### Changed
 
 - **The motion layer, completed** — all four goals of

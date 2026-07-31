@@ -8,10 +8,10 @@
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test \"src/**/*.test.ts\"",
+    "test": "tsx --import ./src/testHome.ts --test \"src/**/*.test.ts\"",
     "build": "tsc -p tsconfig.build.json",
     "lint": "eslint .",
-    "test:coverage": "tsx --test --experimental-test-coverage --test-coverage-lines=73 --test-coverage-functions=59 --test-coverage-branches=61 \"src/**/*.test.ts\""
+    "test:coverage": "tsx --import ./src/testHome.ts --test --experimental-test-coverage --test-coverage-lines=73 --test-coverage-functions=59 --test-coverage-branches=61 \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@argus/contracts": "*",
