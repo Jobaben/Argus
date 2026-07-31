@@ -109,13 +109,23 @@ test("start spawns phase 0's step with signal env injected", async () => {
   assert.ok(rec.calls[0].env.ARGUS_SIGNAL_URL.includes(inst!.id));
 });
 
-test("step env opts the CLI into forwarding subagent text to the stream log", async () => {
+test("step env names the runtime the hook is running under", async () => {
   const { engine, pipelines } = await load();
   await seedPipeline(pipelines);
   const rec = recordingSpawn();
   const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
   await e.start("p1", "manual");
-  assert.equal(rec.calls[0].env.CLAUDE_CODE_FORWARD_SUBAGENT_TEXT, "1");
+  assert.equal(rec.calls[0].env.ARGUS_RUNTIME, "claude");
+});
+
+test("the Claude step plan opts the CLI into forwarding subagent text", async () => {
+  const engine = await import("./pipelineEngine.js");
+  const plan = engine.buildStepPlan({
+    prompt: "go",
+    sessionId: "s",
+    runtime: "claude",
+  } as Parameters<typeof engine.buildStepPlan>[0]);
+  assert.equal(plan.env.CLAUDE_CODE_FORWARD_SUBAGENT_TEXT, "1");
 });
 
 test("a needs-input signal pauses the instance for approval", async () => {
@@ -590,10 +600,28 @@ test("adopt claims alive running steps and occupies concurrency slots", async ()
 
   // A second pipeline start now queues behind the adopted run instead of spawning.
   await seedSecondPipeline(pipelines);
-  const started = e2.start("p2", "manual"); // intentionally not awaited — it blocks on the slot
+  const started = e2.start("p2", "manual"); // deliberately not awaited yet — it blocks on the slot
   await new Promise((r) => setTimeout(r, 50));
   assert.equal(rec2.calls.length, 0); // blocked on the adopted run's slot
-  void started;
+
+  // Then settle it, rather than leaving it parked past the end of the test.
+  //
+  // Not tidiness: `beforeEach` repoints ARGUS_CLAUDE_HOME at a fresh directory,
+  // and every path in the engine is resolved *when it is used*. A start() still
+  // in flight across that boundary therefore writes its instance into the NEXT
+  // test's home — where a stray "running p2" makes that test's overlap check
+  // refuse to start anything, and it fails with no spawn and no explanation.
+  // That is a load-dependent failure (50ms is plenty on an idle box and not
+  // always enough on a busy one), which is the worst kind to debug from CI.
+  //
+  // Settling it also makes the test say more: the slot is held, *and* the queued
+  // start goes through the moment it is released. The release is the real
+  // sequence — the reattached run ends, and reconcile hands its slot on.
+  const runs = await import("./sources/runs.js");
+  await runs.patchRun(rec.calls[0].runId, { status: "cancelled" });
+  await e2.reconcile();
+  await started;
+  assert.equal(rec2.calls.length, 1);
 });
 
 test("adopt ignores dead-pid runs and leaves the slot free", async () => {

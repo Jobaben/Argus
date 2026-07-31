@@ -101,7 +101,7 @@ const engine = createEngine({
 
 const users = createUserStore();
 const auth = createAuthService({ store: users });
-// One runner for every bounded `claude -p` analysis pass in the process — the
+// One runner for every bounded analysis pass in the process — the
 // on-demand routes and the background watcher share its concurrency and spend
 // gate, so "one pass at a time" means one, not one per caller.
 const analysis = createAnalysisRunner();

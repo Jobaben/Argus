@@ -1,21 +1,37 @@
 # 👁️ Argus — User Guide
 
-**What Argus is:** a dashboard and control plane over your local `~/.claude`
-folder. It watches the files Claude Code already writes (background jobs,
-transcripts, history, stats) and turns them into a live web view — and it can
-fire its own scheduled and pipelined `claude -p` runs on top.
+**What Argus is:** a dashboard and control plane over your local agent state —
+`~/.claude` for Claude Code and `~/.codex` for Codex. It watches the files those
+CLIs already write (background jobs, transcripts, history, stats) and turns them
+into a live web view — and it can fire its own scheduled and pipelined runs on
+top, on **either** agent.
 
-Argus **never modifies the state Claude Code owns** — it treats jobs,
+**Two runtimes.** Anywhere Argus starts a run — the Launch tab, a schedule, a
+pipeline — you can choose **Claude Code** (`claude -p`) or **Codex**
+(`codex exec`). Inside a pipeline the choice goes finer still: a phase, or a
+single step, can override the pipeline's runtime, so one pipeline can draft on
+one agent and review on the other. Leave every picker on its default and nothing
+changes: existing schedules and pipelines keep running on Claude Code exactly as
+before. Each run records which CLI produced it, and rows that used something
+other than the server default are badged. See
+[Agent runtimes](../README.md#agent-runtimes) for the full mapping — and for the
+two honest gaps: Codex names its own session (the transcript link appears once
+the run starts, not before) and reports tokens rather than dollars (so `cost` is
+blank on Codex runs, and a USD budget ceiling only constrains Claude Code runs).
+
+Argus **never modifies the state the agent CLIs own** — it treats jobs,
 transcripts, history and daemon files as strictly read-only. It _does_ own and
 write its own state under `~/.claude/argus/` (schedules, pipelines, run
 records, issue triage, accounts) and, when you apply setup fixes, its signal
-hooks under `~/.claude/hooks/` and a hook entry in `settings.json`. The
+hooks under `~/.claude/hooks/` and `~/.codex/hooks/`, a hook entry in
+`settings.json`, and an appended `[[hooks.stop]]` block in `~/.codex/config.toml`
+(appended — your existing config is never rewritten). The
 monitoring tabs (Agents, Sessions, Activity, Projects, Stats, Search,
 Inventory, Tasks) are observe-only, while the Launch, Scheduler, Pipelines,
 Issues, Budget and Users tabs let you create, run, revise, triage, cap and
 cancel work.
 
-**Security note:** because Argus can launch `claude -p` agents with your
+**Security note:** because Argus can launch agents with your
 credentials, the server binds to loopback (`127.0.0.1`) only and rejects
 cross-origin and unknown-Host requests. If you deliberately expose it on
 another interface (`ARGUS_HOST`), set `ARGUS_TOKEN` so the surface is
@@ -32,8 +48,8 @@ can do, and where the data comes from.
 | 1   | [Command Center](#1-command-center)    | `#/command`    | how are my pipelines doing right now?      |
 | 2   | [Briefing](#2-briefing)                | `#/briefing`   | what happened while I was away?            |
 | 3   | [Chronicle](#3-chronicle)              | `#/chronicle`  | what ran when, across every source?        |
-| 4   | [Launch](#4-launch)                    | `#/launch`     | fire one `claude -p` run right now         |
-| 5   | [Scheduler](#5-scheduler)              | `#/schedules`  | fire `claude -p` on a schedule             |
+| 4   | [Launch](#4-launch)                    | `#/launch`     | fire one agent run right now               |
+| 5   | [Scheduler](#5-scheduler)              | `#/schedules`  | fire agent runs on a schedule              |
 | 6   | [Monitors](#6-monitors)                | `#/monitors`   | did my schedules actually run?             |
 | 7   | [Issues](#7-issues)                    | `#/issues`     | why are runs failing, grouped by cause?    |
 | 8   | [Pipelines](#8-pipelines)              | `#/pipelines`  | author multi-phase, human-gated flows      |
@@ -202,7 +218,7 @@ _A step's drawer opens over the board, so inspecting one run doesn't cost you th
 view of the other eleven._
 
 **Cost semantics:** a metric appears once at least one run reports it via the
-`claude -p` result envelope; steps still running (or predating cost capture)
+runtime's result envelope; steps still running (or predating cost capture)
 show nothing. Money spent on a retried phase still counts toward the row Σ.
 
 **Where the data comes from:** `GET /api/overview` (re-fetched on the
@@ -310,7 +326,7 @@ the scheduler's run records with `~/.claude/jobs/` and
 
 ## 4. Launch
 
-_Fire one `claude -p` run right now._ Route: `#/launch`
+_Fire one agent run right now._ Route: `#/launch`
 
 ![Launch](screenshots/launch.png)
 
@@ -321,17 +337,24 @@ nothing recurs.
 
 **The form:**
 
-- **Prompt for `claude -p`** and a **working directory** (absolute path,
+- **Prompt** (the field is labelled with the runtime you picked — `claude -p`
+  or `codex exec`) and a **working directory** (absolute path,
   must exist) — the only two required fields; **▶ Launch** stays disabled
   until both are filled.
 - **Name** (optional) — how the run is titled everywhere; left empty it
   defaults to the prompt's first line (ellipsized at 60 chars).
-- **Model** — inherit the CLI default, pick an alias (Opus / Sonnet / Haiku),
-  or type a custom model id; passed to the agent as `--model`.
+- **Runtime** — Claude Code, Codex, or the server default. A CLI that isn't on
+  PATH is still offered, marked "not installed", rather than hidden: you may be
+  configuring a machine you are about to install it on.
+- **Model** — inherit the CLI default, pick an alias, or type a custom model id;
+  passed to the agent as `--model`. The alias list follows the runtime (Claude
+  Code offers Opus / Sonnet / Haiku; Codex's catalogue is account-dependent, so
+  it ships free-text unless `ARGUS_CODEX_MODELS` is set). Switching runtime
+  clears the model, because an alias from one means nothing to the other.
 
-After a launch the form keeps the **working directory and model** and clears the
-prompt and name, so firing several prompts at one repo does not mean retyping an
-absolute path each time.
+After a launch the form keeps the **working directory, runtime and model** and
+clears the prompt and name, so firing several prompts at one repo does not mean
+retyping an absolute path each time.
 
 **Recent one-off runs** — the last 20 launches, newest first, with a count of how
 many are in flight and the total reported cost of the list. Each is titled and
@@ -339,8 +362,8 @@ expandable exactly like a schedule's run rows: status pill, relative start time,
 duration, cost and tokens once reported, the error or result summary, a link
 to the **transcript** in Sessions, and a **live-tailing log** (refreshes every
 3s while running). A running launch has a **Cancel** button, and every row has
-**Reuse** — it copies that run's prompt, directory, name and model back into
-the form for a tweak-and-refire loop.
+**Reuse** — it copies that run's prompt, directory, name, runtime and model back
+into the form for a tweak-and-refire loop.
 
 **Where one-off runs show up:** everywhere runs go. They share the `oneoff`
 run bucket (pruned to the same 50-run window a schedule gets), appear as a
@@ -358,7 +381,7 @@ record), then the standard run surface — `GET /api/runs?scheduleId=oneoff`,
 
 ## 5. Scheduler
 
-_Recurring `claude -p` runs, owned by Argus._ Route: `#/schedules`
+_Recurring agent runs, owned by Argus._ Route: `#/schedules`
 
 ![Scheduler](screenshots/scheduler.png)
 
@@ -372,7 +395,9 @@ section) and **Cron** (see [Cron panel](#20-cron-panel)).
 ![New schedule form](screenshots/scheduler-form.png)
 
 - **Name** — how it appears everywhere (cards, Chronicle, Monitors).
-- **Prompt for `claude -p`** — the full prompt the headless agent receives.
+- **Prompt** — the full prompt the headless agent receives. The label names
+  the runtime the schedule will use.
+- **Runtime** — Claude Code, Codex, or the server default.
 - **Working directory** — absolute path the agent runs in.
 - **Trigger** — one of: **every N minutes** (interval), **daily at HH:MM**,
   **weekly on a day at HH:MM**, or **windowed** (every N minutes, but only
@@ -530,7 +555,7 @@ _Author multi-phase, human-gated agent flows._ Route: `#/pipelines`
 ![Pipelines](screenshots/pipelines.png)
 
 **Purpose:** define pipelines — ordered **phases**, each with a working
-directory and one or more **steps** (a step = one `claude -p` run with its own
+directory and one or more **steps** (a step = one headless agent run with its own
 prompt) — then launch them manually or on a trigger and watch them on the
 [Command Center](#1-command-center). A phase can be **gated**: the pipeline
 pauses there until a human approves or revises.
@@ -635,7 +660,7 @@ granted), and an `ARGUS_WEBHOOK_URL` POST (`budget.warning` /
 restart never replays a known-exceeded state.
 
 **How spend is counted:** each completed run's cost (reported by the
-`claude -p` result envelope) is folded into the day it ended, at the same
+runtime's result envelope) is folded into the day it ended, at the same
 exactly-once point that feeds the all-time totals — so scheduled, manual,
 one-off and pipeline-step runs all count, and the ledger survives run-record
 pruning. Runs that report no cost (older CLIs, crashed spawns) add nothing.
@@ -1644,7 +1669,7 @@ since.
 ### Safety
 
 Both planning and executing sit behind the **admin login**, like every other
-mutation. Planning spawns a bounded `claude -p` pass through the same runner
+mutation. Planning spawns a bounded analysis pass through the same runner
 Autopsy and Verdict use — one at a time, ninety-second timeout, output capped,
 metered into the spend ledger, and refused outright while the budget hard stop
 is in force.
@@ -1802,7 +1827,7 @@ are polled once per scheduler tick, with a four-second timeout and no retries.
 | ------------------- | ------------------------------------------ | ------------------------------------------- |
 | **Command Center**  | How are my pipelines doing right now?      | `argus/pipelines.json` + `argus/instances/` |
 | **Chronicle**       | What ran when, across everything?          | runs + jobs + transcripts, merged           |
-| **Launch**          | Fire one `claude -p` run right now         | `argus/runs/` (the `oneoff` bucket)         |
+| **Launch**          | Fire one agent run right now               | `argus/runs/` (the `oneoff` bucket)         |
 | **Scheduler**       | What fires on a timer, and how did it go?  | `argus/schedules.json` + `argus/runs/`      |
 | **Monitors**        | Did the expected runs actually land?       | derived from schedules + runs               |
 | **Issues**          | Why are runs failing, grouped by cause?    | derived from runs + `argus/issues.json`     |

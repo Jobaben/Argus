@@ -231,6 +231,7 @@ function StepTile({
             {step.model && step.model !== rowModel && (
               <span title="Model running this step"> · {step.model}</span>
             )}
+            {step.runtime === "codex" && <span title="Run by the Codex CLI"> · codex</span>}
           </div>
         </button>
         <StatusPill status={step.status} size="sm" />

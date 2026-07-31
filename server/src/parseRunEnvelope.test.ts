@@ -35,7 +35,13 @@ test("parses a large result that would have overflowed the old 8KB tail", () => 
 
 test("returns nulls, not a throw, on unparseable output", () => {
   const out = parseRunEnvelope("not json at all { partial");
-  assert.deepEqual(out, { result: null, costUsd: null, tokens: null, isError: null });
+  assert.deepEqual(out, {
+    result: null,
+    costUsd: null,
+    tokens: null,
+    isError: null,
+    sessionId: null,
+  });
 });
 
 test("returns nulls on empty output", () => {
@@ -44,6 +50,7 @@ test("returns nulls on empty output", () => {
     costUsd: null,
     tokens: null,
     isError: null,
+    sessionId: null,
   });
 });
 

@@ -196,6 +196,9 @@ export function StepDrawer({
           <span className="font-mono">{runId ?? "—"}</span>
         </Field>
         {step.model && <Field label="model">{step.model}</Field>}
+        {step.runtime && (
+          <Field label="runtime">{step.runtime === "codex" ? "Codex" : "Claude Code"}</Field>
+        )}
         {step.startedAt && (
           <Field label="started">{new Date(step.startedAt).toLocaleString()}</Field>
         )}

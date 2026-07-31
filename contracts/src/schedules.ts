@@ -1,6 +1,7 @@
 /** Triggers, schedules, run records and one-off launches. */
 
 import type { BudgetAction } from "./ledger.js";
+import type { AgentRuntimeId } from "./runtimes.js";
 import type { Rubric } from "./verdict.js";
 
 export type TriggerKind = "interval" | "daily" | "weekly" | "windowed";
@@ -37,6 +38,8 @@ export interface Schedule {
   /** Opt-in quality rubric. When set, each completed run is scored by a
    *  bounded judge pass and the score trends on the schedule's card. */
   rubric?: Rubric;
+  /** Which agent CLI runs this schedule. Absent = the server default. */
+  runtime?: AgentRuntimeId;
   createdAt: string;
   updatedAt: string;
   lastRunAt: string | null;
@@ -59,6 +62,8 @@ export interface ScheduleInput {
   catchUp?: boolean;
   /** Null clears an existing rubric; absent leaves it alone on a PATCH. */
   rubric?: Rubric | null;
+  /** Null clears the override (back to the server default); absent leaves it alone. */
+  runtime?: AgentRuntimeId | null;
 }
 
 export type RunStatus =
@@ -84,12 +89,19 @@ export interface Run {
   exitCode: number | null;
   sessionId: string | null;
   model?: string;
+  /**
+   * Which agent CLI executed this run. Absent means `"claude"` — every run
+   * recorded before runtimes existed was one, and rewriting history to say so
+   * would be a migration with nothing to gain.
+   */
+  runtime?: AgentRuntimeId;
   project: string | null;
   resultSummary: string | null;
   error: string | null;
   instanceId?: string;
   phaseId?: string;
-  /** Total USD cost reported by `claude -p --output-format json`, if present. */
+  /** Total USD cost reported by the runtime's result envelope, if it reports one
+   *  (Claude Code does; Codex reports tokens only). */
   costUsd?: number | null;
   /** Total tokens (input+output) reported by the CLI result envelope, if present. */
   tokens?: number | null;
@@ -116,4 +128,6 @@ export interface LaunchInput {
   prompt: string;
   cwd: string;
   model?: string;
+  /** Which agent CLI to run. Absent = the server default. */
+  runtime?: AgentRuntimeId;
 }

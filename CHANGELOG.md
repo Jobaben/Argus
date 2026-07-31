@@ -5,6 +5,96 @@ All notable changes to Argus are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **A second agent runtime: OpenAI Codex.** Argus now drives `codex exec`
+  alongside `claude -p`, selectable per schedule, per one-off launch, per
+  pipeline — and per **phase or step** inside a pipeline, so one pipeline can
+  draft on one agent and review on the other.
+
+  The two CLIs differ in ways that reach all the way up to the dashboard, so
+  rather than scatter `if (codex)` through four spawn sites, a log parser and an
+  activity tailer, everything CLI-specific now sits behind one seam in
+  `server/src/runtimes/`. A runtime answers four questions and nothing else in
+  the server knows which one is running: how to invoke it (a spawn plan —
+  binary, argv, the text for stdin, env), how to read what it printed, how to
+  turn one line of its streaming log into Command Center activity, and what it
+  cannot do.
+
+  The mapping, feature for feature: `codex exec` for `claude -p`; the prompt on
+  stdin via the `-` placeholder, so no shell ever parses user-authored text;
+  `--json` serving as both the result envelope and the live NDJSON transcript
+  the tailer follows; `--model` for `--model`; and a `[[hooks.stop]]` entry in
+  `~/.codex/config.toml` for the `Stop` hook in `settings.json`. Codex has no
+  `--append-system-prompt`, so the outcome contract that lets a phase report
+  `ARGUS_OUTCOME` rides at the top of the prompt instead — same text, same
+  effect, one delivery mechanism.
+
+  Two differences survive the mapping and are **reported rather than papered
+  over**, as declared capabilities the UI can read. Codex mints its own thread
+  id, so Argus reads it back out of the stream and patches the run record once
+  the run starts — the transcript link appears a moment late instead of pointing
+  at nothing. And `turn.completed.usage` reports tokens but not dollars, so
+  `costUsd` stays null on Codex runs: the Budget view shows what it has, and a
+  USD ceiling constrains Claude Code runs only. Inventing a figure nobody could
+  reconcile against an invoice would have been the worse answer.
+
+  Everything else is at parity. Codex rollouts under
+  `~/.codex/sessions/YYYY/MM/DD/` are translated into the same line shape the
+  Claude transcript reader consumes, so the Sessions list, the detail view, the
+  live tail, the Markdown export and the Flight Recorder all work unchanged
+  rather than growing a second code path. Gated phases pause on Codex too —
+  there is no `AskUserQuestion` twin to hook, and none is needed, because the
+  engine holds a gate on the phase's _completion_ signal rather than on the
+  agent asking a question.
+
+  Nothing is rewritten on upgrade. A schedule, pipeline or run that names no
+  runtime is Claude Code, exactly as before; resolution is narrowest-wins (step,
+  phase, pipeline, `ARGUS_AGENT`, then Claude Code), and the resolved value is
+  written onto the run record so a run started under one default stays
+  explicable after the default changes.
+
+  Setup follows the same principle in reverse: each runtime's CLI and hook
+  prerequisites are checked **only while something on the machine uses that
+  runtime**. These are the checks a pipeline start refuses on, so an unscoped
+  version would have left a Codex-only install permanently unable to run
+  anything because Claude Code wasn't present — and, once Codex existed, the
+  same trap in mirror image. Registering the Codex hook **appends** a block to
+  `config.toml` and never rewrites it; a config that already declares a scalar
+  `stop` key under `[hooks]` (which would make the block invalid TOML) is
+  reported for a human rather than silently corrupted.
+
+  New: `GET /api/runtimes`, `runtime` fields across the schedule / launch /
+  pipeline / phase / step / run contracts, `codexHome` on `GET /api/health`, and
+  the `ARGUS_AGENT`, `ARGUS_CODEX_HOME`, `ARGUS_CLAUDE_BIN`, `ARGUS_CODEX_BIN`,
+  `ARGUS_CODEX_SANDBOX`, `ARGUS_CLAUDE_ARGS`, `ARGUS_CODEX_ARGS`,
+  `ARGUS_CODEX_MODELS` and `ARGUS_ANALYSIS_RUNTIME` environment variables.
+
+### Fixed
+
+- **A test that could leak into the next one, and did on CI.** The engine's
+  "adoption holds the concurrency slot" test deliberately left a `start()`
+  parked on the semaphore and never settled it. Every path in the engine is
+  resolved when it is used, and `beforeEach` repoints `ARGUS_CLAUDE_HOME` at a
+  fresh directory — so a start still in flight across that boundary wrote its
+  instance into the _next_ test's home, where a stray running instance made that
+  test's overlap check refuse to start anything. It failed with no spawn and no
+  explanation, only under load: 50ms is plenty of parked time on an idle box and
+  not always enough on a two-core runner, which is why adding tests elsewhere
+  was enough to surface it. The test now releases the adopted slot the way a
+  real restart does — the reattached run ends, `reconcile` hands the slot on —
+  and awaits the queued start, which also makes it assert the half it never did:
+  that the queued work actually proceeds once the slot frees.
+
+- **Tests no longer read the developer's real `~/.codex`.** Every test file
+  already pinned `ARGUS_CLAUDE_HOME` to a temp directory; nothing pinned the
+  Codex home, and once the Sessions list, transcript search and the setup
+  prerequisites learned to read it, a machine that actually uses Codex would
+  fail assertions about "one session in this temp home" — on that machine only.
+  A `--import` preload on the test scripts defaults the variable to a throwaway
+  directory, so isolation holds for every file at once and cannot be forgotten
+  by the next test that needs it.
+
 ### Changed
 
 - **The motion layer, completed** — all four goals of

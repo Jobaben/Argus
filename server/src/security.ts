@@ -17,7 +17,7 @@ function safeEqual(a: string | null, b: string): boolean {
 }
 
 /**
- * Argus can spawn `claude -p` agents with the user's full credentials, so the
+ * Argus can spawn agents with the user's full credentials, so the
  * HTTP surface is treated as a privileged, single-user control plane. Three
  * layers keep a local-only tool from becoming a remote-code-execution vector:
  *

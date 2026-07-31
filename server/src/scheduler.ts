@@ -16,8 +16,14 @@ import {
 } from "./sources/runs.js";
 import { currentEnforcement, isSpendBlocked } from "./sources/budget.js";
 import { ONEOFF_SCHEDULE_ID, type LaunchInput } from "./sources/launch.js";
+import {
+  parseClaudeEnvelope,
+  parseEnvelopeFor,
+  resolveRuntimeId,
+  runtimeFor,
+} from "./runtimes/index.js";
 import type { Run, RunStatus, Schedule } from "./sources/scheduleTypes.js";
-import type { BudgetEnforcement } from "@argus/contracts";
+import type { AgentRuntimeId, BudgetEnforcement } from "@argus/contracts";
 import { log } from "./log.js";
 
 /** Builds a terminal run record for a schedule that never spawned a process
@@ -45,6 +51,7 @@ function ephemeralRun(
     pid: null,
     exitCode: null,
     sessionId: null,
+    runtime: resolveRuntimeId(schedule.runtime),
     project: null,
     resultSummary: null,
     error,
@@ -57,6 +64,9 @@ export interface RunResult {
   error: string | null;
   costUsd: number | null;
   tokens: number | null;
+  /** Set only by runtimes that mint their own session id (Codex), so the run
+   *  record can be patched with the id its transcript actually landed under. */
+  sessionId?: string | null;
 }
 
 export interface SpawnHandle {
@@ -65,54 +75,14 @@ export interface SpawnHandle {
 }
 
 /**
- * `claude -p --output-format json` prints a single JSON envelope as its final
- * output. Parse it out of the captured stdout, tolerant of anything the tool
- * logged before it: try the whole buffer, then fall back to the last balanced
- * top-level `{...}` object. Returns nulls when nothing parses.
+ * Parse a Claude Code result envelope out of captured stdout.
+ *
+ * Kept here, and kept Claude-shaped, because it is what every caller that knows
+ * it is looking at a `claude -p --output-format json` log already means. Code
+ * that may be handed either runtime's log uses `parseEnvelopeFor` instead, which
+ * dispatches on the run record's `runtime`.
  */
-export function parseRunEnvelope(stdout: string): {
-  result: string | null;
-  costUsd: number | null;
-  tokens: number | null;
-  isError: boolean | null;
-} {
-  const empty = { result: null, costUsd: null, tokens: null, isError: null };
-  const extract = (obj: Record<string, unknown>) => {
-    const usage = (obj.usage ?? {}) as Record<string, unknown>;
-    const inTok = Number(usage.input_tokens ?? 0);
-    const outTok = Number(usage.output_tokens ?? 0);
-    const tokens = Number.isFinite(inTok + outTok) && inTok + outTok > 0 ? inTok + outTok : null;
-    const cost = Number(obj.total_cost_usd ?? obj.cost_usd);
-    return {
-      result: typeof obj.result === "string" ? obj.result : null,
-      costUsd: Number.isFinite(cost) ? cost : null,
-      tokens,
-      isError: typeof obj.is_error === "boolean" ? obj.is_error : null,
-    };
-  };
-  const text = stdout.trim();
-  if (!text) return empty;
-  try {
-    return extract(JSON.parse(text) as Record<string, unknown>);
-  } catch {
-    // Collect every balanced top-level {...} span with a string-aware depth
-    // scan (so braces inside strings and any stray brace emitted AFTER the
-    // envelope don't defeat extraction), then take the last span that parses
-    // AND looks like the CLI envelope (has result/cost/usage).
-    const spans = topLevelObjectSpans(text);
-    for (let i = spans.length - 1; i >= 0; i--) {
-      try {
-        const obj = JSON.parse(text.slice(spans[i][0], spans[i][1] + 1)) as Record<string, unknown>;
-        if ("result" in obj || "total_cost_usd" in obj || "cost_usd" in obj || "usage" in obj) {
-          return extract(obj);
-        }
-      } catch {
-        /* not valid JSON; try an earlier span */
-      }
-    }
-    return empty;
-  }
-}
+export const parseRunEnvelope = parseClaudeEnvelope;
 
 /**
  * One-time boot backfill: terminal runs recorded before cost capture existed
@@ -128,7 +98,10 @@ export async function backfillRunCosts(): Promise<number> {
     if (r.costUsd !== undefined || r.tokens !== undefined) continue;
     const got = await readRun(r.id);
     if (!got) continue;
-    const env = parseRunEnvelope(got.log);
+    // These records predate runtimes, so most are Claude — but a Codex run can
+    // reach here too (queued before a restart, finalized after), and the
+    // dispatching parser reads whichever the log actually is.
+    const env = parseEnvelopeFor(got.run.runtime, got.log);
     await patchRun(r.id, {
       costUsd: env.costUsd,
       tokens: env.tokens,
@@ -137,39 +110,6 @@ export async function backfillRunCosts(): Promise<number> {
     patched++;
   }
   return patched;
-}
-
-/** Byte spans [start,end] of every balanced top-level `{...}` in `text`,
- *  ignoring braces inside JSON strings. */
-function topLevelObjectSpans(text: string): [number, number][] {
-  const spans: [number, number][] = [];
-  let depth = 0;
-  let start = -1;
-  let inStr = false;
-  let escaped = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (inStr) {
-      if (escaped) escaped = false;
-      else if (ch === "\\") escaped = true;
-      else if (ch === '"') inStr = false;
-      continue;
-    }
-    if (ch === '"') inStr = true;
-    else if (ch === "{") {
-      if (depth === 0) start = i;
-      depth++;
-    } else if (ch === "}") {
-      depth--;
-      if (depth === 0 && start >= 0) {
-        spans.push([start, i]);
-        start = -1;
-      } else if (depth < 0) {
-        depth = 0; // stray closing brace; resync
-      }
-    }
-  }
-  return spans;
 }
 
 export type SpawnFn = (run: Run, logPath: string) => SpawnHandle;
@@ -197,31 +137,36 @@ export function isAlive(pid: number | null): boolean {
 }
 
 /**
- * Real spawn: runs `claude -p <prompt>` in the run's cwd, piping stdout+stderr
- * to the log file. A pre-generated session id (already on the run) is passed so
- * the transcript can be linked; `--output-format json` lets us capture a result.
+ * Real spawn: runs the run's agent CLI in its cwd, piping stdout+stderr to the
+ * log file, with the prompt on stdin.
  *
- * NOTE: verify these flags against the installed CLI before relying on them:
- *   claude -p "hi" --output-format json --session-id <uuid>
- * Adjust the args here if the installed version differs.
+ * Which CLI and which flags is the runtime's business — `claude -p
+ * --output-format json` or `codex exec --json`, both producing something
+ * {@link AgentRuntime.parseEnvelope} can turn into a result, a cost and a token
+ * count. What stays here is the process discipline that is the same either way:
+ * the prompt never touches argv (so no shell parses user-authored text, which
+ * `shell:true` on win32 would), the child is a POSIX process-group leader so
+ * `killRunProcess` can signal the whole tree, and a bounded stdout tail is kept
+ * so a multi-KB result envelope survives.
  */
 export const defaultSpawn: SpawnFn = (run, logPath) => {
   const out = createWriteStream(logPath, { flags: "a" });
-  const args = ["-p", "--output-format", "json", "--session-id", run.sessionId ?? randomUUID()];
-  if (run.model && run.model.trim()) args.push("--model", run.model);
-  const child = nodeSpawn(
-    "claude",
-    args,
-    // detached makes the child a POSIX process-group leader so killRunProcess
-    // can signal the whole tree with kill(-pid); irrelevant under win32 taskkill.
-    { cwd: run.cwd, shell: process.platform === "win32", detached: process.platform !== "win32" },
-  );
-  // The prompt is user-authored; pass it on stdin so no shell parsing touches it
-  // (shell:true on win32 would otherwise word-split it and interpret metacharacters).
+  const runtime = runtimeFor(run.runtime);
+  const plan = runtime.batchPlan({
+    prompt: run.prompt,
+    sessionId: run.sessionId,
+    model: run.model,
+  });
+  const child = nodeSpawn(plan.bin, plan.args, {
+    cwd: run.cwd,
+    env: { ...process.env, ...plan.env },
+    shell: process.platform === "win32",
+    detached: process.platform !== "win32",
+  });
   child.stdin?.on("error", () => {
     /* ignore broken pipe if the process failed to spawn */
   });
-  child.stdin?.write(run.prompt);
+  child.stdin?.write(plan.stdin);
   child.stdin?.end();
   child.stdout?.pipe(out, { end: false });
   child.stderr?.pipe(out, { end: false });
@@ -245,8 +190,15 @@ export const defaultSpawn: SpawnFn = (run, logPath) => {
       if (settled) return;
       settled = true;
       out.end();
-      const { result, costUsd, tokens } = parseRunEnvelope(tail);
-      resolve({ code, result, error: code === 0 ? null : `exit code ${code}`, costUsd, tokens });
+      const { result, costUsd, tokens, sessionId } = runtime.parseEnvelope(tail);
+      resolve({
+        code,
+        result,
+        error: code === 0 ? null : `exit code ${code}`,
+        costUsd,
+        tokens,
+        sessionId,
+      });
     });
   });
   return { pid: child.pid ?? null, done };
@@ -254,11 +206,21 @@ export const defaultSpawn: SpawnFn = (run, logPath) => {
 
 /** Builds the initial "running" run record shared by scheduled and one-off firings. */
 function newRun(
-  spec: { scheduleId: string; scheduleName: string; prompt: string; cwd: string; model?: string },
+  spec: {
+    scheduleId: string;
+    scheduleName: string;
+    prompt: string;
+    cwd: string;
+    model?: string;
+    runtime?: AgentRuntimeId;
+  },
   trigger: "scheduled" | "manual",
   startedAt: Date,
   deps: SchedulerDeps,
 ): Run {
+  // Resolved once, at firing time, and written down: a run started under one
+  // default must stay explicable after the default changes.
+  const runtime = resolveRuntimeId(spec.runtime);
   return {
     id: deps.newId(),
     scheduleId: spec.scheduleId,
@@ -273,8 +235,12 @@ function newRun(
     durationMs: null,
     pid: null,
     exitCode: null,
-    sessionId: deps.newId(),
+    // A runtime that mints its own thread id gets a null here and is patched
+    // with the real one once the stream reports it; pre-assigning a UUID the
+    // CLI will ignore would produce a transcript link to nothing.
+    sessionId: runtimeFor(runtime).capabilities.presetSessionId ? deps.newId() : null,
     ...(spec.model ? { model: spec.model } : {}),
+    runtime,
     project: encodeProject(spec.cwd),
     resultSummary: null,
     error: null,
@@ -301,6 +267,9 @@ async function spawnAndTrack(run: Run, startedAt: Date, deps: SchedulerDeps): Pr
         endedAt: ended.toISOString(),
         durationMs: ended.getTime() - startedAt.getTime(),
         exitCode: res.code,
+        // The transcript link for a runtime that names its own session: learned
+        // from the stream, kept only if we didn't already have one.
+        sessionId: run.sessionId ?? res.sessionId ?? null,
         resultSummary: res.result,
         error: res.error,
         costUsd: res.costUsd,
@@ -333,6 +302,7 @@ export async function fireRun(
       scheduleName: schedule.name,
       prompt: schedule.prompt,
       cwd: schedule.cwd,
+      ...(schedule.runtime ? { runtime: schedule.runtime } : {}),
     },
     trigger,
     startedAt,
@@ -362,6 +332,7 @@ export async function fireOneOff(input: LaunchInput, deps: SchedulerDeps): Promi
       prompt: input.prompt,
       cwd: input.cwd,
       model: input.model,
+      ...(input.runtime ? { runtime: input.runtime } : {}),
     },
     "manual",
     startedAt,

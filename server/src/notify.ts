@@ -7,7 +7,7 @@ import type { IncidentAlert } from "./sources/sentinel.js";
 import { log } from "./log.js";
 
 /**
- * Unattended runs are the whole point of Argus (overnight `claude -p`), so a
+ * Unattended runs are the whole point of Argus (an overnight agent run), so a
  * failure the user only discovers by opening the dashboard is a real gap. When
  * ARGUS_WEBHOOK_URL is set, a compact JSON payload is POSTed on every failure —
  * wire it to Slack, a mail relay, or a desktop-notifier bridge.

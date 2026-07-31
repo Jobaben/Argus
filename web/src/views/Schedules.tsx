@@ -11,6 +11,7 @@ import {
   Handoff,
   Page,
   RubricFields,
+  RuntimeSelect,
   SkeletonRows,
   TimeAgo,
   TriggerFields,
@@ -18,6 +19,7 @@ import {
   useFlip,
   useTicker,
 } from "../ds";
+import { useRuntimes } from "../useRuntimes";
 import { useVerdictTrends } from "../useVerdict";
 import { VerdictSparkline } from "./VerdictPanel";
 import { CronPanel } from "./Cron";
@@ -204,6 +206,9 @@ function ScheduleForm({
   const [form, setForm] = useState<ScheduleInput>(initial);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const { runtimes, default: defaultRuntime } = useRuntimes();
+  const active = form.runtime ?? defaultRuntime;
+  const command = active === "codex" ? "codex exec" : "claude -p";
 
   const submit = async () => {
     setBusy(true);
@@ -235,7 +240,7 @@ function ScheduleForm({
         />
       </label>
       <label className={labelCls}>
-        <span>Prompt for claude -p</span>
+        <span>Prompt for {command}</span>
         <textarea
           className={`${field} h-24`}
           placeholder="Review yesterday's changes and summarize risks"
@@ -252,11 +257,22 @@ function ScheduleForm({
           onChange={(e) => setForm({ ...form, cwd: e.target.value })}
         />
       </label>
-      <TriggerFields
-        fieldClass={field}
-        value={form.trigger}
-        onChange={(t) => setForm({ ...form, trigger: t ?? { kind: "daily", time: "02:00" } })}
-      />
+      <div className="flex flex-wrap items-center gap-2">
+        <TriggerFields
+          fieldClass={field}
+          value={form.trigger}
+          onChange={(t) => setForm({ ...form, trigger: t ?? { kind: "daily", time: "02:00" } })}
+        />
+        <RuntimeSelect
+          fieldClass={field}
+          label="Runtime (server default)"
+          value={form.runtime ?? undefined}
+          runtimes={runtimes}
+          // Null, not undefined: a PATCH omitting the key leaves the stored
+          // override alone, so clearing one has to say so explicitly.
+          onChange={(r) => setForm({ ...form, runtime: r ?? null })}
+        />
+      </div>
 
       <label className="flex items-start gap-2 text-xs text-ink-dim">
         <input
@@ -659,8 +675,9 @@ export default function Schedules() {
               <EmptyState>
                 <p className="text-sm text-ink-dim">No schedules yet.</p>
                 <p className="mx-auto mt-2 max-w-md text-xs">
-                  A schedule is a prompt, a working directory and a cadence: Argus runs{" "}
-                  <code className="font-mono text-ink-dim">claude -p</code> in that directory on
+                  A schedule is a prompt, a working directory and a cadence: Argus runs your chosen
+                  agent — <code className="font-mono text-ink-dim">claude -p</code> or{" "}
+                  <code className="font-mono text-ink-dim">codex exec</code> — in that directory on
                   time and keeps every run&apos;s transcript, cost and result. A first one worth
                   having is a nightly review of yesterday&apos;s commits.
                 </p>

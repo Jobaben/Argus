@@ -80,9 +80,10 @@ export interface RunLogField {
 }
 
 /**
- * A run log is either the CLI's `--output-format json` result envelope (which we
- * surface as readable fields, never raw JSON) or, when the process crashed before
- * emitting one, plain diagnostic text we must not discard.
+ * A run log is the agent CLI's own machine-readable output — Claude Code's
+ * `--output-format json` result envelope, or Codex's `--json` event stream —
+ * which we surface as readable fields, never raw JSON. When the process crashed
+ * before emitting either, it is plain diagnostic text we must not discard.
  */
 export type ParsedRunLog =
   | { kind: "envelope"; fields: RunLogField[]; truncated: boolean }
@@ -113,6 +114,69 @@ function extractEnvelope(text: string): Record<string, unknown> | null {
   return null;
 }
 
+/**
+ * Codex reports a run as a JSONL event stream rather than one closing envelope,
+ * so its summary is folded out of the whole log: the last `agent_message`, the
+ * token counts on `turn.completed`, and whichever of `turn.failed` / `error`
+ * arrived. No cost line — Codex reports tokens, not dollars, and inventing a
+ * figure would be worse than omitting one.
+ */
+function parseCodexLog(text: string, truncated: boolean): ParsedRunLog | null {
+  const fields: RunLogField[] = [];
+  let sawEvent = false;
+  let status: string | null = null;
+  let message: string | null = null;
+  let thread: string | null = null;
+  let tokens: { i: number; o: number } | null = null as { i: number; o: number } | null;
+
+  for (const line of text.split("\n")) {
+    const t = line.trim();
+    if (!t.startsWith("{")) continue;
+    let e: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(t);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+      e = parsed as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    const type = typeof e.type === "string" ? e.type : "";
+    if (!/^(thread|turn|item)\.|^error$/.test(type)) continue;
+    sawEvent = true;
+    if (type === "thread.started" && typeof e.thread_id === "string") thread = e.thread_id;
+    if (type === "turn.completed") {
+      status ??= "success";
+      const usage = e.usage as Record<string, unknown> | undefined;
+      if (usage) {
+        const i = typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
+        const o = typeof usage.output_tokens === "number" ? usage.output_tokens : 0;
+        tokens = { i: (tokens?.i ?? 0) + i, o: (tokens?.o ?? 0) + o };
+      }
+    }
+    if (type === "turn.failed" || type === "error") {
+      status = "error";
+      const err = e.error as Record<string, unknown> | undefined;
+      const m = typeof e.message === "string" ? e.message : err?.message;
+      if (typeof m === "string") message = m;
+    }
+    if (type === "item.completed") {
+      const item = e.item as Record<string, unknown> | undefined;
+      if (item?.type === "agent_message" && typeof item.text === "string") message = item.text;
+      if (item?.type === "error" && typeof item.message === "string") {
+        status = "error";
+        message = item.message;
+      }
+    }
+  }
+  if (!sawEvent) return null;
+
+  fields.push({ label: "Status", value: status ?? "incomplete" });
+  if (tokens) fields.push({ label: "Tokens", value: `${tokens.i} in / ${tokens.o} out` });
+  if (thread) fields.push({ label: "Thread", value: thread });
+  if (message) fields.push({ label: "Result", value: message });
+  return { kind: "envelope", fields, truncated };
+}
+
 export function parseRunLog(raw: string): ParsedRunLog {
   let truncated = false;
   let text = raw ?? "";
@@ -122,6 +186,11 @@ export function parseRunLog(raw: string): ParsedRunLog {
   }
   text = text.trim();
   if (!text) return { kind: "empty" };
+
+  // Codex first: its `turn.completed` line would otherwise be mistaken for a
+  // Claude envelope (it has a `usage` object) and reported as a bare success.
+  const codex = parseCodexLog(text, truncated);
+  if (codex) return codex;
 
   const env = extractEnvelope(text);
   if (!env) return { kind: "text", text, truncated };

@@ -3,8 +3,9 @@ import { paths } from "../claudeHome.js";
 import { nextFireAfter, parseHHMM } from "./nextFire.js";
 import { createJsonArrayStore } from "./jsonArrayStore.js";
 import { RubricValidationError, validateRubric } from "./verdict.js";
+import { isRuntimeId } from "../runtimes/index.js";
 import type { Schedule, Trigger } from "./scheduleTypes.js";
-import type { Rubric } from "@argus/contracts";
+import type { AgentRuntimeId, Rubric } from "@argus/contracts";
 
 // The crash-safe, mutex-serialized single-file store lives in one shared place.
 const store = createJsonArrayStore<Schedule>({
@@ -30,6 +31,16 @@ export interface ScheduleInput {
   catchUp?: boolean;
   /** Null clears an existing rubric; absent leaves it untouched on a PATCH. */
   rubric?: Rubric | null;
+  /** Null clears the override (back to the server default); absent leaves it alone. */
+  runtime?: AgentRuntimeId | null;
+}
+
+/** `null` is the documented way to clear an override; anything else must name a
+ *  known runtime, so a typo is a 400 rather than a silent fall-back. */
+function runtimeOrThrow(raw: unknown): AgentRuntimeId | null {
+  if (raw === null || raw === undefined) return null;
+  if (!isRuntimeId(raw)) throw new ScheduleValidationError("runtime must be claude | codex");
+  return raw;
 }
 
 /** Rubric errors surface as schedule validation errors, so the route's existing
@@ -129,6 +140,7 @@ export function validateInput(raw: unknown): ScheduleInput {
     overlapPolicy,
     catchUp: Boolean(r.catchUp),
     ...(r.rubric === undefined ? {} : { rubric: rubricOrThrow(r.rubric) ?? null }),
+    ...(r.runtime === undefined ? {} : { runtime: runtimeOrThrow(r.runtime) }),
   };
 }
 
@@ -164,6 +176,7 @@ export function validatePatch(raw: unknown): Partial<ScheduleInput> {
   if ("overlapPolicy" in r) patch.overlapPolicy = r.overlapPolicy === "allow" ? "allow" : "skip";
   if ("catchUp" in r) patch.catchUp = Boolean(r.catchUp);
   if ("rubric" in r) patch.rubric = rubricOrThrow(r.rubric) ?? null;
+  if ("runtime" in r) patch.runtime = runtimeOrThrow(r.runtime);
   return patch;
 }
 
@@ -197,6 +210,7 @@ export async function createSchedule(
     overlapPolicy: input.overlapPolicy ?? "skip",
     catchUp: input.catchUp ?? false,
     ...(input.rubric ? { rubric: input.rubric } : {}),
+    ...(input.runtime ? { runtime: input.runtime } : {}),
     createdAt: iso,
     updatedAt: iso,
     lastRunAt: null,
@@ -235,6 +249,12 @@ export async function updateSchedule(
     if ("rubric" in patch) {
       if (patch.rubric) merged.rubric = patch.rubric;
       else delete merged.rubric;
+    }
+    // Same shape as the rubric: null removes the key rather than leaving a
+    // present-and-null override on disk for the resolver to step over.
+    if ("runtime" in patch) {
+      if (patch.runtime) merged.runtime = patch.runtime;
+      else delete merged.runtime;
     }
     list[idx] = merged;
     await writeSchedules(list);

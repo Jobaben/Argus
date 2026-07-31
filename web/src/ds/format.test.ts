@@ -296,3 +296,62 @@ describe("formatTrigger", () => {
     expect(formatTrigger({ kind: "interval" })).toBe("every \u2014");
   });
 });
+
+describe("parseRunLog on a Codex event stream", () => {
+  const stream = [
+    '{"type":"thread.started","thread_id":"019c7149-abcd"}',
+    '{"type":"turn.started"}',
+    '{"type":"item.completed","item":{"id":"i0","type":"agent_message","text":"all green"}}',
+    '{"type":"turn.completed","usage":{"input_tokens":1200,"cached_input_tokens":900,"output_tokens":300}}',
+  ].join("\n");
+
+  it("folds the stream into readable fields", () => {
+    const parsed = parseRunLog(stream);
+    expect(parsed.kind).toBe("envelope");
+    if (parsed.kind !== "envelope") throw new Error("expected envelope");
+    const byLabel = Object.fromEntries(parsed.fields.map((f) => [f.label, f.value]));
+    expect(byLabel.Status).toBe("success");
+    expect(byLabel.Tokens).toBe("1200 in / 300 out");
+    expect(byLabel.Thread).toBe("019c7149-abcd");
+    expect(byLabel.Result).toBe("all green");
+    // Codex reports tokens, not dollars; a cost line here would be invented.
+    expect(byLabel.Cost).toBeUndefined();
+  });
+
+  it("reports a failed turn as an error rather than a bare success", () => {
+    const parsed = parseRunLog(
+      '{"type":"thread.started","thread_id":"t"}\n{"type":"turn.failed","error":{"message":"overloaded"}}',
+    );
+    if (parsed.kind !== "envelope") throw new Error("expected envelope");
+    const byLabel = Object.fromEntries(parsed.fields.map((f) => [f.label, f.value]));
+    expect(byLabel.Status).toBe("error");
+    expect(byLabel.Result).toBe("overloaded");
+  });
+
+  it("says so when the stream stops before the turn completes", () => {
+    const parsed = parseRunLog(
+      '{"type":"thread.started","thread_id":"t"}\n{"type":"turn.started"}',
+    );
+    if (parsed.kind !== "envelope") throw new Error("expected envelope");
+    expect(parsed.fields[0]).toEqual({ label: "Status", value: "incomplete" });
+  });
+
+  it("keeps the truncation marker's meaning", () => {
+    const parsed = parseRunLog(`…(truncated)…\n${stream}`);
+    if (parsed.kind !== "envelope") throw new Error("expected envelope");
+    expect(parsed.truncated).toBe(true);
+  });
+
+  it("leaves a Claude envelope alone", () => {
+    const parsed = parseRunLog(
+      JSON.stringify({ type: "result", is_error: false, total_cost_usd: 0.5 }),
+    );
+    if (parsed.kind !== "envelope") throw new Error("expected envelope");
+    const byLabel = Object.fromEntries(parsed.fields.map((f) => [f.label, f.value]));
+    expect(byLabel.Cost).toBe("$0.5000");
+  });
+
+  it("still falls through to plain text for a crash log", () => {
+    expect(parseRunLog("Error: ENOENT codex").kind).toBe("text");
+  });
+});

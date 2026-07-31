@@ -1,6 +1,7 @@
 import { useState } from "react";
-import type { PhaseDef, PhaseStep, PipelineInput } from "../types";
-import { AlertStrip, ModelSelect, TriggerFields } from "../ds";
+import type { AgentRuntimeId, PhaseDef, PhaseStep, PipelineInput } from "../types";
+import { AlertStrip, ModelSelect, RuntimeSelect, TriggerFields } from "../ds";
+import { useRuntimes } from "../useRuntimes";
 
 const FIELD =
   "w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink placeholder-ink-faint";
@@ -50,6 +51,14 @@ export function PipelineForm({
   const [form, setForm] = useState<PipelineInput>(initial);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const { runtimes, default: defaultRuntime } = useRuntimes();
+
+  /** The runtime a phase/step will actually run on, narrowest override wins —
+   *  the same resolution the engine does, so the model picker offers the right
+   *  aliases before anything is saved. */
+  const effective = (phase?: PhaseDef, step?: PhaseStep): AgentRuntimeId =>
+    step?.runtime ?? phase?.runtime ?? form.runtime ?? defaultRuntime;
+  const aliasesFor = (id: AgentRuntimeId) => runtimes.find((r) => r.id === id)?.models;
 
   const setPhase = (i: number, patch: Partial<PhaseDef>) =>
     setForm((f) => ({ ...f, phases: f.phases.map((p, j) => (j === i ? { ...p, ...patch } : p)) }));
@@ -116,13 +125,26 @@ export function PipelineForm({
           <option value="skip">Skip if running</option>
           <option value="allow">Allow overlap</option>
         </select>
+        <RuntimeSelect
+          fieldClass={FIELD}
+          label="Runtime (server default)"
+          value={form.runtime}
+          runtimes={runtimes}
+          onChange={(r) => setForm({ ...form, runtime: r, model: undefined })}
+        />
         <ModelSelect
+          key={`pipeline:${effective()}`}
           fieldClass={FIELD}
           label="Default model (inherit CLI)"
           value={form.model}
+          {...(aliasesFor(effective()) ? { aliases: aliasesFor(effective()) } : {})}
           onChange={(m) => setForm({ ...form, model: m })}
         />
       </div>
+      <p className="max-w-prose text-xs text-ink-faint">
+        A phase or a single step can override the runtime, so one pipeline can draft on one agent
+        and review on the other. Each step's run records which CLI produced it.
+      </p>
 
       <div className="space-y-4">
         {form.phases.map((phase, pi) => (
@@ -175,14 +197,24 @@ export function PipelineForm({
               value={phase.cwd}
               onChange={(e) => setPhase(pi, { cwd: e.target.value })}
             />
-            <label className="flex items-center gap-2 text-sm text-ink-dim">
-              <input
-                type="checkbox"
-                checked={phase.gated}
-                onChange={(e) => setPhase(pi, { gated: e.target.checked })}
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="flex items-center gap-2 text-sm text-ink-dim">
+                <input
+                  type="checkbox"
+                  checked={phase.gated}
+                  onChange={(e) => setPhase(pi, { gated: e.target.checked })}
+                />
+                Requires human approval (gated)
+              </label>
+              <RuntimeSelect
+                fieldClass={FIELD}
+                label="Use pipeline runtime"
+                ariaLabel={`Runtime (phase ${pi + 1})`}
+                value={phase.runtime}
+                runtimes={runtimes}
+                onChange={(r) => setPhase(pi, { runtime: r })}
               />
-              Requires human approval (gated)
-            </label>
+            </div>
 
             <div className="space-y-2 border-l border-line pl-3">
               {phase.steps.map((step, si) => (
@@ -195,11 +227,23 @@ export function PipelineForm({
                       value={step.name}
                       onChange={(e) => setStep(pi, si, { name: e.target.value })}
                     />
+                    <RuntimeSelect
+                      fieldClass={FIELD}
+                      label="Use phase runtime"
+                      ariaLabel={`Runtime (phase ${pi + 1} step ${si + 1})`}
+                      value={step.runtime}
+                      runtimes={runtimes}
+                      onChange={(r) => setStep(pi, si, { runtime: r, model: undefined })}
+                    />
                     <ModelSelect
+                      key={`step:${pi}:${si}:${effective(phase, step)}`}
                       fieldClass={FIELD}
                       label="Use pipeline default"
                       ariaLabel={`Use pipeline default (phase ${pi + 1} step ${si + 1})`}
                       value={step.model}
+                      {...(aliasesFor(effective(phase, step))
+                        ? { aliases: aliasesFor(effective(phase, step)) }
+                        : {})}
                       onChange={(m) => setStep(pi, si, { model: m })}
                     />
                     <div className="ml-auto flex items-center gap-1">

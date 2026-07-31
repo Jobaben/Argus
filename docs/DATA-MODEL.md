@@ -1,8 +1,9 @@
 # Argus — Data Model Reference
 
-Empirically observed shapes of the `~/.claude` files Argus reads. Verified
-against a live home directory on 2026-06-16. Treat every field as optional and
-read defensively — Claude Code versions vary and files are written incrementally.
+Empirically observed shapes of the files Argus reads — `~/.claude` for Claude
+Code, `~/.codex` for Codex. Verified against a live home directory on
+2026-06-16. Treat every field as optional and read defensively — CLI versions
+vary and files are written incrementally.
 
 ## `jobs/<short>/state.json` — background job state
 
@@ -95,6 +96,39 @@ skill_listing, hook_success, hook_additional_context, deferred_tools_delta
 
 Useful for summaries: `ai-title` (human title), `last-prompt`/`user` (first
 prompt), `tool_use` count, message count, first/last timestamps where present.
+
+## `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<id>.jsonl` — Codex transcripts
+
+Filed by **date**, not by project, and named for the thread id — which is why a
+Codex session is resolved by id rather than by composing a path from
+`(project, sessionId)` the way a Claude transcript is. Archived threads move to
+`~/.codex/archived_sessions/` with the same shape.
+
+Each line wraps one item with a UTC timestamp:
+
+```jsonc
+{ "timestamp": "…", "type": "session_meta",   "payload": { "id": "…", "cwd": "/srv/app", "cli_version": "…" } }
+{ "timestamp": "…", "type": "turn_context",   "payload": { "model": "gpt-5.3-codex", "cwd": "/srv/app" } }
+{ "timestamp": "…", "type": "response_item",  "payload": { "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "…" }] } }
+{ "timestamp": "…", "type": "response_item",  "payload": { "type": "function_call", "name": "shell", "arguments": "{…}" } }
+{ "timestamp": "…", "type": "response_item",  "payload": { "type": "function_call_output", "output": "…" } }
+{ "timestamp": "…", "type": "response_item",  "payload": { "type": "reasoning", "summary": [{ "type": "summary_text", "text": "…" }] } }
+{ "timestamp": "…", "type": "event_msg",      "payload": { "type": "token_count", "info": { "total_token_usage": { … } } } }
+```
+
+`server/src/sources/codexSessions.ts` translates these into the Claude line
+shape so one set of readers serves both. It reads **`response_item` only**: a
+rollout carries the same content again as `event_msg` UI events, and reading
+both would show every message twice. `session_meta` / `turn_context` are kept
+for the working directory and the model; roles other than user/assistant come
+through flagged `isMeta`, which is the signal the title deriver already uses to
+skip injected instructions.
+
+## `~/.codex/config.toml` — Codex configuration
+
+TOML. Argus reads it to check whether its stop hook is registered, and
+**appends** a `[[hooks.stop]]` block when it isn't — never a rewrite, so
+comments and ordering survive. See ARCHITECTURE §1.
 
 ## `history.jsonl` — global prompt history
 

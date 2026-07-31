@@ -15,7 +15,7 @@ export { AuthValidationError, MIN_PASSWORD_LENGTH } from "./userStore.js";
 /**
  * Session management for the pipeline control surface.
  *
- * Editing or running a pipeline ultimately spawns `claude -p` with the user's
+ * Editing or running a pipeline ultimately spawns an agent CLI with the user's
  * full credentials, so those endpoints demand an authenticated account on top
  * of the host/origin/token layers in security.ts. Accounts themselves —
  * registration, root approval, scrypt hashing — live in userStore.ts; this

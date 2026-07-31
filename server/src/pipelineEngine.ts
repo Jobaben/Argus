@@ -1,6 +1,5 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
-import { randomUUID } from "node:crypto";
 import {
   encodeProject,
   killRunProcess,
@@ -30,9 +29,12 @@ import {
 } from "./pipelineTransitions.js";
 import { interpolate, livePhases, previousPayloadFor } from "./sources/dag.js";
 import { journal } from "./sources/journal.js";
-import { isAlive, parseRunEnvelope } from "./scheduler.js";
+import { isAlive } from "./scheduler.js";
+import { claudeRuntime, parseEnvelopeFor, resolveRuntimeId, runtimeFor } from "./runtimes/index.js";
 import { graceMsFor, previousFireTime } from "./sources/nextFire.js";
 import { KeyedMutex } from "./mutex.js";
+import type { SpawnPlan } from "./runtimes/index.js";
+import type { AgentRuntimeId } from "@argus/contracts";
 import type { Run } from "./sources/scheduleTypes.js";
 import type { RetryableClass } from "./sources/pipelineTypes.js";
 import type {
@@ -87,39 +89,50 @@ export const OUTCOME_CONTRACT =
   "subagents finish, so do not stop while any are still in flight. If you must stop " +
   "with deferred work unfinished, report `ARGUS_OUTCOME: blocked`.";
 
-/** Build the `claude -p` argument vector for a step run, with the outcome
- *  contract appended to the system prompt. Kept pure for unit testing. */
-export function buildClaudeArgs(run: Run): string[] {
-  const args = [
-    "-p",
-    // stream-json turns the fd-backed log into a live NDJSON transcript the
-    // run tailer can follow; the CLI requires --verbose alongside it in -p mode.
-    "--output-format",
-    "stream-json",
-    "--verbose",
-    "--session-id",
-    run.sessionId ?? randomUUID(),
-    "--append-system-prompt",
-    OUTCOME_CONTRACT,
-  ];
-  if (run.model && run.model.trim()) args.push("--model", run.model);
-  return args;
+/**
+ * Build the invocation for a step run, with the outcome contract carried into
+ * the agent's instructions.
+ *
+ * The runtime decides how that contract is delivered — Claude Code takes it on
+ * `--append-system-prompt`, Codex has no such flag so it rides at the top of
+ * the prompt — and both produce a run that reports `ARGUS_OUTCOME` the same way.
+ * Kept pure for unit testing.
+ */
+export function buildStepPlan(run: Run): SpawnPlan {
+  return runtimeFor(run.runtime).streamPlan({
+    prompt: run.prompt,
+    sessionId: run.sessionId,
+    model: run.model,
+    systemPrompt: OUTCOME_CONTRACT,
+  });
 }
 
-/** Real spawn: `claude -p`, prompt on stdin, with the signal env injected.
- *  Detached with fd-backed stdio so the run survives an Argus restart and
- *  keeps logging without the parent process. Deliberately NO shell: with a
+/** The Claude Code argument vector for a step run. Retained as the narrow,
+ *  named form of {@link buildStepPlan} for callers and tests that mean Claude. */
+export function buildClaudeArgs(run: Run): string[] {
+  return claudeRuntime.streamPlan({
+    prompt: run.prompt,
+    sessionId: run.sessionId,
+    model: run.model,
+    systemPrompt: OUTCOME_CONTRACT,
+  }).args;
+}
+
+/** Real spawn: the run's agent CLI, prompt on stdin, with the signal env
+ *  injected. Detached with fd-backed stdio so the run survives an Argus restart
+ *  and keeps logging without the parent process. Deliberately NO shell: with a
  *  cmd.exe wrapper the detached grandchild's output never reaches the log fd,
  *  and the wrapper pid breaks pid tracking across restarts (spike-verified).
- *  Requires `claude` to be a real executable (claude.exe / binary), which the
- *  native installer provides. */
+ *  Requires the CLI to be a real executable (claude.exe / codex.exe / binary),
+ *  which the native installers provide. */
 export const defaultPipelineSpawn: PipelineSpawnFn = (run, logPath, env) => {
   const fd = openSync(logPath, "a");
+  const plan = buildStepPlan(run);
   let child: ReturnType<typeof nodeSpawn>;
   try {
-    child = nodeSpawn("claude", buildClaudeArgs(run), {
+    child = nodeSpawn(plan.bin, plan.args, {
       cwd: run.cwd,
-      env: { ...process.env, ...env },
+      env: { ...process.env, ...plan.env, ...env },
       detached: true,
       stdio: ["pipe", fd, fd],
     });
@@ -128,7 +141,7 @@ export const defaultPipelineSpawn: PipelineSpawnFn = (run, logPath, env) => {
     closeSync(fd);
   }
   child.stdin?.on("error", () => {});
-  child.stdin?.write(run.prompt);
+  child.stdin?.write(plan.stdin);
   child.stdin?.end();
   child.unref();
   const done = new Promise<{ code: number | null }>((resolve) => {
@@ -152,9 +165,10 @@ export interface EngineDeps {
   preflight?: () => Promise<{ ok: boolean; reasons: string[] }>;
   /** Kills a run's process tree; injectable for tests. Defaults to killRunProcess. */
   kill?: (pid: number) => Promise<boolean> | boolean;
-  /** Live-activity tailer; told when step runs start and end. */
+  /** Live-activity tailer; told when step runs start and end, and under which
+   *  runtime so it reads the log in that CLI's event vocabulary. */
   tailer?: {
-    track(runId: string, instanceId: string): void;
+    track(runId: string, instanceId: string, runtime?: AgentRuntimeId | null): void;
     untrack(runId: string): void;
   };
 }
@@ -223,6 +237,10 @@ export function createEngine(deps: EngineDeps): Engine {
     const startedAt = nowISO();
     const planned = phaseDef.steps.map((stepDef) => {
       const runId = deps.newId();
+      // Narrowest wins: a step names its runtime, else its phase, else the
+      // pipeline, else the server default. Resolved and written down here, so a
+      // mixed-runtime pipeline stays readable on the board and in the record.
+      const runtime = resolveRuntimeId(stepDef.runtime, phaseDef.runtime, def.runtime);
       const run: Run = {
         id: runId,
         scheduleId: `pipeline:${inst.pipelineId}`,
@@ -237,8 +255,9 @@ export function createEngine(deps: EngineDeps): Engine {
         durationMs: null,
         pid: null,
         exitCode: null,
-        sessionId: deps.newId(),
+        sessionId: runtimeFor(runtime).capabilities.presetSessionId ? deps.newId() : null,
         model: stepDef.model ?? def.model,
+        runtime,
         project: encodeProject(phaseDef.cwd),
         resultSummary: null,
         error: null,
@@ -297,12 +316,12 @@ export function createEngine(deps: EngineDeps): Engine {
       ARGUS_RUN_ID: run.id,
       ARGUS_STEP_NAME: run.scheduleName,
       ARGUS_SIGNAL_TOKEN: inst.signalToken,
-      // Opt the CLI into forwarding subagent text/thinking into the stream-json
-      // log so the tailer can surface subagent activity. Env var instead of the
-      // equivalent --forward-subagent-text flag: older CLIs ignore the var but
-      // would reject the unknown flag.
-      CLAUDE_CODE_FORWARD_SUBAGENT_TEXT: "1",
+      // Which CLI the hook is running under. One hook file serves both, and the
+      // two deliver slightly different Stop payloads; this removes the guess.
+      ARGUS_RUNTIME: resolveRuntimeId(run.runtime),
     };
+    // Runtime-specific environment (e.g. Claude Code's subagent-text forwarding)
+    // comes from the spawn plan, so it stays with the runtime that needs it.
     let handle: { pid: number | null; done: Promise<{ code: number | null }> };
     try {
       handle = deps.spawn(run, runLogPath(run.id), env);
@@ -313,7 +332,7 @@ export function createEngine(deps: EngineDeps): Engine {
     }
     run.pid = handle.pid;
     await writeRun(run);
-    deps.tailer?.track(run.id, inst.id);
+    deps.tailer?.track(run.id, inst.id, run.runtime);
     return handle;
   }
 
@@ -338,12 +357,15 @@ export function createEngine(deps: EngineDeps): Engine {
         // cost/tokens/result from it so every completed step reports its spend
         // (not only runs finalized by the adopted-run reconcile path).
         const got = await readRun(run.id);
-        const envelope = got ? parseRunEnvelope(got.log) : null;
+        const envelope = got ? parseEnvelopeFor(run.runtime, got.log) : null;
         await patchRun(run.id, {
           status: res.code === 0 ? "succeeded" : "failed",
           endedAt: nowISO(),
           durationMs: deps.now().getTime() - new Date(startedAt).getTime(),
           exitCode: res.code,
+          // Codex names its own thread; the id only becomes knowable once the
+          // stream has reported it, which by now the log has.
+          sessionId: got?.run.sessionId ?? envelope?.sessionId ?? null,
           resultSummary: envelope?.result ?? got?.run.resultSummary ?? null,
           costUsd: envelope?.costUsd ?? got?.run.costUsd ?? null,
           tokens: envelope?.tokens ?? got?.run.tokens ?? null,
@@ -474,7 +496,7 @@ export function createEngine(deps: EngineDeps): Engine {
         if (!got || got.run.status !== "running" || !isAlive(got.run.pid)) continue;
         await sem.acquire();
         adopted.set(s.runId, { instanceId: inst.id });
-        deps.tailer?.track(s.runId, inst.id);
+        deps.tailer?.track(s.runId, inst.id, got.run.runtime);
       }
     }
   }
@@ -667,7 +689,7 @@ export function createEngine(deps: EngineDeps): Engine {
           continue;
         }
         if (isAlive(got.run.pid)) continue;
-        const envelope = parseRunEnvelope(got.log);
+        const envelope = parseEnvelopeFor(got.run.runtime, got.log);
         const parsed = envelope.isError !== null || envelope.result !== null ? envelope : null;
         const ended = deps.now();
         // patchRun (not a full writeRun spread): the signal path patches
@@ -679,6 +701,7 @@ export function createEngine(deps: EngineDeps): Engine {
             ? ended.getTime() - new Date(got.run.startedAt).getTime()
             : null,
           exitCode: null,
+          sessionId: got.run.sessionId ?? parsed?.sessionId ?? null,
           resultSummary: parsed?.result ?? got.run.resultSummary,
           costUsd: parsed?.costUsd ?? got.run.costUsd,
           tokens: parsed?.tokens ?? got.run.tokens,

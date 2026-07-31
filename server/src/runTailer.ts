@@ -1,88 +1,36 @@
 /**
- * Tails the NDJSON logs of running pipeline steps (written by `claude -p
- * --output-format stream-json --verbose`) and derives compact activity events
- * for the Command Center. The log on disk is the durable source of truth;
- * everything here is in-memory and rebuilt from the log after a restart.
+ * Tails the NDJSON logs of running pipeline steps and derives compact activity
+ * events for the Command Center. Both runtimes write one: `claude -p
+ * --output-format stream-json --verbose` and `codex exec --json`. The two use
+ * different event vocabularies, so the line-to-event mapping belongs to the
+ * runtime; everything here is the byte-offset machinery that is the same for
+ * either. The log on disk is the durable source of truth; all of this is
+ * in-memory and rebuilt from the log after a restart.
  */
 
 import { open } from "node:fs/promises";
 import path from "node:path";
 import chokidar, { type FSWatcher } from "chokidar";
 import { LOG_CAP_BYTES, runLogPath } from "./sources/runs.js";
-import type { ActivityEvent } from "@argus/contracts";
+import { runtimeFor } from "./runtimes/index.js";
+import type { ActivityEvent, AgentRuntimeId } from "@argus/contracts";
 import { log } from "./log.js";
 
 export type { ActivityEvent } from "@argus/contracts";
 
-const LABEL_MAX = 80;
-
-/** One-line, length-capped label text. */
-function clip(s: string): string {
-  const t = s.replace(/\s+/g, " ").trim();
-  return t.length > LABEL_MAX ? `${t.slice(0, LABEL_MAX - 1)}…` : t;
-}
-
-function basename(p: string): string {
-  return p.split(/[\\/]/).pop() ?? p;
-}
-
-/** "Bash: npm test" / "Edit: foo.ts" / bare tool name for everything else. */
-function summarizeToolUse(name: string, input: Record<string, unknown>): string {
-  switch (name) {
-    case "Bash":
-      return clip(`${name}: ${String(input.command ?? "")}`);
-    case "Read":
-    case "Edit":
-    case "Write":
-      return clip(
-        `${name}: ${typeof input.file_path === "string" ? basename(input.file_path) : ""}`,
-      );
-    case "Task":
-      return clip(`${name}: ${String(input.description ?? "")}`);
-    default:
-      return name;
-  }
-}
-
 /**
- * Map one NDJSON line to zero or more activity events. Unknown, malformed,
- * and uninteresting lines (user/tool_result echoes) yield nothing.
+ * Map one NDJSON line to zero or more activity events for the named runtime.
+ * Unknown, malformed, and uninteresting lines yield nothing.
+ *
+ * Defaults to Claude Code when no runtime is named, which is what every caller
+ * that predates runtimes means.
  */
-export function deriveActivity(line: string, at: string): ActivityEvent[] {
-  let obj: Record<string, unknown>;
-  try {
-    obj = JSON.parse(line) as Record<string, unknown>;
-  } catch {
-    return [];
-  }
-  if (!obj || typeof obj !== "object") return [];
-  if (obj.type === "system" && obj.subtype === "init") {
-    return [{ at, kind: "init", label: "session started" }];
-  }
-  if (obj.type === "result") return [{ at, kind: "done", label: "finished" }];
-  if (obj.type !== "assistant") return [];
-  const message = obj.message as Record<string, unknown> | undefined;
-  const content = Array.isArray(message?.content) ? (message.content as unknown[]) : [];
-  // Subagent messages (forwarded when CLAUDE_CODE_FORWARD_SUBAGENT_TEXT is set
-  // at spawn) carry the spawning Task tool_use id; mark their labels so the
-  // Command Center distinguishes them from the main agent's output.
-  const prefix = typeof obj.parent_tool_use_id === "string" ? "Subagent: " : "";
-  const events: ActivityEvent[] = [];
-  for (const raw of content) {
-    const block = raw as Record<string, unknown>;
-    if (block?.type === "tool_use" && typeof block.name === "string") {
-      events.push({
-        at,
-        kind: "tool",
-        label: clip(
-          prefix + summarizeToolUse(block.name, (block.input ?? {}) as Record<string, unknown>),
-        ),
-      });
-    } else if (block?.type === "text" && typeof block.text === "string" && block.text.trim()) {
-      events.push({ at, kind: "text", label: clip(prefix + block.text) });
-    }
-  }
-  return events;
+export function deriveActivity(
+  line: string,
+  at: string,
+  runtime?: AgentRuntimeId | null,
+): ActivityEvent[] {
+  return runtimeFor(runtime ?? "claude").deriveActivity(line, at);
 }
 
 const RING_CAP = 200;
@@ -98,7 +46,8 @@ export interface TailerDeps {
 }
 
 export interface RunTailer {
-  track(runId: string, instanceId: string): void;
+  /** `runtime` decides how the log's lines are read; omitted means Claude Code. */
+  track(runId: string, instanceId: string, runtime?: AgentRuntimeId | null): void;
   untrack(runId: string): void;
   latest(): Map<string, ActivityEvent>;
   poke(runId: string): void;
@@ -107,6 +56,7 @@ export interface RunTailer {
 
 interface TrackedRun {
   instanceId: string;
+  runtime: AgentRuntimeId | null;
   offset: number;
   leftover: Buffer;
   events: ActivityEvent[];
@@ -203,7 +153,7 @@ export function createRunTailer(deps: TailerDeps): RunTailer {
       const at = deps.now().toISOString();
       for (const line of data.subarray(0, lastNl).toString("utf8").split("\n")) {
         if (!line.trim()) continue;
-        const events = deriveActivity(line, at);
+        const events = deriveActivity(line, at, st.runtime);
         if (events.length === 0) continue;
         st.events.push(...events);
         if (st.events.length > RING_CAP) st.events.splice(0, st.events.length - RING_CAP);
@@ -240,10 +190,11 @@ export function createRunTailer(deps: TailerDeps): RunTailer {
       });
   }
 
-  function track(runId: string, instanceId: string): void {
+  function track(runId: string, instanceId: string, runtime?: AgentRuntimeId | null): void {
     if (runs.has(runId)) return;
     runs.set(runId, {
       instanceId,
+      runtime: runtime ?? null,
       offset: 0,
       leftover: Buffer.alloc(0),
       events: [],

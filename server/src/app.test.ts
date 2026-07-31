@@ -92,6 +92,41 @@ test("GET /api/health returns ok + version", async () => {
   assert.equal(typeof body.version, "string");
 });
 
+test("GET /api/health names both agent homes", async () => {
+  const res = await makeApp().request("/api/health", { headers: loopback });
+  const body = (await res.json()) as { claudeHome: string; codexHome: string };
+  assert.equal(typeof body.claudeHome, "string");
+  assert.equal(typeof body.codexHome, "string");
+});
+
+test("GET /api/runtimes lists every runtime, its default, and its capabilities", async () => {
+  const res = await makeApp().request("/api/runtimes", { headers: loopback });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as {
+    default: string;
+    runtimes: {
+      id: string;
+      available: boolean;
+      isDefault: boolean;
+      capabilities: Record<string, boolean>;
+    }[];
+  };
+  assert.equal(body.default, "claude");
+  assert.deepEqual(
+    body.runtimes.map((r) => r.id),
+    ["claude", "codex"],
+  );
+  assert.equal(body.runtimes.filter((r) => r.isDefault).length, 1);
+  // The capabilities the UI reads to explain a gap rather than hide it: Codex
+  // names its own session and reports tokens, not dollars.
+  const codex = body.runtimes.find((r) => r.id === "codex")!;
+  assert.equal(codex.capabilities.presetSessionId, false);
+  assert.equal(codex.capabilities.reportsCost, false);
+  assert.equal(codex.capabilities.reportsTokens, true);
+  // Whether the CLI is installed is a fact about the box, not about the shape.
+  assert.equal(typeof codex.available, "boolean");
+});
+
 test("unknown Host header is rejected with 403", async () => {
   const res = await makeApp().request("/api/health", { headers: { host: "evil.example.com" } });
   assert.equal(res.status, 403);

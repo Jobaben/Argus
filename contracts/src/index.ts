@@ -19,6 +19,13 @@ export type {
 } from "./agents.js";
 
 export type {
+  AgentRuntimeCapabilities,
+  AgentRuntimeId,
+  AgentRuntimeInfo,
+  RuntimesResponse,
+} from "./runtimes.js";
+
+export type {
   LaunchInput,
   Run,
   RunOutcome,

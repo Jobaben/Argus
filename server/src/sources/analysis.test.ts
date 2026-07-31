@@ -172,6 +172,7 @@ test("the budget hard stop refuses a pass before it spawns", async () => {
         prompt: "",
         cwd: "",
         model: "",
+        runtime: "claude",
         maxOutputBytes: 0,
       });
     },

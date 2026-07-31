@@ -1,4 +1,6 @@
 import { existsSync, statSync } from "node:fs";
+import { isRuntimeId } from "../runtimes/index.js";
+import type { AgentRuntimeId } from "@argus/contracts";
 
 /** Runs fired ad hoc from the Launch tab share one run bucket: they are pruned
  * together (same RUN_KEEP window as a schedule) and grouped into one Chronicle
@@ -17,6 +19,8 @@ export interface LaunchInput {
   prompt: string;
   cwd: string;
   model?: string;
+  /** Which agent CLI to run. Absent = the server default. */
+  runtime?: AgentRuntimeId;
 }
 
 export function validateLaunchInput(raw: unknown): LaunchInput {
@@ -37,6 +41,9 @@ export function validateLaunchInput(raw: unknown): LaunchInput {
   if (r.model !== undefined && (typeof r.model !== "string" || !r.model.trim())) {
     throw new LaunchValidationError("model must be a non-empty string");
   }
+  if (r.runtime !== undefined && r.runtime !== null && !isRuntimeId(r.runtime)) {
+    throw new LaunchValidationError("runtime must be claude | codex");
+  }
   const prompt = r.prompt.trim();
   const name = typeof r.name === "string" && r.name.trim() ? r.name.trim() : deriveName(prompt);
   return {
@@ -44,6 +51,7 @@ export function validateLaunchInput(raw: unknown): LaunchInput {
     prompt,
     cwd: r.cwd,
     ...(r.model !== undefined ? { model: (r.model as string).trim() } : {}),
+    ...(isRuntimeId(r.runtime) ? { runtime: r.runtime } : {}),
   };
 }
 

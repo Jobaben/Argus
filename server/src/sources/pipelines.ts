@@ -6,6 +6,8 @@ import type { PhaseDef, PhaseStep, PipelineDefinition } from "./pipelineTypes.js
 import type { Trigger } from "./scheduleTypes.js";
 import { RubricValidationError, validateAutoApprove, validateRubric } from "./verdict.js";
 import { DagValidationError, validateDag } from "./dag.js";
+import { isRuntimeId } from "../runtimes/index.js";
+import type { AgentRuntimeId } from "@argus/contracts";
 
 // The crash-safe, mutex-serialized single-file store (shared with schedules).
 const store = createJsonArrayStore<PipelineDefinition>({
@@ -28,12 +30,22 @@ export interface PipelineInput {
   enabled?: boolean;
   overlapPolicy?: "skip" | "allow";
   model?: string;
+  runtime?: AgentRuntimeId;
 }
 
-// Model names are passed as a `--model <value>` argv pair to `claude`. Reject
-// anything that could be mistaken for a flag (leading dash) or smuggle shell
-// metacharacters on the win32 shell:true path — only plain identifier chars.
+// Model names are passed as a `--model <value>` argv pair to the agent CLI.
+// Reject anything that could be mistaken for a flag (leading dash) or smuggle
+// shell metacharacters on the win32 shell:true path — only plain identifier chars.
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+
+/** A runtime override on a pipeline, phase or step. Undefined/null = inherit. */
+function validateRuntime(raw: unknown, ctx: string): AgentRuntimeId | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (!isRuntimeId(raw)) {
+    throw new PipelineValidationError(`${ctx}: runtime must be claude | codex`);
+  }
+  return raw;
+}
 
 function validateModel(raw: unknown, ctx: string): string {
   if (typeof raw !== "string" || !raw.trim()) {
@@ -57,6 +69,8 @@ function validateStep(raw: unknown, ctx: string): PhaseStep {
   const step: PhaseStep = { name: s.name.trim(), prompt: s.prompt.trim() };
   if (s.model !== undefined && s.model !== null)
     step.model = validateModel(s.model, `${ctx}: step`);
+  const runtime = validateRuntime(s.runtime, `${ctx}: step`);
+  if (runtime) step.runtime = runtime;
   return step;
 }
 
@@ -111,6 +125,7 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
   }
 
   const retry = validateRetry(p.retry, i);
+  const runtime = validateRuntime(p.runtime, `phase ${i}`);
 
   let produces: string | undefined;
   if (p.produces !== undefined && p.produces !== null) {
@@ -133,6 +148,7 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
     ...(produces ? { produces } : {}),
     ...(rubric ? { rubric } : {}),
     ...(autoApprove ? { autoApprove } : {}),
+    ...(runtime ? { runtime } : {}),
   };
 }
 
@@ -189,6 +205,8 @@ export function validatePipelineInput(raw: unknown): PipelineInput {
   const enabled = r.enabled === undefined ? true : Boolean(r.enabled);
   const input: PipelineInput = { name: r.name.trim(), phases, trigger, enabled, overlapPolicy };
   if (r.model !== undefined && r.model !== null) input.model = validateModel(r.model, "pipeline");
+  const runtime = validateRuntime(r.runtime, "pipeline");
+  if (runtime) input.runtime = runtime;
   return input;
 }
 
@@ -213,6 +231,7 @@ export function validatePipelinePatch(raw: unknown): Partial<PipelineInput> {
   if ("enabled" in r) patch.enabled = Boolean(r.enabled);
   if ("overlapPolicy" in r) patch.overlapPolicy = r.overlapPolicy === "allow" ? "allow" : "skip";
   if ("model" in r) patch.model = r.model == null ? undefined : validateModel(r.model, "pipeline");
+  if ("runtime" in r) patch.runtime = validateRuntime(r.runtime, "pipeline");
   return patch;
 }
 
@@ -233,6 +252,7 @@ export async function createPipeline(
     enabled: input.enabled ?? true,
     overlapPolicy: input.overlapPolicy ?? "skip",
     ...(input.model ? { model: input.model } : {}),
+    ...(input.runtime ? { runtime: input.runtime } : {}),
     lastStartedAt: null,
     createdAt: iso,
     updatedAt: iso,
@@ -264,6 +284,12 @@ export async function updatePipeline(
       ...("model" in patch ? { model: patch.model } : {}),
       updatedAt: now.toISOString(),
     };
+    // An explicit `runtime: null` clears the override; spreading it would leave
+    // a present-and-null key the resolver has to keep stepping over.
+    if ("runtime" in patch) {
+      if (patch.runtime) merged.runtime = patch.runtime;
+      else delete merged.runtime;
+    }
     list[idx] = merged;
     await writePipelines(list);
     return merged;

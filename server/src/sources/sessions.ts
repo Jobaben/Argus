@@ -4,6 +4,14 @@ import { paths } from "../claudeHome.js";
 import { KeyedMutex } from "../mutex.js";
 import { readJsonl } from "./readJson.js";
 import { cached } from "./cache.js";
+import { encodeProject } from "./runs.js";
+import { codexPaths } from "../codexHome.js";
+import {
+  CODEX_PROJECT,
+  listCodexSessionFiles,
+  resolveCodexSessionFile,
+  translateRolloutLine,
+} from "./codexSessions.js";
 import type { SessionDetail, SessionMessage, SessionSummary, SessionTail } from "@argus/contracts";
 
 const DEFAULT_LIMIT = 60;
@@ -37,6 +45,9 @@ interface RawLine {
   isMeta?: boolean;
   timestamp?: string;
   message?: RawMessage;
+  /** Only on translated Codex lines: the directory the run happened in, which
+   *  stands in for the encoded project dir Claude Code would have given us. */
+  cwd?: string;
 }
 
 export type { SessionDetail, SessionMessage, SessionSummary, SessionTail } from "@argus/contracts";
@@ -48,6 +59,10 @@ export type { SessionDetail, SessionMessage, SessionSummary, SessionTail } from 
  * is a best-effort cosmetic label only — never round-trip it back to disk.
  */
 export function decodeProjectLabel(encoded: string): string {
+  // Codex has no per-project directory; its sessions share one reserved segment
+  // and carry their real directory inside the rollout, which the readers below
+  // prefer when they have it.
+  if (encoded === CODEX_PROJECT) return "codex";
   let s = encoded;
   if (s.startsWith("C--")) s = "C:/" + s.slice(3);
   else if (s.startsWith("-")) s = s.slice(1);
@@ -104,13 +119,20 @@ function summarize(project: string, id: string, lines: RawLine[]): SessionSummar
   let model: string | null = null;
   let firstActivity: string | null = null;
   let lastActivity: string | null = null;
+  let cwd: string | null = null;
 
   for (const line of lines) {
     if (line.timestamp) {
       if (!firstActivity) firstActivity = line.timestamp;
       lastActivity = line.timestamp;
     }
-    if (!isMessageLine(line.type)) continue;
+    // Codex reports its directory and model on meta lines rather than in the
+    // path, so pick both up wherever they appear.
+    if (line.cwd) cwd = line.cwd;
+    if (!isMessageLine(line.type)) {
+      if (line.message?.model) model = line.message.model;
+      continue;
+    }
     messageCount++;
     if (line.message?.model) model = line.message.model;
     const content = line.message?.content;
@@ -119,10 +141,15 @@ function summarize(project: string, id: string, lines: RawLine[]): SessionSummar
     }
   }
 
+  // A Codex rollout has no project directory to be filed under, but it does
+  // record the directory it ran in — which is the same thing a Claude project
+  // segment encodes. Using it means both runtimes' sessions group by working
+  // directory in the list, instead of Codex collapsing into one "codex" bucket.
+  const filedUnder = project === CODEX_PROJECT && cwd ? encodeProject(cwd) : project;
   return {
     id,
-    project,
-    projectLabel: decodeProjectLabel(project),
+    project: filedUnder,
+    projectLabel: cwd ?? decodeProjectLabel(project),
     title: deriveTitle(lines, id),
     messageCount,
     toolUseCount,
@@ -132,15 +159,23 @@ function summarize(project: string, id: string, lines: RawLine[]): SessionSummar
   };
 }
 
-async function listSessionFiles(): Promise<
-  { project: string; id: string; file: string; mtime: number }[]
-> {
-  let projectDirs: string[];
+interface TranscriptFile {
+  project: string;
+  id: string;
+  file: string;
+  mtime: number;
+  /** A Codex rollout, which is translated on read. */
+  codex: boolean;
+}
+
+async function listSessionFiles(): Promise<TranscriptFile[]> {
+  let projectDirs: string[] = [];
   try {
     const entries = await readdir(paths.projects(), { withFileTypes: true });
     projectDirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
   } catch {
-    return [];
+    // No Claude transcripts here — which is an ordinary state on a Codex-only
+    // machine, not a reason to stop before the Codex scan below.
   }
 
   const all = await Promise.all(
@@ -161,13 +196,33 @@ async function listSessionFiles(): Promise<
           } catch {
             /* unreadable; keep mtime 0 */
           }
-          return { project, id: f.replace(/\.jsonl$/, ""), file, mtime };
+          return { project, id: f.replace(/\.jsonl$/, ""), file, mtime, codex: false };
         }),
       );
     }),
   );
 
-  return all.flat();
+  const codex = (await listCodexSessionFiles()).map((f) => ({
+    project: CODEX_PROJECT,
+    id: f.id,
+    file: f.file,
+    mtime: f.mtime,
+    codex: true,
+  }));
+  return [...all.flat(), ...codex];
+}
+
+/** Parse one transcript into the canonical line shape, translating a Codex
+ *  rollout on the way through so every reader below sees one format. */
+async function readLines(codex: boolean, file: string): Promise<RawLine[]> {
+  const raw = await readJsonl<unknown>(file);
+  if (!codex) return raw as RawLine[];
+  const out: RawLine[] = [];
+  for (const line of raw) {
+    const translated = translateRolloutLine(line);
+    if (translated) out.push(translated as RawLine);
+  }
+  return out;
 }
 
 // Per-file summary memo keyed by (file, mtimeMs). A transcript is only re-read
@@ -178,12 +233,7 @@ async function listSessionFiles(): Promise<
 const SUMMARY_MEMO_MAX = 500;
 const summaryMemo = new Map<string, { mtime: number; summary: SessionSummary }>();
 
-async function summarizeFile(entry: {
-  project: string;
-  id: string;
-  file: string;
-  mtime: number;
-}): Promise<SessionSummary> {
+async function summarizeFile(entry: TranscriptFile): Promise<SessionSummary> {
   const key = entry.file;
   const hit = summaryMemo.get(key);
   if (hit && hit.mtime === entry.mtime) {
@@ -191,7 +241,7 @@ async function summarizeFile(entry: {
     summaryMemo.set(key, hit);
     return hit.summary;
   }
-  const lines = await readJsonl<RawLine>(entry.file);
+  const lines = await readLines(entry.codex, entry.file);
   const summary = summarize(entry.project, entry.id, lines);
   summaryMemo.delete(key);
   summaryMemo.set(key, { mtime: entry.mtime, summary });
@@ -215,17 +265,45 @@ async function readSessionsRaw(limit: number): Promise<SessionSummary[]> {
 
 // The list read scans dozens of transcript files; a short-TTL single-flight
 // cache collapses the burst of refetches a single live broadcast triggers.
+// Keyed by both transcript roots as well as the limit, mirroring the runs scan:
+// the roots are configurable, so a key that ignored them would serve one home's
+// listing for another's (and does, to tests with a home per case).
 export async function readSessions(limit = DEFAULT_LIMIT): Promise<SessionSummary[]> {
-  return cached(`sessions:${limit}`, 1500, () => readSessionsRaw(limit));
+  const key = `sessions:${limit}:${paths.projects()}:${codexPaths.sessions()}`;
+  return cached(key, 1500, () => readSessionsRaw(limit));
 }
 
-function resolveSessionPath(project: string, id: string): string | null {
+interface ResolvedSession {
+  file: string;
+  /** A Codex rollout, which is translated on read. */
+  codex: boolean;
+}
+
+/**
+ * The transcript file behind a `(project, sessionId)` pair.
+ *
+ * Claude Code's path is composed from the two, guarded so a crafted segment
+ * cannot escape `projects/`. Codex files by **date**, not by project, so its
+ * rollout is found by id in the index instead — which is what lets a run keep
+ * recording its working directory as `project` whichever CLI produced it, and
+ * still resolve its transcript. The id is segment-checked either way, and the
+ * index only ever holds paths under the Codex home.
+ */
+async function resolveSessionPath(project: string, id: string): Promise<ResolvedSession | null> {
   if (!PROJECT_SEG_RE.test(project) || !SESSION_ID_RE.test(id)) return null;
-  const base = paths.projects();
-  const resolved = path.resolve(base, project, `${id}.jsonl`);
-  const expectedDir = path.resolve(base, project);
-  if (path.dirname(resolved) !== expectedDir) return null;
-  return resolved;
+  if (project !== CODEX_PROJECT) {
+    const base = paths.projects();
+    const resolved = path.resolve(base, project, `${id}.jsonl`);
+    if (path.dirname(resolved) !== path.resolve(base, project)) return null;
+    try {
+      await stat(resolved);
+      return { file: resolved, codex: false };
+    } catch {
+      /* no Claude transcript under this project; it may be a Codex session */
+    }
+  }
+  const rollout = await resolveCodexSessionFile(id);
+  return rollout ? { file: rollout, codex: true } : null;
 }
 
 /**
@@ -249,10 +327,19 @@ export const RAW_LINES_CAP_BYTES = 8 * 1024 * 1024;
  * usage and tool-result errors, none of which survive normalization. Returns
  * an empty array for an unreadable or path-rejected session, same as every
  * other reader here: a missing transcript is an empty timeline, not an error.
+ *
+ * A Codex rollout is translated on the way out, so callers see Claude-shaped
+ * lines whichever runtime wrote the transcript. The translation carries roles,
+ * text, tool calls and tool results; fields Codex records elsewhere (per-message
+ * token usage) simply aren't there, and the derivations already treat those as
+ * optional.
  */
 export async function readSessionLines(project: string, id: string): Promise<unknown[]> {
-  const file = resolveSessionPath(project, id);
-  if (!file) return [];
+  const found = await resolveSessionPath(project, id);
+  if (!found) return [];
+  const { file } = found;
+  const translate = (lines: unknown[]) =>
+    found.codex ? lines.map(translateRolloutLine).filter((l) => l !== null) : lines;
 
   let size: number;
   try {
@@ -260,7 +347,7 @@ export async function readSessionLines(project: string, id: string): Promise<unk
   } catch {
     return [];
   }
-  if (size <= RAW_LINES_CAP_BYTES) return readJsonl<unknown>(file);
+  if (size <= RAW_LINES_CAP_BYTES) return translate(await readJsonl<unknown>(file));
 
   let text: string;
   try {
@@ -292,7 +379,7 @@ export async function readSessionLines(project: string, id: string): Promise<unk
       // skip malformed line
     }
   }
-  return out;
+  return translate(out);
 }
 
 function normalizeMessage(line: RawLine, index: number): SessionMessage {
@@ -319,10 +406,10 @@ function normalizeMessage(line: RawLine, index: number): SessionMessage {
 }
 
 async function readSessionRaw(project: string, id: string): Promise<SessionDetail | null> {
-  const file = resolveSessionPath(project, id);
-  if (!file) return null;
+  const found = await resolveSessionPath(project, id);
+  if (!found) return null;
 
-  const lines = await readJsonl<RawLine>(file);
+  const lines = await readLines(found.codex, found.file);
   if (lines.length === 0) return null;
 
   const summary = summarize(project, id, lines);
@@ -369,7 +456,11 @@ interface TailState {
   model: string | null;
   firstActivity: string | null;
   lastActivity: string | null;
+  /** Codex only: the directory the run happened in, used as the project label. */
+  cwd: string | null;
   messages: SessionMessage[];
+  /** Whether appended bytes must be translated from a Codex rollout first. */
+  codex: boolean;
 }
 
 const tailMemo = new Map<string, TailState>();
@@ -378,7 +469,7 @@ const tailMemo = new Map<string, TailState>();
 // bytes twice, corrupting the memoized state. Serialize per file.
 const tailLocks = new KeyedMutex();
 
-function newTailState(): TailState {
+function newTailState(codex: boolean): TailState {
   return {
     size: 0,
     mtimeMs: 0,
@@ -388,7 +479,9 @@ function newTailState(): TailState {
     model: null,
     firstActivity: null,
     lastActivity: null,
+    cwd: null,
     messages: [],
+    codex,
   };
 }
 
@@ -396,10 +489,15 @@ function newTailState(): TailState {
 // deriveTitle() + the message mapping in readSessionRaw derive from a full
 // parse: `aiTitle ?? userTitle` matches deriveTitle's precedence because an
 // ai-title anywhere in the file beats user text regardless of order.
-function ingestParsed(state: TailState, parsed: unknown): void {
+function ingestParsed(state: TailState, raw: unknown): void {
   state.lineCount++;
+  // A Codex rollout is translated line by line, exactly as the full read does,
+  // so a live tail and a reload of the same session agree message for message.
+  const parsed = state.codex ? translateRolloutLine(raw) : raw;
   if (!parsed || typeof parsed !== "object") return;
   const line = parsed as RawLine;
+  if (line.cwd) state.cwd = line.cwd;
+  if (!isMessageLine(line.type) && line.message?.model) state.model = line.message.model;
   if (line.timestamp) {
     if (!state.firstActivity) state.firstActivity = line.timestamp;
     state.lastActivity = line.timestamp;
@@ -481,13 +579,16 @@ export async function readSessionTail(
   id: string,
   after: number,
 ): Promise<SessionTail | null> {
-  const file = resolveSessionPath(project, id);
-  if (!file) return null;
-  return tailLocks.withLock(file, () => readSessionTailLocked(file, project, id, after));
+  const found = await resolveSessionPath(project, id);
+  if (!found) return null;
+  return tailLocks.withLock(found.file, () =>
+    readSessionTailLocked(found.file, found.codex, project, id, after),
+  );
 }
 
 async function readSessionTailLocked(
   file: string,
+  codex: boolean,
   project: string,
   id: string,
   after: number,
@@ -504,7 +605,7 @@ async function readSessionTailLocked(
   if (state && (st.size < state.size || (st.size === state.size && st.mtimeMs !== state.mtimeMs))) {
     state = undefined; // truncated or rewritten in place — reparse from scratch
   }
-  if (!state) state = newTailState();
+  if (!state) state = newTailState(codex);
   if (st.size > state.size) await ingestAppendedBytes(state, file, st.size);
   state.mtimeMs = st.mtimeMs;
 
@@ -521,7 +622,7 @@ async function readSessionTailLocked(
   return {
     id,
     project,
-    projectLabel: decodeProjectLabel(project),
+    projectLabel: state.cwd ?? decodeProjectLabel(project),
     title: state.aiTitle ?? state.userTitle ?? `Session ${id.slice(0, 8)}`,
     model: state.model,
     firstActivity: state.firstActivity,

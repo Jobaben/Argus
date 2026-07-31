@@ -5,8 +5,19 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { claudeHome, paths } from "../claudeHome.js";
+import { codexHome, codexPaths } from "../codexHome.js";
 import { atomicWriteJson } from "../sources/atomicWrite.js";
-import type { PrereqResult, PrereqStatus } from "@argus/contracts";
+import { defaultRuntimeId, resolveRuntimeId, runtimeFor } from "../runtimes/index.js";
+import { readPipelines } from "../sources/pipelines.js";
+import { readSchedules } from "../sources/schedules.js";
+import {
+  copyCodexHookFile,
+  hasArgusStopHook,
+  hasConflictingStopKey,
+  installCodexStopHook,
+  readCodexConfig,
+} from "./codexConfig.js";
+import type { AgentRuntimeId, PrereqResult, PrereqStatus } from "@argus/contracts";
 
 export type { PrereqResult, PrereqStatus } from "@argus/contracts";
 
@@ -16,6 +27,48 @@ interface Prerequisite {
   fixable: boolean;
   check(): Promise<PrereqResult>;
   apply?(): Promise<void>;
+}
+
+/**
+ * Which runtimes this installation actually depends on.
+ *
+ * Every CLI-and-hooks prerequisite is scoped to this set, because the
+ * alternative is worse in both directions: a Codex-only installation held to
+ * "Claude CLI on PATH" is permanently red and — since these are the checks
+ * `preflight()` refuses a pipeline start on — permanently unable to run
+ * anything, and the same in mirror image once Codex exists. A prerequisite for
+ * a tool nobody here uses is not a prerequisite.
+ *
+ * The default counts even with nothing configured, so a fresh install still
+ * gets told to install a CLI rather than reporting a clean bill of health for a
+ * machine that can't run an agent at all.
+ */
+export async function runtimesInUse(): Promise<Set<AgentRuntimeId>> {
+  const used = new Set<AgentRuntimeId>([defaultRuntimeId()]);
+  const [schedules, pipelines] = await Promise.all([
+    readSchedules().catch(() => []),
+    readPipelines().catch(() => []),
+  ]);
+  for (const s of schedules) if (s.runtime) used.add(s.runtime);
+  for (const d of pipelines) {
+    if (d.runtime) used.add(d.runtime);
+    for (const p of d.phases ?? []) {
+      if (p.runtime) used.add(p.runtime);
+      for (const step of p.steps ?? []) if (step.runtime) used.add(step.runtime);
+    }
+  }
+  return used;
+}
+
+/** A prerequisite that only applies while its runtime is in use. */
+function notInUse(id: string, label: string, fixable: boolean, runtime: string): PrereqResult {
+  return {
+    id,
+    label,
+    fixable,
+    status: "ok",
+    detail: `Not checked — nothing on this machine runs on ${runtime}.`,
+  };
 }
 
 /** Absolute, forward-slashed command for the hook, resolved from the Claude home. */
@@ -61,6 +114,14 @@ async function writeSettings(settings: Record<string, unknown>): Promise<void> {
 async function copyHookFile(): Promise<void> {
   await mkdir(paths.hooksDir(), { recursive: true });
   await copyFile(REPO_HOOK_SRC, path.join(paths.hooksDir(), "argus-signal.mjs"));
+}
+
+/** True only when the hook installed under `~/.codex/hooks` matches the repo's. */
+async function installedCodexHookMatchesRepo(): Promise<boolean> {
+  const installed = await fileHash(path.join(codexPaths.hooksDir(), "argus-signal.mjs"));
+  if (installed === null) return false;
+  const repo = await fileHash(REPO_HOOK_SRC);
+  return repo !== null && installed === repo;
 }
 
 /** Appends a hook group to settings.hooks[event], creating the arrays as needed. */
@@ -162,6 +223,9 @@ const REGISTRY: Prerequisite[] = [
     label: "Signal Stop hook",
     fixable: true,
     async check() {
+      if (!(await runtimesInUse()).has("claude")) {
+        return notInUse("signal-stop-hook", "Signal Stop hook", true, "Claude Code");
+      }
       const registered = commands(groupsFor(await readSettings(), "Stop")).some((c) =>
         c.command.includes("argus-signal"),
       );
@@ -199,6 +263,9 @@ const REGISTRY: Prerequisite[] = [
     label: "Gate PreToolUse hook",
     fixable: true,
     async check() {
+      if (!(await runtimesInUse()).has("claude")) {
+        return notInUse("gate-pretooluse-hook", "Gate PreToolUse hook", true, "Claude Code");
+      }
       const registered = commands(groupsFor(await readSettings(), "PreToolUse")).some(
         (c) =>
           c.matcher.includes("AskUserQuestion") &&
@@ -265,14 +332,83 @@ const REGISTRY: Prerequisite[] = [
     label: "Claude CLI on PATH",
     fixable: false,
     async check() {
-      const probe = probeCommand("claude");
+      if (!(await runtimesInUse()).has("claude")) {
+        return notInUse("claude-cli", "Claude CLI on PATH", false, "Claude Code");
+      }
+      const cli = runtimeFor("claude");
+      const probe = probeCommand(cli.bin(), cli.versionArgs);
       return {
         id: "claude-cli",
         label: "Claude CLI on PATH",
         fixable: false,
         status: probe.ok ? "ok" : "error",
-        detail: probe.ok ? undefined : `\`claude\` ${probe.reason}. Install the Claude CLI.`,
+        detail: probe.ok ? undefined : `\`${cli.bin()}\` ${probe.reason}. Install the Claude CLI.`,
       };
+    },
+  },
+  {
+    id: "codex-cli",
+    label: "Codex CLI on PATH",
+    fixable: false,
+    async check() {
+      if (!(await runtimesInUse()).has("codex")) {
+        return notInUse("codex-cli", "Codex CLI on PATH", false, "Codex");
+      }
+      const cli = runtimeFor("codex");
+      const probe = probeCommand(cli.bin(), cli.versionArgs);
+      return {
+        id: "codex-cli",
+        label: "Codex CLI on PATH",
+        fixable: false,
+        status: probe.ok ? "ok" : "error",
+        detail: probe.ok ? undefined : `\`${cli.bin()}\` ${probe.reason}. Install the Codex CLI.`,
+      };
+    },
+  },
+  {
+    // The Codex counterpart of `signal-stop-hook`. Codex has no
+    // AskUserQuestion tool, so there is no PreToolUse twin: a gated phase on
+    // Codex still pauses, because the engine holds a gate open on the phase's
+    // *completion* signal rather than on the agent asking a question.
+    id: "codex-signal-hook",
+    label: "Codex signal stop hook",
+    fixable: true,
+    async check() {
+      if (!(await runtimesInUse()).has("codex")) {
+        return notInUse("codex-signal-hook", "Codex signal stop hook", true, "Codex");
+      }
+      const toml = await readCodexConfig();
+      if (hasConflictingStopKey(toml)) {
+        return {
+          id: "codex-signal-hook",
+          label: "Codex signal stop hook",
+          fixable: true,
+          status: "error",
+          detail:
+            `${codexPaths.configFile()} declares \`stop\` as a value under [hooks], so Argus ` +
+            "can't add a [[hooks.stop]] block beside it. Move that key into a " +
+            "[[hooks.stop]] block, then apply fixes again.",
+        };
+      }
+      const registered = hasArgusStopHook(toml);
+      const fresh = await installedCodexHookMatchesRepo();
+      const status: PrereqStatus = !registered ? "missing" : !fresh ? "outdated" : "ok";
+      return {
+        id: "codex-signal-hook",
+        label: "Codex signal stop hook",
+        fixable: true,
+        status,
+        detail:
+          status === "missing"
+            ? "Codex pipeline phases can't complete without this hook."
+            : status === "outdated"
+              ? "Installed hook differs from the shipped version — runs may mis-report their outcome. Apply fixes to refresh it."
+              : undefined,
+      };
+    },
+    async apply() {
+      await copyCodexHookFile(REPO_HOOK_SRC);
+      await installCodexStopHook();
     },
   },
   {
@@ -362,11 +498,16 @@ const REGISTRY: Prerequisite[] = [
   },
 ];
 
+// Each runtime's CLI and signal hook are critical, and each is a no-op check
+// while that runtime is unused — so a single-runtime installation is held to
+// exactly the preconditions it depends on and no others.
 const CRITICAL_IDS = new Set([
   "signal-stop-hook",
   "gate-pretooluse-hook",
+  "codex-signal-hook",
   "argus-data-dir",
   "claude-cli",
+  "codex-cli",
   "node-runtime",
 ]);
 
@@ -406,14 +547,20 @@ export async function preflight(): Promise<{ ok: boolean; reasons: string[] }> {
 }
 
 /**
- * Repairs only the intrinsically-safe fixables: re-copies the hook file and
- * creates data dirs. NEVER edits settings.json. Used at server startup.
+ * Repairs only the intrinsically-safe fixables: re-copies the hook files and
+ * creates data dirs. NEVER edits settings.json or config.toml. Used at server
+ * startup.
  */
 export async function repairSafeFixables(): Promise<void> {
   try {
     await copyHookFile();
   } catch {
     /* re-check by caller surfaces failures */
+  }
+  try {
+    await copyCodexHookFile(REPO_HOOK_SRC);
+  } catch {
+    /* idem — a machine without ~/.codex simply has nothing to refresh */
   }
   try {
     await ensureDataDirs();
@@ -448,4 +595,4 @@ export async function applyAll(): Promise<{ ok: boolean; prereqs: PrereqResult[]
   return { ok: prereqs.every((p) => p.status === "ok"), prereqs };
 }
 
-export { REGISTRY, claudeHome };
+export { REGISTRY, claudeHome, codexHome, resolveRuntimeId };

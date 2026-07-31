@@ -1,20 +1,28 @@
 # Argus — Architecture
 
-> The all-seeing monitor for Claude Code. A dashboard **and control plane** over
-> `~/.claude`: it reads the state Claude Code owns and manages its own
-> scheduler/pipeline state alongside it.
+> The all-seeing monitor for coding agents. A dashboard **and control plane**
+> over `~/.claude` (and `~/.codex`): it reads the state the agent CLIs own and
+> manages its own scheduler/pipeline state alongside it. Two runtimes are
+> supported — Claude Code (`claude -p`) and Codex (`codex exec`) — selectable
+> per schedule, per pipeline, and per phase or step within one. See §3, "The
+> runtime seam".
 
-## 1. Principle: read Claude's state, own only Argus's
+## 1. Principle: read the agents' state, own only Argus's
 
-Argus treats the state Claude Code owns — `jobs/`, `daemon/`, `projects/`,
-`history.jsonl`, `tasks/`, `stats-cache.json` — as **strictly read-only**. It
-never mutates those files, so it is safe to run alongside live sessions and
-cannot corrupt the state it observes.
+Argus treats the state the agent CLIs own — Claude Code's `jobs/`, `daemon/`,
+`projects/`, `history.jsonl`, `tasks/`, `stats-cache.json`, and Codex's
+`sessions/` rollouts — as **strictly read-only**. It never mutates those files,
+so it is safe to run alongside live sessions and cannot corrupt the state it
+observes.
 
 Argus does **own and write** its own state, all confined to `~/.claude/argus/`
 (schedules, pipelines, per-run records, instances and issue triage) plus, when the user
-applies setup fixes, its signal hook under `~/.claude/hooks/` and a hook entry
-in `settings.json`. All Argus writes go through an atomic tmp+rename writer and
+applies setup fixes, its signal hook under `~/.claude/hooks/` and `~/.codex/hooks/`,
+a hook entry in `settings.json`, and an appended `[[hooks.stop]]` block in
+`~/.codex/config.toml`. That last one is an **append**, never a rewrite: a TOML
+round-trip through a parser would lose the operator's comments and ordering, and
+an array-of-tables header is valid wherever it appears, so appending is a
+well-formed edit that leaves every existing byte intact. All Argus writes go through an atomic tmp+rename writer and
 are serialized per file/instance by a keyed mutex.
 
 The one exception is the Vault's `argus/vault.sqlite`, which uses SQLite's own
@@ -24,7 +32,7 @@ has, and wrapping a live database in tmp+rename would remove that guarantee
 rather than add it. It is safe to make the exception there precisely because the
 Vault holds no authoritative state — see §5.
 
-Because it can spawn `claude -p` agents with the user's credentials, the HTTP
+Because it can spawn agents with the user's credentials, the HTTP
 surface is a privileged single-user control plane: loopback-bound by default,
 with a Host allowlist (anti DNS-rebind), an Origin check on mutations (anti
 CSRF), and an optional bearer token — all applied to the WebSocket upgrade too.
@@ -47,13 +55,14 @@ instead. See docs/API.md § Admin authentication.
 
 ```
 ┌────────────────────┐   read-only (chokidar watch)  ┌─────────────────────┐
-│  Claude's state     │ ───────────────────────────▶ │  server (Hono+ws)   │
+│  the agents' state  │ ───────────────────────────▶ │  server (Hono+ws)   │
 │  jobs/ daemon/      │      read on demand           │  /api/* + /ws       │
 │  projects/ history  │                               │  createApp factory  │
-├────────────────────┤   read + atomic writes        │  + scheduler/engine │
+│  ~/.codex/sessions  │                               │  + scheduler/engine │
+├────────────────────┤   read + atomic writes        │  + runtimes/ seam   │
 │  ~/.claude/argus/   │ ◀───────────────────────────▶ │                     │
 │  schedules pipelines│                               └──────────┬──────────┘
-│  runs/ instances/   │       spawn `claude -p`  ◀───────────────┤ JSON + ws push
+│  runs/ instances/   │  spawn claude -p / codex exec ◀──────────┤ JSON + ws push
 └────────────────────┘                              ┌──────────▼──────────┐
                                                      │  web (Vite/React)   │
                                                      │  one live socket +  │
@@ -63,11 +72,11 @@ instead. See docs/API.md § Admin authentication.
 
 ## 2. Workspaces
 
-| Workspace    | Runtime                         | Responsibility                                               |
-| ------------ | ------------------------------- | ------------------------------------------------------------ |
-| `contracts/` | Types only, no runtime          | Every DTO that crosses the HTTP/WS boundary, declared once   |
-| `server/`    | Node 22 + TS (tsx)              | Read `~/.claude`, expose REST + WebSocket, watch for changes |
-| `web/`       | Vite 8 + React 19 + Tailwind v4 | Tabbed dashboard, live refresh                               |
+| Workspace    | Runtime                         | Responsibility                                                            |
+| ------------ | ------------------------------- | ------------------------------------------------------------------------- |
+| `contracts/` | Types only, no runtime          | Every DTO that crosses the HTTP/WS boundary, declared once                |
+| `server/`    | Node 22 + TS (tsx)              | Read `~/.claude` + `~/.codex`, expose REST + WebSocket, watch for changes |
+| `web/`       | Vite 8 + React 19 + Tailwind v4 | Tabbed dashboard, live refresh                                            |
 
 Dev: `npm run dev` → server `:7777`, web `:5757` (Vite proxies `/api` and `/ws`
 to the server). One command, two processes via `concurrently`.
@@ -95,7 +104,12 @@ contracts, because the web cannot observe them.
 
 ```
 src/
-  claudeHome.ts        — single source of truth for path resolution
+  claudeHome.ts        — single source of truth for Claude Code path resolution
+  codexHome.ts         — the same for Codex (~/.codex)
+  runtimes/            — the agent-CLI seam (see below)
+    types.ts           — AgentRuntime: argv, envelope parsing, activity, capabilities
+    claude.ts codex.ts — one implementation each
+    index.ts           — the registry + narrowest-wins resolution
   log.ts               — one structured logger (text or JSON lines)
   httpCache.ts         — ETag / If-None-Match for every read
   requestLog.ts        — per-request id + timing, as a Hono middleware
@@ -118,10 +132,40 @@ src/
 - **Open/Closed** — adding a view = add a `sources/x.ts` + register one route;
   nothing existing changes.
 
+### The runtime seam
+
+Four places spawn an agent: the scheduler's batch run, the pipeline engine's
+streaming step, the bounded analysis pass, and the setup probe. Each used to
+spell `claude` and its flags out inline, and a second CLI added that way would
+have meant four sets of branches that could drift, plus a fifth in the log
+parser and a sixth in the activity tailer.
+
+Instead `runtimes/` answers four questions per CLI, and nothing else in the
+server knows which one is running:
+
+- **How do I invoke you?** A `SpawnPlan` — binary, argv, the text for stdin
+  (never argv, so no shell parses a user's prompt), and any env. Three flavours,
+  because a batch run, a live-tailed step and a bounded analysis pass want
+  different output formats.
+- **What did you say?** `parseEnvelope` turns whatever the CLI printed —
+  Claude Code's single JSON envelope, Codex's JSONL event stream — into the one
+  shape the run record stores.
+- **What are you doing right now?** `deriveActivity` maps one line of the
+  streaming log to Command Center events.
+- **What can't you do?** Capabilities, so a gap is reported rather than
+  producing a null the UI can't explain. Codex mints its own session id
+  (`presetSessionId: false`, so the run record is patched once the stream reports
+  it) and reports tokens but not dollars (`reportsCost: false`).
+
+The resolved runtime is **written onto the run record**, not re-derived at read
+time: a run started under one default has to stay explicable after the default
+changes, exactly like the budget ladder's `budgetAction`.
+
 ### Path discipline (cross-OS)
 
 `claudeHome()` derives the root from `os.homedir()` (or `ARGUS_CLAUDE_HOME` /
-`CLAUDE_CONFIG_DIR`). Data files frequently embed **foreign** absolute paths —
+`CLAUDE_CONFIG_DIR`); `codexHome()` does the same for `~/.codex` (or
+`ARGUS_CODEX_HOME` / `CODEX_HOME`). Data files frequently embed **foreign** absolute paths —
 e.g. a Windows `cwd: C:\GIT\Spectacle` sitting inside a Linux `~/.claude`. Those
 are display-only. Correlation always keys off `sessionId` and the **encoded
 project-dir name** (`-home-mtrushbad-GIT`, `C--GIT-Spectacle`), never the

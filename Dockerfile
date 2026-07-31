@@ -23,6 +23,9 @@ COPY --from=build /app/web/dist web/dist
 
 # Argus reads Claude Code state under this path; mount the host's ~/.claude here.
 ENV ARGUS_CLAUDE_HOME=/data/.claude
+# And Codex state here. Mount the host's ~/.codex only if you run Codex agents;
+# an absent directory is simply a machine with no Codex sessions to show.
+ENV ARGUS_CODEX_HOME=/data/.codex
 # Bind all interfaces inside the container; publish the port with `-p` and set
 # ARGUS_TOKEN so the exposed surface is authenticated.
 ENV ARGUS_HOST=0.0.0.0
