@@ -1,8 +1,8 @@
 import { spawn as nodeSpawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { parseRunEnvelope } from "../scheduler.js";
+import { defaultRuntimeId, isRuntimeId, runtimeFor } from "../runtimes/index.js";
 import { isSpendBlocked, recordRunSpend } from "./budget.js";
 import { log } from "../log.js";
+import type { AgentRuntimeId } from "@argus/contracts";
 
 /**
  * The one place Argus asks a model a question about its own state.
@@ -14,7 +14,7 @@ import { log } from "../log.js";
  * everything goes through here and inherits the same ones:
  *
  * **Bounded time.** A hard timeout kills the process group, not just the pid —
- * `claude` spawns children, and killing only the parent leaves them running.
+ * an agent CLI spawns children, and killing only the parent leaves them running.
  *
  * **Bounded output.** stdout is capped; past the cap the process is killed
  * rather than allowed to fill memory with a runaway response.
@@ -50,6 +50,8 @@ export interface AnalysisRequest {
   cwd: string;
   /** Model alias/id. Defaults to the configured analysis model. */
   model?: string;
+  /** Which CLI answers. Defaults to `ARGUS_ANALYSIS_RUNTIME`, else the server default. */
+  runtime?: AgentRuntimeId;
   timeoutMs?: number;
   maxOutputBytes?: number;
 }
@@ -86,6 +88,7 @@ export type AnalysisSpawn = (opts: {
   prompt: string;
   cwd: string;
   model: string;
+  runtime: AgentRuntimeId;
   maxOutputBytes: number;
 }) => AnalysisSpawnHandle;
 
@@ -96,12 +99,30 @@ export type AnalysisSpawn = (opts: {
  * low-stakes reads over text that is already in the prompt. Spending the
  * flagship model's price on them is how a helpful background feature turns into
  * a line item, so the cheap fast model is the default and every caller can
- * override it.
+ * override it. Kept exported at its historical name and value: it is the Claude
+ * Code default, and the runtime supplies its own when the pass runs elsewhere.
  */
 export const DEFAULT_ANALYSIS_MODEL = "haiku";
 
-export function analysisModel(): string {
-  return process.env.ARGUS_ANALYSIS_MODEL?.trim() || DEFAULT_ANALYSIS_MODEL;
+/**
+ * Which CLI answers the analysis passes.
+ *
+ * Separate from `ARGUS_AGENT` on purpose: these are short, cheap, read-only
+ * questions Argus asks about its own state, and an operator may well want them
+ * answered by a different (cheaper, or simply already-authenticated) CLI than
+ * the one doing the real work.
+ */
+export function analysisRuntime(): AgentRuntimeId {
+  const raw = process.env.ARGUS_ANALYSIS_RUNTIME?.trim().toLowerCase();
+  return isRuntimeId(raw) ? raw : defaultRuntimeId();
+}
+
+/** The analysis model for a runtime: the explicit override, else that runtime's
+ *  own default (empty string = let the CLI decide). */
+export function analysisModel(runtime?: AgentRuntimeId): string {
+  const override = process.env.ARGUS_ANALYSIS_MODEL?.trim();
+  if (override) return override;
+  return runtimeFor(runtime ?? analysisRuntime()).defaultAnalysisModel();
 }
 
 /** Analysis passes are opt-out: `ARGUS_ANALYSIS=off` disables every one. */
@@ -110,26 +131,30 @@ export function analysisEnabled(): boolean {
 }
 
 /**
- * The real spawn. Mirrors `defaultSpawn` in the scheduler — same flags, same
- * stdin discipline, same detached process group so the whole tree can be
+ * The real spawn. Mirrors `defaultSpawn` in the scheduler — same runtime seam,
+ * same stdin discipline, same detached process group so the whole tree can be
  * signalled — but captures stdout in memory under a cap instead of streaming it
  * to a log file, because an analysis pass's output *is* the result.
  */
-export const defaultAnalysisSpawn: AnalysisSpawn = ({ prompt, cwd, model, maxOutputBytes }) => {
-  const child = nodeSpawn(
-    "claude",
-    ["-p", "--output-format", "json", "--session-id", randomUUID(), "--model", model],
-    {
-      cwd,
-      shell: process.platform === "win32",
-      detached: process.platform !== "win32",
-    },
-  );
+export const defaultAnalysisSpawn: AnalysisSpawn = ({
+  prompt,
+  cwd,
+  model,
+  runtime,
+  maxOutputBytes,
+}) => {
+  const plan = runtimeFor(runtime).analysisPlan({ prompt, model });
+  const child = nodeSpawn(plan.bin, plan.args, {
+    cwd,
+    env: { ...process.env, ...plan.env },
+    shell: process.platform === "win32",
+    detached: process.platform !== "win32",
+  });
 
   child.stdin?.on("error", () => {
     /* the process failed to spawn; the close handler reports it */
   });
-  child.stdin?.write(prompt);
+  child.stdin?.write(plan.stdin);
   child.stdin?.end();
 
   let stdout = "";
@@ -300,10 +325,12 @@ export function createAnalysisRunner(deps: AnalysisRunnerDeps = {}): AnalysisRun
         return failed<T>("budget-blocked", "the spend budget hard stop is in force");
       }
 
+      const runtime = req.runtime ?? analysisRuntime();
       const handle = spawn({
         prompt: req.prompt,
         cwd: req.cwd,
-        model: req.model ?? analysisModel(),
+        model: req.model ?? analysisModel(runtime),
+        runtime,
         maxOutputBytes,
       });
       timer = setTimeout(() => {
@@ -313,7 +340,7 @@ export function createAnalysisRunner(deps: AnalysisRunnerDeps = {}): AnalysisRun
 
       const res = await handle.done;
       const durationMs = now().getTime() - startedAt.getTime();
-      const envelope = parseRunEnvelope(res.stdout);
+      const envelope = runtimeFor(runtime).parseEnvelope(res.stdout);
 
       // Meter first, unconditionally: a pass that timed out or answered
       // nonsense still cost money, and a ledger that only counts successes

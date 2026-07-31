@@ -5,7 +5,7 @@ import { LedgerValidationError, enforcementFor, validateLadder } from "./ledger.
 import type { BudgetConfig, BudgetState, BudgetStatus, BudgetWindow } from "@argus/contracts";
 
 /**
- * Spend guardrails: Argus fires `claude -p` agents unattended, i.e. it spends
+ * Spend guardrails: Argus fires agents unattended, i.e. it spends
  * money while nobody is watching. The budget is a daily/monthly USD ceiling
  * over the per-day spend ledger, with an optional hard stop that pauses
  * *scheduled* firings while the ceiling is breached. Manual actions (Run now,

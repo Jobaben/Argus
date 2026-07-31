@@ -26,8 +26,9 @@ Options:
   --version      print the Argus version
   --help         show this help
 
-Environment: ARGUS_PORT, ARGUS_HOST, ARGUS_TOKEN, ARGUS_CLAUDE_HOME and every
-other server variable are honoured as usual (see docs/API.md).`;
+Environment: ARGUS_PORT, ARGUS_HOST, ARGUS_TOKEN, ARGUS_CLAUDE_HOME,
+ARGUS_CODEX_HOME, ARGUS_AGENT (claude|codex) and every other server variable
+are honoured as usual (see the README's Configuration table).`;
 
 function fail(msg) {
   console.error(`[argus] ${msg}`);

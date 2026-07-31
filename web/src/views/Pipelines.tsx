@@ -39,6 +39,7 @@ function toInput(def: PipelineDefinition): PipelineInput {
     enabled: def.enabled,
     overlapPolicy: def.overlapPolicy,
     ...(def.model ? { model: def.model } : {}),
+    ...(def.runtime ? { runtime: def.runtime } : {}),
   };
 }
 
@@ -160,6 +161,14 @@ function PipelineCard({
             {def.model && (
               <span className="rounded-md border border-line px-1.5 py-0.5 text-[11px] text-ink-dim">
                 {def.model}
+              </span>
+            )}
+            {def.runtime && (
+              <span
+                className="rounded-md border border-line px-1.5 py-0.5 text-[11px] text-ink-dim"
+                title="Agent CLI this pipeline's steps run on, unless a phase or step overrides it"
+              >
+                {def.runtime === "codex" ? "Codex" : "Claude Code"}
               </span>
             )}
           </p>
@@ -373,8 +382,8 @@ export default function Pipelines() {
             <p className="text-sm text-ink-dim">No pipelines yet.</p>
             <p className="mx-auto mt-2 max-w-lg text-xs">
               A pipeline is ordered <strong className="text-ink-dim">phases</strong>, each with a
-              working directory and one or more steps — a step being one{" "}
-              <code className="font-mono text-ink-dim">claude -p</code> run. Any phase can be{" "}
+              working directory and one or more steps — a step being one headless agent run, on
+              whichever runtime that step, phase or pipeline names. Any phase can be{" "}
               <strong className="text-ink-dim">gated</strong>, which pauses the pipeline there until
               a human approves or sends it back with a note. Once created it appears on the Command
               Center wall, where you approve gates and watch steps as they work.

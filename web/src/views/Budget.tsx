@@ -336,11 +336,12 @@ export default function Budget() {
       }
     >
       <p className="mb-6 max-w-prose text-sm text-ink-dim">
-        Argus spends money unattended — every scheduled, pipelined and one-off{" "}
-        <span className="font-mono">claude -p</span> run reports its cost, and it lands in a per-day
-        ledger here. Set a daily or monthly USD ceiling to get alerted at 80% and at the limit;
-        optionally pause scheduled firings while you're over. Manual actions (Run now, Launch,
-        pipeline starts) are never blocked.
+        Argus spends money unattended — every scheduled, pipelined and one-off run reports what it
+        cost, and it lands in a per-day ledger here. Claude Code reports dollars; Codex reports
+        tokens only, so its runs contribute to the token totals and not to the USD ones. Set a daily
+        or monthly USD ceiling to get alerted at 80% and at the limit; optionally pause scheduled
+        firings while you're over. Manual actions (Run now, Launch, pipeline starts) are never
+        blocked.
       </p>
 
       <MachinePicker facet={facet} label="Show budget from" />

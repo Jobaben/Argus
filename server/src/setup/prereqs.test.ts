@@ -248,3 +248,170 @@ test("repairSafeFixables installs the hook file and dirs but never writes settin
   assert.ok(existsSync(path.join(home, "argus", "runs")), "runs dir created");
   assert.equal(existsSync(path.join(home, "settings.json")), false, "settings.json NOT written");
 });
+
+// ── Runtime scoping ─────────────────────────────────────────────────────────
+// Every CLI-and-hooks prerequisite is critical, and `preflight()` refuses a
+// pipeline start while a critical one is broken. That makes scoping load-
+// bearing rather than cosmetic: without it a Codex-only machine would be
+// permanently unable to start anything because Claude Code isn't installed,
+// and a Claude-only machine the same in mirror image.
+
+function withEnv(vars: Record<string, string | undefined>, fn: () => Promise<void>) {
+  const before: Record<string, string | undefined> = {};
+  for (const [k, v] of Object.entries(vars)) {
+    before[k] = process.env[k];
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+  return fn().finally(() => {
+    for (const [k, v] of Object.entries(before)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+}
+
+/** A pipelines.json naming a runtime on one of its steps. */
+function writePipelineUsing(runtime: string) {
+  mkdirSync(path.join(home, "argus"), { recursive: true });
+  writeFileSync(
+    path.join(home, "argus", "pipelines.json"),
+    JSON.stringify([
+      {
+        id: "p1",
+        name: "P",
+        phases: [
+          {
+            id: "a",
+            name: "A",
+            cwd: home,
+            gated: false,
+            steps: [{ name: "s", prompt: "p", runtime }],
+          },
+        ],
+        trigger: null,
+        enabled: true,
+        overlapPolicy: "skip",
+        lastStartedAt: null,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    ]),
+    "utf8",
+  );
+}
+
+test("Codex prerequisites are not checked while nothing uses Codex", async () => {
+  await withEnv(
+    { ARGUS_AGENT: "claude", ARGUS_CODEX_HOME: path.join(home, "dot-codex") },
+    async () => {
+      const m = await fresh();
+      const { prereqs } = await m.checkAll();
+      assert.equal(find(prereqs, "codex-cli").status, "ok");
+      assert.equal(find(prereqs, "codex-signal-hook").status, "ok");
+      assert.match(
+        find(prereqs, "codex-signal-hook").detail,
+        /nothing on this machine runs on Codex/,
+      );
+    },
+  );
+});
+
+test("a step that names Codex brings the Codex hook prerequisite into force", async () => {
+  writePipelineUsing("codex");
+  await withEnv(
+    { ARGUS_AGENT: "claude", ARGUS_CODEX_HOME: path.join(home, "dot-codex") },
+    async () => {
+      const m = await fresh();
+      const { prereqs } = await m.checkAll();
+      assert.equal(find(prereqs, "codex-signal-hook").status, "missing");
+    },
+  );
+});
+
+test("applying fixes registers the Codex stop hook and installs the hook file", async () => {
+  writePipelineUsing("codex");
+  const codexHome = path.join(home, "dot-codex");
+  await withEnv({ ARGUS_AGENT: "claude", ARGUS_CODEX_HOME: codexHome }, async () => {
+    const m = await fresh();
+    await m.applyAll();
+    const toml = readFileSync(path.join(codexHome, "config.toml"), "utf8");
+    assert.match(toml, /\[\[hooks\.stop\]\]/);
+    assert.match(toml, /argus-signal\.mjs/);
+    assert.ok(existsSync(path.join(codexHome, "hooks", "argus-signal.mjs")), "hook file copied");
+    const { prereqs } = await m.checkAll();
+    assert.equal(find(prereqs, "codex-signal-hook").status, "ok");
+  });
+});
+
+test("applying fixes twice leaves exactly one Argus stop hook", async () => {
+  writePipelineUsing("codex");
+  const codexHome = path.join(home, "dot-codex");
+  await withEnv({ ARGUS_AGENT: "claude", ARGUS_CODEX_HOME: codexHome }, async () => {
+    const m = await fresh();
+    await m.applyAll();
+    await m.applyAll();
+    const toml = readFileSync(path.join(codexHome, "config.toml"), "utf8");
+    assert.equal(toml.match(/\[\[hooks\.stop\]\]/g)?.length, 1);
+  });
+});
+
+test("Claude prerequisites are not checked on a Codex-only machine", async () => {
+  await withEnv(
+    { ARGUS_AGENT: "codex", ARGUS_CODEX_HOME: path.join(home, "dot-codex") },
+    async () => {
+      const m = await fresh();
+      const { prereqs } = await m.checkAll();
+      assert.equal(find(prereqs, "signal-stop-hook").status, "ok");
+      assert.equal(find(prereqs, "gate-pretooluse-hook").status, "ok");
+      assert.equal(find(prereqs, "claude-cli").status, "ok");
+    },
+  );
+});
+
+test("a schedule that names Claude brings its hooks back into force", async () => {
+  mkdirSync(path.join(home, "argus"), { recursive: true });
+  writeFileSync(
+    path.join(home, "argus", "schedules.json"),
+    JSON.stringify([
+      {
+        id: "s1",
+        name: "S",
+        prompt: "p",
+        cwd: home,
+        trigger: { kind: "daily", time: "02:00" },
+        enabled: true,
+        overlapPolicy: "skip",
+        runtime: "claude",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        lastRunAt: null,
+        lastRunId: null,
+      },
+    ]),
+    "utf8",
+  );
+  await withEnv(
+    { ARGUS_AGENT: "codex", ARGUS_CODEX_HOME: path.join(home, "dot-codex") },
+    async () => {
+      const m = await fresh();
+      const { prereqs } = await m.checkAll();
+      assert.equal(find(prereqs, "signal-stop-hook").status, "missing");
+    },
+  );
+});
+
+test("a config.toml with a scalar `stop` under [hooks] is reported, not corrupted", async () => {
+  writePipelineUsing("codex");
+  const codexHome = path.join(home, "dot-codex");
+  mkdirSync(codexHome, { recursive: true });
+  const original = '[hooks]\nstop = "echo hi"\n';
+  writeFileSync(path.join(codexHome, "config.toml"), original, "utf8");
+  await withEnv({ ARGUS_AGENT: "claude", ARGUS_CODEX_HOME: codexHome }, async () => {
+    const m = await fresh();
+    const { prereqs } = await m.checkAll();
+    assert.equal(find(prereqs, "codex-signal-hook").status, "error");
+    await m.applyAll();
+    assert.equal(readFileSync(path.join(codexHome, "config.toml"), "utf8"), original);
+  });
+});

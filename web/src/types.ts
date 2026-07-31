@@ -11,6 +11,11 @@
  */
 
 export type {
+  // Runtimes
+  AgentRuntimeCapabilities,
+  AgentRuntimeId,
+  AgentRuntimeInfo,
+  RuntimesResponse,
   // Agents
   Agent,
   AgentStatus,

@@ -2,6 +2,7 @@ import { Fragment, useEffect, useState } from "react";
 import type { Run } from "../types";
 import {
   Loading,
+  RuntimeBadge,
   SkeletonText,
   StatusPill,
   TimeAgo,
@@ -11,6 +12,7 @@ import {
   parseRunLog,
   runDsStatus,
 } from "../ds";
+import { useRuntimes } from "../useRuntimes";
 
 /** One expandable run entry: status/meta line, error or result, transcript
  * link and a live-tailing log. Shared by the Scheduler cards and the Launch
@@ -28,6 +30,9 @@ export function RunRow({
   const [open, setOpen] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const isRunning = run.status === "running";
+  // Badge only the runs that didn't use this server's default agent: a mark on
+  // every row when every row says the same thing is noise.
+  const { default: defaultRuntime } = useRuntimes();
   return (
     <li className="rounded-lg border border-line bg-surface">
       <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">
@@ -60,6 +65,7 @@ export function RunRow({
             </span>
           )}
           {run.trigger === "manual" && <span className="text-xs text-queue">manual</span>}
+          <RuntimeBadge runtime={run.runtime} baseline={defaultRuntime} />
         </button>
         {extraActions}
         {isRunning && onCancel && (

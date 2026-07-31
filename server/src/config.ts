@@ -59,7 +59,7 @@ export class ConfigError extends Error {
 /**
  * Refuses an unauthenticated bind to a non-loopback interface.
  *
- * Argus spawns `claude -p` with the user's credentials, so an exposed port with
+ * Argus spawns agent CLIs with the user's credentials, so an exposed port with
  * no token is remote code execution for anyone on the network. The README has
  * always called `ARGUS_TOKEN` "mandatory" in that case — it was only a warning,
  * which meant the documented promise and the actual behaviour disagreed, and the

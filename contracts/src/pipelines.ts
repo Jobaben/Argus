@@ -1,5 +1,6 @@
 /** Pipeline definitions, running instances, and the board overview. */
 
+import type { AgentRuntimeId } from "./runtimes.js";
 import type { Trigger } from "./schedules.js";
 import type { AutoApprove, Rubric } from "./verdict.js";
 
@@ -7,6 +8,8 @@ export interface PhaseStep {
   name: string;
   prompt: string;
   model?: string;
+  /** Overrides the phase's (and pipeline's) runtime for this one step. */
+  runtime?: AgentRuntimeId;
 }
 
 /**
@@ -55,6 +58,8 @@ export interface PhaseDef {
   /** On a gated phase: let the gate open itself when the verdict clears the
    *  bar. Requires `rubric`; without one there is nothing to clear. */
   autoApprove?: AutoApprove;
+  /** Overrides the pipeline's runtime for every step in this phase. */
+  runtime?: AgentRuntimeId;
 }
 
 export interface PipelineDefinition {
@@ -65,6 +70,12 @@ export interface PipelineDefinition {
   enabled: boolean;
   overlapPolicy: "skip" | "allow";
   model?: string;
+  /**
+   * Which agent CLI runs this pipeline's steps, unless a phase or step names
+   * another. Absent = the server default, so every pipeline authored before
+   * runtimes existed keeps running on Claude Code exactly as it did.
+   */
+  runtime?: AgentRuntimeId;
   lastStartedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -78,6 +89,7 @@ export interface PipelineInput {
   enabled?: boolean;
   overlapPolicy?: "skip" | "allow";
   model?: string;
+  runtime?: AgentRuntimeId;
 }
 
 export type InstanceStatus = "running" | "awaiting-approval" | "failed" | "succeeded" | "aborted";
@@ -97,6 +109,8 @@ export interface StepProgress {
   tokens?: number | null;
   /** Model the step's run was started with, joined from the run record. */
   model?: string | null;
+  /** Runtime the step's run was started with, joined from the run record. */
+  runtime?: AgentRuntimeId | null;
   /** Latest activity label from the run tailer; only set while running. */
   currentActivity?: string | null;
   /** Arrival timestamp of that activity. */

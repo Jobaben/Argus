@@ -1,5 +1,6 @@
 import type { DsStatus } from "./status";
 import type {
+  AgentRuntimeId,
   InstanceStatus,
   PhaseStatus,
   StepStatus,
@@ -21,6 +22,10 @@ export interface StepPill {
   /** Model running the step: the run's recorded model when a run exists,
    *  otherwise the definition's step/pipeline model. Null = CLI default. */
   model: string | null;
+  /** Agent CLI running the step, resolved the same way: the run's recorded
+   *  runtime when a run exists, otherwise the step/phase/pipeline override.
+   *  Null = the server default. */
+  runtime: AgentRuntimeId | null;
   /** Latest live-activity label, while the step is running. */
   currentActivity: string | null;
   /** Run start time (ISO) for the elapsed ticker. */
@@ -110,10 +115,13 @@ function stepPills(
   phase: PhaseProgress,
   def: PhaseDef | undefined,
   defaultModel: string | null,
+  defaultRuntime: AgentRuntimeId | null,
 ): StepPill[] {
-  // Definition model for a step, by position (progress steps are created from
-  // the definition's step list in order).
+  // Definition model/runtime for a step, by position (progress steps are
+  // created from the definition's step list in order). The runtime chain
+  // mirrors the engine's: step, then phase, then pipeline.
   const defModel = (i: number) => def?.steps[i]?.model ?? defaultModel;
+  const defRuntime = (i: number) => def?.steps[i]?.runtime ?? def?.runtime ?? defaultRuntime;
   if (phase.steps.length > 0) {
     return phase.steps.map((s, i) => ({
       name: s.name,
@@ -123,6 +131,7 @@ function stepPills(
       tokens: s.tokens ?? null,
       // Absent = no run record joined yet; fall back to the definition.
       model: s.model !== undefined ? s.model : defModel(i),
+      runtime: s.runtime !== undefined ? s.runtime : defRuntime(i),
       currentActivity: s.currentActivity ?? null,
       startedAt: s.startedAt ?? null,
       durationMs: s.durationMs ?? null,
@@ -135,6 +144,7 @@ function stepPills(
     costUsd: null,
     tokens: null,
     model: s.model ?? defaultModel,
+    runtime: s.runtime ?? def?.runtime ?? defaultRuntime,
     currentActivity: null,
     startedAt: null,
     durationMs: null,
@@ -207,6 +217,7 @@ function instanceRow(
       p,
       definition.phases.find((d) => d.id === p.id),
       definition.model ?? null,
+      definition.runtime ?? null,
     ),
     reason: p.status === "failed" ? extractReason(p.payload) : null,
     gated: p.gated,
@@ -251,6 +262,7 @@ export function toOverviewRow(entry: OverviewEntry): OverviewRow {
           costUsd: null,
           tokens: null,
           model: s.model ?? definition.model ?? null,
+          runtime: s.runtime ?? p.runtime ?? definition.runtime ?? null,
           currentActivity: null,
           startedAt: null,
           durationMs: null,

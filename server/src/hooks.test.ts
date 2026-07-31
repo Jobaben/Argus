@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 // The reference hook lives at <repo>/hooks/argus-signal.mjs; import its pure
 // type-resolution helper. The module guards its side effects behind an
 // is-main check, so importing it here is safe.
-import { resolveType, hasPendingBackgroundWork, buildReason } from "../../hooks/argus-signal.mjs";
+import {
+  resolveType,
+  hasPendingBackgroundWork,
+  buildReason,
+  lastMessage,
+} from "../../hooks/argus-signal.mjs";
 
 test("explicit CLI arg always wins over the message", () => {
   assert.equal(
@@ -119,4 +124,47 @@ test("buildReason: falls back to the last message tail, then a generic reason", 
     "Stuck on the migration.",
   );
   assert.equal(buildReason({}), "run stopped without reporting an outcome");
+});
+
+// ── Runtime-agnostic payload reading ────────────────────────────────────────
+// One hook file is registered with both CLIs — as a `Stop` hook in Claude
+// Code's settings.json and as `[[hooks.stop]]` in Codex's config.toml — so the
+// outcome logic has to read either payload.
+
+test("the closing message is read under whichever name the runtime used", () => {
+  assert.equal(lastMessage({ last_assistant_message: "a" }), "a");
+  assert.equal(lastMessage({ last_agent_message: "b" }), "b");
+  assert.equal(lastMessage({ last_message: "c" }), "c");
+  assert.equal(lastMessage({}), "");
+  assert.equal(lastMessage(null), "");
+  assert.equal(lastMessage("not an object"), "");
+});
+
+test("a Codex stop payload resolves an outcome the same way a Claude one does", () => {
+  // Codex reports no background_tasks; a run that stops is simply finished, so
+  // the sentinel in the final message is the whole decision.
+  const codexStop = {
+    hook_event_name: "Stop",
+    session_id: "019c7149",
+    cwd: "/srv/app",
+    stop_hook_active: false,
+    last_assistant_message: "shipped it\nARGUS_OUTCOME: succeeded",
+  };
+  assert.equal(resolveType(undefined, codexStop), "completed");
+  assert.equal(
+    resolveType(undefined, {
+      ...codexStop,
+      last_assistant_message: "ARGUS_OUTCOME: blocked no creds",
+    }),
+    "failed",
+  );
+  assert.equal(
+    buildReason({ ...codexStop, last_assistant_message: "ARGUS_OUTCOME: blocked no creds" }),
+    "blocked: no creds",
+  );
+});
+
+test("deferral needs background tasks, which Codex never reports", () => {
+  assert.equal(hasPendingBackgroundWork({ last_assistant_message: "done" }), false);
+  assert.equal(resolveType(undefined, { last_assistant_message: "done" }), "completed");
 });

@@ -1,6 +1,14 @@
 #!/usr/bin/env node
-// Reference Claude Code hook: emit a pipeline signal to Argus from inside a
-// `claude -p` run started by the pipeline engine.
+// Reference agent hook: emit a pipeline signal to Argus from inside a headless
+// run started by the pipeline engine.
+//
+// One file serves both runtimes. Claude Code registers it as a `Stop` hook in
+// settings.json and a `PreToolUse` hook for the gate; Codex registers it as
+// `[[hooks.stop]]` in config.toml. Both deliver a JSON payload on stdin and
+// both name the agent's closing words `last_assistant_message`, so the outcome
+// logic below is shared; where they differ (Codex reads a JSON response off
+// stdout, Claude Code is happy with silence) the difference is keyed off
+// ARGUS_RUNTIME, which the engine injects.
 //
 // Signal type resolution:
 //   * If a type is passed as the first CLI arg ("needs-input" | "failed" |
@@ -68,16 +76,27 @@ function pendingTaskLabels(payload) {
 }
 
 /**
+ * The agent's closing message, whatever the runtime called the field.
+ *
+ * `last_assistant_message` is what both CLIs document today; the aliases are
+ * cheap insurance against a rename in either, and cost one property read.
+ */
+export function lastMessage(payload) {
+  if (!payload || typeof payload !== "object") return "";
+  for (const key of ["last_assistant_message", "last_agent_message", "last_message"]) {
+    if (typeof payload[key] === "string") return payload[key];
+  }
+  return "";
+}
+
+/**
  * Compose a human-readable failure reason from a Stop payload. Only meaningful
  * for a `failed` outcome. Precedence: the ARGUS_OUTCOME sentinel's trailing
  * text, else a pending-background-work summary, else the last message's tail,
  * else a generic fallback. Always returns a non-empty string.
  */
 export function buildReason(payload) {
-  const msg =
-    payload && typeof payload === "object" && typeof payload.last_assistant_message === "string"
-      ? payload.last_assistant_message
-      : "";
+  const msg = lastMessage(payload);
   const m = OUTCOME_RE.exec(msg);
   if (m) {
     const kind = m[1].toLowerCase();
@@ -102,19 +121,26 @@ export function buildReason(payload) {
  */
 export function resolveType(argType, payload) {
   if (argType) return argType;
-  const msg =
-    payload && typeof payload === "object" && typeof payload.last_assistant_message === "string"
-      ? payload.last_assistant_message
-      : "";
+  const msg = lastMessage(payload);
   if (OUTCOME_RE.test(msg)) return "failed";
   if (hasPendingBackgroundWork(payload)) return "deferred";
   return "completed";
 }
 
+/** Codex reads a JSON response off a command hook's stdout; a bare `continue`
+ *  is the "carry on, nothing to add" answer. Claude Code needs no reply, so it
+ *  gets none — this hook stays byte-identical on that path. */
+function respond() {
+  if (process.env.ARGUS_RUNTIME === "codex") process.stdout.write('{"continue":true}');
+}
+
 function main() {
   const argType = process.argv[2];
   const url = process.env.ARGUS_SIGNAL_URL;
-  if (!url) process.exit(0);
+  if (!url) {
+    respond();
+    process.exit(0);
+  }
 
   let stdin = "";
   process.stdin.on("data", (c) => (stdin += c));
@@ -130,7 +156,10 @@ function main() {
     // signal — the process stays alive and a later Stop (or the engine's healing
     // pass on process exit) drives the real outcome. Terminalizing here would
     // fail a run that is still working.
-    if (type === "deferred") process.exit(0);
+    if (type === "deferred") {
+      respond();
+      process.exit(0);
+    }
     if (type === "failed") {
       const reason = buildReason(payload);
       payload =
@@ -154,6 +183,7 @@ function main() {
     } catch {
       /* server unreachable — nothing to do */
     }
+    respond();
     process.exit(0);
   });
 }

@@ -40,5 +40,7 @@ export interface HealthResponse {
   ok: true;
   version: string;
   claudeHome: string;
+  /** Where Codex keeps its state, watched the same way `claudeHome` is. */
+  codexHome: string;
   service: "argus";
 }

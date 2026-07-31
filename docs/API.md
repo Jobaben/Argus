@@ -10,7 +10,13 @@ best-effort: a missing/unreadable source yields an empty collection, not a 500.
   noted per endpoint). Relative formatting is the client's job.
 - List endpoints return `{ <plural>: [...] }`; detail endpoints return the entity.
 - Identifiers: agents use the daemon `short`; sessions use `(project, sessionId)`
-  where `project` is the encoded `projects/` dir name.
+  where `project` is the encoded `projects/` dir name. Codex has no per-project
+  directory, but its rollouts record the directory the run happened in, so its
+  sessions are filed under the same encoded form — a Codex session and a Claude
+  session from one repo group together. A rollout with no recorded directory
+  falls back to the reserved segment `_codex_` (an underscore can never appear
+  in an encoded project, so the two namespaces cannot collide). Detail reads
+  resolve a Codex rollout **by session id**, so either segment works.
 - **Every shape here is declared once**, in the `@argus/contracts` workspace, and
   imported by both the server that produces it and the web client that consumes
   it. A field added or removed on one side fails `npm run typecheck` on the
@@ -52,8 +58,86 @@ default); `4xx` logs at `warn`, `5xx` at `error`. `ARGUS_LOG_LEVEL` and
 ### `GET /api/health`
 
 ```json
-{ "ok": true, "claudeHome": "/home/you/.claude", "service": "argus" }
+{
+  "ok": true,
+  "version": "0.4.0",
+  "claudeHome": "/home/you/.claude",
+  "codexHome": "/home/you/.codex",
+  "service": "argus"
+}
 ```
+
+### `GET /api/runtimes`
+
+Which agent CLIs this server can drive, and what each can and cannot do. Read-
+only and unprivileged: the runtime pickers need it before a session exists, and
+it discloses nothing beyond "is this CLI installed", which `GET /api/setup`
+already reports. The probe result is cached for ~30s, so installing a CLI and
+reloading picks it up.
+
+```json
+{
+  "default": "claude",
+  "runtimes": [
+    {
+      "id": "claude",
+      "label": "Claude Code",
+      "bin": "claude",
+      "home": "/home/you/.claude",
+      "available": true,
+      "isDefault": true,
+      "models": ["opus", "sonnet", "haiku"],
+      "capabilities": {
+        "presetSessionId": true,
+        "appendSystemPrompt": true,
+        "reportsCost": true,
+        "reportsTokens": true,
+        "signalHook": true,
+        "liveActivity": true,
+        "transcripts": true
+      }
+    },
+    {
+      "id": "codex",
+      "label": "Codex",
+      "bin": "codex",
+      "home": "/home/you/.codex",
+      "available": false,
+      "detail": "`codex` was not found on PATH",
+      "isDefault": false,
+      "models": [],
+      "capabilities": {
+        "presetSessionId": false,
+        "appendSystemPrompt": false,
+        "reportsCost": false,
+        "reportsTokens": true,
+        "signalHook": true,
+        "liveActivity": true,
+        "transcripts": true
+      }
+    }
+  ]
+}
+```
+
+`capabilities` exists so the UI can explain a gap instead of hiding it. The two
+that are visible in the data: `presetSessionId: false` means a run's
+`sessionId` is null until the CLI reports its own thread id (so the transcript
+link appears once the run starts), and `reportsCost: false` means `costUsd` on
+that runtime's runs is always null — tokens are reported, dollars are not.
+
+### Naming a runtime
+
+`runtime` is `"claude" | "codex"` and may be set on a schedule, a launch, a
+pipeline, a phase, or a single step. Resolution is **narrowest wins**: step,
+then phase, then pipeline (or the schedule / launch body), then the server's
+`ARGUS_AGENT` default, then `"claude"`. The resolved value is written onto the
+run record, so a run started under one default stays explicable after the
+default changes.
+
+Omitting the key inherits. On the `PATCH`/`PUT` bodies that support it,
+`"runtime": null` **clears** an override (back to inheriting) — omitting the key
+leaves the stored value alone. An unrecognized value is a `400`.
 
 ### `GET /api/agents`
 
@@ -255,6 +339,7 @@ first. `endedAt: null` means still in flight — render through `windowEnd`.
 
 Create/patch body fields: `name`, `prompt`, `cwd` (must exist), `trigger`,
 `enabled` (default `true`), `overlapPolicy` (`skip`|`allow`, default `skip`),
+`runtime` (see [Naming a runtime](#naming-a-runtime)),
 and `catchUp` (boolean, default `false`) — when `true`, a slot missed beyond
 the firing grace (machine asleep, Argus down) fires **once** on the next
 scheduler tick instead of being skipped; only the most recent missed slot is
@@ -262,10 +347,11 @@ run.
 
 ### `POST /api/launch`
 
-Fire a single one-off `claude -p` run right now — no schedule is created or
+Fire a single one-off headless agent run right now — no schedule is created or
 touched. Body: `prompt` (required), `cwd` (required, must exist), `name`
-(optional — defaults to the prompt's first line, ellipsized at 60 chars), and
-`model` (optional model alias/id, passed to the CLI as `--model`). Returns
+(optional — defaults to the prompt's first line, ellipsized at 60 chars),
+`model` (optional model alias/id, passed to the CLI as `--model`), and
+`runtime` (optional, see [Naming a runtime](#naming-a-runtime)). Returns
 `202` with the created run record, `400` on validation failure.
 
 One-off runs carry `scheduleId: "oneoff"` and share that bucket: list them
@@ -1711,19 +1797,37 @@ session — it cannot execute anything.
 WS frame `{ "type": "pipelines:changed" }` is pushed on any pipeline mutation.
 
 In `GET /api/overview`, each entry's `latest.phases[].steps[]` carries
-`costUsd`/`tokens` joined from the step's run record, and `cost` is the
-instance's total spend `{ usd, tokens }` across **all** of its runs (including
-superseded revise attempts). A metric is `null` until at least one run reports
-it; `cost` is `null` when the pipeline has never run.
+`costUsd`/`tokens`/`model`/`runtime` joined from the step's run record, and
+`cost` is the instance's total spend `{ usd, tokens }` across **all** of its runs
+(including superseded revise attempts). A metric is `null` until at least one run
+reports it; `cost` is `null` when the pipeline has never run. `usd` counts only
+runs whose runtime reports a dollar figure — Codex reports tokens only, so a
+Codex-only instance has `tokens` and a null `usd`.
+
+A definition, a phase (`phases[]`) and a step (`phases[].steps[]`) may each
+carry `runtime`; see [Naming a runtime](#naming-a-runtime) for the resolution
+order. One pipeline can therefore mix runtimes phase by phase.
 
 ### Emitting signals from a run
 
-The engine spawns each phase's `claude -p` run with `ARGUS_SIGNAL_URL`,
-`ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`, `ARGUS_RUN_ID`, and `ARGUS_SIGNAL_TOKEN`.
-`hooks/argus-signal.mjs` reads these and POSTs a signal. Register it as a Stop
-hook (no arg) to report the run's outcome, and (optionally) as a `PreToolUse`
-hook on `AskUserQuestion` invoked as `argus-signal.mjs needs-input` to pause at
-a gate.
+The engine spawns each phase's run with `ARGUS_SIGNAL_URL`,
+`ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`, `ARGUS_RUN_ID`, `ARGUS_SIGNAL_TOKEN` and
+`ARGUS_RUNTIME`. `hooks/argus-signal.mjs` reads these and POSTs a signal. One
+hook file serves both runtimes:
+
+- **Claude Code** — a `Stop` hook in `settings.json` (no arg) to report the
+  run's outcome, and optionally a `PreToolUse` hook on `AskUserQuestion` invoked
+  as `argus-signal.mjs needs-input` to pause at a gate early.
+- **Codex** — a `[[hooks.stop]]` entry in `~/.codex/config.toml`. There is no
+  `PreToolUse` twin: Codex has no AskUserQuestion tool, and a gated phase pauses
+  anyway, because the engine holds the gate on the phase's _completion_ signal
+  rather than on the agent asking a question.
+
+`POST /api/setup/apply` installs whichever of these the machine needs — and
+only those. Each runtime's CLI and hook prerequisites are checked only while
+something on the machine uses that runtime, so a Codex-only install is never
+held to "Claude CLI on PATH" (and, since these are the checks a pipeline start
+refuses on, never blocked by it) and vice versa.
 
 The Stop hook does **not** assume success. When invoked with no arg it derives
 the signal type from the agent's final message: a line matching
@@ -1732,8 +1836,10 @@ the signal type from the agent's final message: a line matching
 its phase instead of being rubber-stamped.
 
 The engine supplies this reporting contract automatically: every step run is
-spawned with `claude --append-system-prompt`, injecting a constant instruction
-to end the final message with `ARGUS_OUTCOME: <succeeded|failed|blocked>`.
+spawned with a constant instruction to end the final message with
+`ARGUS_OUTCOME: <succeeded|failed|blocked>` — delivered on
+`claude --append-system-prompt`, or prepended to the prompt for Codex, which has
+no equivalent flag.
 Pipeline authors therefore do **not** write the `ARGUS_OUTCOME` mechanic into
 their prompts — they only state each step's acceptance criteria in prose, and
 the agent judges success against them. An explicit CLI arg (`needs-input` /

@@ -1,6 +1,7 @@
 import chokidar from "chokidar";
 import path from "node:path";
 import { claudeHome, paths } from "./claudeHome.js";
+import { codexPaths } from "./codexHome.js";
 import { log } from "./log.js";
 
 /**
@@ -44,9 +45,11 @@ export function watchSchedules(onChange: () => void): () => Promise<void> {
 }
 
 /** Watches the transcript files so the live-tail transcript view can stream
- *  appended messages as a running agent writes them. */
+ *  appended messages as a running agent writes them. Both runtimes' trees: a
+ *  Codex rollout is nested a day deep (`sessions/YYYY/MM/DD/`), which is inside
+ *  the shared watcher's depth limit. */
 export function watchSessions(onChange: () => void): () => Promise<void> {
-  return makeWatcher([paths.projects()], onChange);
+  return makeWatcher([paths.projects(), codexPaths.sessions()], onChange);
 }
 
 /** Watches the installed extensions + usage stats so the Inventory and Stats

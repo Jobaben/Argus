@@ -15,7 +15,15 @@ export const RUN_KEEP = 50;
 // (no dots/slashes allowed, mirroring the session-route segment guard).
 const RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
-/** Mirrors Claude Code's project-dir encoding so we can link to transcripts. */
+/**
+ * Mirrors Claude Code's project-dir encoding.
+ *
+ * Every run records it, whichever CLI ran — it is the run's *working directory*,
+ * which is what the cost-by-project dimension, the Vault index and the OTel
+ * attribute all mean by "project". Codex files its transcripts by date rather
+ * than by directory, so for those it is not also a path to the transcript; the
+ * session reader resolves a Codex rollout from the session id instead.
+ */
 export function encodeProject(cwd: string): string {
   return cwd.replace(/[^A-Za-z0-9]/g, "-");
 }
@@ -159,7 +167,7 @@ export async function readRun(id: string): Promise<{ run: Run; log: string } | n
   return { run, log };
 }
 
-/** Kill a run's whole process tree if it's alive. `claude` spawns its own
+/** Kill a run's whole process tree if it's alive. An agent CLI spawns its own
  *  subprocesses (tools, shells); a plain kill on the recorded pid would orphan
  *  them, so use taskkill /T on win32. On POSIX, detached:true makes the child
  *  a group leader, so signal the group, falling back to the single pid.

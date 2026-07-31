@@ -2,6 +2,8 @@ import { Hono, type Context } from "hono";
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { claudeHome } from "./claudeHome.js";
+import { codexHome } from "./codexHome.js";
+import { readRuntimes } from "./sources/runtimeInfo.js";
 import { readAgents, readTimeline } from "./sources/jobs.js";
 import { readDaemon } from "./sources/daemon.js";
 import {
@@ -198,7 +200,7 @@ export interface AppDeps {
   users?: UserStore;
   /** Socket peer address, injectable for tests. Defaults to the node-server conninfo. */
   remoteAddr?: (c: Context) => string | null;
-  /** Bounded `claude -p` analysis runner (Autopsy). Defaults to the real one. */
+  /** Bounded analysis runner (Autopsy). Defaults to the real one. */
   analysis?: AnalysisRunner;
 }
 
@@ -226,7 +228,7 @@ export function createApp(deps: AppDeps): Hono {
   const notifyRunFailed = (run: Parameters<typeof buildRunFailurePayload>[0]) =>
     void postWebhook(config.webhookUrl, buildRunFailurePayload(run, new Date().toISOString()));
 
-  // One runner for every bounded `claude -p` analysis pass this app performs,
+  // One runner for every bounded analysis pass this app performs,
   // so they share a single concurrency and spend gate. Injectable for tests.
   const analysis = deps.analysis ?? createAnalysisRunner();
   const autopsyDeps: AutopsyDeps = {
@@ -280,8 +282,19 @@ export function createApp(deps: AppDeps): Hono {
   app.use("/api/*", conditionalGet());
 
   app.get("/api/health", (c) =>
-    c.json({ ok: true, version: VERSION, claudeHome: claudeHome(), service: "argus" }),
+    c.json({
+      ok: true,
+      version: VERSION,
+      claudeHome: claudeHome(),
+      codexHome: codexHome(),
+      service: "argus",
+    }),
   );
+
+  // Which agent CLIs this machine can drive. Read-only and unprivileged: the
+  // runtime pickers need it before a session exists, and it discloses nothing
+  // beyond "is this CLI installed", which the Setup panel already reports.
+  app.get("/api/runtimes", async (c) => c.json(await readRuntimes()));
 
   // ── Admin auth ────────────────────────────────────────────────────────────
   // Editing or running a pipeline executes agents with the user's credentials,
@@ -689,7 +702,7 @@ export function createApp(deps: AppDeps): Hono {
     }
   });
 
-  // One-off launch: fire a single `claude -p` run right now, no schedule needed.
+  // One-off launch: fire a single agent run right now, no schedule needed.
   app.post("/api/launch", async (c) => {
     const body = await jsonBody(c);
     if (!body.ok) return body.res;

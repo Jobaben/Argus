@@ -1,7 +1,17 @@
 import { useState } from "react";
 import { useLaunch } from "../useLaunch";
-import type { LaunchInput, Run } from "../types";
-import { AlertStrip, EmptyState, formatUsd, Handoff, ModelSelect, Page, SkeletonRows } from "../ds";
+import { useRuntimes } from "../useRuntimes";
+import type { AgentRuntimeId, LaunchInput, Run } from "../types";
+import {
+  AlertStrip,
+  EmptyState,
+  formatUsd,
+  Handoff,
+  ModelSelect,
+  Page,
+  RuntimeSelect,
+  SkeletonRows,
+} from "../ds";
 import { RunRow } from "./RunRow";
 
 const FIELD =
@@ -21,7 +31,11 @@ function LaunchForm({
 }) {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const { runtimes, default: defaultRuntime } = useRuntimes();
   const valid = form.prompt.trim() && form.cwd.trim();
+  const active: AgentRuntimeId = form.runtime ?? defaultRuntime;
+  const aliases = runtimes.find((r) => r.id === active)?.models;
+  const command = active === "codex" ? "codex exec" : "claude -p";
 
   const submit = async () => {
     setBusy(true);
@@ -39,7 +53,7 @@ function LaunchForm({
     <div className="space-y-3 rounded-xl border border-line bg-surface p-5">
       {err && <AlertStrip subject="Error" message={err} />}
       <label className={LABEL}>
-        <span>Prompt for claude -p</span>
+        <span>Prompt for {command}</span>
         <textarea
           className={`${FIELD} h-28`}
           placeholder="Summarize the open TODOs in this repo and rank them by risk"
@@ -66,10 +80,21 @@ function LaunchForm({
             onChange={(e) => setForm({ ...form, name: e.target.value })}
           />
         </label>
+        <RuntimeSelect
+          fieldClass={FIELD}
+          label="Runtime (server default)"
+          value={form.runtime}
+          runtimes={runtimes}
+          // Switching CLI invalidates the model: "haiku" means nothing to Codex
+          // and a stale alias would fail at spawn rather than in the form.
+          onChange={(r) => setForm({ ...form, runtime: r, model: undefined })}
+        />
         <ModelSelect
+          key={active}
           fieldClass={FIELD}
           label="Model (inherit CLI)"
           value={form.model}
+          {...(aliases ? { aliases } : {})}
           onChange={(m) => setForm({ ...form, model: m })}
         />
       </div>
@@ -107,9 +132,10 @@ export default function Launch() {
           prompt: run.prompt,
           cwd: run.cwd,
           ...(run.model ? { model: run.model } : {}),
+          ...(run.runtime ? { runtime: run.runtime } : {}),
         })
       }
-      title="Copy this run's prompt, directory and model back into the form"
+      title="Copy this run's prompt, directory, runtime and model back into the form"
       className="rounded-md border border-line px-2 py-0.5 text-xs text-ink-dim hover:text-ink"
     >
       Reuse
@@ -119,9 +145,9 @@ export default function Launch() {
   return (
     <Page title="Launch">
       <p className="mb-4 max-w-prose text-sm text-ink-dim">
-        Fire a single <span className="font-mono">claude -p</span> run right now — no schedule
-        needed. The run lands below with a live log, and everywhere else runs go: Chronicle, Issues,
-        the Briefing.
+        Fire a single headless agent run right now — <span className="font-mono">claude -p</span> or{" "}
+        <span className="font-mono">codex exec</span>, your pick — with no schedule needed. The run
+        lands below with a live log, and everywhere else runs go: Chronicle, Issues, the Briefing.
       </p>
 
       {error && (
@@ -140,11 +166,18 @@ export default function Launch() {
               cwd: input.cwd,
               ...(input.name?.trim() ? { name: input.name.trim() } : {}),
               ...(input.model ? { model: input.model } : {}),
+              ...(input.runtime ? { runtime: input.runtime } : {}),
             });
-            // Keep the directory and model, clear what was one-shot. People fire
-            // several prompts at the same repo in a row; making them retype an
-            // absolute path each time was the single most tedious thing here.
-            setForm({ ...EMPTY, cwd: input.cwd, ...(input.model ? { model: input.model } : {}) });
+            // Keep the directory, runtime and model, clear what was one-shot.
+            // People fire several prompts at the same repo in a row; making them
+            // retype an absolute path each time was the single most tedious
+            // thing here.
+            setForm({
+              ...EMPTY,
+              cwd: input.cwd,
+              ...(input.model ? { model: input.model } : {}),
+              ...(input.runtime ? { runtime: input.runtime } : {}),
+            });
           }}
         />
       </div>
