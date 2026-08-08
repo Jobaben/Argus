@@ -72,6 +72,17 @@ All notable changes to Argus are documented here. The format follows
 
 ### Fixed
 
+- **Codex pipeline completion no longer depends on perfect Stop-hook delivery.**
+  The hook remains the preferred path, but reconciliation now recovers a
+  terminated Codex step from its completed run record and strict
+  `ARGUS_OUTCOME` marker. Successful records advance only on an unambiguous
+  `succeeded`; reported `failed` / `blocked`, process errors, missing markers,
+  and conflicting markers fail safely. The instance mutex makes a delayed or
+  duplicate hook signal idempotent. Hook transport failures, timeouts, and
+  non-2xx responses now reach stderr and return a non-zero hook status instead
+  of disappearing. This also fixes a DAG terminality bug that could label an
+  all-terminal graph containing a failed phase as succeeded.
+
 - **A test that could leak into the next one, and did on CI.** The engine's
   "adoption holds the concurrency slot" test deliberately left a `start()`
   parked on the semaphore and never settled it. Every path in the engine is

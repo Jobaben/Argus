@@ -1,9 +1,4 @@
-import type {
-  PhaseDef,
-  PhaseProgress,
-  PipelineDefinition,
-  PipelineInstance,
-} from "./pipelineTypes.js";
+import type { PhaseDef, PipelineDefinition, PipelineInstance } from "./pipelineTypes.js";
 
 /**
  * Weave: the pipeline as a typed directed acyclic graph.
@@ -155,8 +150,6 @@ export function layers(phases: PhaseDef[]): string[][] {
   return out.map((l) => l ?? []);
 }
 
-const TERMINAL: ReadonlySet<PhaseProgress["status"]> = new Set(["succeeded", "failed", "aborted"]);
-
 /**
  * The phases that should start now: pending, with every dependency succeeded.
  *
@@ -198,7 +191,10 @@ export function instanceOutcome(
   if (livePhases(inst).length > 0) return "running";
   if (readyPhases(def, inst).length > 0) return "running";
   if (inst.phases.every((p) => p.status === "succeeded")) return "succeeded";
-  return inst.phases.some((p) => !TERMINAL.has(p.status)) ? "blocked" : "succeeded";
+  // Nothing can progress and at least one phase did not succeed. This includes
+  // both a failed dependency with pending descendants and a fully-settled graph
+  // containing a failed branch; neither may be rubber-stamped as succeeded.
+  return "blocked";
 }
 
 /**

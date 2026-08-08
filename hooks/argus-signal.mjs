@@ -134,6 +134,36 @@ function respond() {
   if (process.env.ARGUS_RUNTIME === "codex") process.stdout.write('{"continue":true}');
 }
 
+/**
+ * Deliver one signal and reject on every condition the hook runner needs to
+ * report: transport errors and non-2xx responses alike. Exported so the exact
+ * HTTP contract can be regression-tested without starting a pipeline.
+ */
+export async function deliverSignal(url, body, fetchImpl = globalThis.fetch) {
+  const response = await fetchImpl(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (response.ok) return;
+
+  let detail = "";
+  try {
+    detail = (await response.text()).trim().slice(0, 500);
+  } catch {
+    // Status and statusText still make the delivery failure diagnosable.
+  }
+  const status = `${response.status}${response.statusText ? ` ${response.statusText}` : ""}`;
+  throw new Error(`Argus signal endpoint returned HTTP ${status}${detail ? `: ${detail}` : ""}`);
+}
+
+function reportFailure(error) {
+  const message = error instanceof Error ? error.stack || error.message : String(error);
+  process.stderr.write(`[argus-signal] hook failed: ${message}\n`);
+  process.exitCode = 1;
+}
+
 function main() {
   const argType = process.argv[2];
   const url = process.env.ARGUS_SIGNAL_URL;
@@ -168,23 +198,22 @@ function main() {
           : { reason, raw: payload };
     }
     try {
-      await fetch(url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          instanceId: process.env.ARGUS_INSTANCE_ID,
-          phaseId: process.env.ARGUS_PHASE_ID,
-          runId: process.env.ARGUS_RUN_ID,
-          type,
-          token: process.env.ARGUS_SIGNAL_TOKEN,
-          payload,
-        }),
+      await deliverSignal(url, {
+        instanceId: process.env.ARGUS_INSTANCE_ID,
+        phaseId: process.env.ARGUS_PHASE_ID,
+        runId: process.env.ARGUS_RUN_ID,
+        type,
+        token: process.env.ARGUS_SIGNAL_TOKEN,
+        payload,
       });
-    } catch {
-      /* server unreachable — nothing to do */
+    } catch (error) {
+      reportFailure(error);
     }
     respond();
-    process.exit(0);
+  });
+  process.stdin.on("error", (error) => {
+    reportFailure(error);
+    respond();
   });
 }
 

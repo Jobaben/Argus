@@ -1845,10 +1845,18 @@ their prompts — they only state each step's acceptance criteria in prose, and
 the agent judges success against them. An explicit CLI arg (`needs-input` /
 `failed`) always overrides the message-derived type.
 
-> **Important:** a phase advances ONLY on an explicit signal. If a run exits
-> without its hook POSTing anything, the reconciler heals it as `failed`
-> (process exit is not a success trigger). Register `argus-signal.mjs` as a Stop
-> hook so every finished run emits `completed` or `failed`.
+> **Important:** the Stop-hook signal is the preferred completion path. If a
+> completed Codex run has not signalled, reconciliation falls back to its run
+> record and final message: a successful run with one unambiguous
+> `ARGUS_OUTCOME: succeeded` advances; `failed` / `blocked` fails with the
+> reported reason; a failed run uses its recorded error; and a missing or
+> conflicting marker fails safely. Unsignalled Claude Code runs retain the
+> existing fail-safe behavior. The instance lock makes fallback and a delayed
+> hook signal idempotent.
+
+Hook POSTs have a 10-second timeout. Transport errors and non-2xx responses are
+written to the hook's stderr and make the hook exit non-zero, so the agent run
+log retains the delivery failure instead of silently hiding it.
 
 Argus surfaces missing prerequisites (including this hook) via `GET /api/setup`;
 the web UI's setup banner installs the fixable ones with `POST /api/setup/apply`.
