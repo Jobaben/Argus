@@ -342,10 +342,9 @@ const REGISTRY: Prerequisite[] = [
         label: "Claude CLI on PATH",
         fixable: false,
         status: probe.ok ? "ok" : "error",
-        detail:
-          probe.ok
-            ? undefined
-            : `\`${cli.bin()}\` ${probe.reason}. Install the Claude CLI, or start Argus with \`ARGUS_AGENT=codex\` (or \`argus --agent codex\`) for a Codex-only machine.`,
+        detail: probe.ok
+          ? undefined
+          : `\`${cli.bin()}\` ${probe.reason}. Install the Claude CLI, or start Argus with \`ARGUS_AGENT=codex\` (or \`argus --agent codex\`) for a Codex-only machine.`,
       };
     },
   },
