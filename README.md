@@ -126,11 +126,12 @@ ARGUS_CLAUDE_HOME=/path/to/.claude ARGUS_PORT=7777 npm run dev
 ```bash
 npm i -g .        # or `npm link` — puts `argus` on your PATH
 argus --open      # build check, UI + API on :7777, opens your browser
+argus --agent codex --open  # Codex-only machine; Claude is not required
 ```
 
 `argus` makes sure a production build exists (building one on first run),
 then serves the UI and API together on one port. Flags: `--open`,
-`--port <n>`, `--rebuild`, `--version`, `--help`; every `ARGUS_*` variable
+`--agent <claude|codex>`, `--port <n>`, `--rebuild`, `--version`, `--help`; every `ARGUS_*` variable
 below is honoured. To install on another machine:
 
 ```bash

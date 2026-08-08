@@ -21,6 +21,7 @@ Usage: argus [options]
 
 Options:
   --open         open the dashboard in your browser once the server is up
+  --agent <id>   default runtime: claude or codex (default: $ARGUS_AGENT or claude)
   --port <n>     port to serve on (default: $ARGUS_PORT or 7777)
   --rebuild      rebuild the UI and server even if a build already exists
   --version      print the Argus version
@@ -36,7 +37,7 @@ function fail(msg) {
 }
 
 function parseArgs(argv) {
-  const opts = { open: false, rebuild: false, port: null };
+  const opts = { open: false, rebuild: false, port: null, agent: null };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--help" || arg === "-h") {
@@ -49,6 +50,11 @@ function parseArgs(argv) {
       opts.open = true;
     } else if (arg === "--rebuild") {
       opts.rebuild = true;
+    } else if (arg === "--agent" || arg.startsWith("--agent=")) {
+      const agent = (arg.includes("=") ? arg.slice("--agent=".length) : argv[++i])?.toLowerCase();
+      if (agent !== "claude" && agent !== "codex")
+        fail(`--agent needs \"claude\" or \"codex\", got \"${agent ?? ""}\"`);
+      opts.agent = agent;
     } else if (arg === "--port" || arg.startsWith("--port=")) {
       const raw = arg.includes("=") ? arg.slice("--port=".length) : argv[++i];
       const n = Number(raw);
@@ -119,6 +125,7 @@ ensureBuilt(opts.rebuild);
 
 const env = { ...process.env };
 if (opts.port !== null) env.ARGUS_PORT = String(opts.port);
+if (opts.agent !== null) env.ARGUS_AGENT = opts.agent;
 const port = opts.port ?? (Number(process.env.ARGUS_PORT || "") || 7777);
 
 const child = spawn(process.execPath, [path.join(root, "server", "dist", "index.js")], {
