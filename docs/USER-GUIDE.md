@@ -597,7 +597,12 @@ action requires a signed-in, root-approved account.
 **How steps complete:** the Stop-hook and gate-hook installed by Setup let
 each spawned agent signal "step finished" / "needs input" back to Argus
 (`POST /api/instances/:id/signal`, authenticated by a per-instance token —
-this is the one instance endpoint that doesn't need a login).
+this is the one instance endpoint that doesn't need a login). The Stop hook is
+preferred; if a finished Codex process did not signal, Argus can recover only
+from a successful run record whose final message contains one unambiguous
+`ARGUS_OUTCOME: succeeded`. Failed, blocked, missing, and conflicting outcomes
+fail safely. Hook delivery errors and non-2xx responses are written into the
+run log for diagnosis.
 
 **Where the data comes from:** `~/.claude/argus/pipelines.json` and instance
 records under `~/.claude/argus/instances/` via `GET/POST /api/pipelines`,

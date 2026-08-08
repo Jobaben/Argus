@@ -317,19 +317,22 @@ test("abort returns 409 on an already-terminal instance", async () => {
   assert.equal(res.code, 409);
 });
 
-test("reconcile fails a phase whose run ended without signalling", async () => {
+test("reconcile preserves fail-safe behavior for a successful unsignalled Claude run", async () => {
   const { engine, pipelines, instances } = await load();
   const runs = await import(`./sources/runs.js?${Math.random()}`);
   await seedPipeline(pipelines);
   const rec = recordingSpawn();
   const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
   const inst = await e.start("p1", "manual");
-  // Mark the run record terminal with a dead pid, but never send a signal.
+  // Claude's Stop-hook semantics remain unchanged; the strict run-record
+  // fallback is Codex-only.
   const runId = rec.calls[0].runId;
   const got = await runs.readRun(runId);
   await runs.writeRun({
     ...got!.run,
-    status: "failed",
+    status: "succeeded",
+    exitCode: 0,
+    resultSummary: "Done.\nARGUS_OUTCOME: succeeded",
     pid: 2_000_000_000,
     endedAt: new Date().toISOString(),
   });
@@ -338,10 +341,251 @@ test("reconcile fails a phase whose run ended without signalling", async () => {
   assert.equal(after?.status, "failed");
 });
 
+test("reconcile completes a successful Codex run whose Stop hook never signalled", async () => {
+  const { engine, pipelines, instances } = await load();
+  const runs = await import(`./sources/runs.js?${Math.random()}`);
+  await seedPipeline(pipelines, {
+    runtime: "codex",
+    phases: [
+      { id: "only", name: "Only", cwd: home, gated: false, steps: [{ name: "s", prompt: "p" }] },
+    ],
+  });
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const inst = await e.start("p1", "manual");
+  const runId = rec.calls[0].runId;
+  const got = await runs.readRun(runId);
+  await runs.writeRun({
+    ...got!.run,
+    status: "succeeded",
+    exitCode: 0,
+    endedAt: new Date().toISOString(),
+    resultSummary: "Created the expected artifacts.\nARGUS_OUTCOME: succeeded",
+  });
+
+  await e.reconcile();
+
+  const after = await instances.readInstance(inst!.id);
+  assert.equal(after?.status, "succeeded");
+  assert.equal(after?.phases[0].status, "succeeded");
+  assert.equal((await runs.readRun(runId))?.run.outcome, "succeeded");
+});
+
+test("successful Codex fallback still stops at a gate", async () => {
+  const { engine, pipelines, instances } = await load();
+  const runs = await import(`./sources/runs.js?${Math.random()}`);
+  await seedPipeline(pipelines, {
+    runtime: "codex",
+    phases: [
+      { id: "gate", name: "Gate", cwd: home, gated: true, steps: [{ name: "s", prompt: "p" }] },
+      { id: "after", name: "After", cwd: home, gated: false, steps: [{ name: "n", prompt: "n" }] },
+    ],
+  });
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const inst = await e.start("p1", "manual");
+  const got = await runs.readRun(rec.calls[0].runId);
+  await runs.writeRun({
+    ...got!.run,
+    status: "succeeded",
+    exitCode: 0,
+    endedAt: new Date().toISOString(),
+    resultSummary: "Ready for review.\nARGUS_OUTCOME: succeeded",
+  });
+
+  await e.reconcile();
+
+  const after = await instances.readInstance(inst!.id);
+  assert.equal(after?.status, "awaiting-approval");
+  assert.equal(after?.phases[0].status, "awaiting-approval");
+  assert.equal(after?.phases[1].status, "pending");
+  assert.equal(rec.calls.length, 1);
+});
+
+test("Codex fallback settles parallel phases without losing either completion", async () => {
+  const { engine, pipelines, instances } = await load();
+  const runs = await import(`./sources/runs.js?${Math.random()}`);
+  await seedPipeline(pipelines, {
+    runtime: "codex",
+    phases: [
+      {
+        id: "left",
+        name: "Left",
+        cwd: home,
+        gated: false,
+        needs: [],
+        steps: [{ name: "l", prompt: "l" }],
+      },
+      {
+        id: "right",
+        name: "Right",
+        cwd: home,
+        gated: false,
+        needs: [],
+        steps: [{ name: "r", prompt: "r" }],
+      },
+    ],
+  });
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const inst = await e.start("p1", "manual");
+  assert.equal(rec.calls.length, 2);
+  for (const call of rec.calls) {
+    const got = await runs.readRun(call.runId);
+    await runs.writeRun({
+      ...got!.run,
+      status: "succeeded",
+      exitCode: 0,
+      endedAt: new Date().toISOString(),
+      resultSummary: "Done.\nARGUS_OUTCOME: succeeded",
+    });
+  }
+
+  await e.reconcile();
+
+  const after = await instances.readInstance(inst!.id);
+  assert.equal(after?.status, "succeeded");
+  assert.deepEqual(
+    after?.phases.map((phase: { status: string }) => phase.status),
+    ["succeeded", "succeeded"],
+  );
+});
+
+test("Codex fallback fails successful processes that report failed or blocked", async (t) => {
+  for (const outcome of ["failed", "blocked"] as const) {
+    await t.test(outcome, async () => {
+      const { engine, pipelines, instances } = await load();
+      const runs = await import(`./sources/runs.js?${Math.random()}`);
+      await seedPipeline(pipelines, {
+        runtime: "codex",
+        phases: [
+          {
+            id: "only",
+            name: "Only",
+            cwd: home,
+            gated: false,
+            steps: [{ name: "s", prompt: "p" }],
+          },
+        ],
+      });
+      const rec = recordingSpawn();
+      const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+      const inst = await e.start("p1", "manual");
+      const runId = rec.calls[0].runId;
+      const got = await runs.readRun(runId);
+      await runs.writeRun({
+        ...got!.run,
+        status: "succeeded",
+        exitCode: 0,
+        endedAt: new Date().toISOString(),
+        resultSummary: `Could not finish.\nARGUS_OUTCOME: ${outcome} — credentials unavailable`,
+      });
+
+      await e.reconcile();
+
+      const after = await instances.readInstance(inst!.id);
+      assert.equal(after?.status, "failed");
+      assert.equal(
+        (after?.phases[0].payload as { reason?: string })?.reason,
+        `${outcome}: credentials unavailable`,
+      );
+      assert.equal((await runs.readRun(runId))?.run.outcome, outcome);
+    });
+  }
+});
+
+test("Codex fallback fails safely on missing or conflicting outcome markers", async (t) => {
+  for (const [name, resultSummary, reasonPattern] of [
+    ["missing", "Done, but no marker", /without an ARGUS_OUTCOME/],
+    [
+      "conflicting",
+      "ARGUS_OUTCOME: succeeded\nARGUS_OUTCOME: failed — contradictory",
+      /conflicting ARGUS_OUTCOME/,
+    ],
+  ] as const) {
+    await t.test(name, async () => {
+      const { engine, pipelines, instances } = await load();
+      const runs = await import(`./sources/runs.js?${Math.random()}`);
+      await seedPipeline(pipelines, {
+        runtime: "codex",
+        phases: [
+          {
+            id: "only",
+            name: "Only",
+            cwd: home,
+            gated: false,
+            steps: [{ name: "s", prompt: "p" }],
+          },
+        ],
+      });
+      const rec = recordingSpawn();
+      const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+      const inst = await e.start("p1", "manual");
+      const runId = rec.calls[0].runId;
+      const got = await runs.readRun(runId);
+      await runs.writeRun({
+        ...got!.run,
+        status: "succeeded",
+        exitCode: 0,
+        endedAt: new Date().toISOString(),
+        resultSummary,
+      });
+
+      await e.reconcile();
+
+      const after = await instances.readInstance(inst!.id);
+      assert.equal(after?.status, "failed");
+      assert.match((after?.phases[0].payload as { reason: string }).reason, reasonPattern);
+      assert.equal((await runs.readRun(runId))?.run.outcome, "failed");
+    });
+  }
+});
+
+test("a delayed or duplicate hook signal cannot advance after Codex fallback", async () => {
+  const { engine, pipelines, instances } = await load();
+  const runs = await import(`./sources/runs.js?${Math.random()}`);
+  await seedPipeline(pipelines, {
+    runtime: "codex",
+    phases: [
+      { id: "one", name: "One", cwd: home, gated: false, steps: [{ name: "a", prompt: "a" }] },
+      { id: "two", name: "Two", cwd: home, gated: false, steps: [{ name: "b", prompt: "b" }] },
+    ],
+  });
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const inst = await e.start("p1", "manual");
+  const firstRunId = rec.calls[0].runId;
+  const got = await runs.readRun(firstRunId);
+  await runs.writeRun({
+    ...got!.run,
+    status: "succeeded",
+    exitCode: 0,
+    endedAt: new Date().toISOString(),
+    resultSummary: "Done.\nARGUS_OUTCOME: succeeded",
+  });
+
+  await e.reconcile();
+  await waitFor(() => rec.calls.length === 2);
+  const delayed = {
+    instanceId: inst!.id,
+    phaseId: "one",
+    runId: firstRunId,
+    type: "completed" as const,
+    token: inst!.signalToken,
+  };
+  await e.onSignal(inst!.id, delayed);
+  await e.onSignal(inst!.id, delayed);
+
+  const after = await instances.readInstance(inst!.id);
+  assert.equal(rec.calls.length, 2, "phase two spawned exactly once");
+  assert.equal(after?.phases[0].status, "succeeded");
+  assert.equal(after?.phases[1].status, "running");
+});
+
 test("reconcile records the run error as the failed phase reason", async () => {
   const { engine, pipelines, instances } = await load();
   const runs = await import(`./sources/runs.js?${Math.random()}`);
-  await seedPipeline(pipelines);
+  await seedPipeline(pipelines, { runtime: "codex" });
   const rec = recordingSpawn();
   const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
   const inst = await e.start("p1", "manual");
@@ -359,6 +603,47 @@ test("reconcile records the run error as the failed phase reason", async () => {
   const after = await instances.readInstance(inst!.id);
   assert.equal(after?.status, "failed");
   assert.equal((after?.phases[0].payload as { reason?: string })?.reason, "exit code 1");
+  assert.equal((await runs.readRun(runId))?.run.outcome, "failed");
+});
+
+test("a failed Codex process recovered from its run record retains retry policy", async () => {
+  const { engine, pipelines, instances } = await load();
+  const runs = await import(`./sources/runs.js?${Math.random()}`);
+  await seedPipeline(pipelines, {
+    runtime: "codex",
+    phases: [
+      {
+        id: "only",
+        name: "Only",
+        cwd: home,
+        gated: false,
+        retry: { attempts: 2, backoffSeconds: 0 },
+        steps: [{ name: "s", prompt: "p" }],
+      },
+    ],
+  });
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const inst = await e.start("p1", "manual");
+  const runId = rec.calls[0].runId;
+  const got = await runs.readRun(runId);
+  await runs.writeRun({
+    ...got!.run,
+    status: "failed",
+    exitCode: 1,
+    error: "exit code 1",
+    endedAt: new Date().toISOString(),
+  });
+
+  await e.reconcile(); // records the failure and schedules the zero-backoff retry
+  await e.reconcile(); // starts the due retry
+
+  const after = await instances.readInstance(inst!.id);
+  assert.equal(rec.calls.length, 2);
+  assert.equal(after?.status, "running");
+  assert.equal(after?.phases[0].status, "running");
+  assert.equal(after?.phases[0].attempt, 1);
+  assert.equal(after?.phases[0].retries, 1);
 });
 
 test("reconcile tags a restart-interrupted phase as retryable", async () => {

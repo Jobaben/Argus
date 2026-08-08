@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 // The reference hook lives at <repo>/hooks/argus-signal.mjs; import its pure
 // type-resolution helper. The module guards its side effects behind an
 // is-main check, so importing it here is safe.
@@ -8,6 +10,7 @@ import {
   hasPendingBackgroundWork,
   buildReason,
   lastMessage,
+  deliverSignal,
 } from "../../hooks/argus-signal.mjs";
 
 test("explicit CLI arg always wins over the message", () => {
@@ -167,4 +170,68 @@ test("a Codex stop payload resolves an outcome the same way a Claude one does", 
 test("deferral needs background tasks, which Codex never reports", () => {
   assert.equal(hasPendingBackgroundWork({ last_assistant_message: "done" }), false);
   assert.equal(resolveType(undefined, { last_assistant_message: "done" }), "completed");
+});
+
+test("signal delivery accepts a 2xx response and POSTs JSON", async () => {
+  let call: { url: string; init: RequestInit } | undefined;
+  await deliverSignal(
+    "http://argus.test/signal",
+    { type: "completed", runId: "r1" },
+    async (url: string | URL | Request, init?: RequestInit) => {
+      call = { url: String(url), init: init! };
+      return new Response(null, { status: 204 });
+    },
+  );
+  assert.equal(call?.url, "http://argus.test/signal");
+  assert.equal(call?.init.method, "POST");
+  assert.deepEqual(JSON.parse(String(call?.init.body)), { type: "completed", runId: "r1" });
+});
+
+test("signal delivery reports non-2xx status and response body", async () => {
+  await assert.rejects(
+    deliverSignal(
+      "http://argus.test/signal",
+      { type: "completed" },
+      async () => new Response("bad token", { status: 403, statusText: "Forbidden" }),
+    ),
+    /HTTP 403 Forbidden: bad token/,
+  );
+});
+
+test("signal delivery does not swallow transport failures", async () => {
+  await assert.rejects(
+    deliverSignal("http://argus.test/signal", {}, async () => {
+      throw new Error("connection refused");
+    }),
+    /connection refused/,
+  );
+});
+
+test("the hook process reports delivery failure and exits non-zero", async () => {
+  const hook = fileURLToPath(new URL("../../hooks/argus-signal.mjs", import.meta.url));
+  const child = spawn(process.execPath, [hook], {
+    env: {
+      ...process.env,
+      ARGUS_RUNTIME: "codex",
+      ARGUS_SIGNAL_URL: "http://127.0.0.1:1/api/signal",
+      ARGUS_INSTANCE_ID: "i1",
+      ARGUS_PHASE_ID: "p1",
+      ARGUS_RUN_ID: "r1",
+      ARGUS_SIGNAL_TOKEN: "t1",
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8").on("data", (chunk) => (stdout += chunk));
+  child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
+  child.stdin.end(JSON.stringify({ last_assistant_message: "ARGUS_OUTCOME: succeeded" }));
+  const code = await new Promise<number | null>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", resolve);
+  });
+
+  assert.equal(code, 1);
+  assert.equal(stdout, '{"continue":true}', "Codex still receives its hook response");
+  assert.match(stderr, /\[argus-signal\] hook failed:/);
 });

@@ -200,6 +200,17 @@ test("regression: a pipeline that skipped half its work reports blocked, not suc
   assert.equal(instanceOutcome(def(phases), stuck), "blocked");
 });
 
+test("regression: an all-terminal graph containing a failed phase is not succeeded", () => {
+  const one = [phase("a")];
+  assert.equal(instanceOutcome(def(one), instance(one, { a: "failed" })), "blocked");
+
+  const parallel = [phase("a"), phase("b")];
+  assert.equal(
+    instanceOutcome(def(parallel), instance(parallel, { a: "failed", b: "succeeded" })),
+    "blocked",
+  );
+});
+
 test("currentPhaseIndex prefers the gate a human has to act on", () => {
   const phases = [phase("a"), phase("b", ["a"]), phase("c", ["a"])];
   assert.equal(

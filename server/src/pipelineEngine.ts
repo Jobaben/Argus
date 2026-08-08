@@ -180,6 +180,80 @@ export interface ActionResult {
   error?: string;
 }
 
+interface RecoveredOutcome {
+  signalType: "completed" | "failed";
+  outcome: NonNullable<Run["outcome"]>;
+  payload: unknown;
+  /** Failure policy class. Absent for a recovered success. */
+  failureClass?: RetryableClass;
+  failureReason?: string;
+}
+
+const OUTCOME_LINE_RE = /^\s*ARGUS_OUTCOME:\s*(succeeded|failed|blocked)\b[^\S\r\n]*(.*)$/gim;
+
+/**
+ * Recover Codex's work-level conclusion from the final message stored on a
+ * terminal run. The Stop hook remains authoritative when it arrives; this is
+ * only used by reconciliation while the tracked step is still `running`.
+ *
+ * Conflicting sentinels are deliberately ambiguous. Repeating the same
+ * sentinel is harmless (models sometimes recap before the required last
+ * line), but two different conclusions must never be guessed into success.
+ */
+export function recoverCodexOutcome(run: Run): RecoveredOutcome {
+  if (run.status !== "succeeded" || (run.exitCode != null && run.exitCode !== 0)) {
+    const reason =
+      run.error?.trim() ||
+      (run.exitCode != null ? `exit code ${run.exitCode}` : `run ended with status ${run.status}`);
+    return {
+      signalType: "failed",
+      outcome: "failed",
+      payload: { reason },
+      failureClass: run.pid == null ? "spawn" : "exit-code",
+      failureReason: reason,
+    };
+  }
+
+  const message = run.resultSummary ?? "";
+  const matches = [...message.matchAll(OUTCOME_LINE_RE)];
+  const kinds = new Set(matches.map((m) => m[1].toLowerCase()));
+  if (matches.length === 0 || kinds.size !== 1) {
+    const reason =
+      matches.length === 0
+        ? "successful Codex run ended without an ARGUS_OUTCOME completion marker"
+        : `successful Codex run reported conflicting ARGUS_OUTCOME markers (${[...kinds].join(
+            ", ",
+          )})`;
+    return {
+      signalType: "failed",
+      outcome: "failed",
+      payload: { reason },
+      // A missing/ambiguous completion protocol is recoverable infrastructure,
+      // not a considered agent failure, so existing exit-code retry policies
+      // keep their pre-fallback behavior.
+      failureClass: "exit-code",
+      failureReason: reason,
+    };
+  }
+
+  const kind = matches[matches.length - 1][1].toLowerCase() as NonNullable<Run["outcome"]>;
+  const payload = {
+    last_assistant_message: message,
+    completion_source: "run-record-fallback",
+  };
+  if (kind === "succeeded") return { signalType: "completed", outcome: kind, payload };
+
+  const tail = (matches[matches.length - 1][2] ?? "").replace(/^[\s:–—-]+/, "").trim();
+  const reason = tail ? `${kind}: ${tail}` : kind;
+  return {
+    signalType: "failed",
+    outcome: kind,
+    payload: { ...payload, reason },
+    failureClass: "signal",
+    failureReason: reason,
+  };
+}
+
 export interface Engine {
   start(pipelineId: string, trigger?: "manual" | "scheduled"): Promise<PipelineInstance | null>;
   onSignal(instanceId: string, signal: PipelineSignal): Promise<ActionResult>;
@@ -533,6 +607,34 @@ export function createEngine(deps: EngineDeps): Engine {
     return instance;
   }
 
+  /**
+   * Launch phases exposed by a transition after the caller releases the
+   * instance lock. Signal handlers must answer the child before waiting for a
+   * concurrency slot, and reconciliation uses the same path so fallback and a
+   * delayed hook have one idempotency boundary.
+   */
+  function queueReadyPhases(
+    instanceId: string,
+    def: PipelineDefinition,
+    transitioned: PipelineInstance,
+    ready: number[],
+  ): void {
+    if (ready.length === 0) return;
+    const wantIds = ready.map((i) => transitioned.phases[i].id);
+    void locks
+      .withLock(instanceId, async () => {
+        const fresh = await readInstance(instanceId);
+        if (!fresh || fresh.status !== "running") return;
+        // Re-resolve by phase id: an abort/revise landing in the transition
+        // window may have changed which work is live.
+        const stillWanted = wantIds
+          .map((id) => fresh.phases.findIndex((p) => p.id === id))
+          .filter((i) => i >= 0 && fresh.phases[i].status === "running");
+        await startPhases(def, fresh, stillWanted);
+      })
+      .catch((e: unknown) => log.error("deferred phase start failed", { instanceId, err: e }));
+  }
+
   async function onSignal(instanceId: string, signal: PipelineSignal): Promise<ActionResult> {
     return locks.withLock(instanceId, async () => {
       const inst = await readInstance(instanceId);
@@ -576,22 +678,7 @@ export function createEngine(deps: EngineDeps): Engine {
       // instance lock and re-verifies liveness before launching, so an abort/
       // revise landing in the transition window can't be clobbered and won't be
       // raced into spawning orphan children (it queues behind, then kills them).
-      if (ready.length > 0) {
-        const wantIds = ready.map((i) => instance.phases[i].id);
-        void locks
-          .withLock(instanceId, async () => {
-            const fresh = await readInstance(instanceId);
-            if (!fresh || fresh.status !== "running") return;
-            // Re-resolve by phase *id*: an abort/revise landing in the window
-            // may have changed which phases are live, and launching by a stale
-            // index would spawn the wrong work.
-            const stillWanted = wantIds
-              .map((id) => fresh.phases.findIndex((p) => p.id === id))
-              .filter((i) => i >= 0 && fresh.phases[i].status === "running");
-            await startPhases(def, fresh, stillWanted);
-          })
-          .catch((e: unknown) => log.error("deferred phase start failed", { instanceId, err: e }));
-      }
+      queueReadyPhases(instanceId, def, instance, ready);
       if (instance.status === "failed") deps.onFailure?.(instance);
       deps.onChange?.();
       return { ok: true, code: 202 };
@@ -761,36 +848,65 @@ export function createEngine(deps: EngineDeps): Engine {
           for (const { phaseId, step: s } of orphans) {
             if (s.status !== "running" || !s.runId) continue;
             const got = await readRun(s.runId);
+            // Reconcile only from a completed run record. A dead pid whose
+            // record is still `running` can be racing the normal close handler;
+            // guessing in that window would discard the final Codex message we
+            // need to distinguish success, failure, and ambiguity.
             const ended =
               got &&
               (got.run.status === "failed" ||
                 got.run.status === "succeeded" ||
-                !isAlive(got.run.pid));
+                got.run.status === "interrupted" ||
+                got.run.status === "cancelled");
             if (!ended) continue;
             const restarted = got?.run.status === "interrupted";
-            const payload = restarted
-              ? { reason: "Argus restarted mid-run — revise to retry", kind: "restarted" }
-              : {
-                  reason: got?.run.error ?? "run ended without emitting a completion signal",
-                };
-            const { instance } = advance(
+            const codexFallback =
+              !restarted && got?.run.runtime === "codex" ? recoverCodexOutcome(got.run) : null;
+            const signalType = codexFallback?.signalType ?? "failed";
+            const payload = codexFallback
+              ? codexFallback.payload
+              : restarted
+                ? { reason: "Argus restarted mid-run — revise to retry", kind: "restarted" }
+                : {
+                    reason: got?.run.error ?? "run ended without emitting a completion signal",
+                  };
+            const { instance, startPhases: ready } = advance(
               def,
               current,
               {
                 instanceId: current.id,
                 phaseId,
                 runId: s.runId,
-                type: "failed",
+                type: signalType,
                 token: current.signalToken,
                 payload,
               },
               nowISO(),
             );
-            // Class the failure from what the run record shows, so a policy
-            // that retries infrastructure but not judgement can tell them apart.
-            const failureClass: RetryableClass = got?.run.pid == null ? "spawn" : "exit-code";
-            noteFailure(def, instance, phaseId, failureClass, payload.reason);
+            if (codexFallback) await patchRun(s.runId, { outcome: codexFallback.outcome });
+            if (signalType === "failed") {
+              // Class the failure from what the run record shows, so retry
+              // policies keep distinguishing infrastructure from an agent's
+              // considered failed/blocked conclusion.
+              const failureClass: RetryableClass =
+                codexFallback?.failureClass ?? (got?.run.pid == null ? "spawn" : "exit-code");
+              const reason =
+                codexFallback?.failureReason ??
+                (payload as { reason?: string }).reason ??
+                "run ended without emitting a completion signal";
+              noteFailure(def, instance, phaseId, failureClass, reason);
+            }
             await writeInstance(instance);
+            void journal(instance.id, {
+              at: nowISO(),
+              kind: "phase.signalled",
+              phaseId,
+              runId: s.runId,
+              detail: codexFallback
+                ? `run-record fallback: ${codexFallback.outcome}`
+                : "reconcile: failed",
+            });
+            queueReadyPhases(instance.id, def, instance, ready);
             deps.tailer?.untrack(s.runId);
             if (instance.status === "failed") deps.onFailure?.(instance);
             deps.onChange?.();

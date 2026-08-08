@@ -16,3 +16,8 @@ export function lastMessage(payload: unknown): string;
 export function hasPendingBackgroundWork(payload: unknown): boolean;
 export function resolveType(argType: string | undefined, payload: unknown): string;
 export function buildReason(payload: unknown): string;
+export function deliverSignal(
+  url: string,
+  body: unknown,
+  fetchImpl?: typeof globalThis.fetch,
+): Promise<void>;
