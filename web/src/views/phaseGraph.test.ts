@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { graphColumns, graphEdges, isBranching, type GraphNode } from "./phaseGraph";
+import { graphColumns, graphEdges, isBranching, type GraphNode } from "./phaseGraphLayout";
 
 const node = (id: string, needs?: string[]): GraphNode => ({ id, ...(needs ? { needs } : {}) });
 

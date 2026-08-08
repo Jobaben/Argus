@@ -1,5 +1,5 @@
 import type { DsStatus, PhasePill } from "../ds";
-import { graphColumns, graphEdges, isBranching } from "./phaseGraph";
+import { graphColumns, graphEdges, isBranching } from "./phaseGraphLayout";
 
 /**
  * The pipeline's shape, when it has one.
