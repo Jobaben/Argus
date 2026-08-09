@@ -57,6 +57,7 @@ describe("useRuntimes", () => {
           available: true,
           isDefault: true,
           models: [],
+          reasoningEfforts: [],
           capabilities: CAPS,
         },
       ],

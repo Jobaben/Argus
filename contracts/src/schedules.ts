@@ -1,7 +1,7 @@
 /** Triggers, schedules, run records and one-off launches. */
 
 import type { BudgetAction } from "./ledger.js";
-import type { AgentRuntimeId } from "./runtimes.js";
+import type { AgentRuntimeId, ReasoningEffort } from "./runtimes.js";
 import type { Rubric } from "./verdict.js";
 
 export type TriggerKind = "interval" | "daily" | "weekly" | "windowed";
@@ -40,6 +40,10 @@ export interface Schedule {
   rubric?: Rubric;
   /** Which agent CLI runs this schedule. Absent = the server default. */
   runtime?: AgentRuntimeId;
+  /** Optional model override passed to the selected runtime. */
+  model?: string;
+  /** Codex-only per-run reasoning override. */
+  reasoningEffort?: ReasoningEffort;
   createdAt: string;
   updatedAt: string;
   lastRunAt: string | null;
@@ -64,6 +68,10 @@ export interface ScheduleInput {
   rubric?: Rubric | null;
   /** Null clears the override (back to the server default); absent leaves it alone. */
   runtime?: AgentRuntimeId | null;
+  /** Null clears the model override; absent leaves it alone on a PATCH. */
+  model?: string | null;
+  /** Null clears the Codex reasoning override; absent leaves it alone on a PATCH. */
+  reasoningEffort?: ReasoningEffort | null;
 }
 
 export type RunStatus =
@@ -89,6 +97,8 @@ export interface Run {
   exitCode: number | null;
   sessionId: string | null;
   model?: string;
+  /** Codex reasoning effort used for this run, when explicitly selected. */
+  reasoningEffort?: ReasoningEffort;
   /**
    * Which agent CLI executed this run. Absent means `"claude"` — every run
    * recorded before runtimes existed was one, and rewriting history to say so
@@ -100,8 +110,7 @@ export interface Run {
   error: string | null;
   instanceId?: string;
   phaseId?: string;
-  /** Total USD cost reported by the runtime's result envelope, if it reports one
-   *  (Claude Code does; Codex reports tokens only). */
+  /** Total reported USD, or a public token-price estimate for supported Codex models. */
   costUsd?: number | null;
   /** Total tokens (input+output) reported by the CLI result envelope, if present. */
   tokens?: number | null;
@@ -128,6 +137,7 @@ export interface LaunchInput {
   prompt: string;
   cwd: string;
   model?: string;
+  reasoningEffort?: ReasoningEffort;
   /** Which agent CLI to run. Absent = the server default. */
   runtime?: AgentRuntimeId;
 }

@@ -33,6 +33,29 @@ vi.mock("../useRuns", () => ({
   useRuns: () => ({ runs: mockState.runs, loading: false, error: null }),
 }));
 
+vi.mock("../useRuntimes", () => ({
+  useRuntimes: () => ({
+    default: "claude",
+    runtimes: [
+      {
+        id: "claude",
+        label: "Claude Code",
+        available: true,
+        models: ["opus", "sonnet", "haiku"],
+        reasoningEfforts: [],
+      },
+      {
+        id: "codex",
+        label: "Codex",
+        available: true,
+        models: ["gpt-5.6-sol", "gpt-5.6-terra"],
+        reasoningEfforts: ["low", "medium", "high", "xhigh"],
+      },
+    ],
+  }),
+  runtimeLabel: (id: string) => (id === "codex" ? "Codex" : "Claude Code"),
+}));
+
 const schedule = (over: Partial<ScheduleWithNext> = {}): ScheduleWithNext => ({
   id: "s1",
   name: "Nightly audit",
@@ -107,6 +130,24 @@ describe("Schedules catch-up", () => {
     mockState.schedules = [schedule({ catchUp: true })];
     render(<Schedules />);
     expect(screen.getByText(/catch-up/i)).toBeTruthy();
+  });
+
+  it("submits Codex model and effort selections", async () => {
+    const user = userEvent.setup();
+    render(<Schedules />);
+    await user.click(screen.getByRole("button", { name: /new schedule/i }));
+    await user.type(screen.getByPlaceholderText("Nightly audit"), "Codex audit");
+    await user.type(screen.getByPlaceholderText(/Review yesterday/), "audit");
+    await user.type(screen.getByPlaceholderText("/home/you/project"), "/tmp");
+    await user.selectOptions(screen.getByLabelText("Runtime (server default)"), "codex");
+    await user.selectOptions(screen.getByLabelText("Model (inherit CLI)"), "gpt-5.6-terra");
+    await user.selectOptions(screen.getByLabelText("Effort (inherit CLI)"), "high");
+    await user.click(screen.getByRole("button", { name: /save schedule/i }));
+    expect(mockState.create.mock.calls[0][0]).toMatchObject({
+      runtime: "codex",
+      model: "gpt-5.6-terra",
+      reasoningEffort: "high",
+    });
   });
 });
 

@@ -48,6 +48,7 @@ the absolute paths embedded in the data files (those can be from another OS).
 | one parseable result     | `--output-format json`         | `--json` (a JSONL event stream)       |
 | live transcript to tail  | `--output-format stream-json`  | the same `--json` stream              |
 | model override           | `--model`                      | `--model`                             |
+| reasoning override       | CLI/model default              | `-c model_reasoning_effort=…`         |
 | pipeline outcome signal  | `Stop` hook in `settings.json` | `[[hooks.stop]]` in `config.toml`     |
 | Argus-owned instructions | `--append-system-prompt`       | prepended to the prompt               |
 | transcripts on disk      | `projects/<proj>/<id>.jsonl`   | `sessions/YYYY/MM/DD/rollout-*.jsonl` |
@@ -58,10 +59,10 @@ over them:
 - **Codex mints its own session id.** Argus reads the `thread.started` event
   back out of the stream and patches the run record, so the transcript link
   appears once the run has started rather than before it.
-- **Codex reports tokens, not dollars.** `turn.completed.usage` has no cost, so
-  `costUsd` stays null on Codex runs and the Budget view reports what it has. A
-  spend ceiling measured in USD therefore only constrains Claude Code runs; use
-  the token figures for Codex.
+- **Codex reports tokens, not dollars.** Argus uses the input, cached-input and
+  output breakdown to estimate supported OpenAI models at public API list
+  prices. The UI marks per-run Codex dollars with `~`; custom models without a
+  known price keep `costUsd: null` rather than receiving a fabricated value.
 
 Everything else is at parity: live activity in the Command Center, the Flight
 Recorder, the Sessions transcript view (Codex rollouts are translated into the
@@ -164,7 +165,7 @@ docker run --rm -p 7777:7777 \
 | `ARGUS_CODEX_SANDBOX`       | `workspace-write`                      | Codex sandbox mode (`read-only` \| `workspace-write` \| `danger-full-access`).          |
 | `ARGUS_CLAUDE_ARGS`         | _(none)_                               | Extra argv appended to every `claude -p` (simple quoting honoured).                     |
 | `ARGUS_CODEX_ARGS`          | _(none)_                               | Extra argv appended to every `codex exec`.                                              |
-| `ARGUS_CODEX_MODELS`        | _(none)_                               | Comma-separated model aliases to offer in the Codex model picker.                       |
+| `ARGUS_CODEX_MODELS`        | _(none)_                               | Extra comma-separated model aliases to add to the built-in Codex model picker.          |
 | `ARGUS_ANALYSIS_RUNTIME`    | `$ARGUS_AGENT`                         | Which CLI answers the bounded analysis passes (autopsy, verdict, diagnose, plan).       |
 | `ARGUS_ANALYSIS_MODEL`      | `haiku` (Claude) / CLI default (Codex) | Model for those passes.                                                                 |
 | `ARGUS_PORT`                | `7777`                                 | HTTP/WS port.                                                                           |

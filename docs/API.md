@@ -87,6 +87,7 @@ reloading picks it up.
       "available": true,
       "isDefault": true,
       "models": ["opus", "sonnet", "haiku"],
+      "reasoningEfforts": [],
       "capabilities": {
         "presetSessionId": true,
         "appendSystemPrompt": true,
@@ -105,7 +106,8 @@ reloading picks it up.
       "available": false,
       "detail": "`codex` was not found on PATH",
       "isDefault": false,
-      "models": [],
+      "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+      "reasoningEfforts": ["minimal", "low", "medium", "high", "xhigh"],
       "capabilities": {
         "presetSessionId": false,
         "appendSystemPrompt": false,
@@ -123,8 +125,9 @@ reloading picks it up.
 `capabilities` exists so the UI can explain a gap instead of hiding it. The two
 that are visible in the data: `presetSessionId: false` means a run's
 `sessionId` is null until the CLI reports its own thread id (so the transcript
-link appears once the run starts), and `reportsCost: false` means `costUsd` on
-that runtime's runs is always null — tokens are reported, dollars are not.
+link appears once the run starts), and `reportsCost: false` means the CLI does
+not emit dollars. For supported Codex models Argus estimates `costUsd` from the
+reported token classes and public API prices; unknown model prices stay null.
 
 ### Naming a runtime
 
@@ -1801,8 +1804,9 @@ In `GET /api/overview`, each entry's `latest.phases[].steps[]` carries
 `cost` is the instance's total spend `{ usd, tokens }` across **all** of its runs
 (including superseded revise attempts). A metric is `null` until at least one run
 reports it; `cost` is `null` when the pipeline has never run. `usd` counts only
-runs whose runtime reports a dollar figure — Codex reports tokens only, so a
-Codex-only instance has `tokens` and a null `usd`.
+runs with a reported or estimated dollar figure. Supported Codex models
+therefore contribute both `tokens` and estimated `usd`; unknown/custom model
+prices contribute tokens while `usd` remains null.
 
 A definition, a phase (`phases[]`) and a step (`phases[].steps[]`) may each
 carry `runtime`; see [Naming a runtime](#naming-a-runtime) for the resolution

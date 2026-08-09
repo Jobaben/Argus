@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { codexRuntime, parseCodexEnvelope } from "./codex.js";
+import { codexRuntime, estimateCodexCost, parseCodexEnvelope } from "./codex.js";
 import { deriveCodexActivity } from "./codex.js";
 
 const RESET = { ...process.env };
@@ -20,22 +20,24 @@ function withEnv(vars: Record<string, string | undefined>, fn: () => void): void
 }
 
 test("a batch run is `codex exec --json`, sandboxed, reading the prompt from stdin", () => {
-  const plan = codexRuntime.batchPlan({ prompt: "do the thing" });
-  assert.equal(plan.bin, "codex");
-  assert.deepEqual(plan.args, [
-    "exec",
-    "--json",
-    "--skip-git-repo-check",
-    "--sandbox",
-    "workspace-write",
-    "-",
-  ]);
-  assert.equal(plan.stdin, "do the thing");
-  // The prompt is user-authored text; nothing may put it on argv.
-  assert.equal(
-    plan.args.some((a) => a.includes("do the thing")),
-    false,
-  );
+  withEnv({ ARGUS_CODEX_BIN: undefined }, () => {
+    const plan = codexRuntime.batchPlan({ prompt: "do the thing" });
+    assert.equal(plan.bin, "codex");
+    assert.deepEqual(plan.args, [
+      "exec",
+      "--json",
+      "--skip-git-repo-check",
+      "--sandbox",
+      "workspace-write",
+      "-",
+    ]);
+    assert.equal(plan.stdin, "do the thing");
+    // The prompt is user-authored text; nothing may put it on argv.
+    assert.equal(
+      plan.args.some((a) => a.includes("do the thing")),
+      false,
+    );
+  });
 });
 
 test("the model override becomes --model", () => {
@@ -43,6 +45,19 @@ test("the model override becomes --model", () => {
   const i = plan.args.indexOf("--model");
   assert.ok(i > -1);
   assert.equal(plan.args[i + 1], "gpt-5.3-codex");
+});
+
+test("the reasoning override becomes an inline Codex config value", () => {
+  const plan = codexRuntime.batchPlan({ prompt: "p", reasoningEffort: "high" });
+  const i = plan.args.indexOf("-c");
+  assert.ok(i > -1);
+  assert.equal(plan.args[i + 1], 'model_reasoning_effort="high"');
+});
+
+test("Codex exposes current model and reasoning choices to the UI", () => {
+  assert.ok(codexRuntime.models().includes("gpt-5.6-sol"));
+  assert.ok(codexRuntime.models().includes("gpt-5.6-terra"));
+  assert.deepEqual(codexRuntime.reasoningEfforts(), ["minimal", "low", "medium", "high", "xhigh"]);
 });
 
 test("no --model when none is set, so the CLI keeps its own default", () => {
@@ -106,6 +121,23 @@ test("the envelope is folded out of the whole event stream", () => {
   assert.equal(env.isError, false);
   // Codex reports tokens, not dollars — a fabricated figure would be worse.
   assert.equal(env.costUsd, null);
+});
+
+test("Codex cost is estimated from uncached input, cached input, and output tokens", () => {
+  const env = parseCodexEnvelope(STREAM, "gpt-5.3-codex");
+  assert.equal(env.costUsd, 0.004883);
+  assert.equal(
+    estimateCodexCost("gpt-5.6-terra", {
+      inputTokens: 1_000,
+      cachedInputTokens: 400,
+      outputTokens: 200,
+    }),
+    0.0046,
+  );
+});
+
+test("unknown model pricing stays null instead of fabricating a dollar amount", () => {
+  assert.equal(parseCodexEnvelope(STREAM, "private-model").costUsd, null);
 });
 
 test("the envelope survives stderr chatter and a torn leading line", () => {

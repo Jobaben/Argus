@@ -155,7 +155,9 @@ server knows which one is running:
 - **What can't you do?** Capabilities, so a gap is reported rather than
   producing a null the UI can't explain. Codex mints its own session id
   (`presetSessionId: false`, so the run record is patched once the stream reports
-  it) and reports tokens but not dollars (`reportsCost: false`).
+  it) and reports token usage rather than dollars (`reportsCost: false`). For
+  supported OpenAI models Argus derives a public-list-price estimate from the
+  input/cached/output breakdown; unknown model prices stay null.
 
 The resolved runtime is **written onto the run record**, not re-derived at read
 time: a run started under one default has to stay explicable after the default

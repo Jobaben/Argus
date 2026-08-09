@@ -1,6 +1,6 @@
 /** Pipeline definitions, running instances, and the board overview. */
 
-import type { AgentRuntimeId } from "./runtimes.js";
+import type { AgentRuntimeId, ReasoningEffort } from "./runtimes.js";
 import type { Trigger } from "./schedules.js";
 import type { AutoApprove, Rubric } from "./verdict.js";
 
@@ -8,6 +8,8 @@ export interface PhaseStep {
   name: string;
   prompt: string;
   model?: string;
+  /** Codex-only override; absent inherits the pipeline/CLI setting. */
+  reasoningEffort?: ReasoningEffort;
   /** Overrides the phase's (and pipeline's) runtime for this one step. */
   runtime?: AgentRuntimeId;
 }
@@ -70,6 +72,8 @@ export interface PipelineDefinition {
   enabled: boolean;
   overlapPolicy: "skip" | "allow";
   model?: string;
+  /** Default Codex reasoning effort for steps that do not override it. */
+  reasoningEffort?: ReasoningEffort;
   /**
    * Which agent CLI runs this pipeline's steps, unless a phase or step names
    * another. Absent = the server default, so every pipeline authored before
@@ -89,6 +93,7 @@ export interface PipelineInput {
   enabled?: boolean;
   overlapPolicy?: "skip" | "allow";
   model?: string;
+  reasoningEffort?: ReasoningEffort;
   runtime?: AgentRuntimeId;
 }
 

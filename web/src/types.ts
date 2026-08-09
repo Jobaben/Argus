@@ -15,6 +15,7 @@ export type {
   AgentRuntimeCapabilities,
   AgentRuntimeId,
   AgentRuntimeInfo,
+  ReasoningEffort,
   RuntimesResponse,
   // Agents
   Agent,

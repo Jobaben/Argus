@@ -17,6 +17,9 @@
 /** Which agent CLI executes a run. Absent anywhere = `"claude"`. */
 export type AgentRuntimeId = "claude" | "codex";
 
+/** Per-run reasoning override understood by Codex CLI. */
+export type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+
 /** What a runtime can and cannot do, so the UI explains gaps instead of hiding them. */
 export interface AgentRuntimeCapabilities {
   /** Accepts a caller-chosen session id, so the transcript link is known before the run starts. */
@@ -51,6 +54,8 @@ export interface AgentRuntimeInfo {
   isDefault: boolean;
   /** Model aliases worth offering in a picker. Empty = free-text only. */
   models: string[];
+  /** Reasoning-effort overrides worth offering. Empty = use the CLI default. */
+  reasoningEfforts: ReasoningEffort[];
   capabilities: AgentRuntimeCapabilities;
 }
 

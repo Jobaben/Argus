@@ -23,6 +23,7 @@ const ROSTER: AgentRuntimeInfo[] = [
     available: true,
     isDefault: true,
     models: ["opus"],
+    reasoningEfforts: [],
     capabilities: CAPS,
   },
   {
@@ -34,6 +35,7 @@ const ROSTER: AgentRuntimeInfo[] = [
     detail: "`codex` was not found on PATH",
     isDefault: false,
     models: [],
+    reasoningEfforts: ["low", "medium", "high"],
     capabilities: { ...CAPS, presetSessionId: false, reportsCost: false },
   },
 ];

@@ -103,6 +103,7 @@ export function buildStepPlan(run: Run): SpawnPlan {
     prompt: run.prompt,
     sessionId: run.sessionId,
     model: run.model,
+    reasoningEffort: run.reasoningEffort,
     systemPrompt: OUTCOME_CONTRACT,
   });
 }
@@ -332,6 +333,7 @@ export function createEngine(deps: EngineDeps): Engine {
         exitCode: null,
         sessionId: runtimeFor(runtime).capabilities.presetSessionId ? deps.newId() : null,
         model: stepDef.model ?? def.model,
+        reasoningEffort: stepDef.reasoningEffort ?? def.reasoningEffort,
         runtime,
         project: encodeProject(phaseDef.cwd),
         resultSummary: null,
@@ -432,7 +434,9 @@ export function createEngine(deps: EngineDeps): Engine {
         // cost/tokens/result from it so every completed step reports its spend
         // (not only runs finalized by the adopted-run reconcile path).
         const got = await readRun(run.id);
-        const envelope = got ? parseEnvelopeFor(run.runtime, got.log) : null;
+        const envelope = got
+          ? parseEnvelopeFor(run.runtime, got.log, { model: got.run.model })
+          : null;
         await patchRun(run.id, {
           status: res.code === 0 ? "succeeded" : "failed",
           endedAt: nowISO(),
@@ -777,7 +781,7 @@ export function createEngine(deps: EngineDeps): Engine {
           continue;
         }
         if (isAlive(got.run.pid)) continue;
-        const envelope = parseEnvelopeFor(got.run.runtime, got.log);
+        const envelope = parseEnvelopeFor(got.run.runtime, got.log, { model: got.run.model });
         const parsed = envelope.isError !== null || envelope.result !== null ? envelope : null;
         const ended = deps.now();
         // patchRun (not a full writeRun spread): the signal path patches

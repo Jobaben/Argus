@@ -3,6 +3,28 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PipelineForm, EMPTY_PIPELINE } from "./PipelineForm";
 
+vi.mock("../useRuntimes", () => ({
+  useRuntimes: () => ({
+    default: "claude",
+    runtimes: [
+      {
+        id: "claude",
+        label: "Claude Code",
+        available: true,
+        models: ["opus", "sonnet", "haiku"],
+        reasoningEfforts: [],
+      },
+      {
+        id: "codex",
+        label: "Codex",
+        available: true,
+        models: ["gpt-5.6-sol", "gpt-5.6-terra"],
+        reasoningEfforts: ["low", "medium", "high", "xhigh"],
+      },
+    ],
+  }),
+}));
+
 describe("PipelineForm", () => {
   it("renders a single phase by default and adds another on '+ add phase'", async () => {
     const user = userEvent.setup();
@@ -132,5 +154,31 @@ describe("PipelineForm", () => {
     const arg = onSubmit.mock.calls[0][0];
     expect(arg.model).toBeUndefined();
     expect(arg.phases[0].steps[0].model).toBeUndefined();
+  });
+
+  it("submits Codex model and effort defaults and step overrides", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    render(<PipelineForm initial={EMPTY_PIPELINE} onSubmit={onSubmit} onCancel={vi.fn()} />);
+    await user.type(screen.getByPlaceholderText("Pipeline name"), "Codex pipeline");
+    await user.type(screen.getByPlaceholderText("Phase name"), "Build");
+    await user.type(screen.getByPlaceholderText(/Working directory/), "/tmp");
+    await user.type(screen.getByPlaceholderText("Step name"), "compile");
+    await user.type(screen.getByPlaceholderText("Step prompt"), "run");
+    await user.selectOptions(screen.getByLabelText("Runtime (server default)"), "codex");
+    await user.selectOptions(screen.getByLabelText("Default model (inherit CLI)"), "gpt-5.6-terra");
+    await user.selectOptions(screen.getByLabelText("Default effort (inherit CLI)"), "medium");
+    await user.selectOptions(
+      screen.getByLabelText("Use pipeline effort (phase 1 step 1)"),
+      "xhigh",
+    );
+    await user.click(screen.getByRole("button", { name: /save pipeline/i }));
+    const arg = onSubmit.mock.calls[0][0];
+    expect(arg).toMatchObject({
+      runtime: "codex",
+      model: "gpt-5.6-terra",
+      reasoningEffort: "medium",
+    });
+    expect(arg.phases[0].steps[0].reasoningEffort).toBe("xhigh");
   });
 });
