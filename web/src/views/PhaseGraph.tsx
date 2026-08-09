@@ -64,22 +64,24 @@ export function PhaseGraph({ phases }: { phases: PhasePill[] }) {
         Graph — {columns.length} stage{columns.length === 1 ? "" : "s"}, {edges.length} dependenc
         {edges.length === 1 ? "y" : "ies"}
       </figcaption>
-      <div className="flex items-stretch gap-2 overflow-x-auto">
+      <ol
+        className="grid min-w-0 gap-2"
+        style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 144px), 1fr))" }}
+      >
         {columns.map((col, i) => (
-          <div key={col.depth} className="flex items-stretch gap-2">
-            {i > 0 && (
-              <span aria-hidden="true" className="self-center font-mono text-ink-faint">
-                →
-              </span>
-            )}
-            <ul className="flex min-w-36 flex-col justify-center gap-2">
+          <li key={col.depth} className="min-w-0 rounded-md border border-line/70 p-1.5">
+            <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[9px] uppercase tracking-[0.12em] text-ink-faint">
+              <span>Stage {String(i + 1).padStart(2, "0")}</span>
+              {i > 0 && <span aria-hidden="true">→</span>}
+            </div>
+            <ul className="flex min-w-0 flex-col justify-center gap-2">
               {col.phases.map((p) => (
                 <PhaseNode key={p.id} phase={p} />
               ))}
             </ul>
-          </div>
+          </li>
         ))}
-      </div>
+      </ol>
     </figure>
   );
 }

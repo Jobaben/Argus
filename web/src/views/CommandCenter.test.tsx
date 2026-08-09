@@ -93,7 +93,7 @@ beforeEach(() => {
 });
 
 describe("CommandCenter", () => {
-  it("renders one pipeline card with a phase grid per instance when overlapping", () => {
+  it("renders one pipeline card with a responsive phase grid per instance when overlapping", () => {
     const e = entry("sprint-pr", "running", ["running", "pending"]);
     const newest = { ...e.latest!, id: "11111111-aaaa" };
     const older = {
@@ -109,13 +109,27 @@ describe("CommandCenter", () => {
     render(<CommandCenter />);
     // one pipeline tile, not one per instance
     expect(screen.getAllByText("sprint-pr")).toHaveLength(1);
-    // phase titles render once, shared by every instance
-    expect(screen.getAllByText("Phase0")).toHaveLength(1);
-    expect(screen.getAllByText("Phase1")).toHaveLength(1);
+    // Each instance owns its grid so an in-flight run remains accurate even if
+    // the pipeline definition changes underneath it.
+    expect(screen.getAllByTestId("phase-grid")).toHaveLength(2);
+    expect(screen.getAllByText("Phase0")).toHaveLength(2);
+    expect(screen.getAllByText("Phase1")).toHaveLength(2);
     // each instance keeps its own labelled row of step tiles
     expect(screen.getByText("#11111111")).toBeInTheDocument();
     expect(screen.getByText("#22222222")).toBeInTheDocument();
     expect(screen.getAllByText("step-x")).toHaveLength(2);
+  });
+
+  it("wraps an arbitrarily long pipeline instead of creating horizontal scroll", () => {
+    mockOverview.overview = [entry("release-train", "running", Array(24).fill("pending"))];
+    const { container } = render(<CommandCenter />);
+
+    const grid = screen.getByTestId("phase-grid");
+    expect(grid).toHaveStyle({
+      gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))",
+    });
+    expect(screen.getByText("Phase23")).toBeInTheDocument();
+    expect(container.querySelector(".overflow-x-auto")).toBeNull();
   });
 
   it("shows every concurrently-stopped instance as stopped", () => {

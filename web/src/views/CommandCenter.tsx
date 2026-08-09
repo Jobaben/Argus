@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useMachineFacet } from "../fleet/useMachineFacet";
 import { MachinePicker, PeerBanner, PeerEmpty } from "../fleet/MachineFacet";
 import { useOverview } from "../useOverview";
@@ -342,11 +342,10 @@ function PhaseCell({
 }
 
 /**
- * One card per pipeline. With a single instance the header carries its badge,
- * cost and freshness exactly as before. With several concurrent instances the
- * card stays singular: the phase titles render once, and each instance
- * contributes only its own row of step tiles under those shared columns,
- * headed by the short instance id, badge and per-instance meter.
+ * One card per pipeline. Every instance gets a responsive phase grid that
+ * wraps into additional rows instead of making the board horizontally scroll.
+ * Keeping the grid instance-local also means an older in-flight instance stays
+ * accurate if the pipeline definition is edited while it runs.
  */
 function Row({
   rows,
@@ -417,73 +416,67 @@ function Row({
           </>
         )}
       </div>
-      {/* One flat grid per card keeps every instance's tiles under the same
-          shared phase headers, so titles render once and columns stay aligned.
-          Columns share the row equally *until* a column would fall below 200px,
-          at which point the card scrolls horizontally instead. The old
-          `minmax(0, 1fr)` had no floor, so a 4-phase board on a 390px phone gave
-          each phase ~60px and rendered its title one letter per line. Every
-          phase still fits at any desktop width; below that, a Kanban-style
-          scroll beats an illegible one. */}
-      <div className="-mx-1 overflow-x-auto px-1">
-        <div
-          className="mt-3.5 grid min-w-full gap-x-3.5 gap-y-2.5 pb-1"
-          style={{ gridTemplateColumns: `repeat(${first.phases.length}, minmax(200px, 1fr))` }}
-        >
-          {first.phases.map((pill, i) => (
-            <PhaseHeader key={pill.id} pill={pill} index={i} />
-          ))}
-          {first.phases.map((pill) => (
-            <div key={pill.id} className="h-[2px] rounded-full bg-line" />
-          ))}
-          {rows.map((row, rowIndex) => (
-            <Fragment key={row.instanceId ?? row.pipelineId}>
-              {multi && (
-                <div
-                  className={`col-span-full flex items-center gap-3 ${
-                    rowIndex > 0 ? "mt-1 border-t border-line pt-2.5" : ""
-                  }`}
-                >
-                  <span className="font-mono text-[10px] text-ink-faint">
-                    #{row.instanceLabel ?? row.instanceId}
-                  </span>
-                  <StatusPill status={row.badge} size="sm" />
-                  {row.cost && (
-                    <Meter
-                      level="row"
-                      tokens={row.cost.tokens}
-                      usd={row.cost.usd}
-                      title="Total tokens and dollar cost of the latest run, including revised attempts"
-                    />
-                  )}
-                  <span className="ml-auto font-mono text-[10px]">
-                    <TimeAgo iso={row.updatedAt} />
-                  </span>
-                </div>
-              )}
-              {/* The shape, when there is one to see. A linear pipeline renders
-                  nothing here — the phase cells below already are the shape. */}
-              <PhaseGraph phases={row.phases} />
-              {row.phases.map((pill) => (
-                <PhaseCell
-                  key={pill.id}
-                  pill={pill}
-                  instanceId={row.instanceId}
-                  gate={row.gate}
-                  approve={approve}
-                  revise={revise}
-                  reviseLabel={row.failure?.kind === "restarted" ? "Retry" : "Revise"}
-                  liveActivity={liveActivity}
-                  now={now}
-                  rowModel={row.model}
-                  onOpenStep={(step, phaseName, reason, originY) =>
-                    onOpenStep({ step, pipelineName: row.name, phaseName, reason, originY })
-                  }
-                />
+      <div className="mt-3.5 flex min-w-0 flex-col gap-4">
+        {rows.map((row, rowIndex) => (
+          <section
+            key={row.instanceId ?? row.pipelineId}
+            className={`min-w-0 ${rowIndex > 0 ? "border-t border-line pt-3.5" : ""}`}
+          >
+            {multi && (
+              <div className="mb-3 flex min-w-0 flex-wrap items-center gap-3">
+                <span className="min-w-0 truncate font-mono text-[10px] text-ink-faint">
+                  #{row.instanceLabel ?? row.instanceId}
+                </span>
+                <StatusPill status={row.badge} size="sm" />
+                {row.cost && (
+                  <Meter
+                    level="row"
+                    tokens={row.cost.tokens}
+                    usd={row.cost.usd}
+                    title="Total tokens and dollar cost of the latest run, including revised attempts"
+                  />
+                )}
+                <span className="ml-auto font-mono text-[10px]">
+                  <TimeAgo iso={row.updatedAt} />
+                </span>
+              </div>
+            )}
+            {/* A branching shape is supplementary. The phase grid below remains
+                the complete, interactive view for linear and branching runs. */}
+            <PhaseGraph phases={row.phases} />
+            <ol
+              aria-label={
+                multi ? `Phases for instance ${row.instanceLabel ?? row.instanceId}` : "Phases"
+              }
+              data-testid="phase-grid"
+              className="mt-3 grid min-w-0 gap-x-3.5 gap-y-4"
+              style={{
+                gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))",
+              }}
+            >
+              {row.phases.map((pill, phaseIndex) => (
+                <li key={pill.id} className="flex min-w-0 flex-col gap-2.5">
+                  <PhaseHeader pill={pill} index={phaseIndex} />
+                  <div className="h-[2px] rounded-full bg-line" />
+                  <PhaseCell
+                    pill={pill}
+                    instanceId={row.instanceId}
+                    gate={row.gate}
+                    approve={approve}
+                    revise={revise}
+                    reviseLabel={row.failure?.kind === "restarted" ? "Retry" : "Revise"}
+                    liveActivity={liveActivity}
+                    now={now}
+                    rowModel={row.model}
+                    onOpenStep={(step, phaseName, reason, originY) =>
+                      onOpenStep({ step, pipelineName: row.name, phaseName, reason, originY })
+                    }
+                  />
+                </li>
               ))}
-            </Fragment>
-          ))}
-        </div>
+            </ol>
+          </section>
+        ))}
       </div>
     </article>
   );
