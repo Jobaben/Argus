@@ -162,6 +162,7 @@ export const defaultSpawn: SpawnFn = (run, logPath) => {
     env: { ...process.env, ...plan.env },
     shell: process.platform === "win32",
     detached: process.platform !== "win32",
+    windowsHide: process.platform === "win32",
   });
   child.stdin?.on("error", () => {
     /* ignore broken pipe if the process failed to spawn */
