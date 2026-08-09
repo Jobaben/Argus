@@ -84,4 +84,20 @@ describe("PhaseGraph", () => {
     );
     expect(screen.queryByText("retry queued")).not.toBeInTheDocument();
   });
+
+  it("wraps deep branching graphs without a horizontal scroller", () => {
+    const phases = [phase("root")];
+    for (let i = 1; i <= 12; i += 1) {
+      const previous = i === 1 ? "root" : `main-${i - 1}`;
+      phases.push(phase(`main-${i}`, { needs: [previous] }));
+      phases.push(phase(`side-${i}`, { needs: [previous] }));
+    }
+
+    const { container } = render(<PhaseGraph phases={phases} />);
+    const stages = screen.getByText("Stage 13").closest("ol");
+    expect(stages).toHaveStyle({
+      gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 144px), 1fr))",
+    });
+    expect(container.querySelector(".overflow-x-auto")).toBeNull();
+  });
 });
