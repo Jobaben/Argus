@@ -39,6 +39,7 @@ function toInput(def: PipelineDefinition): PipelineInput {
     enabled: def.enabled,
     overlapPolicy: def.overlapPolicy,
     ...(def.model ? { model: def.model } : {}),
+    ...(def.reasoningEffort ? { reasoningEffort: def.reasoningEffort } : {}),
     ...(def.runtime ? { runtime: def.runtime } : {}),
   };
 }

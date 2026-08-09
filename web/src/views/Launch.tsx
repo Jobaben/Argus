@@ -8,6 +8,7 @@ import {
   formatUsd,
   Handoff,
   ModelSelect,
+  ReasoningEffortSelect,
   Page,
   RuntimeSelect,
   SkeletonRows,
@@ -34,7 +35,8 @@ function LaunchForm({
   const { runtimes, default: defaultRuntime } = useRuntimes();
   const valid = form.prompt.trim() && form.cwd.trim();
   const active: AgentRuntimeId = form.runtime ?? defaultRuntime;
-  const aliases = runtimes.find((r) => r.id === active)?.models;
+  const runtimeInfo = runtimes.find((r) => r.id === active);
+  const aliases = runtimeInfo?.models;
   const command = active === "codex" ? "codex exec" : "claude -p";
 
   const submit = async () => {
@@ -87,7 +89,17 @@ function LaunchForm({
           runtimes={runtimes}
           // Switching CLI invalidates the model: "haiku" means nothing to Codex
           // and a stale alias would fail at spawn rather than in the form.
-          onChange={(r) => setForm({ ...form, runtime: r, model: undefined })}
+          onChange={(r) =>
+            setForm({ ...form, runtime: r, model: undefined, reasoningEffort: undefined })
+          }
+        />
+        <ReasoningEffortSelect
+          key={`launch-effort:${active}`}
+          fieldClass={FIELD}
+          label="Effort (inherit CLI)"
+          value={form.reasoningEffort}
+          efforts={runtimeInfo?.reasoningEfforts ?? []}
+          onChange={(reasoningEffort) => setForm({ ...form, reasoningEffort })}
         />
         <ModelSelect
           key={active}
@@ -132,6 +144,7 @@ export default function Launch() {
           prompt: run.prompt,
           cwd: run.cwd,
           ...(run.model ? { model: run.model } : {}),
+          ...(run.reasoningEffort ? { reasoningEffort: run.reasoningEffort } : {}),
           ...(run.runtime ? { runtime: run.runtime } : {}),
         })
       }
@@ -166,6 +179,7 @@ export default function Launch() {
               cwd: input.cwd,
               ...(input.name?.trim() ? { name: input.name.trim() } : {}),
               ...(input.model ? { model: input.model } : {}),
+              ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
               ...(input.runtime ? { runtime: input.runtime } : {}),
             });
             // Keep the directory, runtime and model, clear what was one-shot.
@@ -176,6 +190,7 @@ export default function Launch() {
               ...EMPTY,
               cwd: input.cwd,
               ...(input.model ? { model: input.model } : {}),
+              ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
               ...(input.runtime ? { runtime: input.runtime } : {}),
             });
           }}

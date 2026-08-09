@@ -22,6 +22,7 @@ export type {
   AgentRuntimeCapabilities,
   AgentRuntimeId,
   AgentRuntimeInfo,
+  ReasoningEffort,
   RuntimesResponse,
 } from "./runtimes.js";
 

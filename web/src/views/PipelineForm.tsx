@@ -1,6 +1,12 @@
 import { useState } from "react";
 import type { AgentRuntimeId, PhaseDef, PhaseStep, PipelineInput } from "../types";
-import { AlertStrip, ModelSelect, RuntimeSelect, TriggerFields } from "../ds";
+import {
+  AlertStrip,
+  ModelSelect,
+  ReasoningEffortSelect,
+  RuntimeSelect,
+  TriggerFields,
+} from "../ds";
 import { useRuntimes } from "../useRuntimes";
 
 const FIELD =
@@ -59,6 +65,8 @@ export function PipelineForm({
   const effective = (phase?: PhaseDef, step?: PhaseStep): AgentRuntimeId =>
     step?.runtime ?? phase?.runtime ?? form.runtime ?? defaultRuntime;
   const aliasesFor = (id: AgentRuntimeId) => runtimes.find((r) => r.id === id)?.models;
+  const effortsFor = (id: AgentRuntimeId) =>
+    runtimes.find((r) => r.id === id)?.reasoningEfforts ?? [];
 
   const setPhase = (i: number, patch: Partial<PhaseDef>) =>
     setForm((f) => ({ ...f, phases: f.phases.map((p, j) => (j === i ? { ...p, ...patch } : p)) }));
@@ -130,7 +138,17 @@ export function PipelineForm({
           label="Runtime (server default)"
           value={form.runtime}
           runtimes={runtimes}
-          onChange={(r) => setForm({ ...form, runtime: r, model: undefined })}
+          onChange={(r) =>
+            setForm({ ...form, runtime: r, model: undefined, reasoningEffort: undefined })
+          }
+        />
+        <ReasoningEffortSelect
+          key={`pipeline-effort:${effective()}`}
+          fieldClass={FIELD}
+          label="Default effort (inherit CLI)"
+          value={form.reasoningEffort}
+          efforts={effortsFor(effective())}
+          onChange={(reasoningEffort) => setForm({ ...form, reasoningEffort })}
         />
         <ModelSelect
           key={`pipeline:${effective()}`}
@@ -233,7 +251,22 @@ export function PipelineForm({
                       ariaLabel={`Runtime (phase ${pi + 1} step ${si + 1})`}
                       value={step.runtime}
                       runtimes={runtimes}
-                      onChange={(r) => setStep(pi, si, { runtime: r, model: undefined })}
+                      onChange={(r) =>
+                        setStep(pi, si, {
+                          runtime: r,
+                          model: undefined,
+                          reasoningEffort: undefined,
+                        })
+                      }
+                    />
+                    <ReasoningEffortSelect
+                      key={`step-effort:${pi}:${si}:${effective(phase, step)}`}
+                      fieldClass={FIELD}
+                      label="Use pipeline effort"
+                      ariaLabel={`Use pipeline effort (phase ${pi + 1} step ${si + 1})`}
+                      value={step.reasoningEffort}
+                      efforts={effortsFor(effective(phase, step))}
+                      onChange={(reasoningEffort) => setStep(pi, si, { reasoningEffort })}
                     />
                     <ModelSelect
                       key={`step:${pi}:${si}:${effective(phase, step)}`}

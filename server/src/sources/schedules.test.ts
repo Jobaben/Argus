@@ -150,3 +150,33 @@ test("catchUp defaults to false when omitted", async () => {
   // A patch without catchUp must not touch it.
   assert.equal("catchUp" in m.validatePatch({ enabled: true }), false);
 });
+
+test("model and Codex reasoning effort round-trip and can be cleared", async () => {
+  const m = await fresh();
+  const input = m.validateInput({
+    ...getInput(),
+    runtime: "codex",
+    model: "gpt-5.6-terra",
+    reasoningEffort: "high",
+  });
+  const created = await m.createSchedule(input, new Date(2026, 5, 22, 10, 0), "id-codex");
+  assert.equal(created.model, "gpt-5.6-terra");
+  assert.equal(created.reasoningEffort, "high");
+
+  const updated = await m.updateSchedule(
+    "id-codex",
+    m.validatePatch({ model: null, reasoningEffort: null }),
+    new Date(2026, 5, 22, 11, 0),
+  );
+  assert.equal(updated?.model, undefined);
+  assert.equal(updated?.reasoningEffort, undefined);
+});
+
+test("rejects an invalid model or reasoning effort", async () => {
+  const m = await fresh();
+  assert.throws(() => m.validateInput({ ...getInput(), model: "--bad" }), /model/);
+  assert.throws(
+    () => m.validateInput({ ...getInput(), reasoningEffort: "ultra" }),
+    /reasoningEffort/,
+  );
+});

@@ -7,7 +7,7 @@ import type { Trigger } from "./scheduleTypes.js";
 import { RubricValidationError, validateAutoApprove, validateRubric } from "./verdict.js";
 import { DagValidationError, validateDag } from "./dag.js";
 import { isRuntimeId } from "../runtimes/index.js";
-import type { AgentRuntimeId } from "@argus/contracts";
+import type { AgentRuntimeId, ReasoningEffort } from "@argus/contracts";
 
 // The crash-safe, mutex-serialized single-file store (shared with schedules).
 const store = createJsonArrayStore<PipelineDefinition>({
@@ -30,6 +30,7 @@ export interface PipelineInput {
   enabled?: boolean;
   overlapPolicy?: "skip" | "allow";
   model?: string;
+  reasoningEffort?: ReasoningEffort;
   runtime?: AgentRuntimeId;
 }
 
@@ -37,6 +38,16 @@ export interface PipelineInput {
 // Reject anything that could be mistaken for a flag (leading dash) or smuggle
 // shell metacharacters on the win32 shell:true path — only plain identifier chars.
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+const REASONING_EFFORTS = new Set<ReasoningEffort>(["minimal", "low", "medium", "high", "xhigh"]);
+
+function validateReasoningEffort(raw: unknown, ctx: string): ReasoningEffort {
+  if (!REASONING_EFFORTS.has(raw as ReasoningEffort)) {
+    throw new PipelineValidationError(
+      `${ctx}: reasoningEffort must be ${[...REASONING_EFFORTS].join(" | ")}`,
+    );
+  }
+  return raw as ReasoningEffort;
+}
 
 /** A runtime override on a pipeline, phase or step. Undefined/null = inherit. */
 function validateRuntime(raw: unknown, ctx: string): AgentRuntimeId | undefined {
@@ -69,6 +80,9 @@ function validateStep(raw: unknown, ctx: string): PhaseStep {
   const step: PhaseStep = { name: s.name.trim(), prompt: s.prompt.trim() };
   if (s.model !== undefined && s.model !== null)
     step.model = validateModel(s.model, `${ctx}: step`);
+  if (s.reasoningEffort !== undefined && s.reasoningEffort !== null) {
+    step.reasoningEffort = validateReasoningEffort(s.reasoningEffort, `${ctx}: step`);
+  }
   const runtime = validateRuntime(s.runtime, `${ctx}: step`);
   if (runtime) step.runtime = runtime;
   return step;
@@ -205,6 +219,9 @@ export function validatePipelineInput(raw: unknown): PipelineInput {
   const enabled = r.enabled === undefined ? true : Boolean(r.enabled);
   const input: PipelineInput = { name: r.name.trim(), phases, trigger, enabled, overlapPolicy };
   if (r.model !== undefined && r.model !== null) input.model = validateModel(r.model, "pipeline");
+  if (r.reasoningEffort !== undefined && r.reasoningEffort !== null) {
+    input.reasoningEffort = validateReasoningEffort(r.reasoningEffort, "pipeline");
+  }
   const runtime = validateRuntime(r.runtime, "pipeline");
   if (runtime) input.runtime = runtime;
   return input;
@@ -231,6 +248,12 @@ export function validatePipelinePatch(raw: unknown): Partial<PipelineInput> {
   if ("enabled" in r) patch.enabled = Boolean(r.enabled);
   if ("overlapPolicy" in r) patch.overlapPolicy = r.overlapPolicy === "allow" ? "allow" : "skip";
   if ("model" in r) patch.model = r.model == null ? undefined : validateModel(r.model, "pipeline");
+  if ("reasoningEffort" in r) {
+    patch.reasoningEffort =
+      r.reasoningEffort == null
+        ? undefined
+        : validateReasoningEffort(r.reasoningEffort, "pipeline");
+  }
   if ("runtime" in r) patch.runtime = validateRuntime(r.runtime, "pipeline");
   return patch;
 }
@@ -252,6 +275,7 @@ export async function createPipeline(
     enabled: input.enabled ?? true,
     overlapPolicy: input.overlapPolicy ?? "skip",
     ...(input.model ? { model: input.model } : {}),
+    ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
     ...(input.runtime ? { runtime: input.runtime } : {}),
     lastStartedAt: null,
     createdAt: iso,
@@ -282,6 +306,7 @@ export async function updatePipeline(
       ...("enabled" in patch ? { enabled: patch.enabled! } : {}),
       ...("overlapPolicy" in patch ? { overlapPolicy: patch.overlapPolicy! } : {}),
       ...("model" in patch ? { model: patch.model } : {}),
+      ...("reasoningEffort" in patch ? { reasoningEffort: patch.reasoningEffort } : {}),
       updatedAt: now.toISOString(),
     };
     // An explicit `runtime: null` clears the override; spreading it would leave

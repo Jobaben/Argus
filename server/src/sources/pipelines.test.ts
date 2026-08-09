@@ -209,6 +209,32 @@ test("createPipeline persists both model levels", async () => {
   assert.equal(created.phases[0].steps[0].model, "haiku");
 });
 
+test("Codex reasoning effort persists at pipeline and step level", async () => {
+  const m = await fresh();
+  const created = await m.createPipeline(
+    m.validatePipelineInput(
+      goodInput({
+        runtime: "codex",
+        reasoningEffort: "medium",
+        phases: [
+          {
+            id: "x",
+            name: "X",
+            cwd: home,
+            gated: false,
+            steps: [{ name: "s", prompt: "p", reasoningEffort: "xhigh" }],
+          },
+        ],
+      }),
+    ),
+    new Date(2026, 5, 30, 9, 0),
+    "p-effort",
+  );
+  assert.equal(created.reasoningEffort, "medium");
+  assert.equal(created.phases[0].steps[0].reasoningEffort, "xhigh");
+  assert.throws(() => m.validatePipelinePatch({ reasoningEffort: "ultra" }), /reasoningEffort/);
+});
+
 test("updatePipeline via a PUT-shaped input clears an existing model", async () => {
   const m = await fresh();
   await m.createPipeline(

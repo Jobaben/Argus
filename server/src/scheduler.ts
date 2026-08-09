@@ -23,7 +23,7 @@ import {
   runtimeFor,
 } from "./runtimes/index.js";
 import type { Run, RunStatus, Schedule } from "./sources/scheduleTypes.js";
-import type { AgentRuntimeId, BudgetEnforcement } from "@argus/contracts";
+import type { AgentRuntimeId, BudgetEnforcement, ReasoningEffort } from "@argus/contracts";
 import { log } from "./log.js";
 
 /** Builds a terminal run record for a schedule that never spawned a process
@@ -101,7 +101,7 @@ export async function backfillRunCosts(): Promise<number> {
     // These records predate runtimes, so most are Claude — but a Codex run can
     // reach here too (queued before a restart, finalized after), and the
     // dispatching parser reads whichever the log actually is.
-    const env = parseEnvelopeFor(got.run.runtime, got.log);
+    const env = parseEnvelopeFor(got.run.runtime, got.log, { model: got.run.model });
     await patchRun(r.id, {
       costUsd: env.costUsd,
       tokens: env.tokens,
@@ -156,6 +156,7 @@ export const defaultSpawn: SpawnFn = (run, logPath) => {
     prompt: run.prompt,
     sessionId: run.sessionId,
     model: run.model,
+    reasoningEffort: run.reasoningEffort,
   });
   const child = nodeSpawn(plan.bin, plan.args, {
     cwd: run.cwd,
@@ -191,7 +192,9 @@ export const defaultSpawn: SpawnFn = (run, logPath) => {
       if (settled) return;
       settled = true;
       out.end();
-      const { result, costUsd, tokens, sessionId } = runtime.parseEnvelope(tail);
+      const { result, costUsd, tokens, sessionId } = runtime.parseEnvelope(tail, {
+        model: run.model,
+      });
       resolve({
         code,
         result,
@@ -213,6 +216,7 @@ function newRun(
     prompt: string;
     cwd: string;
     model?: string;
+    reasoningEffort?: ReasoningEffort;
     runtime?: AgentRuntimeId;
   },
   trigger: "scheduled" | "manual",
@@ -241,6 +245,7 @@ function newRun(
     // CLI will ignore would produce a transcript link to nothing.
     sessionId: runtimeFor(runtime).capabilities.presetSessionId ? deps.newId() : null,
     ...(spec.model ? { model: spec.model } : {}),
+    ...(spec.reasoningEffort ? { reasoningEffort: spec.reasoningEffort } : {}),
     runtime,
     project: encodeProject(spec.cwd),
     resultSummary: null,
@@ -303,6 +308,8 @@ export async function fireRun(
       scheduleName: schedule.name,
       prompt: schedule.prompt,
       cwd: schedule.cwd,
+      ...(schedule.model ? { model: schedule.model } : {}),
+      ...(schedule.reasoningEffort ? { reasoningEffort: schedule.reasoningEffort } : {}),
       ...(schedule.runtime ? { runtime: schedule.runtime } : {}),
     },
     trigger,
@@ -333,6 +340,7 @@ export async function fireOneOff(input: LaunchInput, deps: SchedulerDeps): Promi
       prompt: input.prompt,
       cwd: input.cwd,
       model: input.model,
+      reasoningEffort: input.reasoningEffort,
       ...(input.runtime ? { runtime: input.runtime } : {}),
     },
     "manual",

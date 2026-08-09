@@ -22,9 +22,9 @@
  *     reads it back out of the stream and patches the run record once the run
  *     starts. Until then the transcript link is simply not there yet, which is
  *     honest; inventing an id would produce a link to nothing.
- *   * **No dollar figure.** `turn.completed.usage` reports tokens, not money.
- *     Cost stays null for Codex runs, and the Budget view reports what it has
- *     rather than a number nobody can reconcile against an invoice.
+ *   * **No emitted dollar figure.** `turn.completed.usage` reports input,
+ *     cached-input and output tokens. Argus converts supported OpenAI models at
+ *     public API list prices; an unknown/custom model honestly stays null.
  *
  * Codex also runs sandboxed by default. `ARGUS_CODEX_SANDBOX` selects the mode
  * (`workspace-write` by default, matching what an unattended agent needs to do
@@ -32,7 +32,8 @@
  * anything else the local install needs.
  */
 
-import { codexHome } from "../codexHome.js";
+import { readFileSync } from "node:fs";
+import { codexHome, codexPaths } from "../codexHome.js";
 import { log } from "../log.js";
 import { EMPTY_ENVELOPE, basename, clip, extraArgs } from "./types.js";
 import type {
@@ -43,9 +44,12 @@ import type {
   SpawnPlan,
 } from "./types.js";
 import type { ActivityEvent } from "@argus/contracts";
+import type { ReasoningEffort } from "@argus/contracts";
 
 const SANDBOX_MODES = new Set(["read-only", "workspace-write", "danger-full-access"]);
 export const DEFAULT_CODEX_SANDBOX = "workspace-write";
+export const DEFAULT_CODEX_MODELS = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
+const CODEX_REASONING_EFFORTS: ReasoningEffort[] = ["minimal", "low", "medium", "high", "xhigh"];
 
 function bin(): string {
   return process.env.ARGUS_CODEX_BIN?.trim() || "codex";
@@ -77,7 +81,11 @@ export function codexSandbox(): string {
  * operator pointed it at; refusing to run outside a repo would make Argus
  * narrower than the CLI it drives.
  */
-function execArgs(opts: { sandbox: string; model?: string | null }): string[] {
+function execArgs(opts: {
+  sandbox: string;
+  model?: string | null;
+  reasoningEffort?: ReasoningEffort | null;
+}): string[] {
   return [
     "exec",
     "--json",
@@ -86,6 +94,7 @@ function execArgs(opts: { sandbox: string; model?: string | null }): string[] {
     opts.sandbox,
     ...(opts.model && opts.model.trim() ? ["--model", opts.model.trim()] : []),
     ...extraArgs(process.env.ARGUS_CODEX_ARGS),
+    ...(opts.reasoningEffort ? ["-c", `model_reasoning_effort="${opts.reasoningEffort}"`] : []),
     // The prompt placeholder: read it from stdin, so no shell and no argv ever
     // sees user-authored text. Must stay last — it is the positional argument.
     "-",
@@ -125,13 +134,14 @@ function asRecord(v: unknown): Record<string, unknown> | null {
  * was captured, so anything that isn't a parseable event is skipped rather than
  * failing the parse.
  */
-export function parseCodexEnvelope(stdout: string): RunEnvelope {
+export function parseCodexEnvelope(stdout: string, model?: string | null): RunEnvelope {
   const text = stdout.trim();
   if (!text) return EMPTY_ENVELOPE;
 
   let result: string | null = null;
   let sessionId: string | null = null;
   let tokens: number | null = null;
+  let costUsd: number | null = null;
   let isError: boolean | null = null;
   let errorMessage: string | null = null;
 
@@ -166,9 +176,16 @@ export function parseCodexEnvelope(stdout: string): RunEnvelope {
         const usage = asRecord(obj.usage);
         if (usage) {
           const inTok = Number(usage.input_tokens ?? 0);
+          const cachedTok = Number(usage.cached_input_tokens ?? 0);
           const outTok = Number(usage.output_tokens ?? 0);
           const sum = inTok + outTok;
           if (Number.isFinite(sum) && sum > 0) tokens = (tokens ?? 0) + sum;
+          const estimate = estimateCodexCost(model, {
+            inputTokens: inTok,
+            cachedInputTokens: cachedTok,
+            outputTokens: outTok,
+          });
+          if (estimate != null) costUsd = round6((costUsd ?? 0) + estimate);
         }
         // A completed turn is a clean finish unless an error item said otherwise.
         if (isError === null) isError = false;
@@ -194,12 +211,56 @@ export function parseCodexEnvelope(stdout: string): RunEnvelope {
     // With no agent message to report, the failure text is the closest thing to
     // a result — and it is what the run card would otherwise leave blank.
     result: result ?? errorMessage,
-    // Codex reports tokens, not dollars. See the header note.
-    costUsd: null,
+    // Codex does not emit dollars, so this is an API-list-price estimate from
+    // the usage breakdown. Unknown/custom models stay null instead of guessing.
+    costUsd,
     tokens,
     isError,
     sessionId,
   };
+}
+
+interface TokenPrice {
+  input: number;
+  cachedInput: number;
+  output: number;
+  /** GPT-5.6 charges long-context requests at higher token rates. */
+  longContext?: boolean;
+}
+
+const CODEX_PRICES: Record<string, TokenPrice> = {
+  "gpt-5.6": { input: 5, cachedInput: 0.5, output: 30, longContext: true },
+  "gpt-5.6-sol": { input: 5, cachedInput: 0.5, output: 30, longContext: true },
+  "gpt-5.6-terra": { input: 2.5, cachedInput: 0.25, output: 15, longContext: true },
+  "gpt-5.6-luna": { input: 1, cachedInput: 0.1, output: 6, longContext: true },
+  "gpt-5.3-codex": { input: 1.75, cachedInput: 0.175, output: 14 },
+  "gpt-5.2-codex": { input: 1.75, cachedInput: 0.175, output: 14 },
+};
+
+function round6(n: number): number {
+  return Math.round(n * 1_000_000) / 1_000_000;
+}
+
+/** Estimate public API token cost for a Codex turn. Rates are per 1M tokens. */
+export function estimateCodexCost(
+  model: string | null | undefined,
+  usage: { inputTokens: number; cachedInputTokens: number; outputTokens: number },
+): number | null {
+  const price = model ? CODEX_PRICES[model.trim().toLowerCase()] : undefined;
+  if (!price) return null;
+  const input = Number.isFinite(usage.inputTokens) ? Math.max(0, usage.inputTokens) : 0;
+  const cached = Number.isFinite(usage.cachedInputTokens)
+    ? Math.min(input, Math.max(0, usage.cachedInputTokens))
+    : 0;
+  const output = Number.isFinite(usage.outputTokens) ? Math.max(0, usage.outputTokens) : 0;
+  const long = price.longContext && input > 272_000;
+  const inputMultiplier = long ? 2 : 1;
+  const outputMultiplier = long ? 1.5 : 1;
+  return round6(
+    (((input - cached) * price.input + cached * price.cachedInput) * inputMultiplier +
+      output * price.output * outputMultiplier) /
+      1_000_000,
+  );
 }
 
 /** `Edit: foo.ts` / `Edit: foo.ts +2` for a multi-file patch. */
@@ -285,14 +346,31 @@ export function deriveCodexActivity(line: string, at: string): ActivityEvent[] {
   return label ? [{ at, kind: "tool", label }] : [];
 }
 
-/** Model aliases to offer in a picker. Codex's catalogue moves faster than this
- *  file can, so it is empty by default (the UI keeps its free-text field) and
- *  `ARGUS_CODEX_MODELS` fills it in for an install that wants the shortcut. */
+/** Read the configured top-level model without needing a TOML dependency. The
+ *  model key is a simple quoted scalar; stop at the first table so a provider's
+ *  nested `model` key can never be mistaken for the CLI default. */
+export function codexDefaultModel(): string {
+  try {
+    const text = readFileSync(codexPaths.configFile(), "utf8");
+    for (const line of text.split(/\r?\n/)) {
+      if (/^\s*\[/.test(line)) break;
+      const match = line.match(/^\s*model\s*=\s*(["'])(.*?)\1\s*(?:#.*)?$/);
+      if (match?.[2]?.trim()) return match[2].trim();
+    }
+  } catch {
+    /* A missing/unreadable config simply means there is no known default. */
+  }
+  return "";
+}
+
+/** Current built-in Codex choices plus any install-specific additions. The
+ *  free-text escape hatch remains available for account-specific models. */
 function models(): string[] {
-  return (process.env.ARGUS_CODEX_MODELS ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const configured = codexDefaultModel();
+  const extras = (process.env.ARGUS_CODEX_MODELS ?? "").split(",");
+  return [...new Set([configured, ...DEFAULT_CODEX_MODELS, ...extras].map((s) => s.trim()))].filter(
+    Boolean,
+  );
 }
 
 export const codexRuntime: AgentRuntime = {
@@ -302,6 +380,7 @@ export const codexRuntime: AgentRuntime = {
   versionArgs: ["--version"],
   home: codexHome,
   models,
+  reasoningEfforts: () => CODEX_REASONING_EFFORTS,
   capabilities: {
     presetSessionId: false,
     appendSystemPrompt: false,
@@ -316,10 +395,10 @@ export const codexRuntime: AgentRuntime = {
   // sets ARGUS_ANALYSIS_MODEL.
   defaultAnalysisModel: () => "",
 
-  batchPlan({ prompt, model, systemPrompt }: RunPlanOptions): SpawnPlan {
+  batchPlan({ prompt, model, reasoningEffort, systemPrompt }: RunPlanOptions): SpawnPlan {
     return {
       bin: bin(),
-      args: execArgs({ sandbox: codexSandbox(), model }),
+      args: execArgs({ sandbox: codexSandbox(), model, reasoningEffort }),
       stdin: composePrompt(prompt, systemPrompt),
       env: {},
     };
@@ -327,10 +406,10 @@ export const codexRuntime: AgentRuntime = {
 
   // `--json` is already a live NDJSON stream, so a step run and a batch run take
   // the same argv; only the consumer of the log differs.
-  streamPlan({ prompt, model, systemPrompt }: RunPlanOptions): SpawnPlan {
+  streamPlan({ prompt, model, reasoningEffort, systemPrompt }: RunPlanOptions): SpawnPlan {
     return {
       bin: bin(),
-      args: execArgs({ sandbox: codexSandbox(), model }),
+      args: execArgs({ sandbox: codexSandbox(), model, reasoningEffort }),
       stdin: composePrompt(prompt, systemPrompt),
       env: {},
     };
@@ -348,6 +427,8 @@ export const codexRuntime: AgentRuntime = {
     };
   },
 
-  parseEnvelope: parseCodexEnvelope,
+  parseEnvelope(text, context) {
+    return parseCodexEnvelope(text, context?.model || codexDefaultModel());
+  },
   deriveActivity: deriveCodexActivity,
 };

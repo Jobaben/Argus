@@ -10,6 +10,8 @@ import {
   formatTrigger,
   Handoff,
   Page,
+  ModelSelect,
+  ReasoningEffortSelect,
   RubricFields,
   RuntimeSelect,
   SkeletonRows,
@@ -208,6 +210,7 @@ function ScheduleForm({
   const [busy, setBusy] = useState(false);
   const { runtimes, default: defaultRuntime } = useRuntimes();
   const active = form.runtime ?? defaultRuntime;
+  const runtimeInfo = runtimes.find((runtime) => runtime.id === active);
   const command = active === "codex" ? "codex exec" : "claude -p";
 
   const submit = async () => {
@@ -270,7 +273,32 @@ function ScheduleForm({
           runtimes={runtimes}
           // Null, not undefined: a PATCH omitting the key leaves the stored
           // override alone, so clearing one has to say so explicitly.
-          onChange={(r) => setForm({ ...form, runtime: r ?? null })}
+          onChange={(r) =>
+            setForm({
+              ...form,
+              runtime: r ?? null,
+              model: null,
+              reasoningEffort: null,
+            })
+          }
+        />
+        <ModelSelect
+          key={`schedule-model:${active}`}
+          fieldClass={field}
+          label="Model (inherit CLI)"
+          value={form.model ?? undefined}
+          aliases={runtimeInfo?.models ?? []}
+          onChange={(model) => setForm({ ...form, model: model ?? null })}
+        />
+        <ReasoningEffortSelect
+          key={`schedule-effort:${active}`}
+          fieldClass={field}
+          label="Effort (inherit CLI)"
+          value={form.reasoningEffort}
+          efforts={runtimeInfo?.reasoningEfforts ?? []}
+          onChange={(reasoningEffort) =>
+            setForm({ ...form, reasoningEffort: reasoningEffort ?? null })
+          }
         />
       </div>
 

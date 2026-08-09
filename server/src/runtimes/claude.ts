@@ -186,6 +186,7 @@ export const claudeRuntime: AgentRuntime = {
   versionArgs: ["--version"],
   home: claudeHome,
   models: () => ["opus", "sonnet", "haiku"],
+  reasoningEfforts: () => [],
   capabilities: {
     presetSessionId: true,
     appendSystemPrompt: true,

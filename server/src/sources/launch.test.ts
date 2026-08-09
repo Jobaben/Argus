@@ -26,9 +26,16 @@ test("ellipsizes a derived name past 60 chars", () => {
 });
 
 test("keeps an explicit name and model", () => {
-  const input = validateLaunchInput({ name: " Audit ", prompt: "p", cwd, model: "haiku" });
+  const input = validateLaunchInput({
+    name: " Audit ",
+    prompt: "p",
+    cwd,
+    model: "gpt-5.6-sol",
+    reasoningEffort: "xhigh",
+  });
   assert.equal(input.name, "Audit");
-  assert.equal(input.model, "haiku");
+  assert.equal(input.model, "gpt-5.6-sol");
+  assert.equal(input.reasoningEffort, "xhigh");
 });
 
 test("rejects a missing prompt", () => {
@@ -50,4 +57,8 @@ test("rejects a blank model and a non-string name", () => {
     LaunchValidationError,
   );
   assert.throws(() => validateLaunchInput({ prompt: "p", cwd, name: 7 }), LaunchValidationError);
+  assert.throws(
+    () => validateLaunchInput({ prompt: "p", cwd, reasoningEffort: "ultra" }),
+    LaunchValidationError,
+  );
 });

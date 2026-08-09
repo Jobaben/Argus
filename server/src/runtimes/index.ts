@@ -79,13 +79,17 @@ export function runtimeFor(id: AgentRuntimeId | null | undefined): AgentRuntime 
  * Trying the named runtime first and the others after means an old Claude run
  * and a new Codex run both parse, and a mislabelled one still does.
  */
-export function parseEnvelopeFor(id: AgentRuntimeId | null | undefined, text: string): RunEnvelope {
+export function parseEnvelopeFor(
+  id: AgentRuntimeId | null | undefined,
+  text: string,
+  context?: { model?: string | null },
+): RunEnvelope {
   const primary = runtimeFor(id);
-  const first = primary.parseEnvelope(text);
+  const first = primary.parseEnvelope(text, context);
   if (first.result !== null || first.tokens !== null || first.isError !== null) return first;
   for (const other of RUNTIME_IDS) {
     if (other === primary.id) continue;
-    const alt = RUNTIMES[other].parseEnvelope(text);
+    const alt = RUNTIMES[other].parseEnvelope(text, context);
     if (alt.result !== null || alt.tokens !== null || alt.isError !== null) return alt;
   }
   return first;

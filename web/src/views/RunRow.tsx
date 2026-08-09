@@ -55,7 +55,15 @@ export function RunRow({
             </span>
           )}
           {run.costUsd != null && (
-            <span className="text-xs text-ink-faint" title="Reported run cost">
+            <span
+              className="text-xs text-ink-faint"
+              title={
+                run.runtime === "codex"
+                  ? "Estimated from public API token prices"
+                  : "Reported run cost"
+              }
+            >
+              {run.runtime === "codex" ? "~" : ""}
               {formatUsd(run.costUsd)}
             </span>
           )}

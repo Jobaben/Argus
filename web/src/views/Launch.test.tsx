@@ -24,6 +24,28 @@ vi.mock("../useLaunch", () => ({
   }),
 }));
 
+vi.mock("../useRuntimes", () => ({
+  useRuntimes: () => ({
+    default: "claude",
+    runtimes: [
+      {
+        id: "claude",
+        label: "Claude Code",
+        available: true,
+        models: ["opus", "sonnet", "haiku"],
+        reasoningEfforts: [],
+      },
+      {
+        id: "codex",
+        label: "Codex",
+        available: true,
+        models: ["gpt-5.6-sol", "gpt-5.6-terra"],
+        reasoningEfforts: ["low", "medium", "high", "xhigh"],
+      },
+    ],
+  }),
+}));
+
 const run = (over: Partial<Run> = {}): Run => ({
   id: "r1",
   scheduleId: "oneoff",
@@ -84,6 +106,24 @@ describe("Launch", () => {
       cwd: "/tmp/repo",
       name: "My run",
       model: "haiku",
+    });
+  });
+
+  it("sends Codex model and reasoning effort", async () => {
+    const user = userEvent.setup();
+    render(<Launch />);
+    await user.type(screen.getByPlaceholderText(/Summarize the open TODOs/), "p");
+    await user.type(screen.getByPlaceholderText("/home/you/project"), "/tmp/repo");
+    await user.selectOptions(screen.getByLabelText("Runtime (server default)"), "codex");
+    await user.selectOptions(screen.getByLabelText("Model (inherit CLI)"), "gpt-5.6-sol");
+    await user.selectOptions(screen.getByLabelText("Effort (inherit CLI)"), "xhigh");
+    await user.click(screen.getByRole("button", { name: /launch/i }));
+    expect(mockState.launch).toHaveBeenCalledWith({
+      prompt: "p",
+      cwd: "/tmp/repo",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "xhigh",
+      runtime: "codex",
     });
   });
 

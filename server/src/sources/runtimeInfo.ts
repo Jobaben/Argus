@@ -33,6 +33,7 @@ function describe(id: (typeof RUNTIME_IDS)[number], fallbackDefault: string): Ag
     ...(probe.ok ? {} : { detail: `\`${rt.bin()}\` ${probe.reason}` }),
     isDefault: id === fallbackDefault,
     models: rt.models(),
+    reasoningEfforts: rt.reasoningEfforts(),
     capabilities: rt.capabilities,
   };
 }

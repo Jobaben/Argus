@@ -21,13 +21,18 @@
  *     silently producing a null the UI can't explain.
  */
 
-import type { ActivityEvent, AgentRuntimeCapabilities, AgentRuntimeId } from "@argus/contracts";
+import type {
+  ActivityEvent,
+  AgentRuntimeCapabilities,
+  AgentRuntimeId,
+  ReasoningEffort,
+} from "@argus/contracts";
 
 /** The normalized result of a finished run, however the CLI reported it. */
 export interface RunEnvelope {
   /** The agent's final message. */
   result: string | null;
-  /** USD, when the runtime reports money. Null when it only reports tokens. */
+  /** Reported USD, or a token-price estimate when enough usage detail exists. */
   costUsd: number | null;
   /** Input + output tokens. */
   tokens: number | null;
@@ -59,6 +64,8 @@ export interface RunPlanOptions {
   /** Ignored by runtimes that assign their own. */
   sessionId?: string | null;
   model?: string | null;
+  /** Codex-only inline configuration override. */
+  reasoningEffort?: ReasoningEffort | null;
   /**
    * Instructions that belong to Argus rather than the pipeline author (the
    * outcome contract). Passed as a system-prompt flag where the CLI has one and
@@ -85,6 +92,8 @@ export interface AgentRuntime {
   home(): string;
   /** Model aliases worth offering in a picker. Empty = free-text only. */
   models(): string[];
+  /** Supported per-run reasoning overrides. Empty for runtimes without one. */
+  reasoningEfforts(): ReasoningEffort[];
   capabilities: AgentRuntimeCapabilities;
   /** The default analysis model for this runtime; empty = the CLI's own default. */
   defaultAnalysisModel(): string;
@@ -94,7 +103,7 @@ export interface AgentRuntime {
   streamPlan(opts: RunPlanOptions): SpawnPlan;
   /** Bounded, tool-light pass whose stdout *is* the answer. */
   analysisPlan(opts: AnalysisPlanOptions): SpawnPlan;
-  parseEnvelope(text: string): RunEnvelope;
+  parseEnvelope(text: string, context?: { model?: string | null }): RunEnvelope;
   /** Zero or more Command Center events for one line of the streaming log. */
   deriveActivity(line: string, at: string): ActivityEvent[];
 }
