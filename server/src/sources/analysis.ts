@@ -149,6 +149,7 @@ export const defaultAnalysisSpawn: AnalysisSpawn = ({
     env: { ...process.env, ...plan.env },
     shell: process.platform === "win32",
     detached: process.platform !== "win32",
+    windowsHide: process.platform === "win32",
   });
 
   child.stdin?.on("error", () => {

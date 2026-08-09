@@ -134,6 +134,7 @@ export const defaultPipelineSpawn: PipelineSpawnFn = (run, logPath, env) => {
       cwd: run.cwd,
       env: { ...process.env, ...plan.env, ...env },
       detached: true,
+      windowsHide: process.platform === "win32",
       stdio: ["pipe", fd, fd],
     });
   } finally {
