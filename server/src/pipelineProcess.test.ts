@@ -81,6 +81,21 @@ function assertRejectedHostCleaned(host: FakeHost): void {
   assert.equal(host.unrefCalled, false);
 }
 
+async function captureNumericSignals(run: () => Promise<void>): Promise<number[]> {
+  const originalKill = process.kill;
+  const signals: number[] = [];
+  process.kill = ((pid: number) => {
+    signals.push(pid);
+    return true;
+  }) as typeof process.kill;
+  try {
+    await run();
+  } finally {
+    process.kill = originalKill;
+  }
+  return signals;
+}
+
 test("Windows launches a hidden host and returns the real agent PID from IPC", async () => {
   const host = new FakeHost();
   const calls: { command: string; args: string[]; options: Record<string, unknown> }[] = [];
@@ -251,41 +266,87 @@ test("Windows rejects an unavailable IPC channel and cleans the host", async () 
   assertRejectedHostCleaned(host);
 });
 
-test("Windows cleanup errors do not mask the original handshake rejection", async () => {
+test("Windows does not signal a numeric PID when owned host kill returns false", async () => {
   const host = new FakeHost();
-  let destroyAttempted = false;
-  let disconnectAttempted = false;
-  let killAttempted = false;
-  host.pid = null as unknown as number;
-  host.stdin.destroy = () => {
-    destroyAttempted = true;
-    throw new Error("destroy failed");
-  };
-  host.disconnect = () => {
-    disconnectAttempted = true;
-    throw new Error("disconnect failed");
-  };
+  let killCalls = 0;
   host.kill = () => {
-    killAttempted = true;
-    throw new Error("kill failed");
+    killCalls += 1;
+    return false;
   };
   const spawn = (() => {
     queueMicrotask(() => host.emit("message", { type: "spawned", pid: 0 }));
     return host;
   }) as unknown as typeof nodeSpawn;
+  const signals = await captureNumericSignals(async () => {
+    await assert.rejects(
+      spawnPipelineProcess(
+        { bin: "codex.exe", args: [], stdin: "", cwd: "C:\\work", env: {} },
+        17,
+        "win32",
+        spawn,
+      ),
+      /invalid agent pid/i,
+    );
+  });
+  assert.equal(killCalls, 1);
+  assert.deepEqual(signals, []);
+});
 
-  await assert.rejects(
-    spawnPipelineProcess(
-      { bin: "codex.exe", args: [], stdin: "", cwd: "C:\\work", env: {} },
-      17,
-      "win32",
-      spawn,
-    ),
-    /invalid agent pid/i,
-  );
-  assert.equal(destroyAttempted, true);
-  assert.equal(disconnectAttempted, true);
-  assert.equal(killAttempted, true);
+test("Windows does not signal a numeric PID when owned host kill throws", async () => {
+  const host = new FakeHost();
+  let killCalls = 0;
+  host.kill = () => {
+    killCalls += 1;
+    throw new Error("owned kill failed");
+  };
+  const spawn = (() => {
+    queueMicrotask(() => host.emit("message", { type: "spawned", pid: 0 }));
+    return host;
+  }) as unknown as typeof nodeSpawn;
+  const signals = await captureNumericSignals(async () => {
+    await assert.rejects(
+      spawnPipelineProcess(
+        { bin: "codex.exe", args: [], stdin: "", cwd: "C:\\work", env: {} },
+        17,
+        "win32",
+        spawn,
+      ),
+      /invalid agent pid/i,
+    );
+  });
+  assert.equal(killCalls, 1);
+  assert.deepEqual(signals, []);
+});
+
+test("Windows does not kill or signal an already-closed host", async () => {
+  const host = new FakeHost();
+  let killCalls = 0;
+  host.kill = () => {
+    killCalls += 1;
+    return true;
+  };
+  const spawn = (() => {
+    queueMicrotask(() => {
+      host.connected = false;
+      host.emit("close", 1);
+    });
+    return host;
+  }) as unknown as typeof nodeSpawn;
+  const signals = await captureNumericSignals(async () => {
+    await assert.rejects(
+      spawnPipelineProcess(
+        { bin: "codex.exe", args: [], stdin: "", cwd: "C:\\work", env: {} },
+        17,
+        "win32",
+        spawn,
+      ),
+      /before reporting an agent pid/i,
+    );
+  });
+  assert.equal(host.destroyed, true);
+  assert.equal(host.disconnectCalls, 0);
+  assert.equal(killCalls, 0);
+  assert.deepEqual(signals, []);
 });
 
 test("Windows rejects an acknowledgement callback error before writing stdin", async () => {
@@ -347,9 +408,11 @@ test(
     let hostPid: number | null = null;
     let agentPid: number | null = null;
     let hostClosed = false;
+    let hostProcess: ReturnType<typeof nodeSpawn> | null = null;
     const agentSource = "setInterval(() => {}, 1000);";
     const rejectingSpawn = ((command: string, args: string[], options: Parameters<typeof nodeSpawn>[2]) => {
       const host = nodeSpawn(command, args, options);
+      hostProcess = host;
       hostPid = host.pid ?? null;
       host.once("close", () => {
         hostClosed = true;
@@ -381,13 +444,12 @@ test(
       await Promise.all([waitForExit(hostPid!), waitForExit(agentPid!)]);
     } finally {
       closeSync(fd);
-      for (const pid of [hostPid, agentPid]) {
-        if (pid && isAlive(pid)) {
-          try {
-            process.kill(pid);
-          } catch {
-            // The test process may exit between the liveness check and cleanup.
-          }
+      const ownedHost = hostProcess as ReturnType<typeof nodeSpawn> | null;
+      if (ownedHost && !hostClosed) {
+        try {
+          ownedHost.kill();
+        } catch {
+          // The owned host process may exit between the close check and cleanup.
         }
       }
       await Promise.all(

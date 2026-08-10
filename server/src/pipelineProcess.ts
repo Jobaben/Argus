@@ -114,6 +114,8 @@ function spawnWindowsHost(
   return new Promise((resolve, reject) => {
     let settled = false;
     let acknowledgementAttempted = false;
+    let hostClosed = false;
+    let hostKillAttempted = false;
     let stdinDelivered = false;
     let agentPid: number | null = null;
     const cleanupRejectedHost = () => {
@@ -127,11 +129,10 @@ function spawnWindowsHost(
       } catch {
         // Cleanup is best-effort and must not mask the handshake error.
       }
-      try {
-        if (!host.kill() && host.pid) process.kill(host.pid);
-      } catch {
+      if (!hostClosed && !hostKillAttempted) {
+        hostKillAttempted = true;
         try {
-          if (host.pid) process.kill(host.pid);
+          host.kill();
         } catch {
           // Cleanup is best-effort and must not mask the handshake error.
         }
@@ -171,6 +172,7 @@ function spawnWindowsHost(
       resolve({ pid: agentPid, done });
     });
     host.once("close", () => {
+      hostClosed = true;
       if (settled) return;
       rejectHandshake(
         new Error(

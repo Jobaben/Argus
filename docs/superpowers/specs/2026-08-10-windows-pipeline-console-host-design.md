@@ -116,7 +116,9 @@ On non-Windows platforms, Argus continues to spawn the agent directly with
 - Any rejection before authoritative acknowledgement confirmation destroys the
   prompt pipe, disconnects IPC when possible, and terminates the detached host,
   which also reaps its non-detached agent. Cleanup errors do not replace the
-  original handshake error.
+  original handshake error. Cleanup targets only the owned `ChildProcess`
+  handle, at most once while it remains open; it never falls back to signaling
+  a stored numeric host PID that may have been reused.
 - An agent-spawn failure is sent over IPC with a bounded error string; the host
   exits nonzero and Argus records the step as a spawn failure.
 - Only the expected PID or error message shape is accepted from IPC.
