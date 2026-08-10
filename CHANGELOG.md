@@ -72,6 +72,12 @@ All notable changes to Argus are documented here. The format follows
 
 ### Fixed
 
+- **Windows pipeline PowerShell popup spam.** Pipeline agents now run through a
+  hidden console host on Windows, so repeated PowerShell tool calls inherit one
+  console instead of flashing a new window each time. Argus records the real
+  agent PID, preserving aborts, process-tree cleanup, and adoption after a
+  server restart.
+
 - **Codex pipeline completion no longer depends on perfect Stop-hook delivery.**
   The hook remains the preferred path, but reconciliation now recovers a
   terminated Codex step from its completed run record and strict

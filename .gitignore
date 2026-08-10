@@ -8,3 +8,6 @@ coverage/
 
 # superpowers planning artifacts (local-only)
 docs/superpowers/
+
+# isolated implementation worktrees
+.worktrees/

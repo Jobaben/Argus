@@ -1,4 +1,3 @@
-import { spawn as nodeSpawn } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
 import {
   encodeProject,
@@ -33,6 +32,8 @@ import { isAlive } from "./scheduler.js";
 import { claudeRuntime, parseEnvelopeFor, resolveRuntimeId, runtimeFor } from "./runtimes/index.js";
 import { graceMsFor, previousFireTime } from "./sources/nextFire.js";
 import { KeyedMutex } from "./mutex.js";
+import { spawnPipelineProcess } from "./pipelineProcess.js";
+import type { PipelineProcessHandle } from "./pipelineProcess.js";
 import type { SpawnPlan } from "./runtimes/index.js";
 import type { AgentRuntimeId } from "@argus/contracts";
 import type { Run } from "./sources/scheduleTypes.js";
@@ -72,7 +73,7 @@ export type PipelineSpawnFn = (
   run: Run,
   logPath: string,
   env: Record<string, string>,
-) => { pid: number | null; done: Promise<{ code: number | null }> };
+) => PipelineProcessHandle | Promise<PipelineProcessHandle>;
 
 /**
  * Injected into every step run's system prompt so the Stop hook can derive an
@@ -120,37 +121,28 @@ export function buildClaudeArgs(run: Run): string[] {
 }
 
 /** Real spawn: the run's agent CLI, prompt on stdin, with the signal env
- *  injected. Detached with fd-backed stdio so the run survives an Argus restart
- *  and keeps logging without the parent process. Deliberately NO shell: with a
- *  cmd.exe wrapper the detached grandchild's output never reaches the log fd,
- *  and the wrapper pid breaks pid tracking across restarts (spike-verified).
- *  Requires the CLI to be a real executable (claude.exe / codex.exe / binary),
- *  which the native installers provide. */
-export const defaultPipelineSpawn: PipelineSpawnFn = (run, logPath, env) => {
+ *  injected. POSIX starts the agent directly and detached; Windows uses a
+ *  hidden, detached two-stage host so the real agent PID can be confirmed over
+ *  IPC before this handle resolves. Both keep fd-backed logs so the run survives
+ *  an Argus restart. The handshake, rather than the host itself, preserves PID
+ *  tracking across restarts. */
+export const defaultPipelineSpawn: PipelineSpawnFn = async (run, logPath, env) => {
   const fd = openSync(logPath, "a");
   const plan = buildStepPlan(run);
-  let child: ReturnType<typeof nodeSpawn>;
   try {
-    child = nodeSpawn(plan.bin, plan.args, {
-      cwd: run.cwd,
-      env: { ...process.env, ...plan.env, ...env },
-      detached: true,
-      windowsHide: process.platform === "win32",
-      stdio: ["pipe", fd, fd],
-    });
+    return await spawnPipelineProcess(
+      {
+        bin: plan.bin,
+        args: plan.args,
+        stdin: plan.stdin,
+        cwd: run.cwd,
+        env: { ...process.env, ...plan.env, ...env },
+      },
+      fd,
+    );
   } finally {
-    // The child holds its own duplicate of the descriptor.
     closeSync(fd);
   }
-  child.stdin?.on("error", () => {});
-  child.stdin?.write(plan.stdin);
-  child.stdin?.end();
-  child.unref();
-  const done = new Promise<{ code: number | null }>((resolve) => {
-    child.on("error", () => resolve({ code: null }));
-    child.on("close", (code) => resolve({ code }));
-  });
-  return { pid: child.pid ?? null, done };
 };
 
 export interface EngineDeps {
@@ -399,9 +391,9 @@ export function createEngine(deps: EngineDeps): Engine {
     };
     // Runtime-specific environment (e.g. Claude Code's subagent-text forwarding)
     // comes from the spawn plan, so it stays with the runtime that needs it.
-    let handle: { pid: number | null; done: Promise<{ code: number | null }> };
+    let handle: PipelineProcessHandle;
     try {
-      handle = deps.spawn(run, runLogPath(run.id), env);
+      handle = await Promise.resolve(deps.spawn(run, runLogPath(run.id), env));
     } catch (e) {
       sem.release();
       await writeRun({ ...run, status: "failed", error: String(e), endedAt: nowISO() });
