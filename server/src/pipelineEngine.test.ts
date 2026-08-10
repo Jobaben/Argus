@@ -33,6 +33,12 @@ function deferred() {
   return { promise, resolve };
 }
 
+function deferredValue<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => (resolve = r));
+  return { promise, resolve };
+}
+
 // A spawn that records calls and lets the test resolve each run's completion.
 function recordingSpawn() {
   const calls: { runId: string; env: Record<string, string> }[] = [];
@@ -107,6 +113,31 @@ test("start spawns phase 0's step with signal env injected", async () => {
   assert.equal(rec.calls[0].env.ARGUS_PHASE_ID, "brainstorm");
   assert.equal(rec.calls[0].env.ARGUS_SIGNAL_TOKEN, inst!.signalToken);
   assert.ok(rec.calls[0].env.ARGUS_SIGNAL_URL.includes(inst!.id));
+});
+
+test("start waits for an asynchronous spawn and persists the resolved real pid", async () => {
+  const { engine, pipelines } = await load();
+  await seedPipeline(pipelines);
+  const ready = deferredValue<{ pid: number; done: Promise<{ code: number | null }> }>();
+  const completion = deferred();
+  let runId = "";
+  const spawn = (run: { id: string }) => {
+    runId = run.id;
+    return ready.promise;
+  };
+  const e = engine.createEngine(baseDeps({ spawn }));
+  let started = false;
+  const starting = e.start("p1", "manual").then(() => {
+    started = true;
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(started, false);
+  ready.resolve({ pid: 4321, done: completion.promise });
+  await starting;
+
+  const runs = await import("./sources/runs.js");
+  assert.equal((await runs.readRun(runId))?.run.pid, 4321);
 });
 
 test("step env names the runtime the hook is running under", async () => {

@@ -285,7 +285,7 @@ test("Windows host keeps overlapping PowerShell descendants in one hidden consol
     assert.equal(probes[0].visible, false);
     assert.equal(probes[1].visible, false);
   } finally {
-    rmSync(home, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
