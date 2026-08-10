@@ -101,14 +101,18 @@ function spawnWindowsHost(
   logFd: number,
   spawnImpl: typeof nodeSpawn,
 ): Promise<PipelineProcessHandle> {
-  const host = spawnImpl(process.execPath, ["--input-type=commonjs", "-e", WINDOWS_HOST_SOURCE, plan.bin, ...plan.args], {
-    cwd: plan.cwd,
-    env: plan.env,
-    shell: false,
-    detached: true,
-    windowsHide: true,
-    stdio: ["pipe", logFd, logFd, "ipc"],
-  });
+  const host = spawnImpl(
+    process.execPath,
+    ["--input-type=commonjs", "-e", WINDOWS_HOST_SOURCE, plan.bin, ...plan.args],
+    {
+      cwd: plan.cwd,
+      env: plan.env,
+      shell: false,
+      detached: true,
+      windowsHide: true,
+      stdio: ["pipe", logFd, logFd, "ipc"],
+    },
+  );
   const done = completionOf(host);
 
   return new Promise((resolve, reject) => {
@@ -149,11 +153,15 @@ function spawnWindowsHost(
     host.once("disconnect", () => {
       if (settled) return;
       if (agentPid === null) {
-        rejectHandshake(new Error("Windows pipeline host disconnected before reporting an agent pid"));
+        rejectHandshake(
+          new Error("Windows pipeline host disconnected before reporting an agent pid"),
+        );
         return;
       }
       if (!acknowledgementAttempted) {
-        rejectHandshake(new Error("Windows pipeline host disconnected before acknowledgement attempt"));
+        rejectHandshake(
+          new Error("Windows pipeline host disconnected before acknowledgement attempt"),
+        );
         return;
       }
       try {

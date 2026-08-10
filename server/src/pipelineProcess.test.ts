@@ -68,7 +68,8 @@ function isAlive(pid: number): boolean {
 async function waitForExit(pid: number, timeoutMs = 5000): Promise<void> {
   const started = Date.now();
   while (isAlive(pid)) {
-    if (Date.now() - started > timeoutMs) throw new Error(`timed out waiting for pid ${pid} to exit`);
+    if (Date.now() - started > timeoutMs)
+      throw new Error(`timed out waiting for pid ${pid} to exit`);
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
 }
@@ -410,7 +411,11 @@ test(
     let hostClosed = false;
     let hostProcess: ReturnType<typeof nodeSpawn> | null = null;
     const agentSource = "setInterval(() => {}, 1000);";
-    const rejectingSpawn = ((command: string, args: string[], options: Parameters<typeof nodeSpawn>[2]) => {
+    const rejectingSpawn = ((
+      command: string,
+      args: string[],
+      options: Parameters<typeof nodeSpawn>[2],
+    ) => {
       const host = nodeSpawn(command, args, options);
       hostProcess = host;
       hostPid = host.pid ?? null;
@@ -418,7 +423,11 @@ test(
         hostClosed = true;
       });
       host.on("message", (message: unknown) => {
-        if (message && typeof message === "object" && (message as { type?: unknown }).type === "spawned") {
+        if (
+          message &&
+          typeof message === "object" &&
+          (message as { type?: unknown }).type === "spawned"
+        ) {
           agentPid = (message as { pid?: number }).pid ?? null;
         }
       });
@@ -432,7 +441,13 @@ test(
     try {
       await assert.rejects(
         spawnPipelineProcess(
-          { bin: process.execPath, args: ["-e", agentSource], stdin: "", cwd: home, env: process.env },
+          {
+            bin: process.execPath,
+            args: ["-e", agentSource],
+            stdin: "",
+            cwd: home,
+            env: process.env,
+          },
           fd,
           "win32",
           rejectingSpawn,
@@ -487,11 +502,14 @@ test("non-Windows launches the agent directly and detached", async () => {
   assert.equal(handle.pid, 5150);
 });
 
-test("Windows host keeps overlapping PowerShell descendants in one hidden console", { skip: process.platform !== "win32" }, async () => {
-  const home = mkdtempSync(path.join(tmpdir(), "argus-pipeline-console-"));
-  const logPath = path.join(home, "console-probe.log");
-  const moduleUrl = pathToFileURL(path.join(import.meta.dirname, "pipelineProcess.ts")).href;
-  const probeAgentSource = String.raw`
+test(
+  "Windows host keeps overlapping PowerShell descendants in one hidden console",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "argus-pipeline-console-"));
+    const logPath = path.join(home, "console-probe.log");
+    const moduleUrl = pathToFileURL(path.join(import.meta.dirname, "pipelineProcess.ts")).href;
+    const probeAgentSource = String.raw`
     const { spawn } = require("node:child_process");
     const path = require("node:path");
     const shell = path.join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
@@ -521,7 +539,7 @@ test("Windows host keeps overlapping PowerShell descendants in one hidden consol
       .then((handles) => console.log(JSON.stringify(handles)))
       .catch((error) => { console.error(error); process.exitCode = 1; });
   `;
-  const consoleParentSource = `
+    const consoleParentSource = `
     import { closeSync, openSync } from "node:fs";
     import { spawnPipelineProcess } from ${JSON.stringify(moduleUrl)};
     const fd = openSync(${JSON.stringify(logPath)}, "a");
@@ -537,32 +555,41 @@ test("Windows host keeps overlapping PowerShell descendants in one hidden consol
     clearInterval(keepAlive);
     closeSync(fd);
   `;
-  const parent = nodeSpawn(
-    process.execPath,
-    ["--import", "tsx", "--input-type=module", "-e", consoleParentSource],
-    { cwd: path.join(import.meta.dirname, ".."), detached: true, windowsHide: true, stdio: "ignore" },
-  );
+    const parent = nodeSpawn(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "-e", consoleParentSource],
+      {
+        cwd: path.join(import.meta.dirname, ".."),
+        detached: true,
+        windowsHide: true,
+        stdio: "ignore",
+      },
+    );
 
-  try {
-    await once(parent, "close");
-    const probes = JSON.parse(readFileSync(logPath, "utf8").trim().split(/\r?\n/).at(-1)!);
-    assert.equal(probes[0].handle > 0, true);
-    assert.equal(probes[0].handle, probes[1].handle);
-    assert.equal(probes[0].visible, false);
-    assert.equal(probes[1].visible, false);
-  } finally {
-    rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-  }
-});
+    try {
+      await once(parent, "close");
+      const probes = JSON.parse(readFileSync(logPath, "utf8").trim().split(/\r?\n/).at(-1)!);
+      assert.equal(probes[0].handle > 0, true);
+      assert.equal(probes[0].handle, probes[1].handle);
+      assert.equal(probes[0].visible, false);
+      assert.equal(probes[1].visible, false);
+    } finally {
+      rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  },
+);
 
-test("Windows host keeps the real agent alive after its parent exits", { skip: process.platform !== "win32" }, async () => {
-  const home = mkdtempSync(path.join(tmpdir(), "argus-pipeline-restart-"));
-  const logPath = path.join(home, "restart.log");
-  const doneMarker = path.join(home, "done");
-  const pidMarker = path.join(home, "pid");
-  let agentPid: number | null = null;
-  const moduleUrl = pathToFileURL(path.join(import.meta.dirname, "pipelineProcess.ts")).href;
-  const agentSource = `
+test(
+  "Windows host keeps the real agent alive after its parent exits",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "argus-pipeline-restart-"));
+    const logPath = path.join(home, "restart.log");
+    const doneMarker = path.join(home, "done");
+    const pidMarker = path.join(home, "pid");
+    let agentPid: number | null = null;
+    const moduleUrl = pathToFileURL(path.join(import.meta.dirname, "pipelineProcess.ts")).href;
+    const agentSource = `
     const { writeFileSync } = require("node:fs");
     setTimeout(() => {
       try {
@@ -572,7 +599,7 @@ test("Windows host keeps the real agent alive after its parent exits", { skip: p
       }
     }, 750);
   `;
-  const parentSource = `
+    const parentSource = `
     import { closeSync, openSync, writeFileSync } from "node:fs";
     import { spawnPipelineProcess } from ${JSON.stringify(moduleUrl)};
     const fd = openSync(${JSON.stringify(logPath)}, "a");
@@ -587,26 +614,32 @@ test("Windows host keeps the real agent alive after its parent exits", { skip: p
     writeFileSync(${JSON.stringify(pidMarker)}, String(handle.pid));
     process.exit(0);
   `;
-  const parent = nodeSpawn(
-    process.execPath,
-    ["--import", "tsx", "--input-type=module", "-e", parentSource],
-    { cwd: path.join(import.meta.dirname, ".."), detached: true, windowsHide: true, stdio: "ignore" },
-  );
+    const parent = nodeSpawn(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "-e", parentSource],
+      {
+        cwd: path.join(import.meta.dirname, ".."),
+        detached: true,
+        windowsHide: true,
+        stdio: "ignore",
+      },
+    );
 
-  try {
-    await once(parent, "close");
-    await waitForFile(doneMarker);
-    agentPid = Number(readFileSync(pidMarker, "utf8"));
-    assert.equal(Number.isInteger(agentPid) && agentPid > 0, true);
-    assert.equal(readFileSync(doneMarker, "utf8"), "done");
-    await waitForExit(agentPid, 1000);
-  } finally {
-    if (agentPid === null && existsSync(pidMarker)) {
+    try {
+      await once(parent, "close");
+      await waitForFile(doneMarker);
       agentPid = Number(readFileSync(pidMarker, "utf8"));
+      assert.equal(Number.isInteger(agentPid) && agentPid > 0, true);
+      assert.equal(readFileSync(doneMarker, "utf8"), "done");
+      await waitForExit(agentPid, 1000);
+    } finally {
+      if (agentPid === null && existsSync(pidMarker)) {
+        agentPid = Number(readFileSync(pidMarker, "utf8"));
+      }
+      if (agentPid && Number.isInteger(agentPid) && agentPid > 0) {
+        await waitForExit(agentPid).catch(() => {});
+      }
+      rmSync(home, { recursive: true, force: true });
     }
-    if (agentPid && Number.isInteger(agentPid) && agentPid > 0) {
-      await waitForExit(agentPid).catch(() => {});
-    }
-    rmSync(home, { recursive: true, force: true });
-  }
-});
+  },
+);
