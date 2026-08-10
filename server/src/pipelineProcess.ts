@@ -113,38 +113,72 @@ function spawnWindowsHost(
 
   return new Promise((resolve, reject) => {
     let settled = false;
-    let reportedPid = false;
-    let acknowledged = false;
-    let hostDisconnected = false;
+    let acknowledgementAttempted = false;
+    let stdinDelivered = false;
     let agentPid: number | null = null;
+    const cleanupRejectedHost = () => {
+      try {
+        host.stdin?.destroy();
+      } catch {
+        // Cleanup is best-effort and must not mask the handshake error.
+      }
+      try {
+        if (host.connected) host.disconnect();
+      } catch {
+        // Cleanup is best-effort and must not mask the handshake error.
+      }
+      try {
+        if (!host.kill() && host.pid) process.kill(host.pid);
+      } catch {
+        try {
+          if (host.pid) process.kill(host.pid);
+        } catch {
+          // Cleanup is best-effort and must not mask the handshake error.
+        }
+      }
+    };
     const rejectHandshake = (error: Error) => {
       if (settled) return;
       settled = true;
+      cleanupRejectedHost();
       reject(error);
     };
 
     host.once("error", (error) => rejectHandshake(error));
-    const resolveAcknowledged = () => {
-      if (settled || !acknowledged || !hostDisconnected || agentPid === null) return;
-      settled = true;
-      resolve({ pid: agentPid, done });
-    };
     host.once("disconnect", () => {
-      if (!reportedPid) {
+      if (settled) return;
+      if (agentPid === null) {
         rejectHandshake(new Error("Windows pipeline host disconnected before reporting an agent pid"));
         return;
       }
-      if (!acknowledged) {
-        rejectHandshake(new Error("Windows pipeline host disconnected before acknowledgement"));
+      if (!acknowledgementAttempted) {
+        rejectHandshake(new Error("Windows pipeline host disconnected before acknowledgement attempt"));
         return;
       }
-      hostDisconnected = true;
-      resolveAcknowledged();
+      try {
+        if (!stdinDelivered) {
+          stdinDelivered = true;
+          host.stdin?.on("error", () => {});
+          host.stdin?.write(plan.stdin);
+          host.stdin?.end();
+        }
+        host.unref();
+      } catch (error) {
+        rejectHandshake(error instanceof Error ? error : new Error(String(error)));
+        return;
+      }
+      settled = true;
+      resolve({ pid: agentPid, done });
     });
     host.once("close", () => {
-      if (!reportedPid) {
-        rejectHandshake(new Error("Windows pipeline host exited before reporting an agent pid"));
-      }
+      if (settled) return;
+      rejectHandshake(
+        new Error(
+          agentPid === null
+            ? "Windows pipeline host exited before reporting an agent pid"
+            : "Windows pipeline host exited before confirming acknowledgement",
+        ),
+      );
     });
     host.on("message", (message: unknown) => {
       if (settled || !message || typeof message !== "object") return;
@@ -159,25 +193,18 @@ function spawnWindowsHost(
         return;
       }
 
-      reportedPid = true;
       agentPid = protocol.pid as number;
       if (!host.send) {
         rejectHandshake(new Error("Windows pipeline host has no IPC channel"));
         return;
       }
+      acknowledgementAttempted = true;
       try {
         host.send({ type: "ack" }, (error) => {
+          if (settled) return;
           if (error) {
             rejectHandshake(error);
-            return;
           }
-          if (settled) return;
-          host.stdin?.on("error", () => {});
-          host.stdin?.write(plan.stdin);
-          host.stdin?.end();
-          host.unref();
-          acknowledged = true;
-          resolveAcknowledged();
         });
       } catch (error) {
         rejectHandshake(error instanceof Error ? error : new Error(String(error)));

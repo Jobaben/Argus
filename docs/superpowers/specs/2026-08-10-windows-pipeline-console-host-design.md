@@ -85,10 +85,13 @@ async flow and will await the spawn result. Existing injected test spawns may
 continue returning their result synchronously through `Awaitable` typing or be
 wrapped with `Promise.resolve`.
 
-After a valid PID, Argus sends an acknowledgement, writes the prompt through
-the inherited stdin pipe, closes that pipe, and releases the host handle. The
-host disconnects its IPC channel only after it has processed that acknowledgement.
-The Windows spawn resolves only after one of these events:
+After a valid PID, Argus records that acknowledgement transmission is being
+attempted before sending it. The host disconnects its IPC channel only after it
+has processed that acknowledgement, making disconnect—not the local send
+callback—the authoritative confirmation. At confirmation, Argus writes the
+prompt through the inherited stdin pipe exactly once, closes that pipe, and
+releases the host handle. The Windows spawn resolves only after one of these
+events:
 
 - the acknowledged host disconnects after a valid positive agent PID arrives,
   returning `{ pid, done }`;
@@ -110,6 +113,10 @@ On non-Windows platforms, Argus continues to spawn the agent directly with
   the existing pipeline spawn failure.
 - An invalid or missing PID rejects the spawn rather than persisting the host
   PID or leaving the run indefinitely in `running`.
+- Any rejection before authoritative acknowledgement confirmation destroys the
+  prompt pipe, disconnects IPC when possible, and terminates the detached host,
+  which also reaps its non-detached agent. Cleanup errors do not replace the
+  original handshake error.
 - An agent-spawn failure is sent over IPC with a bounded error string; the host
   exits nonzero and Argus records the step as a spawn failure.
 - Only the expected PID or error message shape is accepted from IPC.
@@ -124,7 +131,8 @@ Implementation will follow a red-green sequence:
    detached hidden host, receive the real agent PID, and expose completion
    separately from the PID handshake.
 2. Add failure-path tests for an invalid PID, host exit before handshake, and
-   reported agent-spawn failure.
+   reported agent-spawn failure, plus both send-callback orderings and cleanup
+   for every pre-confirmation rejection.
 3. Add a Windows-only integration test whose fake agent starts overlapping
    PowerShell descendants and reports their console identities and visibility.
    They must share one hidden console, proving repeated calls cannot allocate
@@ -133,7 +141,9 @@ Implementation will follow a red-green sequence:
 4. Add a Windows-only subprocess test that exits the simulated Argus parent and
    verifies that the reported real agent continues and writes a completion
    marker. The test will clean up only processes and temporary files it creates.
-5. Run the focused server tests, the full server test suite, typecheck, lint,
+5. Add a Windows-only rejected-handshake test that records its real host and
+   agent PIDs and verifies both are gone after rejection.
+6. Run the focused server tests, the full server test suite, typecheck, lint,
    and the production build.
 
 The integration tests will be skipped with an explicit reason on non-Windows
