@@ -564,7 +564,13 @@ test("Windows host keeps the real agent alive after its parent exits", { skip: p
   const moduleUrl = pathToFileURL(path.join(import.meta.dirname, "pipelineProcess.ts")).href;
   const agentSource = `
     const { writeFileSync } = require("node:fs");
-    setTimeout(() => writeFileSync(${JSON.stringify(doneMarker)}, "done"), 750);
+    setTimeout(() => {
+      try {
+        writeFileSync(${JSON.stringify(doneMarker)}, "done");
+      } finally {
+        process.exit(0);
+      }
+    }, 750);
   `;
   const parentSource = `
     import { closeSync, openSync, writeFileSync } from "node:fs";
@@ -591,17 +597,15 @@ test("Windows host keeps the real agent alive after its parent exits", { skip: p
     await once(parent, "close");
     await waitForFile(doneMarker);
     agentPid = Number(readFileSync(pidMarker, "utf8"));
+    assert.equal(Number.isInteger(agentPid) && agentPid > 0, true);
+    assert.equal(readFileSync(doneMarker, "utf8"), "done");
+    await waitForExit(agentPid, 1000);
   } finally {
     if (agentPid === null && existsSync(pidMarker)) {
       agentPid = Number(readFileSync(pidMarker, "utf8"));
     }
     if (agentPid && Number.isInteger(agentPid) && agentPid > 0) {
-      try {
-        process.kill(agentPid, 0);
-        process.kill(agentPid);
-      } catch {
-        // The delayed agent has normally exited before cleanup.
-      }
+      await waitForExit(agentPid).catch(() => {});
     }
     rmSync(home, { recursive: true, force: true });
   }
