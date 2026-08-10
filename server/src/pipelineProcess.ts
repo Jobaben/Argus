@@ -165,15 +165,23 @@ function spawnWindowsHost(
         rejectHandshake(new Error("Windows pipeline host has no IPC channel"));
         return;
       }
-      host.send({ type: "ack" }, () => {
-        if (settled) return;
-        host.stdin?.on("error", () => {});
-        host.stdin?.write(plan.stdin);
-        host.stdin?.end();
-        host.unref();
-        acknowledged = true;
-        resolveAcknowledged();
-      });
+      try {
+        host.send({ type: "ack" }, (error) => {
+          if (error) {
+            rejectHandshake(error);
+            return;
+          }
+          if (settled) return;
+          host.stdin?.on("error", () => {});
+          host.stdin?.write(plan.stdin);
+          host.stdin?.end();
+          host.unref();
+          acknowledged = true;
+          resolveAcknowledged();
+        });
+      } catch (error) {
+        rejectHandshake(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   });
 }

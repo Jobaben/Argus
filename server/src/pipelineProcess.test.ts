@@ -151,6 +151,55 @@ test("Windows rejects a host disconnect before acknowledgement", async () => {
   );
 });
 
+test("Windows rejects an acknowledgement callback error before writing stdin", async () => {
+  const host = new FakeHost();
+  host.send = (message, callback) => {
+    host.sent.push(message);
+    callback?.(new Error("IPC acknowledgement failed"));
+    queueMicrotask(() => host.disconnect());
+    return true;
+  };
+  const spawn = (() => {
+    queueMicrotask(() => host.emit("message", { type: "spawned", pid: 4242 }));
+    return host;
+  }) as unknown as typeof nodeSpawn;
+  await assert.rejects(
+    spawnPipelineProcess(
+      { bin: "codex.exe", args: [], stdin: "prompt", cwd: "C:\\work", env: {} },
+      17,
+      "win32",
+      spawn,
+    ),
+    /IPC acknowledgement failed/,
+  );
+  assert.deepEqual(host.writes, []);
+  assert.equal(host.ended, false);
+  assert.equal(host.unrefCalled, false);
+});
+
+test("Windows rejects a synchronous acknowledgement send error", async () => {
+  const host = new FakeHost();
+  host.send = () => {
+    throw new Error("IPC send exploded");
+  };
+  const spawn = (() => {
+    queueMicrotask(() => host.emit("message", { type: "spawned", pid: 4242 }));
+    return host;
+  }) as unknown as typeof nodeSpawn;
+  await assert.rejects(
+    spawnPipelineProcess(
+      { bin: "codex.exe", args: [], stdin: "prompt", cwd: "C:\\work", env: {} },
+      17,
+      "win32",
+      spawn,
+    ),
+    /IPC send exploded/,
+  );
+  assert.deepEqual(host.writes, []);
+  assert.equal(host.ended, false);
+  assert.equal(host.unrefCalled, false);
+});
+
 test("non-Windows launches the agent directly and detached", async () => {
   const child = new FakeHost();
   child.pid = 5150;
@@ -277,7 +326,10 @@ test("Windows host keeps the real agent alive after its parent exits", { skip: p
     await waitForFile(doneMarker);
     agentPid = Number(readFileSync(pidMarker, "utf8"));
   } finally {
-    if (agentPid && Number.isInteger(agentPid)) {
+    if (agentPid === null && existsSync(pidMarker)) {
+      agentPid = Number(readFileSync(pidMarker, "utf8"));
+    }
+    if (agentPid && Number.isInteger(agentPid) && agentPid > 0) {
       try {
         process.kill(agentPid, 0);
         process.kill(agentPid);
