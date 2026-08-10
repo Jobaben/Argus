@@ -1,7 +1,7 @@
 # Windows Pipeline Console Host Design
 
 **Date:** 2026-08-10
-**Status:** Approved for implementation (amended after Windows process-lifetime probe)
+**Status:** Approved for planning
 
 ## Problem
 
@@ -43,16 +43,16 @@ behavior.
 On Windows only, `defaultPipelineSpawn` starts a small Node launch host instead
 of starting the agent CLI directly.
 
-1. Argus starts the host with `detached: true`, `windowsHide: true`, the run's
+1. Argus starts the host with `detached: false`, `windowsHide: true`, the run's
    working directory and environment, the existing prompt pipe, the existing
    log descriptors, and a Node IPC channel.
-2. The detached host survives an Argus exit and starts without an inherited
-   console. It remains the lifetime supervisor for the real agent.
+2. Because the host is non-detached, it inherits Argus's console when one
+   exists. When Argus has no console, Windows creates one for the host and
+   `windowsHide` keeps it hidden.
 3. The host starts the real agent CLI with `shell: false`, `detached: false`, and
-   inherited standard handles. Windows creates one console for this first
-   non-detached console process and `windowsHide` keeps it hidden. The agent and
-   every ordinary console descendant, including repeated PowerShell invocations,
-   share that console instead of allocating new visible windows.
+   inherited standard handles. The agent and every ordinary console descendant,
+   including repeated PowerShell invocations, therefore share the host's single
+   existing console instead of allocating new windows.
 4. The host sends the real agent PID to Argus over IPC, disconnects the IPC
    channel, waits for the agent, and exits with the agent's exit status.
 5. Argus persists and returns the real agent PID, not the host PID. The existing
@@ -65,17 +65,16 @@ vector remain separate arguments; no shell parses the command or prompt.
 
 ### Restart survival
 
-libuv explicitly assigns every non-detached child to the spawning Node process's
-kill-on-parent-exit Windows job. A non-detached host would therefore be killed
-when Argus exits, and closing the host's own libuv job would also kill its
-non-detached agent. The host must instead be detached from Argus. It stays alive
-across the restart and continues supervising the non-detached agent, which keeps
-its inherited log handles and hidden console. Argus has already stored the real
-agent PID, so the existing adoption pass can reclaim it after restart.
+libuv assigns a non-detached direct child to its kill-on-parent-exit Windows job,
+whose configuration includes `JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK`. The launch
+host is that direct child. Windows therefore leaves the host's child—the real
+agent—outside the job. If Argus exits, the host is terminated but the agent
+continues with its inherited log handles and console. Argus has already stored
+the agent PID, so the existing adoption pass can reclaim it after restart.
 
-Simply detaching the real agent would restore restart survival but remove the
-console its ordinary PowerShell descendants need to inherit. Detaching only the
-outer host preserves both requirements.
+This extra process generation is necessary: simply making the agent
+non-detached would stop the popup windows but would also put the agent itself in
+libuv's kill-on-parent-exit job.
 
 ### API and data flow
 
@@ -85,19 +84,11 @@ async flow and will await the spawn result. Existing injected test spawns may
 continue returning their result synchronously through `Awaitable` typing or be
 wrapped with `Promise.resolve`.
 
-After a valid PID, Argus records that acknowledgement transmission is being
-attempted before sending it. The host disconnects its IPC channel only after it
-has processed that acknowledgement, making disconnect—not the local send
-callback—the authoritative confirmation. At confirmation, Argus writes the
-prompt through the inherited stdin pipe exactly once, closes that pipe, and
-releases the host handle. The Windows spawn resolves only after one of these
-events:
+The Windows spawn resolves only after one of these events:
 
-- the acknowledged host disconnects after a valid positive agent PID arrives,
-  returning `{ pid, done }`;
+- a valid positive agent PID arrives, returning `{ pid, done }`;
 - the host reports an agent-spawn error; or
-- the host exits, reports an invalid PID, or disconnects before reporting a PID
-  or processing the acknowledgement.
+- the host exits or disconnects before reporting a PID.
 
 The `done` promise follows the host, which normally exits exactly when the agent
 does. After the PID handshake, the host's process handle and IPC channel must not
@@ -113,12 +104,6 @@ On non-Windows platforms, Argus continues to spawn the agent directly with
   the existing pipeline spawn failure.
 - An invalid or missing PID rejects the spawn rather than persisting the host
   PID or leaving the run indefinitely in `running`.
-- Any rejection before authoritative acknowledgement confirmation destroys the
-  prompt pipe, disconnects IPC when possible, and terminates the detached host,
-  which also reaps its non-detached agent. Cleanup errors do not replace the
-  original handshake error. Cleanup targets only the owned `ChildProcess`
-  handle, at most once while it remains open; it never falls back to signaling
-  a stored numeric host PID that may have been reused.
 - An agent-spawn failure is sent over IPC with a bounded error string; the host
   exits nonzero and Argus records the step as a spawn failure.
 - Only the expected PID or error message shape is accepted from IPC.
@@ -130,22 +115,19 @@ On non-Windows platforms, Argus continues to spawn the agent directly with
 Implementation will follow a red-green sequence:
 
 1. Add a failing unit test that requires the Windows strategy to start a
-   detached hidden host, receive the real agent PID, and expose completion
+   non-detached hidden host, receive the real agent PID, and expose completion
    separately from the PID handshake.
 2. Add failure-path tests for an invalid PID, host exit before handshake, and
-   reported agent-spawn failure, plus both send-callback orderings and cleanup
-   for every pre-confirmation rejection.
+   reported agent-spawn failure.
 3. Add a Windows-only integration test whose fake agent starts overlapping
-   PowerShell descendants and reports their console identities and visibility.
-   They must share one hidden console, proving repeated calls cannot allocate
-   independent popup consoles. The fixture will request hidden windows even
-   during the intentional failing run so the test itself does not flash windows.
+   PowerShell descendants and reports their console identities. They must share
+   one console, proving repeated calls cannot allocate independent popup
+   consoles. The fixture will request hidden windows even during the intentional
+   failing run so the test itself does not flash windows.
 4. Add a Windows-only subprocess test that exits the simulated Argus parent and
    verifies that the reported real agent continues and writes a completion
    marker. The test will clean up only processes and temporary files it creates.
-5. Add a Windows-only rejected-handshake test that records its real host and
-   agent PIDs and verifies both are gone after rejection.
-6. Run the focused server tests, the full server test suite, typecheck, lint,
+5. Run the focused server tests, the full server test suite, typecheck, lint,
    and the production build.
 
 The integration tests will be skipped with an explicit reason on non-Windows
