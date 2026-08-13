@@ -33,6 +33,57 @@ export interface RetryPolicy {
   retryOn?: RetryableClass[];
 }
 
+/** A dependency can preserve the legacy phase-id shorthand or describe a route. */
+export type Dependency = string | DependencyEdge;
+
+/** The object form of a dependency edge. */
+export interface DependencyEdge {
+  phase: string;
+  when?: RouteCondition;
+  /** Accept a source phase that was intentionally skipped by routing. */
+  allowSkipped?: boolean;
+}
+
+export interface RouteCondition {
+  group?: string;
+  exclusive?: boolean;
+  required?: boolean;
+  default?: true;
+  predicate?: RoutePredicate;
+}
+
+export interface RoutePredicate {
+  path: string[];
+  operator: "equals" | "not-equals" | "one-of" | "exists";
+  value?: string | number | boolean | null | Array<string | number | boolean | null>;
+}
+
+/** A deliberately small recursive schema for a JSON phase result. */
+export interface ResultSchema {
+  type: "object" | "array" | "string" | "number" | "boolean" | "null";
+  properties?: Record<string, ResultSchema>;
+  required?: string[];
+  items?: ResultSchema;
+  enum?: Array<string | number | boolean | null>;
+}
+
+/** Opt-in structured outcome a completed phase may publish. */
+export interface PhaseResult {
+  artifact: string;
+  resultStep?: string;
+  schema: ResultSchema;
+}
+
+/** Immutable outcome of evaluating a result-producing phase's routes. */
+export interface RouteDecision {
+  sourcePhase: string;
+  artifact: string;
+  value: unknown;
+  selected: string[];
+  skipped: string[];
+  reason: string;
+}
+
 export interface PhaseDef {
   id: string;
   name: string;
@@ -46,7 +97,9 @@ export interface PhaseDef {
    * implicitly needs the one before it — which is how every pipeline authored
    * before Weave keeps working, unchanged, as a degenerate DAG.
    */
-  needs?: string[];
+  needs?: Dependency[];
+  /** Opt-in structured result used by conditional outgoing dependencies. */
+  result?: PhaseResult;
   /** Retry policy for this phase's steps. Absent = one attempt. */
   retry?: RetryPolicy;
   /**
@@ -100,9 +153,9 @@ export interface PipelineInput {
 export type InstanceStatus = "running" | "awaiting-approval" | "failed" | "succeeded" | "aborted";
 
 export type PhaseStatus =
-  "pending" | "running" | "awaiting-approval" | "succeeded" | "failed" | "aborted";
+  "pending" | "running" | "awaiting-approval" | "succeeded" | "skipped" | "failed" | "aborted";
 
-export type StepStatus = "pending" | "running" | "succeeded" | "failed" | "aborted";
+export type StepStatus = "pending" | "running" | "succeeded" | "skipped" | "failed" | "aborted";
 
 export interface StepProgress {
   name: string;
@@ -145,6 +198,8 @@ export interface PhaseProgress {
   /** Free-form: a gated phase carries whatever its agent signalled, a failed
    *  phase carries a {@link PhaseFailurePayload}. Narrow before reading. */
   payload: unknown | null;
+  /** Validated structured outcome, intentionally separate from legacy payloads. */
+  result?: unknown;
 }
 
 /** What the engine writes into `PhaseProgress.payload` when a phase fails.
@@ -169,6 +224,8 @@ export interface PipelineInstance {
   endedAt: string | null;
   /** Named payloads published by completed phases, for `{{artifacts.<name>}}`. */
   artifacts?: Record<string, unknown>;
+  /** Immutable records for phase outcomes that selected conditional routes. */
+  routeDecisions?: RouteDecision[];
 }
 
 export type SignalType = "completed" | "needs-input" | "failed";

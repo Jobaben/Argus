@@ -5,6 +5,8 @@
  */
 
 export type {
+  Dependency,
+  DependencyEdge,
   InstanceStatus,
   PhaseDef,
   PhaseFailurePayload,
@@ -16,6 +18,11 @@ export type {
   PipelineSignal,
   RetryableClass,
   RetryPolicy,
+  RouteCondition,
+  RouteDecision,
+  RoutePredicate,
+  ResultSchema,
+  PhaseResult,
   SignalType,
   StepProgress,
   StepStatus,
