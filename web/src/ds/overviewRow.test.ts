@@ -362,6 +362,26 @@ describe("toOverviewRow", () => {
     expect(row.phases[0].status).toBe("stopped");
     expect(row.phases[0].steps[0].status).toBe("stopped");
   });
+
+  it("maps skipped phases and steps to idle pills", () => {
+    const latest = inst("succeeded", ["skipped", "succeeded"]);
+    latest.phases[0].steps = [{ name: "red-green", runId: null, status: "skipped" }];
+    const row = toOverviewRow({ definition: def(), latest });
+    expect(row.phases[0].status).toBe("idle");
+    expect(row.phases[0].steps[0].status).toBe("idle");
+  });
+
+  it("renders conditional definition dependencies by source phase before a pipeline runs", () => {
+    const definition = def();
+    definition.phases[1].needs = [
+      {
+        phase: "bs",
+        when: { predicate: { path: ["accepted"], operator: "equals", value: true } },
+      },
+    ];
+    const row = toOverviewRow({ definition, latest: null });
+    expect(row.phases[1].needs).toEqual(["bs"]);
+  });
 });
 
 describe("toOverviewRows", () => {
