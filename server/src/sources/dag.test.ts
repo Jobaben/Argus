@@ -15,13 +15,14 @@ import {
   validateDag,
 } from "./dag.js";
 import type {
+  Dependency,
   PhaseDef,
   PhaseStatus,
   PipelineDefinition,
   PipelineInstance,
 } from "./pipelineTypes.js";
 
-const phase = (id: string, needs?: string[]): PhaseDef => ({
+const phase = (id: string, needs?: Dependency[]): PhaseDef => ({
   id,
   name: id,
   cwd: "/tmp",
@@ -91,6 +92,20 @@ test("regression: one declared `needs` makes the whole graph explicit, not half-
   const needs = resolveNeeds(phases);
   assert.deepEqual(needs.get("b"), [], "b does not silently inherit a");
   assert.deepEqual(needs.get("c"), ["a"]);
+});
+
+test("conditional dependency objects retain their source phase in the DAG", () => {
+  const phases = [
+    phase("evaluate"),
+    phase("publish", [
+      {
+        phase: "evaluate",
+        when: { predicate: { path: ["accepted"], operator: "equals", value: true } },
+      },
+    ]),
+  ];
+
+  assert.deepEqual(resolveNeeds(phases).get("publish"), ["evaluate"]);
 });
 
 // ── Validation ──────────────────────────────────────────────────────────────
