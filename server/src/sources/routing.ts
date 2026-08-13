@@ -1,9 +1,4 @@
-import type {
-  Dependency,
-  DependencyEdge,
-  ResultSchema,
-  RoutePredicate,
-} from "./pipelineTypes.js";
+import type { Dependency, DependencyEdge, ResultSchema, RoutePredicate } from "./pipelineTypes.js";
 
 export class ResultValidationError extends Error {
   constructor(message: string) {
@@ -56,7 +51,9 @@ function validateValue(schema: ResultSchema, value: unknown, path: string): void
   }
 
   if (schema.type === "array" && schema.items) {
-    (value as unknown[]).forEach((item, index) => validateValue(schema.items!, item, `${path}[${index}]`));
+    (value as unknown[]).forEach((item, index) =>
+      validateValue(schema.items!, item, `${path}[${index}]`),
+    );
   }
 }
 
@@ -101,7 +98,12 @@ export function evaluatePredicate(result: unknown, predicate: RoutePredicate): b
 function resolvePath(value: unknown, path: string[]): { found: boolean; value: unknown } {
   let current = value;
   for (const segment of path) {
-    if (typeof current !== "object" || current === null || Array.isArray(current) || !Object.hasOwn(current, segment)) {
+    if (
+      typeof current !== "object" ||
+      current === null ||
+      Array.isArray(current) ||
+      !Object.hasOwn(current, segment)
+    ) {
       return { found: false, value: undefined };
     }
     current = (current as Record<string, unknown>)[segment];
@@ -129,14 +131,21 @@ export function evaluateRoutes(
       const group = groups.get(edge.when.group) ?? [];
       group.push(edge);
       groups.set(edge.when.group, group);
-    } else if (!edge.when.default && edge.when.predicate && evaluatePredicate(result, edge.when.predicate)) {
+    } else if (
+      !edge.when.default &&
+      edge.when.predicate &&
+      evaluatePredicate(result, edge.when.predicate)
+    ) {
       selected.add(edge.phase);
     }
   }
 
   for (const [groupName, groupEdges] of groups) {
     const ordinaryMatches = groupEdges.filter(
-      (edge) => !edge.when!.default && edge.when!.predicate && evaluatePredicate(result, edge.when!.predicate),
+      (edge) =>
+        !edge.when!.default &&
+        edge.when!.predicate &&
+        evaluatePredicate(result, edge.when!.predicate),
     );
     const defaults = groupEdges.filter((edge) => edge.when!.default);
     const groupSelected = ordinaryMatches.length > 0 ? ordinaryMatches : defaults;
@@ -144,7 +153,9 @@ export function evaluateRoutes(
     const required = groupEdges.some((edge) => edge.when!.required);
 
     if (exclusive && groupSelected.length > 1) {
-      throw new RouteEvaluationError(`exclusive route group "${groupName}" matched more than one route`);
+      throw new RouteEvaluationError(
+        `exclusive route group "${groupName}" matched more than one route`,
+      );
     }
     if (required && groupSelected.length === 0) {
       throw new RouteEvaluationError(`required route group "${groupName}" did not match a route`);

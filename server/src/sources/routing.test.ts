@@ -56,7 +56,10 @@ test("evaluatePredicate supports only equality, inequality, one-of, and existenc
 
   assert.equal(evaluatePredicate(value, decision("equals", "approve").predicate!), true);
   assert.equal(evaluatePredicate(value, decision("not-equals", "revise").predicate!), true);
-  assert.equal(evaluatePredicate(value, decision("one-of", ["revise", "approve"]).predicate!), true);
+  assert.equal(
+    evaluatePredicate(value, decision("one-of", ["revise", "approve"]).predicate!),
+    true,
+  );
   assert.equal(
     evaluatePredicate(value, { path: ["metadata", "reviewed"], operator: "exists" }),
     true,
