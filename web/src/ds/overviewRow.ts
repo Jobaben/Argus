@@ -89,6 +89,7 @@ const PHASE_STATUS_TO_DS: Record<PhaseStatus, DsStatus> = {
   running: "working",
   "awaiting-approval": "await",
   succeeded: "done",
+  skipped: "idle",
   failed: "failed",
   aborted: "stopped",
 };
@@ -97,6 +98,7 @@ const STEP_STATUS_TO_DS: Record<StepStatus, DsStatus> = {
   pending: "queued",
   running: "working",
   succeeded: "done",
+  skipped: "idle",
   failed: "failed",
   aborted: "stopped",
 };
@@ -107,6 +109,7 @@ const FALLBACK_STEP_STATUS: Record<PhaseStatus, DsStatus> = {
   running: "working",
   "awaiting-approval": "done",
   succeeded: "done",
+  skipped: "idle",
   failed: "failed",
   aborted: "stopped",
 };
@@ -273,7 +276,9 @@ export function toOverviewRow(entry: OverviewEntry): OverviewRow {
         // edges, so they are resolved from the definition here — same rule as
         // the server: no phase declaring `needs` means linear.
         needs: definition.phases.some((x) => x.needs !== undefined)
-          ? (p.needs ?? [])
+          ? (p.needs ?? []).map((dependency) =>
+              typeof dependency === "string" ? dependency : dependency.phase,
+            )
           : i === 0
             ? []
             : [definition.phases[i - 1].id],

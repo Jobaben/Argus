@@ -1,4 +1,5 @@
 import type { PhaseDef, PipelineDefinition, PipelineInstance } from "./pipelineTypes.js";
+import { normalizeNeeds } from "./routing.js";
 
 /**
  * Weave: the pipeline as a typed directed acyclic graph.
@@ -40,7 +41,11 @@ export function resolveNeeds(phases: PhaseDef[]): Map<string, string[]> {
   const declared = phases.some((p) => p.needs !== undefined);
   const out = new Map<string, string[]>();
   phases.forEach((p, i) => {
-    if (declared) out.set(p.id, [...(p.needs ?? [])]);
+    if (declared)
+      out.set(
+        p.id,
+        normalizeNeeds(p.needs).map((edge) => edge.phase),
+      );
     else out.set(p.id, i === 0 ? [] : [phases[i - 1].id]);
   });
   return out;
