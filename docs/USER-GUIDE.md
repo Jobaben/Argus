@@ -593,16 +593,32 @@ action requires a signed-in, root-approved account.
 
 **The pipeline form** (+ New pipeline / Edit):
 
+![Pipeline form](screenshots/pipeline-form.png)
+
 - **Name**, **trigger** (manual — i.e. no trigger — or interval / daily /
   weekly / windowed), **overlap policy** (skip if running / allow overlap),
   and a pipeline-default **model** (Opus, Sonnet, Haiku, custom, or inherit
   the CLI default).
-- An ordered list of **phases** — each with a name, a working directory, and
-  a **"Requires human approval (gated)"** checkbox.
-- Inside each phase, ordered **steps** — each with a name, an optional
-  per-step **model override**, and its prompt. Reorder or remove phases and
-  steps freely; **Save** stays disabled until every phase has a name, cwd and
-  at least one complete step.
+- A **phase rail** — the same stage layout as the Command Center board: one
+  chip per phase, phases that start together stacked in one column, gates
+  marked, and a red dot on any phase that still needs a field. The rail is the
+  whole pipeline at a glance; selecting a chip edits that phase in the panel
+  beneath, so a fourteen-phase pipeline is one screen, not fourteen screens of
+  stacked inputs.
+- The **focus panel** carries the selected phase: name, working directory, a
+  **"Requires human approval (gated)"** checkbox, an optional per-phase
+  **runtime override** — and **"Starts after"**, where the phase's
+  dependencies (`needs`) are edited as toggles. Choices that would create a
+  cycle are disabled and say so; the rail re-lays the graph as you click, so a
+  fan-out is authored by looking at the fan-out. A pipeline that never touches
+  "Starts after" stays linear, exactly as before.
+- Inside the phase, ordered **steps** — each with a name, optional per-step
+  **runtime / model / effort overrides**, and its prompt. Reorder or remove
+  phases and steps freely; **Save** stays disabled until every phase has a
+  name, cwd and at least one complete step (the rail marks the incomplete
+  ones). Phase features authored via the API — retry policies, published
+  artifacts, rubrics, auto-approve — show as badges on the panel and are
+  preserved on save.
 
 **What you can do (signed in):**
 
