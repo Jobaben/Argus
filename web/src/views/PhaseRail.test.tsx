@@ -81,9 +81,7 @@ describe("PhaseRail", () => {
         onSelect={() => {}}
       />,
     );
-    const rail = screen.getByTestId("phase-rail");
-    // Top-level list items are stages: 2 stages, not 3.
-    const stages = Array.from(rail.children);
+    const stages = screen.getAllByTestId("rail-stage");
     expect(stages).toHaveLength(2);
     expect(stages[1].textContent).toContain("build-a");
     expect(stages[1].textContent).toContain("build-b");
@@ -99,13 +97,13 @@ describe("PhaseRail", () => {
         onSelect={() => {}}
       />,
     );
-    const stages = Array.from(screen.getByTestId("phase-rail").children);
-    expect(stages).toHaveLength(3);
+    expect(screen.getAllByTestId("rail-stage")).toHaveLength(3);
   });
 
-  it("top-aligns rows so a wrapped rail stays straight next to a tall stack", () => {
+  it("renders rows as bordered tiles with straight, top-aligned lanes", () => {
     // Centering set every chip's height off the tallest stack in its wrap
-    // row, which zigzagged the chain on real pipelines.
+    // row, which zigzagged the chain on real pipelines — and a bare CSS wrap
+    // left the row break invisible. Rows are explicit bordered tiles now.
     render(
       <PhaseRail
         phases={[
@@ -117,9 +115,12 @@ describe("PhaseRail", () => {
         onSelect={() => {}}
       />,
     );
-    const rail = screen.getByTestId("phase-rail");
-    expect(rail.className).toContain("items-start");
-    expect(rail.className).not.toContain("items-center");
+    // jsdom measures nothing, so everything packs into the single first row.
+    const rows = screen.getAllByTestId("rail-row");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].className).toContain("border");
+    expect(rows[0].className).toContain("items-start");
+    expect(rows[0].className).not.toContain("items-center");
     // Chips share one fixed height, so the chain reads as a single lane.
     for (const chip of screen.getAllByRole("button")) {
       expect(chip.className).toContain("h-7");
