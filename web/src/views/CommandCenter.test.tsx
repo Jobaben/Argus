@@ -93,7 +93,7 @@ beforeEach(() => {
 });
 
 describe("CommandCenter", () => {
-  it("renders one pipeline card with a responsive phase grid per instance when overlapping", () => {
+  it("renders one pipeline card with a rail and focus panel per instance when overlapping", () => {
     const e = entry("sprint-pr", "running", ["running", "pending"]);
     const newest = { ...e.latest!, id: "11111111-aaaa" };
     const older = {
@@ -109,12 +109,13 @@ describe("CommandCenter", () => {
     render(<CommandCenter />);
     // one pipeline tile, not one per instance
     expect(screen.getAllByText("sprint-pr")).toHaveLength(1);
-    // Each instance owns its grid so an in-flight run remains accurate even if
-    // the pipeline definition changes underneath it.
+    // Each instance owns its rail and focus panel so an in-flight run remains
+    // accurate even if the pipeline definition changes underneath it.
+    expect(screen.getAllByTestId("phase-rail")).toHaveLength(2);
     expect(screen.getAllByTestId("phase-grid")).toHaveLength(2);
-    expect(screen.getAllByText("Phase0")).toHaveLength(2);
-    expect(screen.getAllByText("Phase1")).toHaveLength(2);
-    // each instance keeps its own labelled row of step tiles
+    // every phase is a chip on each instance's rail
+    expect(screen.getAllByRole("button", { name: /Phase1/ })).toHaveLength(2);
+    // each instance keeps its own labelled focus of step tiles
     expect(screen.getByText("#11111111")).toBeInTheDocument();
     expect(screen.getByText("#22222222")).toBeInTheDocument();
     expect(screen.getAllByText("step-x")).toHaveLength(2);
@@ -128,8 +129,24 @@ describe("CommandCenter", () => {
     expect(grid).toHaveStyle({
       gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))",
     });
-    expect(screen.getByText("Phase23")).toBeInTheDocument();
+    // The last phase stays reachable as a rail chip even though only one
+    // phase's steps are in focus.
+    expect(screen.getByRole("button", { name: /Phase23/ })).toBeInTheDocument();
     expect(container.querySelector(".overflow-x-auto")).toBeNull();
+  });
+
+  it("focuses the phase that needs attention and swaps focus on a chip click", () => {
+    mockOverview.overview = [entry("scheduler-prune", "running", ["succeeded", "running"])];
+    render(<CommandCenter />);
+    // Auto-focus follows the action: the running phase's step is in focus.
+    expect(screen.getByText("step-x")).toBeInTheDocument();
+    // Pin the finished phase instead: its (definition-derived) tile swaps in.
+    fireEvent.click(screen.getByRole("button", { name: /Phase0/ }));
+    expect(screen.queryByText("step-x")).not.toBeInTheDocument();
+    expect(screen.getByText("s")).toBeInTheDocument();
+    // Clicking the pinned chip again returns to following the action.
+    fireEvent.click(screen.getByRole("button", { name: /Phase0/ }));
+    expect(screen.getByText("step-x")).toBeInTheDocument();
   });
 
   it("shows every concurrently-stopped instance as stopped", () => {
@@ -161,13 +178,15 @@ describe("CommandCenter", () => {
     expect(screen.getByText("auth-refactor")).toBeInTheDocument();
   });
 
-  it("renders a numbered column per phase with step tiles", () => {
+  it("renders a numbered chip per phase and the focused phase's step tiles", () => {
     mockOverview.overview = [entry("scheduler-prune", "running", ["succeeded", "running"])];
     render(<CommandCenter />);
+    // Both phases are numbered chips on the rail; the running one is also the
+    // focus header, so its number appears twice.
     expect(screen.getByText("01")).toBeInTheDocument();
-    expect(screen.getByText("02")).toBeInTheDocument();
-    expect(screen.getByText("Phase0")).toBeInTheDocument();
-    expect(screen.getByText("Phase1")).toBeInTheDocument();
+    expect(screen.getAllByText("02").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: /Phase0/ })).toBeInTheDocument();
+    expect(screen.getAllByText("Phase1").length).toBeGreaterThan(0);
     expect(screen.getByText("step-x")).toBeInTheDocument();
     expect(screen.getByText("job r")).toBeInTheDocument();
   });
