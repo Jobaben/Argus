@@ -5,6 +5,25 @@ All notable changes to Argus are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **The pipeline form is now a rail + focus panel, and dependencies became
+  editable.** The form used to render every field of every phase and step at
+  once — a nine-phase pipeline was ~6,000px of stacked inputs, and the graph
+  shape (`needs`) had no UI at all: invisible when reading, impossible to
+  author, and deleting a phase another phase depended on produced a validation
+  error the form gave no way to see or fix. Now a compact phase rail (the
+  Command Center board's stage layout, edit flavour — validity dots instead of
+  status dots) is the always-on overview, and one phase's fields render
+  beneath it, entering with the board's focus-panel motion. "Starts after"
+  toggles edit `needs` per phase with cycle-creating choices disabled; the
+  first dependency edit of a linear pipeline materializes the implicit edges
+  on every phase so going explicit doesn't reshape the graph, and an untouched
+  linear pipeline keeps declaring nothing. Removing a phase strips edges into
+  it. Phase features authored via the API (retry, produces, rubric,
+  auto-approve) show as badges and survive the round-trip; un-gating a phase
+  drops its now-meaningless auto-approve instead of failing validation.
+
 ### Added
 
 - **A second agent runtime: OpenAI Codex.** Argus now drives `codex exec`

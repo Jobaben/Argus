@@ -35,6 +35,7 @@ export type {
   RunOutcome,
   LaunchInput,
   // Pipelines
+  Dependency,
   PhaseStep,
   PhaseDef,
   PipelineDefinition,
