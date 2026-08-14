@@ -68,7 +68,10 @@ function PhaseChip({
       onClick={onSelect}
       aria-pressed={selected}
       title={chipTitle(pill, index, needNames)}
-      className={`flex min-w-0 items-center gap-1.5 rounded-md border px-2 py-1 text-left transition-[border-color,background-color] duration-(--duration-quick) ${
+      // One fixed height for every chip (names truncate to one line), so the
+      // top-aligned rail rows read as straight lanes — content-sized heights
+      // made wrapped rails visibly crooked on real data.
+      className={`flex h-7 min-w-0 items-center gap-1.5 rounded-md border px-2 text-left transition-[border-color,background-color] duration-(--duration-quick) ${
         selected ? "border-ink-faint bg-ground-2" : border
       }`}
     >
@@ -135,15 +138,24 @@ export function PhaseRail({
       ? graphColumns(phases)
       : phases.map((p, i) => ({ depth: i, phases: [p] }));
   return (
+    // Top-aligned, not centered: centering set every chip's height off the
+    // tallest stack in its wrap row, which zigzagged the chain on real
+    // pipelines. Top alignment keeps each row a straight lane — the chain runs
+    // along the top edge and a fan-out hangs below it.
     <ol
       aria-label="Phases"
       data-testid="phase-rail"
-      className="flex flex-wrap items-center gap-x-1.5 gap-y-1.5"
+      className="flex flex-wrap items-start gap-x-1.5 gap-y-2"
     >
       {columns.map((col, i) => (
-        <li key={col.depth} className="flex min-w-0 items-center gap-1.5">
+        <li key={col.depth} className="flex min-w-0 items-start gap-1.5">
           {i > 0 && (
-            <span aria-hidden="true" className="font-mono text-[10px] text-ink-faint">
+            // The same fixed height as a chip, so the arrow centers on the
+            // first chip row instead of floating against a taller stack.
+            <span
+              aria-hidden="true"
+              className="flex h-7 items-center font-mono text-[10px] text-ink-faint"
+            >
               →
             </span>
           )}

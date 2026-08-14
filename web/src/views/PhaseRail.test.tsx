@@ -103,6 +103,29 @@ describe("PhaseRail", () => {
     expect(stages).toHaveLength(3);
   });
 
+  it("top-aligns rows so a wrapped rail stays straight next to a tall stack", () => {
+    // Centering set every chip's height off the tallest stack in its wrap
+    // row, which zigzagged the chain on real pipelines.
+    render(
+      <PhaseRail
+        phases={[
+          pill("plan", "done"),
+          pill("build-a", "working", { needs: ["plan"] }),
+          pill("build-b", "working", { needs: ["plan"] }),
+        ]}
+        selectedId={null}
+        onSelect={() => {}}
+      />,
+    );
+    const rail = screen.getByTestId("phase-rail");
+    expect(rail.className).toContain("items-start");
+    expect(rail.className).not.toContain("items-center");
+    // Chips share one fixed height, so the chain reads as a single lane.
+    for (const chip of screen.getAllByRole("button")) {
+      expect(chip.className).toContain("h-7");
+    }
+  });
+
   it("marks gates, attempts and step progress on the chip", () => {
     render(
       <PhaseRail
