@@ -39,6 +39,8 @@ export type {
 } from "./schedules.js";
 
 export type {
+  Dependency,
+  DependencyEdge,
   InstanceStatus,
   OverviewCost,
   OverviewEntry,
@@ -46,6 +48,11 @@ export type {
   PhaseFailurePayload,
   RetryableClass,
   RetryPolicy,
+  RouteCondition,
+  RouteDecision,
+  RoutePredicate,
+  ResultSchema,
+  PhaseResult,
   PhaseProgress,
   PhaseStatus,
   PhaseStep,
