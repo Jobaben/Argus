@@ -6,7 +6,8 @@ import { useInsight } from "../useInsight";
 import { useRuns } from "../useRuns";
 import { SituationStrip } from "./SituationStrip";
 import { ActivityRail } from "./ActivityRail";
-import { PhaseGraph } from "./PhaseGraph";
+import { PhaseRail } from "./PhaseRail";
+import { attentionPhase } from "./phaseAttention";
 import { StepDrawer, type StepSelection } from "./StepDrawer";
 import { useRunActivity } from "../useRunActivity";
 import type { LiveActivity } from "../useRunActivity";
@@ -273,24 +274,21 @@ function StepTile({
   );
 }
 
-function PhaseHeader({ pill, index }: { pill: PhasePill; index: number }) {
-  return (
-    <div className="flex items-baseline gap-2 self-start px-0.5">
-      <span className="font-mono text-[10px] text-ink-faint">
-        {String(index + 1).padStart(2, "0")}
-      </span>
-      <span className="min-w-0 break-words font-mono text-label font-bold uppercase tracking-[0.14em] text-ink-dim">
-        {pill.name}
-      </span>
-      <span className="ml-auto rounded-full border border-line px-2 font-mono text-label text-ink-faint">
-        {pill.steps.length}
-      </span>
-    </div>
-  );
-}
-
-function PhaseCell({
+/**
+ * One phase's step tiles — the focus panel under the rail.
+ *
+ * The board used to render every step of every phase at all times, which put a
+ * 14-phase pipeline at several screens per card, most of it "queued" tiles
+ * carrying nothing. Now the rail above is the complete always-on summary and
+ * this panel renders the one phase being asked about, keyed by the caller so a
+ * focus change enters as a change (same posture as a route swap: the outgoing
+ * content is gone by the time React commits, the incoming one arrives with the
+ * card entrance).
+ */
+function PhaseFocus({
   pill,
+  index,
+  phaseNames,
   instanceId,
   gate,
   approve,
@@ -302,6 +300,9 @@ function PhaseCell({
   onOpenStep,
 }: {
   pill: PhasePill;
+  index: number;
+  /** Phase names by id, to render `needs` as names rather than ids. */
+  phaseNames: Map<string, string>;
   instanceId: string | null;
   gate: OverviewGate | null;
   approve: (id: string) => Promise<unknown>;
@@ -312,22 +313,62 @@ function PhaseCell({
   rowModel: string | null;
   onOpenStep: (step: StepPill, phaseName: string, reason: string | null, originY: number) => void;
 }) {
+  const needNames = pill.needs.map((n) => phaseNames.get(n) ?? n);
   return (
-    <div className="flex min-w-0 flex-col gap-2.5">
-      {pill.steps.map((step, i) => {
-        const reason = step.status === "failed" ? pill.reason : null;
-        return (
-          <StepTile
-            key={`${step.name}-${i}`}
-            step={step}
-            reason={reason}
-            live={step.runId ? (liveActivity.get(step.runId) ?? null) : null}
-            now={now}
-            rowModel={rowModel}
-            onOpen={(originY) => onOpenStep(step, pill.name, reason, originY)}
-          />
-        );
-      })}
+    <div className="flex min-w-0 flex-col gap-2.5 motion-safe:animate-[slide-up_var(--duration-base)_var(--ease-out-expo)_both]">
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 px-0.5">
+        <span className="font-mono text-[10px] text-ink-faint">
+          {String(index + 1).padStart(2, "0")}
+        </span>
+        <span className="min-w-0 break-words font-mono text-label font-bold uppercase tracking-[0.14em] text-ink-dim">
+          {pill.name}
+        </span>
+        <span className="rounded-full border border-line px-2 font-mono text-label text-ink-faint">
+          {pill.steps.length}
+        </span>
+        {(pill.attempt ?? 0) > 0 && (
+          <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint">
+            attempt {pill.attempt + 1}
+          </span>
+        )}
+        {pill.retryAt && pill.status === "failed" && (
+          <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-await">
+            retry queued
+          </span>
+        )}
+        {needNames.length > 0 && (
+          <span
+            className="min-w-0 truncate font-mono text-[10px] text-ink-faint"
+            title={`Waits for ${needNames.join(", ")}`}
+          >
+            ← {needNames.join(", ")}
+          </span>
+        )}
+      </div>
+      <ol
+        aria-label={`Steps of phase ${pill.name}`}
+        data-testid="phase-grid"
+        className="grid min-w-0 gap-x-3.5 gap-y-2.5"
+        style={{
+          gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))",
+        }}
+      >
+        {pill.steps.map((step, i) => {
+          const reason = step.status === "failed" ? pill.reason : null;
+          return (
+            <li key={`${step.name}-${i}`} className="min-w-0">
+              <StepTile
+                step={step}
+                reason={reason}
+                live={step.runId ? (liveActivity.get(step.runId) ?? null) : null}
+                now={now}
+                rowModel={rowModel}
+                onOpen={(originY) => onOpenStep(step, pill.name, reason, originY)}
+              />
+            </li>
+          );
+        })}
+      </ol>
       {instanceId && gate?.phaseId === pill.id && (
         <Gate
           instanceId={instanceId}
@@ -335,6 +376,72 @@ function PhaseCell({
           approve={approve}
           revise={revise}
           reviseLabel={reviseLabel}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * One instance's rail + focus panel, and the selection between them.
+ *
+ * The focus follows the action by default — the gate waiting on you, the
+ * failure, the live work (see {@link attentionPhase}) — so an untouched board
+ * always shows the step detail that matters right now. Clicking a chip pins
+ * that phase; clicking the pinned chip again returns to following. The pin
+ * lives here, per instance, so two concurrent instances can be inspected
+ * independently.
+ */
+function InstanceBoard({
+  row,
+  approve,
+  revise,
+  liveActivity,
+  now,
+  onOpenStep,
+}: {
+  row: OverviewRow;
+  approve: (id: string) => Promise<unknown>;
+  revise: (id: string, note?: string) => Promise<unknown>;
+  liveActivity: Map<string, LiveActivity>;
+  now: number;
+  onOpenStep: (selection: StepSelection) => void;
+}) {
+  const [pinned, setPinned] = useState<string | null>(null);
+  // A pin outlives the phase it names only if the definition was edited
+  // mid-flight; fall back to following rather than showing nothing.
+  const auto = attentionPhase(row.phases);
+  const selectedId = pinned && row.phases.some((p) => p.id === pinned) ? pinned : auto;
+  const selectedIndex = row.phases.findIndex((p) => p.id === selectedId);
+  const selected = selectedIndex === -1 ? null : row.phases[selectedIndex];
+  const phaseNames = useMemo(() => new Map(row.phases.map((p) => [p.id, p.name])), [row.phases]);
+  return (
+    <div className="flex min-w-0 flex-col gap-3">
+      <PhaseRail
+        phases={row.phases}
+        selectedId={selectedId}
+        onSelect={(id) => setPinned((prev) => (prev === id ? null : id))}
+      />
+      {selected && (
+        <PhaseFocus
+          // Keyed per phase so moving the focus is visible as a change — the
+          // incoming panel plays the card entrance; reduced motion resolves
+          // instantly via the global kill switch.
+          key={selected.id}
+          pill={selected}
+          index={selectedIndex}
+          phaseNames={phaseNames}
+          instanceId={row.instanceId}
+          gate={row.gate}
+          approve={approve}
+          revise={revise}
+          reviseLabel={row.failure?.kind === "restarted" ? "Retry" : "Revise"}
+          liveActivity={liveActivity}
+          now={now}
+          rowModel={row.model}
+          onOpenStep={(step, phaseName, reason, originY) =>
+            onOpenStep({ step, pipelineName: row.name, phaseName, reason, originY })
+          }
         />
       )}
     </div>
@@ -441,40 +548,18 @@ function Row({
                 </span>
               </div>
             )}
-            {/* A branching shape is supplementary. The phase grid below remains
-                the complete, interactive view for linear and branching runs. */}
-            <PhaseGraph phases={row.phases} />
-            <ol
-              aria-label={
-                multi ? `Phases for instance ${row.instanceLabel ?? row.instanceId}` : "Phases"
-              }
-              data-testid="phase-grid"
-              className="mt-3 grid min-w-0 gap-x-3.5 gap-y-4"
-              style={{
-                gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))",
-              }}
-            >
-              {row.phases.map((pill, phaseIndex) => (
-                <li key={pill.id} className="flex min-w-0 flex-col gap-2.5">
-                  <PhaseHeader pill={pill} index={phaseIndex} />
-                  <div className="h-[2px] rounded-full bg-line" />
-                  <PhaseCell
-                    pill={pill}
-                    instanceId={row.instanceId}
-                    gate={row.gate}
-                    approve={approve}
-                    revise={revise}
-                    reviseLabel={row.failure?.kind === "restarted" ? "Retry" : "Revise"}
-                    liveActivity={liveActivity}
-                    now={now}
-                    rowModel={row.model}
-                    onOpenStep={(step, phaseName, reason, originY) =>
-                      onOpenStep({ step, pipelineName: row.name, phaseName, reason, originY })
-                    }
-                  />
-                </li>
-              ))}
-            </ol>
+            {/* The rail is the whole pipeline at a glance — statuses, stages,
+                gates, step progress — and the focus panel under it renders one
+                phase's step tiles at a time, following the action unless a chip
+                is pinned. The complete view for linear and branching runs. */}
+            <InstanceBoard
+              row={row}
+              approve={approve}
+              revise={revise}
+              liveActivity={liveActivity}
+              now={now}
+              onOpenStep={onOpenStep}
+            />
           </section>
         ))}
       </div>
