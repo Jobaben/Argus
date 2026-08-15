@@ -154,17 +154,33 @@ present-but-unparseable file is refused rather than replaced.
 
 ## `~/.qwen/projects/<encoded-cwd>/chats/<session-id>.jsonl` — Qwen Code transcripts
 
-Filed by project the way Claude Code's are, one directory deeper. The line shape
-is Gemini CLI's rather than Claude Code's — `message.parts[]` instead of
-`message.content[]`, `type: "system"` carrying telemetry — so Argus does not yet
-read these back into the Sessions view (`transcripts: false` on the runtime).
-Live activity during a run comes off the `-o stream-json` stream instead, which
-_is_ Claude-shaped.
+Filed by project the way Claude Code's are, one directory deeper, and with the
+**same** encoding of the working directory into a path segment — so a Qwen
+session resolves from `(project, sessionId)` exactly as a Claude one does, and a
+Claude and a Qwen session from the same directory share a project segment
+without shadowing each other (both ids are UUIDs).
 
 ```jsonc
-{ "uuid": "…", "parentUuid": null, "sessionId": "…", "timestamp": "…", "type": "user",      "cwd": "/srv/app", "message": { "role": "user",  "parts": [{ "text": "…" }] } }
-{ "uuid": "…", "parentUuid": "…",  "sessionId": "…", "timestamp": "…", "type": "assistant", "cwd": "/srv/app", "message": { "role": "model", "parts": [{ "text": "…" }] } }
+{ "uuid": "…", "parentUuid": null, "sessionId": "…", "timestamp": "…", "type": "user",        "cwd": "/srv/app", "message": { "role": "user",  "parts": [{ "text": "…" }] } }
+{ "uuid": "…", "parentUuid": "…",  "sessionId": "…", "timestamp": "…", "type": "system",      "cwd": "/srv/app", "subtype": "ui_telemetry", "systemPayload": { "uiEvent": { "model": "qwen3-27b", … } } }
+{ "uuid": "…", "parentUuid": "…",  "sessionId": "…", "timestamp": "…", "type": "assistant",   "cwd": "/srv/app", "message": { "role": "model", "parts": [{ "functionCall": { "name": "run_shell_command", "args": { … } } }] } }
+{ "uuid": "…", "parentUuid": "…",  "sessionId": "…", "timestamp": "…", "type": "tool_result", "cwd": "/srv/app", "message": { "role": "user",  "parts": [{ "functionResponse": { "name": "…", "response": { "output": "…" } } }] } }
+{ "uuid": "…", "parentUuid": "…",  "sessionId": "…", "timestamp": "…", "type": "assistant",   "cwd": "/srv/app", "message": { "role": "model", "parts": [{ "text": "…" }] } }
 ```
+
+The line shape is Gemini CLI's rather than Claude Code's — `message.parts[]`
+instead of `message.content[]`, `functionCall` / `functionResponse` instead of
+`tool_use` / `tool_result` blocks, `role: "model"` for the assistant, and
+`type: "system"` lines that are telemetry rather than conversation.
+`server/src/sources/qwenSessions.ts` translates these into the Claude line shape
+so one set of readers serves all three sources. The telemetry lines are kept
+rather than dropped: they are the only place the model name is recorded, and
+every line carries the run's `cwd`. A `tool_result` line comes through flagged
+`isMeta`, so a shell transcript can never become the session's title.
+
+Note the asymmetry with the live stream: `qwen -o stream-json` emits Claude
+Code's envelope verbatim, which is why the runtime's activity derivation needs
+no translation at all. Only the file on disk is in Gemini's dialect.
 
 ## `~/.local/share/opencode/opencode.db` — OpenCode sessions
 

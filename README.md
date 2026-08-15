@@ -56,6 +56,7 @@ the absolute paths embedded in the data files (those can be from another OS).
 | pipeline outcome signal  | `Stop` hook in `settings.json` | `[[hooks.stop]]` in `config.toml`     | _none — read off the run_       | `Stop` hook in `settings.json`     |
 | Argus-owned instructions | `--append-system-prompt`       | prepended to the prompt               | prepended to the prompt         | prepended to the prompt            |
 | transcripts on disk      | `projects/<proj>/<id>.jsonl`   | `sessions/YYYY/MM/DD/rollout-*.jsonl` | a private SQLite database       | `projects/<proj>/chats/<id>.jsonl` |
+| readable in Sessions     | yes                            | yes (translated)                      | no — see below                  | yes (translated)                   |
 
 Four differences survive the mapping, and Argus reports them rather than
 papering over them:
@@ -79,12 +80,14 @@ papering over them:
 - **OpenCode keeps transcripts in SQLite.** Its sessions live in a private
   schema rather than per-session JSONL, so the Sessions view has nothing to read
   back and says so. Live activity during the run is unaffected — that comes off
-  the event stream.
+  the event stream. (Qwen Code writes ordinary per-session JSONL, one directory
+  deeper than Claude Code and in Gemini CLI's dialect; Argus translates it.)
 
 Everything else is at parity: live activity in the Command Center, the Flight
 Recorder, gated phases, retries, the Chronicle, monitors and issues. The
-Sessions transcript view covers Claude Code and Codex (rollouts are translated
-into the same shape).
+Sessions transcript view covers three of the four — Codex rollouts and Qwen
+Code's Gemini-dialect chats are both translated into Claude Code's line shape on
+read, so one list, one detail view, one search and one exporter serve them all.
 
 **Local models.** OpenCode and Qwen Code are the two runtimes that talk to an
 OpenAI-compatible endpoint, which is what makes a GPU in the next room usable
@@ -240,16 +243,17 @@ docker run --rm -p 7777:7777 \
 
 Under `~/.claude` unless noted:
 
-| Source            | Path                                           | Feeds                                 |
-| ----------------- | ---------------------------------------------- | ------------------------------------- |
-| Background agents | `jobs/<short>/state.json`, `timeline.jsonl`    | status, tempo, progress, results      |
-| Live workers      | `daemon/roster.json`, `daemon.status.json`     | which agents are alive right now      |
-| Transcripts       | `projects/<proj>/<session>.jsonl`              | Sessions list + full transcript view  |
-| Codex transcripts | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | the same list, view and search        |
-| Prompt history    | `history.jsonl`                                | global activity feed                  |
-| Tasks             | `tasks/<id>/`                                  | task-queue metadata                   |
-| Argus schedules   | `argus/schedules.json`                         | Scheduler triggers + run history      |
-| Argus pipelines   | `argus/pipelines.json`, `argus/instances/`     | multi-phase pipeline defs + instances |
+| Source            | Path                                            | Feeds                                 |
+| ----------------- | ----------------------------------------------- | ------------------------------------- |
+| Background agents | `jobs/<short>/state.json`, `timeline.jsonl`     | status, tempo, progress, results      |
+| Live workers      | `daemon/roster.json`, `daemon.status.json`      | which agents are alive right now      |
+| Transcripts       | `projects/<proj>/<session>.jsonl`               | Sessions list + full transcript view  |
+| Codex transcripts | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`  | the same list, view and search        |
+| Qwen transcripts  | `~/.qwen/projects/<proj>/chats/<session>.jsonl` | the same list, view and search        |
+| Prompt history    | `history.jsonl`                                 | global activity feed                  |
+| Tasks             | `tasks/<id>/`                                   | task-queue metadata                   |
+| Argus schedules   | `argus/schedules.json`                          | Scheduler triggers + run history      |
+| Argus pipelines   | `argus/pipelines.json`, `argus/instances/`      | multi-phase pipeline defs + instances |
 
 **Argus's Scheduler** fires its own headless runs (`claude -p`, `codex exec`,
 `opencode run` or `qwen`)

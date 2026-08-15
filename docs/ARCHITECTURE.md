@@ -123,6 +123,9 @@ src/
     types.ts           — re-exports the agent contract + the on-disk JobState
     jobs.ts daemon.ts sessions.ts history.ts projects.ts
     stats.ts inventory.ts tasks.ts search.ts cron.ts
+    codexSessions.ts qwenSessions.ts
+                       — one translator per foreign transcript dialect, so the
+                         session readers above stay a single code path
     insight.ts         — the board situation (derived)
     palette.ts         — the command palette index (derived)
   watch.ts             — chokidar → debounced change callback
@@ -166,7 +169,8 @@ server knows which one is running:
   (`reportsCost: false`); for supported OpenAI models Argus derives a
   public-list-price estimate from the input/cached/output breakdown, and unknown
   model prices stay null. OpenCode exposes no command hook (`signalHook: false`)
-  and files its transcripts in SQLite (`transcripts: false`).
+  and files its transcripts in SQLite (`transcripts: false`) — the one runtime
+  whose sessions the transcript views cannot show.
 
 A fifth question is answered off the capability list, because only the pipeline
 engine asks it: **may a phase's outcome be read off the finished run record?**

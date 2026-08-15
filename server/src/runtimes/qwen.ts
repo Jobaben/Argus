@@ -37,6 +37,12 @@
  *   * **No emitted dollar figure.** The result envelope carries token counts
  *     and no cost, which is the honest answer for a locally served model:
  *     `costUsd` stays null rather than being invented.
+ *
+ * The transcripts on disk are the one place the two dialects diverge: the file
+ * is filed the way Claude Code files one, but its lines are Gemini CLI's
+ * (`message.parts[]`, `functionCall`, `role: "model"`). `sources/qwenSessions.ts`
+ * translates them, so the Sessions view, transcript search and the Flight
+ * Recorder read a Qwen run exactly as they read a Claude one.
  */
 
 import { qwenHome } from "../qwenHome.js";
@@ -230,7 +236,7 @@ export const qwenRuntime: AgentRuntime = {
     reportsTokens: true,
     signalHook: true,
     liveActivity: true,
-    transcripts: false,
+    transcripts: true,
   },
   // Whatever the endpoint serves; a local install has exactly one model loaded
   // and naming a second one would only produce a run that cannot start.

@@ -161,6 +161,9 @@ test("Qwen Code declares the gaps the UI has to explain", () => {
   assert.equal(qwenRuntime.outcomeFromRecord, false);
   // It mints its own session id and reports tokens, not dollars.
   assert.equal(qwenRuntime.capabilities.presetSessionId, false);
+  // Its transcripts are filed like Claude Code's and translated on read, so the
+  // Sessions view has something to show.
+  assert.equal(qwenRuntime.capabilities.transcripts, true);
   assert.equal(qwenRuntime.capabilities.reportsTokens, true);
   assert.equal(qwenRuntime.capabilities.reportsCost, false);
   // No per-run reasoning flag: effort is a property of the served model.

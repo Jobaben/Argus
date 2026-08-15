@@ -2,6 +2,7 @@ import chokidar from "chokidar";
 import path from "node:path";
 import { claudeHome, paths } from "./claudeHome.js";
 import { codexPaths } from "./codexHome.js";
+import { qwenPaths } from "./qwenHome.js";
 import { log } from "./log.js";
 
 /**
@@ -49,7 +50,7 @@ export function watchSchedules(onChange: () => void): () => Promise<void> {
  *  Codex rollout is nested a day deep (`sessions/YYYY/MM/DD/`), which is inside
  *  the shared watcher's depth limit. */
 export function watchSessions(onChange: () => void): () => Promise<void> {
-  return makeWatcher([paths.projects(), codexPaths.sessions()], onChange);
+  return makeWatcher([paths.projects(), codexPaths.sessions(), qwenPaths.projects()], onChange);
 }
 
 /** Watches the installed extensions + usage stats so the Inventory and Stats

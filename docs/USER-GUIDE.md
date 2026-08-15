@@ -1,8 +1,8 @@
 # 👁️ Argus — User Guide
 
 **What Argus is:** a dashboard and control plane over your local agent state —
-`~/.claude` for Claude Code, `~/.codex` for Codex, and the homes Qwen Code and
-OpenCode keep. It watches the files those CLIs already write (background jobs,
+`~/.claude` for Claude Code, `~/.codex` for Codex, `~/.qwen` for Qwen Code, and
+the XDG data directory OpenCode keeps. It watches the files those CLIs already write (background jobs,
 transcripts, history, stats) and turns them into a live web view — and it can
 fire its own scheduled and pipelined runs on top, on **any** of them.
 
@@ -19,7 +19,9 @@ and for the honest gaps: only Claude Code takes a session id from Argus (on the
 others the transcript link appears once the run starts, not before), Codex and
 Qwen Code report tokens rather than dollars (so a USD budget ceiling only
 constrains the runtimes that price their runs), and OpenCode has neither a
-command hook nor readable transcripts.
+command hook nor transcripts Argus can read back (its sessions live in a private
+SQLite database, so they never reach the Sessions tab — everything else about an
+OpenCode run does).
 
 **Local models.** OpenCode and Qwen Code talk to OpenAI-compatible endpoints, so
 a model you serve yourself — `llama-server`, Ollama, vLLM — is a runtime like
@@ -852,8 +854,11 @@ _Browse & read transcripts._ Route: `#/sessions`
 
 ![Sessions](screenshots/sessions.png)
 
-**Purpose:** read the actual conversation transcripts of your Claude Code
-sessions across all projects.
+**Purpose:** read the actual conversation transcripts of your agent sessions
+across all projects — Claude Code's, Codex's rollouts and Qwen Code's chats
+alike. The latter two are written in their own CLI's vocabulary and translated
+on read, so one list and one reader serve all three; only OpenCode is absent,
+because it keeps its sessions in a private database rather than as files.
 
 **What you see:** a count of transcripts and the projects they span, then cards
 **grouped by day** — Today, Yesterday, the weekday within the last week, the date
@@ -1890,7 +1895,7 @@ are polled once per scheduler tick, with a four-second timeout and no retries.
 | **Search**          | Where did I say/see _that_?                | all `projects/*/*.jsonl`                    |
 | **Agents**          | What's running / done / failed right now?  | `jobs/*/state.json` + `daemon/roster.json`  |
 | **Detail**          | How did _this_ agent get here?             | `jobs/<short>/timeline.jsonl`               |
-| **Sessions**        | What was actually said in a conversation?  | `projects/*/*.jsonl`                        |
+| **Sessions**        | What was actually said in a conversation?  | `projects/*/*.jsonl` + Codex / Qwen homes   |
 | **Activity**        | What have I prompted lately, everywhere?   | `history.jsonl`                             |
 | **Projects**        | Which folders are active, and when?        | `projects/*/`                               |
 | **Stats**           | What's my usage / cost / token spend?      | `stats/stats-cache.json`                    |

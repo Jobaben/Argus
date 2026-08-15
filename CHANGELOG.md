@@ -82,6 +82,40 @@ All notable changes to Argus are documented here. The format follows
   only to add its own group, leaves every other key alone, and refuses a
   present-but-unparseable file rather than replacing it.
 
+  **Qwen Code transcripts read back into the Sessions view.** Qwen Code files
+  transcripts almost exactly where Claude Code does — one directory deeper, at
+  `projects/<encoded-cwd>/chats/<id>.jsonl`, with the same encoding of the
+  working directory into a path segment — so a session resolves from
+  `(project, sessionId)` the way a Claude one does, needs no reserved bucket the
+  way a Codex rollout does, and groups by working directory for free. A Claude
+  and a Qwen session from the same directory share a project segment without
+  shadowing each other, since both ids are UUIDs and Claude's path is tried
+  first.
+
+  Only the _file_ is foreign. Qwen Code inherits Gemini CLI's message vocabulary
+  — `message.parts[]` for `message.content[]`, `functionCall` /
+  `functionResponse` for `tool_use` / `tool_result`, `role: "model"` for the
+  assistant, and `type: "system"` lines that are telemetry rather than
+  conversation — so `sources/qwenSessions.ts` translates it, and the list,
+  detail view, live tail, transcript search, Markdown export and Flight Recorder
+  all read a Qwen run through the code path they already had. The telemetry
+  lines are kept rather than dropped, because they are the only place the model
+  name is recorded; a `tool_result` line comes through flagged `isMeta` so a
+  shell transcript can never become a session's title. That the _live_ stream
+  needs no translation at all — `-o stream-json` is Claude Code's envelope
+  verbatim — remains the odd asymmetry of this runtime.
+
+  The two-way `codex: boolean` that used to decide how a transcript was read
+  became a `TranscriptKind`, which is what kept adding a third source from
+  meaning a third branch in the summarizer, the resolver, the tail and the
+  search scanner.
+
+  This turned up a real bug in transcript search: `listTranscriptFiles` gave up
+  entirely when `~/.claude/projects` was missing, which is the ordinary state of
+  a Codex-only or Qwen-only machine — so search came back empty rather than
+  searching the transcripts that were there. A missing Claude directory is now
+  "no Claude transcripts", not "stop".
+
   Two smaller things fell out of it. Model identifiers may now contain `/`,
   which OpenCode requires to address a model as `<provider>/<model>` and which
   is neither a shell metacharacter nor a flag introducer. And the web's nine

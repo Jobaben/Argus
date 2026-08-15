@@ -153,7 +153,7 @@ reloading picks it up.
         "reportsTokens": true,
         "signalHook": true,
         "liveActivity": true,
-        "transcripts": false
+        "transcripts": true
       }
     }
   ]
@@ -169,7 +169,11 @@ reported token classes and public API prices, and unknown model prices stay
 null; `signalHook: false` (OpenCode) means a pipeline phase completes from the
 `ARGUS_OUTCOME` marker on the finished run record rather than from a pushed
 signal, so it advances on the next reconcile tick; and `transcripts: false`
-means the Sessions view has nothing to read back for that runtime.
+means the Sessions view has nothing to read back for that runtime — true only of
+OpenCode, whose sessions live in a private SQLite schema. Codex rollouts and
+Qwen Code chats are translated into Claude Code's line shape on read, so the
+list, detail, search and Markdown export routes cover them without a second
+code path.
 
 `models` is what the picker offers, and is free text besides. OpenCode addresses
 a model as `<provider>/<model>`, so the list is empty until
