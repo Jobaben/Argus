@@ -1,9 +1,10 @@
 # Argus — Data Model Reference
 
 Empirically observed shapes of the files Argus reads — `~/.claude` for Claude
-Code, `~/.codex` for Codex. Verified against a live home directory on
-2026-06-16. Treat every field as optional and read defensively — CLI versions
-vary and files are written incrementally.
+Code, `~/.codex` for Codex, `~/.qwen` for Qwen Code and the XDG data dir for
+OpenCode. Verified against a live home directory on 2026-06-16, and against
+OpenCode 1.18 / Qwen Code 0.21 on 2026-08-15. Treat every field as optional and
+read defensively — CLI versions vary and files are written incrementally.
 
 ## `jobs/<short>/state.json` — background job state
 
@@ -129,6 +130,48 @@ skip injected instructions.
 TOML. Argus reads it to check whether its stop hook is registered, and
 **appends** a `[[hooks.stop]]` block when it isn't — never a rewrite, so
 comments and ordering survive. See ARCHITECTURE §1.
+
+## `~/.qwen/settings.json` — Qwen Code configuration
+
+JSON, and the hook schema is **Claude Code's**, key for key:
+
+```jsonc
+{
+  "hooks": {
+    "Stop": [
+      { "matcher": "", "hooks": [{ "type": "command", "command": "node \"…/argus-signal.mjs\"" }] },
+    ],
+  },
+}
+```
+
+The payload that hook receives is Claude Code's too — `last_assistant_message`,
+`background_tasks`, `session_id`, `transcript_path` — which is why one
+`argus-signal.mjs` serves both and needs no branch for this runtime. Argus reads
+the file to check its own registration and rewrites it only to add that one
+group, leaving every other key (and any hook the operator registered) intact; a
+present-but-unparseable file is refused rather than replaced.
+
+## `~/.qwen/projects/<encoded-cwd>/chats/<session-id>.jsonl` — Qwen Code transcripts
+
+Filed by project the way Claude Code's are, one directory deeper. The line shape
+is Gemini CLI's rather than Claude Code's — `message.parts[]` instead of
+`message.content[]`, `type: "system"` carrying telemetry — so Argus does not yet
+read these back into the Sessions view (`transcripts: false` on the runtime).
+Live activity during a run comes off the `-o stream-json` stream instead, which
+_is_ Claude-shaped.
+
+```jsonc
+{ "uuid": "…", "parentUuid": null, "sessionId": "…", "timestamp": "…", "type": "user",      "cwd": "/srv/app", "message": { "role": "user",  "parts": [{ "text": "…" }] } }
+{ "uuid": "…", "parentUuid": "…",  "sessionId": "…", "timestamp": "…", "type": "assistant", "cwd": "/srv/app", "message": { "role": "model", "parts": [{ "text": "…" }] } }
+```
+
+## `~/.local/share/opencode/opencode.db` — OpenCode sessions
+
+SQLite (plus `-wal` / `-shm`), not JSONL: a private schema Argus does not read,
+which is what `transcripts: false` on that runtime reports. Its configuration
+lives elsewhere again, in `~/.config/opencode/opencode.json`, where the provider
+list defines the `<provider>/<model>` ids the model picker accepts.
 
 ## `history.jsonl` — global prompt history
 

@@ -1,3 +1,4 @@
+import { runtimeLabel } from "../useRuntimes";
 import type { AgentRuntimeId } from "../types";
 
 /**
@@ -20,13 +21,13 @@ export function RuntimeBadge({
   title?: string;
 }) {
   if (!runtime || (baseline && runtime === baseline)) return null;
-  const label = runtime === "codex" ? "codex" : "claude";
+  const named = runtimeLabel(runtime);
   return (
     <span
       className="rounded border border-line px-1 py-px font-mono text-[10px] uppercase tracking-wide text-ink-faint"
-      title={title ?? `Run by the ${runtime === "codex" ? "Codex" : "Claude Code"} CLI`}
+      title={title ?? (named ? `Run by the ${named} CLI` : `Run by the ${runtime} CLI`)}
     >
-      {label}
+      {runtime}
     </span>
   );
 }

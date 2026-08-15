@@ -17,6 +17,13 @@ import {
   installCodexStopHook,
   readCodexConfig,
 } from "./codexConfig.js";
+import {
+  copyQwenHookFile,
+  hasArgusStopHook as qwenHasArgusStopHook,
+  installQwenStopHook,
+  readQwenSettings,
+} from "./qwenSettings.js";
+import { qwenPaths } from "../qwenHome.js";
 import type { AgentRuntimeId, PrereqResult, PrereqStatus } from "@argus/contracts";
 
 export type { PrereqResult, PrereqStatus } from "@argus/contracts";
@@ -119,6 +126,14 @@ async function copyHookFile(): Promise<void> {
 /** True only when the hook installed under `~/.codex/hooks` matches the repo's. */
 async function installedCodexHookMatchesRepo(): Promise<boolean> {
   const installed = await fileHash(path.join(codexPaths.hooksDir(), "argus-signal.mjs"));
+  if (installed === null) return false;
+  const repo = await fileHash(REPO_HOOK_SRC);
+  return repo !== null && installed === repo;
+}
+
+/** True only when the hook installed under `~/.qwen/hooks` matches the repo's. */
+async function installedQwenHookMatchesRepo(): Promise<boolean> {
+  const installed = await fileHash(path.join(qwenPaths.hooksDir(), "argus-signal.mjs"));
   if (installed === null) return false;
   const repo = await fileHash(REPO_HOOK_SRC);
   return repo !== null && installed === repo;
@@ -414,6 +429,80 @@ const REGISTRY: Prerequisite[] = [
     },
   },
   {
+    id: "opencode-cli",
+    label: "OpenCode CLI on PATH",
+    fixable: false,
+    async check() {
+      if (!(await runtimesInUse()).has("opencode")) {
+        return notInUse("opencode-cli", "OpenCode CLI on PATH", false, "OpenCode");
+      }
+      const cli = runtimeFor("opencode");
+      const probe = probeCommand(cli.bin(), cli.versionArgs);
+      return {
+        id: "opencode-cli",
+        label: "OpenCode CLI on PATH",
+        fixable: false,
+        status: probe.ok ? "ok" : "error",
+        detail: probe.ok
+          ? undefined
+          : `\`${cli.bin()}\` ${probe.reason}. Install the OpenCode CLI (\`npm i -g opencode-ai\`).`,
+      };
+    },
+  },
+  {
+    id: "qwen-cli",
+    label: "Qwen Code CLI on PATH",
+    fixable: false,
+    async check() {
+      if (!(await runtimesInUse()).has("qwen")) {
+        return notInUse("qwen-cli", "Qwen Code CLI on PATH", false, "Qwen Code");
+      }
+      const cli = runtimeFor("qwen");
+      const probe = probeCommand(cli.bin(), cli.versionArgs);
+      return {
+        id: "qwen-cli",
+        label: "Qwen Code CLI on PATH",
+        fixable: false,
+        status: probe.ok ? "ok" : "error",
+        detail: probe.ok
+          ? undefined
+          : `\`${cli.bin()}\` ${probe.reason}. Install the Qwen Code CLI (\`npm i -g @qwen-code/qwen-code\`).`,
+      };
+    },
+  },
+  {
+    // The Qwen Code counterpart of `signal-stop-hook`. Same hook file, same
+    // settings.json schema, a different home — and, like Codex, no PreToolUse
+    // twin, because Qwen Code has no AskUserQuestion tool to match on.
+    id: "qwen-signal-hook",
+    label: "Qwen Code signal stop hook",
+    fixable: true,
+    async check() {
+      if (!(await runtimesInUse()).has("qwen")) {
+        return notInUse("qwen-signal-hook", "Qwen Code signal stop hook", true, "Qwen Code");
+      }
+      const registered = qwenHasArgusStopHook(await readQwenSettings());
+      const fresh = await installedQwenHookMatchesRepo();
+      const status: PrereqStatus = !registered ? "missing" : !fresh ? "outdated" : "ok";
+      return {
+        id: "qwen-signal-hook",
+        label: "Qwen Code signal stop hook",
+        fixable: true,
+        status,
+        detail:
+          status === "missing"
+            ? "Qwen Code pipeline phases can't complete without this hook."
+            : status === "outdated"
+              ? "Installed hook differs from the shipped version — runs may mis-report their outcome. Apply fixes to refresh it."
+              : undefined,
+      };
+    },
+    async apply() {
+      await copyQwenHookFile(REPO_HOOK_SRC);
+      await installQwenStopHook();
+    },
+  },
+  {
     id: "node-runtime",
     label: "Node on PATH",
     fixable: false,
@@ -507,9 +596,12 @@ const CRITICAL_IDS = new Set([
   "signal-stop-hook",
   "gate-pretooluse-hook",
   "codex-signal-hook",
+  "qwen-signal-hook",
   "argus-data-dir",
   "claude-cli",
   "codex-cli",
+  "opencode-cli",
+  "qwen-cli",
   "node-runtime",
 ]);
 
@@ -563,6 +655,11 @@ export async function repairSafeFixables(): Promise<void> {
     await copyCodexHookFile(REPO_HOOK_SRC);
   } catch {
     /* idem — a machine without ~/.codex simply has nothing to refresh */
+  }
+  try {
+    await copyQwenHookFile(REPO_HOOK_SRC);
+  } catch {
+    /* idem — a machine without ~/.qwen simply has nothing to refresh */
   }
   try {
     await ensureDataDirs();

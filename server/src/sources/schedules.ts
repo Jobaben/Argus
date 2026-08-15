@@ -3,7 +3,7 @@ import { paths } from "../claudeHome.js";
 import { nextFireAfter, parseHHMM } from "./nextFire.js";
 import { createJsonArrayStore } from "./jsonArrayStore.js";
 import { RubricValidationError, validateRubric } from "./verdict.js";
-import { isRuntimeId } from "../runtimes/index.js";
+import { isRuntimeId, runtimeIdList } from "../runtimes/index.js";
 import type { Schedule, Trigger } from "./scheduleTypes.js";
 import type { AgentRuntimeId, ReasoningEffort, Rubric } from "@argus/contracts";
 
@@ -37,7 +37,9 @@ export interface ScheduleInput {
   reasoningEffort?: ReasoningEffort | null;
 }
 
-const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+// Same rule as the pipeline validator: identifier characters only, plus the `/`
+// OpenCode needs to address a model as `<provider>/<model>`.
+const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
 const REASONING_EFFORTS = new Set<ReasoningEffort>(["minimal", "low", "medium", "high", "xhigh"]);
 
 function modelOrThrow(raw: unknown): string | null {
@@ -62,7 +64,7 @@ function reasoningEffortOrThrow(raw: unknown): ReasoningEffort | null {
  *  known runtime, so a typo is a 400 rather than a silent fall-back. */
 function runtimeOrThrow(raw: unknown): AgentRuntimeId | null {
   if (raw === null || raw === undefined) return null;
-  if (!isRuntimeId(raw)) throw new ScheduleValidationError("runtime must be claude | codex");
+  if (!isRuntimeId(raw)) throw new ScheduleValidationError(`runtime must be ${runtimeIdList()}`);
   return raw;
 }
 

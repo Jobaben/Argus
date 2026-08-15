@@ -1,5 +1,5 @@
 import { existsSync, statSync } from "node:fs";
-import { isRuntimeId } from "../runtimes/index.js";
+import { isRuntimeId, runtimeIdList } from "../runtimes/index.js";
 import type { AgentRuntimeId, ReasoningEffort } from "@argus/contracts";
 
 /** Runs fired ad hoc from the Launch tab share one run bucket: they are pruned
@@ -43,7 +43,7 @@ export function validateLaunchInput(raw: unknown): LaunchInput {
     throw new LaunchValidationError("model must be a non-empty string");
   }
   if (r.runtime !== undefined && r.runtime !== null && !isRuntimeId(r.runtime)) {
-    throw new LaunchValidationError("runtime must be claude | codex");
+    throw new LaunchValidationError(`runtime must be ${runtimeIdList()}`);
   }
   const efforts: ReasoningEffort[] = ["minimal", "low", "medium", "high", "xhigh"];
   if (r.reasoningEffort !== undefined && !efforts.includes(r.reasoningEffort as ReasoningEffort)) {

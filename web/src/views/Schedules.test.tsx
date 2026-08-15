@@ -33,7 +33,8 @@ vi.mock("../useRuns", () => ({
   useRuns: () => ({ runs: mockState.runs, loading: false, error: null }),
 }));
 
-vi.mock("../useRuntimes", () => ({
+vi.mock("../useRuntimes", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../useRuntimes")>()),
   useRuntimes: () => ({
     default: "claude",
     runtimes: [
@@ -53,7 +54,6 @@ vi.mock("../useRuntimes", () => ({
       },
     ],
   }),
-  runtimeLabel: (id: string) => (id === "codex" ? "Codex" : "Claude Code"),
 }));
 
 const schedule = (over: Partial<ScheduleWithNext> = {}): ScheduleWithNext => ({

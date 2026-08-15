@@ -21,15 +21,23 @@ Usage: argus [options]
 
 Options:
   --open         open the dashboard in your browser once the server is up
-  --agent <id>   default runtime: claude or codex (default: $ARGUS_AGENT or claude)
+  --agent <id>   default runtime: claude, codex, opencode or qwen
+                 (default: $ARGUS_AGENT or claude)
   --port <n>     port to serve on (default: $ARGUS_PORT or 7777)
   --rebuild      rebuild the UI and server even if a build already exists
   --version      print the Argus version
   --help         show this help
 
 Environment: ARGUS_PORT, ARGUS_HOST, ARGUS_TOKEN, ARGUS_CLAUDE_HOME,
-ARGUS_CODEX_HOME, ARGUS_AGENT (claude|codex) and every other server variable
-are honoured as usual (see the README's Configuration table).`;
+ARGUS_CODEX_HOME, ARGUS_OPENCODE_HOME, ARGUS_QWEN_HOME, ARGUS_AGENT
+(claude|codex|opencode|qwen) and every other server variable are honoured as
+usual (see the README's Configuration table).`;
+
+// The runtime ids the server registry knows. Duplicated here rather than
+// imported because this launcher runs before anything is built — but a value
+// that slips through is only ever ARGUS_AGENT, which the server itself
+// re-validates and falls back to Claude Code for.
+const AGENTS = ["claude", "codex", "opencode", "qwen"];
 
 function fail(msg) {
   console.error(`[argus] ${msg}`);
@@ -52,8 +60,8 @@ function parseArgs(argv) {
       opts.rebuild = true;
     } else if (arg === "--agent" || arg.startsWith("--agent=")) {
       const agent = (arg.includes("=") ? arg.slice("--agent=".length) : argv[++i])?.toLowerCase();
-      if (agent !== "claude" && agent !== "codex")
-        fail(`--agent needs \"claude\" or \"codex\", got \"${agent ?? ""}\"`);
+      if (!AGENTS.includes(agent))
+        fail(`--agent needs one of ${AGENTS.join(", ")}, got \"${agent ?? ""}\"`);
       opts.agent = agent;
     } else if (arg === "--port" || arg.startsWith("--port=")) {
       const raw = arg.includes("=") ? arg.slice("--port=".length) : argv[++i];

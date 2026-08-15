@@ -6,7 +6,7 @@ import type { PhaseDef, PhaseStep, PipelineDefinition } from "./pipelineTypes.js
 import type { Trigger } from "./scheduleTypes.js";
 import { RubricValidationError, validateAutoApprove, validateRubric } from "./verdict.js";
 import { DagValidationError, validateDag } from "./dag.js";
-import { isRuntimeId } from "../runtimes/index.js";
+import { isRuntimeId, runtimeIdList } from "../runtimes/index.js";
 import type { AgentRuntimeId, ReasoningEffort } from "@argus/contracts";
 
 // The crash-safe, mutex-serialized single-file store (shared with schedules).
@@ -36,8 +36,11 @@ export interface PipelineInput {
 
 // Model names are passed as a `--model <value>` argv pair to the agent CLI.
 // Reject anything that could be mistaken for a flag (leading dash) or smuggle
-// shell metacharacters on the win32 shell:true path — only plain identifier chars.
-const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+// shell metacharacters on the win32 shell:true path — only plain identifier
+// chars, plus the `/` that OpenCode's `<provider>/<model>` addressing requires.
+// A slash is neither a shell metacharacter nor a flag introducer, and the first
+// character still has to be alphanumeric.
+const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
 const REASONING_EFFORTS = new Set<ReasoningEffort>(["minimal", "low", "medium", "high", "xhigh"]);
 
 function validateReasoningEffort(raw: unknown, ctx: string): ReasoningEffort {
@@ -53,7 +56,7 @@ function validateReasoningEffort(raw: unknown, ctx: string): ReasoningEffort {
 function validateRuntime(raw: unknown, ctx: string): AgentRuntimeId | undefined {
   if (raw === undefined || raw === null) return undefined;
   if (!isRuntimeId(raw)) {
-    throw new PipelineValidationError(`${ctx}: runtime must be claude | codex`);
+    throw new PipelineValidationError(`${ctx}: runtime must be ${runtimeIdList()}`);
   }
   return raw;
 }

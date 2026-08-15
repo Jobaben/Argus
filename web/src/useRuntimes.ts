@@ -9,6 +9,28 @@ import type { AgentRuntimeId, AgentRuntimeInfo, RuntimesResponse } from "./types
  * and step) ask for it at once. A module-level promise makes that one request
  * instead of a dozen, and keeps the pickers from flickering between mounts.
  */
+/**
+ * Every runtime id the client knows, with the display name and headless
+ * invocation that go with it.
+ *
+ * One table, because the alternative is what it replaced: a `=== "codex"`
+ * ternary in nine components, each of which silently renders a fifth runtime as
+ * "Claude Code" the day one is added. The roster from `/api/runtimes` is still
+ * the authority on what a *server* can run; this is only how those ids read.
+ */
+export const RUNTIME_META: Record<AgentRuntimeId, { label: string; command: string }> = {
+  claude: { label: "Claude Code", command: "claude -p" },
+  codex: { label: "Codex", command: "codex exec" },
+  opencode: { label: "OpenCode", command: "opencode run" },
+  qwen: { label: "Qwen Code", command: "qwen" },
+};
+
+export const RUNTIME_IDS = Object.keys(RUNTIME_META) as AgentRuntimeId[];
+
+function isRuntimeId(v: unknown): v is AgentRuntimeId {
+  return typeof v === "string" && Object.prototype.hasOwnProperty.call(RUNTIME_META, v);
+}
+
 let inflight: Promise<RuntimesResponse> | null = null;
 
 function load(): Promise<RuntimesResponse> {
@@ -20,7 +42,7 @@ function load(): Promise<RuntimesResponse> {
       // degrade to "no roster yet" rather than throwing inside a render.
       const body = (await r.json()) as Partial<RuntimesResponse> | null;
       return {
-        default: body?.default === "codex" ? "codex" : "claude",
+        default: isRuntimeId(body?.default) ? body.default : "claude",
         runtimes: Array.isArray(body?.runtimes) ? body.runtimes : [],
       } satisfies RuntimesResponse;
     })
@@ -73,9 +95,14 @@ export function useRuntimes(): RuntimesState {
   return state;
 }
 
-/** The display label for a runtime id, falling back to the id itself. */
+/** The display label for a runtime id; empty for an id this client can't name,
+ *  so a record written by a newer Argus renders as blank rather than as a lie. */
 export function runtimeLabel(id: AgentRuntimeId | null | undefined): string {
-  if (id === "codex") return "Codex";
-  if (id === "claude") return "Claude Code";
-  return "";
+  return isRuntimeId(id) ? RUNTIME_META[id].label : "";
+}
+
+/** The headless command a runtime is driven with, for the "what this will run"
+ *  hints on the Launch and Scheduler forms. */
+export function runtimeCommand(id: AgentRuntimeId | null | undefined): string {
+  return isRuntimeId(id) ? RUNTIME_META[id].command : RUNTIME_META.claude.command;
 }

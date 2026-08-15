@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { runtimeLabel } from "../useRuntimes";
 import { usePipelines } from "../usePipelines";
 import { useOverview } from "../useOverview";
 import { useAuth } from "../useAuth";
@@ -169,7 +170,7 @@ function PipelineCard({
                 className="rounded-md border border-line px-1.5 py-0.5 text-[11px] text-ink-dim"
                 title="Agent CLI this pipeline's steps run on, unless a phase or step overrides it"
               >
-                {def.runtime === "codex" ? "Codex" : "Claude Code"}
+                {runtimeLabel(def.runtime) || def.runtime}
               </span>
             )}
           </p>

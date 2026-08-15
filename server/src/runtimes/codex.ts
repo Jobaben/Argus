@@ -394,6 +394,10 @@ export const codexRuntime: AgentRuntime = {
   // default to name: let the CLI's own configuration decide unless an operator
   // sets ARGUS_ANALYSIS_MODEL.
   defaultAnalysisModel: () => "",
+  // Codex registers a stop hook, but its delivery is best-effort in a way
+  // Claude Code's is not — a sandboxed run can end without the hook ever
+  // running — so the marker on the run record backstops it.
+  outcomeFromRecord: true,
 
   batchPlan({ prompt, model, reasoningEffort, systemPrompt }: RunPlanOptions): SpawnPlan {
     return {

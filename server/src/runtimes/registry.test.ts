@@ -1,11 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  RUNTIMES,
+  RUNTIME_IDS,
   defaultRuntimeId,
   isRuntimeId,
   parseEnvelopeFor,
   resolveRuntimeId,
   runtimeFor,
+  runtimeIdList,
 } from "./index.js";
 
 const RESET = process.env.ARGUS_AGENT;
@@ -46,9 +49,20 @@ test("resolution is narrowest-wins, skipping absent overrides", () => {
 test("isRuntimeId rejects anything that isn't a known id", () => {
   assert.equal(isRuntimeId("claude"), true);
   assert.equal(isRuntimeId("codex"), true);
+  assert.equal(isRuntimeId("opencode"), true);
+  assert.equal(isRuntimeId("qwen"), true);
   assert.equal(isRuntimeId("CODEX"), false);
   assert.equal(isRuntimeId(undefined), false);
   assert.equal(isRuntimeId(7), false);
+  // The check is a lookup, so nothing inherited from Object may pass as an id.
+  assert.equal(isRuntimeId("constructor"), false);
+  assert.equal(isRuntimeId("toString"), false);
+});
+
+test("every registered runtime answers to its own id, under every id in the list", () => {
+  for (const id of RUNTIME_IDS) assert.equal(RUNTIMES[id].id, id);
+  assert.equal(RUNTIME_IDS.length, Object.keys(RUNTIMES).length);
+  assert.equal(runtimeIdList(), "claude | codex | opencode | qwen");
 });
 
 test("runtimeFor falls back to the default for an unrecognized id", () => {
@@ -80,6 +94,25 @@ test("parseEnvelopeFor recovers a mislabelled or unlabelled log", () => {
   // still has to parse, or its cost backfill would silently record nothing.
   assert.equal(parseEnvelopeFor(undefined, CODEX_LOG).tokens, 15);
   assert.equal(parseEnvelopeFor("codex", CLAUDE_LOG).result, "done");
+});
+
+const OPENCODE_LOG = [
+  '{"type":"text","sessionID":"ses_1","part":{"type":"text","text":"done"}}',
+  '{"type":"step_finish","sessionID":"ses_1","part":{"reason":"stop","tokens":{"input":10,"output":5},"cost":0.25}}',
+].join("\n");
+const QWEN_LOG = JSON.stringify({
+  type: "result",
+  session_id: "q7",
+  result: "done",
+  is_error: false,
+  usage: { input_tokens: 10, output_tokens: 5 },
+});
+
+test("parseEnvelopeFor reads the runtimes added after the first two", () => {
+  assert.equal(parseEnvelopeFor("opencode", OPENCODE_LOG).costUsd, 0.25);
+  assert.equal(parseEnvelopeFor("opencode", OPENCODE_LOG).sessionId, "ses_1");
+  assert.equal(parseEnvelopeFor("qwen", QWEN_LOG).sessionId, "q7");
+  assert.equal(parseEnvelopeFor("qwen", QWEN_LOG).tokens, 15);
 });
 
 test("parseEnvelopeFor returns the named runtime's empty answer for junk", () => {

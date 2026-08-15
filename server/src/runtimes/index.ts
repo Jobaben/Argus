@@ -12,6 +12,8 @@
 
 import { claudeRuntime } from "./claude.js";
 import { codexRuntime } from "./codex.js";
+import { opencodeRuntime } from "./opencode.js";
+import { qwenRuntime } from "./qwen.js";
 import { log } from "../log.js";
 import type { AgentRuntime, RunEnvelope } from "./types.js";
 import type { AgentRuntimeId } from "@argus/contracts";
@@ -25,18 +27,28 @@ export type {
 } from "./types.js";
 export { claudeRuntime, DEFAULT_ANALYSIS_MODEL, parseClaudeEnvelope } from "./claude.js";
 export { codexRuntime, codexSandbox, parseCodexEnvelope } from "./codex.js";
+export { opencodeRuntime, parseOpencodeEnvelope } from "./opencode.js";
+export { qwenRuntime, parseQwenEnvelope } from "./qwen.js";
 
 export const RUNTIMES: Record<AgentRuntimeId, AgentRuntime> = {
   claude: claudeRuntime,
   codex: codexRuntime,
+  opencode: opencodeRuntime,
+  qwen: qwenRuntime,
 };
 
-export const RUNTIME_IDS: AgentRuntimeId[] = ["claude", "codex"];
+export const RUNTIME_IDS: AgentRuntimeId[] = ["claude", "codex", "opencode", "qwen"];
 
 /** `"claude"` unless the value is a known id. Never throws — callers on the
  *  read path have to render *something* for a hand-edited JSON file. */
 export function isRuntimeId(v: unknown): v is AgentRuntimeId {
-  return v === "claude" || v === "codex";
+  return typeof v === "string" && Object.prototype.hasOwnProperty.call(RUNTIMES, v);
+}
+
+/** Human-readable list of the accepted ids, for validation messages that would
+ *  otherwise go stale every time a runtime is added. */
+export function runtimeIdList(): string {
+  return RUNTIME_IDS.join(" | ");
 }
 
 /**
@@ -52,7 +64,7 @@ export function defaultRuntimeId(): AgentRuntimeId {
   if (isRuntimeId(raw)) return raw;
   log.warn("ignoring invalid ARGUS_AGENT", {
     value: raw,
-    allowed: RUNTIME_IDS.join(" | "),
+    allowed: runtimeIdList(),
     using: "claude",
   });
   return "claude";

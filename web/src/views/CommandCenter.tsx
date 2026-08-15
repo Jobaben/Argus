@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { runtimeLabel } from "../useRuntimes";
 import { useMachineFacet } from "../fleet/useMachineFacet";
 import { MachinePicker, PeerBanner, PeerEmpty } from "../fleet/MachineFacet";
 import { useOverview } from "../useOverview";
@@ -232,7 +233,12 @@ function StepTile({
             {step.model && step.model !== rowModel && (
               <span title="Model running this step"> · {step.model}</span>
             )}
-            {step.runtime === "codex" && <span title="Run by the Codex CLI"> · codex</span>}
+            {step.runtime && step.runtime !== "claude" && (
+              <span title={`Run by the ${runtimeLabel(step.runtime) || step.runtime} CLI`}>
+                {" "}
+                · {step.runtime}
+              </span>
+            )}
           </div>
         </button>
         <StatusPill status={step.status} size="sm" />

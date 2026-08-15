@@ -1,3 +1,4 @@
+import { RUNTIME_IDS, RUNTIME_META } from "../useRuntimes";
 import type { AgentRuntimeId, AgentRuntimeInfo } from "../types";
 
 /**
@@ -38,10 +39,7 @@ export function RuntimeSelect({
           available: r.available,
           ...(r.detail ? { detail: r.detail } : {}),
         }))
-      : [
-          { id: "claude", label: "Claude Code", available: true },
-          { id: "codex", label: "Codex", available: true },
-        ];
+      : RUNTIME_IDS.map((id) => ({ id, label: RUNTIME_META[id].label, available: true }));
   const chosen = options.find((o) => o.id === value);
 
   return (
