@@ -24,7 +24,8 @@ vi.mock("../useLaunch", () => ({
   }),
 }));
 
-vi.mock("../useRuntimes", () => ({
+vi.mock("../useRuntimes", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../useRuntimes")>()),
   useRuntimes: () => ({
     default: "claude",
     runtimes: [

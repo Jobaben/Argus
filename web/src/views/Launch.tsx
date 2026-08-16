@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useLaunch } from "../useLaunch";
-import { useRuntimes } from "../useRuntimes";
+import { runtimeCommand, useRuntimes } from "../useRuntimes";
 import type { AgentRuntimeId, LaunchInput, Run } from "../types";
 import {
   AlertStrip,
@@ -37,7 +37,7 @@ function LaunchForm({
   const active: AgentRuntimeId = form.runtime ?? defaultRuntime;
   const runtimeInfo = runtimes.find((r) => r.id === active);
   const aliases = runtimeInfo?.models;
-  const command = active === "codex" ? "codex exec" : "claude -p";
+  const command = runtimeCommand(active);
 
   const submit = async () => {
     setBusy(true);
@@ -158,9 +158,11 @@ export default function Launch() {
   return (
     <Page title="Launch">
       <p className="mb-4 max-w-prose text-sm text-ink-dim">
-        Fire a single headless agent run right now — <span className="font-mono">claude -p</span> or{" "}
-        <span className="font-mono">codex exec</span>, your pick — with no schedule needed. The run
-        lands below with a live log, and everywhere else runs go: Chronicle, Issues, the Briefing.
+        Fire a single headless agent run right now — <span className="font-mono">claude -p</span>,{" "}
+        <span className="font-mono">codex exec</span>,{" "}
+        <span className="font-mono">opencode run</span> or <span className="font-mono">qwen</span>,
+        your pick — with no schedule needed. The run lands below with a live log, and everywhere
+        else runs go: Chronicle, Issues, the Briefing.
       </p>
 
       {error && (

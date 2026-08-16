@@ -82,9 +82,16 @@ export function parseClaudeEnvelope(stdout: string): RunEnvelope {
   }
 }
 
-/** Byte spans [start,end] of every balanced top-level `{...}` in `text`,
- *  ignoring braces inside JSON strings. */
-function topLevelObjectSpans(text: string): [number, number][] {
+/**
+ * Byte spans [start,end] of every balanced top-level `{...}` in `text`,
+ * ignoring braces inside JSON strings.
+ *
+ * Exported because it is the one reliable way to find a CLI's result object in
+ * a log that also carries stderr, may be truncated to its tail, and — for Qwen
+ * Code's `-o json` — prints every event of the run as one line-long JSON array.
+ * Array brackets are not tracked, so the objects *inside* one are found too.
+ */
+export function topLevelObjectSpans(text: string): [number, number][] {
   const spans: [number, number][] = [];
   let depth = 0;
   let start = -1;
@@ -137,8 +144,16 @@ function summarizeToolUse(name: string, input: Record<string, unknown>): string 
  * Map one `--output-format stream-json` line to zero or more activity events.
  * Unknown, malformed, and uninteresting lines (user/tool_result echoes) yield
  * nothing.
+ *
+ * Shared with Qwen Code, whose `-o stream-json` emits the same envelope — same
+ * `system`/`init`, `assistant` content blocks and closing `result` — so only
+ * the tool *vocabulary* differs, which is what `summarizeTool` supplies.
  */
-export function deriveClaudeActivity(line: string, at: string): ActivityEvent[] {
+export function deriveStreamJsonActivity(
+  line: string,
+  at: string,
+  summarizeTool: (name: string, input: Record<string, unknown>) => string,
+): ActivityEvent[] {
   let obj: Record<string, unknown>;
   try {
     obj = JSON.parse(line) as Record<string, unknown>;
@@ -165,7 +180,7 @@ export function deriveClaudeActivity(line: string, at: string): ActivityEvent[] 
         at,
         kind: "tool",
         label: clip(
-          prefix + summarizeToolUse(block.name, (block.input ?? {}) as Record<string, unknown>),
+          prefix + summarizeTool(block.name, (block.input ?? {}) as Record<string, unknown>),
         ),
       });
     } else if (block?.type === "text" && typeof block.text === "string" && block.text.trim()) {
@@ -173,6 +188,12 @@ export function deriveClaudeActivity(line: string, at: string): ActivityEvent[] 
     }
   }
   return events;
+}
+
+/** The Claude Code derivation: the shared stream-json reader, told Claude's
+ *  tool names. */
+export function deriveClaudeActivity(line: string, at: string): ActivityEvent[] {
+  return deriveStreamJsonActivity(line, at, summarizeToolUse);
 }
 
 function modelArgs(model: string | null | undefined): string[] {
@@ -197,6 +218,10 @@ export const claudeRuntime: AgentRuntime = {
     transcripts: true,
   },
   defaultAnalysisModel: () => DEFAULT_ANALYSIS_MODEL,
+  // The Stop hook is the completion protocol here, and it has both halves of
+  // the gate (PreToolUse too). Reading an outcome back off the run record would
+  // only ever second-guess a signal that already arrived.
+  outcomeFromRecord: false,
 
   /**
    * Runs `claude -p` with a pre-generated session id (so the transcript can be

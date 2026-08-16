@@ -27,6 +27,39 @@ test("searchTranscripts: empty query returns nothing", async () => {
   assert.deepEqual(await searchTranscripts("  "), []);
 });
 
+test("searchTranscripts: a machine with no Claude transcripts still searches the others", async () => {
+  // Regression: the scan used to give up entirely when `projects/` was absent,
+  // which is the ordinary state of a Codex-only or Qwen-only install — so
+  // transcript search came back empty rather than searching what was there.
+  const previousQwenHome = process.env.ARGUS_QWEN_HOME;
+  const qwenHome = path.join(home, "dot-qwen");
+  process.env.ARGUS_QWEN_HOME = qwenHome;
+  const chats = path.join(qwenHome, "projects", "-srv-app", "chats");
+  mkdirSync(chats, { recursive: true });
+  writeFileSync(
+    path.join(chats, "q1.jsonl"),
+    JSON.stringify({
+      type: "user",
+      timestamp: "2026-08-15T00:00:00.000Z",
+      cwd: "/srv/app",
+      message: { role: "user", parts: [{ text: "fix the WIDGET rendering bug" }] },
+    }),
+  );
+  try {
+    const { searchTranscripts } = await load("search");
+    const results = await searchTranscripts("widget");
+    assert.equal(results.length, 1);
+    assert.equal(results[0].sessionId, "q1");
+    assert.equal(results[0].project, "-srv-app");
+  } finally {
+    // Restore rather than delete: unset would fall back to the developer's real
+    // ~/.qwen for every later test in this file, which is the exact leak the
+    // test preload exists to prevent.
+    if (previousQwenHome === undefined) delete process.env.ARGUS_QWEN_HOME;
+    else process.env.ARGUS_QWEN_HOME = previousQwenHome;
+  }
+});
+
 test("searchTranscripts: case-insensitive match with a centered snippet", async () => {
   seedTranscript("-home-user-proj", "s1", [
     { type: "user", message: { role: "user", content: "Please fix the WIDGET rendering bug" } },

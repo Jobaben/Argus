@@ -1,31 +1,42 @@
 # 👁️ Argus — User Guide
 
 **What Argus is:** a dashboard and control plane over your local agent state —
-`~/.claude` for Claude Code and `~/.codex` for Codex. It watches the files those
-CLIs already write (background jobs, transcripts, history, stats) and turns them
-into a live web view — and it can fire its own scheduled and pipelined runs on
-top, on **either** agent.
+`~/.claude` for Claude Code, `~/.codex` for Codex, `~/.qwen` for Qwen Code, and
+the XDG data directory OpenCode keeps. It watches the files those CLIs already write (background jobs,
+transcripts, history, stats) and turns them into a live web view — and it can
+fire its own scheduled and pipelined runs on top, on **any** of them.
 
-**Two runtimes.** Anywhere Argus starts a run — the Launch tab, a schedule, a
-pipeline — you can choose **Claude Code** (`claude -p`) or **Codex**
-(`codex exec`). Inside a pipeline the choice goes finer still: a phase, or a
-single step, can override the pipeline's runtime, so one pipeline can draft on
-one agent and review on the other. Leave every picker on its default and nothing
-changes: existing schedules and pipelines keep running on Claude Code exactly as
-before. Each run records which CLI produced it, and rows that used something
-other than the server default are badged. See
-[Agent runtimes](../README.md#agent-runtimes) for the full mapping — and for the
-two honest gaps: Codex names its own session (the transcript link appears once
-the run starts, not before) and reports tokens rather than dollars (so `cost` is
-blank on Codex runs, and a USD budget ceiling only constrains Claude Code runs).
+**Four runtimes.** Anywhere Argus starts a run — the Launch tab, a schedule, a
+pipeline — you can choose **Claude Code** (`claude -p`), **Codex**
+(`codex exec`), **OpenCode** (`opencode run`) or **Qwen Code** (`qwen`). Inside a
+pipeline the choice goes finer still: a phase, or a single step, can override the
+pipeline's runtime, so one pipeline can draft on one agent and review on another.
+Leave every picker on its default and nothing changes: existing schedules and
+pipelines keep running on Claude Code exactly as before. Each run records which
+CLI produced it, and rows that used something other than the server default are
+badged. See [Agent runtimes](../README.md#agent-runtimes) for the full mapping —
+and for the honest gaps: only Claude Code takes a session id from Argus (on the
+others the transcript link appears once the run starts, not before), Codex and
+Qwen Code report tokens rather than dollars (so a USD budget ceiling only
+constrains the runtimes that price their runs), and OpenCode has neither a
+command hook nor transcripts Argus can read back (its sessions live in a private
+SQLite database, so they never reach the Sessions tab — everything else about an
+OpenCode run does).
+
+**Local models.** OpenCode and Qwen Code talk to OpenAI-compatible endpoints, so
+a model you serve yourself — `llama-server`, Ollama, vLLM — is a runtime like
+any other. Point `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `OPENAI_MODEL` at it for
+Qwen Code, or declare it as a provider in `~/.config/opencode/opencode.json` for
+OpenCode, and schedule against it exactly as you would a hosted model.
 
 Argus **never modifies the state the agent CLIs own** — it treats jobs,
 transcripts, history and daemon files as strictly read-only. It _does_ own and
 write its own state under `~/.claude/argus/` (schedules, pipelines, run
 records, issue triage, accounts) and, when you apply setup fixes, its signal
-hooks under `~/.claude/hooks/` and `~/.codex/hooks/`, a hook entry in
-`settings.json`, and an appended `[[hooks.stop]]` block in `~/.codex/config.toml`
-(appended — your existing config is never rewritten). The
+hooks under `~/.claude/hooks/`, `~/.codex/hooks/` and `~/.qwen/hooks/`, a hook
+entry in `~/.claude/settings.json` and `~/.qwen/settings.json`, and an appended
+`[[hooks.stop]]` block in `~/.codex/config.toml` (appended — your existing config
+is never rewritten). The
 monitoring tabs (Agents, Sessions, Activity, Projects, Stats, Search,
 Inventory, Tasks) are observe-only, while the Launch, Scheduler, Pipelines,
 Issues, Budget and Users tabs let you create, run, revise, triage, cap and
@@ -356,20 +367,22 @@ nothing recurs.
 
 **The form:**
 
-- **Prompt** (the field is labelled with the runtime you picked — `claude -p`
-  or `codex exec`) and a **working directory** (absolute path,
+- **Prompt** (the field is labelled with the runtime you picked — `claude -p`,
+  `codex exec`, `opencode run` or `qwen`) and a **working directory** (absolute path,
   must exist) — the only two required fields; **▶ Launch** stays disabled
   until both are filled.
 - **Name** (optional) — how the run is titled everywhere; left empty it
   defaults to the prompt's first line (ellipsized at 60 chars).
-- **Runtime** — Claude Code, Codex, or the server default. A CLI that isn't on
-  PATH is still offered, marked "not installed", rather than hidden: you may be
-  configuring a machine you are about to install it on.
+- **Runtime** — Claude Code, Codex, OpenCode, Qwen Code, or the server default.
+  A CLI that isn't on PATH is still offered, marked "not installed", rather than
+  hidden: you may be configuring a machine you are about to install it on.
 - **Model** — inherit the CLI default, pick an alias, or type a custom model id;
   passed to the agent as `--model`. The alias list follows the runtime (Claude
   Code offers Opus / Sonnet / Haiku; Codex's catalogue is account-dependent, so
-  it ships free-text unless `ARGUS_CODEX_MODELS` is set). Switching runtime
-  clears the model, because an alias from one means nothing to the other.
+  it ships free-text unless `ARGUS_CODEX_MODELS` is set; Qwen Code leads with
+  whatever `OPENAI_MODEL` names, and OpenCode wants a `<provider>/<model>` id
+  from its own config). Switching runtime clears the model, because an alias
+  from one means nothing to another.
 
 After a launch the form keeps the **working directory, runtime and model** and
 clears the prompt and name, so firing several prompts at one repo does not mean
@@ -416,7 +429,7 @@ section) and **Cron** (see [Cron panel](#20-cron-panel)).
 - **Name** — how it appears everywhere (cards, Chronicle, Monitors).
 - **Prompt** — the full prompt the headless agent receives. The label names
   the runtime the schedule will use.
-- **Runtime** — Claude Code, Codex, or the server default.
+- **Runtime** — Claude Code, Codex, OpenCode, Qwen Code, or the server default.
 - **Working directory** — absolute path the agent runs in.
 - **Trigger** — one of: **every N minutes** (interval), **daily at HH:MM**,
   **weekly on a day at HH:MM**, or **windowed** (every N minutes, but only
@@ -633,9 +646,11 @@ action requires a signed-in, root-approved account.
 each spawned agent signal "step finished" / "needs input" back to Argus
 (`POST /api/instances/:id/signal`, authenticated by a per-instance token —
 this is the one instance endpoint that doesn't need a login). The Stop hook is
-preferred; if a finished Codex process did not signal, Argus can recover only
-from a successful run record whose final message contains one unambiguous
-`ARGUS_OUTCOME: succeeded`. Failed, blocked, missing, and conflicting outcomes
+preferred; where a finished process did not signal — because its runtime's hook
+is best-effort (Codex) or because it has no command hook at all (OpenCode) —
+Argus can recover only from a successful run record whose final message contains
+one unambiguous `ARGUS_OUTCOME: succeeded`, which is why an OpenCode phase
+advances on the next reconcile tick rather than instantly. Failed, blocked, missing, and conflicting outcomes
 fail safely. Hook delivery errors and non-2xx responses are written into the
 run log for diagnosis.
 
@@ -839,8 +854,11 @@ _Browse & read transcripts._ Route: `#/sessions`
 
 ![Sessions](screenshots/sessions.png)
 
-**Purpose:** read the actual conversation transcripts of your Claude Code
-sessions across all projects.
+**Purpose:** read the actual conversation transcripts of your agent sessions
+across all projects — Claude Code's, Codex's rollouts and Qwen Code's chats
+alike. The latter two are written in their own CLI's vocabulary and translated
+on read, so one list and one reader serve all three; only OpenCode is absent,
+because it keeps its sessions in a private database rather than as files.
 
 **What you see:** a count of transcripts and the projects they span, then cards
 **grouped by day** — Today, Yesterday, the weekday within the last week, the date
@@ -1877,7 +1895,7 @@ are polled once per scheduler tick, with a four-second timeout and no retries.
 | **Search**          | Where did I say/see _that_?                | all `projects/*/*.jsonl`                    |
 | **Agents**          | What's running / done / failed right now?  | `jobs/*/state.json` + `daemon/roster.json`  |
 | **Detail**          | How did _this_ agent get here?             | `jobs/<short>/timeline.jsonl`               |
-| **Sessions**        | What was actually said in a conversation?  | `projects/*/*.jsonl`                        |
+| **Sessions**        | What was actually said in a conversation?  | `projects/*/*.jsonl` + Codex / Qwen homes   |
 | **Activity**        | What have I prompted lately, everywhere?   | `history.jsonl`                             |
 | **Projects**        | Which folders are active, and when?        | `projects/*/`                               |
 | **Stats**           | What's my usage / cost / token spend?      | `stats/stats-cache.json`                    |

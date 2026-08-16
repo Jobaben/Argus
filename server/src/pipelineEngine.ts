@@ -186,15 +186,25 @@ interface RecoveredOutcome {
 const OUTCOME_LINE_RE = /^\s*ARGUS_OUTCOME:\s*(succeeded|failed|blocked)\b[^\S\r\n]*(.*)$/gim;
 
 /**
- * Recover Codex's work-level conclusion from the final message stored on a
- * terminal run. The Stop hook remains authoritative when it arrives; this is
- * only used by reconciliation while the tracked step is still `running`.
+ * Recover a run's work-level conclusion from the final message stored on a
+ * terminal run record. A completion signal remains authoritative when one
+ * arrives; this is only used by reconciliation while the tracked step is still
+ * `running`.
+ *
+ * For Codex it backstops a hook whose delivery is best-effort. For OpenCode,
+ * which exposes no command hook at all, it *is* the completion protocol — the
+ * agent writes the same `ARGUS_OUTCOME` line either way, and the only
+ * difference is that the conclusion is read off the record on the next
+ * reconcile tick instead of being pushed the instant the run ends. Which
+ * runtimes are eligible is the runtime's own declaration
+ * ({@link AgentRuntime.outcomeFromRecord}), so a runtime whose hook Argus
+ * installs is never quietly rubber-stamped when that hook fails to fire.
  *
  * Conflicting sentinels are deliberately ambiguous. Repeating the same
  * sentinel is harmless (models sometimes recap before the required last
  * line), but two different conclusions must never be guessed into success.
  */
-export function recoverCodexOutcome(run: Run): RecoveredOutcome {
+export function recoverRunOutcome(run: Run): RecoveredOutcome {
   if (run.status !== "succeeded" || (run.exitCode != null && run.exitCode !== 0)) {
     const reason =
       run.error?.trim() ||
@@ -214,10 +224,8 @@ export function recoverCodexOutcome(run: Run): RecoveredOutcome {
   if (matches.length === 0 || kinds.size !== 1) {
     const reason =
       matches.length === 0
-        ? "successful Codex run ended without an ARGUS_OUTCOME completion marker"
-        : `successful Codex run reported conflicting ARGUS_OUTCOME markers (${[...kinds].join(
-            ", ",
-          )})`;
+        ? "run succeeded but ended without an ARGUS_OUTCOME completion marker"
+        : `run succeeded but reported conflicting ARGUS_OUTCOME markers (${[...kinds].join(", ")})`;
     return {
       signalType: "failed",
       outcome: "failed",
@@ -847,8 +855,8 @@ export function createEngine(deps: EngineDeps): Engine {
             const got = await readRun(s.runId);
             // Reconcile only from a completed run record. A dead pid whose
             // record is still `running` can be racing the normal close handler;
-            // guessing in that window would discard the final Codex message we
-            // need to distinguish success, failure, and ambiguity.
+            // guessing in that window would discard the agent's final message,
+            // which is what distinguishes success, failure, and ambiguity.
             const ended =
               got &&
               (got.run.status === "failed" ||
@@ -857,11 +865,13 @@ export function createEngine(deps: EngineDeps): Engine {
                 got.run.status === "cancelled");
             if (!ended) continue;
             const restarted = got?.run.status === "interrupted";
-            const codexFallback =
-              !restarted && got?.run.runtime === "codex" ? recoverCodexOutcome(got.run) : null;
-            const signalType = codexFallback?.signalType ?? "failed";
-            const payload = codexFallback
-              ? codexFallback.payload
+            const recovered =
+              !restarted && got && runtimeFor(got.run.runtime).outcomeFromRecord
+                ? recoverRunOutcome(got.run)
+                : null;
+            const signalType = recovered?.signalType ?? "failed";
+            const payload = recovered
+              ? recovered.payload
               : restarted
                 ? { reason: "Argus restarted mid-run — revise to retry", kind: "restarted" }
                 : {
@@ -880,15 +890,15 @@ export function createEngine(deps: EngineDeps): Engine {
               },
               nowISO(),
             );
-            if (codexFallback) await patchRun(s.runId, { outcome: codexFallback.outcome });
+            if (recovered) await patchRun(s.runId, { outcome: recovered.outcome });
             if (signalType === "failed") {
               // Class the failure from what the run record shows, so retry
               // policies keep distinguishing infrastructure from an agent's
               // considered failed/blocked conclusion.
               const failureClass: RetryableClass =
-                codexFallback?.failureClass ?? (got?.run.pid == null ? "spawn" : "exit-code");
+                recovered?.failureClass ?? (got?.run.pid == null ? "spawn" : "exit-code");
               const reason =
-                codexFallback?.failureReason ??
+                recovered?.failureReason ??
                 (payload as { reason?: string }).reason ??
                 "run ended without emitting a completion signal";
               noteFailure(def, instance, phaseId, failureClass, reason);
@@ -899,9 +909,7 @@ export function createEngine(deps: EngineDeps): Engine {
               kind: "phase.signalled",
               phaseId,
               runId: s.runId,
-              detail: codexFallback
-                ? `run-record fallback: ${codexFallback.outcome}`
-                : "reconcile: failed",
+              detail: recovered ? `run-record fallback: ${recovered.outcome}` : "reconcile: failed",
             });
             queueReadyPhases(instance.id, def, instance, ready);
             deps.tailer?.untrack(s.runId);

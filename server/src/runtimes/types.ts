@@ -97,6 +97,19 @@ export interface AgentRuntime {
   capabilities: AgentRuntimeCapabilities;
   /** The default analysis model for this runtime; empty = the CLI's own default. */
   defaultAnalysisModel(): string;
+  /**
+   * Whether a terminal run's own final message may stand in for a completion
+   * signal that never arrived.
+   *
+   * The `ARGUS_OUTCOME` marker is written by the agent either way; this decides
+   * whether the pipeline engine is allowed to *read it off the run record* when
+   * reconciling a phase whose run has ended without signalling. For a runtime
+   * with no command hook to register it is the completion protocol; for one
+   * whose hook Argus installs it would only second-guess a signal that already
+   * arrived, and a hook that failed to fire should surface as a failure rather
+   * than be quietly papered over.
+   */
+  outcomeFromRecord: boolean;
   /** One-shot batch run — the scheduler and the Launch tab. */
   batchPlan(opts: RunPlanOptions): SpawnPlan;
   /** Streaming run whose log is an NDJSON transcript — pipeline steps. */

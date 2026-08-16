@@ -219,7 +219,7 @@ function SessionList({
       <div className="mb-6 flex flex-wrap items-center gap-x-4 gap-y-3">
         <p className="text-sm text-ink-faint">
           {loading && sessions.length === 0
-            ? "Recent Claude Code transcripts across all projects"
+            ? "Recent agent transcripts across all projects"
             : searching
               ? `${matches.length} of ${sessions.length} ${
                   sessions.length === 1 ? "transcript" : "transcripts"

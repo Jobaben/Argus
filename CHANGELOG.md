@@ -26,6 +26,103 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Two more agent runtimes: OpenCode and Qwen Code.** Argus now drives
+  `opencode run` and `qwen` alongside `claude -p` and `codex exec`, selectable
+  in every place a runtime already was: per schedule, per one-off launch, per
+  pipeline, and per phase or step inside one. Both speak OpenAI-compatible
+  endpoints, which is the point of adding them — a model served locally by
+  `llama-server`, Ollama or vLLM becomes a runtime like any other, rather than
+  something you drive outside the dashboard. Nothing existing moves: a record
+  that names no runtime still runs on Claude Code.
+
+  The runtime seam earned its keep. Each is one new file under
+  `server/src/runtimes/` answering the same four questions, with no new branch
+  anywhere else in the engine.
+
+  **Qwen Code** turned out to be Claude Code's twin where it counts. Its
+  `-o stream-json` emits the same envelope — `system`/`init`, `assistant`
+  messages carrying `text` and `tool_use` blocks, a closing `result` — so the
+  activity derivation is Claude's, handed Qwen's tool vocabulary rather than
+  rewritten. Its hooks are Claude Code's too, down to the `settings.json` schema
+  and the `last_assistant_message` payload, so the same `argus-signal.mjs` is
+  registered under `~/.qwen` and pipeline phases signal exactly as they always
+  have. The prompt goes on stdin and `-p` is deliberately unused: it _appends_
+  to stdin rather than replacing it, so using both would deliver the prompt
+  twice. Unattended runs pass `--approval-mode yolo`, without which Qwen Code
+  withholds the shell, write and edit tools entirely and an agent asked to fix a
+  test reports back that it has no way to run one; the banner that warns about
+  it is silenced per-run, because it is written to stderr and the pipeline
+  engine points both descriptors at the log the tailer parses.
+
+  **OpenCode** needed two gaps declared rather than papered over. It has no
+  command hooks at all — its extension surface is JavaScript plugins — so there
+  is nothing for Setup to register, and it files transcripts in a private SQLite
+  schema rather than per-session JSONL, so the Sessions view honestly reports
+  that it has nothing to read back. Live activity is unaffected: that comes off
+  the `--format json` event stream, which also carries OpenCode's own `cost`,
+  so this is the one non-Claude runtime that needs no price table to be honest
+  about dollars. `--auto` is passed for ordinary runs, since an unattended run
+  that stops at a permission prompt on a terminal nobody is watching presents as
+  a hang; analysis passes instead run under the built-in read-only `plan` agent.
+
+  How a phase on a hookless runtime completes is now the runtime's own
+  declaration. `recoverCodexOutcome` — which read a run's conclusion off the
+  `ARGUS_OUTCOME` marker in its final message when Codex's best-effort hook
+  didn't fire — became `recoverRunOutcome`, gated on an `outcomeFromRecord` flag
+  each runtime sets. For OpenCode it is the completion protocol rather than a
+  backstop, so a phase advances on the next reconcile tick instead of the
+  instant the process exits; for Claude Code and Qwen Code it stays off, so a
+  hook that fails to fire still surfaces as a failure rather than being quietly
+  rubber-stamped.
+
+  Setup gained `opencode-cli`, `qwen-cli` and `qwen-signal-hook`, each scoped
+  the same way the existing ones are: checked only while something on the
+  machine actually runs on that CLI, so a Qwen-only install is never held to
+  "Claude CLI on PATH". The Qwen hook installer rewrites `~/.qwen/settings.json`
+  only to add its own group, leaves every other key alone, and refuses a
+  present-but-unparseable file rather than replacing it.
+
+  **Qwen Code transcripts read back into the Sessions view.** Qwen Code files
+  transcripts almost exactly where Claude Code does — one directory deeper, at
+  `projects/<encoded-cwd>/chats/<id>.jsonl`, with the same encoding of the
+  working directory into a path segment — so a session resolves from
+  `(project, sessionId)` the way a Claude one does, needs no reserved bucket the
+  way a Codex rollout does, and groups by working directory for free. A Claude
+  and a Qwen session from the same directory share a project segment without
+  shadowing each other, since both ids are UUIDs and Claude's path is tried
+  first.
+
+  Only the _file_ is foreign. Qwen Code inherits Gemini CLI's message vocabulary
+  — `message.parts[]` for `message.content[]`, `functionCall` /
+  `functionResponse` for `tool_use` / `tool_result`, `role: "model"` for the
+  assistant, and `type: "system"` lines that are telemetry rather than
+  conversation — so `sources/qwenSessions.ts` translates it, and the list,
+  detail view, live tail, transcript search, Markdown export and Flight Recorder
+  all read a Qwen run through the code path they already had. The telemetry
+  lines are kept rather than dropped, because they are the only place the model
+  name is recorded; a `tool_result` line comes through flagged `isMeta` so a
+  shell transcript can never become a session's title. That the _live_ stream
+  needs no translation at all — `-o stream-json` is Claude Code's envelope
+  verbatim — remains the odd asymmetry of this runtime.
+
+  The two-way `codex: boolean` that used to decide how a transcript was read
+  became a `TranscriptKind`, which is what kept adding a third source from
+  meaning a third branch in the summarizer, the resolver, the tail and the
+  search scanner.
+
+  This turned up a real bug in transcript search: `listTranscriptFiles` gave up
+  entirely when `~/.claude/projects` was missing, which is the ordinary state of
+  a Codex-only or Qwen-only machine — so search came back empty rather than
+  searching the transcripts that were there. A missing Claude directory is now
+  "no Claude transcripts", not "stop".
+
+  Two smaller things fell out of it. Model identifiers may now contain `/`,
+  which OpenCode requires to address a model as `<provider>/<model>` and which
+  is neither a shell metacharacter nor a flag introducer. And the web's nine
+  `runtime === "codex" ? … : …` ternaries — each of which would have rendered a
+  third runtime as "Claude Code" — collapsed into one table of ids, labels and
+  commands.
+
 - **A second agent runtime: OpenAI Codex.** Argus now drives `codex exec`
   alongside `claude -p`, selectable per schedule, per one-off launch, per
   pipeline — and per **phase or step** inside a pipeline, so one pipeline can

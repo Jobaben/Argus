@@ -5,6 +5,7 @@ import path from "node:path";
 import { paths } from "../claudeHome.js";
 import { decodeProjectLabel } from "./sessions.js";
 import { CODEX_PROJECT, listCodexSessionFiles, translateRolloutLine } from "./codexSessions.js";
+import { listQwenSessionFiles, translateQwenLine } from "./qwenSessions.js";
 import { encodeProject } from "./runs.js";
 import type { SearchResult } from "@argus/contracts";
 
@@ -56,22 +57,34 @@ function makeSnippet(text: string, lowerQ: string): string {
   return snippet.slice(0, SNIPPET_MAX);
 }
 
+/** Which CLI wrote a transcript, and so which dialect its lines are in. */
+type TranscriptKind = "claude" | "codex" | "qwen";
+
+/** The translator for a kind, or null when the lines are already canonical. */
+function translatorFor(kind: TranscriptKind): ((raw: unknown) => RawLine | null) | null {
+  if (kind === "codex") return translateRolloutLine as (raw: unknown) => RawLine | null;
+  if (kind === "qwen") return translateQwenLine as (raw: unknown) => RawLine | null;
+  return null;
+}
+
 interface TranscriptFile {
   project: string;
   sessionId: string;
   file: string;
   mtime: number;
-  /** A Codex rollout: its lines are translated before the text is extracted. */
-  codex: boolean;
+  kind: TranscriptKind;
 }
 
 async function listTranscriptFiles(): Promise<TranscriptFile[]> {
-  let projectDirs: string[];
+  let projectDirs: string[] = [];
   try {
     const entries = await readdir(paths.projects(), { withFileTypes: true });
     projectDirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
   } catch {
-    return [];
+    // No Claude transcripts here, which is an ordinary state on a machine that
+    // runs another agent — and not a reason to skip the scans below. Returning
+    // early is what used to make transcript search silently empty on a
+    // Codex-only or Qwen-only install.
   }
 
   const nested = await Promise.all(
@@ -88,7 +101,13 @@ async function listTranscriptFiles(): Promise<TranscriptFile[]> {
             } catch {
               /* unreadable; sinks to the end of the scan order */
             }
-            return { project, sessionId: f.replace(/\.jsonl$/, ""), file, mtime, codex: false };
+            return {
+              project,
+              sessionId: f.replace(/\.jsonl$/, ""),
+              file,
+              mtime,
+              kind: "claude" as const,
+            };
           }),
         );
       } catch {
@@ -96,17 +115,25 @@ async function listTranscriptFiles(): Promise<TranscriptFile[]> {
       }
     }),
   );
-  // Codex rollouts join the same scan. They are filed by date rather than by
-  // project, and their lines are translated on read, so a transcript search
-  // covers both runtimes instead of quietly meaning "Claude transcripts only".
+  // Codex rollouts and Qwen Code chats join the same scan, translated on read,
+  // so a transcript search covers every runtime that keeps readable transcripts
+  // instead of quietly meaning "Claude transcripts only". Codex is filed by date
+  // rather than by project; Qwen Code files by project exactly as Claude does.
   const codex = (await listCodexSessionFiles()).map((f) => ({
     project: CODEX_PROJECT,
     sessionId: f.id,
     file: f.file,
     mtime: f.mtime,
-    codex: true,
+    kind: "codex" as const,
   }));
-  return [...nested.flat(), ...codex];
+  const qwen = (await listQwenSessionFiles()).map((f) => ({
+    project: f.project,
+    sessionId: f.id,
+    file: f.file,
+    mtime: f.mtime,
+    kind: "qwen" as const,
+  }));
+  return [...nested.flat(), ...codex, ...qwen];
 }
 
 /** Scans one transcript line by line, pushing matches until the cap is hit. */
@@ -124,22 +151,23 @@ async function scanFile(
   // found the run's directory is known — which is what lets a Codex hit be
   // filed under the same project a Claude hit from that directory would be.
   let project = entry.project;
+  const translate = translatorFor(entry.kind);
   try {
     for await (const raw of rl) {
       if (out.length >= limit) break;
       let line: RawLine | null;
-      if (entry.codex) {
+      if (translate) {
         let parsed: unknown;
         try {
           parsed = JSON.parse(raw);
         } catch {
           continue;
         }
-        const translated = translateRolloutLine(parsed);
+        const translated = translate(parsed) as (RawLine & { cwd?: string }) | null;
         if (translated?.cwd) project = encodeProject(translated.cwd);
         // Fast path, after the meta scan so the directory is not missed.
         if (!raw.toLowerCase().includes(lowerQ)) continue;
-        line = translated as RawLine | null;
+        line = translated;
       } else {
         // Fast path: skip lines that can't contain the query at all.
         if (!raw.toLowerCase().includes(lowerQ)) continue;

@@ -1,13 +1,13 @@
 /**
  * Agent runtimes — which CLI actually executes a run.
  *
- * Argus was built around `claude -p`. Codex is a second, equally capable
- * headless agent CLI, and the two differ in ways that are visible all the way
- * up to the dashboard: Codex assigns its own thread id rather than accepting
- * one, reports tokens but not dollars, and has no per-invocation
- * system-prompt flag. Rather than let those differences leak into the engine as
- * `if (codex)` branches, every one of them is declared here as a capability and
- * answered by the runtime implementation on the server.
+ * Argus was built around `claude -p`. Codex, OpenCode and Qwen Code are equally
+ * capable headless agent CLIs, and they differ in ways that are visible all the
+ * way up to the dashboard: three of the four assign their own session id rather
+ * than accepting one, only two report dollars, and only Claude Code has a
+ * per-invocation system-prompt flag. Rather than let those differences leak into
+ * the engine as `if (codex)` branches, every one of them is declared here as a
+ * capability and answered by the runtime implementation on the server.
  *
  * The id is persisted on schedules, pipelines, phases, steps and run records,
  * so a run remains explicable long after the default has changed: "which agent
@@ -15,9 +15,15 @@
  */
 
 /** Which agent CLI executes a run. Absent anywhere = `"claude"`. */
-export type AgentRuntimeId = "claude" | "codex";
+export type AgentRuntimeId = "claude" | "codex" | "opencode" | "qwen";
 
-/** Per-run reasoning override understood by Codex CLI. */
+/**
+ * Per-run reasoning override.
+ *
+ * Codex spells it `model_reasoning_effort`; OpenCode spells it `--variant` and
+ * calls the values provider-specific, which is why each runtime publishes the
+ * subset it actually accepts rather than sharing one list.
+ */
 export type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
 
 /** What a runtime can and cannot do, so the UI explains gaps instead of hiding them. */

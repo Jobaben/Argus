@@ -1,11 +1,12 @@
 # Argus — Architecture
 
 > The all-seeing monitor for coding agents. A dashboard **and control plane**
-> over `~/.claude` (and `~/.codex`): it reads the state the agent CLIs own and
-> manages its own scheduler/pipeline state alongside it. Two runtimes are
-> supported — Claude Code (`claude -p`) and Codex (`codex exec`) — selectable
-> per schedule, per pipeline, and per phase or step within one. See §3, "The
-> runtime seam".
+> over `~/.claude` (and `~/.codex`, `~/.qwen`, `~/.local/share/opencode`): it
+> reads the state the agent CLIs own and manages its own scheduler/pipeline
+> state alongside it. Four runtimes are supported — Claude Code (`claude -p`),
+> Codex (`codex exec`), OpenCode (`opencode run`) and Qwen Code (`qwen`) —
+> selectable per schedule, per pipeline, and per phase or step within one. See
+> §3, "The runtime seam".
 
 ## 1. Principle: read the agents' state, own only Argus's
 
@@ -17,9 +18,10 @@ observes.
 
 Argus does **own and write** its own state, all confined to `~/.claude/argus/`
 (schedules, pipelines, per-run records, instances and issue triage) plus, when the user
-applies setup fixes, its signal hook under `~/.claude/hooks/` and `~/.codex/hooks/`,
-a hook entry in `settings.json`, and an appended `[[hooks.stop]]` block in
-`~/.codex/config.toml`. That last one is an **append**, never a rewrite: a TOML
+applies setup fixes, its signal hook under `~/.claude/hooks/`, `~/.codex/hooks/`
+and `~/.qwen/hooks/`, a hook entry in each of the two `settings.json` files
+(Qwen Code's hook schema is Claude Code's), and an appended `[[hooks.stop]]`
+block in `~/.codex/config.toml`. That last one is an **append**, never a rewrite: a TOML
 round-trip through a parser would lose the operator's comments and ordering, and
 an array-of-tables header is valid wherever it appears, so appending is a
 well-formed edit that leaves every existing byte intact. All Argus writes go through an atomic tmp+rename writer and
@@ -106,9 +108,12 @@ contracts, because the web cannot observe them.
 src/
   claudeHome.ts        — single source of truth for Claude Code path resolution
   codexHome.ts         — the same for Codex (~/.codex)
+  opencodeHome.ts      — the same for OpenCode (XDG data dir)
+  qwenHome.ts          — the same for Qwen Code (~/.qwen)
   runtimes/            — the agent-CLI seam (see below)
     types.ts           — AgentRuntime: argv, envelope parsing, activity, capabilities
-    claude.ts codex.ts — one implementation each
+    claude.ts codex.ts — one implementation each…
+    opencode.ts qwen.ts  …and one per runtime added since
     index.ts           — the registry + narrowest-wins resolution
   log.ts               — one structured logger (text or JSON lines)
   httpCache.ts         — ETag / If-None-Match for every read
@@ -118,6 +123,9 @@ src/
     types.ts           — re-exports the agent contract + the on-disk JobState
     jobs.ts daemon.ts sessions.ts history.ts projects.ts
     stats.ts inventory.ts tasks.ts search.ts cron.ts
+    codexSessions.ts qwenSessions.ts
+                       — one translator per foreign transcript dialect, so the
+                         session readers above stay a single code path
     insight.ts         — the board situation (derived)
     palette.ts         — the command palette index (derived)
   watch.ts             — chokidar → debounced change callback
@@ -138,7 +146,8 @@ Four places spawn an agent: the scheduler's batch run, the pipeline engine's
 streaming step, the bounded analysis pass, and the setup probe. Each used to
 spell `claude` and its flags out inline, and a second CLI added that way would
 have meant four sets of branches that could drift, plus a fifth in the log
-parser and a sixth in the activity tailer.
+parser and a sixth in the activity tailer. The seam is what made the third and
+fourth runtimes a new file each rather than a fresh round of branching.
 
 Instead `runtimes/` answers four questions per CLI, and nothing else in the
 server knows which one is running:
@@ -148,16 +157,28 @@ server knows which one is running:
   because a batch run, a live-tailed step and a bounded analysis pass want
   different output formats.
 - **What did you say?** `parseEnvelope` turns whatever the CLI printed —
-  Claude Code's single JSON envelope, Codex's JSONL event stream — into the one
-  shape the run record stores.
+  Claude Code's single JSON envelope, Codex's and OpenCode's event streams, Qwen
+  Code's array of Claude-shaped events — into the one shape the run record
+  stores.
 - **What are you doing right now?** `deriveActivity` maps one line of the
   streaming log to Command Center events.
 - **What can't you do?** Capabilities, so a gap is reported rather than
-  producing a null the UI can't explain. Codex mints its own session id
-  (`presetSessionId: false`, so the run record is patched once the stream reports
-  it) and reports token usage rather than dollars (`reportsCost: false`). For
-  supported OpenAI models Argus derives a public-list-price estimate from the
-  input/cached/output breakdown; unknown model prices stay null.
+  producing a null the UI can't explain. Every runtime but Claude Code mints its
+  own session id (`presetSessionId: false`, so the run record is patched once
+  the stream reports it). Codex reports token usage rather than dollars
+  (`reportsCost: false`); for supported OpenAI models Argus derives a
+  public-list-price estimate from the input/cached/output breakdown, and unknown
+  model prices stay null. OpenCode exposes no command hook (`signalHook: false`)
+  and files its transcripts in SQLite (`transcripts: false`) — the one runtime
+  whose sessions the transcript views cannot show.
+
+A fifth question is answered off the capability list, because only the pipeline
+engine asks it: **may a phase's outcome be read off the finished run record?**
+`outcomeFromRecord` says so. It is how a runtime with no hook to register
+(OpenCode) still completes a phase — from the `ARGUS_OUTCOME` marker in the
+agent's own final message, on the next reconcile tick — and why a runtime whose
+hook Argus _does_ install (Claude Code, Qwen Code) is never quietly
+rubber-stamped when that hook fails to fire.
 
 The resolved runtime is **written onto the run record**, not re-derived at read
 time: a run started under one default has to stay explicable after the default
@@ -167,7 +188,9 @@ changes, exactly like the budget ladder's `budgetAction`.
 
 `claudeHome()` derives the root from `os.homedir()` (or `ARGUS_CLAUDE_HOME` /
 `CLAUDE_CONFIG_DIR`); `codexHome()` does the same for `~/.codex` (or
-`ARGUS_CODEX_HOME` / `CODEX_HOME`). Data files frequently embed **foreign** absolute paths —
+`ARGUS_CODEX_HOME` / `CODEX_HOME`), `qwenHome()` for `~/.qwen` (or
+`ARGUS_QWEN_HOME`), and `opencodeHome()` for the XDG data dir (or
+`ARGUS_OPENCODE_HOME` / `XDG_DATA_HOME`). Data files frequently embed **foreign** absolute paths —
 e.g. a Windows `cwd: C:\GIT\Spectacle` sitting inside a Linux `~/.claude`. Those
 are display-only. Correlation always keys off `sessionId` and the **encoded
 project-dir name** (`-home-mtrushbad-GIT`, `C--GIT-Spectacle`), never the

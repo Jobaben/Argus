@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState } from "react";
+import { runtimeLabel } from "../useRuntimes";
 import type { Run } from "../types";
 import type { StepPill } from "../ds";
 import {
@@ -197,7 +198,7 @@ export function StepDrawer({
         </Field>
         {step.model && <Field label="model">{step.model}</Field>}
         {step.runtime && (
-          <Field label="runtime">{step.runtime === "codex" ? "Codex" : "Claude Code"}</Field>
+          <Field label="runtime">{runtimeLabel(step.runtime) || step.runtime}</Field>
         )}
         {step.startedAt && (
           <Field label="started">{new Date(step.startedAt).toLocaleString()}</Field>

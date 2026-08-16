@@ -92,26 +92,104 @@ export type ParsedRunLog =
 
 const TRUNCATION_MARKER = "…(truncated)…";
 
-/** The result envelope is the final JSON object on stdout, emitted as its own
- * line. Try the whole payload first, then each brace-led line from last to first
- * so leading stderr noise can't defeat the parse. */
+/**
+ * The result envelope is the final JSON object on stdout. Try the whole payload
+ * first, then each JSON-led line from last to first so leading stderr noise
+ * can't defeat the parse.
+ *
+ * Qwen Code prints the same envelope Claude Code does — `type: "result"`, the
+ * same `is_error` / `usage` / `session_id` keys — but wraps the run's whole
+ * event list in one JSON *array*, so an array candidate contributes its
+ * elements rather than being discarded. Whichever candidate says it is the
+ * result wins over merely being parseable, which is what keeps an `init` event
+ * at the head of that array from being reported as the run's outcome.
+ */
 function extractEnvelope(text: string): Record<string, unknown> | null {
-  const candidates = [text];
+  const candidates: Record<string, unknown>[] = [];
+  const consider = (parsed: unknown) => {
+    if (!parsed || typeof parsed !== "object") return;
+    if (Array.isArray(parsed)) {
+      for (let i = parsed.length - 1; i >= 0; i--) consider(parsed[i]);
+      return;
+    }
+    candidates.push(parsed as Record<string, unknown>);
+  };
+
+  const sources = [text];
   const lines = text.split("\n");
   for (let i = lines.length - 1; i >= 0; i--) {
-    if (lines[i].trimStart().startsWith("{")) candidates.push(lines[i]);
+    const start = lines[i].trimStart();
+    if (start.startsWith("{") || start.startsWith("[")) sources.push(lines[i]);
   }
-  for (const c of candidates) {
+  for (const source of sources) {
     try {
-      const parsed: unknown = JSON.parse(c);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as Record<string, unknown>;
-      }
+      consider(JSON.parse(source));
     } catch {
       // not this candidate; try the next
     }
   }
-  return null;
+  return candidates.find((c) => c.type === "result") ?? candidates[0] ?? null;
+}
+
+/**
+ * OpenCode reports a run as an NDJSON event stream rather than one closing
+ * envelope, so its summary is folded out of the whole log: the last `text`
+ * part, the totals each `step-finish` carries, and any `error` event. Its
+ * events are told apart from every other runtime's by the camel-cased
+ * `sessionID` they all carry.
+ */
+function parseOpencodeLog(text: string, truncated: boolean): ParsedRunLog | null {
+  const fields: RunLogField[] = [];
+  let sawEvent = false;
+  let status: string | null = null;
+  let message: string | null = null;
+  let session: string | null = null;
+  let cost = 0;
+  let tokens: { i: number; o: number } | null = null as { i: number; o: number } | null;
+
+  for (const line of text.split("\n")) {
+    const t = line.trim();
+    if (!t.startsWith("{")) continue;
+    let e: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(t);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+      e = parsed as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    if (typeof e.sessionID !== "string") continue;
+    sawEvent = true;
+    session = e.sessionID;
+    const part = (e.part ?? {}) as Record<string, unknown>;
+
+    if (e.type === "text" && typeof part.text === "string") message = part.text;
+    if (e.type === "step_finish") {
+      const t2 = part.tokens as Record<string, unknown> | undefined;
+      if (t2) {
+        const i = typeof t2.input === "number" ? t2.input : 0;
+        const o = typeof t2.output === "number" ? t2.output : 0;
+        tokens = { i: (tokens?.i ?? 0) + i, o: (tokens?.o ?? 0) + o };
+      }
+      if (typeof part.cost === "number") cost += part.cost;
+      if (part.reason === "stop") status ??= "success";
+    }
+    if (e.type === "error") {
+      status = "error";
+      const err = e.error as Record<string, unknown> | undefined;
+      const data = err?.data as Record<string, unknown> | undefined;
+      if (typeof data?.message === "string") message = data.message;
+      else if (typeof err?.name === "string") message = err.name;
+    }
+  }
+  if (!sawEvent) return null;
+
+  fields.push({ label: "Status", value: status ?? "incomplete" });
+  if (tokens) fields.push({ label: "Tokens", value: `${tokens.i} in / ${tokens.o} out` });
+  if (cost > 0) fields.push({ label: "Cost", value: `$${cost.toFixed(4)}` });
+  if (session) fields.push({ label: "Session", value: session });
+  if (message) fields.push({ label: "Result", value: message });
+  return { kind: "envelope", fields, truncated };
 }
 
 /**
@@ -187,10 +265,14 @@ export function parseRunLog(raw: string): ParsedRunLog {
   text = text.trim();
   if (!text) return { kind: "empty" };
 
-  // Codex first: its `turn.completed` line would otherwise be mistaken for a
-  // Claude envelope (it has a `usage` object) and reported as a bare success.
+  // The event-stream runtimes first: a Codex `turn.completed` line would
+  // otherwise be mistaken for a Claude envelope (it has a `usage` object) and
+  // reported as a bare success, and an OpenCode log has no closing envelope at
+  // all. Claude Code's and Qwen Code's single result object is the fallthrough.
   const codex = parseCodexLog(text, truncated);
   if (codex) return codex;
+  const opencode = parseOpencodeLog(text, truncated);
+  if (opencode) return opencode;
 
   const env = extractEnvelope(text);
   if (!env) return { kind: "text", text, truncated };

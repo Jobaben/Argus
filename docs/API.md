@@ -117,21 +117,72 @@ reloading picks it up.
         "liveActivity": true,
         "transcripts": true
       }
+    },
+    {
+      "id": "opencode",
+      "label": "OpenCode",
+      "bin": "opencode",
+      "home": "/home/you/.local/share/opencode",
+      "available": true,
+      "isDefault": false,
+      "models": [],
+      "reasoningEfforts": ["minimal", "low", "medium", "high"],
+      "capabilities": {
+        "presetSessionId": false,
+        "appendSystemPrompt": false,
+        "reportsCost": true,
+        "reportsTokens": true,
+        "signalHook": false,
+        "liveActivity": true,
+        "transcripts": false
+      }
+    },
+    {
+      "id": "qwen",
+      "label": "Qwen Code",
+      "bin": "qwen",
+      "home": "/home/you/.qwen",
+      "available": true,
+      "isDefault": false,
+      "models": ["qwen3-27b", "qwen3-coder-plus", "qwen3-coder-flash"],
+      "reasoningEfforts": [],
+      "capabilities": {
+        "presetSessionId": false,
+        "appendSystemPrompt": false,
+        "reportsCost": false,
+        "reportsTokens": true,
+        "signalHook": true,
+        "liveActivity": true,
+        "transcripts": true
+      }
     }
   ]
 }
 ```
 
-`capabilities` exists so the UI can explain a gap instead of hiding it. The two
+`capabilities` exists so the UI can explain a gap instead of hiding it. The four
 that are visible in the data: `presetSessionId: false` means a run's
-`sessionId` is null until the CLI reports its own thread id (so the transcript
-link appears once the run starts), and `reportsCost: false` means the CLI does
-not emit dollars. For supported Codex models Argus estimates `costUsd` from the
-reported token classes and public API prices; unknown model prices stay null.
+`sessionId` is null until the CLI reports its own session id (so the transcript
+link appears once the run starts); `reportsCost: false` means the CLI does not
+emit dollars — for supported Codex models Argus estimates `costUsd` from the
+reported token classes and public API prices, and unknown model prices stay
+null; `signalHook: false` (OpenCode) means a pipeline phase completes from the
+`ARGUS_OUTCOME` marker on the finished run record rather than from a pushed
+signal, so it advances on the next reconcile tick; and `transcripts: false`
+means the Sessions view has nothing to read back for that runtime — true only of
+OpenCode, whose sessions live in a private SQLite schema. Codex rollouts and
+Qwen Code chats are translated into Claude Code's line shape on read, so the
+list, detail, search and Markdown export routes cover them without a second
+code path.
+
+`models` is what the picker offers, and is free text besides. OpenCode addresses
+a model as `<provider>/<model>`, so the list is empty until
+`ARGUS_OPENCODE_MODELS` names some; Qwen Code's list leads with `OPENAI_MODEL`,
+which is the model a locally served endpoint has loaded.
 
 ### Naming a runtime
 
-`runtime` is `"claude" | "codex"` and may be set on a schedule, a launch, a
+`runtime` is `"claude" | "codex" | "opencode" | "qwen"` and may be set on a schedule, a launch, a
 pipeline, a phase, or a single step. Resolution is **narrowest wins**: step,
 then phase, then pipeline (or the schedule / launch body), then the server's
 `ARGUS_AGENT` default, then `"claude"`. The resolved value is written onto the
@@ -1817,7 +1868,7 @@ order. One pipeline can therefore mix runtimes phase by phase.
 The engine spawns each phase's run with `ARGUS_SIGNAL_URL`,
 `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`, `ARGUS_RUN_ID`, `ARGUS_SIGNAL_TOKEN` and
 `ARGUS_RUNTIME`. `hooks/argus-signal.mjs` reads these and POSTs a signal. One
-hook file serves both runtimes:
+hook file serves every runtime that has hooks at all:
 
 - **Claude Code** — a `Stop` hook in `settings.json` (no arg) to report the
   run's outcome, and optionally a `PreToolUse` hook on `AskUserQuestion` invoked
@@ -1826,12 +1877,18 @@ hook file serves both runtimes:
   `PreToolUse` twin: Codex has no AskUserQuestion tool, and a gated phase pauses
   anyway, because the engine holds the gate on the phase's _completion_ signal
   rather than on the agent asking a question.
+- **Qwen Code** — a `Stop` hook in `~/.qwen/settings.json`. Its hook schema and
+  payload are Claude Code's, so the same file is registered unchanged; like
+  Codex it has no `PreToolUse` twin, for the same reason.
+- **OpenCode** — nothing to register. Its extension surface is JavaScript
+  plugins rather than command hooks, so phases on OpenCode complete through the
+  run-record fallback described below rather than through a signal.
 
 `POST /api/setup/apply` installs whichever of these the machine needs — and
 only those. Each runtime's CLI and hook prerequisites are checked only while
 something on the machine uses that runtime, so a Codex-only install is never
 held to "Claude CLI on PATH" (and, since these are the checks a pipeline start
-refuses on, never blocked by it) and vice versa.
+refuses on, never blocked by it) — and the same for each of the other three.
 
 The Stop hook does **not** assume success. When invoked with no arg it derives
 the signal type from the agent's final message: a line matching
@@ -1842,21 +1899,24 @@ its phase instead of being rubber-stamped.
 The engine supplies this reporting contract automatically: every step run is
 spawned with a constant instruction to end the final message with
 `ARGUS_OUTCOME: <succeeded|failed|blocked>` — delivered on
-`claude --append-system-prompt`, or prepended to the prompt for Codex, which has
-no equivalent flag.
+`claude --append-system-prompt`, or prepended to the prompt for the three
+runtimes with no equivalent flag.
 Pipeline authors therefore do **not** write the `ARGUS_OUTCOME` mechanic into
 their prompts — they only state each step's acceptance criteria in prose, and
 the agent judges success against them. An explicit CLI arg (`needs-input` /
 `failed`) always overrides the message-derived type.
 
 > **Important:** the Stop-hook signal is the preferred completion path. If a
-> completed Codex run has not signalled, reconciliation falls back to its run
-> record and final message: a successful run with one unambiguous
+> completed run on a runtime that declares the fallback (Codex, which has a
+> best-effort hook, and OpenCode, which has none) has not signalled,
+> reconciliation falls back to its run record and final message: a successful
+> run with one unambiguous
 > `ARGUS_OUTCOME: succeeded` advances; `failed` / `blocked` fails with the
 > reported reason; a failed run uses its recorded error; and a missing or
-> conflicting marker fails safely. Unsignalled Claude Code runs retain the
-> existing fail-safe behavior. The instance lock makes fallback and a delayed
-> hook signal idempotent.
+> conflicting marker fails safely. Unsignalled Claude Code and Qwen Code runs —
+> the two whose hooks Argus installs and can rely on — retain the existing
+> fail-safe behavior. The instance lock makes fallback and a delayed hook signal
+> idempotent.
 
 Hook POSTs have a 10-second timeout. Transport errors and non-2xx responses are
 written to the hook's stderr and make the hook exit non-zero, so the agent run

@@ -21,7 +21,7 @@ import {
   useFlip,
   useTicker,
 } from "../ds";
-import { useRuntimes } from "../useRuntimes";
+import { runtimeCommand, useRuntimes } from "../useRuntimes";
 import { useVerdictTrends } from "../useVerdict";
 import { VerdictSparkline } from "./VerdictPanel";
 import { CronPanel } from "./Cron";
@@ -211,7 +211,7 @@ function ScheduleForm({
   const { runtimes, default: defaultRuntime } = useRuntimes();
   const active = form.runtime ?? defaultRuntime;
   const runtimeInfo = runtimes.find((runtime) => runtime.id === active);
-  const command = active === "codex" ? "codex exec" : "claude -p";
+  const command = runtimeCommand(active);
 
   const submit = async () => {
     setBusy(true);
@@ -704,10 +704,12 @@ export default function Schedules() {
                 <p className="text-sm text-ink-dim">No schedules yet.</p>
                 <p className="mx-auto mt-2 max-w-md text-xs">
                   A schedule is a prompt, a working directory and a cadence: Argus runs your chosen
-                  agent — <code className="font-mono text-ink-dim">claude -p</code> or{" "}
-                  <code className="font-mono text-ink-dim">codex exec</code> — in that directory on
-                  time and keeps every run&apos;s transcript, cost and result. A first one worth
-                  having is a nightly review of yesterday&apos;s commits.
+                  agent — <code className="font-mono text-ink-dim">claude -p</code>,{" "}
+                  <code className="font-mono text-ink-dim">codex exec</code>,{" "}
+                  <code className="font-mono text-ink-dim">opencode run</code> or{" "}
+                  <code className="font-mono text-ink-dim">qwen</code> — in that directory on time
+                  and keeps every run&apos;s transcript, cost and result. A first one worth having
+                  is a nightly review of yesterday&apos;s commits.
                 </p>
                 <button
                   type="button"

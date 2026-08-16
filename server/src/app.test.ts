@@ -114,7 +114,7 @@ test("GET /api/runtimes lists every runtime, its default, and its capabilities",
   assert.equal(body.default, "claude");
   assert.deepEqual(
     body.runtimes.map((r) => r.id),
-    ["claude", "codex"],
+    ["claude", "codex", "opencode", "qwen"],
   );
   assert.equal(body.runtimes.filter((r) => r.isDefault).length, 1);
   // The capabilities the UI reads to explain a gap rather than hide it: Codex
@@ -125,6 +125,18 @@ test("GET /api/runtimes lists every runtime, its default, and its capabilities",
   assert.equal(codex.capabilities.reportsTokens, true);
   // Whether the CLI is installed is a fact about the box, not about the shape.
   assert.equal(typeof codex.available, "boolean");
+  // OpenCode has no command hook to register, so a pipeline phase on it
+  // completes from the run record rather than from a signal; the UI has to be
+  // able to say so rather than showing an unexplained delay.
+  const opencode = body.runtimes.find((r) => r.id === "opencode")!;
+  assert.equal(opencode.capabilities.signalHook, false);
+  assert.equal(opencode.capabilities.reportsCost, true);
+  // Qwen Code's hooks are Claude Code's, so its phases signal the same way —
+  // but it mints its own session id and reports no dollars.
+  const qwen = body.runtimes.find((r) => r.id === "qwen")!;
+  assert.equal(qwen.capabilities.signalHook, true);
+  assert.equal(qwen.capabilities.presetSessionId, false);
+  assert.equal(qwen.capabilities.reportsCost, false);
 });
 
 test("unknown Host header is rejected with 403", async () => {

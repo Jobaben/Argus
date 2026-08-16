@@ -6,12 +6,14 @@ import { readJsonl } from "./readJson.js";
 import { cached } from "./cache.js";
 import { encodeProject } from "./runs.js";
 import { codexPaths } from "../codexHome.js";
+import { qwenPaths } from "../qwenHome.js";
 import {
   CODEX_PROJECT,
   listCodexSessionFiles,
   resolveCodexSessionFile,
   translateRolloutLine,
 } from "./codexSessions.js";
+import { listQwenSessionFiles, qwenSessionFile, translateQwenLine } from "./qwenSessions.js";
 import type { SessionDetail, SessionMessage, SessionSummary, SessionTail } from "@argus/contracts";
 
 const DEFAULT_LIMIT = 60;
@@ -51,6 +53,26 @@ interface RawLine {
 }
 
 export type { SessionDetail, SessionMessage, SessionSummary, SessionTail } from "@argus/contracts";
+
+/**
+ * Which CLI wrote a transcript, and therefore how its lines are read.
+ *
+ * Claude Code's own files need no translation; the others are mapped into that
+ * same line shape on the way in, so the summarizer, the detail route, the live
+ * tail, the Markdown exporter and the Flight Recorder all stay one code path.
+ * Carried on every file handle rather than re-derived from the path, because
+ * two of the three sources share Claude Code's `projects/<encoded-cwd>/`
+ * namespace and only the reader knows which root it came from.
+ */
+export type TranscriptKind = "claude" | "codex" | "qwen";
+
+/** The translator for a transcript kind, or null when the lines are already in
+ *  the canonical shape. */
+function translatorFor(kind: TranscriptKind): ((raw: unknown) => RawLine | null) | null {
+  if (kind === "codex") return translateRolloutLine as (raw: unknown) => RawLine | null;
+  if (kind === "qwen") return translateQwenLine as (raw: unknown) => RawLine | null;
+  return null;
+}
 
 /**
  * Turns an encoded project directory name back into something readable.
@@ -164,8 +186,7 @@ interface TranscriptFile {
   id: string;
   file: string;
   mtime: number;
-  /** A Codex rollout, which is translated on read. */
-  codex: boolean;
+  kind: TranscriptKind;
 }
 
 async function listSessionFiles(): Promise<TranscriptFile[]> {
@@ -196,7 +217,13 @@ async function listSessionFiles(): Promise<TranscriptFile[]> {
           } catch {
             /* unreadable; keep mtime 0 */
           }
-          return { project, id: f.replace(/\.jsonl$/, ""), file, mtime, codex: false };
+          return {
+            project,
+            id: f.replace(/\.jsonl$/, ""),
+            file,
+            mtime,
+            kind: "claude" as const,
+          };
         }),
       );
     }),
@@ -207,20 +234,31 @@ async function listSessionFiles(): Promise<TranscriptFile[]> {
     id: f.id,
     file: f.file,
     mtime: f.mtime,
-    codex: true,
+    kind: "codex" as const,
   }));
-  return [...all.flat(), ...codex];
+  // Qwen Code encodes the working directory into a project segment exactly as
+  // Claude Code does, so its sessions need no reserved bucket: they file
+  // themselves next to the Claude sessions from the same directory.
+  const qwen = (await listQwenSessionFiles()).map((f) => ({
+    project: f.project,
+    id: f.id,
+    file: f.file,
+    mtime: f.mtime,
+    kind: "qwen" as const,
+  }));
+  return [...all.flat(), ...codex, ...qwen];
 }
 
-/** Parse one transcript into the canonical line shape, translating a Codex
- *  rollout on the way through so every reader below sees one format. */
-async function readLines(codex: boolean, file: string): Promise<RawLine[]> {
+/** Parse one transcript into the canonical line shape, translating another
+ *  CLI's dialect on the way through so every reader below sees one format. */
+async function readLines(kind: TranscriptKind, file: string): Promise<RawLine[]> {
   const raw = await readJsonl<unknown>(file);
-  if (!codex) return raw as RawLine[];
+  const translate = translatorFor(kind);
+  if (!translate) return raw as RawLine[];
   const out: RawLine[] = [];
   for (const line of raw) {
-    const translated = translateRolloutLine(line);
-    if (translated) out.push(translated as RawLine);
+    const translated = translate(line);
+    if (translated) out.push(translated);
   }
   return out;
 }
@@ -241,7 +279,7 @@ async function summarizeFile(entry: TranscriptFile): Promise<SessionSummary> {
     summaryMemo.set(key, hit);
     return hit.summary;
   }
-  const lines = await readLines(entry.codex, entry.file);
+  const lines = await readLines(entry.kind, entry.file);
   const summary = summarize(entry.project, entry.id, lines);
   summaryMemo.delete(key);
   summaryMemo.set(key, { mtime: entry.mtime, summary });
@@ -269,14 +307,13 @@ async function readSessionsRaw(limit: number): Promise<SessionSummary[]> {
 // the roots are configurable, so a key that ignored them would serve one home's
 // listing for another's (and does, to tests with a home per case).
 export async function readSessions(limit = DEFAULT_LIMIT): Promise<SessionSummary[]> {
-  const key = `sessions:${limit}:${paths.projects()}:${codexPaths.sessions()}`;
+  const key = `sessions:${limit}:${paths.projects()}:${codexPaths.sessions()}:${qwenPaths.projects()}`;
   return cached(key, 1500, () => readSessionsRaw(limit));
 }
 
 interface ResolvedSession {
   file: string;
-  /** A Codex rollout, which is translated on read. */
-  codex: boolean;
+  kind: TranscriptKind;
 }
 
 /**
@@ -297,13 +334,25 @@ async function resolveSessionPath(project: string, id: string): Promise<Resolved
     if (path.dirname(resolved) !== path.resolve(base, project)) return null;
     try {
       await stat(resolved);
-      return { file: resolved, codex: false };
+      return { file: resolved, kind: "claude" };
     } catch {
-      /* no Claude transcript under this project; it may be a Codex session */
+      /* no Claude transcript under this project; another runtime's may be */
+    }
+    // Qwen Code shares the encoded-project namespace, so the same pair composes
+    // its path too — one directory deeper. Session ids are UUIDs, so the two
+    // can share a project segment without ever colliding on a file.
+    const qwen = qwenSessionFile(project, id);
+    if (qwen) {
+      try {
+        await stat(qwen);
+        return { file: qwen, kind: "qwen" };
+      } catch {
+        /* nor a Qwen transcript; fall through to the Codex index */
+      }
     }
   }
   const rollout = await resolveCodexSessionFile(id);
-  return rollout ? { file: rollout, codex: true } : null;
+  return rollout ? { file: rollout, kind: "codex" } : null;
 }
 
 /**
@@ -338,8 +387,9 @@ export async function readSessionLines(project: string, id: string): Promise<unk
   const found = await resolveSessionPath(project, id);
   if (!found) return [];
   const { file } = found;
+  const translateLine = translatorFor(found.kind);
   const translate = (lines: unknown[]) =>
-    found.codex ? lines.map(translateRolloutLine).filter((l) => l !== null) : lines;
+    translateLine ? lines.map(translateLine).filter((l) => l !== null) : lines;
 
   let size: number;
   try {
@@ -409,7 +459,7 @@ async function readSessionRaw(project: string, id: string): Promise<SessionDetai
   const found = await resolveSessionPath(project, id);
   if (!found) return null;
 
-  const lines = await readLines(found.codex, found.file);
+  const lines = await readLines(found.kind, found.file);
   if (lines.length === 0) return null;
 
   const summary = summarize(project, id, lines);
@@ -456,11 +506,11 @@ interface TailState {
   model: string | null;
   firstActivity: string | null;
   lastActivity: string | null;
-  /** Codex only: the directory the run happened in, used as the project label. */
+  /** Reported by the runtimes that record it; used as the project label. */
   cwd: string | null;
   messages: SessionMessage[];
-  /** Whether appended bytes must be translated from a Codex rollout first. */
-  codex: boolean;
+  /** How appended bytes are read — the same discriminator the full read uses. */
+  kind: TranscriptKind;
 }
 
 const tailMemo = new Map<string, TailState>();
@@ -469,7 +519,7 @@ const tailMemo = new Map<string, TailState>();
 // bytes twice, corrupting the memoized state. Serialize per file.
 const tailLocks = new KeyedMutex();
 
-function newTailState(codex: boolean): TailState {
+function newTailState(kind: TranscriptKind): TailState {
   return {
     size: 0,
     mtimeMs: 0,
@@ -481,7 +531,7 @@ function newTailState(codex: boolean): TailState {
     lastActivity: null,
     cwd: null,
     messages: [],
-    codex,
+    kind,
   };
 }
 
@@ -491,9 +541,10 @@ function newTailState(codex: boolean): TailState {
 // ai-title anywhere in the file beats user text regardless of order.
 function ingestParsed(state: TailState, raw: unknown): void {
   state.lineCount++;
-  // A Codex rollout is translated line by line, exactly as the full read does,
-  // so a live tail and a reload of the same session agree message for message.
-  const parsed = state.codex ? translateRolloutLine(raw) : raw;
+  // Translated line by line, exactly as the full read does, so a live tail and
+  // a reload of the same session agree message for message.
+  const translate = translatorFor(state.kind);
+  const parsed = translate ? translate(raw) : raw;
   if (!parsed || typeof parsed !== "object") return;
   const line = parsed as RawLine;
   if (line.cwd) state.cwd = line.cwd;
@@ -582,13 +633,13 @@ export async function readSessionTail(
   const found = await resolveSessionPath(project, id);
   if (!found) return null;
   return tailLocks.withLock(found.file, () =>
-    readSessionTailLocked(found.file, found.codex, project, id, after),
+    readSessionTailLocked(found.file, found.kind, project, id, after),
   );
 }
 
 async function readSessionTailLocked(
   file: string,
-  codex: boolean,
+  kind: TranscriptKind,
   project: string,
   id: string,
   after: number,
@@ -605,7 +656,7 @@ async function readSessionTailLocked(
   if (state && (st.size < state.size || (st.size === state.size && st.mtimeMs !== state.mtimeMs))) {
     state = undefined; // truncated or rewritten in place — reparse from scratch
   }
-  if (!state) state = newTailState(codex);
+  if (!state) state = newTailState(kind);
   if (st.size > state.size) await ingestAppendedBytes(state, file, st.size);
   state.mtimeMs = st.mtimeMs;
 

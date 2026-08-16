@@ -1,9 +1,10 @@
 # Argus — Data Model Reference
 
 Empirically observed shapes of the files Argus reads — `~/.claude` for Claude
-Code, `~/.codex` for Codex. Verified against a live home directory on
-2026-06-16. Treat every field as optional and read defensively — CLI versions
-vary and files are written incrementally.
+Code, `~/.codex` for Codex, `~/.qwen` for Qwen Code and the XDG data dir for
+OpenCode. Verified against a live home directory on 2026-06-16, and against
+OpenCode 1.18 / Qwen Code 0.21 on 2026-08-15. Treat every field as optional and
+read defensively — CLI versions vary and files are written incrementally.
 
 ## `jobs/<short>/state.json` — background job state
 
@@ -129,6 +130,64 @@ skip injected instructions.
 TOML. Argus reads it to check whether its stop hook is registered, and
 **appends** a `[[hooks.stop]]` block when it isn't — never a rewrite, so
 comments and ordering survive. See ARCHITECTURE §1.
+
+## `~/.qwen/settings.json` — Qwen Code configuration
+
+JSON, and the hook schema is **Claude Code's**, key for key:
+
+```jsonc
+{
+  "hooks": {
+    "Stop": [
+      { "matcher": "", "hooks": [{ "type": "command", "command": "node \"…/argus-signal.mjs\"" }] },
+    ],
+  },
+}
+```
+
+The payload that hook receives is Claude Code's too — `last_assistant_message`,
+`background_tasks`, `session_id`, `transcript_path` — which is why one
+`argus-signal.mjs` serves both and needs no branch for this runtime. Argus reads
+the file to check its own registration and rewrites it only to add that one
+group, leaving every other key (and any hook the operator registered) intact; a
+present-but-unparseable file is refused rather than replaced.
+
+## `~/.qwen/projects/<encoded-cwd>/chats/<session-id>.jsonl` — Qwen Code transcripts
+
+Filed by project the way Claude Code's are, one directory deeper, and with the
+**same** encoding of the working directory into a path segment — so a Qwen
+session resolves from `(project, sessionId)` exactly as a Claude one does, and a
+Claude and a Qwen session from the same directory share a project segment
+without shadowing each other (both ids are UUIDs).
+
+```jsonc
+{ "uuid": "…", "parentUuid": null, "sessionId": "…", "timestamp": "…", "type": "user",        "cwd": "/srv/app", "message": { "role": "user",  "parts": [{ "text": "…" }] } }
+{ "uuid": "…", "parentUuid": "…",  "sessionId": "…", "timestamp": "…", "type": "system",      "cwd": "/srv/app", "subtype": "ui_telemetry", "systemPayload": { "uiEvent": { "model": "qwen3-27b", … } } }
+{ "uuid": "…", "parentUuid": "…",  "sessionId": "…", "timestamp": "…", "type": "assistant",   "cwd": "/srv/app", "message": { "role": "model", "parts": [{ "functionCall": { "name": "run_shell_command", "args": { … } } }] } }
+{ "uuid": "…", "parentUuid": "…",  "sessionId": "…", "timestamp": "…", "type": "tool_result", "cwd": "/srv/app", "message": { "role": "user",  "parts": [{ "functionResponse": { "name": "…", "response": { "output": "…" } } }] } }
+{ "uuid": "…", "parentUuid": "…",  "sessionId": "…", "timestamp": "…", "type": "assistant",   "cwd": "/srv/app", "message": { "role": "model", "parts": [{ "text": "…" }] } }
+```
+
+The line shape is Gemini CLI's rather than Claude Code's — `message.parts[]`
+instead of `message.content[]`, `functionCall` / `functionResponse` instead of
+`tool_use` / `tool_result` blocks, `role: "model"` for the assistant, and
+`type: "system"` lines that are telemetry rather than conversation.
+`server/src/sources/qwenSessions.ts` translates these into the Claude line shape
+so one set of readers serves all three sources. The telemetry lines are kept
+rather than dropped: they are the only place the model name is recorded, and
+every line carries the run's `cwd`. A `tool_result` line comes through flagged
+`isMeta`, so a shell transcript can never become the session's title.
+
+Note the asymmetry with the live stream: `qwen -o stream-json` emits Claude
+Code's envelope verbatim, which is why the runtime's activity derivation needs
+no translation at all. Only the file on disk is in Gemini's dialect.
+
+## `~/.local/share/opencode/opencode.db` — OpenCode sessions
+
+SQLite (plus `-wal` / `-shm`), not JSONL: a private schema Argus does not read,
+which is what `transcripts: false` on that runtime reports. Its configuration
+lives elsewhere again, in `~/.config/opencode/opencode.json`, where the provider
+list defines the `<provider>/<model>` ids the model picker accepts.
 
 ## `history.jsonl` — global prompt history
 
