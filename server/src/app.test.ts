@@ -2265,3 +2265,85 @@ test("ARGUS_TOKEN still guards the routes next to the signal", async () => {
     assert.equal(res.status, 401, path);
   }
 });
+
+// ── Outcome routing: authoring ───────────────────────────────────────────────
+
+test("routing: a conditional definition is accepted and its edges round-trip", async () => {
+  const app = makeApp();
+  const res = await postPipeline(app, [
+    dagPhase("evaluate", {
+      result: {
+        artifact: "evaluation",
+        schema: {
+          type: "object",
+          required: ["accepted"],
+          properties: { accepted: { type: "boolean" } },
+        },
+      },
+    }),
+    dagPhase("publish", {
+      needs: [
+        {
+          phase: "evaluate",
+          when: { predicate: { path: ["accepted"], operator: "equals", value: true } },
+        },
+      ],
+    }),
+    dagPhase("repair", {
+      needs: [
+        {
+          phase: "evaluate",
+          when: { predicate: { path: ["accepted"], operator: "equals", value: false } },
+        },
+      ],
+    }),
+    dagPhase("report", {
+      needs: [
+        { phase: "publish", allowSkipped: true },
+        { phase: "repair", allowSkipped: true },
+      ],
+    }),
+  ]);
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as {
+    phases: { needs?: unknown[]; result?: { artifact: string } }[];
+  };
+  assert.equal(body.phases[0].result?.artifact, "evaluation");
+  assert.deepEqual(body.phases[3].needs, [
+    { phase: "publish", allowSkipped: true },
+    { phase: "repair", allowSkipped: true },
+  ]);
+});
+
+test("routing: a condition on a phase with no result is a 400 naming the phase", async () => {
+  const app = makeApp();
+  const res = await postPipeline(app, [
+    dagPhase("evaluate"),
+    dagPhase("publish", {
+      needs: [
+        { phase: "evaluate", when: { predicate: { path: ["accepted"], operator: "exists" } } },
+      ],
+    }),
+  ]);
+  assert.equal(res.status, 400);
+  assert.match(
+    ((await res.json()) as { error: string }).error,
+    /phase "publish".*declares no result/,
+  );
+});
+
+test("routing: a predicate path the source schema does not declare is a 400", async () => {
+  const app = makeApp();
+  const res = await postPipeline(app, [
+    dagPhase("evaluate", {
+      result: { artifact: "evaluation", schema: { type: "object", properties: {} } },
+    }),
+    dagPhase("publish", {
+      needs: [
+        { phase: "evaluate", when: { predicate: { path: ["accepted"], operator: "exists" } } },
+      ],
+    }),
+  ]);
+  assert.equal(res.status, 400);
+  assert.match(((await res.json()) as { error: string }).error, /path "accepted"/);
+});
