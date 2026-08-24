@@ -12,6 +12,7 @@ import { readResultFile } from "../../hooks/argus-signal.mjs";
 import type { ArgusConfig } from "./config.js";
 import type { AuthService } from "./auth.js";
 import type { PipelineInstance } from "./sources/pipelineTypes.js";
+import type { OverviewEntry } from "@argus/contracts";
 
 /**
  * The spec's worked example, end to end, through the real seams.
@@ -130,6 +131,7 @@ async function runExample(decision: { accepted: boolean }): Promise<{
   instance: PipelineInstance;
   spawned: Spawned[];
   prompts: Map<string, string>;
+  overview: () => Promise<OverviewEntry[]>;
 }> {
   const spawned: Spawned[] = [];
   const prompts = new Map<string, string>();
@@ -204,7 +206,19 @@ async function runExample(decision: { accepted: boolean }): Promise<{
     assert.equal(res.status, 202, `signal for ${step.phaseId}`);
   }
 
-  return { instance: (await readInstance(instanceId))!, spawned, prompts };
+  return {
+    instance: (await readInstance(instanceId))!,
+    spawned,
+    prompts,
+    // The board reads the instance through here, so this is where a dropped
+    // field would actually be noticed.
+    overview: async () =>
+      (
+        (await (await app.request("/api/overview", { headers: sameOrigin })).json()) as {
+          overview: OverviewEntry[];
+        }
+      ).overview,
+  };
 }
 
 /** Give the engine's detached launch a moment to add the next wave, if any. */
@@ -217,7 +231,7 @@ async function settling(spawned: Spawned[], done: number): Promise<boolean> {
 }
 
 test("accepted: the publish branch runs, repair is skipped, and the join reports", async () => {
-  const { instance, spawned, prompts } = await runExample({ accepted: true });
+  const { instance, spawned, prompts, overview } = await runExample({ accepted: true });
 
   assert.deepEqual(
     spawned.map((s) => s.phaseId),
@@ -247,6 +261,14 @@ test("accepted: the publish branch runs, repair is skipped, and the join reports
   // schema rather than the mechanic.
   assert.match(prompts.get("evaluate")!, /ARGUS_RESULT_FILE/);
   assert.match(prompts.get("evaluate")!, /"accepted"/);
+
+  // And all of it reaches the board: the overview enriches the instance with
+  // run costs, and must not lose the routing state doing it.
+  const [entry] = await overview();
+  assert.equal(entry.latest?.routeDecisions?.length, 1);
+  assert.deepEqual(entry.latest?.phases[0].result, { accepted: true });
+  assert.equal(entry.latest?.phases[2].status, "skipped");
+  assert.equal(entry.definition.phases[0].result?.artifact, "evaluation");
 
   const journal = await readJournal(instance.id);
   assert.equal(

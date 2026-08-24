@@ -469,6 +469,23 @@ test("a settled route is replayed from its record, not evaluated again", () => {
   assert.deepEqual(res.routing!.decisions, [], "a replay reports no new decision");
 });
 
+test("a phase that succeeded before its result was declared fails rather than skipping everything", () => {
+  const d = def(WORKED);
+  const inst = start(d).instance;
+  // As an instance mid-flight would look if the phase had succeeded under a
+  // definition that did not yet declare a result.
+  const evaluate = inst.phases[0];
+  evaluate.status = "succeeded";
+  evaluate.steps = evaluate.steps.map((s) => ({ ...s, status: "succeeded" }));
+  delete evaluate.result;
+
+  const res = settle(d, inst, NOW);
+  assert.equal(status(inst, "evaluate"), "failed");
+  assert.equal(status(inst, "publish"), "pending", "no branch is guessed");
+  assert.equal(status(inst, "repair"), "pending");
+  assert.match(res.routing!.failures[0].reason, /without recording its declared result/);
+});
+
 // ── Every pre-routing definition behaves exactly as before ─────────────────
 
 test("a failed phase still blocks its dependents rather than skipping them", () => {

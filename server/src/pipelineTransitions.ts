@@ -202,6 +202,20 @@ function recordRouteDecisions(
     const phaseDef = def.phases.find((p) => p.id === phase.id);
     if (!phaseDef?.result) continue;
     const edges = outgoingEdges(def.phases, phase.id);
+    if (phase.result === undefined) {
+      // Reachable only when a definition gained its `result` after this phase
+      // had already succeeded — an edit to a running pipeline. With nothing to
+      // evaluate, every predicate would read false and every branch would be
+      // silently skipped, so say so instead. (A declared result *value* of
+      // null is a different thing, and is recorded as null.)
+      if (!edges.some((edge) => edge.when)) continue;
+      const reason = `route evaluation failed: phase "${phase.id}" succeeded without recording its declared result "${phaseDef.result.artifact}"`;
+      phase.status = "failed";
+      phase.payload = withReason(phase.payload, reason);
+      routing.failures.push({ phaseId: phase.id, reason });
+      settled.add(phase.id);
+      continue;
+    }
     try {
       const { selected, skipped } = evaluateRoutes(edges, phase.result);
       // The artifact and the decision are the same fact, so they are published
