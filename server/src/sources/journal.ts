@@ -22,6 +22,13 @@ import { log } from "../log.js";
  *
  * Append-only and per-instance, so writes never contend and a torn last line
  * (the only failure mode of an append) costs exactly one record.
+ *
+ * Routing earns three of its own kinds. The instance file holds the decision
+ * record, but it cannot say when the decision was taken relative to the work
+ * around it, and "why did this phase never run?" is the question a conditional
+ * pipeline gets asked most: `route.selection` names what a result selected,
+ * `route.skip` names each phase that was consequently not run, and
+ * `route.failure` names a result or group that could not be evaluated at all.
  */
 
 export type JournalKind =
@@ -35,6 +42,9 @@ export type JournalKind =
   | "phase.retrying"
   | "phase.revised"
   | "phase.approved"
+  | "route.selection"
+  | "route.skip"
+  | "route.failure"
   | "instance.ended";
 
 export interface JournalEntry {

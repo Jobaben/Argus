@@ -1,4 +1,12 @@
-import type { PhaseDef, PipelineDefinition, PipelineInstance } from "./pipelineTypes.js";
+import type {
+  DependencyEdge,
+  PhaseDef,
+  PhaseStatus,
+  PipelineDefinition,
+  PipelineInstance,
+  RouteCondition,
+  RouteDecision,
+} from "./pipelineTypes.js";
 import { normalizeNeeds } from "./routing.js";
 
 /**
@@ -19,6 +27,14 @@ import { normalizeNeeds } from "./routing.js";
  * Fan-in is the other half. A phase becomes ready only when *every* dependency
  * has succeeded, which is why readiness is computed from the instance's phase
  * statuses rather than from a cursor. A cursor cannot express "wait for both".
+ *
+ * Routing adds one idea to that and no more: an edge can carry a condition, so
+ * readiness is computed over edges rather than over dependency *names*. An edge
+ * has four possible states ({@link edgeState}) and only one of them is new —
+ * `routed-out`, "this work was deliberately not selected". Keeping it distinct
+ * from `blocked` is what preserves every existing pipeline exactly: a failed
+ * dependency still leaves its dependents pending and the instance failed, while
+ * an unselected one is skipped and the instance can still succeed.
  */
 
 export class DagValidationError extends Error {
@@ -37,18 +53,103 @@ export class DagValidationError extends Error {
  * phases get implicit predecessors and others don't, would make the same
  * definition mean two different things depending on where you looked.
  */
-export function resolveNeeds(phases: PhaseDef[]): Map<string, string[]> {
+export function resolveEdges(phases: PhaseDef[]): Map<string, DependencyEdge[]> {
   const declared = phases.some((p) => p.needs !== undefined);
-  const out = new Map<string, string[]>();
+  const out = new Map<string, DependencyEdge[]>();
   phases.forEach((p, i) => {
-    if (declared)
-      out.set(
-        p.id,
-        normalizeNeeds(p.needs).map((edge) => edge.phase),
-      );
-    else out.set(p.id, i === 0 ? [] : [phases[i - 1].id]);
+    if (declared) out.set(p.id, normalizeNeeds(p.needs));
+    else out.set(p.id, i === 0 ? [] : [{ phase: phases[i - 1].id }]);
   });
   return out;
+}
+
+/**
+ * The same edges as dependency ids, for everything that only needs the shape of
+ * the graph: topology, layers, the board's drawn arrows.
+ *
+ * Derived from {@link resolveEdges} rather than computed separately, so a
+ * condition can never be visible to one and invisible to the other.
+ */
+export function resolveNeeds(phases: PhaseDef[]): Map<string, string[]> {
+  return new Map(
+    [...resolveEdges(phases)].map(([id, edges]) => [id, edges.map((edge) => edge.phase)]),
+  );
+}
+
+/** Every edge pointing *out* of one phase, as routes to its targets, in
+ *  definition order — the order route evaluation is specified to use. */
+export function outgoingEdges(phases: PhaseDef[], sourceId: string): DependencyEdge[] {
+  const edges = resolveEdges(phases);
+  const out: DependencyEdge[] = [];
+  for (const target of phases) {
+    for (const edge of edges.get(target.id) ?? []) {
+      if (edge.phase !== sourceId) continue;
+      out.push({
+        phase: target.id,
+        ...(edge.when ? { when: edge.when } : {}),
+        ...(edge.allowSkipped ? { allowSkipped: true } : {}),
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * What one incoming edge currently says about its target.
+ *
+ * `satisfied` — go. `blocked` — the source failed or was aborted, so the target
+ * can never run and the instance is failing; it stays pending, exactly as it did
+ * before routing existed. `routed-out` — the source succeeded but did not select
+ * this target, so the target is deliberately skipped. `unknown` — the source has
+ * not finished, or has finished but its decision has not been recorded yet.
+ */
+export type EdgeState = "satisfied" | "routed-out" | "blocked" | "unknown";
+
+export function edgeState(
+  edge: DependencyEdge,
+  target: string,
+  statusById: Map<string, PhaseStatus>,
+  decisions: Map<string, RouteDecision>,
+): EdgeState {
+  const status = statusById.get(edge.phase);
+  if (status === "failed" || status === "aborted") return "blocked";
+  // An explicitly skip-tolerant edge is how a join after alternatives stops
+  // waiting for the branch that was never going to run.
+  if (status === "skipped") return edge.allowSkipped ? "satisfied" : "routed-out";
+  if (status !== "succeeded") return "unknown";
+  if (!edge.when) return "satisfied";
+  const decision = decisions.get(edge.phase);
+  if (!decision) return "unknown";
+  return decision.selected.includes(target) ? "satisfied" : "routed-out";
+}
+
+/** The recorded decisions by source phase — the only routing input readiness has. */
+export function decisionsBySource(inst: PipelineInstance): Map<string, RouteDecision> {
+  return new Map((inst.routeDecisions ?? []).map((d) => [d.sourcePhase, d]));
+}
+
+function edgeStatesFor(def: PipelineDefinition, inst: PipelineInstance): Map<string, EdgeState[]> {
+  const edges = resolveEdges(def.phases);
+  const statusById = new Map(inst.phases.map((p) => [p.id, p.status]));
+  const decisions = decisionsBySource(inst);
+  return new Map(
+    inst.phases.map((p) => [
+      p.id,
+      (edges.get(p.id) ?? []).map((edge) => edgeState(edge, p.id, statusById, decisions)),
+    ]),
+  );
+}
+
+/** A one-line description of an edge's condition, for records and labels. */
+export function describeCondition(when: RouteCondition | undefined): string {
+  if (!when) return "always";
+  if (when.default) return "default";
+  const p = when.predicate;
+  if (!p) return "never";
+  const path = p.path.join(".");
+  return p.operator === "exists"
+    ? `${path} exists`
+    : `${path} ${p.operator} ${JSON.stringify(p.value)}`;
 }
 
 /**
@@ -175,13 +276,33 @@ export function layers(phases: PhaseDef[]): string[][] {
  * launch them without another lookup.
  */
 export function readyPhases(def: PipelineDefinition, inst: PipelineInstance): number[] {
-  const needs = resolveNeeds(def.phases);
-  const statusById = new Map(inst.phases.map((p) => [p.id, p.status]));
+  const states = edgeStatesFor(def, inst);
   const out: number[] = [];
   inst.phases.forEach((p, i) => {
     if (p.status !== "pending") return;
-    const deps = needs.get(p.id) ?? [];
-    if (deps.every((d) => statusById.get(d) === "succeeded")) out.push(i);
+    if ((states.get(p.id) ?? []).every((state) => state === "satisfied")) out.push(i);
+  });
+  return out;
+}
+
+/**
+ * The phases routing has decided will not run.
+ *
+ * A target is skipped only once **every** incoming edge is known: a phase with
+ * one routed-out edge and one dependency still running has not been decided
+ * yet, and skipping it early would cancel work its other dependency was about
+ * to authorize. A single blocked edge keeps the phase pending instead — a
+ * failure upstream is a failing instance, never a tidy skip.
+ */
+export function skippablePhases(def: PipelineDefinition, inst: PipelineInstance): number[] {
+  const states = edgeStatesFor(def, inst);
+  const out: number[] = [];
+  inst.phases.forEach((p, i) => {
+    if (p.status !== "pending") return;
+    const mine = states.get(p.id) ?? [];
+    if (mine.length === 0) return;
+    if (mine.some((state) => state === "unknown" || state === "blocked")) return;
+    if (mine.some((state) => state === "routed-out")) out.push(i);
   });
   return out;
 }
@@ -208,7 +329,12 @@ export function instanceOutcome(
 ): "running" | "succeeded" | "blocked" {
   if (livePhases(inst).length > 0) return "running";
   if (readyPhases(def, inst).length > 0) return "running";
-  if (inst.phases.every((p) => p.status === "succeeded")) return "succeeded";
+  // Terminal and intentional: a skipped phase is work routing decided against,
+  // so an instance whose every phase either succeeded or was deliberately
+  // skipped has done exactly what it was asked to do.
+  if (inst.phases.every((p) => p.status === "succeeded" || p.status === "skipped")) {
+    return "succeeded";
+  }
   // Nothing can progress and at least one phase did not succeed. This includes
   // both a failed dependency with pending descendants and a fully-settled graph
   // containing a failed branch; neither may be rubber-stamped as succeeded.

@@ -8,6 +8,11 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { readResultFile } from "../../hooks/argus-signal.mjs";
 import { resultStepName } from "./sources/dag.js";
+import { createEngine } from "./pipelineEngine.js";
+import { createPipeline, validatePipelineInput } from "./sources/pipelines.js";
+import { readInstance } from "./sources/instances.js";
+import { readRun, readRunResult, runResultPath, writeRun } from "./sources/runs.js";
+import type { EngineDeps } from "./pipelineEngine.js";
 import type { PhaseDef } from "./sources/pipelineTypes.js";
 
 /**
@@ -26,14 +31,6 @@ beforeEach(() => {
   process.env.ARGUS_CLAUDE_HOME = home;
 });
 
-async function load() {
-  const engine = await import(`./pipelineEngine.js?${Math.random()}`);
-  const pipelines = await import(`./sources/pipelines.js?${Math.random()}`);
-  const instances = await import(`./sources/instances.js?${Math.random()}`);
-  const runs = await import(`./sources/runs.js?${Math.random()}`);
-  return { engine, pipelines, instances, runs };
-}
-
 let counter = 0;
 function deferred() {
   let resolve!: (v: { code: number | null }) => void;
@@ -50,7 +47,7 @@ function recordingSpawn() {
   return { spawn, calls };
 }
 
-const baseDeps = (over: Record<string, unknown>) => ({
+const baseDeps = (over: Partial<EngineDeps> & { spawn: EngineDeps["spawn"] }): EngineDeps => ({
   now: () => new Date(2026, 5, 30, 12, 0),
   newId: () => `id-${++counter}`,
   signalUrlBase: "http://localhost:7777",
@@ -65,15 +62,13 @@ const decisionSchema = {
   properties: { accepted: { type: "boolean" as const } },
 };
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-async function seed(pipelines: any, phases: unknown[], over: Record<string, unknown> = {}) {
-  return pipelines.createPipeline(
-    pipelines.validatePipelineInput({ name: "feature", trigger: null, phases, ...over }),
+async function seed(phases: unknown[], over: Record<string, unknown> = {}) {
+  return createPipeline(
+    validatePipelineInput({ name: "feature", trigger: null, phases, ...over }),
     new Date(2026, 5, 30, 9, 0),
     "p1",
   );
 }
-/* eslint-enable @typescript-eslint/no-explicit-any */
 
 const phaseDef = (id: string, over: Partial<PhaseDef> = {}): PhaseDef => ({
   id,
@@ -109,8 +104,7 @@ test("the publishing step is the only step, or the one the phase named", () => {
 // ── The engine's half: an env var and an instruction, for one step only ──────
 
 test("only the declared result step is given a result file and told to write it", async () => {
-  const { engine, pipelines, runs } = await load();
-  await seed(pipelines, [
+  await seed([
     {
       id: "evaluate",
       name: "Evaluate",
@@ -124,13 +118,13 @@ test("only the declared result step is given a result file and told to write it"
     },
   ]);
   const rec = recordingSpawn();
-  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const e = createEngine(baseDeps({ spawn: rec.spawn }));
   await e.start("p1", "manual");
 
   assert.equal(rec.calls.length, 2);
   const byStep = new Map<string, { runId: string; env: Record<string, string> }>();
   for (const call of rec.calls) {
-    const got = await runs.readRun(call.runId);
+    const got = await readRun(call.runId);
     byStep.set(got!.run.scheduleName, call);
   }
   const decide = rec.calls[1];
@@ -138,23 +132,22 @@ test("only the declared result step is given a result file and told to write it"
   assert.ok(decide.env.ARGUS_RESULT_FILE, "the publishing step gets a result file path");
   assert.equal(gather.env.ARGUS_RESULT_FILE, undefined, "a sibling step gets no result file");
 
-  const decideRun = await runs.readRun(decide.runId);
-  const gatherRun = await runs.readRun(gather.runId);
+  const decideRun = await readRun(decide.runId);
+  const gatherRun = await readRun(gather.runId);
   assert.match(decideRun!.run.prompt, /ARGUS_RESULT_FILE/);
   assert.match(decideRun!.run.prompt, /"accepted"/, "the schema travels with the instruction");
   assert.doesNotMatch(gatherRun!.run.prompt, /ARGUS_RESULT_FILE/);
 });
 
 test("a phase with no declared result is spawned exactly as before", async () => {
-  const { engine, pipelines, runs } = await load();
-  await seed(pipelines, [
+  await seed([
     { id: "only", name: "Only", cwd: home, gated: false, steps: [{ name: "s", prompt: "p" }] },
   ]);
   const rec = recordingSpawn();
-  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const e = createEngine(baseDeps({ spawn: rec.spawn }));
   await e.start("p1", "manual");
   assert.equal(rec.calls[0].env.ARGUS_RESULT_FILE, undefined);
-  assert.equal((await runs.readRun(rec.calls[0].runId))!.run.prompt, "p");
+  assert.equal((await readRun(rec.calls[0].runId))!.run.prompt, "p");
 });
 
 // ── The hook's half: read the file, never the prose ──────────────────────────
@@ -261,8 +254,7 @@ test("the stop hook never reads a decision out of the assistant's prose", async 
 // ── The receiving end: the signal's result lands on its step ─────────────────
 
 test("a completion signal's result is recorded against the step that sent it", async () => {
-  const { engine, pipelines, instances } = await load();
-  await seed(pipelines, [
+  await seed([
     {
       id: "evaluate",
       name: "Evaluate",
@@ -273,7 +265,7 @@ test("a completion signal's result is recorded against the step that sent it", a
     },
   ]);
   const rec = recordingSpawn();
-  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const e = createEngine(baseDeps({ spawn: rec.spawn }));
   const inst = await e.start("p1", "manual");
   await e.onSignal(inst!.id, {
     instanceId: inst!.id,
@@ -283,16 +275,14 @@ test("a completion signal's result is recorded against the step that sent it", a
     token: inst!.signalToken,
     result: { accepted: true },
   });
-  const after = await instances.readInstance(inst!.id);
+  const after = await readInstance(inst!.id);
   assert.deepEqual(after!.phases[0].steps[0].result, { accepted: true });
 });
 
 // ── The hookless runtimes: the file is read on the reconcile tick ────────────
 
 test("a hookless runtime's result file is read when its run is reconciled", async () => {
-  const { engine, pipelines, instances, runs } = await load();
   await seed(
-    pipelines,
     [
       {
         id: "evaluate",
@@ -306,7 +296,7 @@ test("a hookless runtime's result file is read when its run is reconciled", asyn
     { runtime: "opencode" },
   );
   const rec = recordingSpawn();
-  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const e = createEngine(baseDeps({ spawn: rec.spawn }));
   const inst = await e.start("p1", "manual");
   const runId = rec.calls[0].runId;
 
@@ -316,8 +306,8 @@ test("a hookless runtime's result file is read when its run is reconciled", asyn
   assert.ok(file, "a result-producing step is given a file even without a hook");
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify({ accepted: true }));
-  const got = await runs.readRun(runId);
-  await runs.writeRun({
+  const got = await readRun(runId);
+  await writeRun({
     ...got!.run,
     status: "succeeded",
     exitCode: 0,
@@ -327,14 +317,12 @@ test("a hookless runtime's result file is read when its run is reconciled", asyn
 
   await e.reconcile();
 
-  const after = await instances.readInstance(inst!.id);
+  const after = await readInstance(inst!.id);
   assert.deepEqual(after!.phases[0].steps[0].result, { accepted: true });
 });
 
 test("a hookless runtime's malformed result file is reported, not parsed from prose", async () => {
-  const { engine, pipelines, instances, runs } = await load();
   await seed(
-    pipelines,
     [
       {
         id: "evaluate",
@@ -348,13 +336,13 @@ test("a hookless runtime's malformed result file is reported, not parsed from pr
     { runtime: "opencode" },
   );
   const rec = recordingSpawn();
-  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const e = createEngine(baseDeps({ spawn: rec.spawn }));
   const inst = await e.start("p1", "manual");
   const file = rec.calls[0].env.ARGUS_RESULT_FILE;
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, "not json at all");
-  const got = await runs.readRun(rec.calls[0].runId);
-  await runs.writeRun({
+  const got = await readRun(rec.calls[0].runId);
+  await writeRun({
     ...got!.run,
     status: "succeeded",
     exitCode: 0,
@@ -364,19 +352,18 @@ test("a hookless runtime's malformed result file is reported, not parsed from pr
 
   await e.reconcile();
 
-  const after = await instances.readInstance(inst!.id);
+  const after = await readInstance(inst!.id);
   assert.equal(after!.phases[0].steps[0].result, undefined);
   assert.match(String(after!.phases[0].steps[0].resultError), /could not be parsed/);
 });
 
 test("the result file lives beside the run it belongs to", async () => {
-  const { runs } = await load();
-  const file = runs.runResultPath("run-9");
+  const file = runResultPath("run-9");
   assert.equal(path.basename(file), "run-9.json");
   assert.equal(path.basename(path.dirname(file)), "results");
   // And it is readable back through the same helper the engine uses.
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify({ accepted: true }));
-  assert.deepEqual(await runs.readRunResult("run-9"), { result: { accepted: true } });
+  assert.deepEqual(await readRunResult("run-9"), { result: { accepted: true } });
   assert.equal(readFileSync(file, "utf8"), '{"accepted":true}');
 });

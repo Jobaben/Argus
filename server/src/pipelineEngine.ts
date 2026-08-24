@@ -42,6 +42,7 @@ import type { SpawnPlan } from "./runtimes/index.js";
 import type { AgentRuntimeId } from "@argus/contracts";
 import type { Run } from "./sources/scheduleTypes.js";
 import type { PhaseDef, RetryableClass } from "./sources/pipelineTypes.js";
+import type { RouteOutcome } from "./pipelineTransitions.js";
 import type {
   PipelineDefinition,
   PipelineInstance,
@@ -580,6 +581,52 @@ export function createEngine(deps: EngineDeps): Engine {
     return true;
   }
 
+  /**
+   * Journal what a transition did to the graph's routes, and put any route or
+   * result failure through the same policy an ordinary failure gets.
+   *
+   * Returns true when a retry was scheduled, so the caller re-persists the
+   * instance. Nothing here decides anything: settle already did, and this only
+   * writes down what it decided.
+   */
+  function noteRouting(
+    def: PipelineDefinition,
+    inst: PipelineInstance,
+    routing: RouteOutcome | undefined,
+  ): boolean {
+    if (!routing) return false;
+    for (const decision of routing.decisions) {
+      void journal(inst.id, {
+        at: nowISO(),
+        kind: "route.selection",
+        phaseId: decision.sourcePhase,
+        detail: `${decision.artifact} ${JSON.stringify(decision.value)} → ${decision.reason}`,
+      });
+    }
+    for (const phaseId of routing.skipped) {
+      void journal(inst.id, {
+        at: nowISO(),
+        kind: "route.skip",
+        phaseId,
+        detail: "not selected by an upstream route",
+      });
+    }
+    let rescheduled = false;
+    for (const failure of routing.failures) {
+      void journal(inst.id, {
+        at: nowISO(),
+        kind: "route.failure",
+        phaseId: failure.phaseId,
+        detail: failure.reason,
+      });
+      // A result that never arrived, or arrived unusable, is an operational
+      // signal failure: the agent reported, and what it reported cannot be
+      // routed on. It gets the phase's own retry policy, never a branch.
+      if (noteFailure(def, inst, failure.phaseId, "signal", failure.reason)) rescheduled = true;
+    }
+    return rescheduled;
+  }
+
   /** Start every retry whose backoff has elapsed. Called from reconcile. */
   async function runDueRetries(now: Date): Promise<void> {
     for (const candidate of await readInstances()) {
@@ -694,8 +741,11 @@ export function createEngine(deps: EngineDeps): Engine {
       if (inst.status !== "running") return { ok: true, code: 200 }; // paused/terminal → idempotent ignore
       const def = await loadDef(inst.pipelineId);
       if (!def) return { ok: false, code: 404 };
-      const { instance, startPhases: ready } = advance(def, inst, signal, nowISO());
+      const { instance, startPhases: ready, routing } = advance(def, inst, signal, nowISO());
+      // One write: the route decision, the skips it implies and the phase
+      // statuses land together or not at all.
       await writeInstance(instance);
+      if (noteRouting(def, instance, routing)) await writeInstance(instance);
       const outcome: Run["outcome"] | undefined =
         signal.type === "failed" ? "failed" : signal.type === "completed" ? "succeeded" : undefined;
       if (outcome) await patchRun(signal.runId, { outcome });
@@ -749,6 +799,7 @@ export function createEngine(deps: EngineDeps): Engine {
         return { ok: false, code: 409, error: e instanceof Error ? e.message : String(e) };
       }
       await writeInstance(res.instance);
+      if (noteRouting(def, res.instance, res.routing)) await writeInstance(res.instance);
       await startPhases(def, res.instance, res.startPhases);
       deps.onChange?.();
       return { ok: true, code: 200 };
@@ -927,7 +978,11 @@ export function createEngine(deps: EngineDeps): Engine {
                 : {
                     reason: got?.run.error ?? "run ended without emitting a completion signal",
                   };
-            const { instance, startPhases: ready } = advance(
+            const {
+              instance,
+              startPhases: ready,
+              routing,
+            } = advance(
               def,
               current,
               {
@@ -954,6 +1009,7 @@ export function createEngine(deps: EngineDeps): Engine {
                 "run ended without emitting a completion signal";
               noteFailure(def, instance, phaseId, failureClass, reason);
             }
+            noteRouting(def, instance, routing);
             await writeInstance(instance);
             void journal(instance.id, {
               at: nowISO(),

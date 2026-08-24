@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { validatePipelineInput, validatePipelinePatch } from "./pipelines.js";
 
 /**
  * Authoring validation for outcome routing.
@@ -19,10 +20,6 @@ beforeEach(() => {
   home = mkdtempSync(path.join(tmpdir(), "argus-routes-"));
   process.env.ARGUS_CLAUDE_HOME = home;
 });
-
-async function fresh() {
-  return import(`./pipelines.js?${Math.random()}`);
-}
 
 const phase = (id: string, over: Record<string, unknown> = {}) => ({
   id,
@@ -54,24 +51,21 @@ const when = (value: boolean) => ({
 
 // ── A definition with no `when` edges validates exactly as today ─────────────
 
-test("string dependencies still round-trip as plain phase ids", async () => {
-  const m = await fresh();
-  const out = m.validatePipelineInput(input([phase("plan"), phase("build", { needs: ["plan"] })]));
+test("string dependencies still round-trip as plain phase ids", () => {
+  const out = validatePipelineInput(input([phase("plan"), phase("build", { needs: ["plan"] })]));
   assert.deepEqual(out.phases[1].needs, ["plan"]);
   assert.equal(out.phases[1].result, undefined);
 });
 
-test("an object edge with no condition is an ordinary dependency", async () => {
-  const m = await fresh();
-  const out = m.validatePipelineInput(
+test("an object edge with no condition is an ordinary dependency", () => {
+  const out = validatePipelineInput(
     input([phase("plan"), phase("build", { needs: [{ phase: "plan" }] })]),
   );
   assert.deepEqual(out.phases[1].needs, [{ phase: "plan" }]);
 });
 
-test("the worked example validates and round-trips its routes", async () => {
-  const m = await fresh();
-  const out = m.validatePipelineInput(
+test("the worked example validates and round-trips its routes", () => {
+  const out = validatePipelineInput(
     input([
       evaluatePhase(),
       phase("publish", { needs: [{ phase: "evaluate", when: when(true) }] }),
@@ -95,10 +89,9 @@ test("the worked example validates and round-trips its routes", async () => {
   ]);
 });
 
-test("a group with a default and exclusive members validates", async () => {
-  const m = await fresh();
+test("a group with a default and exclusive members validates", () => {
   const group = { group: "verdict", exclusive: true, required: true };
-  const out = m.validatePipelineInput(
+  const out = validatePipelineInput(
     input([
       phase("audit", {
         result: {
@@ -121,7 +114,8 @@ test("a group with a default and exclusive members validates", async () => {
       phase("remediate", { needs: [{ phase: "audit", when: { ...group, default: true } }] }),
     ]),
   );
-  assert.equal(out.phases[2].needs[0].when.default, true);
+  const remediate = out.phases[2].needs![0];
+  assert.equal(typeof remediate === "string" ? undefined : remediate.when?.default, true);
 });
 
 // ── The rejection table ─────────────────────────────────────────────────────
@@ -392,38 +386,34 @@ const REJECTED: [string, () => unknown[], RegExp][] = [
 ];
 
 for (const [label, phases, pattern] of REJECTED) {
-  test(`validation rejects ${label}`, async () => {
-    const m = await fresh();
-    assert.throws(() => m.validatePipelineInput(input(phases())), pattern);
+  test(`validation rejects ${label}`, () => {
+    assert.throws(() => validatePipelineInput(input(phases())), pattern);
   });
 }
 
 // ── The existing DAG checks keep applying through object edges ───────────────
 
-test("a cycle built from object edges is still rejected", async () => {
-  const m = await fresh();
+test("a cycle built from object edges is still rejected", () => {
   assert.throws(
     () =>
-      m.validatePipelineInput(
+      validatePipelineInput(
         input([phase("a", { needs: [{ phase: "b" }] }), phase("b", { needs: [{ phase: "a" }] })]),
       ),
     /cycle/,
   );
 });
 
-test("a dangling object edge is still named in the error", async () => {
-  const m = await fresh();
+test("a dangling object edge is still named in the error", () => {
   assert.throws(
-    () => m.validatePipelineInput(input([phase("a"), phase("b", { needs: [{ phase: "ghost" }] })])),
+    () => validatePipelineInput(input([phase("a"), phase("b", { needs: [{ phase: "ghost" }] })])),
     /needs "ghost"/,
   );
 });
 
-test("the same source listed twice is still a duplicate dependency", async () => {
-  const m = await fresh();
+test("the same source listed twice is still a duplicate dependency", () => {
   assert.throws(
     () =>
-      m.validatePipelineInput(
+      validatePipelineInput(
         input([
           evaluatePhase(),
           phase("publish", {
@@ -438,11 +428,10 @@ test("the same source listed twice is still a duplicate dependency", async () =>
   );
 });
 
-test("a patch is validated the same way as a create", async () => {
-  const m = await fresh();
+test("a patch is validated the same way as a create", () => {
   assert.throws(
     () =>
-      m.validatePipelinePatch({
+      validatePipelinePatch({
         phases: [
           phase("evaluate"),
           phase("publish", { needs: [{ phase: "evaluate", when: when(true) }] }),
