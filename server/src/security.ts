@@ -99,13 +99,36 @@ function bearer(header: string | undefined): string | null {
  */
 const SELF_AUTHENTICATING = new Set(["/api/federation/summary"]);
 
+/**
+ * The completion signal is the same exemption, for the same reason.
+ *
+ * A headless agent reports its step finished by POSTing the per-instance token
+ * the engine injected as `ARGUS_SIGNAL_TOKEN` — in the body, because the hook
+ * has no way to know the operator's `ARGUS_TOKEN`. So the shared-secret check
+ * rejects the signal before `onSignal` can verify the token that route actually
+ * authenticates with, and every step of every pipeline ends as "run ended
+ * without emitting a completion signal": the work happens, the result is
+ * thrown away. Setting `ARGUS_TOKEN` should close the control plane, not
+ * silently disable pipelines.
+ *
+ * Matched by shape rather than by name because the instance id is in the path;
+ * `onSignal` still 404s an unknown instance and 403s a token mismatch, and the
+ * anchors keep the exemption off the sibling routes (`approve`, `abort`) that
+ * have no second credential of their own.
+ */
+const SELF_AUTHENTICATING_SHAPES = [/^\/api\/instances\/[^/]+\/signal$/];
+
+export function isSelfAuthenticating(path: string): boolean {
+  return SELF_AUTHENTICATING.has(path) || SELF_AUTHENTICATING_SHAPES.some((re) => re.test(path));
+}
+
 /** Hono middleware enforcing the three-layer model above on every /api route. */
 export function securityMiddleware(cfg: ArgusConfig) {
   return async (c: Context, next: Next) => {
     if (!isHostAllowed(c.req.header("host"), cfg)) {
       return c.json({ error: "forbidden: host not allowed" }, 403);
     }
-    if (cfg.token && !SELF_AUTHENTICATING.has(c.req.path)) {
+    if (cfg.token && !isSelfAuthenticating(c.req.path)) {
       const supplied =
         bearer(c.req.header("authorization")) ?? c.req.header("x-argus-token") ?? null;
       if (!safeEqual(supplied, cfg.token)) return c.json({ error: "unauthorized" }, 401);

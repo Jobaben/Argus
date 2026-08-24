@@ -2244,3 +2244,24 @@ test("federation: a paired peer reaches the summary without the shared bearer to
   // And an unpaired caller still gets nothing, token or no token.
   assert.equal((await app.request("/api/federation/summary", { headers: peerHost })).status, 401);
 });
+
+test("the agent completion signal survives ARGUS_TOKEN without a bearer header", async () => {
+  // The hook carries a per-instance token in the body, not an Authorization
+  // header, so a bearer check on this route rejects every step's completion and
+  // the phase dies as "run ended without emitting a completion signal".
+  const app = makeApp({ token: "secret" });
+  const res = await app.request("/api/instances/inst-1/signal", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ phaseId: "p1", runId: "r1", type: "completed", token: "sig-1" }),
+  });
+  assert.equal(res.status, 200);
+});
+
+test("ARGUS_TOKEN still guards the routes next to the signal", async () => {
+  const app = makeApp({ token: "secret" });
+  for (const path of ["/api/instances/inst-1/abort", "/api/instances/inst-1/approve"]) {
+    const res = await app.request(path, { method: "POST", headers: sameOrigin });
+    assert.equal(res.status, 401, path);
+  }
+});

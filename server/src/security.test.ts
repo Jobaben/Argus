@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isHostAllowed, isOriginAllowed, isUpgradeAllowed } from "./security.js";
+import {
+  isHostAllowed,
+  isOriginAllowed,
+  isSelfAuthenticating,
+  isUpgradeAllowed,
+} from "./security.js";
 import type { ArgusConfig } from "./config.js";
 
 const base: ArgusConfig = {
@@ -84,4 +89,25 @@ test("upgrade guard requires host, origin, and token together", () => {
     ),
     true,
   );
+});
+
+test("the completion signal is self-authenticating for any instance id", () => {
+  assert.equal(isSelfAuthenticating("/api/federation/summary"), true);
+  assert.equal(
+    isSelfAuthenticating("/api/instances/3c1c1b74-d421-4063-b18d-2eb9820d400d/signal"),
+    true,
+  );
+});
+
+test("self-authenticating matching does not spread to neighbouring routes", () => {
+  for (const p of [
+    "/api/instances/abc/approve",
+    "/api/instances/abc/abort",
+    "/api/instances/abc/signal/extra",
+    "/api/instances//signal",
+    "/api/instances",
+    "/api/signal",
+  ]) {
+    assert.equal(isSelfAuthenticating(p), false, p);
+  }
 });
