@@ -1280,6 +1280,23 @@ pipeline that behaves exactly as it did before Weave.
 }
 ```
 
+A `needs` entry may also be an **edge object**, which is what carries a route:
+
+```jsonc
+{
+  "needs": [
+    {
+      "phase": "evaluate",
+      "when": { "predicate": { "path": ["accepted"], "operator": "equals", "value": true } },
+    },
+    { "phase": "sign-off", "allowSkipped": true }, // accepts a skipped source
+  ],
+}
+```
+
+The string form is preserved as a string: a definition authored before routing
+comes back out of validation byte for byte.
+
 **The linear default.** If **no** phase declares `needs`, each phase implicitly
 needs the one before it. If **any** phase declares it, the graph is taken at
 face value and phases without it are roots. A mixed reading would make the same
@@ -1301,15 +1318,21 @@ can start. `produces` must match `[A-Za-z0-9_-]{1,40}`.
   running, then the last thing that happened — so existing views keep working.
 - A failed phase does **not** immediately terminate the instance while a sibling
   is still executing; the instance settles to `failed` when nothing is left that
-  could progress. (`succeeded` requires every phase to have succeeded.)
+  could progress. `succeeded` requires every phase to be terminal and each one
+  to have either succeeded or been intentionally `skipped` by routing.
 - `POST /api/instances/:id/revise` re-runs only the revised phase and kills only
   that phase's stragglers. `POST /api/instances/:id/abort` stops everything.
 
 ### Instance fields
 
 `PhaseProgress` gains `needs` (resolved, so the board can draw the graph without
-the definition — which may since have been edited), `retries`, and `retryAt`.
-`PipelineInstance` gains `artifacts: Record<string, unknown>`.
+the definition — which may since have been edited), `retries`, `retryAt`, and
+`result` (the validated structured outcome, kept apart from the free-form
+`payload` so gate answers and existing artifacts stay compatible).
+`StepProgress` gains `result` / `resultError` — the submission as it arrived,
+held per step because a phase's result lands with one step's signal while its
+siblings may still be running. `PipelineInstance` gains
+`artifacts: Record<string, unknown>` and `routeDecisions: RouteDecision[]`.
 
 ### Artifacts
 
@@ -1321,6 +1344,92 @@ A step prompt may interpolate:
 
 An unknown artifact interpolates to the empty string rather than being left as a
 literal marker in the prompt.
+
+### Outcome routing
+
+A phase may declare a **result**: a validated structured value its outgoing
+conditional edges branch on.
+
+```jsonc
+{
+  "id": "evaluate",
+  "steps": [
+    { "name": "gather", "prompt": "…" },
+    { "name": "decide", "prompt": "…" },
+  ],
+  "result": {
+    "artifact": "evaluation", // published as {{artifacts.evaluation}}
+    "resultStep": "decide", // required beyond one step; omitted for one
+    "schema": {
+      "type": "object",
+      "required": ["accepted"],
+      "properties": { "accepted": { "type": "boolean" } },
+    },
+  },
+}
+```
+
+The schema is a small recursive JSON-value schema — object properties/required,
+scalar types, enums, array items — and nothing executable. A `RouteCondition`
+on an edge is one predicate over it (`equals`, `not-equals`, `one-of`,
+`exists`), optionally inside a **group**:
+
+| Field       | Meaning                                                                |
+| ----------- | ---------------------------------------------------------------------- |
+| `group`     | Names one decision; members share a source and its flags               |
+| `exclusive` | At most one member may match; two matches fail the source phase        |
+| `required`  | At least one member must match; none fails the source phase            |
+| `default`   | `true` on one member, selected only when no ordinary predicate matched |
+| `predicate` | `{ path, operator, value? }` over the source phase's declared result   |
+
+**Validation** is a `400` naming the phase, and covers the whole promise an edge
+makes: a condition on a source that declares no result, a predicate path the
+source's schema does not declare, a compared value the declared type or enum
+cannot hold, `default`/`exclusive`/`required` outside a group, two defaults in a
+group, a group spanning two sources or whose members disagree, a `resultStep`
+that names no step, and a multi-step result phase with no `resultStep`. A
+definition with no `when` edges validates exactly as it did before.
+
+**Delivering the result.** A result-producing step is spawned with
+`ARGUS_RESULT_FILE` — a per-run path — and its prompt carries the schema. The
+stop hook parses that file and sends the value as `result` on the completion
+signal; a file that exists but does not parse arrives as `resultError` instead.
+Runtimes with no command hook have the same file read on the reconcile tick.
+Argus never derives a routing value from the agent's prose, and `ARGUS_OUTCOME`
+keeps its own meaning: whether the run _worked_.
+
+**Evaluation.** `settle()` is the only route evaluator. When every step of a
+result phase has completed, the result is validated; a missing, unreadable,
+schema-invalid or contradicted result fails the phase with a specific reason
+under its ordinary retry policy — never a business branch. On success the
+artifact is published, the outgoing edges are evaluated in definition order, and
+the decision is recorded on the instance in the same atomic write as the phase
+statuses it implies:
+
+```json
+{
+  "sourcePhase": "evaluate",
+  "artifact": "evaluation",
+  "value": { "accepted": true },
+  "selected": ["publish"],
+  "skipped": ["repair"],
+  "reason": "selected publish (accepted equals true); skipped repair (accepted equals false)"
+}
+```
+
+- An unselected target becomes `skipped` — but only once **every** incoming edge
+  is known, so a phase still waiting on another dependency is not cancelled
+  early. A skip propagates down the branch it cancelled.
+- An `allowSkipped` edge accepts a source that succeeded **or** was skipped,
+  which is how a join after alternatives stops waiting for the branch that was
+  never going to run.
+- A failed or aborted source is _not_ a skip: its dependents stay pending and
+  the instance fails, exactly as before routing existed.
+- A gated result phase validates its result at completion and activates its
+  routes only when the approval lands.
+- A recorded decision is **replayed, never recomputed**: recovery resumes onto
+  the same branch, an edited definition cannot reroute a running instance, and a
+  downstream revise cannot re-decide what already happened.
 
 ### `GET /api/instances/:id/journal`
 
@@ -1337,7 +1446,20 @@ literal marker in the prompt.
       "phaseId": "build",
       "detail": "attempt 2 of 3 at …"
     },
-    { "at": "…", "kind": "phase.retrying", "phaseId": "build", "attempt": 1 }
+    { "at": "…", "kind": "phase.retrying", "phaseId": "build", "attempt": 1 },
+    {
+      "at": "…",
+      "kind": "route.selection",
+      "phaseId": "evaluate",
+      "detail": "evaluation {\"accepted\":true} → selected publish (accepted equals true)"
+    },
+    {
+      "at": "…",
+      "kind": "route.skip",
+      "phaseId": "repair",
+      "detail": "not selected by an upstream route"
+    },
+    { "at": "…", "kind": "route.failure", "phaseId": "evaluate", "detail": "…" }
   ]
 }
 ```
@@ -1831,22 +1953,22 @@ session — it cannot execute anything.
 
 ## Pipelines (v0.3)
 
-| Method + path                      | Effect                                                                            |
-| ---------------------------------- | --------------------------------------------------------------------------------- |
-| `GET /api/pipelines`               | list pipeline definitions                                                         |
-| `POST /api/pipelines`              | create a definition (validated) — **admin**                                       |
-| `PUT /api/pipelines/:id`           | replace a definition — **admin**                                                  |
-| `DELETE /api/pipelines/:id`        | delete a definition — **admin**                                                   |
-| `POST /api/pipelines/:id/start`    | start an instance manually → `202`, or `409` on overlap — **admin**               |
-| `GET /api/pipelines/:id/instances` | instances for a pipeline (newest first)                                           |
-| `GET /api/overview`                | command-center rows: `{ definition, latest, cost }` per pipeline, attention-first |
-| `GET /api/instances/:id`           | full pipeline instance                                                            |
-| `POST /api/instances/:id/signal`   | ingest a signal `{ phaseId, runId, type, token, payload? }`; `403` on bad token   |
-| `POST /api/instances/:id/approve`  | advance past a gate (optional `{ answers }`) — **admin**                          |
-| `POST /api/instances/:id/revise`   | re-run the current phase (optional `{ note }`) — **admin**                        |
-| `POST /api/instances/:id/abort`    | abort the instance — **admin**                                                    |
-| `GET /api/setup`                   | prerequisite status `{ ok, prereqs[] }`                                           |
-| `POST /api/setup/apply`            | install fixable prerequisites, then re-check → `{ ok, prereqs[] }`                |
+| Method + path                      | Effect                                                                                                 |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `GET /api/pipelines`               | list pipeline definitions                                                                              |
+| `POST /api/pipelines`              | create a definition (validated) — **admin**                                                            |
+| `PUT /api/pipelines/:id`           | replace a definition — **admin**                                                                       |
+| `DELETE /api/pipelines/:id`        | delete a definition — **admin**                                                                        |
+| `POST /api/pipelines/:id/start`    | start an instance manually → `202`, or `409` on overlap — **admin**                                    |
+| `GET /api/pipelines/:id/instances` | instances for a pipeline (newest first)                                                                |
+| `GET /api/overview`                | command-center rows: `{ definition, latest, cost }` per pipeline, attention-first                      |
+| `GET /api/instances/:id`           | full pipeline instance                                                                                 |
+| `POST /api/instances/:id/signal`   | ingest a signal `{ phaseId, runId, type, token, payload?, result?, resultError? }`; `403` on bad token |
+| `POST /api/instances/:id/approve`  | advance past a gate (optional `{ answers }`) — **admin**                                               |
+| `POST /api/instances/:id/revise`   | re-run the current phase (optional `{ note }`) — **admin**                                             |
+| `POST /api/instances/:id/abort`    | abort the instance — **admin**                                                                         |
+| `GET /api/setup`                   | prerequisite status `{ ok, prereqs[] }`                                                                |
+| `POST /api/setup/apply`            | install fixable prerequisites, then re-check → `{ ok, prereqs[] }`                                     |
 
 WS frame `{ "type": "pipelines:changed" }` is pushed on any pipeline mutation.
 
@@ -1867,7 +1989,8 @@ order. One pipeline can therefore mix runtimes phase by phase.
 
 The engine spawns each phase's run with `ARGUS_SIGNAL_URL`,
 `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`, `ARGUS_RUN_ID`, `ARGUS_SIGNAL_TOKEN` and
-`ARGUS_RUNTIME`. `hooks/argus-signal.mjs` reads these and POSTs a signal. One
+`ARGUS_RUNTIME` — plus `ARGUS_RESULT_FILE` on the one step that publishes a
+declared result. `hooks/argus-signal.mjs` reads these and POSTs a signal. One
 hook file serves every runtime that has hooks at all:
 
 - **Claude Code** — a `Stop` hook in `settings.json` (no arg) to report the
@@ -1928,6 +2051,7 @@ the web UI's setup banner installs the fixable ones with `POST /api/setup/apply`
 | Env var                     | Meaning                                                        |
 | --------------------------- | -------------------------------------------------------------- |
 | `ARGUS_STEP_NAME`           | label of the running step, injected into the run's environment |
+| `ARGUS_RESULT_FILE`         | where a result-producing step writes its decision JSON         |
 | `ARGUS_MAX_CONCURRENT_RUNS` | cap on concurrent `claude -p` processes (default 4)            |
 
 ## Derived views

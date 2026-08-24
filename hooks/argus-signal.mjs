@@ -28,9 +28,17 @@
 //     dies with work unfinished, the engine's healing pass fails the phase on
 //     process exit, so abandoned work is never rubber-stamped completed.
 //
+// A phase that declares a structured result also gets ARGUS_RESULT_FILE: the
+// path the agent writes its decision JSON to. The hook parses that file and
+// sends the value with the completion signal, so routing never has to read a
+// decision out of the agent's prose. ARGUS_OUTCOME keeps its own meaning —
+// whether the run *worked* — untouched by any of it.
+//
 // Reads ARGUS_SIGNAL_URL / ARGUS_INSTANCE_ID / ARGUS_PHASE_ID / ARGUS_RUN_ID /
-// ARGUS_SIGNAL_TOKEN from the environment the engine injected. No-ops when not
-// running under a pipeline (env unset), so it is safe to register globally.
+// ARGUS_SIGNAL_TOKEN / ARGUS_RESULT_FILE from the environment the engine
+// injected. No-ops when not running under a pipeline (env unset), so it is safe
+// to register globally.
+import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 /** A final message reporting a failed/blocked outcome via the sentinel line,
@@ -127,6 +135,43 @@ export function resolveType(argType, payload) {
   return "completed";
 }
 
+/**
+ * Read the run's structured result file, named by ARGUS_RESULT_FILE.
+ *
+ * This is the whole reason routing does not read the agent's prose. A decision
+ * the pipeline branches on has to be a value the agent *wrote down*, in a file
+ * whose path Argus chose, not a phrase a regex found in a paragraph that also
+ * contains the model's reasoning about that phrase.
+ *
+ * Three outcomes, all deliberate:
+ *   * parsed JSON → `{ result }`, handed on verbatim for the engine to validate
+ *     against the phase's declared schema;
+ *   * a file that exists but does not parse → `{ resultError }`, so the phase
+ *     fails with "the result file was unreadable" rather than with the much
+ *     more confusing "no result was delivered";
+ *   * no path, or nothing written → `{}`. Absence is the engine's story to
+ *     tell: only it knows whether this phase declared a result at all.
+ */
+export function readResultFile(file) {
+  if (!file) return {};
+  let raw;
+  try {
+    raw = readFileSync(file, "utf8");
+  } catch {
+    // Never written (or unreadable): the engine reports the missing result.
+    return {};
+  }
+  try {
+    return { result: JSON.parse(raw) };
+  } catch (error) {
+    return {
+      resultError: `the result file at ${file} could not be parsed as JSON: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    };
+  }
+}
+
 /** Codex reads a JSON response off a command hook's stdout; a bare `continue`
  *  is the "carry on, nothing to add" answer. Claude Code needs no reply, so it
  *  gets none — this hook stays byte-identical on that path. */
@@ -197,6 +242,9 @@ function main() {
           ? { ...payload, reason }
           : { reason, raw: payload };
     }
+    // Only a completion carries a business decision: an operational failure
+    // must never select a branch, so its result file is left unread.
+    const result = type === "completed" ? readResultFile(process.env.ARGUS_RESULT_FILE) : {};
     try {
       await deliverSignal(url, {
         instanceId: process.env.ARGUS_INSTANCE_ID,
@@ -205,6 +253,7 @@ function main() {
         type,
         token: process.env.ARGUS_SIGNAL_TOKEN,
         payload,
+        ...result,
       });
     } catch (error) {
       reportFailure(error);

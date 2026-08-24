@@ -2,10 +2,16 @@ import { existsSync, statSync } from "node:fs";
 import { paths } from "../claudeHome.js";
 import { validateTrigger } from "./schedules.js";
 import { createJsonArrayStore } from "./jsonArrayStore.js";
-import type { PhaseDef, PhaseStep, PipelineDefinition } from "./pipelineTypes.js";
+import type { Dependency, PhaseDef, PhaseStep, PipelineDefinition } from "./pipelineTypes.js";
 import type { Trigger } from "./scheduleTypes.js";
 import { RubricValidationError, validateAutoApprove, validateRubric } from "./verdict.js";
 import { DagValidationError, validateDag } from "./dag.js";
+import {
+  RouteAuthoringError,
+  validateDependency,
+  validatePhaseResult,
+  validateRoutes,
+} from "./routeAuthoring.js";
 import { isRuntimeId, runtimeIdList } from "../runtimes/index.js";
 import type { AgentRuntimeId, ReasoningEffort } from "@argus/contracts";
 
@@ -91,12 +97,26 @@ function validateStep(raw: unknown, ctx: string): PhaseStep {
   return step;
 }
 
+/**
+ * Run a route/result check, re-badging its error as a pipeline validation error
+ * so the route's existing 400 mapping covers it — the same wrapping the rubric
+ * checks get, and for the same reason: an authoring mistake is a 400, not a 500.
+ */
+function routeChecked<T>(check: () => T): T {
+  try {
+    return check();
+  } catch (e) {
+    throw new PipelineValidationError(e instanceof RouteAuthoringError ? e.message : String(e));
+  }
+}
+
 function validatePhase(raw: unknown, i: number): PhaseDef {
   if (!raw || typeof raw !== "object")
     throw new PipelineValidationError(`phase ${i} must be an object`);
   const p = raw as Record<string, unknown>;
   if (typeof p.id !== "string" || !p.id.trim())
     throw new PipelineValidationError(`phase ${i}: id is required`);
+  const id = p.id.trim();
   if (typeof p.name !== "string" || !p.name.trim())
     throw new PipelineValidationError(`phase ${i}: name is required`);
   if (
@@ -132,14 +152,24 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
 
   // Dependency edges. `needs: []` is meaningful (an explicit root), so the
   // key's *presence* is what switches the whole graph from linear-implicit to
-  // explicit — see resolveNeeds.
-  let needs: string[] | undefined;
+  // explicit — see resolveNeeds. An entry is either the legacy phase id or a
+  // route-carrying edge object; the string form is preserved as a string so a
+  // pre-routing definition round-trips byte for byte.
+  let needs: Dependency[] | undefined;
   if (p.needs !== undefined) {
-    if (!Array.isArray(p.needs) || p.needs.some((n) => typeof n !== "string" || !n.trim())) {
+    if (!Array.isArray(p.needs)) {
       throw new PipelineValidationError(`phase ${i}: needs must be a list of phase ids`);
     }
-    needs = p.needs.map((n) => (n as string).trim());
+    needs = p.needs.map((n) => routeChecked(() => validateDependency(n, `phase "${id}"`)));
   }
+
+  // The declared structured result. Validated against this phase's own steps
+  // here; whether a *condition* can read it is a whole-graph question, checked
+  // in validateRoutes once every phase's schema is known.
+  const result =
+    p.result === undefined || p.result === null
+      ? undefined
+      : routeChecked(() => validatePhaseResult(p.result, id, steps));
 
   const retry = validateRetry(p.retry, i);
   const runtime = validateRuntime(p.runtime, `phase ${i}`);
@@ -155,12 +185,13 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
   }
 
   return {
-    id: p.id.trim(),
+    id,
     name: p.name.trim(),
     cwd: p.cwd,
     steps,
     gated,
     ...(needs === undefined ? {} : { needs }),
+    ...(result ? { result } : {}),
     ...(retry ? { retry } : {}),
     ...(produces ? { produces } : {}),
     ...(rubric ? { rubric } : {}),
@@ -200,6 +231,19 @@ function validateRetry(raw: unknown, i: number) {
   };
 }
 
+/**
+ * Whole-graph checks: the DAG first (a dangling edge or a cycle is reported as
+ * itself), then the routes, which assume every edge names a phase that exists.
+ */
+function validateGraph(phases: PhaseDef[]): void {
+  try {
+    validateDag(phases);
+  } catch (e) {
+    throw new PipelineValidationError(e instanceof DagValidationError ? e.message : String(e));
+  }
+  routeChecked(() => validateRoutes(phases));
+}
+
 export function validatePipelineInput(raw: unknown): PipelineInput {
   if (!raw || typeof raw !== "object") throw new PipelineValidationError("body required");
   const r = raw as Record<string, unknown>;
@@ -212,11 +256,7 @@ export function validatePipelineInput(raw: unknown): PipelineInput {
   // A cycle or a dangling edge is a 400 at authoring time. Without this it is
   // an instance that starts and then simply never finishes, which is how a DAG
   // executor fails when nobody checks.
-  try {
-    validateDag(phases);
-  } catch (e) {
-    throw new PipelineValidationError(e instanceof DagValidationError ? e.message : String(e));
-  }
+  validateGraph(phases);
   const trigger = r.trigger == null ? null : validateTrigger(r.trigger, { allowWindowed: true });
   const overlapPolicy = r.overlapPolicy === "allow" ? "allow" : "skip";
   const enabled = r.enabled === undefined ? true : Boolean(r.enabled);
@@ -245,6 +285,9 @@ export function validatePipelinePatch(raw: unknown): Partial<PipelineInput> {
       throw new PipelineValidationError("pipeline needs at least one phase");
     }
     patch.phases = r.phases.map((p, i) => validatePhase(p, i));
+    // A patched phase list replaces the whole graph, so it gets the whole
+    // graph's checks — otherwise routing could only be broken by PUT.
+    validateGraph(patch.phases);
   }
   if ("trigger" in r)
     patch.trigger = r.trigger == null ? null : validateTrigger(r.trigger, { allowWindowed: true });

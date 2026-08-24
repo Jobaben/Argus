@@ -1,17 +1,24 @@
 import {
   currentIndex,
+  describeCondition,
   instanceOutcome,
   interpolate,
+  outgoingEdges,
   readyPhases,
   resolveNeeds,
+  resultStepName,
+  skippablePhases,
 } from "./sources/dag.js";
+import { RouteEvaluationError, evaluateRoutes, validateResult } from "./sources/routing.js";
 import type {
+  DependencyEdge,
   PhaseProgress,
   PipelineDefinition,
   PipelineInstance,
   PipelineSignal,
   RetryableClass,
   RetryPolicy,
+  RouteDecision,
 } from "./sources/pipelineTypes.js";
 
 /**
@@ -29,10 +36,29 @@ import type {
  * with the general one.
  */
 
+/** A phase that could not produce a usable result, or a route that could not be
+ *  evaluated. Both are operational failures under the phase's retry policy —
+ *  never a business branch. */
+export interface RouteFailure {
+  phaseId: string;
+  reason: string;
+}
+
+/** What this transition did to the graph's routes, for the caller to journal. */
+export interface RouteOutcome {
+  /** Decisions recorded by this transition (never a replay of an old one). */
+  decisions: RouteDecision[];
+  /** Phase ids this transition marked skipped. */
+  skipped: string[];
+  failures: RouteFailure[];
+}
+
 export interface TransitionResult {
   instance: PipelineInstance;
   /** Indices into `instance.phases` to launch now. Empty means nothing to do. */
   startPhases: number[];
+  /** Present on every settled transition; absent when nothing was settled. */
+  routing?: RouteOutcome;
 }
 
 /** Kept for definitions and tests that predate `{{artifacts.<name>}}`. */
@@ -68,6 +94,13 @@ function failLeftoverSteps(phase: PhaseProgress): void {
   }
 }
 
+/** Attach a failure reason to whatever payload the phase already carries. */
+function withReason(payload: unknown, reason: string): unknown {
+  return payload && typeof payload === "object" && !Array.isArray(payload)
+    ? { ...(payload as Record<string, unknown>), reason }
+    : { reason };
+}
+
 /** Publish a succeeded phase's payload under its declared artifact name. */
 function publishArtifact(def: PipelineDefinition, inst: PipelineInstance, phaseId: string): void {
   const name = def.phases.find((p) => p.id === phaseId)?.produces;
@@ -76,6 +109,165 @@ function publishArtifact(def: PipelineDefinition, inst: PipelineInstance, phaseI
     ...(inst.artifacts ?? {}),
     [name]: inst.phases.find((p) => p.id === phaseId)?.payload ?? null,
   };
+}
+
+/**
+ * Resolve one phase's declared structured result, once every step is in.
+ *
+ * Everything that can go wrong here is an *operational* failure with a specific
+ * reason, and that distinction is the whole point: an agent that decided "fail
+ * the audit" has succeeded at its job, while an agent that never wrote the file,
+ * wrote unparseable bytes, or wrote a value the schema rejects has not reported
+ * anything the pipeline can branch on. The first is a route; the second is a
+ * failed phase under the phase's ordinary retry policy.
+ */
+function resolvePhaseResult(
+  def: PipelineDefinition,
+  phase: PhaseProgress,
+): { ok: true; value?: unknown } | { ok: false; reason: string } {
+  const phaseDef = def.phases.find((p) => p.id === phase.id);
+  if (!phaseDef?.result) return { ok: true };
+  const artifact = phaseDef.result.artifact;
+  const wanted = resultStepName(phaseDef);
+
+  const unreadable = phase.steps.find((s) => s.resultError);
+  if (unreadable) return { ok: false, reason: `result "${artifact}": ${unreadable.resultError}` };
+
+  const submitted = phase.steps.filter((s) => s.result !== undefined);
+  if (new Set(submitted.map((s) => JSON.stringify(s.result))).size > 1) {
+    return {
+      ok: false,
+      reason: `contradictory result submissions for "${artifact}" from steps ${submitted
+        .map((s) => `"${s.name}"`)
+        .join(", ")}`,
+    };
+  }
+  const foreign = submitted.find((s) => s.name !== wanted);
+  if (foreign) {
+    return {
+      ok: false,
+      reason: `result "${artifact}" was submitted by step "${foreign.name}", which is not the declared result step ("${wanted}")`,
+    };
+  }
+  if (submitted.length === 0) {
+    return {
+      ok: false,
+      reason: `phase "${phase.id}" did not deliver its declared result "${artifact}"`,
+    };
+  }
+  try {
+    validateResult(phaseDef.result.schema, submitted[0].result);
+  } catch (e) {
+    return {
+      ok: false,
+      reason: `result "${artifact}" does not match the declared schema: ${
+        e instanceof Error ? e.message : String(e)
+      }`,
+    };
+  }
+  return { ok: true, value: submitted[0].result };
+}
+
+/** A record of what a decision selected and skipped, and on what grounds. */
+function describeDecision(edges: DependencyEdge[], selected: string[], skipped: string[]): string {
+  const label = (id: string) => {
+    const edge = edges.find((e) => e.phase === id);
+    return `${id} (${describeCondition(edge?.when)})`;
+  };
+  const parts = [
+    selected.length ? `selected ${selected.map(label).join(", ")}` : "selected nothing",
+  ];
+  if (skipped.length) parts.push(`skipped ${skipped.map(label).join(", ")}`);
+  return parts.join("; ");
+}
+
+/**
+ * Record the route decision of every succeeded result-producing phase that does
+ * not have one yet.
+ *
+ * "Does not have one yet" is what makes recovery safe. A decision is written
+ * once, in the same atomic instance write as the statuses it implies, and from
+ * then on it is replayed rather than recomputed — so a crash between the write
+ * and the branch's launch resumes onto the same branch, and a revise downstream
+ * cannot quietly re-decide what already happened.
+ */
+function recordRouteDecisions(
+  def: PipelineDefinition,
+  inst: PipelineInstance,
+  routing: RouteOutcome,
+): void {
+  const settled = new Set((inst.routeDecisions ?? []).map((d) => d.sourcePhase));
+  for (const phase of inst.phases) {
+    if (phase.status !== "succeeded" || settled.has(phase.id)) continue;
+    const phaseDef = def.phases.find((p) => p.id === phase.id);
+    if (!phaseDef?.result) continue;
+    const edges = outgoingEdges(def.phases, phase.id);
+    if (phase.result === undefined) {
+      // Reachable only when a definition gained its `result` after this phase
+      // had already succeeded — an edit to a running pipeline. With nothing to
+      // evaluate, every predicate would read false and every branch would be
+      // silently skipped, so say so instead. (A declared result *value* of
+      // null is a different thing, and is recorded as null.)
+      if (!edges.some((edge) => edge.when)) continue;
+      const reason = `route evaluation failed: phase "${phase.id}" succeeded without recording its declared result "${phaseDef.result.artifact}"`;
+      phase.status = "failed";
+      phase.payload = withReason(phase.payload, reason);
+      routing.failures.push({ phaseId: phase.id, reason });
+      settled.add(phase.id);
+      continue;
+    }
+    try {
+      const { selected, skipped } = evaluateRoutes(edges, phase.result);
+      // The artifact and the decision are the same fact, so they are published
+      // together: no reader can see one without the other.
+      inst.artifacts = {
+        ...(inst.artifacts ?? {}),
+        [phaseDef.result.artifact]: phase.result ?? null,
+      };
+      const decision: RouteDecision = {
+        sourcePhase: phase.id,
+        artifact: phaseDef.result.artifact,
+        value: phase.result ?? null,
+        selected,
+        skipped,
+        reason: describeDecision(edges, selected, skipped),
+      };
+      inst.routeDecisions = [...(inst.routeDecisions ?? []), decision];
+      routing.decisions.push(decision);
+    } catch (e) {
+      // An ambiguous or unmatched required group would authorize work nobody
+      // asked for (or none at all), so the source phase fails instead.
+      const reason = `route evaluation failed: ${
+        e instanceof RouteEvaluationError ? e.message : String(e)
+      }`;
+      phase.status = "failed";
+      phase.payload = withReason(phase.payload, reason);
+      routing.failures.push({ phaseId: phase.id, reason });
+    }
+    settled.add(phase.id);
+  }
+}
+
+/** Mark the work routing decided against, and everything that only it fed. */
+function propagateSkips(
+  def: PipelineDefinition,
+  inst: PipelineInstance,
+  routing: RouteOutcome,
+): void {
+  // Iterated to a fixed point: skipping a phase resolves its own outgoing
+  // edges, which can be the last unknown edge of the phase after it.
+  for (;;) {
+    const next = skippablePhases(def, inst);
+    if (next.length === 0) return;
+    for (const i of next) {
+      const phase = inst.phases[i];
+      phase.status = "skipped";
+      phase.steps = phase.steps.map((step) =>
+        step.status === "pending" ? { ...step, status: "skipped" as const } : step,
+      );
+      routing.skipped.push(phase.id);
+    }
+  }
 }
 
 /**
@@ -88,12 +280,22 @@ function publishArtifact(def: PipelineDefinition, inst: PipelineInstance, phaseI
  * pipeline with a live process still writing to it — so the failure is recorded
  * on the phase, the branch that is still running is allowed to finish, and the
  * instance settles to `failed` when nothing is left that could still progress.
+ *
+ * This is also the *only* route evaluator. Routes are decided here, before
+ * readiness, because a decision is what makes a conditional edge readable at
+ * all: skips propagate from it, and the phases it authorized are launched in the
+ * same pass. Nowhere else in Argus may select a branch.
  */
 export function settle(
   def: PipelineDefinition,
   inst: PipelineInstance,
   nowISO: string,
+  priorFailures: RouteFailure[] = [],
 ): TransitionResult {
+  const routing: RouteOutcome = { decisions: [], skipped: [], failures: [...priorFailures] };
+  recordRouteDecisions(def, inst, routing);
+  propagateSkips(def, inst, routing);
+
   const needs = resolveNeeds(def.phases);
   const startPhases = readyPhases(def, inst);
   for (const i of startPhases) {
@@ -119,7 +321,7 @@ export function settle(
 
   inst.currentPhaseIndex = currentIndex(inst);
   touch(inst, nowISO);
-  return { instance: inst, startPhases };
+  return { instance: inst, startPhases, routing };
 }
 
 export function initInstance(
@@ -177,12 +379,14 @@ export function advance(
   if (!step) return { instance: inst, startPhases: [] };
   step.status = signal.type === "failed" ? "failed" : "succeeded";
   if (signal.payload !== undefined) phase.payload = signal.payload;
+  // A structured result belongs to the step that submitted it until every step
+  // is in: the phase publishes one decision, and which step may submit it is
+  // the definition's business, not the arrival order's.
+  if (signal.result !== undefined) step.result = signal.result;
+  if (signal.resultError !== undefined) step.resultError = signal.resultError;
 
   if (signal.type === "failed" && !payloadReason(phase.payload)) {
-    phase.payload =
-      phase.payload && typeof phase.payload === "object" && !Array.isArray(phase.payload)
-        ? { ...(phase.payload as Record<string, unknown>), reason: DEFAULT_FAIL_REASON }
-        : { reason: DEFAULT_FAIL_REASON };
+    phase.payload = withReason(phase.payload, DEFAULT_FAIL_REASON);
   }
 
   if (signal.type === "failed") {
@@ -206,6 +410,18 @@ export function advance(
     touch(inst, nowISO);
     return { instance: inst, startPhases: [] };
   }
+  // Every step is in, so the phase's declared result is now due. A gate
+  // validates it here and still waits for a human: the result is what the
+  // approval is *about*, and routes activate only once that approval lands.
+  const resolved = resolvePhaseResult(def, phase);
+  if (!resolved.ok) {
+    phase.status = "failed";
+    phase.payload = withReason(phase.payload, resolved.reason);
+    failLeftoverSteps(phase);
+    return settle(def, inst, nowISO, [{ phaseId: phase.id, reason: resolved.reason }]);
+  }
+  if (resolved.value !== undefined) phase.result = resolved.value;
+
   if (phase.gated) {
     phase.status = "awaiting-approval";
     return settle(def, inst, nowISO);

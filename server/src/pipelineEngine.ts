@@ -1,10 +1,14 @@
 import { closeSync, openSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import {
   encodeProject,
   killRunProcess,
   patchRun,
   readRun,
+  readRunResult,
   runLogPath,
+  runResultPath,
   writeRun,
 } from "./sources/runs.js";
 import { markPipelineStarted, readPipelines } from "./sources/pipelines.js";
@@ -26,7 +30,7 @@ import {
   shouldRetry,
   initInstance,
 } from "./pipelineTransitions.js";
-import { interpolate, livePhases, previousPayloadFor } from "./sources/dag.js";
+import { interpolate, livePhases, previousPayloadFor, resultStepName } from "./sources/dag.js";
 import { journal } from "./sources/journal.js";
 import { isAlive } from "./scheduler.js";
 import { claudeRuntime, parseEnvelopeFor, resolveRuntimeId, runtimeFor } from "./runtimes/index.js";
@@ -37,7 +41,8 @@ import type { PipelineProcessHandle } from "./pipelineProcess.js";
 import type { SpawnPlan } from "./runtimes/index.js";
 import type { AgentRuntimeId } from "@argus/contracts";
 import type { Run } from "./sources/scheduleTypes.js";
-import type { RetryableClass } from "./sources/pipelineTypes.js";
+import type { PhaseDef, RetryableClass } from "./sources/pipelineTypes.js";
+import type { RouteOutcome } from "./pipelineTransitions.js";
 import type {
   PipelineDefinition,
   PipelineInstance,
@@ -89,6 +94,32 @@ export const OUTCOME_CONTRACT =
   "This is a one-shot batch run: it will not be re-invoked when background tasks or " +
   "subagents finish, so do not stop while any are still in flight. If you must stop " +
   "with deferred work unfinished, report `ARGUS_OUTCOME: blocked`.";
+
+/**
+ * The instruction a result-producing step gets appended to its prompt.
+ *
+ * Not part of {@link OUTCOME_CONTRACT}: that is a pure constant so the prompt
+ * cache prefix holds across every run, and this text carries the phase's own
+ * schema. It goes in the prompt rather than the system prompt for the same
+ * reason the schema is in the definition — it is this phase's contract, not
+ * Argus's.
+ *
+ * The two say different things and both are needed. `ARGUS_OUTCOME` reports
+ * whether the run *worked*; the result file reports what it *decided*. An agent
+ * that decides "reject" has succeeded operationally, and conflating the two is
+ * how a failing audit becomes a failing pipeline.
+ */
+export function resultInstruction(result: PhaseDef["result"]): string {
+  if (!result) return "";
+  return (
+    "\n\nStructured result required. Before you finish, write this phase's result as JSON " +
+    "to the file path given in the ARGUS_RESULT_FILE environment variable. It must match " +
+    `this schema: ${JSON.stringify(result.schema)}. The pipeline reads that file — not your ` +
+    "message text — to decide what runs next, and the phase fails if it is missing or does " +
+    "not match. Reporting `ARGUS_OUTCOME: succeeded` still means the work itself went fine, " +
+    "whatever the result says."
+  );
+}
 
 /**
  * Build the invocation for a step run, with the outcome contract carried into
@@ -311,8 +342,12 @@ export function createEngine(deps: EngineDeps): Engine {
     // the phase before it — the same value the cursor version produced.
     const prevPayload = previousPayloadFor(def, inst, phaseDef.id);
     const startedAt = nowISO();
+    // Exactly one step may publish the phase's result; only that step is told
+    // about it, so concurrent siblings cannot race to write a decision.
+    const publishingStep = resultStepName(phaseDef);
     const planned = phaseDef.steps.map((stepDef) => {
       const runId = deps.newId();
+      const publishes = stepDef.name === publishingStep;
       // Narrowest wins: a step names its runtime, else its phase, else the
       // pipeline, else the server default. Resolved and written down here, so a
       // mixed-runtime pipeline stays readable on the board and in the record.
@@ -321,7 +356,10 @@ export function createEngine(deps: EngineDeps): Engine {
         id: runId,
         scheduleId: `pipeline:${inst.pipelineId}`,
         scheduleName: `${inst.pipelineName} · ${phaseDef.name}`,
-        prompt: interpolate(stepDef.prompt, prevPayload, inst.artifacts ?? {}) + noteSuffix,
+        prompt:
+          interpolate(stepDef.prompt, prevPayload, inst.artifacts ?? {}) +
+          (publishes ? resultInstruction(phaseDef.result) : "") +
+          noteSuffix,
         cwd: phaseDef.cwd,
         status: "running",
         trigger: "scheduled",
@@ -341,7 +379,7 @@ export function createEngine(deps: EngineDeps): Engine {
         instanceId: inst.id,
         phaseId: phaseDef.id,
       };
-      return { stepDef, run };
+      return { stepDef, run, publishes };
     });
     // Record the runIds on the instance up front, then persist once (no write races).
     inst.phases[phaseIndex].steps = planned.map(({ stepDef, run }) => ({
@@ -364,8 +402,8 @@ export function createEngine(deps: EngineDeps): Engine {
     // spawn is observable when they return. The concurrency cap still applies —
     // a launch past the cap waits for a slot, which is fine here because these
     // callers hold no slot of their own.
-    for (const { run } of planned) {
-      const handle = await launchStep(run, phaseDef, inst);
+    for (const { run, publishes } of planned) {
+      const handle = await launchStep(run, phaseDef, inst, publishes);
       void journal(inst.id, {
         at: nowISO(),
         kind: "step.spawned",
@@ -384,6 +422,7 @@ export function createEngine(deps: EngineDeps): Engine {
     run: Run,
     phaseDef: PipelineDefinition["phases"][number],
     inst: PipelineInstance,
+    publishesResult = false,
   ): Promise<{ pid: number | null; done: Promise<{ code: number | null }> } | null> {
     await sem.acquire();
     const env: Record<string, string> = {
@@ -397,6 +436,14 @@ export function createEngine(deps: EngineDeps): Engine {
       // two deliver slightly different Stop payloads; this removes the guess.
       ARGUS_RUNTIME: resolveRuntimeId(run.runtime),
     };
+    // The result file is named for every runtime, hook or no hook: the agent
+    // writes the same file either way, and a runtime without a command hook has
+    // it read off disk on the next reconcile tick instead.
+    if (publishesResult) {
+      const file = runResultPath(run.id);
+      await mkdir(path.dirname(file), { recursive: true });
+      env.ARGUS_RESULT_FILE = file;
+    }
     // Runtime-specific environment (e.g. Claude Code's subagent-text forwarding)
     // comes from the spawn plan, so it stays with the runtime that needs it.
     let handle: PipelineProcessHandle;
@@ -534,6 +581,52 @@ export function createEngine(deps: EngineDeps): Engine {
     return true;
   }
 
+  /**
+   * Journal what a transition did to the graph's routes, and put any route or
+   * result failure through the same policy an ordinary failure gets.
+   *
+   * Returns true when a retry was scheduled, so the caller re-persists the
+   * instance. Nothing here decides anything: settle already did, and this only
+   * writes down what it decided.
+   */
+  function noteRouting(
+    def: PipelineDefinition,
+    inst: PipelineInstance,
+    routing: RouteOutcome | undefined,
+  ): boolean {
+    if (!routing) return false;
+    for (const decision of routing.decisions) {
+      void journal(inst.id, {
+        at: nowISO(),
+        kind: "route.selection",
+        phaseId: decision.sourcePhase,
+        detail: `${decision.artifact} ${JSON.stringify(decision.value)} → ${decision.reason}`,
+      });
+    }
+    for (const phaseId of routing.skipped) {
+      void journal(inst.id, {
+        at: nowISO(),
+        kind: "route.skip",
+        phaseId,
+        detail: "not selected by an upstream route",
+      });
+    }
+    let rescheduled = false;
+    for (const failure of routing.failures) {
+      void journal(inst.id, {
+        at: nowISO(),
+        kind: "route.failure",
+        phaseId: failure.phaseId,
+        detail: failure.reason,
+      });
+      // A result that never arrived, or arrived unusable, is an operational
+      // signal failure: the agent reported, and what it reported cannot be
+      // routed on. It gets the phase's own retry policy, never a branch.
+      if (noteFailure(def, inst, failure.phaseId, "signal", failure.reason)) rescheduled = true;
+    }
+    return rescheduled;
+  }
+
   /** Start every retry whose backoff has elapsed. Called from reconcile. */
   async function runDueRetries(now: Date): Promise<void> {
     for (const candidate of await readInstances()) {
@@ -648,8 +741,11 @@ export function createEngine(deps: EngineDeps): Engine {
       if (inst.status !== "running") return { ok: true, code: 200 }; // paused/terminal → idempotent ignore
       const def = await loadDef(inst.pipelineId);
       if (!def) return { ok: false, code: 404 };
-      const { instance, startPhases: ready } = advance(def, inst, signal, nowISO());
+      const { instance, startPhases: ready, routing } = advance(def, inst, signal, nowISO());
+      // One write: the route decision, the skips it implies and the phase
+      // statuses land together or not at all.
       await writeInstance(instance);
+      if (noteRouting(def, instance, routing)) await writeInstance(instance);
       const outcome: Run["outcome"] | undefined =
         signal.type === "failed" ? "failed" : signal.type === "completed" ? "succeeded" : undefined;
       if (outcome) await patchRun(signal.runId, { outcome });
@@ -703,6 +799,7 @@ export function createEngine(deps: EngineDeps): Engine {
         return { ok: false, code: 409, error: e instanceof Error ? e.message : String(e) };
       }
       await writeInstance(res.instance);
+      if (noteRouting(def, res.instance, res.routing)) await writeInstance(res.instance);
       await startPhases(def, res.instance, res.startPhases);
       deps.onChange?.();
       return { ok: true, code: 200 };
@@ -870,6 +967,10 @@ export function createEngine(deps: EngineDeps): Engine {
                 ? recoverRunOutcome(got.run)
                 : null;
             const signalType = recovered?.signalType ?? "failed";
+            // A recovered *completion* may carry a declared result. Read it the
+            // same way the stop hook would; this is the whole completion
+            // protocol for a runtime with no hook to install.
+            const recoveredResult = signalType === "completed" ? await readRunResult(s.runId) : {};
             const payload = recovered
               ? recovered.payload
               : restarted
@@ -877,7 +978,11 @@ export function createEngine(deps: EngineDeps): Engine {
                 : {
                     reason: got?.run.error ?? "run ended without emitting a completion signal",
                   };
-            const { instance, startPhases: ready } = advance(
+            const {
+              instance,
+              startPhases: ready,
+              routing,
+            } = advance(
               def,
               current,
               {
@@ -887,6 +992,7 @@ export function createEngine(deps: EngineDeps): Engine {
                 type: signalType,
                 token: current.signalToken,
                 payload,
+                ...recoveredResult,
               },
               nowISO(),
             );
@@ -903,6 +1009,7 @@ export function createEngine(deps: EngineDeps): Engine {
                 "run ended without emitting a completion signal";
               noteFailure(def, instance, phaseId, failureClass, reason);
             }
+            noteRouting(def, instance, routing);
             await writeInstance(instance);
             void journal(instance.id, {
               at: nowISO(),

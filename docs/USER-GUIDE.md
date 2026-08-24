@@ -1354,8 +1354,9 @@ in `~/.claude/argus/sentinel.json`.
 
 ## 26. Weave
 
-_Pipelines as a typed graph: fan-out, fan-in, retries, artifacts._ Authored on
-[Pipelines](#8-pipelines); rendered on the [Command Center](#1-command-center).
+_Pipelines as a typed graph: fan-out, fan-in, retries, artifacts, routes._
+Authored on [Pipelines](#8-pipelines); rendered on the
+[Command Center](#1-command-center).
 
 **Purpose:** a pipeline used to be a list — phase 1, then 2, then 3. Real work
 branches: plan once, then build and test in parallel, then ship when both are
@@ -1374,10 +1375,15 @@ the general rule, so the executor has no separate linear path that could drift.
   make the same definition mean two things depending on where you looked.
 - **`retry: { attempts, backoffSeconds, retryOn }`** — see below.
 - **`produces: "plan"`** — publish this phase's payload as an artifact.
+- **`result: { artifact, resultStep?, schema }`** — publish a _validated_
+  structured decision other phases can branch on. See **Routing** below.
 
 **Cycles and dangling edges are rejected when you save**, naming the phases
 involved. Without that check, a bad graph is not an error — it is an instance
-that starts and then simply never finishes.
+that starts and then simply never finishes. Routes get the same treatment: a
+condition on a phase that decides nothing, a field its schema never declares, or
+a value its type cannot hold is refused at save time, because an unchecked
+condition does not fail loudly — it is simply false forever.
 
 **What you see:** when a pipeline actually branches, its card draws a **graph**:
 one column per stage, phases that can run together stacked in a column, and each
@@ -1413,6 +1419,49 @@ _scheduled_ (a timestamp on the phase) rather than held in a timer, so a backoff
 survives a restart. A **revise** resets the retry budget — otherwise a phase
 that had exhausted its retries could never be revised again.
 
+**Routing: letting the work decide what happens next.**
+
+A phase can publish a decision, and a dependency can say when it applies. In the
+editor that is two controls in the phase panel: **"Publishes a structured
+result"** (an artifact name and a short list of typed fields) on the deciding
+phase, and a **Routes** row under "starts after" on each phase that depends on
+it — `always`, `only if <field> is <value>`, or `otherwise`.
+
+The example the whole feature is built around: `evaluate` decides
+`{ "accepted": true|false }`; `publish` needs `evaluate` only if
+`accepted is true`; `repair` needs it only if `accepted is false`. When the run
+lands on `accepted: true`, `publish` starts and `repair` is **skipped** — not
+failed, not idle. A later `report` phase needs both with **accept skipped**
+ticked, so it runs after whichever branch actually happened.
+
+- **The value comes from a file, never from prose.** A deciding step is told to
+  write its JSON to the path in `ARGUS_RESULT_FILE`, and the stop hook sends
+  that parsed value to Argus. `ARGUS_OUTCOME` keeps meaning exactly what it
+  meant: whether the run _worked_. An agent that decides "reject" has succeeded.
+- **A missing or malformed result fails the phase**, with a reason saying which,
+  under the phase's ordinary retry policy. It is never quietly read as one of
+  the branches.
+- **Groups** make one decision out of several routes: name a group on each edge
+  and tick `exclusive` (at most one may match — two is a failure, not a guess),
+  `required` (at least one must), or mark one edge `otherwise` as the default
+  taken when nothing else matched.
+- **A skip travels.** Anything that only depended on a skipped phase is skipped
+  too. An instance whose every phase either succeeded or was intentionally
+  skipped **succeeds** — half the graph not running is the plan, not a problem.
+- **A failure is not a skip.** If a phase fails, its dependents stay pending and
+  the instance fails, exactly as before. Only routing skips work.
+- **A gate decides last.** A gated deciding phase validates its result when the
+  agent finishes and takes its route only when you approve.
+- **A decision is taken once.** It is recorded on the instance, and everything
+  afterwards — a restart, a revise downstream, an edit to the definition — reads
+  the record rather than deciding again. What ran is what the record says ran.
+
+**What you see:** an unrun branch reads as **skipped** — a hollow dot, a struck
+name, `skip` — and the phase panel says which decision skipped it and on what
+grounds. A conditional chip carries its condition (`if Evaluate: accepted =
+true`), and the deciding phase's panel shows the decision in one line: the
+artifact, the value, what it selected, what it skipped.
+
 **Artifacts.** A phase with `produces: "plan"` publishes its payload; any later
 phase can interpolate `{{artifacts.plan}}` in a step prompt. The older
 `{{previous.payload}}` still works and means "my dependency's payload" — which
@@ -1424,7 +1473,8 @@ sense of.
 
 **The journal.** Every instance keeps an append-only history at
 `~/.claude/argus/journals/<id>.jsonl` — started, phase started, step spawned,
-signalled, failed, retry scheduled, retrying, revised, ended. The instance file
+signalled, failed, retry scheduled, retrying, revised, route selected, route
+skipped, route failed, ended. The instance file
 is _state_ and is rewritten in place, so it can tell you a phase failed but
 never that it failed, retried, failed again and was revised. Read it at
 `GET /api/instances/:id/journal`. It is evidence, never the source of truth: a

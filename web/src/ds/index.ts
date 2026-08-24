@@ -34,6 +34,7 @@ export { ToastRegion } from "./Toast";
 export type { ToastItem } from "./Toast";
 export { ActivityEvent } from "./ActivityEvent";
 export * from "./overviewRow";
+export * from "./routes";
 export * from "./rail";
 export {
   useCountUp,

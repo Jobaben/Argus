@@ -2265,3 +2265,129 @@ test("ARGUS_TOKEN still guards the routes next to the signal", async () => {
     assert.equal(res.status, 401, path);
   }
 });
+
+// ── Outcome routing: authoring ───────────────────────────────────────────────
+
+test("routing: a conditional definition is accepted and its edges round-trip", async () => {
+  const app = makeApp();
+  const res = await postPipeline(app, [
+    dagPhase("evaluate", {
+      result: {
+        artifact: "evaluation",
+        schema: {
+          type: "object",
+          required: ["accepted"],
+          properties: { accepted: { type: "boolean" } },
+        },
+      },
+    }),
+    dagPhase("publish", {
+      needs: [
+        {
+          phase: "evaluate",
+          when: { predicate: { path: ["accepted"], operator: "equals", value: true } },
+        },
+      ],
+    }),
+    dagPhase("repair", {
+      needs: [
+        {
+          phase: "evaluate",
+          when: { predicate: { path: ["accepted"], operator: "equals", value: false } },
+        },
+      ],
+    }),
+    dagPhase("report", {
+      needs: [
+        { phase: "publish", allowSkipped: true },
+        { phase: "repair", allowSkipped: true },
+      ],
+    }),
+  ]);
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as {
+    phases: { needs?: unknown[]; result?: { artifact: string } }[];
+  };
+  assert.equal(body.phases[0].result?.artifact, "evaluation");
+  assert.deepEqual(body.phases[3].needs, [
+    { phase: "publish", allowSkipped: true },
+    { phase: "repair", allowSkipped: true },
+  ]);
+});
+
+test("routing: a condition on a phase with no result is a 400 naming the phase", async () => {
+  const app = makeApp();
+  const res = await postPipeline(app, [
+    dagPhase("evaluate"),
+    dagPhase("publish", {
+      needs: [
+        { phase: "evaluate", when: { predicate: { path: ["accepted"], operator: "exists" } } },
+      ],
+    }),
+  ]);
+  assert.equal(res.status, 400);
+  assert.match(
+    ((await res.json()) as { error: string }).error,
+    /phase "publish".*declares no result/,
+  );
+});
+
+test("routing: a predicate path the source schema does not declare is a 400", async () => {
+  const app = makeApp();
+  const res = await postPipeline(app, [
+    dagPhase("evaluate", {
+      result: { artifact: "evaluation", schema: { type: "object", properties: {} } },
+    }),
+    dagPhase("publish", {
+      needs: [
+        { phase: "evaluate", when: { predicate: { path: ["accepted"], operator: "exists" } } },
+      ],
+    }),
+  ]);
+  assert.equal(res.status, 400);
+  assert.match(((await res.json()) as { error: string }).error, /path "accepted"/);
+});
+
+test("routing: the signal route forwards a structured result to the engine", async () => {
+  const seen: unknown[] = [];
+  const app = createApp({
+    config,
+    engine: {
+      ...fakeEngine,
+      onSignal: async (_id, signal) => (seen.push(signal), { ok: true, code: 202 }),
+    },
+    broadcast: () => {},
+    serveWeb: false,
+    users: createUserStore(),
+    remoteAddr: () => "127.0.0.1",
+    auth: openAuth,
+  });
+  const res = await app.request("/api/instances/inst-1/signal", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({
+      phaseId: "evaluate",
+      runId: "r1",
+      type: "completed",
+      token: "t1",
+      result: { accepted: true },
+    }),
+  });
+  assert.equal(res.status, 202);
+  assert.deepEqual((seen[0] as { result: unknown }).result, { accepted: true });
+
+  // A torn result file arrives as an explanation, not as a guessed value.
+  await app.request("/api/instances/inst-1/signal", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({
+      phaseId: "evaluate",
+      runId: "r2",
+      type: "completed",
+      token: "t1",
+      resultError: "the result file could not be parsed as JSON",
+    }),
+  });
+  assert.equal((seen[1] as { result?: unknown }).result, undefined);
+  assert.match(String((seen[1] as { resultError: string }).resultError), /could not be parsed/);
+});

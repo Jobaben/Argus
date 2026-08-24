@@ -177,6 +177,16 @@ export interface StepProgress {
   startedAt?: string | null;
   /** Final run duration, joined from the run record when it ended. */
   durationMs?: number | null;
+  /**
+   * The structured result this step delivered, exactly as it was submitted.
+   *
+   * Held per-step because a phase's result arrives with one step's completion
+   * signal while its siblings may still be running, and it is the phase — not
+   * the step — that publishes a decision once every step is in.
+   */
+  result?: unknown;
+  /** Why the step's declared result could not be read (e.g. a torn file). */
+  resultError?: string;
 }
 
 export interface PhaseProgress {
@@ -237,6 +247,14 @@ export interface PipelineSignal {
   type: SignalType;
   token: string;
   payload?: unknown;
+  /**
+   * The structured result the run wrote to its result file, parsed by the stop
+   * hook. Never derived from the agent's prose: routing reads declared JSON or
+   * it fails the phase.
+   */
+  result?: unknown;
+  /** Set instead of `result` when the result file existed but could not be read. */
+  resultError?: string;
 }
 
 /** Aggregated spend for one instance. Null field = no run reported that metric. */

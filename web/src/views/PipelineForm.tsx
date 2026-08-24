@@ -9,6 +9,7 @@ import {
 } from "../ds";
 import { useRuntimes } from "../useRuntimes";
 import { graphColumns, graphEdges } from "./phaseGraphLayout";
+import { EdgeConditions, ResultEditor } from "./PipelineRoutes";
 
 /**
  * The pipeline editor as rail + focus panel.
@@ -574,8 +575,23 @@ export function PipelineForm({
                   </span>
                 )}
               </div>
+              {/* Each edge's condition, right under the toggles that create it:
+                  a route is a property of the dependency, not of the phase. */}
+              <EdgeConditions
+                phases={form.phases}
+                phase={phase}
+                fieldClass={FIELD_BASE}
+                onPhases={(phases) => setForm((f) => ({ ...f, phases }))}
+              />
             </div>
           )}
+
+          <ResultEditor
+            phase={phase}
+            index={pi}
+            fieldClass={FIELD_BASE}
+            onChange={(patch) => setPhase(pi, patch)}
+          />
 
           <div className="space-y-2 border-l border-line pl-3">
             <span className="font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-ink-faint">

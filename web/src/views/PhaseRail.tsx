@@ -44,12 +44,36 @@ const JOIN_PX = 30;
 /** Row tile horizontal padding + borders, subtracted from the container width. */
 const ROW_CHROME_PX = 22;
 
+/**
+ * The conditional edges into a phase, as one label.
+ *
+ * Only the conditions are drawn. An unconditional edge already reads as an
+ * arrow, and labelling every one of them "always" would bury the two that
+ * actually decide something under a row of noise.
+ */
+function routeLabel(pill: PhasePill, nameOf: Map<string, string>): string | null {
+  const conditional = (pill.edges ?? []).filter((e) => e.conditional);
+  if (conditional.length === 0) return null;
+  const first = conditional[0];
+  const rest = conditional.length - 1;
+  return `${nameOf.get(first.phase) ?? first.phase}: ${first.label}${rest > 0 ? ` +${rest}` : ""}`;
+}
+
 function chipTitle(pill: PhasePill, index: number, needNames: string[]): string {
-  const bits = [`${index + 1}. ${pill.name} — ${STATUS[pill.status].label.toLowerCase()}`];
+  // A skipped phase says so in words. The DS token behind it is the quiet one,
+  // which is right for the colour and wrong for the word: "idle" would promise
+  // work that is never coming.
+  const state = pill.skipped ? "skipped" : STATUS[pill.status].label.toLowerCase();
+  const bits = [`${index + 1}. ${pill.name} — ${state}`];
   if (pill.gated) bits.push("gated: waits for a human");
   if ((pill.attempt ?? 0) > 0) bits.push(`attempt ${pill.attempt + 1}`);
   if (pill.retryAt && pill.status === "failed") bits.push("retry queued");
   if (pill.reason) bits.push(pill.reason.split("\n")[0]);
+  if (pill.skipCause) bits.push(`not selected — ${pill.skipCause.source}: ${pill.skipCause.label}`);
+  for (const edge of pill.edges ?? []) {
+    if (edge.conditional) bits.push(`only if ${edge.phase}: ${edge.label}`);
+    if (edge.allowSkipped) bits.push(`accepts ${edge.phase} skipped`);
+  }
   bits.push(needNames.length > 0 ? `waits for ${needNames.join(", ")}` : "starts immediately");
   return bits.join(" · ");
 }
@@ -58,16 +82,20 @@ function PhaseChip({
   pill,
   index,
   needNames,
+  route,
   selected,
   onSelect,
 }: {
   pill: PhasePill;
   index: number;
   needNames: string[];
+  /** The condition that governs this phase, when one does. */
+  route: string | null;
   selected: boolean;
   onSelect: () => void;
 }) {
   const live = pill.status === "working" || pill.status === "await";
+  const skipped = pill.skipped === true;
   // Same beat as every other pulsing surface on the board.
   const beat = useSyncedDelay(DURATION.pulse);
   // Tinted borders only for the states that demand attention while unselected.
@@ -90,23 +118,39 @@ function PhaseChip({
         selected ? "border-ink-faint bg-surface-2" : border
       }`}
     >
+      {/* Hollow, not dim: a skipped phase is terminal, and an outline reads as
+          "decided against" where another filled dot reads as "not yet". */}
       <span
         aria-hidden="true"
         style={live ? { animationDelay: beat } : undefined}
-        className={`h-1.5 w-1.5 shrink-0 rounded-full ${PHASE_DOT[pill.status]} ${
-          live ? "motion-safe:animate-[pulse_var(--duration-pulse)_ease-in-out_infinite]" : ""
-        }`}
+        className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+          skipped ? "border border-ink-faint" : PHASE_DOT[pill.status]
+        } ${live ? "motion-safe:animate-[pulse_var(--duration-pulse)_ease-in-out_infinite]" : ""}`}
       />
       <span className="shrink-0 font-mono text-[9px] text-ink-faint">
         {String(index + 1).padStart(2, "0")}
       </span>
       <span
         className={`max-w-[10rem] truncate text-[11px] font-semibold ${
-          selected ? "text-ink" : "text-ink-dim"
+          skipped
+            ? "text-ink-faint line-through decoration-line"
+            : selected
+              ? "text-ink"
+              : "text-ink-dim"
         }`}
       >
         {pill.name}
       </span>
+      {skipped && (
+        <span className="shrink-0 font-mono text-[8px] font-bold uppercase tracking-[0.1em] text-ink-faint">
+          skip
+        </span>
+      )}
+      {route && !skipped && (
+        <span className="min-w-0 truncate font-mono text-[8px] uppercase tracking-[0.08em] text-ink-faint">
+          if {route}
+        </span>
+      )}
       {pill.gated && (
         <span className="shrink-0 font-mono text-[8px] font-bold uppercase tracking-[0.1em] text-await">
           gate
@@ -244,6 +288,7 @@ export function PhaseRail({
                           pill={p}
                           index={indexOf.get(p.id) ?? 0}
                           needNames={p.needs.map((n) => nameOf.get(n) ?? n)}
+                          route={routeLabel(p, nameOf)}
                           selected={p.id === selectedId}
                           onSelect={() => onSelect(p.id)}
                         />
