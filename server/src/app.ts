@@ -1273,6 +1273,10 @@ export function createApp(deps: AppDeps): Hono {
       type: (body.type ?? "completed") as PipelineSignal["type"],
       token: String(body.token ?? ""),
       payload: body.payload,
+      // The declared structured result, verbatim: the engine validates it
+      // against the phase's schema, so no shape is assumed here.
+      ...(body.result === undefined ? {} : { result: body.result }),
+      ...(typeof body.resultError === "string" ? { resultError: body.resultError } : {}),
     };
     const res = await engine.onSignal(id, signal);
     return c.json({ ok: res.ok }, res.code as 200 | 202 | 403 | 404);

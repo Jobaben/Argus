@@ -177,6 +177,11 @@ export function advance(
   if (!step) return { instance: inst, startPhases: [] };
   step.status = signal.type === "failed" ? "failed" : "succeeded";
   if (signal.payload !== undefined) phase.payload = signal.payload;
+  // A structured result belongs to the step that submitted it until every step
+  // is in: the phase publishes one decision, and which step may submit it is
+  // the definition's business, not the arrival order's.
+  if (signal.result !== undefined) step.result = signal.result;
+  if (signal.resultError !== undefined) step.resultError = signal.resultError;
 
   if (signal.type === "failed" && !payloadReason(phase.payload)) {
     phase.payload =

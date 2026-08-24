@@ -2347,3 +2347,47 @@ test("routing: a predicate path the source schema does not declare is a 400", as
   assert.equal(res.status, 400);
   assert.match(((await res.json()) as { error: string }).error, /path "accepted"/);
 });
+
+test("routing: the signal route forwards a structured result to the engine", async () => {
+  const seen: unknown[] = [];
+  const app = createApp({
+    config,
+    engine: {
+      ...fakeEngine,
+      onSignal: async (_id, signal) => (seen.push(signal), { ok: true, code: 202 }),
+    },
+    broadcast: () => {},
+    serveWeb: false,
+    users: createUserStore(),
+    remoteAddr: () => "127.0.0.1",
+    auth: openAuth,
+  });
+  const res = await app.request("/api/instances/inst-1/signal", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({
+      phaseId: "evaluate",
+      runId: "r1",
+      type: "completed",
+      token: "t1",
+      result: { accepted: true },
+    }),
+  });
+  assert.equal(res.status, 202);
+  assert.deepEqual((seen[0] as { result: unknown }).result, { accepted: true });
+
+  // A torn result file arrives as an explanation, not as a guessed value.
+  await app.request("/api/instances/inst-1/signal", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({
+      phaseId: "evaluate",
+      runId: "r2",
+      type: "completed",
+      token: "t1",
+      resultError: "the result file could not be parsed as JSON",
+    }),
+  });
+  assert.equal((seen[1] as { result?: unknown }).result, undefined);
+  assert.match(String((seen[1] as { resultError: string }).resultError), /could not be parsed/);
+});

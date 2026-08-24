@@ -32,6 +32,46 @@ export function runLogPath(id: string): string {
   return path.join(paths.runsDir(), `${id}.log`);
 }
 
+/**
+ * The per-run file a result-producing step writes its structured decision to.
+ *
+ * Beside the run rather than beside the instance: the file belongs to one
+ * attempt of one step, so a retry writes a fresh path and can never read back
+ * the previous attempt's decision.
+ */
+export function runResultPath(id: string): string {
+  return path.join(paths.argus(), "results", `${id}.json`);
+}
+
+/**
+ * Read a run's result file the way the stop hook does.
+ *
+ * Used by the reconcile tick for runtimes with no command hook to install: the
+ * agent writes the same file either way, and the only difference is that the
+ * value is picked up off disk a tick later instead of being pushed the instant
+ * the run ends.
+ */
+export async function readRunResult(
+  id: string,
+): Promise<{ result?: unknown; resultError?: string }> {
+  if (!RUN_ID_RE.test(id)) return {};
+  let raw: string;
+  try {
+    raw = await readFile(runResultPath(id), "utf8");
+  } catch {
+    return {};
+  }
+  try {
+    return { result: JSON.parse(raw) as unknown };
+  } catch (e) {
+    return {
+      resultError: `the result file at ${runResultPath(id)} could not be parsed as JSON: ${
+        e instanceof Error ? e.message : String(e)
+      }`,
+    };
+  }
+}
+
 function runJsonPath(id: string): string {
   return path.join(paths.runsDir(), `${id}.json`);
 }
@@ -220,6 +260,7 @@ export async function pruneRuns(scheduleId: string, keep: number): Promise<void>
     drop.flatMap((r) => [
       rm(runJsonPath(r.id), { force: true }),
       rm(runLogPath(r.id), { force: true }),
+      rm(runResultPath(r.id), { force: true }),
     ]),
   );
   for (const r of drop) parseMemo.forget(r.id);

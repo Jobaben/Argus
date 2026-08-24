@@ -51,6 +51,19 @@ export function resolveNeeds(phases: PhaseDef[]): Map<string, string[]> {
   return out;
 }
 
+/**
+ * The one step of a phase allowed to publish its declared result.
+ *
+ * A single-step phase needs no ceremony; beyond that the definition names the
+ * step, because two concurrent siblings racing to write one phase-level
+ * decision is not a routing rule — it is a coin toss. Null when the phase
+ * declares no result at all.
+ */
+export function resultStepName(phase: PhaseDef): string | null {
+  if (!phase.result) return null;
+  return phase.result.resultStep ?? phase.steps[0]?.name ?? null;
+}
+
 /** True when the definition uses explicit edges rather than the linear default. */
 export function isExplicitDag(phases: PhaseDef[]): boolean {
   return phases.some((p) => p.needs !== undefined);
