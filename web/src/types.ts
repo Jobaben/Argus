@@ -36,6 +36,12 @@ export type {
   LaunchInput,
   // Pipelines
   Dependency,
+  DependencyEdge,
+  RouteCondition,
+  RoutePredicate,
+  ResultSchema,
+  PhaseResult,
+  RouteDecision,
   PhaseStep,
   PhaseDef,
   PipelineDefinition,

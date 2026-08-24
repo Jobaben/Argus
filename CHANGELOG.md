@@ -26,6 +26,31 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Outcome-based routing: a phase can decide what runs next.** A phase may
+  declare a `result` — an artifact name and a small validated schema — and a
+  dependency may carry a `when` condition over it, so `publish` runs only if
+  `evaluate` decided `accepted: true` while `repair` is _skipped_, and a later
+  join needing both with `allowSkipped` runs after whichever branch happened.
+  The decision travels through a per-run JSON file named by `ARGUS_RESULT_FILE`
+  and parsed by the stop hook (read off disk on the reconcile tick for runtimes
+  with no hook), never from the agent's prose: `ARGUS_OUTCOME` still reports
+  whether the run _worked_, and an agent that decides "reject" has succeeded.
+  `settle()` is the only route evaluator — it validates the result, publishes
+  the artifact, evaluates the edges in definition order and records the decision
+  in the same atomic write as the skips it implies, then replays that record
+  forever after, so a crash, a downstream revise, or an edit to the definition
+  cannot re-decide a branch that already ran. A missing, unreadable,
+  schema-invalid or contradicted result fails the phase with a specific reason
+  under its ordinary retry policy; an ambiguous exclusive group or an unmatched
+  required group fails it too. Authoring is validated at save time as a `400`
+  naming the phase — a condition on a phase that decides nothing, a field its
+  schema never declares, a value its type cannot hold, a stray default, a group
+  spanning two sources. The board renders a skipped branch as skipped (not
+  idle), labels conditional edges, and explains the decision in one line; the
+  phase panel authors results, conditions, groups, defaults and skip-tolerant
+  joins. An instance whose every phase either succeeded or was intentionally
+  skipped succeeds. Every pipeline without a `when` edge loads, validates,
+  executes and renders exactly as before.
 - **Two more agent runtimes: OpenCode and Qwen Code.** Argus now drives
   `opencode run` and `qwen` alongside `claude -p` and `codex exec`, selectable
   in every place a runtime already was: per schedule, per one-off launch, per

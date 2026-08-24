@@ -1,7 +1,10 @@
 import type { DsStatus } from "./status";
+import { edgeViews, effectiveEdges, type RouteEdgeView } from "./routes";
 import type {
   AgentRuntimeId,
+  DependencyEdge,
   InstanceStatus,
+  RouteDecision,
   PhaseStatus,
   StepStatus,
   PhaseProgress,
@@ -54,6 +57,22 @@ export interface PhasePill {
   attempt: number;
   /** When an automatic retry is due, while one is queued. */
   retryAt: string | null;
+  /**
+   * Terminal, deliberate, and not idle.
+   *
+   * Carried beside the status rather than folded into it: the DS status token
+   * still reads `idle` (a skipped phase is quiet, and it borrows the quiet
+   * colour), while the board says "skipped" in words — because "idle" tells a
+   * reader the work is about to happen, which is the one thing that is false.
+   */
+  skipped?: boolean;
+  /** Incoming edges with the condition that governs each, for route labels.
+   *  Absent means the caller built a pill without a graph to read. */
+  edges?: RouteEdgeView[];
+  /** The route decision this phase's own result took, if it took one. */
+  decision?: RouteDecision | null;
+  /** Why this phase was skipped: the phase that decided, and on what grounds. */
+  skipCause?: { source: string; label: string } | null;
 }
 
 /**
@@ -206,11 +225,42 @@ function failureFor(latest: PipelineInstance): OverviewRow["failure"] {
   return { step, reason: extractReason(phase.payload), kind: extractKind(phase.payload) };
 }
 
+/**
+ * Why a phase was skipped.
+ *
+ * Two shapes, and the difference is the whole explanation: a decision named
+ * this phase (so the condition on its own incoming edge is what did not match),
+ * or the branch above it was cancelled and the skip simply travelled down.
+ */
+function skipCauseFor(
+  phase: PhaseProgress,
+  edges: RouteEdgeView[],
+  decisions: RouteDecision[],
+  statusById: Map<string, PhaseStatus>,
+): PhasePill["skipCause"] {
+  if (phase.status !== "skipped") return null;
+  const decided = decisions.find((d) => d.skipped.includes(phase.id));
+  if (decided) {
+    const edge = edges.find((e) => e.phase === decided.sourcePhase);
+    return { source: decided.sourcePhase, label: edge?.label ?? "not selected" };
+  }
+  const upstream = edges.find((e) => statusById.get(e.phase) === "skipped");
+  return upstream ? { source: upstream.phase, label: "was skipped too" } : null;
+}
+
 function instanceRow(
   definition: OverviewEntry["definition"],
   instance: PipelineInstance,
   cost: OverviewCost | null,
 ): OverviewRow {
+  // Conditions live in the definition; the instance carries only resolved ids.
+  // A phase the definition no longer has falls back to its recorded edges —
+  // a mid-flight edit costs the labels, never the graph.
+  const defEdges = effectiveEdges(definition.phases);
+  const decisions = instance.routeDecisions ?? [];
+  const statusById = new Map(instance.phases.map((p) => [p.id, p.status]));
+  const edgesFor = (p: PhaseProgress): DependencyEdge[] =>
+    defEdges.get(p.id) ?? (p.needs ?? []).map((phase) => ({ phase }));
   const phases: PhasePill[] = instance.phases.map((p) => ({
     id: p.id,
     name: p.name,
@@ -227,6 +277,10 @@ function instanceRow(
     needs: p.needs ?? [],
     attempt: p.attempt,
     retryAt: p.retryAt ?? null,
+    skipped: p.status === "skipped",
+    edges: edgeViews(edgesFor(p)),
+    decision: decisions.find((d) => d.sourcePhase === p.id) ?? null,
+    skipCause: skipCauseFor(p, edgeViews(edgesFor(p)), decisions, statusById),
   }));
 
   return {
@@ -248,12 +302,13 @@ export function toOverviewRow(entry: OverviewEntry): OverviewRow {
   const { definition, latest } = entry;
 
   if (!latest) {
+    const edges = effectiveEdges(definition.phases);
     return {
       pipelineId: definition.id,
       name: definition.name,
       badge: "idle",
       updatedAt: null,
-      phases: definition.phases.map((p, i) => ({
+      phases: definition.phases.map((p) => ({
         id: p.id,
         name: p.name,
         status: "idle" as const,
@@ -275,15 +330,13 @@ export function toOverviewRow(entry: OverviewEntry): OverviewRow {
         // A pipeline that has never run has no instance to carry resolved
         // edges, so they are resolved from the definition here — same rule as
         // the server: no phase declaring `needs` means linear.
-        needs: definition.phases.some((x) => x.needs !== undefined)
-          ? (p.needs ?? []).map((dependency) =>
-              typeof dependency === "string" ? dependency : dependency.phase,
-            )
-          : i === 0
-            ? []
-            : [definition.phases[i - 1].id],
+        needs: (edges.get(p.id) ?? []).map((edge) => edge.phase),
         attempt: 0,
         retryAt: null,
+        skipped: false,
+        edges: edgeViews(edges.get(p.id) ?? []),
+        decision: null,
+        skipCause: null,
       })),
       instanceId: null,
       gate: null,

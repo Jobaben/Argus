@@ -319,7 +319,11 @@ function PhaseFocus({
   rowModel: string | null;
   onOpenStep: (step: StepPill, phaseName: string, reason: string | null, originY: number) => void;
 }) {
-  const needNames = pill.needs.map((n) => phaseNames.get(n) ?? n);
+  const name = (id: string) => phaseNames.get(id) ?? id;
+  const edges =
+    pill.edges ??
+    pill.needs.map((n) => ({ phase: n, label: "always", conditional: false, allowSkipped: false }));
+  const needNames = pill.needs.map(name);
   return (
     <div className="flex min-w-0 flex-col gap-2.5 motion-safe:animate-[slide-up_var(--duration-base)_var(--ease-out-expo)_both]">
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 px-0.5">
@@ -342,15 +346,54 @@ function PhaseFocus({
             retry queued
           </span>
         )}
-        {needNames.length > 0 && (
+        {pill.skipped && (
+          <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint">
+            skipped
+          </span>
+        )}
+        {/* Each incoming edge with the condition that governs it: an
+            unconditional edge is just the arrow it always was, a conditional
+            one says what has to be true, and a skip-tolerant join says it
+            accepts a branch that never ran. */}
+        {edges.length > 0 && (
           <span
             className="min-w-0 truncate font-mono text-[10px] text-ink-faint"
             title={`Waits for ${needNames.join(", ")}`}
           >
-            ← {needNames.join(", ")}
+            ←{" "}
+            {edges
+              .map(
+                (e) =>
+                  `${name(e.phase)}${e.conditional ? ` (${e.label})` : ""}${
+                    e.allowSkipped ? " or skipped" : ""
+                  }`,
+              )
+              .join(", ")}
           </span>
         )}
       </div>
+      {/* Why this phase did not run, in the words of the decision that said so. */}
+      {pill.skipped && pill.skipCause && (
+        <p data-testid="phase-skip" className="px-0.5 text-[11px] text-ink-faint">
+          Not selected — {name(pill.skipCause.source)}: {pill.skipCause.label}
+        </p>
+      )}
+      {/* The decision this phase's own result took: the value, then what it
+          selected and what it consequently skipped. Compact on purpose — the
+          journal has the long form, this is the line that stops the reader
+          asking. */}
+      {pill.decision && (
+        <p data-testid="phase-decision" className="min-w-0 px-0.5 text-[11px] text-ink-faint">
+          <span className="font-mono text-ink-dim">{pill.decision.artifact}</span>{" "}
+          <span className="font-mono break-all">{JSON.stringify(pill.decision.value)}</span> →{" "}
+          {pill.decision.selected.length > 0
+            ? pill.decision.selected.map(name).join(", ")
+            : "nothing"}
+          {pill.decision.skipped.length > 0 && (
+            <span> · skipped {pill.decision.skipped.map(name).join(", ")}</span>
+          )}
+        </p>
+      )}
       <ol
         aria-label={`Steps of phase ${pill.name}`}
         data-testid="phase-grid"
