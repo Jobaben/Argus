@@ -315,7 +315,16 @@ export function createApp(deps: AppDeps): Hono {
 
   app.get("/api/auth/status", async (c) => {
     const { configured, username, role } = await auth.status(sessionToken(c));
-    return c.json({ configured, authenticated: username !== null, username, role });
+    return c.json({
+      configured,
+      authenticated: username !== null,
+      username,
+      role,
+      // With a shared token set, a browser has no credential except a session,
+      // so the UI must ask for a login before mounting a dashboard that would
+      // otherwise 401 on every panel.
+      sessionRequired: config.token !== null,
+    });
   });
 
   const LOOPBACK_ADDRS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);

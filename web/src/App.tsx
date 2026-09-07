@@ -69,6 +69,7 @@ const AgentDetail = lazy(() => import("./views/AgentDetail"));
 const FlightRecorder = lazy(() => import("./views/FlightRecorder"));
 import { useBriefing } from "./useBriefing";
 import { useAuth } from "./useAuth";
+import { AdminAuthPanel } from "./views/AdminAuthPanel";
 import {
   CommandPalette,
   NAV_CHORDS,
@@ -220,7 +221,7 @@ async function postAction(path: string): Promise<void> {
   }
 }
 
-export default function App() {
+function Dashboard() {
   const [active, setActive] = useState<string>(currentTabId);
   const [direction, setDirection] = useState<RouteDirection>("lateral");
   const agentsState = useAgents();
@@ -485,6 +486,54 @@ export default function App() {
         onClose={() => setShortcutsOpen(false)}
         bindings={bindings}
       />
+    </div>
+  );
+}
+
+/**
+ * The sign-in wall for a token-gated server.
+ *
+ * `ARGUS_TOKEN` is mandatory on an exposed bind and unknowable to a browser, so
+ * a session is the only credential the UI can hold. Rendering the dashboard
+ * without one used to mount every data hook at once and retry each on a backoff
+ * — a screen of empty panels over a wall of 401s, with the only way in buried
+ * on the Pipelines page.
+ *
+ * Gating *above* `Dashboard` is what makes it quiet: the hooks live inside that
+ * subtree, so refusing to render it means the requests are never made, rather
+ * than made and discarded.
+ *
+ * Deliberately fails open. The wall appears only when the server says a session
+ * is required and we know we lack one; an unreachable `/api/auth/status` renders
+ * the dashboard, whose own error strips report a server that is down. Nothing is
+ * protected by this choice — every route is enforced server-side regardless —
+ * so the cost of guessing wrong is a login form nobody needed, and fail-open
+ * keeps a loopback server working exactly as before.
+ */
+export default function App() {
+  const { status, loading, login, setup, register } = useAuth();
+
+  if (status === null) {
+    // First status fetch in flight: showing nothing beats flashing a login form
+    // at someone who turns out to be signed in already.
+    return loading ? <ViewLoading label="Argus" /> : <Dashboard />;
+  }
+  if (!status.sessionRequired || status.authenticated) return <Dashboard />;
+
+  return (
+    <div className="flex min-h-screen items-center justify-center p-6">
+      <div className="w-full max-w-sm">
+        <h1 className="mb-1 text-lg text-ink">Argus</h1>
+        <p className="mb-6 text-sm text-ink-dim">
+          This server requires an account. Sign in to see the dashboard.
+        </p>
+        <AdminAuthPanel
+          configured={status.configured}
+          onLogin={login}
+          onSetup={setup}
+          onRegister={register}
+        />
+      </div>
     </div>
   );
 }

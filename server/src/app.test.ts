@@ -352,6 +352,8 @@ test("setup → authenticated mutation → logout → 401 again", async () => {
     authenticated: true,
     username: "usha",
     role: "root",
+    // No ARGUS_TOKEN on this app, so the UI needs no login to read.
+    sessionRequired: false,
   });
 
   const logout = await app.request("/api/auth/logout", {
@@ -573,6 +575,7 @@ test("weak setup password is rejected with 400 and no account is created", async
     authenticated: false,
     username: null,
     role: null,
+    sessionRequired: false,
   });
 });
 
@@ -2266,6 +2269,19 @@ test("federation: a paired peer reaches the summary without the shared bearer to
   assert.equal((await app.request("/api/fleet", { headers: peerHost })).status, 401);
   // And an unpaired caller still gets nothing, token or no token.
   assert.equal((await app.request("/api/federation/summary", { headers: peerHost })).status, 401);
+});
+
+test("auth status tells the UI whether a session is required at all", async () => {
+  // The UI cannot infer this: signed out, a loopback server reads fine and a
+  // token-gated one 401s every panel. Without the flag the dashboard either
+  // gates a local server that needs no login or mounts one that refuses it.
+  const open = await makeApp({}, signedOut).request("/api/auth/status", { headers: loopback });
+  assert.equal(((await open.json()) as { sessionRequired: boolean }).sessionRequired, false);
+
+  const gated = await makeApp({ token: "s3cret" }, signedOut).request("/api/auth/status", {
+    headers: loopback,
+  });
+  assert.equal(((await gated.json()) as { sessionRequired: boolean }).sessionRequired, true);
 });
 
 test("with ARGUS_TOKEN set, the browser reaches the API by logging in", async () => {
