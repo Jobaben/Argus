@@ -155,6 +155,28 @@ export function sessionToken(c: Context): string | null {
 }
 
 /**
+ * The same lookup for the WebSocket upgrade, which bypasses Hono entirely and
+ * so has no `Context` to read a cookie from — only the raw header string.
+ */
+export function sessionTokenFromCookieHeader(cookie: string | undefined): string | null {
+  if (!cookie) return null;
+  for (const part of cookie.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq === -1) continue;
+    if (part.slice(0, eq).trim() !== SESSION_COOKIE) continue;
+    // Cookie values are opaque base64url here, but decode anyway: a proxy that
+    // percent-encodes on the way through should not silently log everyone out.
+    const raw = part.slice(eq + 1).trim();
+    try {
+      return decodeURIComponent(raw) || null;
+    } catch {
+      return raw || null;
+    }
+  }
+  return null;
+}
+
+/**
  * Middleware for routes any active account may use (pipeline edit/run).
  * 401s carry a `code` the UI switches on: `auth_setup_required` renders the
  * first-run form, `auth_required` renders the login form.

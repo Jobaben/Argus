@@ -48,6 +48,23 @@ const openAuth: AuthService = {
   revokeSessions: () => {},
 };
 
+// Signed out: no session, so the shared token is the only credential left.
+// Tests that assert the ARGUS_TOKEN gate rejects a caller need this rather than
+// `openAuth` — an authenticated session is itself an accepted credential now,
+// so an always-authenticated stub would satisfy the gate it is trying to prove.
+const signedOut: AuthService = {
+  ...openAuth,
+  status: async () => ({ configured: true, username: null, role: null }),
+  verify: () => null,
+};
+
+/** Honours the token it is given, like the real service: only SESSION is valid. */
+const SESSION = "session-cookie-value";
+const sessionAware: AuthService = {
+  ...openAuth,
+  verify: (t) => (t === SESSION ? { username: "test", role: "root" } : null),
+};
+
 function makeApp(over: Partial<ArgusConfig> = {}, auth: AuthService = openAuth) {
   const users = createUserStore();
   return createApp({
@@ -158,7 +175,7 @@ test("cross-origin mutation is rejected with 403", async () => {
 });
 
 test("token gate: missing token is 401, correct token passes", async () => {
-  const app = makeApp({ token: "s3cret" });
+  const app = makeApp({ token: "s3cret" }, signedOut);
   const denied = await app.request("/api/health", { headers: loopback });
   assert.equal(denied.status, 401);
   const ok = await app.request("/api/health", {
@@ -2224,12 +2241,18 @@ test("federation: a paired peer reaches the summary without the shared bearer to
     serveWeb: false,
     users: createUserStore(),
     remoteAddr: () => "127.0.0.1",
-    auth: openAuth,
+    auth: sessionAware,
   });
   const peerHost = { host: "box.local:7777" };
+  // Adding the peer is an admin route: it needs the token *and* a session.
   await app.request("/api/peers", {
     method: "POST",
-    headers: { ...peerHost, origin: "http://box.local:7777", "x-argus-token": "server-token" },
+    headers: {
+      ...peerHost,
+      origin: "http://box.local:7777",
+      "x-argus-token": "server-token",
+      cookie: `argus_session=${SESSION}`,
+    },
     body: JSON.stringify({ label: "Box", url: "http://box.local:7777", secret: PEER_SECRET }),
   });
 
@@ -2239,10 +2262,64 @@ test("federation: a paired peer reaches the summary without the shared bearer to
   });
   assert.equal(res.status, 200, "a paired peer is authenticated by its pairing");
 
-  // Every other route still demands the token.
+  // Every other route still demands a credential — token or session, neither sent.
   assert.equal((await app.request("/api/fleet", { headers: peerHost })).status, 401);
   // And an unpaired caller still gets nothing, token or no token.
   assert.equal((await app.request("/api/federation/summary", { headers: peerHost })).status, 401);
+});
+
+test("with ARGUS_TOKEN set, the browser reaches the API by logging in", async () => {
+  // The end-to-end shape of the dashboard's own path, through the real auth
+  // service: ARGUS_TOKEN is set (mandatory on an exposed bind), and the browser
+  // has no way to know it. Before the session credential existed, every request
+  // the UI made was rejected before its route ran — a working API and a dead UI.
+  const users = createUserStore();
+  const auth = createAuthService({ store: users });
+  const app = createApp({
+    config: { ...config, token: "s3cret" },
+    engine: fakeEngine,
+    broadcast: () => {},
+    serveWeb: false,
+    users,
+    auth,
+    remoteAddr: () => "127.0.0.1",
+  });
+
+  // 1. A cold dashboard can ask whether it needs to log in.
+  const status = await app.request("/api/auth/status", { headers: loopback });
+  assert.equal(status.status, 200, "the UI can discover it needs a login");
+
+  // 2. Reads are refused, with the code the UI renders a login form for.
+  const cold = await app.request("/api/overview", { headers: loopback });
+  assert.equal(cold.status, 401);
+  assert.equal(((await cold.json()) as { code?: string }).code, "auth_required");
+
+  // 3. Creating the root account is reachable without the shared token.
+  const created = await app.request("/api/auth/setup", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ username: "root", password: "correct horse battery" }),
+  });
+  assert.equal(created.status, 201);
+
+  // 4. The session cookie it hands back is accepted in place of the token.
+  const cookie = created.headers.get("set-cookie") ?? "";
+  assert.match(cookie, /argus_session=/);
+  const session = /argus_session=([^;]+)/.exec(cookie)?.[1] ?? "";
+  const warm = await app.request("/api/overview", {
+    headers: { ...loopback, cookie: `argus_session=${session}` },
+  });
+  assert.equal(warm.status, 200, "a logged-in browser reads the API without the token");
+
+  // 5. Logging out revokes it again — the cookie is not a permanent bypass.
+  await app.request("/api/auth/logout", {
+    method: "POST",
+    headers: { ...sameOrigin, cookie: `argus_session=${session}` },
+  });
+  const after = await app.request("/api/overview", {
+    headers: { ...loopback, cookie: `argus_session=${session}` },
+  });
+  assert.equal(after.status, 401, "a revoked session stops being a credential");
 });
 
 test("the agent completion signal survives ARGUS_TOKEN without a bearer header", async () => {
@@ -2259,7 +2336,9 @@ test("the agent completion signal survives ARGUS_TOKEN without a bearer header",
 });
 
 test("ARGUS_TOKEN still guards the routes next to the signal", async () => {
-  const app = makeApp({ token: "secret" });
+  // Signed out on purpose: with neither the shared token nor a session, these
+  // two must still be refused while the signal beside them goes through.
+  const app = makeApp({ token: "secret" }, signedOut);
   for (const path of ["/api/instances/inst-1/abort", "/api/instances/inst-1/approve"]) {
     const res = await app.request(path, { method: "POST", headers: sameOrigin });
     assert.equal(res.status, 401, path);

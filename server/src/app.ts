@@ -278,7 +278,12 @@ export function createApp(deps: AppDeps): Hono {
   // and the ETag layer wraps the handler's body, so it sits inside the security
   // gate (a rejected request never gets a tag) but outside every route.
   app.use("/api/*", requestLog());
-  app.use("/api/*", securityMiddleware(config));
+  // A session is the browser's credential: it cannot present ARGUS_TOKEN, which
+  // is a server-side env var the page never sees.
+  app.use(
+    "/api/*",
+    securityMiddleware(config, (c) => auth.verify(sessionToken(c)) !== null),
+  );
   app.use("/api/*", conditionalGet());
 
   app.get("/api/health", (c) =>

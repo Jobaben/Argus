@@ -46,7 +46,7 @@ import { createAnalysisRunner } from "./sources/analysis.js";
 import { readSessionLines } from "./sources/sessions.js";
 import { readSchedules } from "./sources/schedules.js";
 import { createApp } from "./app.js";
-import { createAuthService } from "./auth.js";
+import { createAuthService, sessionTokenFromCookieHeader } from "./auth.js";
 import { createUserStore } from "./userStore.js";
 import { createRunTailer } from "./runTailer.js";
 import { log } from "./log.js";
@@ -185,6 +185,7 @@ server.on("upgrade", (req, socket, head) => {
       token: (req.headers["x-argus-token"] as string | undefined) ?? undefined,
     },
     config,
+    auth.verify(sessionTokenFromCookieHeader(req.headers.cookie)) !== null,
   );
   if (!allowed) {
     socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");

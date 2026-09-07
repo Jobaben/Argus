@@ -122,16 +122,71 @@ export function isSelfAuthenticating(path: string): boolean {
   return SELF_AUTHENTICATING.has(path) || SELF_AUTHENTICATING_SHAPES.some((re) => re.test(path));
 }
 
+/**
+ * The account-session routes, exempt from the shared token for the same reason
+ * the two routes above are: without the exemption you could never obtain the
+ * credential they hand out.
+ *
+ * `ARGUS_TOKEN` is a server-side environment variable. A browser never learns
+ * it, and the bundled UI has no field to type it into — so with a token set,
+ * every request the dashboard makes was rejected before its route ran, and an
+ * exposed bind (which the token is *mandatory* for, see `assertBindIsSafe`)
+ * meant a working API and a dead UI. Letting a session stand in as an
+ * alternative credential is what makes the UI usable there; that only works if
+ * logging in is itself reachable.
+ *
+ * These routes carry their own protections rather than relying on the token:
+ * login is constant-time and trips a global lockout after
+ * `MAX_LOGIN_FAILURES`, registration lands pending root approval and is capped
+ * at `MAX_PENDING_REGISTRATIONS`, and the first (root) account can only be
+ * created from loopback. The Origin check below is *not* skipped for them, so
+ * the mutating ones keep their CSRF cover.
+ *
+ * Matched exactly, so nothing under a longer path inherits the exemption.
+ */
+const SESSION_BOOTSTRAP = new Set([
+  "/api/auth/status",
+  "/api/auth/login",
+  "/api/auth/register",
+  "/api/auth/setup",
+  "/api/auth/logout",
+]);
+
+export function isSessionBootstrap(path: string): boolean {
+  return SESSION_BOOTSTRAP.has(path);
+}
+
+/**
+ * Whether a request carries a valid account session.
+ *
+ * Injected rather than imported so this module keeps owning the *policy* ("a
+ * logged-in account is an acceptable credential") while auth.ts keeps owning
+ * the *mechanism* (cookie, session table, expiry). It defaults to "no session",
+ * which is the fail-closed reading: a caller that does not wire up accounts
+ * gets exactly the old token-only behaviour.
+ */
+export type SessionCheck = (c: Context) => boolean;
+
 /** Hono middleware enforcing the three-layer model above on every /api route. */
-export function securityMiddleware(cfg: ArgusConfig) {
+export function securityMiddleware(cfg: ArgusConfig, hasSession: SessionCheck = () => false) {
   return async (c: Context, next: Next) => {
     if (!isHostAllowed(c.req.header("host"), cfg)) {
       return c.json({ error: "forbidden: host not allowed" }, 403);
     }
-    if (cfg.token && !isSelfAuthenticating(c.req.path)) {
+    if (cfg.token && !isSelfAuthenticating(c.req.path) && !isSessionBootstrap(c.req.path)) {
       const supplied =
         bearer(c.req.header("authorization")) ?? c.req.header("x-argus-token") ?? null;
-      if (!safeEqual(supplied, cfg.token)) return c.json({ error: "unauthorized" }, 401);
+      // Two acceptable credentials: the shared token (CLIs, reverse proxies)
+      // or a logged-in account (the browser, which cannot know the token).
+      // The compare runs first and unconditionally, so its timing does not
+      // depend on whether a session happens to be present.
+      const tokenOk = safeEqual(supplied, cfg.token);
+      if (!tokenOk && !hasSession(c)) {
+        // `auth_required` is the code the UI already switches on to render the
+        // login form; without it a token-gated 401 is indistinguishable from a
+        // wrong token, and the dashboard shows an error instead of a way in.
+        return c.json({ error: "unauthorized", code: "auth_required" }, 401);
+      }
     }
     if (
       MUTATING.has(c.req.method) &&
@@ -150,12 +205,16 @@ export function securityMiddleware(cfg: ArgusConfig) {
 export function isUpgradeAllowed(
   headers: { host?: string; origin?: string; authorization?: string; token?: string },
   cfg: ArgusConfig,
+  hasSession = false,
 ): boolean {
   if (!isHostAllowed(headers.host, cfg)) return false;
   if (!isOriginAllowed(headers.origin, headers.host, cfg)) return false;
   if (cfg.token) {
     const supplied = bearer(headers.authorization) ?? headers.token ?? null;
-    if (!safeEqual(supplied, cfg.token)) return false;
+    // Same two credentials as the REST surface. Without this the dashboard
+    // would authenticate, then silently lose live updates and fall back to
+    // polling forever — the failure the token gate is least visible in.
+    if (!safeEqual(supplied, cfg.token) && !hasSession) return false;
   }
   return true;
 }
