@@ -15,19 +15,19 @@
   },
   "dependencies": {
     "@argus/contracts": "*",
-    "@hono/node-server": "^2.1.0",
+    "@hono/node-server": "^2.1.1",
     "chokidar": "^4.0.3",
-    "hono": "^4.13.1",
+    "hono": "^4.13.7",
     "ws": "^8.21.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/node": "^26.2.0",
+    "@types/node": "^26.4.1",
     "@types/ws": "^8.5.13",
-    "eslint": "^10.8.1",
-    "globals": "^17.9.0",
-    "tsx": "^4.23.11",
+    "eslint": "^10.10.0",
+    "globals": "^17.12.0",
+    "tsx": "^4.23.13",
     "typescript": "^5.7.2",
-    "typescript-eslint": "^8.66.0"
+    "typescript-eslint": "^8.69.0"
   }
 }
