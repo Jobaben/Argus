@@ -184,6 +184,64 @@ The resolved runtime is **written onto the run record**, not re-derived at read
 time: a run started under one default has to stay explicable after the default
 changes, exactly like the budget ladder's `budgetAction`.
 
+### The harness layer
+
+A phase's steps used to be "hand the runtime a prompt and a model, inherit
+everything else." `server/src/harness/` is where that stopped being true:
+what a step's process may do (`CapabilityProfile`), what of Argus's own
+environment reaches it (`EnvPolicy`), whether its work actually happened
+(`PhaseCheck`), and a record of exactly what was launched
+(`AgentInvocationRecord`) — all runtime-neutral, all optional, and a phase
+declaring none of it runs exactly as it did before this layer existed. Full
+field-by-field reference: [docs/HARNESS.md](HARNESS.md).
+
+The split follows the same ownership rule as the rest of the server:
+
+- **The pipeline engine (`pipelineEngine.ts`) owns every side effect** —
+  when to launch a step, when to kill it (a deadline, an abort, a revise
+  superseding it), when to run its checks, and when to write the result down.
+  Nothing in `harness/` touches the filesystem or a child process itself
+  except at the engine's direction.
+- **`harness/invocation.ts` prepares, and only prepares.** `resolveCapabilities`
+  merges the pipeline/phase/step profiles by key (narrowest wins);
+  `prepareInvocation` asks the chosen runtime to map the resolved profile onto
+  its own flags and config files, applies the environment policy, and returns
+  everything the engine needs to write down and spawn — as data, not as
+  actions taken. A capability the runtime can't honour under strict
+  enforcement comes back as a `blocking` reason instead of quietly launching
+  with more capability than the profile declared.
+- **`harness/childEnv.ts` owns the environment policy**, and is the _one_
+  place a child process's environment is assembled — every runtime routes
+  through `buildChildEnv` rather than spreading `process.env` by hand. This is
+  also where Argus's own secrets (`ARGUS_TOKEN`, `ARGUS_WEBHOOK_URL`) and
+  per-invocation identifiers are stripped unconditionally, independent of
+  whatever policy a pipeline author declares: an agent must never be able to
+  administer the harness that runs it.
+- **`harness/verification.ts` owns Argus's own checks.** A step reporting
+  success is the agent's word; `runChecks` is Argus's own — a command's exit
+  code, a required file, whether the working tree actually changed — run once
+  every step of a phase has reported in, never derived from anything the
+  agent said.
+- **The runtimes (`runtimes/claude.ts`, `codex.ts`, `opencode.ts`, `qwen.ts`)
+  map capabilities onto their own CLI**, and report what they can't as
+  `limitations` strings rather than silently dropping them — the same
+  discipline the runtime seam already applied to argv, envelopes and
+  activity (see above). Two runtimes (OpenCode, Qwen Code) currently map
+  none of it: every declared key on either becomes a limitation.
+- **`pipelineTransitions.ts` stays pure.** `applyVerification` — the function
+  that turns a `VerificationReport` into a phase's next status — takes an
+  instance and a report and returns what the instance becomes; it has no
+  more business calling `runChecks` itself than any other transition has
+  calling `spawn`. The engine runs the checks (off the instance lock, since
+  they can take as long as a test suite) and hands the _result_ to the
+  transition, exactly as it hands a completion signal to `advance()`.
+
+This is also why a capability profile or a check can be added to an existing
+pipeline with zero migration: every new field is optional at every level
+(pipeline, phase, step), and `undefined` at every level has always meant "the
+CLI's own defaults" — which is what every pipeline authored before this layer
+existed already got.
+
 ### Path discipline (cross-OS)
 
 `claudeHome()` derives the root from `os.homedir()` (or `ARGUS_CLAUDE_HOME` /
