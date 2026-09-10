@@ -19,8 +19,9 @@
 
 import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, stat, lstat } from "node:fs/promises";
 import path from "node:path";
+import { buildChildEnv } from "./childEnv.js";
 import type { CheckResult, PhaseCheck, VerificationReport } from "../sources/pipelineTypes.js";
 
 /** Combined stdout+stderr is capped in memory; only the tail is kept as evidence. */
@@ -30,17 +31,16 @@ export const OUTPUT_TAIL_CHARS = 4000;
 /** Default wall-clock limit for a `command` check that doesn't set its own. */
 export const DEFAULT_COMMAND_TIMEOUT_MS = 600_000;
 
-/** Names Argus never hands to a check's command — see `../harness/childEnv.ts`. */
-const ARGUS_SERVER_SECRETS = ["ARGUS_TOKEN", "ARGUS_WEBHOOK_URL"];
+/** Grace between SIGTERM and SIGKILL for a command that ignores the first. */
+export const DEFAULT_KILL_GRACE_MS = 5000;
+/** Dirty files larger than this are identified by size and mtime, not hashed. */
+export const MAX_HASH_BYTES = 8 * 1024 * 1024;
+/** A dirty tree with more entries than this cannot be baselined faithfully. */
+export const MAX_SNAPSHOT_ENTRIES = 5000;
 
+/** Argus's own environment under the default policy: its secrets removed. */
 function defaultCheckEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [name, value] of Object.entries(process.env)) {
-    if (value === undefined) continue;
-    if (ARGUS_SERVER_SECRETS.includes(name)) continue;
-    env[name] = value;
-  }
-  return env;
+  return buildChildEnv(process.env, undefined).env;
 }
 
 // ── Working-tree snapshots ───────────────────────────────────────────────────
@@ -48,9 +48,16 @@ function defaultCheckEnv(): Record<string, string> {
 export interface WorkingTreeSnapshot {
   /** `git rev-parse HEAD`, or null when not a repo / no commits. */
   head: string | null;
-  /** Dirty paths (repo-relative, renames use the new path) → identity string:
-   *  `${statusCode}:${sha256 of working-copy bytes}` or `${statusCode}:deleted`. */
+  /**
+   * Dirty paths (repo-relative, renames use the new path) → content identity:
+   * the sha256 of the working-copy bytes, `size:<bytes>:<mtimeMs>` for a file
+   * too large to hash, or `deleted`. Staging state is deliberately not part of
+   * it: `git add` changes nothing about what the file says.
+   */
   dirty: Record<string, string>;
+  /** Set when the dirty set exceeded {@link MAX_SNAPSHOT_ENTRIES} and was cut
+   *  short — such a snapshot cannot support a `changed-files` verdict. */
+  truncated?: boolean;
 }
 
 function runGit(
@@ -101,10 +108,15 @@ export async function snapshotWorkingTree(cwd: string): Promise<WorkingTreeSnaps
   if (statusRes.code !== 0) return { head, dirty: {} };
 
   const dirty: Record<string, string> = {};
+  let truncated = false;
   const raw = statusRes.stdout.toString("utf8");
   const entries = raw.split("\0").filter((s) => s.length > 0);
   let i = 0;
   while (i < entries.length) {
+    if (Object.keys(dirty).length >= MAX_SNAPSHOT_ENTRIES) {
+      truncated = true;
+      break;
+    }
     const entry = entries[i];
     const statusCode = entry.slice(0, 2);
     let repoRelPath = entry.slice(3);
@@ -118,20 +130,50 @@ export async function snapshotWorkingTree(cwd: string): Promise<WorkingTreeSnaps
     const abs = path.join(top.stdout.toString("utf8").trim(), repoRelPath);
     const isDeleted = statusCode.includes("D");
     if (isDeleted) {
-      dirty[repoRelPath] = `${statusCode}:deleted`;
+      dirty[repoRelPath] = "deleted";
       continue;
     }
     try {
+      const st = await lstat(abs);
+      if (st.isSymbolicLink() || st.size > MAX_HASH_BYTES) {
+        dirty[repoRelPath] = `size:${st.size}:${st.mtimeMs}`;
+        continue;
+      }
       const bytes = await readFile(abs);
-      const hash = createHash("sha256").update(bytes).digest("hex");
-      dirty[repoRelPath] = `${statusCode}:${hash}`;
+      dirty[repoRelPath] = createHash("sha256").update(bytes).digest("hex");
     } catch {
       // Vanished between `git status` and our read, or unreadable — treat
       // like a deletion rather than throwing away the whole snapshot.
-      dirty[repoRelPath] = `${statusCode}:deleted`;
+      dirty[repoRelPath] = "deleted";
     }
   }
-  return { head, dirty };
+  return truncated ? { head, dirty, truncated } : { head, dirty };
+}
+
+/**
+ * Paths whose *committed* content differs between two snapshots' heads: what
+ * an agent that committed its work changed. The working-tree diff cannot see
+ * it — a commit makes the tree clean — so it is read from git separately.
+ * Returns null when the diff cannot be computed (and the check must fail
+ * closed rather than pass on missing evidence).
+ */
+export async function committedSince(
+  baseline: WorkingTreeSnapshot,
+  current: WorkingTreeSnapshot,
+  cwd: string,
+): Promise<string[] | null> {
+  if (baseline.head === current.head) return [];
+  if (current.head === null) return null;
+  const res =
+    baseline.head === null
+      ? await runGit(["ls-tree", "-r", "--name-only", current.head], cwd)
+      : await runGit(["diff", "--name-only", baseline.head, current.head], cwd);
+  if (res.code !== 0) return null;
+  return res.stdout
+    .toString("utf8")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
 }
 
 /**
@@ -163,6 +205,8 @@ export interface CheckContext {
   /** Working-tree snapshot taken when the phase attempt started; null if unavailable. */
   baseline: WorkingTreeSnapshot | null;
   now?: () => Date;
+  /** Grace between SIGTERM and SIGKILL when a command ignores its timeout. */
+  killGraceMs?: number;
   /** Default per-command timeout; default 600_000 ms. */
   defaultCommandTimeoutMs?: number;
   /** Environment for command checks. Default: process.env with ARGUS_TOKEN and ARGUS_WEBHOOK_URL removed. */
@@ -249,6 +293,8 @@ async function runCommandCheck(
     let timedOut = false;
     let killedSignal: string | null = null;
     let settled = false;
+    const graceMs = ctx.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
+    const timers: ReturnType<typeof setTimeout>[] = [];
 
     function append(chunk: Buffer): void {
       output += chunk.toString("utf8");
@@ -259,29 +305,53 @@ async function runCommandCheck(
     child.stdout?.on("data", append);
     child.stderr?.on("data", append);
 
-    function killGroup(): void {
+    function killGroup(signal: NodeJS.Signals): void {
       if (child.pid == null) return;
       try {
         if (process.platform === "win32") child.kill();
-        else process.kill(-child.pid);
+        else process.kill(-child.pid, signal);
       } catch {
         try {
-          child.kill();
+          child.kill(signal);
         } catch {
           /* already gone */
         }
       }
     }
 
-    const timer = setTimeout(() => {
-      timedOut = true;
-      killGroup();
-    }, timeoutMs);
+    // SIGTERM at the deadline; SIGKILL to the whole group if it is ignored;
+    // and a verdict regardless, so a command that traps signals or leaves a
+    // grandchild holding the pipe can never hang verification (and with it
+    // the phase, the instance, and drain()).
+    timers.push(
+      setTimeout(() => {
+        timedOut = true;
+        killGroup("SIGTERM");
+        timers.push(
+          setTimeout(() => {
+            killGroup("SIGKILL");
+            timers.push(
+              setTimeout(() => {
+                finish(
+                  result(
+                    check,
+                    "failed",
+                    `timed out after ${Math.round(timeoutMs / 1000)}s (process did not exit)`,
+                    Date.now() - started,
+                    { exitCode: null, output: tail(output) },
+                  ),
+                );
+              }, graceMs),
+            );
+          }, graceMs),
+        );
+      }, timeoutMs),
+    );
 
     function finish(res: CheckResult): void {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      for (const t of timers) clearTimeout(t);
       resolve(res);
     }
 
@@ -372,9 +442,14 @@ async function runFileLikeCheck(
   const minBytes = check.minBytes ?? 1;
   let st;
   try {
-    st = await stat(resolved);
+    // lstat, not stat: the directory is agent-writable, and a symlink to some
+    // large file elsewhere is not the artifact the phase was asked to produce.
+    st = await lstat(resolved);
   } catch {
     return result(check, "failed", "missing", now());
+  }
+  if (st.isSymbolicLink()) {
+    return result(check, "failed", "is a symbolic link, not a file", now());
   }
   if (!st.isFile()) {
     return result(check, "failed", "missing", now());
@@ -408,7 +483,24 @@ async function runChangedFilesCheck(
       now(),
     );
   }
-  const changed = changedSince(ctx.baseline, current);
+  if (ctx.baseline.truncated || current.truncated) {
+    return result(
+      check,
+      "failed",
+      `the working tree has more than ${MAX_SNAPSHOT_ENTRIES} dirty paths; changed-files cannot be evaluated`,
+      now(),
+    );
+  }
+  const committed = await committedSince(ctx.baseline, current, ctx.cwd);
+  if (committed === null) {
+    return result(
+      check,
+      "failed",
+      `HEAD moved from ${ctx.baseline.head ?? "(none)"} to ${current.head ?? "(none)"} and the commits could not be diffed`,
+      now(),
+    );
+  }
+  const changed = [...new Set([...changedSince(ctx.baseline, current), ...committed])].sort();
 
   if (check.requireChanges && changed.length === 0) {
     return result(check, "failed", "no files changed", now());

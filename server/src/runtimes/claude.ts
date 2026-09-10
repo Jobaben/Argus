@@ -67,8 +67,21 @@ function buildClaudeCapabilities(cap: CapabilityRequest | undefined): ClaudeCapa
   const deny = [...(profile.tools?.deny ?? [])];
 
   if (profile.filesystem === "read-only") {
-    deny.push(`Edit(//${cwd}/**)`);
-    for (const dir of profile.additionalDirectories ?? []) deny.push(`Edit(//${dir}/**)`);
+    // An `Edit(path)` rule governs every built-in file-editing tool — Edit,
+    // Write, MultiEdit, NotebookEdit — per Claude Code's permission rules;
+    // `Write(path)` rules are accepted but never consulted, so this is the one
+    // rule shape that actually denies writes under these roots. The artifact
+    // directory is outside them on purpose: a read-only researcher still
+    // writes its report there.
+    for (const root of [cwd, ...(profile.additionalDirectories ?? [])]) {
+      if (/[,\r\n]/.test(root)) {
+        // The rules travel comma-joined in one flag; a comma in the path would
+        // split the rule and silently leave the root writable.
+        limitations.push(`read-only cannot be expressed for a path containing a comma: ${root}`);
+        continue;
+      }
+      deny.push(`Edit(//${root}/**)`);
+    }
 
     const bashAllowRules = allow.filter((r) => r === "Bash" || r.startsWith("Bash("));
     const hasBareBash = bashAllowRules.some(isBareBashRule);

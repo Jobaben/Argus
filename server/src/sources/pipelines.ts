@@ -21,7 +21,11 @@ import {
   validateRoutes,
 } from "./routeAuthoring.js";
 import { isRuntimeId, runtimeIdList } from "../runtimes/index.js";
-import { ARGUS_SERVER_SECRETS, matchesEnvPattern } from "../harness/childEnv.js";
+import {
+  ARGUS_PER_INVOCATION_IDENTIFIERS,
+  ARGUS_SERVER_SECRETS,
+  matchesEnvPattern,
+} from "../harness/childEnv.js";
 import type { AgentRuntimeId, ReasoningEffort } from "@argus/contracts";
 
 // The crash-safe, mutex-serialized single-file store (shared with schedules).
@@ -57,6 +61,7 @@ export interface PipelineInput {
 // A slash is neither a shell metacharacter nor a flag introducer, and the first
 // character still has to be alphanumeric.
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
+const PHASE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
 const REASONING_EFFORTS = new Set<ReasoningEffort>(["minimal", "low", "medium", "high", "xhigh"]);
 
 function validateReasoningEffort(raw: unknown, ctx: string): ReasoningEffort {
@@ -136,17 +141,16 @@ const MAX_TOOL_RULES = 200;
 // forge another invocation's identifiers.
 const RESERVED_ENV_PATTERNS: readonly string[] = [
   ...ARGUS_SERVER_SECRETS,
-  "ARGUS_SIGNAL_*",
-  "ARGUS_RUN_ID",
-  "ARGUS_INSTANCE_ID",
-  "ARGUS_PHASE_ID",
-  "ARGUS_RESULT_FILE",
-  "ARGUS_ARTIFACT_DIR",
+  ...ARGUS_PER_INVOCATION_IDENTIFIERS,
 ];
 
 function isReservedEnvName(name: string): boolean {
   return RESERVED_ENV_PATTERNS.some((pattern) => matchesEnvPattern(name, pattern));
 }
+
+/** Keys of an MCP server's `env`/`headers`: plain identifiers (and `-` for
+ *  header names), because Codex receives them unquoted inside `-c` overrides. */
+const RECORD_KEY_RE = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 
 function validateStringRecord(raw: unknown, ctx: string): Record<string, string> {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
@@ -154,6 +158,9 @@ function validateStringRecord(raw: unknown, ctx: string): Record<string, string>
   }
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!RECORD_KEY_RE.test(key)) {
+      throw new PipelineValidationError(`${ctx} has an invalid key "${key}"`);
+    }
     if (typeof value !== "string") {
       throw new PipelineValidationError(`${ctx}.${key} must be a string`);
     }
@@ -630,6 +637,13 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
   if (typeof p.id !== "string" || !p.id.trim())
     throw new PipelineValidationError(`phase ${i}: id is required`);
   const id = p.id.trim();
+  // The id names directories on disk (artifacts, baselines): one path segment,
+  // no separators, never `.`/`..`.
+  if (!PHASE_ID_RE.test(id)) {
+    throw new PipelineValidationError(
+      `phase ${i}: id must be 1-80 letters, digits, ".", "-" or "_" and start with a letter or digit`,
+    );
+  }
   if (typeof p.name !== "string" || !p.name.trim())
     throw new PipelineValidationError(`phase ${i}: name is required`);
   if (

@@ -67,6 +67,9 @@ export interface TransitionResult {
    * result through {@link applyVerification}; nothing downstream is ready yet.
    */
   verify?: string[];
+  /** Set by {@link applyVerification} when the report was taken; absent when it
+   *  was refused as stale. */
+  verificationApplied?: boolean;
 }
 
 /** Kept for definitions and tests that predate `{{artifacts.<name>}}`. */
@@ -497,7 +500,9 @@ export function applyVerification(
     return { instance: inst, startPhases: [] };
   }
   phase.verification = report;
-  if (report.status === "passed") return concludePhase(def, inst, phase, nowISO);
+  if (report.status === "passed") {
+    return { ...concludePhase(def, inst, phase, nowISO), verificationApplied: true };
+  }
 
   phase.status = "failed";
   phase.payload = withFailureClass(
@@ -505,7 +510,7 @@ export function applyVerification(
     "verification",
   );
   failLeftoverSteps(phase);
-  return settle(def, inst, nowISO);
+  return { ...settle(def, inst, nowISO), verificationApplied: true };
 }
 
 /** The phase a human action targets: the named one, else the single paused one. */

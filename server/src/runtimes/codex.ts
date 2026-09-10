@@ -141,13 +141,17 @@ function buildCodexCapabilities(cap: CapabilityRequest | undefined): CodexCapabi
 
   const sandbox =
     profile.filesystem === "unrestricted" ? "danger-full-access" : (profile.filesystem ?? null);
+  // What the process will actually run under, whether the profile said so or
+  // the operator's default did: the artifact directory must be writable in
+  // either case, or a required-artifact check fails for the wrong reason.
+  const effectiveSandbox = sandbox ?? codexSandbox();
 
   const writableRoots = [...(profile.additionalDirectories ?? [])];
-  if (artifactDir && profile.filesystem === "workspace-write") writableRoots.push(artifactDir);
+  if (artifactDir && effectiveSandbox === "workspace-write") writableRoots.push(artifactDir);
   if (writableRoots.length) {
     capArgs.push("-c", `sandbox_workspace_write.writable_roots=${tomlStringArray(writableRoots)}`);
   }
-  if (artifactDir && profile.filesystem === "read-only") {
+  if (artifactDir && effectiveSandbox === "read-only") {
     limitations.push("read-only sandbox prevents writing artifacts");
   }
 

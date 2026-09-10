@@ -20,6 +20,7 @@ import {
   phaseBaselinePath,
   prepareInvocation,
   readGitHead,
+  resolveCapabilities,
   resolveTimeoutSeconds,
 } from "./harness/invocation.js";
 import type { PreparedInvocation } from "./harness/invocation.js";
@@ -394,6 +395,8 @@ export function createEngine(deps: EngineDeps): Engine {
   const parentEnv = () => deps.parentEnv ?? process.env;
   /** Phase attempts whose checks this process is currently running. */
   const verifying = new Set<string>();
+  /** Runs this process spawned and is still awaiting the exit of. */
+  const live = new Set<string>();
   /** Detached continuations in flight, so `drain` can wait for them. */
   const detached = new Set<Promise<unknown>>();
   function track<T>(p: Promise<T>): Promise<T> {
@@ -484,10 +487,9 @@ export function createEngine(deps: EngineDeps): Engine {
         error: null,
         instanceId: inst.id,
         phaseId: phaseDef.id,
-        deadlineAt:
-          timeoutSeconds != null
-            ? new Date(deps.now().getTime() + timeoutSeconds * 1000).toISOString()
-            : null,
+        // The deadline is set at spawn, not here: a step may wait for a
+        // concurrency slot first, and waiting is not running.
+        deadlineAt: null,
       };
       return { stepDef, run, publishes, timeoutSeconds };
     });
@@ -564,14 +566,18 @@ export function createEngine(deps: EngineDeps): Engine {
     // `configuration` class — never retried, because the definition is what is
     // wrong. (A spawn *error* keeps its existing path: the run record says
     // failed and the reconcile pass classes it as `spawn`.)
+    const readyAfterFailure: number[] = [];
     for (const { run, reason } of unlaunchable) {
       if (inst.status !== "running") break;
-      failStepInPlace(def, inst, phaseDef.id, run.id, "configuration", reason);
+      readyAfterFailure.push(
+        ...failStepInPlace(def, inst, phaseDef.id, run.id, "configuration", reason).startPhases,
+      );
     }
     if (unlaunchable.length > 0) {
       await writeInstance(inst);
       // Siblings that did launch belong to a phase that has already failed.
       await killPhaseRuns(inst, [phaseDef.id], "stopped: phase failed");
+      queueReadyPhases(inst.id, def, inst, readyAfterFailure);
       if (inst.status === "failed") deps.onFailure?.(inst);
     }
     deps.onChange?.();
@@ -686,6 +692,9 @@ export function createEngine(deps: EngineDeps): Engine {
     let prepared: PreparedInvocation;
     try {
       await mkdir(invocationDir, { recursive: true });
+      // The clock the deadline runs from: now, with the slot held and the
+      // process about to start.
+      run.startedAt = nowISO();
       prepared = prepareInvocation({
         run,
         def: ctx.def,
@@ -701,8 +710,9 @@ export function createEngine(deps: EngineDeps): Engine {
         timeoutSeconds: ctx.timeoutSeconds,
         gitHead: ctx.gitHead,
         parentEnv: parentEnv(),
-        now: deps.now(),
+        now: new Date(run.startedAt),
       });
+      run.deadlineAt = prepared.record.deadlineAt;
       await writeInvocation(prepared.record);
       for (const file of prepared.files) await writeFile(file.path, file.contents, "utf8");
     } catch (e) {
@@ -730,7 +740,9 @@ export function createEngine(deps: EngineDeps): Engine {
     }
     let handle: PipelineProcessHandle;
     try {
-      handle = await Promise.resolve(deps.spawn(run, runLogPath(run.id), env, prepared));
+      const logPath = runLogPath(run.id);
+      await mkdir(path.dirname(logPath), { recursive: true });
+      handle = await Promise.resolve(deps.spawn(run, logPath, env, prepared));
     } catch (e) {
       sem.release();
       await writeRun({
@@ -758,9 +770,11 @@ export function createEngine(deps: EngineDeps): Engine {
     phaseId: string,
   ): void {
     let released = false;
+    live.add(run.id);
     const release = () => {
       if (!released) {
         released = true;
+        live.delete(run.id);
         sem.release();
       }
     };
@@ -811,6 +825,20 @@ export function createEngine(deps: EngineDeps): Engine {
               : `exit code ${res.code}`,
         });
         await accumulateRun(run.id, deps.now);
+        // The completion signal is authoritative and has already advanced the
+        // phase; a process that then exits non-zero contradicts its own report.
+        // Argus does not unwind downstream work over it, but it must not be
+        // silent either: the journal names it, and the run record carries both
+        // the outcome and the exit code for anyone reconciling the two.
+        if (res.code !== 0 && !endedByArgus && got?.run.outcome === "succeeded") {
+          void journal(instanceId, {
+            at: nowISO(),
+            kind: "step.exit-mismatch",
+            phaseId,
+            runId: run.id,
+            detail: `signalled completed, then exited ${res.code ?? "on a signal"}`,
+          });
+        }
         deps.tailer?.untrack(run.id);
         deps.onChange?.();
       })
@@ -836,7 +864,9 @@ export function createEngine(deps: EngineDeps): Engine {
     }
     const grace = deps.killGraceMs ?? 5000;
     const t = setTimeout(() => {
-      if (!isAlive(pid)) return;
+      // Sent to the group regardless of the leader: a child that outlived an
+      // exited leader is exactly the process this exists to reach. Killing a
+      // group that is already gone is a harmless error.
       void Promise.resolve(kill(pid, "SIGKILL")).catch(() => {});
     }, grace);
     // Never keep the server alive just to escalate a kill.
@@ -858,16 +888,28 @@ export function createEngine(deps: EngineDeps): Engine {
         ? Math.round((Date.parse(got.run.deadlineAt) - Date.parse(got.run.startedAt)) / 1000)
         : null;
     const reason = seconds != null ? `timed out after ${seconds}s` : "timed out";
-    await patchRun(runId, { termination: "timed-out", error: reason });
-    await stopRun(got.run.pid);
-    void journal(instanceId, {
-      at: nowISO(),
-      kind: "step.timed-out",
+    // Nothing is written until the step is known to still be running: a step
+    // whose completion signal already landed is not timed out, whatever its
+    // process is still doing, and must not be stamped as if it were.
+    await failStep(
+      instanceId,
       phaseId,
       runId,
-      detail: reason,
-    });
-    await failStep(instanceId, phaseId, runId, "timeout", reason, { kind: "timed-out" });
+      "timeout",
+      reason,
+      { kind: "timed-out" },
+      async () => {
+        await patchRun(runId, { termination: "timed-out", error: reason });
+        await stopRun(got.run.pid);
+        void journal(instanceId, {
+          at: nowISO(),
+          kind: "step.timed-out",
+          phaseId,
+          runId,
+          detail: reason,
+        });
+      },
+    );
   }
 
   /**
@@ -883,6 +925,8 @@ export function createEngine(deps: EngineDeps): Engine {
     failureClass: PhaseFailureClass,
     reason: string,
     extra: Record<string, unknown> = {},
+    /** Runs under the lock once the failure is known to apply, before the transition. */
+    beforeTransition?: () => Promise<void>,
   ): Promise<void> {
     await locks.withLock(instanceId, async () => {
       const inst = await readInstance(instanceId);
@@ -892,6 +936,7 @@ export function createEngine(deps: EngineDeps): Engine {
       if (!phase || phase.status !== "running" || step?.status !== "running") return;
       const def = await loadDef(inst.pipelineId);
       if (!def) return;
+      if (beforeTransition) await beforeTransition();
       const res = failStepInPlace(def, inst, phaseId, runId, failureClass, reason, extra);
       await patchRun(runId, { outcome: "failed" });
       await writeInstance(res.instance);
@@ -1100,7 +1145,10 @@ export function createEngine(deps: EngineDeps): Engine {
       kind: "instance.started",
       detail: `${def.name} (${trigger})`,
     });
-    await startPhases(def, instance, ready);
+    // Under the lock like every other launch, so a reconcile tick that sees
+    // the new instance cannot mistake a step still being prepared for one
+    // whose launch was lost.
+    await locks.withLock(instance.id, () => startPhases(def, instance, ready));
     await pruneInstances(def.id, INSTANCE_KEEP);
     deps.onChange?.();
     return instance;
@@ -1187,9 +1235,10 @@ export function createEngine(deps: EngineDeps): Engine {
           artifactDir: phase.artifactDir ?? null,
           baseline,
           now: deps.now,
-          // Argus's own checks run with Argus's environment — minus its secrets,
-          // like every child it starts.
-          env: buildChildEnv(parentEnv(), undefined).env,
+          // The checks run under the phase's own environment policy: a command
+          // check is a script in the repository the agent just edited, and must
+          // not see what the agent was not allowed to see.
+          env: buildChildEnv(parentEnv(), resolveCapabilities(def, phaseDef, {})?.env).env,
         });
         await locks.withLock(instanceId, async () => {
           const fresh = await readInstance(instanceId);
@@ -1197,7 +1246,7 @@ export function createEngine(deps: EngineDeps): Engine {
           const current = fresh.phases.find((p) => p.id === phaseId);
           if (!current || current.attempt !== attempt) return;
           const res = applyVerification(def, fresh, phaseId, report, nowISO());
-          if (res.instance.phases.find((p) => p.id === phaseId)?.verification !== report) return;
+          if (!res.verificationApplied) return;
           const failed = report.status === "failed";
           void journal(instanceId, {
             at: nowISO(),
@@ -1265,22 +1314,21 @@ export function createEngine(deps: EngineDeps): Engine {
         routing,
         verify,
       } = advance(def, inst, signal, nowISO());
-      // One write: the route decision, the skips it implies and the phase
-      // statuses land together or not at all.
-      await writeInstance(instance);
-      queueVerifications(instanceId, def, instance, verify);
-      if (noteRouting(def, instance, routing)) await writeInstance(instance);
-      const outcome: Run["outcome"] | undefined =
-        signal.type === "failed" ? "failed" : signal.type === "completed" ? "succeeded" : undefined;
-      if (outcome) await patchRun(signal.runId, { outcome });
+      noteRouting(def, instance, routing);
       if (signal.type === "failed") {
         // An agent that signalled failure has considered the work, so this
         // class is excluded from the default retry set — but an author who
         // opted into it gets it.
-        if (noteFailure(def, instance, signal.phaseId, "signal", "the agent signalled failure")) {
-          await writeInstance(instance);
-        }
+        noteFailure(def, instance, signal.phaseId, "signal", "the agent signalled failure");
       }
+      // One write: the route decision, the skips it implies, the phase
+      // statuses, the failure class and any scheduled retry land together or
+      // not at all.
+      await writeInstance(instance);
+      queueVerifications(instanceId, def, instance, verify);
+      const outcome: Run["outcome"] | undefined =
+        signal.type === "failed" ? "failed" : signal.type === "completed" ? "succeeded" : undefined;
+      if (outcome) await patchRun(signal.runId, { outcome });
       void journal(instance.id, {
         at: nowISO(),
         kind: "phase.signalled",
@@ -1517,7 +1565,48 @@ export function createEngine(deps: EngineDeps): Engine {
           );
           for (const { phaseId, step: s } of orphans) {
             if (s.status !== "running" || !s.runId) continue;
-            const got = await readRun(s.runId);
+            let got = await readRun(s.runId);
+            // A step recorded as running with no process behind it — no run
+            // record at all, or one that never got a pid — and not being
+            // launched by this process: Argus stopped between recording the
+            // step and starting it. Nothing will ever signal for it, so it is
+            // failed here as a spawn failure (retryable by default).
+            if (
+              !live.has(s.runId) &&
+              (!got || (got.run.status === "running" && got.run.pid == null))
+            ) {
+              const stepDef = def.phases.find((p) => p.id === phaseId);
+              const reason = "Argus stopped before the step's process was started";
+              const stub: Run = got?.run ?? {
+                id: s.runId,
+                scheduleId: `pipeline:${current.pipelineId}`,
+                scheduleName: `${current.pipelineName} · ${stepDef?.name ?? phaseId}`,
+                prompt: "",
+                cwd: stepDef?.cwd ?? "",
+                status: "running",
+                trigger: "scheduled",
+                queuedAt: nowISO(),
+                startedAt: null,
+                endedAt: null,
+                durationMs: null,
+                pid: null,
+                exitCode: null,
+                sessionId: null,
+                project: stepDef ? encodeProject(stepDef.cwd) : null,
+                resultSummary: null,
+                error: null,
+                instanceId: current.id,
+                phaseId,
+              };
+              await writeRun({
+                ...stub,
+                status: "failed",
+                termination: "spawn-failed",
+                error: reason,
+                endedAt: nowISO(),
+              });
+              got = await readRun(s.runId);
+            }
             // Reconcile only from a completed run record. A dead pid whose
             // record is still `running` can be racing the normal close handler;
             // guessing in that window would discard the agent's final message,

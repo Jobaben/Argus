@@ -154,7 +154,7 @@ export function prepareInvocation(inputs: InvocationInputs): PreparedInvocation 
     cwd: run.cwd,
     envNames: child.passed,
     envStripped: child.stripped,
-    capabilities: profile ?? null,
+    capabilities: profile ? redactProfile(profile) : null,
     limitations,
     materializedFiles: files.map((f) => f.path),
     artifactDir: inputs.artifactDir,
@@ -172,6 +172,44 @@ export function prepareInvocation(inputs: InvocationInputs): PreparedInvocation 
     record,
     blocking: strict ? limitations : [],
   };
+}
+
+const REDACTED = "<redacted>";
+
+/**
+ * The profile as the record may show it: every value an author could have
+ * put a secret in — `env.set`, an MCP server's `env` and `headers` — replaced
+ * by a marker, keys kept. The values still reach the process (and the
+ * materialized MCP config) where they are needed; the record is read by
+ * anyone with a session, and promises to hold names only.
+ */
+export function redactProfile(profile: CapabilityProfile): CapabilityProfile {
+  const redactValues = (r: Record<string, string> | undefined) =>
+    r ? Object.fromEntries(Object.keys(r).map((k) => [k, REDACTED])) : undefined;
+  const out: CapabilityProfile = { ...profile };
+  if (profile.env?.set) out.env = { ...profile.env, set: redactValues(profile.env.set) };
+  if (profile.mcpServers) {
+    out.mcpServers = Object.fromEntries(
+      Object.entries(profile.mcpServers).map(([name, spec]) => [
+        name,
+        {
+          ...spec,
+          ...(spec.env ? { env: redactValues(spec.env) } : {}),
+          ...(spec.headers ? { headers: redactValues(spec.headers) } : {}),
+        },
+      ]),
+    );
+  }
+  return out;
+}
+
+/** One path segment derived from an identifier: anything outside
+ *  `[A-Za-z0-9._-]` becomes `_`, and a segment that would mean "here" or
+ *  "up" becomes a literal name. Validation already enforces the same shape;
+ *  this keeps a directory join from ever leaving its root even if it didn't. */
+export function safeSegment(id: string): string {
+  const s = id.replace(/[^A-Za-z0-9._-]/g, "_");
+  return s === "" || s === "." || s === ".." ? `_${s}_` : s;
 }
 
 /** `git rev-parse HEAD` in `cwd`, or null when it is not a repository (or git
@@ -193,7 +231,7 @@ export function readGitHead(cwd: string): Promise<string | null> {
 
 /** Where a phase attempt's steps leave their file artifacts. */
 export function phaseArtifactDir(root: string, instanceId: string, phaseId: string): string {
-  return path.join(root, instanceId, phaseId);
+  return path.join(root, safeSegment(instanceId), safeSegment(phaseId));
 }
 
 /** Where a phase attempt's working-tree baseline is kept, beside the run
@@ -204,5 +242,9 @@ export function phaseBaselinePath(
   phaseId: string,
   attempt: number,
 ): string {
-  return path.join(root, instanceId, `${phaseId}.${attempt}.baseline.json`);
+  return path.join(
+    root,
+    safeSegment(instanceId),
+    `${safeSegment(phaseId)}.${Math.max(0, Math.trunc(attempt))}.baseline.json`,
+  );
 }

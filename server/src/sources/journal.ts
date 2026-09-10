@@ -36,6 +36,7 @@ export type JournalKind =
   | "phase.started"
   | "step.spawned"
   | "step.timed-out"
+  | "step.exit-mismatch"
   | "phase.verifying"
   | "phase.verified"
   | "phase.signalled"

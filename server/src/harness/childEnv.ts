@@ -42,7 +42,7 @@ export const ARGUS_SERVER_SECRETS: readonly string[] = ["ARGUS_TOKEN", "ARGUS_WE
  * Argus child process would inherit its parent's identifiers and could
  * impersonate or interfere with the parent's own run.
  */
-const ARGUS_PER_INVOCATION_IDENTIFIERS: readonly string[] = [
+export const ARGUS_PER_INVOCATION_IDENTIFIERS: readonly string[] = [
   "ARGUS_SIGNAL_TOKEN",
   "ARGUS_SIGNAL_URL",
   "ARGUS_RESULT_FILE",
@@ -50,6 +50,10 @@ const ARGUS_PER_INVOCATION_IDENTIFIERS: readonly string[] = [
   "ARGUS_INSTANCE_ID",
   "ARGUS_PHASE_ID",
   "ARGUS_RUN_ID",
+  "ARGUS_STEP_NAME",
+  // The hook keys its Stop-payload handling off this; a wrong value loses the
+  // completion signal.
+  "ARGUS_RUNTIME",
 ];
 
 /** The baseline that `inherit: "minimal"` passes through even without `allow`. */
