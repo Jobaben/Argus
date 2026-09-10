@@ -6,6 +6,7 @@ import { paths } from "../claudeHome.js";
 import { atomicWriteJson } from "./atomicWrite.js";
 import { cached, invalidate, patchCached } from "./cache.js";
 import { createFileMemo } from "./fileMemo.js";
+import { KeyedMutex } from "../mutex.js";
 import type { Run } from "./scheduleTypes.js";
 import type { AgentInvocationRecord } from "./pipelineTypes.js";
 
@@ -156,12 +157,20 @@ export async function writeRun(run: Run): Promise<void> {
  * run is gone.
  */
 export async function patchRun(id: string, patch: Partial<Run>): Promise<Run | null> {
-  const current = await readRunFile(id);
-  if (!current) return null;
-  const next = { ...current, ...patch };
-  await writeRun(next);
-  return next;
+  // Serialized per run: the completion handler, the signal path and the
+  // deadline handler can all patch one record within the same few
+  // milliseconds, and two unlocked read-modify-writes lose whichever landed
+  // first.
+  return patchLocks.withLock(id, async () => {
+    const current = await readRunFile(id);
+    if (!current) return null;
+    const next = { ...current, ...patch };
+    await writeRun(next);
+    return next;
+  });
 }
+
+const patchLocks = new KeyedMutex();
 
 async function readRunFile(id: string): Promise<Run | null> {
   const file = runJsonPath(id);
