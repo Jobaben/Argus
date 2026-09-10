@@ -320,3 +320,31 @@ test("Claude Code reports no generic limitations for any single supported key", 
     assert.deepEqual(plan.limitations, [], JSON.stringify(profile));
   }
 });
+
+// ── Regression: a comma in cwd under read-only reports a limitation ─────────
+// Previously a comma in `cwd` (or an additionalDirectories entry) was joined
+// straight into the comma-separated --disallowedTools rule list, silently
+// splitting the `Edit(//<path>/**)` rule in two and leaving the root writable.
+
+test("read-only with a comma in cwd reports a limitation instead of emitting a split rule", () => {
+  const plan = claudeRuntime.streamPlan({
+    prompt: "p",
+    sessionId: SESSION_ID,
+    capabilities: request(
+      { filesystem: "read-only" },
+      { cwd: "/tmp/a,b", invocationDir: "/i", artifactDir: null },
+    ),
+  });
+  assert.ok(
+    plan.limitations?.some((l) => l.includes("containing a comma")),
+    JSON.stringify(plan.limitations),
+  );
+  const di = plan.args.indexOf("--disallowedTools");
+  const denied = di > -1 ? plan.args[di + 1].split(",") : [];
+  assert.ok(
+    !denied.some((d) => d.startsWith("Edit(///tmp/a")),
+    `did not expect a split Edit(...) fragment, got ${JSON.stringify(denied)}`,
+  );
+  // Bash is still denied: the comma only defeats the filesystem deny rule.
+  assert.ok(denied.includes("Bash"));
+});

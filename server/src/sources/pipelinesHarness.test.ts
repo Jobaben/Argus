@@ -504,3 +504,73 @@ test("updatePipeline via patch sets then clears pipeline-level capabilities", as
   const [persisted] = await m.readPipelines();
   assert.ok(!("capabilities" in persisted));
 });
+
+// ── Regression: phase id validation, and newly reserved env.set names ───────
+// Previously a phase id was accepted whenever it was non-empty after
+// trimming — no shape check at all — so an id like "../../x" was stored
+// verbatim and later joined straight into a filesystem path (the per-attempt
+// artifact directory) with no sanitization.
+
+test("phase id rejects path-hostile shapes and an over-length id, and accepts a normal dotted id", async () => {
+  const m = await fresh();
+  const withId = (id: string) =>
+    goodInput({
+      phases: [{ id, name: "X", cwd: home, gated: false, steps: [{ name: "s", prompt: "p" }] }],
+    });
+
+  for (const id of ["../../x", "a/b", "..", "x".repeat(81)]) {
+    assert.throws(() => m.validatePipelineInput(withId(id)), /id must be/, id);
+  }
+
+  const ok = m.validatePipelineInput(withId("feature-1.a_b"));
+  assert.equal(ok.phases[0].id, "feature-1.a_b");
+});
+
+test("a whitespace-only phase id is rejected (via the pre-existing 'id is required' check, since trim() empties it)", async () => {
+  const m = await fresh();
+  const withId = (id: string) =>
+    goodInput({
+      phases: [{ id, name: "X", cwd: home, gated: false, steps: [{ name: "s", prompt: "p" }] }],
+    });
+  // Note: this does NOT reach the PHASE_ID_RE "id must be ..." message — a
+  // single space trims to "", so the earlier "id is required" check fires
+  // first. Still rejected either way; see the written report for detail.
+  assert.throws(() => m.validatePipelineInput(withId(" ")), /id is required/);
+});
+
+test("env.set rejects ARGUS_RUNTIME and ARGUS_STEP_NAME as reserved per-invocation identifiers", async () => {
+  const m = await fresh();
+  assert.throws(
+    () => m.validateCapabilities({ env: { set: { ARGUS_RUNTIME: "x" } } }, "ctx"),
+    /reserved variable "ARGUS_RUNTIME"/,
+  );
+  assert.throws(
+    () => m.validateCapabilities({ env: { set: { ARGUS_STEP_NAME: "x" } } }, "ctx"),
+    /reserved variable "ARGUS_STEP_NAME"/,
+  );
+});
+
+test("mcpServers env/headers reject a key with = or a space, and accept a hyphenated header name", async () => {
+  const m = await fresh();
+  assert.throws(
+    () =>
+      m.validateCapabilities(
+        { mcpServers: { x: { command: "c", env: { "BAD=KEY": "v" } } } },
+        "ctx",
+      ),
+    /invalid key "BAD=KEY"/,
+  );
+  assert.throws(
+    () =>
+      m.validateCapabilities(
+        { mcpServers: { x: { command: "c", headers: { "X Y": "v" } } } },
+        "ctx",
+      ),
+    /invalid key "X Y"/,
+  );
+  const out = m.validateCapabilities(
+    { mcpServers: { x: { command: "c", headers: { "X-Api-Key": "v" } } } },
+    "ctx",
+  );
+  assert.deepEqual(out.mcpServers.x.headers, { "X-Api-Key": "v" });
+});

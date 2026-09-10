@@ -382,3 +382,32 @@ test("no capabilities means no files/limitations at all, and argv is unchanged",
   assert.equal("files" in plan, false);
   assert.equal("limitations" in plan, false);
 });
+
+// ── Regression: the artifact dir is writable under the *effective* sandbox ──
+// Previously the writable-roots/limitation logic keyed off
+// `profile.filesystem` alone, so a profile that set no filesystem mode (only
+// e.g. `additionalDirectories`) never made the artifact dir writable even
+// though the operator's own default sandbox (ARGUS_CODEX_SANDBOX, or its
+// "workspace-write" fallback) is what the process actually runs under.
+
+test("the artifact dir is writable under the operator's default sandbox when the profile sets no filesystem mode", () => {
+  withEnv({ ARGUS_CODEX_SANDBOX: undefined }, () => {
+    const plan = codexRuntime.streamPlan({
+      prompt: "p",
+      capabilities: capRequest({ additionalDirectories: [] }, { artifactDir: "/art" }),
+    });
+    const i = plan.args.indexOf("-c");
+    assert.ok(i > -1, "expected a sandbox_workspace_write.writable_roots override");
+    assert.ok(plan.args[i + 1].includes("/art"), plan.args[i + 1]);
+  });
+});
+
+test("a read-only ARGUS_CODEX_SANDBOX reports the artifact-writing limitation even with no filesystem capability set", () => {
+  withEnv({ ARGUS_CODEX_SANDBOX: "read-only" }, () => {
+    const plan = codexRuntime.streamPlan({
+      prompt: "p",
+      capabilities: capRequest({ additionalDirectories: [] }, { artifactDir: "/art" }),
+    });
+    assert.ok(plan.limitations?.includes("read-only sandbox prevents writing artifacts"));
+  });
+});
