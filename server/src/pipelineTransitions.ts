@@ -12,6 +12,7 @@ import {
 import { RouteEvaluationError, evaluateRoutes, validateResult } from "./sources/routing.js";
 import type {
   DependencyEdge,
+  PhaseFailureClass,
   PhaseProgress,
   PipelineDefinition,
   PipelineInstance,
@@ -19,6 +20,7 @@ import type {
   RetryableClass,
   RetryPolicy,
   RouteDecision,
+  VerificationReport,
 } from "./sources/pipelineTypes.js";
 
 /**
@@ -59,6 +61,12 @@ export interface TransitionResult {
   startPhases: number[];
   /** Present on every settled transition; absent when nothing was settled. */
   routing?: RouteOutcome;
+  /**
+   * Phase ids whose steps have all reported success and whose declared checks
+   * Argus must now run. The phase stays `running` until the engine reports the
+   * result through {@link applyVerification}; nothing downstream is ready yet.
+   */
+  verify?: string[];
 }
 
 /** Kept for definitions and tests that predate `{{artifacts.<name>}}`. */
@@ -99,6 +107,14 @@ function withReason(payload: unknown, reason: string): unknown {
   return payload && typeof payload === "object" && !Array.isArray(payload)
     ? { ...(payload as Record<string, unknown>), reason }
     : { reason };
+}
+
+/** Record how a failure was classed, beside its reason, so the record explains
+ *  the retry policy's decision without re-deriving it. */
+export function withFailureClass(payload: unknown, failureClass: PhaseFailureClass): unknown {
+  return payload && typeof payload === "object" && !Array.isArray(payload)
+    ? { ...(payload as Record<string, unknown>), failureClass }
+    : { failureClass };
 }
 
 /** Publish a succeeded phase's payload under its declared artifact name. */
@@ -422,12 +438,73 @@ export function advance(
   }
   if (resolved.value !== undefined) phase.result = resolved.value;
 
+  // Agent completion is not phase success. A phase with declared checks stays
+  // running while Argus verifies the work itself; the gate and the successors
+  // wait for that verdict, not for the agent's.
+  const checks = def.phases.find((p) => p.id === phase.id)?.checks;
+  if (checks && checks.length > 0) {
+    phase.verification = { status: "running", startedAt: nowISO, checks: [] };
+    touch(inst, nowISO);
+    return { instance: inst, startPhases: [], verify: [phase.id] };
+  }
+  return concludePhase(def, inst, phase, nowISO);
+}
+
+/** Every step is in and every check has passed: pause at the gate or succeed. */
+function concludePhase(
+  def: PipelineDefinition,
+  inst: PipelineInstance,
+  phase: PhaseProgress,
+  nowISO: string,
+): TransitionResult {
   if (phase.gated) {
     phase.status = "awaiting-approval";
     return settle(def, inst, nowISO);
   }
   phase.status = "succeeded";
   publishArtifact(def, inst, phase.id);
+  return settle(def, inst, nowISO);
+}
+
+/** One line naming what failed, for the phase's failure reason. */
+export function verificationFailureReason(report: VerificationReport): string {
+  const failed = report.checks.filter((c) => c.status === "failed");
+  if (failed.length === 0) return "verification failed";
+  return `verification failed: ${failed.map((c) => `${c.label} (${c.detail})`).join("; ")}`;
+}
+
+/**
+ * Record the outcome of Argus's own checks over a phase whose steps have all
+ * reported success.
+ *
+ * Only a phase still `running` under a `running` verification takes the
+ * report: an abort, a revise or a competing transition in the window while the
+ * checks ran has already decided otherwise, and a stale report must not undo
+ * it. A passing report concludes the phase exactly as a check-less phase would
+ * have at the last step's signal; a failing one fails the phase under the
+ * `verification` class, carrying the report as evidence for the retry, the
+ * revise, or the person reading the board.
+ */
+export function applyVerification(
+  def: PipelineDefinition,
+  inst: PipelineInstance,
+  phaseId: string,
+  report: VerificationReport,
+  nowISO: string,
+): TransitionResult {
+  const phase = inst.phases.find((p) => p.id === phaseId);
+  if (!phase || phase.status !== "running" || phase.verification?.status !== "running") {
+    return { instance: inst, startPhases: [] };
+  }
+  phase.verification = report;
+  if (report.status === "passed") return concludePhase(def, inst, phase, nowISO);
+
+  phase.status = "failed";
+  phase.payload = withFailureClass(
+    withReason(phase.payload, verificationFailureReason(report)),
+    "verification",
+  );
+  failLeftoverSteps(phase);
   return settle(def, inst, nowISO);
 }
 
@@ -483,6 +560,9 @@ function restartPhase(phase: PhaseProgress): void {
   phase.attempt += 1;
   phase.status = "running";
   phase.steps = phase.steps.map((s) => ({ name: s.name, runId: null, status: "pending" }));
+  // A fresh attempt is verified afresh; the previous report stays in the
+  // journal, and in the payload's reason, not on the live phase.
+  delete phase.verification;
 }
 
 export function applyAbort(inst: PipelineInstance, nowISO: string): PipelineInstance {

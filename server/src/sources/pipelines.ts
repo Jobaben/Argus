@@ -1,8 +1,16 @@
 import { existsSync, statSync } from "node:fs";
+import path from "node:path";
 import { paths } from "../claudeHome.js";
 import { validateTrigger } from "./schedules.js";
 import { createJsonArrayStore } from "./jsonArrayStore.js";
 import type { Dependency, PhaseDef, PhaseStep, PipelineDefinition } from "./pipelineTypes.js";
+import type {
+  CapabilityProfile,
+  EnvPolicy,
+  McpServerSpec,
+  PhaseCheck,
+  RetryableClass,
+} from "./pipelineTypes.js";
 import type { Trigger } from "./scheduleTypes.js";
 import { RubricValidationError, validateAutoApprove, validateRubric } from "./verdict.js";
 import { DagValidationError, validateDag } from "./dag.js";
@@ -13,6 +21,7 @@ import {
   validateRoutes,
 } from "./routeAuthoring.js";
 import { isRuntimeId, runtimeIdList } from "../runtimes/index.js";
+import { ARGUS_SERVER_SECRETS, matchesEnvPattern } from "../harness/childEnv.js";
 import type { AgentRuntimeId, ReasoningEffort } from "@argus/contracts";
 
 // The crash-safe, mutex-serialized single-file store (shared with schedules).
@@ -38,6 +47,7 @@ export interface PipelineInput {
   model?: string;
   reasoningEffort?: ReasoningEffort;
   runtime?: AgentRuntimeId;
+  capabilities?: CapabilityProfile;
 }
 
 // Model names are passed as a `--model <value>` argv pair to the agent CLI.
@@ -78,6 +88,502 @@ function validateModel(raw: unknown, ctx: string): string {
   return model;
 }
 
+/** A wall-clock limit on a step's or phase's process. Undefined/null = no limit. */
+function validateTimeout(raw: unknown, ctx: string): number | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 86400) {
+    throw new PipelineValidationError(`${ctx}: timeoutSeconds must be an integer 1-86400`);
+  }
+  return n;
+}
+
+// ── Capability profiles ──────────────────────────────────────────────────────
+
+const CAPABILITY_KEYS = new Set([
+  "filesystem",
+  "tools",
+  "mcpServers",
+  "additionalDirectories",
+  "settingSources",
+  "permissionMode",
+  "maxTurns",
+  "env",
+  "enforcement",
+]);
+const FILESYSTEM_MODES = new Set(["read-only", "workspace-write", "unrestricted"]);
+const SETTING_SOURCES = new Set(["user", "project", "local"]);
+const PERMISSION_MODES = new Set([
+  "default",
+  "acceptEdits",
+  "plan",
+  "bypassPermissions",
+  "dontAsk",
+]);
+const ENV_INHERIT = new Set(["all", "minimal"]);
+const MCP_TYPES = new Set(["stdio", "http", "sse"]);
+const ENFORCEMENT_MODES = new Set(["strict", "best-effort"]);
+const MCP_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
+// A variable name, optionally with one trailing `*` wildcard (matched via
+// `matchesEnvPattern`, shared with the harness's own env-policy engine).
+const ENV_PATTERN_RE = /^[A-Za-z_][A-Za-z0-9_]*\*?$/;
+const ENV_SET_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const MAX_TOOL_RULES = 200;
+
+// Names Argus reserves for the harness's own control-plane use (see
+// `../harness/childEnv.ts`) — `env.set` may never overwrite these, since that
+// would let a pipeline author hand an agent process its own admin token or
+// forge another invocation's identifiers.
+const RESERVED_ENV_PATTERNS: readonly string[] = [
+  ...ARGUS_SERVER_SECRETS,
+  "ARGUS_SIGNAL_*",
+  "ARGUS_RUN_ID",
+  "ARGUS_INSTANCE_ID",
+  "ARGUS_PHASE_ID",
+  "ARGUS_RESULT_FILE",
+  "ARGUS_ARTIFACT_DIR",
+];
+
+function isReservedEnvName(name: string): boolean {
+  return RESERVED_ENV_PATTERNS.some((pattern) => matchesEnvPattern(name, pattern));
+}
+
+function validateStringRecord(raw: unknown, ctx: string): Record<string, string> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PipelineValidationError(`${ctx} must be an object of strings`);
+  }
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value !== "string") {
+      throw new PipelineValidationError(`${ctx}.${key} must be a string`);
+    }
+    out[key] = value;
+  }
+  return out;
+}
+
+function validateToolRules(raw: unknown, ctx: string): string[] {
+  if (!Array.isArray(raw)) {
+    throw new PipelineValidationError(`${ctx} must be a list of strings`);
+  }
+  if (raw.length > MAX_TOOL_RULES) {
+    throw new PipelineValidationError(`${ctx} is capped at ${MAX_TOOL_RULES} rules`);
+  }
+  const rules: string[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "string" || !entry.trim()) {
+      throw new PipelineValidationError(`${ctx} entries must be non-empty strings`);
+    }
+    // Rules are joined comma-separated on the CLI, so a comma (or a newline,
+    // which would also corrupt the joined line) inside one rule is ambiguous.
+    if (entry.includes(",") || entry.includes("\n")) {
+      throw new PipelineValidationError(`${ctx}: tool rule "${entry}" must not contain a comma`);
+    }
+    rules.push(entry);
+  }
+  return [...new Set(rules)];
+}
+
+function validateMcpServer(raw: unknown, name: string, ctx: string): McpServerSpec {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PipelineValidationError(`${ctx}: mcpServers["${name}"] must be an object`);
+  }
+  const s = raw as Record<string, unknown>;
+  const server: McpServerSpec = {};
+
+  if (s.type !== undefined && s.type !== null) {
+    if (!MCP_TYPES.has(s.type as string)) {
+      throw new PipelineValidationError(
+        `${ctx}: mcpServers["${name}"].type must be ${[...MCP_TYPES].join(" | ")}`,
+      );
+    }
+    server.type = s.type as McpServerSpec["type"];
+  }
+  if (s.command !== undefined && s.command !== null) {
+    const command = s.command;
+    if (typeof command !== "string" || !command.trim()) {
+      throw new PipelineValidationError(
+        `${ctx}: mcpServers["${name}"].command must be a non-empty string`,
+      );
+    }
+    server.command = command;
+  }
+  if (s.args !== undefined && s.args !== null) {
+    const args = s.args;
+    if (!Array.isArray(args) || args.some((a) => typeof a !== "string")) {
+      throw new PipelineValidationError(
+        `${ctx}: mcpServers["${name}"].args must be a list of strings`,
+      );
+    }
+    server.args = [...args] as string[];
+  }
+  if (s.env !== undefined && s.env !== null) {
+    server.env = validateStringRecord(s.env, `${ctx}: mcpServers["${name}"].env`);
+  }
+  if (s.url !== undefined && s.url !== null) {
+    const url = s.url;
+    if (typeof url !== "string" || !url.trim()) {
+      throw new PipelineValidationError(
+        `${ctx}: mcpServers["${name}"].url must be a non-empty string`,
+      );
+    }
+    server.url = url;
+  }
+  if (s.headers !== undefined && s.headers !== null) {
+    server.headers = validateStringRecord(s.headers, `${ctx}: mcpServers["${name}"].headers`);
+  }
+  if (!server.command && !server.url) {
+    throw new PipelineValidationError(
+      `${ctx}: mcpServers["${name}"] needs either command (stdio) or url (http/sse)`,
+    );
+  }
+  return server;
+}
+
+function validateEnvPolicy(raw: unknown, ctx: string): EnvPolicy {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PipelineValidationError(`${ctx}: capabilities.env must be an object`);
+  }
+  const e = raw as Record<string, unknown>;
+  const env: EnvPolicy = {};
+
+  if (e.inherit !== undefined && e.inherit !== null) {
+    if (!ENV_INHERIT.has(e.inherit as string)) {
+      throw new PipelineValidationError(
+        `${ctx}: capabilities.env.inherit must be ${[...ENV_INHERIT].join(" | ")}`,
+      );
+    }
+    env.inherit = e.inherit as EnvPolicy["inherit"];
+  }
+
+  for (const side of ["allow", "deny"] as const) {
+    const raw2 = e[side];
+    if (raw2 === undefined || raw2 === null) continue;
+    if (!Array.isArray(raw2)) {
+      throw new PipelineValidationError(
+        `${ctx}: capabilities.env.${side} must be a list of strings`,
+      );
+    }
+    const patterns: string[] = [];
+    for (const entry of raw2) {
+      if (typeof entry !== "string" || !ENV_PATTERN_RE.test(entry)) {
+        throw new PipelineValidationError(
+          `${ctx}: capabilities.env.${side} entries must be a variable name, optionally with one trailing *`,
+        );
+      }
+      patterns.push(entry);
+    }
+    env[side] = [...new Set(patterns)];
+  }
+
+  if (e.set !== undefined && e.set !== null) {
+    if (typeof e.set !== "object" || Array.isArray(e.set)) {
+      throw new PipelineValidationError(`${ctx}: capabilities.env.set must be an object`);
+    }
+    const set: Record<string, string> = {};
+    for (const [key, value] of Object.entries(e.set as Record<string, unknown>)) {
+      if (!ENV_SET_KEY_RE.test(key)) {
+        throw new PipelineValidationError(
+          `${ctx}: env.set key "${key}" must be a valid environment variable name`,
+        );
+      }
+      if (isReservedEnvName(key)) {
+        throw new PipelineValidationError(
+          `${ctx}: env.set must not set reserved variable "${key}"`,
+        );
+      }
+      if (typeof value !== "string") {
+        throw new PipelineValidationError(`${ctx}: env.set["${key}"] must be a string`);
+      }
+      set[key] = value;
+    }
+    env.set = set;
+  }
+
+  return env;
+}
+
+/**
+ * What an agent invocation may do (see `CapabilityProfile` in
+ * `@argus/contracts`). Undefined/null = inherit the pipeline's profile, or the
+ * CLI's own defaults with no profile at all. Returns a fresh object containing
+ * only the keys the author actually set, so a stored definition round-trips
+ * byte for byte.
+ */
+export function validateCapabilities(raw: unknown, ctx: string): CapabilityProfile | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PipelineValidationError(`${ctx}: capabilities must be an object`);
+  }
+  const c = raw as Record<string, unknown>;
+  for (const key of Object.keys(c)) {
+    if (!CAPABILITY_KEYS.has(key)) {
+      throw new PipelineValidationError(`${ctx}: capabilities has unknown key "${key}"`);
+    }
+  }
+
+  const out: CapabilityProfile = {};
+
+  if (c.filesystem !== undefined && c.filesystem !== null) {
+    if (!FILESYSTEM_MODES.has(c.filesystem as string)) {
+      throw new PipelineValidationError(
+        `${ctx}: capabilities.filesystem must be ${[...FILESYSTEM_MODES].join(" | ")}`,
+      );
+    }
+    out.filesystem = c.filesystem as CapabilityProfile["filesystem"];
+  }
+
+  if (c.tools !== undefined && c.tools !== null) {
+    if (typeof c.tools !== "object" || Array.isArray(c.tools)) {
+      throw new PipelineValidationError(`${ctx}: capabilities.tools must be an object`);
+    }
+    const t = c.tools as Record<string, unknown>;
+    const tools: { allow?: string[]; deny?: string[] } = {};
+    if (t.allow !== undefined && t.allow !== null) {
+      tools.allow = validateToolRules(t.allow, `${ctx}: capabilities.tools.allow`);
+    }
+    if (t.deny !== undefined && t.deny !== null) {
+      tools.deny = validateToolRules(t.deny, `${ctx}: capabilities.tools.deny`);
+    }
+    out.tools = tools;
+  }
+
+  if (c.mcpServers !== undefined && c.mcpServers !== null) {
+    if (typeof c.mcpServers !== "object" || Array.isArray(c.mcpServers)) {
+      throw new PipelineValidationError(`${ctx}: capabilities.mcpServers must be an object`);
+    }
+    const servers: Record<string, McpServerSpec> = {};
+    for (const [name, spec] of Object.entries(c.mcpServers as Record<string, unknown>)) {
+      if (!MCP_NAME_RE.test(name)) {
+        throw new PipelineValidationError(
+          `${ctx}: mcpServers key "${name}" must match ${MCP_NAME_RE}`,
+        );
+      }
+      servers[name] = validateMcpServer(spec, name, ctx);
+    }
+    out.mcpServers = servers;
+  }
+
+  if (c.additionalDirectories !== undefined && c.additionalDirectories !== null) {
+    if (!Array.isArray(c.additionalDirectories)) {
+      throw new PipelineValidationError(
+        `${ctx}: capabilities.additionalDirectories must be a list of paths`,
+      );
+    }
+    out.additionalDirectories = c.additionalDirectories.map((d, i) => {
+      if (
+        typeof d !== "string" ||
+        !d.trim() ||
+        !path.isAbsolute(d) ||
+        !existsSync(d) ||
+        !statSync(d).isDirectory()
+      ) {
+        throw new PipelineValidationError(
+          `${ctx}: additionalDirectories[${i}] does not exist: ${String(d)}`,
+        );
+      }
+      return d;
+    });
+  }
+
+  if (c.settingSources !== undefined && c.settingSources !== null) {
+    if (
+      !Array.isArray(c.settingSources) ||
+      c.settingSources.some((s) => !SETTING_SOURCES.has(String(s)))
+    ) {
+      throw new PipelineValidationError(
+        `${ctx}: capabilities.settingSources must be a list of ${[...SETTING_SOURCES].join(" | ")}`,
+      );
+    }
+    out.settingSources = [
+      ...new Set(c.settingSources.map(String)),
+    ] as CapabilityProfile["settingSources"];
+  }
+
+  if (c.permissionMode !== undefined && c.permissionMode !== null) {
+    if (!PERMISSION_MODES.has(c.permissionMode as string)) {
+      throw new PipelineValidationError(
+        `${ctx}: capabilities.permissionMode must be ${[...PERMISSION_MODES].join(" | ")}`,
+      );
+    }
+    out.permissionMode = c.permissionMode as CapabilityProfile["permissionMode"];
+  }
+
+  if (c.maxTurns !== undefined && c.maxTurns !== null) {
+    const n = Number(c.maxTurns);
+    if (!Number.isInteger(n) || n < 1 || n > 1000) {
+      throw new PipelineValidationError(`${ctx}: capabilities.maxTurns must be an integer 1-1000`);
+    }
+    out.maxTurns = n;
+  }
+
+  if (c.env !== undefined && c.env !== null) {
+    out.env = validateEnvPolicy(c.env, ctx);
+  }
+
+  if (c.enforcement !== undefined && c.enforcement !== null) {
+    if (!ENFORCEMENT_MODES.has(c.enforcement as string)) {
+      throw new PipelineValidationError(
+        `${ctx}: capabilities.enforcement must be ${[...ENFORCEMENT_MODES].join(" | ")}`,
+      );
+    }
+    out.enforcement = c.enforcement as CapabilityProfile["enforcement"];
+  }
+
+  return out;
+}
+
+// ── Verification checks ──────────────────────────────────────────────────────
+
+const MAX_CHECKS = 50;
+const CHECK_KINDS = new Set(["command", "artifact", "file", "changed-files"]);
+const CHECK_BASE_KEYS = ["kind", "label"];
+const CHECK_KIND_KEYS: Record<string, string[]> = {
+  command: ["run", "cwd", "timeoutSeconds"],
+  artifact: ["path", "minBytes"],
+  file: ["path", "minBytes"],
+  "changed-files": ["allow", "deny", "requireChanges"],
+};
+
+function validateCheckLabel(raw: unknown, ctx: string, i: number): string | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "string" || !raw.trim() || raw.length > 120) {
+    throw new PipelineValidationError(
+      `${ctx}: checks[${i}].label must be a non-empty string up to 120 chars`,
+    );
+  }
+  return raw;
+}
+
+/** A `checks[i].path`: relative, and unable to escape the directory it is read against. */
+function validateCheckPath(raw: unknown, ctx: string, i: number): string {
+  if (typeof raw !== "string" || !raw.trim()) {
+    throw new PipelineValidationError(`${ctx}: checks[${i}].path is required`);
+  }
+  const p = raw.trim();
+  const segments = p.split(/[/\\]/);
+  if (path.isAbsolute(p) || segments.some((seg) => seg === "..")) {
+    throw new PipelineValidationError(
+      `${ctx}: checks[${i}].path must be a relative path inside the directory`,
+    );
+  }
+  return p;
+}
+
+function validateMinBytes(raw: unknown, ctx: string, i: number): number | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) {
+    throw new PipelineValidationError(
+      `${ctx}: checks[${i}].minBytes must be a non-negative integer`,
+    );
+  }
+  return n;
+}
+
+function validateGlobList(
+  raw: unknown,
+  ctx: string,
+  i: number,
+  field: string,
+): string[] | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (!Array.isArray(raw) || raw.some((g) => typeof g !== "string" || !g.trim())) {
+    throw new PipelineValidationError(
+      `${ctx}: checks[${i}].${field} must be a list of non-empty globs`,
+    );
+  }
+  return [...raw] as string[];
+}
+
+function validateCheck(raw: unknown, ctx: string, i: number): PhaseCheck {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PipelineValidationError(`${ctx}: checks[${i}] must be an object`);
+  }
+  const c = raw as Record<string, unknown>;
+  const kind = c.kind;
+  if (typeof kind !== "string" || !CHECK_KINDS.has(kind)) {
+    throw new PipelineValidationError(
+      `${ctx}: checks[${i}].kind must be ${[...CHECK_KINDS].join(" | ")}`,
+    );
+  }
+  const allowedKeys = new Set([...CHECK_BASE_KEYS, ...CHECK_KIND_KEYS[kind]]);
+  for (const key of Object.keys(c)) {
+    if (!allowedKeys.has(key)) {
+      throw new PipelineValidationError(`${ctx}: checks[${i}] has unknown key "${key}"`);
+    }
+  }
+  const label = validateCheckLabel(c.label, ctx, i);
+
+  if (kind === "command") {
+    const run = c.run;
+    if (typeof run !== "string" || !run.trim() || run.length > 4000) {
+      throw new PipelineValidationError(
+        `${ctx}: checks[${i}].run must be a non-empty string up to 4000 chars`,
+      );
+    }
+    let cwd: string | undefined;
+    if (c.cwd !== undefined && c.cwd !== null) {
+      const rawCwd = c.cwd;
+      if (typeof rawCwd !== "string" || !rawCwd.trim()) {
+        throw new PipelineValidationError(`${ctx}: checks[${i}].cwd must be a non-empty string`);
+      }
+      cwd = rawCwd;
+    }
+    const timeoutSeconds = validateTimeout(c.timeoutSeconds, `${ctx}: checks[${i}]`);
+    return {
+      kind: "command",
+      run,
+      ...(label !== undefined ? { label } : {}),
+      ...(cwd !== undefined ? { cwd } : {}),
+      ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
+    };
+  }
+
+  if (kind === "artifact" || kind === "file") {
+    const checkPath = validateCheckPath(c.path, ctx, i);
+    const minBytes = validateMinBytes(c.minBytes, ctx, i);
+    return {
+      kind,
+      path: checkPath,
+      ...(label !== undefined ? { label } : {}),
+      ...(minBytes !== undefined ? { minBytes } : {}),
+    };
+  }
+
+  // "changed-files"
+  const allow = validateGlobList(c.allow, ctx, i, "allow");
+  const deny = validateGlobList(c.deny, ctx, i, "deny");
+  let requireChanges: boolean | undefined;
+  if (c.requireChanges !== undefined && c.requireChanges !== null) {
+    if (typeof c.requireChanges !== "boolean") {
+      throw new PipelineValidationError(`${ctx}: checks[${i}].requireChanges must be a boolean`);
+    }
+    requireChanges = c.requireChanges;
+  }
+  return {
+    kind: "changed-files",
+    ...(label !== undefined ? { label } : {}),
+    ...(allow !== undefined ? { allow } : {}),
+    ...(deny !== undefined ? { deny } : {}),
+    ...(requireChanges !== undefined ? { requireChanges } : {}),
+  };
+}
+
+/**
+ * A phase's deterministic checks (see `PhaseCheck` in `@argus/contracts`).
+ * Undefined/null = no checks — the legacy behaviour, where a phase's success
+ * is exactly its steps' own reports.
+ */
+export function validateChecks(raw: unknown, ctx: string): PhaseCheck[] | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (!Array.isArray(raw)) throw new PipelineValidationError(`${ctx}: checks must be a list`);
+  if (raw.length > MAX_CHECKS) {
+    throw new PipelineValidationError(`${ctx}: checks is capped at ${MAX_CHECKS}`);
+  }
+  return raw.map((r, i) => validateCheck(r, ctx, i));
+}
+
 function validateStep(raw: unknown, ctx: string): PhaseStep {
   if (!raw || typeof raw !== "object")
     throw new PipelineValidationError(`${ctx}: step must be an object`);
@@ -94,6 +600,13 @@ function validateStep(raw: unknown, ctx: string): PhaseStep {
   }
   const runtime = validateRuntime(s.runtime, `${ctx}: step`);
   if (runtime) step.runtime = runtime;
+
+  const stepCtx = `${ctx}: step "${step.name}"`;
+  const timeoutSeconds = validateTimeout(s.timeoutSeconds, stepCtx);
+  if (timeoutSeconds !== undefined) step.timeoutSeconds = timeoutSeconds;
+  const capabilities = validateCapabilities(s.capabilities, stepCtx);
+  if (capabilities) step.capabilities = capabilities;
+
   return step;
 }
 
@@ -184,6 +697,10 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
     produces = p.produces;
   }
 
+  const timeoutSeconds = validateTimeout(p.timeoutSeconds, `phase ${i}`);
+  const capabilities = validateCapabilities(p.capabilities, `phase ${i}`);
+  const checks = validateChecks(p.checks, `phase ${i}`);
+
   return {
     id,
     name: p.name.trim(),
@@ -197,10 +714,13 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
     ...(rubric ? { rubric } : {}),
     ...(autoApprove ? { autoApprove } : {}),
     ...(runtime ? { runtime } : {}),
+    ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
+    ...(capabilities ? { capabilities } : {}),
+    ...(checks ? { checks } : {}),
   };
 }
 
-const RETRYABLE: readonly string[] = ["spawn", "exit-code", "signal"];
+const RETRYABLE: readonly string[] = ["spawn", "exit-code", "signal", "timeout", "verification"];
 
 function validateRetry(raw: unknown, i: number) {
   if (raw === undefined || raw === null) return undefined;
@@ -227,7 +747,7 @@ function validateRetry(raw: unknown, i: number) {
   return {
     attempts,
     backoffSeconds,
-    ...(retryOn ? { retryOn: retryOn as ("spawn" | "exit-code" | "signal")[] } : {}),
+    ...(retryOn ? { retryOn: retryOn as RetryableClass[] } : {}),
   };
 }
 
@@ -267,6 +787,8 @@ export function validatePipelineInput(raw: unknown): PipelineInput {
   }
   const runtime = validateRuntime(r.runtime, "pipeline");
   if (runtime) input.runtime = runtime;
+  const capabilities = validateCapabilities(r.capabilities, "pipeline");
+  if (capabilities) input.capabilities = capabilities;
   return input;
 }
 
@@ -301,6 +823,7 @@ export function validatePipelinePatch(raw: unknown): Partial<PipelineInput> {
         : validateReasoningEffort(r.reasoningEffort, "pipeline");
   }
   if ("runtime" in r) patch.runtime = validateRuntime(r.runtime, "pipeline");
+  if ("capabilities" in r) patch.capabilities = validateCapabilities(r.capabilities, "pipeline");
   return patch;
 }
 
@@ -323,6 +846,7 @@ export async function createPipeline(
     ...(input.model ? { model: input.model } : {}),
     ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
     ...(input.runtime ? { runtime: input.runtime } : {}),
+    ...(input.capabilities ? { capabilities: input.capabilities } : {}),
     lastStartedAt: null,
     createdAt: iso,
     updatedAt: iso,
@@ -360,6 +884,13 @@ export async function updatePipeline(
     if ("runtime" in patch) {
       if (patch.runtime) merged.runtime = patch.runtime;
       else delete merged.runtime;
+    }
+    // Same story for `capabilities`: an empty object `{}` is a meaningful,
+    // truthy profile ("no MCP servers, no extra directories, ..."), while
+    // null/undefined clears the override back to the pipeline's own default.
+    if ("capabilities" in patch) {
+      if (patch.capabilities) merged.capabilities = patch.capabilities;
+      else delete merged.capabilities;
     }
     list[idx] = merged;
     await writePipelines(list);

@@ -12,6 +12,10 @@ export interface PhaseStep {
   reasoningEffort?: ReasoningEffort;
   /** Overrides the phase's (and pipeline's) runtime for this one step. */
   runtime?: AgentRuntimeId;
+  /** Wall-clock limit for this step's process; overrides the phase's. */
+  timeoutSeconds?: number;
+  /** Narrows or replaces the phase's capability profile for this one step. */
+  capabilities?: CapabilityProfile;
 }
 
 /**
@@ -22,7 +26,15 @@ export interface PhaseStep {
  * change its mind — while a process that never started, or died on a non-zero
  * exit, plausibly hit something transient.
  */
-export type RetryableClass = "spawn" | "exit-code" | "signal";
+export type RetryableClass = "spawn" | "exit-code" | "signal" | "timeout" | "verification";
+
+/**
+ * Every way a phase can fail. The retryable classes are the subset an author
+ * may name in `retry.retryOn`; `configuration` (an invocation Argus could not
+ * construct as declared — e.g. a capability the runtime cannot enforce under
+ * strict enforcement) is never retried, because running it again cannot help.
+ */
+export type PhaseFailureClass = RetryableClass | "configuration";
 
 export interface RetryPolicy {
   /** Total attempts including the first. 1 means no retry. */
@@ -31,6 +43,173 @@ export interface RetryPolicy {
   backoffSeconds: number;
   /** Defaults to `["spawn", "exit-code"]` — the transient-looking ones. */
   retryOn?: RetryableClass[];
+}
+
+// ── Harness: capabilities, verification ──────────────────────────────────────
+
+/** One MCP server an invocation may talk to. Mirrors the CLIs' own config shape. */
+export interface McpServerSpec {
+  type?: "stdio" | "http" | "sse";
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+}
+
+/**
+ * Which of Argus's own environment reaches the agent process.
+ *
+ * `inherit: "all"` (the default, and the pre-harness behaviour) passes the
+ * server's environment through; `"minimal"` passes only a safe baseline (PATH,
+ * HOME, locale, temp dirs, the agent CLIs' own variables) plus `allow`. Argus's
+ * own secrets — its admin bearer token and webhook URL — are removed under
+ * either policy: an agent must never be able to administer the harness that
+ * runs it. Values are never recorded; the invocation record lists names only.
+ */
+export interface EnvPolicy {
+  inherit?: "all" | "minimal";
+  /** Variable names or `PREFIX_*` patterns to pass through (or to keep despite `deny`). */
+  allow?: string[];
+  /** Variable names or `PREFIX_*` patterns removed from the child environment. */
+  deny?: string[];
+  /** Values set for this invocation only. */
+  set?: Record<string, string>;
+}
+
+/**
+ * What an agent invocation may do. Runtime-neutral: each runtime maps it onto
+ * its own flags and config files, and reports anything it cannot enforce as a
+ * limitation. Under `enforcement: "strict"` (the default) a limitation is a
+ * configuration failure — the step does not launch with more capability than
+ * the author declared. `"best-effort"` records the limitation and launches.
+ */
+export interface CapabilityProfile {
+  /**
+   * `read-only` — no file edits (Codex: OS sandbox; Claude Code: Edit/Write
+   * tools denied, and Bash denied unless `tools.allow` names specific commands).
+   * `workspace-write` — edits inside the working directory and
+   * `additionalDirectories`. `unrestricted` — the CLI's own default.
+   */
+  filesystem?: "read-only" | "workspace-write" | "unrestricted";
+  /** Tool permission rules in the runtime's own grammar (Claude Code: `Bash(npm test:*)`, `Edit`, `mcp__docs__search`, `Skill(name)`). */
+  tools?: { allow?: string[]; deny?: string[] };
+  /**
+   * The MCP servers this invocation may use. Absent = whatever the CLI is
+   * configured with (legacy). Present — even empty — means exactly these and no
+   * others, where the runtime can enforce it.
+   */
+  mcpServers?: Record<string, McpServerSpec>;
+  /** Directories beyond the working directory the agent may access. */
+  additionalDirectories?: string[];
+  /**
+   * Which settings files the CLI loads (Claude Code). Absent = the CLI's
+   * default (user, project and local). Naming only `project` and `local` cuts
+   * the operator's global settings — and their MCP servers, hooks and
+   * permission grants — out of the invocation.
+   */
+  settingSources?: ("user" | "project" | "local")[];
+  /** Claude Code permission mode for the run. */
+  permissionMode?: "default" | "acceptEdits" | "plan" | "bypassPermissions" | "dontAsk";
+  /** Cap on agentic turns, where the runtime supports one. */
+  maxTurns?: number;
+  env?: EnvPolicy;
+  enforcement?: "strict" | "best-effort";
+}
+
+/**
+ * A deterministic check Argus runs itself once every step of a phase has
+ * reported success — the difference between "the agent said the tests pass"
+ * and "the tests pass". A failing check fails the phase under the
+ * `verification` failure class.
+ */
+export type PhaseCheck =
+  | {
+      kind: "command";
+      /** Run through the shell in the phase's cwd (or `cwd`); exit 0 passes. */
+      run: string;
+      label?: string;
+      cwd?: string;
+      timeoutSeconds?: number;
+    }
+  | {
+      /** A file the phase was required to leave in its artifact directory. */
+      kind: "artifact";
+      path: string;
+      label?: string;
+      minBytes?: number;
+    }
+  | {
+      /** A file relative to the phase's working directory. */
+      kind: "file";
+      path: string;
+      label?: string;
+      minBytes?: number;
+    }
+  | {
+      /**
+       * The working tree's changed paths (git) must all match `allow` and none
+       * match `deny`. `requireChanges` fails a phase that changed nothing.
+       */
+      kind: "changed-files";
+      label?: string;
+      allow?: string[];
+      deny?: string[];
+      requireChanges?: boolean;
+    };
+
+export interface CheckResult {
+  kind: PhaseCheck["kind"];
+  label: string;
+  status: "passed" | "failed";
+  /** One line: why it passed or failed. */
+  detail: string;
+  exitCode?: number | null;
+  durationMs: number;
+  /** Bounded tail of a command's combined output. */
+  output?: string;
+}
+
+export interface VerificationReport {
+  status: "running" | "passed" | "failed";
+  startedAt: string;
+  endedAt?: string | null;
+  checks: CheckResult[];
+}
+
+/**
+ * What Argus actually launched, written beside the run so a failure can be
+ * reproduced: the exact executable and argv, the environment by *name*, the
+ * capability profile as applied and what could not be enforced, the config
+ * files materialized for the invocation, and the repository state it started
+ * against. No values of environment variables, ever.
+ */
+export interface AgentInvocationRecord {
+  runId: string;
+  instanceId: string;
+  phaseId: string;
+  step: string;
+  attempt: number;
+  runtime: AgentRuntimeId;
+  bin: string;
+  args: string[];
+  cwd: string;
+  /** Names of the environment variables passed to the child, sorted. */
+  envNames: string[];
+  /** Names Argus removed from its own environment before spawning, sorted. */
+  envStripped: string[];
+  capabilities: CapabilityProfile | null;
+  /** What the runtime could not enforce of the declared profile. */
+  limitations: string[];
+  /** Files Argus wrote for this invocation (settings, MCP config). */
+  materializedFiles: string[];
+  artifactDir: string | null;
+  resultFile: string | null;
+  timeoutSeconds: number | null;
+  deadlineAt: string | null;
+  /** `git rev-parse HEAD` in cwd at launch, when cwd is a repository. */
+  gitHead: string | null;
+  startedAt: string;
 }
 
 /** A dependency can preserve the legacy phase-id shorthand or describe a route. */
@@ -115,6 +294,12 @@ export interface PhaseDef {
   autoApprove?: AutoApprove;
   /** Overrides the pipeline's runtime for every step in this phase. */
   runtime?: AgentRuntimeId;
+  /** Wall-clock limit for each step's process. Absent = no limit. */
+  timeoutSeconds?: number;
+  /** What this phase's agents may do. Absent = the pipeline's profile, else the CLI's defaults. */
+  capabilities?: CapabilityProfile;
+  /** Deterministic checks that must pass before the phase counts as succeeded. */
+  checks?: PhaseCheck[];
 }
 
 export interface PipelineDefinition {
@@ -133,6 +318,8 @@ export interface PipelineDefinition {
    * runtimes existed keeps running on Claude Code exactly as it did.
    */
   runtime?: AgentRuntimeId;
+  /** Default capability profile for every phase that does not declare one. */
+  capabilities?: CapabilityProfile;
   lastStartedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -148,6 +335,7 @@ export interface PipelineInput {
   model?: string;
   reasoningEffort?: ReasoningEffort;
   runtime?: AgentRuntimeId;
+  capabilities?: CapabilityProfile;
 }
 
 export type InstanceStatus = "running" | "awaiting-approval" | "failed" | "succeeded" | "aborted";
@@ -210,6 +398,10 @@ export interface PhaseProgress {
   payload: unknown | null;
   /** Validated structured outcome, intentionally separate from legacy payloads. */
   result?: unknown;
+  /** Argus's own checks over the phase's work, once every step has reported. */
+  verification?: VerificationReport;
+  /** Where this attempt's steps were told to leave file artifacts. */
+  artifactDir?: string | null;
 }
 
 /** What the engine writes into `PhaseProgress.payload` when a phase fails.
@@ -218,6 +410,8 @@ export interface PhaseProgress {
 export interface PhaseFailurePayload {
   reason?: string;
   kind?: "restarted" | string;
+  /** How the failure was classed for the retry policy. */
+  failureClass?: PhaseFailureClass;
 }
 
 export interface PipelineInstance {

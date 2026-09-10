@@ -375,16 +375,33 @@ export function currentIndex(inst: PipelineInstance): number {
  * `{{artifacts.foo}}` in the prompt — a template marker reaching the model is
  * worse than a gap, because the model will try to make sense of it.
  */
+export interface ArtifactDirs {
+  /** This phase's own artifact directory. */
+  own: string | null;
+  /** Every phase's artifact directory so far, by phase id. */
+  byPhase: Record<string, string>;
+}
+
+/**
+ * Render a step prompt: `{{previous.payload}}`, `{{artifacts.<name>}}`,
+ * `{{artifactDir}}` (this phase's file-artifact directory) and
+ * `{{artifactDir.<phaseId>}}` (an earlier phase's). Directories are the
+ * file-based counterpart of payload artifacts — a plan or an investigation is
+ * handed on as a path the next agent reads, not as text pasted into its prompt.
+ */
 export function interpolate(
   prompt: string,
   previousPayload: unknown,
   artifacts: Record<string, unknown> = {},
+  dirs: ArtifactDirs = { own: null, byPhase: {} },
 ): string {
   const render = (v: unknown): string =>
     v == null ? "" : typeof v === "string" ? v : JSON.stringify(v);
   return prompt
     .replace(/\{\{previous\.payload\}\}/g, render(previousPayload))
-    .replace(/\{\{artifacts\.([A-Za-z0-9_-]+)\}\}/g, (_, name: string) => render(artifacts[name]));
+    .replace(/\{\{artifacts\.([A-Za-z0-9_-]+)\}\}/g, (_, name: string) => render(artifacts[name]))
+    .replace(/\{\{artifactDir\.([A-Za-z0-9_-]+)\}\}/g, (_, id: string) => dirs.byPhase[id] ?? "")
+    .replace(/\{\{artifactDir\}\}/g, dirs.own ?? "");
 }
 
 /** The payload a phase should see as `{{previous.payload}}`: its dependency's,

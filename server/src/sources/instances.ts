@@ -109,6 +109,9 @@ export async function pruneInstances(pipelineId: string, keep: number): Promise<
   await Promise.all(
     drop.map(async (i) => {
       await rm(instancePath(i.id), { force: true });
+      // The instance's file artifacts and working-tree baselines go with it.
+      await rm(path.join(paths.artifactsDir(), i.id), { recursive: true, force: true });
+      await rm(path.join(paths.invocationsDir(), i.id), { recursive: true, force: true });
       parseMemo.forget(i.id);
     }),
   );

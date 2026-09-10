@@ -11,15 +11,127 @@
 
 import { randomUUID } from "node:crypto";
 import { claudeHome } from "../claudeHome.js";
-import { EMPTY_ENVELOPE, basename, clip, extraArgs } from "./types.js";
+import { EMPTY_ENVELOPE, basename, clip, extraArgs, unsupportedCapabilities } from "./types.js";
 import type {
   AgentRuntime,
   AnalysisPlanOptions,
+  CapabilityRequest,
+  MaterializedFile,
   RunEnvelope,
   RunPlanOptions,
   SpawnPlan,
 } from "./types.js";
 import type { ActivityEvent } from "@argus/contracts";
+
+/** Every `CapabilityProfile` key Claude Code can map onto its own invocation —
+ *  which is all of them; the one gap (Bash left unrestricted under
+ *  `read-only`) is reported as a specific limitation rather than the generic
+ *  "cannot enforce" one, so it never appears in this list. */
+const CLAUDE_SUPPORTED_CAPABILITIES = [
+  "filesystem",
+  "tools",
+  "mcpServers",
+  "additionalDirectories",
+  "settingSources",
+  "permissionMode",
+  "maxTurns",
+] as const;
+
+/** A bare, unscoped `Bash` allow rule — one that leaves the shell unrestricted
+ *  regardless of `filesystem: "read-only"`. */
+function isBareBashRule(rule: string): boolean {
+  return rule === "Bash" || rule === "Bash(*)" || rule === "Bash(*:*)";
+}
+
+interface ClaudeCapabilityResult {
+  args: string[];
+  files: MaterializedFile[];
+  limitations: string[];
+}
+
+/**
+ * Maps a {@link CapabilityRequest} onto Claude Code's own flags and config
+ * files. Shared by `batchPlan` and `streamPlan` so the two forms can never
+ * drift on what a profile means.
+ */
+function buildClaudeCapabilities(cap: CapabilityRequest | undefined): ClaudeCapabilityResult {
+  if (!cap) return { args: [], files: [], limitations: [] };
+  const { profile, invocationDir, cwd, artifactDir, hooks } = cap;
+  const args: string[] = [];
+  const files: MaterializedFile[] = [];
+  const limitations = unsupportedCapabilities(profile, "Claude Code", [
+    ...CLAUDE_SUPPORTED_CAPABILITIES,
+  ]);
+
+  const allow = [...(profile.tools?.allow ?? [])];
+  const deny = [...(profile.tools?.deny ?? [])];
+
+  if (profile.filesystem === "read-only") {
+    deny.push(`Edit(//${cwd}/**)`);
+    for (const dir of profile.additionalDirectories ?? []) deny.push(`Edit(//${dir}/**)`);
+
+    const bashAllowRules = allow.filter((r) => r === "Bash" || r.startsWith("Bash("));
+    const hasBareBash = bashAllowRules.some(isBareBashRule);
+    const hasScopedBash = bashAllowRules.some((r) => !isBareBashRule(r));
+    if (hasBareBash) {
+      limitations.push("read-only cannot prevent shell writes while Bash is allowed unrestricted");
+    } else if (!hasScopedBash) {
+      deny.push("Bash");
+    }
+    // hasScopedBash && !hasBareBash: Bash stays allowed, but only through the
+    // scoped rules the profile named — nothing further to deny.
+  }
+  // "workspace-write" needs no extra rules: Claude Code's default already
+  // scopes edits to cwd + additional dirs. "unrestricted" needs none either.
+
+  if (allow.length) args.push("--allowedTools", allow.join(","));
+  if (deny.length) args.push("--disallowedTools", deny.join(","));
+
+  if (profile.mcpServers !== undefined) {
+    const mcpPath = `${invocationDir}/mcp.json`;
+    files.push({
+      path: mcpPath,
+      contents: `${JSON.stringify({ mcpServers: profile.mcpServers }, null, 2)}\n`,
+    });
+    args.push("--mcp-config", mcpPath, "--strict-mcp-config");
+  }
+
+  for (const dir of profile.additionalDirectories ?? []) args.push("--add-dir", dir);
+  // The engine created artifactDir for this invocation to write into; keep it
+  // reachable no matter what the profile said about the rest of the filesystem.
+  if (artifactDir) args.push("--add-dir", artifactDir);
+
+  if (profile.settingSources !== undefined) {
+    args.push("--setting-sources", profile.settingSources.join(","));
+  }
+  if (profile.permissionMode) args.push("--permission-mode", profile.permissionMode);
+  if (profile.maxTurns !== undefined) args.push("--max-turns", String(profile.maxTurns));
+
+  if (hooks) {
+    const settingsPath = `${invocationDir}/settings.json`;
+    files.push({
+      path: settingsPath,
+      contents: `${JSON.stringify(
+        {
+          hooks: {
+            Stop: [{ matcher: "", hooks: [{ type: "command", command: hooks.stop }] }],
+            PreToolUse: [
+              {
+                matcher: "AskUserQuestion",
+                hooks: [{ type: "command", command: hooks.gate }],
+              },
+            ],
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    });
+    args.push("--settings", settingsPath);
+  }
+
+  return { args, files, limitations };
+}
 
 /**
  * The default analysis model.
@@ -228,7 +340,8 @@ export const claudeRuntime: AgentRuntime = {
    * linked) and `--output-format json`, which prints one result envelope we can
    * mine for the result text, cost and tokens.
    */
-  batchPlan({ prompt, sessionId, model }: RunPlanOptions): SpawnPlan {
+  batchPlan({ prompt, sessionId, model, capabilities }: RunPlanOptions): SpawnPlan {
+    const cap = buildClaudeCapabilities(capabilities);
     return {
       bin: bin(),
       args: [
@@ -238,10 +351,12 @@ export const claudeRuntime: AgentRuntime = {
         "--session-id",
         sessionId || randomUUID(),
         ...modelArgs(model),
+        ...cap.args,
         ...extraArgs(process.env.ARGUS_CLAUDE_ARGS),
       ],
       stdin: prompt,
       env: {},
+      ...(capabilities ? { files: cap.files, limitations: cap.limitations } : {}),
     };
   },
 
@@ -250,7 +365,8 @@ export const claudeRuntime: AgentRuntime = {
    * NDJSON transcript the run tailer can follow; the CLI requires `--verbose`
    * alongside it in `-p` mode.
    */
-  streamPlan({ prompt, sessionId, model, systemPrompt }: RunPlanOptions): SpawnPlan {
+  streamPlan({ prompt, sessionId, model, systemPrompt, capabilities }: RunPlanOptions): SpawnPlan {
+    const cap = buildClaudeCapabilities(capabilities);
     return {
       bin: bin(),
       args: [
@@ -262,6 +378,7 @@ export const claudeRuntime: AgentRuntime = {
         sessionId || randomUUID(),
         ...(systemPrompt ? ["--append-system-prompt", systemPrompt] : []),
         ...modelArgs(model),
+        ...cap.args,
         ...extraArgs(process.env.ARGUS_CLAUDE_ARGS),
       ],
       stdin: prompt,
@@ -272,6 +389,7 @@ export const claudeRuntime: AgentRuntime = {
         // ignore the var but would reject the unknown flag.
         CLAUDE_CODE_FORWARD_SUBAGENT_TEXT: "1",
       },
+      ...(capabilities ? { files: cap.files, limitations: cap.limitations } : {}),
     };
   },
 

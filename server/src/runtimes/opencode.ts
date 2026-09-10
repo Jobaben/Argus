@@ -41,15 +41,27 @@
  */
 
 import { opencodeHome } from "../opencodeHome.js";
-import { EMPTY_ENVELOPE, basename, clip, extraArgs } from "./types.js";
+import { EMPTY_ENVELOPE, basename, clip, extraArgs, unsupportedCapabilities } from "./types.js";
 import type {
   AgentRuntime,
   AnalysisPlanOptions,
+  CapabilityRequest,
   RunEnvelope,
   RunPlanOptions,
   SpawnPlan,
 } from "./types.js";
 import type { ActivityEvent, ReasoningEffort } from "@argus/contracts";
+
+/**
+ * OpenCode has no per-invocation capability control at all — no scoped tool
+ * flags, no MCP allowlist, no settings-source override, nothing — so every
+ * key a profile sets is reported as a limitation rather than silently
+ * dropped.
+ */
+function opencodeLimitations(cap: CapabilityRequest | undefined): string[] {
+  if (!cap) return [];
+  return unsupportedCapabilities(cap.profile, "OpenCode", []);
+}
 
 /**
  * `--variant` is documented as provider-specific, so this is the subset of
@@ -311,23 +323,37 @@ export const opencodeRuntime: AgentRuntime = {
   // is the completion protocol rather than a backstop for one.
   outcomeFromRecord: true,
 
-  batchPlan({ prompt, model, reasoningEffort, systemPrompt }: RunPlanOptions): SpawnPlan {
+  batchPlan({
+    prompt,
+    model,
+    reasoningEffort,
+    systemPrompt,
+    capabilities,
+  }: RunPlanOptions): SpawnPlan {
     return {
       bin: bin(),
       args: runArgs({ model, reasoningEffort }),
       stdin: composePrompt(prompt, systemPrompt),
       env: {},
+      ...(capabilities ? { files: [], limitations: opencodeLimitations(capabilities) } : {}),
     };
   },
 
   // `--format json` is already a live NDJSON stream, so a step run and a batch
   // run take the same argv; only the consumer of the log differs.
-  streamPlan({ prompt, model, reasoningEffort, systemPrompt }: RunPlanOptions): SpawnPlan {
+  streamPlan({
+    prompt,
+    model,
+    reasoningEffort,
+    systemPrompt,
+    capabilities,
+  }: RunPlanOptions): SpawnPlan {
     return {
       bin: bin(),
       args: runArgs({ model, reasoningEffort }),
       stdin: composePrompt(prompt, systemPrompt),
       env: {},
+      ...(capabilities ? { files: [], limitations: opencodeLimitations(capabilities) } : {}),
     };
   },
 

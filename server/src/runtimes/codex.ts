@@ -35,10 +35,11 @@
 import { readFileSync } from "node:fs";
 import { codexHome, codexPaths } from "../codexHome.js";
 import { log } from "../log.js";
-import { EMPTY_ENVELOPE, basename, clip, extraArgs } from "./types.js";
+import { EMPTY_ENVELOPE, basename, clip, extraArgs, unsupportedCapabilities } from "./types.js";
 import type {
   AgentRuntime,
   AnalysisPlanOptions,
+  CapabilityRequest,
   RunEnvelope,
   RunPlanOptions,
   SpawnPlan,
@@ -85,6 +86,7 @@ function execArgs(opts: {
   sandbox: string;
   model?: string | null;
   reasoningEffort?: ReasoningEffort | null;
+  capArgs?: string[];
 }): string[] {
   return [
     "exec",
@@ -93,12 +95,86 @@ function execArgs(opts: {
     "--sandbox",
     opts.sandbox,
     ...(opts.model && opts.model.trim() ? ["--model", opts.model.trim()] : []),
+    ...(opts.capArgs ?? []),
     ...extraArgs(process.env.ARGUS_CODEX_ARGS),
     ...(opts.reasoningEffort ? ["-c", `model_reasoning_effort="${opts.reasoningEffort}"`] : []),
     // The prompt placeholder: read it from stdin, so no shell and no argv ever
     // sees user-authored text. Must stay last — it is the positional argument.
     "-",
   ];
+}
+
+/** Every `CapabilityProfile` key Codex maps onto its own invocation, for the
+ *  purposes of the generic "cannot enforce" check. `mcpServers` is included
+ *  here even though Codex can't fully enforce it either — that gap gets its
+ *  own specific limitation below instead of the generic one. */
+const CODEX_SUPPORTED_CAPABILITIES = ["filesystem", "additionalDirectories", "mcpServers"] as const;
+
+interface CodexCapabilityResult {
+  /** Overrides `codexSandbox()` / `ARGUS_CODEX_SANDBOX` when the profile sets
+   *  a filesystem mode. Null keeps the caller's own default. */
+  sandbox: string | null;
+  /** `-c key=value` pairs (flattened; every other element is the value). */
+  capArgs: string[];
+  limitations: string[];
+}
+
+/** TOML-quote a string the way a `-c key="value"` pair needs — JSON's quoting
+ *  rules are a subset of TOML's basic-string ones, so this is exact. */
+function tomlString(s: string): string {
+  return JSON.stringify(s);
+}
+
+function tomlStringArray(values: string[]): string {
+  return `[${values.map(tomlString).join(",")}]`;
+}
+
+/**
+ * Maps a {@link CapabilityRequest} onto Codex's `--sandbox` flag and `-c`
+ * config overrides. Shared by `batchPlan` and `streamPlan`.
+ */
+function buildCodexCapabilities(cap: CapabilityRequest | undefined): CodexCapabilityResult {
+  if (!cap) return { sandbox: null, capArgs: [], limitations: [] };
+  const { profile, artifactDir } = cap;
+  const limitations = unsupportedCapabilities(profile, "Codex", [...CODEX_SUPPORTED_CAPABILITIES]);
+  const capArgs: string[] = [];
+
+  const sandbox =
+    profile.filesystem === "unrestricted" ? "danger-full-access" : (profile.filesystem ?? null);
+
+  const writableRoots = [...(profile.additionalDirectories ?? [])];
+  if (artifactDir && profile.filesystem === "workspace-write") writableRoots.push(artifactDir);
+  if (writableRoots.length) {
+    capArgs.push("-c", `sandbox_workspace_write.writable_roots=${tomlStringArray(writableRoots)}`);
+  }
+  if (artifactDir && profile.filesystem === "read-only") {
+    limitations.push("read-only sandbox prevents writing artifacts");
+  }
+
+  if (profile.mcpServers !== undefined) {
+    for (const [name, spec] of Object.entries(profile.mcpServers)) {
+      const prefix = `mcp_servers.${name}`;
+      if (spec.type !== undefined) capArgs.push("-c", `${prefix}.type=${tomlString(spec.type)}`);
+      if (spec.command !== undefined) {
+        capArgs.push("-c", `${prefix}.command=${tomlString(spec.command)}`);
+      }
+      if (spec.args !== undefined) {
+        capArgs.push("-c", `${prefix}.args=${tomlStringArray(spec.args)}`);
+      }
+      for (const [k, v] of Object.entries(spec.env ?? {})) {
+        capArgs.push("-c", `${prefix}.env.${k}=${tomlString(v)}`);
+      }
+      if (spec.url !== undefined) capArgs.push("-c", `${prefix}.url=${tomlString(spec.url)}`);
+      for (const [k, v] of Object.entries(spec.headers ?? {})) {
+        capArgs.push("-c", `${prefix}.headers.${k}=${tomlString(v)}`);
+      }
+    }
+    // Codex has no strict flag scoping a run to exactly these servers — the
+    // operator's config.toml servers stay reachable alongside them.
+    limitations.push("Codex cannot exclude MCP servers configured in config.toml");
+  }
+
+  return { sandbox, capArgs, limitations };
 }
 
 /** Codex has no `--append-system-prompt`, so Argus-owned instructions ride at
@@ -399,23 +475,49 @@ export const codexRuntime: AgentRuntime = {
   // running — so the marker on the run record backstops it.
   outcomeFromRecord: true,
 
-  batchPlan({ prompt, model, reasoningEffort, systemPrompt }: RunPlanOptions): SpawnPlan {
+  batchPlan({
+    prompt,
+    model,
+    reasoningEffort,
+    systemPrompt,
+    capabilities,
+  }: RunPlanOptions): SpawnPlan {
+    const cap = buildCodexCapabilities(capabilities);
     return {
       bin: bin(),
-      args: execArgs({ sandbox: codexSandbox(), model, reasoningEffort }),
+      args: execArgs({
+        sandbox: cap.sandbox ?? codexSandbox(),
+        model,
+        reasoningEffort,
+        capArgs: cap.capArgs,
+      }),
       stdin: composePrompt(prompt, systemPrompt),
       env: {},
+      ...(capabilities ? { files: [], limitations: cap.limitations } : {}),
     };
   },
 
   // `--json` is already a live NDJSON stream, so a step run and a batch run take
   // the same argv; only the consumer of the log differs.
-  streamPlan({ prompt, model, reasoningEffort, systemPrompt }: RunPlanOptions): SpawnPlan {
+  streamPlan({
+    prompt,
+    model,
+    reasoningEffort,
+    systemPrompt,
+    capabilities,
+  }: RunPlanOptions): SpawnPlan {
+    const cap = buildCodexCapabilities(capabilities);
     return {
       bin: bin(),
-      args: execArgs({ sandbox: codexSandbox(), model, reasoningEffort }),
+      args: execArgs({
+        sandbox: cap.sandbox ?? codexSandbox(),
+        model,
+        reasoningEffort,
+        capArgs: cap.capArgs,
+      }),
       stdin: composePrompt(prompt, systemPrompt),
       env: {},
+      ...(capabilities ? { files: [], limitations: cap.limitations } : {}),
     };
   },
 

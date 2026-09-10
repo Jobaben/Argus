@@ -5,6 +5,14 @@
  */
 
 export type {
+  AgentInvocationRecord,
+  CapabilityProfile,
+  CheckResult,
+  EnvPolicy,
+  McpServerSpec,
+  PhaseCheck,
+  PhaseFailureClass,
+  VerificationReport,
   Dependency,
   DependencyEdge,
   InstanceStatus,
