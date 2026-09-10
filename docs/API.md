@@ -1442,33 +1442,34 @@ flags, and a complete worked pipeline: [docs/HARNESS.md](HARNESS.md).
 
 ### `PipelineDefinition` / `PhaseDef` / `PhaseStep` fields
 
-| Field            | On                    | Type                | Validation                                                                                                                               |
-| ---------------- | --------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `capabilities`   | pipeline, phase, step | `CapabilityProfile` | See below. Merges by key, narrowest wins (step ▸ phase ▸ pipeline).                                                                      |
-| `timeoutSeconds` | phase, step           | integer             | 1–86400. A step's own value overrides its phase's; absent on both = no limit.                                                            |
-| `checks`         | phase                 | `PhaseCheck[]`      | Up to 50 entries. Run once every step of the phase has reported success; a failing check fails the phase under the `verification` class. |
+| Field            | On                    | Type                | Validation                                                                                                                                                                                |
+| ---------------- | --------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`             | phase                 | string              | `^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$` — one path segment, 1-80 chars, never `.`/`..`. It names the phase's artifact and changed-files-baseline directories on disk, not just a graph label. |
+| `capabilities`   | pipeline, phase, step | `CapabilityProfile` | See below. Merges by key, narrowest wins (step ▸ phase ▸ pipeline).                                                                                                                       |
+| `timeoutSeconds` | phase, step           | integer             | 1–86400. A step's own value overrides its phase's; absent on both = no limit.                                                                                                             |
+| `checks`         | phase                 | `PhaseCheck[]`      | Up to 50 entries. Run once every step of the phase has reported success; a failing check fails the phase under the `verification` class.                                                  |
 
 `CapabilityProfile`:
 
-| Key                     | Type                                                               | Validation                                                                                                             |
-| ----------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
-| `filesystem`            | `"read-only" \| "workspace-write" \| "unrestricted"`               | one of the three                                                                                                       |
-| `tools`                 | `{ allow?, deny? }`                                                | each a list of ≤200 non-empty strings, none containing a comma or newline                                              |
-| `mcpServers`            | `Record<name, McpServerSpec>`                                      | name matches `[A-Za-z0-9_-]{1,64}`; each spec needs `command` (stdio) or `url` (http/sse); `type` ∈ `stdio\|http\|sse` |
-| `additionalDirectories` | `string[]`                                                         | each an absolute path that already exists on disk                                                                      |
-| `settingSources`        | `("user"\|"project"\|"local")[]`                                   | Claude Code only                                                                                                       |
-| `permissionMode`        | `"default"\|"acceptEdits"\|"plan"\|"bypassPermissions"\|"dontAsk"` | Claude Code only                                                                                                       |
-| `maxTurns`              | integer                                                            | 1–1000                                                                                                                 |
-| `env`                   | `EnvPolicy`                                                        | see below                                                                                                              |
-| `enforcement`           | `"strict"\|"best-effort"`                                          | default `"strict"`: a limitation the runtime reports blocks the launch (`configuration` failure class, never retried)  |
+| Key                     | Type                                                               | Validation                                                                                                                                                                         |
+| ----------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `filesystem`            | `"read-only" \| "workspace-write" \| "unrestricted"`               | one of the three                                                                                                                                                                   |
+| `tools`                 | `{ allow?, deny? }`                                                | each a list of ≤200 non-empty strings, none containing a comma or newline                                                                                                          |
+| `mcpServers`            | `Record<name, McpServerSpec>`                                      | name matches `[A-Za-z0-9_-]{1,64}`; each spec needs `command` (stdio) or `url` (http/sse); `type` ∈ `stdio\|http\|sse`; each `env`/`headers` key matches `[A-Za-z_][A-Za-z0-9_-]*` |
+| `additionalDirectories` | `string[]`                                                         | each an absolute path that already exists on disk                                                                                                                                  |
+| `settingSources`        | `("user"\|"project"\|"local")[]`                                   | Claude Code only                                                                                                                                                                   |
+| `permissionMode`        | `"default"\|"acceptEdits"\|"plan"\|"bypassPermissions"\|"dontAsk"` | Claude Code only                                                                                                                                                                   |
+| `maxTurns`              | integer                                                            | 1–1000                                                                                                                                                                             |
+| `env`                   | `EnvPolicy`                                                        | see below                                                                                                                                                                          |
+| `enforcement`           | `"strict"\|"best-effort"`                                          | default `"strict"`: a limitation the runtime reports blocks the launch (`configuration` failure class, never retried)                                                              |
 
 `EnvPolicy`:
 
-| Key              | Type                     | Validation                                                                                                                                                                                                                                   |
-| ---------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `inherit`        | `"all"\|"minimal"`       | default `"all"`                                                                                                                                                                                                                              |
-| `allow` / `deny` | `string[]`               | each an env-var name, optionally with one trailing `*`                                                                                                                                                                                       |
-| `set`            | `Record<string, string>` | keys must be valid env-var names and may not name a reserved Argus control variable (`ARGUS_TOKEN`, `ARGUS_WEBHOOK_URL`, `ARGUS_SIGNAL_*`, `ARGUS_RUN_ID`, `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`, `ARGUS_RESULT_FILE`, `ARGUS_ARTIFACT_DIR`) |
+| Key              | Type                     | Validation                                                                                                                                                                                                                                                                       |
+| ---------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inherit`        | `"all"\|"minimal"`       | default `"all"`                                                                                                                                                                                                                                                                  |
+| `allow` / `deny` | `string[]`               | each an env-var name, optionally with one trailing `*`                                                                                                                                                                                                                           |
+| `set`            | `Record<string, string>` | keys must be valid env-var names and may not name a reserved Argus control variable (`ARGUS_TOKEN`, `ARGUS_WEBHOOK_URL`, `ARGUS_SIGNAL_*`, `ARGUS_RUN_ID`, `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`, `ARGUS_RESULT_FILE`, `ARGUS_ARTIFACT_DIR`, `ARGUS_STEP_NAME`, `ARGUS_RUNTIME`) |
 
 `PhaseCheck` (discriminated on `kind`; each kind accepts only its own fields
 plus the common `label`, ≤120 chars):
@@ -1522,10 +1523,12 @@ own.
 ### `GET /api/runs/:id/invocation`
 
 What Argus actually launched for a run: the exact executable and argv, the
-environment **by name** (never by value), the resolved capability profile and
-what the runtime couldn't enforce of it, the config files materialized for
-the invocation, the artifact directory, the deadline, and the repository
-state (`git rev-parse HEAD`) it started against. Returns the
+environment **by name** (never by value), the resolved capability profile —
+with `env.set` and every MCP server's `env`/`headers` values replaced by
+`"<redacted>"` (keys kept; the materialized `mcp.json` still carries the real
+values) — and what the runtime couldn't enforce of it, the config files
+materialized for the invocation, the artifact directory, the deadline, and
+the repository state (`git rev-parse HEAD`) it started against. Returns the
 `AgentInvocationRecord`, or `404` when the run predates invocation records or
 is unknown. See [docs/HARNESS.md § 8](HARNESS.md#8-observability--reproducibility)
 for the full shape and an example.
@@ -1544,6 +1547,13 @@ for the full shape and an example.
       "phaseId": "build",
       "runId": "…",
       "detail": "timed out after 900s"
+    },
+    {
+      "at": "…",
+      "kind": "step.exit-mismatch",
+      "phaseId": "build",
+      "runId": "…",
+      "detail": "signalled completed, then exited 1"
     },
     { "at": "…", "kind": "phase.failed", "phaseId": "build", "detail": "exit-code: exit code 1" },
     {
@@ -1593,8 +1603,12 @@ pipeline. A torn final line (the only failure mode of an append) costs exactly
 one record. An unknown or path-escaping id returns an empty list.
 
 `step.timed-out` marks a step killed at its deadline (live, or discovered on
-reconcile after a restart); `phase.verifying` / `phase.verified` bracket
-Argus's own checks running over a phase's work, once every step is in.
+reconcile after a restart); `step.exit-mismatch` marks a step whose completion
+signal was accepted as `completed` but whose process then exited non-zero —
+the phase is not unwound over it, but the run carries both
+`outcome: "succeeded"` and the non-zero `exitCode`; `phase.verifying` /
+`phase.verified` bracket Argus's own checks running over a phase's work, once
+every step is in.
 
 ## Sentinel
 

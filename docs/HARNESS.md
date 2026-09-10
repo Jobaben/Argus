@@ -95,6 +95,17 @@ code phase by phase:
   deadline.** A runtime's `SpawnPlan.env` is one _layer_ `buildChildEnv`
   overlays; enforcement of `timeoutSeconds` (SIGTERM/SIGKILL) is the engine's
   own `setTimeout`/reconcile logic, identical for every runtime.
+- **The deadline clock starts at spawn, not when the wave is planned.** A step
+  can sit queued behind the concurrency semaphore for a while; `deadlineAt`
+  (and `run.startedAt`) are computed once the slot is held and the invocation
+  is fully prepared — immediately before `deps.spawn` is called — so a step's
+  timeout budget is never eaten by however long it waited for a slot.
+- **Shutdown waits, briefly, for detached continuations.** Every
+  `launchStep`/`queueVerification` continuation that runs off the request path
+  is tracked in a set the engine can await; `Engine.drain()` resolves once
+  that set is empty, and server shutdown races it against a 5-second timeout
+  so an in-flight launch or verification gets a chance to persist its result
+  instead of being cut off mid-write.
 
 ## 2. Agent completion ≠ phase success
 
@@ -125,14 +136,26 @@ succeeded
 
 `PhaseFailureClass` (in `@argus/contracts`) is the closed set:
 
-| Class           | Meaning                                                                                                                                                                                          | Retried by default?                                     |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------- |
-| `spawn`         | The process never started — preparing the invocation threw, or `deps.spawn` itself threw. `run.termination = "spawn-failed"`.                                                                    | **Yes**                                                 |
-| `exit-code`     | The process ended (any way) without Argus's own timeout and without the agent signalling failure.                                                                                                | **Yes**                                                 |
-| `signal`        | The agent's _own_ completion signal declared `failed` or `blocked` — it considered the work and reported on it. (Named for the pipeline `signal` the agent posts, **not** an OS process signal.) | No — opt in via `retry.retryOn`                         |
-| `timeout`       | Argus killed the process at its `deadlineAt`.                                                                                                                                                    | No — opt in                                             |
-| `verification`  | Every step reported success, but a `checks` entry failed.                                                                                                                                        | No — opt in                                             |
-| `configuration` | The declared capability profile could not be enforced under strict enforcement — the step never launched with more capability than its author asked for.                                         | **Never** — the definition is what's wrong, not the run |
+| Class           | Meaning                                                                                                                                                                                                                           | Retried by default?                                     |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `spawn`         | The process never started — preparing the invocation threw, `deps.spawn` itself threw, or (found by `reconcile()` after a restart) a step recorded `running` had no process behind it at all. `run.termination = "spawn-failed"`. | **Yes**                                                 |
+| `exit-code`     | The process ended (any way) without Argus's own timeout and without the agent signalling failure.                                                                                                                                 | **Yes**                                                 |
+| `signal`        | The agent's _own_ completion signal declared `failed` or `blocked` — it considered the work and reported on it. (Named for the pipeline `signal` the agent posts, **not** an OS process signal.)                                  | No — opt in via `retry.retryOn`                         |
+| `timeout`       | Argus killed the process at its `deadlineAt`.                                                                                                                                                                                     | No — opt in                                             |
+| `verification`  | Every step reported success, but a `checks` entry failed.                                                                                                                                                                         | No — opt in                                             |
+| `configuration` | The declared capability profile could not be enforced under strict enforcement — the step never launched with more capability than its author asked for.                                                                          | **Never** — the definition is what's wrong, not the run |
+
+The class is written onto the phase's payload (`withFailureClass`) whenever a
+phase fails, whether or not that failure ends up scheduling a retry — a
+terminal failure with no attempts left still names which of the six classes
+it was, never just "failed".
+
+**A completion signal is authoritative over the exit code that follows it.**
+Once a step's Stop hook (or the reconcile fallback) reports `completed`, the
+phase has already advanced on it; a process that then exits non-zero does not
+unwind that decision. The contradiction is recorded, not hidden: the run
+carries both `outcome: "succeeded"` and the non-zero `exitCode`, and the
+journal gets a `step.exit-mismatch` entry. See §10.
 
 `RetryPolicy.retryOn` defaults to `["spawn", "exit-code"]` — the two classes
 that plausibly reflect a transient infrastructure hiccup rather than a
@@ -191,11 +214,22 @@ pipeline can set an `env` policy once and one review phase can add
 - `filesystem: "read-only"` → `--disallowedTools` gets `Edit(//<cwd>/**)` and
   `Edit(//<dir>/**)` for every `additionalDirectories` entry, **plus** `Bash`
   itself — unless `tools.allow` already names specific `Bash(...)` rules, in
-  which case only those survive and the bare rule is left alone. If
-  `tools.allow` contains a **bare** `Bash` (or `Bash(*)` / `Bash(*:*)`) rule,
-  Claude Code cannot be made read-only for shell commands at all — that is
-  reported as its own limitation string rather than the generic one:
+  which case only those survive and the bare rule is left alone. An
+  `Edit(path)` deny rule is what actually does the work here: Claude Code
+  consults it for every built-in file-editing tool — `Edit`, `Write`,
+  `MultiEdit`, `NotebookEdit` — not only its own `Edit`; a `Write(path)` rule
+  is accepted but never consulted, so `Edit(...)` is the one shape that denies
+  writes under these roots. If `tools.allow` contains a **bare** `Bash` (or
+  `Bash(*)` / `Bash(*:*)`) rule, Claude Code cannot be made read-only for shell
+  commands at all — that is reported as its own limitation string rather than
+  the generic one:
   `"read-only cannot prevent shell writes while Bash is allowed unrestricted"`.
+  A root (`cwd` or an `additionalDirectories` entry) containing a comma or
+  newline can't be expressed in the comma-joined `--disallowedTools` flag at
+  all — that, too, is reported as its own limitation
+  (`"read-only cannot be expressed for a path containing a comma: ..."`),
+  which under strict enforcement (the default) refuses the launch rather than
+  silently leaving that root writable.
 - `tools.allow` / `tools.deny` → `--allowedTools` / `--disallowedTools`
   (comma-joined; a rule may not itself contain a comma).
 - `mcpServers` (present, even `{}`) → written to
@@ -239,20 +273,28 @@ pipeline can set an `env` policy once and one review phase can add
 
 - `filesystem` → `--sandbox` (`read-only` / `workspace-write` /
   `danger-full-access` for `"unrestricted"`).
-- `additionalDirectories` (plus the artifact directory, when
-  `filesystem: "workspace-write"`) → `-c
-sandbox_workspace_write.writable_roots=[...]`.
+- `additionalDirectories` (plus the artifact directory, when the **effective**
+  sandbox is `workspace-write`) → `-c
+sandbox_workspace_write.writable_roots=[...]`. "Effective" means the
+  profile's own `filesystem`, else `ARGUS_CODEX_SANDBOX`, else
+  `workspace-write` — the same resolution order that decides which sandbox the
+  process actually runs under, so the artifact directory is writable whenever
+  the run is, whether that came from the profile or the operator's own
+  default.
 - `mcpServers` → one `-c mcp_servers.<name>.<field>=<value>` per field
-  (`type`, `command`, `args`, `env.*`, `url`, `headers.*`), TOML-quoted.
+  (`type`, `command`, `args`, `env.*`, `url`, `headers.*`), TOML-quoted. `env`
+  and `headers` keys are restricted to `[A-Za-z_][A-Za-z0-9_-]*` at validation
+  time (same as the record-shape check every runtime's spec goes through) —
+  Codex receives them unquoted inside the `-c` override.
 
 ### Limitations, per runtime
 
-| Runtime         | What it cannot do                                                                                                                                                                                                                                                                                                                                             |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Claude Code** | Bash stays a bare shell under `read-only` unless `tools.allow` scopes it to specific commands — Claude Code has no OS-level sandbox, only tool permission rules.                                                                                                                                                                                              |
-| **Codex**       | `mcpServers` narrows nothing: there is no flag scoping a run to _only_ the declared servers, so whatever is in `config.toml` stays reachable alongside them (`"Codex cannot exclude MCP servers configured in config.toml"`). A `read-only` sandbox with an artifact directory also can't write artifacts (`"read-only sandbox prevents writing artifacts"`). |
-| **OpenCode**    | Enforces **none** of `CapabilityProfile`'s keys — every key a profile sets becomes its own limitation string (`"OpenCode cannot enforce \"filesystem\" for this invocation"`, one per key present).                                                                                                                                                           |
-| **Qwen Code**   | Same as OpenCode: zero keys supported, every declared key becomes a limitation.                                                                                                                                                                                                                                                                               |
+| Runtime         | What it cannot do                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Claude Code** | Bash stays a bare shell under `read-only` unless `tools.allow` scopes it to specific commands — Claude Code has no OS-level sandbox, only tool permission rules.                                                                                                                                                                                                                                                                                                           |
+| **Codex**       | `mcpServers` narrows nothing: there is no flag scoping a run to _only_ the declared servers, so whatever is in `config.toml` stays reachable alongside them (`"Codex cannot exclude MCP servers configured in config.toml"`). A `read-only` **effective** sandbox (declared, or inherited from `ARGUS_CODEX_SANDBOX` when the profile leaves `filesystem` unset) with an artifact directory also can't write artifacts (`"read-only sandbox prevents writing artifacts"`). |
+| **OpenCode**    | Enforces **none** of `CapabilityProfile`'s keys — every key a profile sets becomes its own limitation string (`"OpenCode cannot enforce \"filesystem\" for this invocation"`, one per key present).                                                                                                                                                                                                                                                                        |
+| **Qwen Code**   | Same as OpenCode: zero keys supported, every declared key becomes a limitation.                                                                                                                                                                                                                                                                                                                                                                                            |
 
 `unsupportedCapabilities()` (in `runtimes/types.ts`) is what produces those
 strings — it is handed each runtime's list of keys it _can_ map (empty for
@@ -325,7 +367,10 @@ always applied; there is nothing to "fail to enforce" here).
   freshly-computed values, never be inherited from Argus's own process (which
   would let a nested Argus child impersonate or interfere with the run that
   spawned it): `ARGUS_SIGNAL_TOKEN`, `ARGUS_SIGNAL_URL`, `ARGUS_RESULT_FILE`,
-  `ARGUS_ARTIFACT_DIR`, `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`, `ARGUS_RUN_ID`.
+  `ARGUS_ARTIFACT_DIR`, `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`, `ARGUS_RUN_ID`,
+  `ARGUS_STEP_NAME`, and `ARGUS_RUNTIME` (the hook keys its Stop-payload
+  handling off this one, so a value inherited from a different invocation
+  would misparse the signal).
 
 The invocation record never stores a variable's _value_ — only names
 (`envNames`, sorted; `envStripped`, sorted). Reconstructing what Argus ran
@@ -335,7 +380,18 @@ never means reconstructing a secret.
 
 Every phase attempt gets its own directory for file artifacts, distinct from
 the payload artifacts `produces`/`{{artifacts.<name>}}` already carry (see
-API.md § Weave):
+API.md § Weave).
+
+A phase's `id` is more than a label: it names that directory, and the
+`changed-files` baseline file below, so it is validated at save time as one
+path segment — `^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$`, 1-80 chars, never `.` or
+`..`. `safeSegment()` (`harness/invocation.ts`) sanitizes both the instance id
+and the phase id again at every directory join — any character outside
+`[A-Za-z0-9._-]` becomes `_`, and a segment that would resolve to "here" or
+"up" becomes a literal `_._`/`_.._` — a second line of defense should
+validation ever be bypassed, not a substitute for it.
+
+The directory itself:
 
 - `ARGUS_ARTIFACT_DIR` — set on every step's environment, pointing at
   `~/.claude/argus/artifacts/<instanceId>/<phaseId>/`. Argus creates the
@@ -373,12 +429,12 @@ declared work actually happened — run once every step of the phase has
 reported success (or been recovered as successful — §2), never before, and
 never derived from the agent's own words.
 
-| Kind            | Fields                                                                                                                        | Limit / semantics                                                                                                                                                                                                                                                                                        |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `command`       | `run` (string, ≤4000 chars), `label?`, `cwd?` (resolved against the phase's `cwd`), `timeoutSeconds?` (1–86400; default 600s) | Runs through the shell in `cwd`; exit `0` passes. Combined stdout+stderr is capped at 16 KiB in memory, and only the last 4000 chars survive into the `CheckResult.output`. Runs with Argus's own environment, minus `ARGUS_TOKEN`/`ARGUS_WEBHOOK_URL`. A timeout kills the whole process group (POSIX). |
-| `artifact`      | `path` (relative, no `..`, no absolute), `label?`, `minBytes?` (≥0, default 1)                                                | Resolved against the phase's `ARGUS_ARTIFACT_DIR`. Fails if the phase has no artifact directory, the path escapes it, the file is missing, or it's smaller than `minBytes`.                                                                                                                              |
-| `file`          | same fields as `artifact`                                                                                                     | Resolved against the phase's own `cwd` instead of the artifact directory — for a file the agent was supposed to leave in the working tree itself.                                                                                                                                                        |
-| `changed-files` | `label?`, `allow?` (globs), `deny?` (globs), `requireChanges?` (boolean)                                                      | See below.                                                                                                                                                                                                                                                                                               |
+| Kind            | Fields                                                                                                                        | Limit / semantics                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `command`       | `run` (string, ≤4000 chars), `label?`, `cwd?` (resolved against the phase's `cwd`), `timeoutSeconds?` (1–86400; default 600s) | Runs through the shell in `cwd`; exit `0` passes. Combined stdout+stderr is capped at 16 KiB in memory, and only the last 4000 chars survive into the `CheckResult.output`. Runs under the phase's own resolved `EnvPolicy` (pipeline → phase capabilities — the same merge the phase's steps ran under), not Argus's full environment. At the deadline: SIGTERM to the whole process group (POSIX), SIGKILL after a grace period (`killGraceMs`, default 5s) if it's still alive, and a failed verdict ("process did not exit") after another such grace regardless — a command that traps signals or leaves a grandchild behind can never hang verification. |
+| `artifact`      | `path` (relative, no `..`, no absolute), `label?`, `minBytes?` (≥0, default 1)                                                | Resolved against the phase's `ARGUS_ARTIFACT_DIR`. Uses `lstat`, so it does not follow a symlink: fails if the phase has no artifact directory, the path escapes it, the file is missing, **is a symbolic link**, or it's smaller than `minBytes` — a symlink to some large file elsewhere is never mistaken for the artifact the phase was asked to produce.                                                                                                                                                                                                                                                                                                  |
+| `file`          | same fields as `artifact`                                                                                                     | Resolved against the phase's own `cwd` instead of the artifact directory — for a file the agent was supposed to leave in the working tree itself.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `changed-files` | `label?`, `allow?` (globs), `deny?` (globs), `requireChanges?` (boolean)                                                      | See below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
 A phase may declare up to 50 checks (`MAX_CHECKS`); they all run, always —
 verification never stops at the first failure, because the full report is the
@@ -433,18 +489,42 @@ signal; a failing one fails the phase under the `verification` class, with
 the report kept as `phase.verification` — evidence, not just a verdict.
 
 **Changed-files baseline.** When a phase declares a `changed-files` check,
-Argus snapshots the working tree (`git status --porcelain`, plus a SHA-256 of
-each dirty file's bytes) at the _start_ of the attempt, before any step
+Argus snapshots the working tree (`git status --porcelain=v1 -z
+--untracked-files=all`) at the _start_ of the attempt, before any step
 launches, and writes it beside the invocation records
 (`~/.claude/argus/invocations/<instanceId>/<phaseId>.<attempt>.baseline.json`
-— keyed by instance, unlike the per-run invocation directories). At
-verification time it snapshots again and reports the paths whose identity
-differs — added, modified, deleted, or newly dirty. **A file that was already
-dirty before the phase started and comes out with an identical hash is not
-"changed"** — only a path whose baseline/current identity actually differs
-counts, so a phase run against an already-dirty tree isn't credited (or
-blamed) for pre-existing changes it never touched. `requireChanges: true`
-fails a phase that changed nothing at all.
+— keyed by instance, unlike the per-run invocation directories). Each dirty
+path's identity is **content-only**: the SHA-256 of its bytes, or
+`size:<bytes>:<mtimeMs>` for a file over 8 MiB (`MAX_HASH_BYTES`) or a
+symlink — too large or too risky to hash — or `deleted`. **Staging a file
+(`git add`) is deliberately not part of it**: only the bytes (or the file's
+presence) change identity, so an agent that stages without editing is not
+credited with a change, and one that edits after staging still is.
+
+At verification time Argus snapshots again and reports every path whose
+identity differs between the two snapshots — added, modified, deleted, or
+newly dirty. **A file that was already dirty before the phase started and
+comes out with an identical hash is not "changed"** — only a path whose
+baseline/current identity actually differs counts, so a phase run against an
+already-dirty tree isn't credited (or blamed) for pre-existing changes it
+never touched.
+
+**Commits the agent made are included, not just the working tree.** A commit
+leaves a clean tree, which the working-tree diff alone can't see — so
+whenever `HEAD` moved between the baseline and the current snapshot, Argus
+additionally runs `git diff --name-only <baseline-head> <current-head>` (or,
+when the attempt started with no commits at all, `git ls-tree -r --name-only
+<current-head>` over the full tree) and folds those paths into the changed
+set too. If that diff can't be computed, the check **fails closed** — it
+would rather report "cannot be evaluated" than silently ignore commits the
+agent made.
+
+`requireChanges: true` fails a phase that changed nothing at all. A dirty
+working tree with more than 5000 entries (`MAX_SNAPSHOT_ENTRIES`) is recorded
+as `truncated` at snapshot time instead of silently cut off, and a
+`changed-files` check against a truncated baseline or current snapshot fails
+outright ("the working tree has more than 5000 dirty paths; changed-files
+cannot be evaluated") rather than pass on a set it never fully saw.
 
 **Glob semantics.** `allow`/`deny` globs are matched against each changed
 path with Node's own `path.matchesGlob`, after normalizing to forward slashes
@@ -466,11 +546,25 @@ every step in it); absent on both means no limit. A limit turns into a
   group a kill signal, and — after a grace period (`killGraceMs`, default
   5000ms) if it's still alive — escalates to `SIGKILL`. The phase (and any
   sibling steps still running in it) fails under the `timeout` class.
+- **Only a step confirmed still running is stamped.** Both `expireStep` and
+  the plain `failStep` it calls re-read the run and the instance under the
+  instance lock before writing anything; a step whose completion signal
+  already landed is left exactly as that signal decided, never overwritten as
+  timed out just because its timer happened to fire around the same moment.
 - **Enforcement survives a restart.** `deadlineAt` is read back off the `Run`
   record by `reconcile()`: an adopted run already past its deadline is killed
   on the very next reconcile tick, exactly as if the original timer had fired
   — the deadline is a property of the run, not of the process that happened
   to be watching it.
+- **A step whose process never started at all gets a different heal.** If
+  Argus stops between recording a step as `running` and actually starting its
+  process, there is no `deadlineAt` to enforce — nothing will ever kill a
+  process that doesn't exist. `reconcile()`'s heal pass instead recognizes the
+  step directly (no run record yet, or one with `pid: null` and status
+  `running`, and not a run this process itself is mid-launch of) and fails it
+  under the `spawn` class with a `spawn-failed` run record and the reason
+  "Argus stopped before the step's process was started" — retryable by
+  default, since nothing about the step's own work was ever at fault.
 
 ```json
 {
@@ -502,7 +596,11 @@ or is unknown):
   "cwd": "/path/to/repo",
   "envNames": ["HOME", "PATH", "ANTHROPIC_API_KEY", "ARGUS_ARTIFACT_DIR", "…"],
   "envStripped": ["ARGUS_TOKEN", "ARGUS_WEBHOOK_URL", "AWS_SECRET_ACCESS_KEY"],
-  "capabilities": { "filesystem": "workspace-write", "maxTurns": 40 },
+  "capabilities": {
+    "filesystem": "workspace-write",
+    "maxTurns": 40,
+    "mcpServers": { "docs": { "command": "docs-mcp", "env": { "DOCS_TOKEN": "<redacted>" } } }
+  },
   "limitations": [],
   "materializedFiles": ["/home/user/.claude/argus/invocations/run_8f2a/settings.json"],
   "artifactDir": "/home/user/.claude/argus/artifacts/inst_71c0/implement",
@@ -514,18 +612,28 @@ or is unknown):
 }
 ```
 
-Values of environment variables never appear — only names. `limitations` is
-what the chosen runtime could not enforce of the declared profile; empty
-means every declared key was honoured (or no profile was declared at all).
+Values of environment variables never appear in `envNames`/`envStripped` —
+only names. Within `capabilities`, the same rule applies to every value that
+could hold a secret: `env.set`'s values and each MCP server's `env`/`headers`
+values are replaced with `"<redacted>"` — keys are kept (so the record still
+shows _that_ `DOCS_TOKEN` was set, just not to what), and every other
+`CapabilityProfile` key (`filesystem`, `tools`, `mcpServers`'s `command`/
+`args`/`url`, `additionalDirectories`, …) is written verbatim, since none of
+those can carry a secret. The materialized `mcp.json` a runtime actually reads
+still carries the real values — an agent needs them to work — this record
+just isn't where they get archived. `limitations` is what the chosen runtime
+could not enforce of the declared profile; empty means every declared key was
+honoured (or no profile was declared at all).
 
 **Journal kinds** (`server/src/sources/journal.ts`, append-only, per
 instance) that this feature adds:
 
-| Kind              | When                                                                                                |
-| ----------------- | --------------------------------------------------------------------------------------------------- |
-| `step.timed-out`  | A step's process was killed at its `deadlineAt` (live, or discovered on reconcile after a restart). |
-| `phase.verifying` | Every step of a phase reported success and Argus started running its `checks`.                      |
-| `phase.verified`  | The checks finished — `passed`, or `failed` naming which checks and why.                            |
+| Kind                 | When                                                                                                                                                                                                                                        |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `step.timed-out`     | A step's process was killed at its `deadlineAt` (live, or discovered on reconcile after a restart).                                                                                                                                         |
+| `step.exit-mismatch` | A step's completion signal was accepted as `completed`, and its process then exited non-zero. The phase is not unwound — the signal already decided — but the run carries both `outcome: "succeeded"` and the non-zero `exitCode`. See §10. |
+| `phase.verifying`    | Every step of a phase reported success and Argus started running its `checks`.                                                                                                                                                              |
+| `phase.verified`     | The checks finished — `passed`, or `failed` naming which checks and why.                                                                                                                                                                    |
 
 **`Run.termination`** (`@argus/contracts`) records _how_ a run ended when
 Argus knows more than the exit code: `"exited"` (its own doing), `"timed-out"`
@@ -724,3 +832,14 @@ choices are legible:
 - **No API keys live in Argus.** Every runtime authenticates itself exactly as
   it would run outside Argus; the environment policy controls whether an
   existing credential variable reaches the child, never issues one.
+- **A completion signal can be right about the phase and wrong about the exit
+  code, and Argus does not undo the phase over it.** If a step's Stop hook (or
+  the reconcile fallback) reports `completed` and the process then exits
+  non-zero — a hook that fires before the CLI's own cleanup fails, for
+  instance — the phase has already advanced on the signal, and downstream work
+  may already be running against it; Argus does not unwind that decision,
+  because the signal is what a later step or a person already saw. The
+  contradiction is not hidden, though: the run carries both
+  `outcome: "succeeded"` and the non-zero `exitCode`, and the journal gets a
+  `step.exit-mismatch` entry naming the phase and run, for anyone reconciling
+  the two by hand.

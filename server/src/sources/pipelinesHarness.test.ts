@@ -16,8 +16,12 @@ beforeEach(() => {
   process.env.ARGUS_CLAUDE_HOME = home;
 });
 
+// A static import: the store resolves its file from the per-test home lazily,
+// and a cache-busting re-import would hide this file's execution from coverage.
+import * as pipelinesMod from "./pipelines.js";
+
 async function fresh() {
-  return import(`./pipelines.js?${Math.random()}`);
+  return pipelinesMod as any;
 }
 
 const goodInput = (over: Record<string, unknown> = {}) => ({

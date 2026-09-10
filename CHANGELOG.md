@@ -38,8 +38,10 @@ All notable changes to Argus are documented here. The format follows
   narrowest-wins by key (step ▸ phase ▸ pipeline), asks the runtime to map it
   onto its own flags and config files, and writes an `AgentInvocationRecord`
   beside the run — bin, argv, environment variable **names** (never values),
-  the profile as applied, what the runtime couldn't enforce, materialized
-  config files, the artifact directory, the deadline, and `git rev-parse HEAD`
+  the profile as applied (secret-bearing values under `env.set` and each MCP
+  server's `env`/`headers` redacted, keys kept), what the runtime couldn't
+  enforce, materialized config files, the artifact directory, the deadline,
+  and `git rev-parse HEAD`
   — readable at `GET /api/runs/:id/invocation`. `harness/childEnv.ts` is now
   the one place a child's environment is assembled, so Argus's own secrets
   (`ARGUS_TOKEN`, `ARGUS_WEBHOOK_URL`) and per-invocation identifiers are
@@ -57,10 +59,11 @@ All notable changes to Argus are documented here. The format follows
   the full `VerificationReport` as evidence. Five new failure classes
   (`spawn`, `exit-code`, `signal`, `timeout`, `verification`, plus the
   never-retried `configuration`) replace the old binary success/failure split
-  on `PhaseFailurePayload.failureClass`, and three journal kinds
-  (`step.timed-out`, `phase.verifying`, `phase.verified`) narrate the new
-  states. See [docs/HARNESS.md](docs/HARNESS.md) for the full reference,
-  including a worked five-phase pipeline.
+  on `PhaseFailurePayload.failureClass`, and four journal kinds
+  (`step.timed-out`, `step.exit-mismatch`, `phase.verifying`,
+  `phase.verified`) narrate the new states. See
+  [docs/HARNESS.md](docs/HARNESS.md) for the full reference, including a
+  worked five-phase pipeline.
 - **Outcome-based routing: a phase can decide what runs next.** A phase may
   declare a `result` — an artifact name and a small validated schema — and a
   dependency may carry a `when` condition over it, so `publish` runs only if

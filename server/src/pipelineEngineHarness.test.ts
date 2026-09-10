@@ -15,13 +15,25 @@ beforeEach(() => {
   process.env.ARGUS_CLAUDE_HOME = home;
 });
 
+// Static imports: every module resolves its paths lazily from the per-test
+// home, so a fresh module instance per test buys nothing — and a cache-busting
+// query string makes the coverage tool see only one instance's execution.
+import * as engineMod from "./pipelineEngine.js";
+import * as pipelinesMod from "./sources/pipelines.js";
+import * as instancesMod from "./sources/instances.js";
+import * as runsMod from "./sources/runs.js";
+import * as journalMod from "./sources/journal.js";
+
 async function load() {
-  const engine = await import(`./pipelineEngine.js?${Math.random()}`);
-  const pipelines = await import(`./sources/pipelines.js?${Math.random()}`);
-  const instances = await import(`./sources/instances.js?${Math.random()}`);
-  const runsSrc = await import(`./sources/runs.js?${Math.random()}`);
-  const journalSrc = await import(`./sources/journal.js?${Math.random()}`);
-  return { engine, pipelines, instances, runsSrc, journalSrc };
+  // Loosely typed, as the dynamic imports these replaced were: the tests read
+  // the modules' shapes at runtime and assert on persisted records.
+  return {
+    engine: engineMod as any,
+    pipelines: pipelinesMod as any,
+    instances: instancesMod as any,
+    runsSrc: runsMod as any,
+    journalSrc: journalMod as any,
+  };
 }
 
 async function waitFor(cond: () => boolean | Promise<boolean>, timeoutMs = 3000): Promise<void> {
