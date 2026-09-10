@@ -114,6 +114,40 @@ export function isLoopbackUrl(raw: string): boolean {
   }
 }
 
+/**
+ * A wildcard bind has no address to dial back on, so the self URL uses the
+ * loopback of the matching family — which a wildcard socket is always listening
+ * on too.
+ */
+const WILDCARD_BINDS = new Map([
+  ["0.0.0.0", "127.0.0.1"],
+  ["::", "[::1]"],
+  ["[::]", "[::1]"],
+]);
+
+/** An IPv6 literal needs brackets in a URL authority; a hostname or IPv4 has
+ *  no colon, so this is a no-op for them. */
+function asUrlHost(host: string): string {
+  if (host.startsWith("[")) return host;
+  return host.includes(":") ? `[${host}]` : host;
+}
+
+/**
+ * The base URL Argus reaches *itself* on — the address the completion-signal
+ * hook posts to from inside a headless run.
+ *
+ * It has to follow the bind address rather than assume loopback. With
+ * ARGUS_HOST set to a LAN interface the listening socket exists only there, so
+ * a signal posted to 127.0.0.1 is refused outright and every pipeline step ends
+ * as "run ended without emitting a completion signal" — the work happens and
+ * the agent's own verdict is thrown away.
+ */
+export function selfBaseUrl(config: Pick<ArgusConfig, "host" | "port">): string {
+  const host = config.host.trim();
+  const target = WILDCARD_BINDS.get(host.toLowerCase()) ?? asUrlHost(host);
+  return `http://${target}:${config.port}`;
+}
+
 export function loadConfig(): ArgusConfig {
   return {
     port: intFromEnv("ARGUS_PORT", 7777),

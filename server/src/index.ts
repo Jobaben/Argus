@@ -11,7 +11,13 @@ import {
   checkAll as checkPrereqs,
   preflight as preflightPrereqs,
 } from "./setup/prereqs.js";
-import { assertBindIsSafe, assertPeersAreSafe, describeListenError, loadConfig } from "./config.js";
+import {
+  assertBindIsSafe,
+  assertPeersAreSafe,
+  describeListenError,
+  loadConfig,
+  selfBaseUrl,
+} from "./config.js";
 import { isUpgradeAllowed } from "./security.js";
 import { VERSION } from "./version.js";
 import {
@@ -86,7 +92,7 @@ const engine = createEngine({
   now: () => new Date(),
   newId: () => randomUUID(),
   spawn: defaultPipelineSpawn,
-  signalUrlBase: `http://127.0.0.1:${PORT}`,
+  signalUrlBase: selfBaseUrl(config),
   maxConcurrent: config.maxConcurrentRuns,
   tickMs: config.schedulerTickMs,
   tailer,
