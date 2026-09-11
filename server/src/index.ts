@@ -410,6 +410,9 @@ async function shutdown() {
   await stopWatchingSessions();
   await scheduler.stop();
   await tailer.stop();
+  // Let deferred launches and verifications land: a half-written instance is
+  // what an unclean stop looks like to the next boot's reconcile pass.
+  await Promise.race([engine.drain(), new Promise((r) => setTimeout(r, 5000))]);
   await killLiveRuns();
   if (wss) {
     for (const client of wss.clients) client.terminate();

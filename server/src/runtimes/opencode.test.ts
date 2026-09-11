@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { deriveOpencodeActivity, opencodeRuntime, parseOpencodeEnvelope } from "./opencode.js";
+import type { CapabilityRequest } from "./types.js";
 
 const RESET = { ...process.env };
 function withEnv(vars: Record<string, string | undefined>, fn: () => void): void {
@@ -149,4 +150,49 @@ test("the model picker is free-text unless a machine pins its own", () => {
   withEnv({ ARGUS_OPENCODE_MODELS: "llama/qwen3-27b, ollama/devstral" }, () => {
     assert.deepEqual(opencodeRuntime.models(), ["llama/qwen3-27b", "ollama/devstral"]);
   });
+});
+
+const CAP_REQUEST: CapabilityRequest = {
+  profile: {
+    filesystem: "read-only",
+    tools: { allow: ["Read"] },
+    mcpServers: { docs: { command: "docs-mcp" } },
+    additionalDirectories: ["/a"],
+    settingSources: ["project"],
+    permissionMode: "plan",
+    maxTurns: 3,
+  },
+  invocationDir: "/inv",
+  cwd: "/work",
+  artifactDir: null,
+};
+
+test("OpenCode has no per-invocation control at all: every present key is a limitation", () => {
+  const plan = opencodeRuntime.streamPlan({ prompt: "p", capabilities: CAP_REQUEST });
+  assert.deepEqual(plan.limitations, [
+    'OpenCode cannot enforce "filesystem" for this invocation',
+    'OpenCode cannot enforce "tools" for this invocation',
+    'OpenCode cannot enforce "mcpServers" for this invocation',
+    'OpenCode cannot enforce "additionalDirectories" for this invocation',
+    'OpenCode cannot enforce "settingSources" for this invocation',
+    'OpenCode cannot enforce "permissionMode" for this invocation',
+    'OpenCode cannot enforce "maxTurns" for this invocation',
+  ]);
+  assert.deepEqual(plan.files, []);
+  // No argv changes at all: there is nothing OpenCode can be told to do.
+  assert.deepEqual(plan.args, opencodeRuntime.streamPlan({ prompt: "p" }).args);
+});
+
+test("no capabilities means no files/limitations on the plan at all", () => {
+  const plan = opencodeRuntime.batchPlan({ prompt: "p" });
+  assert.equal("files" in plan, false);
+  assert.equal("limitations" in plan, false);
+});
+
+test("an empty profile reports no limitations", () => {
+  const plan = opencodeRuntime.batchPlan({
+    prompt: "p",
+    capabilities: { profile: {}, invocationDir: "/inv", cwd: "/work", artifactDir: null },
+  });
+  assert.deepEqual(plan.limitations, []);
 });

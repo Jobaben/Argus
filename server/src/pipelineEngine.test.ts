@@ -11,11 +11,23 @@ beforeEach(() => {
   process.env.ARGUS_CLAUDE_HOME = home;
 });
 
+// Static imports: every module resolves its paths lazily from the per-test
+// home, so a fresh module instance per test buys nothing — and a cache-busting
+// query string makes the coverage tool see only one instance's execution.
+import * as engineMod from "./pipelineEngine.js";
+import * as pipelinesMod from "./sources/pipelines.js";
+import * as instancesMod from "./sources/instances.js";
+import * as runsMod from "./sources/runs.js";
+import * as totalsMod from "./sources/totals.js";
+
 async function load() {
-  const engine = await import(`./pipelineEngine.js?${Math.random()}`);
-  const pipelines = await import(`./sources/pipelines.js?${Math.random()}`);
-  const instances = await import(`./sources/instances.js?${Math.random()}`);
-  return { engine, pipelines, instances };
+  // Loosely typed, as the dynamic imports these replaced were: the tests read
+  // the modules' shapes at runtime and assert on persisted records.
+  return {
+    engine: engineMod as any,
+    pipelines: pipelinesMod as any,
+    instances: instancesMod as any,
+  };
 }
 
 async function waitFor(cond: () => boolean | Promise<boolean>, timeoutMs = 2000): Promise<void> {
@@ -350,7 +362,7 @@ test("abort returns 409 on an already-terminal instance", async () => {
 
 test("reconcile preserves fail-safe behavior for a successful unsignalled Claude run", async () => {
   const { engine, pipelines, instances } = await load();
-  const runs = await import(`./sources/runs.js?${Math.random()}`);
+  const runs = runsMod;
   await seedPipeline(pipelines);
   const rec = recordingSpawn();
   const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
@@ -374,7 +386,7 @@ test("reconcile preserves fail-safe behavior for a successful unsignalled Claude
 
 test("reconcile completes a successful Codex run whose Stop hook never signalled", async () => {
   const { engine, pipelines, instances } = await load();
-  const runs = await import(`./sources/runs.js?${Math.random()}`);
+  const runs = runsMod;
   await seedPipeline(pipelines, {
     runtime: "codex",
     phases: [
@@ -404,7 +416,7 @@ test("reconcile completes a successful Codex run whose Stop hook never signalled
 
 test("successful Codex fallback still stops at a gate", async () => {
   const { engine, pipelines, instances } = await load();
-  const runs = await import(`./sources/runs.js?${Math.random()}`);
+  const runs = runsMod;
   await seedPipeline(pipelines, {
     runtime: "codex",
     phases: [
@@ -435,7 +447,7 @@ test("successful Codex fallback still stops at a gate", async () => {
 
 test("Codex fallback settles parallel phases without losing either completion", async () => {
   const { engine, pipelines, instances } = await load();
-  const runs = await import(`./sources/runs.js?${Math.random()}`);
+  const runs = runsMod;
   await seedPipeline(pipelines, {
     runtime: "codex",
     phases: [
@@ -486,7 +498,7 @@ test("Codex fallback fails successful processes that report failed or blocked", 
   for (const outcome of ["failed", "blocked"] as const) {
     await t.test(outcome, async () => {
       const { engine, pipelines, instances } = await load();
-      const runs = await import(`./sources/runs.js?${Math.random()}`);
+      const runs = runsMod;
       await seedPipeline(pipelines, {
         runtime: "codex",
         phases: [
@@ -536,7 +548,7 @@ test("Codex fallback fails safely on missing or conflicting outcome markers", as
   ] as const) {
     await t.test(name, async () => {
       const { engine, pipelines, instances } = await load();
-      const runs = await import(`./sources/runs.js?${Math.random()}`);
+      const runs = runsMod;
       await seedPipeline(pipelines, {
         runtime: "codex",
         phases: [
@@ -574,7 +586,7 @@ test("Codex fallback fails safely on missing or conflicting outcome markers", as
 
 test("a delayed or duplicate hook signal cannot advance after Codex fallback", async () => {
   const { engine, pipelines, instances } = await load();
-  const runs = await import(`./sources/runs.js?${Math.random()}`);
+  const runs = runsMod;
   await seedPipeline(pipelines, {
     runtime: "codex",
     phases: [
@@ -615,7 +627,7 @@ test("a delayed or duplicate hook signal cannot advance after Codex fallback", a
 
 test("reconcile records the run error as the failed phase reason", async () => {
   const { engine, pipelines, instances } = await load();
-  const runs = await import(`./sources/runs.js?${Math.random()}`);
+  const runs = runsMod;
   await seedPipeline(pipelines, { runtime: "codex" });
   const rec = recordingSpawn();
   const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
@@ -639,7 +651,7 @@ test("reconcile records the run error as the failed phase reason", async () => {
 
 test("a failed Codex process recovered from its run record retains retry policy", async () => {
   const { engine, pipelines, instances } = await load();
-  const runs = await import(`./sources/runs.js?${Math.random()}`);
+  const runs = runsMod;
   await seedPipeline(pipelines, {
     runtime: "codex",
     phases: [
@@ -679,7 +691,7 @@ test("a failed Codex process recovered from its run record retains retry policy"
 
 test("reconcile tags a restart-interrupted phase as retryable", async () => {
   const { engine, pipelines, instances } = await load();
-  const runs = await import(`./sources/runs.js?${Math.random()}`);
+  const runs = runsMod;
   await seedPipeline(pipelines);
   const rec = recordingSpawn();
   const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
@@ -798,7 +810,7 @@ test("start() proceeds when preflight passes", async () => {
 
 test("startPhase resolves step override over pipeline default", async () => {
   const { engine, pipelines } = await load();
-  const runs = await import(`./sources/runs.js?${Math.random()}`);
+  const runs = runsMod;
   await seedPipeline(pipelines, {
     model: "sonnet",
     phases: [
@@ -825,7 +837,7 @@ test("startPhase resolves step override over pipeline default", async () => {
 
 test("startPhase leaves model unset when neither level defines one", async () => {
   const { engine, pipelines } = await load();
-  const runs = await import(`./sources/runs.js?${Math.random()}`);
+  const runs = runsMod;
   await seedPipeline(pipelines, {
     phases: [
       { id: "only", name: "Only", cwd: home, gated: false, steps: [{ name: "s", prompt: "p" }] },
@@ -840,7 +852,7 @@ test("startPhase leaves model unset when neither level defines one", async () =>
 
 test("onSignal records the run outcome, preserved when the process later exits 0", async () => {
   const { engine, pipelines } = await load();
-  const runs = await import(`./sources/runs.js?${Math.random()}`);
+  const runs = runsMod;
   await seedPipeline(pipelines);
   const rec = recordingSpawn();
   const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
@@ -967,7 +979,7 @@ test("adopt ignores dead-pid runs and leaves the slot free", async () => {
 
 test("a completed step harvests cost/tokens/result from its log envelope", async () => {
   const { engine, pipelines } = await load();
-  const runsSrc = await import(`./sources/runs.js?${Math.random()}`);
+  const runsSrc = runsMod;
   await seedPipeline(pipelines, {
     phases: [
       { id: "only", name: "Only", cwd: home, gated: false, steps: [{ name: "s", prompt: "p" }] },
@@ -995,8 +1007,8 @@ test("a completed step harvests cost/tokens/result from its log envelope", async
 
 test("a completed step folds its cost into the all-time totals", async () => {
   const { engine, pipelines } = await load();
-  const runsSrc = await import(`./sources/runs.js?${Math.random()}`);
-  const totals = await import(`./sources/totals.js?${Math.random()}`);
+  const runsSrc = runsMod;
+  const totals = totalsMod;
   await seedPipeline(pipelines, {
     phases: [
       { id: "only", name: "Only", cwd: home, gated: false, steps: [{ name: "s", prompt: "p" }] },
@@ -1024,7 +1036,7 @@ test("a completed step folds its cost into the all-time totals", async () => {
 
 test("reconcile finalizes an adopted run whose process died, from the log envelope", async () => {
   const { engine, pipelines } = await load();
-  const runsSrc = await import(`./sources/runs.js?${Math.random()}`);
+  const runsSrc = runsMod;
   await seedPipeline(pipelines, {
     phases: [
       { id: "only", name: "Only", cwd: home, gated: false, steps: [{ name: "s", prompt: "p" }] },
@@ -1067,7 +1079,7 @@ test("reconcile finalizes an adopted run whose process died, from the log envelo
 
 test("reconcile finalizes an adopted run with no parseable envelope as failed", async () => {
   const { engine, pipelines } = await load();
-  const runsSrc = await import(`./sources/runs.js?${Math.random()}`);
+  const runsSrc = runsMod;
   await seedPipeline(pipelines, {
     phases: [
       { id: "only", name: "Only", cwd: home, gated: false, steps: [{ name: "s", prompt: "p" }] },

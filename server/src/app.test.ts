@@ -36,6 +36,7 @@ const fakeEngine: Engine = {
   abort: async () => ({ ok: true, code: 200 }),
   reconcile: async () => {},
   adopt: async () => {},
+  drain: async () => {},
 };
 
 // Always-authenticated root stub for tests that target other routes' behavior.
@@ -2485,4 +2486,38 @@ test("routing: the signal route forwards a structured result to the engine", asy
   });
   assert.equal((seen[1] as { result?: unknown }).result, undefined);
   assert.match(String((seen[1] as { resultError: string }).resultError), /could not be parsed/);
+});
+
+test("GET /api/runs/:id/invocation serves the recorded invocation, 404 when none", async () => {
+  const runs = await import("./sources/runs.js");
+  await runs.writeInvocation({
+    runId: "inv1",
+    instanceId: "i1",
+    phaseId: "investigate",
+    step: "research",
+    attempt: 0,
+    runtime: "claude",
+    bin: "claude",
+    args: ["-p", "--disallowedTools", "Bash"],
+    cwd: "/repo",
+    envNames: ["HOME", "PATH"],
+    envStripped: ["ARGUS_TOKEN"],
+    capabilities: { filesystem: "read-only" },
+    limitations: [],
+    materializedFiles: [],
+    artifactDir: null,
+    resultFile: null,
+    timeoutSeconds: 600,
+    deadlineAt: "2026-06-30T12:10:00.000Z",
+    gitHead: "abc123",
+    startedAt: "2026-06-30T12:00:00.000Z",
+  });
+  const app = makeApp();
+  const ok = await app.request("/api/runs/inv1/invocation", { headers: loopback });
+  assert.equal(ok.status, 200);
+  const body = (await ok.json()) as { envStripped: string[]; args: string[] };
+  assert.deepEqual(body.envStripped, ["ARGUS_TOKEN"]);
+  assert.deepEqual(body.args, ["-p", "--disallowedTools", "Bash"]);
+  assert.equal((await app.request("/api/runs/nope/invocation", { headers: loopback })).status, 404);
+  assert.equal((await app.request("/api/runs/../x/invocation", { headers: loopback })).status, 404);
 });

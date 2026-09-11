@@ -119,6 +119,14 @@ export interface Run {
   countedInTotals?: boolean;
   /** Null/absent for non-pipeline or unsignalled runs. */
   outcome?: RunOutcome | null;
+  /** When the harness will kill this run if it is still alive. Null = no limit. */
+  deadlineAt?: string | null;
+  /**
+   * How the process ended, when the harness knows more than the exit code:
+   * `timed-out` — killed at its deadline; `killed` — aborted/cancelled by
+   * Argus; `spawn-failed` — never started. Absent = it exited on its own.
+   */
+  termination?: "exited" | "timed-out" | "killed" | "spawn-failed";
   /**
    * The budget ladder step that governed this run, when one did.
    *

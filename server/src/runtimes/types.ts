@@ -25,6 +25,7 @@ import type {
   ActivityEvent,
   AgentRuntimeCapabilities,
   AgentRuntimeId,
+  CapabilityProfile,
   ReasoningEffort,
 } from "@argus/contracts";
 
@@ -49,6 +50,32 @@ export interface RunEnvelope {
   sessionId: string | null;
 }
 
+/** A file the engine must write before spawning; paths are absolute, inside
+ *  `CapabilityRequest.invocationDir`. */
+export interface MaterializedFile {
+  path: string;
+  contents: string;
+}
+
+export interface CapabilityRequest {
+  profile: CapabilityProfile;
+  /** Per-invocation directory Argus created for config files (absolute, exists). */
+  invocationDir: string;
+  /** The run's working directory (absolute). */
+  cwd: string;
+  /** Where the agent may write artifacts (absolute), or null. Must remain
+   *  writable even under `filesystem: "read-only"`. */
+  artifactDir: string | null;
+  /**
+   * Shell command lines for Argus's own completion hooks, so a runtime that can
+   * carry hooks per invocation can register them itself instead of relying on
+   * the operator's global config. `stop` fires when the agent finishes; `gate`
+   * fires before the agent asks the user a question (Claude Code's
+   * AskUserQuestion).
+   */
+  hooks?: { stop: string; gate: string };
+}
+
 /** Everything needed to start one run, with nothing runtime-specific left over. */
 export interface SpawnPlan {
   bin: string;
@@ -57,6 +84,12 @@ export interface SpawnPlan {
   stdin: string;
   /** Extra environment for the child, merged over `process.env` by the caller. */
   env: Record<string, string>;
+  /** Files to write before spawning (invocation-specific config). Absent/empty
+   *  when no capabilities were requested. */
+  files?: MaterializedFile[];
+  /** Declared capabilities this runtime could not enforce (human-readable, one
+   *  per item). Empty when fully enforced. */
+  limitations?: string[];
 }
 
 export interface RunPlanOptions {
@@ -73,6 +106,8 @@ export interface RunPlanOptions {
    * either way.
    */
   systemPrompt?: string;
+  /** The capability profile for this invocation, when the phase declares one. */
+  capabilities?: CapabilityRequest;
 }
 
 export interface AnalysisPlanOptions {
@@ -148,5 +183,43 @@ export function extraArgs(raw: string | undefined): string[] {
   const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(raw)) !== null) out.push(m[1] ?? m[2] ?? m[3]);
+  return out;
+}
+
+/**
+ * The `CapabilityProfile` keys a runtime maps onto its own invocation, in a
+ * fixed order so a runtime's limitations list is deterministic. `env` and
+ * `enforcement` are excluded: both are engine-owned (the engine applies the
+ * env policy itself and decides strict vs. best-effort), never a runtime's to
+ * enforce or report on.
+ */
+const PROFILE_KEYS: (keyof CapabilityProfile)[] = [
+  "filesystem",
+  "tools",
+  "mcpServers",
+  "additionalDirectories",
+  "settingSources",
+  "permissionMode",
+  "maxTurns",
+];
+
+/**
+ * One limitation string for every key present in `profile` (mcpServers counts
+ * as present even when it is `{}`) that isn't in `supported` — phrased
+ * `${runtimeLabel} cannot enforce "${key}" for this invocation` so a gap is
+ * reported rather than silently producing a null the UI can't explain.
+ */
+export function unsupportedCapabilities(
+  profile: CapabilityProfile,
+  runtimeLabel: string,
+  supported: (keyof CapabilityProfile)[],
+): string[] {
+  const supportedSet = new Set(supported);
+  const out: string[] = [];
+  for (const key of PROFILE_KEYS) {
+    if (profile[key] === undefined) continue;
+    if (supportedSet.has(key)) continue;
+    out.push(`${runtimeLabel} cannot enforce "${key}" for this invocation`);
+  }
   return out;
 }

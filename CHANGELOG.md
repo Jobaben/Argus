@@ -26,6 +26,44 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Argus as a harness: capability profiles, environment policy, deterministic
+  verification and timeouts for pipeline steps.** A phase (or one of its
+  steps) may now declare `capabilities` — filesystem mode, tool allow/deny
+  rules, an exact MCP server set, extra readable directories, Claude Code's
+  setting sources/permission mode/max turns, and an environment policy — plus
+  `checks` (a command, a required artifact or file, or a changed-files
+  assertion Argus runs itself once every step has reported success) and a
+  `timeoutSeconds`. None of it is required: a phase declaring none of it runs
+  exactly as it always did. `harness/invocation.ts` resolves the profile
+  narrowest-wins by key (step ▸ phase ▸ pipeline), asks the runtime to map it
+  onto its own flags and config files, and writes an `AgentInvocationRecord`
+  beside the run — bin, argv, environment variable **names** (never values),
+  the profile as applied (secret-bearing values under `env.set` and each MCP
+  server's `env`/`headers` redacted, keys kept), what the runtime couldn't
+  enforce, materialized config files, the artifact directory, the deadline,
+  and `git rev-parse HEAD`
+  — readable at `GET /api/runs/:id/invocation`. `harness/childEnv.ts` is now
+  the one place a child's environment is assembled, so Argus's own secrets
+  (`ARGUS_TOKEN`, `ARGUS_WEBHOOK_URL`) and per-invocation identifiers are
+  stripped unconditionally regardless of policy. Under `enforcement: "strict"`
+  (the default) a capability the chosen runtime cannot honour — Claude Code's
+  bare `Bash` under `read-only`, Codex's inability to exclude `config.toml`
+  MCP servers, or OpenCode/Qwen Code's total lack of per-invocation
+  control — fails the step before it launches, under a new `configuration`
+  failure class that is never retried; `"best-effort"` launches anyway and
+  just records the gap. `timeoutSeconds` (step overrides phase) becomes a
+  persisted `deadlineAt` enforced by SIGTERM-then-SIGKILL, surviving an Argus
+  restart via reconcile. A phase's `checks` run after every step succeeds and
+  before the gate or the next phase — "the agent said the tests pass" and
+  "the tests pass" are no longer the same claim — and a failure there carries
+  the full `VerificationReport` as evidence. Five new failure classes
+  (`spawn`, `exit-code`, `signal`, `timeout`, `verification`, plus the
+  never-retried `configuration`) replace the old binary success/failure split
+  on `PhaseFailurePayload.failureClass`, and four journal kinds
+  (`step.timed-out`, `step.exit-mismatch`, `phase.verifying`,
+  `phase.verified`) narrate the new states. See
+  [docs/HARNESS.md](docs/HARNESS.md) for the full reference, including a
+  worked five-phase pipeline.
 - **Outcome-based routing: a phase can decide what runs next.** A phase may
   declare a `result` — an artifact name and a small validated schema — and a
   dependency may carry a `when` condition over it, so `publish` runs only if

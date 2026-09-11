@@ -47,15 +47,27 @@
 
 import { qwenHome } from "../qwenHome.js";
 import { deriveStreamJsonActivity, topLevelObjectSpans } from "./claude.js";
-import { EMPTY_ENVELOPE, basename, clip, extraArgs } from "./types.js";
+import { EMPTY_ENVELOPE, basename, clip, extraArgs, unsupportedCapabilities } from "./types.js";
 import type {
   AgentRuntime,
   AnalysisPlanOptions,
+  CapabilityRequest,
   RunEnvelope,
   RunPlanOptions,
   SpawnPlan,
 } from "./types.js";
 import type { ActivityEvent } from "@argus/contracts";
+
+/**
+ * Qwen Code has no per-invocation capability control — `--approval-mode` is
+ * the only knob, and it's already spoken for by the yolo/default split
+ * between an ordinary run and an analysis pass — so every key a profile sets
+ * is reported as a limitation rather than silently dropped.
+ */
+function qwenLimitations(cap: CapabilityRequest | undefined): string[] {
+  if (!cap) return [];
+  return unsupportedCapabilities(cap.profile, "Qwen Code", []);
+}
 
 /** Aliases for the models Qwen Code ships pointed at by default. A local
  *  endpoint's model name is whatever the operator loaded, so it comes from
@@ -244,21 +256,23 @@ export const qwenRuntime: AgentRuntime = {
   // The Stop hook is authoritative, as it is for Claude Code.
   outcomeFromRecord: false,
 
-  batchPlan({ prompt, model, systemPrompt }: RunPlanOptions): SpawnPlan {
+  batchPlan({ prompt, model, systemPrompt, capabilities }: RunPlanOptions): SpawnPlan {
     return {
       bin: bin(),
       args: qwenArgs({ outputFormat: "json", approvalMode: "yolo", model }),
       stdin: composePrompt(prompt, systemPrompt),
       env: runEnv(),
+      ...(capabilities ? { files: [], limitations: qwenLimitations(capabilities) } : {}),
     };
   },
 
-  streamPlan({ prompt, model, systemPrompt }: RunPlanOptions): SpawnPlan {
+  streamPlan({ prompt, model, systemPrompt, capabilities }: RunPlanOptions): SpawnPlan {
     return {
       bin: bin(),
       args: qwenArgs({ outputFormat: "stream-json", approvalMode: "yolo", model }),
       stdin: composePrompt(prompt, systemPrompt),
       env: runEnv(),
+      ...(capabilities ? { files: [], limitations: qwenLimitations(capabilities) } : {}),
     };
   },
 

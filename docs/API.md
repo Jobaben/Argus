@@ -389,6 +389,7 @@ first. `endedAt: null` means still in flight — render through `windowEnd`.
 | `GET /api/runs?scheduleId=&limit=` | run history (newest first)                                         |
 | `GET /api/runs/:id`                | one run plus the tail of its log                                   |
 | `GET /api/runs/:id/recording`      | the run as a Flight Recorder timeline (see below)                  |
+| `GET /api/runs/:id/invocation`     | what Argus launched for this run (see § Harness) → `404` if none   |
 | `POST /api/runs/:id/cancel`        | kill a running run → `200`, `409` if not running, `404` if unknown |
 
 Create/patch body fields: `name`, `prompt`, `cwd` (must exist), `trigger`,
@@ -1431,6 +1432,107 @@ statuses it implies:
   the same branch, an edited definition cannot reroute a running instance, and a
   downstream revise cannot re-decide what already happened.
 
+## Harness — capabilities, verification, timeouts
+
+A phase (or one of its steps) may additionally declare `capabilities`, `checks`
+and `timeoutSeconds`. All three are optional at every level (pipeline, phase,
+step); a definition using none of them runs exactly as it did before this
+existed. Full field-by-field reference, mapping onto each runtime's actual
+flags, and a complete worked pipeline: [docs/HARNESS.md](HARNESS.md).
+
+### `PipelineDefinition` / `PhaseDef` / `PhaseStep` fields
+
+| Field            | On                    | Type                | Validation                                                                                                                                                                                |
+| ---------------- | --------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`             | phase                 | string              | `^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$` — one path segment, 1-80 chars, never `.`/`..`. It names the phase's artifact and changed-files-baseline directories on disk, not just a graph label. |
+| `capabilities`   | pipeline, phase, step | `CapabilityProfile` | See below. Merges by key, narrowest wins (step ▸ phase ▸ pipeline).                                                                                                                       |
+| `timeoutSeconds` | phase, step           | integer             | 1–86400. A step's own value overrides its phase's; absent on both = no limit.                                                                                                             |
+| `checks`         | phase                 | `PhaseCheck[]`      | Up to 50 entries. Run once every step of the phase has reported success; a failing check fails the phase under the `verification` class.                                                  |
+
+`CapabilityProfile`:
+
+| Key                     | Type                                                               | Validation                                                                                                                                                                         |
+| ----------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `filesystem`            | `"read-only" \| "workspace-write" \| "unrestricted"`               | one of the three                                                                                                                                                                   |
+| `tools`                 | `{ allow?, deny? }`                                                | each a list of ≤200 non-empty strings, none containing a comma or newline                                                                                                          |
+| `mcpServers`            | `Record<name, McpServerSpec>`                                      | name matches `[A-Za-z0-9_-]{1,64}`; each spec needs `command` (stdio) or `url` (http/sse); `type` ∈ `stdio\|http\|sse`; each `env`/`headers` key matches `[A-Za-z_][A-Za-z0-9_-]*` |
+| `additionalDirectories` | `string[]`                                                         | each an absolute path that already exists on disk                                                                                                                                  |
+| `settingSources`        | `("user"\|"project"\|"local")[]`                                   | Claude Code only                                                                                                                                                                   |
+| `permissionMode`        | `"default"\|"acceptEdits"\|"plan"\|"bypassPermissions"\|"dontAsk"` | Claude Code only                                                                                                                                                                   |
+| `maxTurns`              | integer                                                            | 1–1000                                                                                                                                                                             |
+| `env`                   | `EnvPolicy`                                                        | see below                                                                                                                                                                          |
+| `enforcement`           | `"strict"\|"best-effort"`                                          | default `"strict"`: a limitation the runtime reports blocks the launch (`configuration` failure class, never retried)                                                              |
+
+`EnvPolicy`:
+
+| Key              | Type                     | Validation                                                                                                                                                                                                                                                                       |
+| ---------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inherit`        | `"all"\|"minimal"`       | default `"all"`                                                                                                                                                                                                                                                                  |
+| `allow` / `deny` | `string[]`               | each an env-var name, optionally with one trailing `*`                                                                                                                                                                                                                           |
+| `set`            | `Record<string, string>` | keys must be valid env-var names and may not name a reserved Argus control variable (`ARGUS_TOKEN`, `ARGUS_WEBHOOK_URL`, `ARGUS_SIGNAL_*`, `ARGUS_RUN_ID`, `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`, `ARGUS_RESULT_FILE`, `ARGUS_ARTIFACT_DIR`, `ARGUS_STEP_NAME`, `ARGUS_RUNTIME`) |
+
+`PhaseCheck` (discriminated on `kind`; each kind accepts only its own fields
+plus the common `label`, ≤120 chars):
+
+| Kind            | Fields                               | Validation                                                                               |
+| --------------- | ------------------------------------ | ---------------------------------------------------------------------------------------- |
+| `command`       | `run`, `cwd?`, `timeoutSeconds?`     | `run` ≤4000 chars; `timeoutSeconds` 1–86400                                              |
+| `artifact`      | `path`, `minBytes?`                  | `path` relative, no `..` segment, no absolute path; `minBytes` a non-negative integer    |
+| `file`          | `path`, `minBytes?`                  | same as `artifact`, resolved against the phase's `cwd` instead of its artifact directory |
+| `changed-files` | `allow?`, `deny?`, `requireChanges?` | `allow`/`deny` lists of non-empty globs; `requireChanges` a boolean                      |
+
+```jsonc
+{
+  "id": "implement",
+  "cwd": "/path/to/repo",
+  "timeoutSeconds": 3600,
+  "capabilities": { "filesystem": "workspace-write", "env": { "inherit": "minimal" } },
+  "checks": [
+    { "kind": "command", "run": "npm test", "timeoutSeconds": 300 },
+    { "kind": "changed-files", "allow": ["src/**"], "requireChanges": true },
+  ],
+}
+```
+
+### `PhaseProgress` fields
+
+- `verification?: VerificationReport` — `{ status: "running"|"passed"|"failed", startedAt, endedAt?, checks: CheckResult[] }`. Present only once the phase's steps have all reported and it declares `checks`; absent for a check-less phase, same as before.
+- `artifactDir?: string | null` — where this attempt's steps were told to write file artifacts (`~/.claude/argus/artifacts/<instanceId>/<phaseId>/`), interpolated into prompts as `{{artifactDir}}` / `{{artifactDir.<phaseId>}}`.
+
+### `PhaseFailurePayload.failureClass`
+
+A failed phase's `payload` (free-form otherwise) carries
+`failureClass: "spawn" | "exit-code" | "signal" | "timeout" | "verification" | "configuration"` —
+how the failure was classed for the retry policy. `"configuration"` is never
+retried; the other five are retried only when named in the phase's
+`retry.retryOn` (default `["spawn", "exit-code"]`). See
+[docs/HARNESS.md § 2](HARNESS.md#2-agent-completion--phase-success) for what
+each class means and exactly which rung of the completion ladder it comes
+from.
+
+### `Run.deadlineAt` / `Run.termination`
+
+`deadlineAt` (nullable) is set at launch from the resolved `timeoutSeconds`
+and is what a step's process is killed against — persisted, so the deadline
+is enforced even across an Argus restart (via `reconcile()`), not only by the
+in-process timer that first set it. `termination` records how a run ended
+when Argus knows more than the exit code: `"exited"` | `"timed-out"` |
+`"killed"` | `"spawn-failed"` — absent means the process simply exited on its
+own.
+
+### `GET /api/runs/:id/invocation`
+
+What Argus actually launched for a run: the exact executable and argv, the
+environment **by name** (never by value), the resolved capability profile —
+with `env.set` and every MCP server's `env`/`headers` values replaced by
+`"<redacted>"` (keys kept; the materialized `mcp.json` still carries the real
+values) — and what the runtime couldn't enforce of it, the config files
+materialized for the invocation, the artifact directory, the deadline, and
+the repository state (`git rev-parse HEAD`) it started against. Returns the
+`AgentInvocationRecord`, or `404` when the run predates invocation records or
+is unknown. See [docs/HARNESS.md § 8](HARNESS.md#8-observability--reproducibility)
+for the full shape and an example.
+
 ### `GET /api/instances/:id/journal`
 
 ```json
@@ -1439,6 +1541,20 @@ statuses it implies:
     { "at": "…", "kind": "instance.started", "detail": "Release train (manual)" },
     { "at": "…", "kind": "phase.started", "phaseId": "build", "attempt": 0, "detail": "2 steps" },
     { "at": "…", "kind": "step.spawned", "phaseId": "build", "runId": "…", "detail": "pid 4212" },
+    {
+      "at": "…",
+      "kind": "step.timed-out",
+      "phaseId": "build",
+      "runId": "…",
+      "detail": "timed out after 900s"
+    },
+    {
+      "at": "…",
+      "kind": "step.exit-mismatch",
+      "phaseId": "build",
+      "runId": "…",
+      "detail": "signalled completed, then exited 1"
+    },
     { "at": "…", "kind": "phase.failed", "phaseId": "build", "detail": "exit-code: exit code 1" },
     {
       "at": "…",
@@ -1447,6 +1563,20 @@ statuses it implies:
       "detail": "attempt 2 of 3 at …"
     },
     { "at": "…", "kind": "phase.retrying", "phaseId": "build", "attempt": 1 },
+    {
+      "at": "…",
+      "kind": "phase.verifying",
+      "phaseId": "build",
+      "attempt": 1,
+      "detail": "2 checks"
+    },
+    {
+      "at": "…",
+      "kind": "phase.verified",
+      "phaseId": "build",
+      "attempt": 1,
+      "detail": "passed: 2 checks"
+    },
     {
       "at": "…",
       "kind": "route.selection",
@@ -1471,6 +1601,14 @@ again and was revised. **Nothing reads the journal to decide what to do next** �
 it is evidence, and a missing or corrupt one costs the history, never the
 pipeline. A torn final line (the only failure mode of an append) costs exactly
 one record. An unknown or path-escaping id returns an empty list.
+
+`step.timed-out` marks a step killed at its deadline (live, or discovered on
+reconcile after a restart); `step.exit-mismatch` marks a step whose completion
+signal was accepted as `completed` but whose process then exited non-zero —
+the phase is not unwound over it, but the run carries both
+`outcome: "succeeded"` and the non-zero `exitCode`; `phase.verifying` /
+`phase.verified` bracket Argus's own checks running over a phase's work, once
+every step is in.
 
 ## Sentinel
 

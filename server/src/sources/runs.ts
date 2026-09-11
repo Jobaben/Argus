@@ -6,7 +6,9 @@ import { paths } from "../claudeHome.js";
 import { atomicWriteJson } from "./atomicWrite.js";
 import { cached, invalidate, patchCached } from "./cache.js";
 import { createFileMemo } from "./fileMemo.js";
+import { KeyedMutex } from "../mutex.js";
 import type { Run } from "./scheduleTypes.js";
+import type { AgentInvocationRecord } from "./pipelineTypes.js";
 
 export const LOG_CAP_BYTES = 1_048_576; // 1 MB
 export const RUN_KEEP = 50;
@@ -72,6 +74,34 @@ export async function readRunResult(
   }
 }
 
+/**
+ * The per-run directory holding what Argus launched: the invocation record and
+ * any settings/MCP files materialized for that one process. Beside the run,
+ * like the result file, so a retry gets a fresh directory and the record of an
+ * attempt is never overwritten by the next one.
+ */
+export function runInvocationDir(id: string): string {
+  return path.join(paths.invocationsDir(), id);
+}
+
+export function runInvocationPath(id: string): string {
+  return path.join(runInvocationDir(id), "invocation.json");
+}
+
+export async function writeInvocation(record: AgentInvocationRecord): Promise<void> {
+  await atomicWriteJson(runInvocationPath(record.runId), record);
+}
+
+/** The invocation record, or null when the run predates them or is unknown. */
+export async function readInvocation(id: string): Promise<AgentInvocationRecord | null> {
+  if (!RUN_ID_RE.test(id)) return null;
+  try {
+    return JSON.parse(await readFile(runInvocationPath(id), "utf8")) as AgentInvocationRecord;
+  } catch {
+    return null;
+  }
+}
+
 function runJsonPath(id: string): string {
   return path.join(paths.runsDir(), `${id}.json`);
 }
@@ -127,12 +157,20 @@ export async function writeRun(run: Run): Promise<void> {
  * run is gone.
  */
 export async function patchRun(id: string, patch: Partial<Run>): Promise<Run | null> {
-  const current = await readRunFile(id);
-  if (!current) return null;
-  const next = { ...current, ...patch };
-  await writeRun(next);
-  return next;
+  // Serialized per run: the completion handler, the signal path and the
+  // deadline handler can all patch one record within the same few
+  // milliseconds, and two unlocked read-modify-writes lose whichever landed
+  // first.
+  return patchLocks.withLock(id, async () => {
+    const current = await readRunFile(id);
+    if (!current) return null;
+    const next = { ...current, ...patch };
+    await writeRun(next);
+    return next;
+  });
 }
+
+const patchLocks = new KeyedMutex();
 
 async function readRunFile(id: string): Promise<Run | null> {
   const file = runJsonPath(id);
@@ -212,18 +250,21 @@ export async function readRun(id: string): Promise<{ run: Run; log: string } | n
  *  them, so use taskkill /T on win32. On POSIX, detached:true makes the child
  *  a group leader, so signal the group, falling back to the single pid.
  *  Returns whether a signal was sent. */
-export async function killRunProcess(pid: number | null): Promise<boolean> {
+export async function killRunProcess(
+  pid: number | null,
+  signal: NodeJS.Signals = "SIGTERM",
+): Promise<boolean> {
   if (!pid) return false;
   if (process.platform === "win32") {
     const res = spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
     return res.status === 0;
   }
   try {
-    process.kill(-pid);
+    process.kill(-pid, signal);
     return true;
   } catch {
     try {
-      process.kill(pid);
+      process.kill(pid, signal);
       return true;
     } catch {
       return false;
@@ -261,6 +302,7 @@ export async function pruneRuns(scheduleId: string, keep: number): Promise<void>
       rm(runJsonPath(r.id), { force: true }),
       rm(runLogPath(r.id), { force: true }),
       rm(runResultPath(r.id), { force: true }),
+      rm(runInvocationDir(r.id), { recursive: true, force: true }),
     ]),
   );
   for (const r of drop) parseMemo.forget(r.id);

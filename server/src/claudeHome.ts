@@ -41,6 +41,10 @@ export const paths = {
   authFile: () => path.join(claudeHome(), "argus", "auth.json"),
   usersFile: () => path.join(claudeHome(), "argus", "users.json"),
   instancesDir: () => path.join(claudeHome(), "argus", "instances"),
+  /** Per-run invocation records and the config files materialized for them. */
+  invocationsDir: () => path.join(claudeHome(), "argus", "invocations"),
+  /** Per-instance, per-phase directories where step agents leave file artifacts. */
+  artifactsDir: () => path.join(claudeHome(), "argus", "artifacts"),
   vaultFile: () => path.join(claudeHome(), "argus", "vault.sqlite"),
   settingsFile: () => path.join(claudeHome(), "settings.json"),
   hooksDir: () => path.join(claudeHome(), "hooks"),

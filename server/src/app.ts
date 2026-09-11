@@ -65,7 +65,7 @@ import {
   ScheduleValidationError,
   readSchedules,
 } from "./sources/schedules.js";
-import { readRun, readRuns, cancelRun } from "./sources/runs.js";
+import { readInvocation, readRun, readRuns, cancelRun } from "./sources/runs.js";
 import { buildMonitors } from "./sources/monitors.js";
 import {
   buildIssues,
@@ -746,6 +746,15 @@ export function createApp(deps: AppDeps): Hono {
   app.get("/api/runs/:id", async (c) => {
     const got = await readRun(c.req.param("id"));
     return got ? c.json(got) : c.json({ error: "not found" }, 404);
+  });
+
+  // What Argus actually launched for a pipeline step: executable, argv, the
+  // environment by name, the capability profile as applied and its
+  // limitations, the config files written for it, the repository state.
+  // Values of environment variables are never recorded, so this is safe to read.
+  app.get("/api/runs/:id/invocation", async (c) => {
+    const record = await readInvocation(c.req.param("id"));
+    return record ? c.json(record) : c.json({ error: "not found" }, 404);
   });
 
   // The Flight Recorder: the run's transcript replayed as a scrubbable causal
