@@ -86,6 +86,7 @@ can do, and where the data comes from.
 | 28  | [The Vault](#28-the-vault)             | `#/stats`      | what happened last quarter, and last year? |
 | 29  | [Omnibar](#29-omnibar)                 | `⌘K`           | say it, see the exact changes, confirm     |
 | 30  | [Constellation](#30-constellation)     | `#/fleet`      | N machines, one lens                       |
+| 31  | [`argus tail`](#31-argus-tail)         | terminal       | what is it doing, when I can't see the UI? |
 
 ---
 
@@ -1929,6 +1930,95 @@ are polled once per scheduler tick, with a four-second timeout and no retries.
 
 ---
 
+## 31. `argus tail`
+
+_What is it doing, when I can't see the UI?_ Not a tab — a command.
+
+**Purpose:** every view above assumes a browser pointed at the machine. Often
+there isn't one: you are on a phone, and the only window onto the box is a
+terminal — an SSH session, or a Claude Code session driven through Remote
+Control. `argus tail` is the dashboard for that window. It prints the same
+facts as text, one line each, and returns on its own, so a person can read it
+and an agent can relay it.
+
+```bash
+argus tail                        # snapshot, then follow the live feed for 60s
+argus tail --for 0                # snapshot only
+argus tail --for 5m --until-idle  # follow until nothing is running
+argus tail --json                 # one JSON object per line
+```
+
+**What you see.** Every line is `HH:MM:SS <icon> <text>`.
+
+The **snapshot** comes first: a summary line (how many running, how many
+waiting for approval, live background agents, monitors down, open issues,
+today's spend against the budget); one ▶ line per running run — its board name
+(`Pipeline › phase › step`), runtime if not the default, elapsed time, time left
+before its deadline if it has one, and what it is doing right now — with its
+last few activity lines indented beneath it, oldest first; one ⏸ line per
+pipeline waiting at a gate, with the agent's own summary of what it wants
+approved; one ● line per live Claude Code background agent; recent outcomes
+(✓ ✗) inside the `--since` window, newest first, with duration, cost, the
+failure reason or the first line of the result; the next scheduled firing (⏲);
+and `○ idle` when nothing at all is running.
+
+Then it **follows**. Per-tool activity from running pipeline steps streams as
+it happens (⚙ a tool call, 💬 the agent's own words, ○ session started, ■
+finished). Runs starting (▶) and ending (■ ✓ / ✗); phases starting, succeeding,
+failing or being skipped (→); pipelines starting, pausing at a gate (⏸),
+resuming and ending; background agents changing state (●); and every alert the
+bell would ring — monitor (⚠), budget ($), anomaly (↯), incident (🔥). A closing
+── line says why it stopped (window elapsed, went idle, Ctrl-C), how many
+events it printed, and how many runs are still going.
+
+**How it works.** It is a client of the running server: the same port, the
+same `ARGUS_TOKEN` (`--url` and `--token` override both). It reads the API the
+dashboard reads and follows the same WebSocket. The payload frames print
+directly; the payload-free `*:changed` pings trigger conditional re-reads of
+runs, the board and the agents, which it diffs against its previous read to
+produce "run X started" rather than "something changed". A dropped socket
+reconnects with backoff and re-reads everything on the way back, and a
+twenty-second safety re-read covers a ping that never arrived.
+
+**The window matters.** When stdout is not a terminal — an agent's tool call, a
+pipe — the default is to follow for 60 seconds and exit, so a call with a
+timeout always returns a complete, self-describing answer; on a real terminal
+the default is to follow until Ctrl-C. `--for` sets it explicitly (`--for 0` is
+a pure snapshot), and `--until-idle` ends it early once nothing is running.
+Each run's snapshot catches anything that happened between calls, so "run it
+again" is the whole continuation story.
+
+**Honest limits.** Only pipeline steps stream per-tool activity, because only
+they run with a live transcript (`--output-format stream-json`); schedule and
+one-off runs are batch runs and show start and finish lines only. A gate needs
+a human: the tail tells you a pipeline is waiting, and approving, revising or
+aborting happens in the Command Center or through the API.
+
+**For an agent.** `argus tail --install-skill` installs the bundled
+`argus-tail` skill for every agent CLI it finds on PATH. Claude Code and Codex
+discover skills the same way — a `skills/<name>/SKILL.md` tree under the CLI's
+home, `name` and `description` frontmatter, chosen implicitly when a request
+matches the description or by name — so it is one file, written in the
+dialect both accept, landing in `~/.claude/skills/` (honouring
+`ARGUS_CLAUDE_HOME`) and `~/.codex/skills/` (honouring `ARGUS_CODEX_HOME` and
+`CODEX_HOME`). `--install-skill=claude`, `=codex` or `=all` chooses
+explicitly; bare, it installs for what is present and says what it skipped.
+From then on a session of either CLI on that machine answers "what is Argus
+doing?", "has the release pipeline finished?", `/argus-tail` (Claude Code) or
+`$argus-tail` (Codex) by running the command and relaying the lines —
+including a remote session on your phone, which is the case this exists for.
+The skill teaches the icon vocabulary, the bounded-window habit, and to quote
+failure reasons verbatim. Inside the Argus checkout both CLIs find it without
+installing: Claude Code at `.claude/skills/argus-tail/`, Codex through the
+`.agents/skills/argus-tail` link to the same file (a symlink, so a Windows
+checkout without symlink support falls back to the install).
+
+**Where the data comes from:** `GET /api/health`, `/api/runs`,
+`/api/overview`, `/api/agents`, `/api/insight`, `/api/runs/:id/activity` (the
+tailer's retained events for a running step), and `WS /ws`.
+
+---
+
 ## Quick mental model
 
 | Tab                 | Answers the question                       | Source                                      |
@@ -1956,6 +2046,7 @@ are polled once per scheduler tick, with a four-second timeout and no retries.
 | **Ledger**          | Where did the money go, and where next?    | `argus/runs/` + `argus/spend.json`          |
 | **The Vault**       | What happened last quarter, and last year? | `argus/vault.sqlite` (a rebuildable cache)  |
 | **Omnibar**         | Say it, see the exact changes, confirm     | schedules + issues + instances + budget     |
+| **`argus tail`**    | What is it doing, when I can't see the UI? | the API + `WS /ws`, narrated as text        |
 
 _Screenshots in this guide live in [`docs/screenshots/`](screenshots/) and
 were captured from a live instance. To refresh them after a UI change, run the

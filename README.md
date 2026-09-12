@@ -197,6 +197,56 @@ npm ci && npm i -g .
 Without a global install, the same thing is `npm run build && npm start`
 (or `node bin/argus.mjs`).
 
+### Watching without a browser: `argus tail`
+
+The dashboard is not the only frontend. When the machine running Argus is one
+you reach through a terminal — an SSH session, or a Claude Code session driven
+from your phone via Remote Control — `argus tail` prints the same picture as
+text, one line per fact, and returns on its own:
+
+```bash
+argus tail                        # snapshot, then the live feed for 60s
+argus tail --for 0                # snapshot only: running / waiting / recent
+argus tail --for 5m --until-idle  # follow until nothing is running
+argus tail --json                 # one JSON object per line
+```
+
+```
+10:42:03 ▣ Argus 0.4.0 at http://127.0.0.1:7777 — 2 running · 1 waiting for approval · $0.84 today
+10:42:03 ▶ Release train › build · running 4m 12s · ⚙ Bash: npm test
+10:41:20   ⚙ Edit: package.json
+10:41:58   ⚙ Bash: npm test
+10:42:03 ▶ Nightly triage · running 1m 03s
+10:42:03 ⏸ Docs sweep · waiting for approval at "review" for 12m 00s — three files changed
+10:38:11 · ✗ Deps audit failed in 5s: npm audit found 3 vulnerabilities
+10:42:03 ⏲ next: schedule "Hourly sync" in 17m 57s (11:00)
+10:42:03 👁 following live for 1m 00s
+10:42:15 ⚙ Release train › build · Bash: git diff --stat
+10:42:31 ■ ✓ Release train › build succeeded in 4m 40s · $0.31
+10:42:31 → Release train › review started
+10:43:03 ── followed for 1m 00s · 3 events · 2 still running · run `argus tail` again to keep following
+```
+
+It is a client of the running server — same port, same `ARGUS_TOKEN` — that
+reads the API the dashboard reads and follows the same WebSocket, turning the
+payload-free `*:changed` pings into concrete lines by diffing consecutive reads.
+Per-tool activity (⚙ 💬) streams for pipeline steps, which run with a live
+transcript; schedule and one-off runs show start and finish lines. When stdout
+is not a terminal the window defaults to 60 seconds so a tool call with a
+timeout always gets a complete answer; `--for` sets it, `0` means snapshot
+only. `argus tail --help` lists every option.
+
+**For an agent on that machine**, `argus tail --install-skill` installs the
+bundled `argus-tail` skill for every agent CLI found on PATH — Claude Code
+(`~/.claude/skills/`) and Codex (`~/.codex/skills/`) read the same `SKILL.md`
+format — after which "what is Argus doing?", `/argus-tail` (Claude Code) or
+`$argus-tail` (Codex) has the agent run the command and relay it, including
+from a phone, where a remote session is often the only window onto the box.
+`--install-skill=codex`, `=claude` or `=all` picks explicitly. The skill also
+lives in this repo, at `.claude/skills/argus-tail/` with `.agents/skills/`
+linking to it, so a session of either CLI opened inside the checkout has it
+already.
+
 Or with Docker (mount your `~/.claude`, publish the port, set a token):
 
 ```bash
@@ -275,7 +325,7 @@ in brief:
 | Monitoring (read) | `GET /api/agents`, `/agents/:short/timeline`, `/daemon`, `/sessions`, `/sessions/:project/:id`, `/activity`, `/projects`, `/stats`, `/inventory`, `/tasks`, `/search`, `/cron`, `/chronicle`                                                  |
 | Scheduler         | `GET/POST /api/schedules`, `PUT/DELETE /api/schedules/:id`, `POST /api/schedules/:id/run`, `POST /api/runs/:id/cancel`, `GET /api/runs`, `/runs/:id`                                                                                          |
 | Pipelines         | `GET/POST /api/pipelines`, `PUT/PATCH/DELETE /api/pipelines/:id`, `POST /api/pipelines/:id/start`, `GET /api/pipelines/:id/instances`, `GET /api/overview`, `GET /api/instances/:id`, `POST /api/instances/:id/{signal,approve,revise,abort}` |
-| Live push         | `WS /ws` — `{type:"agents:changed"｜"schedules:changed"｜"pipelines:changed"｜"inventory:changed"}`                                                                                                                                           |
+| Live push         | `WS /ws` — `{type:"agents:changed"｜"schedules:changed"｜"pipelines:changed"｜"inventory:changed"}`; `GET /api/runs/:id/activity` for the retained tail of a running step                                                                     |
 
 ## Status
 

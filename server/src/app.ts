@@ -194,6 +194,8 @@ export interface AppDeps {
   fleet?: () => { summaries: Map<string, MachineSummary>; health: Map<string, PeerHealth> };
   /** Latest activity per running step run, from the run tailer. */
   activity?: () => Map<string, ActivityEvent>;
+  /** The retained activity of one running step run, oldest first. */
+  activityLog?: (runId: string) => ActivityEvent[];
   /** Admin auth for pipeline edit/run routes. Defaults to the real service. */
   auth?: AuthService;
   /** User accounts backing auth. Defaults to the real store. */
@@ -747,6 +749,15 @@ export function createApp(deps: AppDeps): Hono {
     const got = await readRun(c.req.param("id"));
     return got ? c.json(got) : c.json({ error: "not found" }, 404);
   });
+
+  // The live activity the tailer has retained for a running pipeline step —
+  // what a client arriving mid-run (the `argus tail` terminal frontend) shows
+  // before the next `run:activity` frame lands. Empty, not 404, for a run the
+  // tailer is not following: a finished step or a batch run has a log to read
+  // via `GET /api/runs/:id`, but no live tail.
+  app.get("/api/runs/:id/activity", (c) =>
+    c.json({ events: deps.activityLog?.(c.req.param("id")) ?? [] }),
+  );
 
   // What Argus actually launched for a pipeline step: executable, argv, the
   // environment by name, the capability profile as applied and its

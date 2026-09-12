@@ -26,6 +26,34 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **`argus tail` — a terminal frontend, for the window that isn't a browser.**
+  When the machine running Argus is one you only reach through a terminal — an
+  SSH session, or a Claude Code session driven from your phone through Remote
+  Control — there was no way to see what it was doing short of curling JSON.
+  `argus tail` prints the dashboard's facts as text, one line each: a snapshot
+  (what is running and what it is doing right now, with its last few activity
+  lines; pipelines waiting at a gate and what they want approved; live
+  background agents; recent outcomes with duration, cost and the failure reason;
+  the next firing; or `idle`), then the live feed — per-tool activity from
+  running steps, runs and phases and pipelines starting and ending, agents
+  changing state, and every alert the bell would ring — and a closing line
+  saying why it stopped and how many runs are still going. It is a client of the
+  running server (same port, same `ARGUS_TOKEN`) that follows the same
+  WebSocket and turns the payload-free `*:changed` pings into concrete lines by
+  diffing conditional re-reads of `/api/runs`, `/api/overview` and
+  `/api/agents`. When stdout is not a terminal the window defaults to 60 seconds
+  so an agent's tool call always returns a complete answer; `--for` sets it
+  (`0` = snapshot only), `--until-idle` ends it once nothing is running,
+  `--json` emits one object per line. A bundled skill teaches an agent session
+  on that machine to run it and relay it: Claude Code and Codex read the same
+  `SKILL.md` format from `skills/<name>/` under their homes, so it is one file
+  (`.claude/skills/argus-tail/`, with `.agents/skills/` linking to it for a
+  Codex session inside the checkout) that `argus tail --install-skill` copies
+  into `~/.claude/skills/` and/or `~/.codex/skills/` — bare, for every CLI on
+  PATH; `=claude`, `=codex` or `=all` to choose. Alongside it,
+  `GET /api/runs/:id/activity` exposes the run tailer's
+  retained events for a running step, so a client arriving mid-run can say what
+  the step has been doing rather than only what it did last.
 - **Argus as a harness: capability profiles, environment policy, deterministic
   verification and timeouts for pipeline steps.** A phase (or one of its
   steps) may now declare `capabilities` — filesystem mode, tool allow/deny

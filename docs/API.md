@@ -258,6 +258,13 @@ The client reconnects with exponential backoff (1s doubling to a 30s ceiling,
 jittered) and immediately when the tab becomes visible or the browser reports it
 is back online.
 
+The browser is not the only client. `argus tail` (see the README) opens the
+same socket with `Authorization: Bearer $ARGUS_TOKEN`, prints the payload
+frames as they arrive, and resolves each change ping into concrete lines by
+re-reading `/api/runs`, `/api/overview` and `/api/agents` conditionally and
+diffing against its previous read — the same "ping means re-fetch" contract,
+applied by a process that has to narrate rather than redraw.
+
 ## Security
 
 All `/api/*` routes and the `/ws` upgrade are gated:
@@ -388,6 +395,7 @@ first. `endedAt: null` means still in flight — render through `windowEnd`.
 | `POST /api/schedules/:id/run`      | fire now → `202`, or `409` when `overlap=skip` and a run is live   |
 | `GET /api/runs?scheduleId=&limit=` | run history (newest first)                                         |
 | `GET /api/runs/:id`                | one run plus the tail of its log                                   |
+| `GET /api/runs/:id/activity`       | the live activity retained for a running step (see below)          |
 | `GET /api/runs/:id/recording`      | the run as a Flight Recorder timeline (see below)                  |
 | `GET /api/runs/:id/invocation`     | what Argus launched for this run (see § Harness) → `404` if none   |
 | `POST /api/runs/:id/cancel`        | kill a running run → `200`, `409` if not running, `404` if unknown |
@@ -415,6 +423,27 @@ schedule gets), read/cancel them through the standard run endpoints, and they
 appear as a single "One-off runs" lane in `GET /api/chronicle`. A failed
 launch fingerprints into Issues and posts the `run.failed` webhook like any
 other run; reported cost feeds the totals and the budget ledger.
+
+### `GET /api/runs/:id/activity`
+
+The activity the run tailer has retained for one **running pipeline step** —
+the same `ActivityEvent`s the `run:activity` WebSocket frame streams, oldest
+first, capped at the tailer's ring (200). This is what a client arriving
+mid-run reads to say what the step _has been_ doing before the next frame
+lands; the `argus tail` terminal frontend uses it for its opening snapshot.
+
+```jsonc
+{
+  "events": [
+    { "at": "2026-07-01T10:00:00.000Z", "kind": "init", "label": "session started" },
+    { "at": "2026-07-01T10:00:04.000Z", "kind": "tool", "label": "Bash: npm test" },
+  ],
+}
+```
+
+Always `200`. `events` is empty — not `404` — for a run the tailer is not
+following: a finished step, or a schedule / one-off run (those run in batch
+mode and have no live tail; read their log through `GET /api/runs/:id`).
 
 ### `GET /api/runs/:id/recording`
 

@@ -191,6 +191,38 @@ test("GET /api/agents returns an empty list on a fresh home", async () => {
   assert.deepEqual(await res.json(), { agents: [] });
 });
 
+test("GET /api/runs/:id/activity serves the tailer's retained events, empty when untracked", async () => {
+  const users = createUserStore();
+  const app = createApp({
+    config,
+    engine: fakeEngine,
+    broadcast: () => {},
+    serveWeb: false,
+    users,
+    remoteAddr: () => "127.0.0.1",
+    auth: openAuth,
+    activityLog: (runId) =>
+      runId === "live-1"
+        ? [
+            { at: "2026-07-07T10:00:00.000Z", kind: "init", label: "session started" },
+            { at: "2026-07-07T10:00:03.000Z", kind: "tool", label: "Bash: npm test" },
+          ]
+        : [],
+  });
+  const live = await app.request("/api/runs/live-1/activity", { headers: loopback });
+  assert.equal(live.status, 200);
+  assert.deepEqual(
+    ((await live.json()) as { events: { label: string }[] }).events.map((e) => e.label),
+    ["session started", "Bash: npm test"],
+  );
+  const idle = await app.request("/api/runs/finished-9/activity", { headers: loopback });
+  assert.equal(idle.status, 200);
+  assert.deepEqual(await idle.json(), { events: [] });
+  // No tailer wired at all (tests, or a stripped deployment) reads as idle too.
+  const bare = await makeApp().request("/api/runs/live-1/activity", { headers: loopback });
+  assert.deepEqual(await bare.json(), { events: [] });
+});
+
 test("path traversal on the timeline route yields an empty timeline", async () => {
   const res = await makeApp().request("/api/agents/..%2f..%2fetc/timeline", { headers: loopback });
   assert.equal(res.status, 200);
