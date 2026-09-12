@@ -8,7 +8,7 @@ import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { WebSocket, WebSocketServer } from "ws";
@@ -149,7 +149,7 @@ function options(fake: Fake, over: Partial<TailOptions> = {}): TailOptions {
     json: false,
     context: 3,
     snapshot: true,
-    installSkill: false,
+    installSkill: null,
     ...over,
   };
 }
@@ -345,7 +345,7 @@ describe("runTail failure modes", () => {
         json: false,
         context: 0,
         snapshot: true,
-        installSkill: false,
+        installSkill: null,
       },
       o,
     );
@@ -374,33 +374,101 @@ describe("runTail failure modes", () => {
 });
 
 describe("--install-skill", () => {
-  it("copies the bundled skill into the Claude home", async () => {
-    const home = mkdtempSync(path.join(tmpdir(), "argus-skill-"));
-    const prev = process.env.ARGUS_CLAUDE_HOME;
-    process.env.ARGUS_CLAUDE_HOME = home;
+  const skillOptions = (installSkill: TailOptions["installSkill"]): TailOptions => ({
+    url: "http://127.0.0.1:1",
+    token: null,
+    forMs: 0,
+    untilIdle: false,
+    sinceMs: 1,
+    json: false,
+    context: 0,
+    snapshot: true,
+    installSkill,
+  });
+
+  /** Fresh Claude and Codex homes for one test; restores the env afterwards. */
+  async function withHomes(
+    fn: (homes: { claude: string; codex: string }) => Promise<void>,
+  ): Promise<void> {
+    const homes = {
+      claude: mkdtempSync(path.join(tmpdir(), "argus-skill-claude-")),
+      codex: mkdtempSync(path.join(tmpdir(), "argus-skill-codex-")),
+    };
+    const prev = { claude: process.env.ARGUS_CLAUDE_HOME, codex: process.env.ARGUS_CODEX_HOME };
+    process.env.ARGUS_CLAUDE_HOME = homes.claude;
+    process.env.ARGUS_CODEX_HOME = homes.codex;
     try {
-      const o = io();
-      const code = await runTail(
-        {
-          url: "http://127.0.0.1:1",
-          token: null,
-          forMs: 0,
-          untilIdle: false,
-          sinceMs: 1,
-          json: false,
-          context: 0,
-          snapshot: true,
-          installSkill: true,
-        },
-        o,
-      );
-      assert.equal(code, 0);
-      const target = installedSkillPath(home);
-      assert.equal(readFileSync(target, "utf8"), readFileSync(bundledSkillPath(), "utf8"));
-      assert.match(o.lines[0], /installed the argus-tail skill/);
+      await fn(homes);
     } finally {
-      if (prev === undefined) delete process.env.ARGUS_CLAUDE_HOME;
-      else process.env.ARGUS_CLAUDE_HOME = prev;
+      for (const [key, value] of [
+        ["ARGUS_CLAUDE_HOME", prev.claude],
+        ["ARGUS_CODEX_HOME", prev.codex],
+      ] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
+  }
+
+  const bundled = () => readFileSync(bundledSkillPath(), "utf8");
+
+  it("bare: installs for every CLI found on PATH, and says which it skipped", async () => {
+    await withHomes(async (homes) => {
+      const o = io({ probe: (rt) => rt === "codex" });
+      assert.equal(await runTail(skillOptions("auto"), o), 0);
+      assert.equal(readFileSync(installedSkillPath("codex", homes.codex), "utf8"), bundled());
+      assert.equal(existsSync(installedSkillPath("claude", homes.claude)), false);
+      assert.match(o.lines[0], /installed the argus-tail skill for Codex at .*SKILL\.md/);
+      assert.match(o.lines[1], /\$argus-tail in Codex/);
+      assert.match(o.lines[2], /skipped Claude Code \(CLI not found on PATH\)/);
+    });
+  });
+
+  it("bare with nothing on PATH falls back to Claude Code", async () => {
+    await withHomes(async (homes) => {
+      const o = io({ probe: () => false });
+      assert.equal(await runTail(skillOptions("auto"), o), 0);
+      assert.equal(readFileSync(installedSkillPath("claude", homes.claude), "utf8"), bundled());
+      assert.equal(existsSync(installedSkillPath("codex", homes.codex)), false);
+      assert.match(o.lines[1], /\/argus-tail in Claude Code/);
+    });
+  });
+
+  it("=all installs both regardless of PATH; =codex installs one", async () => {
+    await withHomes(async (homes) => {
+      const both = io({ probe: () => false });
+      assert.equal(await runTail(skillOptions("all"), both), 0);
+      assert.equal(readFileSync(installedSkillPath("claude", homes.claude), "utf8"), bundled());
+      assert.equal(readFileSync(installedSkillPath("codex", homes.codex), "utf8"), bundled());
+      assert.equal(
+        both.lines.filter((l) => l.includes("installed the argus-tail skill")).length,
+        2,
+      );
+      assert.equal(
+        both.lines.some((l) => l.includes("skipped")),
+        false,
+      );
+    });
+    await withHomes(async (homes) => {
+      const one = io({ probe: () => true });
+      assert.equal(await runTail(skillOptions("codex"), one), 0);
+      assert.equal(existsSync(installedSkillPath("codex", homes.codex)), true);
+      assert.equal(existsSync(installedSkillPath("claude", homes.claude)), false);
+    });
+  });
+
+  it("the bundled skill is one file, readable from both the Claude and the Codex repo paths", () => {
+    const viaAgents = path.resolve(
+      path.dirname(bundledSkillPath()),
+      "..",
+      "..",
+      "..",
+      ".agents",
+      "skills",
+      "argus-tail",
+      "SKILL.md",
+    );
+    assert.equal(readFileSync(viaAgents, "utf8"), bundled());
+    assert.match(bundled(), /^---\nname: argus-tail\ndescription: .+\n---\n/);
   });
 });

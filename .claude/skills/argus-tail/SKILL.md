@@ -9,6 +9,9 @@ Argus is a dashboard over coding-agent runs. The person asking cannot see that
 dashboard right now — you are their frontend. `argus tail` prints the same
 facts as text, one line each, and returns on its own.
 
+This skill reads the same in Claude Code (`/argus-tail`) and Codex
+(`$argus-tail`); nothing in it depends on which agent you are.
+
 ## The command
 
 ```bash
@@ -42,7 +45,9 @@ Every line is `HH:MM:SS <icon> <text>`:
 
 Only **pipeline steps** stream per-tool activity (⚙ 💬). Schedule and one-off
 runs show start and finish lines only — that is how Argus runs them, not a
-gap in the tail.
+gap in the tail. A run's label carries its runtime when it is not the server
+default, e.g. `Release train › build (codex)`; Codex dollar figures are
+estimates and are marked `~`.
 
 ## How to relay it
 

@@ -1994,13 +1994,24 @@ one-off runs are batch runs and show start and finish lines only. A gate needs
 a human: the tail tells you a pipeline is waiting, and approving, revising or
 aborting happens in the Command Center or through the API.
 
-**For an agent.** `argus tail --install-skill` copies the bundled `argus-tail`
-Claude Code skill into `~/.claude/skills/` (honouring `ARGUS_CLAUDE_HOME`).
-From then on a Claude Code session on that machine answers "what is Argus
-doing?", "has the release pipeline finished?" or `/argus-tail` by running the
-command and relaying the lines — including a Remote Control session on your
-phone, which is the case this exists for. The skill teaches the icon
-vocabulary, the bounded-window habit, and to quote failure reasons verbatim.
+**For an agent.** `argus tail --install-skill` installs the bundled
+`argus-tail` skill for every agent CLI it finds on PATH. Claude Code and Codex
+discover skills the same way — a `skills/<name>/SKILL.md` tree under the CLI's
+home, `name` and `description` frontmatter, chosen implicitly when a request
+matches the description or by name — so it is one file, written in the
+dialect both accept, landing in `~/.claude/skills/` (honouring
+`ARGUS_CLAUDE_HOME`) and `~/.codex/skills/` (honouring `ARGUS_CODEX_HOME` and
+`CODEX_HOME`). `--install-skill=claude`, `=codex` or `=all` chooses
+explicitly; bare, it installs for what is present and says what it skipped.
+From then on a session of either CLI on that machine answers "what is Argus
+doing?", "has the release pipeline finished?", `/argus-tail` (Claude Code) or
+`$argus-tail` (Codex) by running the command and relaying the lines —
+including a remote session on your phone, which is the case this exists for.
+The skill teaches the icon vocabulary, the bounded-window habit, and to quote
+failure reasons verbatim. Inside the Argus checkout both CLIs find it without
+installing: Claude Code at `.claude/skills/argus-tail/`, Codex through the
+`.agents/skills/argus-tail` link to the same file (a symlink, so a Windows
+checkout without symlink support falls back to the install).
 
 **Where the data comes from:** `GET /api/health`, `/api/runs`,
 `/api/overview`, `/api/agents`, `/api/insight`, `/api/runs/:id/activity` (the

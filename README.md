@@ -236,12 +236,15 @@ is not a terminal the window defaults to 60 seconds so a tool call with a
 timeout always gets a complete answer; `--for` sets it, `0` means snapshot
 only. `argus tail --help` lists every option.
 
-**For a Claude Code session on that machine**, `argus tail --install-skill`
-copies the bundled `argus-tail` skill into `~/.claude/skills/`, after which
-"what is Argus doing?" or `/argus-tail` has the agent run the command and relay
-it — including from a phone, where a Remote Control session is often the only
-window onto the box. The skill also lives in this repo at
-`.claude/skills/argus-tail/`, so a session opened inside the checkout has it
+**For an agent on that machine**, `argus tail --install-skill` installs the
+bundled `argus-tail` skill for every agent CLI found on PATH — Claude Code
+(`~/.claude/skills/`) and Codex (`~/.codex/skills/`) read the same `SKILL.md`
+format — after which "what is Argus doing?", `/argus-tail` (Claude Code) or
+`$argus-tail` (Codex) has the agent run the command and relay it, including
+from a phone, where a remote session is often the only window onto the box.
+`--install-skill=codex`, `=claude` or `=all` picks explicitly. The skill also
+lives in this repo, at `.claude/skills/argus-tail/` with `.agents/skills/`
+linking to it, so a session of either CLI opened inside the checkout has it
 already.
 
 Or with Docker (mount your `~/.claude`, publish the port, set a token):

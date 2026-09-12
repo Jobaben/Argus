@@ -185,8 +185,28 @@ describe("parseTailArgs", () => {
       json: true,
       context: 0,
       snapshot: false,
-      installSkill: false,
+      installSkill: null,
     });
+  });
+
+  it("reads --install-skill bare, with a runtime, or with all — and never eats the next flag", () => {
+    const auto = parseTailArgs(["--install-skill"], env, true);
+    if (auto.kind === "run") assert.equal(auto.options.installSkill, "auto");
+    else assert.fail("expected run");
+    const codex = parseTailArgs(["--install-skill=codex"], env, true);
+    if (codex.kind === "run") assert.equal(codex.options.installSkill, "codex");
+    else assert.fail("expected run");
+    const all = parseTailArgs(["--install-skill=ALL", "--json"], env, true);
+    if (all.kind === "run") {
+      assert.equal(all.options.installSkill, "all");
+      assert.equal(all.options.json, true);
+    } else assert.fail("expected run");
+    const bad = parseTailArgs(["--install-skill=qwen"], env, true);
+    assert.equal(bad.kind, "error");
+    if (bad.kind === "error") assert.match(bad.message, /takes claude, codex or all, got "qwen"/);
+    // A space-separated value is not a value: it surfaces as an unknown option.
+    const spaced = parseTailArgs(["--install-skill", "codex"], env, true);
+    assert.equal(spaced.kind, "error");
   });
 
   it("reports bad values and unknown flags, and recognises --help", () => {

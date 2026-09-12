@@ -49,7 +49,24 @@ export interface TailOptions {
   /** Retained activity lines to show per running step in the snapshot. */
   context: number;
   snapshot: boolean;
-  installSkill: boolean;
+  /**
+   * `--install-skill`: which agent CLIs get the bundled skill. `"auto"` means
+   * every one whose CLI is on PATH (Claude Code when none is), the others
+   * name one or all of them explicitly. `null` = not installing.
+   */
+  installSkill: SkillTarget | null;
+}
+
+/** The CLIs that read a `skills/<name>/SKILL.md` tree under their home. */
+export const SKILL_RUNTIMES = ["claude", "codex"] as const;
+export type SkillRuntime = (typeof SKILL_RUNTIMES)[number];
+export type SkillTarget = SkillRuntime | "all" | "auto";
+
+export function parseSkillTarget(raw: string | undefined): SkillTarget | null {
+  if (raw === undefined || raw === "") return "auto";
+  const v = raw.trim().toLowerCase();
+  if (v === "all" || v === "auto") return v;
+  return (SKILL_RUNTIMES as readonly string[]).includes(v) ? (v as SkillRuntime) : null;
 }
 
 export type ParsedArgs =
@@ -82,8 +99,12 @@ Options:
   --json              one JSON object per line instead of text
   --url <base>        Argus base URL (default http://127.0.0.1:$ARGUS_PORT or 7777)
   --token <token>     bearer token (default $ARGUS_TOKEN)
-  --install-skill     install the "argus-tail" Claude Code skill into
-                      $ARGUS_CLAUDE_HOME/skills (default ~/.claude/skills) and exit
+  --install-skill[=claude|codex|all]
+                      install the bundled "argus-tail" skill so an agent on
+                      this machine can run and relay the tail, then exit.
+                      Bare: every CLI found on PATH (Claude Code if none).
+                      Lands in $ARGUS_CLAUDE_HOME/skills (~/.claude/skills)
+                      and/or $CODEX_HOME/skills (~/.codex/skills).
   --help              show this help
 
 Exit status: 0 when the window ended (or Ctrl-C), 1 when Argus could not be
@@ -130,7 +151,7 @@ export function parseTailArgs(
     json: false,
     context: DEFAULT_CONTEXT_LINES,
     snapshot: true,
-    installSkill: false,
+    installSkill: null,
   };
   const value = (i: number, flag: string): string | { error: string } => {
     const arg = argv[i];
@@ -162,9 +183,20 @@ export function parseTailArgs(
       case "--no-snapshot":
         options.snapshot = false;
         break;
-      case "--install-skill":
-        options.installSkill = true;
+      case "--install-skill": {
+        // Optional value, `=` form only: a bare `--install-skill` must not eat
+        // the next flag. `--install-skill codex` would read as "install for
+        // auto, then an unknown option 'codex'", which the default arm reports.
+        const target = parseSkillTarget(arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : "");
+        if (target === null) {
+          return {
+            kind: "error",
+            message: `--install-skill takes ${SKILL_RUNTIMES.join(", ")} or all, got "${arg.slice(arg.indexOf("=") + 1)}"`,
+          };
+        }
+        options.installSkill = target;
         break;
+      }
       case "--for": {
         const ms = parseDuration(v as string);
         if (ms === null)

@@ -44,10 +44,14 @@ All notable changes to Argus are documented here. The format follows
   `/api/agents`. When stdout is not a terminal the window defaults to 60 seconds
   so an agent's tool call always returns a complete answer; `--for` sets it
   (`0` = snapshot only), `--until-idle` ends it once nothing is running,
-  `--json` emits one object per line. A bundled Claude Code skill
-  (`.claude/skills/argus-tail/`, installed into `~/.claude/skills/` by
-  `argus tail --install-skill`) teaches a session on that machine to run it and
-  relay it. Alongside it, `GET /api/runs/:id/activity` exposes the run tailer's
+  `--json` emits one object per line. A bundled skill teaches an agent session
+  on that machine to run it and relay it: Claude Code and Codex read the same
+  `SKILL.md` format from `skills/<name>/` under their homes, so it is one file
+  (`.claude/skills/argus-tail/`, with `.agents/skills/` linking to it for a
+  Codex session inside the checkout) that `argus tail --install-skill` copies
+  into `~/.claude/skills/` and/or `~/.codex/skills/` — bare, for every CLI on
+  PATH; `=claude`, `=codex` or `=all` to choose. Alongside it,
+  `GET /api/runs/:id/activity` exposes the run tailer's
   retained events for a running step, so a client arriving mid-run can say what
   the step has been doing rather than only what it did last.
 - **Argus as a harness: capability profiles, environment policy, deterministic
