@@ -132,6 +132,7 @@ const app = createApp({
   users,
   analysis,
   activity: () => tailer.latest(),
+  activityLog: (runId) => tailer.events(runId),
   fleet: () => fleetPoller.state(),
 });
 

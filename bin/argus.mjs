@@ -18,6 +18,14 @@ const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const HELP = `argus — the all-seeing monitor for your Claude Code agents
 
 Usage: argus [options]
+       argus tail [tail options]
+
+Commands:
+  (none)         serve the dashboard and API on one port
+  tail           stream what Argus is doing as text — a snapshot of what is
+                 running, waiting for approval or just finished, then the live
+                 feed for a bounded window. For a terminal you cannot see, or
+                 an agent relaying it. \`argus tail --help\` for its options.
 
 Options:
   --open         open the dashboard in your browser once the server is up
@@ -128,20 +136,42 @@ async function openWhenUp(url) {
 const major = Number(process.versions.node.split(".")[0]);
 if (major < 22) fail(`Node >= 22 required (you have ${process.versions.node})`);
 
-const opts = parseArgs(process.argv.slice(2));
-ensureBuilt(opts.rebuild);
+/**
+ * `argus tail` — the terminal frontend. It is a client of a *running* Argus
+ * (same port, same token), so it needs the compiled server tree but starts no
+ * server of its own. Everything after `tail` belongs to it.
+ */
+if (process.argv[2] === "tail") {
+  ensureBuilt(false);
+  const child = spawn(
+    process.execPath,
+    [path.join(root, "server", "dist", "cli", "tail.js"), ...process.argv.slice(3)],
+    { cwd: root, env: process.env, stdio: "inherit" },
+  );
+  child.on("exit", (code, signal) => process.exit(signal ? 130 : (code ?? 1)));
+  // Ctrl-C reaches the child through the shared terminal; forward it when it
+  // arrives here first so the child prints its closing line either way.
+  for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => child.kill(sig));
+} else {
+  serve();
+}
 
-const env = { ...process.env };
-if (opts.port !== null) env.ARGUS_PORT = String(opts.port);
-if (opts.agent !== null) env.ARGUS_AGENT = opts.agent;
-const port = opts.port ?? (Number(process.env.ARGUS_PORT || "") || 7777);
+function serve() {
+  const opts = parseArgs(process.argv.slice(2));
+  ensureBuilt(opts.rebuild);
 
-const child = spawn(process.execPath, [path.join(root, "server", "dist", "index.js")], {
-  cwd: root,
-  env,
-  stdio: "inherit",
-});
-child.on("exit", (code, signal) => process.exit(signal ? 1 : (code ?? 1)));
-for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => child.kill(sig));
+  const env = { ...process.env };
+  if (opts.port !== null) env.ARGUS_PORT = String(opts.port);
+  if (opts.agent !== null) env.ARGUS_AGENT = opts.agent;
+  const port = opts.port ?? (Number(process.env.ARGUS_PORT || "") || 7777);
 
-if (opts.open) void openWhenUp(`http://127.0.0.1:${port}`);
+  const child = spawn(process.execPath, [path.join(root, "server", "dist", "index.js")], {
+    cwd: root,
+    env,
+    stdio: "inherit",
+  });
+  child.on("exit", (code, signal) => process.exit(signal ? 1 : (code ?? 1)));
+  for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => child.kill(sig));
+
+  if (opts.open) void openWhenUp(`http://127.0.0.1:${port}`);
+}
