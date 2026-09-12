@@ -220,7 +220,7 @@ argus tail --json                 # one JSON object per line
 10:42:03 ⏸ Docs sweep · waiting for approval at "review" for 12m 00s — three files changed
 10:38:11 · ✗ Deps audit failed in 5s: npm audit found 3 vulnerabilities
 10:42:03 ⏲ next: schedule "Hourly sync" in 17m 57s (11:00)
-10:42:03 👁 following live for 60s
+10:42:03 👁 following live for 1m 00s
 10:42:15 ⚙ Release train › build · Bash: git diff --stat
 10:42:31 ■ ✓ Release train › build succeeded in 4m 40s · $0.31
 10:42:31 → Release train › review started

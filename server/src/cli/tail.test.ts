@@ -171,7 +171,9 @@ function io(over: Partial<TailIo> = {}): TailIo & { lines: string[]; errors: str
   };
 }
 
-async function waitFor(pred: () => boolean, ms = 3000): Promise<void> {
+/** Generous by design: a coverage-instrumented run on a two-core CI runner is
+ *  several times slower than a laptop, and a wait only lasts as long as it must. */
+async function waitFor(pred: () => boolean, ms = 15_000): Promise<void> {
   const deadline = Date.now() + ms;
   while (!pred()) {
     if (Date.now() > deadline) throw new Error("timed out waiting");
@@ -218,13 +220,32 @@ describe("runTail against a stand-in Argus", () => {
     assert.ok(fake.requests.some((r) => r.path === "/api/runs/run-1/activity"));
   });
 
-  it("follows: pings become diffs, payload frames print, and the window closes it", async () => {
+  it("a bounded window closes the follow on its own", async () => {
+    fake.runs = [run()];
+    const o = io();
+    const before = fake.connections;
+    const done = runTail(options(fake, { forMs: 300, snapshot: false }), o);
+    await connected(fake, before);
+    assert.equal(await done, 0);
+    const lines = o.lines.map(strip);
+    assert.equal(lines[0], "👁 following live for 300ms");
+    // Elapsed is measured from the first read, so a slow machine may round up.
+    assert.match(
+      lines[1],
+      /^── followed for \d+(ms|s) · 0 events · 1 still running · run `argus tail` again to keep following$/,
+    );
+  });
+
+  it("follows: pings become diffs and payload frames print, in order", async () => {
     fake.requests = [];
     fake.runs = [run()];
     fake.activity = {};
-    const o = io();
+    // Ended by signal once everything expected has printed, not by a timer:
+    // the assertions below must not depend on how fast the runner is.
+    const controller = new AbortController();
+    const o = io({ signal: controller.signal });
     const before = fake.connections;
-    const done = runTail(options(fake, { forMs: 2000 }), o);
+    const done = runTail(options(fake, { forMs: null }), o);
     await connected(fake, before);
     // Something ran to completion and something new started.
     fake.runs = [
@@ -250,18 +271,20 @@ describe("runTail against a stand-in Argus", () => {
         detail: "ran at 10:29",
       },
     });
+    await waitFor(() => o.lines.some((l) => l.includes("Hourly sync")));
+    controller.abort();
     const code = await done;
     assert.equal(code, 0);
     const lines = o.lines.map(strip);
-    const follow = lines.indexOf("👁 following live for 2s");
+    const follow = lines.indexOf("👁 following live (Ctrl-C to stop)");
     assert.ok(follow > 0, `no follow marker in ${lines.join("\n")}`);
-    assert.deepEqual(lines.slice(follow + 1), [
+    assert.deepEqual(lines.slice(follow + 1, -1), [
       "■ ✓ Nightly triage succeeded in 9m 00s",
       "▶ Deps audit started",
       "⚙ Deps audit · Read: README.md",
       '⚠ monitor "Hourly sync" recovered — ran at 10:29',
-      "── followed for 2s · 4 events · 1 still running · run `argus tail` again to keep following",
     ]);
+    assert.match(lines[lines.length - 1], /^── stopped after .* · 4 events · 1 still running$/);
     // The second read of /api/runs was conditional, and the overview re-read
     // (unchanged) came back 304 without being counted as anything.
     const runReads = fake.requests.filter((r) => r.path === "/api/runs?limit=100");
@@ -319,13 +342,15 @@ describe("runTail against a stand-in Argus", () => {
 
   it("reconnects when the socket drops and re-reads what it missed", async () => {
     fake.runs = [run()];
-    const o = io();
+    const controller = new AbortController();
+    const o = io({ signal: controller.signal });
     const before = fake.connections;
-    const done = runTail(options(fake, { forMs: 2500 }), o);
+    const done = runTail(options(fake, { forMs: null }), o);
     await connected(fake, before);
     for (const ws of fake.sockets) ws.terminate();
     fake.runs = [run({ status: "succeeded", endedAt: "2026-07-07T10:29:00.000Z" })];
     await waitFor(() => o.lines.some((l) => l.includes("Nightly triage succeeded")));
+    controller.abort();
     assert.equal(await done, 0);
     const lines = o.lines.map(strip);
     assert.ok(lines.some((l) => l.startsWith("↻ live feed dropped — reconnecting")));

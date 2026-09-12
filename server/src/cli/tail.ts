@@ -34,6 +34,7 @@ import { probeCommand } from "../setup/prereqs.js";
 import {
   buildSnapshot,
   endLine,
+  formatMs,
   parseFrame,
   parseTailArgs,
   refreshFor,
@@ -351,7 +352,7 @@ export async function runTail(options: TailOptions, io: TailIo): Promise<number>
         text:
           options.forMs === null
             ? "following live (Ctrl-C to stop)"
-            : `following live for ${Math.round(options.forMs / 1000)}s${options.untilIdle ? ", or until idle" : ""}`,
+            : `following live for ${formatMs(options.forMs)}${options.untilIdle ? ", or until idle" : ""}`,
       });
     } else {
       print({
