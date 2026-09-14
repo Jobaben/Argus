@@ -279,6 +279,20 @@ All notable changes to Argus are documented here. The format follows
 
 ### Fixed
 
+- **Retrying a phase after its pipeline was edited could launch a different
+  phase.** An instance snapshots its phase list when it starts, but the engine
+  looked the phase's definition up by _position_ in the current definition. Once
+  an author inserted a phase ahead of the failed one, a Retry or Revise spawned
+  whatever now sat at that index — the wrong prompt, recorded on the right
+  phase — and the child's completion signal named a phase id the instance did
+  not have, so it was dropped and the reconciler failed the step 30 s later as
+  "run ended without emitting a completion signal". The launcher now resolves
+  the definition by phase id. A phase the definition has since removed fails
+  cleanly as a `configuration` failure naming the missing phase (previously the
+  launch threw and left the instance wedged as running with nothing to heal),
+  and a signal the instance cannot apply is journalled as `phase.signalled`
+  with an `(ignored: …)` detail and logged, instead of recorded as if it had
+  landed.
 - **The Command Center's Live rail listed a running pipeline step twice.** The
   rail shows every working board step, then adds the running runs the board
   does not own (scheduled firings, one-off Launches) so it can never claim

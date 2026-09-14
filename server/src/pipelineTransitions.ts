@@ -70,6 +70,9 @@ export interface TransitionResult {
   /** Set by {@link applyVerification} when the report was taken; absent when it
    *  was refused as stale. */
   verificationApplied?: boolean;
+  /** Set by {@link advance} when the signal matched nothing it may drive and
+   *  the instance was returned untouched. */
+  ignored?: "unknown-phase" | "phase-not-running" | "unknown-run";
 }
 
 /** Kept for definitions and tests that predate `{{artifacts.<name>}}`. */
@@ -388,14 +391,17 @@ export function advance(
   // Located by id, not by a cursor: with a fan-out, several phases are live at
   // once and the signalling one is whichever sent it.
   const phase = inst.phases.find((p) => p.id === signal.phaseId);
-  if (!phase || phase.status !== "running") return { instance: inst, startPhases: [] };
+  if (!phase) return { instance: inst, startPhases: [], ignored: "unknown-phase" };
+  if (phase.status !== "running") {
+    return { instance: inst, startPhases: [], ignored: "phase-not-running" };
+  }
 
   // Only a run currently tracked by this phase may drive it. A signal whose
   // runId matches no step comes from a stale or duplicate concurrent run (its
   // runId was overwritten by a later revise/re-spawn) and is ignored, so it
   // can't terminalize or advance the instance behind the tracked run's back.
   const step = phase.steps.find((s) => s.runId === signal.runId);
-  if (!step) return { instance: inst, startPhases: [] };
+  if (!step) return { instance: inst, startPhases: [], ignored: "unknown-run" };
   step.status = signal.type === "failed" ? "failed" : "succeeded";
   if (signal.payload !== undefined) phase.payload = signal.payload;
   // A structured result belongs to the step that submitted it until every step
@@ -511,6 +517,29 @@ export function applyVerification(
   );
   failLeftoverSteps(phase);
   return { ...settle(def, inst, nowISO), verificationApplied: true };
+}
+
+/**
+ * Fail a phase that is about to launch but whose definition is gone: the
+ * pipeline was edited under a live instance and no longer names this phase.
+ * A `configuration` failure, never retried, because running again cannot
+ * bring the phase back; a person fixes the definition or revises elsewhere.
+ * Only a `running` phase is taken (the one a revise, retry or settle just
+ * marked); anything else is left alone.
+ */
+export function applyUnlaunchable(
+  def: PipelineDefinition,
+  inst: PipelineInstance,
+  phaseId: string,
+  reason: string,
+  nowISO: string,
+): TransitionResult {
+  const phase = inst.phases.find((p) => p.id === phaseId);
+  if (!phase || phase.status !== "running") return { instance: inst, startPhases: [] };
+  phase.status = "failed";
+  phase.payload = withFailureClass(withReason(phase.payload, reason), "configuration");
+  failLeftoverSteps(phase);
+  return settle(def, inst, nowISO);
 }
 
 /** The phase a human action targets: the named one, else the single paused one. */

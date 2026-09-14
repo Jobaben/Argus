@@ -19,6 +19,7 @@ import * as pipelinesMod from "./sources/pipelines.js";
 import * as instancesMod from "./sources/instances.js";
 import * as runsMod from "./sources/runs.js";
 import * as totalsMod from "./sources/totals.js";
+import { readJournal } from "./sources/journal.js";
 
 async function load() {
   // Loosely typed, as the dynamic imports these replaced were: the tests read
@@ -1125,4 +1126,221 @@ test("engine tracks a step run at spawn and untracks it on completion", async ()
   rec.dones[0].resolve({ code: 0 });
   await waitFor(() => untracked.length === 1);
   assert.equal(untracked[0], rec.calls[0].runId);
+});
+
+// ── The definition is edited under a live instance ─────────────────────────
+//
+// An instance snapshots its phases when it starts; the definition may gain,
+// lose or reorder phases afterwards. Every launch must run the *instance*
+// phase's own definition, found by id, never whatever sits at the same index.
+
+const CONTEXT = {
+  id: "context",
+  name: "Context",
+  gated: false,
+  steps: [{ name: "c", prompt: "gather context" }],
+};
+const PLAN = {
+  id: "plan",
+  name: "Plan",
+  gated: false,
+  steps: [{ name: "wp", prompt: "plan {{previous.payload}}" }],
+};
+
+test("a revise after the definition gained a phase relaunches the instance's phase, not its index-mate", async () => {
+  const { engine, pipelines, instances } = await load();
+  await seedPipeline(pipelines, {
+    phases: [
+      { ...CONTEXT, cwd: home },
+      { ...PLAN, cwd: home },
+    ],
+  });
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const inst = await e.start("p1", "manual");
+  assert.equal(rec.calls[0].env.ARGUS_PHASE_ID, "context");
+  await e.onSignal(inst!.id, {
+    instanceId: inst!.id,
+    phaseId: "context",
+    runId: rec.calls[0].runId,
+    type: "failed",
+    token: inst!.signalToken,
+    payload: { reason: "nope" },
+  });
+
+  // The author inserts a phase ahead of the failed one: indices shift, ids don't.
+  await pipelines.updatePipeline(
+    "p1",
+    pipelines.validatePipelinePatch({
+      phases: [
+        {
+          id: "sync",
+          name: "Sync",
+          cwd: home,
+          gated: false,
+          steps: [{ name: "s", prompt: "sync the repo" }],
+        },
+        { ...CONTEXT, cwd: home },
+        { ...PLAN, cwd: home },
+      ],
+    }),
+    new Date(2026, 5, 30, 12, 30),
+  );
+
+  const res = await e.revise(inst!.id);
+  assert.equal(res.ok, true);
+  assert.equal(rec.calls.length, 2);
+  assert.equal(rec.calls[1].env.ARGUS_PHASE_ID, "context");
+  const run = (await runsMod.readRun(rec.calls[1].runId))!.run;
+  assert.equal(run.phaseId, "context");
+  assert.equal(run.prompt, "gather context");
+  const after = await instances.readInstance(inst!.id);
+  assert.equal(after.phases[0].id, "context");
+  assert.equal(after.phases[0].status, "running");
+  assert.equal(after.phases[0].steps[0].runId, rec.calls[1].runId);
+
+  // The Stop hook signals with whatever ARGUS_PHASE_ID it was handed.
+  await e.onSignal(inst!.id, {
+    instanceId: inst!.id,
+    phaseId: rec.calls[1].env.ARGUS_PHASE_ID,
+    runId: rec.calls[1].runId,
+    type: "completed",
+    token: inst!.signalToken,
+  });
+  await e.drain();
+  const done = await instances.readInstance(inst!.id);
+  assert.equal(done.phases[0].status, "succeeded");
+  assert.equal(done.phases[1].status, "running");
+  assert.equal(rec.calls.length, 3);
+  assert.equal(rec.calls[2].env.ARGUS_PHASE_ID, "plan");
+});
+
+test("a revise after the definition dropped the failed phase fails it as a configuration error", async () => {
+  const { engine, pipelines, instances } = await load();
+  await seedPipeline(pipelines, {
+    phases: [
+      {
+        id: "brainstorm",
+        name: "Brainstorm",
+        cwd: home,
+        gated: false,
+        steps: [{ name: "bs", prompt: "go" }],
+      },
+      { ...PLAN, cwd: home },
+    ],
+  });
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const inst = await e.start("p1", "manual");
+  await e.onSignal(inst!.id, {
+    instanceId: inst!.id,
+    phaseId: "brainstorm",
+    runId: rec.calls[0].runId,
+    type: "completed",
+    token: inst!.signalToken,
+  });
+  await e.drain();
+  await waitFor(() => rec.calls.length === 2);
+  await e.onSignal(inst!.id, {
+    instanceId: inst!.id,
+    phaseId: "plan",
+    runId: rec.calls[1].runId,
+    type: "failed",
+    token: inst!.signalToken,
+  });
+
+  // The author removes the failed phase altogether; the definition shrinks.
+  await pipelines.updatePipeline(
+    "p1",
+    pipelines.validatePipelinePatch({
+      phases: [
+        {
+          id: "brainstorm",
+          name: "Brainstorm",
+          cwd: home,
+          gated: false,
+          steps: [{ name: "bs", prompt: "go" }],
+        },
+      ],
+    }),
+    new Date(2026, 5, 30, 12, 30),
+  );
+
+  const res = await e.revise(inst!.id);
+  assert.equal(res.ok, true);
+  assert.equal(rec.calls.length, 2, "nothing was spawned");
+  const after = await instances.readInstance(inst!.id);
+  const plan = after.phases[1];
+  assert.equal(plan.id, "plan");
+  assert.equal(plan.status, "failed");
+  assert.equal(plan.attempt, 1);
+  assert.equal(plan.payload.failureClass, "configuration");
+  assert.match(plan.payload.reason, /phase "plan" no longer exists in pipeline "feature"/);
+  assert.ok(plan.steps.every((s: any) => s.status === "failed" && s.runId === null));
+  assert.equal(after.status, "failed");
+  await waitFor(async () =>
+    (await readJournal(inst!.id)).some(
+      (x) =>
+        x.kind === "phase.failed" &&
+        x.phaseId === "plan" &&
+        /^configuration: /.test(x.detail ?? ""),
+    ),
+  );
+
+  // The reconciler has nothing to heal and leaves the verdict alone.
+  await e.reconcile();
+  await e.drain();
+  const later = await instances.readInstance(inst!.id);
+  assert.equal(later.status, "failed");
+  assert.equal(later.phases[1].status, "failed");
+  assert.equal(rec.calls.length, 2);
+});
+
+test("a signal for a phase the instance does not have is journalled as ignored", async () => {
+  const { engine, pipelines, instances } = await load();
+  await seedPipeline(pipelines);
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const inst = await e.start("p1", "manual");
+
+  const res = await e.onSignal(inst!.id, {
+    instanceId: inst!.id,
+    phaseId: "sync",
+    runId: rec.calls[0].runId,
+    type: "completed",
+    token: inst!.signalToken,
+  });
+  assert.equal(res.ok, true);
+  const after = await instances.readInstance(inst!.id);
+  assert.equal(after.status, "running");
+  assert.equal(after.phases[0].status, "running");
+  assert.equal(rec.calls.length, 1);
+  let entry: any;
+  await waitFor(async () => {
+    entry = (await readJournal(inst!.id)).find(
+      (x) => x.kind === "phase.signalled" && x.phaseId === "sync",
+    );
+    return entry !== undefined;
+  });
+  assert.match(entry.detail, /ignored/);
+  assert.match(entry.detail, /no phase "sync"/);
+
+  // A runId the phase does not track is ignored the same way.
+  await e.onSignal(inst!.id, {
+    instanceId: inst!.id,
+    phaseId: "brainstorm",
+    runId: "not-a-run",
+    type: "completed",
+    token: inst!.signalToken,
+  });
+  let stale: any;
+  await waitFor(async () => {
+    stale = (await readJournal(inst!.id)).find(
+      (x) => x.kind === "phase.signalled" && x.runId === "not-a-run",
+    );
+    return stale !== undefined;
+  });
+  assert.match(stale.detail, /ignored/);
+  assert.match(stale.detail, /not a tracked step/);
+  assert.equal((await instances.readInstance(inst!.id)).phases[0].status, "running");
 });
