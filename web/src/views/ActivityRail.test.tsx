@@ -111,6 +111,48 @@ describe("ActivityRail — live", () => {
     expect(screen.getByText("Nightly code review")).toBeInTheDocument();
     expect(screen.queryByText(/nothing is running/i)).toBeNull();
   });
+
+  it("does not list a pipeline step's run twice — once as the step, once as a run", () => {
+    // The engine records each pipeline step as a run named `pipeline · step`,
+    // and that run is "running" while the step is working. Only the step line
+    // (which carries the live tool call) should appear, not a second line for
+    // the same run under its schedule name.
+    const rows = [
+      row({
+        name: "Backend Autopilot",
+        phases: [
+          {
+            id: "p1",
+            name: "Read the specification",
+            status: "working",
+            reason: null,
+            steps: [{ name: "Read the specification", runId: "r9", status: "working" }],
+          },
+        ],
+      } as Partial<OverviewRow>),
+    ];
+    render(
+      <ActivityRail
+        rows={rows}
+        liveActivity={new Map([["r9", { label: "Writing context.md", at: "t" }]])}
+        runs={[
+          run({
+            id: "r9",
+            status: "running",
+            scheduleName: "Backend Autopilot · Claim the ticket",
+          }),
+          run({ id: "r5", status: "running", scheduleName: "Nightly code review" }),
+        ]}
+        loading={false}
+      />,
+    );
+    expect(screen.getByText("Backend Autopilot · Read the specification")).toBeInTheDocument();
+    expect(screen.queryByText("Backend Autopilot · Claim the ticket")).toBeNull();
+    expect(screen.getAllByText(/Writing context\.md/)).toHaveLength(1);
+    // The unrelated scheduled run still shows, and the count is 2 not 3.
+    expect(screen.getByText("Nightly code review")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /^live ?2$/i })).toBeInTheDocument();
+  });
 });
 
 describe("ActivityRail — recent", () => {

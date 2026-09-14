@@ -113,6 +113,7 @@ export function ActivityRail({
             .filter((step) => step.status === "working")
             .map((step) => ({
               key: `${row.instanceId ?? row.pipelineId}:${phase.id}:${step.name}`,
+              runId: step.runId ?? null,
               label: `${row.name} · ${step.name}`,
               activity: step.runId ? (liveActivity.get(step.runId) ?? null) : null,
             })),
@@ -127,7 +128,13 @@ export function ActivityRail({
     () => runs.filter((run) => run.status !== "running").slice(0, RECENT_LIMIT),
     [runs],
   );
-  const inFlightRuns = useMemo(() => runs.filter((run) => run.status === "running"), [runs]);
+  // Running runs the board does not already show as a working step. A pipeline
+  // step's run is *also* a running run, so without this it would appear twice —
+  // once under its step name, once under the run's schedule name.
+  const inFlightRuns = useMemo(() => {
+    const shown = new Set(working.map((step) => step.runId).filter(Boolean));
+    return runs.filter((run) => run.status === "running" && !shown.has(run.id));
+  }, [runs, working]);
 
   return (
     <aside
