@@ -11,7 +11,7 @@
  * the only thing faked in the whole path is the agent's own thinking.
  */
 
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -42,8 +42,16 @@ export const LEAK_VAR = "E2E_SECRET_LEAK";
 const POLL_TIMEOUT_MS = 10_000;
 const POLL_INTERVAL_MS = 20;
 
+/**
+ * A throwaway directory, resolved through any symlinks on the way to it.
+ *
+ * On macOS `tmpdir()` is `/var/folders/…`, itself a symlink to
+ * `/private/var/folders/…`, and the kernel hands a child process the resolved
+ * form of its own `cwd`. Resolving here means a fixture path and the path an
+ * agent reports back are the same string.
+ */
 export function tempDir(prefix: string): string {
-  return mkdtempSync(path.join(tmpdir(), prefix));
+  return realpathSync(mkdtempSync(path.join(tmpdir(), prefix)));
 }
 
 export function hasGit(): boolean {
