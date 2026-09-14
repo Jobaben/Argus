@@ -414,6 +414,19 @@ export function createEngine(deps: EngineDeps): Engine {
   }
 
   /**
+   * The definition an existing instance runs against: the copy it snapshotted
+   * when it started. Only `start` reads the live definition; everything after
+   * — a signal, an approval, a revise, a retry, a verification, a run healed
+   * after a restart — reads the snapshot, so an edit (or a delete) saved
+   * mid-flight cannot change what the instance does. An instance written
+   * before the snapshot existed has none and falls back to the live definition,
+   * which is exactly the behaviour it was started under.
+   */
+  async function defFor(inst: PipelineInstance): Promise<PipelineDefinition | undefined> {
+    return inst.definition ?? (await loadDef(inst.pipelineId));
+  }
+
+  /**
    * Launch a wave of ready phases, given as indices into `inst.phases`.
    *
    * Sequential over the wave rather than `Promise.all`: each phase's launch
@@ -433,9 +446,11 @@ export function createEngine(deps: EngineDeps): Engine {
 
   /**
    * Launch one instance phase. `phaseIndex` indexes `inst.phases`; the phase's
-   * definition is found by id, never by that index, because the definition may
-   * have been edited since `initInstance` snapshotted the phase list (a phase
-   * inserted ahead shifts every index, and its id is the one stable key).
+   * definition is found by id, never by that index. `def` is normally the
+   * instance's own snapshot, where the two line up — but an instance from
+   * before the snapshot existed runs against the live definition, which may
+   * have been edited since it started (a phase inserted ahead shifts every
+   * index, and its id is the one stable key).
    */
   async function startPhase(
     def: PipelineDefinition,
@@ -986,7 +1001,7 @@ export function createEngine(deps: EngineDeps): Engine {
       const phase = inst.phases.find((p) => p.id === phaseId);
       const step = phase?.steps.find((s) => s.runId === runId);
       if (!phase || phase.status !== "running" || step?.status !== "running") return;
-      const def = await loadDef(inst.pipelineId);
+      const def = await defFor(inst);
       if (!def) return;
       if (beforeTransition) await beforeTransition();
       const res = failStepInPlace(def, inst, phaseId, runId, failureClass, reason, extra);
@@ -1129,7 +1144,7 @@ export function createEngine(deps: EngineDeps): Engine {
     for (const candidate of await readInstances()) {
       if (candidate.status !== "running" && candidate.status !== "failed") continue;
       if (!candidate.phases.some((p) => p.retryAt)) continue;
-      const def = await loadDef(candidate.pipelineId);
+      const def = await defFor(candidate);
       if (!def) continue;
       await locks.withLock(candidate.id, async () => {
         const inst = await readInstance(candidate.id);
@@ -1358,7 +1373,7 @@ export function createEngine(deps: EngineDeps): Engine {
       if (!inst) return { ok: false, code: 404 };
       if (signal.token !== inst.signalToken) return { ok: false, code: 403 };
       if (inst.status !== "running") return { ok: true, code: 200 }; // paused/terminal → idempotent ignore
-      const def = await loadDef(inst.pipelineId);
+      const def = await defFor(inst);
       if (!def) return { ok: false, code: 404 };
       const res = advance(def, inst, signal, nowISO());
       const outcome: Run["outcome"] | undefined =
@@ -1438,7 +1453,7 @@ export function createEngine(deps: EngineDeps): Engine {
     return locks.withLock(instanceId, async () => {
       const inst = await readInstance(instanceId);
       if (!inst) return { ok: false, code: 404, error: "instance not found" };
-      const def = await loadDef(inst.pipelineId);
+      const def = await defFor(inst);
       if (!def) return { ok: false, code: 404, error: "pipeline not found" };
       let res;
       try {
@@ -1458,7 +1473,7 @@ export function createEngine(deps: EngineDeps): Engine {
     return locks.withLock(instanceId, async () => {
       const inst = await readInstance(instanceId);
       if (!inst) return { ok: false, code: 404, error: "instance not found" };
-      const def = await loadDef(inst.pipelineId);
+      const def = await defFor(inst);
       if (!def) return { ok: false, code: 404, error: "pipeline not found" };
       // Validate the transition BEFORE any destructive side effect: killing the
       // phase's straggler runs must not happen if the instance can't be revised
@@ -1612,156 +1627,158 @@ export function createEngine(deps: EngineDeps): Engine {
     //    Each instance is healed under its lock, re-reading fresh state inside,
     //    so a genuine completion signal landing mid-pass is never clobbered by a
     //    stale "failed" write (the TOCTOU the lock closes).
-    for (const def of defs) {
-      const candidates = await readInstances({ pipelineId: def.id });
-      for (const candidate of candidates) {
-        if (candidate.status !== "running") continue;
-        await locks.withLock(candidate.id, async () => {
-          const inst = await readInstance(candidate.id);
-          if (!inst || inst.status !== "running") return;
-          let current = inst;
-          // A phase whose checks were running when Argus stopped is verified
-          // again: the checks are Argus's own and deterministic, and the
-          // attempt key makes a duplicate report a no-op.
-          for (const i of livePhases(current)) {
-            const phase = current.phases[i];
-            if (
-              phase.status === "running" &&
-              phase.verification?.status === "running" &&
-              !verifying.has(`${current.id}:${phase.id}:${phase.attempt}`)
-            ) {
-              queueVerification(current.id, def, phase.id, phase.attempt);
-            }
+    //    Over the instances, not the definitions: an instance heals against its
+    //    own snapshot, so one whose definition was edited — or deleted — under
+    //    it is healed like any other rather than left running forever.
+    for (const candidate of await readInstances()) {
+      if (candidate.status !== "running") continue;
+      const def = candidate.definition ?? defs.find((d) => d.id === candidate.pipelineId);
+      if (!def) continue;
+      await locks.withLock(candidate.id, async () => {
+        const inst = await readInstance(candidate.id);
+        if (!inst || inst.status !== "running") return;
+        let current = inst;
+        // A phase whose checks were running when Argus stopped is verified
+        // again: the checks are Argus's own and deterministic, and the
+        // attempt key makes a duplicate report a no-op.
+        for (const i of livePhases(current)) {
+          const phase = current.phases[i];
+          if (
+            phase.status === "running" &&
+            phase.verification?.status === "running" &&
+            !verifying.has(`${current.id}:${phase.id}:${phase.attempt}`)
+          ) {
+            queueVerification(current.id, def, phase.id, phase.attempt);
           }
-          // Every live phase: with a fan-out, a died-without-signalling run can
-          // be in any of them, and healing only one would leave the others
-          // showing a working tile forever.
-          const orphans = livePhases(current).flatMap((i) =>
-            current.phases[i].steps.map((s) => ({ phaseId: current.phases[i].id, step: s })),
-          );
-          for (const { phaseId, step: s } of orphans) {
-            if (s.status !== "running" || !s.runId) continue;
-            let got = await readRun(s.runId);
-            // A step recorded as running with no process behind it — no run
-            // record at all, or one that never got a pid — and not being
-            // launched by this process: Argus stopped between recording the
-            // step and starting it. Nothing will ever signal for it, so it is
-            // failed here as a spawn failure (retryable by default).
-            if (
-              !live.has(s.runId) &&
-              (!got || (got.run.status === "running" && got.run.pid == null))
-            ) {
-              const stepDef = def.phases.find((p) => p.id === phaseId);
-              const reason = "Argus stopped before the step's process was started";
-              const stub: Run = got?.run ?? {
-                id: s.runId,
-                scheduleId: `pipeline:${current.pipelineId}`,
-                scheduleName: `${current.pipelineName} · ${stepDef?.name ?? phaseId}`,
-                prompt: "",
-                cwd: stepDef?.cwd ?? "",
-                status: "running",
-                trigger: "scheduled",
-                queuedAt: nowISO(),
-                startedAt: null,
-                endedAt: null,
-                durationMs: null,
-                pid: null,
-                exitCode: null,
-                sessionId: null,
-                project: stepDef ? encodeProject(stepDef.cwd) : null,
-                resultSummary: null,
-                error: null,
-                instanceId: current.id,
-                phaseId,
-              };
-              await writeRun({
-                ...stub,
-                status: "failed",
-                termination: "spawn-failed",
-                error: reason,
-                endedAt: nowISO(),
-              });
-              got = await readRun(s.runId);
-            }
-            // Reconcile only from a completed run record. A dead pid whose
-            // record is still `running` can be racing the normal close handler;
-            // guessing in that window would discard the agent's final message,
-            // which is what distinguishes success, failure, and ambiguity.
-            const ended =
-              got &&
-              (got.run.status === "failed" ||
-                got.run.status === "succeeded" ||
-                got.run.status === "interrupted" ||
-                got.run.status === "cancelled");
-            if (!ended) continue;
-            const restarted = got?.run.status === "interrupted";
-            const recovered =
-              !restarted && got && runtimeFor(got.run.runtime).outcomeFromRecord
-                ? recoverRunOutcome(got.run)
-                : null;
-            const signalType = recovered?.signalType ?? "failed";
-            // A recovered *completion* may carry a declared result. Read it the
-            // same way the stop hook would; this is the whole completion
-            // protocol for a runtime with no hook to install.
-            const recoveredResult = signalType === "completed" ? await readRunResult(s.runId) : {};
-            const payload = recovered
-              ? recovered.payload
-              : restarted
-                ? { reason: "Argus restarted mid-run — revise to retry", kind: "restarted" }
-                : {
-                    reason: got?.run.error ?? "run ended without emitting a completion signal",
-                  };
-            const {
-              instance,
-              startPhases: ready,
-              routing,
-              verify,
-            } = advance(
-              def,
-              current,
-              {
-                instanceId: current.id,
-                phaseId,
-                runId: s.runId,
-                type: signalType,
-                token: current.signalToken,
-                payload,
-                ...recoveredResult,
-              },
-              nowISO(),
-            );
-            if (recovered) await patchRun(s.runId, { outcome: recovered.outcome });
-            if (signalType === "failed") {
-              // Class the failure from what the run record shows, so retry
-              // policies keep distinguishing infrastructure from an agent's
-              // considered failed/blocked conclusion.
-              const failureClass: RetryableClass =
-                recovered?.failureClass ?? (got ? failureClassOfRecord(got.run) : "spawn");
-              const reason =
-                recovered?.failureReason ??
-                (payload as { reason?: string }).reason ??
-                "run ended without emitting a completion signal";
-              noteFailure(def, instance, phaseId, failureClass, reason);
-            }
-            noteRouting(def, instance, routing);
-            await writeInstance(instance);
-            queueVerifications(instance.id, def, instance, verify);
-            void journal(instance.id, {
-              at: nowISO(),
-              kind: "phase.signalled",
+        }
+        // Every live phase: with a fan-out, a died-without-signalling run can
+        // be in any of them, and healing only one would leave the others
+        // showing a working tile forever.
+        const orphans = livePhases(current).flatMap((i) =>
+          current.phases[i].steps.map((s) => ({ phaseId: current.phases[i].id, step: s })),
+        );
+        for (const { phaseId, step: s } of orphans) {
+          if (s.status !== "running" || !s.runId) continue;
+          let got = await readRun(s.runId);
+          // A step recorded as running with no process behind it — no run
+          // record at all, or one that never got a pid — and not being
+          // launched by this process: Argus stopped between recording the
+          // step and starting it. Nothing will ever signal for it, so it is
+          // failed here as a spawn failure (retryable by default).
+          if (
+            !live.has(s.runId) &&
+            (!got || (got.run.status === "running" && got.run.pid == null))
+          ) {
+            const stepDef = def.phases.find((p) => p.id === phaseId);
+            const reason = "Argus stopped before the step's process was started";
+            const stub: Run = got?.run ?? {
+              id: s.runId,
+              scheduleId: `pipeline:${current.pipelineId}`,
+              scheduleName: `${current.pipelineName} · ${stepDef?.name ?? phaseId}`,
+              prompt: "",
+              cwd: stepDef?.cwd ?? "",
+              status: "running",
+              trigger: "scheduled",
+              queuedAt: nowISO(),
+              startedAt: null,
+              endedAt: null,
+              durationMs: null,
+              pid: null,
+              exitCode: null,
+              sessionId: null,
+              project: stepDef ? encodeProject(stepDef.cwd) : null,
+              resultSummary: null,
+              error: null,
+              instanceId: current.id,
+              phaseId,
+            };
+            await writeRun({
+              ...stub,
+              status: "failed",
+              termination: "spawn-failed",
+              error: reason,
+              endedAt: nowISO(),
+            });
+            got = await readRun(s.runId);
+          }
+          // Reconcile only from a completed run record. A dead pid whose
+          // record is still `running` can be racing the normal close handler;
+          // guessing in that window would discard the agent's final message,
+          // which is what distinguishes success, failure, and ambiguity.
+          const ended =
+            got &&
+            (got.run.status === "failed" ||
+              got.run.status === "succeeded" ||
+              got.run.status === "interrupted" ||
+              got.run.status === "cancelled");
+          if (!ended) continue;
+          const restarted = got?.run.status === "interrupted";
+          const recovered =
+            !restarted && got && runtimeFor(got.run.runtime).outcomeFromRecord
+              ? recoverRunOutcome(got.run)
+              : null;
+          const signalType = recovered?.signalType ?? "failed";
+          // A recovered *completion* may carry a declared result. Read it the
+          // same way the stop hook would; this is the whole completion
+          // protocol for a runtime with no hook to install.
+          const recoveredResult = signalType === "completed" ? await readRunResult(s.runId) : {};
+          const payload = recovered
+            ? recovered.payload
+            : restarted
+              ? { reason: "Argus restarted mid-run — revise to retry", kind: "restarted" }
+              : {
+                  reason: got?.run.error ?? "run ended without emitting a completion signal",
+                };
+          const {
+            instance,
+            startPhases: ready,
+            routing,
+            verify,
+          } = advance(
+            def,
+            current,
+            {
+              instanceId: current.id,
               phaseId,
               runId: s.runId,
-              detail: recovered ? `run-record fallback: ${recovered.outcome}` : "reconcile: failed",
-            });
-            queueReadyPhases(instance.id, def, instance, ready);
-            deps.tailer?.untrack(s.runId);
-            if (instance.status === "failed") deps.onFailure?.(instance);
-            deps.onChange?.();
-            current = instance;
-            if (current.status !== "running" && current.status !== "awaiting-approval") break;
+              type: signalType,
+              token: current.signalToken,
+              payload,
+              ...recoveredResult,
+            },
+            nowISO(),
+          );
+          if (recovered) await patchRun(s.runId, { outcome: recovered.outcome });
+          if (signalType === "failed") {
+            // Class the failure from what the run record shows, so retry
+            // policies keep distinguishing infrastructure from an agent's
+            // considered failed/blocked conclusion.
+            const failureClass: RetryableClass =
+              recovered?.failureClass ?? (got ? failureClassOfRecord(got.run) : "spawn");
+            const reason =
+              recovered?.failureReason ??
+              (payload as { reason?: string }).reason ??
+              "run ended without emitting a completion signal";
+            noteFailure(def, instance, phaseId, failureClass, reason);
           }
-        });
-      }
+          noteRouting(def, instance, routing);
+          await writeInstance(instance);
+          queueVerifications(instance.id, def, instance, verify);
+          void journal(instance.id, {
+            at: nowISO(),
+            kind: "phase.signalled",
+            phaseId,
+            runId: s.runId,
+            detail: recovered ? `run-record fallback: ${recovered.outcome}` : "reconcile: failed",
+          });
+          queueReadyPhases(instance.id, def, instance, ready);
+          deps.tailer?.untrack(s.runId);
+          if (instance.status === "failed") deps.onFailure?.(instance);
+          deps.onChange?.();
+          current = instance;
+          if (current.status !== "running" && current.status !== "awaiting-approval") break;
+        }
+      });
     }
   }
 

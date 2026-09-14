@@ -189,6 +189,19 @@ test("rubricFor resolves a schedule's rubric and a phase's rubric", () => {
   assert.equal(rubricFor(step, [], []), null, "a deleted pipeline is not a crash");
   const renamedPhase = run("c", { scheduleId: "pipeline:p1", phaseId: "gone" });
   assert.equal(rubricFor(renamedPhase, [], [pipeline()]), null);
+
+  // A step run is judged by the rubric its instance started with: a rubric
+  // edited (or removed) on the live definition does not move the bar under a
+  // run that is already in flight.
+  const pinned = run("d", { scheduleId: "pipeline:p1", phaseId: "build", instanceId: "i1" });
+  const stricter = pipeline({
+    phases: pipeline().phases.map((p) => ({ ...p, rubric: { ...RUBRIC, goal: "Be perfect." } })),
+  });
+  const snapshot = instance({ definition: pipeline() });
+  assert.equal(rubricFor(pinned, [], [stricter], [snapshot])?.goal, "Be good.");
+  assert.equal(rubricFor(pinned, [], [], [snapshot])?.goal, "Be good.", "deleted, still judged");
+  const legacy = instance();
+  assert.equal(rubricFor(pinned, [], [stricter], [legacy])?.goal, "Be perfect.", "no snapshot");
 });
 
 // ── Scoring ─────────────────────────────────────────────────────────────────

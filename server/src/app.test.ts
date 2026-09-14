@@ -8,6 +8,8 @@ import type { ArgusConfig } from "./config.js";
 import type { Engine } from "./pipelineEngine.js";
 import { createAuthService, type AuthService } from "./auth.js";
 import { createUserStore } from "./userStore.js";
+import { writeInstance } from "./sources/instances.js";
+import type { PipelineDefinition, PipelineInstance } from "./sources/pipelineTypes.js";
 import type { AnalysisRunner } from "./sources/analysis.js";
 
 let home: string;
@@ -1575,6 +1577,133 @@ async function postPipeline(app: ReturnType<typeof makeApp>, phases: unknown[]) 
     body: JSON.stringify({ name: "P", trigger: null, phases }),
   });
 }
+
+// ── Editing a definition that has live instances ────────────────────────────
+
+function liveInstance(def: PipelineDefinition, id: string, status: PipelineInstance["status"]) {
+  const at = "2026-06-30T12:00:00.000Z";
+  return {
+    id,
+    pipelineId: def.id,
+    pipelineName: def.name,
+    status,
+    currentPhaseIndex: 0,
+    phases: [],
+    trigger: "manual",
+    signalToken: "tok",
+    createdAt: at,
+    updatedAt: at,
+    endedAt: status === "running" || status === "awaiting-approval" ? null : at,
+    definition: def,
+  } satisfies PipelineInstance;
+}
+
+test("editing what a pipeline executes is refused while instances are live, unless forced", async () => {
+  const app = makeApp();
+  const created = await postPipeline(app, [dagPhase("plan")]);
+  assert.equal(created.status, 201);
+  const def = (await created.json()) as PipelineDefinition;
+  await writeInstance(liveInstance(def, "i-live", "running"));
+  await writeInstance(liveInstance(def, "i-gate", "awaiting-approval"));
+  await writeInstance(liveInstance(def, "i-done", "succeeded"));
+  const put = (body: unknown, qs = "") =>
+    app.request(`/api/pipelines/${def.id}${qs}`, {
+      method: "PUT",
+      headers: sameOrigin,
+      body: JSON.stringify(body),
+    });
+  const edited = {
+    name: def.name,
+    trigger: null,
+    phases: [dagPhase("plan", { steps: [{ name: "s", prompt: "a better prompt" }] })],
+  };
+
+  // A changed prompt is refused, naming the instances it will not reach.
+  const refused = await put(edited);
+  assert.equal(refused.status, 409);
+  const body = (await refused.json()) as {
+    error: string;
+    code: string;
+    instances: { id: string; status: string }[];
+  };
+  assert.equal(body.code, "instances-running");
+  assert.deepEqual(
+    body.instances.map((i) => i.id).sort(),
+    ["i-gate", "i-live"],
+    "a finished instance is not live",
+  );
+  assert.match(body.error, /2 instances are running/);
+  assert.match(body.error, /force=1/);
+  const unchanged = (await (await app.request("/api/pipelines", { headers: loopback })).json()) as {
+    pipelines: PipelineDefinition[];
+  };
+  assert.equal(unchanged.pipelines[0].phases[0].steps[0].prompt, "p", "nothing was saved");
+
+  // Saving the definition back as it is, is not an edit.
+  const same = await put({
+    name: def.name,
+    trigger: def.trigger,
+    phases: def.phases,
+    enabled: def.enabled,
+    overlapPolicy: def.overlapPolicy,
+  });
+  assert.equal(same.status, 200);
+
+  // Name, trigger, overlap and enabled change nothing about work in flight.
+  const renamed = await put({ ...edited, phases: def.phases, name: "Renamed" });
+  assert.equal(renamed.status, 200);
+  const paused = await app.request(`/api/pipelines/${def.id}`, {
+    method: "PATCH",
+    headers: sameOrigin,
+    body: JSON.stringify({ enabled: false }),
+  });
+  assert.equal(paused.status, 200);
+  const retimed = await app.request(`/api/pipelines/${def.id}`, {
+    method: "PATCH",
+    headers: sameOrigin,
+    body: JSON.stringify({
+      trigger: { kind: "interval", everyMinutes: 30 },
+      overlapPolicy: "allow",
+    }),
+  });
+  assert.equal(retimed.status, 200);
+
+  // A phase edit through PATCH is held to the same rule as PUT.
+  const patched = await app.request(`/api/pipelines/${def.id}`, {
+    method: "PATCH",
+    headers: sameOrigin,
+    body: JSON.stringify({ phases: edited.phases }),
+  });
+  assert.equal(patched.status, 409);
+
+  // Forced, the edit lands — and applies to the next start only.
+  const forced = await put(edited, "?force=1");
+  assert.equal(forced.status, 200);
+  const after = (await forced.json()) as PipelineDefinition;
+  assert.equal(after.phases[0].steps[0].prompt, "a better prompt");
+
+  // A bad body is still a 400, live instances or not.
+  const invalid = await put({ name: "", phases: [] });
+  assert.equal(invalid.status, 400);
+});
+
+test("editing what a pipeline executes saves freely once nothing is live", async () => {
+  const app = makeApp();
+  const created = await postPipeline(app, [dagPhase("plan")]);
+  const def = (await created.json()) as PipelineDefinition;
+  await writeInstance(liveInstance(def, "i-done", "succeeded"));
+  await writeInstance(liveInstance(def, "i-failed", "failed"));
+  const res = await app.request(`/api/pipelines/${def.id}`, {
+    method: "PUT",
+    headers: sameOrigin,
+    body: JSON.stringify({
+      name: def.name,
+      trigger: null,
+      phases: [dagPhase("plan", { steps: [{ name: "s", prompt: "a better prompt" }] })],
+    }),
+  });
+  assert.equal(res.status, 200);
+});
 
 test("weave: a valid diamond is accepted and its edges round-trip", async () => {
   const app = makeApp();

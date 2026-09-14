@@ -148,6 +148,60 @@ describe("Pipelines tab", () => {
     );
   });
 
+  /** The routed fetch, with PUT refused as `instances-running` until forced. */
+  function fetchRefusingEdits() {
+    const base = routedFetch([{ definition: p1, latest: instance("running") }]);
+    const puts: string[] = [];
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (init?.method !== "PUT") return base(input, init);
+      puts.push(url);
+      if (url.includes("force=1")) return Promise.resolve(okJson(p1));
+      return Promise.resolve({
+        ok: false,
+        status: 409,
+        json: async () => ({
+          error: "1 instance is running",
+          code: "instances-running",
+          instances: [{ id: "i1", status: "running" }],
+        }),
+      } as Response);
+    });
+    return { fetchMock, puts };
+  }
+
+  it("asks before saving an edit over a running instance, then saves it with force", async () => {
+    const user = userEvent.setup();
+    const { fetchMock, puts } = fetchRefusingEdits();
+    vi.stubGlobal("fetch", fetchMock);
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<Pipelines />);
+    await waitFor(() => expect(screen.getByRole("button", { name: /^edit$/i })).toBeTruthy());
+    await user.click(screen.getByRole("button", { name: /^edit$/i }));
+    await user.click(screen.getByRole("button", { name: /save pipeline/i }));
+    await waitFor(() => expect(puts).toEqual(["/api/pipelines/p1", "/api/pipelines/p1?force=1"]));
+    expect(confirmSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/1 instance is running under "Nightly".*next start/),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /save pipeline/i })).toBeNull(),
+    );
+  });
+
+  it("keeps the edit open and unsaved when the author declines", async () => {
+    const user = userEvent.setup();
+    const { fetchMock, puts } = fetchRefusingEdits();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(<Pipelines />);
+    await waitFor(() => expect(screen.getByRole("button", { name: /^edit$/i })).toBeTruthy());
+    await user.click(screen.getByRole("button", { name: /^edit$/i }));
+    await user.click(screen.getByRole("button", { name: /save pipeline/i }));
+    await waitFor(() => expect(puts).toEqual(["/api/pipelines/p1"]));
+    expect(screen.getByRole("button", { name: /save pipeline/i })).toBeTruthy();
+    expect(screen.queryByText(/1 instance is running/)).toBeNull();
+  });
+
   it("shows 'Stop all (n)' and aborts every active instance when several overlap", async () => {
     const user = userEvent.setup();
     const pAllow: PipelineDefinition = { ...p1, overlapPolicy: "allow" };

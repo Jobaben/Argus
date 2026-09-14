@@ -1,6 +1,21 @@
 import { useCallback } from "react";
 import { useLiveResource } from "./live/useLiveResource";
-import type { PipelineDefinition, PipelineInput } from "./types";
+import type { InstanceStatus, PipelineDefinition, PipelineInput } from "./types";
+
+/**
+ * The server refused an edit because instances are still running (or waiting
+ * at a gate) under the current definition. They keep the definition they
+ * started with, so the edit would only show on the next start; the caller
+ * decides whether that is what the author meant and retries with `force`.
+ */
+export class InstancesRunningError extends Error {
+  readonly instances: { id: string; status: InstanceStatus }[];
+  constructor(message: string, instances: { id: string; status: InstanceStatus }[]) {
+    super(message);
+    this.name = "InstancesRunningError";
+    this.instances = instances;
+  }
+}
 
 /** Lists pipeline definitions, refreshing on "pipelines:changed", plus CRUD. */
 export function usePipelines() {
@@ -21,7 +36,14 @@ export function usePipelines() {
         body: body ? JSON.stringify(body) : undefined,
       });
       if (!res.ok) {
-        const msg = (await res.json().catch(() => ({}))) as { error?: string };
+        const msg = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          code?: string;
+          instances?: { id: string; status: InstanceStatus }[];
+        };
+        if (res.status === 409 && msg.code === "instances-running") {
+          throw new InstancesRunningError(msg.error ?? `HTTP ${res.status}`, msg.instances ?? []);
+        }
         throw new Error(msg.error ?? `HTTP ${res.status}`);
       }
       await refresh();
@@ -34,8 +56,10 @@ export function usePipelines() {
     (input: PipelineInput) => mutate("/api/pipelines", "POST", input),
     [mutate],
   );
+  /** `force` saves over the server's running-instances refusal. */
   const update = useCallback(
-    (id: string, input: PipelineInput) => mutate(`/api/pipelines/${id}`, "PUT", input),
+    (id: string, input: PipelineInput, opts: { force?: boolean } = {}) =>
+      mutate(`/api/pipelines/${id}${opts.force ? "?force=1" : ""}`, "PUT", input),
     [mutate],
   );
   const remove = useCallback((id: string) => mutate(`/api/pipelines/${id}`, "DELETE"), [mutate]);

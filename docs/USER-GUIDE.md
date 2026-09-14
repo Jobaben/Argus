@@ -639,7 +639,12 @@ action requires a signed-in, root-approved account.
 - **Run now** — start an instance (hidden while one is running unless overlap
   is allowed).
 - **Stop / Stop all (N)** — abort active instances (with confirm).
-- **Enable / Disable**, **Edit**, **Delete** (with confirm).
+- **Enable / Disable**, **Edit**, **Delete** (with confirm). An instance runs
+  the definition it started with — snapshotted onto the instance — so editing
+  the pipeline while instances are running or waiting at a gate does not change
+  them. Saving such an edit asks first, so you know a fixed prompt lands on the
+  _next_ start rather than the one you are watching; renaming, changing the
+  trigger or overlap policy, and enabling or disabling save without asking.
 - Approving/revising a **gated phase** happens on the Command Center, inline
   on the paused row.
 

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { runtimeLabel } from "../useRuntimes";
-import { usePipelines } from "../usePipelines";
+import { InstancesRunningError, usePipelines } from "../usePipelines";
 import { useOverview } from "../useOverview";
 import { useAuth } from "../useAuth";
 import type { PipelineDefinition, PipelineInput } from "../types";
@@ -30,6 +30,16 @@ interface PipelineLive {
   activeIds: string[];
   /** The newest row, or null when the pipeline has never run. */
   latest: OverviewRow | null;
+}
+
+/** The question asked before saving an edit over live instances. */
+function editWhileRunningPrompt(name: string, count: number): string {
+  const which = count === 1 ? "1 instance is" : `${count} instances are`;
+  const they = count === 1 ? "It keeps" : "They keep";
+  return (
+    `${which} running under "${name}". ${they} the definition it started with, ` +
+    "so this edit only applies to the next start. Save anyway?"
+  );
 }
 
 function toInput(def: PipelineDefinition): PipelineInput {
@@ -371,7 +381,17 @@ export default function Pipelines() {
             initial={toInput(editing)}
             onCancel={() => setMode({ kind: "none" })}
             onSubmit={async (input) => {
-              await update(editing.id, input);
+              try {
+                await update(editing.id, input);
+              } catch (e) {
+                if (!(e instanceof InstancesRunningError)) throw e;
+                // Instances are running under the current definition. They
+                // keep it — each snapshotted it when it started — so the
+                // author is told the edit will not reach them before it saves.
+                // Declining leaves the form open with the edit intact.
+                if (!confirm(editWhileRunningPrompt(editing.name, e.instances.length))) return;
+                await update(editing.id, input, { force: true });
+              }
               setMode({ kind: "none" });
             }}
           />
