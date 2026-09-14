@@ -42,6 +42,7 @@ import {
   applyApprove,
   applyRevise,
   applyRetry,
+  applyUnlaunchable,
   applyVerification,
   retryDelayMs,
   shouldRetry,
@@ -413,7 +414,7 @@ export function createEngine(deps: EngineDeps): Engine {
   }
 
   /**
-   * Launch a wave of ready phases.
+   * Launch a wave of ready phases, given as indices into `inst.phases`.
    *
    * Sequential over the wave rather than `Promise.all`: each phase's launch
    * writes the instance, and two concurrent writers would race on the same
@@ -430,19 +431,32 @@ export function createEngine(deps: EngineDeps): Engine {
     for (const i of indices) await startPhase(def, inst, i, noteSuffix);
   }
 
+  /**
+   * Launch one instance phase. `phaseIndex` indexes `inst.phases`; the phase's
+   * definition is found by id, never by that index, because the definition may
+   * have been edited since `initInstance` snapshotted the phase list (a phase
+   * inserted ahead shifts every index, and its id is the one stable key).
+   */
   async function startPhase(
     def: PipelineDefinition,
     inst: PipelineInstance,
     phaseIndex: number,
     noteSuffix = "",
   ): Promise<void> {
-    const phaseDef = def.phases[phaseIndex];
+    const progress = inst.phases[phaseIndex];
+    const phaseDef = def.phases.find((p) => p.id === progress.id);
+    if (!phaseDef) {
+      await failUnlaunchable(def, inst, progress.id);
+      return;
+    }
     // "Previous" is the phase's own dependency, which for a linear pipeline is
-    // the phase before it — the same value the cursor version produced.
+    // the phase before it — the same value the cursor version produced. A
+    // dependency the edited definition names but the instance never had reads
+    // as absent, which is the honest answer.
     const prevPayload = previousPayloadFor(def, inst, phaseDef.id);
     const startedAt = nowISO();
     const artifactDir = phaseArtifactDir(paths.artifactsDir(), inst.id, phaseDef.id);
-    inst.phases[phaseIndex].artifactDir = artifactDir;
+    progress.artifactDir = artifactDir;
     const dirs = {
       own: artifactDir,
       byPhase: Object.fromEntries(
@@ -494,18 +508,18 @@ export function createEngine(deps: EngineDeps): Engine {
       return { stepDef, run, publishes, timeoutSeconds };
     });
     // Record the runIds on the instance up front, then persist once (no write races).
-    inst.phases[phaseIndex].steps = planned.map(({ stepDef, run }) => ({
+    progress.steps = planned.map(({ stepDef, run }) => ({
       name: stepDef.name,
       runId: run.id,
       status: "running" as const,
     }));
-    inst.phases[phaseIndex].status = "running";
+    progress.status = "running";
     await writeInstance(inst);
     void journal(inst.id, {
       at: startedAt,
       kind: "phase.started",
       phaseId: phaseDef.id,
-      attempt: inst.phases[phaseIndex].attempt,
+      attempt: progress.attempt,
       detail: `${planned.length} step${planned.length === 1 ? "" : "s"}`,
     });
     // Every attempt starts with an empty artifact directory: a file left by a
@@ -522,7 +536,7 @@ export function createEngine(deps: EngineDeps): Engine {
         paths.invocationsDir(),
         inst.id,
         phaseDef.id,
-        inst.phases[phaseIndex].attempt,
+        progress.attempt,
       );
       if (baseline) await atomicWriteJson(file, baseline);
       else await rm(file, { force: true });
@@ -580,6 +594,44 @@ export function createEngine(deps: EngineDeps): Engine {
       queueReadyPhases(inst.id, def, inst, readyAfterFailure);
       if (inst.status === "failed") deps.onFailure?.(inst);
     }
+    deps.onChange?.();
+  }
+
+  /**
+   * A phase the instance has but the definition no longer names. Nothing was
+   * spawned for this attempt (its steps carry no runId), so there is nothing
+   * to kill; the phase fails under `configuration`, the instance settles, and
+   * whatever that makes ready is queued exactly as after any other failure.
+   */
+  async function failUnlaunchable(
+    def: PipelineDefinition,
+    inst: PipelineInstance,
+    phaseId: string,
+  ): Promise<void> {
+    const reason = `phase "${phaseId}" no longer exists in pipeline "${def.name}"`;
+    log.warn("phase cannot be launched: not in the pipeline definition", {
+      instanceId: inst.id,
+      pipelineId: def.id,
+      phaseId,
+    });
+    const res = applyUnlaunchable(def, inst, phaseId, reason, nowISO());
+    const phase = res.instance.phases.find((p) => p.id === phaseId);
+    if (phase?.status === "failed") {
+      void journal(inst.id, {
+        at: nowISO(),
+        kind: "phase.failed",
+        phaseId,
+        attempt: phase.attempt,
+        detail: `configuration: ${reason}`,
+      });
+    }
+    noteRouting(def, res.instance, res.routing);
+    await writeInstance(res.instance);
+    if (res.instance.status === "succeeded" || res.instance.status === "failed") {
+      void journal(inst.id, { at: nowISO(), kind: "instance.ended", detail: res.instance.status });
+    }
+    queueReadyPhases(inst.id, def, res.instance, res.startPhases);
+    if (res.instance.status === "failed") deps.onFailure?.(res.instance);
     deps.onChange?.();
   }
 
@@ -1308,12 +1360,38 @@ export function createEngine(deps: EngineDeps): Engine {
       if (inst.status !== "running") return { ok: true, code: 200 }; // paused/terminal → idempotent ignore
       const def = await loadDef(inst.pipelineId);
       if (!def) return { ok: false, code: 404 };
-      const {
-        instance,
-        startPhases: ready,
-        routing,
-        verify,
-      } = advance(def, inst, signal, nowISO());
+      const res = advance(def, inst, signal, nowISO());
+      const outcome: Run["outcome"] | undefined =
+        signal.type === "failed" ? "failed" : signal.type === "completed" ? "succeeded" : undefined;
+      if (res.ignored) {
+        // The instance is untouched; say so where someone debugging will look,
+        // instead of journalling the signal as if it had landed. The run did
+        // report, so its own record keeps the outcome.
+        const status = inst.phases.find((p) => p.id === signal.phaseId)?.status;
+        const why =
+          res.ignored === "unknown-phase"
+            ? `no phase "${signal.phaseId}" on this instance`
+            : res.ignored === "phase-not-running"
+              ? `phase "${signal.phaseId}" is ${status}, not running`
+              : `run ${signal.runId} is not a tracked step of phase "${signal.phaseId}"`;
+        log.warn("pipeline signal ignored", {
+          instanceId,
+          phaseId: signal.phaseId,
+          runId: signal.runId,
+          type: signal.type,
+          reason: res.ignored,
+        });
+        if (outcome) await patchRun(signal.runId, { outcome });
+        void journal(instanceId, {
+          at: nowISO(),
+          kind: "phase.signalled",
+          phaseId: signal.phaseId,
+          runId: signal.runId,
+          detail: `${signal.type} (ignored: ${why})`,
+        });
+        return { ok: true, code: 202 };
+      }
+      const { instance, startPhases: ready, routing, verify } = res;
       noteRouting(def, instance, routing);
       if (signal.type === "failed") {
         // An agent that signalled failure has considered the work, so this
@@ -1326,8 +1404,6 @@ export function createEngine(deps: EngineDeps): Engine {
       // not at all.
       await writeInstance(instance);
       queueVerifications(instanceId, def, instance, verify);
-      const outcome: Run["outcome"] | undefined =
-        signal.type === "failed" ? "failed" : signal.type === "completed" ? "succeeded" : undefined;
       if (outcome) await patchRun(signal.runId, { outcome });
       void journal(instance.id, {
         at: nowISO(),

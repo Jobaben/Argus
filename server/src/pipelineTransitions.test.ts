@@ -7,6 +7,7 @@ import {
   applyRevise,
   applyAbort,
   applyTemplate,
+  applyUnlaunchable,
 } from "./pipelineTransitions.js";
 import type {
   PipelineDefinition,
@@ -269,4 +270,37 @@ test("failed signal keeps an existing reason untouched", () => {
     NOW,
   );
   assert.equal((r.instance.phases[0].payload as { reason: string }).reason, "blocked: no Jira");
+});
+
+test("applyUnlaunchable fails a running phase under the configuration class and settles", () => {
+  const d = def();
+  const inst = started(d);
+  const res = applyUnlaunchable(d, inst, "brainstorm", 'phase "brainstorm" is gone', NOW);
+  const phase = res.instance.phases[0];
+  assert.equal(phase.status, "failed");
+  assert.deepEqual(phase.payload, {
+    reason: 'phase "brainstorm" is gone',
+    failureClass: "configuration",
+  });
+  assert.ok(phase.steps.every((s) => s.status === "failed"));
+  assert.equal(res.instance.status, "failed");
+  assert.deepEqual(res.startPhases, []);
+});
+
+test("applyUnlaunchable leaves a phase that is not running alone", () => {
+  const d = def();
+  const inst = started(d);
+  const res = applyUnlaunchable(d, inst, "plan", "gone", NOW);
+  assert.equal(res.instance.phases[1].status, "pending");
+  assert.equal(res.instance.status, "running");
+  assert.deepEqual(res.startPhases, []);
+});
+
+test("advance names why a signal it cannot apply was ignored", () => {
+  const d = def();
+  assert.equal(advance(d, started(d), sig({ phaseId: "nope" }), NOW).ignored, "unknown-phase");
+  assert.equal(advance(d, started(d), sig({ runId: "other" }), NOW).ignored, "unknown-run");
+  const paused = advance(d, started(d), sig({ type: "needs-input", payload: "Q?" }), NOW).instance;
+  assert.equal(advance(d, paused, sig({}), NOW).ignored, "phase-not-running");
+  assert.equal(advance(d, started(d), sig({}), NOW).ignored, undefined);
 });

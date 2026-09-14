@@ -1572,6 +1572,20 @@ for the full shape and an example.
     { "at": "…", "kind": "step.spawned", "phaseId": "build", "runId": "…", "detail": "pid 4212" },
     {
       "at": "…",
+      "kind": "phase.signalled",
+      "phaseId": "build",
+      "runId": "…",
+      "detail": "completed"
+    },
+    {
+      "at": "…",
+      "kind": "phase.signalled",
+      "phaseId": "sync",
+      "runId": "…",
+      "detail": "completed (ignored: no phase \"sync\" on this instance)"
+    },
+    {
+      "at": "…",
       "kind": "step.timed-out",
       "phaseId": "build",
       "runId": "…",
