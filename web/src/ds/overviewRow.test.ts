@@ -181,6 +181,30 @@ describe("toOverviewRow", () => {
     expect(row.phases[0].steps[0].model).toBe("sonnet");
   });
 
+  it("labels a running instance from its own definition snapshot, not the live one", () => {
+    // The author renamed the pipeline, switched its model and gave a step an
+    // override while this instance was running. None of that is what it runs.
+    const live = def({ model: "sonnet", name: "renamed" });
+    live.phases[1].steps = [{ name: "s", prompt: "x", model: "opus" }];
+    const latest = inst("running", ["succeeded", "running"]);
+    latest.phases[1].steps = [{ name: "red-green", runId: "r1", status: "running" }];
+    latest.definition = def({ model: "haiku" });
+    const row = toOverviewRow({ definition: live, latest });
+    expect(row.model).toBe("haiku");
+    expect(row.phases[1].steps[0].model).toBe("haiku");
+    // The row still belongs to the live pipeline's card.
+    expect(row.pipelineId).toBe("p1");
+    expect(row.name).toBe("renamed");
+  });
+
+  it("reads the live definition for an instance from before the snapshot existed", () => {
+    const row = toOverviewRow({
+      definition: def({ model: "sonnet" }),
+      latest: inst("running", ["succeeded", "running"]),
+    });
+    expect(row.phases[1].steps[0].model).toBe("sonnet");
+  });
+
   it("prefers the run's joined model, and a step definition override, over the pipeline model", () => {
     const definition = def({ model: "sonnet" });
     definition.phases[0].steps = [{ name: "s", prompt: "x", model: "opus" }];

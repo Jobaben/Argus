@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
-import { usePipelines } from "./usePipelines";
+import { InstancesRunningError, usePipelines } from "./usePipelines";
 
 class FakeWS {
   onmessage: ((ev: unknown) => void) | null = null;
@@ -55,6 +55,42 @@ describe("usePipelines", () => {
     );
     expect(call).toBeTruthy();
     expect(JSON.parse(call![1].body as string)).toEqual({ enabled: false });
+  });
+
+  it("update PUTs the input, adding ?force=1 only when forced", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okJson({ pipelines: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { result } = renderHook(() => usePipelines());
+    const input = { name: "p", phases: [], trigger: null };
+    await act(async () => {
+      await result.current.update("p1", input);
+      await result.current.update("p1", input, { force: true });
+    });
+    const puts = fetchMock.mock.calls.filter((c) => c[1]?.method === "PUT").map((c) => c[0]);
+    expect(puts).toEqual(["/api/pipelines/p1", "/api/pipelines/p1?force=1"]);
+  });
+
+  it("a 409 naming running instances is an InstancesRunningError carrying them", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(okJson({ pipelines: [] })) // mount refresh
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 409,
+        json: async () => ({
+          error: "1 instance is running",
+          code: "instances-running",
+          instances: [{ id: "i1", status: "running" }],
+        }),
+      } as Response);
+    vi.stubGlobal("fetch", fetchMock);
+    const { result } = renderHook(() => usePipelines());
+    const attempt = result.current.update("p1", { name: "p", phases: [], trigger: null });
+    await expect(attempt).rejects.toBeInstanceOf(InstancesRunningError);
+    await attempt.catch((e: InstancesRunningError) => {
+      expect(e.message).toBe("1 instance is running");
+      expect(e.instances).toEqual([{ id: "i1", status: "running" }]);
+    });
   });
 
   it("surfaces the server error message on a failed mutation", async () => {

@@ -1,5 +1,6 @@
 import { Hono, type Context } from "hono";
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { hostname } from "node:os";
 import { claudeHome } from "./claudeHome.js";
 import { codexHome } from "./codexHome.js";
@@ -83,6 +84,7 @@ import {
   validatePipelinePatch,
   validatePipelineInput,
   PipelineValidationError,
+  type PipelineInput,
 } from "./sources/pipelines.js";
 import { readInstance, readInstances } from "./sources/instances.js";
 import {
@@ -138,7 +140,7 @@ import { buildOverview } from "./sources/overview.js";
 import { buildPalette } from "./sources/palette.js";
 import { buildSituation } from "./sources/insight.js";
 import { PreflightError, type Engine } from "./pipelineEngine.js";
-import type { PipelineSignal } from "./sources/pipelineTypes.js";
+import type { PipelineDefinition, PipelineSignal } from "./sources/pipelineTypes.js";
 import type { ActivityEvent } from "./runTailer.js";
 import { defaultSpawn, fireOneOff, fireRun, isAlive } from "./scheduler.js";
 import { LaunchValidationError, validateLaunchInput } from "./sources/launch.js";
@@ -1152,17 +1154,56 @@ export function createApp(deps: AppDeps): Hono {
   });
 
   // PUT replaces via the full-input validator; PATCH merges via the partial one.
+  /**
+   * The definition fields that decide what an instance *executes*. A change to
+   * any of them under a live instance is refused (409) unless `?force=1`. Not
+   * because the edit would reach the instance — it cannot; each instance runs
+   * against the definition it snapshotted at start — but because an author who
+   * fixes a prompt and watches the running instance for the fix would otherwise
+   * wait for something that only the *next* start will show. Name, trigger,
+   * enabled and overlap policy change nothing about work already in flight and
+   * save freely.
+   */
+  const EXECUTION_KEYS = ["phases", "model", "reasoningEffort", "runtime", "capabilities"] as const;
+  function changesExecution(current: PipelineDefinition, patch: Partial<PipelineInput>): boolean {
+    return EXECUTION_KEYS.some((k) => k in patch && !isDeepStrictEqual(patch[k], current[k]));
+  }
+  /** Instances that started under the current definition and are still going. */
+  async function liveInstancesOf(pipelineId: string) {
+    return (await readInstances({ pipelineId })).filter(
+      (i) => i.status === "running" || i.status === "awaiting-approval",
+    );
+  }
+
   const pipelineUpdateHandler =
-    (validate: (v: unknown) => Parameters<typeof updatePipeline>[1]) => async (c: Context) => {
+    (validate: (v: unknown) => Partial<PipelineInput>) => async (c: Context) => {
       const body = await jsonBody(c);
       if (!body.ok) return body.res;
       try {
         // Plain `Context` can't infer the :id param type; missing id → "" → 404.
-        const updated = await updatePipeline(
-          c.req.param("id") ?? "",
-          validate(body.value),
-          new Date(),
-        );
+        const id = c.req.param("id") ?? "";
+        const patch = validate(body.value);
+        const current = (await readPipelines()).find((d) => d.id === id);
+        if (!current) return c.json({ error: "not found" }, 404);
+        const force = ["1", "true"].includes(c.req.query("force") ?? "");
+        if (!force && changesExecution(current, patch)) {
+          const live = await liveInstancesOf(id);
+          if (live.length > 0) {
+            const n = live.length;
+            return c.json(
+              {
+                error:
+                  `${n} instance${n === 1 ? " is" : "s are"} running under "${current.name}". ` +
+                  "They keep the definition they started with; this edit applies to the next " +
+                  "start only. Repeat with ?force=1 to save it anyway.",
+                code: "instances-running",
+                instances: live.map((i) => ({ id: i.id, status: i.status })),
+              },
+              409,
+            );
+          }
+        }
+        const updated = await updatePipeline(id, patch, new Date());
         if (!updated) return c.json({ error: "not found" }, 404);
         return c.json(updated);
       } catch (e) {

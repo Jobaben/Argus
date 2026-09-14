@@ -45,20 +45,27 @@ const runMoment = (r: Run): string => r.endedAt ?? r.startedAt ?? r.queuedAt;
  * the phase's. Exported because "which rubric governs this run" is exactly the
  * kind of lookup that goes subtly wrong when a pipeline is renamed or a phase
  * removed, and it deserves its own tests.
+ *
+ * A step run is judged by the rubric its *instance* started with — the
+ * definition snapshotted on the instance — so a rubric edited after the run
+ * launched does not move the bar under it. The live definition is only
+ * consulted for instances written before the snapshot existed.
  */
 export function rubricFor(
   run: Run,
   schedules: Schedule[],
   pipelines: PipelineDefinition[],
+  instances: PipelineInstance[] = [],
 ): Rubric | null {
   if (run.phaseId) {
     // Step runs carry `scheduleId: "pipeline:<pipelineId>"`.
     const pipelineId = run.scheduleId.startsWith("pipeline:")
       ? run.scheduleId.slice("pipeline:".length)
       : run.scheduleId;
-    const phase = pipelines
-      .find((p) => p.id === pipelineId)
-      ?.phases.find((f) => f.id === run.phaseId);
+    const def =
+      instances.find((i) => i.id === run.instanceId)?.definition ??
+      pipelines.find((p) => p.id === pipelineId);
+    const phase = def?.phases.find((f) => f.id === run.phaseId);
     return phase?.rubric ?? null;
   }
   return schedules.find((s) => s.id === run.scheduleId)?.rubric ?? null;
@@ -73,10 +80,11 @@ export function createVerdictWatcher(deps: VerdictWatcherDeps): { check: () => P
   return {
     async check(): Promise<void> {
       try {
-        const [runs, schedules, pipelines, existing] = await Promise.all([
+        const [runs, schedules, pipelines, instances, existing] = await Promise.all([
           deps.readRuns(),
           deps.readSchedules(),
           deps.readPipelines(),
+          deps.readInstances(),
           readVerdicts(),
         ]);
         const scored = new Set(existing.map((v) => v.runId));
@@ -88,18 +96,18 @@ export function createVerdictWatcher(deps: VerdictWatcherDeps): { check: () => P
             const at = Date.parse(runMoment(r));
             return Number.isFinite(at) && at >= floor;
           })
-          .filter((r) => rubricFor(r, schedules, pipelines) !== null)
+          .filter((r) => rubricFor(r, schedules, pipelines, instances) !== null)
           .sort((a, b) => runMoment(b).localeCompare(runMoment(a)))[0];
 
         if (next) {
-          const rubric = rubricFor(next, schedules, pipelines);
+          const rubric = rubricFor(next, schedules, pipelines, instances);
           if (rubric) {
             await performVerdict(next, rubric, deps);
             deps.onVerdict?.(next.id);
           }
         }
 
-        await openQualifiedGates(deps, pipelines);
+        await openQualifiedGates(deps, pipelines, instances);
       } catch (e) {
         log.error("verdict check failed", { err: e });
       }
@@ -119,15 +127,17 @@ export function createVerdictWatcher(deps: VerdictWatcherDeps): { check: () => P
 async function openQualifiedGates(
   deps: VerdictWatcherDeps,
   pipelines: PipelineDefinition[],
+  instances: PipelineInstance[],
 ): Promise<void> {
-  const waiting = (await deps.readInstances()).filter((i) => i.status === "awaiting-approval");
+  const waiting = instances.filter((i) => i.status === "awaiting-approval");
   if (waiting.length === 0) return;
   const verdicts = await readVerdicts();
   const byRun = new Map(verdicts.map((v) => [v.runId, v]));
 
   for (const inst of waiting) {
     const phase = inst.phases[inst.currentPhaseIndex];
-    const def = pipelines.find((p) => p.id === inst.pipelineId);
+    // The bar the gate was authored with, from the instance's own snapshot.
+    const def = inst.definition ?? pipelines.find((p) => p.id === inst.pipelineId);
     const bar = def?.phases.find((p) => p.id === phase?.id)?.autoApprove?.verdict;
     if (bar === undefined || !phase) continue;
 

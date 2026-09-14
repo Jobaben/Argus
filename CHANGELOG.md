@@ -279,6 +279,24 @@ All notable changes to Argus are documented here. The format follows
 
 ### Fixed
 
+- **Editing a pipeline under a running instance no longer changes it — and is
+  no longer silent.** Every launch after the first — the phase after a gate, a
+  retry, a revise, a run healed after a restart, the rubric a verdict scored
+  against — read the _live_ definition. A prompt fixed mid-flight ran on the
+  very next phase, a phase removed mid-flight failed the instance as a
+  configuration error, and deleting the pipeline left its running instance
+  unable to advance (approve and revise answered "pipeline not found"). An
+  instance now snapshots the whole definition when it starts and runs against
+  that copy forever after; the live definition is read only to _start_ one.
+  Saving an edit that changes what runs (phases, model, effort, runtime,
+  capabilities) while an instance is running or awaiting approval is refused
+  with a `409` naming those instances unless `?force=1`, and the pipeline form
+  asks before forcing it — so an author fixing a prompt learns the fix lands on
+  the next start rather than watching for it on this one. Trigger, overlap,
+  enable/disable and rename save freely. The Command Center labels a running
+  instance from its own snapshot, and an instance written before the snapshot
+  existed keeps reading the live definition as it always did.
+
 - **Retrying a phase after its pipeline was edited could launch a different
   phase.** An instance snapshots its phase list when it starts, but the engine
   looked the phase's definition up by _position_ in the current definition. Once

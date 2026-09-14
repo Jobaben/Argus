@@ -430,6 +430,17 @@ export interface PipelineInstance {
   artifacts?: Record<string, unknown>;
   /** Immutable records for phase outcomes that selected conditional routes. */
   routeDecisions?: RouteDecision[];
+  /**
+   * The definition exactly as it was when this instance started.
+   *
+   * Every later launch — a retry, a revise, the phase after a gate, a
+   * verification, a run healed after a restart — reads this copy, never the
+   * live definition, so editing (or deleting) the pipeline cannot change what
+   * an instance that is already running does. What ran is what this says ran.
+   * Absent on instances written before the snapshot existed; the engine falls
+   * back to the live definition for those.
+   */
+  definition?: PipelineDefinition;
 }
 
 export type SignalType = "completed" | "needs-input" | "failed";

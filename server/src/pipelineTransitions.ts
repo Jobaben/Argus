@@ -378,6 +378,10 @@ export function initInstance(
     updatedAt: nowISO,
     endedAt: null,
     artifacts: {},
+    // Snapshotted here, in the same record as the phase list it describes: the
+    // instance carries its own definition from its first write, so nothing an
+    // author saves afterwards can reach it.
+    definition: def,
   };
   return settle(def, instance, nowISO);
 }

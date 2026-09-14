@@ -1364,6 +1364,14 @@ held per step because a phase's result lands with one step's signal while its
 siblings may still be running. `PipelineInstance` gains
 `artifacts: Record<string, unknown>` and `routeDecisions: RouteDecision[]`.
 
+`PipelineInstance.definition` is the whole definition as it was when the
+instance started. Every launch after the first — the phase after a gate, a
+retry, a revise, a verification, a run healed after a restart, the rubric a
+verdict scores against — reads this copy, never the live definition, so
+editing or deleting the pipeline cannot change what a running instance does;
+the live definition is read only to _start_ one. An instance written before the
+field existed has none and runs against the live definition, as it always did.
+
 ### Artifacts
 
 A step prompt may interpolate:
@@ -2134,22 +2142,23 @@ session — it cannot execute anything.
 
 ## Pipelines (v0.3)
 
-| Method + path                      | Effect                                                                                                 |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `GET /api/pipelines`               | list pipeline definitions                                                                              |
-| `POST /api/pipelines`              | create a definition (validated) — **admin**                                                            |
-| `PUT /api/pipelines/:id`           | replace a definition — **admin**                                                                       |
-| `DELETE /api/pipelines/:id`        | delete a definition — **admin**                                                                        |
-| `POST /api/pipelines/:id/start`    | start an instance manually → `202`, or `409` on overlap — **admin**                                    |
-| `GET /api/pipelines/:id/instances` | instances for a pipeline (newest first)                                                                |
-| `GET /api/overview`                | command-center rows: `{ definition, latest, cost }` per pipeline, attention-first                      |
-| `GET /api/instances/:id`           | full pipeline instance                                                                                 |
-| `POST /api/instances/:id/signal`   | ingest a signal `{ phaseId, runId, type, token, payload?, result?, resultError? }`; `403` on bad token |
-| `POST /api/instances/:id/approve`  | advance past a gate (optional `{ answers }`) — **admin**                                               |
-| `POST /api/instances/:id/revise`   | re-run the current phase (optional `{ note }`) — **admin**                                             |
-| `POST /api/instances/:id/abort`    | abort the instance — **admin**                                                                         |
-| `GET /api/setup`                   | prerequisite status `{ ok, prereqs[] }`                                                                |
-| `POST /api/setup/apply`            | install fixable prerequisites, then re-check → `{ ok, prereqs[] }`                                     |
+| Method + path                      | Effect                                                                                                                                                                                                                                                             |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET /api/pipelines`               | list pipeline definitions                                                                                                                                                                                                                                          |
+| `POST /api/pipelines`              | create a definition (validated) — **admin**                                                                                                                                                                                                                        |
+| `PUT /api/pipelines/:id`           | replace a definition — **admin**; `409 { code: "instances-running", instances }` when the edit changes what runs (`phases`, `model`, `reasoningEffort`, `runtime`, `capabilities`) while an instance is running or awaiting approval — `?force=1` saves regardless |
+| `PATCH /api/pipelines/:id`         | update some fields (`enabled`, `trigger`, …) — **admin**; the same `409` rule applies to the execution fields                                                                                                                                                      |
+| `DELETE /api/pipelines/:id`        | delete a definition — **admin**                                                                                                                                                                                                                                    |
+| `POST /api/pipelines/:id/start`    | start an instance manually → `202`, or `409` on overlap — **admin**                                                                                                                                                                                                |
+| `GET /api/pipelines/:id/instances` | instances for a pipeline (newest first)                                                                                                                                                                                                                            |
+| `GET /api/overview`                | command-center rows: `{ definition, latest, cost }` per pipeline, attention-first                                                                                                                                                                                  |
+| `GET /api/instances/:id`           | full pipeline instance                                                                                                                                                                                                                                             |
+| `POST /api/instances/:id/signal`   | ingest a signal `{ phaseId, runId, type, token, payload?, result?, resultError? }`; `403` on bad token                                                                                                                                                             |
+| `POST /api/instances/:id/approve`  | advance past a gate (optional `{ answers }`) — **admin**                                                                                                                                                                                                           |
+| `POST /api/instances/:id/revise`   | re-run the current phase (optional `{ note }`) — **admin**                                                                                                                                                                                                         |
+| `POST /api/instances/:id/abort`    | abort the instance — **admin**                                                                                                                                                                                                                                     |
+| `GET /api/setup`                   | prerequisite status `{ ok, prereqs[] }`                                                                                                                                                                                                                            |
+| `POST /api/setup/apply`            | install fixable prerequisites, then re-check → `{ ok, prereqs[] }`                                                                                                                                                                                                 |
 
 WS frame `{ "type": "pipelines:changed" }` is pushed on any pipeline mutation.
 

@@ -1130,9 +1130,12 @@ test("engine tracks a step run at spawn and untracks it on completion", async ()
 
 // ── The definition is edited under a live instance ─────────────────────────
 //
-// An instance snapshots its phases when it starts; the definition may gain,
-// lose or reorder phases afterwards. Every launch must run the *instance*
-// phase's own definition, found by id, never whatever sits at the same index.
+// An instance snapshots the whole definition when it starts and runs against
+// that copy forever after; the live definition may gain, lose, reorder or
+// rewrite phases and none of it reaches the instance. Every launch runs the
+// *instance* phase's own definition, found by id — and an instance from before
+// the snapshot existed, which has to use the live definition, still finds its
+// phase by id rather than by whatever sits at the same index.
 
 const CONTEXT = {
   id: "context",
@@ -1215,8 +1218,9 @@ test("a revise after the definition gained a phase relaunches the instance's pha
   assert.equal(rec.calls[2].env.ARGUS_PHASE_ID, "plan");
 });
 
-test("a revise after the definition dropped the failed phase fails it as a configuration error", async () => {
-  const { engine, pipelines, instances } = await load();
+/** Start `p1`, complete brainstorm, fail plan — the setup for "the author now
+ *  edits the definition and revises". Returns the instance and the recorder. */
+async function failedPlan(engine: any, pipelines: any) {
   await seedPipeline(pipelines, {
     phases: [
       {
@@ -1248,8 +1252,11 @@ test("a revise after the definition dropped the failed phase fails it as a confi
     type: "failed",
     token: inst!.signalToken,
   });
+  return { e, rec, inst: inst! };
+}
 
-  // The author removes the failed phase altogether; the definition shrinks.
+/** The author removes the failed phase altogether; the definition shrinks. */
+async function dropPlan(pipelines: any) {
   await pipelines.updatePipeline(
     "p1",
     pipelines.validatePipelinePatch({
@@ -1265,11 +1272,54 @@ test("a revise after the definition dropped the failed phase fails it as a confi
     }),
     new Date(2026, 5, 30, 12, 30),
   );
+}
 
-  const res = await e.revise(inst!.id);
+test("an instance carries the definition it started with", async () => {
+  const { engine, pipelines, instances } = await load();
+  const def = await seedPipeline(pipelines);
+  const e = engine.createEngine(baseDeps({ spawn: recordingSpawn().spawn }));
+  const inst = await e.start("p1", "manual");
+  const persisted = await instances.readInstance(inst!.id);
+  assert.deepEqual(persisted.definition, def, "the snapshot is the definition, verbatim");
+  assert.deepEqual(
+    persisted.definition.phases.map((p: any) => p.id),
+    ["brainstorm", "plan"],
+  );
+});
+
+test("a revise after the definition dropped the failed phase relaunches it from the instance's snapshot", async () => {
+  const { engine, pipelines, instances } = await load();
+  const { e, rec, inst } = await failedPlan(engine, pipelines);
+  await dropPlan(pipelines);
+  assert.equal((await pipelines.readPipelines())[0].phases.length, 1, "the edit did land");
+
+  const res = await e.revise(inst.id);
+  assert.equal(res.ok, true);
+  assert.equal(rec.calls.length, 3, "the dropped phase launched again");
+  assert.equal(rec.calls[2].env.ARGUS_PHASE_ID, "plan");
+  const run = (await runsMod.readRun(rec.calls[2].runId))!.run;
+  assert.equal(run.phaseId, "plan");
+  assert.match(run.prompt, /^plan\b/, "the snapshot's prompt, not nothing");
+  const after = await instances.readInstance(inst.id);
+  assert.equal(after.phases[1].status, "running");
+  assert.equal(after.status, "running");
+  assert.equal(after.definition.phases.length, 2, "the snapshot is untouched by the edit");
+});
+
+test("an instance from before the snapshot existed falls back to the live definition, and a dropped phase fails as a configuration error", async () => {
+  const { engine, pipelines, instances } = await load();
+  const { e, rec, inst } = await failedPlan(engine, pipelines);
+  // What an instance written by an older Argus looks like: no `definition`.
+  const stored = await instances.readInstance(inst.id);
+  const { definition: _snapshot, ...legacy } = stored;
+  await instances.writeInstance(legacy);
+  assert.equal((await instances.readInstance(inst.id)).definition, undefined);
+  await dropPlan(pipelines);
+
+  const res = await e.revise(inst.id);
   assert.equal(res.ok, true);
   assert.equal(rec.calls.length, 2, "nothing was spawned");
-  const after = await instances.readInstance(inst!.id);
+  const after = await instances.readInstance(inst.id);
   const plan = after.phases[1];
   assert.equal(plan.id, "plan");
   assert.equal(plan.status, "failed");
@@ -1279,7 +1329,7 @@ test("a revise after the definition dropped the failed phase fails it as a confi
   assert.ok(plan.steps.every((s: any) => s.status === "failed" && s.runId === null));
   assert.equal(after.status, "failed");
   await waitFor(async () =>
-    (await readJournal(inst!.id)).some(
+    (await readJournal(inst.id)).some(
       (x) =>
         x.kind === "phase.failed" &&
         x.phaseId === "plan" &&
@@ -1290,10 +1340,102 @@ test("a revise after the definition dropped the failed phase fails it as a confi
   // The reconciler has nothing to heal and leaves the verdict alone.
   await e.reconcile();
   await e.drain();
-  const later = await instances.readInstance(inst!.id);
+  const later = await instances.readInstance(inst.id);
   assert.equal(later.status, "failed");
   assert.equal(later.phases[1].status, "failed");
   assert.equal(rec.calls.length, 2);
+});
+
+test("a prompt edited while a gate is waiting does not reach the phase the approval launches", async () => {
+  const { engine, pipelines, instances } = await load();
+  await seedPipeline(pipelines, { overlapPolicy: "allow" });
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const inst = await e.start("p1", "manual");
+  await e.onSignal(inst!.id, {
+    instanceId: inst!.id,
+    phaseId: "brainstorm",
+    runId: rec.calls[0].runId,
+    type: "needs-input",
+    token: inst!.signalToken,
+    payload: { idea: "x" },
+  });
+  assert.equal((await instances.readInstance(inst!.id)).status, "awaiting-approval");
+
+  // The author rewrites the next phase's prompt while the gate is open.
+  await pipelines.updatePipeline(
+    "p1",
+    pipelines.validatePipelinePatch({
+      phases: [
+        {
+          id: "brainstorm",
+          name: "Brainstorm",
+          cwd: home,
+          gated: true,
+          steps: [{ name: "bs", prompt: "go" }],
+        },
+        {
+          id: "plan",
+          name: "Plan",
+          cwd: home,
+          gated: false,
+          steps: [{ name: "wp", prompt: "REWRITTEN" }],
+        },
+      ],
+    }),
+    new Date(2026, 5, 30, 12, 30),
+  );
+
+  const res = await e.approve(inst!.id);
+  assert.equal(res.ok, true);
+  await waitFor(() => rec.calls.length === 2);
+  const run = (await runsMod.readRun(rec.calls[1].runId))!.run;
+  assert.equal(run.phaseId, "plan");
+  assert.match(run.prompt, /^plan /, "the prompt the instance started with");
+  assert.doesNotMatch(run.prompt, /REWRITTEN/);
+  // The next instance picks the edit up: only running work is pinned.
+  const next = await e.start("p1", "manual");
+  assert.equal(next!.definition.phases[1].steps[0].prompt, "REWRITTEN");
+});
+
+test("deleting the definition under a running instance leaves the instance able to finish", async () => {
+  const { engine, pipelines, instances } = await load();
+  await seedPipeline(pipelines);
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const inst = await e.start("p1", "manual");
+  assert.equal(await pipelines.deletePipeline("p1"), true);
+  assert.deepEqual(await pipelines.readPipelines(), []);
+
+  // Gate, approve, next phase, done — every step read the snapshot.
+  const gate = await e.onSignal(inst!.id, {
+    instanceId: inst!.id,
+    phaseId: "brainstorm",
+    runId: rec.calls[0].runId,
+    type: "needs-input",
+    token: inst!.signalToken,
+  });
+  assert.equal(gate.ok, true);
+  assert.equal((await instances.readInstance(inst!.id)).status, "awaiting-approval");
+  const approved = await e.approve(inst!.id);
+  assert.equal(approved.ok, true, "approve does not 404 on the deleted pipeline");
+  await waitFor(() => rec.calls.length === 2);
+  assert.equal(rec.calls[1].env.ARGUS_PHASE_ID, "plan");
+  // A reconcile tick with no definition on disk still finds nothing to heal
+  // and, crucially, does not throw or skip the instance.
+  await e.reconcile();
+  await e.drain();
+  assert.equal((await instances.readInstance(inst!.id)).status, "running");
+  const done = await e.onSignal(inst!.id, {
+    instanceId: inst!.id,
+    phaseId: "plan",
+    runId: rec.calls[1].runId,
+    type: "completed",
+    token: inst!.signalToken,
+  });
+  assert.equal(done.ok, true);
+  await e.drain();
+  assert.equal((await instances.readInstance(inst!.id)).status, "succeeded");
 });
 
 test("a signal for a phase the instance does not have is journalled as ignored", async () => {

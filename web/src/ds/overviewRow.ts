@@ -249,13 +249,17 @@ function skipCauseFor(
 }
 
 function instanceRow(
-  definition: OverviewEntry["definition"],
+  live: OverviewEntry["definition"],
   instance: PipelineInstance,
   cost: OverviewCost | null,
 ): OverviewRow {
-  // Conditions live in the definition; the instance carries only resolved ids.
-  // A phase the definition no longer has falls back to its recorded edges —
-  // a mid-flight edit costs the labels, never the graph.
+  // What the instance actually runs: the definition it snapshotted when it
+  // started. The live one may since have been edited, and labelling running
+  // work with prompts and models it is not using would be a lie. An instance
+  // from before the snapshot existed reads the live definition, as it always
+  // did; a phase that definition no longer has falls back to its recorded
+  // edges — a mid-flight edit costs the labels, never the graph.
+  const definition = instance.definition ?? live;
   const defEdges = effectiveEdges(definition.phases);
   const decisions = instance.routeDecisions ?? [];
   const statusById = new Map(instance.phases.map((p) => [p.id, p.status]));
@@ -284,8 +288,9 @@ function instanceRow(
   }));
 
   return {
-    pipelineId: definition.id,
-    name: definition.name,
+    // The row still belongs to the live pipeline's card, whatever it is called now.
+    pipelineId: live.id,
+    name: live.name,
     badge: INSTANCE_BADGE[instance.status],
     updatedAt: instance.updatedAt,
     phases,
