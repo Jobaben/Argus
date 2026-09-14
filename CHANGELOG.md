@@ -279,6 +279,15 @@ All notable changes to Argus are documented here. The format follows
 
 ### Fixed
 
+- **The Command Center's Live rail listed a running pipeline step twice.** The
+  rail shows every working board step, then adds the running runs the board
+  does not own (scheduled firings, one-off Launches) so it can never claim
+  nothing is running. But a pipeline step's run is itself a running run, so
+  the same run appeared once under its step name and once under the run's
+  `pipeline · phase` name, with the identical live tool call beneath both,
+  and the Live count read one higher than the RUNNING counter above it. Runs
+  already represented by a working step are now excluded from that second
+  list.
 - **Windows pipeline PowerShell popup spam.** Pipeline agents now run through a
   hidden console host on Windows, so repeated PowerShell tool calls inherit one
   console instead of flashing a new window each time. Argus records the real
