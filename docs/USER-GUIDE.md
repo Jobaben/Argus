@@ -175,10 +175,10 @@ _Pipelines at a glance — the home tab._ Route: `#/command`
 
 ![Command Center](screenshots/command-center.png)
 
-**Purpose:** one card per pipeline, attention-first, with a compact **phase
-rail** summarizing the whole pipeline and a **focus panel** showing one phase's
-step tiles at a time. Approve/Revise gates appear inline on the row that needs
-you — this is the wall you keep open on a second monitor.
+**Purpose:** one card per pipeline, attention-first, with a **phase graph**
+drawing the whole pipeline's shape and a **focus panel** beside it showing one
+phase's step tiles at a time. Approve/Revise gates appear inline on the row
+that needs you — this is the wall you keep open on a second monitor.
 
 **What you see:**
 
@@ -199,22 +199,32 @@ you — this is the wall you keep open on a second monitor.
   (e.g. `fable`, `opus`), an aggregated **status pill** (`awaiting approval`
   wins over `failed` over `working`…), the latest run's **Σ cost** (tokens +
   USD, including superseded revise attempts), and a freshness stamp.
-- Under the header, the **phase rail**: one numbered chip per phase carrying
+- Under the header, the **phase graph**: one numbered node per phase carrying
   its status dot, name, a `gate` marker, a `try N` marker after a retry or
   revise, and one mini-dot per step (a `done/total` count once dots stop being
-  countable). Chips are grouped into **stages** separated by arrows — phases
-  that can run at the same time stack inside one stage, so a branching
-  pipeline reads as a graph and a 14-phase pipeline stays one card tall.
-  Hovering a chip names what the phase waits for.
-- Beneath the rail, the **focus panel**: one phase's **step tiles** — step
-  name, `job <runId>`, a status pill, the failure reason if it failed, a live
-  activity line and animated sweep bar while working, and a per-step meter —
-  duration, tokens, dollars (e.g. `2m 19s · 23.5k tok · $1.09`). By default
-  the focus **follows the action** — the gate awaiting you, else the failure,
-  else the live work, else the next phase up — so an untouched board always
-  shows the detail that matters right now.
+  countable). **Stages** — phases that can run at the same time — are rows,
+  read top to bottom; the chain that continues stays in the left lane and
+  branches that end the run hang to its right. Every dependency is a drawn
+  edge, so a fan-out reads as a fan-out and a join as a join: the path that
+  ran is the green thread, a branch that was decided against is dashed, and a
+  phase nothing depends on ends with a small terminator. A **route
+  condition** sits as a label on the edge it governs, carrying the value
+  alone (`verdict = "approved"`) — the phase that decides it is the line the
+  label sits on. A skipped phase shows a hollow dot and a struck name.
+  Hovering a node names what the phase waits for and the conditions on it.
+  A very long pipeline scrolls inside the graph tile, opened at the phase
+  that needs you.
+- Beside the graph (below it on a narrow card), the **focus panel**: one
+  phase's **step tiles** — step name, `job <runId>`, a status pill, the
+  failure reason if it failed, a live activity line and animated sweep bar
+  while working, and a per-step meter — duration, tokens, dollars (e.g.
+  `2m 19s · 23.5k tok · $1.09`). Its header names what the phase waited for
+  (`←`) and where its routes lead (`→`), each with the condition it needs. By
+  default the focus **follows the action** — the gate awaiting you, else the
+  failure, else the live work, else the next phase up — so an untouched board
+  always shows the detail that matters right now.
 - If two instances of one pipeline run concurrently, the card splits into
-  labeled sub-sections, one per instance, each with its own rail and focus.
+  labeled sub-sections, one per instance, each with its own graph and focus.
 - **Total spend** (top-right): the all-time board total. **Reset total** is a
   two-click armed confirm — the reset is irreversible.
 
@@ -227,13 +237,13 @@ you — this is the wall you keep open on a second monitor.
 - Both actions require a signed-in, approved account (see
   [Users & sign-in](#10-users--sign-in)); the buttons render for everyone but
   the server answers 401 unless you're authenticated.
-- **Click a phase chip** to pin that phase's steps into the focus panel —
-  every step of every phase is one click away; click the pinned chip again to
-  return to following the action.
+- **Click a phase node** to pin that phase's steps into the focus panel —
+  every step of every phase is one click away; the edges into and out of the
+  pinned node light up; click it again to return to following the action.
 
 ![Phase focus](screenshots/command-center-focus.png)
 
-_A pinned phase: the rail keeps the whole pipeline ambient while the focus
+_A pinned phase: the graph keeps the whole pipeline ambient while the focus
 panel shows the steps being asked about._
 
 - **Click a step's name** to open its drawer, over the board rather than away
