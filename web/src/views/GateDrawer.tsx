@@ -52,27 +52,94 @@ function formatBytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
-/** The agent's closing words: a string as-is, anything else pretty-printed. */
+/** The prose a payload carries, in the order it is shown, and the fields left
+ *  once that prose is lifted out. `reason` is one sentence, so it stays plain
+ *  text; `summary` and `last_assistant_message` are the agent's own writing,
+ *  which Claude Code (and the agent's closing note in general) formats as
+ *  markdown. */
+const PROSE_FIELDS = ["reason", "summary", "last_assistant_message"] as const;
+
+function splitPayload(value: Record<string, unknown>) {
+  const prose: Partial<Record<(typeof PROSE_FIELDS)[number], string>> = {};
+  const rest: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value)) {
+    if ((PROSE_FIELDS as readonly string[]).includes(k) && typeof v === "string" && v.trim()) {
+      prose[k as (typeof PROSE_FIELDS)[number]] = v;
+    } else {
+      rest[k] = v;
+    }
+  }
+  return { prose, rest };
+}
+
+/**
+ * The agent's closing words.
+ *
+ * A phase's payload is usually the whole event the runtime handed the Stop
+ * hook — session id, transcript path, permission mode, background tasks — with
+ * the agent's final message as one field among a dozen, plus the `reason`
+ * and `failureClass` Argus attached. What a reviewer wants is the reason and
+ * the note; the rest is diagnostic, so it folds behind a toggle and only
+ * comes forward when there is no prose to show instead. A bare string is
+ * treated as the note itself.
+ */
 function Payload({ value }: { value: unknown }) {
   if (value == null) return null;
   if (typeof value === "string") {
-    return (
-      <p className="whitespace-pre-wrap text-[12.5px] leading-relaxed text-ink-dim">{value}</p>
-    );
+    return <ClosingNote source={value} />;
   }
-  const summary =
-    typeof value === "object" && "summary" in (value as object)
-      ? (value as { summary?: unknown }).summary
-      : undefined;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    return <RawPayload value={value} />;
+  }
+  const { prose, rest } = splitPayload(value as Record<string, unknown>);
+  const hasProse = Object.keys(prose).length > 0;
+  const hasRest = Object.keys(rest).length > 0;
+  if (!hasProse) return <RawPayload value={value} />;
   return (
     <div className="flex flex-col gap-2">
-      {typeof summary === "string" && (
-        <p className="whitespace-pre-wrap text-[12.5px] leading-relaxed text-ink-dim">{summary}</p>
+      {prose.reason && (
+        <p
+          data-testid="gate-reason"
+          className="whitespace-pre-wrap text-[12.5px] leading-relaxed text-ink"
+        >
+          {prose.reason}
+        </p>
       )}
-      <pre className="max-h-[30vh] overflow-auto rounded-lg bg-black/30 p-3 font-mono text-[11px] leading-relaxed text-ink-dim">
-        {JSON.stringify(value, null, 2)}
-      </pre>
+      {prose.summary && <ClosingNote source={prose.summary} />}
+      {prose.last_assistant_message && <ClosingNote source={prose.last_assistant_message} />}
+      {hasRest && (
+        <details>
+          <summary className="cursor-pointer select-none font-mono text-[10px] uppercase tracking-[0.12em] text-ink-faint hover:text-ink-dim">
+            Raw payload
+          </summary>
+          <div className="mt-2">
+            <RawPayload value={rest} />
+          </div>
+        </details>
+      )}
     </div>
+  );
+}
+
+function ClosingNote({ source }: { source: string }) {
+  return (
+    <div
+      data-testid="gate-closing-note"
+      className="rounded-lg border border-line bg-surface px-4 py-3"
+    >
+      <Markdown source={source} className="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0" />
+    </div>
+  );
+}
+
+function RawPayload({ value }: { value: unknown }) {
+  return (
+    <pre
+      data-testid="gate-raw-payload"
+      className="max-h-[30vh] overflow-auto rounded-lg bg-black/30 p-3 font-mono text-[11px] leading-relaxed text-ink-dim"
+    >
+      {JSON.stringify(value, null, 2)}
+    </pre>
   );
 }
 
@@ -365,7 +432,9 @@ function GatePanel({
                     onClick={() =>
                       run(
                         () => revise(selection.instanceId, note.trim() || undefined, target),
-                        retry ? "Retry sent — phase restarting" : "Revision sent — phase restarting",
+                        retry
+                          ? "Retry sent — phase restarting"
+                          : "Revision sent — phase restarting",
                       )
                     }
                     className={`${BUTTON} border-await bg-await/10 text-await`}
