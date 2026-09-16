@@ -247,7 +247,6 @@ export function PhaseGraph({
                 strokeOpacity={on ? s.hot : s.opacity}
                 strokeWidth={on ? 2 : 1.5}
                 strokeDasharray={e.state === "skipped" ? "3 3" : undefined}
-                className="transition-[stroke-opacity,stroke-width] duration-(--duration-quick)"
               />
             );
           })}
