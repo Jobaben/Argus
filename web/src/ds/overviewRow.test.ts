@@ -260,8 +260,17 @@ describe("toOverviewRow", () => {
       definition: def(),
       latest: inst("awaiting-approval", ["succeeded", "awaiting-approval"]),
     });
-    expect(row.gate).toEqual({ phaseId: "impl", canApprove: true });
+    expect(row.gates).toEqual([{ phaseId: "impl", canApprove: true }]);
     expect(row.instanceId).toBe("i1");
+  });
+
+  it("lists every awaiting-approval phase as a gate", () => {
+    const row = toOverviewRow({
+      definition: def(),
+      latest: inst("awaiting-approval", ["awaiting-approval", "awaiting-approval"]),
+    });
+    expect(row.gates.map((g) => g.phaseId)).toEqual(["bs", "impl"]);
+    expect(row.gates.every((g) => g.canApprove)).toBe(true);
   });
 
   it("exposes a revise-only gate on a failed instance", () => {
@@ -269,7 +278,7 @@ describe("toOverviewRow", () => {
       definition: def(),
       latest: inst("failed", ["succeeded", "failed"]),
     });
-    expect(row.gate).toEqual({ phaseId: "impl", canApprove: false });
+    expect(row.gates).toEqual([{ phaseId: "impl", canApprove: false }]);
   });
 
   it("has no gate on a running instance", () => {
@@ -277,14 +286,14 @@ describe("toOverviewRow", () => {
       definition: def(),
       latest: inst("running", ["succeeded", "running"]),
     });
-    expect(row.gate).toBeNull();
+    expect(row.gates).toEqual([]);
   });
 
   it("renders a never-run row from the definition when latest is null", () => {
     const row = toOverviewRow({ definition: def(), latest: null });
     expect(row.badge).toBe("idle");
     expect(row.instanceId).toBeNull();
-    expect(row.gate).toBeNull();
+    expect(row.gates).toEqual([]);
     expect(row.phases.map((p) => p.status)).toEqual(["idle", "idle"]);
     expect(row.phases.map((p) => p.name)).toEqual(["Brainstorm", "Implement"]);
   });

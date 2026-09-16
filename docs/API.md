@@ -1352,6 +1352,9 @@ can start. `produces` must match `[A-Za-z0-9_-]{1,40}`.
   to have either succeeded or been intentionally `skipped` by routing.
 - `POST /api/instances/:id/revise` re-runs only the revised phase and kills only
   that phase's stragglers. `POST /api/instances/:id/abort` stops everything.
+- Both `approve` and `revise` accept an optional `phaseId` naming which paused
+  phase is meant. Absent, the single paused phase is meant — a bare `POST` is
+  still a valid approval. Naming a phase that is not paused is a `409`.
 
 ### Instance fields
 
@@ -1569,6 +1572,50 @@ the repository state (`git rev-parse HEAD`) it started against. Returns the
 `AgentInvocationRecord`, or `404` when the run predates invocation records or
 is unknown. See [docs/HARNESS.md § 8](HARNESS.md#8-observability--reproducibility)
 for the full shape and an example.
+
+### `GET /api/instances/:id/phases/:phaseId/review`
+
+Everything a human needs to decide on one paused phase, derived per read from
+the instance record and the phase's artifact directory — nothing is stored for
+it. This is what the Command Center's review drawer renders.
+
+```json
+{
+  "instanceId": "…", "phaseId": "draft", "phaseName": "Draft", "pipelineName": "Reports",
+  "status": "awaiting-approval",
+  "attempt": 0,
+  "canApprove": true,
+  "payload": { "summary": "…" },
+  "result": { "…": "…" },
+  "verification": { "status": "passed", "checks": [ … ] },
+  "artifactDir": "/home/me/.claude/argus/artifacts/<instanceId>/draft",
+  "artifacts": [
+    { "path": "report.md", "bytes": 1832, "modifiedAt": "…", "required": true, "text": true }
+  ],
+  "truncated": false
+}
+```
+
+`status` is `awaiting-approval` (Approve and Revise both apply) or `failed`
+(Revise only; `canApprove` is `false`). `artifacts` lists every regular file
+under the attempt's artifact directory, sorted, to a cap of 200 entries and 5
+levels deep (`truncated: true` when more exist); symlinks are skipped.
+`required` marks a path named by one of the phase's `kind: "artifact"` checks,
+read from the instance's snapshotted definition. `text` is UTF-8 with no NUL
+byte, judged from the first 8 KiB. `result` and `verification` appear only when
+the phase declared them. `404` for an unknown instance or phase; `409` when the
+phase is neither waiting nor failed. Open like every other read.
+
+### `GET /api/instances/:id/phases/:phaseId/artifact?path=<relative>`
+
+One artifact's bytes for the viewer, `path` relative to the artifact directory
+(`sub/report.md`). Returns
+`{ path, bytes, modifiedAt, text, content?, truncated }`: `content` is present
+only for text and is clipped at 512 KiB, in which case `truncated` is `true`.
+`400` when `path` is missing, absolute, or escapes the directory; `404` for an
+unknown instance, phase or file, or a phase with no artifact directory. The
+viewer is read-only — there is no write route; the human's revision travels as
+the `note` on `POST /api/instances/:id/revise`.
 
 ### `GET /api/instances/:id/journal`
 
@@ -2154,8 +2201,10 @@ session — it cannot execute anything.
 | `GET /api/overview`                | command-center rows: `{ definition, latest, cost }` per pipeline, attention-first                                                                                                                                                                                  |
 | `GET /api/instances/:id`           | full pipeline instance                                                                                                                                                                                                                                             |
 | `POST /api/instances/:id/signal`   | ingest a signal `{ phaseId, runId, type, token, payload?, result?, resultError? }`; `403` on bad token                                                                                                                                                             |
-| `POST /api/instances/:id/approve`  | advance past a gate (optional `{ answers }`) — **admin**                                                                                                                                                                                                           |
-| `POST /api/instances/:id/revise`   | re-run the current phase (optional `{ note }`) — **admin**                                                                                                                                                                                                         |
+| `GET /api/instances/:id/phases/:phaseId/review` | what a paused phase left for a human: payload, result, checks, artifact listing; `409` unless waiting or failed                                                                                                                                       |
+| `GET /api/instances/:id/phases/:phaseId/artifact?path=` | one artifact's text (clipped at 512 KiB) or metadata; `400` on a path that escapes the directory                                                                                                                                                  |
+| `POST /api/instances/:id/approve`  | advance past a gate (optional `{ answers, phaseId }`) — **admin**                                                                                                                                                                                                  |
+| `POST /api/instances/:id/revise`   | re-run the paused phase with the human's note (optional `{ note, phaseId }`) — **admin**                                                                                                                                                                           |
 | `POST /api/instances/:id/abort`    | abort the instance — **admin**                                                                                                                                                                                                                                     |
 | `GET /api/setup`                   | prerequisite status `{ ok, prereqs[] }`                                                                                                                                                                                                                            |
 | `POST /api/setup/apply`            | install fixable prerequisites, then re-check → `{ ok, prereqs[] }`                                                                                                                                                                                                 |

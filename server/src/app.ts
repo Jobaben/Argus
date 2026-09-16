@@ -87,6 +87,7 @@ import {
   type PipelineInput,
 } from "./sources/pipelines.js";
 import { readInstance, readInstances } from "./sources/instances.js";
+import { buildPhaseReview, readPhaseArtifact, resolveArtifactPath } from "./sources/artifacts.js";
 import {
   buildBriefing,
   clampSince,
@@ -1336,6 +1337,34 @@ export function createApp(deps: AppDeps): Hono {
     return inst ? c.json(inst) : c.json({ error: "not found" }, 404);
   });
 
+  // ── Gated artifact review ─────────────────────────────────────────────────
+  // What a paused phase left for a human to look at, derived per read from the
+  // instance and its artifact directory. Reads stay open like every other read;
+  // the decision itself goes through the admin-gated approve/revise beside them.
+  app.get("/api/instances/:id/phases/:phaseId/review", async (c) => {
+    const inst = await readInstance(c.req.param("id"));
+    if (!inst) return c.json({ error: "not found" }, 404);
+    const def =
+      inst.definition ?? (await readPipelines()).find((d) => d.id === inst.pipelineId);
+    const res = await buildPhaseReview(inst, c.req.param("phaseId"), def);
+    return res.ok ? c.json(res.review) : c.json({ error: res.error }, res.code);
+  });
+
+  app.get("/api/instances/:id/phases/:phaseId/artifact", async (c) => {
+    const rel = c.req.query("path");
+    if (!rel) return c.json({ error: "path is required" }, 400);
+    const inst = await readInstance(c.req.param("id"));
+    if (!inst) return c.json({ error: "not found" }, 404);
+    const phase = inst.phases.find((p) => p.id === c.req.param("phaseId"));
+    if (!phase) return c.json({ error: "not found" }, 404);
+    if (!phase.artifactDir) return c.json({ error: "phase has no artifact directory" }, 404);
+    if (resolveArtifactPath(phase.artifactDir, rel) === null) {
+      return c.json({ error: "path escapes the artifact directory" }, 400);
+    }
+    const content = await readPhaseArtifact(phase.artifactDir, rel);
+    return content ? c.json(content) : c.json({ error: "not found" }, 404);
+  });
+
   app.post("/api/instances/:id/signal", async (c) => {
     const parsed = await jsonBody(c);
     if (!parsed.ok) return parsed.res;
@@ -1363,14 +1392,23 @@ export function createApp(deps: AppDeps): Hono {
       ? ((body.value as Record<string, unknown>)[key] as T | undefined)
       : undefined;
 
+  // `phaseId` names which paused phase is meant when a fan-out has several
+  // waiting; absent, the single paused phase. See `ApproveRequest`/`ReviseRequest`.
+  const phaseTarget = (body: Awaited<ReturnType<typeof jsonBody>>) => {
+    const phaseId = optionalField<unknown>(body, "phaseId");
+    return typeof phaseId === "string" && phaseId ? { phaseId } : {};
+  };
+
   app.post("/api/instances/:id/approve", async (c) => {
-    const answers = optionalField<unknown>(await jsonBody(c), "answers");
-    return engineReply(c, await engine.approve(c.req.param("id"), answers));
+    const body = await jsonBody(c);
+    const answers = optionalField<unknown>(body, "answers");
+    return engineReply(c, await engine.approve(c.req.param("id"), answers, phaseTarget(body)));
   });
 
   app.post("/api/instances/:id/revise", async (c) => {
-    const note = optionalField<string>(await jsonBody(c), "note");
-    return engineReply(c, await engine.revise(c.req.param("id"), note));
+    const body = await jsonBody(c);
+    const note = optionalField<string>(body, "note");
+    return engineReply(c, await engine.revise(c.req.param("id"), note, phaseTarget(body)));
   });
 
   app.post("/api/instances/:id/abort", async (c) =>

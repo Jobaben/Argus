@@ -19,6 +19,8 @@ const HELP = `argus — the all-seeing monitor for your Claude Code agents
 
 Usage: argus [options]
        argus tail [tail options]
+       argus approve <instanceId> [--phase <id>]
+       argus revise <instanceId> --note "<text>" [--phase <id>]
 
 Commands:
   (none)         serve the dashboard and API on one port
@@ -26,6 +28,11 @@ Commands:
                  running, waiting for approval or just finished, then the live
                  feed for a bounded window. For a terminal you cannot see, or
                  an agent relaying it. \`argus tail --help\` for its options.
+  approve        open a gate a pipeline is waiting at, from a terminal that
+                 cannot reach the Command Center. Needs an Argus account
+                 (ARGUS_USER / ARGUS_PASSWORD, or the prompt).
+  revise         send a paused phase back to its agent with a note; the phase
+                 runs again. Same credentials. \`argus revise --help\`.
 
 Options:
   --open         open the dashboard in your browser once the server is up
@@ -151,6 +158,17 @@ if (process.argv[2] === "tail") {
   child.on("exit", (code, signal) => process.exit(signal ? 130 : (code ?? 1)));
   // Ctrl-C reaches the child through the shared terminal; forward it when it
   // arrives here first so the child prints its closing line either way.
+  for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => child.kill(sig));
+} else if (process.argv[2] === "approve" || process.argv[2] === "revise") {
+  // The terminal's Approve / Revise: same server, same token, plus an admin
+  // login for the one call. The verb travels as the first argument.
+  ensureBuilt(false);
+  const child = spawn(
+    process.execPath,
+    [path.join(root, "server", "dist", "cli", "gate.js"), ...process.argv.slice(2)],
+    { cwd: root, env: process.env, stdio: "inherit" },
+  );
+  child.on("exit", (code, signal) => process.exit(signal ? 130 : (code ?? 1)));
   for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => child.kill(sig));
 } else {
   serve();

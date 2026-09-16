@@ -1,10 +1,51 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import type { OverviewEntry, InstanceStatus, PhaseStatus } from "../types";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import type { OverviewEntry, InstanceStatus, PhaseStatus, PhaseReview } from "../types";
+import type { MachineFacetState } from "../fleet/useMachineFacet";
 import CommandCenter from "./CommandCenter";
 
 const approve = vi.fn(() => new Promise<Response>(() => {})); // never resolves: lets us assert disabled-after-click
 const revise = vi.fn(() => new Promise<Response>(() => {}));
+
+// The review drawer's read side, canned: these tests are about the board
+// handing off to the drawer and the drawer being the only place that acts.
+const mockReview: { review: PhaseReview | null; loading: boolean; error: string | null } = {
+  review: null,
+  loading: false,
+  error: null,
+};
+vi.mock("../useGateReview", () => ({
+  useGateReview: (instanceId: string | null, phaseId: string | null) =>
+    instanceId && phaseId ? mockReview : { review: null, loading: false, error: null },
+  useArtifactContent: () => ({ content: null, loading: false, error: null }),
+}));
+
+const mockFacet: MachineFacetState = {
+  selected: null,
+  select: vi.fn(),
+  machines: [],
+  peer: null,
+  soloMode: true,
+};
+vi.mock("../fleet/useMachineFacet", () => ({
+  useMachineFacet: () => mockFacet,
+}));
+
+function review(over: Partial<PhaseReview> = {}): PhaseReview {
+  return {
+    instanceId: "auth-refactor-i1",
+    phaseId: "ph1",
+    phaseName: "Phase1",
+    pipelineName: "auth-refactor",
+    status: "awaiting-approval",
+    attempt: 0,
+    canApprove: true,
+    payload: { summary: "ready for eyes" },
+    artifactDir: null,
+    artifacts: [],
+    ...over,
+  };
+}
 
 // Mutable mock state. The name is "mock"-prefixed so vitest's hoisted factory may close over it.
 const mockOverview: { overview: OverviewEntry[]; loading: boolean; error: string | null } = {
@@ -90,7 +131,24 @@ beforeEach(() => {
   mockOverview.error = null;
   mockActivity.clear();
   mockTotals.totals = { usd: 12.5, tokens: 340000, since: "2026-07-01T00:00:00.000Z" };
+  mockReview.review = review();
+  mockReview.loading = false;
+  mockReview.error = null;
+  mockFacet.peer = null;
+  mockFacet.soloMode = true;
 });
+
+afterEach(() => {
+  window.location.hash = "";
+});
+
+const awaiting = () => entry("auth-refactor", "awaiting-approval", ["succeeded", "awaiting-approval"]);
+
+/** The board's opener for the gate, then the drawer it opens (a lazy chunk). */
+async function openDrawer() {
+  fireEvent.click(screen.getByTestId("gate-opener"));
+  return await screen.findByRole("dialog");
+}
 
 describe("CommandCenter", () => {
   it("renders one pipeline card with a rail and focus panel per instance when overlapping", () => {
@@ -191,40 +249,83 @@ describe("CommandCenter", () => {
     expect(screen.getByText("job r")).toBeInTheDocument();
   });
 
-  it("shows Approve/Revise only on an awaiting pipeline", () => {
+  it("shows no opener on a running pipeline", () => {
     mockOverview.overview = [entry("scheduler-prune", "running", ["succeeded", "running"])];
     render(<CommandCenter />);
-    expect(screen.queryByRole("button", { name: /approve/i })).toBeNull();
+    expect(screen.queryByTestId("gate-opener")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^approve$/i })).toBeNull();
   });
 
-  it("fires approve and disables the gate after clicking", () => {
-    mockOverview.overview = [
-      entry("auth-refactor", "awaiting-approval", ["succeeded", "awaiting-approval"]),
-    ];
+  it("never renders Approve or Revise on the board itself — only one Review opener", () => {
+    mockOverview.overview = [awaiting()];
     render(<CommandCenter />);
-    const btn = screen.getByRole("button", { name: /approve/i });
+    expect(screen.queryByRole("button", { name: /^approve$/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^revise$/i })).toBeNull();
+    expect(screen.queryByLabelText(/revision note/i)).toBeNull();
+    const openers = screen.getAllByTestId("gate-opener");
+    expect(openers).toHaveLength(1);
+    expect(openers[0]).toHaveTextContent(/^review$/i);
+  });
+
+  it("opens the review drawer from the opener and approves the named phase from there", async () => {
+    mockOverview.overview = [awaiting()];
+    render(<CommandCenter />);
+    const dialog = await openDrawer();
+    expect(within(dialog).getByText("ready for eyes")).toBeInTheDocument();
+    const btn = within(dialog).getByRole("button", { name: /^approve$/i });
     fireEvent.click(btn);
-    expect(approve).toHaveBeenCalledWith("auth-refactor-i1");
+    expect(approve).toHaveBeenCalledWith("auth-refactor-i1", { phaseId: "ph1" });
     expect(btn).toBeDisabled();
   });
 
-  it("reveals a note field and fires revise", () => {
-    mockOverview.overview = [
-      entry("auth-refactor", "awaiting-approval", ["succeeded", "awaiting-approval"]),
-    ];
+  it("revise needs a note on a gate, then sends it for the named phase", async () => {
+    mockOverview.overview = [awaiting()];
     render(<CommandCenter />);
-    fireEvent.click(screen.getByRole("button", { name: /revise/i }));
-    const note = screen.getByPlaceholderText(/note/i);
-    fireEvent.change(note, { target: { value: "tighten the spec" } });
-    fireEvent.click(screen.getByRole("button", { name: /send/i }));
-    expect(revise).toHaveBeenCalledWith("auth-refactor-i1", "tighten the spec");
+    const dialog = await openDrawer();
+    fireEvent.click(within(dialog).getByRole("button", { name: /^revise$/i }));
+    const send = within(dialog).getByRole("button", { name: /^send$/i });
+    expect(send).toBeDisabled();
+    fireEvent.change(within(dialog).getByLabelText(/revision note/i), {
+      target: { value: "tighten the spec" },
+    });
+    expect(send).not.toBeDisabled();
+    fireEvent.click(send);
+    expect(revise).toHaveBeenCalledWith("auth-refactor-i1", "tighten the spec", {
+      phaseId: "ph1",
+    });
   });
 
-  it("offers Revise (but not Approve) on a failed pipeline", () => {
+  it("a failed pipeline gets a Review · Revise opener and a drawer without Approve", async () => {
     mockOverview.overview = [entry("auth-refactor", "failed", ["succeeded", "failed"])];
+    mockReview.review = review({
+      status: "failed",
+      canApprove: false,
+      payload: { reason: "exit code 1" },
+    });
     render(<CommandCenter />);
-    expect(screen.getByRole("button", { name: /revise/i })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /approve/i })).toBeNull();
+    expect(screen.getByTestId("gate-opener")).toHaveTextContent(/review · revise/i);
+    const dialog = await openDrawer();
+    expect(within(dialog).queryByRole("button", { name: /^approve$/i })).toBeNull();
+    expect(within(dialog).getByRole("button", { name: /^revise$/i })).toBeInTheDocument();
+  });
+
+  it("opens the drawer from a #/command/<instance>/<phase> deep link, and not on a peer's board", async () => {
+    mockOverview.overview = [awaiting()];
+    window.location.hash = "#/command/auth-refactor-i1/ph1";
+    const first = render(<CommandCenter />);
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /^esc$/i }));
+    expect(window.location.hash).toBe("#/command");
+    first.unmount();
+
+    mockFacet.peer = {
+      peer: { id: "m2", label: "other box", url: "http://other:7777", status: "ok", error: null },
+      summary: null,
+    } as unknown as MachineFacetState["peer"];
+    mockFacet.soloMode = false;
+    window.location.hash = "#/command/auth-refactor-i1/ph1";
+    render(<CommandCenter />);
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("shows the failed step and reason on a failed pipeline", () => {
@@ -283,17 +384,16 @@ describe("CommandCenter", () => {
     expect(screen.getByText(/exit code 1/i)).toBeInTheDocument();
   });
 
-  it("surfaces an action error and re-enables the gate", async () => {
-    mockOverview.overview = [
-      entry("auth-refactor", "awaiting-approval", ["succeeded", "awaiting-approval"]),
-    ];
+  it("surfaces an action error in the drawer and re-enables the gate", async () => {
+    mockOverview.overview = [awaiting()];
     approve.mockImplementationOnce(() =>
       Promise.reject(new Error("instance is not awaiting approval")),
     );
     render(<CommandCenter />);
-    const btn = screen.getByRole("button", { name: /approve/i });
+    const dialog = await openDrawer();
+    const btn = within(dialog).getByRole("button", { name: /^approve$/i });
     fireEvent.click(btn);
-    expect(await screen.findByText(/not awaiting approval/i)).toBeInTheDocument();
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(/not awaiting approval/i);
     expect(btn).not.toBeDisabled();
   });
 
@@ -337,14 +437,13 @@ describe("CommandCenter", () => {
     expect(screen.getByText("auth-refactor failed")).toBeInTheDocument();
   });
 
-  it("confirms an accepted approve with a status line", async () => {
-    mockOverview.overview = [
-      entry("auth-refactor", "awaiting-approval", ["succeeded", "awaiting-approval"]),
-    ];
+  it("confirms an accepted approve with a status line in the drawer", async () => {
+    mockOverview.overview = [awaiting()];
     approve.mockImplementationOnce(() => Promise.resolve(new Response()));
     render(<CommandCenter />);
-    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
-    expect(await screen.findByText(/approved — pipeline resuming/i)).toBeInTheDocument();
+    const dialog = await openDrawer();
+    fireEvent.click(within(dialog).getByRole("button", { name: /^approve$/i }));
+    expect(await within(dialog).findByText(/approved — pipeline resuming/i)).toBeInTheDocument();
   });
 
   it("renders the empty state when there are no pipelines", () => {

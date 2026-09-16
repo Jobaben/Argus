@@ -143,7 +143,7 @@ export async function runTail(options: TailOptions, io: TailIo): Promise<number>
   const agents = agentsRes.status === "ok" ? agentsRes.body.agents : [];
   const situation = situationRes.status === "ok" ? situationRes.body : null;
 
-  const tracker = new Tracker(io.now);
+  const tracker = new Tracker(io.now, options.url);
   tracker.applyOverview(overview);
   tracker.applyRuns(runs);
   tracker.applyAgents(agents);

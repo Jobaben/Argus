@@ -264,6 +264,11 @@ export interface ActionResult {
   error?: string;
 }
 
+/** Which paused phase a gate action means, when more than one could be. */
+export interface GateTarget {
+  phaseId?: string;
+}
+
 interface RecoveredOutcome {
   signalType: "completed" | "failed";
   outcome: NonNullable<Run["outcome"]>;
@@ -368,8 +373,11 @@ export function retryNote(payload: unknown): string {
 export interface Engine {
   start(pipelineId: string, trigger?: "manual" | "scheduled"): Promise<PipelineInstance | null>;
   onSignal(instanceId: string, signal: PipelineSignal): Promise<ActionResult>;
-  approve(instanceId: string, answers?: unknown): Promise<ActionResult>;
-  revise(instanceId: string, note?: string): Promise<ActionResult>;
+  /** Open a gate. `phaseId` names which paused phase when a fan-out has more
+   *  than one waiting; absent, the single paused phase is meant. */
+  approve(instanceId: string, answers?: unknown, options?: GateTarget): Promise<ActionResult>;
+  /** Send a paused phase back to its agent with the human's note. */
+  revise(instanceId: string, note?: string, options?: GateTarget): Promise<ActionResult>;
   abort(instanceId: string): Promise<ActionResult>;
   reconcile(): Promise<void>;
   /** On boot: claim still-alive runs from running instances so they keep
@@ -1449,7 +1457,11 @@ export function createEngine(deps: EngineDeps): Engine {
     });
   }
 
-  async function approve(instanceId: string, answers?: unknown): Promise<ActionResult> {
+  async function approve(
+    instanceId: string,
+    answers?: unknown,
+    options: GateTarget = {},
+  ): Promise<ActionResult> {
     return locks.withLock(instanceId, async () => {
       const inst = await readInstance(instanceId);
       if (!inst) return { ok: false, code: 404, error: "instance not found" };
@@ -1457,7 +1469,7 @@ export function createEngine(deps: EngineDeps): Engine {
       if (!def) return { ok: false, code: 404, error: "pipeline not found" };
       let res;
       try {
-        res = applyApprove(def, inst, answers, nowISO());
+        res = applyApprove(def, inst, answers, nowISO(), options.phaseId);
       } catch (e) {
         return { ok: false, code: 409, error: e instanceof Error ? e.message : String(e) };
       }
@@ -1469,7 +1481,11 @@ export function createEngine(deps: EngineDeps): Engine {
     });
   }
 
-  async function revise(instanceId: string, note?: string): Promise<ActionResult> {
+  async function revise(
+    instanceId: string,
+    note?: string,
+    options: GateTarget = {},
+  ): Promise<ActionResult> {
     return locks.withLock(instanceId, async () => {
       const inst = await readInstance(instanceId);
       if (!inst) return { ok: false, code: 404, error: "instance not found" };
@@ -1481,7 +1497,7 @@ export function createEngine(deps: EngineDeps): Engine {
       // torn down live work.
       let res;
       try {
-        res = applyRevise(inst, nowISO());
+        res = applyRevise(inst, nowISO(), options.phaseId);
       } catch (e) {
         return { ok: false, code: 409, error: e instanceof Error ? e.message : String(e) };
       }

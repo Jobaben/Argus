@@ -6,7 +6,12 @@
 
 export type {
   AgentInvocationRecord,
+  ApproveRequest,
   CapabilityProfile,
+  PhaseArtifact,
+  PhaseArtifactContent,
+  PhaseReview,
+  ReviseRequest,
   CheckResult,
   EnvPolicy,
   McpServerSpec,

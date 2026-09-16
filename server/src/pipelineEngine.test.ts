@@ -1486,3 +1486,57 @@ test("a signal for a phase the instance does not have is journalled as ignored",
   assert.match(stale.detail, /not a tracked step/);
   assert.equal((await instances.readInstance(inst!.id)).phases[0].status, "running");
 });
+
+test("approve and revise act on the named phase, and refuse one that is not paused", async () => {
+  const { engine, pipelines, instances } = await load();
+  await seedPipeline(pipelines);
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const inst = await e.start("p1", "manual");
+  await e.onSignal(inst!.id, {
+    instanceId: inst!.id,
+    phaseId: "brainstorm",
+    runId: rec.calls[0].runId,
+    type: "needs-input",
+    token: inst!.signalToken,
+  });
+  assert.equal((await instances.readInstance(inst!.id)).status, "awaiting-approval");
+
+  // Naming a phase that is not paused — or does not exist — is refused before
+  // anything moves, so a stale client cannot open a gate it never looked at.
+  for (const phaseId of ["plan", "nope"]) {
+    const res = await e.approve(inst!.id, undefined, { phaseId });
+    assert.equal(res.ok, false, phaseId);
+    assert.equal(res.code, 409, phaseId);
+    assert.equal((await instances.readInstance(inst!.id)).phases[0].status, "awaiting-approval");
+  }
+  const badRevise = await e.revise(inst!.id, "note", { phaseId: "plan" });
+  assert.equal(badRevise.ok, false);
+  assert.equal(badRevise.code, 409);
+  assert.equal(rec.calls.length, 1, "no run was killed or started by a refused revise");
+
+  const revised = await e.revise(inst!.id, "tighten the intro", { phaseId: "brainstorm" });
+  assert.equal(revised.ok, true);
+  await waitFor(() => rec.calls.length === 2);
+  assert.equal(rec.calls[1].env.ARGUS_PHASE_ID, "brainstorm");
+  const run = (await runsMod.readRun(rec.calls[1].runId))!.run;
+  assert.match(run.prompt, /Revision note: tighten the intro/);
+  let cur = await instances.readInstance(inst!.id);
+  assert.equal(cur.phases[0].status, "running");
+  assert.equal(cur.phases[0].attempt, 1, "one revise past the first attempt (0)");
+
+  await e.onSignal(inst!.id, {
+    instanceId: inst!.id,
+    phaseId: "brainstorm",
+    runId: rec.calls[1].runId,
+    type: "needs-input",
+    token: inst!.signalToken,
+  });
+  const approved = await e.approve(inst!.id, undefined, { phaseId: "brainstorm" });
+  assert.equal(approved.ok, true);
+  await waitFor(() => rec.calls.length === 3);
+  cur = await instances.readInstance(inst!.id);
+  assert.equal(cur.phases[0].status, "succeeded");
+  assert.equal(cur.phases[1].status, "running");
+  assert.equal(rec.calls[2].env.ARGUS_PHASE_ID, "plan");
+});

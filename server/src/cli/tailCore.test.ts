@@ -4,6 +4,7 @@ import type { Agent, OverviewEntry, PipelineInstance, Run } from "@argus/contrac
 import {
   boardInstances,
   buildSnapshot,
+  gateHints,
   clip,
   endLine,
   formatMs,
@@ -374,8 +375,12 @@ describe("buildSnapshot", () => {
     ]);
     assert.equal(
       texts[5],
-      'snapshot.gate|Docs sweep · waiting for approval at "review" for 12m 00s — Three files changed, please look at README',
+      'snapshot.gate|Docs sweep · waiting for approval at "review" for 12m 00s — Three files changed, please look at README · review http://127.0.0.1:7777/#/command/inst-2/review · argus approve inst-2 --phase review',
     );
+    const gateLine = lines.find((l) => l.kind === "snapshot.gate")!;
+    assert.equal(gateLine.reviewUrl, "http://127.0.0.1:7777/#/command/inst-2/review");
+    assert.equal(gateLine.approveCommand, "argus approve inst-2 --phase review");
+    assert.equal(gateLine.reviseCommand, 'argus revise inst-2 --phase review --note "<what to change>"');
     // Recent, newest first, inside the window only; failures carry the reason.
     assert.deepEqual(texts.slice(6, 8), [
       "snapshot.recent|✗ Deps audit failed in 5s: npm audit found 3 vulnerabilities",
@@ -524,7 +529,7 @@ describe("Tracker", () => {
         ["phase.changed", "Release train › build succeeded"],
         [
           "pipeline.gate",
-          'pipeline Release train is waiting for approval at "review" — ready for eyes',
+          'pipeline Release train is waiting for approval at "review" — ready for eyes · argus approve inst-1 --phase review',
         ],
       ],
     );
@@ -709,5 +714,41 @@ describe("frames and refresh policy", () => {
       json: true,
     });
     assert.equal(idle.text, "idle after 12s · 1 event · nothing running");
+  });
+});
+
+describe("gateHints", () => {
+  it("links the review drawer and names the CLI verbs, phase-targeted when known", () => {
+    const withPhase = gateHints("http://127.0.0.1:7777/", "inst-1", "review");
+    assert.equal(withPhase.reviewUrl, "http://127.0.0.1:7777/#/command/inst-1/review");
+    assert.equal(withPhase.approveCommand, "argus approve inst-1 --phase review");
+    assert.equal(
+      withPhase.reviseCommand,
+      'argus revise inst-1 --phase review --note "<what to change>"',
+    );
+    assert.equal(
+      withPhase.text,
+      " · review http://127.0.0.1:7777/#/command/inst-1/review · argus approve inst-1 --phase review",
+    );
+    const bare = gateHints(null, "inst-1", undefined);
+    assert.equal(bare.reviewUrl, null);
+    assert.equal(bare.text, " · argus approve inst-1");
+  });
+
+  it("carries the review link on a tracker built with a URL", () => {
+    const t = new Tracker(() => NOW, "http://127.0.0.1:7777");
+    t.applyOverview([entry(instance())]);
+    const gated = instance({
+      status: "awaiting-approval",
+      currentPhaseIndex: 1,
+      updatedAt: "2026-07-07T10:31:00.000Z",
+      phases: [
+        { ...instance().phases[0], status: "succeeded" },
+        { ...instance().phases[1], status: "awaiting-approval" },
+      ],
+    });
+    const gate = t.applyOverview([entry(gated)]).find((l) => l.kind === "pipeline.gate")!;
+    assert.equal(gate.reviewUrl, "http://127.0.0.1:7777/#/command/inst-1/review");
+    assert.match(gate.text, /review http:\/\/127\.0\.0\.1:7777\/#\/command\/inst-1\/review/);
   });
 });

@@ -2682,3 +2682,181 @@ test("GET /api/runs/:id/invocation serves the recorded invocation, 404 when none
   assert.equal((await app.request("/api/runs/nope/invocation", { headers: loopback })).status, 404);
   assert.equal((await app.request("/api/runs/../x/invocation", { headers: loopback })).status, 404);
 });
+
+// ── Gated artifact review ────────────────────────────────────────────────────
+
+async function gatedInstance(app: ReturnType<typeof makeApp>) {
+  const created = await postPipeline(app, [dagPhase("draft", { gated: true })]);
+  assert.equal(created.status, 201);
+  const def = (await created.json()) as PipelineDefinition;
+  const artifactDir = path.join(home, "artifacts", "i-gate", "draft");
+  mkdirSync(path.join(artifactDir, "notes"), { recursive: true });
+  writeFileSync(path.join(artifactDir, "report.md"), "# Report\n\nbody");
+  writeFileSync(path.join(artifactDir, "notes", "raw.txt"), "raw");
+  const inst = liveInstance(def, "i-gate", "awaiting-approval");
+  const gated: PipelineInstance = {
+    ...inst,
+    phases: [
+      {
+        id: "draft",
+        name: "draft",
+        gated: true,
+        status: "awaiting-approval",
+        steps: [{ name: "s", runId: "r1", status: "succeeded" }],
+        attempt: 0,
+        payload: { summary: "drafted" },
+        artifactDir,
+      },
+      {
+        id: "later",
+        name: "later",
+        gated: false,
+        status: "pending",
+        steps: [{ name: "s", runId: null, status: "pending" }],
+        attempt: 0,
+        payload: null,
+      },
+    ],
+  };
+  await writeInstance(gated);
+  return { def, inst: gated, artifactDir };
+}
+
+test("review: lists a paused phase's artifacts without a login", async () => {
+  const app = makeApp({}, signedOut);
+  const { inst } = await gatedInstance(makeApp());
+  const res = await app.request(`/api/instances/${inst.id}/phases/draft/review`, {
+    headers: loopback,
+  });
+  assert.equal(res.status, 200);
+  const review = (await res.json()) as {
+    phaseId: string;
+    status: string;
+    canApprove: boolean;
+    payload: unknown;
+    artifacts: { path: string; text: boolean }[];
+  };
+  assert.equal(review.phaseId, "draft");
+  assert.equal(review.status, "awaiting-approval");
+  assert.equal(review.canApprove, true);
+  assert.deepEqual(review.payload, { summary: "drafted" });
+  assert.deepEqual(
+    review.artifacts.map((a) => a.path),
+    ["notes/raw.txt", "report.md"],
+  );
+  assert.ok(res.headers.get("etag"), "reads carry an ETag like every other GET");
+  const again = await app.request(`/api/instances/${inst.id}/phases/draft/review`, {
+    headers: { ...loopback, "if-none-match": res.headers.get("etag")! },
+  });
+  assert.equal(again.status, 304);
+});
+
+test("review: 404 for an unknown instance or phase, 409 for one that is not paused", async () => {
+  const app = makeApp();
+  const { inst } = await gatedInstance(app);
+  const missing = await app.request("/api/instances/nope/phases/draft/review", {
+    headers: loopback,
+  });
+  assert.equal(missing.status, 404);
+  const noPhase = await app.request(`/api/instances/${inst.id}/phases/ghost/review`, {
+    headers: loopback,
+  });
+  assert.equal(noPhase.status, 404);
+  const pending = await app.request(`/api/instances/${inst.id}/phases/later/review`, {
+    headers: loopback,
+  });
+  assert.equal(pending.status, 409);
+  assert.match(((await pending.json()) as { error: string }).error, /pending/);
+});
+
+test("artifact: serves one file by relative path and refuses escapes", async () => {
+  const app = makeApp({}, signedOut);
+  const { inst } = await gatedInstance(makeApp());
+  const base = `/api/instances/${inst.id}/phases/draft/artifact`;
+  const ok = await app.request(`${base}?path=${encodeURIComponent("notes/raw.txt")}`, {
+    headers: loopback,
+  });
+  assert.equal(ok.status, 200);
+  const body = (await ok.json()) as { path: string; content?: string; text: boolean };
+  assert.equal(body.path, "notes/raw.txt");
+  assert.equal(body.text, true);
+  assert.equal(body.content, "raw");
+
+  const noPath = await app.request(base, { headers: loopback });
+  assert.equal(noPath.status, 400);
+  const escape = await app.request(`${base}?path=${encodeURIComponent("../../secret")}`, {
+    headers: loopback,
+  });
+  assert.equal(escape.status, 400);
+  const absolute = await app.request(
+    `${base}?path=${encodeURIComponent(path.join(home, "artifacts"))}`,
+    { headers: loopback },
+  );
+  assert.equal(absolute.status, 400);
+  const missing = await app.request(`${base}?path=nope.md`, { headers: loopback });
+  assert.equal(missing.status, 404);
+  const noDir = await app.request(
+    `/api/instances/${inst.id}/phases/later/artifact?path=report.md`,
+    { headers: loopback },
+  );
+  assert.equal(noDir.status, 404);
+});
+
+test("approve and revise forward the named phase to the engine and stay admin-gated", async () => {
+  const seen: { approve?: unknown[]; revise?: unknown[] } = {};
+  const engine: Engine = {
+    ...fakeEngine,
+    approve: async (...args) => {
+      seen.approve = args;
+      return { ok: true, code: 200 };
+    },
+    revise: async (...args) => {
+      seen.revise = args;
+      return { ok: true, code: 200 };
+    },
+  };
+  const users = createUserStore();
+  const wire = (eng: Engine, auth: AuthService) =>
+    createApp({
+      config,
+      engine: eng,
+      broadcast: () => {},
+      serveWeb: false,
+      users,
+      remoteAddr: () => "127.0.0.1",
+      auth,
+    });
+  const app = wire(engine, openAuth);
+  const approve = await app.request("/api/instances/i1/approve", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ answers: "yes", phaseId: "draft" }),
+  });
+  assert.equal(approve.status, 200);
+  assert.deepEqual(seen.approve, ["i1", "yes", { phaseId: "draft" }]);
+
+  const revise = await app.request("/api/instances/i1/revise", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ note: "tighten", phaseId: "draft" }),
+  });
+  assert.equal(revise.status, 200);
+  assert.deepEqual(seen.revise, ["i1", "tighten", { phaseId: "draft" }]);
+
+  // A bare POST is still a valid approval of the single paused phase.
+  const bare = await app.request("/api/instances/i1/approve", {
+    method: "POST",
+    headers: sameOrigin,
+  });
+  assert.equal(bare.status, 200);
+  assert.deepEqual(seen.approve, ["i1", undefined, {}]);
+
+  // Signed out, the same body is refused before the engine hears of it.
+  const gated = wire(fakeEngine, signedOut);
+  const refused = await gated.request("/api/instances/i1/approve", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ phaseId: "draft" }),
+  });
+  assert.equal(refused.status, 401);
+});

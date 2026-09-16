@@ -482,6 +482,30 @@ export interface SnapshotInput {
   context: number;
 }
 
+/**
+ * Where a human decides on a gate. The dashboard's review drawer is the place
+ * to *look*; the two CLI verbs are for a terminal that cannot open it. The
+ * tail itself never approves — it only says where to.
+ */
+export function gateHints(
+  url: string | null,
+  instanceId: string,
+  phaseId: string | undefined,
+): { reviewUrl: string | null; approveCommand: string; reviseCommand: string; text: string } {
+  const target = phaseId ? ` --phase ${phaseId}` : "";
+  const reviewUrl = url
+    ? `${url.replace(/\/$/, "")}/#/command/${instanceId}${phaseId ? `/${phaseId}` : ""}`
+    : null;
+  const approveCommand = `argus approve ${instanceId}${target}`;
+  const reviseCommand = `argus revise ${instanceId}${target} --note "<what to change>"`;
+  return {
+    reviewUrl,
+    approveCommand,
+    reviseCommand,
+    text: `${reviewUrl ? ` · review ${reviewUrl}` : ""} · ${approveCommand}`,
+  };
+}
+
 /** The opening picture, as lines. Pure: every read has already happened. */
 export function buildSnapshot(input: SnapshotInput): TailLine[] {
   const { now, runs, overview, agents } = input;
@@ -570,15 +594,19 @@ export function buildSnapshot(input: SnapshotInput): TailLine[] {
     const phase = inst.phases.find((p) => p.status === "awaiting-approval");
     const since = new Date(inst.updatedAt).getTime();
     const note = firstString(phase?.payload, ["summary", "reason", "message", "text"]);
+    const hints = gateHints(input.url, inst.id, phase?.id);
     lines.push({
       at,
       kind: "snapshot.gate",
-      text: `${inst.pipelineName} · waiting for approval at "${phase?.name ?? "?"}" for ${formatMs(now.getTime() - since)}${note ? ` — ${clip(note, 140)}` : ""}`,
+      text: `${inst.pipelineName} · waiting for approval at "${phase?.name ?? "?"}" for ${formatMs(now.getTime() - since)}${note ? ` — ${clip(note, 140)}` : ""}${hints.text}`,
       instanceId: inst.id,
       phaseId: phase?.id,
       label: inst.pipelineName,
       status: "awaiting-approval",
       detail: note ?? undefined,
+      reviewUrl: hints.reviewUrl,
+      approveCommand: hints.approveCommand,
+      reviseCommand: hints.reviseCommand,
     });
   }
 
@@ -678,7 +706,11 @@ export class Tracker {
   private labels = new Map<string, string>();
   private primed = { runs: false, instances: false, agents: false };
 
-  constructor(private readonly now: () => Date) {}
+  constructor(
+    private readonly now: () => Date,
+    /** Argus base URL, for the review link on a gate line. Null = no link. */
+    private readonly url: string | null = null,
+  ) {}
 
   /** A step run's board label, else its schedule/launch name, else its id. */
   labelFor(runId: string): string {
@@ -831,15 +863,19 @@ export class Tracker {
   private gateLine(inst: PipelineInstance, at: string): TailLine {
     const phase = inst.phases.find((p) => p.status === "awaiting-approval");
     const note = firstString(phase?.payload, ["summary", "reason", "message", "text"]);
+    const hints = gateHints(this.url, inst.id, phase?.id);
     return {
       at,
       kind: "pipeline.gate",
-      text: `pipeline ${inst.pipelineName} is waiting for approval at "${phase?.name ?? "?"}"${note ? ` — ${clip(note, 140)}` : ""}`,
+      text: `pipeline ${inst.pipelineName} is waiting for approval at "${phase?.name ?? "?"}"${note ? ` — ${clip(note, 140)}` : ""}${hints.text}`,
       instanceId: inst.id,
       phaseId: phase?.id,
       label: inst.pipelineName,
       status: "awaiting-approval",
       detail: note ?? undefined,
+      reviewUrl: hints.reviewUrl,
+      approveCommand: hints.approveCommand,
+      reviseCommand: hints.reviseCommand,
     };
   }
 

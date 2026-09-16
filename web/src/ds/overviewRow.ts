@@ -76,9 +76,10 @@ export interface PhasePill {
 }
 
 /**
- * The actionable gate for a row. Present when the instance is paused awaiting a
- * human: `awaiting-approval` (Approve + Revise) or `failed` (Revise-only retry,
- * since the engine's applyRevise also accepts a failed instance).
+ * One phase of a row waiting on a human: `awaiting-approval` (Approve + Revise)
+ * or `failed` (Revise-only retry, since the engine's applyRevise also accepts a
+ * failed instance). The board renders an opener per gate; the decision itself
+ * is made in the review drawer, nowhere else.
  */
 export interface OverviewGate {
   phaseId: string;
@@ -92,7 +93,8 @@ export interface OverviewRow {
   updatedAt: string | null;
   phases: PhasePill[];
   instanceId: string | null;
-  gate: OverviewGate | null;
+  /** Every phase waiting on a human; empty when nothing is. */
+  gates: OverviewGate[];
   failure: { step: string | null; reason: string | null; kind: string | null } | null;
   /** Total spend of the latest run (all attempts); null when unknown. */
   cost: OverviewCost | null;
@@ -186,17 +188,19 @@ function activeStepName(phase: PhaseProgress): string | null {
   return phase.steps.find((s) => s.status === "running")?.name ?? null;
 }
 
-function gateFor(latest: OverviewEntry["latest"]): OverviewGate | null {
-  if (!latest) return null;
+function gatesFor(latest: OverviewEntry["latest"]): OverviewGate[] {
+  if (!latest) return [];
   if (latest.status === "awaiting-approval") {
-    const phase = latest.phases.find((p) => p.status === "awaiting-approval");
-    if (phase) return { phaseId: phase.id, canApprove: true };
+    return latest.phases
+      .filter((p) => p.status === "awaiting-approval")
+      .map((p) => ({ phaseId: p.id, canApprove: true }));
   }
   if (latest.status === "failed") {
-    const phase = latest.phases.find((p) => p.status === "failed");
-    if (phase) return { phaseId: phase.id, canApprove: false };
+    return latest.phases
+      .filter((p) => p.status === "failed")
+      .map((p) => ({ phaseId: p.id, canApprove: false }));
   }
-  return null;
+  return [];
 }
 
 function extractReason(payload: unknown): string | null {
@@ -295,7 +299,7 @@ function instanceRow(
     updatedAt: instance.updatedAt,
     phases,
     instanceId: instance.id,
-    gate: gateFor(instance),
+    gates: gatesFor(instance),
     failure: failureFor(instance),
     cost,
     model: definition.model ?? null,
@@ -344,7 +348,7 @@ export function toOverviewRow(entry: OverviewEntry): OverviewRow {
         skipCause: null,
       })),
       instanceId: null,
-      gate: null,
+      gates: [],
       failure: null,
       cost: null,
       model: definition.model ?? null,

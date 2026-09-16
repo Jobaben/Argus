@@ -16,6 +16,10 @@ export {
   SkeletonTile,
 } from "./Skeleton";
 export { Drawer } from "./Drawer";
+// `Markdown` is deliberately not re-exported here: it carries the `marked`
+// lexer, and the barrel is imported by the eager shell. Import it from
+// "./Markdown" inside a lazily-loaded view instead.
+export { isMarkdown, safeHref } from "./markdownText";
 export { ErrorBoundary } from "./ErrorBoundary";
 export { Page } from "./Page";
 export type { Crumb } from "./Page";

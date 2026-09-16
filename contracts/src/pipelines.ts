@@ -480,3 +480,73 @@ export interface OverviewEntry {
    *  beside its peers. Empty when only the lone `latest` instance remains. */
   active: { instance: PipelineInstance; cost: OverviewCost }[];
 }
+
+// ── Gated artifact review ────────────────────────────────────────────────────
+
+/** One file a gated (or failed) phase left in its artifact directory. */
+export interface PhaseArtifact {
+  /** Path relative to the phase's artifact directory, POSIX separators. */
+  path: string;
+  bytes: number;
+  modifiedAt: string;
+  /** A `kind: "artifact"` check on the phase's snapshotted definition names this path. */
+  required: boolean;
+  /** UTF-8 text with no NUL bytes: only these can be viewed. */
+  text: boolean;
+}
+
+/**
+ * Everything a human needs to decide on one paused phase. Derived per read
+ * from the instance record and the phase's artifact directory; nothing is
+ * stored for it.
+ */
+export interface PhaseReview {
+  instanceId: string;
+  phaseId: string;
+  phaseName: string;
+  pipelineName: string;
+  /** `awaiting-approval` → Approve + Revise. `failed` → Revise only. */
+  status: "awaiting-approval" | "failed";
+  /** The attempt this review describes. */
+  attempt: number;
+  /** Whether Approve is offered at all (false for a failed phase). */
+  canApprove: boolean;
+  /** The agent's own closing payload — read-only context for the decision. */
+  payload: unknown | null;
+  /** The phase's validated structured result, when it declared one. */
+  result?: unknown;
+  /** Argus's own checks over this attempt, when the phase declared any. */
+  verification?: VerificationReport;
+  artifactDir: string | null;
+  artifacts: PhaseArtifact[];
+  /** The listing hit its cap; more files exist on disk. */
+  truncated?: boolean;
+}
+
+/** One artifact's bytes, for the read-only viewer. */
+export interface PhaseArtifactContent {
+  path: string;
+  bytes: number;
+  modifiedAt: string;
+  text: boolean;
+  /** Present only when `text`. Clipped at the server's read cap. */
+  content?: string;
+  /** `content` is a head, not the whole file. */
+  truncated: boolean;
+}
+
+/** The body of `POST /api/instances/:id/approve`. Every field optional — a
+ *  bare POST stays a valid approval of the single paused phase. */
+export interface ApproveRequest {
+  answers?: unknown;
+  /** Which paused phase to approve when more than one is waiting. */
+  phaseId?: string;
+}
+
+/** The body of `POST /api/instances/:id/revise`. */
+export interface ReviseRequest {
+  /** The human's revision, handed to the agent when the phase runs again. */
+  note?: string;
+  /** Which paused phase to revise when more than one is waiting. */
+  phaseId?: string;
+}

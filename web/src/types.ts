@@ -35,6 +35,9 @@ export type {
   RunOutcome,
   LaunchInput,
   // Pipelines
+  PhaseArtifact,
+  PhaseArtifactContent,
+  PhaseReview,
   Dependency,
   DependencyEdge,
   RouteCondition,

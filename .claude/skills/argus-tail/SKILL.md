@@ -58,7 +58,25 @@ estimates and are marked `~`.
   under your tool timeout), report, and run it again if they want more. Each
   run's snapshot catches anything you missed between calls.
 - Asked "is it done yet?": `argus tail --for 0` answers immediately.
-- A ⏸ line means a person must approve, revise or abort in the Argus UI or via
-  its API; say so rather than waiting for it to move.
+- A ⏸ line means a person must decide. It carries a review link (the Command
+  Center's review drawer, where they can read what the phase produced) and the
+  matching `argus approve <instanceId> [--phase <id>]` command. Relay both; do
+  not wait for it to move on its own.
+
+## Deciding on a gate
+
+Only when the person tells you to — never on your own judgement:
+
+```bash
+argus approve <instanceId> [--phase <phaseId>]                    # continue the pipeline
+argus revise  <instanceId> --note "<what to change>" [--phase <phaseId>]   # run the phase again
+```
+
+Both need an Argus account: `ARGUS_USER` and `ARGUS_PASSWORD` in your shell
+(a terminal prompts instead when they are missing; a tool call cannot). The
+session lasts for the one call. `--phase` is only needed when the ⏸ line shows
+one, i.e. more than one phase is waiting. Relay the command's one output line
+verbatim — on exit 1 it names the reason (wrong password, no account yet, the
+instance is no longer waiting).
 - If the command exits 1, relay its stderr line as-is — it names the fix
   (server not running, wrong port, missing token).

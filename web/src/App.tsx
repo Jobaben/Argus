@@ -357,7 +357,6 @@ function Dashboard() {
     () => ({
       destinations: paletteDestinations,
       canAdmin: auth.status?.authenticated === true,
-      approveGate: (instanceId: string) => postAction(`/api/instances/${instanceId}/approve`),
       runSchedule: (scheduleId: string) => postAction(`/api/schedules/${scheduleId}/run`),
       markCaughtUp: async () => {
         await briefingState.ack();

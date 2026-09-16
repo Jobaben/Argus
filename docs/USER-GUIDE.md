@@ -105,8 +105,8 @@ health, the issues it raised, and the action that fires it now._
   characters and it fuzzy-matches across every destination, pipeline, schedule,
   failing monitor, open issue, background agent, project and recent transcript —
   "dpa" finds _Dependency audit_, "rt" finds _Release train_. It also carries
-  **actions**: approve a pipeline waiting at a gate, run a schedule now, mark the
-  Briefing caught up. `↑`/`↓` move, `Enter` runs, `Esc` closes; the rows you use
+  **actions**: open the review of a pipeline waiting at a gate, run a schedule
+  now, mark the Briefing caught up. `↑`/`↓` move, `Enter` runs, `Esc` closes; the rows you use
   float to the top next time you open it with an empty query. An action that
   talks to the server keeps the palette open long enough to report a failure
   rather than closing over it. The **Jump to… ⌘K** button in the bar opens the
@@ -177,8 +177,9 @@ _Pipelines at a glance — the home tab._ Route: `#/command`
 
 **Purpose:** one card per pipeline, attention-first, with a **phase graph**
 drawing the whole pipeline's shape and a **focus panel** beside it showing one
-phase's step tiles at a time. Approve/Revise gates appear inline on the row
-that needs you — this is the wall you keep open on a second monitor.
+phase's step tiles at a time. A phase waiting on you gets a **Review** button
+on its row that opens the review drawer — this is the wall you keep open on a
+second monitor.
 
 **What you see:**
 
@@ -230,13 +231,24 @@ that needs you — this is the wall you keep open on a second monitor.
 
 **What you can do:**
 
-- **Approve** (green) a gated phase that's awaiting you — the pipeline resumes.
-  `⌘K` → "approve" reaches the same action without finding the card first.
-- **Revise** (labeled **Retry** after a crash-restart) — optionally attach a
-  revise note, hit **Send**, and the phase restarts with your feedback.
+- **Review** a gated phase that's awaiting you. The button opens the **review
+  drawer**: the agent's closing note, the phase's structured result and Argus's
+  own checks when it declared any, and every file the phase left in its
+  artifact directory. A `.md` artifact renders as a document; any other text
+  file shows raw; a binary shows its size. The file a check required is badged
+  **required** and opens first. `⌘K` → "review" reaches the same drawer
+  without finding the card first, and `#/command/<instanceId>` deep-links to
+  it — that is the link `argus tail` prints beside a waiting gate.
+- **Approve** (green, in the drawer) continues the pipeline with exactly what
+  is shown. **Revise** (labeled **Retry** after a crash-restart) asks for a
+  note — your revision — and **Send** restarts the phase with it appended to
+  the agent's prompt; that attempt's files are discarded. Nothing in the drawer
+  edits an artifact: the note is how you change the outcome. Approve and Revise
+  live in the drawer and nowhere else on the board.
 - Both actions require a signed-in, approved account (see
-  [Users & sign-in](#10-users--sign-in)); the buttons render for everyone but
-  the server answers 401 unless you're authenticated.
+  [Users & sign-in](#10-users--sign-in)); looking is open to everyone, and the
+  server answers 401 to a decision unless you're authenticated. From a terminal,
+  `argus approve` / `argus revise` do the same (see [`argus tail`](#31-argus-tail)).
 - **Click a phase node** to pin that phase's steps into the focus panel —
   every step of every phase is one click away; the edges into and out of the
   pinned node light up; click it again to return to following the action.
@@ -293,7 +305,7 @@ deep-linking to the tab where you act on it:
 - **Monitor down** (→ Monitors): a schedule's expected run never arrived —
   the dead-man's switch fired.
 - **Awaiting approval** (→ Pipelines): a gated pipeline phase is paused
-  waiting for your Approve/Revise.
+  waiting for you to review it.
 - **Monitor failing** (→ Monitors): the schedule runs, but its last completed
   run failed.
 - **Open issue** (→ Issues): an unresolved failure group, with its occurrence
@@ -673,7 +685,8 @@ run log for diagnosis.
 **Where the data comes from:** `~/.claude/argus/pipelines.json` and instance
 records under `~/.claude/argus/instances/` via `GET/POST /api/pipelines`,
 `PUT/PATCH/DELETE /api/pipelines/:id`, `POST /api/pipelines/:id/start`,
-`GET /api/overview`, `POST /api/instances/:id/{approve,revise,abort}`.
+`GET /api/overview`, `GET /api/instances/:id/phases/:phaseId/{review,artifact}`,
+`POST /api/instances/:id/{approve,revise,abort}`.
 
 ---
 
@@ -2006,8 +2019,28 @@ again" is the whole continuation story.
 **Honest limits.** Only pipeline steps stream per-tool activity, because only
 they run with a live transcript (`--output-format stream-json`); schedule and
 one-off runs are batch runs and show start and finish lines only. A gate needs
-a human: the tail tells you a pipeline is waiting, and approving, revising or
-aborting happens in the Command Center or through the API.
+a human: the tail tells you a pipeline is waiting and never decides for you.
+Each ⏸ line carries the link to that gate's review drawer and the matching
+`argus approve` command, so the person reading the relay can look, then act.
+
+**Deciding from the terminal.** Two sibling commands make the decision the
+review drawer makes, for the window that has no browser:
+
+```bash
+argus approve <instanceId> [--phase <phaseId>]                  # continue the pipeline
+argus revise  <instanceId> --note "<what to change>" [--phase <phaseId>]  # run the phase again
+```
+
+Both need an Argus account, because they call the same admin-gated routes the
+drawer does. Set `ARGUS_USER` and `ARGUS_PASSWORD` in the shell, or answer the
+prompt on a real terminal (a tool call has no terminal, so an agent relaying
+the tail needs the variables). The session lasts for the one call and is never
+written to disk. `--note` is required for `revise` — the note is the revision.
+`--phase` is only needed when the ⏸ line shows one. `--json` prints the outcome
+as one object; the exit status is `0` when the decision landed, `1` when Argus
+refused it or could not be reached (the one line on stderr says why), `2` for
+bad arguments. Approving here is exactly approving in the drawer: what the
+agent produced is what continues, so look first — the tail printed the link.
 
 **For an agent.** `argus tail --install-skill` installs the bundled
 `argus-tail` skill for every agent CLI it finds on PATH. Claude Code and Codex

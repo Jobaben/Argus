@@ -38,7 +38,7 @@ function row(over: Partial<OverviewRow> = {}): OverviewRow {
     model: null,
     updatedAt: "2026-07-07T10:00:00.000Z",
     cost: null,
-    gate: null,
+    gates: [],
     failure: null,
     phases: [],
     ...over,
