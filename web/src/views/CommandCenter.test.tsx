@@ -109,11 +109,11 @@ describe("CommandCenter", () => {
     render(<CommandCenter />);
     // one pipeline tile, not one per instance
     expect(screen.getAllByText("sprint-pr")).toHaveLength(1);
-    // Each instance owns its rail and focus panel so an in-flight run remains
+    // Each instance owns its graph and focus panel so an in-flight run remains
     // accurate even if the pipeline definition changes underneath it.
-    expect(screen.getAllByTestId("phase-rail")).toHaveLength(2);
+    expect(screen.getAllByTestId("phase-graph")).toHaveLength(2);
     expect(screen.getAllByTestId("phase-grid")).toHaveLength(2);
-    // every phase is a chip on each instance's rail
+    // every phase is a node on each instance's graph
     expect(screen.getAllByRole("button", { name: /Phase1/ })).toHaveLength(2);
     // each instance keeps its own labelled focus of step tiles
     expect(screen.getByText("#11111111")).toBeInTheDocument();
@@ -129,7 +129,7 @@ describe("CommandCenter", () => {
     expect(grid).toHaveStyle({
       gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))",
     });
-    // The last phase stays reachable as a rail chip even though only one
+    // The last phase stays reachable as a graph node even though only one
     // phase's steps are in focus.
     expect(screen.getByRole("button", { name: /Phase23/ })).toBeInTheDocument();
     expect(container.querySelector(".overflow-x-auto")).toBeNull();

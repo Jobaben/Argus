@@ -7,7 +7,9 @@ import { useInsight } from "../useInsight";
 import { useRuns } from "../useRuns";
 import { SituationStrip } from "./SituationStrip";
 import { ActivityRail } from "./ActivityRail";
-import { PhaseRail } from "./PhaseRail";
+import { PhaseGraph } from "./PhaseGraph";
+import { useElementWidth, useLaneLayout } from "./useLaneLayout";
+import { edgeState } from "./laneGraphLayout";
 import { attentionPhase } from "./phaseAttention";
 import { StepDrawer, type StepSelection } from "./StepDrawer";
 import { useRunActivity } from "../useRunActivity";
@@ -281,11 +283,11 @@ function StepTile({
 }
 
 /**
- * One phase's step tiles — the focus panel under the rail.
+ * One phase's step tiles — the focus panel beside the graph.
  *
  * The board used to render every step of every phase at all times, which put a
  * 14-phase pipeline at several screens per card, most of it "queued" tiles
- * carrying nothing. Now the rail above is the complete always-on summary and
+ * carrying nothing. Now the graph is the complete always-on summary and
  * this panel renders the one phase being asked about, keyed by the caller so a
  * focus change enters as a change (same posture as a route swap: the outgoing
  * content is gone by the time React commits, the incoming one arrives with the
@@ -294,6 +296,7 @@ function StepTile({
 function PhaseFocus({
   pill,
   index,
+  phases,
   phaseNames,
   instanceId,
   gate,
@@ -307,6 +310,8 @@ function PhaseFocus({
 }: {
   pill: PhasePill;
   index: number;
+  /** Every phase of the instance, to name where this one's routes lead. */
+  phases: PhasePill[];
   /** Phase names by id, to render `needs` as names rather than ids. */
   phaseNames: Map<string, string>;
   instanceId: string | null;
@@ -324,6 +329,24 @@ function PhaseFocus({
     pill.edges ??
     pill.needs.map((n) => ({ phase: n, label: "always", conditional: false, allowSkipped: false }));
   const needNames = pill.needs.map(name);
+  // Where this phase leads, with the condition each route needs. The graph
+  // draws the same labels on its edges; this is the line for a reader who is
+  // looking at the steps and asks "and then?" — including a route that is
+  // still to be decided by the result these steps produce.
+  const routes = phases.flatMap((q) => {
+    const edge = (q.edges ?? []).find((e) => e.phase === pill.id);
+    const linked = edge !== undefined || q.needs.includes(pill.id);
+    if (!linked || q.id === pill.id) return [];
+    return [
+      {
+        to: q,
+        index: phases.indexOf(q),
+        condition: edge?.conditional ? edge.label : null,
+        state: edgeState(pill, q),
+      },
+    ];
+  });
+  const undecided = routes.some((r) => r.condition) && pill.status !== "done";
   return (
     <div className="flex min-w-0 flex-col gap-2.5 motion-safe:animate-[slide-up_var(--duration-base)_var(--ease-out-expo)_both]">
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 px-0.5">
@@ -372,6 +395,36 @@ function PhaseFocus({
           </span>
         )}
       </div>
+      {routes.length > 0 && (
+        <p
+          data-testid="phase-routes"
+          className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 px-0.5 text-[11px] text-ink-faint"
+        >
+          <span aria-hidden="true">→</span>
+          {routes.map((r, i) => (
+            <span key={r.to.id} className="inline-flex min-w-0 items-center gap-1.5">
+              {i > 0 && <span className="opacity-60">·</span>}
+              {r.condition && (
+                <span
+                  className={`rounded border bg-surface-2 px-[5px] font-mono text-[8.5px] leading-[14px] ${
+                    r.state === "taken"
+                      ? "border-ok/40 text-ink-dim"
+                      : r.state === "skipped"
+                        ? "border-line text-ink-faint opacity-60"
+                        : "border-line text-ink-faint"
+                  }`}
+                >
+                  {r.condition}
+                </span>
+              )}
+              <span className={`min-w-0 truncate ${r.state === "skipped" ? "" : "text-ink-dim"}`}>
+                {String(r.index + 1).padStart(2, "0")} {r.to.name}
+              </span>
+            </span>
+          ))}
+          {undecided && <span className="opacity-60">— decided by this phase's result</span>}
+        </p>
+      )}
       {/* Why this phase did not run, in the words of the decision that said so. */}
       {pill.skipped && pill.skipCause && (
         <p data-testid="phase-skip" className="px-0.5 text-[11px] text-ink-faint">
@@ -432,7 +485,7 @@ function PhaseFocus({
 }
 
 /**
- * One instance's rail + focus panel, and the selection between them.
+ * One instance's graph + focus panel, and the selection between them.
  *
  * The focus follows the action by default — the gate waiting on you, the
  * failure, the live work (see {@link attentionPhase}) — so an untouched board
@@ -464,10 +517,25 @@ function InstanceBoard({
   const selectedIndex = row.phases.findIndex((p) => p.id === selectedId);
   const selected = selectedIndex === -1 ? null : row.phases[selectedIndex];
   const phaseNames = useMemo(() => new Map(row.phases.map((p) => [p.id, p.name])), [row.phases]);
+  // The graph sits beside the focus panel on a wide card and above it on a
+  // narrow one — the step tiles need the horizontal room more than the graph
+  // does, so the graph is what moves. Measured here, not with a viewport
+  // breakpoint: the card's width depends on whether the activity rail is
+  // beside the board, which a media query cannot see.
+  const [boardRef, width] = useElementWidth<HTMLDivElement>();
+  const { layout, laneW, stacked } = useLaneLayout(row.phases, width);
   return (
-    <div className="flex min-w-0 flex-col gap-3">
-      <PhaseRail
+    <div
+      ref={boardRef}
+      data-testid="instance-board"
+      className={`min-w-0 ${stacked ? "flex flex-col gap-3" : "grid items-start gap-4"}`}
+      style={stacked ? undefined : { gridTemplateColumns: `${layout.width}px minmax(0, 1fr)` }}
+    >
+      <PhaseGraph
         phases={row.phases}
+        layout={layout}
+        laneW={laneW}
+        stacked={stacked}
         selectedId={selectedId}
         onSelect={(id) => setPinned((prev) => (prev === id ? null : id))}
       />
@@ -479,6 +547,7 @@ function InstanceBoard({
           key={selected.id}
           pill={selected}
           index={selectedIndex}
+          phases={row.phases}
           phaseNames={phaseNames}
           instanceId={row.instanceId}
           gate={row.gate}
@@ -597,10 +666,10 @@ function Row({
                 </span>
               </div>
             )}
-            {/* The rail is the whole pipeline at a glance — statuses, stages,
-                gates, step progress — and the focus panel under it renders one
-                phase's step tiles at a time, following the action unless a chip
-                is pinned. The complete view for linear and branching runs. */}
+            {/* The graph is the whole pipeline at a glance — statuses, stages,
+                edges, routes, gates, step progress — and the focus panel beside
+                it renders one phase's step tiles at a time, following the
+                action unless a node is pinned. */}
             <InstanceBoard
               row={row}
               approve={approve}

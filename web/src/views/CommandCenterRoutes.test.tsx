@@ -180,10 +180,15 @@ describe("the board on a routed instance", () => {
     expect(chip.textContent).toMatch(/skip/);
   });
 
-  it("draws the condition that governs a conditional branch", () => {
+  it("draws the condition that governs a conditional branch on its edge, not in the node", () => {
     render(<CommandCenter />);
-    const chip = screen.getByRole("button", { name: /Publish/ });
-    expect(chip.textContent).toMatch(/if Evaluate: accepted = true/);
+    // The condition is a label on the edge from Evaluate — the value alone,
+    // since the source is the line it sits on — and the node keeps its name.
+    const labels = screen.getAllByTestId("route-label").map((l) => l.textContent);
+    expect(labels).toEqual(expect.arrayContaining(["accepted = true", "accepted = false"]));
+    const node = screen.getByRole("button", { name: /Publish/ });
+    expect(node.textContent).not.toMatch(/if /);
+    expect(node.getAttribute("title")).toMatch(/only if evaluate: accepted = true/);
     expect(screen.getByRole("button", { name: /Report/ }).getAttribute("title")).toMatch(
       /accepts publish skipped/,
     );

@@ -7,6 +7,28 @@ All notable changes to Argus are documented here. The format follows
 
 ### Changed
 
+- **The Command Center draws each pipeline as a lane graph instead of a packed
+  chip rail.** The rail held a linear pipeline to one card-height, but on a
+  real conditional pipeline it broke the chain wherever a row ran out of
+  width, stacked a fan-out without saying which chip fed which, and put the
+  route condition _inside_ the chip — a phase gated on another phase's
+  verdict carried a chip the width of the sentence
+  (`IF PHASE 3 · VERIFY THE PLAN AGAINST TICKET AND CONTEXT: VERDICT =
+"APPROVED"`). Now stages are rows read top to bottom, the chain that
+  continues keeps the left lane and leaves hang to its right, and every
+  dependency is a drawn edge from the instance's own graph, so a join is a
+  join and a fan-out is a fan-out. Conditions moved onto the edge they govern
+  as the value alone; the path that ran is tinted, an untaken branch is
+  dashed, a leaf ends with a terminator, and the edges around the pinned node
+  light up. The graph sits beside the focus panel on a wide card (measured,
+  not a viewport breakpoint — the card's width depends on whether the
+  activity rail is beside the board) and above it on a narrow one, fitting
+  its lanes to the card; beyond about twelve stages it scrolls inside its
+  tile, opened at the phase that needs you. The focus panel's header now also
+  says where the phase's routes lead (`→`) with the condition each needs.
+  Layout is a pure module (`laneGraphLayout.ts`) with its own tests — lane
+  assignment, edge state, label placement and collision — because that is
+  where the off-by-ones live.
 - **The pipeline form is now a rail + focus panel, and dependencies became
   editable.** The form used to render every field of every phase and step at
   once — a nine-phase pipeline was ~6,000px of stacked inputs, and the graph
