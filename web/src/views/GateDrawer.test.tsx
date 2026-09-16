@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import { render, screen, fireEvent, within, cleanup } from "@testing-library/react";
 import type { PhaseArtifactContent, PhaseReview } from "../types";
 import { GateDrawer, type GateSelection } from "./GateDrawer";
 
@@ -86,7 +86,13 @@ describe("GateDrawer — content", () => {
         startedAt: "2026-07-07T10:00:00.000Z",
         endedAt: "2026-07-07T10:00:01.000Z",
         checks: [
-          { kind: "artifact", label: "report.md", status: "passed", detail: "1.2 KiB", durationMs: 3 },
+          {
+            kind: "artifact",
+            label: "report.md",
+            status: "passed",
+            detail: "1.2 KiB",
+            durationMs: 3,
+          },
         ],
       },
     });
@@ -100,11 +106,93 @@ describe("GateDrawer — content", () => {
     expect(within(dialog).getByText(/paused here until you decide/i)).toBeInTheDocument();
   });
 
+  it("lifts the reason and the closing note out of a Stop-hook payload and folds the rest", () => {
+    mockReview.review = review({
+      status: "failed",
+      canApprove: false,
+      payload: {
+        session_id: "4eec19c6",
+        transcript_path: "/Users/me/.claude/projects/x.jsonl",
+        hook_event_name: "Stop",
+        stop_hook_active: false,
+        background_tasks: [],
+        last_assistant_message:
+          "## Ship\n\nRepo is clean, **fsck passes**.\n\nARGUS_OUTCOME: blocked — no remote",
+        reason: "blocked: no remote",
+        failureClass: "signal",
+      },
+    });
+    open();
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("What went wrong")).toBeInTheDocument();
+    expect(within(dialog).getByTestId("gate-reason")).toHaveTextContent("blocked: no remote");
+    // The note is rendered, not dumped: its heading is a heading and its
+    // emphasis is markup.
+    const note = within(dialog).getByTestId("gate-closing-note");
+    expect(within(note).getByRole("heading", { level: 2, name: "Ship" })).toBeInTheDocument();
+    expect(within(note).getByText("fsck passes").tagName).toBe("STRONG");
+    // The hook event's bookkeeping is behind a closed toggle, without the
+    // fields already shown above it.
+    const raw = within(dialog).getByTestId("gate-raw-payload");
+    const details = raw.closest("details");
+    expect(details).not.toBeNull();
+    expect(details).not.toHaveAttribute("open");
+    expect(raw).toHaveTextContent('"hook_event_name": "Stop"');
+    expect(raw).toHaveTextContent('"failureClass": "signal"');
+    expect(raw).not.toHaveTextContent("last_assistant_message");
+    expect(raw).not.toHaveTextContent('"reason"');
+    fireEvent.click(within(dialog).getByText("Raw payload"));
+    expect(details).toHaveAttribute("open");
+  });
+
+  it("shows a summary-only payload as a rendered note with no raw toggle", () => {
+    mockReview.review = review({ payload: { summary: "Drafted the *quarterly* report." } });
+    open();
+    const dialog = screen.getByRole("dialog");
+    const note = within(dialog).getByTestId("gate-closing-note");
+    expect(within(note).getByText("quarterly").tagName).toBe("EM");
+    expect(within(dialog).queryByTestId("gate-raw-payload")).toBeNull();
+    expect(within(dialog).queryByText("Raw payload")).toBeNull();
+  });
+
+  it("renders a string payload as the closing note and a prose-less object raw", () => {
+    mockReview.review = review({ payload: "- one\n- two" });
+    open();
+    let dialog = screen.getByRole("dialog");
+    expect(
+      within(dialog)
+        .getAllByRole("listitem")
+        .map((li) => li.textContent),
+    ).toEqual(expect.arrayContaining(["one", "two"]));
+    expect(within(dialog).queryByTestId("gate-raw-payload")).toBeNull();
+    cleanup();
+
+    mockReview.review = review({ payload: { kind: "restarted", attempt: 2 } });
+    open();
+    dialog = screen.getByRole("dialog");
+    expect(within(dialog).queryByTestId("gate-closing-note")).toBeNull();
+    const raw = within(dialog).getByTestId("gate-raw-payload");
+    expect(raw).toHaveTextContent('"kind": "restarted"');
+    expect(raw.closest("details")).toBeNull();
+  });
+
   it("lists artifacts with a required badge and opens the required one first", () => {
     mockReview.review = review({
       artifacts: [
-        { path: "notes.txt", bytes: 20, modifiedAt: "2026-07-07T10:00:00.000Z", required: false, text: true },
-        { path: "report.md", bytes: 1200, modifiedAt: "2026-07-07T10:00:00.000Z", required: true, text: true },
+        {
+          path: "notes.txt",
+          bytes: 20,
+          modifiedAt: "2026-07-07T10:00:00.000Z",
+          required: false,
+          text: true,
+        },
+        {
+          path: "report.md",
+          bytes: 1200,
+          modifiedAt: "2026-07-07T10:00:00.000Z",
+          required: true,
+          text: true,
+        },
       ],
     });
     mockContent.set("report.md", content("report.md", { content: "# Quarterly\n\nAll good." }));
@@ -124,8 +212,20 @@ describe("GateDrawer — content", () => {
   it("renders a .md artifact as markdown and any other text as raw", () => {
     mockReview.review = review({
       artifacts: [
-        { path: "report.md", bytes: 10, modifiedAt: "2026-07-07T10:00:00.000Z", required: true, text: true },
-        { path: "log.txt", bytes: 10, modifiedAt: "2026-07-07T10:00:00.000Z", required: false, text: true },
+        {
+          path: "report.md",
+          bytes: 10,
+          modifiedAt: "2026-07-07T10:00:00.000Z",
+          required: true,
+          text: true,
+        },
+        {
+          path: "log.txt",
+          bytes: 10,
+          modifiedAt: "2026-07-07T10:00:00.000Z",
+          required: false,
+          text: true,
+        },
       ],
     });
     mockContent.set("report.md", content("report.md", { content: "# Title\n\n- one\n- two" }));
@@ -143,10 +243,19 @@ describe("GateDrawer — content", () => {
   it("shows a binary artifact as metadata only", () => {
     mockReview.review = review({
       artifacts: [
-        { path: "chart.png", bytes: 4096, modifiedAt: "2026-07-07T10:00:00.000Z", required: false, text: false },
+        {
+          path: "chart.png",
+          bytes: 4096,
+          modifiedAt: "2026-07-07T10:00:00.000Z",
+          required: false,
+          text: false,
+        },
       ],
     });
-    mockContent.set("chart.png", content("chart.png", { text: false, content: undefined, bytes: 4096 }));
+    mockContent.set(
+      "chart.png",
+      content("chart.png", { text: false, content: undefined, bytes: 4096 }),
+    );
     open();
     expect(screen.getByText(/binary — not shown here/i)).toBeInTheDocument();
     expect(screen.getAllByText("4.0 KiB").length).toBeGreaterThanOrEqual(1);
@@ -156,17 +265,28 @@ describe("GateDrawer — content", () => {
   it("says when a file is clipped", () => {
     mockReview.review = review({
       artifacts: [
-        { path: "big.txt", bytes: 600000, modifiedAt: "2026-07-07T10:00:00.000Z", required: false, text: true },
+        {
+          path: "big.txt",
+          bytes: 600000,
+          modifiedAt: "2026-07-07T10:00:00.000Z",
+          required: false,
+          text: true,
+        },
       ],
     });
-    mockContent.set("big.txt", content("big.txt", { bytes: 600000, truncated: true, content: "x".repeat(2048) }));
+    mockContent.set(
+      "big.txt",
+      content("big.txt", { bytes: 600000, truncated: true, content: "x".repeat(2048) }),
+    );
     open();
     expect(screen.getByText(/showing the first 2\.0 KiB of 586 KiB/i)).toBeInTheDocument();
   });
 
   it("states the empty case and still offers Approve", () => {
     open();
-    expect(screen.getByTestId("gate-no-artifacts")).toHaveTextContent(/left no files.*approving continues/i);
+    expect(screen.getByTestId("gate-no-artifacts")).toHaveTextContent(
+      /left no files.*approving continues/i,
+    );
     expect(screen.getByRole("button", { name: /^approve$/i })).toBeInTheDocument();
   });
 
@@ -178,13 +298,21 @@ describe("GateDrawer — content", () => {
 
     mockReview.review = review({
       artifacts: [
-        { path: "report.md", bytes: 10, modifiedAt: "2026-07-07T10:00:00.000Z", required: true, text: true },
+        {
+          path: "report.md",
+          bytes: 10,
+          modifiedAt: "2026-07-07T10:00:00.000Z",
+          required: true,
+          text: true,
+        },
       ],
     });
     mockReview.error = null;
     mockContentError.error = "HTTP 404";
     open();
-    expect(screen.getAllByRole("alert").at(-1)).toHaveTextContent(/couldn't load report\.md: HTTP 404/i);
+    expect(screen.getAllByRole("alert").at(-1)).toHaveTextContent(
+      /couldn't load report\.md: HTTP 404/i,
+    );
   });
 
   it("shows a loading state before the review arrives", () => {
@@ -238,7 +366,9 @@ describe("GateDrawer — deciding", () => {
   });
 
   it("surfaces an action error and re-enables the buttons", async () => {
-    approve.mockImplementationOnce(() => Promise.reject(new Error("instance is not awaiting approval")));
+    approve.mockImplementationOnce(() =>
+      Promise.reject(new Error("instance is not awaiting approval")),
+    );
     open();
     const btn = screen.getByRole("button", { name: /^approve$/i });
     fireEvent.click(btn);
