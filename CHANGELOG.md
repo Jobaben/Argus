@@ -7,6 +7,15 @@ All notable changes to Argus are documented here. The format follows
 
 ### Changed
 
+- **The review drawer shows the agent's closing note as a document instead of
+  dumping the Stop-hook event.** A phase's payload is usually the whole event
+  Claude Code hands its Stop hook — session id, transcript path, permission
+  mode, background tasks — with the agent's final message buried as one field
+  among a dozen, so "What went wrong" opened on a wall of JSON. Now the
+  one-line reason comes first, the closing note (`last_assistant_message`, or
+  a `summary`) renders as markdown the way a `.md` artifact already did, and
+  the remaining fields fold behind a **Raw payload** toggle. A payload with no
+  prose in it still shows raw, expanded, as before.
 - **The Command Center draws each pipeline as a lane graph instead of a packed
   chip rail.** The rail held a linear pipeline to one card-height, but on a
   real conditional pipeline it broke the chain wherever a row ran out of

@@ -234,8 +234,12 @@ second monitor.
 - **Review** a gated phase that's awaiting you. The button opens the **review
   drawer**: the agent's closing note, the phase's structured result and Argus's
   own checks when it declared any, and every file the phase left in its
-  artifact directory. A `.md` artifact renders as a document; any other text
-  file shows raw; a binary shows its size. The file a check required is badged
+  artifact directory. The closing note renders as a document (it is the
+  agent's last message, which is markdown); on a failed phase the one-line
+  reason sits above it, and the rest of what the runtime handed the Stop hook
+  — session id, transcript path, background tasks and the like — waits behind
+  a **Raw payload** toggle. A `.md` artifact renders as a document; any other
+  text file shows raw; a binary shows its size. The file a check required is badged
   **required** and opens first. `⌘K` → "review" reaches the same drawer
   without finding the card first, and `#/command/<instanceId>` deep-links to
   it — that is the link `argus tail` prints beside a waiting gate.
