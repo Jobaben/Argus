@@ -1,7 +1,12 @@
 import { useEffect, useRef } from "react";
 import type { DsStatus, PhasePill } from "../ds";
 import { DURATION, STATUS, useSyncedDelay } from "../ds";
-import { LANE_GEOMETRY, type EdgeState, type LaneLayout } from "./laneGraphLayout";
+import {
+  LANE_GEOMETRY,
+  MAX_TILE_HEIGHT_PX,
+  type EdgeState,
+  type LaneLayout,
+} from "./laneGraphLayout";
 
 /**
  * The pipeline's shape as a lane graph: one node per phase, stages as rows,
@@ -26,9 +31,6 @@ const PHASE_DOT: Record<DsStatus, string> = {
   await: "bg-await",
   stopped: "bg-idle",
 };
-
-/** Roughly twelve plain stages; a longer graph scrolls inside its tile. */
-const MAX_TILE_HEIGHT_PX = 640;
 
 /**
  * Edge strokes by state. Same colour brighter and heavier when the edge is
@@ -178,6 +180,7 @@ export function PhaseGraph({
   phases,
   layout,
   laneW,
+  tileWidth,
   stacked,
   selectedId,
   onSelect,
@@ -186,6 +189,9 @@ export function PhaseGraph({
   layout: LaneLayout;
   /** The node width the layout was computed with. */
   laneW: number;
+  /** The graph's width plus the tile's own chrome, so the graph never scrolls
+   *  sideways inside it. */
+  tileWidth: number;
   /** Whether the graph sits above the focus panel (fits the card) or beside it. */
   stacked: boolean;
   selectedId: string | null;
@@ -214,14 +220,19 @@ export function PhaseGraph({
   const edges = [...layout.edges].sort((a, b) => Number(hot(a)) - Number(hot(b)));
 
   return (
+    // Clipped sideways, not scrolled: the lanes are already sized to fit the
+    // tile, so anything left over is sub-pixel — a device-pixel rounding at
+    // fractional display scaling, or a scrollbar a pixel wider than the 16 we
+    // budgeted for. That is a bar across the bottom of the card and nothing to
+    // read by dragging it.
     <div
       ref={tileRef}
       role="group"
       aria-label="Phases"
       data-testid="phase-graph"
       data-stacked={stacked ? "true" : undefined}
-      style={{ maxHeight: MAX_TILE_HEIGHT_PX, width: stacked ? undefined : layout.width }}
-      className={`relative overflow-auto rounded-tile border border-line/80 bg-ground-2/70 ${
+      style={{ maxHeight: MAX_TILE_HEIGHT_PX, width: stacked ? undefined : tileWidth }}
+      className={`relative overflow-x-clip overflow-y-auto rounded-tile border border-line/80 bg-ground-2/70 ${
         stacked ? "w-full" : "shrink-0"
       }`}
     >

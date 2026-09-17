@@ -205,6 +205,39 @@ describe("the board on a routed instance", () => {
     expect(decision.textContent).toMatch(/skipped Repair/);
   });
 
+  it("takes a wordy decision apart instead of printing it as a wall of JSON", () => {
+    const wordy = routed();
+    wordy.latest!.routeDecisions = [
+      {
+        ...wordy.latest!.routeDecisions![0],
+        value: {
+          verdict: "blocked",
+          missing: [
+            "The .NET SDK pinned by global.json is not installed on this machine",
+            "No test project references the Admin assembly, so the criterion cannot be covered",
+          ],
+        },
+      },
+    ];
+    mockOverview.overview = [wordy];
+    render(<CommandCenter />);
+    fireEvent.click(screen.getAllByRole("button", { name: /Evaluate/ })[0]);
+    const decision = screen.getByTestId("phase-decision");
+    // The value moves out of the sentence and into fields; a list reads as a
+    // list, and the braces and quotes are gone from the prose.
+    expect(decision.textContent).not.toMatch(/\{"verdict"/);
+    expect(screen.getByTestId("decision-fields").textContent).toMatch(/verdict/);
+    const bullets = screen.getByTestId("decision-fields").querySelectorAll("li");
+    expect([...bullets].map((li) => li.textContent)).toEqual([
+      "·The .NET SDK pinned by global.json is not installed on this machine",
+      "·No test project references the Admin assembly, so the criterion cannot be covered",
+    ]);
+    const toggle = screen.getByRole("button", { name: /Full value/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+    expect(screen.getByRole("button", { name: /Less/ })).toHaveAttribute("aria-expanded", "true");
+  });
+
   it("explains a skipped phase in the words of the decision that skipped it", () => {
     render(<CommandCenter />);
     // The focus follows the action; pin the skipped phase to read its panel.

@@ -10,6 +10,7 @@ import { ActivityRail } from "./ActivityRail";
 import { PhaseGraph } from "./PhaseGraph";
 import { useElementWidth, useLaneLayout } from "./useLaneLayout";
 import { edgeState } from "./laneGraphLayout";
+import { decisionFields, isLongValue } from "./decisionValue";
 import { attentionPhase } from "./phaseAttention";
 import { StepDrawer, type StepSelection } from "./StepDrawer";
 import type { GateSelection } from "./GateDrawer";
@@ -40,6 +41,7 @@ import {
   useTicker,
 } from "../ds";
 import type { OverviewRow, OverviewGate, PhasePill, StepPill, DsStatus } from "../ds";
+import type { RouteDecision } from "../types";
 
 // The review drawer carries the markdown lexer, which the board does not need
 // until a gate is actually opened — so it is its own chunk, fetched on first
@@ -195,6 +197,94 @@ function StepTile({
 }
 
 /**
+ * The route decision a phase's own result took: the value, what it selected,
+ * what it consequently skipped.
+ *
+ * A short value stays on the line — `{"accepted":true}` is already the clearest
+ * form of itself and a layout around it is ceremony. A long one is lifted into
+ * a block of its own fields, a list drawn as a list, and folded to a few lines
+ * until asked for. What it replaces was one paragraph of raw JSON broken
+ * mid-word, which on a real agent verdict ran to a dozen lines and pushed the
+ * step tiles — the reason anyone opened the phase — under the fold.
+ */
+function DecisionNote({
+  decision,
+  name,
+}: {
+  decision: RouteDecision;
+  /** Phase ids as the names the reader knows them by. */
+  name: (id: string) => string;
+}) {
+  const [open, setOpen] = useState(false);
+  const long = isLongValue(decision.value);
+  return (
+    <div data-testid="phase-decision" className="min-w-0 px-0.5 text-[11px] text-ink-faint">
+      <p className="min-w-0">
+        <span className="font-mono text-ink-dim">{decision.artifact}</span>{" "}
+        {!long && (
+          <>
+            <span className="break-words font-mono text-ink-dim">
+              {JSON.stringify(decision.value)}
+            </span>{" "}
+          </>
+        )}
+        → {decision.selected.length > 0 ? decision.selected.map(name).join(", ") : "nothing"}
+        {decision.skipped.length > 0 && (
+          <span> · skipped {decision.skipped.map(name).join(", ")}</span>
+        )}
+      </p>
+      {long && (
+        <div className="mt-1.5">
+          <dl
+            data-testid="decision-fields"
+            className={`flex min-w-0 flex-col gap-1.5 rounded-lg border border-line/70 bg-ground-2/60 px-2.5 py-2 ${
+              open
+                ? ""
+                : "max-h-24 overflow-hidden [mask-image:linear-gradient(to_bottom,black_55%,transparent)]"
+            }`}
+          >
+            {decisionFields(decision.value).map((field, i) => (
+              <div key={field.key ?? i} className="min-w-0">
+                {field.key && (
+                  <dt className="font-mono text-[9px] font-bold uppercase tracking-[0.12em] text-ink-faint">
+                    {field.key}
+                  </dt>
+                )}
+                <dd className="min-w-0 break-words leading-[1.55] text-ink-dim">
+                  {field.kind === "list" ? (
+                    <ul className="flex flex-col gap-1">
+                      {field.items.map((item, j) => (
+                        <li key={j} className="flex min-w-0 gap-1.5">
+                          <span aria-hidden="true" className="text-ink-faint">
+                            ·
+                          </span>
+                          <span className="min-w-0">{item}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    field.text
+                  )}
+                </dd>
+              </div>
+            ))}
+          </dl>
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
+            className="mt-1 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint transition hover:text-ink"
+          >
+            <span aria-hidden="true">{open ? "▾" : "▸"}</span>
+            {open ? "Less" : "Full value"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * One phase's step tiles — the focus panel beside the graph.
  *
  * The board used to render every step of every phase at all times, which put a
@@ -343,22 +433,7 @@ function PhaseFocus({
           Not selected — {name(pill.skipCause.source)}: {pill.skipCause.label}
         </p>
       )}
-      {/* The decision this phase's own result took: the value, then what it
-          selected and what it consequently skipped. Compact on purpose — the
-          journal has the long form, this is the line that stops the reader
-          asking. */}
-      {pill.decision && (
-        <p data-testid="phase-decision" className="min-w-0 px-0.5 text-[11px] text-ink-faint">
-          <span className="font-mono text-ink-dim">{pill.decision.artifact}</span>{" "}
-          <span className="font-mono break-all">{JSON.stringify(pill.decision.value)}</span> →{" "}
-          {pill.decision.selected.length > 0
-            ? pill.decision.selected.map(name).join(", ")
-            : "nothing"}
-          {pill.decision.skipped.length > 0 && (
-            <span> · skipped {pill.decision.skipped.map(name).join(", ")}</span>
-          )}
-        </p>
-      )}
+      {pill.decision && <DecisionNote decision={pill.decision} name={name} />}
       <ol
         aria-label={`Steps of phase ${pill.name}`}
         data-testid="phase-grid"
@@ -442,18 +517,19 @@ function InstanceBoard({
   // breakpoint: the card's width depends on whether the activity rail is
   // beside the board, which a media query cannot see.
   const [boardRef, width] = useElementWidth<HTMLDivElement>();
-  const { layout, laneW, stacked } = useLaneLayout(row.phases, width);
+  const { layout, laneW, tileWidth, stacked } = useLaneLayout(row.phases, width);
   return (
     <div
       ref={boardRef}
       data-testid="instance-board"
       className={`min-w-0 ${stacked ? "flex flex-col gap-3" : "grid items-start gap-4"}`}
-      style={stacked ? undefined : { gridTemplateColumns: `${layout.width}px minmax(0, 1fr)` }}
+      style={stacked ? undefined : { gridTemplateColumns: `${tileWidth}px minmax(0, 1fr)` }}
     >
       <PhaseGraph
         phases={row.phases}
         layout={layout}
         laneW={laneW}
+        tileWidth={tileWidth}
         stacked={stacked}
         selectedId={selectedId}
         onSelect={(id) => setPinned((prev) => (prev === id ? null : id))}

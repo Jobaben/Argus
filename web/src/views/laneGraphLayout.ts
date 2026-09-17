@@ -64,6 +64,35 @@ export const LANE_GEOMETRY: LaneGeometry = {
   tail: 10,
 };
 
+/** Roughly twelve plain stages; a longer graph scrolls inside its tile. */
+export const MAX_TILE_HEIGHT_PX = 640;
+
+/** The tile's border, which a border-box width takes out of the graph's room. */
+export const TILE_BORDER_PX = 1;
+
+/** What a classic (non-overlay) vertical scrollbar takes out of the same. */
+export const SCROLLBAR_PX = 16;
+
+/**
+ * What the tile's own chrome costs the graph horizontally.
+ *
+ * The graph must never scroll sideways — a pipeline you have to drag to read is
+ * not a pipeline at a glance — so the lanes have to be sized for the room left
+ * after the border and, on a graph tall enough to scroll, the vertical
+ * scrollbar. Both are knowable in one pass: the layout's height does not depend
+ * on its lane width, so the tall-graph question is answered before the width is
+ * chosen, with no measure-then-resize loop.
+ *
+ * Sizing is the whole answer only if the numbers are exact, and they are not:
+ * a classic scrollbar is 15, 16 or 17px depending on the platform, and device
+ * pixels round at fractional display scaling. The tile clips its horizontal
+ * overflow for that remainder; this is what keeps the lanes readable, not what
+ * keeps the bar away.
+ */
+export function tileChromeFor(height: number): number {
+  return TILE_BORDER_PX * 2 + (height > MAX_TILE_HEIGHT_PX ? SCROLLBAR_PX : 0);
+}
+
 /** Lane width by lane count: three lanes side by side need narrower nodes. */
 export function laneWidthFor(lanes: number, available?: number): number {
   const ideal = lanes >= 3 ? 150 : LANE_GEOMETRY.laneW;

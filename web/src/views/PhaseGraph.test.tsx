@@ -4,7 +4,7 @@ import type { PhasePill, StepPill } from "../ds";
 import { PhaseGraph } from "./PhaseGraph";
 import { useLaneLayout } from "./useLaneLayout";
 import { attentionPhase } from "./phaseAttention";
-import { LANE_GEOMETRY } from "./laneGraphLayout";
+import { LANE_GEOMETRY, MAX_TILE_HEIGHT_PX, SCROLLBAR_PX, TILE_BORDER_PX } from "./laneGraphLayout";
 
 function step(status: StepPill["status"]): StepPill {
   return {
@@ -49,12 +49,13 @@ function Graph({
   onSelect?: (id: string) => void;
   width?: number;
 }) {
-  const { layout, laneW, stacked } = useLaneLayout(phases, width);
+  const { layout, laneW, tileWidth, stacked } = useLaneLayout(phases, width);
   return (
     <PhaseGraph
       phases={phases}
       layout={layout}
       laneW={laneW}
+      tileWidth={tileWidth}
       stacked={stacked}
       selectedId={selectedId}
       onSelect={onSelect}
@@ -212,5 +213,38 @@ describe("PhaseGraph", () => {
     expect(narrow.layout.width).toBeLessThanOrEqual(358);
     // Unmeasured means unknown, not narrow.
     expect(renderHook(() => useLaneLayout(phases, 0)).result.current.stacked).toBe(false);
+  });
+
+  it("sizes the tile for the graph plus its own chrome, so it never scrolls sideways", () => {
+    const phases = [
+      pill("plan", "done"),
+      pill("a", "working", { needs: ["plan"] }),
+      pill("b", "working", { needs: ["plan"] }),
+    ];
+    // The tile is a border-box: a tile exactly the graph's width is two pixels
+    // too narrow for the graph inside it.
+    const wide = renderHook(() => useLaneLayout(phases, 1200)).result.current;
+    expect(wide.tileWidth).toBe(wide.layout.width + TILE_BORDER_PX * 2);
+    const narrow = renderHook(() => useLaneLayout(phases, 358)).result.current;
+    expect(narrow.tileWidth).toBeLessThanOrEqual(358);
+    expect(narrow.layout.width).toBeLessThanOrEqual(358 - TILE_BORDER_PX * 2);
+  });
+
+  it("clips sideways rather than scrolling, whatever the lane arithmetic leaves over", () => {
+    render(<Graph phases={[pill("plan", "done"), pill("a", "working", { needs: ["plan"] })]} />);
+    const tile = screen.getByTestId("phase-graph");
+    expect(tile.className).toContain("overflow-x-clip");
+    expect(tile.className).not.toMatch(/\boverflow-(auto|x-auto)\b/);
+    // Tall enough to scroll vertically is still tall enough to scroll vertically.
+    expect(tile.className).toContain("overflow-y-auto");
+  });
+
+  it("also pays for the scrollbar of a graph long enough to scroll", () => {
+    const tall = Array.from({ length: 16 }, (_, i) =>
+      pill(`p${i}`, "done", i === 0 ? {} : { needs: [`p${i - 1}`] }),
+    );
+    const { layout, tileWidth } = renderHook(() => useLaneLayout(tall, 1200)).result.current;
+    expect(layout.height).toBeGreaterThan(MAX_TILE_HEIGHT_PX);
+    expect(tileWidth).toBe(layout.width + TILE_BORDER_PX * 2 + SCROLLBAR_PX);
   });
 });

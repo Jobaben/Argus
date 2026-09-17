@@ -5,6 +5,10 @@ import {
   laneLayout,
   laneWidthFor,
   labelWidth,
+  tileChromeFor,
+  MAX_TILE_HEIGHT_PX,
+  TILE_BORDER_PX,
+  SCROLLBAR_PX,
   type LanePhase,
 } from "./laneGraphLayout";
 import type { RouteEdgeView } from "../ds";
@@ -166,5 +170,12 @@ describe("laneWidthFor", () => {
     expect(laneWidthFor(4, 200)).toBe(110);
     // Unmeasured means unknown: use the ideal, not the floor.
     expect(laneWidthFor(2, 0)).toBe(G.laneW);
+  });
+});
+
+describe("tileChromeFor", () => {
+  it("charges the graph for the tile's border, and for the scrollbar once it scrolls", () => {
+    expect(tileChromeFor(MAX_TILE_HEIGHT_PX - 1)).toBe(TILE_BORDER_PX * 2);
+    expect(tileChromeFor(MAX_TILE_HEIGHT_PX + 1)).toBe(TILE_BORDER_PX * 2 + SCROLLBAR_PX);
   });
 });
