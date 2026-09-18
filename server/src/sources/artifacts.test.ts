@@ -12,11 +12,7 @@ import {
   readPhaseArtifact,
   resolveArtifactPath,
 } from "./artifacts.js";
-import type {
-  PhaseProgress,
-  PipelineDefinition,
-  PipelineInstance,
-} from "./pipelineTypes.js";
+import type { PhaseProgress, PipelineDefinition, PipelineInstance } from "./pipelineTypes.js";
 
 async function dir(): Promise<string> {
   return mkdtemp(path.join(tmpdir(), "argus-artifacts-"));

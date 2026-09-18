@@ -129,7 +129,9 @@ function block(token: Token, key: number): ReactNode {
     case "text": {
       // A tight list item's body arrives as a bare text token at block level.
       const t = token as Tokens.Text;
-      return <Fragment key={key}>{t.tokens ? renderInline(t.tokens) : unescapeText(t.text)}</Fragment>;
+      return (
+        <Fragment key={key}>{t.tokens ? renderInline(t.tokens) : unescapeText(t.text)}</Fragment>
+      );
     }
     case "code": {
       const t = token as Tokens.Code;
@@ -145,10 +147,7 @@ function block(token: Token, key: number): ReactNode {
     }
     case "blockquote":
       return (
-        <blockquote
-          key={key}
-          className="my-2 border-l-2 border-line pl-3 text-ink-dim [&>p]:my-1"
-        >
+        <blockquote key={key} className="my-2 border-l-2 border-line pl-3 text-ink-dim [&>p]:my-1">
           {renderBlocks((token as Tokens.Blockquote).tokens)}
         </blockquote>
       );

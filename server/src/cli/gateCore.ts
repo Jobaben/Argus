@@ -239,7 +239,8 @@ export function explainRefusal(
     if (status === 401 && body?.error) {
       return `login refused: ${body.error}`;
     }
-    if (status === 401) return `Argus at ${url} refused the shared token — set ARGUS_TOKEN (or pass --token)`;
+    if (status === 401)
+      return `Argus at ${url} refused the shared token — set ARGUS_TOKEN (or pass --token)`;
     if (status === 403 && body?.code === "pending_approval") {
       return "login refused: your account is awaiting root approval";
     }

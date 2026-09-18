@@ -1344,8 +1344,7 @@ export function createApp(deps: AppDeps): Hono {
   app.get("/api/instances/:id/phases/:phaseId/review", async (c) => {
     const inst = await readInstance(c.req.param("id"));
     if (!inst) return c.json({ error: "not found" }, 404);
-    const def =
-      inst.definition ?? (await readPipelines()).find((d) => d.id === inst.pipelineId);
+    const def = inst.definition ?? (await readPipelines()).find((d) => d.id === inst.pipelineId);
     const res = await buildPhaseReview(inst, c.req.param("phaseId"), def);
     return res.ok ? c.json(res.review) : c.json({ error: res.error }, res.code);
   });
