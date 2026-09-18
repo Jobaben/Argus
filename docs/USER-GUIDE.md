@@ -481,6 +481,15 @@ section) and **One-off** (see [One-off runs](#4-one-off-runs)).
 - **Save schedule** stays disabled until name, prompt and working directory
   are filled.
 
+**What counts as a succeeded run.** The process must exit 0 _and_ the CLI's
+own result envelope must not report an error (`is_error: true` for Claude
+Code, a failed turn for Codex, an error part for OpenCode). A run whose CLI
+exited cleanly after saying "Invalid API key" or refusing the prompt is
+recorded **failed**, with that message as its error, and reaches failure
+notifications and Issues like any other failure. A clean exit whose log has no
+envelope to read is still a success — the exit code is the precondition, the
+envelope is the verdict.
+
 **The summary strip** above the list answers "is my scheduler healthy?"
 without reading a card: how many schedules exist, how many are **failing** or
 **paused**, how many runs reached a verdict in the last 24 hours and how many of
