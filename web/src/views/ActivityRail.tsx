@@ -183,7 +183,7 @@ export function ActivityRail({
           </ul>
         )}
         <a
-          href="#/launch"
+          href="#/schedules/oneoff"
           className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.12em] text-ink-faint transition duration-(--duration-quick) hover:text-ink"
         >
           All runs →

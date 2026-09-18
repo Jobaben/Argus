@@ -5,7 +5,60 @@ All notable changes to Argus are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **A scheduled or one-off run whose CLI exits 0 after reporting an error is
+  now recorded `failed`, not `succeeded`.** The scheduler decided a run's
+  status from the exit code alone, and threw away the `is_error` verdict every
+  runtime's envelope parser already extracted — so `claude -p` ending with
+  `"is_error": true, "result": "Invalid API key · Please run /login"` and a
+  clean exit landed as a green run with the refusal as its summary. Exit 0 is
+  now a precondition and the envelope is the verdict: a `true` `isError` fails
+  the run with the CLI's own message as its error (so it reaches failure
+  notifications and Issues), a non-zero exit still names the exit code, and a
+  clean exit with no envelope to read is unchanged. Pipeline steps already
+  behaved this way on the reconcile path; this brings schedules in line.
+
 ### Changed
+
+- **The nav is eight tabs, not eleven.** Watchtower and Sentinel had been
+  added to a bar laid out for nine, and six surfaces were answering "is
+  anything wrong?" in slightly different words. Now: **Launch is the
+  Scheduler's One-off sub-tab** (`#/schedules/oneoff`) — a one-off run is a
+  schedule with no trigger, and the two pages shared a form and a run list.
+  **Monitors and Watchtower are the two halves of Health** (`#/health`,
+  `#/health/watchtower`) — both per-schedule, both read-only, both about the
+  same objects. **Sentinel moved to the ⋯ menu**: it holds the stateful record
+  of signals the Briefing already surfaces, so it is where you go with an
+  incident in hand, not where you learn about one. **Sessions gained a menu
+  entry** — it was the main reading surface with no way in but a run row.
+  Every old hash (`#/launch`, `#/monitors`, `#/watchtower`, `#/projects`,
+  `#/activity`, `#/tasks`) is rewritten in place to where its content went, so
+  bookmarks, archived alert links and older `argus tail` output keep landing.
+  `g m` now opens Health; `g l` and `g w` are retired.
+- **The Briefing's "Awaiting approval" card opens the review drawer.** It
+  linked to the Pipelines page, which can only _stop_ an instance; approve and
+  revise live in the Command Center's drawer and nowhere else. The card now
+  deep-links to that instance's drawer, the same link the palette and
+  `argus tail` already used. The situation strip's **running** count likewise
+  goes to the Chronicle, which shows every run in flight, rather than to the
+  one-off list, which shows only launches.
+- **Budget and Stats each say which spend they count.** Budget meters the runs
+  Argus launched; Stats reads Claude Code's own telemetry, interactive sessions
+  included. Two pages about dollars with no word on why the figures differ
+  read as a bug.
+
+### Removed
+
+- **Projects, Activity and Tasks pages, and the Scheduler's Cron sub-tab.**
+  Projects was a card per folder with a session count and, per its own guide
+  entry, "informational only" — it is now a filter on Sessions
+  (`#/sessions/:project`), which is where its palette entries land. Activity
+  listed the last hundred prompts with nothing to click and nothing linking to
+  it. Tasks read Claude Code's internal `.lock` files, "mostly diagnostic".
+  The Cron sub-tab was three panels explaining that it could show nothing. The
+  `GET /api/activity`, `/api/projects`, `/api/tasks` and `/api/cron` endpoints
+  are unchanged.
 
 - **The review drawer shows the agent's closing note as a document instead of
   dumping the Stop-hook event.** A phase's payload is usually the whole event

@@ -15,8 +15,9 @@ two speak OpenAI-compatible endpoints, so a model served locally by
 workaround. See [Agent runtimes](#agent-runtimes).
 
 📖 **[User Guide](docs/USER-GUIDE.md)** — every feature, with screenshots:
-Command Center, Briefing, Chronicle, Scheduler, Monitors, Issues, Pipelines,
-Users, Search, and all the monitoring tabs.
+Command Center, Briefing, Chronicle, Scheduler (with one-off runs), Pipelines,
+Health (monitors and learned envelopes), Issues, Budget, and the reference pages
+behind the ⋯ menu.
 
 ## Stack
 
@@ -156,8 +157,8 @@ pipeline waiting at a gate or firing a schedule now. Three characters and Enter
 usually gets there.
 
 `?` lists every keyboard shortcut. `g` then a letter jumps to a destination
-(`g c` Command Center, `g b` Briefing, `g h` Chronicle, `g l` Launch, `g s`
-Scheduler, `g m` Monitors, `g i` Issues, `g p` Pipelines, `g u` Budget, `g a`
+(`g c` Command Center, `g b` Briefing, `g h` Chronicle, `g s` Scheduler, `g p`
+Pipelines, `g m` Health, `g i` Issues, `g u` Budget, `g n` Sentinel, `g a`
 Agents); `/` goes to transcript search.
 
 ## Quick start
@@ -300,8 +301,8 @@ Under `~/.claude` unless noted:
 | Transcripts       | `projects/<proj>/<session>.jsonl`               | Sessions list + full transcript view  |
 | Codex transcripts | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`  | the same list, view and search        |
 | Qwen transcripts  | `~/.qwen/projects/<proj>/chats/<session>.jsonl` | the same list, view and search        |
-| Prompt history    | `history.jsonl`                                 | global activity feed                  |
-| Tasks             | `tasks/<id>/`                                   | task-queue metadata                   |
+| Prompt history    | `history.jsonl`                                 | `GET /api/activity` (API only)        |
+| Tasks             | `tasks/<id>/`                                   | `GET /api/tasks` (API only)           |
 | Argus schedules   | `argus/schedules.json`                          | Scheduler triggers + run history      |
 | Argus pipelines   | `argus/pipelines.json`, `argus/instances/`      | multi-phase pipeline defs + instances |
 
@@ -312,7 +313,7 @@ history).
 This is distinct from Claude Code's **native cron routines**, which are
 session-scoped (harness-managed, visible only via `CronList` inside a live
 Claude session) and are **not** stored on disk; Argus, a disk reader, cannot
-surface those — the Cron tab explains why.
+surface those — `GET /api/cron` says so and why.
 
 ## API
 

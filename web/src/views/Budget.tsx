@@ -340,8 +340,16 @@ export default function Budget() {
         cost, and it lands in a per-day ledger here. Claude Code reports dollars; Codex reports
         tokens only, so its runs contribute to the token totals and not to the USD ones. Set a daily
         or monthly USD ceiling to get alerted at 80% and at the limit; optionally pause scheduled
-        firings while you're over. Manual actions (Run now, Launch, pipeline starts) are never
+        firings while you're over. Manual actions (Run now, One-off, pipeline starts) are never
         blocked.
+      </p>
+      <p className="-mt-4 mb-6 max-w-prose text-xs text-ink-faint">
+        This counts only what Argus launched. Your own interactive Claude Code sessions are metered
+        by the CLI itself and appear under{" "}
+        <a href="#/stats" className="text-queue underline hover:text-ink">
+          Stats
+        </a>
+        .
       </p>
 
       <MachinePicker facet={facet} label="Show budget from" />

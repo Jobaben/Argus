@@ -298,12 +298,12 @@ while an unrecognised frame _type_ is still forwarded for forward compatibility.
 | Background agents | `jobs/<short>/state.json`, `timeline.jsonl`     | `state` (working/done/failed/idle), `tempo`, `detail`, `output.result`, `inFlight`   |
 | Live workers      | `daemon/roster.json`, `daemon.status.json`      | `workers[short].pid` → liveness join                                                 |
 | Sessions          | `projects/<proj>/<id>.jsonl`                    | typed message stream (`ai-title`, `user`, `assistant`, `tool_use`, …)                |
-| Activity          | `history.jsonl`                                 | global prompt log                                                                    |
-| Projects          | `projects/<proj>/`                              | encoded path → label, session counts                                                 |
+| Activity          | `history.jsonl`                                 | global prompt log (API only — no view since the nav consolidation)                   |
+| Projects          | `projects/<proj>/`                              | encoded path → label, session counts (API + palette; the view is Sessions' filter)   |
 | Stats             | `stats-cache.json`                              | usage aggregates                                                                     |
 | Inventory         | `agents/ commands/ skills/ plugins/`            | installed extensions (md frontmatter)                                                |
-| Tasks             | `tasks/<uuid>/`                                 | `.highwatermark`, `.lock`                                                            |
-| Cron              | — (not on disk)                                 | session-scoped; see §6                                                               |
+| Tasks             | `tasks/<uuid>/`                                 | `.highwatermark`, `.lock` (API only — no view since the nav consolidation)           |
+| Cron              | — (not on disk)                                 | session-scoped; see §6 (`GET /api/cron` only — the Cron sub-tab is gone)             |
 | Flight Recorder   | run record + `projects/<proj>/<id>.jsonl`       | derived per read; never persisted (see below)                                        |
 | Watchtower        | runs + `argus/watchtower.json`                  | envelopes derived per read; only reset markers persist                               |
 | Autopsy           | `argus/autopsies.json`                          | bounded `claude -p` verdicts, capped at 200, keyed by run id                         |

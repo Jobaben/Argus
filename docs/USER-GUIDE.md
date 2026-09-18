@@ -6,7 +6,7 @@ the XDG data directory OpenCode keeps. It watches the files those CLIs already w
 transcripts, history, stats) and turns them into a live web view — and it can
 fire its own scheduled and pipelined runs on top, on **any** of them.
 
-**Four runtimes.** Anywhere Argus starts a run — the Launch tab, a schedule, a
+**Four runtimes.** Anywhere Argus starts a run — a one-off run, a schedule, a
 pipeline — you can choose **Claude Code** (`claude -p`), **Codex**
 (`codex exec`), **OpenCode** (`opencode run`) or **Qwen Code** (`qwen`). Inside a
 pipeline the choice goes finer still: a phase, or a single step, can override the
@@ -37,10 +37,9 @@ hooks under `~/.claude/hooks/`, `~/.codex/hooks/` and `~/.qwen/hooks/`, a hook
 entry in `~/.claude/settings.json` and `~/.qwen/settings.json`, and an appended
 `[[hooks.stop]]` block in `~/.codex/config.toml` (appended — your existing config
 is never rewritten). The
-monitoring tabs (Agents, Sessions, Activity, Projects, Stats, Search,
-Inventory, Tasks) are observe-only, while the Launch, Scheduler, Pipelines,
-Issues, Budget and Users tabs let you create, run, revise, triage, cap and
-cancel work.
+monitoring views (Health, Agents, Sessions, Stats, Search, Inventory) are
+observe-only, while the Scheduler, Pipelines, Issues, Budget, Sentinel and
+Users tabs let you create, run, revise, triage, cap and cancel work.
 
 **Security note:** because Argus can launch agents with your
 credentials, the server binds to loopback (`127.0.0.1`) only and rejects
@@ -53,40 +52,40 @@ can do, and where the data comes from.
 
 ## Contents
 
-| #   | Feature                                | Route          | What it answers                            |
-| --- | -------------------------------------- | -------------- | ------------------------------------------ |
-| 0   | [Global UI](#global-ui)                | —              | nav, live dot, auto-refresh, setup banner  |
-| 1   | [Command Center](#1-command-center)    | `#/command`    | how are my pipelines doing right now?      |
-| 2   | [Briefing](#2-briefing)                | `#/briefing`   | what happened while I was away?            |
-| 3   | [Chronicle](#3-chronicle)              | `#/chronicle`  | what ran when, across every source?        |
-| 4   | [Launch](#4-launch)                    | `#/launch`     | fire one agent run right now               |
-| 5   | [Scheduler](#5-scheduler)              | `#/schedules`  | fire agent runs on a schedule              |
-| 6   | [Monitors](#6-monitors)                | `#/monitors`   | did my schedules actually run?             |
-| 7   | [Issues](#7-issues)                    | `#/issues`     | why are runs failing, grouped by cause?    |
-| 8   | [Pipelines](#8-pipelines)              | `#/pipelines`  | author multi-phase, human-gated flows      |
-| 9   | [Budget](#9-budget)                    | `#/budget`     | how much am I spending — and cap it        |
-| 10  | [Users & sign-in](#10-users--sign-in)  | `#/users`      | who may run/edit pipelines?                |
-| 11  | [Search](#11-search)                   | `#/search`     | where did I say/see _that_?                |
-| 12  | [Agents](#12-agents)                   | `#/agents`     | what's running / done / failed right now?  |
-| 13  | [Agent Detail](#13-agent-detail)       | `#/agent/<id>` | how did _this_ agent get here?             |
-| 14  | [Sessions](#14-sessions)               | `#/sessions`   | what was actually said in a conversation?  |
-| 15  | [Activity](#15-activity)               | `#/activity`   | what have I prompted lately, everywhere?   |
-| 16  | [Projects](#16-projects)               | `#/projects`   | which folders are active, and when?        |
-| 17  | [Stats](#17-stats)                     | `#/stats`      | what's my usage / cost / token spend?      |
-| 18  | [Inventory](#18-inventory)             | `#/inventory`  | what's installed and available?            |
-| 19  | [Tasks](#19-tasks)                     | `#/tasks`      | what task workspaces exist / are locked?   |
-| 20  | [Cron panel](#20-cron-panel)           | Scheduler tab  | why native cron routines can't be shown    |
-| 21  | [Flight Recorder](#21-flight-recorder) | `#/run/<id>`   | what was it doing at minute four?          |
-| 22  | [Watchtower](#22-watchtower)           | `#/watchtower` | did it run the way it _usually_ runs?      |
-| 23  | [Autopsy](#23-autopsy)                 | `#/run/<id>`   | why did this run fail, in one paragraph?   |
-| 24  | [Verdict](#24-verdict)                 | `#/run/<id>`   | was the output any _good_?                 |
-| 25  | [Sentinel](#25-sentinel)               | `#/sentinel`   | what is on fire, and who has it?           |
-| 26  | [Weave](#26-weave)                     | `#/pipelines`  | fan-out, fan-in, retries, artifacts        |
-| 27  | [Ledger](#27-ledger)                   | `#/budget`     | where did the money go, and where next?    |
-| 28  | [The Vault](#28-the-vault)             | `#/stats`      | what happened last quarter, and last year? |
-| 29  | [Omnibar](#29-omnibar)                 | `⌘K`           | say it, see the exact changes, confirm     |
-| 30  | [Constellation](#30-constellation)     | `#/fleet`      | N machines, one lens                       |
-| 31  | [`argus tail`](#31-argus-tail)         | terminal       | what is it doing, when I can't see the UI? |
+| #   | Feature                                | Route                  | What it answers                            |
+| --- | -------------------------------------- | ---------------------- | ------------------------------------------ |
+| 0   | [Global UI](#global-ui)                | —                      | nav, live dot, auto-refresh, setup banner  |
+| 1   | [Command Center](#1-command-center)    | `#/command`            | how are my pipelines doing right now?      |
+| 2   | [Briefing](#2-briefing)                | `#/briefing`           | what happened while I was away?            |
+| 3   | [Chronicle](#3-chronicle)              | `#/chronicle`          | what ran when, across every source?        |
+| 4   | [One-off runs](#4-one-off-runs)        | `#/schedules/oneoff`   | fire one agent run right now               |
+| 5   | [Scheduler](#5-scheduler)              | `#/schedules`          | fire agent runs on a schedule              |
+| 6   | [Monitors](#6-monitors)                | `#/health`             | did my schedules actually run?             |
+| 7   | [Issues](#7-issues)                    | `#/issues`             | why are runs failing, grouped by cause?    |
+| 8   | [Pipelines](#8-pipelines)              | `#/pipelines`          | author multi-phase, human-gated flows      |
+| 9   | [Budget](#9-budget)                    | `#/budget`             | how much am I spending — and cap it        |
+| 10  | [Users & sign-in](#10-users--sign-in)  | `#/users`              | who may run/edit pipelines?                |
+| 11  | [Search](#11-search)                   | `#/search`             | where did I say/see _that_?                |
+| 12  | [Agents](#12-agents)                   | `#/agents`             | what's running / done / failed right now?  |
+| 13  | [Agent Detail](#13-agent-detail)       | `#/agent/<id>`         | how did _this_ agent get here?             |
+| 14  | [Sessions](#14-sessions)               | `#/sessions`           | what was actually said in a conversation?  |
+| 15  | [Activity](#15-activity)               | _(removed)_            | `GET /api/activity` only                   |
+| 16  | [Projects](#16-projects)               | `#/sessions/<project>` | which folders are active, and when?        |
+| 17  | [Stats](#17-stats)                     | `#/stats`              | what's my usage / cost / token spend?      |
+| 18  | [Inventory](#18-inventory)             | `#/inventory`          | what's installed and available?            |
+| 19  | [Tasks](#19-tasks)                     | _(removed)_            | `GET /api/tasks` only                      |
+| 20  | [Cron panel](#20-cron-panel)           | _(removed)_            | why native cron routines can't be shown    |
+| 21  | [Flight Recorder](#21-flight-recorder) | `#/run/<id>`           | what was it doing at minute four?          |
+| 22  | [Watchtower](#22-watchtower)           | `#/health/watchtower`  | did it run the way it _usually_ runs?      |
+| 23  | [Autopsy](#23-autopsy)                 | `#/run/<id>`           | why did this run fail, in one paragraph?   |
+| 24  | [Verdict](#24-verdict)                 | `#/run/<id>`           | was the output any _good_?                 |
+| 25  | [Sentinel](#25-sentinel)               | `#/sentinel`           | what is on fire, and who has it?           |
+| 26  | [Weave](#26-weave)                     | `#/pipelines`          | fan-out, fan-in, retries, artifacts        |
+| 27  | [Ledger](#27-ledger)                   | `#/budget`             | where did the money go, and where next?    |
+| 28  | [The Vault](#28-the-vault)             | `#/stats`              | what happened last quarter, and last year? |
+| 29  | [Omnibar](#29-omnibar)                 | `⌘K`                   | say it, see the exact changes, confirm     |
+| 30  | [Constellation](#30-constellation)     | `#/fleet`              | N machines, one lens                       |
+| 31  | [`argus tail`](#31-argus-tail)         | terminal               | what is it doing, when I can't see the UI? |
 
 ---
 
@@ -127,12 +126,17 @@ health, the issues it raised, and the action that fires it now._
   them fire while you are in another tab. Each entry links to the view it is
   about; opening the panel marks them read. For what changed while Argus ran
   without you at all, use [Briefing](#2-briefing).
-- **Navigation** is split by role: the nine **destination** tabs (Command
-  Center, Briefing, Chronicle, Launch, Scheduler, Monitors, Issues, Pipelines,
-  Budget) sit in the bar; the **⋯ More** menu holds the reference tabs
-  (Stats, Inventory, Projects, Tasks, Users). Drill-down views (Agents,
-  Detail, Sessions, Activity) are reached through links, breadcrumbs and the
-  palette. On a phone the bar collapses to a **menu** naming your current
+- **Navigation** is split by role: the eight **destination** tabs (Command
+  Center, Briefing, Chronicle, Scheduler, Pipelines, Health, Issues, Budget)
+  sit in the bar; the **⋯ More** menu holds Sentinel and the reference pages
+  (Sessions, Stats, Inventory, Fleet, and Users for the root account).
+  Scheduler and Health each carry a sub-tab in the hash — **Schedules |
+  One-off** and **Monitors | Watchtower** — so a link lands on the half it
+  means. Drill-down views (Agents, Detail, Flight Recorder) are reached
+  through links, breadcrumbs and the palette; Search through `/` and the
+  palette. Old hashes (`#/launch`, `#/monitors`, `#/watchtower`,
+  `#/projects`, `#/activity`, `#/tasks`) are rewritten to where their content
+  went. On a phone the bar collapses to a **menu** naming your current
   destination, listing every tab at once with its attention badge.
 - **Auto-refresh:** the server pushes a "something changed" ping over a
   WebSocket whenever a watched file mutates, and the UI re-fetches. Those
@@ -381,13 +385,16 @@ the scheduler's run records with `~/.claude/jobs/` and
 
 ---
 
-## 4. Launch
+## 4. One-off runs
 
-_Fire one agent run right now._ Route: `#/launch`
+_Fire one agent run right now._ Route: `#/schedules/oneoff` — the Scheduler's
+**One-off** sub-tab. (`#/launch` still lands here.)
 
 ![Launch](screenshots/launch.png)
 
-**Purpose:** not everything deserves a schedule. Launch fires a **single
+**Purpose:** not everything deserves a schedule. A one-off is a schedule with
+no trigger — same form, same run rows, same machinery — so it lives inside the
+Scheduler rather than as a tab of its own. It fires a **single
 one-off run** — a quick audit, a report, a cleanup — straight from the
 dashboard: prompt, working directory, go. No schedule object is created and
 nothing recurs.
@@ -447,7 +454,7 @@ _Recurring agent runs, owned by Argus._ Route: `#/schedules`
 **Purpose:** define headless prompts that Argus fires on a trigger — nightly
 audits, periodic report generators, cleanup jobs — then watch their run
 history and logs without leaving the page. Two sub-tabs: **Schedules** (this
-section) and **Cron** (see [Cron panel](#20-cron-panel)).
+section) and **One-off** (see [One-off runs](#4-one-off-runs)).
 
 **Creating a schedule** — click **+ New schedule**:
 
@@ -473,6 +480,15 @@ section) and **Cron** (see [Cron panel](#20-cron-panel)).
   stale run is worse than no run.
 - **Save schedule** stays disabled until name, prompt and working directory
   are filled.
+
+**What counts as a succeeded run.** The process must exit 0 _and_ the CLI's
+own result envelope must not report an error (`is_error: true` for Claude
+Code, a failed turn for Codex, an error part for OpenCode). A run whose CLI
+exited cleanly after saying "Invalid API key" or refusing the prompt is
+recorded **failed**, with that message as its error, and reaches failure
+notifications and Issues like any other failure. A clean exit whose log has no
+envelope to read is still a success — the exit code is the precondition, the
+envelope is the verdict.
 
 **The summary strip** above the list answers "is my scheduler healthy?"
 without reading a card: how many schedules exist, how many are **failing** or
@@ -517,7 +533,9 @@ via `GET/POST /api/schedules`, `PUT/DELETE /api/schedules/:id`,
 
 ## 6. Monitors
 
-_A dead-man's switch over your schedules._ Route: `#/monitors`
+_A dead-man's switch over your schedules._ Route: `#/health` — the **Monitors**
+half of the Health tab (`g m`); its other half is
+[Watchtower](#22-watchtower). (`#/monitors` still lands here.)
 
 ![Monitors](screenshots/monitors.png)
 
@@ -800,7 +818,8 @@ machine running Argus and bootstrap again.
 
 ## 11. Search
 
-_Full-text across all transcripts._ Route: `#/search` (the 🔍 in the nav)
+_Full-text across all transcripts._ Route: `#/search` (`/` from anywhere, or
+the palette — it has no tab of its own)
 
 ![Search](screenshots/search.png)
 
@@ -883,7 +902,8 @@ the main list.
 
 ## 14. Sessions
 
-_Browse & read transcripts._ Route: `#/sessions`
+_Browse & read transcripts._ Route: `#/sessions` (⋯ More menu);
+`#/sessions/<project>` narrows the list to one working directory.
 
 ![Sessions](screenshots/sessions.png)
 
@@ -925,6 +945,12 @@ results come back in relevance order, freshest first among equal matches.
 
 ## 15. Activity
 
+_Removed from the UI._ `GET /api/activity` still serves the feed; `#/activity`
+lands on Sessions, which shows the same prompts in the transcripts they belong
+to, and Search finds them by text.
+
+<details><summary>What the page was</summary>
+
 _Global prompt feed._ Route: `#/activity`
 
 ![Activity](screenshots/activity.png)
@@ -938,9 +964,18 @@ relative timestamp, and the prompt text (truncated to ~240 chars). Read-only.
 **Where the data comes from:** `GET /api/activity`, reading
 `~/.claude/history.jsonl` (most recent ~100 entries).
 
+</details>
+
 ---
 
 ## 16. Projects
+
+_Folded into Sessions._ A project is now a filter on the transcript list:
+`#/sessions/<project>` shows that working directory's sessions with a chip
+naming it, and the palette's project entries land there. `#/projects` lands on
+Sessions. `GET /api/projects` is unchanged.
+
+<details><summary>What the page was</summary>
 
 _Working-directories overview._ Route: `#/projects`
 
@@ -959,6 +994,8 @@ touched. Informational only — drill into content via Sessions or Search.
 
 **Where the data comes from:** `GET /api/projects`, scanning
 `~/.claude/projects/` subdirectories.
+
+</details>
 
 ---
 
@@ -1014,6 +1051,11 @@ do." No install/remove actions.
 
 ## 19. Tasks
 
+_Removed from the UI._ `GET /api/tasks` still serves the listing; `#/tasks`
+lands on the Command Center.
+
+<details><summary>What the page was</summary>
+
 _Task-queue workspace inventory._ Route: `#/tasks`
 
 ![Tasks](screenshots/tasks.png)
@@ -1028,9 +1070,17 @@ locked/in use, green = open), and last-updated time. Read-only.
 **Where the data comes from:** `GET /api/tasks`, scanning
 `~/.claude/tasks/<id>/` for `.lock` / `.highwatermark` files.
 
+</details>
+
 ---
 
 ## 20. Cron panel
+
+_Removed from the UI._ The sub-tab was three panels explaining that it could
+show nothing; the explanation is below and `GET /api/cron` still returns it.
+The Scheduler's second sub-tab is now [One-off runs](#4-one-off-runs).
+
+<details><summary>What the panel was</summary>
 
 _An honest empty state, by design._ Found under **Scheduler → Cron** sub-tab
 (there is deliberately no `#/cron` route).
@@ -1058,6 +1108,8 @@ harness-managed routines.
 
 **Where the data comes from:** `GET /api/cron`, returning
 `{ available: false, reason, howTo }` plus filename hints.
+
+</details>
 
 ---
 
@@ -1120,8 +1172,9 @@ is persisted — the transcript stays the source of truth.
 
 ## 22. Watchtower
 
-_Learned envelopes, and the runs that leave them._ Route: `#/watchtower`
-(`g w`)
+_Learned envelopes, and the runs that leave them._ Route:
+`#/health/watchtower` — the **Watchtower** half of the Health tab, beside
+[Monitors](#6-monitors). (`#/watchtower` still lands here.)
 
 **Purpose:** Monitors answer "did it run". Issues answer "did it fail".
 Neither catches the run that **succeeded**, took nine minutes instead of two,
@@ -1324,7 +1377,8 @@ definition.
 ## 25. Sentinel
 
 _Incidents, escalation, and a diagnostic that proposes but never acts._ Route:
-`#/sentinel` (`g n`)
+`#/sentinel` (`g n`, or the ⋯ More menu — the Briefing is where a signal is
+first seen; Sentinel is where its record lives)
 
 **Purpose:** Monitors, Issues and Watchtower each raise a _signal_. None of them
 holds the state that makes a signal answerable — who saw it, when it was
