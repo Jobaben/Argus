@@ -24,8 +24,9 @@ import {
 import { runtimeCommand, useRuntimes } from "../useRuntimes";
 import { useVerdictTrends } from "../useVerdict";
 import { VerdictSparkline } from "./VerdictPanel";
-import { CronPanel } from "./Cron";
+import { LaunchPanel } from "./Launch";
 import { RunRow } from "./RunRow";
+import { useHashRoute } from "../useHashRoute";
 import {
   scheduleHealthById,
   summarizeSchedules,
@@ -596,7 +597,9 @@ export default function Schedules() {
   const [mode, setMode] = useState<
     { kind: "none" } | { kind: "new" } | { kind: "edit"; id: string }
   >({ kind: "none" });
-  const [subTab, setSubTab] = useState<"schedules" | "cron">("schedules");
+  // The sub-tab lives in the hash (`#/schedules`, `#/schedules/oneoff`) so a
+  // link to "fire one now" lands on the form and a reload keeps the tab.
+  const subTab: "schedules" | "oneoff" = useHashRoute()[1] === "oneoff" ? "oneoff" : "schedules";
   const [filter, setFilter] = useState<Filter>("all");
 
   const editing = mode.kind === "edit" ? schedules.find((s) => s.id === mode.id) : undefined;
@@ -629,31 +632,29 @@ export default function Schedules() {
         ) : null
       }
     >
-      <div className="mb-6 flex items-center gap-1">
-        <button
-          type="button"
-          onClick={() => setSubTab("schedules")}
-          aria-pressed={subTab === "schedules"}
+      <nav aria-label="Scheduler views" className="mb-6 flex items-center gap-1">
+        <a
+          href="#/schedules"
+          aria-current={subTab === "schedules" ? "page" : undefined}
           className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
             subTab === "schedules" ? "bg-surface-2 text-ink" : "text-ink-dim hover:text-ink"
           }`}
         >
           Schedules
-        </button>
-        <button
-          type="button"
-          onClick={() => setSubTab("cron")}
-          aria-pressed={subTab === "cron"}
+        </a>
+        <a
+          href="#/schedules/oneoff"
+          aria-current={subTab === "oneoff" ? "page" : undefined}
           className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
-            subTab === "cron" ? "bg-surface-2 text-ink" : "text-ink-dim hover:text-ink"
+            subTab === "oneoff" ? "bg-surface-2 text-ink" : "text-ink-dim hover:text-ink"
           }`}
         >
-          Cron
-        </button>
-      </div>
+          One-off
+        </a>
+      </nav>
 
-      {subTab === "cron" ? (
-        <CronPanel />
+      {subTab === "oneoff" ? (
+        <LaunchPanel />
       ) : (
         <>
           {error && (

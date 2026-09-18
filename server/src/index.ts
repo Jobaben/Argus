@@ -244,7 +244,7 @@ const monitorWatcher = createMonitorWatcher({
         severity: alert.event === "monitor.recovered" ? "info" : "warning",
         subject: alert.name,
         detail: alert.detail,
-        href: "#/monitors",
+        href: "#/health",
       }),
     );
   },

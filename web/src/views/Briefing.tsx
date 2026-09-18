@@ -14,12 +14,23 @@ import type { AttentionKind, Briefing as BriefingData, RunStatus } from "../type
 
 /** Where each attention kind sends the user to act on it. */
 const KIND_META: Record<AttentionKind, { href: string; label: string; tone: "fail" | "await" }> = {
-  "monitor-down": { href: "#/monitors", label: "Monitor down", tone: "fail" },
-  "gate-waiting": { href: "#/pipelines", label: "Awaiting approval", tone: "await" },
-  "monitor-failing": { href: "#/monitors", label: "Monitor failing", tone: "fail" },
+  "monitor-down": { href: "#/health", label: "Monitor down", tone: "fail" },
+  "gate-waiting": { href: "#/command", label: "Awaiting approval", tone: "await" },
+  "monitor-failing": { href: "#/health", label: "Monitor failing", tone: "fail" },
   "issue-open": { href: "#/issues", label: "Open issue", tone: "fail" },
-  anomaly: { href: "#/watchtower", label: "Anomaly", tone: "await" },
+  anomaly: { href: "#/health/watchtower", label: "Anomaly", tone: "await" },
 };
+
+/**
+ * A gate is acted on in the Command Center's review drawer and nowhere else —
+ * the Pipelines page can only stop an instance — so the card deep-links to the
+ * drawer for *this* instance, the same link the palette and `argus tail` use.
+ */
+function attentionHref(item: BriefingData["attention"][number]): string {
+  return item.kind === "gate-waiting"
+    ? `#/command/${encodeURIComponent(item.id)}`
+    : KIND_META[item.kind].href;
+}
 
 const TONE_CLASS = {
   fail: "border-fail/40 text-fail bg-fail/12",
@@ -45,7 +56,7 @@ function failureHref(run: BriefingData["window"]["failures"][number]): string {
 function AttentionCard({ item }: { item: BriefingData["attention"][number] }) {
   const meta = KIND_META[item.kind];
   return (
-    <a href={meta.href} className="block">
+    <a href={attentionHref(item)} className="block">
       {/* Border follows the kind's own tone rather than a special case for
           gates: with anomalies added there are now two amber kinds, and the
           old `kind === "gate-waiting"` test would have drawn one of them red. */}
@@ -227,7 +238,7 @@ export default function Briefing({
                   <Section title="Ran, but not the way it usually runs">
                     <div className="flex flex-col gap-2">
                       {briefing.window.anomalies.map((a) => (
-                        <a key={a.id} href="#/watchtower" className="block">
+                        <a key={a.id} href="#/health/watchtower" className="block">
                           <Card>
                             <div className="flex items-center gap-3 text-sm">
                               <span className="shrink-0 font-semibold text-ink">{a.name}</span>
