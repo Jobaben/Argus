@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, renderHook, screen } from "@testing-library/react";
-import { CLOCK_TICK_MS, useClock } from "./clock";
+import { CLOCK_TICK_MS, useClock, useTicker } from "./clock";
 import { TimeAgo } from "./TimeAgo";
 
 beforeEach(() => {
@@ -53,6 +53,45 @@ describe("useClock", () => {
     vi.setSystemTime(new Date("2026-07-07T13:00:00.000Z"));
     const second = renderHook(() => useClock());
     expect(second.result.current).toBeGreaterThan(before);
+  });
+});
+
+describe("useTicker", () => {
+  it("re-reads the wall clock when it is switched on, not just at mount", () => {
+    // A tile mounts queued and starts working later; an elapsed time computed
+    // from the mount-time value would run negative for the first tick.
+    const { result, rerender } = renderHook(({ active }) => useTicker(active), {
+      initialProps: { active: false },
+    });
+    const mounted = result.current;
+    act(() => {
+      vi.advanceTimersByTime(90_000);
+    });
+    expect(result.current).toBe(mounted);
+    rerender({ active: true });
+    expect(result.current).toBe(mounted + 90_000);
+  });
+
+  it("advances once per interval while active", () => {
+    const { result } = renderHook(() => useTicker(true));
+    const start = result.current;
+    act(() => {
+      vi.advanceTimersByTime(999);
+    });
+    expect(result.current).toBe(start);
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(result.current).toBe(start + 1000);
+  });
+
+  it("runs no timer while inactive", () => {
+    const { result } = renderHook(() => useTicker(false));
+    const start = result.current;
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(result.current).toBe(start);
   });
 });
 

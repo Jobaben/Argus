@@ -131,4 +131,31 @@ describe("route direction", () => {
       doc.startViewTransition = original;
     }
   });
+
+  it("does not start a view transition for a hash change within the same view", async () => {
+    // Opening a gate deep link (`#/command/<instance>`) and closing it again both
+    // change the hash without changing the view. A transition there crossfades
+    // the page into itself and hands hit-testing to the snapshot meanwhile.
+    type Deferrable = { startViewTransition?: (cb: () => void) => unknown };
+    const doc = document as unknown as Deferrable;
+    const original = doc.startViewTransition;
+    const started = vi.fn((cb: () => void) => {
+      cb();
+      return { finished: Promise.resolve() };
+    });
+    doc.startViewTransition = started;
+    try {
+      await mount();
+      await act(async () => goto("#/command/some-instance"));
+      await act(async () => goto("#/command"));
+      expect(started).not.toHaveBeenCalled();
+      expect(screen.getByRole("link", { name: "Command Center" })).toBeInTheDocument();
+
+      // A genuine route change still transitions.
+      await act(async () => goto("#/agent/abc"));
+      expect(started).toHaveBeenCalledTimes(1);
+    } finally {
+      doc.startViewTransition = original;
+    }
+  });
 });

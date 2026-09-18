@@ -86,14 +86,12 @@ function StepTile({
   step,
   reason,
   live,
-  now,
   rowModel,
   onOpen,
 }: {
   step: StepPill;
   reason: string | null;
   live: LiveActivity | null;
-  now: number;
   /** Pipeline-level model shown in the card header; the tile only repeats a
    *  model when its own differs from this. */
   rowModel: string | null;
@@ -102,6 +100,10 @@ function StepTile({
 }) {
   const token = STATUS[step.status].token;
   const working = step.status === "working";
+  // The elapsed clock lives in the tile that shows it. One clock at the board
+  // root re-rendered every card once a second for the sake of a few labels —
+  // and each of those renders re-measured the whole board for FLIP.
+  const now = useTicker(working);
   const activity = working ? (live?.label ?? step.currentActivity) : null;
   const elapsed =
     working && step.startedAt ? formatElapsed(now - new Date(step.startedAt).getTime()) : null;
@@ -304,7 +306,6 @@ function PhaseFocus({
   gate,
   reviseLabel,
   liveActivity,
-  now,
   rowModel,
   onOpenStep,
   onOpenGate,
@@ -320,7 +321,6 @@ function PhaseFocus({
   gate: OverviewGate | null;
   reviseLabel?: string;
   liveActivity: Map<string, LiveActivity>;
-  now: number;
   rowModel: string | null;
   onOpenStep: (step: StepPill, phaseName: string, reason: string | null, originY: number) => void;
   /** Open the review drawer — the only place Approve and Revise live. */
@@ -450,7 +450,6 @@ function PhaseFocus({
                 step={step}
                 reason={reason}
                 live={step.runId ? (liveActivity.get(step.runId) ?? null) : null}
-                now={now}
                 rowModel={rowModel}
                 onOpen={(originY) => onOpenStep(step, pill.name, reason, originY)}
               />
@@ -493,13 +492,11 @@ function PhaseFocus({
 function InstanceBoard({
   row,
   liveActivity,
-  now,
   onOpenStep,
   onOpenGate,
 }: {
   row: OverviewRow;
   liveActivity: Map<string, LiveActivity>;
-  now: number;
   onOpenStep: (selection: StepSelection) => void;
   onOpenGate: (selection: GateSelection) => void;
 }) {
@@ -548,7 +545,6 @@ function InstanceBoard({
           gate={row.gates.find((g) => g.phaseId === selected.id) ?? null}
           reviseLabel={row.failure?.kind === "restarted" ? "Retry" : "Revise"}
           liveActivity={liveActivity}
-          now={now}
           rowModel={row.model}
           onOpenStep={(step, phaseName, reason, originY) =>
             onOpenStep({ step, pipelineName: row.name, phaseName, reason, originY })
@@ -578,7 +574,6 @@ function InstanceBoard({
 function Row({
   rows,
   liveActivity,
-  now,
   index,
   onOpenStep,
   onOpenGate,
@@ -586,7 +581,6 @@ function Row({
 }: {
   rows: OverviewRow[];
   liveActivity: Map<string, LiveActivity>;
-  now: number;
   /** Position in the board, for the entrance stagger. */
   index: number;
   onOpenStep: (selection: StepSelection) => void;
@@ -674,7 +668,6 @@ function Row({
             <InstanceBoard
               row={row}
               liveActivity={liveActivity}
-              now={now}
               onOpenStep={onOpenStep}
               onOpenGate={onOpenGate}
             />
@@ -842,12 +835,6 @@ export default function CommandCenter() {
   // glides there shows exactly what moved.
   const flip = useFlip();
   const liveActivity = useRunActivity();
-  const anyWorking = useMemo(
-    () => rows.some((r) => r.phases.some((p) => p.steps.some((s) => s.status === "working"))),
-    [rows],
-  );
-  // One clock for every running tile; idle boards do not tick.
-  const now = useTicker(anyWorking);
 
   return (
     <Page wide title="Command Center" actions={<BoardTotal totals={totals} reset={reset} />}>
@@ -899,7 +886,6 @@ export default function CommandCenter() {
                     index={i}
                     rows={group}
                     liveActivity={liveActivity}
-                    now={now}
                     onOpenStep={setSelected}
                     onOpenGate={setPickedGate}
                   />

@@ -279,6 +279,11 @@ function Dashboard() {
       // hashchange, which is the one that navigates.
       if (applyLegacyRedirect()) return;
       const next = currentTabId();
+      // A hash change that stays on the same view — a deep link opening a gate
+      // on the board, or the board dropping it again — changes nothing this
+      // container renders. A view transition here would crossfade the page
+      // into itself and, for its duration, hand hit-testing to the snapshot.
+      if (next === leavingRef.current) return;
       const direction = routeDirection(leavingRef.current, next, roleOf);
       leavingRef.current = next;
       setRouteDirection(direction);

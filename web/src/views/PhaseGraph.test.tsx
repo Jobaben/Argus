@@ -96,6 +96,28 @@ describe("PhaseGraph", () => {
     expect(onSelect).toHaveBeenCalledWith("ship");
   });
 
+  it("keeps the selected node in view by scrolling its own tile, never the page", () => {
+    // `scrollIntoView` scrolls every scrollable ancestor, the window included,
+    // so a status change on a card below the fold used to yank the page to it.
+    const intoView = vi.spyOn(Element.prototype, "scrollIntoView");
+    const tall = Array.from({ length: 16 }, (_, i) =>
+      pill(`p${i}`, "done", i === 0 ? {} : { needs: [`p${i - 1}`] }),
+    );
+    const { rerender } = render(<Graph phases={tall} selectedId="p0" />);
+    const tile = screen.getByTestId("phase-graph");
+    // jsdom has no layout: give the tile a viewport and the far node a position.
+    Object.defineProperty(tile, "clientHeight", { value: 200, configurable: true });
+    const far = screen.getByRole("button", { name: /p15/ });
+    Object.defineProperty(far, "offsetTop", { value: 900, configurable: true });
+    Object.defineProperty(far, "offsetHeight", { value: 30, configurable: true });
+
+    rerender(<Graph phases={tall} selectedId="p15" />);
+
+    expect(intoView).not.toHaveBeenCalled();
+    expect(tile.scrollTop).toBe(930 - 200);
+    intoView.mockRestore();
+  });
+
   it("puts phases that can run together on one row, in separate lanes", () => {
     // build-a and build-b both need plan: two stages, the second holding both.
     render(

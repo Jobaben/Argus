@@ -1,20 +1,28 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PhasePill } from "../ds";
 import { LANE_GEOMETRY, laneLayout, laneWidthFor, tileChromeFor } from "./laneGraphLayout";
 
 /** Below this card width the graph stacks above the focus panel. */
 export const STACK_BELOW_PX = 900;
 
-/** The width of the element the ref lands on, tracked as it resizes. */
+/**
+ * The width of the element the ref lands on, tracked as it resizes.
+ *
+ * Measured in a layout effect, before the first paint: a `ResizeObserver` alone
+ * reports after paint, so the graph drew once at its "unknown width" geometry
+ * and snapped to the real one a frame later — on every instance mount.
+ */
 export function useElementWidth<T extends HTMLElement>() {
   const ref = useRef<T>(null);
   const [width, setWidth] = useState(0);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = ref.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
+    if (!el) return;
+    const apply = (w: number) => setWidth((prev) => (prev === w ? prev : w));
+    apply(Math.round(el.clientWidth));
+    if (typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver((entries) => {
-      const w = Math.round(entries[0]?.contentRect.width ?? 0);
-      setWidth((prev) => (prev === w ? prev : w));
+      apply(Math.round(entries[0]?.contentRect.width ?? 0));
     });
     ro.observe(el);
     return () => ro.disconnect();

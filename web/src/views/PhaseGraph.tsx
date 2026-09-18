@@ -204,14 +204,23 @@ export function PhaseGraph({
 
   // A long graph scrolls inside its tile; keep the phase being asked about in
   // view when the selection moves (a gate opening, a failure landing).
+  //
+  // The tile's own scroll position, never `scrollIntoView`: that scrolls every
+  // scrollable ancestor including the window, so a status change on a card
+  // below the fold used to yank the whole page to it. The node is absolutely
+  // positioned inside the tile's content box, so its offsets are already tile
+  // coordinates. Vertical only — sideways overflow is clipped by design.
   const tileRef = useRef<HTMLDivElement>(null);
   const nodeEls = useRef(new Map<string, HTMLButtonElement>());
   useEffect(() => {
     const tile = tileRef.current;
     const el = selectedId ? nodeEls.current.get(selectedId) : undefined;
-    if (!tile || !el || typeof el.scrollIntoView !== "function") return;
-    if (tile.scrollHeight <= tile.clientHeight && tile.scrollWidth <= tile.clientWidth) return;
-    el.scrollIntoView({ block: "nearest", inline: "nearest" });
+    if (!tile || !el) return;
+    const top = el.offsetTop;
+    const bottom = top + el.offsetHeight;
+    if (top < tile.scrollTop) tile.scrollTop = top;
+    else if (bottom > tile.scrollTop + tile.clientHeight)
+      tile.scrollTop = bottom - tile.clientHeight;
   }, [selectedId]);
 
   const hot = (e: { from: string; to: string }) =>

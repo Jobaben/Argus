@@ -76,13 +76,20 @@ export function useClock(): number {
  * inappropriate for the dozens of "3m ago" labels the shared clock serves.
  */
 export function useTicker(active = true, intervalMs = 1000): number {
-  const [now, setNow] = useState(() => Date.now());
+  const [clock, setClock] = useState(() => ({ now: Date.now(), active }));
+  // Re-seed on activation, during render ("adjust state when a prop changes"):
+  // the mount-time value is stale by the time a tile that mounted as "queued"
+  // starts working, and an elapsed time computed from it runs negative until
+  // the first tick.
+  if (clock.active !== active) {
+    setClock((c) => ({ now: active ? Date.now() : c.now, active }));
+  }
   useEffect(() => {
     if (!active) return;
-    const timer = setInterval(() => setNow(Date.now()), intervalMs);
+    const timer = setInterval(() => setClock((c) => ({ ...c, now: Date.now() })), intervalMs);
     return () => clearInterval(timer);
   }, [active, intervalMs]);
-  return now;
+  return clock.now;
 }
 
 /** Exposed for tests: forces a tick without waiting for the interval. */
