@@ -142,7 +142,8 @@ afterEach(() => {
   window.location.hash = "";
 });
 
-const awaiting = () => entry("auth-refactor", "awaiting-approval", ["succeeded", "awaiting-approval"]);
+const awaiting = () =>
+  entry("auth-refactor", "awaiting-approval", ["succeeded", "awaiting-approval"]);
 
 /** The board's opener for the gate, then the drawer it opens (a lazy chunk). */
 async function openDrawer() {

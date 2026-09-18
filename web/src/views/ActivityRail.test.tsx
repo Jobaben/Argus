@@ -209,6 +209,9 @@ describe("ActivityRail — recent", () => {
 
   it("links to the full run history", () => {
     render(<ActivityRail rows={[]} liveActivity={NO_ACTIVITY} runs={[]} loading={false} />);
-    expect(screen.getByRole("link", { name: /all runs/i })).toHaveAttribute("href", "#/launch");
+    expect(screen.getByRole("link", { name: /all runs/i })).toHaveAttribute(
+      "href",
+      "#/schedules/oneoff",
+    );
   });
 });

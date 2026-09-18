@@ -380,7 +380,10 @@ describe("buildSnapshot", () => {
     const gateLine = lines.find((l) => l.kind === "snapshot.gate")!;
     assert.equal(gateLine.reviewUrl, "http://127.0.0.1:7777/#/command/inst-2/review");
     assert.equal(gateLine.approveCommand, "argus approve inst-2 --phase review");
-    assert.equal(gateLine.reviseCommand, 'argus revise inst-2 --phase review --note "<what to change>"');
+    assert.equal(
+      gateLine.reviseCommand,
+      'argus revise inst-2 --phase review --note "<what to change>"',
+    );
     // Recent, newest first, inside the window only; failures carry the reason.
     assert.deepEqual(texts.slice(6, 8), [
       "snapshot.recent|✗ Deps audit failed in 5s: npm audit found 3 vulnerabilities",

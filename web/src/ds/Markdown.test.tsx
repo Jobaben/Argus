@@ -43,9 +43,7 @@ describe("Markdown", () => {
   });
 
   it("renders ordered, unordered, nested and task lists", () => {
-    render(
-      <Markdown source={"1. one\n2. two\n\n- a\n  - nested\n- [x] done\n- [ ] todo"} />,
-    );
+    render(<Markdown source={"1. one\n2. two\n\n- a\n  - nested\n- [x] done\n- [ ] todo"} />);
     const lists = screen.getAllByRole("list");
     expect(lists[0].tagName).toBe("OL");
     expect(lists[1].tagName).toBe("UL");
@@ -66,7 +64,9 @@ describe("Markdown", () => {
   });
 
   it("renders fenced code with its language, blockquotes and rules", () => {
-    const { container } = render(<Markdown source={"```ts\nconst x = 1;\n```\n\n> quoted\n\n---"} />);
+    const { container } = render(
+      <Markdown source={"```ts\nconst x = 1;\n```\n\n> quoted\n\n---"} />,
+    );
     const pre = container.querySelector("pre[data-lang='ts']");
     expect(pre).not.toBeNull();
     expect(pre?.textContent).toBe("const x = 1;");
@@ -75,9 +75,7 @@ describe("Markdown", () => {
   });
 
   it("keeps safe links, with a hardened target, and flattens unsafe ones to text", () => {
-    render(
-      <Markdown source={"[ok](https://example.com) and [bad](javascript:alert(1)) here"} />,
-    );
+    render(<Markdown source={"[ok](https://example.com) and [bad](javascript:alert(1)) here"} />);
     const ok = screen.getByRole("link", { name: "ok" });
     expect(ok).toHaveAttribute("href", "https://example.com");
     expect(ok).toHaveAttribute("rel", "noopener noreferrer");
@@ -88,7 +86,9 @@ describe("Markdown", () => {
 
   it("shows raw HTML as text, never as markup", () => {
     const { container } = render(
-      <Markdown source={"before <b onmouseover=\"x()\">inline</b> after\n\n<script>alert(1)</script>\n"} />,
+      <Markdown
+        source={'before <b onmouseover="x()">inline</b> after\n\n<script>alert(1)</script>\n'}
+      />,
     );
     expect(container.querySelector("script")).toBeNull();
     expect(container.querySelector("b")).toBeNull();

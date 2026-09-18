@@ -175,8 +175,7 @@ export async function readPhaseArtifact(
 }
 
 export type ReviewResult =
-  | { ok: true; review: PhaseReview }
-  | { ok: false; code: 404 | 409; error: string };
+  { ok: true; review: PhaseReview } | { ok: false; code: 404 | 409; error: string };
 
 /**
  * The review for one paused phase. `def` is the definition the instance runs

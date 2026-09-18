@@ -30,9 +30,26 @@ describe("App shell", () => {
     await act(async () => {});
     expect(screen.getByRole("link", { name: "Command Center" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Scheduler" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Health" })).toBeInTheDocument();
+    // Folded into Scheduler and Health respectively — no tab of their own.
+    expect(screen.queryByRole("link", { name: "Launch" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Monitors" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Watchtower" })).toBeNull();
+    // Overflow and removed routes are not in the bar.
     expect(screen.queryByRole("link", { name: "Inventory" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Sessions" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Sentinel" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Activity" })).toBeNull();
+  });
+
+  it("rewrites a legacy hash to where its content went, without a history entry", async () => {
+    window.location.hash = "#/monitors";
+    await act(async () => {
+      render(<App />);
+    });
+    await act(async () => {});
+    expect(window.location.hash).toBe("#/health");
+    expect(await screen.findByRole("heading", { name: "Health" })).toBeInTheDocument();
   });
 });
 

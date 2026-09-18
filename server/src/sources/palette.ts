@@ -149,7 +149,7 @@ export function buildPalette(input: PaletteInput, now: Date): PaletteIndex {
         monitor.uptimePct === null
           ? "no completed runs yet"
           : `${monitor.uptimePct.toFixed(0)}% uptime`,
-      href: "#/monitors",
+      href: "#/health",
       badge: monitor.status,
       severity: MONITOR_SEVERITY[monitor.status],
       keywords: [monitor.scheduleId, "monitor", "health", "uptime"],
@@ -189,7 +189,8 @@ export function buildPalette(input: PaletteInput, now: Date): PaletteIndex {
       id: project.id,
       title: project.label,
       subtitle: `${project.sessionCount} session${project.sessionCount === 1 ? "" : "s"}`,
-      href: "#/projects",
+      // The Sessions list, narrowed to this project: #/sessions/:project.
+      href: `#/sessions/${encodeURIComponent(project.id)}`,
       badge: null,
       severity: "none",
       keywords: [project.id, "project", "repo"],

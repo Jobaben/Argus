@@ -24,12 +24,13 @@ bash -ic 'argus tail --url "http://$ARGUS_HOST:$ARGUS_PORT" --token "$ARGUS_TOKE
 `argus` must be on PATH on this machine (it is wherever Argus runs). On this
 machine the CLI's `127.0.0.1:7777` default is wrong — the real server is on a
 non-loopback address. Environment variables `$ARGUS_HOST`, `$ARGUS_PORT`, and
-`$ARGUS_TOKEN` are only visible to an *interactive* shell (a `.bashrc` guard
+`$ARGUS_TOKEN` are only visible to an _interactive_ shell (a `.bashrc` guard
 hides them from a plain script/tool shell). Always run through `bash -ic '...'`
 to pick them up. The `--token` flag should always be included when Argus has
 authentication enabled.
 
 **If connection fails**, check that Argus is running:
+
 ```bash
 ps aux | grep -i "argus server" | grep -v grep
 ss -tlnp | grep node

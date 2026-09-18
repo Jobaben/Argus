@@ -36,11 +36,9 @@ describe("parseGateArgs", () => {
     if (fromEnv.kind !== "ok") return;
     assert.equal(fromEnv.options.url, "http://127.0.0.1:9001");
     assert.equal(fromEnv.options.token, "t0k");
-    const flags = parseGateArgs(
-      "approve",
-      ["inst-1", "--url=http://box:7000/", "--token=other"],
-      { ARGUS_TOKEN: "t0k" } as NodeJS.ProcessEnv,
-    );
+    const flags = parseGateArgs("approve", ["inst-1", "--url=http://box:7000/", "--token=other"], {
+      ARGUS_TOKEN: "t0k",
+    } as NodeJS.ProcessEnv);
     assert.equal(flags.kind, "ok");
     if (flags.kind !== "ok") return;
     assert.equal(flags.options.url, "http://box:7000");
@@ -121,7 +119,10 @@ describe("credentials and sessions", () => {
     assert.equal(credentialsFromEnv({} as NodeJS.ProcessEnv), null);
     assert.equal(credentialsFromEnv({ ARGUS_USER: "u" } as NodeJS.ProcessEnv), null);
     assert.equal(credentialsFromEnv({ ARGUS_PASSWORD: "p" } as NodeJS.ProcessEnv), null);
-    assert.equal(credentialsFromEnv({ ARGUS_USER: "  ", ARGUS_PASSWORD: "p" } as NodeJS.ProcessEnv), null);
+    assert.equal(
+      credentialsFromEnv({ ARGUS_USER: "  ", ARGUS_PASSWORD: "p" } as NodeJS.ProcessEnv),
+      null,
+    );
     assert.deepEqual(
       credentialsFromEnv({ ARGUS_USER: " usha ", ARGUS_PASSWORD: "pw" } as NodeJS.ProcessEnv),
       { username: "usha", password: "pw" },
@@ -130,7 +131,10 @@ describe("credentials and sessions", () => {
 
   it("sessionFromSetCookie picks the named cookie out of a set-cookie header", () => {
     assert.equal(
-      sessionFromSetCookie("argus_session=abc123; Path=/; HttpOnly; SameSite=Strict", "argus_session"),
+      sessionFromSetCookie(
+        "argus_session=abc123; Path=/; HttpOnly; SameSite=Strict",
+        "argus_session",
+      ),
       "abc123",
     );
     assert.equal(
@@ -143,7 +147,13 @@ describe("credentials and sessions", () => {
 });
 
 describe("renderOutcome", () => {
-  const ok = { ok: true, verb: "approve" as const, instanceId: "i1", phaseId: "review", status: 200 };
+  const ok = {
+    ok: true,
+    verb: "approve" as const,
+    instanceId: "i1",
+    phaseId: "review",
+    status: 200,
+  };
   it("reads as one line for a human", () => {
     assert.equal(renderOutcome(ok, false), '✓ approved i1 at "review" — the pipeline continues');
     assert.equal(
@@ -162,13 +172,25 @@ describe("renderOutcome", () => {
 
 describe("explainRefusal", () => {
   it("turns login and gate statuses into a sentence that names the fix", () => {
-    assert.match(explainRefusal("login", 401, { code: "auth_setup_required" }, "http://x"), /no account yet/);
-    assert.match(explainRefusal("login", 401, { error: "invalid username or password" }, "http://x"), /invalid username/);
+    assert.match(
+      explainRefusal("login", 401, { code: "auth_setup_required" }, "http://x"),
+      /no account yet/,
+    );
+    assert.match(
+      explainRefusal("login", 401, { error: "invalid username or password" }, "http://x"),
+      /invalid username/,
+    );
     assert.match(explainRefusal("login", 401, null, "http://x"), /ARGUS_TOKEN/);
-    assert.match(explainRefusal("login", 403, { code: "pending_approval" }, "http://x"), /root approval/);
+    assert.match(
+      explainRefusal("login", 403, { code: "pending_approval" }, "http://x"),
+      /root approval/,
+    );
     assert.match(explainRefusal("login", 403, null, "http://x"), /Host allowlist/);
     assert.match(explainRefusal("login", 429, null, "http://x"), /too many/);
-    assert.equal(explainRefusal("gate", 409, { error: "instance is not awaiting approval" }, "http://x"), "instance is not awaiting approval");
+    assert.equal(
+      explainRefusal("gate", 409, { error: "instance is not awaiting approval" }, "http://x"),
+      "instance is not awaiting approval",
+    );
     assert.equal(explainRefusal("gate", 404, null, "http://x"), "no such instance");
     assert.equal(explainRefusal("gate", 500, null, "http://x"), "HTTP 500");
   });

@@ -7,6 +7,45 @@ All notable changes to Argus are documented here. The format follows
 
 ### Changed
 
+- **The nav is eight tabs, not eleven.** Watchtower and Sentinel had been
+  added to a bar laid out for nine, and six surfaces were answering "is
+  anything wrong?" in slightly different words. Now: **Launch is the
+  Scheduler's One-off sub-tab** (`#/schedules/oneoff`) — a one-off run is a
+  schedule with no trigger, and the two pages shared a form and a run list.
+  **Monitors and Watchtower are the two halves of Health** (`#/health`,
+  `#/health/watchtower`) — both per-schedule, both read-only, both about the
+  same objects. **Sentinel moved to the ⋯ menu**: it holds the stateful record
+  of signals the Briefing already surfaces, so it is where you go with an
+  incident in hand, not where you learn about one. **Sessions gained a menu
+  entry** — it was the main reading surface with no way in but a run row.
+  Every old hash (`#/launch`, `#/monitors`, `#/watchtower`, `#/projects`,
+  `#/activity`, `#/tasks`) is rewritten in place to where its content went, so
+  bookmarks, archived alert links and older `argus tail` output keep landing.
+  `g m` now opens Health; `g l` and `g w` are retired.
+- **The Briefing's "Awaiting approval" card opens the review drawer.** It
+  linked to the Pipelines page, which can only _stop_ an instance; approve and
+  revise live in the Command Center's drawer and nowhere else. The card now
+  deep-links to that instance's drawer, the same link the palette and
+  `argus tail` already used. The situation strip's **running** count likewise
+  goes to the Chronicle, which shows every run in flight, rather than to the
+  one-off list, which shows only launches.
+- **Budget and Stats each say which spend they count.** Budget meters the runs
+  Argus launched; Stats reads Claude Code's own telemetry, interactive sessions
+  included. Two pages about dollars with no word on why the figures differ
+  read as a bug.
+
+### Removed
+
+- **Projects, Activity and Tasks pages, and the Scheduler's Cron sub-tab.**
+  Projects was a card per folder with a session count and, per its own guide
+  entry, "informational only" — it is now a filter on Sessions
+  (`#/sessions/:project`), which is where its palette entries land. Activity
+  listed the last hundred prompts with nothing to click and nothing linking to
+  it. Tasks read Claude Code's internal `.lock` files, "mostly diagnostic".
+  The Cron sub-tab was three panels explaining that it could show nothing. The
+  `GET /api/activity`, `/api/projects`, `/api/tasks` and `/api/cron` endpoints
+  are unchanged.
+
 - **The review drawer shows the agent's closing note as a document instead of
   dumping the Stop-hook event.** A phase's payload is usually the whole event
   Claude Code hands its Stop hook — session id, transcript path, permission
