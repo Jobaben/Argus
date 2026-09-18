@@ -5,6 +5,20 @@ All notable changes to Argus are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **A scheduled or one-off run whose CLI exits 0 after reporting an error is
+  now recorded `failed`, not `succeeded`.** The scheduler decided a run's
+  status from the exit code alone, and threw away the `is_error` verdict every
+  runtime's envelope parser already extracted — so `claude -p` ending with
+  `"is_error": true, "result": "Invalid API key · Please run /login"` and a
+  clean exit landed as a green run with the refusal as its summary. Exit 0 is
+  now a precondition and the envelope is the verdict: a `true` `isError` fails
+  the run with the CLI's own message as its error (so it reaches failure
+  notifications and Issues), a non-zero exit still names the exit code, and a
+  clean exit with no envelope to read is unchanged. Pipeline steps already
+  behaved this way on the reconcile path; this brings schedules in line.
+
 ### Changed
 
 - **The review drawer shows the agent's closing note as a document instead of

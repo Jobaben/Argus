@@ -64,6 +64,10 @@ export interface RunResult {
   error: string | null;
   costUsd: number | null;
   tokens: number | null;
+  /** The CLI's own verdict from its result envelope (`is_error`, a failed
+   *  Codex turn, an OpenCode error part). `true` fails the run even when the
+   *  process exited 0; `null` when the log carried no envelope to read. */
+  isError?: boolean | null;
   /** Set only by runtimes that mint their own session id (Codex), so the run
    *  record can be patched with the id its transcript actually landed under. */
   sessionId?: string | null;
@@ -72,6 +76,26 @@ export interface RunResult {
 export interface SpawnHandle {
   pid: number | null;
   done: Promise<RunResult>;
+}
+
+/** Whether a finished process counts as a succeeded run: the CLI must have
+ *  exited 0 *and* not reported an error in its own envelope. A missing envelope
+ *  (`isError` null) is not held against a clean exit. */
+export function runSucceeded(res: Pick<RunResult, "code" | "isError">): boolean {
+  return res.code === 0 && res.isError !== true;
+}
+
+/** The error string a finished process earns. The exit code wins when it is
+ *  non-zero; otherwise an envelope error is named by the CLI's own message,
+ *  which for `claude -p` is the `result` field of an `is_error` envelope. */
+export function runError(
+  code: number | null,
+  isError: boolean | null | undefined,
+  result: string | null,
+): string | null {
+  if (code !== 0) return `exit code ${code}`;
+  if (isError === true) return result?.trim() || "agent reported an error";
+  return null;
 }
 
 /**
@@ -192,16 +216,17 @@ export const defaultSpawn: SpawnFn = (run, logPath) => {
       if (settled) return;
       settled = true;
       out.end();
-      const { result, costUsd, tokens, sessionId } = runtime.parseEnvelope(tail, {
+      const { result, costUsd, tokens, sessionId, isError } = runtime.parseEnvelope(tail, {
         model: run.model,
       });
       resolve({
         code,
         result,
-        error: code === 0 ? null : `exit code ${code}`,
+        error: runError(code, isError, result),
         costUsd,
         tokens,
         sessionId,
+        isError,
       });
     });
   });
@@ -269,7 +294,10 @@ async function spawnAndTrack(run: Run, startedAt: Date, deps: SchedulerDeps): Pr
       const ended = deps.now();
       const finished: Run = {
         ...run,
-        status: res.code === 0 ? "succeeded" : "failed",
+        // Exit 0 is a precondition, not the verdict: a CLI that exits cleanly
+        // after its envelope said `is_error: true` (auth rejected, the model
+        // refused, a turn that failed) did not do the work.
+        status: runSucceeded(res) ? "succeeded" : "failed",
         endedAt: ended.toISOString(),
         durationMs: ended.getTime() - startedAt.getTime(),
         exitCode: res.code,

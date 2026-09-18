@@ -4,6 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { parseRunEnvelope } from "./scheduler.js";
+import * as schedulerModule from "./scheduler.js";
 
 let home: string;
 beforeEach(() => {
@@ -300,6 +301,76 @@ test("a failed one-off run reaches onFailure and stays in the bucket", async () 
   const list = await runs.readRuns({ scheduleId: "oneoff" });
   assert.equal(list[0].status, "failed");
   assert.equal(list[0].error, "exit code 3");
+});
+
+test("a run whose envelope says is_error fails even though the process exited 0", async () => {
+  const { scheduler, runs } = await load();
+  const failures: string[] = [];
+  await scheduler.fireOneOff(
+    { name: "refused", prompt: "p", cwd: home },
+    deps({
+      spawn: () => ({
+        pid: 1,
+        done: Promise.resolve({
+          code: 0,
+          result: "Invalid API key · Please run /login",
+          error: "Invalid API key · Please run /login",
+          costUsd: null,
+          tokens: null,
+          isError: true,
+        }),
+      }),
+      onFailure: (r: { scheduleName: string }) => failures.push(r.scheduleName),
+    }),
+  );
+  await waitFor(() => failures.length === 1);
+  const list = await runs.readRuns({ scheduleId: "oneoff" });
+  assert.equal(list[0].status, "failed");
+  assert.equal(list[0].exitCode, 0);
+  assert.equal(list[0].error, "Invalid API key · Please run /login");
+});
+
+test("a clean exit with no envelope to read (isError null) still succeeds", async () => {
+  const { scheduler, runs } = await load();
+  await scheduler.fireOneOff(
+    { name: "quiet", prompt: "p", cwd: home },
+    deps({
+      spawn: () => ({
+        pid: 1,
+        done: Promise.resolve({
+          code: 0,
+          result: null,
+          error: null,
+          costUsd: null,
+          tokens: null,
+          isError: null,
+        }),
+      }),
+    }),
+  );
+  await waitFor(
+    async () => (await runs.readRuns({ scheduleId: "oneoff" }))[0]?.status !== "running",
+  );
+  assert.equal((await runs.readRuns({ scheduleId: "oneoff" }))[0].status, "succeeded");
+});
+
+test("runSucceeded / runError: exit code is a precondition, the envelope is the verdict", () => {
+  const { runSucceeded, runError } = schedulerModule;
+  assert.equal(runSucceeded({ code: 0, isError: null }), true);
+  assert.equal(runSucceeded({ code: 0, isError: false }), true);
+  assert.equal(runSucceeded({ code: 0, isError: true }), false);
+  assert.equal(runSucceeded({ code: 0 }), true);
+  assert.equal(runSucceeded({ code: 1, isError: false }), false);
+  assert.equal(runSucceeded({ code: null, isError: null }), false);
+  // A non-zero exit names the exit code even when the envelope also errored.
+  assert.equal(runError(1, true, "boom"), "exit code 1");
+  assert.equal(runError(null, null, null), "exit code null");
+  // Exit 0 + is_error names the CLI's own message, or a fallback if it had none.
+  assert.equal(runError(0, true, "  Invalid API key  "), "Invalid API key");
+  assert.equal(runError(0, true, ""), "agent reported an error");
+  assert.equal(runError(0, true, null), "agent reported an error");
+  assert.equal(runError(0, false, "fine"), null);
+  assert.equal(runError(0, null, null), null);
 });
 
 test("tick skips a due schedule while the budget hard stop is engaged", async () => {
