@@ -136,6 +136,16 @@ export type {
   AutopsySpan,
   AutopsyStatus,
   FailureClass,
+  // Tuning
+  PhaseTuning,
+  PhaseTuningStatus,
+  TuningField,
+  TuningInheritedFrom,
+  TuningProposal,
+  TuningReport,
+  TuningResponse,
+  TuningScope,
+  TuningStatus,
   // Watchtower
   Anomaly,
   AnomalyDirection,

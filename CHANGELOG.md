@@ -57,6 +57,21 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Analyze — a settings review for a pipeline, one agent per phase.** Whether
+  a step's model, reasoning effort, timeout and turn cap fit the work its prompt
+  describes was something an author judged once, when writing the pipeline, and
+  rarely revisited. **Analyze** on a pipeline card now asks one bounded pass
+  per phase exactly that, and opens a drawer of proposals — each with the
+  current value, the proposed one, where the current value is inherited from
+  and the words in the prompt that led there — for the author to tick and
+  apply. Two things it will not do. It never touches a prompt: the response
+  schema has no field for one, the parser drops any field outside the four
+  tunable ones, and the client rebuilds each step by whitelisted assignment.
+  And it never forces a change: a phase whose settings already fit comes back
+  "No changes recommended", a proposal equal to the current value is dropped,
+  and nothing is saved until a ticked proposal is applied through the same
+  admin-gated update — with the same running-instances confirm — as a hand
+  edit. `GET`/`POST /api/pipelines/:id/tune`; reports in `argus/tuning.json`.
 - **`argus tail` — a terminal frontend, for the window that isn't a browser.**
   When the machine running Argus is one you only reach through a terminal — an
   SSH session, or a Claude Code session driven from your phone through Remote

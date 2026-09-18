@@ -461,3 +461,56 @@ describe("Pipelines admin gate", () => {
     expect(screen.getByRole("button", { name: /^stop$/i })).toBeTruthy();
   });
 });
+
+describe("Pipelines tab — Analyze", () => {
+  it("shows an Analyze button for an admin and opens the tuning drawer for that pipeline", async () => {
+    const user = userEvent.setup();
+    const base = routedFetch([{ definition: p1, latest: null }]);
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/api/pipelines/p1/tune")) {
+        return Promise.resolve(
+          init?.method === "POST"
+            ? ({
+                ok: true,
+                status: 202,
+                json: async () => ({ report: null, unavailable: null }),
+              } as Response)
+            : okJson({ report: null, unavailable: null }),
+        );
+      }
+      return base(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Pipelines />);
+    await waitFor(() => expect(screen.getByRole("button", { name: /^analyze$/i })).toBeTruthy());
+    await user.click(screen.getByRole("button", { name: /^analyze$/i }));
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: /analyze · nightly/i })).toBeTruthy(),
+    );
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url).includes("/api/pipelines/p1/tune") &&
+            (init as RequestInit | undefined)?.method === "POST",
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it("hides Analyze when signed out", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch([{ definition: p1, latest: null }], [p1], {
+        configured: true,
+        authenticated: false,
+        username: null,
+        role: null,
+      }),
+    );
+    render(<Pipelines />);
+    await waitFor(() => expect(screen.getByText("Nightly")).toBeTruthy());
+    expect(screen.queryByRole("button", { name: /^analyze$/i })).toBeNull();
+  });
+});

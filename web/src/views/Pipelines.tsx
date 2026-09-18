@@ -22,6 +22,8 @@ import {
 } from "../ds";
 import { PipelineForm, EMPTY_PIPELINE } from "./PipelineForm";
 import { AdminAuthPanel } from "./AdminAuthPanel";
+import { TuningDrawer } from "./TuningDrawer";
+import { toInput } from "./tuningApply";
 
 /** What the board already knows about this pipeline's latest run. */
 interface PipelineLive {
@@ -40,19 +42,6 @@ function editWhileRunningPrompt(name: string, count: number): string {
     `${which} running under "${name}". ${they} the definition it started with, ` +
     "so this edit only applies to the next start. Save anyway?"
   );
-}
-
-function toInput(def: PipelineDefinition): PipelineInput {
-  return {
-    name: def.name,
-    phases: def.phases,
-    trigger: def.trigger,
-    enabled: def.enabled,
-    overlapPolicy: def.overlapPolicy,
-    ...(def.model ? { model: def.model } : {}),
-    ...(def.reasoningEffort ? { reasoningEffort: def.reasoningEffort } : {}),
-    ...(def.runtime ? { runtime: def.runtime } : {}),
-  };
 }
 
 const DOT: Record<DsStatus, string> = {
@@ -103,6 +92,7 @@ function PipelineCard({
   live,
   admin,
   onEdit,
+  onAnalyze,
   setEnabled,
   remove,
   runNow,
@@ -113,6 +103,7 @@ function PipelineCard({
   /** Edit/run controls only render for an authenticated admin. */
   admin: boolean;
   onEdit: () => void;
+  onAnalyze: () => void;
   setEnabled: (id: string, enabled: boolean) => Promise<unknown>;
   remove: (id: string) => Promise<unknown>;
   runNow: (id: string) => Promise<unknown>;
@@ -231,6 +222,14 @@ function PipelineCard({
               Run now
             </button>
           )}
+          <button
+            type="button"
+            onClick={onAnalyze}
+            title="Ask one agent per phase whether this pipeline's model and effort settings fit its steps. Prompts are never changed; nothing is saved until you apply a proposal."
+            className="rounded-lg border border-line px-2.5 py-1 text-xs text-ink-dim hover:text-ink"
+          >
+            Analyze
+          </button>
           {abortable && (
             <button
               type="button"
@@ -294,11 +293,24 @@ export default function Pipelines() {
     return m;
   }, [overview]);
   const [mode, setMode] = useState<
-    { kind: "none" } | { kind: "new" } | { kind: "edit"; id: string }
+    { kind: "none" } | { kind: "new" } | { kind: "edit"; id: string } | { kind: "tune"; id: string }
   >({ kind: "none" });
   const [actionError, setActionError] = useState<string | null>(null);
 
   const editing = mode.kind === "edit" ? pipelines.find((p) => p.id === mode.id) : undefined;
+  const tuning = mode.kind === "tune" ? pipelines.find((p) => p.id === mode.id) : undefined;
+
+  /** Save a definition the way the edit form does: refuse-then-confirm when
+   *  instances are running under the current one. */
+  const saveDefinition = async (def: PipelineDefinition, input: PipelineInput) => {
+    try {
+      await update(def.id, input);
+    } catch (e) {
+      if (!(e instanceof InstancesRunningError)) throw e;
+      if (!confirm(editWhileRunningPrompt(def.name, e.instances.length))) return;
+      await update(def.id, input, { force: true });
+    }
+  };
 
   const guarded = (fn: (id: string) => Promise<unknown>) => async (id: string) => {
     setActionError(null);
@@ -398,6 +410,15 @@ export default function Pipelines() {
         </div>
       )}
 
+      {mode.kind === "tune" && tuning && (
+        <TuningDrawer
+          key={tuning.id}
+          def={tuning}
+          onClose={() => setMode({ kind: "none" })}
+          onApply={(input) => saveDefinition(tuning, input)}
+        />
+      )}
+
       <Handoff busy={loading} label="pipelines" skeleton={<SkeletonRows count={3} />}>
         {pipelines.length === 0 && mode.kind === "none" ? (
           <EmptyState>
@@ -420,6 +441,7 @@ export default function Pipelines() {
                 live={liveByPipeline.get(p.id) ?? { badge: "idle", activeIds: [], latest: null }}
                 admin={isAdmin}
                 onEdit={() => setMode({ kind: "edit", id: p.id })}
+                onAnalyze={() => setMode({ kind: "tune", id: p.id })}
                 setEnabled={guarded((id) => setEnabled(id, !p.enabled))}
                 remove={guarded(remove)}
                 runNow={guarded(runNow)}

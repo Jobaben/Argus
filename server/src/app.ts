@@ -24,6 +24,13 @@ import {
 } from "./sources/autopsy.js";
 import { analysisEnabled, createAnalysisRunner, type AnalysisRunner } from "./sources/analysis.js";
 import {
+  isTuningInFlight,
+  performPipelineTuning,
+  readTuningReport,
+  seedTuningReport,
+  writeTuningReport,
+} from "./sources/tuning.js";
+import {
   buildVerdictTrends,
   failingVerdicts,
   performVerdict,
@@ -460,6 +467,8 @@ export function createApp(deps: AppDeps): Hono {
   // token, verified by the engine.
   // Producing a postmortem spawns an agent; relaunching spawns a real run.
   app.on(["POST"], "/api/runs/:id/autopsy", admin);
+  // Tuning a pipeline's settings spawns one agent pass per phase.
+  app.on(["POST"], "/api/pipelines/:id/tune", admin);
   app.on(["POST"], "/api/runs/:id/verdict", admin);
   // Incident actions mutate shared operator state; diagnosing spawns an agent.
   app.use("/api/sentinel/policy", admin);
@@ -1236,6 +1245,44 @@ export function createApp(deps: AppDeps): Hono {
     c.json({ instances: await readInstances({ pipelineId: c.req.param("id") }) }),
   );
 
+  // ── Tuning ────────────────────────────────────────────────────────────────
+  // Reading a report is open; producing one spawns an agent per phase, so the
+  // POST sits behind the admin gate. Nothing here writes to the definition: a
+  // proposal is applied by the client through the ordinary pipeline update,
+  // with its validators and its running-instances refusal.
+
+  app.get("/api/pipelines/:id/tune", async (c) => {
+    const id = c.req.param("id");
+    const def = (await readPipelines()).find((d) => d.id === id);
+    if (!def) return c.json({ error: "not found" }, 404);
+    const report = await readTuningReport(def.id);
+    return c.json({
+      report,
+      unavailable: analysisEnabled() ? null : "tuning passes are disabled (ARGUS_ANALYSIS=off)",
+    });
+  });
+
+  app.post("/api/pipelines/:id/tune", async (c) => {
+    const id = c.req.param("id");
+    const def = (await readPipelines()).find((d) => d.id === id);
+    if (!def) return c.json({ error: "not found" }, 404);
+    const now = new Date();
+    if (isTuningInFlight(await readTuningReport(def.id), now)) {
+      return c.json({ error: "a tuning pass is already running for this pipeline" }, 409);
+    }
+    const seed = await writeTuningReport(seedTuningReport(def, randomUUID(), now));
+    broadcast({ type: "tuning:changed" });
+    // Not awaited: one pass per phase at up to 90s each would hold the request
+    // open for minutes. The report is persisted after every phase and the
+    // client re-fetches on each ping.
+    void performPipelineTuning(def, seed, {
+      runner: analysis,
+      now: () => new Date(),
+      onProgress: async () => broadcast({ type: "tuning:changed" }),
+    }).catch((err) => log.error("tuning pass failed", { pipelineId: def.id, err }));
+    return c.json({ report: seed, unavailable: null }, 202);
+  });
+
   app.get("/api/overview", async (c) => {
     const [defs, insts, runs] = await Promise.all([readPipelines(), readInstances(), readRuns()]);
     return c.json({ overview: buildOverview(defs, insts, runs, deps.activity?.()) });
@@ -1344,8 +1391,7 @@ export function createApp(deps: AppDeps): Hono {
   app.get("/api/instances/:id/phases/:phaseId/review", async (c) => {
     const inst = await readInstance(c.req.param("id"));
     if (!inst) return c.json({ error: "not found" }, 404);
-    const def =
-      inst.definition ?? (await readPipelines()).find((d) => d.id === inst.pipelineId);
+    const def = inst.definition ?? (await readPipelines()).find((d) => d.id === inst.pipelineId);
     const res = await buildPhaseReview(inst, c.req.param("phaseId"), def);
     return res.ok ? c.json(res.review) : c.json({ error: res.error }, res.code);
   });

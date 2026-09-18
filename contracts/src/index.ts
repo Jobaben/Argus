@@ -205,6 +205,18 @@ export type {
 } from "./autopsy.js";
 
 export type {
+  PhaseTuning,
+  PhaseTuningStatus,
+  TuningField,
+  TuningInheritedFrom,
+  TuningProposal,
+  TuningReport,
+  TuningResponse,
+  TuningScope,
+  TuningStatus,
+} from "./tuning.js";
+
+export type {
   Anomaly,
   AnomalyDirection,
   AnomalyEvent,

@@ -307,6 +307,7 @@ while an unrecognised frame _type_ is still forwarded for forward compatibility.
 | Flight Recorder   | run record + `projects/<proj>/<id>.jsonl`       | derived per read; never persisted (see below)                                        |
 | Watchtower        | runs + `argus/watchtower.json`                  | envelopes derived per read; only reset markers persist                               |
 | Autopsy           | `argus/autopsies.json`                          | bounded `claude -p` verdicts, capped at 200, keyed by run id                         |
+| Tuning            | `argus/tuning.json`                             | per-phase settings proposals, one report per Analyze press, capped at 50             |
 | Verdict           | `argus/verdicts.json` + rubrics on defs         | rubric scores keyed by run id, capped at 400; trends derived per read                |
 | Sentinel          | `argus/incidents.json`, `argus/sentinel.json`   | persisted incidents (so a restart resumes mid-incident) + escalation policy          |
 | Ledger            | runs + `argus/spend.json` + `argus/budget.json` | attribution, forecast and enforcement all derived per read; only the ladder persists |
