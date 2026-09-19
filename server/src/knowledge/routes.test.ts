@@ -678,3 +678,74 @@ test("the persisted document is the source of truth the API reads", async () => 
   assert.equal(r.status, 200);
   assert.equal(r.body.support, "supported");
 });
+
+// ── KnowledgeDeltas (Phase 3): inspection only ──────────────────────────────
+
+test("delta inspection: 404 for unknown ids and empty lists for runs that staged nothing", async () => {
+  const app = makeApp();
+  assert.equal((await get(app, "/api/knowledge/deltas/KD-nope")).status, 404);
+  assert.equal((await get(app, "/api/knowledge/deltas/KD-nope/result")).status, 404);
+  assert.equal((await get(app, "/api/knowledge/deltas/..%2Fx")).status, 404);
+  const r = await get(app, "/api/knowledge/executions/run-none/deltas");
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body, { runId: "run-none", deltas: [] });
+  assert.equal((await get(app, "/api/knowledge/executions/..%2Fx/deltas")).status, 404);
+});
+
+test("delta inspection reads the staged record beside the run; the result appears once applied", async () => {
+  const staging = await import("./staging.js");
+  const app = makeApp();
+  const record = {
+    id: "KD-1",
+    runId: "run-7",
+    instanceId: "inst-1",
+    phaseId: "plan",
+    attempt: 0,
+    step: "s",
+    status: "staged" as const,
+    receivedAt: "2026-09-19T10:00:00.000Z",
+    updatedAt: "2026-09-19T10:00:00.000Z",
+    delta: {
+      schemaVersion: 1 as const,
+      claims: [{ localId: "c", kind: "conclusion" as const, statement: "c" }],
+    },
+  };
+  await staging.writeDeltaRecord(record);
+  assert.deepEqual((await get(app, "/api/knowledge/deltas/KD-1")).body, record);
+  assert.deepEqual((await get(app, "/api/knowledge/executions/run-7/deltas")).body, {
+    runId: "run-7",
+    deltas: [record],
+  });
+  assert.equal((await get(app, "/api/knowledge/deltas/KD-1/result")).status, 404);
+
+  const result = {
+    status: "applied" as const,
+    deltaId: "KD-1",
+    appliedAt: "2026-09-19T10:01:00.000Z",
+    createdClaims: [{ localId: "c", claim: { id: "CONCLUSION-1", revision: 1 } }],
+    createdRevisions: [],
+    evidenceIds: [],
+    justificationIds: [],
+    consumptions: [],
+    artifacts: [],
+  };
+  await staging.updateDeltaStatus("run-7", "applied", { at: "2026-09-19T10:01:00.000Z", result });
+  assert.deepEqual((await get(app, "/api/knowledge/deltas/KD-1/result")).body, result);
+  assert.equal((await get(app, "/api/knowledge/deltas/KD-1")).body.status, "applied");
+
+  // An applied record is never demoted by a later sweep.
+  const after = await staging.updateDeltaStatus("run-7", "superseded", {
+    at: "later",
+    reason: "x",
+  });
+  assert.equal(after?.status, "applied");
+  assert.equal(await staging.updateDeltaStatus("run-none", "superseded", { at: "later" }), null);
+
+  // There is no write surface: the agent boundary is the file, not the API.
+  const res = await app.request("/api/knowledge/deltas", {
+    method: "POST",
+    headers: sameOrigin,
+    body: "{}",
+  });
+  assert.equal(res.status, 404);
+});

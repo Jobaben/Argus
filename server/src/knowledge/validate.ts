@@ -85,20 +85,20 @@ function fail(msg: string): never {
   throw new KnowledgeValidationError(msg);
 }
 
-function record(raw: unknown, ctx: string): Record<string, unknown> {
+export function record(raw: unknown, ctx: string): Record<string, unknown> {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     fail(`${ctx} must be an object`);
   }
   return raw as Record<string, unknown>;
 }
 
-function text(raw: unknown, ctx: string, max: number): string {
+export function text(raw: unknown, ctx: string, max: number): string {
   if (typeof raw !== "string" || !raw.trim()) fail(`${ctx} must be a non-empty string`);
   if (raw.length > max) fail(`${ctx} exceeds ${max} characters`);
   return raw.trim();
 }
 
-function optionalText(raw: unknown, ctx: string, max: number): string | undefined {
+export function optionalText(raw: unknown, ctx: string, max: number): string | undefined {
   if (raw === undefined || raw === null) return undefined;
   return text(raw, ctx, max);
 }
@@ -113,7 +113,7 @@ function optionalIdentifier(raw: unknown, ctx: string): string | undefined {
   return identifier(raw, ctx);
 }
 
-function structuredValue(raw: unknown): unknown {
+export function structuredValue(raw: unknown): unknown {
   if (raw === undefined || raw === null) return undefined;
   let bytes: number;
   try {
@@ -140,7 +140,7 @@ function executionRef(raw: unknown): ExecutionRef | undefined {
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-function direction(raw: unknown, ctx: string): "supports" | "opposes" {
+export function direction(raw: unknown, ctx: string): "supports" | "opposes" {
   if (raw === undefined || raw === null) return "supports";
   if (raw !== "supports" && raw !== "opposes") fail(`${ctx} must be "supports" | "opposes"`);
   return raw;
@@ -169,7 +169,7 @@ export function claimKey(raw: unknown, ctx: string): ClaimKey {
   return { id: r.id, revision: r.revision };
 }
 
-function evidenceSource(raw: unknown): EvidenceSource {
+export function evidenceSource(raw: unknown): EvidenceSource {
   const r = record(raw, "source");
   const ctx = "source";
   switch (r.type) {
@@ -304,7 +304,7 @@ export function validateConsumptions(raw: unknown): ProposedConsumptions {
   return { claims: r.claims.map((c, i) => claimKey(c, `claims[${i}]`)) };
 }
 
-function artifactRef(raw: unknown, ctx: string): ArtifactRef {
+export function artifactRef(raw: unknown, ctx: string): ArtifactRef {
   const r = record(raw, ctx);
   if (r.location !== "artifact-dir" && r.location !== "repository") {
     fail(`${ctx}.location must be artifact-dir | repository`);

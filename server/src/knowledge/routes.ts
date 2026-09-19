@@ -5,8 +5,10 @@ import type {
   ClaimKind,
   ClaimsResponse,
   ConsumptionsResponse,
+  KnowledgeDeltasResponse,
 } from "@argus/contracts";
 import {
+  CLAIM_ID_RE,
   CLAIM_KINDS,
   EXECUTION_ID_RE,
   KnowledgeValidationError,
@@ -23,6 +25,7 @@ import {
   type KnowledgeLedger,
 } from "./kernel.js";
 import { analyzeImpact } from "./impact.js";
+import { readDeltaRecord, readDeltaRecordById } from "./staging.js";
 import {
   createClaim,
   createEvidence,
@@ -156,6 +159,42 @@ export function knowledgeRoutes(): Hono {
     const report = executionProvenance(ledger, runId);
     if (!report) return c.json({ error: "not found" }, 404);
     return c.json(report);
+  });
+
+  // ── KnowledgeDeltas (Phase 3) ────────────────────────────────────────────
+  // Inspection only. The agent boundary is the per-run file, never this API:
+  // a delta is staged by the engine when its run completes and committed by
+  // the engine when its phase is accepted. Reads are open like every other
+  // dashboard read; there is nothing to write.
+
+  /** One staged/applied/rejected/superseded delta, with its provenance and,
+   *  once applied, what it became. */
+  routes.get("/deltas/:id", async (c) => {
+    const id = c.req.param("id");
+    if (!CLAIM_ID_RE.test(id)) return c.json({ error: "not found" }, 404);
+    const record = await readDeltaRecordById(id);
+    if (!record) return c.json({ error: "not found" }, 404);
+    return c.json(record);
+  });
+
+  /** The application result alone: local id → canonical identity, and every
+   *  record the delta created. 404 until the delta is applied. */
+  routes.get("/deltas/:id/result", async (c) => {
+    const id = c.req.param("id");
+    if (!CLAIM_ID_RE.test(id)) return c.json({ error: "not found" }, 404);
+    const record = await readDeltaRecordById(id);
+    if (!record?.result) return c.json({ error: "not found" }, 404);
+    return c.json(record.result);
+  });
+
+  /** Every delta a run emitted — at most one, by protocol — in a list so the
+   *  shape holds if a later phase lets a run stage more than one. */
+  routes.get("/executions/:runId/deltas", async (c) => {
+    const runId = c.req.param("runId");
+    if (!EXECUTION_ID_RE.test(runId)) return c.json({ error: "not found" }, 404);
+    const record = await readDeltaRecord(runId);
+    const body: KnowledgeDeltasResponse = { runId, deltas: record ? [record] : [] };
+    return c.json(body);
   });
 
   // ── Proposals (admin) ────────────────────────────────────────────────────

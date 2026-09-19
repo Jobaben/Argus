@@ -54,6 +54,10 @@ export type JournalKind =
   | "workspace.created"
   | "workspace.removed"
   | "memory.trimmed"
+  | "knowledge.staged"
+  | "knowledge.rejected"
+  | "knowledge.applied"
+  | "knowledge.superseded"
   | "instance.ended";
 
 export interface JournalEntry {

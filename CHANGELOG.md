@@ -7,6 +7,32 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **The Knowledge Ledger (Phase 3): the KnowledgeDelta protocol.** Agent
+  executions can now _propose_ semantic knowledge, and Argus alone validates
+  and commits it. Every step run is handed `ARGUS_KNOWLEDGE_DELTA_FILE`, a
+  per-run path (writable under every capability profile) where it may leave
+  one typed JSON document: new claims (by delta-local id — Argus mints the
+  canonical identity and the apply result exposes the mapping), revisions
+  guarded by an `expectedRevision` precondition, evidence, justifications, the
+  exact revisions the run declares it consumed, and the artifacts it produced.
+  References to existing knowledge must be exact revisions; a bare id, an
+  invented canonical id or an agent-asserted `producedBy` is refused. When the
+  run completes Argus reads the file itself (the Stop hook is unchanged),
+  validates it, preflights it against the ledger and **stages** it beside the
+  run; it becomes canonical only when the phase crosses every deterministic
+  acceptance condition — checks passed, gate approved — as one atomic ledger
+  transition covering every sibling step's delta of that attempt, or none. A
+  stale precondition (the ledger moved), two steps revising the same revision,
+  a cycle or an unresolved reference refuses the whole commit and fails the
+  phase under the new `knowledge-delta` failure class (retryable on opt-in,
+  with the exact refusal in the retry note). A failed, revised, aborted or
+  losing attempt's deltas are superseded and never enter the ledger.
+  `knowledge.json` is now version 3 with a `deltas` array recording which run,
+  in which attempt, introduced which records; commits are idempotent on delta
+  id, so a restart mid-commit is healed by reconcile. Inspection:
+  `GET /api/knowledge/deltas/:id`, `/deltas/:id/result`,
+  `/executions/:runId/deltas`. Consumption is agent-declared and structurally
+  verified — Argus proves the reference, not the reasoning.
 - **The Knowledge Ledger (Phase 2): execution provenance and deterministic
   impact analysis.** Phase 1 could say which run _produced_ a claim; it could
   not say which later run _relied on_ one, so it could not answer "which

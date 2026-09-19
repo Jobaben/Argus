@@ -3,6 +3,7 @@
 import type { AgentRuntimeId, ReasoningEffort } from "./runtimes.js";
 import type { Trigger } from "./schedules.js";
 import type { AutoApprove, Rubric } from "./verdict.js";
+import type { KnowledgeDeltaStatus } from "./knowledge.js";
 
 export interface PhaseStep {
   name: string;
@@ -30,7 +31,21 @@ export interface PhaseStep {
  * change its mind — while a process that never started, or died on a non-zero
  * exit, plausibly hit something transient.
  */
-export type RetryableClass = "spawn" | "exit-code" | "signal" | "timeout" | "verification";
+export type RetryableClass =
+  | "spawn"
+  | "exit-code"
+  | "signal"
+  | "timeout"
+  | "verification"
+  /**
+   * The run emitted a KnowledgeDelta Argus refused: malformed, an unresolved
+   * or inexact reference, a stale revision precondition, a cycle, or a
+   * conflict with a sibling step's delta at the phase commit. Not retried by
+   * default — the agent considered its proposal — but retryable on opt-in,
+   * because the retry note carries the exact refusal (e.g. the revision that
+   * moved) and a second attempt can propose from the current ledger.
+   */
+  | "knowledge-delta";
 
 /**
  * Every way a phase can fail. The retryable classes are the subset an author
@@ -314,6 +329,9 @@ export interface AgentInvocationRecord {
   /** The isolated worktree this invocation ran in, when the phase declared one. */
   workspace?: WorkspaceRecord | null;
   resultFile: string | null;
+  /** Where this run may leave its KnowledgeDelta (`ARGUS_KNOWLEDGE_DELTA_FILE`).
+   *  Absent on records written before the protocol existed. */
+  knowledgeDeltaFile?: string | null;
   timeoutSeconds: number | null;
   deadlineAt: string | null;
   /** `git rev-parse HEAD` in cwd at launch, when cwd is a repository. */
@@ -569,6 +587,38 @@ export interface StepProgress {
   /** The worktree this candidate ran in. Absent on an ordinary step, whose
    *  phase records the one tree they shared. */
   workspace?: WorkspaceRecord | null;
+  /**
+   * The KnowledgeDelta this step's run emitted, as Argus staged it. Held per
+   * step because each run may propose at most one delta and the phase commits
+   * every eligible one of its attempt atomically. Absent when the run wrote no
+   * delta file. Lives on the step so a new attempt (fresh steps) starts clean.
+   */
+  knowledgeDelta?: StepKnowledgeDelta;
+}
+
+/** A staged delta as the instance record sees it; the full record lives
+ *  beside the run (`GET /api/knowledge/deltas/:id`). */
+export interface StepKnowledgeDelta {
+  id: string;
+  status: KnowledgeDeltaStatus;
+}
+
+/**
+ * The commit of a phase attempt's staged KnowledgeDeltas — the last rung of
+ * the acceptance ladder. `pending` while Argus applies them (the phase stays
+ * `running`, exactly as it does under `verification.status: "running"`, and
+ * a restart re-runs the commit, which is idempotent); `applied` on a phase
+ * that succeeded with new canonical knowledge; `rejected` on one that failed
+ * under the `knowledge-delta` class because the ledger refused the commit.
+ */
+export interface PhaseKnowledgeCommit {
+  status: "pending" | "applied" | "rejected";
+  /** The delta ids this attempt commits, in step order. */
+  deltas: string[];
+  startedAt: string;
+  endedAt?: string | null;
+  /** Why the commit was refused. */
+  reason?: string;
 }
 
 export interface PhaseProgress {
@@ -606,6 +656,9 @@ export interface PhaseProgress {
   /** How every candidate ended, written once the phase settles — the losers'
    *  runs are the evidence for a selection, and they outlive their processes. */
   candidateOutcomes?: CandidateOutcome[];
+  /** The atomic commit of this attempt's staged KnowledgeDeltas, when it had
+   *  any. Absent on a phase whose runs proposed no knowledge. */
+  knowledge?: PhaseKnowledgeCommit;
 }
 
 /** What the engine writes into `PhaseProgress.payload` when a phase fails.

@@ -87,6 +87,18 @@ export interface TransitionResult {
    * records the cost comparison needs, which is I/O and therefore not done here.
    */
   candidatesMoved?: string;
+  /**
+   * Phase ids whose every acceptance condition has been met — steps
+   * succeeded, result validated, checks passed, gate approved — and whose
+   * staged KnowledgeDeltas Argus must now commit before the phase may
+   * succeed. The phase stays `running` with `knowledge.status: "pending"`
+   * until the engine reports through {@link applyKnowledgeCommit}; nothing
+   * downstream is ready yet.
+   */
+  commitKnowledge?: string[];
+  /** Set by {@link applyKnowledgeCommit} when the verdict was taken; absent
+   *  when it was refused as stale. */
+  knowledgeApplied?: boolean;
   /** Set by {@link advance} when the signal matched nothing it may drive and
    *  the instance was returned untouched. */
   ignored?: "unknown-phase" | "phase-not-running" | "unknown-run";
@@ -508,7 +520,8 @@ export function advance(
   return concludePhase(def, inst, phase, nowISO);
 }
 
-/** Every step is in and every check has passed: pause at the gate or succeed. */
+/** Every step is in and every check has passed: pause at the gate, or
+ *  succeed — through the knowledge commit when the attempt staged any. */
 function concludePhase(
   def: PipelineDefinition,
   inst: PipelineInstance,
@@ -519,9 +532,94 @@ function concludePhase(
     phase.status = "awaiting-approval";
     return settle(def, inst, nowISO);
   }
+  return succeedPhase(def, inst, phase, nowISO);
+}
+
+/**
+ * The KnowledgeDeltas this attempt would commit: one per step whose run
+ * staged one and whose step *succeeded*. A losing candidate's step is
+ * `aborted` and its delta is not eligible, however valid it was.
+ */
+export function stagedDeltaIds(phase: PhaseProgress): string[] {
+  return phase.steps.flatMap((s) =>
+    s.status === "succeeded" && s.knowledgeDelta?.status === "staged" ? [s.knowledgeDelta.id] : [],
+  );
+}
+
+/**
+ * The last rung of the acceptance ladder. A phase whose attempt staged no
+ * KnowledgeDelta succeeds here exactly as it always did. One that did stays
+ * `running` under `knowledge.status: "pending"` — the same shape as a phase
+ * under `verification.status: "running"` — and hands the engine the phase id:
+ * the commit is I/O against `knowledge.json`, which a pure transition cannot
+ * do, and the phase must not read as succeeded until it has happened. The
+ * held phase is persisted in that state, so a restart between the ledger
+ * write and the instance write is healed by committing again (idempotent).
+ */
+function succeedPhase(
+  def: PipelineDefinition,
+  inst: PipelineInstance,
+  phase: PhaseProgress,
+  nowISO: string,
+): TransitionResult {
+  const deltas = stagedDeltaIds(phase);
+  if (deltas.length > 0) {
+    phase.status = "running";
+    phase.knowledge = { status: "pending", deltas, startedAt: nowISO };
+    return { ...settle(def, inst, nowISO), commitKnowledge: [phase.id] };
+  }
   phase.status = "succeeded";
   publishArtifact(def, inst, phase.id);
   return settle(def, inst, nowISO);
+}
+
+/** What the engine learned from committing a phase's staged deltas. */
+export type KnowledgeCommitVerdict = { ok: true } | { ok: false; reason: string };
+
+/**
+ * Record the outcome of committing a phase attempt's staged KnowledgeDeltas.
+ *
+ * Only a phase still `running` under a `pending` commit takes the verdict: an
+ * abort or a revise in the window has already decided otherwise. A committed
+ * ledger concludes the phase as `succeeded` exactly as a delta-less phase
+ * would have; a refused commit — the ledger moved under a precondition, two
+ * steps' proposals conflicted — fails the phase under the `knowledge-delta`
+ * class with the ledger's own reason, so the retry note or the person
+ * revising sees precisely what was refused.
+ */
+export function applyKnowledgeCommit(
+  def: PipelineDefinition,
+  inst: PipelineInstance,
+  phaseId: string,
+  verdict: KnowledgeCommitVerdict,
+  nowISO: string,
+): TransitionResult {
+  const phase = inst.phases.find((p) => p.id === phaseId);
+  if (!phase || phase.status !== "running" || phase.knowledge?.status !== "pending") {
+    return { instance: inst, startPhases: [] };
+  }
+  const held = phase.knowledge;
+  if (verdict.ok) {
+    phase.knowledge = { ...held, status: "applied", endedAt: nowISO };
+    for (const s of phase.steps) {
+      if (s.knowledgeDelta && held.deltas.includes(s.knowledgeDelta.id)) {
+        s.knowledgeDelta = { ...s.knowledgeDelta, status: "applied" };
+      }
+    }
+    phase.status = "succeeded";
+    publishArtifact(def, inst, phase.id);
+    return { ...settle(def, inst, nowISO), knowledgeApplied: true };
+  }
+  phase.knowledge = { ...held, status: "rejected", endedAt: nowISO, reason: verdict.reason };
+  for (const s of phase.steps) {
+    if (s.knowledgeDelta && held.deltas.includes(s.knowledgeDelta.id)) {
+      s.knowledgeDelta = { ...s.knowledgeDelta, status: "rejected" };
+    }
+  }
+  phase.status = "failed";
+  phase.payload = withFailureClass(withReason(phase.payload, verdict.reason), "knowledge-delta");
+  failLeftoverSteps(phase);
+  return { ...settle(def, inst, nowISO), knowledgeApplied: true };
 }
 
 /** One line naming what failed, for the phase's failure reason. */
@@ -932,9 +1030,9 @@ export function applyApprove(
     throw new Error("instance is not awaiting approval");
   }
   if (answers !== undefined) phase.payload = answers;
-  phase.status = "succeeded";
-  publishArtifact(def, inst, phase.id);
-  return settle(def, inst, nowISO);
+  // Approval is the gate's acceptance condition; the staged knowledge commits
+  // only now, never when the agent finished or the checks passed.
+  return succeedPhase(def, inst, phase, nowISO);
 }
 
 export function applyRevise(
@@ -970,6 +1068,9 @@ function restartPhase(phase: PhaseProgress): void {
   // A fresh attempt is verified afresh; the previous report stays in the
   // journal, and in the payload's reason, not on the live phase.
   delete phase.verification;
+  // And its knowledge is proposed afresh: the previous attempt's staged deltas
+  // (on the steps just replaced) are superseded, never committed.
+  delete phase.knowledge;
   // So is a fresh attempt selected afresh. The previous attempt's outcomes are
   // evidence about a run that no longer exists.
   delete phase.selectedCandidate;

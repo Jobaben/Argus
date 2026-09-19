@@ -8,6 +8,7 @@ const FAILURE_LABEL: Record<PhaseFailureClass, string> = {
   signal: "signalled failure",
   timeout: "timeout",
   verification: "verification",
+  "knowledge-delta": "knowledge delta",
   configuration: "configuration",
 };
 
