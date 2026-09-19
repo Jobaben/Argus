@@ -135,7 +135,7 @@ function tomlStringArray(values: string[]): string {
  */
 function buildCodexCapabilities(cap: CapabilityRequest | undefined): CodexCapabilityResult {
   if (!cap) return { sandbox: null, capArgs: [], limitations: [] };
-  const { profile, artifactDir } = cap;
+  const { profile, artifactDir, memoryDir } = cap;
   const limitations = unsupportedCapabilities(profile, "Codex", [...CODEX_SUPPORTED_CAPABILITIES]);
   const capArgs: string[] = [];
 
@@ -148,11 +148,15 @@ function buildCodexCapabilities(cap: CapabilityRequest | undefined): CodexCapabi
 
   const writableRoots = [...(profile.additionalDirectories ?? [])];
   if (artifactDir && effectiveSandbox === "workspace-write") writableRoots.push(artifactDir);
+  if (memoryDir && effectiveSandbox === "workspace-write") writableRoots.push(memoryDir);
   if (writableRoots.length) {
     capArgs.push("-c", `sandbox_workspace_write.writable_roots=${tomlStringArray(writableRoots)}`);
   }
   if (artifactDir && effectiveSandbox === "read-only") {
     limitations.push("read-only sandbox prevents writing artifacts");
+  }
+  if (memoryDir && effectiveSandbox === "read-only") {
+    limitations.push("read-only sandbox prevents writing memory notes");
   }
 
   if (profile.mcpServers !== undefined) {

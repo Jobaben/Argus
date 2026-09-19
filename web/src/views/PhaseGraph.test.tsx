@@ -18,6 +18,10 @@ function step(status: StepPill["status"]): StepPill {
     currentActivity: null,
     startedAt: null,
     durationMs: null,
+    candidate: null,
+    verified: null,
+    selected: false,
+    superseded: false,
   };
 }
 
@@ -268,5 +272,45 @@ describe("PhaseGraph", () => {
     const { layout, tileWidth } = renderHook(() => useLaneLayout(tall, 1200)).result.current;
     expect(layout.height).toBeGreaterThan(MAX_TILE_HEIGHT_PX);
     expect(tileWidth).toBe(layout.width + TILE_BORDER_PX * 2 + SCROLLBAR_PX);
+  });
+});
+
+describe("PhaseGraph: candidates", () => {
+  it("summarises best-of-N in place of the step dots, and names the winner", () => {
+    render(
+      <Graph
+        phases={[
+          pill("impl", "working", {
+            steps: [step("working"), step("working"), step("working")],
+            candidates: { total: 3, verified: 2, selected: 1 },
+          }),
+        ]}
+      />,
+    );
+    expect(screen.getByTestId("candidate-summary").textContent).toBe("2/3 verified · c2 selected");
+  });
+
+  it("says only how many verified while the selection is still open", () => {
+    render(
+      <Graph
+        phases={[
+          pill("impl", "working", {
+            steps: [step("working"), step("working")],
+            candidates: { total: 2, verified: 0, selected: null },
+          }),
+        ]}
+      />,
+    );
+    expect(screen.getByTestId("candidate-summary").textContent).toBe("0/2 verified");
+    // The dots are gone: three tiles of one step would say nothing.
+    const node = screen.getByRole("button", { name: /impl/ });
+    expect(node.getAttribute("title")).toContain("0/2 verified");
+  });
+
+  it("leaves an ordinary phase's step dots alone", () => {
+    render(
+      <Graph phases={[pill("build", "working", { steps: [step("done"), step("working")] })]} />,
+    );
+    expect(screen.queryByTestId("candidate-summary")).toBeNull();
   });
 });

@@ -110,6 +110,107 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Context discipline: bounded placeholders, pipeline memory, richer retry
+  feedback and stall detection.** Five loops the harness research pointed at
+  directly (docs/HARNESS-RESEARCH.md §2 #4–#7, §4):
+  - **Every interpolated placeholder value is capped**, by default 16 KiB
+    (`PipelineDefinition.contextLimits.placeholderBytes`, 1 KiB–256 KiB). Over
+    the cap, Argus keeps the head (2/3) and tail (1/3) with a one-line marker
+    naming where the full value was written under the run's invocation
+    directory (`context/<placeholder>.txt`), UTF-8 safe. Two new
+    placeholders: `{{trigger.payload}}` (the instance's firing payload) and
+    `{{previous.instance}}` (a one-paragraph summary of the pipeline's last
+    settled instance — status, when it ended, which phase failed and why,
+    which candidate won). Argus's own injected prompt blocks (result,
+    artifact, memory, retry-note instructions) now always ride _after_ the
+    agent's own prompt, in a fixed order, with the retry note last —
+    recency is what a model weighs most ("lost in the middle").
+  - **Pipeline memory** (`PipelineDefinition.memory: { enabled, maxBytes? }`,
+    off by default): durable notes at `~/.claude/argus/memory/<pipelineId>/NOTES.md`,
+    read via `{{memory}}` (tail-capped to `maxBytes`, default 8 KiB) and
+    writable by the agent through `$ARGUS_MEMORY_DIR` (added to Claude Code's
+    `--add-dir` / Codex's `writable_roots` the same way the artifact
+    directory is). Trimmed back to its cap on a line boundary after each
+    instance settles (`memory.trimmed` journal entry); never created until
+    enabled, never deleted by Argus.
+  - **Every retryable failure class now hands the next attempt something to
+    repair against**, not just `verification`/`signal`: `verification` names
+    each failed check with the tail of its own output, `exit-code` carries the
+    exit code plus a tail of the run's own error/result text, and
+    `timeout`/`spawn`/`signal` carry their existing one-line reason — each
+    bounded, the whole note capped at ~2 KiB, and headed
+    `Previous attempt (n of m) failed — <class>:`.
+  - **Stall detection**: `PhaseDef.stallSeconds` / `PhaseStep.stallSeconds`
+    (minimum 30, absent = off) kills a step whose transcript has gone quiet
+    for that long even though its process is still alive — a hard timeout
+    sized for the worst case never notices a stuck-but-alive run. Reuses the
+    existing reconcile tick rather than a second timer system; classed as
+    `timeout` for the retry policy, with its own `termination: "stalled"` and
+    `step.stalled` journal entry so it reads distinctly from a hard timeout.
+  - **`WorkspacePolicy.scope` gains `"none"`**, so one phase can opt out of a
+    pipeline-wide isolation policy and run in its own `cwd`.
+  - See docs/HARNESS.md §13.
+
+- **Candidates — a phase can run N drafts of its step and let its checks pick
+  one.** A phase ran its step once; a bad draw was found at the checks and cost
+  a sequential retry at the same price. A phase can now declare
+  `candidates: { count, select, variants? }` and Argus launches `count` runs of
+  its single step at once, each in a git worktree, artifact directory and
+  `changed-files` baseline of its own, each verified by the phase's own
+  `checks` inside its own tree. `select: "first-verified"` takes the first
+  draft whose checks pass and kills the rest (recorded as **superseded**, not
+  failed); `"cheapest-verified"` lets them all finish and buys the cheapest
+  verified one, tie-broken by duration. The winner's payload, result,
+  verification report and worktree become the phase's — so
+  `{{previous.payload}}`, `produces` and routing see one draft, never a
+  mixture — and a gated phase opens its gate on the winner. `variants` gives
+  each candidate its own runtime, model or reasoning effort, cycled when
+  shorter than `count`, so the same step can be drafted on Claude Code **and**
+  Codex and the checks decide which lands. A candidate that dies before its
+  checks simply loses; the phase fails only when none can still win, once, with
+  every draft's fate in the reason and the retry policy applied as usual.
+  Requires exactly one step and an effective `workspace.scope: "attempt"`, both
+  refused at save time with the reason. Candidate runs are ordinary runs: they
+  cost what they cost, take a concurrency slot each, and queue past the global
+  cap. The board badges each draft `c1`/`c2`…, marks the winner selected, and
+  summarises the phase as `2/3 verified · c2 selected`. Evidence:
+  Trae Agent 70.6 → 75.2% from its ensemble alone, AutoCodeRover +7 points from
+  three samples — and, crucially, sampling without a verifier plateaus. See
+  [docs/HARNESS.md § 12](docs/HARNESS.md).
+- **Webhook and after-pipeline triggers.** A schedule or pipeline's trigger
+  can now be `{ "kind": "webhook" }` — fired by
+  `POST /api/hooks/{pipelines,schedules}/:id`, authenticated with a per-definition
+  `hookToken` (minted on first save, shown with a copy button and a **Rotate**
+  action in the trigger editor, never `ARGUS_TOKEN`) — or
+  `{ "kind": "after", "pipelineId", "on": "succeeded" | "failed" | "any" }`,
+  which chains a pipeline or schedule to fire once a chosen **pipeline**'s
+  instance ends. Chaining runs on the ordinary scheduler tick and is
+  restart-safe: a small ledger (`~/.claude/argus/chains.json`) fires each
+  source instance into each matching target at most once. A pipeline instance
+  or schedule run fired this way carries `trigger: "webhook"` or `"chained"`
+  (plus `triggerPayload`/`chainedFrom` on the instance) instead of
+  `"manual"`/`"scheduled"`, shown as a badge wherever those already were. A
+  self-chain and a direct two-pipeline cycle are refused at save time. See
+  [docs/API.md § Webhook and chained triggers](docs/API.md).
+- **Workspace isolation — a phase can run in a git worktree of its own.** Every
+  phase of a pipeline used to edit the same checkout, so two branches of a
+  fan-out overwrote each other and a failed attempt left its half-done edits
+  for the next one. A pipeline or a phase can now declare
+  `workspace: { scope: "instance" | "attempt", base?, keep? }`: Argus creates a
+  worktree under `~/.claude/argus/worktrees/<instanceId>/` on a branch named
+  `argus/<instanceId>/shared` (one per instance, shared by every phase that
+  opts in) or `argus/<instanceId>/<phaseId>/<attempt>` (one per attempt), and
+  the phase's steps — their `cwd`, their transcripts' project, their
+  `changed-files` baseline and the phase's `checks` — all run there instead of
+  in the phase's own `cwd`. `ARGUS_WORKSPACE` names it to the agent. The
+  branch is the deliverable: the directory is removed when the instance
+  settles (or is pruned) unless `keep: true`, and whatever was left
+  uncommitted goes with it. A worktree Argus cannot create — not a repository,
+  an unresolvable `base`, no git — fails the phase under `configuration` with
+  git's own words, and is never retried. Restart-safe: a tree that is already
+  there is reused, and a branch whose tree was removed is checked out again
+  with its commits. Not a security boundary — Codex's sandbox remains the only
+  OS-level one. See [docs/HARNESS.md § 11](docs/HARNESS.md).
 - **Analyze — a settings review for a pipeline, one agent per phase.** Whether
   a step's model, reasoning effort, timeout and turn cap fit the work its prompt
   describes was something an author judged once, when writing the pipeline, and
@@ -375,6 +476,21 @@ All notable changes to Argus are documented here. The format follows
   the `ARGUS_AGENT`, `ARGUS_CODEX_HOME`, `ARGUS_CLAUDE_BIN`, `ARGUS_CODEX_BIN`,
   `ARGUS_CODEX_SANDBOX`, `ARGUS_CLAUDE_ARGS`, `ARGUS_CODEX_ARGS`,
   `ARGUS_CODEX_MODELS` and `ARGUS_ANALYSIS_RUNTIME` environment variables.
+
+- **Reliability — first-attempt pass rate and lucky passes, per pipeline.**
+  Binary pass/fail on the board hides the run that only succeeded after a
+  retry the harness quietly absorbed (AgentLens: 0.5–23% of "passing" agent
+  trajectories are exactly this). Each pipeline card now has a
+  **Reliability ▾** disclosure covering the trailing 30 days: the share of
+  settled instances that passed with every phase on attempt 1, the share of
+  successful instances that needed a retry or a human revise to get there, a
+  day-by-day sparkline of succeeded vs. failed instances, and a per-phase
+  table of first-try / lucky / failed counts, timeout-classed stalls and the
+  dominant failure class. A rate is `null` — shown as "—" — rather than 0%
+  when nothing has settled yet, so an unproven pipeline never reads as a
+  broken one. `GET /api/pipelines/:id/reliability?days=` (1–365, default 30);
+  the derivation is pure over the instance record alone, in
+  `server/src/sources/reliability.ts`.
 
 ### Fixed
 

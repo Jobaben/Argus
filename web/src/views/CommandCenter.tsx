@@ -82,6 +82,15 @@ function useBoardAnnouncer(rows: OverviewRow[]): string {
   return seen.message;
 }
 
+/** What a candidate badge means, spelled out for the tooltip. */
+function candidateTitle(step: StepPill): string {
+  const which = `Candidate ${(step.candidate?.index ?? 0) + 1} of ${step.candidate?.total ?? 1}`;
+  if (step.selected) return `${which} — selected: its checks passed`;
+  if (step.verified === false) return `${which} — its checks failed`;
+  if (step.superseded) return `${which} — superseded by the candidate that won`;
+  return `${which} — competing drafts of the same step; the phase's checks pick one`;
+}
+
 function StepTile({
   step,
   reason,
@@ -143,8 +152,27 @@ function StepTile({
           className="min-w-0 flex-1 text-left"
           title="Open this step's run, log and cost"
         >
-          <div className="break-words text-tile-name font-bold leading-tight underline decoration-transparent decoration-dotted underline-offset-[3px] transition duration-(--duration-quick) hover:decoration-ink-faint">
-            {step.name}
+          <div className="flex min-w-0 items-baseline gap-1.5">
+            {step.candidate && (
+              // Which draft this is. The badge carries the verdict too, because
+              // "c2" on its own says nothing about whether c2 is any good.
+              <span
+                data-testid="candidate-badge"
+                title={candidateTitle(step)}
+                className={`shrink-0 rounded border px-1 font-mono text-[9px] font-bold uppercase leading-[15px] tracking-[0.08em] ${
+                  step.selected
+                    ? "border-ok/50 bg-ok/10 text-ok"
+                    : step.verified === false
+                      ? "border-fail/40 text-fail"
+                      : "border-line text-ink-faint"
+                }`}
+              >
+                c{step.candidate.index + 1}
+              </span>
+            )}
+            <span className="min-w-0 break-words text-tile-name font-bold leading-tight underline decoration-transparent decoration-dotted underline-offset-[3px] transition duration-(--duration-quick) hover:decoration-ink-faint">
+              {step.name}
+            </span>
           </div>
           <div className="mt-0.5 font-mono text-id text-ink-faint">
             {step.runId ? `job ${step.runId}` : "job ——"}
@@ -159,8 +187,22 @@ function StepTile({
             )}
           </div>
         </button>
-        <StatusPill status={step.status} size="sm" />
+        {step.superseded ? (
+          // Not "stopped": this draft was not interrupted, it was outrun.
+          <span
+            data-testid="candidate-superseded"
+            title="Another candidate passed its checks first, so this one was stopped"
+            className="shrink-0 rounded-full border border-line px-1.5 font-mono text-[9px] uppercase leading-[16px] tracking-[0.08em] text-ink-faint"
+          >
+            superseded
+          </span>
+        ) : (
+          <StatusPill status={step.status} size="sm" />
+        )}
       </div>
+      {step.selected && (
+        <div className="font-mono text-meter text-ok">✓ selected — its checks passed</div>
+      )}
       {reason && (
         <div className={`text-detail leading-snug ${TILE_DETAIL[token] ?? "text-ink-dim"}`}>
           {reason}

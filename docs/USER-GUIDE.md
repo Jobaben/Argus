@@ -466,9 +466,10 @@ section) and **One-off** (see [One-off runs](#4-one-off-runs)).
 - **Runtime** — Claude Code, Codex, OpenCode, Qwen Code, or the server default.
 - **Working directory** — absolute path the agent runs in.
 - **Trigger** — one of: **every N minutes** (interval), **daily at HH:MM**,
-  **weekly on a day at HH:MM**, or **windowed** (every N minutes, but only
+  **weekly on a day at HH:MM**, **windowed** (every N minutes, but only
   between a start and end time on selected weekdays — e.g. "every 30 min,
-  09:00–13:00, Mon–Fri"). Overlap policy defaults to _skip if still running_.
+  09:00–13:00, Mon–Fri"), **Webhook**, or **After pipeline** (see below).
+  Overlap policy defaults to _skip if still running_.
 - **Catch up a missed run on recovery** — off by default. Normally a slot
   only fires within a short grace window (a few minutes), so if the machine
   was asleep or Argus wasn't running when a slot came due, that slot is
@@ -480,6 +481,24 @@ section) and **One-off** (see [One-off runs](#4-one-off-runs)).
   stale run is worse than no run.
 - **Save schedule** stays disabled until name, prompt and working directory
   are filled.
+
+**Webhook and after-pipeline triggers.** Two more trigger kinds, shared with
+Pipelines (see [§8](#8-pipelines)):
+
+- **Webhook** — this schedule fires when something else `POST`s to a URL
+  Argus mints for it, not on any clock. Once saved, the trigger editor shows
+  the hook's **URL** and **token** (each with a Copy button) and a **Rotate**
+  action that invalidates the old token immediately — use it if the token
+  ever leaks. The sender authenticates with `Authorization: Bearer <token>`;
+  reaching the hook from another machine needs the same non-default
+  `ARGUS_HOST`/`ARGUS_TOKEN` setup any remote access to Argus needs (see
+  [the API reference](API.md#security)) — the hook's own token is a separate
+  credential from `ARGUS_TOKEN` and does not substitute for it anywhere else.
+- **After pipeline** — this schedule fires once a chosen **pipeline**'s
+  instance ends, on **succeeded**, **failed**, or **any** outcome. Only
+  pipelines can be a chain's source (a schedule's own runs have nothing to
+  chain from); this schedule still fires its ordinary prompt, tagged
+  `chained` instead of `scheduled` in its run history.
 
 **What counts as a succeeded run.** The process must exit 0 _and_ the CLI's
 own result envelope must not report an error (`is_error: true` for Claude
@@ -505,8 +524,9 @@ reading.
 median duration of the runs listed below, and a **catch-up** chip when
 missed-run recovery is on. Below that the working directory, and the **last five
 runs** — status pill, relative start time (hover for the exact instant),
-duration, cost and tokens if reported, and a `manual` tag on run-now firings —
-with a `3/5 passed` ratio beside them.
+duration, cost and tokens if reported, and a `manual`/`webhook`/`chained` tag
+naming how the run was fired (nothing shown for an ordinary scheduled firing)
+— with a `3/5 passed` ratio beside them.
 
 A schedule that has failed **more than once in a row** says so in a red band,
 with the first line of the most recent error, because one failure is already
@@ -654,9 +674,11 @@ action requires a signed-in, root-approved account.
 ![Pipeline form](screenshots/pipeline-form.png)
 
 - **Name**, **trigger** (manual — i.e. no trigger — or interval / daily /
-  weekly / windowed), **overlap policy** (skip if running / allow overlap),
-  and a pipeline-default **model** (Opus, Sonnet, Haiku, custom, or inherit
-  the CLI default).
+  weekly / windowed / **Webhook** / **After pipeline** — see
+  [§5 Scheduler](#5-scheduler) for what the last two do and how the webhook's
+  URL and token are shown once saved), **overlap policy** (skip if running /
+  allow overlap), and a pipeline-default **model** (Opus, Sonnet, Haiku,
+  custom, or inherit the CLI default).
 - A **phase rail** — the same stage layout as the Command Center board: one
   chip per phase, phases that start together stacked in one column, gates
   marked, and a red dot on any phase that still needs a field. The rail is the
@@ -692,6 +714,37 @@ action requires a signed-in, root-approved account.
 - Approving/revising a **gated phase** happens on the Command Center, inline
   on the paused row.
 
+**Reliability:** each card has a **Reliability ▾** disclosure — open it and,
+over the trailing 30 days, Argus shows the pipeline's **first-attempt pass
+rate** (settled instances where every phase that ran passed on its very first
+try) and its **lucky-pass rate** (successful instances that only got there
+after a retry or a human revise), a day-by-day sparkline of succeeded vs.
+failed instances, and a per-phase table naming each phase's first-try / lucky
+/ failed counts and its most common failure class. A rate reads as "—" rather
+than 0% when nothing has settled yet in the window — an unproven pipeline is
+not the same fact as a broken one. This is Argus grading its own retry loop,
+not the agent's output (that's [Verdict](#24-verdict)) or a run's shape
+against its own history (that's [Watchtower](#22-watchtower)).
+
+**Memory:** a pipeline can turn on `memory` (via the API — see
+[HARNESS.md §13](HARNESS.md#13-context-and-memory)) to keep a small durable
+notes file, `NOTES.md`, that survives from one instance to the next. Off by
+default. Once enabled, a step's prompt can read the notes back with
+`{{memory}}` and append to them at `$ARGUS_MEMORY_DIR/NOTES.md` — handy for a
+pipeline that should remember a decision, a gotcha, or something a previous
+run tried and learned from, without re-deriving it every time. Argus trims the
+file back to its cap after each instance settles, and never deletes it, even
+if the pipeline itself is later deleted.
+
+**Stall detection:** a step's `timeoutSeconds` catches a run that goes on too
+long; it does nothing for one that is technically still alive but has stopped
+producing any output at all — stuck on a hung command, say. A phase (or a
+step) can additionally set a **stall** limit (`stallSeconds`, editable right
+beside the timeout field in the phase panel): if that many seconds pass with
+no new activity from the step, Argus kills it and fails the phase the same way
+it would a timeout, distinguishing the two in the run's record and journal so
+you can tell "it ran out of time" from "it went quiet."
+
 **How steps complete:** the Stop-hook and gate-hook installed by Setup let
 each spawned agent signal "step finished" / "needs input" back to Argus
 (`POST /api/instances/:id/signal`, authenticated by a per-instance token —
@@ -708,7 +761,13 @@ run log for diagnosis.
 records under `~/.claude/argus/instances/` via `GET/POST /api/pipelines`,
 `PUT/PATCH/DELETE /api/pipelines/:id`, `POST /api/pipelines/:id/start`,
 `GET /api/overview`, `GET /api/instances/:id/phases/:phaseId/{review,artifact}`,
-`POST /api/instances/:id/{approve,revise,abort}`.
+`POST /api/instances/:id/{approve,revise,abort}`,
+`GET /api/pipelines/:id/reliability?days=` (the Reliability disclosure; see
+[the API reference](API.md#reliability)); a webhook trigger additionally uses
+`POST /api/pipelines/:id/hook-token/rotate` and is fired from outside Argus at
+`POST /api/hooks/pipelines/:id`; an after-pipeline trigger is evaluated by the
+scheduler tick against `~/.claude/argus/chains.json` (see
+[the API reference](API.md#webhook-and-chained-triggers-v04)).
 
 ---
 

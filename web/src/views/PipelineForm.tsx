@@ -1,12 +1,17 @@
 import { useState } from "react";
-import type { AgentRuntimeId, Dependency, PhaseDef, PhaseStep, PipelineInput } from "../types";
-import {
-  AlertStrip,
-  ModelSelect,
-  ReasoningEffortSelect,
-  RuntimeSelect,
-  TriggerFields,
-} from "../ds";
+import type {
+  AgentRuntimeId,
+  AgentRuntimeInfo,
+  CandidatePolicy,
+  CandidateVariant,
+  Dependency,
+  PhaseDef,
+  PhaseStep,
+  PipelineInput,
+  WorkspacePolicy,
+} from "../types";
+import { AlertStrip, ModelSelect, ReasoningEffortSelect, RuntimeSelect } from "../ds";
+import { TriggerFields } from "../ds/TriggerFields";
 import { useRuntimes } from "../useRuntimes";
 import { graphColumns, graphEdges } from "./phaseGraphLayout";
 import { EdgeConditions, ResultEditor } from "./PipelineRoutes";
@@ -62,6 +67,201 @@ function move<T>(arr: T[], from: number, to: number): T[] {
   const [item] = next.splice(from, 1);
   next.splice(to, 0, item);
   return next;
+}
+
+/**
+ * Isolation, as the form writes it.
+ *
+ * `""` means "no policy here": the key is removed rather than set to
+ * undefined, so a pipeline (or phase) that never asked for a worktree
+ * round-trips exactly as it was authored. `base` and `keep` are API-only
+ * fields — the form preserves whatever they hold and only ever moves `scope`.
+ */
+type IsolationChoice = "" | WorkspacePolicy["scope"];
+
+function withWorkspace<T extends { workspace?: WorkspacePolicy }>(
+  target: T,
+  scope: IsolationChoice,
+): T {
+  if (!scope) {
+    const { workspace: _dropped, ...rest } = target;
+    return rest as T;
+  }
+  return { ...target, workspace: { ...(target.workspace ?? {}), scope } };
+}
+
+/** The isolation control, in the same visual language as the other selects. */
+function IsolationSelect({
+  fieldClass,
+  ariaLabel,
+  inheritLabel,
+  value,
+  onChange,
+}: {
+  fieldClass: string;
+  ariaLabel: string;
+  /** What an absent policy means here: the pipeline's default, or none at all. */
+  inheritLabel: string;
+  value: WorkspacePolicy | undefined;
+  onChange: (scope: IsolationChoice) => void;
+}) {
+  return (
+    <select
+      className={fieldClass}
+      aria-label={ariaLabel}
+      title="Run the steps in a git worktree of the repository at the working directory. The branch is kept; the directory is removed when the instance ends."
+      value={value?.scope ?? ""}
+      onChange={(e) => onChange(e.target.value as IsolationChoice)}
+    >
+      <option value="">{inheritLabel}</option>
+      <option value="instance">Shared worktree per instance</option>
+      <option value="attempt">Fresh worktree per attempt</option>
+      <option value="none">None (opt out, run in the working directory)</option>
+    </select>
+  );
+}
+
+/**
+ * Best-of-N, as the form writes it.
+ *
+ * Two requirements the server enforces are enforced here too, by disabling the
+ * control rather than by letting a save fail: a candidates phase must have
+ * exactly one step (a selection replaces the whole phase's result with one
+ * candidate's), and it must run under attempt-scoped isolation (without a
+ * worktree each, the candidates are not samples of the same task — they are N
+ * agents editing one checkout). The reason is stated inline, because a greyed
+ * control that does not say why is a bug report waiting to happen.
+ */
+function CandidateFields({
+  phase,
+  index,
+  pipelineWorkspace,
+  fieldClass,
+  runtimes,
+  aliasesFor,
+  effective,
+  onChange,
+}: {
+  phase: PhaseDef;
+  index: number;
+  pipelineWorkspace: WorkspacePolicy | undefined;
+  fieldClass: string;
+  runtimes: AgentRuntimeInfo[];
+  aliasesFor: (id: AgentRuntimeId) => string[] | undefined;
+  effective: (phase?: PhaseDef, step?: PhaseStep) => AgentRuntimeId;
+  onChange: (patch: Partial<PhaseDef>) => void;
+}) {
+  const scope = (phase.workspace ?? pipelineWorkspace)?.scope;
+  const blockers: string[] = [];
+  if (phase.steps.length !== 1) blockers.push("the phase must have exactly one step");
+  if (scope !== "attempt") blockers.push('isolation must be "Fresh worktree per attempt"');
+  const allowed = blockers.length === 0;
+  const policy = phase.candidates;
+
+  const write = (next: CandidatePolicy | undefined) => onChange({ candidates: next });
+  const setVariant = (i: number, patch: CandidateVariant) => {
+    if (!policy) return;
+    const variants = Array.from(
+      { length: policy.count },
+      (_, k) => policy.variants?.[k] ?? ({} as CandidateVariant),
+    );
+    const merged = { ...variants[i], ...patch };
+    // An emptied variant is removed rather than kept as `{}`: cycling over
+    // variants is only meaningful for entries that say something.
+    variants[i] = Object.fromEntries(
+      Object.entries(merged).filter(([, v]) => v !== undefined),
+    ) as CandidateVariant;
+    const trimmed = variants.slice(
+      0,
+      variants.reduce((last, v, k) => (Object.keys(v).length > 0 ? k + 1 : last), 0),
+    );
+    write({ ...policy, ...(trimmed.length > 0 ? { variants: trimmed } : { variants: undefined }) });
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-ink-faint">
+          Candidates
+        </span>
+        <select
+          className={fieldClass}
+          disabled={!allowed}
+          aria-label={`Candidates (phase ${index + 1})`}
+          title="Run this step several times at once and let the phase's checks pick the winner."
+          value={policy ? String(policy.count) : ""}
+          onChange={(e) =>
+            write(
+              e.target.value === ""
+                ? undefined
+                : {
+                    ...(policy ?? { select: "first-verified" as const }),
+                    count: Number(e.target.value),
+                  },
+            )
+          }
+        >
+          <option value="">Off — one run of this step</option>
+          {[2, 3, 4, 5, 6, 7, 8].map((n) => (
+            <option key={n} value={n}>
+              {n} candidates
+            </option>
+          ))}
+        </select>
+        {policy && (
+          <select
+            className={fieldClass}
+            aria-label={`Candidate selection (phase ${index + 1})`}
+            value={policy.select}
+            onChange={(e) =>
+              write({ ...policy, select: e.target.value as CandidatePolicy["select"] })
+            }
+          >
+            <option value="first-verified">First verified wins (kill the rest)</option>
+            <option value="cheapest-verified">Cheapest verified wins (run all)</option>
+          </select>
+        )}
+      </div>
+      {!allowed && (
+        <p className="text-[11px] text-ink-faint">Candidates needs {blockers.join(" and ")}.</p>
+      )}
+      {policy && (
+        <div className="space-y-1.5 border-l border-line pl-3">
+          <p className="text-[11px] text-ink-faint">
+            Each candidate gets its own worktree and artifact directory. Leave a row blank to run
+            the step exactly as declared; naming a runtime drafts the same step on two CLIs and lets
+            the checks choose.
+          </p>
+          {Array.from({ length: policy.count }, (_, i) => {
+            const variant = policy.variants?.[i] ?? {};
+            const runtime = variant.runtime ?? effective(phase, phase.steps[0]);
+            return (
+              <div key={i} className="flex flex-wrap items-center gap-2">
+                <span className="w-7 shrink-0 font-mono text-[11px] text-ink-faint">c{i + 1}</span>
+                <RuntimeSelect
+                  fieldClass={fieldClass}
+                  label="Use step runtime"
+                  ariaLabel={`Candidate ${i + 1} runtime (phase ${index + 1})`}
+                  value={variant.runtime}
+                  runtimes={runtimes}
+                  onChange={(r) => setVariant(i, { runtime: r, model: undefined })}
+                />
+                <ModelSelect
+                  key={`candidate:${index}:${i}:${runtime}`}
+                  fieldClass={fieldClass}
+                  label="Use step model"
+                  ariaLabel={`Candidate ${i + 1} model (phase ${index + 1})`}
+                  value={variant.model}
+                  {...(aliasesFor(runtime) ? { aliases: aliasesFor(runtime) } : {})}
+                  onChange={(m) => setVariant(i, { model: m })}
+                />
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** A dependency's target phase id, whichever form the edge takes. */
@@ -179,10 +379,23 @@ export function PipelineForm({
   initial,
   onSubmit,
   onCancel,
+  pipelines = [],
+  pipelineId,
+  hookToken,
+  onRotateHook,
 }: {
   initial: PipelineInput;
   onSubmit: (input: PipelineInput) => Promise<void>;
   onCancel: () => void;
+  /** Every other pipeline, for the "after pipeline" trigger's source select
+   *  (this one is excluded to keep a self-chain from ever being offered). */
+  pipelines?: { id: string; name: string }[];
+  /** This pipeline's own id, once saved — undefined while authoring a new one. */
+  pipelineId?: string;
+  /** Set once this pipeline has a webhook trigger and has been saved at least
+   *  once (the save that mints the token). */
+  hookToken?: string;
+  onRotateHook?: () => Promise<void>;
 }) {
   const [form, setForm] = useState<PipelineInput>(initial);
   const [selectedId, setSelectedId] = useState<string | null>(initial.phases[0]?.id ?? null);
@@ -339,6 +552,16 @@ export function PipelineForm({
           allowWindowed
           value={form.trigger}
           onChange={(t) => setForm({ ...form, trigger: t })}
+          pipelines={pipelines.filter((p) => p.id !== pipelineId)}
+          hook={
+            hookToken && pipelineId && onRotateHook
+              ? {
+                  url: `${window.location.origin}/api/hooks/pipelines/${pipelineId}`,
+                  token: hookToken,
+                  onRotate: onRotateHook,
+                }
+              : undefined
+          }
         />
         <select
           className={FIELD_BASE}
@@ -373,6 +596,13 @@ export function PipelineForm({
           value={form.model}
           {...(aliasesFor(effective()) ? { aliases: aliasesFor(effective()) } : {})}
           onChange={(m) => setForm({ ...form, model: m })}
+        />
+        <IsolationSelect
+          fieldClass={FIELD_BASE}
+          ariaLabel="Isolation"
+          inheritLabel="No isolation (phase working directory)"
+          value={form.workspace}
+          onChange={(scope) => setForm((f) => withWorkspace(f, scope))}
         />
       </div>
 
@@ -532,6 +762,52 @@ export function PipelineForm({
               runtimes={runtimes}
               onChange={(r) => setPhase(pi, { runtime: r })}
             />
+            <IsolationSelect
+              fieldClass={FIELD_BASE}
+              ariaLabel={`Isolation (phase ${pi + 1})`}
+              inheritLabel="Use pipeline isolation"
+              value={phase.workspace}
+              onChange={(scope) =>
+                setForm((f) => ({
+                  ...f,
+                  phases: f.phases.map((p, j) => (j === pi ? withWorkspace(p, scope) : p)),
+                }))
+              }
+            />
+            <label className="flex items-center gap-1.5 text-[12px] text-ink-faint">
+              Timeout (s)
+              <input
+                type="number"
+                min={1}
+                max={86400}
+                className={`${FIELD_BASE} w-24 py-1`}
+                aria-label={`Timeout in seconds (phase ${pi + 1})`}
+                title="Kill a step's process if it runs longer than this. Blank = no limit."
+                value={phase.timeoutSeconds ?? ""}
+                onChange={(e) =>
+                  setPhase(pi, {
+                    timeoutSeconds: e.target.value === "" ? undefined : Number(e.target.value),
+                  })
+                }
+              />
+            </label>
+            <label className="flex items-center gap-1.5 text-[12px] text-ink-faint">
+              Stall (s)
+              <input
+                type="number"
+                min={30}
+                max={86400}
+                className={`${FIELD_BASE} w-24 py-1`}
+                aria-label={`Stall limit in seconds (phase ${pi + 1})`}
+                title="Kill a step if its transcript goes this many seconds without new activity, even though it is still alive. Blank = off. Minimum 30."
+                value={phase.stallSeconds ?? ""}
+                onChange={(e) =>
+                  setPhase(pi, {
+                    stallSeconds: e.target.value === "" ? undefined : Number(e.target.value),
+                  })
+                }
+              />
+            </label>
           </div>
 
           {form.phases.length > 1 && (
@@ -590,6 +866,17 @@ export function PipelineForm({
             phase={phase}
             index={pi}
             fieldClass={FIELD_BASE}
+            onChange={(patch) => setPhase(pi, patch)}
+          />
+
+          <CandidateFields
+            phase={phase}
+            index={pi}
+            pipelineWorkspace={form.workspace}
+            fieldClass={FIELD_BASE}
+            runtimes={runtimes}
+            aliasesFor={aliasesFor}
+            effective={effective}
             onChange={(patch) => setPhase(pi, patch)}
           />
 

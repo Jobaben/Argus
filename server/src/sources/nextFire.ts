@@ -43,8 +43,17 @@ function weekdayAllowed(trigger: Trigger, d: Date): boolean {
   return wds.includes(d.getDay());
 }
 
+/** `webhook` and `after` triggers have no clock grid at all — they fire from
+ *  their own paths (the hook route, the scheduler's chain pass) — so every
+ *  cadence function below treats them as "never due" rather than falling
+ *  through to the weekly-trigger math with undefined fields. */
+function hasNoCadence(trigger: Trigger): boolean {
+  return trigger.kind === "webhook" || trigger.kind === "after";
+}
+
 /** The most recent scheduled instant at or before `now`, or null if none. */
 export function previousFireTime(trigger: Trigger, anchor: Date, now: Date): Date | null {
+  if (hasNoCadence(trigger)) return null;
   if (trigger.kind === "windowed") {
     // An overnight window that opened yesterday can still cover `now`, so check
     // today's window first (more recent when it applies), then yesterday's.
@@ -92,6 +101,7 @@ export function previousFireTime(trigger: Trigger, anchor: Date, now: Date): Dat
 
 /** The next scheduled instant strictly after `from`. */
 export function nextFireTime(trigger: Trigger, from: Date): Date | null {
+  if (hasNoCadence(trigger)) return null;
   if (trigger.kind === "windowed") {
     const step = (trigger.everyMinutes ?? 0) * 60000;
     if (step <= 0) return null;
@@ -142,6 +152,7 @@ export function nextFireTime(trigger: Trigger, from: Date): Date | null {
 
 /** The next fire strictly after `now`, given an interval anchor for cadence. */
 export function nextFireAfter(trigger: Trigger, anchor: Date, now: Date): Date | null {
+  if (hasNoCadence(trigger)) return null;
   if (trigger.kind === "interval") {
     const step = (trigger.everyMinutes ?? 0) * 60000;
     if (step <= 0) return null;

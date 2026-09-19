@@ -28,6 +28,7 @@ import type {
   PhaseDef,
   PhaseStep,
   PipelineDefinition,
+  WorkspaceRecord,
 } from "../sources/pipelineTypes.js";
 
 /**
@@ -86,6 +87,10 @@ export interface InvocationInputs {
   argusEnv: Record<string, string>;
   invocationDir: string;
   artifactDir: string | null;
+  /** This pipeline's durable-notes directory, when `memory` is enabled. */
+  memoryDir?: string | null;
+  /** The isolated worktree the step runs in, when its phase declared one. */
+  workspace?: WorkspaceRecord | null;
   resultFile: string | null;
   timeoutSeconds: number | null;
   gitHead: string | null;
@@ -118,6 +123,7 @@ export function prepareInvocation(inputs: InvocationInputs): PreparedInvocation 
         invocationDir: inputs.invocationDir,
         cwd: run.cwd,
         artifactDir: inputs.artifactDir,
+        memoryDir: inputs.memoryDir ?? null,
         hooks: {
           stop: invocationHookCommand(),
           gate: invocationHookCommand("needs-input"),
@@ -158,6 +164,7 @@ export function prepareInvocation(inputs: InvocationInputs): PreparedInvocation 
     limitations,
     materializedFiles: files.map((f) => f.path),
     artifactDir: inputs.artifactDir,
+    ...(inputs.workspace !== undefined ? { workspace: inputs.workspace } : {}),
     resultFile: inputs.resultFile,
     timeoutSeconds: inputs.timeoutSeconds,
     deadlineAt,
@@ -234,6 +241,13 @@ export function phaseArtifactDir(root: string, instanceId: string, phaseId: stri
   return path.join(root, safeSegment(instanceId), safeSegment(phaseId));
 }
 
+/** Where one candidate of a phase attempt leaves its file artifacts: a
+ *  subdirectory of the phase's own, so the candidates cannot satisfy each
+ *  other's `artifact` checks and the winner's files stay identifiable. */
+export function candidateArtifactDir(phaseDir: string, candidate: number): string {
+  return path.join(phaseDir, `c${Math.max(0, Math.trunc(candidate))}`);
+}
+
 /** Where a phase attempt's working-tree baseline is kept, beside the run
  *  invocation records, out of the agent's reach. */
 export function phaseBaselinePath(
@@ -241,10 +255,14 @@ export function phaseBaselinePath(
   instanceId: string,
   phaseId: string,
   attempt: number,
+  /** Which candidate of the attempt this baseline belongs to. Absent for an
+   *  ordinary attempt, whose steps all share one working tree and one baseline. */
+  candidate?: number,
 ): string {
+  const suffix = candidate === undefined ? "" : `.c${Math.max(0, Math.trunc(candidate))}`;
   return path.join(
     root,
     safeSegment(instanceId),
-    `${safeSegment(phaseId)}.${Math.max(0, Math.trunc(attempt))}.baseline.json`,
+    `${safeSegment(phaseId)}.${Math.max(0, Math.trunc(attempt))}${suffix}.baseline.json`,
   );
 }

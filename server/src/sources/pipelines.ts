@@ -1,15 +1,20 @@
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { paths } from "../claudeHome.js";
-import { validateTrigger } from "./schedules.js";
+import { mintHookToken, validateTrigger } from "./schedules.js";
 import { createJsonArrayStore } from "./jsonArrayStore.js";
 import type { Dependency, PhaseDef, PhaseStep, PipelineDefinition } from "./pipelineTypes.js";
 import type {
+  CandidatePolicy,
+  CandidateVariant,
   CapabilityProfile,
+  ContextLimits,
   EnvPolicy,
   McpServerSpec,
+  MemoryPolicy,
   PhaseCheck,
   RetryableClass,
+  WorkspacePolicy,
 } from "./pipelineTypes.js";
 import type { Trigger } from "./scheduleTypes.js";
 import { RubricValidationError, validateAutoApprove, validateRubric } from "./verdict.js";
@@ -52,6 +57,9 @@ export interface PipelineInput {
   reasoningEffort?: ReasoningEffort;
   runtime?: AgentRuntimeId;
   capabilities?: CapabilityProfile;
+  workspace?: WorkspacePolicy;
+  contextLimits?: ContextLimits;
+  memory?: MemoryPolicy;
 }
 
 // Model names are passed as a `--model <value>` argv pair to the agent CLI.
@@ -101,6 +109,248 @@ function validateTimeout(raw: unknown, ctx: string): number | undefined {
     throw new PipelineValidationError(`${ctx}: timeoutSeconds must be an integer 1-86400`);
   }
   return n;
+}
+
+/** Kill a still-alive step whose transcript has gone quiet this long.
+ *  Undefined/null = off. Minimum 30 — anything shorter is indistinguishable
+ *  from ordinary gaps between tool calls and would fire on healthy runs. */
+function validateStallSeconds(raw: unknown, ctx: string): number | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 30 || n > 86400) {
+    throw new PipelineValidationError(`${ctx}: stallSeconds must be an integer 30-86400`);
+  }
+  return n;
+}
+
+/**
+ * An isolation policy on a pipeline or a phase. Undefined/null = no isolation:
+ * the phase runs in its own `cwd`, exactly as before workspaces existed.
+ *
+ * `base` becomes an argument to `git rev-parse` and `git worktree add`, so it
+ * is held to what a ref can be here rather than at the point of use: no
+ * whitespace (one argument, not several) and no leading `-` (a ref, never a
+ * flag). Whether the ref *exists* is git's answer, at the moment the phase
+ * starts — a branch a pipeline is authored against may be created later.
+ */
+export function validateWorkspace(raw: unknown, ctx: string): WorkspacePolicy | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PipelineValidationError(`${ctx}: workspace must be an object`);
+  }
+  const w = raw as Record<string, unknown>;
+  for (const key of Object.keys(w)) {
+    if (!WORKSPACE_KEYS.has(key)) {
+      throw new PipelineValidationError(`${ctx}: workspace has unknown key "${key}"`);
+    }
+  }
+  if (!WORKSPACE_SCOPES.has(w.scope as WorkspacePolicy["scope"])) {
+    throw new PipelineValidationError(
+      `${ctx}: workspace.scope must be ${[...WORKSPACE_SCOPES].join(" | ")}`,
+    );
+  }
+  const policy: WorkspacePolicy = { scope: w.scope as WorkspacePolicy["scope"] };
+  if (w.base !== undefined && w.base !== null) {
+    if (typeof w.base !== "string" || !w.base.trim()) {
+      throw new PipelineValidationError(`${ctx}: workspace.base must be a non-empty string`);
+    }
+    const base = w.base.trim();
+    if (/\s/.test(base) || base.startsWith("-")) {
+      throw new PipelineValidationError(
+        `${ctx}: workspace.base "${base}" is not a valid git ref (no whitespace, no leading "-")`,
+      );
+    }
+    policy.base = base;
+  }
+  if (w.keep !== undefined && w.keep !== null) {
+    if (typeof w.keep !== "boolean") {
+      throw new PipelineValidationError(`${ctx}: workspace.keep must be a boolean`);
+    }
+    policy.keep = w.keep;
+  }
+  return policy;
+}
+
+const WORKSPACE_KEYS = new Set(["scope", "base", "keep"]);
+const WORKSPACE_SCOPES = new Set<WorkspacePolicy["scope"]>(["instance", "attempt", "none"]);
+
+// ── Candidates ───────────────────────────────────────────────────────────────
+
+const CANDIDATE_KEYS = new Set(["count", "select", "variants"]);
+const CANDIDATE_VARIANT_KEYS = new Set(["runtime", "model", "reasoningEffort"]);
+const CANDIDATE_SELECTORS = new Set<CandidatePolicy["select"]>([
+  "first-verified",
+  "cheapest-verified",
+]);
+export const MIN_CANDIDATES = 2;
+export const MAX_CANDIDATES = 8;
+
+function validateCandidateVariant(raw: unknown, ctx: string, i: number): CandidateVariant {
+  const where = `${ctx}: candidates.variants[${i}]`;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PipelineValidationError(`${where} must be an object`);
+  }
+  const v = raw as Record<string, unknown>;
+  for (const key of Object.keys(v)) {
+    if (!CANDIDATE_VARIANT_KEYS.has(key)) {
+      throw new PipelineValidationError(`${where} has unknown key "${key}"`);
+    }
+  }
+  // Each field is held to exactly what the step field it overrides is held to:
+  // a variant is a step override that happens to be written somewhere else.
+  const variant: CandidateVariant = {};
+  const runtime = validateRuntime(v.runtime, where);
+  if (runtime) variant.runtime = runtime;
+  if (v.model !== undefined && v.model !== null) variant.model = validateModel(v.model, where);
+  if (v.reasoningEffort !== undefined && v.reasoningEffort !== null) {
+    variant.reasoningEffort = validateReasoningEffort(v.reasoningEffort, where);
+  }
+  return variant;
+}
+
+/**
+ * Best-of-N on one phase.
+ *
+ * The shape is checked here; the two *structural* requirements — exactly one
+ * step, and attempt-scoped isolation — are checked by the caller, because the
+ * second of them can only be answered once the pipeline's own policy is known
+ * ({@link assertCandidatesRunnable}).
+ */
+export function validateCandidates(raw: unknown, ctx: string): CandidatePolicy | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PipelineValidationError(`${ctx}: candidates must be an object`);
+  }
+  const c = raw as Record<string, unknown>;
+  for (const key of Object.keys(c)) {
+    if (!CANDIDATE_KEYS.has(key)) {
+      throw new PipelineValidationError(`${ctx}: candidates has unknown key "${key}"`);
+    }
+  }
+  const count = Number(c.count);
+  if (!Number.isInteger(count) || count < MIN_CANDIDATES || count > MAX_CANDIDATES) {
+    throw new PipelineValidationError(
+      `${ctx}: candidates.count must be an integer ${MIN_CANDIDATES}-${MAX_CANDIDATES}`,
+    );
+  }
+  if (!CANDIDATE_SELECTORS.has(c.select as CandidatePolicy["select"])) {
+    throw new PipelineValidationError(
+      `${ctx}: candidates.select must be ${[...CANDIDATE_SELECTORS].join(" | ")}`,
+    );
+  }
+  const policy: CandidatePolicy = { count, select: c.select as CandidatePolicy["select"] };
+  if (c.variants !== undefined && c.variants !== null) {
+    if (!Array.isArray(c.variants)) {
+      throw new PipelineValidationError(`${ctx}: candidates.variants must be a list`);
+    }
+    if (c.variants.length > MAX_CANDIDATES) {
+      throw new PipelineValidationError(
+        `${ctx}: candidates.variants is capped at ${MAX_CANDIDATES} entries`,
+      );
+    }
+    policy.variants = c.variants.map((v, i) => validateCandidateVariant(v, ctx, i));
+  }
+  return policy;
+}
+
+/**
+ * The two things a `candidates` phase needs that its own object cannot say.
+ *
+ * One step, because selection replaces a phase's result with one candidate's
+ * and there is no defined answer for "which of three steps did candidate 2
+ * win with". Attempt-scoped isolation, because without a worktree per
+ * candidate the candidates are not independent samples of the same task — they
+ * are N agents editing one checkout.
+ *
+ * Separated from {@link validateCandidates} because the isolation in force is
+ * `phase.workspace ?? pipeline.workspace`, and a phase alone cannot see the
+ * second half of that.
+ */
+export function assertCandidatesRunnable(
+  phases: PhaseDef[],
+  pipelineWorkspace: WorkspacePolicy | undefined,
+): void {
+  phases.forEach((phase, i) => {
+    if (!phase.candidates) return;
+    if (phase.steps.length !== 1) {
+      throw new PipelineValidationError(
+        `phase ${i}: candidates requires exactly one step (this phase has ${phase.steps.length}) — ` +
+          "a selection replaces the phase's whole result with one candidate's",
+      );
+    }
+    const scope = (phase.workspace ?? pipelineWorkspace)?.scope;
+    if (scope !== "attempt") {
+      throw new PipelineValidationError(
+        `phase ${i}: candidates requires workspace.scope "attempt" on the phase or the pipeline ` +
+          `(effective isolation: ${scope ? `"${scope}"` : "none"}) — without a worktree per ` +
+          "candidate they would all be editing the same checkout",
+      );
+    }
+  });
+}
+
+// ── Context and memory ───────────────────────────────────────────────────────
+
+const CONTEXT_LIMITS_KEYS = new Set(["placeholderBytes"]);
+const MIN_PLACEHOLDER_BYTES = 1024;
+const MAX_PLACEHOLDER_BYTES = 262_144;
+
+/** Per-placeholder byte cap on interpolated prompt text. Undefined/null =
+ *  every placeholder uses the 16 KiB default (`DEFAULT_PLACEHOLDER_BYTES`). */
+export function validateContextLimits(raw: unknown, ctx: string): ContextLimits | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PipelineValidationError(`${ctx}: contextLimits must be an object`);
+  }
+  const c = raw as Record<string, unknown>;
+  for (const key of Object.keys(c)) {
+    if (!CONTEXT_LIMITS_KEYS.has(key)) {
+      throw new PipelineValidationError(`${ctx}: contextLimits has unknown key "${key}"`);
+    }
+  }
+  if (c.placeholderBytes === undefined || c.placeholderBytes === null) return {};
+  const n = Number(c.placeholderBytes);
+  if (!Number.isInteger(n) || n < MIN_PLACEHOLDER_BYTES || n > MAX_PLACEHOLDER_BYTES) {
+    throw new PipelineValidationError(
+      `${ctx}: contextLimits.placeholderBytes must be an integer ${MIN_PLACEHOLDER_BYTES}-${MAX_PLACEHOLDER_BYTES}`,
+    );
+  }
+  return { placeholderBytes: n };
+}
+
+const MEMORY_KEYS = new Set(["enabled", "maxBytes"]);
+const MIN_MEMORY_BYTES = 1024;
+const MAX_MEMORY_BYTES = 65_536;
+
+/**
+ * Durable, cross-instance notes for a pipeline (`NOTES.md`). Undefined/null =
+ * off — `{{memory}}` interpolates to empty and no `ARGUS_MEMORY_DIR` is set.
+ */
+export function validateMemory(raw: unknown, ctx: string): MemoryPolicy | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PipelineValidationError(`${ctx}: memory must be an object`);
+  }
+  const m = raw as Record<string, unknown>;
+  for (const key of Object.keys(m)) {
+    if (!MEMORY_KEYS.has(key)) {
+      throw new PipelineValidationError(`${ctx}: memory has unknown key "${key}"`);
+    }
+  }
+  if (typeof m.enabled !== "boolean") {
+    throw new PipelineValidationError(`${ctx}: memory.enabled must be a boolean`);
+  }
+  const policy: MemoryPolicy = { enabled: m.enabled };
+  if (m.maxBytes !== undefined && m.maxBytes !== null) {
+    const n = Number(m.maxBytes);
+    if (!Number.isInteger(n) || n < MIN_MEMORY_BYTES || n > MAX_MEMORY_BYTES) {
+      throw new PipelineValidationError(
+        `${ctx}: memory.maxBytes must be an integer ${MIN_MEMORY_BYTES}-${MAX_MEMORY_BYTES}`,
+      );
+    }
+    policy.maxBytes = n;
+  }
+  return policy;
 }
 
 // ── Capability profiles ──────────────────────────────────────────────────────
@@ -611,6 +861,8 @@ function validateStep(raw: unknown, ctx: string): PhaseStep {
   const stepCtx = `${ctx}: step "${step.name}"`;
   const timeoutSeconds = validateTimeout(s.timeoutSeconds, stepCtx);
   if (timeoutSeconds !== undefined) step.timeoutSeconds = timeoutSeconds;
+  const stallSeconds = validateStallSeconds(s.stallSeconds, stepCtx);
+  if (stallSeconds !== undefined) step.stallSeconds = stallSeconds;
   const capabilities = validateCapabilities(s.capabilities, stepCtx);
   if (capabilities) step.capabilities = capabilities;
 
@@ -712,8 +964,11 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
   }
 
   const timeoutSeconds = validateTimeout(p.timeoutSeconds, `phase ${i}`);
+  const stallSeconds = validateStallSeconds(p.stallSeconds, `phase ${i}`);
   const capabilities = validateCapabilities(p.capabilities, `phase ${i}`);
   const checks = validateChecks(p.checks, `phase ${i}`);
+  const workspace = validateWorkspace(p.workspace, `phase ${i}`);
+  const candidates = validateCandidates(p.candidates, `phase ${i}`);
 
   return {
     id,
@@ -729,8 +984,11 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
     ...(autoApprove ? { autoApprove } : {}),
     ...(runtime ? { runtime } : {}),
     ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
+    ...(stallSeconds !== undefined ? { stallSeconds } : {}),
     ...(capabilities ? { capabilities } : {}),
     ...(checks ? { checks } : {}),
+    ...(workspace ? { workspace } : {}),
+    ...(candidates ? { candidates } : {}),
   };
 }
 
@@ -803,6 +1061,13 @@ export function validatePipelineInput(raw: unknown): PipelineInput {
   if (runtime) input.runtime = runtime;
   const capabilities = validateCapabilities(r.capabilities, "pipeline");
   if (capabilities) input.capabilities = capabilities;
+  const workspace = validateWorkspace(r.workspace, "pipeline");
+  if (workspace) input.workspace = workspace;
+  assertCandidatesRunnable(phases, workspace);
+  const contextLimits = validateContextLimits(r.contextLimits, "pipeline");
+  if (contextLimits) input.contextLimits = contextLimits;
+  const memory = validateMemory(r.memory, "pipeline");
+  if (memory) input.memory = memory;
   return input;
 }
 
@@ -838,17 +1103,52 @@ export function validatePipelinePatch(raw: unknown): Partial<PipelineInput> {
   }
   if ("runtime" in r) patch.runtime = validateRuntime(r.runtime, "pipeline");
   if ("capabilities" in r) patch.capabilities = validateCapabilities(r.capabilities, "pipeline");
+  if ("workspace" in r) patch.workspace = validateWorkspace(r.workspace, "pipeline");
+  if ("contextLimits" in r)
+    patch.contextLimits = validateContextLimits(r.contextLimits, "pipeline");
+  if ("memory" in r) patch.memory = validateMemory(r.memory, "pipeline");
   return patch;
 }
 
 export const readPipelines = store.read;
 const writePipelines = store.write;
 
+/**
+ * `after.pipelineId` checks that only `createPipeline`/`updatePipeline` can
+ * make, because only they hold every other definition:
+ *
+ *  - the source must exist,
+ *  - a pipeline may not chain off itself, and
+ *  - a *direct* two-node cycle (A after B, B after A) is refused; a longer
+ *    cycle through several pipelines is not detected here — the scheduler's
+ *    chain pass only ever fires an instance once per source, so a longer
+ *    cycle runs down, it does not spin.
+ */
+async function assertAfterTriggerValid(id: string, trigger: Trigger): Promise<void> {
+  if (trigger.kind !== "after") return;
+  if (trigger.pipelineId === id) {
+    throw new PipelineValidationError("a pipeline cannot chain after itself");
+  }
+  const others = await readPipelines();
+  const source = others.find((p) => p.id === trigger.pipelineId);
+  if (!source) {
+    throw new PipelineValidationError(
+      `after trigger names an unknown pipeline: ${trigger.pipelineId}`,
+    );
+  }
+  if (source.trigger?.kind === "after" && source.trigger.pipelineId === id) {
+    throw new PipelineValidationError(
+      `after trigger would create a cycle: "${source.name}" already fires after this pipeline`,
+    );
+  }
+}
+
 export async function createPipeline(
   input: PipelineInput,
   now: Date,
   id: string,
 ): Promise<PipelineDefinition> {
+  if (input.trigger) await assertAfterTriggerValid(id, input.trigger);
   const iso = now.toISOString();
   const def: PipelineDefinition = {
     id,
@@ -861,6 +1161,12 @@ export async function createPipeline(
     ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
     ...(input.runtime ? { runtime: input.runtime } : {}),
     ...(input.capabilities ? { capabilities: input.capabilities } : {}),
+    ...(input.workspace ? { workspace: input.workspace } : {}),
+    ...(input.contextLimits ? { contextLimits: input.contextLimits } : {}),
+    ...(input.memory ? { memory: input.memory } : {}),
+    // Minted on first save of a webhook trigger; rotated only via the
+    // dedicated endpoint, never by an ordinary edit.
+    ...(input.trigger?.kind === "webhook" ? { hookToken: mintHookToken() } : {}),
     lastStartedAt: null,
     createdAt: iso,
     updatedAt: iso,
@@ -878,6 +1184,7 @@ export async function updatePipeline(
   patch: Partial<PipelineInput>,
   now: Date,
 ): Promise<PipelineDefinition | null> {
+  if (patch.trigger) await assertAfterTriggerValid(id, patch.trigger);
   return withStoreLock(async () => {
     const list = await readPipelines();
     const idx = list.findIndex((d) => d.id === id);
@@ -906,6 +1213,30 @@ export async function updatePipeline(
       if (patch.capabilities) merged.capabilities = patch.capabilities;
       else delete merged.capabilities;
     }
+    // And for `workspace`: null/undefined clears the pipeline-wide isolation
+    // policy rather than leaving a present-and-null key behind.
+    if ("workspace" in patch) {
+      if (patch.workspace) merged.workspace = patch.workspace;
+      else delete merged.workspace;
+    }
+    // Same null-clears-the-override story for contextLimits and memory.
+    if ("contextLimits" in patch) {
+      if (patch.contextLimits) merged.contextLimits = patch.contextLimits;
+      else delete merged.contextLimits;
+    }
+    if ("memory" in patch) {
+      if (patch.memory) merged.memory = patch.memory;
+      else delete merged.memory;
+    }
+    // Mint a hook token the first time this pipeline's trigger becomes
+    // "webhook"; keep whatever token it already had otherwise.
+    if (merged.trigger?.kind === "webhook" && !merged.hookToken) {
+      merged.hookToken = mintHookToken();
+    }
+    // A PATCH can carry phases without a workspace (or the other way round), so
+    // the candidate requirements are re-checked against what the save actually
+    // produces rather than against the fragment that was sent.
+    assertCandidatesRunnable(merged.phases, merged.workspace);
     list[idx] = merged;
     await writePipelines(list);
     return merged;
@@ -929,5 +1260,33 @@ export async function markPipelineStarted(id: string, atISO: string): Promise<vo
     if (idx === -1) return;
     list[idx] = { ...list[idx], lastStartedAt: atISO };
     await writePipelines(list);
+  });
+}
+
+/**
+ * Mints a fresh `hookToken`, invalidating whatever URL/token combination was
+ * handed out before. Only reachable via
+ * `POST /api/pipelines/:id/hook-token/rotate` — an ordinary save never
+ * regenerates a working hook.
+ */
+export async function rotatePipelineHookToken(
+  id: string,
+  now: Date,
+): Promise<PipelineDefinition | null> {
+  return withStoreLock(async () => {
+    const list = await readPipelines();
+    const idx = list.findIndex((d) => d.id === id);
+    if (idx === -1) return null;
+    if (list[idx].trigger?.kind !== "webhook") {
+      throw new PipelineValidationError("pipeline does not have a webhook trigger");
+    }
+    const merged: PipelineDefinition = {
+      ...list[idx],
+      hookToken: mintHookToken(),
+      updatedAt: now.toISOString(),
+    };
+    list[idx] = merged;
+    await writePipelines(list);
+    return merged;
   });
 }

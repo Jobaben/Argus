@@ -147,6 +147,48 @@ privileged single-user control plane:
   advised: with `ARGUS_HOST` pointed at a non-loopback interface and no token,
   the server refuses to start rather than opening an unauthenticated port that
   can execute agents with your credentials.
+- **Webhook-triggered schedules and pipelines** (`trigger.kind: "webhook"`)
+  are fired by `POST /api/hooks/{pipelines,schedules}/:id`, authenticated by
+  that definition's own `hookToken` — not by `ARGUS_TOKEN`, which never
+  substitutes for it. These two routes skip the Origin/CSRF check (a webhook
+  sender is a server, not a browser) but **not** the Host allowlist. Reaching
+  one from another machine needs the same non-default setup as any other
+  remote access: a routable `ARGUS_HOST`, `ARGUS_TOKEN` set (still required
+  for the bind itself, and still gating every other route), and the sender's
+  host in `ARGUS_ALLOWED_HOSTS` if it isn't the bind address. Rotate a hook's
+  token (`POST /api/{pipelines,schedules}/:id/hook-token/rotate`) if it ever
+  leaks; the old one stops working immediately.
+
+## The harness
+
+Inside one phase's run, Argus decides what the agent may do, checks its work
+deterministically, and writes down enough to explain the run afterwards. The
+primitives, all opt-in and all documented in
+**[docs/HARNESS.md](docs/HARNESS.md)**:
+
+- **Capability profiles** and an **environment policy** mapped onto each CLI's
+  own flags, with unenforceable keys reported rather than assumed.
+- **Verification checks** (`command`, `file`, `artifact`, `changed-files`) that
+  decide phase success — the agent's own "done" never does.
+- **Workspace isolation**: a git worktree per instance or per attempt, so
+  parallel and repeated work never shares a working tree. No container, no
+  new dependency; the branch is the deliverable.
+- **Candidates**: N drafts of a step at once, each in its own worktree, on the
+  same or different runtimes and models, with the first (or cheapest) one that
+  passes the checks selected and the rest killed.
+- **Retries that carry the evidence back** — failed checks with their output,
+  exit codes with the error tail, stalls — and a **stall timeout** beside the
+  wall-clock one.
+- **Bounded context**: every `{{…}}` placeholder is capped with the full value
+  written to disk, and an opt-in **pipeline memory** file survives across
+  instances.
+- **Webhook** and **after-pipeline** triggers, and a **reliability** view per
+  pipeline: first-attempt pass rate, lucky passes, failure classes over time.
+
+Each of these traces to an externally graded result — a leaderboard entry, a
+peer-reviewed ablation, or an independent evaluation — in
+**[docs/HARNESS-RESEARCH.md](docs/HARNESS-RESEARCH.md)**, which also records
+what the evidence argued _against_ building.
 
 ## Getting around
 

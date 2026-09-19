@@ -14,6 +14,10 @@ export interface PhaseStep {
   runtime?: AgentRuntimeId;
   /** Wall-clock limit for this step's process; overrides the phase's. */
   timeoutSeconds?: number;
+  /** Kill this step if its transcript goes this many seconds without new
+   *  activity, even though the process is still alive. Overrides the phase's.
+   *  Absent = off. Minimum 30. */
+  stallSeconds?: number;
   /** Narrows or replaces the phase's capability profile for this one step. */
   capabilities?: CapabilityProfile;
 }
@@ -118,6 +122,109 @@ export interface CapabilityProfile {
 }
 
 /**
+ * One isolated working tree a phase's steps run in, instead of the phase's own
+ * `cwd`.
+ *
+ * A pipeline that edits a repository has every phase editing the *same* checkout:
+ * two branches of a fan-out overwrite each other, and a failed attempt leaves its
+ * half-done edits behind for the next one. Declaring a workspace gives the work a
+ * git worktree of its own — a real directory on a branch of the repository at
+ * `cwd`, created before the phase's first step launches and removed when the
+ * instance ends. The deliverable is the branch: the directory is disposable.
+ */
+export interface WorkspacePolicy {
+  /** "instance": one worktree per pipeline instance, shared by every phase that
+   *  opts in. "attempt": a fresh worktree per phase attempt. "none": this phase
+   *  opts out of a pipeline-wide policy and runs in its own `cwd` — the only
+   *  reason `scope` is ever read on a phase that inherited a policy it does not
+   *  want. */
+  scope: "instance" | "attempt" | "none";
+  /** Ref the worktree is created from. Default: HEAD of the repository at `cwd`. */
+  base?: string;
+  /** Keep the worktree directory after the instance ends. Default false: the
+   *  directory is removed, the branch is kept. */
+  keep?: boolean;
+}
+
+/** The worktree a phase attempt actually got, written down as evidence: where
+ *  it is, the branch its work lands on, and the ref (and the commit that ref
+ *  named) it was cut from. */
+export interface WorkspaceRecord {
+  path: string;
+  branch: string;
+  base: string;
+  /** resolved base commit */
+  baseHead: string;
+}
+
+/**
+ * One candidate's deviation from the step it is a copy of.
+ *
+ * Absent fields inherit exactly what the step would have used, so a policy
+ * with no `variants` runs `count` identical attempts and differs only in the
+ * sampling. A variant that names a `runtime` is the interesting case: the same
+ * step drafted on Claude Code and on Codex, with the phase's own checks
+ * deciding which draft the pipeline keeps.
+ */
+export interface CandidateVariant {
+  runtime?: AgentRuntimeId;
+  model?: string;
+  reasoningEffort?: ReasoningEffort;
+}
+
+/**
+ * Best-of-N for one phase: run the step several times at once and let the
+ * phase's own `checks` pick the winner.
+ *
+ * The evidence for this is the strongest single lever in the harness
+ * literature — repeated sampling raises coverage, but only a real verifier
+ * turns coverage into a result, and selection without one plateaus. Argus
+ * already has both halves: deterministic `checks`, and a fresh git worktree
+ * per attempt. A candidate is one attempt-scoped worktree per draft, verified
+ * on its own, and the losers are thrown away.
+ *
+ * Requires a phase with exactly one step and an effective
+ * `workspace.scope: "attempt"` (declared on the phase or inherited from the
+ * pipeline); without isolation the candidates would be editing each other's
+ * files, which is not sampling but corruption.
+ */
+export interface CandidatePolicy {
+  /** How many independent attempts of the step run at once. 2..8. */
+  count: number;
+  /**
+   * `first-verified` — the first candidate whose checks pass wins and the rest
+   * are killed. `cheapest-verified` — every candidate runs to its checks; among
+   * the verified, the lowest cost (then the shortest duration) wins.
+   */
+  select: "first-verified" | "cheapest-verified";
+  /** Per-candidate overrides, cycled when shorter than `count`. Absent = identical candidates. */
+  variants?: CandidateVariant[];
+}
+
+/** How one candidate of a phase ended, kept on the phase once it settles so
+ *  the board can explain a selection after the losers' runs are gone. */
+export interface CandidateOutcome {
+  candidate: number;
+  status: StepStatus;
+  /** Whether this candidate's checks passed. Null = it never reached them. */
+  verified: boolean | null;
+  costUsd: number | null;
+  durationMs: number | null;
+  runtime: AgentRuntimeId | null;
+  model: string | null;
+  /** One line: why it lost, when it did. */
+  reason?: string;
+}
+
+/** Why one candidate step ended the way it did — per candidate, because a
+ *  phase's own payload can only carry one story and a candidate phase has
+ *  `count` of them. */
+export interface StepFailure {
+  class: PhaseFailureClass;
+  reason: string;
+}
+
+/**
  * A deterministic check Argus runs itself once every step of a phase has
  * reported success — the difference between "the agent said the tests pass"
  * and "the tests pass". A failing check fails the phase under the
@@ -204,6 +311,8 @@ export interface AgentInvocationRecord {
   /** Files Argus wrote for this invocation (settings, MCP config). */
   materializedFiles: string[];
   artifactDir: string | null;
+  /** The isolated worktree this invocation ran in, when the phase declared one. */
+  workspace?: WorkspaceRecord | null;
   resultFile: string | null;
   timeoutSeconds: number | null;
   deadlineAt: string | null;
@@ -296,10 +405,24 @@ export interface PhaseDef {
   runtime?: AgentRuntimeId;
   /** Wall-clock limit for each step's process. Absent = no limit. */
   timeoutSeconds?: number;
+  /** Kill a step of this phase if its transcript goes this many seconds
+   *  without new activity, even though the process is still alive — a
+   *  process can be alive and silent forever, and a hard timeout sized for
+   *  the worst case is a poor stand-in for noticing that nothing is
+   *  happening. A step that declares its own `stallSeconds` uses that
+   *  instead. Absent = off. Minimum 30. */
+  stallSeconds?: number;
   /** What this phase's agents may do. Absent = the pipeline's profile, else the CLI's defaults. */
   capabilities?: CapabilityProfile;
   /** Deterministic checks that must pass before the phase counts as succeeded. */
   checks?: PhaseCheck[];
+  /** Run this phase's steps in an isolated git worktree of the repository at
+   *  `cwd`. Overrides the pipeline's policy; absent = the pipeline's, else the
+   *  phase's own `cwd` exactly as before workspaces existed. */
+  workspace?: WorkspacePolicy;
+  /** Run this phase's single step as N competing candidates and let `checks`
+   *  select one. Requires exactly one step and attempt-scoped isolation. */
+  candidates?: CandidatePolicy;
 }
 
 export interface PipelineDefinition {
@@ -320,6 +443,29 @@ export interface PipelineDefinition {
   runtime?: AgentRuntimeId;
   /** Default capability profile for every phase that does not declare one. */
   capabilities?: CapabilityProfile;
+  /** Default isolation policy for every phase that does not declare one.
+   *  Absent = no isolation: every phase runs in its own `cwd`. */
+  workspace?: WorkspacePolicy;
+  /**
+   * Caps on what an interpolated placeholder value may cost the prompt.
+   * Absent = the 16 KiB default for every placeholder.
+   */
+  contextLimits?: ContextLimits;
+  /**
+   * Durable notes this pipeline's own runs may read and append to, across
+   * instances. Absent/disabled = `{{memory}}` interpolates to empty and no
+   * `ARGUS_MEMORY_DIR` is set. See `NOTES.md` under `harness/memory.ts`.
+   */
+  memory?: MemoryPolicy;
+  /**
+   * Bearer credential for `POST /api/hooks/pipelines/:id`, minted once this
+   * pipeline's `trigger` first becomes `kind: "webhook"` and kept stable
+   * across later edits — regenerated only via
+   * `POST /api/pipelines/:id/hook-token/rotate`. This is a single-user control
+   * plane behind `ARGUS_TOKEN`; the token is returned in GET responses rather
+   * than hashed, the way `ARGUS_TOKEN` itself is a plaintext shared secret.
+   */
+  hookToken?: string;
   lastStartedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -336,6 +482,32 @@ export interface PipelineInput {
   reasoningEffort?: ReasoningEffort;
   runtime?: AgentRuntimeId;
   capabilities?: CapabilityProfile;
+  workspace?: WorkspacePolicy;
+  contextLimits?: ContextLimits;
+  memory?: MemoryPolicy;
+}
+
+/** Per-placeholder byte cap on interpolated prompt text (§ dag.ts `interpolate`). */
+export interface ContextLimits {
+  /** Bytes a single `{{placeholder}}` value may contribute before Argus trims
+   *  it (head 2/3, tail 1/3, with a marker naming where the full value is on
+   *  disk). Default 16 KiB (16384). Range 1 KiB (1024) – 256 KiB (262144). */
+  placeholderBytes?: number;
+}
+
+/**
+ * Durable, cross-instance notes for one pipeline (`NOTES.md`), opt-in.
+ *
+ * Off by default: most pipelines have nothing worth remembering between runs,
+ * and a file every instance can write to is a shared-mutable-state surface
+ * that should be asked for, not assumed.
+ */
+export interface MemoryPolicy {
+  enabled: boolean;
+  /** Bytes `NOTES.md` may grow to before Argus trims its head (oldest
+   *  content) back down to this cap, on a line boundary. Default 8 KiB
+   *  (8192). Range 1 KiB (1024) – 64 KiB (65536). */
+  maxBytes?: number;
 }
 
 export type InstanceStatus = "running" | "awaiting-approval" | "failed" | "succeeded" | "aborted";
@@ -375,6 +547,28 @@ export interface StepProgress {
   result?: unknown;
   /** Why the step's declared result could not be read (e.g. a torn file). */
   resultError?: string;
+  /**
+   * The agent's own closing payload for this run.
+   *
+   * Ordinarily a phase keeps one payload, because ordinarily one step's report
+   * is the phase's report. A candidate phase has `count` of them and may
+   * publish only the winner's, so each candidate's is held here until selection
+   * copies one onto the phase.
+   */
+  payload?: unknown;
+  /** Why this step ended badly, when it did. Held per step for the same reason
+   *  as {@link StepProgress.payload}. */
+  failure?: StepFailure;
+  /** Which candidate of a `candidates` phase this run is (0-based). Absent on
+   *  an ordinary step. */
+  candidate?: number;
+  /** This candidate's own verification report: the phase's `checks` run inside
+   *  this candidate's worktree, against its own baseline and artifact
+   *  directory. Absent on an ordinary step, which is verified phase-wide. */
+  verification?: VerificationReport;
+  /** The worktree this candidate ran in. Absent on an ordinary step, whose
+   *  phase records the one tree they shared. */
+  workspace?: WorkspaceRecord | null;
 }
 
 export interface PhaseProgress {
@@ -402,6 +596,16 @@ export interface PhaseProgress {
   verification?: VerificationReport;
   /** Where this attempt's steps were told to leave file artifacts. */
   artifactDir?: string | null;
+  /** The isolated worktree this attempt's steps ran in, when the phase declared
+   *  a policy. Null = the phase ran in its own `cwd`. On a `candidates` phase
+   *  this becomes the *winning* candidate's tree once one is selected. */
+  workspace?: WorkspaceRecord | null;
+  /** Which candidate won, on a `candidates` phase that settled. Null while the
+   *  selection is still open, or when no candidate could win. */
+  selectedCandidate?: number | null;
+  /** How every candidate ended, written once the phase settles — the losers'
+   *  runs are the evidence for a selection, and they outlive their processes. */
+  candidateOutcomes?: CandidateOutcome[];
 }
 
 /** What the engine writes into `PhaseProgress.payload` when a phase fails.
@@ -421,7 +625,19 @@ export interface PipelineInstance {
   status: InstanceStatus;
   currentPhaseIndex: number;
   phases: PhaseProgress[];
-  trigger: "manual" | "scheduled";
+  /** `"webhook"` — fired by `POST /api/hooks/pipelines/:id`. `"chained"` —
+   *  fired by an `after` trigger once a source pipeline instance ended. */
+  trigger: "manual" | "scheduled" | "webhook" | "chained";
+  /**
+   * The firing payload, when the trigger carried one: the webhook's JSON body
+   * (capped at 64 KiB; a larger body is rejected with 413 before an instance
+   * is created) for `trigger: "webhook"`, or
+   * `{ sourceInstanceId, sourcePipelineId, status }` for `trigger: "chained"`.
+   * Absent for `"manual"`/`"scheduled"`.
+   */
+  triggerPayload?: unknown;
+  /** `trigger: "chained"` only: the source instance this one was fired from. */
+  chainedFrom?: string;
   signalToken: string;
   createdAt: string;
   updatedAt: string;
@@ -441,6 +657,12 @@ export interface PipelineInstance {
    * back to the live definition for those.
    */
   definition?: PipelineDefinition;
+  /**
+   * The worktree shared by every phase of this instance that declared
+   * `scope: "instance"`, created on its first use. Null/absent = no phase asked
+   * for one. An `attempt`-scoped phase records its own on `PhaseProgress`.
+   */
+  workspace?: WorkspaceRecord | null;
 }
 
 export type SignalType = "completed" | "needs-input" | "failed";

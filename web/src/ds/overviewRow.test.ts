@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { toOverviewRow as mapRow, toOverviewRows as mapRows } from "./overviewRow";
 import type {
   OverviewEntry,
+  PhaseProgress,
   PipelineDefinition,
   PipelineInstance,
   InstanceStatus,
@@ -117,6 +118,16 @@ describe("toOverviewRow", () => {
     expect(row.badge).toBe("await");
   });
 
+  it("carries the instance's trigger onto the row, null when there is no instance", () => {
+    expect(toOverviewRow({ definition: def(), latest: null }).trigger).toBeNull();
+    expect(
+      toOverviewRow({
+        definition: def(),
+        latest: { ...inst("succeeded", ["succeeded", "succeeded"]), trigger: "chained" },
+      }).trigger,
+    ).toBe("chained");
+  });
+
   it("extracts the active step name from the running phase", () => {
     const row = toOverviewRow({
       definition: def(),
@@ -143,8 +154,29 @@ describe("toOverviewRow", () => {
         currentActivity: null,
         startedAt: null,
         durationMs: null,
+        candidate: null,
+        verified: null,
+        selected: false,
+        superseded: false,
       },
     ]);
+  });
+
+  it("carries a phase's workspace onto its step pills, and omits it when there is none", () => {
+    const base = inst("running", ["succeeded", "running"]);
+    const workspace = {
+      path: "/w/i1/shared",
+      branch: "argus/i1/shared",
+      base: "HEAD",
+      baseHead: "abc123",
+    };
+    const row = toOverviewRow({
+      definition: def(),
+      latest: { ...base, phases: [base.phases[0], { ...base.phases[1], workspace }] },
+    });
+    expect(row.phases[1].steps[0].workspace).toEqual(workspace);
+    // The other phase ran in its own cwd: nothing to show.
+    expect(row.phases[0].steps[0].workspace).toBeUndefined();
   });
 
   it("tiles phases without step progress from the definition", () => {
@@ -165,6 +197,10 @@ describe("toOverviewRow", () => {
         currentActivity: null,
         startedAt: null,
         durationMs: null,
+        candidate: null,
+        verified: null,
+        selected: false,
+        superseded: false,
       },
     ]);
   });
@@ -460,5 +496,180 @@ describe("toOverviewRows", () => {
     const rows = toOverviewRows({ definition: def(), latest: null });
     expect(rows).toHaveLength(1);
     expect(rows[0].badge).toBe("idle");
+  });
+});
+
+describe("toOverviewRow: candidates", () => {
+  const CANDIDATES = {
+    count: 3,
+    select: "first-verified" as const,
+    variants: [{ runtime: "claude" as const, model: "opus" }, { runtime: "codex" as const }],
+  };
+
+  const candidateDef = () =>
+    def({
+      workspace: { scope: "attempt" },
+      phases: [
+        {
+          id: "bs",
+          name: "Brainstorm",
+          cwd: "/",
+          gated: true,
+          steps: [{ name: "s", prompt: "x" }],
+        },
+        {
+          id: "impl",
+          name: "Implement",
+          cwd: "/",
+          gated: false,
+          steps: [{ name: "code", prompt: "x" }],
+          candidates: CANDIDATES,
+        },
+      ],
+    });
+
+  /** An instance whose `impl` phase ran three candidates, with the given fates. */
+  const candidateInst = (
+    fates: { status: PhaseProgress["steps"][number]["status"]; verified?: boolean }[],
+    over: Partial<PhaseProgress> = {},
+  ): PipelineInstance => {
+    const base = inst("running", ["succeeded", "running"]);
+    base.phases[1] = {
+      ...base.phases[1],
+      steps: fates.map((f, i) => ({
+        name: "code",
+        runId: `r${i}`,
+        status: f.status,
+        candidate: i,
+        workspace: {
+          path: `/w/c${i}`,
+          branch: `argus/i1/impl/0-c${i}`,
+          base: "HEAD",
+          baseHead: "abc",
+        },
+        ...(f.verified === undefined
+          ? {}
+          : {
+              verification: {
+                status: f.verified ? ("passed" as const) : ("failed" as const),
+                startedAt: "2026-06-30T10:00:00.000Z",
+                endedAt: "2026-06-30T10:01:00.000Z",
+                checks: [],
+              },
+            }),
+      })),
+      ...over,
+    };
+    return base;
+  };
+
+  it("labels each candidate step with its index and count, and its own worktree", () => {
+    const row = toOverviewRow({
+      definition: candidateDef(),
+      latest: candidateInst([{ status: "running" }, { status: "running" }, { status: "running" }]),
+    });
+    const steps = row.phases[1].steps;
+    expect(steps.map((s) => s.candidate)).toEqual([
+      { index: 0, total: 3 },
+      { index: 1, total: 3 },
+      { index: 2, total: 3 },
+    ]);
+    expect(steps[1].workspace?.branch).toBe("argus/i1/impl/0-c1");
+  });
+
+  it("reads each candidate's model and runtime from its variant, cycled", () => {
+    const row = toOverviewRow({
+      definition: candidateDef(),
+      latest: candidateInst([{ status: "running" }, { status: "running" }, { status: "running" }]),
+    });
+    expect(row.phases[1].steps.map((s) => [s.runtime, s.model])).toEqual([
+      ["claude", "opus"],
+      ["codex", null],
+      ["claude", "opus"],
+    ]);
+  });
+
+  it("marks the winner selected and the killed siblings superseded, not failed", () => {
+    const row = toOverviewRow({
+      definition: candidateDef(),
+      latest: candidateInst(
+        [
+          { status: "succeeded", verified: false },
+          { status: "succeeded", verified: true },
+          { status: "aborted" },
+        ],
+        { selectedCandidate: 1 },
+      ),
+    });
+    const steps = row.phases[1].steps;
+    expect(steps.map((s) => s.verified)).toEqual([false, true, null]);
+    expect(steps.map((s) => s.selected)).toEqual([false, true, false]);
+    expect(steps.map((s) => s.superseded)).toEqual([false, false, true]);
+  });
+
+  it("does not call a candidate superseded when nothing won", () => {
+    const row = toOverviewRow({
+      definition: candidateDef(),
+      latest: candidateInst([{ status: "aborted" }, { status: "aborted" }, { status: "aborted" }]),
+    });
+    expect(row.phases[1].steps.every((s) => !s.superseded)).toBe(true);
+  });
+
+  it("summarises the phase as verified-of-total, and names the winner once there is one", () => {
+    const open = toOverviewRow({
+      definition: candidateDef(),
+      latest: candidateInst([
+        { status: "succeeded", verified: true },
+        { status: "running" },
+        { status: "failed" },
+      ]),
+    });
+    expect(open.phases[1].candidates).toEqual({ total: 3, verified: 1, selected: null });
+    // Once settled, the recorded outcomes are the source: the phase's own word.
+    const settled = toOverviewRow({
+      definition: candidateDef(),
+      latest: candidateInst([{ status: "succeeded", verified: true }], {
+        selectedCandidate: 0,
+        candidateOutcomes: [
+          {
+            candidate: 0,
+            status: "succeeded",
+            verified: true,
+            costUsd: 1,
+            durationMs: 10,
+            runtime: "claude",
+            model: "opus",
+          },
+          {
+            candidate: 1,
+            status: "failed",
+            verified: null,
+            costUsd: null,
+            durationMs: null,
+            runtime: "codex",
+            model: null,
+            reason: "timed out",
+          },
+        ],
+      }),
+    });
+    expect(settled.phases[1].candidates).toEqual({ total: 2, verified: 1, selected: 0 });
+  });
+
+  it("leaves candidates null on an ordinary phase", () => {
+    const row = toOverviewRow({
+      definition: candidateDef(),
+      latest: inst("running", ["succeeded", "running"]),
+    });
+    expect(row.phases[0].candidates).toBeNull();
+  });
+
+  it("tiles a never-run candidates phase as one pill per planned draft", () => {
+    const row = toOverviewRow({ definition: candidateDef(), latest: null });
+    const steps = row.phases[1].steps;
+    expect(steps).toHaveLength(3);
+    expect(steps.map((s) => s.candidate?.index)).toEqual([0, 1, 2]);
+    expect(steps.map((s) => s.runtime)).toEqual(["claude", "codex", "claude"]);
+    expect(row.phases[1].candidates).toEqual({ total: 3, verified: 0, selected: null });
   });
 });

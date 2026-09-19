@@ -410,3 +410,193 @@ test("tick fires normally when the budget is alert-only (blockScheduled off)", a
   await scheduler.tick(deps({}));
   await waitFor(async () => (await runs.readRuns({ scheduleId: "s1" }))[0]?.status === "succeeded");
 });
+
+// ── after-triggered chaining ──────────────────────────────────────────────────
+
+async function loadChainDeps() {
+  const pipelines = await import(`./sources/pipelines.js?${Math.random()}`);
+  const instances = await import(`./sources/instances.js?${Math.random()}`);
+  const chains = await import(`./sources/chains.js?${Math.random()}`);
+  return { pipelines, instances, chains };
+}
+
+function sourcePipelineInput(over: Record<string, unknown> = {}) {
+  return {
+    name: "source",
+    phases: [{ id: "p", name: "p", cwd: home, gated: false, steps: [{ name: "s", prompt: "go" }] }],
+    trigger: null,
+    ...over,
+  };
+}
+
+function fakeInstance(over: Record<string, unknown>) {
+  return {
+    id: "inst-1",
+    pipelineId: "source",
+    pipelineName: "source",
+    status: "succeeded",
+    currentPhaseIndex: 0,
+    phases: [],
+    trigger: "manual",
+    signalToken: "tok",
+    createdAt: new Date(2026, 5, 22, 9, 0).toISOString(),
+    updatedAt: new Date(2026, 5, 22, 9, 5).toISOString(),
+    endedAt: new Date(2026, 5, 22, 9, 5).toISOString(),
+    ...over,
+  };
+}
+
+test("tick chains a source instance into a target pipeline exactly once", async () => {
+  const { scheduler } = await load();
+  const { pipelines, instances, chains } = await loadChainDeps();
+  await pipelines.createPipeline(
+    pipelines.validatePipelineInput(sourcePipelineInput()),
+    new Date(2026, 5, 22, 8, 0),
+    "source",
+  );
+  await pipelines.createPipeline(
+    pipelines.validatePipelineInput(
+      sourcePipelineInput({
+        name: "target",
+        trigger: { kind: "after", pipelineId: "source", on: "succeeded" },
+      }),
+    ),
+    new Date(2026, 5, 22, 8, 0),
+    "target",
+  );
+  await instances.writeInstance(fakeInstance({}));
+
+  const started: unknown[] = [];
+  await scheduler.tick(
+    deps({
+      startPipeline: async (pipelineId: string, trigger: string, firing: unknown) => {
+        started.push([pipelineId, trigger, firing]);
+        return { id: "chained-1" };
+      },
+    }),
+  );
+  assert.equal(started.length, 1);
+  assert.deepEqual(started[0], [
+    "target",
+    "chained",
+    {
+      chainedFrom: "inst-1",
+      triggerPayload: {
+        sourceInstanceId: "inst-1",
+        sourcePipelineId: "source",
+        status: "succeeded",
+      },
+    },
+  ]);
+
+  const ledger = await chains.readChainLedger();
+  assert.deepEqual(ledger["inst-1"], ["target"]);
+
+  // A second tick must not fire again — the ledger already recorded it.
+  await scheduler.tick(deps({ startPipeline: async () => (started.push("again"), { id: "x" }) }));
+  assert.equal(started.length, 1);
+});
+
+test("tick does not chain an instance that ended before the target's trigger was saved", async () => {
+  const { scheduler } = await load();
+  const { pipelines, instances } = await loadChainDeps();
+  await pipelines.createPipeline(
+    pipelines.validatePipelineInput(sourcePipelineInput()),
+    new Date(2026, 5, 22, 8, 0),
+    "source",
+  );
+  // Target's `after` trigger is saved *after* the source instance already ended.
+  await pipelines.createPipeline(
+    pipelines.validatePipelineInput(
+      sourcePipelineInput({
+        name: "target",
+        trigger: { kind: "after", pipelineId: "source", on: "succeeded" },
+      }),
+    ),
+    new Date(2026, 5, 22, 10, 0),
+    "target",
+  );
+  await instances.writeInstance(fakeInstance({}));
+
+  let started = 0;
+  await scheduler.tick(deps({ startPipeline: async () => (started++, { id: "x" }) }));
+  assert.equal(started, 0);
+});
+
+test("tick honours `on`: a failed source instance does not chain an on:succeeded target", async () => {
+  const { scheduler } = await load();
+  const { pipelines, instances } = await loadChainDeps();
+  await pipelines.createPipeline(
+    pipelines.validatePipelineInput(sourcePipelineInput()),
+    new Date(2026, 5, 22, 8, 0),
+    "source",
+  );
+  await pipelines.createPipeline(
+    pipelines.validatePipelineInput(
+      sourcePipelineInput({
+        name: "target",
+        trigger: { kind: "after", pipelineId: "source", on: "succeeded" },
+      }),
+    ),
+    new Date(2026, 5, 22, 8, 0),
+    "target",
+  );
+  await instances.writeInstance(fakeInstance({ status: "failed" }));
+
+  let started = 0;
+  await scheduler.tick(deps({ startPipeline: async () => (started++, { id: "x" }) }));
+  assert.equal(started, 0);
+});
+
+test("tick chains an after-triggered schedule as a normal scheduled run, trigger: chained", async () => {
+  const { scheduler, schedules, runs } = await load();
+  const { pipelines, instances } = await loadChainDeps();
+  await pipelines.createPipeline(
+    pipelines.validatePipelineInput(sourcePipelineInput()),
+    new Date(2026, 5, 22, 8, 0),
+    "source",
+  );
+  await schedules.createSchedule(
+    {
+      name: "n",
+      prompt: "p",
+      cwd: home,
+      trigger: { kind: "after", pipelineId: "source", on: "any" },
+    },
+    new Date(2026, 5, 22, 8, 0),
+    "s1",
+  );
+  await instances.writeInstance(fakeInstance({}));
+
+  await scheduler.tick(deps({}));
+  await waitFor(async () => (await runs.readRuns({ scheduleId: "s1" })).length > 0);
+  const list = await runs.readRuns({ scheduleId: "s1" });
+  assert.equal(list.length, 1);
+  assert.equal(list[0].trigger, "chained");
+});
+
+test("tick leaves an overlap=skip busy pipeline target out of the ledger, so it retries", async () => {
+  const { scheduler } = await load();
+  const { pipelines, instances, chains } = await loadChainDeps();
+  await pipelines.createPipeline(
+    pipelines.validatePipelineInput(sourcePipelineInput()),
+    new Date(2026, 5, 22, 8, 0),
+    "source",
+  );
+  await pipelines.createPipeline(
+    pipelines.validatePipelineInput(
+      sourcePipelineInput({
+        name: "target",
+        trigger: { kind: "after", pipelineId: "source", on: "any" },
+      }),
+    ),
+    new Date(2026, 5, 22, 8, 0),
+    "target",
+  );
+  await instances.writeInstance(fakeInstance({}));
+
+  // startPipeline returning null mirrors the engine's own overlap=skip refusal.
+  await scheduler.tick(deps({ startPipeline: async () => null }));
+  const ledger = await chains.readChainLedger();
+  assert.equal(ledger["inst-1"], undefined);
+});

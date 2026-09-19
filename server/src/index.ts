@@ -376,6 +376,9 @@ const vaultWatcher = createVaultWatcher({
 });
 const scheduler = startScheduler({
   onChange: () => broadcast({ type: "schedules:changed" }),
+  // Lets the scheduler's chain pass (`after` triggers) fire a target pipeline
+  // without pipelineEngine.ts and scheduler.ts importing one another.
+  startPipeline: (pipelineId, trigger, firing) => engine.start(pipelineId, trigger, firing),
   onTick: async () => {
     await engine.reconcile();
     await monitorWatcher.check();

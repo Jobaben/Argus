@@ -485,6 +485,20 @@ describe("Tracker", () => {
     assert.deepEqual(t.applyRuns([run({ id: "run-2", scheduleName: "Deps audit" })]), []);
   });
 
+  it("tags a webhook or chained run, and says nothing extra for a plain scheduled one", () => {
+    const t = new Tracker(() => NOW);
+    assert.deepEqual(t.applyRuns([run()]), []);
+    const lines = t.applyRuns([
+      run({ id: "run-2", scheduleName: "Hook fired", trigger: "webhook" }),
+      run({ id: "run-3", scheduleName: "Chained run", trigger: "chained" }),
+      run({ id: "run-4", scheduleName: "Ordinary", trigger: "scheduled" }),
+    ]);
+    assert.deepEqual(
+      lines.map((l) => l.text),
+      ["Hook fired started (webhook)", "Chained run started (chained)", "Ordinary started"],
+    );
+  });
+
   it("uses the board label for a step run and marks a non-default runtime", () => {
     const t = new Tracker(() => NOW);
     t.applyOverview([entry(instance())]);
@@ -579,6 +593,23 @@ describe("Tracker", () => {
     assert.deepEqual(
       t.applyOverview([entry(fresh, [fresh, failed])]).map((l) => [l.kind, l.text]),
       [["pipeline.started", "pipeline Release train started (manual)"]],
+    );
+  });
+
+  it("tags a webhook- or chain-fired instance start the same way", () => {
+    const t = new Tracker(() => NOW);
+    // The first read of any instance is the silent baseline (same rule as runs).
+    assert.deepEqual(t.applyOverview([entry(instance())]), []);
+
+    const hooked = instance({ id: "inst-hook", trigger: "webhook" });
+    assert.deepEqual(
+      t.applyOverview([entry(hooked)]).map((l) => [l.kind, l.text]),
+      [["pipeline.started", "pipeline Release train started (webhook)"]],
+    );
+    const chained = instance({ id: "inst-chain", trigger: "chained" });
+    assert.deepEqual(
+      t.applyOverview([entry(chained, [chained, hooked])]).map((l) => [l.kind, l.text]),
+      [["pipeline.started", "pipeline Release train started (chained)"]],
     );
   });
 

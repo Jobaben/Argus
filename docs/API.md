@@ -294,8 +294,12 @@ may send the session token as `X-Argus-Session` instead of the cookie.
 | `POST /api/auth/logout` | invalidate the current session                                                                      |
 
 Admin-gated routes (all others are unaffected): `POST/PUT/PATCH/DELETE
-/api/pipelines*`, `POST /api/pipelines/:id/start`, and `POST
-/api/instances/:id/{approve,revise,abort}`. Unauthenticated calls get `401`
+/api/pipelines*`, `POST /api/pipelines/:id/start`, `POST
+/api/pipelines/:id/hook-token/rotate`, and `POST
+/api/instances/:id/{approve,revise,abort}`. Schedules (including `POST
+/api/schedules/:id/hook-token/rotate`) are not admin-gated — they carry no
+credential of their own beyond the token/session layer above, same as every
+other schedule route. Unauthenticated calls get `401`
 with `code: "auth_required"` (or `"auth_setup_required"` before first-run
 setup). `POST /api/instances/:id/signal` is **not** admin-gated — it is called
 by headless agent hooks and authenticates with its own per-instance token. To
@@ -386,19 +390,20 @@ first. `endedAt: null` means still in flight — render through `windowEnd`.
 
 ## Scheduler
 
-| Method + path                      | Effect                                                             |
-| ---------------------------------- | ------------------------------------------------------------------ |
-| `GET /api/schedules`               | list schedules, each with a computed `nextRun`                     |
-| `POST /api/schedules`              | create a schedule (validated) → `201`                              |
-| `PUT /api/schedules/:id`           | patch a schedule → `200`, `404` if unknown                         |
-| `DELETE /api/schedules/:id`        | delete a schedule                                                  |
-| `POST /api/schedules/:id/run`      | fire now → `202`, or `409` when `overlap=skip` and a run is live   |
-| `GET /api/runs?scheduleId=&limit=` | run history (newest first)                                         |
-| `GET /api/runs/:id`                | one run plus the tail of its log                                   |
-| `GET /api/runs/:id/activity`       | the live activity retained for a running step (see below)          |
-| `GET /api/runs/:id/recording`      | the run as a Flight Recorder timeline (see below)                  |
-| `GET /api/runs/:id/invocation`     | what Argus launched for this run (see § Harness) → `404` if none   |
-| `POST /api/runs/:id/cancel`        | kill a running run → `200`, `409` if not running, `404` if unknown |
+| Method + path                               | Effect                                                                                               |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `GET /api/schedules`                        | list schedules, each with a computed `nextRun`                                                       |
+| `POST /api/schedules`                       | create a schedule (validated) → `201`                                                                |
+| `PUT /api/schedules/:id`                    | patch a schedule → `200`, `404` if unknown                                                           |
+| `DELETE /api/schedules/:id`                 | delete a schedule                                                                                    |
+| `POST /api/schedules/:id/run`               | fire now → `202`, or `409` when `overlap=skip` and a run is live                                     |
+| `POST /api/schedules/:id/hook-token/rotate` | regenerate a `kind: "webhook"` schedule's `hookToken` → `200`, `400` if the trigger is not `webhook` |
+| `GET /api/runs?scheduleId=&limit=`          | run history (newest first)                                                                           |
+| `GET /api/runs/:id`                         | one run plus the tail of its log                                                                     |
+| `GET /api/runs/:id/activity`                | the live activity retained for a running step (see below)                                            |
+| `GET /api/runs/:id/recording`               | the run as a Flight Recorder timeline (see below)                                                    |
+| `GET /api/runs/:id/invocation`              | what Argus launched for this run (see § Harness) → `404` if none                                     |
+| `POST /api/runs/:id/cancel`                 | kill a running run → `200`, `409` if not running, `404` if unknown                                   |
 
 Create/patch body fields: `name`, `prompt`, `cwd` (must exist), `trigger`,
 `enabled` (default `true`), `overlapPolicy` (`skip`|`allow`, default `skip`),
@@ -407,6 +412,87 @@ and `catchUp` (boolean, default `false`) — when `true`, a slot missed beyond
 the firing grace (machine asleep, Argus down) fires **once** on the next
 scheduler tick instead of being skipped; only the most recent missed slot is
 run.
+
+## Webhook and chained triggers (v0.4)
+
+Two more trigger kinds, available to both schedules (`trigger`) and pipelines
+(`trigger`, which may also be `null` for manual-only): `{ "kind": "webhook" }`
+and `{ "kind": "after", "pipelineId": "<id>", "on": "succeeded" | "failed" | "any" }`.
+Neither has a cadence — the scheduler's tick never fires them
+(`shouldFire`/`nextFireAfter` always report "not due" for these two kinds);
+each fires from its own path below.
+
+**`webhook`.** Saving a definition with `trigger.kind: "webhook"` mints a
+`hookToken` (32 random bytes, base64url) on the definition and returns it in
+every `GET`/`POST`/`PUT`/`PATCH` response from then on — this is a single-user
+control plane behind `ARGUS_TOKEN`, so the token is returned in the clear the
+same way `ARGUS_TOKEN` itself is a plaintext shared secret. The token is
+**stable across edits**; it changes only via:
+
+| Method + path                               | Effect                                                           |
+| ------------------------------------------- | ---------------------------------------------------------------- |
+| `POST /api/pipelines/:id/hook-token/rotate` | mint a fresh `hookToken` → `200`, `400` if not a webhook trigger |
+| `POST /api/schedules/:id/hook-token/rotate` | same, for a schedule                                             |
+
+Fire the hook itself with:
+
+| Method + path                   | Effect                                   |
+| ------------------------------- | ---------------------------------------- |
+| `POST /api/hooks/pipelines/:id` | start an instance → `202 { instanceId }` |
+| `POST /api/hooks/schedules/:id` | fire a scheduled run → `202 { runId }`   |
+
+Both routes authenticate with `Authorization: Bearer <hookToken>` — the
+definition's own token, checked in constant time against exactly the one
+definition named in the path. **`ARGUS_TOKEN` is never accepted here**: a
+caller presenting a correct `ARGUS_TOKEN` but no (or the wrong) `hookToken`
+still gets `401`. A target whose trigger isn't `kind: "webhook"`, or whose id
+doesn't exist, is `404` either way — the route never reveals which pipelines
+or schedules exist to an unauthenticated prober. A disabled definition is
+`409`. `overlapPolicy: "skip"` is honoured exactly like the scheduler's own
+overlap check: a pipeline hook returns `409 { instanceId }` naming the
+instance already in flight; a schedule hook returns `409 { runId }`.
+
+The request body, if any, must be JSON and no larger than 64 KiB (`413`
+otherwise, before it is parsed). For a pipeline, it becomes the new instance's
+`triggerPayload` and the instance's `trigger` reads `"webhook"`. A schedule has
+nowhere to carry a payload — its hook just fires the schedule's own prompt,
+exactly like `POST /api/schedules/:id/run`, with `trigger: "webhook"` on the
+resulting run.
+
+Unlike every other mutating route, the two hook routes are **exempt from the
+Origin/CSRF check** (a webhook sender is a server, not a browser a CSRF page
+could drive) — but **not** from the Host allowlist, which still applies. Argus
+binds loopback by default, so reaching a hook from another machine needs the
+same non-default setup any remote access does: bind a routable `ARGUS_HOST`,
+set `ARGUS_TOKEN` (mandatory once the bind is non-loopback — see
+[Security](#security)), and add the sender's host to `ARGUS_ALLOWED_HOSTS` if
+it addresses Argus by a name other than the bind address. `ARGUS_TOKEN` still
+gates every _other_ route in that setup; it simply isn't the hook's own
+credential.
+
+**`after`.** Chains a pipeline or schedule to fire once a **pipeline**
+instance ends (only pipelines may be a chain's source; both pipelines and
+schedules may be a chain's target). `on: "succeeded"` fires only on a
+succeeded source instance, `"failed"` fires on a failed or aborted one, `"any"`
+fires on either. `pipelineId` must name an existing pipeline; a pipeline
+cannot name itself, and a direct two-pipeline cycle (A after B, B after A) is
+refused at save time with `400` — a longer cycle through several pipelines is
+not detected, but the scheduler fires at most once per source instance, so it
+runs down rather than spinning.
+
+Chaining is evaluated on the same scheduler tick as everything else, right
+after ordinary cadence firing, and is idempotent across restarts: a small
+ledger (`~/.claude/argus/chains.json`, capped to the most recent 500 source
+instances) records which targets have already fired for which source
+instance, so a tick that runs twice — or a restart mid-tick — cannot double-fire
+a chain. Only instances that ended **after** the target's own `updatedAt` are
+considered, so saving a new `after` trigger never reaches into history and
+fires off something that finished before the trigger existed.
+
+A chained pipeline instance carries `trigger: "chained"`, `chainedFrom:
+"<source instance id>"`, and `triggerPayload: { sourceInstanceId,
+sourcePipelineId, status }`. A chained schedule run carries `trigger:
+"chained"` and fires its ordinary prompt, exactly like a normal scheduled run.
 
 ### `POST /api/launch`
 
@@ -2281,6 +2367,7 @@ session — it cannot execute anything.
 | `DELETE /api/pipelines/:id`                             | delete a definition — **admin**                                                                                                                                                                                                                                    |
 | `POST /api/pipelines/:id/start`                         | start an instance manually → `202`, or `409` on overlap — **admin**                                                                                                                                                                                                |
 | `GET /api/pipelines/:id/instances`                      | instances for a pipeline (newest first)                                                                                                                                                                                                                            |
+| `GET /api/pipelines/:id/reliability?days=30`            | first-attempt pass rate, lucky passes, stalls and cost/duration per phase over a trailing window (`days` clamped to 1–365); `404` for an unknown pipeline                                                                                                          |
 | `GET /api/pipelines/:id/tune`                           | newest settings-tuning report for a pipeline, or why none can run                                                                                                                                                                                                  |
 | `POST /api/pipelines/:id/tune`                          | start one tuning pass per phase → `202` with a `running` report; `409` while one runs — **admin**                                                                                                                                                                  |
 | `GET /api/overview`                                     | command-center rows: `{ definition, latest, cost }` per pipeline, attention-first                                                                                                                                                                                  |
@@ -2308,6 +2395,22 @@ prices contribute tokens while `usd` remains null.
 A definition, a phase (`phases[]`) and a step (`phases[].steps[]`) may each
 carry `runtime`; see [Naming a runtime](#naming-a-runtime) for the resolution
 order. One pipeline can therefore mix runtimes phase by phase.
+
+### Reliability
+
+`GET /api/pipelines/:id/reliability?days=30` answers a question binary
+pass/fail hides: how often a pipeline's phases pass on the first try, and
+where they lose attempts when they don't. It reads only the settled
+(`succeeded`/`failed`/`aborted`) instances that ended within the window and
+returns a `PipelineReliability`: overall `firstAttemptSuccessRate` and
+`luckyPassRate` (a "lucky pass" succeeded only after a retry or a human
+revise — `PhaseProgress.attempt > 1`), a per-day `trend` of
+succeeded-vs-failed, and one `PhaseReliability` per phase with its pass/fail
+split, `failureClasses` tally, `stalls` (timeout failures) and mean
+duration/cost. Every rate is `null` — never `NaN` or `0` — when its
+denominator is empty, so an unproven pipeline reads as "no evidence" rather
+than "perfect" or "broken". See `server/src/sources/reliability.ts` for the
+exact derivation and the "first attempt" rule it applies.
 
 ### Emitting signals from a run
 

@@ -24,6 +24,7 @@ import { PipelineForm, EMPTY_PIPELINE } from "./PipelineForm";
 import { AdminAuthPanel } from "./AdminAuthPanel";
 import { TuningDrawer } from "./TuningDrawer";
 import { toInput } from "./tuningApply";
+import { ReliabilityCard } from "./ReliabilityCard";
 
 /** What the board already knows about this pipeline's latest run. */
 interface PipelineLive {
@@ -119,6 +120,7 @@ function PipelineCard({
   const cost = formatCost(live.latest?.cost?.tokens, live.latest?.cost?.usd);
   const failure = live.badge === "failed" ? live.latest?.failure : null;
   const alarming = live.badge === "failed";
+  const [showReliability, setShowReliability] = useState(false);
 
   return (
     <div
@@ -154,6 +156,18 @@ function PipelineCard({
                   last activity <TimeAgo iso={live.latest.updatedAt} />
                 </span>
               </>
+            )}
+            {(live.latest?.trigger === "webhook" || live.latest?.trigger === "chained") && (
+              <span
+                className="rounded-md border border-line px-1.5 py-0.5 text-[11px] text-ink-dim"
+                title={
+                  live.latest.trigger === "webhook"
+                    ? "The latest instance was fired by a webhook POST"
+                    : "The latest instance was chained after another pipeline's instance"
+                }
+              >
+                {live.latest.trigger}
+              </span>
             )}
             {cost && (
               <>
@@ -210,6 +224,16 @@ function PipelineCard({
           </span>
         </p>
       )}
+
+      <button
+        type="button"
+        onClick={() => setShowReliability((v) => !v)}
+        aria-expanded={showReliability}
+        className="mt-2.5 text-xs text-ink-faint hover:text-ink-dim"
+      >
+        {showReliability ? "Hide reliability ▴" : "Reliability ▾"}
+      </button>
+      {showReliability && <ReliabilityCard pipelineId={def.id} />}
 
       {!admin ? null : (
         <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -273,7 +297,8 @@ function PipelineCard({
 }
 
 export default function Pipelines() {
-  const { pipelines, loading, error, create, update, remove, setEnabled, runNow } = usePipelines();
+  const { pipelines, loading, error, create, update, remove, setEnabled, runNow, rotateHookToken } =
+    usePipelines();
   const { overview, abort } = useOverview();
   const auth = useAuth();
   const isAdmin = auth.status?.authenticated === true;
@@ -377,6 +402,7 @@ export default function Pipelines() {
         <div className="mb-6">
           <PipelineForm
             initial={EMPTY_PIPELINE}
+            pipelines={pipelines}
             onCancel={() => setMode({ kind: "none" })}
             onSubmit={async (input) => {
               await create(input);
@@ -391,6 +417,10 @@ export default function Pipelines() {
           <PipelineForm
             key={editing.id}
             initial={toInput(editing)}
+            pipelines={pipelines}
+            pipelineId={editing.id}
+            hookToken={editing.hookToken}
+            onRotateHook={() => rotateHookToken(editing.id).then(() => {})}
             onCancel={() => setMode({ kind: "none" })}
             onSubmit={async (input) => {
               try {

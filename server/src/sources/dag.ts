@@ -1,3 +1,4 @@
+import path from "node:path";
 import type {
   DependencyEdge,
   PhaseDef,
@@ -159,6 +160,11 @@ export function describeCondition(when: RouteCondition | undefined): string {
  * step, because two concurrent siblings racing to write one phase-level
  * decision is not a routing rule — it is a coin toss. Null when the phase
  * declares no result at all.
+ *
+ * A `candidates` phase has one step and therefore one answer, and every
+ * candidate of it publishes — to its own run's result file, never to a shared
+ * one. There is no race: the files are per run, and the phase takes the
+ * winner's after selection, not the first to arrive.
  */
 export function resultStepName(phase: PhaseDef): string | null {
   if (!phase.result) return null;
@@ -374,6 +380,27 @@ export function currentIndex(inst: PipelineInstance): number {
  * An unknown artifact interpolates to empty rather than being left as a literal
  * `{{artifacts.foo}}` in the prompt — a template marker reaching the model is
  * worse than a gap, because the model will try to make sense of it.
+ *
+ * The full placeholder vocabulary (see docs/HARNESS.md §13 for the caps table):
+ *
+ * | Placeholder                    | Value                                                        | Capped |
+ * | ------------------------------- | ------------------------------------------------------------ | ------ |
+ * | `{{previous.payload}}`          | the phase's dependency's payload (last one, if several)      | yes    |
+ * | `{{artifacts.<name>}}`          | a `produces`-published phase payload, by name                | yes    |
+ * | `{{artifactDir}}`               | this phase's own file-artifact directory                     | no     |
+ * | `{{artifactDir.<phaseId>}}`     | an earlier phase's file-artifact directory                   | no     |
+ * | `{{trigger.payload}}`           | the instance's `triggerPayload`, JSON-stringified            | yes    |
+ * | `{{memory}}`                    | the pipeline's `NOTES.md`, tail-capped to its own `maxBytes`  | yes    |
+ * | `{{previous.instance}}`         | one-paragraph summary of the last settled instance           | yes    |
+ *
+ * Every capped value is bounded to `maxPlaceholderBytes` (default 16 KiB, a
+ * pipeline may override via `contextLimits.placeholderBytes`, 1 KiB–256 KiB).
+ * Over the cap, {@link capPlaceholder} keeps the head (2/3) and tail (1/3)
+ * with a one-line marker naming where the full value was written — a context
+ * file this function only *describes* (`InterpolateResult.contextFiles`); it
+ * never touches a filesystem itself, keeping it as pure as the rest of this
+ * module. An unknown placeholder (of any kind) interpolates to empty, same as
+ * an unknown artifact always has.
  */
 export interface ArtifactDirs {
   /** This phase's own artifact directory. */
@@ -382,26 +409,135 @@ export interface ArtifactDirs {
   byPhase: Record<string, string>;
 }
 
+export interface InterpolateOptions {
+  /** The instance's firing payload, for `{{trigger.payload}}`. */
+  triggerPayload?: unknown;
+  /** The pipeline's `NOTES.md`, already tail-capped to its own policy — empty
+   *  when memory is disabled or nothing has been written yet. */
+  memory?: string;
+  /** `summarizeInstance` of the previous settled instance — empty when there
+   *  is none. */
+  previousInstanceSummary?: string;
+  /** Per-placeholder byte cap. Default {@link DEFAULT_PLACEHOLDER_BYTES}. */
+  maxPlaceholderBytes?: number;
+  /** Directory a trimmed placeholder's full value is described as living
+   *  under (`<contextDir>/context/<placeholder>.txt`) — ordinarily the run's
+   *  own invocation directory. Omitted = no {@link InterpolateResult.contextFiles}
+   *  are produced and the marker names no path (defensive fallback only; the
+   *  engine always has one to pass). */
+  contextDir?: string;
+}
+
+export interface InterpolateResult {
+  prompt: string;
+  /** One entry per placeholder this call trimmed, for the engine to write
+   *  under `contextDir` so the agent can still read the whole value. */
+  contextFiles: { path: string; contents: string }[];
+}
+
+/** Default cap for a single interpolated placeholder value. */
+export const DEFAULT_PLACEHOLDER_BYTES = 16 * 1024;
+
+/**
+ * The largest prefix (respectively suffix) of `s` whose UTF-8 encoding is at
+ * most `maxBytes`, never splitting a multi-byte sequence. JS strings are
+ * UTF-16 internally, so trimming by `.slice()` can cut a surrogate pair or a
+ * multi-byte UTF-8 character in half; both back off over UTF-8 continuation
+ * bytes (`10xxxxxx`) to land on a whole code point.
+ */
+export function utf8SlicePrefix(s: string, maxBytes: number): string {
+  if (maxBytes <= 0) return "";
+  const buf = Buffer.from(s, "utf8");
+  if (buf.length <= maxBytes) return s;
+  let end = maxBytes;
+  while (end > 0 && (buf[end] & 0xc0) === 0x80) end--;
+  return buf.subarray(0, end).toString("utf8");
+}
+
+export function utf8SliceSuffix(s: string, maxBytes: number): string {
+  if (maxBytes <= 0) return "";
+  const buf = Buffer.from(s, "utf8");
+  if (buf.length <= maxBytes) return s;
+  let start = buf.length - maxBytes;
+  while (start < buf.length && (buf[start] & 0xc0) === 0x80) start++;
+  return buf.subarray(start).toString("utf8");
+}
+
+/**
+ * Cap one placeholder's rendered value at `maxBytes`, UTF-8-safe. Within the
+ * cap, returns it untouched. Over it, keeps the head (2/3 of the budget) and
+ * tail (1/3), joined by a one-line marker naming how much was cut and where
+ * the full value lives on disk.
+ */
+export function capPlaceholder(
+  name: string,
+  value: string,
+  maxBytes: number,
+  fullValuePath: string,
+): { text: string; trimmed: boolean } {
+  const total = Buffer.byteLength(value, "utf8");
+  if (total <= maxBytes) return { text: value, trimmed: false };
+  const headBudget = Math.floor((maxBytes * 2) / 3);
+  const tailBudget = Math.max(0, maxBytes - headBudget);
+  const head = utf8SlicePrefix(value, headBudget);
+  const tail = utf8SliceSuffix(value, tailBudget);
+  const kept = Buffer.byteLength(head, "utf8") + Buffer.byteLength(tail, "utf8");
+  const removed = Math.max(0, total - kept);
+  const marker =
+    `\n[… Argus trimmed ${removed} bytes of {{${name}}} — ` +
+    `the full value is at ${fullValuePath} …]\n`;
+  return { text: `${head}${marker}${tail}`, trimmed: true };
+}
+
 /**
  * Render a step prompt: `{{previous.payload}}`, `{{artifacts.<name>}}`,
- * `{{artifactDir}}` (this phase's file-artifact directory) and
- * `{{artifactDir.<phaseId>}}` (an earlier phase's). Directories are the
- * file-based counterpart of payload artifacts — a plan or an investigation is
- * handed on as a path the next agent reads, not as text pasted into its prompt.
+ * `{{artifactDir}}` (this phase's file-artifact directory),
+ * `{{artifactDir.<phaseId>}}` (an earlier phase's), `{{trigger.payload}}`,
+ * `{{memory}}` and `{{previous.instance}}`. Directories are the file-based
+ * counterpart of payload artifacts — a plan or an investigation is handed on
+ * as a path the next agent reads, not as text pasted into its prompt — and so
+ * are never capped; every other placeholder's rendered value is, via
+ * {@link capPlaceholder}.
+ *
+ * Pure: a placeholder that would need trimming is trimmed in the returned
+ * text, and its full value is *described* in `contextFiles` for the caller to
+ * write — this function never touches a filesystem.
  */
 export function interpolate(
   prompt: string,
   previousPayload: unknown,
   artifacts: Record<string, unknown> = {},
   dirs: ArtifactDirs = { own: null, byPhase: {} },
-): string {
+  options: InterpolateOptions = {},
+): InterpolateResult {
+  const maxBytes = options.maxPlaceholderBytes ?? DEFAULT_PLACEHOLDER_BYTES;
+  const contextFiles: { path: string; contents: string }[] = [];
   const render = (v: unknown): string =>
     v == null ? "" : typeof v === "string" ? v : JSON.stringify(v);
-  return prompt
-    .replace(/\{\{previous\.payload\}\}/g, render(previousPayload))
-    .replace(/\{\{artifacts\.([A-Za-z0-9_-]+)\}\}/g, (_, name: string) => render(artifacts[name]))
+  const cap = (name: string, raw: string): string => {
+    if (!raw) return raw;
+    const fullPath = options.contextDir
+      ? path.join(options.contextDir, "context", `${name}.txt`)
+      : `context/${name}.txt`;
+    const { text, trimmed } = capPlaceholder(name, raw, maxBytes, fullPath);
+    if (trimmed && options.contextDir) contextFiles.push({ path: fullPath, contents: raw });
+    return text;
+  };
+  const text = prompt
+    .replace(/\{\{previous\.payload\}\}/g, () => cap("previous.payload", render(previousPayload)))
+    .replace(/\{\{artifacts\.([A-Za-z0-9_-]+)\}\}/g, (_, name: string) =>
+      cap(`artifacts.${name}`, render(artifacts[name])),
+    )
     .replace(/\{\{artifactDir\.([A-Za-z0-9_-]+)\}\}/g, (_, id: string) => dirs.byPhase[id] ?? "")
-    .replace(/\{\{artifactDir\}\}/g, dirs.own ?? "");
+    .replace(/\{\{artifactDir\}\}/g, dirs.own ?? "")
+    .replace(/\{\{trigger\.payload\}\}/g, () =>
+      cap("trigger.payload", render(options.triggerPayload)),
+    )
+    .replace(/\{\{memory\}\}/g, () => cap("memory", options.memory ?? ""))
+    .replace(/\{\{previous\.instance\}\}/g, () =>
+      cap("previous.instance", options.previousInstanceSummary ?? ""),
+    );
+  return { prompt: text, contextFiles };
 }
 
 /** The payload a phase should see as `{{previous.payload}}`: its dependency's,

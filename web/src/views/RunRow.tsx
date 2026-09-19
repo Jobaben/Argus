@@ -73,6 +73,8 @@ export function RunRow({
             </span>
           )}
           {run.trigger === "manual" && <span className="text-xs text-queue">manual</span>}
+          {run.trigger === "webhook" && <span className="text-xs text-queue">webhook</span>}
+          {run.trigger === "chained" && <span className="text-xs text-queue">chained</span>}
           <RuntimeBadge runtime={run.runtime} baseline={defaultRuntime} />
         </button>
         {extraActions}
