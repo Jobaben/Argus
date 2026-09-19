@@ -190,6 +190,18 @@ peer-reviewed ablation, or an independent evaluation — in
 **[docs/HARNESS-RESEARCH.md](docs/HARNESS-RESEARCH.md)**, which also records
 what the evidence argued _against_ building.
 
+## The Knowledge Ledger
+
+Execution provenance says which run produced an output. The Knowledge Ledger
+says _why it is believed_: an append-only graph of claims (facts, assumptions,
+business rules, constraints, conclusions, decisions), the evidence that grounds
+them and the justifications that derive one from others. A claim changes by
+revision — the old revision stays addressable and nothing that referenced it is
+retargeted — and support (`supported | unsupported | contested`) is derived by
+one deterministic function, never stored. Inspect it at `/api/knowledge`; the
+design and its worked example are in
+**[docs/KNOWLEDGE-LEDGER.md](docs/KNOWLEDGE-LEDGER.md)**.
+
 ## Getting around
 
 `⌘K` (`Ctrl K`) opens the command palette: fuzzy search over every destination,

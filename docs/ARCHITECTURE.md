@@ -313,6 +313,7 @@ while an unrecognised frame _type_ is still forwarded for forward compatibility.
 | Ledger            | runs + `argus/spend.json` + `argus/budget.json` | attribution, forecast and enforcement all derived per read; only the ladder persists |
 | The Vault         | `argus/vault.sqlite`                            | every run/event/score past JSON retention; a rebuildable cache, never the source     |
 | Gate review       | instance record + `argus/artifacts/<inst>/<ph>` | derived per read from the paused phase and its artifact directory; nothing persisted |
+| Knowledge Ledger  | `argus/knowledge.json`                          | authoritative, append-only claims/evidence/justifications; support derived per read  |
 
 ### Derivation over storage: the Flight Recorder
 

@@ -56,4 +56,7 @@ export const paths = {
   hooksDir: () => path.join(claudeHome(), "hooks"),
   /** Dedupe ledger for `after`-triggered chain fires: `{ [sourceInstanceId]: targetId[] }`. */
   chainsFile: () => path.join(claudeHome(), "argus", "chains.json"),
+  /** The Knowledge Ledger: the one authoritative store of claims, evidence and
+   *  justifications. See docs/KNOWLEDGE-LEDGER.md. */
+  knowledgeFile: () => path.join(claudeHome(), "argus", "knowledge.json"),
 };

@@ -295,3 +295,23 @@ export type {
 } from "./constellation.js";
 
 export type { PhaseReliability, PipelineReliability } from "./reliability.js";
+
+export type {
+  Claim,
+  ClaimDetail,
+  ClaimKind,
+  ClaimLifecycle,
+  ClaimRef,
+  ClaimSupport,
+  ClaimView,
+  ClaimsResponse,
+  DependentsReport,
+  Evidence,
+  EvidenceSource,
+  ExecutionRef,
+  Justification,
+  JustificationForce,
+  JustificationStatus,
+  SupportDirection,
+  SupportReport,
+} from "./knowledge.js";

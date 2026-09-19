@@ -2481,6 +2481,62 @@ the web UI's setup banner installs the fixable ones with `POST /api/setup/apply`
 | `ARGUS_RESULT_FILE`         | where a result-producing step writes its decision JSON         |
 | `ARGUS_MAX_CONCURRENT_RUNS` | cap on concurrent `claude -p` processes (default 4)            |
 
+## Knowledge Ledger
+
+The semantic provenance graph: claims, the evidence that grounds them and the
+justifications that derive one from others. Support is **derived** on every
+read by one deterministic function — no record stores a verdict. Reads are
+open; the four proposals are admin-gated. Design, invariants and the worked
+example: [KNOWLEDGE-LEDGER.md](KNOWLEDGE-LEDGER.md).
+
+A `:key` is a bare claim id (`RULE-7`, meaning its **active** revision) or a
+revision (`RULE-7:v1`). Unknown or malformed keys are `404`.
+
+| Method + path                               | Effect                                                                                                    |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `GET /api/knowledge/claims`                 | `{ claims: ClaimView[] }` — every revision with derived `lifecycle` and `support`; `?kind=` `?lifecycle=` |
+| `GET /api/knowledge/claims/:key`            | `ClaimDetail` — the resolved revision plus every revision of its id, oldest first                         |
+| `GET /api/knowledge/claims/:key/support`    | `SupportReport` — why: each evidence record and each justification with its force                         |
+| `GET /api/knowledge/claims/:key/dependents` | `DependentsReport` — `direct` and `transitive` dependents of that exact revision                          |
+| `POST /api/knowledge/claims`                | (admin) propose revision 1 of a claim → `201 ClaimView`                                                   |
+| `POST /api/knowledge/claims/:id/revise`     | (admin) supersede the active revision → `201 ClaimView`; takes an id, never a `:vN` key                   |
+| `POST /api/knowledge/evidence`              | (admin) attach evidence to a revision → `201 Evidence`                                                    |
+| `POST /api/knowledge/justifications`        | (admin) record a derivation → `201 Justification`; `400` on unknown refs or a cycle                       |
+
+Proposal bodies:
+
+```jsonc
+// POST /api/knowledge/claims
+{ "id": "RULE-7",                 // optional; minted from the kind when absent (RULE-3f9a1c2b)
+  "kind": "business-rule",        // fact | assumption | business-rule | constraint | conclusion | decision
+  "statement": "Kobra comment maximum is 180",
+  "structuredValue": { "when": [], "then": [] },   // optional, opaque, ≤ 64 KiB
+  "producedBy": { "instanceId": "…", "phaseId": "…", "runId": "…" } }   // optional
+
+// POST /api/knowledge/claims/RULE-7/revise
+{ "statement": "Kobra comment maximum is 500", "revisionNote": "Kobra 4.2 raised the limit" }
+
+// POST /api/knowledge/evidence
+{ "claim": "RULE-7",              // "ID" (active revision) | "ID:vN" | { "id", "revision"? }
+  "direction": "supports",        // default; or "opposes"
+  "source": { "type": "document", "uri": "https://…" } }
+// source.type ∈ run | phase | artifact | verification | source-code | git-commit | document | human
+
+// POST /api/knowledge/justifications
+{ "conclusion": "CONCLUSION-19",
+  "premises": ["FACT-12", "RULE-7:v1"],   // ≥ 1, ≤ 64, conjunctive, stored as exact revisions
+  "direction": "supports",
+  "producedBy": { "instanceId": "inst-1", "phaseId": "plan", "runId": "run-9" } }
+```
+
+A bare id in a body is resolved to the active revision **at write time** and
+stored as that revision; the persisted edge never floats. `400` carries
+`{ error }` naming the field or the refused invariant (`unknown claim X`,
+`would form a cycle: …`, `already exists`).
+
+`SupportReport.justifications[].force` is `{ "inForce": true }` or
+`{ "inForce": false, "failing": [{ "premise": { "id", "revision" }, "reason": "superseded" | "unsupported" | "contested" | "missing" }] }`.
+
 ## Derived views
 
 Two endpoints exist purely to save the client from assembling something out of

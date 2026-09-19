@@ -179,6 +179,7 @@ import {
   type UserStore,
 } from "./userStore.js";
 import { VERSION } from "./version.js";
+import { knowledgeRoutes } from "./knowledge/routes.js";
 import { mountWebApp } from "./static.js";
 import { buildRunFailurePayload, postWebhook } from "./notify.js";
 
@@ -491,6 +492,10 @@ export function createApp(deps: AppDeps): Hono {
   app.use("/api/fleet/label", admin);
   app.use("/api/omnibar/plan", admin);
   app.use("/api/omnibar/execute", admin);
+  // Knowledge Ledger: proposals (claims, revisions, evidence, justifications)
+  // are admin writes; reads stay open like every other dashboard read.
+  app.on(["POST", "PUT", "PATCH", "DELETE"], "/api/knowledge/*", admin);
+  app.route("/api/knowledge", knowledgeRoutes());
 
   app.get("/api/setup", async (c) =>
     c.json(await import("./setup/prereqs.js").then((m) => m.checkAll())),
