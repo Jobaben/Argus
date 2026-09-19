@@ -1047,6 +1047,7 @@ const RETRYABLE: readonly string[] = [
   "timeout",
   "verification",
   "knowledge-delta",
+  "knowledge-context-integrity",
 ];
 
 function validateRetry(raw: unknown, i: number) {

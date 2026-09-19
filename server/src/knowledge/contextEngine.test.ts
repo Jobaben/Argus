@@ -534,7 +534,10 @@ test("a run with a context that proposes nothing creates no consumption: supply 
   assert.equal((await instance(inst.id)).status, "succeeded");
   const ledger = await readLedger();
   assert.deepEqual(ledger.consumptions, []);
+  // Supply alone is durable provenance, but it is not *reliance* provenance:
+  // the execution has no consumption or production report (Phase 4.1 §5).
   assert.equal(executionProvenance(ledger, rec.calls[0].runId), null);
+  assert.deepEqual(ledger.supplied[0].claims, [v("RULE-17", 2), v("CONSTRAINT-4", 1)]);
   await createRevision("RULE-17", { statement: "x" }, NOW);
   assert.deepEqual(analyzeImpact(await readLedger(), v("RULE-17", 2)).executions, []);
 });
