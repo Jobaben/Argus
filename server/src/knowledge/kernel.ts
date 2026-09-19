@@ -1,17 +1,24 @@
 import type {
+  ArtifactProduction,
+  ArtifactRef,
   Claim,
+  ClaimConsumption,
   ClaimKind,
   ClaimLifecycle,
   ClaimRef,
   ClaimSupport,
   ClaimView,
+  ConsumedClaimStatus,
+  ConsumersReport,
   DependentsReport,
   Evidence,
   EvidenceSource,
+  ExecutionProvenance,
   ExecutionRef,
   Justification,
   JustificationForce,
   JustificationStatus,
+  RunExecutionRef,
   SupportDirection,
   SupportReport,
 } from "@argus/contracts";
@@ -45,21 +52,43 @@ import type {
  * - **Support is derived.** {@link evaluateSupport} is the only definition of
  *   `supported | unsupported | contested`, and it is a total, deterministic
  *   function of the ledger. No record carries a truth value.
+ * - **Provenance edges are exact and immutable.** A consumption names one
+ *   revision and one run; an artifact production names one run and one path.
+ *   Neither is ever retargeted, and recording an identical edge twice is a
+ *   no-op — the ledger holds each fact once.
  */
 
-/** The authoritative ledger document. `version` guards the on-disk shape. */
+/**
+ * The authoritative ledger document. `version` guards the on-disk shape.
+ *
+ * Version 2 (Phase 2) added `consumptions` and `artifacts` — the explicit
+ * bridges from the semantic graph back into execution history. A version 1
+ * file is upgraded on read by `store.ts` (the two arrays start empty); the
+ * kernel only ever sees version 2.
+ */
 export interface KnowledgeLedger {
-  version: 1;
+  version: 2;
   /** Every claim revision, in the order it was added. */
   claims: Claim[];
   evidence: Evidence[];
   justifications: Justification[];
+  /** Execution → exact claim revision it relied on, in recording order. */
+  consumptions: ClaimConsumption[];
+  /** Execution → artifact it produced, in recording order. */
+  artifacts: ArtifactProduction[];
 }
 
-export const LEDGER_VERSION = 1 as const;
+export const LEDGER_VERSION = 2 as const;
 
 export function emptyLedger(): KnowledgeLedger {
-  return { version: LEDGER_VERSION, claims: [], evidence: [], justifications: [] };
+  return {
+    version: LEDGER_VERSION,
+    claims: [],
+    evidence: [],
+    justifications: [],
+    consumptions: [],
+    artifacts: [],
+  };
 }
 
 /** An input or transition the ledger refuses: bad shape, an unknown reference,
@@ -91,6 +120,15 @@ export const CLAIM_KINDS: readonly ClaimKind[] = [
 /** Same alphabet as phase ids: URL-safe, no `:` (the revision separator).
  *  Evidence and justification ids share it. */
 export const CLAIM_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
+
+/** The shape of an Argus execution identifier (a run, instance or phase id):
+ *  UUIDs, `run-7`-style test ids and phase ids all fit. Same alphabet as the
+ *  `producedBy` validator accepts. */
+export const EXECUTION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+/** Bounds on an {@link ArtifactRef.path}. */
+export const ARTIFACT_PATH_MAX_CHARS = 1024;
+const SHA_RE = /^[0-9a-f]{7,64}$/;
 
 // ── Refs ────────────────────────────────────────────────────────────────────
 
@@ -376,6 +414,173 @@ export function addJustification(
   };
 }
 
+// ── Execution provenance ────────────────────────────────────────────────────
+
+export function sameArtifact(a: ArtifactRef, b: ArtifactRef): boolean {
+  return a.location === b.location && a.path === b.path;
+}
+
+/** Every provenance record naming a run, consumptions first, each in ledger order. */
+function executionRecordsOf(ledger: KnowledgeLedger, runId: string): RunExecutionRef[] {
+  return [
+    ...ledger.consumptions.filter((c) => c.execution.runId === runId).map((c) => c.execution),
+    ...ledger.artifacts.filter((a) => a.execution.runId === runId).map((a) => a.execution),
+  ];
+}
+
+/**
+ * Validate an execution reference and reconcile its locators with what the
+ * ledger already holds for the run. A run belongs to exactly one instance and
+ * phase, so a locator that contradicts an earlier record is refused; a locator
+ * omitted here is filled from the earlier record so every edge of a run reads
+ * the same. Run *existence* is deliberately not checked: run files are a
+ * pruned, rebuildable record (`runs/` → the Vault), and refusing a reference
+ * to a run whose JSON has aged out would make historical provenance
+ * unrecordable. Shape is what can be validated, so shape is what is.
+ */
+function resolveExecution(ledger: KnowledgeLedger, input: RunExecutionRef): RunExecutionRef {
+  if (typeof input.runId !== "string" || !EXECUTION_ID_RE.test(input.runId)) {
+    throw new KnowledgeValidationError(`run id "${String(input.runId)}" is invalid`);
+  }
+  for (const [field, value] of [
+    ["instanceId", input.instanceId],
+    ["phaseId", input.phaseId],
+  ] as const) {
+    if (value !== undefined && !EXECUTION_ID_RE.test(value)) {
+      throw new KnowledgeValidationError(`execution.${field} "${value}" is invalid`);
+    }
+  }
+  const out: RunExecutionRef = compact({
+    runId: input.runId,
+    instanceId: input.instanceId,
+    phaseId: input.phaseId,
+  });
+  for (const known of executionRecordsOf(ledger, input.runId)) {
+    for (const field of ["instanceId", "phaseId"] as const) {
+      const have = known[field];
+      if (have === undefined) continue;
+      if (out[field] === undefined) out[field] = have;
+      else if (out[field] !== have) {
+        throw new KnowledgeValidationError(
+          `run ${input.runId} is already recorded with ${field} "${have}", not "${out[field]}"`,
+        );
+      }
+    }
+  }
+  return out;
+}
+
+export interface RecordConsumptionInput {
+  execution: RunExecutionRef;
+  claim: ClaimRef;
+}
+
+/**
+ * Record that an execution consumed an exact claim revision. The revision must
+ * exist; it may be superseded (a run that relied on `RULE-17:v1` did so
+ * whether or not v2 exists yet). An identical edge already present makes this
+ * a no-op — `added: false` and the same ledger back — so registering twice is
+ * safe and deterministic. Consumption is semantic provenance, not execution
+ * order: nothing here consults, or is consulted by, the DAG.
+ */
+export function recordConsumption(
+  ledger: KnowledgeLedger,
+  input: RecordConsumptionInput,
+  now: string,
+): { ledger: KnowledgeLedger; consumption: ClaimConsumption; added: boolean } {
+  const execution = resolveExecution(ledger, input.execution);
+  if (!getClaim(ledger, input.claim)) {
+    throw new KnowledgeValidationError(
+      `consumption names unknown claim revision ${formatClaimRef(input.claim)}`,
+    );
+  }
+  const existing = ledger.consumptions.find(
+    (c) => c.execution.runId === execution.runId && sameRef(c.claim, input.claim),
+  );
+  if (existing) return { ledger, consumption: existing, added: false };
+  const consumption: ClaimConsumption = {
+    claim: { id: input.claim.id, revision: input.claim.revision },
+    execution,
+    createdAt: now,
+  };
+  return {
+    ledger: { ...ledger, consumptions: [...ledger.consumptions, consumption] },
+    consumption,
+    added: true,
+  };
+}
+
+export interface RecordArtifactInput {
+  execution: RunExecutionRef;
+  artifact: ArtifactRef;
+}
+
+/** A relative POSIX path that stays inside its root: no drive, no leading
+ *  slash, no `..` segment, no NUL, no backslash. Mirrors the containment rule
+ *  the artifact viewer applies, so a path recorded here is one it could list. */
+export function validArtifactPath(path: string): boolean {
+  if (!path || path.length > ARTIFACT_PATH_MAX_CHARS) return false;
+  if (path.includes("\0") || path.includes("\\") || path.startsWith("/")) return false;
+  if (/^[A-Za-z]:/.test(path)) return false;
+  return path.split("/").every((seg) => seg !== "" && seg !== "." && seg !== "..");
+}
+
+/**
+ * Record that an execution produced an artifact. Identity is
+ * `(runId, location, path)`; an identical record is a no-op, and a differing
+ * `gitHead` for the same path is refused rather than silently kept twice — a
+ * run has one working tree.
+ */
+export function recordArtifact(
+  ledger: KnowledgeLedger,
+  input: RecordArtifactInput,
+  now: string,
+): { ledger: KnowledgeLedger; production: ArtifactProduction; added: boolean } {
+  const execution = resolveExecution(ledger, input.execution);
+  const { artifact } = input;
+  if (artifact.location !== "artifact-dir" && artifact.location !== "repository") {
+    throw new KnowledgeValidationError(`artifact.location must be artifact-dir | repository`);
+  }
+  if (typeof artifact.path !== "string" || !validArtifactPath(artifact.path)) {
+    throw new KnowledgeValidationError(
+      `artifact.path "${String(artifact.path)}" must be a relative POSIX path inside its root`,
+    );
+  }
+  if (artifact.gitHead !== undefined) {
+    if (artifact.location !== "repository") {
+      throw new KnowledgeValidationError("artifact.gitHead only applies to a repository path");
+    }
+    if (!SHA_RE.test(artifact.gitHead)) {
+      throw new KnowledgeValidationError("artifact.gitHead must be a hex commit sha");
+    }
+  }
+  const existing = ledger.artifacts.find(
+    (a) => a.execution.runId === execution.runId && sameArtifact(a.artifact, artifact),
+  );
+  if (existing) {
+    if (existing.artifact.gitHead !== artifact.gitHead) {
+      throw new KnowledgeValidationError(
+        `run ${execution.runId} already produced ${artifact.path} at ${existing.artifact.gitHead ?? "an unpinned head"}`,
+      );
+    }
+    return { ledger, production: existing, added: false };
+  }
+  const production: ArtifactProduction = {
+    execution,
+    artifact: compact({
+      location: artifact.location,
+      path: artifact.path,
+      gitHead: artifact.gitHead,
+    }),
+    createdAt: now,
+  };
+  return {
+    ledger: { ...ledger, artifacts: [...ledger.artifacts, production] },
+    production,
+    added: true,
+  };
+}
+
 // ── Support ─────────────────────────────────────────────────────────────────
 
 /** Justifications whose conclusion is this revision, in ledger order. */
@@ -388,11 +593,28 @@ export function evidenceOf(ledger: KnowledgeLedger, ref: ClaimRef): Evidence[] {
   return ledger.evidence.filter((e) => sameRef(e.claim, ref));
 }
 
-interface Evaluation {
+/**
+ * One evaluation pass: a memo, a cycle guard, and — for impact analysis — at
+ * most one *assumption*. An assumed revision is treated as active and
+ * `supported` regardless of the ledger, which is how `analyzeImpact` asks "what
+ * would hold if this revision were still current?" without building a second
+ * ledger. Nothing outside `impact.ts` sets it.
+ */
+export interface Evaluation {
   memo: Map<string, ClaimSupport>;
   /** Revisions on the current recursion path — only ever non-empty on a
    *  hand-edited ledger, since `addJustification` rejects cycles. */
   visiting: Set<string>;
+  /** `formatClaimRef` of the revision held as active and supported, if any. */
+  assume?: string;
+}
+
+export function newEvaluation(assume?: ClaimRef): Evaluation {
+  return {
+    memo: new Map(),
+    visiting: new Set(),
+    ...(assume ? { assume: formatClaimRef(assume) } : {}),
+  };
 }
 
 /**
@@ -404,9 +626,14 @@ interface Evaluation {
  * contested premise does not either — a derivation from disputed ground is not
  * a derivation Argus will vouch for.
  */
-function forceOf(ledger: KnowledgeLedger, j: Justification, ev: Evaluation): JustificationForce {
+export function forceOf(
+  ledger: KnowledgeLedger,
+  j: Justification,
+  ev: Evaluation,
+): JustificationForce {
   const failing: Extract<JustificationForce, { inForce: false }>["failing"] = [];
   for (const premise of j.premises) {
+    if (ev.assume !== undefined && formatClaimRef(premise) === ev.assume) continue;
     if (!getClaim(ledger, premise)) {
       failing.push({ premise, reason: "missing" });
       continue;
@@ -421,8 +648,12 @@ function forceOf(ledger: KnowledgeLedger, j: Justification, ev: Evaluation): Jus
   return failing.length === 0 ? { inForce: true } : { inForce: false, failing };
 }
 
-function evaluate(ledger: KnowledgeLedger, ref: ClaimRef, ev: Evaluation): ClaimSupport {
+/** {@link evaluateSupport} within an existing pass, so one memo serves many
+ *  claims. The reference is not checked for existence; an unknown revision
+ *  evaluates to `unsupported`, as a missing premise would. */
+export function evaluate(ledger: KnowledgeLedger, ref: ClaimRef, ev: Evaluation): ClaimSupport {
   const key = formatClaimRef(ref);
+  if (ev.assume === key) return "supported";
   const hit = ev.memo.get(key);
   if (hit) return hit;
   // Cycle guard: a revision reached again while it is being evaluated cannot
@@ -462,13 +693,13 @@ function evaluate(ledger: KnowledgeLedger, ref: ClaimRef, ev: Evaluation): Claim
  */
 export function evaluateSupport(ledger: KnowledgeLedger, ref: ClaimRef): ClaimSupport {
   requireClaim(ledger, ref);
-  return evaluate(ledger, ref, { memo: new Map(), visiting: new Set() });
+  return evaluate(ledger, ref, newEvaluation());
 }
 
 /** "Why is this claim supported (or not)?" — every signal, with its force. */
 export function supportReport(ledger: KnowledgeLedger, ref: ClaimRef): SupportReport {
   requireClaim(ledger, ref);
-  const ev: Evaluation = { memo: new Map(), visiting: new Set() };
+  const ev = newEvaluation();
   const justifications: JustificationStatus[] = premisesOf(ledger, ref).map((j) => ({
     justification: j,
     force: forceOf(ledger, j, ev),
@@ -530,5 +761,84 @@ export function dependentsReport(ledger: KnowledgeLedger, ref: ClaimRef): Depend
     claim: { id: ref.id, revision: ref.revision },
     direct: dependentsOf(ledger, ref),
     transitive: transitiveDependentsOf(ledger, ref),
+  };
+}
+
+// ── Provenance traversal ────────────────────────────────────────────────────
+
+/** Consumption records naming this exact revision, in recording order. A
+ *  revised claim's consumers stay on the revision they consumed. */
+export function consumersOf(ledger: KnowledgeLedger, ref: ClaimRef): ClaimConsumption[] {
+  return ledger.consumptions.filter((c) => sameRef(c.claim, ref));
+}
+
+export function consumersReport(ledger: KnowledgeLedger, ref: ClaimRef): ConsumersReport {
+  requireClaim(ledger, ref);
+  return { claim: { id: ref.id, revision: ref.revision }, consumptions: consumersOf(ledger, ref) };
+}
+
+/**
+ * The run's reference as the ledger knows it: locators merged across its
+ * provenance records (they cannot disagree — `resolveExecution` refuses that),
+ * then filled from any `producedBy` naming the run. Null when the ledger holds
+ * nothing about it.
+ */
+export function executionOf(ledger: KnowledgeLedger, runId: string): RunExecutionRef | null {
+  const records: ExecutionRef[] = [
+    ...executionRecordsOf(ledger, runId),
+    ...ledger.claims.filter((c) => c.producedBy?.runId === runId).map((c) => c.producedBy!),
+    ...ledger.justifications.filter((j) => j.producedBy?.runId === runId).map((j) => j.producedBy!),
+  ];
+  if (records.length === 0) return null;
+  const out: RunExecutionRef = { runId };
+  for (const r of records) {
+    if (out.instanceId === undefined && r.instanceId !== undefined) out.instanceId = r.instanceId;
+    if (out.phaseId === undefined && r.phaseId !== undefined) out.phaseId = r.phaseId;
+  }
+  return out;
+}
+
+/** Whether a consumed revision is still the active, supported one. Total: a
+ *  dangling reference in a hand-edited file reads as `unsupported`. */
+export function consumedStatus(ledger: KnowledgeLedger, ref: ClaimRef): ConsumedClaimStatus {
+  const lifecycle = lifecycleOf(ledger, ref);
+  const support = evaluate(ledger, ref, newEvaluation());
+  return {
+    claim: { id: ref.id, revision: ref.revision },
+    lifecycle,
+    support,
+    current: lifecycle === "active" && support === "supported",
+  };
+}
+
+/**
+ * Both directions of one execution's semantic provenance, plus its currency.
+ * Null when the ledger holds nothing about the run. `produced` comes from
+ * Phase 1's `producedBy` (matched on `runId`); `consumed` from the
+ * consumption edges. The two are distinct facts: producing a claim does not
+ * make a run a consumer of it, and this report never conflates them.
+ * Currency is derived here and stored nowhere — the run's own status record
+ * is not consulted and not touched.
+ */
+export function executionProvenance(
+  ledger: KnowledgeLedger,
+  runId: string,
+): ExecutionProvenance | null {
+  const execution = executionOf(ledger, runId);
+  if (!execution) return null;
+  const consumed = ledger.consumptions
+    .filter((c) => c.execution.runId === runId)
+    .map((c) => consumedStatus(ledger, c.claim));
+  return {
+    execution,
+    consumed,
+    produced: {
+      claims: ledger.claims
+        .filter((c) => c.producedBy?.runId === runId)
+        .map((c) => viewOf(ledger, c)),
+      justifications: ledger.justifications.filter((j) => j.producedBy?.runId === runId),
+      artifacts: ledger.artifacts.filter((a) => a.execution.runId === runId).map((a) => a.artifact),
+    },
+    currency: consumed.every((c) => c.current) ? "current" : "stale",
   };
 }

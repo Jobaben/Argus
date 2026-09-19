@@ -2483,25 +2483,33 @@ the web UI's setup banner installs the fixable ones with `POST /api/setup/apply`
 
 ## Knowledge Ledger
 
-The semantic provenance graph: claims, the evidence that grounds them and the
-justifications that derive one from others. Support is **derived** on every
-read by one deterministic function — no record stores a verdict. Reads are
-open; the four proposals are admin-gated. Design, invariants and the worked
-example: [KNOWLEDGE-LEDGER.md](KNOWLEDGE-LEDGER.md).
+The semantic provenance graph: claims, the evidence that grounds them, the
+justifications that derive one from others, and — since Phase 2 — the
+executions that consumed exact claim revisions and the artifacts those
+executions produced. Support, currency and impact are **derived** on every
+read by deterministic functions — no record stores a verdict. Reads are open;
+every proposal and registration is admin-gated. Design, invariants and the
+worked example: [KNOWLEDGE-LEDGER.md](KNOWLEDGE-LEDGER.md).
 
 A `:key` is a bare claim id (`RULE-7`, meaning its **active** revision) or a
-revision (`RULE-7:v1`). Unknown or malformed keys are `404`.
+revision (`RULE-7:v1`). A `:runId` is an Argus run id. Unknown or malformed
+keys are `404`.
 
-| Method + path                               | Effect                                                                                                    |
-| ------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `GET /api/knowledge/claims`                 | `{ claims: ClaimView[] }` — every revision with derived `lifecycle` and `support`; `?kind=` `?lifecycle=` |
-| `GET /api/knowledge/claims/:key`            | `ClaimDetail` — the resolved revision plus every revision of its id, oldest first                         |
-| `GET /api/knowledge/claims/:key/support`    | `SupportReport` — why: each evidence record and each justification with its force                         |
-| `GET /api/knowledge/claims/:key/dependents` | `DependentsReport` — `direct` and `transitive` dependents of that exact revision                          |
-| `POST /api/knowledge/claims`                | (admin) propose revision 1 of a claim → `201 ClaimView`                                                   |
-| `POST /api/knowledge/claims/:id/revise`     | (admin) supersede the active revision → `201 ClaimView`; takes an id, never a `:vN` key                   |
-| `POST /api/knowledge/evidence`              | (admin) attach evidence to a revision → `201 Evidence`                                                    |
-| `POST /api/knowledge/justifications`        | (admin) record a derivation → `201 Justification`; `400` on unknown refs or a cycle                       |
+| Method + path                                        | Effect                                                                                                    |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `GET /api/knowledge/claims`                          | `{ claims: ClaimView[] }` — every revision with derived `lifecycle` and `support`; `?kind=` `?lifecycle=` |
+| `GET /api/knowledge/claims/:key`                     | `ClaimDetail` — the resolved revision plus every revision of its id, oldest first                         |
+| `GET /api/knowledge/claims/:key/support`             | `SupportReport` — why: each evidence record and each justification with its force                         |
+| `GET /api/knowledge/claims/:key/dependents`          | `DependentsReport` — `direct` and `transitive` dependents of that exact revision                          |
+| `GET /api/knowledge/claims/:key/consumers`           | `ConsumersReport` — the consumption records naming that exact revision, in recording order                |
+| `GET /api/knowledge/claims/:key/impact`              | `ImpactSet` — what rests on that revision being current and supported, and why (see below)                |
+| `GET /api/knowledge/executions/:runId/provenance`    | `ExecutionProvenance` — what the run consumed (with currency now) and produced; `404` if nothing is known |
+| `POST /api/knowledge/claims`                         | (admin) propose revision 1 of a claim → `201 ClaimView`                                                   |
+| `POST /api/knowledge/claims/:id/revise`              | (admin) supersede the active revision → `201 ClaimView`; takes an id, never a `:vN` key                   |
+| `POST /api/knowledge/evidence`                       | (admin) attach evidence to a revision → `201 Evidence`                                                    |
+| `POST /api/knowledge/justifications`                 | (admin) record a derivation → `201 Justification`; `400` on unknown refs or a cycle                       |
+| `POST /api/knowledge/executions/:runId/consumptions` | (admin) "this run consumed these exact revisions" → `201`, or `200` when every edge already existed       |
+| `POST /api/knowledge/executions/:runId/artifacts`    | (admin) "this run produced these artifacts" → `201`, or `200` when every record already existed           |
 
 Proposal bodies:
 
@@ -2536,6 +2544,58 @@ stored as that revision; the persisted edge never floats. `400` carries
 
 `SupportReport.justifications[].force` is `{ "inForce": true }` or
 `{ "inForce": false, "failing": [{ "premise": { "id", "revision" }, "reason": "superseded" | "unsupported" | "contested" | "missing" }] }`.
+
+Execution provenance registrations:
+
+```jsonc
+// POST /api/knowledge/executions/run_456/consumptions
+{ "instanceId": "inst-1", "phaseId": "implement",   // optional locators; must agree with earlier records of the run
+  "claims": ["DECISION-3", "CONCLUSION-8:v1"] }     // ≥ 1, ≤ 64; bare ids resolve to the active revision at write time
+// → { "execution": { "runId", "instanceId"?, "phaseId"? }, "consumptions": ClaimConsumption[] }
+
+// POST /api/knowledge/executions/run_456/artifacts
+{ "artifacts": [{ "location": "repository",          // artifact-dir | repository
+                  "path": "src/CustomerCommentValidator.cs",   // relative POSIX path inside its root
+                  "gitHead": "9f3c2a1" }] }           // repository only, optional
+// → { "execution": …, "artifacts": ArtifactProduction[] }
+```
+
+Both are idempotent on their identity — `(runId, claim)` and
+`(runId, location, path)` — and answer `200` with the original records when
+nothing was new. Run **existence** is not checked (run files are pruned into
+the Vault); run, instance and phase ids are validated for shape, artifact paths
+for containment, and a differing `gitHead` for an already-recorded path is
+`400`. Consumption is never inferred from prompts or transcripts: it is what
+this endpoint was told.
+
+`ExecutionProvenance` is `{ execution, consumed: [{ claim, lifecycle, support, current }], produced: { claims: ClaimView[], justifications, artifacts: ArtifactRef[] }, currency: "current" | "stale" }`.
+`produced` is joined from Phase 1's `producedBy` on `runId`; `currency` is
+`stale` when any consumed revision is superseded, unsupported or contested. It
+is derived per read and says nothing about — and changes nothing in — the
+run's own status.
+
+`ImpactSet` is the answer to "what rests on this revision, and why?":
+
+```jsonc
+{ "root": { "claim", "lifecycle", "support", "conditions": ["superseded" | "unsupported" | "contested"] },
+  "semantic": {
+    "affectedClaims": [{ "claim", "reasons": ImpactReason[], "support": { "ifRootHeld", "actual" }, "producedBy"? }],
+    "affectedJustifications": [{ "id", "conclusion", "inForce": { "ifRootHeld", "actual" } }] },
+  "executions": [{ "execution", "reasons": ["consumed-affected-claim"], "consumed": ClaimRef[] }],
+  "artifacts":  [{ "execution", "artifact", "reasons": ["produced-by-affected-execution"] }],
+  "paths": [{ "target": ImpactNode, "hops": [{ "via": "premise-of" | "consumed-by" | "produced", "justification"?, "to": ImpactNode }] }] }
+// ImpactReason ∈ premise-superseded | premise-unsupported | premise-contested | support-changed
+//              | consumed-affected-claim | produced-by-affected-execution
+```
+
+A node is affected only when its derived state differs between the ledger as
+it stands and the same ledger with the root held active and supported — so a
+conclusion with an independent justification still in force is not affected,
+and nothing downstream of it is. `executions` lists **consumers** only; the
+run that produced an affected claim appears as its `producedBy`. Every list
+is deduplicated and stably ordered, and `paths` carries one shortest
+explanation per node. An active, supported root has `conditions: []` and
+empty lists.
 
 ## Derived views
 

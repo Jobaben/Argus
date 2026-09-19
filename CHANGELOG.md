@@ -7,6 +7,29 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **The Knowledge Ledger (Phase 2): execution provenance and deterministic
+  impact analysis.** Phase 1 could say which run _produced_ a claim; it could
+  not say which later run _relied on_ one, so it could not answer "which
+  executions and artifacts were built on premises that are no longer
+  current?". The ledger now records two more explicit, immutable edges —
+  **run R consumed exact revision `RULE-17:v1`** and **run R produced artifact
+  `src/Validator.cs`** — registered through
+  `POST /api/knowledge/executions/:runId/consumptions` and `/artifacts`
+  (admin-gated, idempotent on their identity, never inferred from a prompt or
+  transcript). `GET /api/knowledge/executions/:runId/provenance` joins both
+  directions and derives the run's **semantic currency** (`current | stale`)
+  on every read: a run that `succeeded` stays `succeeded` forever, and what
+  can change is whether its premises still hold. `GET
+/api/knowledge/claims/:key/impact` returns a deterministic `ImpactSet`: the
+  claims whose support _actually changed_ (a conclusion with an independent
+  justification still in force is not impacted, and nothing downstream of it
+  is), the justifications that lost or gained force, the consuming runs, the
+  artifacts they produced, and one machine-readable explanation path per node
+  with a closed reason taxonomy that keeps `premise-superseded` apart from
+  `premise-unsupported` and `premise-contested`. `knowledge.json` is now
+  version 2; a version 1 file is read as-is and upgraded by its next write.
+  Nothing re-runs, invalidates or marks a phase. See `docs/KNOWLEDGE-LEDGER.md`
+  §8–§11.
 - **The Knowledge Ledger (Phase 1): semantic provenance beside execution
   provenance.** Argus could say which phase and run produced an output; it
   could not say _why_ a conclusion is believed, which facts, business rules

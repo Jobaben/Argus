@@ -192,3 +192,226 @@ export interface ClaimDetail {
 export interface ClaimsResponse {
   claims: ClaimView[];
 }
+
+// ── Execution provenance bridge (Phase 2) ───────────────────────────────────
+//
+// Two graphs, three explicit bridges:
+//
+//   Execution ──produced──▶ ClaimRevision        (Phase 1: `producedBy`)
+//   ClaimRevision ──consumed-by──▶ Execution     (ClaimConsumption)
+//   Execution ──produced──▶ Artifact             (ArtifactProduction)
+//
+// `producedBy` says which execution *created* a piece of knowledge. It says
+// nothing about which later execution *relied on* it. The consumption edge
+// is that second, distinct fact — and it is the one that matters for impact:
+// when a premise stops being current, the run that produced the downstream
+// decision is provenance; the run that consumed the decision to build
+// something is what needs reevaluation.
+
+/**
+ * An {@link ExecutionRef} that definitely names a run. The run is Argus's unit
+ * of execution — one step attempt, one invocation record — so it is the one
+ * identifier that can say "this exact execution consumed that exact revision".
+ * `instanceId` and `phaseId` stay optional locators, exactly as on `producedBy`.
+ */
+export interface RunExecutionRef extends ExecutionRef {
+  runId: string;
+}
+
+/**
+ * "Execution E consumed exact claim revision R." Immutable once recorded, and
+ * identified by the pair `(execution.runId, claim)`: registering the same pair
+ * again is a no-op that returns the existing record. Revising the claim never
+ * moves this edge — `RULE-17:v1 → v2` leaves every consumer of v1 pointing at
+ * v1, which is precisely what lets impact analysis find them.
+ */
+export interface ClaimConsumption {
+  claim: ClaimRef;
+  execution: RunExecutionRef;
+  createdAt: string;
+}
+
+/**
+ * The smallest useful artifact identity: where a path is rooted, and the path.
+ * `artifact-dir` is the producing phase's artifact directory (the same `path`
+ * a `PhaseArtifact` lists); `repository` is the working tree the run ran in,
+ * with `gitHead` optionally pinning the commit that carries the content. No
+ * content addressing, no versioning — the record `(execution, artifact)`
+ * already names "the file at this path as this run left it".
+ */
+export interface ArtifactRef {
+  location: "artifact-dir" | "repository";
+  /** Relative, POSIX separators, no `..` segment. */
+  path: string;
+  gitHead?: string;
+}
+
+/** "Execution E produced artifact A." Identified by `(execution.runId, location, path)`. */
+export interface ArtifactProduction {
+  execution: RunExecutionRef;
+  artifact: ArtifactRef;
+  createdAt: string;
+}
+
+/** The answer to "which executions consumed this exact revision?". */
+export interface ConsumersReport {
+  claim: ClaimRef;
+  /** In the order they were recorded. */
+  consumptions: ClaimConsumption[];
+}
+
+/**
+ * Semantic currency of one consumed revision, derived at read time: is the
+ * revision the execution relied on still the active, supported one?
+ */
+export interface ConsumedClaimStatus {
+  claim: ClaimRef;
+  lifecycle: ClaimLifecycle;
+  support: ClaimSupport;
+  /** `true` iff `lifecycle === "active" && support === "supported"`. */
+  current: boolean;
+}
+
+/**
+ * `current` — every consumed revision is active and supported. `stale` — at
+ * least one is superseded, unsupported or contested. Derived, never stored,
+ * and independent of the run's own status: a run that `succeeded` stays
+ * `succeeded` forever; what can change is whether its premises still hold.
+ */
+export type ExecutionCurrency = "current" | "stale";
+
+/** Everything the ledger knows about one execution, in both directions. */
+export interface ExecutionProvenance {
+  execution: RunExecutionRef;
+  /** Revisions this execution relied on, with their currency now. */
+  consumed: ConsumedClaimStatus[];
+  produced: {
+    /** Claim revisions whose `producedBy.runId` is this run. */
+    claims: ClaimView[];
+    /** Justifications whose `producedBy.runId` is this run. */
+    justifications: Justification[];
+    artifacts: ArtifactRef[];
+  };
+  currency: ExecutionCurrency;
+}
+
+// ── Impact analysis ─────────────────────────────────────────────────────────
+
+/** What is wrong with the root revision, as the ledger stands. Empty when the
+ *  root is active and supported — and then nothing is impacted. */
+export type RootCondition = "superseded" | "unsupported" | "contested";
+
+/**
+ * Why a node is in an impact set. A closed vocabulary, so a consumer can act
+ * on it without parsing prose.
+ *
+ * - `premise-superseded | premise-unsupported | premise-contested` — a claim:
+ *   a justification concluding it (supporting *or* opposing) lost force
+ *   because an affected premise — the root or another affected claim — is
+ *   superseded / unsupported / contested. The `support` pair says which way
+ *   the claim moved; an opposing derivation losing force moves it *up*.
+ * - `support-changed` — a claim whose derived support differs from what it
+ *   would be were the root current, with no justification concluding it
+ *   failing on an affected premise: one *gained* force, because a contested
+ *   premise upstream became supported.
+ * - `consumed-affected-claim` — an execution that consumed the root or an
+ *   affected claim.
+ * - `produced-by-affected-execution` — an artifact such an execution produced.
+ */
+export type ImpactReason =
+  | "premise-superseded"
+  | "premise-unsupported"
+  | "premise-contested"
+  | "support-changed"
+  | "consumed-affected-claim"
+  | "produced-by-affected-execution";
+
+/**
+ * A claim whose support *changed* because of the root's condition: its
+ * derived support under the counterfactual "the root is active and supported"
+ * differs from its support in the ledger as it stands. Mere reachability is
+ * not impact — a conclusion with an independent justification still in force
+ * is not here.
+ */
+export interface ClaimImpact {
+  claim: ClaimRef;
+  reasons: ImpactReason[];
+  support: { ifRootHeld: ClaimSupport; actual: ClaimSupport };
+  /** Provenance, not impact: the execution that *derived* this claim is not
+   *  thereby a consumer of anything. */
+  producedBy?: ExecutionRef;
+}
+
+/** A justification whose force differs between the two evaluations. */
+export interface JustificationImpact {
+  id: string;
+  conclusion: ClaimRef;
+  inForce: { ifRootHeld: boolean; actual: boolean };
+}
+
+export interface ExecutionImpact {
+  execution: RunExecutionRef;
+  reasons: ImpactReason[];
+  /** The consumed revisions that are the root or affected, in recording order. */
+  consumed: ClaimRef[];
+}
+
+export interface ArtifactImpact {
+  execution: RunExecutionRef;
+  artifact: ArtifactRef;
+  reasons: ImpactReason[];
+}
+
+export type ImpactNode =
+  | { kind: "claim"; claim: ClaimRef }
+  | { kind: "execution"; execution: RunExecutionRef }
+  | { kind: "artifact"; execution: RunExecutionRef; artifact: ArtifactRef };
+
+export type ImpactEdge = "premise-of" | "consumed-by" | "produced";
+
+export interface ImpactHop {
+  via: ImpactEdge;
+  /** The justification carrying a `premise-of` hop. */
+  justification?: string;
+  to: ImpactNode;
+}
+
+/**
+ * One explanation per impacted node: the hops from the root to it. The path
+ * is the shortest through affected nodes, ties broken by ledger order, so the
+ * same ledger always explains the same node the same way.
+ */
+export interface ImpactPath {
+  target: ImpactNode;
+  hops: ImpactHop[];
+}
+
+/** The deterministic result of `analyzeImpact(root)`. Every list is
+ *  deduplicated and in a stable order; `paths` explains every entry. */
+export interface ImpactSet {
+  root: {
+    claim: ClaimRef;
+    lifecycle: ClaimLifecycle;
+    support: ClaimSupport;
+    conditions: RootCondition[];
+  };
+  semantic: {
+    affectedClaims: ClaimImpact[];
+    affectedJustifications: JustificationImpact[];
+  };
+  executions: ExecutionImpact[];
+  artifacts: ArtifactImpact[];
+  paths: ImpactPath[];
+}
+
+/** `POST /executions/:runId/consumptions` and `/artifacts` answer with the
+ *  records for what was requested — new or pre-existing alike. */
+export interface ConsumptionsResponse {
+  execution: RunExecutionRef;
+  consumptions: ClaimConsumption[];
+}
+
+export interface ArtifactProductionsResponse {
+  execution: RunExecutionRef;
+  artifacts: ArtifactProduction[];
+}

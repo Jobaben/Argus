@@ -1,6 +1,14 @@
 import { readFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
-import type { Claim, ClaimKind, Evidence, Justification } from "@argus/contracts";
+import type {
+  ArtifactProduction,
+  Claim,
+  ClaimConsumption,
+  ClaimKind,
+  Evidence,
+  Justification,
+  RunExecutionRef,
+} from "@argus/contracts";
 import { paths } from "../claudeHome.js";
 import { atomicWriteJson } from "../sources/atomicWrite.js";
 import { KeyedMutex } from "../mutex.js";
@@ -11,6 +19,8 @@ import {
   addEvidence,
   addJustification,
   emptyLedger,
+  recordArtifact,
+  recordConsumption,
   resolveKey,
   reviseClaim,
   KnowledgeValidationError,
@@ -19,7 +29,9 @@ import {
   type KnowledgeLedger,
 } from "./kernel.js";
 import type {
+  ProposedArtifacts,
   ProposedClaim,
+  ProposedConsumptions,
   ProposedEvidence,
   ProposedJustification,
   ProposedRevision,
@@ -63,15 +75,31 @@ function mint(prefix: string): string {
   return `${prefix}-${randomBytes(4).toString("hex")}`;
 }
 
-function isLedgerShape(v: unknown): v is KnowledgeLedger {
-  if (typeof v !== "object" || v === null) return false;
+/**
+ * Accept the current shape, or a version 1 document (Phase 1: no provenance
+ * arrays) upgraded in memory by giving it empty ones. The upgrade is written
+ * back only by the next successful transition, and it adds nothing but two
+ * empty arrays and a version number, so nothing Phase 1 recorded changes.
+ * Anything else is another shape: readable as empty, never overwritten.
+ */
+function upgradeLedger(v: unknown): KnowledgeLedger | null {
+  if (typeof v !== "object" || v === null) return null;
   const r = v as Record<string, unknown>;
-  return (
-    r.version === LEDGER_VERSION &&
-    Array.isArray(r.claims) &&
-    Array.isArray(r.evidence) &&
-    Array.isArray(r.justifications)
-  );
+  const phase1 =
+    Array.isArray(r.claims) && Array.isArray(r.evidence) && Array.isArray(r.justifications);
+  if (!phase1) return null;
+  if (r.version === 1) {
+    return {
+      ...r,
+      version: LEDGER_VERSION,
+      consumptions: [],
+      artifacts: [],
+    } as unknown as KnowledgeLedger;
+  }
+  if (r.version === LEDGER_VERSION && Array.isArray(r.consumptions) && Array.isArray(r.artifacts)) {
+    return r as unknown as KnowledgeLedger;
+  }
+  return null;
 }
 
 /** Missing = empty and safe to write. Present but unparseable or of another
@@ -84,9 +112,9 @@ async function readRaw(): Promise<{ ok: boolean; ledger: KnowledgeLedger }> {
     return { ok: true, ledger: emptyLedger() };
   }
   try {
-    const parsed: unknown = JSON.parse(text);
-    if (!isLedgerShape(parsed)) return { ok: false, ledger: emptyLedger() };
-    return { ok: true, ledger: parsed };
+    const ledger = upgradeLedger(JSON.parse(text));
+    if (!ledger) return { ok: false, ledger: emptyLedger() };
+    return { ok: true, ledger };
   } catch {
     return { ok: false, ledger: emptyLedger() };
   }
@@ -183,5 +211,63 @@ export async function createJustification(
       now.toISOString(),
     );
     return { ledger: next, result: justification };
+  });
+}
+
+/**
+ * Record that a run consumed the given revisions, all in one transition so a
+ * body that names an unknown claim writes nothing at all. Bare ids resolve to
+ * the active revision at write time and are stored as that exact revision.
+ * Already-recorded pairs are returned unchanged; `added` counts the new ones.
+ */
+export async function registerConsumptions(
+  execution: RunExecutionRef,
+  input: ProposedConsumptions,
+  now: Date,
+): Promise<{ execution: RunExecutionRef; consumptions: ClaimConsumption[]; added: number }> {
+  return mutateLedger((ledger) => {
+    const claims = input.claims.map((c, i) => resolveOrThrow(ledger, c, `claims[${i}]`));
+    let next = ledger;
+    let added = 0;
+    const consumptions: ClaimConsumption[] = [];
+    for (const claim of claims) {
+      const r = recordConsumption(next, { execution, claim }, now.toISOString());
+      next = r.ledger;
+      if (r.added) added += 1;
+      if (
+        !consumptions.some((c) => c.claim.id === claim.id && c.claim.revision === claim.revision)
+      ) {
+        consumptions.push(r.consumption);
+      }
+    }
+    const resolved = consumptions[0]?.execution ?? execution;
+    return { ledger: next, result: { execution: resolved, consumptions, added } };
+  });
+}
+
+/** Record the artifacts a run produced, all in one transition. */
+export async function registerArtifacts(
+  execution: RunExecutionRef,
+  input: ProposedArtifacts,
+  now: Date,
+): Promise<{ execution: RunExecutionRef; artifacts: ArtifactProduction[]; added: number }> {
+  return mutateLedger((ledger) => {
+    let next = ledger;
+    let added = 0;
+    const artifacts: ArtifactProduction[] = [];
+    for (const artifact of input.artifacts) {
+      const r = recordArtifact(next, { execution, artifact }, now.toISOString());
+      next = r.ledger;
+      if (r.added) added += 1;
+      if (
+        !artifacts.some(
+          (a) => a.artifact.location === artifact.location && a.artifact.path === artifact.path,
+        )
+      ) {
+        artifacts.push(r.production);
+      }
+    }
+    const resolved = artifacts[0]?.execution ?? execution;
+    return { ledger: next, result: { execution: resolved, artifacts, added } };
   });
 }

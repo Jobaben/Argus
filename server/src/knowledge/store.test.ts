@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { Claim } from "@argus/contracts";
+import type { Claim, ClaimConsumption } from "@argus/contracts";
 
 let home: string;
 beforeEach(() => {
@@ -110,19 +110,195 @@ test("persist a graph, reload it: identities, revisions and edges are unchanged"
     assert.equal("lifecycle" in c, false);
     assert.equal("support" in c, false);
   }
-  assert.equal(after.version, 1);
+  assert.equal(after.version, 2);
 });
 
 test("a missing file reads as an empty ledger and the first write creates it", async () => {
   const s = await fresh();
   assert.deepEqual(await s.readLedger(), {
-    version: 1,
+    version: 2,
     claims: [],
     evidence: [],
     justifications: [],
+    consumptions: [],
+    artifacts: [],
   });
   await s.createClaim({ id: "A", kind: "fact", statement: "a" }, NOW);
   assert.equal(JSON.parse(readFileSync(file(), "utf8")).claims.length, 1);
+});
+
+test("a Phase 1 (version 1) document is read as version 2 and upgraded by the next write", async () => {
+  const s = await fresh();
+  const k = await kernel();
+  mkdirSync(path.dirname(file()), { recursive: true });
+  const v1Doc = {
+    version: 1,
+    claims: [
+      { id: "RULE-7", revision: 1, kind: "business-rule", statement: "180", createdAt: "t" },
+    ],
+    evidence: [],
+    justifications: [],
+  };
+  writeFileSync(file(), JSON.stringify(v1Doc));
+
+  const read = await s.readLedger();
+  assert.equal(read.version, 2);
+  assert.deepEqual(read.consumptions, []);
+  assert.deepEqual(read.artifacts, []);
+  assert.deepEqual(read.claims, v1Doc.claims);
+  // Reading alone rewrites nothing.
+  assert.equal(readFileSync(file(), "utf8"), JSON.stringify(v1Doc));
+
+  // The first transition persists the upgraded shape, records intact.
+  await s.registerConsumptions({ runId: "run-1" }, { claims: [{ id: "RULE-7" }] }, NOW);
+  const disk = JSON.parse(readFileSync(file(), "utf8"));
+  assert.equal(disk.version, 2);
+  assert.deepEqual(disk.claims, v1Doc.claims);
+  assert.equal(disk.consumptions.length, 1);
+  assert.deepEqual(k.consumersOf(disk, { id: "RULE-7", revision: 1 })[0].execution, {
+    runId: "run-1",
+  });
+});
+
+test("execution provenance and the ImpactSet survive a reload byte for byte", async () => {
+  const s = await fresh();
+  const k = await kernel();
+  const impact = await import("./impact.js");
+
+  for (const [id, kind, statement] of [
+    ["RULE-17", "business-rule", "Kobra customer comment max = 180"],
+    ["CONCLUSION-8", "conclusion", "Validate customer comments at 180"],
+    ["DECISION-3", "decision", "Implement a 180-char validator"],
+  ] as const) {
+    await s.createClaim({ id, kind, statement }, NOW);
+  }
+  await s.createEvidence(
+    {
+      claim: { id: "RULE-17" },
+      direction: "supports",
+      source: { type: "document", uri: "spec://kobra" },
+    },
+    NOW,
+  );
+  await s.createJustification(
+    { conclusion: { id: "CONCLUSION-8" }, premises: [{ id: "RULE-17" }], direction: "supports" },
+    NOW,
+  );
+  await s.createJustification(
+    {
+      conclusion: { id: "DECISION-3" },
+      premises: [{ id: "CONCLUSION-8" }],
+      direction: "supports",
+      producedBy: { runId: "run_123", instanceId: "inst-1", phaseId: "plan" },
+    },
+    NOW,
+  );
+
+  // run_456 consumed the decision and the conclusion, and produced the validator.
+  const reg = await s.registerConsumptions(
+    { runId: "run_456", instanceId: "inst-1", phaseId: "implement" },
+    { claims: [{ id: "DECISION-3" }, { id: "CONCLUSION-8", revision: 1 }] },
+    NOW,
+  );
+  assert.equal(reg.added, 2);
+  assert.deepEqual(
+    reg.consumptions.map((c: ClaimConsumption) => [c.claim.id, c.claim.revision]),
+    [
+      ["DECISION-3", 1],
+      ["CONCLUSION-8", 1],
+    ],
+  );
+  const again = await s.registerConsumptions(
+    { runId: "run_456" },
+    { claims: [{ id: "DECISION-3" }] },
+    LATER,
+  );
+  assert.equal(again.added, 0);
+  assert.deepEqual(again.execution, {
+    runId: "run_456",
+    instanceId: "inst-1",
+    phaseId: "implement",
+  });
+  assert.equal(again.consumptions[0].createdAt, NOW.toISOString());
+  const art = await s.registerArtifacts(
+    { runId: "run_456" },
+    {
+      artifacts: [
+        { location: "repository", path: "src/CustomerCommentValidator.cs", gitHead: "abc1234" },
+      ],
+    },
+    NOW,
+  );
+  assert.equal(art.added, 1);
+  assert.deepEqual(art.execution, { runId: "run_456", instanceId: "inst-1", phaseId: "implement" });
+
+  // The rule changes.
+  await s.createRevision(
+    "RULE-17",
+    { statement: "Kobra customer comment max = 500", revisionNote: "Kobra 4.2" },
+    LATER,
+  );
+
+  const before = await s.readLedger();
+  const rule = { id: "RULE-17", revision: 1 };
+  const setBefore = impact.analyzeImpact(before, rule);
+  const provBefore = k.executionProvenance(before, "run_456");
+
+  // Reload through a fresh module instance: same document, same answers.
+  const s2 = await fresh();
+  const after = await s2.readLedger();
+  assert.deepEqual(after, before);
+  assert.deepEqual(after, JSON.parse(readFileSync(file(), "utf8")));
+  assert.equal(JSON.stringify(impact.analyzeImpact(after, rule)), JSON.stringify(setBefore));
+  assert.deepEqual(k.executionProvenance(after, "run_456"), provBefore);
+
+  // And the answers are the worked example.
+  assert.deepEqual(setBefore.root.conditions, ["superseded"]);
+  assert.deepEqual(
+    setBefore.semantic.affectedClaims.map((c) => [c.claim.id, c.reasons[0]]),
+    [
+      ["CONCLUSION-8", "premise-superseded"],
+      ["DECISION-3", "premise-unsupported"],
+    ],
+  );
+  assert.deepEqual(
+    setBefore.executions.map((e) => e.execution.runId),
+    ["run_456"],
+  );
+  assert.deepEqual(
+    setBefore.artifacts.map((a) => a.artifact.path),
+    ["src/CustomerCommentValidator.cs"],
+  );
+  assert.equal(provBefore?.currency, "stale");
+  // The consumption edges still name v1 of everything: nothing floated to RULE-17:v2.
+  assert.deepEqual(
+    after.consumptions.map((c: ClaimConsumption) => `${c.claim.id}:v${c.claim.revision}`),
+    ["DECISION-3:v1", "CONCLUSION-8:v1"],
+  );
+  assert.deepEqual(k.consumersOf(after, { id: "RULE-17", revision: 2 }), []);
+});
+
+test("a provenance registration naming an unknown claim writes nothing", async () => {
+  const s = await fresh();
+  await s.createClaim({ id: "A", kind: "fact", statement: "a" }, NOW);
+  const before = readFileSync(file(), "utf8");
+  await assert.rejects(
+    s.registerConsumptions({ runId: "run-1" }, { claims: [{ id: "A" }, { id: "GHOST" }] }, NOW),
+    /claims\[1\] names unknown claim GHOST/,
+  );
+  await assert.rejects(
+    s.registerConsumptions({ runId: "run-1" }, { claims: [{ id: "A", revision: 2 }] }, NOW),
+    /unknown claim A:v2/,
+  );
+  await assert.rejects(
+    s.registerArtifacts(
+      { runId: "run-1" },
+      { artifacts: [{ location: "repository", path: "../escape" }] },
+      NOW,
+    ),
+    /relative POSIX/,
+  );
+  assert.equal(readFileSync(file(), "utf8"), before);
 });
 
 test("a corrupt or foreign-shaped file is read as empty and never overwritten", async () => {
