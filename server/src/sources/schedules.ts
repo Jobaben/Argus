@@ -261,7 +261,9 @@ async function assertAfterSourceExists(trigger: Trigger): Promise<void> {
   const { readPipelines } = await import("./pipelines.js");
   const exists = (await readPipelines()).some((p) => p.id === trigger.pipelineId);
   if (!exists) {
-    throw new ScheduleValidationError(`after trigger names an unknown pipeline: ${trigger.pipelineId}`);
+    throw new ScheduleValidationError(
+      `after trigger names an unknown pipeline: ${trigger.pipelineId}`,
+    );
   }
 }
 
@@ -398,7 +400,11 @@ export async function rotateScheduleHookToken(id: string, now: Date): Promise<Sc
     if (list[idx].trigger.kind !== "webhook") {
       throw new ScheduleValidationError("schedule does not have a webhook trigger");
     }
-    const merged: Schedule = { ...list[idx], hookToken: mintHookToken(), updatedAt: now.toISOString() };
+    const merged: Schedule = {
+      ...list[idx],
+      hookToken: mintHookToken(),
+      updatedAt: now.toISOString(),
+    };
     list[idx] = merged;
     await writeSchedules(list);
     return merged;

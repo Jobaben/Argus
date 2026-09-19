@@ -346,6 +346,7 @@ test("pipeline mutations are 401 before an admin account exists", async () => {
     ["/api/pipelines/p1", "PATCH"],
     ["/api/pipelines/p1", "DELETE"],
     ["/api/pipelines/p1/start", "POST"],
+    ["/api/pipelines/p1/hook-token/rotate", "POST"],
     ["/api/instances/i1/approve", "POST"],
     ["/api/instances/i1/revise", "POST"],
     ["/api/instances/i1/abort", "POST"],
@@ -2966,7 +2967,7 @@ test("approve and revise forward the named phase to the engine and stay admin-ga
 function makeFiringApp(over: Partial<ArgusConfig> = {}) {
   const eng: Engine = {
     ...fakeEngine,
-    start: async () => ({ id: "inst-hooked" } as PipelineInstance),
+    start: async () => ({ id: "inst-hooked" }) as PipelineInstance,
   };
   const users = createUserStore();
   return createApp({

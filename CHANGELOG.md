@@ -110,6 +110,21 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Webhook and after-pipeline triggers.** A schedule or pipeline's trigger
+  can now be `{ "kind": "webhook" }` — fired by
+  `POST /api/hooks/{pipelines,schedules}/:id`, authenticated with a per-definition
+  `hookToken` (minted on first save, shown with a copy button and a **Rotate**
+  action in the trigger editor, never `ARGUS_TOKEN`) — or
+  `{ "kind": "after", "pipelineId", "on": "succeeded" | "failed" | "any" }`,
+  which chains a pipeline or schedule to fire once a chosen **pipeline**'s
+  instance ends. Chaining runs on the ordinary scheduler tick and is
+  restart-safe: a small ledger (`~/.claude/argus/chains.json`) fires each
+  source instance into each matching target at most once. A pipeline instance
+  or schedule run fired this way carries `trigger: "webhook"` or `"chained"`
+  (plus `triggerPayload`/`chainedFrom` on the instance) instead of
+  `"manual"`/`"scheduled"`, shown as a badge wherever those already were. A
+  self-chain and a direct two-pipeline cycle are refused at save time. See
+  [docs/API.md § Webhook and chained triggers](docs/API.md).
 - **Workspace isolation — a phase can run in a git worktree of its own.** Every
   phase of a pipeline used to edit the same checkout, so two branches of a
   fan-out overwrote each other and a failed attempt left its half-done edits

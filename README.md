@@ -147,6 +147,17 @@ privileged single-user control plane:
   advised: with `ARGUS_HOST` pointed at a non-loopback interface and no token,
   the server refuses to start rather than opening an unauthenticated port that
   can execute agents with your credentials.
+- **Webhook-triggered schedules and pipelines** (`trigger.kind: "webhook"`)
+  are fired by `POST /api/hooks/{pipelines,schedules}/:id`, authenticated by
+  that definition's own `hookToken` — not by `ARGUS_TOKEN`, which never
+  substitutes for it. These two routes skip the Origin/CSRF check (a webhook
+  sender is a server, not a browser) but **not** the Host allowlist. Reaching
+  one from another machine needs the same non-default setup as any other
+  remote access: a routable `ARGUS_HOST`, `ARGUS_TOKEN` set (still required
+  for the bind itself, and still gating every other route), and the sender's
+  host in `ARGUS_ALLOWED_HOSTS` if it isn't the bind address. Rotate a hook's
+  token (`POST /api/{pipelines,schedules}/:id/hook-token/rotate`) if it ever
+  leaks; the old one stops working immediately.
 
 ## Getting around
 

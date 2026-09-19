@@ -481,7 +481,11 @@ test("tick chains a source instance into a target pipeline exactly once", async 
     "chained",
     {
       chainedFrom: "inst-1",
-      triggerPayload: { sourceInstanceId: "inst-1", sourcePipelineId: "source", status: "succeeded" },
+      triggerPayload: {
+        sourceInstanceId: "inst-1",
+        sourcePipelineId: "source",
+        status: "succeeded",
+      },
     },
   ]);
 
@@ -489,9 +493,7 @@ test("tick chains a source instance into a target pipeline exactly once", async 
   assert.deepEqual(ledger["inst-1"], ["target"]);
 
   // A second tick must not fire again — the ledger already recorded it.
-  await scheduler.tick(
-    deps({ startPipeline: async () => (started.push("again"), { id: "x" }) }),
-  );
+  await scheduler.tick(deps({ startPipeline: async () => (started.push("again"), { id: "x" }) }));
   assert.equal(started.length, 1);
 });
 

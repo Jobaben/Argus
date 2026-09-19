@@ -60,7 +60,8 @@ export function applyTuningReport(
     scope: TuningProposal["scope"],
     stepName: string | null,
     field: TuningProposal["field"],
-  ): TuningProposal | undefined => chosen.get([phaseId, scope, stepName ?? "", field].join("\u0000"));
+  ): TuningProposal | undefined =>
+    chosen.get([phaseId, scope, stepName ?? "", field].join("\u0000"));
 
   const phases: PhaseDef[] = def.phases.map((phase) => {
     const steps: PhaseStep[] = phase.steps.map((step) => {

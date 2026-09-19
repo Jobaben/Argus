@@ -113,7 +113,11 @@ describe("TriggerFields", () => {
         fieldClass={FIELD}
         value={{ kind: "webhook" }}
         onChange={() => {}}
-        hook={{ url: "https://argus.example/api/hooks/pipelines/p1", token: "tok123", onRotate: vi.fn() }}
+        hook={{
+          url: "https://argus.example/api/hooks/pipelines/p1",
+          token: "tok123",
+          onRotate: vi.fn(),
+        }}
       />,
     );
     expect(screen.getByText("https://argus.example/api/hooks/pipelines/p1")).toBeTruthy();

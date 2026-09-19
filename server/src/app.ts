@@ -465,6 +465,8 @@ export function createApp(deps: AppDeps): Hono {
   app.on(["POST", "PUT", "PATCH", "DELETE"], "/api/pipelines", admin);
   app.on(["POST", "PUT", "PATCH", "DELETE"], "/api/pipelines/:id", admin);
   app.use("/api/pipelines/:id/start", admin);
+  // Rotating a hook token is a pipeline-definition mutation like any other.
+  app.use("/api/pipelines/:id/hook-token/rotate", admin);
   // Instance gate controls run/steer pipelines. /signal is NOT admin-gated:
   // it is called by headless agent hooks and carries its own per-instance
   // token, verified by the engine.

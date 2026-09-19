@@ -530,7 +530,10 @@ interface AfterTarget {
   on: "succeeded" | "failed" | "any";
 }
 
-function collectAfterTargets(pipelines: PipelineDefinition[], schedules: Schedule[]): AfterTarget[] {
+function collectAfterTargets(
+  pipelines: PipelineDefinition[],
+  schedules: Schedule[],
+): AfterTarget[] {
   const targets: AfterTarget[] = [];
   for (const p of pipelines) {
     if (p.enabled && p.trigger?.kind === "after" && p.trigger.pipelineId && p.trigger.on) {
