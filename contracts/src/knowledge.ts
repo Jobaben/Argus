@@ -1,0 +1,194 @@
+/**
+ * The Knowledge Ledger — Argus's semantic provenance graph.
+ *
+ * The pipeline DAG answers "what executes after what?". The Knowledge Ledger
+ * answers "what depends *logically* on what?": which facts, business rules and
+ * assumptions a conclusion rests on, which evidence supports those premises,
+ * and what would lose support if one of them were superseded. The two graphs
+ * are separate concepts and stay separate: nothing here references
+ * `PhaseDef.needs`, and nothing in the execution DAG references a claim.
+ *
+ * Three rules shape every type in this file:
+ *
+ * - **No `truth` field.** Argus models SUPPORT, EVIDENCE and CONFLICT. A
+ *   claim's {@link ClaimSupport} is *derived* from its evidence and
+ *   justifications by a deterministic function, never stored, and no agent can
+ *   set it.
+ * - **History is preserved.** A claim revision is immutable once written. A
+ *   later revision supersedes it; the old one remains addressable, and every
+ *   justification or evidence record that named it keeps naming it.
+ * - **Agents propose, Argus applies.** These are the shapes Argus *returns*
+ *   and the validated inputs it *accepts*; ids, revisions, timestamps and
+ *   referential integrity are Argus's to assign and enforce.
+ */
+
+/** What sort of assertion a claim is. `business-rule` is first class because
+ *  rule impact analysis is the reason the Ledger exists. */
+export type ClaimKind =
+  "fact" | "assumption" | "business-rule" | "constraint" | "conclusion" | "decision";
+
+/**
+ * The revision identity of a claim: one exact statement, at one point in its
+ * history. `id` alone is the *logical* identity (RULE-17); the pair is the
+ * revision identity (RULE-17:v2). Every edge in the graph — evidence,
+ * justification premise, justification conclusion — names a revision, never a
+ * bare id, so nothing can be silently retargeted when a claim is revised.
+ *
+ * String form, used in URLs and accepted anywhere a ref is written:
+ * `<id>:v<revision>`. A bare `<id>` in a URL means "the active revision".
+ */
+export interface ClaimRef {
+  id: string;
+  revision: number;
+}
+
+/** Where in Argus's execution provenance a ledger record was produced. Every
+ *  field is optional so a human-authored record can carry none. */
+export interface ExecutionRef {
+  instanceId?: string;
+  phaseId?: string;
+  runId?: string;
+}
+
+/**
+ * One immutable revision of a claim. Revisions of an id are numbered 1..n with
+ * no gaps; the highest is the active one, and every lower one is superseded.
+ * `lifecycle` is therefore derived (see {@link ClaimView}), not stored.
+ */
+export interface Claim {
+  id: string;
+  revision: number;
+  kind: ClaimKind;
+  statement: string;
+  /**
+   * Structured form of the statement, when one exists. For a business rule this
+   * is the extension point for a future `{ when, then, unless }` representation;
+   * Phase 1 stores it opaquely and never interprets it.
+   */
+  structuredValue?: unknown;
+  producedBy?: ExecutionRef;
+  /** Why this revision replaced the previous one. Absent on revision 1. */
+  revisionNote?: string;
+  createdAt: string;
+}
+
+/** Lifecycle is about *history*: is this the current revision of its id? It is
+ *  deliberately independent of support — a superseded revision can still be
+ *  fully supported, and an active one can be unsupported. */
+export type ClaimLifecycle = "active" | "superseded";
+
+/**
+ * Where a piece of evidence points. A small, closed union rather than a URI
+ * scheme so each variant can be validated field by field; adding a source type
+ * is a one-line addition here and one case in the validator.
+ */
+export type EvidenceSource =
+  | { type: "run"; runId: string }
+  | { type: "phase"; instanceId: string; phaseId: string }
+  | { type: "artifact"; instanceId: string; phaseId: string; path: string }
+  | { type: "verification"; instanceId: string; phaseId: string }
+  | { type: "source-code"; path: string; line?: number; gitHead?: string }
+  | { type: "git-commit"; sha: string; repository?: string }
+  | { type: "document"; uri: string; title?: string }
+  | { type: "human"; who: string };
+
+/** The direction an evidence record or a justification bears on its target. */
+export type SupportDirection = "supports" | "opposes";
+
+/**
+ * A stable-identity record of provenance bearing on one claim revision. A
+ * claim never *contains* prose about where it came from; it is pointed at by
+ * evidence, which can be listed, counted and — later — re-checked against the
+ * execution record it names.
+ */
+export interface Evidence {
+  id: string;
+  claim: ClaimRef;
+  direction: SupportDirection;
+  source: EvidenceSource;
+  note?: string;
+  createdAt: string;
+}
+
+/**
+ * A semantic derivation: "these premise revisions, taken together, support (or
+ * oppose) this conclusion revision". Premises are conjunctive — a justification
+ * is in force only while *every* premise is active and supported. Two
+ * independent derivations of the same conclusion are two justifications, which
+ * is what lets a conclusion survive losing one of them.
+ */
+export interface Justification {
+  id: string;
+  conclusion: ClaimRef;
+  premises: ClaimRef[];
+  direction: SupportDirection;
+  producedBy?: ExecutionRef;
+  note?: string;
+  createdAt: string;
+}
+
+/**
+ * The deterministic support state of a claim revision.
+ *
+ * - `supported` — at least one positive signal is in force and no negative one.
+ * - `contested` — positive and negative signals are both in force.
+ * - `unsupported` — no positive signal is in force (whether or not a negative
+ *   one is; the report says which).
+ */
+export type ClaimSupport = "supported" | "unsupported" | "contested";
+
+/** Why a justification does or does not currently lend force. */
+export type JustificationForce =
+  | { inForce: true }
+  | {
+      inForce: false;
+      /** Every premise that fails, with the first reason it fails for.
+       *  `missing` is unreachable through the API (references are checked on
+       *  write) and exists so a hand-edited ledger still evaluates. */
+      failing: Array<{
+        premise: ClaimRef;
+        reason: "superseded" | "unsupported" | "contested" | "missing";
+      }>;
+    };
+
+/** A justification as it bears on one claim's support right now. */
+export interface JustificationStatus {
+  justification: Justification;
+  force: JustificationForce;
+}
+
+/** A claim revision with its derived history and support state. */
+export interface ClaimView extends Claim {
+  lifecycle: ClaimLifecycle;
+  /** The revision that replaced this one, when superseded. */
+  supersededBy?: ClaimRef;
+  support: ClaimSupport;
+}
+
+/** The full answer to "why is this claim supported (or not)?". */
+export interface SupportReport {
+  claim: ClaimRef;
+  lifecycle: ClaimLifecycle;
+  support: ClaimSupport;
+  evidence: Evidence[];
+  justifications: JustificationStatus[];
+}
+
+/** The answer to "what depends on this claim revision?". */
+export interface DependentsReport {
+  claim: ClaimRef;
+  /** Conclusions of justifications that name this revision as a premise. */
+  direct: ClaimRef[];
+  /** `direct`, then their dependents, and so on — breadth-first, each once. */
+  transitive: ClaimRef[];
+}
+
+export interface ClaimDetail {
+  claim: ClaimView;
+  /** Every revision of the claim's id, oldest first. */
+  revisions: ClaimView[];
+}
+
+export interface ClaimsResponse {
+  claims: ClaimView[];
+}

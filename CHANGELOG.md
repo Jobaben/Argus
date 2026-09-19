@@ -5,6 +5,26 @@ All notable changes to Argus are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **The Knowledge Ledger (Phase 1): semantic provenance beside execution
+  provenance.** Argus could say which phase and run produced an output; it
+  could not say _why_ a conclusion is believed, which facts, business rules
+  and assumptions it rests on, or what would lose support if one of them
+  changed. `~/.claude/argus/knowledge.json` now holds an append-only graph of
+  **claims** (`fact`, `assumption`, `business-rule`, `constraint`,
+  `conclusion`, `decision`), **evidence** pointing at Argus's own execution
+  records (runs, phases, artifacts, verification, source, commits, documents,
+  human assertions) and **justifications** ("these premise revisions support
+  or oppose this conclusion revision"). A claim changes by _revision_ —
+  `RULE-17:v1` stays addressable and every justification that named it keeps
+  naming it — and support (`supported | unsupported | contested`) is derived
+  by one deterministic function, never stored and never set by an agent.
+  `GET /api/knowledge/claims[/:key[/support|/dependents]]` read it; four
+  admin-gated `POST`s propose to it. The semantic graph is a separate concept
+  from the pipeline DAG and touches nothing in it. See
+  `docs/KNOWLEDGE-LEDGER.md`.
+
 ### Fixed
 
 - **A scheduled or one-off run whose CLI exits 0 after reporting an error is
