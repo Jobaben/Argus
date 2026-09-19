@@ -110,6 +110,25 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Workspace isolation — a phase can run in a git worktree of its own.** Every
+  phase of a pipeline used to edit the same checkout, so two branches of a
+  fan-out overwrote each other and a failed attempt left its half-done edits
+  for the next one. A pipeline or a phase can now declare
+  `workspace: { scope: "instance" | "attempt", base?, keep? }`: Argus creates a
+  worktree under `~/.claude/argus/worktrees/<instanceId>/` on a branch named
+  `argus/<instanceId>/shared` (one per instance, shared by every phase that
+  opts in) or `argus/<instanceId>/<phaseId>/<attempt>` (one per attempt), and
+  the phase's steps — their `cwd`, their transcripts' project, their
+  `changed-files` baseline and the phase's `checks` — all run there instead of
+  in the phase's own `cwd`. `ARGUS_WORKSPACE` names it to the agent. The
+  branch is the deliverable: the directory is removed when the instance
+  settles (or is pruned) unless `keep: true`, and whatever was left
+  uncommitted goes with it. A worktree Argus cannot create — not a repository,
+  an unresolvable `base`, no git — fails the phase under `configuration` with
+  git's own words, and is never retried. Restart-safe: a tree that is already
+  there is reused, and a branch whose tree was removed is checked out again
+  with its commits. Not a security boundary — Codex's sandbox remains the only
+  OS-level one. See [docs/HARNESS.md § 11](docs/HARNESS.md).
 - **Analyze — a settings review for a pipeline, one agent per phase.** Whether
   a step's model, reasoning effort, timeout and turn cap fit the work its prompt
   describes was something an author judged once, when writing the pipeline, and
@@ -375,6 +394,21 @@ All notable changes to Argus are documented here. The format follows
   the `ARGUS_AGENT`, `ARGUS_CODEX_HOME`, `ARGUS_CLAUDE_BIN`, `ARGUS_CODEX_BIN`,
   `ARGUS_CODEX_SANDBOX`, `ARGUS_CLAUDE_ARGS`, `ARGUS_CODEX_ARGS`,
   `ARGUS_CODEX_MODELS` and `ARGUS_ANALYSIS_RUNTIME` environment variables.
+
+- **Reliability — first-attempt pass rate and lucky passes, per pipeline.**
+  Binary pass/fail on the board hides the run that only succeeded after a
+  retry the harness quietly absorbed (AgentLens: 0.5–23% of "passing" agent
+  trajectories are exactly this). Each pipeline card now has a
+  **Reliability ▾** disclosure covering the trailing 30 days: the share of
+  settled instances that passed with every phase on attempt 1, the share of
+  successful instances that needed a retry or a human revise to get there, a
+  day-by-day sparkline of succeeded vs. failed instances, and a per-phase
+  table of first-try / lucky / failed counts, timeout-classed stalls and the
+  dominant failure class. A rate is `null` — shown as "—" — rather than 0%
+  when nothing has settled yet, so an unproven pipeline never reads as a
+  broken one. `GET /api/pipelines/:id/reliability?days=` (1–365, default 30);
+  the derivation is pure over the instance record alone, in
+  `server/src/sources/reliability.ts`.
 
 ### Fixed
 

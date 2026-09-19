@@ -35,6 +35,10 @@ export function describeTrigger(trigger: Trigger | null): string {
       return `every ${humanMinutes(trigger.everyMinutes)} ${trigger.startTime ?? "—"}–${
         trigger.endTime ?? "—"
       }`;
+    case "webhook":
+      return "webhook";
+    case "after":
+      return `after pipeline (${trigger.on ?? "any"})`;
   }
 }
 

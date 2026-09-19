@@ -692,6 +692,18 @@ action requires a signed-in, root-approved account.
 - Approving/revising a **gated phase** happens on the Command Center, inline
   on the paused row.
 
+**Reliability:** each card has a **Reliability ▾** disclosure — open it and,
+over the trailing 30 days, Argus shows the pipeline's **first-attempt pass
+rate** (settled instances where every phase that ran passed on its very first
+try) and its **lucky-pass rate** (successful instances that only got there
+after a retry or a human revise), a day-by-day sparkline of succeeded vs.
+failed instances, and a per-phase table naming each phase's first-try / lucky
+/ failed counts and its most common failure class. A rate reads as "—" rather
+than 0% when nothing has settled yet in the window — an unproven pipeline is
+not the same fact as a broken one. This is Argus grading its own retry loop,
+not the agent's output (that's [Verdict](#24-verdict)) or a run's shape
+against its own history (that's [Watchtower](#22-watchtower)).
+
 **How steps complete:** the Stop-hook and gate-hook installed by Setup let
 each spawned agent signal "step finished" / "needs input" back to Argus
 (`POST /api/instances/:id/signal`, authenticated by a per-instance token —
@@ -708,7 +720,9 @@ run log for diagnosis.
 records under `~/.claude/argus/instances/` via `GET/POST /api/pipelines`,
 `PUT/PATCH/DELETE /api/pipelines/:id`, `POST /api/pipelines/:id/start`,
 `GET /api/overview`, `GET /api/instances/:id/phases/:phaseId/{review,artifact}`,
-`POST /api/instances/:id/{approve,revise,abort}`.
+`POST /api/instances/:id/{approve,revise,abort}`,
+`GET /api/pipelines/:id/reliability?days=` (the Reliability disclosure; see
+[the API reference](API.md#reliability)).
 
 ---
 

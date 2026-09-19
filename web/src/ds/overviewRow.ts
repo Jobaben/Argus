@@ -3,6 +3,7 @@ import { edgeViews, effectiveEdges, type RouteEdgeView } from "./routes";
 import type {
   AgentRuntimeId,
   DependencyEdge,
+  WorkspaceRecord,
   InstanceStatus,
   RouteDecision,
   PhaseStatus,
@@ -35,6 +36,9 @@ export interface StepPill {
   startedAt: string | null;
   /** Final run duration once the step ended. */
   durationMs: number | null;
+  /** The isolated worktree the step's phase ran in, when it declared one.
+   *  Carried onto the step because the drawer is where a run is explained. */
+  workspace?: WorkspaceRecord | null;
 }
 
 export interface PhasePill {
@@ -103,6 +107,9 @@ export interface OverviewRow {
   /** Short instance id, set only when the pipeline has several concurrent
    *  instances on the board so their otherwise-identical cards can be told apart. */
   instanceLabel: string | null;
+  /** How the latest/active instance was fired. Null when there is no instance
+   *  yet (the "never run" row). */
+  trigger: PipelineInstance["trigger"] | null;
 }
 
 const PHASE_STATUS_TO_DS: Record<PhaseStatus, DsStatus> = {
@@ -159,6 +166,9 @@ function stepPills(
       currentActivity: s.currentActivity ?? null,
       startedAt: s.startedAt ?? null,
       durationMs: s.durationMs ?? null,
+      // Only when there is one: a step of a phase that ran in its own cwd has
+      // no workspace to speak of, and an always-present null would say it did.
+      ...(phase.workspace ? { workspace: phase.workspace } : {}),
     }));
   }
   return (def?.steps ?? []).map((s) => ({
@@ -172,6 +182,7 @@ function stepPills(
     currentActivity: null,
     startedAt: null,
     durationMs: null,
+    ...(phase.workspace ? { workspace: phase.workspace } : {}),
   }));
 }
 
@@ -304,6 +315,7 @@ function instanceRow(
     cost,
     model: definition.model ?? null,
     instanceLabel: null,
+    trigger: instance.trigger,
   };
 }
 
@@ -353,6 +365,7 @@ export function toOverviewRow(entry: OverviewEntry): OverviewRow {
       cost: null,
       model: definition.model ?? null,
       instanceLabel: null,
+      trigger: null,
     };
   }
 

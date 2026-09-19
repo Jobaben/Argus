@@ -181,4 +181,33 @@ describe("StepDrawer", () => {
     await user.tab();
     expect(document.activeElement).not.toBe(document.body);
   });
+  it("names the workspace branch, with the disposable directory as its title", async () => {
+    stubRun({ id: "run_0003", log: "" });
+    render(
+      <StepDrawer
+        selection={selection({
+          step: step({
+            workspace: {
+              path: "/home/u/.claude/argus/worktrees/i1/shared",
+              branch: "argus/i1/shared",
+              base: "HEAD",
+              baseHead: "abc123",
+            },
+          }),
+        })}
+        onClose={vi.fn()}
+      />,
+    );
+    const branch = await screen.findByText("argus/i1/shared");
+    expect(branch.getAttribute("title")).toBe("/home/u/.claude/argus/worktrees/i1/shared");
+    expect(screen.getByText("workspace")).toBeTruthy();
+  });
+
+  it("says nothing about a workspace for a step that ran without one", async () => {
+    stubRun({ id: "run_0003", log: "" });
+    render(<StepDrawer selection={selection()} onClose={vi.fn()} />);
+    // Let the run detail settle first, so this asserts on the loaded drawer.
+    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+    expect(screen.queryByText("workspace")).toBeNull();
+  });
 });

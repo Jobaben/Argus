@@ -76,6 +76,8 @@ export type {
   SignalType,
   StepProgress,
   StepStatus,
+  WorkspacePolicy,
+  WorkspaceRecord,
 } from "./pipelines.js";
 
 export type { Heartbeat, MonitorHealth, MonitorsSummary, MonitorStatus } from "./monitors.js";
@@ -285,3 +287,5 @@ export type {
   PeerInput,
   PeerStatus,
 } from "./constellation.js";
+
+export type { PhaseReliability, PipelineReliability } from "./reliability.js";

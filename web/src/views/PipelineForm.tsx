@@ -1,5 +1,12 @@
 import { useState } from "react";
-import type { AgentRuntimeId, Dependency, PhaseDef, PhaseStep, PipelineInput } from "../types";
+import type {
+  AgentRuntimeId,
+  Dependency,
+  PhaseDef,
+  PhaseStep,
+  PipelineInput,
+  WorkspacePolicy,
+} from "../types";
 import {
   AlertStrip,
   ModelSelect,
@@ -62,6 +69,57 @@ function move<T>(arr: T[], from: number, to: number): T[] {
   const [item] = next.splice(from, 1);
   next.splice(to, 0, item);
   return next;
+}
+
+/**
+ * Isolation, as the form writes it.
+ *
+ * `""` means "no policy here": the key is removed rather than set to
+ * undefined, so a pipeline (or phase) that never asked for a worktree
+ * round-trips exactly as it was authored. `base` and `keep` are API-only
+ * fields — the form preserves whatever they hold and only ever moves `scope`.
+ */
+type IsolationChoice = "" | WorkspacePolicy["scope"];
+
+function withWorkspace<T extends { workspace?: WorkspacePolicy }>(
+  target: T,
+  scope: IsolationChoice,
+): T {
+  if (!scope) {
+    const { workspace: _dropped, ...rest } = target;
+    return rest as T;
+  }
+  return { ...target, workspace: { ...(target.workspace ?? {}), scope } };
+}
+
+/** The isolation control, in the same visual language as the other selects. */
+function IsolationSelect({
+  fieldClass,
+  ariaLabel,
+  inheritLabel,
+  value,
+  onChange,
+}: {
+  fieldClass: string;
+  ariaLabel: string;
+  /** What an absent policy means here: the pipeline's default, or none at all. */
+  inheritLabel: string;
+  value: WorkspacePolicy | undefined;
+  onChange: (scope: IsolationChoice) => void;
+}) {
+  return (
+    <select
+      className={fieldClass}
+      aria-label={ariaLabel}
+      title="Run the steps in a git worktree of the repository at the working directory. The branch is kept; the directory is removed when the instance ends."
+      value={value?.scope ?? ""}
+      onChange={(e) => onChange(e.target.value as IsolationChoice)}
+    >
+      <option value="">{inheritLabel}</option>
+      <option value="instance">Shared worktree per instance</option>
+      <option value="attempt">Fresh worktree per attempt</option>
+    </select>
+  );
 }
 
 /** A dependency's target phase id, whichever form the edge takes. */
@@ -179,10 +237,23 @@ export function PipelineForm({
   initial,
   onSubmit,
   onCancel,
+  pipelines = [],
+  pipelineId,
+  hookToken,
+  onRotateHook,
 }: {
   initial: PipelineInput;
   onSubmit: (input: PipelineInput) => Promise<void>;
   onCancel: () => void;
+  /** Every other pipeline, for the "after pipeline" trigger's source select
+   *  (this one is excluded to keep a self-chain from ever being offered). */
+  pipelines?: { id: string; name: string }[];
+  /** This pipeline's own id, once saved — undefined while authoring a new one. */
+  pipelineId?: string;
+  /** Set once this pipeline has a webhook trigger and has been saved at least
+   *  once (the save that mints the token). */
+  hookToken?: string;
+  onRotateHook?: () => Promise<void>;
 }) {
   const [form, setForm] = useState<PipelineInput>(initial);
   const [selectedId, setSelectedId] = useState<string | null>(initial.phases[0]?.id ?? null);
@@ -339,6 +410,16 @@ export function PipelineForm({
           allowWindowed
           value={form.trigger}
           onChange={(t) => setForm({ ...form, trigger: t })}
+          pipelines={pipelines.filter((p) => p.id !== pipelineId)}
+          hook={
+            hookToken && pipelineId && onRotateHook
+              ? {
+                  url: `${window.location.origin}/api/hooks/pipelines/${pipelineId}`,
+                  token: hookToken,
+                  onRotate: onRotateHook,
+                }
+              : undefined
+          }
         />
         <select
           className={FIELD_BASE}
@@ -373,6 +454,13 @@ export function PipelineForm({
           value={form.model}
           {...(aliasesFor(effective()) ? { aliases: aliasesFor(effective()) } : {})}
           onChange={(m) => setForm({ ...form, model: m })}
+        />
+        <IsolationSelect
+          fieldClass={FIELD_BASE}
+          ariaLabel="Isolation"
+          inheritLabel="No isolation (phase working directory)"
+          value={form.workspace}
+          onChange={(scope) => setForm((f) => withWorkspace(f, scope))}
         />
       </div>
 
@@ -531,6 +619,18 @@ export function PipelineForm({
               value={phase.runtime}
               runtimes={runtimes}
               onChange={(r) => setPhase(pi, { runtime: r })}
+            />
+            <IsolationSelect
+              fieldClass={FIELD_BASE}
+              ariaLabel={`Isolation (phase ${pi + 1})`}
+              inheritLabel="Use pipeline isolation"
+              value={phase.workspace}
+              onChange={(scope) =>
+                setForm((f) => ({
+                  ...f,
+                  phases: f.phases.map((p, j) => (j === pi ? withWorkspace(p, scope) : p)),
+                }))
+              }
             />
           </div>
 

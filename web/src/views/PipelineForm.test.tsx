@@ -394,4 +394,71 @@ describe("PipelineForm", () => {
     });
     expect(arg.phases[0].steps[0].reasoningEffort).toBe("xhigh");
   });
+  it("submits pipeline-level and phase-level isolation, and clears it again", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    render(<PipelineForm initial={EMPTY_PIPELINE} onSubmit={onSubmit} onCancel={vi.fn()} />);
+    await user.type(screen.getByPlaceholderText("Pipeline name"), "Isolated");
+    await user.type(screen.getByPlaceholderText("Phase name"), "Build");
+    await user.type(screen.getByPlaceholderText(/Working directory/), "/repo");
+    await user.type(screen.getByPlaceholderText("Step name"), "compile");
+    await user.type(screen.getByPlaceholderText("Step prompt"), "run");
+
+    await user.selectOptions(screen.getByLabelText("Isolation"), "instance");
+    await user.selectOptions(screen.getByLabelText("Isolation (phase 1)"), "attempt");
+    await user.click(screen.getByRole("button", { name: /save pipeline/i }));
+
+    const arg = onSubmit.mock.calls[0][0];
+    expect(arg.workspace).toEqual({ scope: "instance" });
+    expect(arg.phases[0].workspace).toEqual({ scope: "attempt" });
+
+    // Back to "no isolation": the key goes entirely, rather than being kept
+    // around as an undefined scope.
+    await user.selectOptions(screen.getByLabelText("Isolation"), "");
+    await user.selectOptions(screen.getByLabelText("Isolation (phase 1)"), "");
+    await user.click(screen.getByRole("button", { name: /save pipeline/i }));
+    const cleared = onSubmit.mock.calls[1][0];
+    expect("workspace" in cleared).toBe(false);
+    expect("workspace" in cleared.phases[0]).toBe(false);
+  });
+
+  it("shows the isolation a pipeline was loaded with and preserves base/keep across a change", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    render(
+      <PipelineForm
+        initial={{
+          ...EMPTY_PIPELINE,
+          name: "Loaded",
+          workspace: { scope: "attempt", base: "origin/main", keep: true },
+          phases: [
+            {
+              id: "p1",
+              name: "Build",
+              cwd: "/repo",
+              gated: false,
+              steps: [{ name: "compile", prompt: "run" }],
+              workspace: { scope: "instance" },
+            },
+          ],
+        }}
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+      />,
+    );
+    expect((screen.getByLabelText("Isolation") as HTMLSelectElement).value).toBe("attempt");
+    expect((screen.getByLabelText("Isolation (phase 1)") as HTMLSelectElement).value).toBe(
+      "instance",
+    );
+
+    await user.selectOptions(screen.getByLabelText("Isolation"), "instance");
+    await user.click(screen.getByRole("button", { name: /save pipeline/i }));
+    // `base` and `keep` are API-only fields; the form moves scope and leaves
+    // the rest exactly as it found them.
+    expect(onSubmit.mock.calls[0][0].workspace).toEqual({
+      scope: "instance",
+      base: "origin/main",
+      keep: true,
+    });
+  });
 });

@@ -348,9 +348,12 @@ export function settle(
 
 export function initInstance(
   def: PipelineDefinition,
-  trigger: "manual" | "scheduled",
+  trigger: PipelineInstance["trigger"],
   ids: { instanceId: string; token: string },
   nowISO: string,
+  /** Set for `trigger: "webhook"` (the request body) or `"chained"` (the
+   *  source instance's outcome) — absent for `"manual"`/`"scheduled"`. */
+  firing?: { triggerPayload?: unknown; chainedFrom?: string },
 ): TransitionResult {
   if (def.phases.length === 0) throw new Error("pipeline has no phases");
   const needs = resolveNeeds(def.phases);
@@ -373,6 +376,8 @@ export function initInstance(
     currentPhaseIndex: 0,
     phases,
     trigger,
+    ...(firing?.triggerPayload !== undefined ? { triggerPayload: firing.triggerPayload } : {}),
+    ...(firing?.chainedFrom !== undefined ? { chainedFrom: firing.chainedFrom } : {}),
     signalToken: ids.token,
     createdAt: nowISO,
     updatedAt: nowISO,

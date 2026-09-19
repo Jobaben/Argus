@@ -39,4 +39,6 @@ export type {
   SignalType,
   StepProgress,
   StepStatus,
+  WorkspacePolicy,
+  WorkspaceRecord,
 } from "@argus/contracts";

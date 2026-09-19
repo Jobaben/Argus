@@ -2281,6 +2281,7 @@ session — it cannot execute anything.
 | `DELETE /api/pipelines/:id`                             | delete a definition — **admin**                                                                                                                                                                                                                                    |
 | `POST /api/pipelines/:id/start`                         | start an instance manually → `202`, or `409` on overlap — **admin**                                                                                                                                                                                                |
 | `GET /api/pipelines/:id/instances`                      | instances for a pipeline (newest first)                                                                                                                                                                                                                            |
+| `GET /api/pipelines/:id/reliability?days=30`            | first-attempt pass rate, lucky passes, stalls and cost/duration per phase over a trailing window (`days` clamped to 1–365); `404` for an unknown pipeline                                                                                                          |
 | `GET /api/pipelines/:id/tune`                           | newest settings-tuning report for a pipeline, or why none can run                                                                                                                                                                                                  |
 | `POST /api/pipelines/:id/tune`                          | start one tuning pass per phase → `202` with a `running` report; `409` while one runs — **admin**                                                                                                                                                                  |
 | `GET /api/overview`                                     | command-center rows: `{ definition, latest, cost }` per pipeline, attention-first                                                                                                                                                                                  |
@@ -2308,6 +2309,22 @@ prices contribute tokens while `usd` remains null.
 A definition, a phase (`phases[]`) and a step (`phases[].steps[]`) may each
 carry `runtime`; see [Naming a runtime](#naming-a-runtime) for the resolution
 order. One pipeline can therefore mix runtimes phase by phase.
+
+### Reliability
+
+`GET /api/pipelines/:id/reliability?days=30` answers a question binary
+pass/fail hides: how often a pipeline's phases pass on the first try, and
+where they lose attempts when they don't. It reads only the settled
+(`succeeded`/`failed`/`aborted`) instances that ended within the window and
+returns a `PipelineReliability`: overall `firstAttemptSuccessRate` and
+`luckyPassRate` (a "lucky pass" succeeded only after a retry or a human
+revise — `PhaseProgress.attempt > 1`), a per-day `trend` of
+succeeded-vs-failed, and one `PhaseReliability` per phase with its pass/fail
+split, `failureClasses` tally, `stalls` (timeout failures) and mean
+duration/cost. Every rate is `null` — never `NaN` or `0` — when its
+denominator is empty, so an unproven pipeline reads as "no evidence" rather
+than "perfect" or "broken". See `server/src/sources/reliability.ts` for the
+exact derivation and the "first attempt" rule it applies.
 
 ### Emitting signals from a run
 

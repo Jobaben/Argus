@@ -423,6 +423,12 @@ function runtimeTag(runtime: string | null | undefined): string {
   return runtime && runtime !== "claude" ? ` (${runtime})` : "";
 }
 
+/** How a run or instance was fired, for a tail line — silent for "scheduled",
+ *  since that is what most lines are and calling it out would be noise. */
+function triggerTag(trigger: string): string {
+  return trigger === "scheduled" ? "" : ` (${trigger})`;
+}
+
 function firstString(v: unknown, keys: string[]): string | null {
   if (typeof v === "string") return v;
   if (!v || typeof v !== "object") return null;
@@ -756,7 +762,7 @@ export class Tracker {
     return {
       at: run.startedAt ?? nowIso,
       kind: "run.started",
-      text: `${label}${runtimeTag(run.runtime)} started${run.trigger === "manual" ? " (manual)" : ""}${run.model ? ` · ${run.model}` : ""}`,
+      text: `${label}${runtimeTag(run.runtime)} started${triggerTag(run.trigger)}${run.model ? ` · ${run.model}` : ""}`,
       runId: run.id,
       instanceId: run.instanceId,
       label,
@@ -806,7 +812,7 @@ export class Tracker {
           lines.push({
             at: inst.createdAt || at,
             kind: "pipeline.started",
-            text: `pipeline ${inst.pipelineName} started${inst.trigger === "manual" ? " (manual)" : ""}`,
+            text: `pipeline ${inst.pipelineName} started${triggerTag(inst.trigger)}`,
             instanceId: inst.id,
             label: inst.pipelineName,
             status: "running",

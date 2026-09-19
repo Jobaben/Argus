@@ -49,6 +49,8 @@ export type JournalKind =
   | "route.selection"
   | "route.skip"
   | "route.failure"
+  | "workspace.created"
+  | "workspace.removed"
   | "instance.ended";
 
 export interface JournalEntry {

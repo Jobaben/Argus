@@ -3,6 +3,9 @@ import { createWriteStream } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { graceMsFor, shouldFire } from "./sources/nextFire.js";
 import { markScheduleRan, readSchedules } from "./sources/schedules.js";
+import { readPipelines } from "./sources/pipelines.js";
+import { readInstances } from "./sources/instances.js";
+import { alreadyChained, readChainLedger, recordChainFire } from "./sources/chains.js";
 import { accumulateRun } from "./sources/totals.js";
 import {
   RUN_KEEP,
@@ -23,6 +26,7 @@ import {
   runtimeFor,
 } from "./runtimes/index.js";
 import type { Run, RunStatus, Schedule } from "./sources/scheduleTypes.js";
+import type { PipelineDefinition, PipelineInstance } from "./sources/pipelineTypes.js";
 import type { AgentRuntimeId, BudgetEnforcement, ReasoningEffort } from "@argus/contracts";
 import { log } from "./log.js";
 
@@ -147,6 +151,17 @@ export interface SchedulerDeps {
   onTick?: () => Promise<void>;
   /** Called when a run reaches the 'failed' state (for failure notifications). */
   onFailure?: (run: Run) => void;
+  /**
+   * Fires a pipeline instance for an `after`-chained target. Wired to the
+   * pipeline engine's own `start()` from index.ts; absent in contexts (tests,
+   * a schedule-only harness) that don't need chained pipelines, in which case
+   * `processChains` simply leaves pipeline targets unfired.
+   */
+  startPipeline?: (
+    pipelineId: string,
+    trigger: "chained",
+    firing: { chainedFrom: string; triggerPayload: unknown },
+  ) => Promise<PipelineInstance | null>;
 }
 
 /** True if a process with `pid` is currently alive. */
@@ -244,7 +259,7 @@ function newRun(
     reasoningEffort?: ReasoningEffort;
     runtime?: AgentRuntimeId;
   },
-  trigger: "scheduled" | "manual",
+  trigger: Run["trigger"],
   startedAt: Date,
   deps: SchedulerDeps,
 ): Run {
@@ -323,7 +338,7 @@ async function spawnAndTrack(run: Run, startedAt: Date, deps: SchedulerDeps): Pr
 /** Creates a run record, spawns it, and updates the record on completion. */
 export async function fireRun(
   schedule: Schedule,
-  trigger: "scheduled" | "manual",
+  trigger: Run["trigger"],
   deps: SchedulerDeps,
   /** The budget ladder step in force, when one is. Only softens scheduled runs
    *  — a human clicking Run now is its own authorization. */
@@ -479,11 +494,151 @@ export async function tick(deps: SchedulerDeps): Promise<void> {
       deps.onChange?.();
     }
   }
+  try {
+    await processChains(deps);
+  } catch (e) {
+    log.error("chain processing failed", { err: e });
+  }
   if (deps.onTick) {
     try {
       await deps.onTick();
     } catch (e) {
       log.error("pipeline reconcile failed", { err: e });
+    }
+  }
+}
+
+/** Which of a source pipeline instance's outcomes satisfies an `after`
+ *  trigger's `on`. An instance still in flight never matches. */
+function afterMatches(
+  status: PipelineInstance["status"],
+  on: "succeeded" | "failed" | "any",
+): boolean {
+  if (status === "running" || status === "awaiting-approval") return false;
+  if (on === "any") return true;
+  if (on === "succeeded") return status === "succeeded";
+  // "failed": an aborted instance never finished its work either, so it
+  // counts as a failure for chaining purposes.
+  return status === "failed" || status === "aborted";
+}
+
+interface AfterTarget {
+  kind: "pipeline" | "schedule";
+  id: string;
+  updatedAt: string;
+  pipelineId: string;
+  on: "succeeded" | "failed" | "any";
+}
+
+function collectAfterTargets(pipelines: PipelineDefinition[], schedules: Schedule[]): AfterTarget[] {
+  const targets: AfterTarget[] = [];
+  for (const p of pipelines) {
+    if (p.enabled && p.trigger?.kind === "after" && p.trigger.pipelineId && p.trigger.on) {
+      targets.push({
+        kind: "pipeline",
+        id: p.id,
+        updatedAt: p.updatedAt,
+        pipelineId: p.trigger.pipelineId,
+        on: p.trigger.on,
+      });
+    }
+  }
+  for (const s of schedules) {
+    if (s.enabled && s.trigger.kind === "after" && s.trigger.pipelineId && s.trigger.on) {
+      targets.push({
+        kind: "schedule",
+        id: s.id,
+        updatedAt: s.updatedAt,
+        pipelineId: s.trigger.pipelineId,
+        on: s.trigger.on,
+      });
+    }
+  }
+  return targets;
+}
+
+/**
+ * Chains `after`-triggered pipelines and schedules off the source pipeline's
+ * instances, firing each source instance into each matching target at most
+ * once (the `chains.json` ledger, see sources/chains.ts). Runs on the same
+ * tick as everything else rather than its own timer, right after ordinary
+ * cadence firing — a pipeline or schedule fired above this pass could itself
+ * be an `after` source for something later in the graph, and reading
+ * instances fresh here lets that chain show up the very next tick.
+ *
+ * A target only ever looks at instances that ended *after its own*
+ * `updatedAt`: an `after` trigger just saved should not immediately fire off
+ * an instance that finished before anyone asked for it to be chained.
+ */
+async function processChains(deps: SchedulerDeps): Promise<void> {
+  const [pipelines, schedules, instances, ledger] = await Promise.all([
+    readPipelines(),
+    readSchedules(),
+    readInstances(),
+    readChainLedger(),
+  ]);
+
+  const targets = collectAfterTargets(pipelines, schedules);
+  if (targets.length === 0) return;
+
+  const instancesBySource = new Map<string, PipelineInstance[]>();
+  for (const inst of instances) {
+    const list = instancesBySource.get(inst.pipelineId);
+    if (list) list.push(inst);
+    else instancesBySource.set(inst.pipelineId, [inst]);
+  }
+
+  for (const target of targets) {
+    const updatedAtMs = new Date(target.updatedAt).getTime();
+    const candidates = (instancesBySource.get(target.pipelineId) ?? [])
+      .filter(
+        (inst) =>
+          inst.endedAt !== null &&
+          new Date(inst.endedAt).getTime() > updatedAtMs &&
+          afterMatches(inst.status, target.on) &&
+          !alreadyChained(ledger, inst.id, target.id),
+      )
+      // Oldest first: a burst of source instances that ended while Argus was
+      // down fires in the order they actually finished.
+      .sort((a, b) => new Date(a.endedAt!).getTime() - new Date(b.endedAt!).getTime());
+
+    for (const inst of candidates) {
+      const triggerPayload = {
+        sourceInstanceId: inst.id,
+        sourcePipelineId: inst.pipelineId,
+        status: inst.status,
+      };
+      let fired = false;
+      try {
+        if (target.kind === "pipeline") {
+          const result = await deps.startPipeline?.(target.id, "chained", {
+            chainedFrom: inst.id,
+            triggerPayload,
+          });
+          fired = result != null; // null = overlap=skip and busy; retry next tick
+        } else {
+          const schedule = schedules.find((s) => s.id === target.id);
+          if (schedule) {
+            const busy =
+              schedule.overlapPolicy === "skip" &&
+              (await readRuns({ scheduleId: schedule.id })).some(
+                (r) => r.status === "running" && isAlive(r.pid),
+              );
+            if (!busy) {
+              await fireRun(schedule, "chained", deps);
+              fired = true;
+            }
+          }
+        }
+      } catch (e) {
+        log.error("chain fire failed", { sourceInstanceId: inst.id, targetId: target.id, err: e });
+      }
+      // A fire that didn't happen (overlap busy, or the target vanished mid-tick)
+      // is left out of the ledger on purpose, so the next tick tries it again.
+      if (fired) {
+        await recordChainFire(inst.id, target.id);
+        deps.onChange?.();
+      }
     }
   }
 }

@@ -1,7 +1,7 @@
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { paths } from "../claudeHome.js";
-import { validateTrigger } from "./schedules.js";
+import { mintHookToken, validateTrigger } from "./schedules.js";
 import { createJsonArrayStore } from "./jsonArrayStore.js";
 import type { Dependency, PhaseDef, PhaseStep, PipelineDefinition } from "./pipelineTypes.js";
 import type {
@@ -10,6 +10,7 @@ import type {
   McpServerSpec,
   PhaseCheck,
   RetryableClass,
+  WorkspacePolicy,
 } from "./pipelineTypes.js";
 import type { Trigger } from "./scheduleTypes.js";
 import { RubricValidationError, validateAutoApprove, validateRubric } from "./verdict.js";
@@ -52,6 +53,7 @@ export interface PipelineInput {
   reasoningEffort?: ReasoningEffort;
   runtime?: AgentRuntimeId;
   capabilities?: CapabilityProfile;
+  workspace?: WorkspacePolicy;
 }
 
 // Model names are passed as a `--model <value>` argv pair to the agent CLI.
@@ -102,6 +104,57 @@ function validateTimeout(raw: unknown, ctx: string): number | undefined {
   }
   return n;
 }
+
+/**
+ * An isolation policy on a pipeline or a phase. Undefined/null = no isolation:
+ * the phase runs in its own `cwd`, exactly as before workspaces existed.
+ *
+ * `base` becomes an argument to `git rev-parse` and `git worktree add`, so it
+ * is held to what a ref can be here rather than at the point of use: no
+ * whitespace (one argument, not several) and no leading `-` (a ref, never a
+ * flag). Whether the ref *exists* is git's answer, at the moment the phase
+ * starts — a branch a pipeline is authored against may be created later.
+ */
+export function validateWorkspace(raw: unknown, ctx: string): WorkspacePolicy | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PipelineValidationError(`${ctx}: workspace must be an object`);
+  }
+  const w = raw as Record<string, unknown>;
+  for (const key of Object.keys(w)) {
+    if (!WORKSPACE_KEYS.has(key)) {
+      throw new PipelineValidationError(`${ctx}: workspace has unknown key "${key}"`);
+    }
+  }
+  if (!WORKSPACE_SCOPES.has(w.scope as WorkspacePolicy["scope"])) {
+    throw new PipelineValidationError(
+      `${ctx}: workspace.scope must be ${[...WORKSPACE_SCOPES].join(" | ")}`,
+    );
+  }
+  const policy: WorkspacePolicy = { scope: w.scope as WorkspacePolicy["scope"] };
+  if (w.base !== undefined && w.base !== null) {
+    if (typeof w.base !== "string" || !w.base.trim()) {
+      throw new PipelineValidationError(`${ctx}: workspace.base must be a non-empty string`);
+    }
+    const base = w.base.trim();
+    if (/\s/.test(base) || base.startsWith("-")) {
+      throw new PipelineValidationError(
+        `${ctx}: workspace.base "${base}" is not a valid git ref (no whitespace, no leading "-")`,
+      );
+    }
+    policy.base = base;
+  }
+  if (w.keep !== undefined && w.keep !== null) {
+    if (typeof w.keep !== "boolean") {
+      throw new PipelineValidationError(`${ctx}: workspace.keep must be a boolean`);
+    }
+    policy.keep = w.keep;
+  }
+  return policy;
+}
+
+const WORKSPACE_KEYS = new Set(["scope", "base", "keep"]);
+const WORKSPACE_SCOPES = new Set<WorkspacePolicy["scope"]>(["instance", "attempt"]);
 
 // ── Capability profiles ──────────────────────────────────────────────────────
 
@@ -714,6 +767,7 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
   const timeoutSeconds = validateTimeout(p.timeoutSeconds, `phase ${i}`);
   const capabilities = validateCapabilities(p.capabilities, `phase ${i}`);
   const checks = validateChecks(p.checks, `phase ${i}`);
+  const workspace = validateWorkspace(p.workspace, `phase ${i}`);
 
   return {
     id,
@@ -731,6 +785,7 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
     ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
     ...(capabilities ? { capabilities } : {}),
     ...(checks ? { checks } : {}),
+    ...(workspace ? { workspace } : {}),
   };
 }
 
@@ -803,6 +858,8 @@ export function validatePipelineInput(raw: unknown): PipelineInput {
   if (runtime) input.runtime = runtime;
   const capabilities = validateCapabilities(r.capabilities, "pipeline");
   if (capabilities) input.capabilities = capabilities;
+  const workspace = validateWorkspace(r.workspace, "pipeline");
+  if (workspace) input.workspace = workspace;
   return input;
 }
 
@@ -838,17 +895,49 @@ export function validatePipelinePatch(raw: unknown): Partial<PipelineInput> {
   }
   if ("runtime" in r) patch.runtime = validateRuntime(r.runtime, "pipeline");
   if ("capabilities" in r) patch.capabilities = validateCapabilities(r.capabilities, "pipeline");
+  if ("workspace" in r) patch.workspace = validateWorkspace(r.workspace, "pipeline");
   return patch;
 }
 
 export const readPipelines = store.read;
 const writePipelines = store.write;
 
+/**
+ * `after.pipelineId` checks that only `createPipeline`/`updatePipeline` can
+ * make, because only they hold every other definition:
+ *
+ *  - the source must exist,
+ *  - a pipeline may not chain off itself, and
+ *  - a *direct* two-node cycle (A after B, B after A) is refused; a longer
+ *    cycle through several pipelines is not detected here — the scheduler's
+ *    chain pass only ever fires an instance once per source, so a longer
+ *    cycle runs down, it does not spin.
+ */
+async function assertAfterTriggerValid(id: string, trigger: Trigger): Promise<void> {
+  if (trigger.kind !== "after") return;
+  if (trigger.pipelineId === id) {
+    throw new PipelineValidationError("a pipeline cannot chain after itself");
+  }
+  const others = await readPipelines();
+  const source = others.find((p) => p.id === trigger.pipelineId);
+  if (!source) {
+    throw new PipelineValidationError(
+      `after trigger names an unknown pipeline: ${trigger.pipelineId}`,
+    );
+  }
+  if (source.trigger?.kind === "after" && source.trigger.pipelineId === id) {
+    throw new PipelineValidationError(
+      `after trigger would create a cycle: "${source.name}" already fires after this pipeline`,
+    );
+  }
+}
+
 export async function createPipeline(
   input: PipelineInput,
   now: Date,
   id: string,
 ): Promise<PipelineDefinition> {
+  if (input.trigger) await assertAfterTriggerValid(id, input.trigger);
   const iso = now.toISOString();
   const def: PipelineDefinition = {
     id,
@@ -861,6 +950,10 @@ export async function createPipeline(
     ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
     ...(input.runtime ? { runtime: input.runtime } : {}),
     ...(input.capabilities ? { capabilities: input.capabilities } : {}),
+    ...(input.workspace ? { workspace: input.workspace } : {}),
+    // Minted on first save of a webhook trigger; rotated only via the
+    // dedicated endpoint, never by an ordinary edit.
+    ...(input.trigger?.kind === "webhook" ? { hookToken: mintHookToken() } : {}),
     lastStartedAt: null,
     createdAt: iso,
     updatedAt: iso,
@@ -878,6 +971,7 @@ export async function updatePipeline(
   patch: Partial<PipelineInput>,
   now: Date,
 ): Promise<PipelineDefinition | null> {
+  if (patch.trigger) await assertAfterTriggerValid(id, patch.trigger);
   return withStoreLock(async () => {
     const list = await readPipelines();
     const idx = list.findIndex((d) => d.id === id);
@@ -906,6 +1000,17 @@ export async function updatePipeline(
       if (patch.capabilities) merged.capabilities = patch.capabilities;
       else delete merged.capabilities;
     }
+    // And for `workspace`: null/undefined clears the pipeline-wide isolation
+    // policy rather than leaving a present-and-null key behind.
+    if ("workspace" in patch) {
+      if (patch.workspace) merged.workspace = patch.workspace;
+      else delete merged.workspace;
+    }
+    // Mint a hook token the first time this pipeline's trigger becomes
+    // "webhook"; keep whatever token it already had otherwise.
+    if (merged.trigger?.kind === "webhook" && !merged.hookToken) {
+      merged.hookToken = mintHookToken();
+    }
     list[idx] = merged;
     await writePipelines(list);
     return merged;
@@ -929,5 +1034,33 @@ export async function markPipelineStarted(id: string, atISO: string): Promise<vo
     if (idx === -1) return;
     list[idx] = { ...list[idx], lastStartedAt: atISO };
     await writePipelines(list);
+  });
+}
+
+/**
+ * Mints a fresh `hookToken`, invalidating whatever URL/token combination was
+ * handed out before. Only reachable via
+ * `POST /api/pipelines/:id/hook-token/rotate` — an ordinary save never
+ * regenerates a working hook.
+ */
+export async function rotatePipelineHookToken(
+  id: string,
+  now: Date,
+): Promise<PipelineDefinition | null> {
+  return withStoreLock(async () => {
+    const list = await readPipelines();
+    const idx = list.findIndex((d) => d.id === id);
+    if (idx === -1) return null;
+    if (list[idx].trigger?.kind !== "webhook") {
+      throw new PipelineValidationError("pipeline does not have a webhook trigger");
+    }
+    const merged: PipelineDefinition = {
+      ...list[idx],
+      hookToken: mintHookToken(),
+      updatedAt: now.toISOString(),
+    };
+    list[idx] = merged;
+    await writePipelines(list);
+    return merged;
   });
 }

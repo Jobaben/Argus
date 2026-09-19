@@ -1,7 +1,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { spawn as nodeSpawn } from "node:child_process";
+import { spawn as nodeSpawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { retryNote, failureClassOfRecord } from "./pipelineEngine.js";
@@ -837,4 +837,223 @@ test("failureClassOfRecord classes a run from its termination and pid", () => {
   assert.equal(failureClassOfRecord({ termination: "timed-out", pid: 123 } as any), "timeout");
   assert.equal(failureClassOfRecord({ pid: null } as any), "spawn");
   assert.equal(failureClassOfRecord({ pid: 123 } as any), "exit-code");
+});
+
+// ── 16. workspace isolation ─────────────────────────────────────────────────
+
+function gitAvailable(): boolean {
+  try {
+    return spawnSync("git", ["--version"]).status === 0;
+  } catch {
+    return false;
+  }
+}
+
+const gitIn = (dir: string, args: string[]) =>
+  spawnSync("git", ["-c", "user.email=t@e.com", "-c", "user.name=T", ...args], {
+    cwd: dir,
+    encoding: "utf8",
+  });
+
+/** A real repository with one commit, as a phase's `cwd`. */
+function makeRepo(): string {
+  const dir = mkdtempSync(path.join(tmpdir(), "argus-engine-repo-"));
+  gitIn(dir, ["init", "-q", "-b", "main"]);
+  writeFileSync(path.join(dir, "README.md"), "base\n", "utf8");
+  gitIn(dir, ["add", "."]);
+  gitIn(dir, ["commit", "-q", "-m", "init"]);
+  return dir;
+}
+
+test("an instance-scoped workspace is shared by every phase and removed when the instance ends", async (t) => {
+  if (!gitAvailable()) return t.skip("git not available");
+  const { engine, pipelines, instances, runsSrc, journalSrc } = await load();
+  const repo = makeRepo();
+  await seed(
+    pipelines,
+    [
+      { id: "one", name: "One", cwd: repo, gated: false, steps: [{ name: "s", prompt: "p" }] },
+      {
+        id: "two",
+        name: "Two",
+        cwd: repo,
+        gated: false,
+        needs: ["one"],
+        steps: [{ name: "s", prompt: "p" }],
+      },
+    ],
+    { workspace: { scope: "instance" } },
+  );
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const inst = await e.start("p1", "manual");
+
+  const shared = path.join(paths.worktreesDir(), inst!.id, "shared");
+  assert.equal(rec.calls[0].run.cwd, shared);
+  // The transcript lands under the directory the agent actually ran in.
+  assert.equal(rec.calls[0].run.project, runsSrc.encodeProject(shared));
+  assert.equal(rec.calls[0].env.ARGUS_WORKSPACE, shared);
+  assert.equal(rec.calls[0].prepared.env.ARGUS_WORKSPACE, shared);
+  assert.equal(rec.calls[0].prepared.record.workspace.branch, `argus/${inst!.id}/shared`);
+  assert.equal(existsSync(path.join(shared, "README.md")), true);
+
+  const started = await instances.readInstance(inst!.id);
+  assert.equal(started.workspace.path, shared);
+  assert.equal(started.phases[0].workspace.path, shared);
+
+  await e.onSignal(inst!.id, {
+    instanceId: inst!.id,
+    phaseId: "one",
+    runId: inst!.phases[0].steps[0].runId,
+    type: "completed",
+    token: inst!.signalToken,
+  });
+  await e.drain();
+  // The second phase reuses the same tree rather than cutting its own.
+  assert.equal(rec.calls.length, 2);
+  assert.equal(rec.calls[1].run.cwd, shared);
+  const mid = await instances.readInstance(inst!.id);
+  assert.equal(mid.phases[1].workspace.path, shared);
+  assert.equal(existsSync(shared), true);
+
+  await e.onSignal(inst!.id, {
+    instanceId: inst!.id,
+    phaseId: "two",
+    runId: mid.phases[1].steps[0].runId,
+    type: "completed",
+    token: inst!.signalToken,
+  });
+  await e.drain();
+
+  const done = await instances.readInstance(inst!.id);
+  assert.equal(done.status, "succeeded");
+  // The directory is disposable; the branch is the deliverable.
+  assert.equal(existsSync(shared), false);
+  assert.equal(gitIn(repo, ["rev-parse", "--verify", `argus/${inst!.id}/shared`]).status, 0);
+  const j = await journalSrc.readJournal(inst!.id);
+  assert.ok(j.some((entry: any) => entry.kind === "workspace.created"));
+  assert.ok(j.some((entry: any) => entry.kind === "workspace.removed"));
+});
+
+test("an attempt-scoped workspace is fresh per attempt, and the superseded one is removed", async (t) => {
+  if (!gitAvailable()) return t.skip("git not available");
+  const { engine, pipelines, instances } = await load();
+  const repo = makeRepo();
+  await seed(pipelines, [
+    {
+      id: "gate",
+      name: "Gate",
+      cwd: repo,
+      gated: true,
+      workspace: { scope: "attempt" },
+      steps: [{ name: "s", prompt: "p" }],
+    },
+  ]);
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const inst = await e.start("p1", "manual");
+  const first = path.join(paths.worktreesDir(), inst!.id, "gate-attempt0");
+  assert.equal(rec.calls[0].run.cwd, first);
+  assert.equal(existsSync(first), true);
+
+  await e.onSignal(inst!.id, {
+    instanceId: inst!.id,
+    phaseId: "gate",
+    runId: inst!.phases[0].steps[0].runId,
+    type: "needs-input",
+    token: inst!.signalToken,
+  });
+  await e.revise(inst!.id, "try again");
+  await e.drain();
+
+  const second = path.join(paths.worktreesDir(), inst!.id, "gate-attempt1");
+  assert.equal(rec.calls.length, 2);
+  assert.equal(rec.calls[1].run.cwd, second);
+  assert.equal(existsSync(second), true);
+  // The superseded attempt's tree goes as the new one starts; its branch stays.
+  assert.equal(existsSync(first), false);
+  assert.equal(gitIn(repo, ["rev-parse", "--verify", `argus/${inst!.id}/gate/0`]).status, 0);
+  const after = await instances.readInstance(inst!.id);
+  assert.equal(after.phases[0].workspace.path, second);
+  assert.equal(after.workspace, undefined);
+});
+
+test("a workspace Argus cannot create fails the phase as configuration, without a retry", async (t) => {
+  if (!gitAvailable()) return t.skip("git not available");
+  const { engine, pipelines, instances, journalSrc } = await load();
+  // `home` is a plain temp directory: not a git work tree.
+  await seed(pipelines, [
+    {
+      id: "only",
+      name: "Only",
+      cwd: home,
+      gated: false,
+      workspace: { scope: "instance" },
+      retry: { attempts: 3, backoffSeconds: 1, retryOn: ["spawn", "exit-code", "verification"] },
+      steps: [{ name: "s", prompt: "p" }],
+    },
+  ]);
+  const rec = recordingSpawn();
+  let failures = 0;
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn, onFailure: () => failures++ }));
+  const inst = await e.start("p1", "manual");
+  await e.drain();
+
+  assert.equal(rec.calls.length, 0);
+  const after = await instances.readInstance(inst!.id);
+  assert.equal(after.status, "failed");
+  assert.equal(after.phases[0].status, "failed");
+  assert.equal(after.phases[0].payload.failureClass, "configuration");
+  assert.match(after.phases[0].payload.reason, /not inside a git work tree/);
+  // `configuration` is never retried: nothing is scheduled.
+  assert.equal(after.phases[0].retryAt ?? null, null);
+  assert.equal(failures, 1);
+  const j = await journalSrc.readJournal(inst!.id);
+  assert.ok(
+    j.some((entry: any) => entry.kind === "phase.failed" && /configuration/.test(entry.detail)),
+  );
+});
+
+test("keep leaves the worktree directory behind, and the phase's checks run inside it", async (t) => {
+  if (!gitAvailable()) return t.skip("git not available");
+  const { engine, pipelines, instances } = await load();
+  const repo = makeRepo();
+  await seed(pipelines, [
+    {
+      id: "build",
+      name: "Build",
+      cwd: repo,
+      gated: false,
+      workspace: { scope: "instance", keep: true },
+      checks: [{ kind: "file", path: "built.txt", label: "built" }],
+      steps: [{ name: "s", prompt: "p" }],
+    },
+  ]);
+  // The "agent" leaves its file in the directory it was given.
+  const rec = recordingSpawn();
+  const spawn = (run: any, log: string, env: Record<string, string>, prepared: any) => {
+    writeFileSync(path.join(run.cwd, "built.txt"), "done\n", "utf8");
+    return rec.spawn(run, log, env, prepared);
+  };
+  const e = engine.createEngine(baseDeps({ spawn }));
+  const inst = await e.start("p1", "manual");
+  const tree = path.join(paths.worktreesDir(), inst!.id, "shared");
+
+  await e.onSignal(inst!.id, {
+    instanceId: inst!.id,
+    phaseId: "build",
+    runId: inst!.phases[0].steps[0].runId,
+    type: "completed",
+    token: inst!.signalToken,
+  });
+  await e.drain();
+
+  const after = await instances.readInstance(inst!.id);
+  // The check passed, which it only can if it looked in the worktree.
+  assert.equal(after.phases[0].verification.status, "passed");
+  assert.equal(after.status, "succeeded");
+  assert.equal(existsSync(path.join(tree, "built.txt")), true);
+  assert.equal(existsSync(path.join(repo, "built.txt")), false);
+  // keep: the directory outlives the instance.
+  assert.equal(existsSync(tree), true);
 });

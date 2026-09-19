@@ -27,6 +27,13 @@ import type { PreparedInvocation } from "./harness/invocation.js";
 import { buildChildEnv } from "./harness/childEnv.js";
 import { runChecks, snapshotWorkingTree } from "./harness/verification.js";
 import type { WorkingTreeSnapshot } from "./harness/verification.js";
+import {
+  createWorktree,
+  plannedRemovals,
+  removeWorktree,
+  workspacePolicyFor,
+  workspaceTarget,
+} from "./harness/workspace.js";
 import { markPipelineStarted, readPipelines } from "./sources/pipelines.js";
 import { accumulateRun } from "./sources/totals.js";
 import {
@@ -64,8 +71,11 @@ import type {
   PhaseDef,
   PhaseFailureClass,
   PhaseFailurePayload,
+  PhaseProgress,
   PhaseStep,
   RetryableClass,
+  WorkspacePolicy,
+  WorkspaceRecord,
 } from "./sources/pipelineTypes.js";
 import type { RouteOutcome, TransitionResult } from "./pipelineTransitions.js";
 import type {
@@ -371,7 +381,13 @@ export function retryNote(payload: unknown): string {
 }
 
 export interface Engine {
-  start(pipelineId: string, trigger?: "manual" | "scheduled"): Promise<PipelineInstance | null>;
+  start(
+    pipelineId: string,
+    trigger?: PipelineInstance["trigger"],
+    /** Set for `trigger: "webhook"` (the request body) or `"chained"` (the
+     *  source instance's outcome) — omitted for `"manual"`/`"scheduled"`. */
+    firing?: { triggerPayload?: unknown; chainedFrom?: string },
+  ): Promise<PipelineInstance | null>;
   onSignal(instanceId: string, signal: PipelineSignal): Promise<ActionResult>;
   /** Open a gate. `phaseId` names which paused phase when a fan-out has more
    *  than one waiting; absent, the single paused phase is meant. */
@@ -415,6 +431,124 @@ export function createEngine(deps: EngineDeps): Engine {
   }
   async function drain(): Promise<void> {
     while (detached.size > 0) await Promise.allSettled([...detached]);
+  }
+
+  /** Instances whose worktrees this process has already cleaned up. */
+  const cleaned = new Set<string>();
+
+  /**
+   * Persist an instance, and — once it has settled — remove the worktrees it
+   * created.
+   *
+   * Every write of an instance goes through here rather than through
+   * `writeInstance` directly, because an instance can reach a terminal status
+   * from a dozen places (a signal, a deadline, a failed check, an abort, a
+   * reconcile pass), and a cleanup hook on each of them is a cleanup hook
+   * somebody eventually forgets. The removal is detached and never throws into
+   * the transition that caused it: a worktree Argus cannot delete is a warning
+   * in the log, never a pipeline that fails to finish.
+   */
+  async function saveInstance(inst: PipelineInstance): Promise<void> {
+    await writeInstance(inst);
+    if (inst.status === "running" || inst.status === "awaiting-approval") {
+      // Alive again — a revise of a failed instance, a scheduled retry. What it
+      // creates from here is cleaned up by the settlement that follows.
+      cleaned.delete(inst.id);
+      return;
+    }
+    if (cleaned.has(inst.id)) return;
+    if (!inst.workspace && !inst.phases.some((p) => p.workspace)) return;
+    cleaned.add(inst.id);
+    void track(cleanupWorkspaces(inst));
+  }
+
+  /** Remove every worktree of a settled instance whose policy did not ask for
+   *  it to be kept. The branches are never touched: they are the deliverable. */
+  async function cleanupWorkspaces(inst: PipelineInstance): Promise<void> {
+    const def = await defFor(inst);
+    if (!def) return;
+    for (const removal of plannedRemovals(def, inst)) {
+      await removeWorkspace(inst.id, removal.repoCwd, removal.path, removal.branch);
+    }
+  }
+
+  /** One worktree, gone. Never throws — a directory Argus could not remove must
+   *  not take a transition (or an instance's settlement) down with it. */
+  async function removeWorkspace(
+    instanceId: string,
+    repoCwd: string,
+    workspacePath: string,
+    branch: string,
+  ): Promise<void> {
+    try {
+      await removeWorktree({ repoCwd, path: workspacePath });
+      // Awaited, unlike the engine's other journal calls: this one runs off the
+      // transition path already, and a settled instance's evidence should be on
+      // disk by the time `drain()` says the settlement is finished.
+      await journal(instanceId, {
+        at: nowISO(),
+        kind: "workspace.removed",
+        detail: `${branch} at ${workspacePath}`,
+      });
+    } catch (e) {
+      log.warn("workspace could not be removed", { instanceId, path: workspacePath, err: e });
+    }
+  }
+
+  /**
+   * The worktree this phase attempt runs in, created (or re-attached) before
+   * anything is planned.
+   *
+   * `scope: "instance"` resolves to one tree per instance, shared by every
+   * phase that opts in and recorded on the instance the first time it is used —
+   * the record is kept as it was, so the base commit it was cut from stays the
+   * one it was cut from however many phases reuse it. `scope: "attempt"` gives
+   * each attempt its own, and the superseded attempt's tree is removed as the
+   * new one is created unless the policy says to keep it.
+   *
+   * Throws {@link WorkspaceError} (with git's own words) when the repository,
+   * the base ref or git itself is not what the definition assumed: the caller
+   * turns that into a `configuration` failure of the phase.
+   */
+  async function ensureWorkspace(
+    inst: PipelineInstance,
+    phaseDef: PhaseDef,
+    progress: PhaseProgress,
+    policy: WorkspacePolicy,
+  ): Promise<WorkspaceRecord> {
+    const target = workspaceTarget({
+      root: paths.worktreesDir(),
+      instanceId: inst.id,
+      phaseId: phaseDef.id,
+      attempt: progress.attempt,
+      policy,
+    });
+    const previous = progress.workspace;
+    if (previous && previous.path !== target.path && policy.keep !== true) {
+      await removeWorkspace(inst.id, phaseDef.cwd, previous.path, previous.branch);
+    }
+    // A restart finds the directory already there (reused as it stands) or the
+    // branch already there without it (checked out again, keeping its commits).
+    const shared =
+      policy.scope === "instance" && inst.workspace?.path === target.path ? inst.workspace : null;
+    const created = await createWorktree({
+      repoCwd: phaseDef.cwd,
+      path: target.path,
+      branch: target.branch,
+      ...(policy.base ? { base: policy.base } : {}),
+    });
+    const record = shared ?? created;
+    if (policy.scope === "instance") inst.workspace = record;
+    if (!shared) {
+      void journal(inst.id, {
+        at: nowISO(),
+        kind: "workspace.created",
+        phaseId: phaseDef.id,
+        attempt: progress.attempt,
+        detail: `${record.branch} at ${record.path}`,
+      });
+    }
+    return record;
   }
 
   async function loadDef(pipelineId: string): Promise<PipelineDefinition | undefined> {
@@ -478,6 +612,26 @@ export function createEngine(deps: EngineDeps): Engine {
     // as absent, which is the honest answer.
     const prevPayload = previousPayloadFor(def, inst, phaseDef.id);
     const startedAt = nowISO();
+    // Isolation first: the worktree is what the steps' `cwd` will be, so it has
+    // to exist before a single run is planned — and a tree that cannot be
+    // created is a definition Argus cannot honour, not a step that failed.
+    const policy = workspacePolicyFor(def, phaseDef);
+    if (policy) {
+      try {
+        progress.workspace = await ensureWorkspace(inst, phaseDef, progress, policy);
+      } catch (e) {
+        await failPhaseConfiguration(
+          def,
+          inst,
+          phaseDef.id,
+          e instanceof Error ? e.message : String(e),
+        );
+        return;
+      }
+    }
+    // Where this attempt's work actually happens: its worktree, else the
+    // phase's own directory exactly as before workspaces existed.
+    const cwd = progress.workspace?.path ?? phaseDef.cwd;
     const artifactDir = phaseArtifactDir(paths.artifactsDir(), inst.id, phaseDef.id);
     progress.artifactDir = artifactDir;
     const dirs = {
@@ -506,7 +660,7 @@ export function createEngine(deps: EngineDeps): Engine {
           (publishes ? resultInstruction(phaseDef.result) : "") +
           artifactInstruction(phaseDef.checks, artifactDir) +
           noteSuffix,
-        cwd: phaseDef.cwd,
+        cwd,
         status: "running",
         trigger: "scheduled",
         queuedAt: startedAt,
@@ -519,7 +673,7 @@ export function createEngine(deps: EngineDeps): Engine {
         model: stepDef.model ?? def.model,
         reasoningEffort: stepDef.reasoningEffort ?? def.reasoningEffort,
         runtime,
-        project: encodeProject(phaseDef.cwd),
+        project: encodeProject(cwd),
         resultSummary: null,
         error: null,
         instanceId: inst.id,
@@ -537,7 +691,7 @@ export function createEngine(deps: EngineDeps): Engine {
       status: "running" as const,
     }));
     progress.status = "running";
-    await writeInstance(inst);
+    await saveInstance(inst);
     void journal(inst.id, {
       at: startedAt,
       kind: "phase.started",
@@ -554,7 +708,7 @@ export function createEngine(deps: EngineDeps): Engine {
     // agent's reach (beside the invocation records, not in the artifact dir).
     let baseline: WorkingTreeSnapshot | null = null;
     if (phaseDef.checks?.some((c) => c.kind === "changed-files")) {
-      baseline = await snapshotWorkingTree(phaseDef.cwd);
+      baseline = await snapshotWorkingTree(cwd);
       const file = phaseBaselinePath(
         paths.invocationsDir(),
         inst.id,
@@ -570,7 +724,7 @@ export function createEngine(deps: EngineDeps): Engine {
     // spawn is observable when they return. The concurrency cap still applies —
     // a launch past the cap waits for a slot, which is fine here because these
     // callers hold no slot of their own.
-    const gitHead = baseline?.head ?? (await readGitHead(phaseDef.cwd));
+    const gitHead = baseline?.head ?? (await readGitHead(cwd));
     const unlaunchable: { run: Run; reason: string }[] = [];
     for (const { stepDef, run, publishes, timeoutSeconds } of planned) {
       const launched = await launchStep(run, {
@@ -582,6 +736,7 @@ export function createEngine(deps: EngineDeps): Engine {
         artifactDir,
         timeoutSeconds,
         gitHead,
+        workspace: progress.workspace ?? null,
       });
       void journal(inst.id, {
         at: nowISO(),
@@ -611,7 +766,7 @@ export function createEngine(deps: EngineDeps): Engine {
       );
     }
     if (unlaunchable.length > 0) {
-      await writeInstance(inst);
+      await saveInstance(inst);
       // Siblings that did launch belong to a phase that has already failed.
       await killPhaseRuns(inst, [phaseDef.id], "stopped: phase failed");
       queueReadyPhases(inst.id, def, inst, readyAfterFailure);
@@ -631,12 +786,32 @@ export function createEngine(deps: EngineDeps): Engine {
     inst: PipelineInstance,
     phaseId: string,
   ): Promise<void> {
-    const reason = `phase "${phaseId}" no longer exists in pipeline "${def.name}"`;
     log.warn("phase cannot be launched: not in the pipeline definition", {
       instanceId: inst.id,
       pipelineId: def.id,
       phaseId,
     });
+    await failPhaseConfiguration(
+      def,
+      inst,
+      phaseId,
+      `phase "${phaseId}" no longer exists in pipeline "${def.name}"`,
+    );
+  }
+
+  /**
+   * A phase that cannot be launched at all: nothing was spawned for this
+   * attempt, so there is nothing to kill. The phase fails under
+   * `configuration` — never retried, because what is wrong is the definition,
+   * not the weather — the instance settles, and whatever that makes ready is
+   * queued exactly as after any other failure.
+   */
+  async function failPhaseConfiguration(
+    def: PipelineDefinition,
+    inst: PipelineInstance,
+    phaseId: string,
+    reason: string,
+  ): Promise<void> {
     const res = applyUnlaunchable(def, inst, phaseId, reason, nowISO());
     const phase = res.instance.phases.find((p) => p.id === phaseId);
     if (phase?.status === "failed") {
@@ -649,7 +824,7 @@ export function createEngine(deps: EngineDeps): Engine {
       });
     }
     noteRouting(def, res.instance, res.routing);
-    await writeInstance(res.instance);
+    await saveInstance(res.instance);
     if (res.instance.status === "succeeded" || res.instance.status === "failed") {
       void journal(inst.id, { at: nowISO(), kind: "instance.ended", detail: res.instance.status });
     }
@@ -723,6 +898,8 @@ export function createEngine(deps: EngineDeps): Engine {
     artifactDir: string;
     timeoutSeconds: number | null;
     gitHead: string | null;
+    /** The worktree the step runs in, when its phase declared a policy. */
+    workspace: WorkspaceRecord | null;
   }
 
   type Launched =
@@ -754,6 +931,10 @@ export function createEngine(deps: EngineDeps): Engine {
       // Where this phase's file artifacts go; later phases read them from here.
       ARGUS_ARTIFACT_DIR: ctx.artifactDir,
     };
+    // The isolated worktree the step is already running in, named so a script
+    // (or a nested tool) does not have to derive it from `pwd`. Per-invocation,
+    // and therefore stripped from the inherited environment by buildChildEnv.
+    if (ctx.workspace) env.ARGUS_WORKSPACE = ctx.workspace.path;
     // The result file is named for every runtime, hook or no hook: the agent
     // writes the same file either way, and a runtime without a command hook has
     // it read off disk on the next reconcile tick instead.
@@ -781,6 +962,7 @@ export function createEngine(deps: EngineDeps): Engine {
         argusEnv: env,
         invocationDir,
         artifactDir: ctx.artifactDir,
+        workspace: ctx.workspace,
         resultFile,
         timeoutSeconds: ctx.timeoutSeconds,
         gitHead: ctx.gitHead,
@@ -1014,7 +1196,7 @@ export function createEngine(deps: EngineDeps): Engine {
       if (beforeTransition) await beforeTransition();
       const res = failStepInPlace(def, inst, phaseId, runId, failureClass, reason, extra);
       await patchRun(runId, { outcome: "failed" });
-      await writeInstance(res.instance);
+      await saveInstance(res.instance);
       await killPhaseRuns(res.instance, [phaseId], "stopped: phase failed");
       queueReadyPhases(instanceId, def, res.instance, res.startPhases);
       if (res.instance.status === "failed") deps.onFailure?.(res.instance);
@@ -1164,7 +1346,7 @@ export function createEngine(deps: EngineDeps): Engine {
           const note = retryNote(phase.payload);
           const res = applyRetry(inst, phase.id, nowISO());
           if (res.startPhases.length === 0) continue;
-          await writeInstance(res.instance);
+          await saveInstance(res.instance);
           void journal(inst.id, {
             at: nowISO(),
             kind: "phase.retrying",
@@ -1194,7 +1376,11 @@ export function createEngine(deps: EngineDeps): Engine {
     }
   }
 
-  async function start(pipelineId: string, trigger: "manual" | "scheduled" = "manual") {
+  async function start(
+    pipelineId: string,
+    trigger: PipelineInstance["trigger"] = "manual",
+    firing?: { triggerPayload?: unknown; chainedFrom?: string },
+  ) {
     const def = await loadDef(pipelineId);
     if (!def) throw new Error("pipeline not found");
     if (def.overlapPolicy === "skip") {
@@ -1212,8 +1398,9 @@ export function createEngine(deps: EngineDeps): Engine {
       trigger,
       { instanceId: deps.newId(), token: deps.newId() },
       nowISO(),
+      firing,
     );
-    await writeInstance(instance);
+    await saveInstance(instance);
     await markPipelineStarted(def.id, instance.createdAt);
     void journal(instance.id, {
       at: instance.createdAt,
@@ -1306,7 +1493,9 @@ export function createEngine(deps: EngineDeps): Engine {
           /* no baseline recorded (not a git repository, or no changed-files check) */
         }
         const report = await runChecks(phaseDef.checks ?? [], {
-          cwd: phaseDef.cwd,
+          // The checks look at the work, so they look where the work happened:
+          // the phase's worktree when it had one, its own cwd otherwise.
+          cwd: phase.workspace?.path ?? phaseDef.cwd,
           artifactDir: phase.artifactDir ?? null,
           baseline,
           now: deps.now,
@@ -1342,7 +1531,7 @@ export function createEngine(deps: EngineDeps): Engine {
             noteFailure(def, res.instance, phaseId, "verification", reason);
           }
           noteRouting(def, res.instance, res.routing);
-          await writeInstance(res.instance);
+          await saveInstance(res.instance);
           if (res.instance.status === "succeeded" || res.instance.status === "failed") {
             void journal(instanceId, {
               at: nowISO(),
@@ -1425,7 +1614,7 @@ export function createEngine(deps: EngineDeps): Engine {
       // One write: the route decision, the skips it implies, the phase
       // statuses, the failure class and any scheduled retry land together or
       // not at all.
-      await writeInstance(instance);
+      await saveInstance(instance);
       queueVerifications(instanceId, def, instance, verify);
       if (outcome) await patchRun(signal.runId, { outcome });
       void journal(instance.id, {
@@ -1473,8 +1662,8 @@ export function createEngine(deps: EngineDeps): Engine {
       } catch (e) {
         return { ok: false, code: 409, error: e instanceof Error ? e.message : String(e) };
       }
-      await writeInstance(res.instance);
-      if (noteRouting(def, res.instance, res.routing)) await writeInstance(res.instance);
+      await saveInstance(res.instance);
+      if (noteRouting(def, res.instance, res.routing)) await saveInstance(res.instance);
       await startPhases(def, res.instance, res.startPhases);
       deps.onChange?.();
       return { ok: true, code: 200 };
@@ -1508,7 +1697,7 @@ export function createEngine(deps: EngineDeps): Engine {
         res.startPhases.map((i) => res.instance.phases[i].id),
         "superseded by a revise",
       );
-      await writeInstance(res.instance);
+      await saveInstance(res.instance);
       const suffix = note ? `\n\nRevision note: ${note}` : "";
       await startPhases(def, res.instance, res.startPhases, suffix);
       deps.onChange?.();
@@ -1533,7 +1722,7 @@ export function createEngine(deps: EngineDeps): Engine {
         inst.phases.map((p) => p.id),
         "aborted",
       );
-      await writeInstance(aborted);
+      await saveInstance(aborted);
       deps.onChange?.();
       return { ok: true, code: 200 };
     });
@@ -1778,7 +1967,7 @@ export function createEngine(deps: EngineDeps): Engine {
             noteFailure(def, instance, phaseId, failureClass, reason);
           }
           noteRouting(def, instance, routing);
-          await writeInstance(instance);
+          await saveInstance(instance);
           queueVerifications(instance.id, def, instance, verify);
           void journal(instance.id, {
             at: nowISO(),

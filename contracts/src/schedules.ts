@@ -4,14 +4,25 @@ import type { BudgetAction } from "./ledger.js";
 import type { AgentRuntimeId, ReasoningEffort } from "./runtimes.js";
 import type { Rubric } from "./verdict.js";
 
-export type TriggerKind = "interval" | "daily" | "weekly" | "windowed";
+export type TriggerKind = "interval" | "daily" | "weekly" | "windowed" | "webhook" | "after";
 
-/** When a schedule fires. `everyMinutes` for interval and windowed cadence;
+/**
+ * When a schedule fires. `everyMinutes` for interval and windowed cadence;
  * `time` ("HH:MM", local) for daily/weekly; `weekday` (0=Sun..6=Sat) for weekly;
  * `startTime`/`endTime` ("HH:MM", local, end exclusive) bound the windowed daily
  * window — an endTime before startTime wraps past midnight into the next day;
  * `weekdays` optionally restricts windowed to the days the window opens on
- * (empty/omitted = every day). */
+ * (empty/omitted = every day).
+ *
+ * `kind: "webhook"` carries no cadence field at all — the owning definition is
+ * fired by `POST /api/hooks/{pipelines,schedules}/:id` instead of by the
+ * scheduler tick. `kind: "after"` chains this definition off another
+ * pipeline's instances: `pipelineId` names the source pipeline (only
+ * pipelines may be a chain's source) and `on` says which of its outcomes
+ * fires this one. Neither kind is understood by `nextFire.ts`'s cadence math;
+ * both are handled as their own firing paths (the webhook route, the
+ * scheduler's chain pass).
+ */
 export interface Trigger {
   kind: TriggerKind;
   everyMinutes?: number;
@@ -20,6 +31,10 @@ export interface Trigger {
   startTime?: string;
   endTime?: string;
   weekdays?: number[];
+  /** `kind: "after"` only: the source pipeline's id. */
+  pipelineId?: string;
+  /** `kind: "after"` only: which of the source pipeline's outcomes fires this one. */
+  on?: "succeeded" | "failed" | "any";
 }
 
 export interface Schedule {
@@ -44,6 +59,15 @@ export interface Schedule {
   model?: string;
   /** Codex-only per-run reasoning override. */
   reasoningEffort?: ReasoningEffort;
+  /**
+   * Bearer credential for `POST /api/hooks/schedules/:id`, minted once this
+   * schedule's `trigger` first becomes `kind: "webhook"` and kept stable
+   * across later edits — regenerated only via
+   * `POST /api/schedules/:id/hook-token/rotate`. This is a single-user control
+   * plane behind `ARGUS_TOKEN`; the token is returned in GET responses rather
+   * than hashed, the way `ARGUS_TOKEN` itself is a plaintext shared secret.
+   */
+  hookToken?: string;
   createdAt: string;
   updatedAt: string;
   lastRunAt: string | null;
@@ -88,7 +112,9 @@ export interface Run {
   prompt: string;
   cwd: string;
   status: RunStatus;
-  trigger: "scheduled" | "manual";
+  /** `"webhook"` — fired by `POST /api/hooks/schedules/:id`. `"chained"` —
+   *  fired by an `after` trigger once a source pipeline instance ended. */
+  trigger: "scheduled" | "manual" | "webhook" | "chained";
   queuedAt: string;
   startedAt: string | null;
   endedAt: string | null;

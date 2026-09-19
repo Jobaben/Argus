@@ -8,12 +8,14 @@ after the fact. None of it is required — a phase that declares no
 `capabilities`, no `checks` and no `timeoutSeconds` runs exactly as it always
 did, on the CLI's own defaults.
 
-The four pieces this document covers live in `server/src/harness/`:
+The pieces this document covers live in `server/src/harness/`:
 
 - `invocation.ts` — resolves capabilities, asks the runtime to map them onto
   flags/config, applies the environment policy, and writes down what it did.
 - `childEnv.ts` — the one place a child process's environment is assembled.
 - `verification.ts` — Argus's own deterministic checks over a phase's work.
+- `workspace.ts` — the git worktree a phase's steps run in, when one is
+  declared (§11).
 - the runtimes (`server/src/runtimes/*.ts`) — map the runtime-neutral
   `CapabilityProfile` onto one CLI's actual flags, and report what they
   couldn't.
@@ -843,3 +845,99 @@ choices are legible:
   `outcome: "succeeded"` and the non-zero `exitCode`, and the journal gets a
   `step.exit-mismatch` entry naming the phase and run, for anyone reconciling
   the two by hand.
+
+## 11. Workspace isolation
+
+A phase's steps run in the phase's `cwd`. For a pipeline that reads, that is
+right; for one that writes, it means every phase — and every attempt of every
+phase — is editing the same checkout. Two branches of a fan-out overwrite each
+other's files, a failed attempt leaves its half-done edits for the retry to
+trip over, and "what did this phase actually change?" is only answerable while
+nothing else is running.
+
+A pipeline or a phase can instead declare a `WorkspacePolicy`, and Argus gives
+the work a **git worktree** of its own:
+
+```jsonc
+{
+  "workspace": { "scope": "instance" }, // pipeline-wide default
+  "phases": [
+    {
+      "id": "implement",
+      "cwd": "/src/app",
+      "workspace": { "scope": "attempt", "base": "origin/main" }, // overrides it
+    },
+  ],
+}
+```
+
+| Field   | Meaning                                                                                                                                      |
+| ------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scope` | `"instance"` — one worktree per pipeline instance, shared by every phase that opts in. `"attempt"` — a fresh worktree per phase attempt.     |
+| `base`  | The ref the worktree is cut from. Default: `HEAD` of the repository at the phase's `cwd`. Validated as a ref: no whitespace, no leading `-`. |
+| `keep`  | Keep the directory after the instance ends. Default `false` — the directory is removed, the branch is kept.                                  |
+
+Narrowest wins, as everywhere else: `phase.workspace ?? pipeline.workspace`.
+Absent at both levels, nothing changes — the phase runs in its own `cwd`
+exactly as it did before this existed.
+
+**Names.** The directory is
+`~/.claude/argus/worktrees/<instanceId>/shared` or
+`.../<instanceId>/<phaseId>-attempt<N>`; the branch is
+`argus/<instanceId>/shared` or `argus/<instanceId>/<phaseId>/<attempt>`. Both
+segments go through the same `safeSegment` sanitizing the artifact directories
+use (§5), plus git's own ref rules, so an identifier can never name a
+directory outside the worktrees root or a branch git refuses.
+
+**What runs there.** Everything about the attempt: each step's `cwd` and the
+`project` its transcript is filed under, `ARGUS_WORKSPACE` in the child
+environment (a per-invocation identifier, so it is never inherited from the
+parent — §4), the `changed-files` baseline snapshot, and the phase's `checks`
+— a `command` check is the repository's own script and must see what the agent
+saw. The invocation record and `PhaseProgress.workspace` both carry the
+`WorkspaceRecord` (`path`, `branch`, `base`, resolved `baseHead`), and the
+step drawer shows the branch.
+
+**The deliverable is the branch; uncommitted changes are discarded.** When the
+instance settles — succeeded, failed or aborted — Argus runs
+`git worktree remove --force` on every tree whose policy did not say `keep`,
+and `pruneInstances` catches any that no settlement ever removed. The branch
+is never deleted, by either path. So a phase that must hand its work on has to
+**commit** it: anything left dirty in the tree goes with the directory. (One
+phase asking to `keep` a shared `instance` tree keeps it for all of them — the
+conservative reading, since a directory kept by mistake costs disk and one
+removed by mistake costs work.)
+
+**Failure is `configuration`.** A `cwd` that is not inside a git work tree, a
+`base` that does not resolve, a directory in the way, git missing entirely —
+each fails the phase before anything is spawned, under the `configuration`
+class, with git's own stderr in the reason. Never retried: running it again
+cannot help, because what is wrong is the definition. The journal gets
+`workspace.created` and `workspace.removed` entries either side of the work.
+
+**Restarts.** Creation is idempotent, because Argus restarts: a directory that
+is already this branch's worktree is reused as it stands (uncommitted work and
+all), and a branch that exists without a directory — its tree already cleaned
+up — is checked out again rather than re-cut from `base`, so the first
+attempt's commits come back with it. A step that is still running keeps
+whatever `cwd` it was launched with; only a new attempt resolves a workspace.
+
+**Limitations.**
+
+- **Not a security boundary.** A worktree is a directory, not a jail. Nothing
+  stops an agent from `cd`-ing out of it, and Argus's `filesystem` capability
+  is still tool permission rules for every runtime but Codex, whose sandbox
+  remains the only OS-level boundary here (§10).
+- **Claude Code's own directory handling is unaffected.** `--add-dir` (from
+  `additionalDirectories` and the artifact directory) still points where it
+  pointed; a phase that hands the agent the original repository as an extra
+  directory has handed it the original repository.
+- **One repository per phase.** The worktree is cut from the repository at the
+  phase's `cwd`; a phase working across several repositories isolates only
+  that one.
+- **`{{workspace}}` is not a placeholder.** The run's `cwd` _is_ the worktree,
+  so a prompt does not need to name it; `ARGUS_WORKSPACE` is there for a
+  script that does.
+- **Nothing merges the branch.** Argus creates it and leaves it; landing the
+  work is a later phase's job (a `command` check, an agent that opens a PR) or
+  a human's.

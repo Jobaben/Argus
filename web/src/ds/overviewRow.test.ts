@@ -117,6 +117,16 @@ describe("toOverviewRow", () => {
     expect(row.badge).toBe("await");
   });
 
+  it("carries the instance's trigger onto the row, null when there is no instance", () => {
+    expect(toOverviewRow({ definition: def(), latest: null }).trigger).toBeNull();
+    expect(
+      toOverviewRow({
+        definition: def(),
+        latest: { ...inst("succeeded", ["succeeded", "succeeded"]), trigger: "chained" },
+      }).trigger,
+    ).toBe("chained");
+  });
+
   it("extracts the active step name from the running phase", () => {
     const row = toOverviewRow({
       definition: def(),
@@ -145,6 +155,23 @@ describe("toOverviewRow", () => {
         durationMs: null,
       },
     ]);
+  });
+
+  it("carries a phase's workspace onto its step pills, and omits it when there is none", () => {
+    const base = inst("running", ["succeeded", "running"]);
+    const workspace = {
+      path: "/w/i1/shared",
+      branch: "argus/i1/shared",
+      base: "HEAD",
+      baseHead: "abc123",
+    };
+    const row = toOverviewRow({
+      definition: def(),
+      latest: { ...base, phases: [base.phases[0], { ...base.phases[1], workspace }] },
+    });
+    expect(row.phases[1].steps[0].workspace).toEqual(workspace);
+    // The other phase ran in its own cwd: nothing to show.
+    expect(row.phases[0].steps[0].workspace).toBeUndefined();
   });
 
   it("tiles phases without step progress from the definition", () => {

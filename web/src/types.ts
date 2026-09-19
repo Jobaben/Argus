@@ -60,6 +60,12 @@ export type {
   SignalType,
   OverviewCost,
   OverviewEntry,
+  PhaseFailureClass,
+  WorkspacePolicy,
+  WorkspaceRecord,
+  // Reliability
+  PhaseReliability,
+  PipelineReliability,
   // Monitors
   MonitorStatus,
   MonitorHealth,

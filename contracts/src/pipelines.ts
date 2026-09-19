@@ -118,6 +118,39 @@ export interface CapabilityProfile {
 }
 
 /**
+ * One isolated working tree a phase's steps run in, instead of the phase's own
+ * `cwd`.
+ *
+ * A pipeline that edits a repository has every phase editing the *same* checkout:
+ * two branches of a fan-out overwrite each other, and a failed attempt leaves its
+ * half-done edits behind for the next one. Declaring a workspace gives the work a
+ * git worktree of its own — a real directory on a branch of the repository at
+ * `cwd`, created before the phase's first step launches and removed when the
+ * instance ends. The deliverable is the branch: the directory is disposable.
+ */
+export interface WorkspacePolicy {
+  /** "instance": one worktree per pipeline instance, shared by every phase that
+   *  opts in. "attempt": a fresh worktree per phase attempt. */
+  scope: "instance" | "attempt";
+  /** Ref the worktree is created from. Default: HEAD of the repository at `cwd`. */
+  base?: string;
+  /** Keep the worktree directory after the instance ends. Default false: the
+   *  directory is removed, the branch is kept. */
+  keep?: boolean;
+}
+
+/** The worktree a phase attempt actually got, written down as evidence: where
+ *  it is, the branch its work lands on, and the ref (and the commit that ref
+ *  named) it was cut from. */
+export interface WorkspaceRecord {
+  path: string;
+  branch: string;
+  base: string;
+  /** resolved base commit */
+  baseHead: string;
+}
+
+/**
  * A deterministic check Argus runs itself once every step of a phase has
  * reported success — the difference between "the agent said the tests pass"
  * and "the tests pass". A failing check fails the phase under the
@@ -204,6 +237,8 @@ export interface AgentInvocationRecord {
   /** Files Argus wrote for this invocation (settings, MCP config). */
   materializedFiles: string[];
   artifactDir: string | null;
+  /** The isolated worktree this invocation ran in, when the phase declared one. */
+  workspace?: WorkspaceRecord | null;
   resultFile: string | null;
   timeoutSeconds: number | null;
   deadlineAt: string | null;
@@ -300,6 +335,10 @@ export interface PhaseDef {
   capabilities?: CapabilityProfile;
   /** Deterministic checks that must pass before the phase counts as succeeded. */
   checks?: PhaseCheck[];
+  /** Run this phase's steps in an isolated git worktree of the repository at
+   *  `cwd`. Overrides the pipeline's policy; absent = the pipeline's, else the
+   *  phase's own `cwd` exactly as before workspaces existed. */
+  workspace?: WorkspacePolicy;
 }
 
 export interface PipelineDefinition {
@@ -320,6 +359,18 @@ export interface PipelineDefinition {
   runtime?: AgentRuntimeId;
   /** Default capability profile for every phase that does not declare one. */
   capabilities?: CapabilityProfile;
+  /** Default isolation policy for every phase that does not declare one.
+   *  Absent = no isolation: every phase runs in its own `cwd`. */
+  workspace?: WorkspacePolicy;
+  /**
+   * Bearer credential for `POST /api/hooks/pipelines/:id`, minted once this
+   * pipeline's `trigger` first becomes `kind: "webhook"` and kept stable
+   * across later edits — regenerated only via
+   * `POST /api/pipelines/:id/hook-token/rotate`. This is a single-user control
+   * plane behind `ARGUS_TOKEN`; the token is returned in GET responses rather
+   * than hashed, the way `ARGUS_TOKEN` itself is a plaintext shared secret.
+   */
+  hookToken?: string;
   lastStartedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -336,6 +387,7 @@ export interface PipelineInput {
   reasoningEffort?: ReasoningEffort;
   runtime?: AgentRuntimeId;
   capabilities?: CapabilityProfile;
+  workspace?: WorkspacePolicy;
 }
 
 export type InstanceStatus = "running" | "awaiting-approval" | "failed" | "succeeded" | "aborted";
@@ -402,6 +454,9 @@ export interface PhaseProgress {
   verification?: VerificationReport;
   /** Where this attempt's steps were told to leave file artifacts. */
   artifactDir?: string | null;
+  /** The isolated worktree this attempt's steps ran in, when the phase declared
+   *  a policy. Null = the phase ran in its own `cwd`. */
+  workspace?: WorkspaceRecord | null;
 }
 
 /** What the engine writes into `PhaseProgress.payload` when a phase fails.
@@ -421,7 +476,19 @@ export interface PipelineInstance {
   status: InstanceStatus;
   currentPhaseIndex: number;
   phases: PhaseProgress[];
-  trigger: "manual" | "scheduled";
+  /** `"webhook"` — fired by `POST /api/hooks/pipelines/:id`. `"chained"` —
+   *  fired by an `after` trigger once a source pipeline instance ended. */
+  trigger: "manual" | "scheduled" | "webhook" | "chained";
+  /**
+   * The firing payload, when the trigger carried one: the webhook's JSON body
+   * (capped at 64 KiB; a larger body is rejected with 413 before an instance
+   * is created) for `trigger: "webhook"`, or
+   * `{ sourceInstanceId, sourcePipelineId, status }` for `trigger: "chained"`.
+   * Absent for `"manual"`/`"scheduled"`.
+   */
+  triggerPayload?: unknown;
+  /** `trigger: "chained"` only: the source instance this one was fired from. */
+  chainedFrom?: string;
   signalToken: string;
   createdAt: string;
   updatedAt: string;
@@ -441,6 +508,12 @@ export interface PipelineInstance {
    * back to the live definition for those.
    */
   definition?: PipelineDefinition;
+  /**
+   * The worktree shared by every phase of this instance that declared
+   * `scope: "instance"`, created on its first use. Null/absent = no phase asked
+   * for one. An `attempt`-scoped phase records its own on `PhaseProgress`.
+   */
+  workspace?: WorkspaceRecord | null;
 }
 
 export type SignalType = "completed" | "needs-input" | "failed";

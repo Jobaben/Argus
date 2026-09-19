@@ -574,3 +574,128 @@ test("mcpServers env/headers reject a key with = or a space, and accept a hyphen
   );
   assert.deepEqual(out.mcpServers.x.headers, { "X-Api-Key": "v" });
 });
+
+// ── workspace (isolation) ───────────────────────────────────────────────────
+
+test("workspace: absent stays absent, and a valid policy round-trips", async () => {
+  const m = await fresh();
+  assert.equal(m.validateWorkspace(undefined, "ctx"), undefined);
+  assert.equal(m.validateWorkspace(null, "ctx"), undefined);
+  assert.deepEqual(m.validateWorkspace({ scope: "instance" }, "ctx"), { scope: "instance" });
+  assert.deepEqual(
+    m.validateWorkspace({ scope: "attempt", base: "origin/main", keep: true }, "ctx"),
+    { scope: "attempt", base: "origin/main", keep: true },
+  );
+  // Trimmed, like every other string the validators accept.
+  assert.equal(m.validateWorkspace({ scope: "attempt", base: "  main  " }, "ctx").base, "main");
+});
+
+test("workspace: scope is one of two values, and unknown keys are rejected", async () => {
+  const m = await fresh();
+  assert.throws(
+    () => m.validateWorkspace({}, "ctx"),
+    /workspace.scope must be instance \| attempt/,
+  );
+  assert.throws(() => m.validateWorkspace({ scope: "phase" }, "ctx"), /workspace.scope must be/);
+  assert.throws(() => m.validateWorkspace("instance", "ctx"), /workspace must be an object/);
+  assert.throws(() => m.validateWorkspace([], "ctx"), /workspace must be an object/);
+  assert.throws(
+    () => m.validateWorkspace({ scope: "instance", branch: "x" }, "ctx"),
+    /workspace has unknown key "branch"/,
+  );
+});
+
+test("workspace: base must be a ref, not a flag or several arguments", async () => {
+  const m = await fresh();
+  assert.throws(
+    () => m.validateWorkspace({ scope: "attempt", base: "" }, "ctx"),
+    /workspace.base must be a non-empty string/,
+  );
+  assert.throws(
+    () => m.validateWorkspace({ scope: "attempt", base: 7 }, "ctx"),
+    /workspace.base must be a non-empty string/,
+  );
+  assert.throws(
+    () => m.validateWorkspace({ scope: "attempt", base: "main --force" }, "ctx"),
+    /is not a valid git ref/,
+  );
+  assert.throws(
+    () => m.validateWorkspace({ scope: "attempt", base: "-b" }, "ctx"),
+    /is not a valid git ref/,
+  );
+});
+
+test("workspace: keep must be a boolean", async () => {
+  const m = await fresh();
+  assert.throws(
+    () => m.validateWorkspace({ scope: "attempt", keep: "yes" }, "ctx"),
+    /workspace.keep must be a boolean/,
+  );
+  assert.deepEqual(m.validateWorkspace({ scope: "attempt", keep: null }, "ctx"), {
+    scope: "attempt",
+  });
+});
+
+test("workspace: accepted on a pipeline and on a phase, and the phase's error names it", async () => {
+  const m = await fresh();
+  const input = m.validatePipelineInput(
+    goodInput({
+      workspace: { scope: "instance" },
+      phases: [
+        {
+          id: "brainstorm",
+          name: "Brainstorm",
+          cwd: home,
+          gated: false,
+          workspace: { scope: "attempt", base: "main" },
+          steps: [{ name: "bs", prompt: "go" }],
+        },
+      ],
+    }),
+  );
+  assert.deepEqual(input.workspace, { scope: "instance" });
+  assert.deepEqual(input.phases[0].workspace, { scope: "attempt", base: "main" });
+
+  assert.throws(
+    () =>
+      m.validatePipelineInput(
+        goodInput({
+          phases: [
+            {
+              id: "brainstorm",
+              name: "Brainstorm",
+              cwd: home,
+              gated: false,
+              workspace: { scope: "nope" },
+              steps: [{ name: "bs", prompt: "go" }],
+            },
+          ],
+        }),
+      ),
+    /phase 0: workspace.scope must be/,
+  );
+});
+
+test("workspace: a patch sets it, and an explicit null clears it", async () => {
+  const m = await fresh();
+  const def = await m.createPipeline(
+    m.validatePipelineInput(goodInput({ workspace: { scope: "instance", keep: true } })),
+    new Date(),
+    "pw",
+  );
+  assert.deepEqual(def.workspace, { scope: "instance", keep: true });
+
+  const patched = await m.updatePipeline(
+    "pw",
+    m.validatePipelinePatch({ workspace: { scope: "attempt" } }),
+    new Date(),
+  );
+  assert.deepEqual(patched.workspace, { scope: "attempt" });
+
+  const cleared = await m.updatePipeline(
+    "pw",
+    m.validatePipelinePatch({ workspace: null }),
+    new Date(),
+  );
+  assert.equal("workspace" in cleared, false);
+});

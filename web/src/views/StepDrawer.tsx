@@ -200,6 +200,16 @@ export function StepDrawer({
         {step.runtime && (
           <Field label="runtime">{runtimeLabel(step.runtime) || step.runtime}</Field>
         )}
+        {step.workspace && (
+          // The branch is the deliverable of an isolated phase; the directory it
+          // ran in is disposable, so it rides along as the title rather than
+          // taking a line of its own.
+          <Field label="workspace">
+            <span className="font-mono" title={step.workspace.path}>
+              {step.workspace.branch}
+            </span>
+          </Field>
+        )}
         {step.startedAt && (
           <Field label="started">{new Date(step.startedAt).toLocaleString()}</Field>
         )}

@@ -28,6 +28,7 @@ import type {
   PhaseDef,
   PhaseStep,
   PipelineDefinition,
+  WorkspaceRecord,
 } from "../sources/pipelineTypes.js";
 
 /**
@@ -86,6 +87,8 @@ export interface InvocationInputs {
   argusEnv: Record<string, string>;
   invocationDir: string;
   artifactDir: string | null;
+  /** The isolated worktree the step runs in, when its phase declared one. */
+  workspace?: WorkspaceRecord | null;
   resultFile: string | null;
   timeoutSeconds: number | null;
   gitHead: string | null;
@@ -158,6 +161,7 @@ export function prepareInvocation(inputs: InvocationInputs): PreparedInvocation 
     limitations,
     materializedFiles: files.map((f) => f.path),
     artifactDir: inputs.artifactDir,
+    ...(inputs.workspace !== undefined ? { workspace: inputs.workspace } : {}),
     resultFile: inputs.resultFile,
     timeoutSeconds: inputs.timeoutSeconds,
     deadlineAt,

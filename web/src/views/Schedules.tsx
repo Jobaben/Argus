@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useSchedules } from "../useSchedules";
+import { usePipelines } from "../usePipelines";
 import { useRuns } from "../useRuns";
 import type { Run, ScheduleInput, ScheduleWithNext, VerdictTrend } from "../types";
 import {
@@ -201,10 +202,21 @@ function ScheduleForm({
   initial,
   onSubmit,
   onCancel,
+  pipelines = [],
+  scheduleId,
+  hookToken,
+  onRotateHook,
 }: {
   initial: ScheduleInput;
   onSubmit: (input: ScheduleInput) => Promise<void>;
   onCancel: () => void;
+  /** Sources for an "after pipeline" trigger — only pipelines may chain. */
+  pipelines?: { id: string; name: string }[];
+  /** This schedule's own id, once saved — undefined while authoring a new one. */
+  scheduleId?: string;
+  /** Set once this schedule has a webhook trigger and has been saved once. */
+  hookToken?: string;
+  onRotateHook?: () => Promise<void>;
 }) {
   const [form, setForm] = useState<ScheduleInput>(initial);
   const [err, setErr] = useState<string | null>(null);
@@ -266,6 +278,16 @@ function ScheduleForm({
           fieldClass={field}
           value={form.trigger}
           onChange={(t) => setForm({ ...form, trigger: t ?? { kind: "daily", time: "02:00" } })}
+          pipelines={pipelines}
+          hook={
+            hookToken && scheduleId && onRotateHook
+              ? {
+                  url: `${window.location.origin}/api/hooks/schedules/${scheduleId}`,
+                  token: hookToken,
+                  onRotate: onRotateHook,
+                }
+              : undefined
+          }
         />
         <RuntimeSelect
           fieldClass={field}
@@ -581,7 +603,10 @@ export default function Schedules() {
   // Rows come and go and change places as health changes; FLIP glides them
   // there instead of letting the list teleport under the reader.
   const flip = useFlip();
-  const { schedules, loading, error, create, update, remove, runNow, cancelRun } = useSchedules();
+  const { schedules, loading, error, create, update, remove, runNow, cancelRun, rotateHookToken } =
+    useSchedules();
+  // Sources for an "after pipeline" trigger — only pipelines may chain.
+  const { pipelines } = usePipelines();
   // One run list for every card. Each card used to fetch its own
   // `/api/runs?scheduleId=…`, so a page with twelve schedules opened thirteen
   // requests and kept thirteen conditional polls alive — and still could not
@@ -667,6 +692,7 @@ export default function Schedules() {
             <div className="mb-6">
               <ScheduleForm
                 initial={EMPTY}
+                pipelines={pipelines}
                 onCancel={() => setMode({ kind: "none" })}
                 onSubmit={async (input) => {
                   await create(input);
@@ -681,6 +707,10 @@ export default function Schedules() {
               <ScheduleForm
                 key={editing.id}
                 initial={editing}
+                pipelines={pipelines}
+                scheduleId={editing.id}
+                hookToken={editing.hookToken}
+                onRotateHook={() => rotateHookToken(editing.id).then(() => {})}
                 onCancel={() => setMode({ kind: "none" })}
                 onSubmit={async (input) => {
                   await update(editing.id, input);
