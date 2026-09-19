@@ -5,17 +5,23 @@ import {
   addClaim,
   addEvidence,
   addJustification,
+  consumersOf,
+  consumersReport,
   dependentsOf,
   dependentsReport,
   emptyLedger,
   evaluateSupport,
+  executionProvenance,
   formatClaimRef,
   lifecycleOf,
   parseClaimKey,
   premisesOf,
+  recordArtifact,
+  recordConsumption,
   reviseClaim,
   supportReport,
   transitiveDependentsOf,
+  validArtifactPath,
   viewOf,
   type KnowledgeLedger,
 } from "./kernel.js";
@@ -478,6 +484,266 @@ test("a cyclic ledger from outside the API still evaluates (as unsupported), nev
   assert.equal(evaluateSupport(ledger, v1("A")), "supported");
   assert.equal(evaluateSupport(ledger, v1("B")), "supported");
   assert.deepEqual(refs(transitiveDependentsOf(ledger, v1("A"))), ["B:v1"]);
+});
+
+// ── Execution provenance ────────────────────────────────────────────────────
+
+test("recordConsumption stores the exact revision and is idempotent on the same pair", () => {
+  const b = new Build().claim("RULE-17", "business-rule").claim("DECISION-3", "decision");
+  const first = recordConsumption(
+    b.ledger,
+    {
+      execution: { runId: "run_456", instanceId: "inst-1", phaseId: "implement" },
+      claim: v1("DECISION-3"),
+    },
+    T0,
+  );
+  assert.equal(first.added, true);
+  assert.deepEqual(first.consumption, {
+    claim: v1("DECISION-3"),
+    execution: { runId: "run_456", instanceId: "inst-1", phaseId: "implement" },
+    createdAt: T0,
+  });
+  assert.equal(first.ledger.consumptions.length, 1);
+  assert.equal(b.ledger.consumptions.length, 0); // input untouched
+
+  // The same pair again: nothing added, the same ledger object back, the
+  // original record (its createdAt included) returned.
+  const again = recordConsumption(
+    first.ledger,
+    { execution: { runId: "run_456" }, claim: v1("DECISION-3") },
+    T1,
+  );
+  assert.equal(again.added, false);
+  assert.equal(again.ledger, first.ledger);
+  assert.equal(again.consumption.createdAt, T0);
+
+  // A different revision or a different run is a different edge.
+  const other = recordConsumption(
+    first.ledger,
+    { execution: { runId: "run_789" }, claim: v1("DECISION-3") },
+    T1,
+  );
+  assert.equal(other.added, true);
+  assert.deepEqual(
+    consumersOf(other.ledger, v1("DECISION-3")).map((c) => c.execution.runId),
+    ["run_456", "run_789"],
+  );
+  assert.deepEqual(consumersReport(other.ledger, v1("DECISION-3")).claim, v1("DECISION-3"));
+});
+
+test("a consumption may name a superseded revision — history is recordable after the fact", () => {
+  const b = new Build().claim("RULE", "business-rule").revise("RULE", "two");
+  const { ledger, added } = recordConsumption(
+    b.ledger,
+    { execution: { runId: "run-old" }, claim: v1("RULE") },
+    T1,
+  );
+  assert.equal(added, true);
+  assert.deepEqual(
+    consumersOf(ledger, v1("RULE")).map((c) => c.execution.runId),
+    ["run-old"],
+  );
+  assert.deepEqual(consumersOf(ledger, v("RULE", 2)), []);
+});
+
+test("a run's locators must agree across its records; omitted ones are filled in", () => {
+  const b = new Build().claim("A").claim("B");
+  const { ledger } = recordConsumption(
+    b.ledger,
+    { execution: { runId: "run-1", instanceId: "inst-1", phaseId: "plan" }, claim: v1("A") },
+    T0,
+  );
+  // Omitted locators are filled from what the ledger knows.
+  const filled = recordConsumption(ledger, { execution: { runId: "run-1" }, claim: v1("B") }, T0);
+  assert.deepEqual(filled.consumption.execution, {
+    runId: "run-1",
+    instanceId: "inst-1",
+    phaseId: "plan",
+  });
+  // Contradicting ones are refused, and the artifact side enforces the same.
+  assert.throws(
+    () =>
+      recordConsumption(
+        ledger,
+        { execution: { runId: "run-1", phaseId: "implement" }, claim: v1("B") },
+        T0,
+      ),
+    /already recorded with phaseId "plan"/,
+  );
+  assert.throws(
+    () =>
+      recordArtifact(
+        ledger,
+        {
+          execution: { runId: "run-1", instanceId: "inst-2" },
+          artifact: { location: "artifact-dir", path: "out.md" },
+        },
+        T0,
+      ),
+    /already recorded with instanceId "inst-1"/,
+  );
+});
+
+test("recordArtifact keys on (run, location, path) and refuses a conflicting head", () => {
+  const b = new Build().claim("A");
+  const first = recordArtifact(
+    b.ledger,
+    {
+      execution: { runId: "run-1" },
+      artifact: { location: "repository", path: "src/Validator.cs", gitHead: "abc1234" },
+    },
+    T0,
+  );
+  assert.equal(first.added, true);
+  const same = recordArtifact(
+    first.ledger,
+    {
+      execution: { runId: "run-1" },
+      artifact: { location: "repository", path: "src/Validator.cs", gitHead: "abc1234" },
+    },
+    T1,
+  );
+  assert.equal(same.added, false);
+  assert.equal(same.ledger, first.ledger);
+  assert.throws(
+    () =>
+      recordArtifact(
+        first.ledger,
+        {
+          execution: { runId: "run-1" },
+          artifact: { location: "repository", path: "src/Validator.cs", gitHead: "def5678" },
+        },
+        T1,
+      ),
+    /already produced src\/Validator.cs at abc1234/,
+  );
+  // The same path in the other root is a different artifact.
+  const otherRoot = recordArtifact(
+    first.ledger,
+    {
+      execution: { runId: "run-1" },
+      artifact: { location: "artifact-dir", path: "src/Validator.cs" },
+    },
+    T1,
+  );
+  assert.equal(otherRoot.added, true);
+  assert.equal(otherRoot.ledger.artifacts.length, 2);
+});
+
+test("provenance records with invalid references are refused and write nothing", () => {
+  const b = new Build().claim("A");
+  const consume = (runId: string, claim: ClaimRef) =>
+    recordConsumption(b.ledger, { execution: { runId }, claim }, T0);
+  assert.throws(() => consume("run-1", v1("GHOST")), /unknown claim revision GHOST:v1/);
+  assert.throws(() => consume("run-1", v("A", 2)), /unknown claim revision A:v2/);
+  assert.throws(() => consume("", v1("A")), /run id "" is invalid/);
+  assert.throws(() => consume("run 1", v1("A")), /run id "run 1" is invalid/);
+  assert.throws(() => consume("../runs", v1("A")), /run id/);
+  assert.throws(
+    () =>
+      recordConsumption(
+        b.ledger,
+        { execution: { runId: "run-1", instanceId: "a b" }, claim: v1("A") },
+        T0,
+      ),
+    /execution.instanceId "a b" is invalid/,
+  );
+
+  const produce = (artifact: Parameters<typeof recordArtifact>[1]["artifact"]) =>
+    recordArtifact(b.ledger, { execution: { runId: "run-1" }, artifact }, T0);
+  assert.throws(() => produce({ location: "repository", path: "/etc/passwd" }), /relative POSIX/);
+  assert.throws(() => produce({ location: "repository", path: "../x" }), /relative POSIX/);
+  assert.throws(() => produce({ location: "repository", path: "a/../../x" }), /relative POSIX/);
+  assert.throws(() => produce({ location: "repository", path: "" }), /relative POSIX/);
+  assert.throws(() => produce({ location: "repository", path: "a\\b" }), /relative POSIX/);
+  assert.throws(() => produce({ location: "repository", path: "C:/x" }), /relative POSIX/);
+  assert.throws(
+    () => produce({ location: "bucket" as "repository", path: "x" }),
+    /location must be/,
+  );
+  assert.throws(
+    () => produce({ location: "repository", path: "x", gitHead: "not-hex" }),
+    /hex commit sha/,
+  );
+  assert.throws(
+    () => produce({ location: "artifact-dir", path: "x", gitHead: "abc1234" }),
+    /only applies to a repository path/,
+  );
+  assert.equal(b.ledger.consumptions.length, 0);
+  assert.equal(b.ledger.artifacts.length, 0);
+
+  assert.equal(validArtifactPath("src/a.ts"), true);
+  assert.equal(validArtifactPath("./a.ts"), false);
+  assert.equal(validArtifactPath("a//b"), false);
+  assert.equal(validArtifactPath("a\0b"), false);
+});
+
+test("executionProvenance joins producedBy, consumption and artifacts by run id", () => {
+  const b = new Build();
+  b.ledger = addClaim(
+    b.ledger,
+    { id: "RULE", kind: "business-rule", statement: "r", producedBy: { runId: "run-p" } },
+    T0,
+  ).ledger;
+  b.claim("DECISION", "decision").evidence(v1("RULE"));
+  b.ledger = addJustification(
+    b.ledger,
+    {
+      id: "J-1",
+      conclusion: v1("DECISION"),
+      premises: [v1("RULE")],
+      direction: "supports",
+      producedBy: { runId: "run-p", phaseId: "plan" },
+    },
+    T0,
+  ).ledger;
+  b.ledger = recordConsumption(
+    b.ledger,
+    { execution: { runId: "run-c", instanceId: "inst-1" }, claim: v1("DECISION") },
+    T0,
+  ).ledger;
+  b.ledger = recordArtifact(
+    b.ledger,
+    { execution: { runId: "run-c" }, artifact: { location: "repository", path: "src/V.cs" } },
+    T0,
+  ).ledger;
+
+  const producer = executionProvenance(b.ledger, "run-p")!;
+  assert.deepEqual(producer.execution, { runId: "run-p", phaseId: "plan" });
+  assert.deepEqual(producer.consumed, []);
+  assert.deepEqual(
+    producer.produced.claims.map((c) => [c.id, c.lifecycle, c.support]),
+    [["RULE", "active", "supported"]],
+  );
+  assert.deepEqual(
+    producer.produced.justifications.map((j) => j.id),
+    ["J-1"],
+  );
+  assert.equal(producer.currency, "current");
+
+  const consumer = executionProvenance(b.ledger, "run-c")!;
+  assert.deepEqual(consumer.execution, { runId: "run-c", instanceId: "inst-1" });
+  assert.deepEqual(consumer.consumed, [
+    { claim: v1("DECISION"), lifecycle: "active", support: "supported", current: true },
+  ]);
+  assert.deepEqual(consumer.produced.claims, []);
+  assert.deepEqual(consumer.produced.artifacts, [{ location: "repository", path: "src/V.cs" }]);
+  assert.equal(consumer.currency, "current");
+
+  assert.equal(executionProvenance(b.ledger, "run-unknown"), null);
+
+  // The rule is revised: the consumer's premises go stale; the producer's
+  // record is untouched and its own currency — it consumed nothing — is not.
+  b.revise("RULE", "r2");
+  assert.equal(executionProvenance(b.ledger, "run-c")!.currency, "stale");
+  assert.deepEqual(executionProvenance(b.ledger, "run-c")!.consumed[0], {
+    claim: v1("DECISION"),
+    lifecycle: "active",
+    support: "unsupported",
+    current: false,
+  });
+  assert.equal(executionProvenance(b.ledger, "run-p")!.currency, "current");
 });
 
 // ── Views ───────────────────────────────────────────────────────────────────

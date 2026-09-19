@@ -1,9 +1,18 @@
-import type { ClaimKind, EvidenceSource, ExecutionRef } from "@argus/contracts";
+import type {
+  ArtifactRef,
+  ClaimKind,
+  EvidenceSource,
+  ExecutionRef,
+  RunExecutionRef,
+} from "@argus/contracts";
 import {
+  ARTIFACT_PATH_MAX_CHARS,
   CLAIM_ID_RE,
   CLAIM_KINDS,
+  EXECUTION_ID_RE,
   KnowledgeValidationError,
   parseClaimKey,
+  validArtifactPath,
   type ClaimKey,
 } from "./kernel.js";
 
@@ -28,8 +37,12 @@ export const NOTE_MAX_CHARS = 2000;
 /** Serialized cap on `structuredValue` — an opaque payload, but a bounded one. */
 export const STRUCTURED_VALUE_MAX_BYTES = 64 * 1024;
 export const PREMISES_MAX = 64;
+/** Most revisions one consumption registration may name, and most artifacts
+ *  one production registration may name. */
+export const CONSUMPTIONS_MAX = 64;
+export const ARTIFACTS_MAX = 64;
 
-const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const ID_RE = EXECUTION_ID_RE;
 const SHA_RE = /^[0-9a-f]{7,64}$/;
 
 /** The typed shapes the routes hand to the kernel (ids minted by the store). */
@@ -58,6 +71,14 @@ export interface ProposedJustification {
   direction: "supports" | "opposes";
   producedBy?: ExecutionRef;
   note?: string;
+}
+/** `POST /executions/:runId/consumptions` — the run comes from the URL. */
+export interface ProposedConsumptions {
+  claims: ClaimKey[];
+}
+/** `POST /executions/:runId/artifacts`. */
+export interface ProposedArtifacts {
+  artifacts: ArtifactRef[];
 }
 
 function fail(msg: string): never {
@@ -255,6 +276,62 @@ export function validateEvidence(raw: unknown): ProposedEvidence {
   const note = optionalText(r.note, "note", NOTE_MAX_CHARS);
   if (note) out.note = note;
   return out;
+}
+
+/**
+ * The run a `/executions/:runId/*` route addresses, with the optional locators
+ * a body may add. Malformed → 400; the kernel reconciles the locators against
+ * what the ledger already holds for the run.
+ */
+export function validateExecution(runId: string, raw: unknown): RunExecutionRef {
+  if (!ID_RE.test(runId)) fail("runId is not a valid run id");
+  const out: RunExecutionRef = { runId };
+  if (raw !== undefined && raw !== null) {
+    const r = record(raw, "body");
+    const instanceId = optionalIdentifier(r.instanceId, "instanceId");
+    const phaseId = optionalIdentifier(r.phaseId, "phaseId");
+    if (instanceId) out.instanceId = instanceId;
+    if (phaseId) out.phaseId = phaseId;
+  }
+  return out;
+}
+
+export function validateConsumptions(raw: unknown): ProposedConsumptions {
+  const r = record(raw, "consumptions");
+  if (!Array.isArray(r.claims)) fail("claims must be an array of claim references");
+  if (r.claims.length === 0) fail("claims must name at least one claim");
+  if (r.claims.length > CONSUMPTIONS_MAX) fail(`claims exceeds ${CONSUMPTIONS_MAX} entries`);
+  return { claims: r.claims.map((c, i) => claimKey(c, `claims[${i}]`)) };
+}
+
+function artifactRef(raw: unknown, ctx: string): ArtifactRef {
+  const r = record(raw, ctx);
+  if (r.location !== "artifact-dir" && r.location !== "repository") {
+    fail(`${ctx}.location must be artifact-dir | repository`);
+  }
+  if (typeof r.path !== "string" || r.path.length > ARTIFACT_PATH_MAX_CHARS) {
+    fail(`${ctx}.path must be a string of at most ${ARTIFACT_PATH_MAX_CHARS} characters`);
+  }
+  if (!validArtifactPath(r.path)) {
+    fail(`${ctx}.path must be a relative POSIX path inside its root`);
+  }
+  const out: ArtifactRef = { location: r.location, path: r.path };
+  if (r.gitHead !== undefined && r.gitHead !== null) {
+    if (r.location !== "repository") fail(`${ctx}.gitHead only applies to a repository path`);
+    if (typeof r.gitHead !== "string" || !SHA_RE.test(r.gitHead)) {
+      fail(`${ctx}.gitHead must be a hex commit sha`);
+    }
+    out.gitHead = r.gitHead;
+  }
+  return out;
+}
+
+export function validateArtifacts(raw: unknown): ProposedArtifacts {
+  const r = record(raw, "artifacts");
+  if (!Array.isArray(r.artifacts)) fail("artifacts must be an array of artifact references");
+  if (r.artifacts.length === 0) fail("artifacts must name at least one artifact");
+  if (r.artifacts.length > ARTIFACTS_MAX) fail(`artifacts exceeds ${ARTIFACTS_MAX} entries`);
+  return { artifacts: r.artifacts.map((a, i) => artifactRef(a, `artifacts[${i}]`)) };
 }
 
 export function validateJustification(raw: unknown): ProposedJustification {

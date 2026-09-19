@@ -1,10 +1,19 @@
 import { Hono, type Context } from "hono";
-import type { ClaimDetail, ClaimKind, ClaimsResponse } from "@argus/contracts";
+import type {
+  ArtifactProductionsResponse,
+  ClaimDetail,
+  ClaimKind,
+  ClaimsResponse,
+  ConsumptionsResponse,
+} from "@argus/contracts";
 import {
   CLAIM_KINDS,
+  EXECUTION_ID_RE,
   KnowledgeValidationError,
   UnknownClaimError,
+  consumersReport,
   dependentsReport,
+  executionProvenance,
   parseClaimKey,
   refOf,
   resolveKey,
@@ -13,16 +22,22 @@ import {
   viewOf,
   type KnowledgeLedger,
 } from "./kernel.js";
+import { analyzeImpact } from "./impact.js";
 import {
   createClaim,
   createEvidence,
   createJustification,
   createRevision,
   readLedger,
+  registerArtifacts,
+  registerConsumptions,
 } from "./store.js";
 import {
+  validateArtifacts,
   validateClaim,
+  validateConsumptions,
   validateEvidence,
+  validateExecution,
   validateJustification,
   validateRevision,
 } from "./validate.js";
@@ -35,10 +50,12 @@ import {
  * anything: the ledger is append-only, and a claim changes by *revision*
  * (`POST /claims/:id/revise`), which is a new record, never an edit.
  *
- * The four writes are the whole proposal vocabulary a future extraction agent
- * will use, so they take the same validated shapes it will produce. The
- * handlers do nothing semantic: validate → store → kernel, and map the two
- * error classes to 400 (refused) and 404 (unknown).
+ * The writes are the whole proposal vocabulary a future extraction agent will
+ * use, so they take the same validated shapes it will produce. Phase 2 added
+ * two more, under `/executions/:runId`: what a run consumed and what it
+ * produced — explicit, typed provenance, never inferred from a prompt or a
+ * transcript. The handlers do nothing semantic: validate → store → kernel,
+ * and map the two error classes to 400 (refused) and 404 (unknown).
  */
 export function knowledgeRoutes(): Hono {
   const routes = new Hono();
@@ -113,6 +130,34 @@ export function knowledgeRoutes(): Hono {
     return c.json(dependentsReport(ledger, refOf(claim)));
   });
 
+  /** Which executions consumed this exact revision. */
+  routes.get("/claims/:key/consumers", async (c) => {
+    const ledger = await readLedger();
+    const claim = claimFor(ledger, c.req.param("key"));
+    if (!claim) return c.json({ error: "not found" }, 404);
+    return c.json(consumersReport(ledger, refOf(claim)));
+  });
+
+  /** What rests on this revision being current and supported — claims,
+   *  justifications, consuming executions, their artifacts — and why. */
+  routes.get("/claims/:key/impact", async (c) => {
+    const ledger = await readLedger();
+    const claim = claimFor(ledger, c.req.param("key"));
+    if (!claim) return c.json({ error: "not found" }, 404);
+    return c.json(analyzeImpact(ledger, refOf(claim)));
+  });
+
+  /** Everything the ledger knows about one run: what it consumed (with
+   *  currency now), what it produced. 404 when it knows nothing. */
+  routes.get("/executions/:runId/provenance", async (c) => {
+    const runId = c.req.param("runId");
+    if (!EXECUTION_ID_RE.test(runId)) return c.json({ error: "not found" }, 404);
+    const ledger = await readLedger();
+    const report = executionProvenance(ledger, runId);
+    if (!report) return c.json({ error: "not found" }, 404);
+    return c.json(report);
+  });
+
   // ── Proposals (admin) ────────────────────────────────────────────────────
 
   routes.post("/claims", async (c) => {
@@ -158,6 +203,46 @@ export function knowledgeRoutes(): Hono {
     if (!body.ok) return body.res;
     try {
       return c.json(await createJustification(validateJustification(body.value), new Date()), 201);
+    } catch (e) {
+      return fail(c, e);
+    }
+  });
+
+  // ── Execution provenance (admin) ─────────────────────────────────────────
+  // 201 when at least one edge was new, 200 when every edge already existed:
+  // registration is idempotent and the status says which happened.
+
+  /** "Run R consumed these exact revisions." Bare ids resolve at write time. */
+  routes.post("/executions/:runId/consumptions", async (c) => {
+    const body = await jsonBody(c);
+    if (!body.ok) return body.res;
+    try {
+      const execution = validateExecution(c.req.param("runId"), body.value);
+      const { added, ...result } = await registerConsumptions(
+        execution,
+        validateConsumptions(body.value),
+        new Date(),
+      );
+      const out: ConsumptionsResponse = result;
+      return c.json(out, added > 0 ? 201 : 200);
+    } catch (e) {
+      return fail(c, e);
+    }
+  });
+
+  /** "Run R produced these artifacts." */
+  routes.post("/executions/:runId/artifacts", async (c) => {
+    const body = await jsonBody(c);
+    if (!body.ok) return body.res;
+    try {
+      const execution = validateExecution(c.req.param("runId"), body.value);
+      const { added, ...result } = await registerArtifacts(
+        execution,
+        validateArtifacts(body.value),
+        new Date(),
+      );
+      const out: ArtifactProductionsResponse = result;
+      return c.json(out, added > 0 ? 201 : 200);
     } catch (e) {
       return fail(c, e);
     }

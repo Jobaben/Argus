@@ -198,9 +198,13 @@ business rules, constraints, conclusions, decisions), the evidence that grounds
 them and the justifications that derive one from others. A claim changes by
 revision — the old revision stays addressable and nothing that referenced it is
 retargeted — and support (`supported | unsupported | contested`) is derived by
-one deterministic function, never stored. Inspect it at `/api/knowledge`; the
-design and its worked example are in
-**[docs/KNOWLEDGE-LEDGER.md](docs/KNOWLEDGE-LEDGER.md)**.
+one deterministic function, never stored. It also records which run
+**consumed** which exact revision and which artifacts that run produced, so
+when a business rule is superseded Argus can compute — deterministically, with
+an explanation path — which conclusions lost support, which runs built on
+them, and which files now need semantic reevaluation, without ever rewriting a
+run's own status. Inspect it at `/api/knowledge`; the design and its worked
+example are in **[docs/KNOWLEDGE-LEDGER.md](docs/KNOWLEDGE-LEDGER.md)**.
 
 ## Getting around
 

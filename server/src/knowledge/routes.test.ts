@@ -8,7 +8,15 @@ import type { ArgusConfig } from "../config.js";
 import type { Engine } from "../pipelineEngine.js";
 import { createAuthService, type AuthService } from "../auth.js";
 import { createUserStore } from "../userStore.js";
-import type { ClaimDetail, ClaimView, DependentsReport, SupportReport } from "@argus/contracts";
+import type {
+  ClaimDetail,
+  ClaimView,
+  ConsumersReport,
+  DependentsReport,
+  ExecutionProvenance,
+  ImpactSet,
+  SupportReport,
+} from "@argus/contracts";
 
 /**
  * The `/api/knowledge` contract: auth posture, validation at the boundary,
@@ -130,6 +138,8 @@ test("mutations are admin-gated; reads stay open", async () => {
     "/api/knowledge/claims/X/revise",
     "/api/knowledge/evidence",
     "/api/knowledge/justifications",
+    "/api/knowledge/executions/run-1/consumptions",
+    "/api/knowledge/executions/run-1/artifacts",
   ]) {
     const r = await post(app, url, {});
     assert.equal(r.status, 401, url);
@@ -196,6 +206,46 @@ test("proposals are validated field by field; nothing invalid is written", async
       { conclusion: { id: "X", revision: 0 }, premises: ["F"] },
       /revision must be a positive integer/,
     ],
+    ["/api/knowledge/executions/run-1/consumptions", {}, /claims must be an array/],
+    ["/api/knowledge/executions/run-1/consumptions", { claims: [] }, /at least one/],
+    ["/api/knowledge/executions/run-1/consumptions", { claims: ["X"] }, /unknown claim X/],
+    [
+      "/api/knowledge/executions/run-1/consumptions",
+      { claims: ["no spaces"] },
+      /not a valid claim reference/,
+    ],
+    [
+      "/api/knowledge/executions/run-1/consumptions",
+      { claims: ["X"], instanceId: "a b" },
+      /instanceId/,
+    ],
+    ["/api/knowledge/executions/run%201/consumptions", { claims: ["X"] }, /runId/],
+    ["/api/knowledge/executions/run-1/artifacts", { artifacts: [] }, /at least one/],
+    [
+      "/api/knowledge/executions/run-1/artifacts",
+      { artifacts: [{ location: "bucket", path: "x" }] },
+      /location must be/,
+    ],
+    [
+      "/api/knowledge/executions/run-1/artifacts",
+      { artifacts: [{ location: "repository", path: "../etc/passwd" }] },
+      /relative POSIX path/,
+    ],
+    [
+      "/api/knowledge/executions/run-1/artifacts",
+      { artifacts: [{ location: "repository", path: "/abs" }] },
+      /relative POSIX path/,
+    ],
+    [
+      "/api/knowledge/executions/run-1/artifacts",
+      { artifacts: [{ location: "artifact-dir", path: "x", gitHead: "abc1234" }] },
+      /only applies to a repository/,
+    ],
+    [
+      "/api/knowledge/executions/run-1/artifacts",
+      { artifacts: [{ location: "repository", path: "x", gitHead: "zz" }] },
+      /hex commit sha/,
+    ],
   ];
   for (const [url, body, re] of cases) {
     const r = await post(app, url, body);
@@ -210,6 +260,7 @@ test("proposals are validated field by field; nothing invalid is written", async
   assert.equal(bad.status, 400);
   const list = await get(app, "/api/knowledge/claims");
   assert.deepEqual(list.body, { claims: [] });
+  assert.equal((await get(app, "/api/knowledge/executions/run-1/provenance")).status, 404);
 });
 
 test("a justification referencing an unknown revision, or forming a cycle, is refused", async () => {
@@ -345,6 +396,213 @@ test("FACT + RULE → CONCLUSION → DECISION, then the rule is superseded", asy
   assert.equal(restored.justifications.length, 2);
   assert.equal(restored.justifications[0].force.inForce, false);
   assert.equal(restored.justifications[1].force.inForce, true);
+});
+
+// ── Execution provenance and impact, end to end ─────────────────────────────
+
+test("a superseded rule → conclusion → decision → consumer run → artifact, through the API", async () => {
+  const app = makeApp();
+  await seedExample(app);
+
+  // run-9 (the plan phase) derived CONCLUSION-19 — that is `producedBy` on J-1.
+  // run-42 (the implement phase) consumed the decision and the conclusion and
+  // wrote the validator. Two different facts, two different runs.
+  const reg = await post(app, "/api/knowledge/executions/run-42/consumptions", {
+    instanceId: "inst-1",
+    phaseId: "implement",
+    claims: ["DECISION-21", { id: "CONCLUSION-19", revision: 1 }],
+  });
+  assert.equal(reg.status, 201, JSON.stringify(reg.body));
+  assert.deepEqual(reg.body.execution, {
+    runId: "run-42",
+    instanceId: "inst-1",
+    phaseId: "implement",
+  });
+  assert.deepEqual(
+    reg.body.consumptions.map((c: any) => c.claim),
+    [
+      { id: "DECISION-21", revision: 1 },
+      { id: "CONCLUSION-19", revision: 1 },
+    ],
+  );
+  // Registering the same pair again is a 200 no-op, and locators must agree.
+  const again = await post(app, "/api/knowledge/executions/run-42/consumptions", {
+    claims: ["DECISION-21:v1"],
+  });
+  assert.equal(again.status, 200);
+  assert.equal(again.body.consumptions[0].createdAt, reg.body.consumptions[0].createdAt);
+  const conflict = await post(app, "/api/knowledge/executions/run-42/consumptions", {
+    phaseId: "verify",
+    claims: ["DECISION-21"],
+  });
+  assert.equal(conflict.status, 400);
+  assert.match(conflict.body.error, /already recorded with phaseId "implement"/);
+
+  const art = await post(app, "/api/knowledge/executions/run-42/artifacts", {
+    artifacts: [
+      { location: "repository", path: "src/CustomerCommentValidator.cs", gitHead: "abc1234" },
+    ],
+  });
+  assert.equal(art.status, 201, JSON.stringify(art.body));
+  assert.deepEqual(art.body.execution, {
+    runId: "run-42",
+    instanceId: "inst-1",
+    phaseId: "implement",
+  });
+  assert.equal(
+    (
+      await post(app, "/api/knowledge/executions/run-42/artifacts", {
+        artifacts: art.body.artifacts.map((a: any) => a.artifact),
+      })
+    ).status,
+    200,
+  );
+
+  // An unrelated run in the same instance and phase.
+  await post(app, "/api/knowledge/claims", { id: "OTHER", kind: "fact", statement: "o" });
+  await post(app, "/api/knowledge/evidence", {
+    claim: "OTHER",
+    source: { type: "human", who: "me" },
+  });
+  await post(app, "/api/knowledge/executions/run-77/consumptions", {
+    instanceId: "inst-1",
+    phaseId: "implement",
+    claims: ["OTHER"],
+  });
+
+  // Consumers are per exact revision; provenance is two-directional.
+  const consumers = (await get(app, "/api/knowledge/claims/DECISION-21/consumers"))
+    .body as ConsumersReport;
+  assert.deepEqual(consumers.claim, { id: "DECISION-21", revision: 1 });
+  assert.deepEqual(
+    consumers.consumptions.map((c) => c.execution.runId),
+    ["run-42"],
+  );
+  const consumer = (await get(app, "/api/knowledge/executions/run-42/provenance"))
+    .body as ExecutionProvenance;
+  assert.equal(consumer.currency, "current");
+  assert.deepEqual(
+    consumer.consumed.map((c) => [c.claim.id, c.current]),
+    [
+      ["DECISION-21", true],
+      ["CONCLUSION-19", true],
+    ],
+  );
+  assert.deepEqual(consumer.produced.artifacts, [
+    { location: "repository", path: "src/CustomerCommentValidator.cs", gitHead: "abc1234" },
+  ]);
+  const producer = (await get(app, "/api/knowledge/executions/run-9/provenance"))
+    .body as ExecutionProvenance;
+  assert.deepEqual(producer.consumed, []);
+  assert.deepEqual(
+    producer.produced.justifications.map((j) => j.conclusion.id),
+    ["CONCLUSION-19"],
+  );
+
+  // Nothing is impacted while the rule is current.
+  const calm = (await get(app, "/api/knowledge/claims/RULE-7/impact")).body as ImpactSet;
+  assert.deepEqual(calm.root.conditions, []);
+  assert.deepEqual(calm.executions, []);
+
+  // The rule changes.
+  const revised = await post(app, "/api/knowledge/claims/RULE-7/revise", {
+    statement: "Kobra comment maximum is 500",
+    revisionNote: "Kobra 4.2 raised the limit",
+  });
+  assert.equal(revised.status, 201);
+
+  const set = (await get(app, "/api/knowledge/claims/RULE-7:v1/impact")).body as ImpactSet;
+  assert.deepEqual(set.root, {
+    claim: { id: "RULE-7", revision: 1 },
+    lifecycle: "superseded",
+    support: "supported",
+    conditions: ["superseded"],
+  });
+  assert.deepEqual(
+    set.semantic.affectedClaims.map((c) => [
+      `${c.claim.id}:v${c.claim.revision}`,
+      c.reasons,
+      c.support,
+    ]),
+    [
+      [
+        "CONCLUSION-19:v1",
+        ["premise-superseded"],
+        { ifRootHeld: "supported", actual: "unsupported" },
+      ],
+      [
+        "DECISION-21:v1",
+        ["premise-unsupported"],
+        { ifRootHeld: "supported", actual: "unsupported" },
+      ],
+    ],
+  );
+  assert.deepEqual(set.executions, [
+    {
+      execution: { runId: "run-42", instanceId: "inst-1", phaseId: "implement" },
+      reasons: ["consumed-affected-claim"],
+      consumed: [
+        { id: "DECISION-21", revision: 1 },
+        { id: "CONCLUSION-19", revision: 1 },
+      ],
+    },
+  ]);
+  assert.deepEqual(
+    set.artifacts.map((a) => [a.execution.runId, a.artifact.path, a.reasons]),
+    [["run-42", "src/CustomerCommentValidator.cs", ["produced-by-affected-execution"]]],
+  );
+  // The producer run and the unrelated run are absent.
+  const runs = JSON.stringify(set.executions) + JSON.stringify(set.artifacts);
+  assert.ok(!runs.includes("run-9") && !runs.includes("run-77"));
+  // The artifact's explanation runs the whole way from the rule.
+  const artifactPath = set.paths.find((p) => p.target.kind === "artifact")!;
+  assert.deepEqual(
+    artifactPath.hops.map((h) => h.via),
+    ["premise-of", "consumed-by", "produced"],
+  );
+  assert.deepEqual(artifactPath.hops[0].to, {
+    kind: "claim",
+    claim: { id: "CONCLUSION-19", revision: 1 },
+  });
+  assert.equal(artifactPath.hops[0].justification, producer.produced.justifications[0].id);
+
+  // The run's own provenance now says stale — nothing about the run was rewritten.
+  const later = (await get(app, "/api/knowledge/executions/run-42/provenance"))
+    .body as ExecutionProvenance;
+  assert.equal(later.currency, "stale");
+  assert.deepEqual(
+    later.consumed.map((c) => [c.claim.id, c.lifecycle, c.support, c.current]),
+    [
+      ["DECISION-21", "active", "unsupported", false],
+      ["CONCLUSION-19", "active", "unsupported", false],
+    ],
+  );
+  // The bare id resolves to v2, which nothing consumed and nothing depends on.
+  const v2 = (await get(app, "/api/knowledge/claims/RULE-7/impact")).body as ImpactSet;
+  assert.equal(v2.root.claim.revision, 2);
+  assert.deepEqual(v2.root.conditions, ["unsupported"]);
+  assert.deepEqual(v2.executions, []);
+  assert.deepEqual(
+    (await get(app, "/api/knowledge/claims/RULE-7/consumers")).body.consumptions,
+    [],
+  );
+
+  // A second app over the same home reproduces the impact set exactly.
+  const other = (await get(makeApp(), "/api/knowledge/claims/RULE-7:v1/impact")).body;
+  assert.deepEqual(other, set);
+});
+
+test("provenance reads 404 on unknown or malformed keys", async () => {
+  const app = makeApp();
+  await seedExample(app);
+  for (const key of ["NOPE", "RULE-7:v9", "a%20b"]) {
+    for (const suffix of ["/consumers", "/impact"]) {
+      assert.equal((await get(app, `/api/knowledge/claims/${key}${suffix}`)).status, 404);
+    }
+  }
+  for (const run of ["unknown", "a%20b", "..%2F.."]) {
+    assert.equal((await get(app, `/api/knowledge/executions/${run}/provenance`)).status, 404);
+  }
 });
 
 test("contested state is visible through the API", async () => {
