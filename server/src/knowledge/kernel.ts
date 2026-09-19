@@ -1,4 +1,5 @@
 import type {
+  AppliedKnowledgeDelta,
   ArtifactProduction,
   ArtifactRef,
   Claim,
@@ -62,12 +63,15 @@ import type {
  * The authoritative ledger document. `version` guards the on-disk shape.
  *
  * Version 2 (Phase 2) added `consumptions` and `artifacts` — the explicit
- * bridges from the semantic graph back into execution history. A version 1
- * file is upgraded on read by `store.ts` (the two arrays start empty); the
- * kernel only ever sees version 2.
+ * bridges from the semantic graph back into execution history. Version 3
+ * (Phase 3) added `deltas` — the ledger's own record of every KnowledgeDelta
+ * it applied, so the provenance chain "canonical record ← delta ← run" is
+ * answerable from this document alone and a commit is idempotent on delta id.
+ * Older files are upgraded on read by `store.ts` (the new arrays start empty);
+ * the kernel only ever sees version 3.
  */
 export interface KnowledgeLedger {
-  version: 2;
+  version: 3;
   /** Every claim revision, in the order it was added. */
   claims: Claim[];
   evidence: Evidence[];
@@ -76,9 +80,11 @@ export interface KnowledgeLedger {
   consumptions: ClaimConsumption[];
   /** Execution → artifact it produced, in recording order. */
   artifacts: ArtifactProduction[];
+  /** Every KnowledgeDelta applied, in commit order. See `delta.ts`. */
+  deltas: AppliedKnowledgeDelta[];
 }
 
-export const LEDGER_VERSION = 2 as const;
+export const LEDGER_VERSION = 3 as const;
 
 export function emptyLedger(): KnowledgeLedger {
   return {
@@ -88,6 +94,7 @@ export function emptyLedger(): KnowledgeLedger {
     justifications: [],
     consumptions: [],
     artifacts: [],
+    deltas: [],
   };
 }
 
@@ -420,11 +427,13 @@ export function sameArtifact(a: ArtifactRef, b: ArtifactRef): boolean {
   return a.location === b.location && a.path === b.path;
 }
 
-/** Every provenance record naming a run, consumptions first, each in ledger order. */
+/** Every provenance record naming a run — consumptions, then artifact
+ *  productions, then applied deltas — each in ledger order. */
 function executionRecordsOf(ledger: KnowledgeLedger, runId: string): RunExecutionRef[] {
   return [
     ...ledger.consumptions.filter((c) => c.execution.runId === runId).map((c) => c.execution),
     ...ledger.artifacts.filter((a) => a.execution.runId === runId).map((a) => a.execution),
+    ...ledger.deltas.filter((d) => d.execution.runId === runId).map((d) => d.execution),
   ];
 }
 

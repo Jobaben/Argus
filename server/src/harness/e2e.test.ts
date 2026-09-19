@@ -24,6 +24,7 @@
 
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { readInstance } from "../sources/instances.js";
@@ -961,5 +962,110 @@ test(
     t.after(() => h.close());
     assert.equal(process.env.ARGUS_TOKEN, ADMIN_TOKEN);
     assert.equal(process.env[LEAK_VAR], "1");
+  },
+);
+
+// ── 12. KnowledgeDelta: the agent proposes, Argus commits ───────────────────
+
+test(
+  "knowledge delta: a read-only agent writes the delta file Argus named, and the phase commits it on success",
+  posixOnly,
+  async (t) => {
+    const h: Harness = await startHarness({ git: true });
+    t.after(() => h.close());
+    const knowledge = await import("../knowledge/store.js");
+    const staging = await import("../knowledge/staging.js");
+    await knowledge.createClaim(
+      { id: "RULE-17", kind: "business-rule", statement: "Comment max is 180" },
+      new Date(),
+    );
+
+    const delta = JSON.stringify({
+      schemaVersion: 1,
+      claims: [{ localId: "c", kind: "conclusion", statement: "Validate comments at 180" }],
+      justifications: [{ conclusion: { local: "c" }, premises: ["RULE-17:v1"] }],
+      consumed: ["RULE-17:v1"],
+    });
+    const def = await h.seed([
+      {
+        id: "derive",
+        name: "Derive",
+        steps: [
+          {
+            name: "think",
+            prompt: ["Derive the validation rule.", `FAKE: write-delta ${delta}`].join("\n"),
+          },
+        ],
+        capabilities: { filesystem: "read-only", tools: { allow: ["Read"] }, mcpServers: {} },
+        checks: [{ kind: "command", run: "exit 0", label: "tests" }],
+      },
+    ]);
+    const inst = (await h.engine.start(def.id, "manual"))!;
+    const done = await waitForInstance(
+      inst.id,
+      (i) => i.status !== "running",
+      "instance to settle",
+    );
+    await h.engine.drain();
+    assert.equal(done.status, "succeeded");
+    const phase = phaseOf(done, "derive");
+    assert.equal(phase.knowledge?.status, "applied");
+    assert.equal(phase.steps[0].knowledgeDelta?.status, "applied");
+
+    // The child saw the file's location and had its directory made writable.
+    const seen = await readSeen(inst.id, "derive");
+    assert.ok(seen.envNames.includes("ARGUS_KNOWLEDGE_DELTA_FILE"));
+    const runId = runIdOf(phase);
+    const invocation = await readInvocation(runId);
+    assert.equal(invocation?.knowledgeDeltaFile, staging.knowledgeDeltaFile(runId));
+    assert.ok(
+      seen.argv.includes(staging.knowledgeDeltaDir(runId)),
+      "--add-dir names the delta dir",
+    );
+    assert.match(argAfter(seen.argv, "--append-system-prompt") ?? "", /ARGUS_KNOWLEDGE_DELTA_FILE/);
+
+    const ledger = await knowledge.readLedger();
+    const created = ledger.claims.find((c) => c.kind === "conclusion");
+    assert.ok(created);
+    assert.deepEqual(created.producedBy, { runId, instanceId: inst.id, phaseId: "derive" });
+    assert.deepEqual(ledger.consumptions[0].claim, { id: "RULE-17", revision: 1 });
+    assert.equal(ledger.deltas[0].execution.runId, runId);
+    const record = await staging.readDeltaRecord(runId);
+    assert.equal(record?.status, "applied");
+    assert.deepEqual(record?.result?.createdClaims, [
+      { localId: "c", claim: { id: created.id, revision: 1 } },
+    ]);
+    const journal = await waitForJournal(inst.id, ["knowledge.staged", "knowledge.applied"]);
+    assert.ok(journal.some((j) => j.kind === "knowledge.applied"));
+  },
+);
+
+test(
+  "knowledge delta: an invalid document fails the step under knowledge-delta and writes nothing canonical",
+  posixOnly,
+  async (t) => {
+    const h: Harness = await startHarness();
+    t.after(() => h.close());
+    const def = await h.seed([
+      {
+        id: "derive",
+        name: "Derive",
+        steps: [
+          { name: "think", prompt: 'FAKE: write-delta {"schemaVersion":1,"consumed":["RULE-17"]}' },
+        ],
+      },
+    ]);
+    const inst = (await h.engine.start(def.id, "manual"))!;
+    const done = await waitForInstance(
+      inst.id,
+      (i) => i.status !== "running",
+      "instance to settle",
+    );
+    assert.equal(done.status, "failed");
+    const phase = phaseOf(done, "derive");
+    assert.equal(failure(phase).failureClass, "knowledge-delta");
+    assert.match(failure(phase).reason ?? "", /exact revision/);
+    assert.equal((await finishedRun(runIdOf(phase))).outcome, "failed");
+    assert.equal(existsSync(path.join(h.home, "argus", "knowledge.json")), false);
   },
 );

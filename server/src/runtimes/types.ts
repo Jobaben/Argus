@@ -70,6 +70,11 @@ export interface CapabilityRequest {
    *  enabled; otherwise null. Added to the writable set the same way as
    *  `artifactDir`, so a `workspace-write` profile can append to `NOTES.md`. */
   memoryDir?: string | null;
+  /** This run's KnowledgeDelta directory (absolute), holding the one file the
+   *  agent may write (`ARGUS_KNOWLEDGE_DELTA_FILE`). Added to the writable set
+   *  the same way as `artifactDir`: a read-only researcher may still propose
+   *  what it learned. */
+  knowledgeDeltaDir?: string | null;
   /**
    * Shell command lines for Argus's own completion hooks, so a runtime that can
    * carry hooks per invocation can register them itself instead of relying on

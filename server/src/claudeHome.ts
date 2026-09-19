@@ -59,4 +59,8 @@ export const paths = {
   /** The Knowledge Ledger: the one authoritative store of claims, evidence and
    *  justifications. See docs/KNOWLEDGE-LEDGER.md. */
   knowledgeFile: () => path.join(claudeHome(), "argus", "knowledge.json"),
+  /** Per-run KnowledgeDelta staging: `<runId>/delta.json` is the one file an
+   *  agent may write (`ARGUS_KNOWLEDGE_DELTA_FILE`); `<runId>/staged.json` is
+   *  Argus's record of it. Never canonical — see docs/KNOWLEDGE-LEDGER.md. */
+  knowledgeDeltasDir: () => path.join(claudeHome(), "argus", "knowledge-deltas"),
 };

@@ -92,6 +92,10 @@ export interface InvocationInputs {
   /** The isolated worktree the step runs in, when its phase declared one. */
   workspace?: WorkspaceRecord | null;
   resultFile: string | null;
+  /** Where this run may leave its KnowledgeDelta; its directory is made
+   *  writable under every capability profile. Absent = the protocol is off
+   *  for this invocation (tests that build one by hand). */
+  knowledgeDeltaFile?: string | null;
   timeoutSeconds: number | null;
   gitHead: string | null;
   /** The environment the policy is applied to — Argus's own, in production. */
@@ -124,6 +128,9 @@ export function prepareInvocation(inputs: InvocationInputs): PreparedInvocation 
         cwd: run.cwd,
         artifactDir: inputs.artifactDir,
         memoryDir: inputs.memoryDir ?? null,
+        knowledgeDeltaDir: inputs.knowledgeDeltaFile
+          ? path.dirname(inputs.knowledgeDeltaFile)
+          : null,
         hooks: {
           stop: invocationHookCommand(),
           gate: invocationHookCommand("needs-input"),
@@ -166,6 +173,7 @@ export function prepareInvocation(inputs: InvocationInputs): PreparedInvocation 
     artifactDir: inputs.artifactDir,
     ...(inputs.workspace !== undefined ? { workspace: inputs.workspace } : {}),
     resultFile: inputs.resultFile,
+    knowledgeDeltaFile: inputs.knowledgeDeltaFile ?? null,
     timeoutSeconds: inputs.timeoutSeconds,
     deadlineAt,
     gitHead: inputs.gitHead,

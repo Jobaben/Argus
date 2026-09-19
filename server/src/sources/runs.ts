@@ -303,6 +303,10 @@ export async function pruneRuns(scheduleId: string, keep: number): Promise<void>
       rm(runLogPath(r.id), { force: true }),
       rm(runResultPath(r.id), { force: true }),
       rm(runInvocationDir(r.id), { recursive: true, force: true }),
+      // The run's KnowledgeDelta staging (its proposal and Argus's record).
+      // The canonical audit trail outlives it: an applied delta is recorded
+      // in knowledge.json's `deltas`, which is never pruned.
+      rm(path.join(paths.knowledgeDeltasDir(), r.id), { recursive: true, force: true }),
     ]),
   );
   for (const r of drop) parseMemo.forget(r.id);

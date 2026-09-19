@@ -15,7 +15,8 @@
  * process could use to impersonate or interfere with a different run
  * (`ARGUS_SIGNAL_TOKEN`, `ARGUS_SIGNAL_URL`, `ARGUS_RESULT_FILE`,
  * `ARGUS_ARTIFACT_DIR`, `ARGUS_WORKSPACE`, `ARGUS_MEMORY_DIR`,
- * `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`, `ARGUS_RUN_ID`).
+ * `ARGUS_KNOWLEDGE_DELTA_FILE`, `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`,
+ * `ARGUS_RUN_ID`).
  *
  * The rule this module enforces: an agent must never be able to administer
  * the harness that runs it. `buildChildEnv` is the one place that assembles
@@ -60,6 +61,9 @@ export const ARGUS_PER_INVOCATION_IDENTIFIERS: readonly string[] = [
   // enabled) — never inherited, for the same reason as `ARGUS_ARTIFACT_DIR`:
   // a nested Argus child must not write another pipeline's notes.
   "ARGUS_MEMORY_DIR",
+  // Where this one run may propose semantic knowledge. Inherited, a nested
+  // child could stage a delta under its parent's run identity.
+  "ARGUS_KNOWLEDGE_DELTA_FILE",
 ];
 
 /** The baseline that `inherit: "minimal"` passes through even without `allow`. */

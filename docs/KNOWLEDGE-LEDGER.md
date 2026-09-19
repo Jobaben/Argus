@@ -1,7 +1,9 @@
 # The Knowledge Ledger — semantic provenance for Argus
 
 _Phase 1: the semantic kernel and its persistence model. Phase 2: the
-execution provenance bridge and deterministic impact analysis._
+execution provenance bridge and deterministic impact analysis. Phase 3: the
+KnowledgeDelta protocol — how agent executions propose knowledge and how Argus
+alone validates and commits it._
 
 ## 1. Why it exists
 
@@ -658,12 +660,486 @@ derivations, consumed by which run. Whether to re-run the implement phase,
 open an issue, or attach new evidence and a new justification from
 `RULE-17:v2` is a later phase's decision, and a human's.
 
-## 12. Persistence
+## 12. KnowledgeDelta protocol (Phase 3)
+
+Phases 1 and 2 built the ledger and the bridges into execution history, and
+left the `POST` endpoints as the vocabulary an agent _would_ use. Phase 3 is
+the point where the ledger starts participating in real agent workflows — and
+the point where the Phase 1 principle has to hold under pressure:
+
+> **LLMs propose; Argus validates and applies.**
+
+```
+Agent
+  ↓  writes one JSON document to $ARGUS_KNOWLEDGE_DELTA_FILE
+KnowledgeDelta proposal
+  ↓  read by Argus when the run completes (Stop hook signal, or reconcile fallback)
+Argus validation                       shape · local ids · exact references · preflight against the ledger
+  ↓
+staged delta                           argus/knowledge-deltas/<runId>/staged.json — NOT canonical
+  ↓
+deterministic successful phase boundary    steps succeeded · result validated · checks passed · gate approved
+  ↓
+atomic ledger transition               every eligible delta of the attempt, or none
+  ↓
+canonical Knowledge Ledger             argus/knowledge.json (version 3)
+```
+
+An agent process never writes `knowledge.json`, never assigns a canonical claim
+id or a revision number, never modifies an existing record, never retargets a
+historical reference, and can never partially commit anything. It produces a
+proposal document. Argus owns canonical ids, revision assignment, referential
+integrity, cycle validation, stale-write detection, provenance binding, atomic
+application and persistence.
+
+### 12.1 The wire contract
+
+One versioned document per run (`contracts/src/knowledge.ts`):
+
+```ts
+interface KnowledgeDelta {
+  schemaVersion: 1;
+  claims?: Array<{ localId; kind; statement; structuredValue? }>; // new claims — Argus mints the id
+  revisions?: Array<{
+    claimId; // an existing claim
+    expectedRevision; // optimistic-concurrency precondition
+    statement;
+    structuredValue?;
+    revisionNote?;
+    localId?; // so the same delta can build on the new revision
+  }>;
+  evidence?: Array<{ claim: DeltaClaimRef; direction?; source: EvidenceSource; note? }>;
+  justifications?: Array<{
+    conclusion: DeltaClaimRef;
+    premises: DeltaClaimRef[];
+    direction?;
+    note?;
+  }>;
+  consumed?: ClaimRef[]; // exact revisions the execution declares it relied on
+  artifacts?: ArtifactRef[]; // what the execution produced
+  metadata?: { summary?: string };
+}
+type DeltaClaimRef = { local: string } | { id: string; revision: number }; // or "ID:vN"
+```
+
+Every section is optional. A missing file, or a delta whose every section is
+empty, means the run proposed no durable knowledge — and the pipeline behaves
+byte for byte as it did before the protocol existed. Sections are bounded at 64
+entries; the file at 1 MiB.
+
+Three things are conspicuously **not** fields: a canonical `id` on a new claim,
+a `revision` number, and `producedBy`. A document that carries any of them is
+refused with a message saying why (`canonical ids are assigned by Argus; use
+localId`). Provenance is bound by Argus from the run that wrote the file.
+
+A realistic delta, as an agent in a `plan` phase would write it:
+
+```jsonc
+{
+  "schemaVersion": 1,
+  "claims": [
+    {
+      "localId": "comment-limit",
+      "kind": "conclusion",
+      "statement": "Customer comments must be limited to 500 characters",
+    },
+    {
+      "localId": "ship-validator",
+      "kind": "decision",
+      "statement": "Implement a 500-character validator on CustomerComment",
+    },
+  ],
+  "revisions": [
+    {
+      "claimId": "RULE-17",
+      "expectedRevision": 2,
+      "statement": "Kobra customer comment max = 500",
+      "revisionNote": "Kobra 4.2 raised the limit",
+      "localId": "rule-v3",
+    },
+  ],
+  "evidence": [
+    {
+      "claim": { "local": "rule-v3" },
+      "source": { "type": "document", "uri": "https://kobra.example/release-notes/4.2" },
+    },
+  ],
+  "justifications": [
+    {
+      "conclusion": { "local": "comment-limit" },
+      "premises": [{ "local": "rule-v3" }, "FACT-12:v1"],
+    },
+    { "conclusion": { "local": "ship-validator" }, "premises": [{ "local": "comment-limit" }] },
+  ],
+  "consumed": ["FACT-12:v1", "RULE-17:v2"],
+  "metadata": { "summary": "re-derived the comment validation decision from Kobra 4.2" },
+}
+```
+
+### 12.2 Local references
+
+Argus assigns canonical ids, but an agent still has to say "create conclusion
+X, then justify X from RULE-17:v2" in one document. A **delta-local id** does
+that:
+
+- `localId` is declared on a new claim (required) or a revision (optional).
+- It is referenced as `{ "local": "<id>" }` from evidence, a justification's
+  conclusion or its premises. Never from `consumed` — a run cannot have relied
+  on a claim it is proposing.
+- Local ids share the claim-id alphabet but live in a different syntactic
+  position from canonical references (`{ local }` vs `{ id, revision }`), so
+  the two cannot be confused.
+- A local id declared twice, or a `{ local }` that names no declaration,
+  refuses the **entire** delta before anything is staged.
+- Argus maps every local id to the canonical revision it minted, and the
+  apply result exposes the mapping: `createdClaims: [{ localId, claim }]`,
+  `createdRevisions: [{ localId?, claim, supersedes }]`.
+- Local ids are never persisted as semantic identity. `knowledge.json` does
+  not contain the string `localId`; the mapping lives on the staged record
+  beside the run.
+
+What the example above became, from its apply result:
+
+| local id         | canonical                              |
+| ---------------- | -------------------------------------- |
+| `comment-limit`  | `CONCLUSION-7c1e02ab:v1`               |
+| `ship-validator` | `DECISION-3b90f4d2:v1`                 |
+| `rule-v3`        | `RULE-17:v3` (supersedes `RULE-17:v2`) |
+
+### 12.3 Exact references only
+
+Every reference to _existing_ knowledge in a delta must be an exact revision:
+`"RULE-17:v2"` or `{ "id": "RULE-17", "revision": 2 }`. A bare `"RULE-17"` is
+refused at validation. The HTTP proposal API (§3) still offers the convenience
+of resolving a bare id at write time for an operator; the file protocol does
+not, because an agent that writes `RULE-17` may have meant "whatever is
+current", and a committed delta must never carry that ambiguity. Canonical
+persisted provenance therefore never contains a "current revision" reference —
+which is also what makes a stale precondition _detectable_ (§12.4).
+
+A reference to a revision that does not exist in the ledger snapshot — including
+a sibling delta's not-yet-minted creation in the same phase commit — is
+`unknown-reference`.
+
+### 12.4 Revision preconditions (optimistic concurrency)
+
+An agent may not say "revise RULE-17". It says:
+
+```jsonc
+{ "claimId": "RULE-17", "expectedRevision": 2, "statement": "…" }
+```
+
+meaning _create the next revision only if v2 is still the active revision_.
+The precondition is checked twice against a ledger snapshot: at intake (so a
+proposal that is already stale fails the step at once) and at commit (inside
+the ledger mutex, against the snapshot that is about to be written). If another
+change made v3 in between:
+
+```
+expected: 2
+actual:   3
+→ stale-revision: revisions[0] expects RULE-17 at v2, but the active revision is v3
+```
+
+the **entire** delta is refused — the valid new claims in it too. Argus does
+not create v4 on reasoning that was built on v2. The phase fails under
+`knowledge-delta`, the reason names the revision that moved, and a retry (if
+the author opted in) or a human revise gets a second attempt that can read v3.
+
+Kind cannot change on revision (a `kind` field on a revision proposal is
+refused), and one delta may not revise the same claim twice.
+
+### 12.5 The per-run file: how the agent receives it and what it writes
+
+Argus follows its result-file convention. Every step run is launched with:
+
+| Env var                      | Value                                                 |
+| ---------------------------- | ----------------------------------------------------- |
+| `ARGUS_KNOWLEDGE_DELTA_FILE` | `~/.claude/argus/knowledge-deltas/<runId>/delta.json` |
+
+The directory exists before the process starts and is made writable under
+every capability profile (Claude Code: `--add-dir`; Codex: a
+`sandbox_workspace_write.writable_roots` entry), the same way the artifact
+directory is — a read-only researcher may still propose what it learned. It is
+a per-invocation identifier: never inherited from Argus's own environment,
+never settable through `env.set`, recorded on the invocation record as
+`knowledgeDeltaFile`.
+
+The system prompt carries one constant, `KNOWLEDGE_DELTA_CONTRACT` (beside
+`OUTCOME_CONTRACT`, in `STEP_CONTRACT`), which says roughly:
+
+> If this task establishes or revises durable semantic knowledge, write one
+> JSON KnowledgeDelta to `$ARGUS_KNOWLEDGE_DELTA_FILE`. Do not invent canonical
+> ids: use a `localId` for a new claim. Reference existing claims only by exact
+> revision (`ID:vN`). Argus applies the delta only once the phase is accepted;
+> an invalid delta fails this step. Ordinary work writes no file.
+
+It is a pure constant — no per-run data — so the prompt-cache prefix holds, and
+it is deliberately short. The agent does not `POST` to `/api/knowledge`; the
+file is the agent boundary. The Stop hook is unchanged: Argus reads the file
+itself when the completion arrives, which gives the hook path and the
+reconcile fallback (Codex/OpenCode, whose completion is read off the run
+record) identical semantics.
+
+**Lifecycle of the file:**
+
+1. `launchStep` creates `knowledge-deltas/<runId>/` and injects the variable.
+2. The agent may write `delta.json` at any point before it finishes.
+3. On the completion signal (or a recovered completion during reconcile),
+   Argus reads it — absent → no delta; present → parse, validate, preflight,
+   stage or refuse.
+4. The file itself is left in place as evidence; `staged.json` beside it is
+   Argus's record.
+
+### 12.6 Staging
+
+`agent completed` is not `phase accepted`. A delta that passes intake is
+**staged**, not applied:
+
+```
+run completes
+  ↓ read delta.json
+  ↓ parse (invalid-json) · validate shape (schema, local-reference)
+  ↓ artifact existence in the run's own roots
+  ↓ preflight against the current ledger snapshot (unknown-reference, stale-revision, cycles)
+  ↓ write knowledge-deltas/<runId>/staged.json  { id, runId, instanceId, phaseId, attempt, step, status: "staged", delta }
+  ↓ step.knowledgeDelta = { id, status: "staged" } on the instance
+```
+
+The staged record carries the identity Argus assigned (`KD-…`), the full
+execution provenance that distinguishes it from any other attempt's proposal
+— instance, phase, **attempt**, run, step — timestamps, the validated
+proposal, and later its refusal reason or apply result. It is written with the
+atomic writer, survives a restart, and is inspectable at
+`GET /api/knowledge/deltas/:id` and `GET /api/knowledge/executions/:runId/deltas`.
+
+Intake failures do not disappear. A malformed or semantically invalid delta
+fails the step at once: the step is marked `failed`, the phase fails under the
+**`knowledge-delta`** failure class with the refusal as its reason, the run's
+outcome is patched to `failed`, and a `rejected` record is written (with the
+tail of what the agent wrote when it could not even be parsed). The journal
+gets `knowledge.rejected`.
+
+### 12.7 The commit boundary
+
+A delta becomes canonical only when the phase its run belongs to has crossed
+**every** deterministic acceptance condition. The integration point is the one
+place a phase becomes `succeeded` in the pure transitions — `succeedPhase`,
+reached from `concludePhase` (ungated) and `applyApprove` (gated):
+
+```
+Ungated phase                            Gated phase
+  all steps succeeded                      all steps succeeded
+  result validated                         result validated
+  checks passed  (if any)                  checks passed  (if any)
+        ↓                                        ↓
+  succeedPhase()                           awaiting-approval
+        │                                        ↓ human approves
+        │                                  succeedPhase()
+        ↓                                        ↓
+  staged deltas?  ──no──▶ succeeded        staged deltas?  ──no──▶ succeeded
+        │ yes                                    │ yes
+        ▼                                        ▼
+  phase.knowledge = pending, phase stays running,  TransitionResult.commitKnowledge = [phaseId]
+        ↓ engine: persist the held state · commitKnowledgeDeltas() under the ledger mutex
+  applyKnowledgeCommit(verdict)
+        ├── ok       → succeeded, publish artifact, settle → successors launch
+        └── refused  → failed (class knowledge-delta), reason = the ledger's refusal
+```
+
+The transitions stay pure: `succeedPhase` only _holds_ the phase (`running`,
+`knowledge.status: "pending"`) and hands the engine the phase id, exactly as
+`advance` holds a phase under `verification.status: "running"` and hands it
+`verify`. The engine's `settleKnowledge` persists the held instance first,
+commits, applies the verdict and continues with what the verdict settled. A
+gated phase's staged deltas are untouched while it waits: approval is the
+acceptance condition, and only approval commits. If the human revises instead,
+the staged deltas are superseded before the new attempt's steps replace the
+old ones, and the new attempt stages its own.
+
+Ledger side effects therefore live in the engine (`commitPhaseKnowledge` →
+`store.commitKnowledgeDeltas`), never in `pipelineTransitions.ts`.
+
+### 12.8 Multi-step atomicity
+
+Steps of a phase run concurrently and complete in any order. Each run may
+write at most one delta; each is staged independently on its own step as it
+completes. When the phase is accepted, **every** staged delta of the
+succeeding attempt is committed as one ledger transition (`applyKnowledgeDeltas`
+over one snapshot, one `atomicWriteJson`) — in step order, never completion
+order — or none is.
+
+Cross-delta conflicts are detected in preflight, before a single record is
+applied, so the refusal is the same whichever run finished first:
+
+```
+step A proposes revision RULE-7 from v2
+step B proposes revision RULE-7 from v2
+→ conflict: deltas KD-… and KD-… both revise RULE-7 from v2; the phase commit is refused rather than choosing one
+```
+
+The phase fails under `knowledge-delta`, both records are `rejected`, and
+`RULE-7` stays at v2. Process-completion timing never decides semantic history.
+Two non-conflicting deltas commit together, each attributed to its own run.
+
+### 12.9 Attempt isolation
+
+The staging identity is (instance, phase, **attempt**, run, step), and the
+staged reference lives on the `StepProgress` of the run that produced it. A
+retry or a revise replaces the phase's steps (`restartPhase`), so a new attempt
+starts with no staged deltas by construction; `phase.knowledge` is deleted
+with them. The commit additionally refuses a record whose `attempt` is not the
+phase's current attempt.
+
+Whenever an attempt can no longer be accepted, its staged deltas are retired to
+**`superseded`** — on every instance write (`retireStagedDeltas`: a failed,
+aborted or skipped phase; a failed, aborted or skipped step, which is how a
+losing candidate's delta is retired) and explicitly on revise. So:
+
+```
+attempt 1 → emits delta D1 → verification fails      D1: superseded ("phase attempt 0 failed")
+attempt 2 → emits delta D2 → succeeds                 D2: applied
+```
+
+Only D2 is canonical. D1 remains on disk as diagnostic evidence, never as
+knowledge. An `applied` record is never demoted by a later sweep.
+
+### 12.10 Atomic application
+
+`applyKnowledgeDeltas(ledger, proposals, { now, mint })` in
+`server/src/knowledge/delta.ts` is pure and composes the Phase 1/2 kernel
+transitions — `addClaim`, `reviseClaim`, `addEvidence`, `addJustification`,
+`recordConsumption`, `recordArtifact` — on a working copy of one snapshot. The
+kernel's invariants (uniqueness, existence, acyclicity, locator agreement,
+duplicate-edge idempotence) are reused, not reimplemented; a kernel refusal
+surfaces as a `ledger`-coded delta error naming the delta and the field. Any
+throw leaves the caller holding the snapshot it started with, because the
+kernel never mutates. The store wraps it in the ledger mutex and writes the
+returned document once:
+
+```
+read knowledge.json  →  preflight(all)  →  apply(each, in order)  →  one atomic write
+                            │ refused                  │ refused
+                            └──────── nothing written ─┘
+```
+
+A delta containing a claim, evidence, a justification, a consumption and an
+artifact commits completely or not at all. The "atomic failure" test pins it:
+a valid claim and valid evidence do not survive an invalid cyclic
+justification in the same delta.
+
+Commits are **idempotent on delta id**: `knowledge.json` (version 3) carries a
+`deltas` array with one `AppliedKnowledgeDelta` per applied delta — its id,
+execution, attempt, and every record id/ref it created. A proposal already
+listed there is skipped and its result rebuilt. That is what makes the
+persisted "pending" hold crash-safe: a restart between the ledger write and
+the instance write is healed by reconcile committing again.
+
+### 12.11 Provenance
+
+Argus binds execution provenance; the agent cannot assert it:
+
+- Every claim, revision and justification a delta creates carries
+  `producedBy: { runId, instanceId, phaseId }` — the run that wrote the file.
+- Every `consumed` entry becomes a Phase 2 `ClaimConsumption` with
+  `execution: { runId, instanceId, phaseId }`, naming the exact revision. There
+  is no second consumption representation.
+- Every `artifacts` entry becomes a Phase 2 `ArtifactProduction` for the same
+  execution. Paths reuse the containment rule (`validArtifactPath`), and at
+  intake Argus additionally checks that the file **exists** in the run's own
+  root — its artifact directory, or its working tree (the worktree when the
+  phase declared one) as the invocation record names them. An agent cannot
+  claim `../../somewhere/outside` or a file it never produced.
+- The ledger's `deltas` entry records which run, in which attempt, introduced
+  which records, so the chain is answerable from `knowledge.json` alone:
+
+```
+canonical claim DECISION-3b90f4d2:v1
+    ← introduced through   KnowledgeDelta KD-4f…   (ledger.deltas[i].claims)
+    ← emitted by           run_123 (inst-1 / plan, attempt 0)   (ledger.deltas[i].execution)
+```
+
+and `executionProvenance(runId)` joins both directions as before.
+
+**Agent-declared dependency vs. Argus-proven validity.** A `consumed` entry
+is the agent's _declaration_ that it relied on that revision. Argus proves
+that the reference exists, is an exact immutable revision, is well formed, and
+records it as provenance. Argus does **not** prove — and does not pretend to
+prove — that the model internally reasoned from the claim merely because it
+declared consumption. The same is true of a justification: Argus proves the
+premises exist and the graph stays acyclic, not that the derivation is sound.
+This distinction is deliberate and must remain explicit: what the ledger holds
+is _structurally valid, agent-declared_ semantic dependency. A later phase can
+make consumption more deterministic by controlling the semantic context Argus
+supplies to an invocation and recording exactly what was supplied.
+
+### 12.12 Failure semantics
+
+**Decision:** a refused KnowledgeDelta is a new **`PhaseFailureClass`**,
+`knowledge-delta`, in the `RetryableClass` subset. Not `configuration`
+(the definition is fine; running again _can_ help) and not `verification`
+(that class means a `checks` entry failed, and its retry note is built from a
+`VerificationReport` that a delta refusal does not have). Like `signal`, it is
+excluded from the default retry set — the agent considered its proposal — and
+an author may opt in with `retry.retryOn: ["knowledge-delta"]`; the retry note
+then carries the exact refusal (the revision that moved, the unresolved local
+id), which is what a second attempt needs.
+
+| Where                     | Trigger                                                                                                                             | Effect                                                                                            |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| intake (step completion)  | invalid JSON · schema · duplicate/undeclared local id · bare id · missing artifact · unknown reference · stale precondition · cycle | step `failed`, phase `failed` (`knowledge-delta`), run outcome `failed`, record `rejected`        |
+| commit (phase acceptance) | stale precondition (the ledger moved while checks ran or a gate waited) · conflict between sibling deltas · unreadable ledger       | phase `failed` (`knowledge-delta`), `phase.knowledge.status: "rejected"`, every record `rejected` |
+| attempt abandoned         | verification failed · agent failed · timeout · revise · abort · lost candidate                                                      | records `superseded`; nothing canonical                                                           |
+
+Refusal codes (`KnowledgeDeltaError.code`): `invalid-json`, `schema`,
+`local-reference`, `unknown-reference`, `stale-revision`, `conflict`,
+`artifact`, `ledger`. The reason text on the phase payload carries the code.
+A phase is never considered semantically successful while a delta it emitted
+was silently discarded: the only deltas that vanish are the ones a run never
+wrote.
+
+### 12.13 Auditability and inspection
+
+| Record                        | Where                                        | Says                                                                                  |
+| ----------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `KnowledgeDeltaRecord`        | `argus/knowledge-deltas/<runId>/staged.json` | id, run, instance, phase, attempt, step, status, timestamps, proposal, reason, result |
+| `StepProgress.knowledgeDelta` | instance record                              | `{ id, status }` per run                                                              |
+| `PhaseProgress.knowledge`     | instance record                              | the attempt's commit: `pending` / `applied` / `rejected`, delta ids                   |
+| `AppliedKnowledgeDelta`       | `knowledge.json` → `deltas[]`                | what each applied delta created, attributed to its run and attempt                    |
+| journal                       | `argus/journals/<instanceId>.jsonl`          | `knowledge.staged`, `knowledge.rejected`, `knowledge.applied`, `knowledge.superseded` |
+
+Read surface (open, like every dashboard read; there is deliberately no write):
+
+- `GET /api/knowledge/deltas/:id` — the record.
+- `GET /api/knowledge/deltas/:id/result` — the `KnowledgeDeltaApplyResult`
+  (local id → canonical mapping, created ids, consumptions, artifacts); `404`
+  until applied.
+- `GET /api/knowledge/executions/:runId/deltas` — the run's deltas (at most
+  one, by protocol).
+
+### 12.14 Restart and recovery
+
+- A **staged** delta is on disk before the step's transition is persisted; a
+  restart finds it exactly where the step's `knowledgeDelta` reference says.
+  A gated phase approved after a restart commits it like any other.
+- A phase held **pending** was persisted in that state before the ledger was
+  written. Reconcile finds `knowledge.status: "pending"` on a running phase
+  and commits again; the ledger's `deltas` makes an already-applied delta a
+  no-op, so nothing is applied twice.
+- A completion recovered from the run record (Codex/OpenCode fallback) goes
+  through the same intake, so a delta written by a run that ended while Argus
+  was down is staged when the run is healed. A Claude Code run that ended
+  without signalling is failed by the existing fail-safe rule, and its file is
+  never staged.
+- A record found `rejected` for the current attempt on re-intake is a refusal
+  again; a record `staged` for the current attempt is reused (same id).
+
+## 13. Persistence
 
 **Authoritative store:** `~/.claude/argus/knowledge.json`, one JSON document:
 
 ```json
-{ "version": 2, "claims": [...], "evidence": [...], "justifications": [...], "consumptions": [...], "artifacts": [...] }
+{ "version": 3, "claims": [...], "evidence": [...], "justifications": [...], "consumptions": [...], "artifacts": [...], "deltas": [...] }
 ```
 
 Written through the same discipline as `pipelines.json` and `schedules.json`:
@@ -673,11 +1149,17 @@ parse or that carries an unknown version. A refused transition writes nothing.
 Concurrent proposals see each other's records, so the second of two identical
 claim ids is refused rather than duplicated.
 
-**Version 2** (Phase 2) added the two provenance arrays. A version 1 file is
-read as version 2 with empty arrays and is rewritten in that shape by the next
-successful transition — nothing Phase 1 recorded changes, and reading alone
-never writes. Any other version is treated as foreign: readable as empty,
-never overwritten.
+**Version 2** (Phase 2) added the two provenance arrays; **version 3** (Phase 3) added `deltas`, the ledger's own record of every KnowledgeDelta it applied.
+A version 1 or 2 file is read as version 3 with the missing arrays empty and is
+rewritten in that shape by the next successful transition — nothing an earlier
+phase recorded changes, and reading alone never writes. Any other version is
+treated as foreign: readable as empty, never overwritten.
+
+**Staging store:** `~/.claude/argus/knowledge-deltas/<runId>/` — `delta.json`
+(the agent's document) and `staged.json` (Argus's record, §12.13). Per run,
+like the result file and the invocation directory — and pruned with the run,
+like them; the ledger's own `deltas` record is what outlives pruning. Never
+canonical; written with the same atomic writer.
 
 Why not the Vault: the Vault is documented as a **rebuildable read-side cache**
 of execution history. It can be deleted and re-ingested from the run and
@@ -697,7 +1179,7 @@ grow past what one read per request tolerates, the kernel is unchanged — only
 The on-disk records carry **no derived state**: no `lifecycle`, no `support`,
 no `truth`, no `currency`, no `impacted`. Every read surface derives them.
 
-## 13. Important invariants
+## 14. Important invariants
 
 1. **Append-only.** No record is updated or deleted. A claim changes by
    revision; evidence, justifications, consumptions and artifact productions
@@ -728,11 +1210,22 @@ no `truth`, no `currency`, no `impacted`. Every read surface derives them.
 12. **Agents propose, Argus applies.** Every write goes through
     `validate.ts` → `store.ts` → `kernel.ts`. Ids (unless validly proposed),
     revisions, timestamps and integrity are Argus's.
-13. **Separate from execution.** No import in either direction between
-    `knowledge/` and the DAG/engine; `PhaseProgress` and run records are never
-    written by the ledger, and never read by it.
+13. **Separate from execution.** No import from `knowledge/` into the
+    DAG/engine; `PhaseProgress` and run records are never written by the
+    ledger, and never read by it. The engine imports the ledger's store to
+    commit deltas — the dependency points one way, and the pure transitions
+    import nothing from it.
+14. **Agents never write the ledger.** The only agent-facing surface is the
+    per-run delta file. Canonical ids, revision numbers and provenance are
+    refused in a proposal and assigned by Argus.
+15. **A delta commits whole or not at all, at the phase's acceptance.** Staged
+    is not canonical; a failed, revised, aborted or superseded attempt's deltas
+    never enter the ledger; sibling deltas of one attempt commit as one
+    transition; a stale precondition or a conflict refuses everything.
+16. **Consumption is agent-declared, structurally verified.** Argus proves the
+    reference; it does not claim to prove the reasoning.
 
-## 14. What Phases 1 and 2 deliberately do NOT do
+## 15. What Phases 1–3 deliberately do NOT do
 
 - **No automatic pipeline invalidation.** A superseded rule changes what
   `evaluateSupport` and `analyzeImpact` return; it does not touch any
@@ -760,39 +1253,56 @@ no `truth`, no `currency`, no `impacted`. Every read surface derives them.
 - **No external source integrations.** `EvidenceSource` names Jira-shaped
   things through `document`; it does not talk to them.
 - **No graph database, RDF, ontology framework or rules engine.**
-- **No changes to `PhaseDef.needs`, routing or any execution semantics.**
+- **No changes to `PhaseDef.needs`, routing or any execution semantics.** The
+  knowledge commit is an extra rung on the acceptance ladder, not a route.
+- **No automatic impact remediation.** After a delta commits, `analyzeImpact`
+  can show the older runs and artifacts it affects. Phase 3 does not re-run
+  them, revise phases, modify code, open remediation agents, resolve
+  contradictions or alter any execution status. It ends at "new knowledge
+  committed → the ImpactSet shows the consequences".
+- **No semantic context delivery.** Argus does not yet choose which claims an
+  agent should read, materialize them, or record what it supplied; a
+  `consumed` entry is the agent's declaration.
+- **No inferred deltas.** Nothing parses a transcript, a diff or a prompt into
+  a delta. The agent writes the file or there is no delta.
 
-## 15. How this prepares the next steps
+## 16. How this prepares the next steps
 
-Everything a trustworthy semantic feedback loop needs to _compute_ now exists,
-and none of it depends on a model: exact provenance in both directions, a
-derived notion of currency, and an impact set with machine-readable reasons
-and paths. What is missing is the trusted way for **agents** to put facts into
-the ledger.
+With Phase 3, every run has a trusted way to put facts into the ledger, and
+every fact in the ledger can be traced back to the delta and the run that
+proposed it. `executionProvenance` and `analyzeImpact` are now fed by the
+pipeline itself rather than by an operator. What remains soft is the _input_
+side: an agent declares what it consumed, but Argus did not choose what it
+read.
 
-The smallest coherent Phase 3 is therefore a typed **`KnowledgeDelta`**
-protocol: a single validated document an agent step may emit alongside its
-result — proposed claims and revisions, evidence, justifications, and the
-exact revisions it consumed and artifacts it produced — which Argus checks
-against the ledger (references, cycles, locator agreement, the run it actually
-came from) and applies deterministically through the existing transitions, or
-refuses as a whole. That gives every run a way to declare its premises without
-Argus guessing at them, at which point `executionProvenance` and
-`analyzeImpact` stop being operator tools and start being the pipeline's own
-memory of why it did what it did. Whether Argus then offers a re-run, opens an
-issue, or marks a phase for review remains a separate decision, and because
-the phase record and the ledger are separate, it can be made without rewriting
-either.
+The smallest coherent Phase 4 is therefore **controlled semantic context
+delivery**: Argus selects the exact claim revisions relevant to an agent task
+(by kind, by explicit reference from the phase definition, by the phase's
+declared dependencies), materializes them as a machine-readable context file
+beside the run — the mirror image of the delta file — and records which
+revisions were supplied to the invocation. Consumption then has a
+deterministic floor ("the run was given exactly these revisions") that the
+agent's declaration refines rather than invents, and a revision proposal can
+be checked against what the run was actually shown. Business-rule discovery —
+an agent proposing `business-rule` claims from a repository — becomes a
+pipeline authored on top of the protocol that already exists, not a new
+mechanism. Whether Argus then offers a re-run, opens an issue, or marks a phase
+for review remains a separate decision, and because the phase record and the
+ledger are separate, it can be made without rewriting either.
 
-## 16. Where the code lives
+## 17. Where the code lives
 
-| Path                               | Role                                                                                                                       |
-| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `contracts/src/knowledge.ts`       | wire types: Claim, ClaimRef, Evidence, Justification, ClaimConsumption, ArtifactProduction, ExecutionProvenance, ImpactSet |
-| `server/src/knowledge/kernel.ts`   | pure transitions and queries; the only definition of support; the provenance transitions and `executionProvenance`         |
-| `server/src/knowledge/impact.ts`   | `analyzeImpact` — the pure, deterministic impact algorithm                                                                 |
-| `server/src/knowledge/validate.ts` | untrusted body → typed proposal (the future agent boundary)                                                                |
-| `server/src/knowledge/store.ts`    | the authoritative JSON document (v2); mints ids, stamps time, upgrades v1                                                  |
-| `server/src/knowledge/routes.ts`   | `/api/knowledge` (mounted and admin-gated in `app.ts`)                                                                     |
-| `server/src/knowledge/*.test.ts`   | kernel semantics, impact scenarios, persistence roundtrip, HTTP contract                                                   |
-| `docs/API.md` § Knowledge Ledger   | endpoint reference                                                                                                         |
+| Path                                | Role                                                                                                                         |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `contracts/src/knowledge.ts`        | wire types: Claim, ClaimRef, Evidence, Justification, ClaimConsumption, ArtifactProduction, ExecutionProvenance, ImpactSet   |
+| `server/src/knowledge/kernel.ts`    | pure transitions and queries; the only definition of support; the provenance transitions and `executionProvenance`           |
+| `server/src/knowledge/impact.ts`    | `analyzeImpact` — the pure, deterministic impact algorithm                                                                   |
+| `server/src/knowledge/validate.ts`  | untrusted body → typed proposal (the future agent boundary)                                                                  |
+| `server/src/knowledge/store.ts`     | the authoritative JSON document (v3); mints ids, stamps time, upgrades v1/v2; `commitKnowledgeDeltas` under the ledger mutex |
+| `server/src/knowledge/delta.ts`     | the KnowledgeDelta protocol's pure half: `validateKnowledgeDelta`, `applyKnowledgeDeltas` (preflight + atomic application)   |
+| `server/src/knowledge/staging.ts`   | per-run staging: the agent's file, Argus's record, status transitions                                                        |
+| `server/src/knowledge/routes.ts`    | `/api/knowledge` (mounted and admin-gated in `app.ts`), including the delta inspection reads                                 |
+| `server/src/pipelineTransitions.ts` | `succeedPhase` (the hold), `applyKnowledgeCommit` (the verdict), `stagedDeltaIds`                                            |
+| `server/src/pipelineEngine.ts`      | `intakeKnowledgeDelta`, `commitPhaseKnowledge`, `settleKnowledge`, `retireStagedDeltas`; `KNOWLEDGE_DELTA_CONTRACT`          |
+| `server/src/knowledge/*.test.ts`    | kernel semantics, impact scenarios, persistence roundtrip, HTTP contract, delta validation/application, engine lifecycle     |
+| `docs/API.md` § Knowledge Ledger    | endpoint reference                                                                                                           |

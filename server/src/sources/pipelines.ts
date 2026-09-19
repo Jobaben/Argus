@@ -992,7 +992,14 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
   };
 }
 
-const RETRYABLE: readonly string[] = ["spawn", "exit-code", "signal", "timeout", "verification"];
+const RETRYABLE: readonly string[] = [
+  "spawn",
+  "exit-code",
+  "signal",
+  "timeout",
+  "verification",
+  "knowledge-delta",
+];
 
 function validateRetry(raw: unknown, i: number) {
   if (raw === undefined || raw === null) return undefined;

@@ -4,9 +4,9 @@ import type {
   ArtifactProduction,
   Claim,
   ClaimConsumption,
-  ClaimKind,
   Evidence,
   Justification,
+  KnowledgeDeltaApplyResult,
   RunExecutionRef,
 } from "@argus/contracts";
 import { paths } from "../claudeHome.js";
@@ -36,6 +36,7 @@ import type {
   ProposedJustification,
   ProposedRevision,
 } from "./validate.js";
+import { KIND_PREFIX, applyKnowledgeDeltas, type DeltaProposal } from "./delta.js";
 
 /**
  * The Knowledge Ledger's one authoritative store: `~/.claude/argus/knowledge.json`.
@@ -61,28 +62,20 @@ import type {
 const lock = new KeyedMutex();
 const LOCK_KEY = "knowledge.json";
 
-/** Mint prefixes, so a minted claim id reads as its kind in a URL or a log. */
-const KIND_PREFIX: Record<ClaimKind, string> = {
-  fact: "FACT",
-  assumption: "ASSUME",
-  "business-rule": "RULE",
-  constraint: "CONSTRAINT",
-  conclusion: "CONCLUSION",
-  decision: "DECISION",
-};
-
 function mint(prefix: string): string {
   return `${prefix}-${randomBytes(4).toString("hex")}`;
 }
 
 /**
- * Accept the current shape, or a version 1 document (Phase 1: no provenance
- * arrays) upgraded in memory by giving it empty ones. The upgrade is written
- * back only by the next successful transition, and it adds nothing but two
- * empty arrays and a version number, so nothing Phase 1 recorded changes.
- * Anything else is another shape: readable as empty, never overwritten.
+ * Accept the current shape, or an older document upgraded in memory: a
+ * version 1 file (Phase 1: no provenance arrays) gains empty `consumptions`
+ * and `artifacts`; a version 2 file (Phase 2) gains an empty `deltas`. The
+ * upgrade is written back only by the next successful transition, and it adds
+ * nothing but empty arrays and a version number, so nothing an earlier phase
+ * recorded changes. Anything else is another shape: readable as empty, never
+ * overwritten.
  */
-function upgradeLedger(v: unknown): KnowledgeLedger | null {
+export function upgradeLedger(v: unknown): KnowledgeLedger | null {
   if (typeof v !== "object" || v === null) return null;
   const r = v as Record<string, unknown>;
   const phase1 =
@@ -94,9 +87,14 @@ function upgradeLedger(v: unknown): KnowledgeLedger | null {
       version: LEDGER_VERSION,
       consumptions: [],
       artifacts: [],
+      deltas: [],
     } as unknown as KnowledgeLedger;
   }
-  if (r.version === LEDGER_VERSION && Array.isArray(r.consumptions) && Array.isArray(r.artifacts)) {
+  const phase2 = Array.isArray(r.consumptions) && Array.isArray(r.artifacts);
+  if (r.version === 2 && phase2) {
+    return { ...r, version: LEDGER_VERSION, deltas: [] } as unknown as KnowledgeLedger;
+  }
+  if (r.version === LEDGER_VERSION && phase2 && Array.isArray(r.deltas)) {
     return r as unknown as KnowledgeLedger;
   }
   return null;
@@ -269,5 +267,45 @@ export async function registerArtifacts(
     }
     const resolved = artifacts[0]?.execution ?? execution;
     return { ledger: next, result: { execution: resolved, artifacts, added } };
+  });
+}
+
+// ── KnowledgeDelta commit (Phase 3) ─────────────────────────────────────────
+
+/**
+ * Validate one or more staged proposals against the ledger *as it stands* —
+ * the same preflight a commit runs — without writing anything. Used at
+ * intake so a proposal that is already refusable (an unknown revision, a
+ * precondition that no longer holds, a cycle) fails the step at once rather
+ * than after a gate has waited on a human. Throws what the commit would.
+ */
+export async function preflightKnowledgeDeltas(
+  proposals: DeltaProposal[],
+  now: Date,
+): Promise<void> {
+  const ledger = await readLedger();
+  applyKnowledgeDeltas(ledger, proposals, { now: now.toISOString(), mint });
+}
+
+/**
+ * Commit a phase attempt's staged deltas as **one** ledger transition.
+ *
+ * Inside the ledger mutex: read the document, run every proposal through the
+ * pure {@link applyKnowledgeDeltas} against that one snapshot, and write the
+ * result once. A refusal anywhere throws before the write, so either every
+ * record of every proposal is in `knowledge.json` or none is. Proposals the
+ * ledger already lists in `deltas` are skipped (their results rebuilt), which
+ * is what makes committing again after a crash safe.
+ */
+export async function commitKnowledgeDeltas(
+  proposals: DeltaProposal[],
+  now: Date,
+): Promise<KnowledgeDeltaApplyResult[]> {
+  return mutateLedger((ledger) => {
+    const { ledger: next, results } = applyKnowledgeDeltas(ledger, proposals, {
+      now: now.toISOString(),
+      mint,
+    });
+    return { ledger: next, result: results };
   });
 }

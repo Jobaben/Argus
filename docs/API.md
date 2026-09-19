@@ -1591,11 +1591,11 @@ flags, and a complete worked pipeline: [docs/HARNESS.md](HARNESS.md).
 
 `EnvPolicy`:
 
-| Key              | Type                     | Validation                                                                                                                                                                                                                                                                       |
-| ---------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `inherit`        | `"all"\|"minimal"`       | default `"all"`                                                                                                                                                                                                                                                                  |
-| `allow` / `deny` | `string[]`               | each an env-var name, optionally with one trailing `*`                                                                                                                                                                                                                           |
-| `set`            | `Record<string, string>` | keys must be valid env-var names and may not name a reserved Argus control variable (`ARGUS_TOKEN`, `ARGUS_WEBHOOK_URL`, `ARGUS_SIGNAL_*`, `ARGUS_RUN_ID`, `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`, `ARGUS_RESULT_FILE`, `ARGUS_ARTIFACT_DIR`, `ARGUS_STEP_NAME`, `ARGUS_RUNTIME`) |
+| Key              | Type                     | Validation                                                                                                                                                                                                                                                                                                     |
+| ---------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inherit`        | `"all"\|"minimal"`       | default `"all"`                                                                                                                                                                                                                                                                                                |
+| `allow` / `deny` | `string[]`               | each an env-var name, optionally with one trailing `*`                                                                                                                                                                                                                                                         |
+| `set`            | `Record<string, string>` | keys must be valid env-var names and may not name a reserved Argus control variable (`ARGUS_TOKEN`, `ARGUS_WEBHOOK_URL`, `ARGUS_SIGNAL_*`, `ARGUS_RUN_ID`, `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`, `ARGUS_RESULT_FILE`, `ARGUS_KNOWLEDGE_DELTA_FILE`, `ARGUS_ARTIFACT_DIR`, `ARGUS_STEP_NAME`, `ARGUS_RUNTIME`) |
 
 `PhaseCheck` (discriminated on `kind`; each kind accepts only its own fields
 plus the common `label`, ≤120 chars):
@@ -2417,7 +2417,9 @@ exact derivation and the "first attempt" rule it applies.
 The engine spawns each phase's run with `ARGUS_SIGNAL_URL`,
 `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`, `ARGUS_RUN_ID`, `ARGUS_SIGNAL_TOKEN` and
 `ARGUS_RUNTIME` — plus `ARGUS_RESULT_FILE` on the one step that publishes a
-declared result. `hooks/argus-signal.mjs` reads these and POSTs a signal. One
+declared result, and `ARGUS_KNOWLEDGE_DELTA_FILE` on every step (where the run
+may leave a KnowledgeDelta; Argus reads it itself at completion, the hook does
+not). `hooks/argus-signal.mjs` reads the signal variables and POSTs a signal. One
 hook file serves every runtime that has hooks at all:
 
 - **Claude Code** — a `Stop` hook in `settings.json` (no arg) to report the
@@ -2475,11 +2477,12 @@ log retains the delivery failure instead of silently hiding it.
 Argus surfaces missing prerequisites (including this hook) via `GET /api/setup`;
 the web UI's setup banner installs the fixable ones with `POST /api/setup/apply`.
 
-| Env var                     | Meaning                                                        |
-| --------------------------- | -------------------------------------------------------------- |
-| `ARGUS_STEP_NAME`           | label of the running step, injected into the run's environment |
-| `ARGUS_RESULT_FILE`         | where a result-producing step writes its decision JSON         |
-| `ARGUS_MAX_CONCURRENT_RUNS` | cap on concurrent `claude -p` processes (default 4)            |
+| Env var                      | Meaning                                                               |
+| ---------------------------- | --------------------------------------------------------------------- |
+| `ARGUS_STEP_NAME`            | label of the running step, injected into the run's environment        |
+| `ARGUS_RESULT_FILE`          | where a result-producing step writes its decision JSON                |
+| `ARGUS_KNOWLEDGE_DELTA_FILE` | where a step may write a KnowledgeDelta (see KNOWLEDGE-LEDGER.md §12) |
+| `ARGUS_MAX_CONCURRENT_RUNS`  | cap on concurrent `claude -p` processes (default 4)                   |
 
 ## Knowledge Ledger
 
@@ -2504,6 +2507,9 @@ keys are `404`.
 | `GET /api/knowledge/claims/:key/consumers`           | `ConsumersReport` — the consumption records naming that exact revision, in recording order                |
 | `GET /api/knowledge/claims/:key/impact`              | `ImpactSet` — what rests on that revision being current and supported, and why (see below)                |
 | `GET /api/knowledge/executions/:runId/provenance`    | `ExecutionProvenance` — what the run consumed (with currency now) and produced; `404` if nothing is known |
+| `GET /api/knowledge/deltas/:id`                      | `KnowledgeDeltaRecord` — a staged/applied/rejected/superseded KnowledgeDelta with its provenance          |
+| `GET /api/knowledge/deltas/:id/result`               | `KnowledgeDeltaApplyResult` — local id → canonical identity and every record created; `404` until applied |
+| `GET /api/knowledge/executions/:runId/deltas`        | `{ runId, deltas: KnowledgeDeltaRecord[] }` — the run's deltas (at most one, by protocol)                 |
 | `POST /api/knowledge/claims`                         | (admin) propose revision 1 of a claim → `201 ClaimView`                                                   |
 | `POST /api/knowledge/claims/:id/revise`              | (admin) supersede the active revision → `201 ClaimView`; takes an id, never a `:vN` key                   |
 | `POST /api/knowledge/evidence`                       | (admin) attach evidence to a revision → `201 Evidence`                                                    |
@@ -2573,6 +2579,30 @@ this endpoint was told.
 `stale` when any consumed revision is superseded, unsupported or contested. It
 is derived per read and says nothing about — and changes nothing in — the
 run's own status.
+
+KnowledgeDeltas (Phase 3) have **no write endpoint**: an agent run writes one
+JSON document to the path in `ARGUS_KNOWLEDGE_DELTA_FILE`, Argus stages it when
+the run completes and commits it — atomically, with every sibling step's delta
+of the same attempt — only when the phase is accepted (checks passed, gate
+approved). A refused delta fails the phase under the `knowledge-delta` class.
+The record the reads return:
+
+```jsonc
+{ "id": "KD-…", "runId": "run_8f2a", "instanceId": "inst_71c0", "phaseId": "plan", "attempt": 0, "step": "think",
+  "status": "staged" | "applied" | "rejected" | "superseded",
+  "receivedAt": "…", "updatedAt": "…",
+  "delta": { "schemaVersion": 1, "claims": [{ "localId": "c", "kind": "conclusion", "statement": "…" }], "justifications": […], "consumed": ["RULE-17:v2"], … },
+  "reason": "…",                       // rejected / superseded
+  "result": {                          // applied
+    "status": "applied", "deltaId": "KD-…", "appliedAt": "…",
+    "createdClaims": [{ "localId": "c", "claim": { "id": "CONCLUSION-7c1e02ab", "revision": 1 } }],
+    "createdRevisions": [{ "localId"?: "…", "claim": { "id": "RULE-17", "revision": 3 }, "supersedes": { "id": "RULE-17", "revision": 2 } }],
+    "evidenceIds": ["EV-…"], "justificationIds": ["J-…"],
+    "consumptions": ClaimConsumption[], "artifacts": ArtifactProduction[] } }
+```
+
+The wire contract, local references, revision preconditions, staging and the
+commit boundary: [KNOWLEDGE-LEDGER.md §12](KNOWLEDGE-LEDGER.md#12-knowledgedelta-protocol-phase-3).
 
 `ImpactSet` is the answer to "what rests on this revision, and why?":
 

@@ -135,23 +135,33 @@ deterministic checks run (if `checks`)         a failing CheckResult → "verifi
 gate opens (if `gated`) or auto-approves
         │
         ▼
+staged KnowledgeDeltas commit (if any)         a refused commit → "knowledge-delta"
+        │                                     (stale revision precondition, conflicting
+        │                                      sibling deltas; see KNOWLEDGE-LEDGER.md §12)
+        ▼
 succeeded
 ```
 
+A delta the run wrote is also validated at the completion signal itself: a
+malformed or refusable document fails the step under `"knowledge-delta"`
+before any of the rungs below it, so an agent's proposal is never silently
+dropped.
+
 `PhaseFailureClass` (in `@argus/contracts`) is the closed set:
 
-| Class           | Meaning                                                                                                                                                                                                                           | Retried by default?                                     |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| `spawn`         | The process never started — preparing the invocation threw, `deps.spawn` itself threw, or (found by `reconcile()` after a restart) a step recorded `running` had no process behind it at all. `run.termination = "spawn-failed"`. | **Yes**                                                 |
-| `exit-code`     | The process ended (any way) without Argus's own timeout and without the agent signalling failure.                                                                                                                                 | **Yes**                                                 |
-| `signal`        | The agent's _own_ completion signal declared `failed` or `blocked` — it considered the work and reported on it. (Named for the pipeline `signal` the agent posts, **not** an OS process signal.)                                  | No — opt in via `retry.retryOn`                         |
-| `timeout`       | Argus killed the process at its `deadlineAt`.                                                                                                                                                                                     | No — opt in                                             |
-| `verification`  | Every step reported success, but a `checks` entry failed.                                                                                                                                                                         | No — opt in                                             |
-| `configuration` | The declared capability profile could not be enforced under strict enforcement — the step never launched with more capability than its author asked for.                                                                          | **Never** — the definition is what's wrong, not the run |
+| Class             | Meaning                                                                                                                                                                                                                                                                                                                                                      | Retried by default?                                     |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------- |
+| `spawn`           | The process never started — preparing the invocation threw, `deps.spawn` itself threw, or (found by `reconcile()` after a restart) a step recorded `running` had no process behind it at all. `run.termination = "spawn-failed"`.                                                                                                                            | **Yes**                                                 |
+| `exit-code`       | The process ended (any way) without Argus's own timeout and without the agent signalling failure.                                                                                                                                                                                                                                                            | **Yes**                                                 |
+| `signal`          | The agent's _own_ completion signal declared `failed` or `blocked` — it considered the work and reported on it. (Named for the pipeline `signal` the agent posts, **not** an OS process signal.)                                                                                                                                                             | No — opt in via `retry.retryOn`                         |
+| `timeout`         | Argus killed the process at its `deadlineAt`.                                                                                                                                                                                                                                                                                                                | No — opt in                                             |
+| `verification`    | Every step reported success, but a `checks` entry failed.                                                                                                                                                                                                                                                                                                    | No — opt in                                             |
+| `knowledge-delta` | The run wrote a KnowledgeDelta Argus refused — malformed, an unresolved or inexact reference, a stale `expectedRevision`, a cycle, a claimed artifact that does not exist — or the phase commit was refused (the ledger moved while a gate waited; two steps' deltas conflicted). The refusal is the reason, so a retry can propose from the current ledger. | No — opt in                                             |
+| `configuration`   | The declared capability profile could not be enforced under strict enforcement — the step never launched with more capability than its author asked for.                                                                                                                                                                                                     | **Never** — the definition is what's wrong, not the run |
 
 The class is written onto the phase's payload (`withFailureClass`) whenever a
 phase fails, whether or not that failure ends up scheduling a retry — a
-terminal failure with no attempts left still names which of the six classes
+terminal failure with no attempts left still names which of the seven classes
 it was, never just "failed".
 
 **A completion signal is authoritative over the exit code that follows it.**
@@ -370,10 +380,10 @@ always applied; there is nothing to "fail to enforce" here).
   freshly-computed values, never be inherited from Argus's own process (which
   would let a nested Argus child impersonate or interfere with the run that
   spawned it): `ARGUS_SIGNAL_TOKEN`, `ARGUS_SIGNAL_URL`, `ARGUS_RESULT_FILE`,
-  `ARGUS_ARTIFACT_DIR`, `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`, `ARGUS_RUN_ID`,
-  `ARGUS_STEP_NAME`, and `ARGUS_RUNTIME` (the hook keys its Stop-payload
-  handling off this one, so a value inherited from a different invocation
-  would misparse the signal).
+  `ARGUS_KNOWLEDGE_DELTA_FILE`, `ARGUS_ARTIFACT_DIR`, `ARGUS_INSTANCE_ID`,
+  `ARGUS_PHASE_ID`, `ARGUS_RUN_ID`, `ARGUS_STEP_NAME`, and `ARGUS_RUNTIME` (the
+  hook keys its Stop-payload handling off this one, so a value inherited from a
+  different invocation would misparse the signal).
 
 The invocation record never stores a variable's _value_ — only names
 (`envNames`, sorted; `envStripped`, sorted). Reconstructing what Argus ran
@@ -1081,13 +1091,14 @@ pipeline-wide workspace under a phase that relies on it is refused too:
 
 Everything that could otherwise be shared, isn't:
 
-| Per candidate `i`        | Value                                                                                                  |
-| ------------------------ | ------------------------------------------------------------------------------------------------------ |
-| worktree                 | `.../worktrees/<instanceId>/<phaseId>-attempt<N>-c<i>`, branch `argus/<instanceId>/<phaseId>/<N>-c<i>` |
-| artifact directory       | `<phaseArtifactDir>/c<i>` — also what `ARGUS_ARTIFACT_DIR` and `{{artifactDir}}` point at              |
-| `changed-files` baseline | `<phaseId>.<attempt>.c<i>.baseline.json`                                                               |
-| verification report      | `StepProgress.verification` — the phase's `checks`, run in **that** worktree                           |
-| result file              | the run's own `ARGUS_RESULT_FILE`; nothing is shared, so nothing races                                 |
+| Per candidate `i`        | Value                                                                                                    |
+| ------------------------ | -------------------------------------------------------------------------------------------------------- |
+| worktree                 | `.../worktrees/<instanceId>/<phaseId>-attempt<N>-c<i>`, branch `argus/<instanceId>/<phaseId>/<N>-c<i>`   |
+| artifact directory       | `<phaseArtifactDir>/c<i>` — also what `ARGUS_ARTIFACT_DIR` and `{{artifactDir}}` point at                |
+| `changed-files` baseline | `<phaseId>.<attempt>.c<i>.baseline.json`                                                                 |
+| verification report      | `StepProgress.verification` — the phase's `checks`, run in **that** worktree                             |
+| result file              | the run's own `ARGUS_RESULT_FILE`; nothing is shared, so nothing races                                   |
+| knowledge delta file     | the run's own `ARGUS_KNOWLEDGE_DELTA_FILE`; a losing candidate's staged delta is superseded at selection |
 
 The candidate index rides on the _attempt_ component of the branch
 (`…/impl/0-c1`, not `…/impl/0/c1`) because git's ref namespace is a

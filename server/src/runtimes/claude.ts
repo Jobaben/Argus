@@ -56,7 +56,7 @@ interface ClaudeCapabilityResult {
  */
 function buildClaudeCapabilities(cap: CapabilityRequest | undefined): ClaudeCapabilityResult {
   if (!cap) return { args: [], files: [], limitations: [] };
-  const { profile, invocationDir, cwd, artifactDir, memoryDir, hooks } = cap;
+  const { profile, invocationDir, cwd, artifactDir, memoryDir, knowledgeDeltaDir, hooks } = cap;
   const args: string[] = [];
   const files: MaterializedFile[] = [];
   const limitations = unsupportedCapabilities(profile, "Claude Code", [
@@ -117,6 +117,9 @@ function buildClaudeCapabilities(cap: CapabilityRequest | undefined): ClaudeCapa
   // an agent told to append to NOTES.md must be able to, whatever `filesystem`
   // says about the rest of the tree.
   if (memoryDir) args.push("--add-dir", memoryDir);
+  // And for the run's KnowledgeDelta: proposing knowledge is a write to a
+  // directory Argus owns, and must be possible under any `filesystem` value.
+  if (knowledgeDeltaDir) args.push("--add-dir", knowledgeDeltaDir);
 
   if (profile.settingSources !== undefined) {
     args.push("--setting-sources", profile.settingSources.join(","));

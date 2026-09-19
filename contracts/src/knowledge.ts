@@ -415,3 +415,170 @@ export interface ArtifactProductionsResponse {
   execution: RunExecutionRef;
   artifacts: ArtifactProduction[];
 }
+
+// ── KnowledgeDelta protocol (Phase 3) ───────────────────────────────────────
+//
+// The typed wire contract through which an agent execution *proposes* semantic
+// changes. The agent writes one JSON document to the path Argus handed it in
+// `ARGUS_KNOWLEDGE_DELTA_FILE`; Argus reads it when the run completes,
+// validates it, stages it beside the run, and applies it to `knowledge.json`
+// only when the phase the run belongs to has crossed every deterministic
+// acceptance condition (checks passed; gate approved). The agent never writes
+// the ledger, never assigns a canonical id or revision number, and never
+// modifies an existing record. LLMs propose; Argus validates and applies.
+
+/**
+ * A claim reference inside a delta. Either a claim this same delta proposes
+ * (by its delta-local id) or an **exact** existing revision. A bare id is
+ * refused: a committed delta may only ever name an immutable revision, so
+ * that nothing it recorded can be retargeted when the claim is revised.
+ * The string form `RULE-17:v2` is accepted for the exact case and parsed to
+ * the object form before staging.
+ */
+export type DeltaClaimRef = { local: string } | ClaimRef;
+
+/** A new claim. Argus mints the canonical id from `kind`; `localId` exists
+ *  only inside this delta and is never persisted as semantic identity. */
+export interface DeltaProposedClaim {
+  localId: string;
+  kind: ClaimKind;
+  statement: string;
+  structuredValue?: unknown;
+}
+
+/**
+ * The next revision of an existing claim, with an optimistic-concurrency
+ * precondition: it is created only if `expectedRevision` is still the active
+ * revision at commit. If the claim has moved on, the whole delta is stale and
+ * nothing in it is applied — reasoning built on a revision that is no longer
+ * current is not silently rebased onto the newer one. `localId` (optional)
+ * lets the same delta justify from, or attach evidence to, the new revision.
+ */
+export interface DeltaProposedRevision {
+  claimId: string;
+  expectedRevision: number;
+  statement: string;
+  structuredValue?: unknown;
+  revisionNote?: string;
+  localId?: string;
+}
+
+export interface DeltaProposedEvidence {
+  claim: DeltaClaimRef;
+  /** Default `supports`. */
+  direction?: SupportDirection;
+  source: EvidenceSource;
+  note?: string;
+}
+
+export interface DeltaProposedJustification {
+  conclusion: DeltaClaimRef;
+  premises: DeltaClaimRef[];
+  /** Default `supports`. */
+  direction?: SupportDirection;
+  note?: string;
+}
+
+/**
+ * One execution's proposed semantic changes. Every section is optional; an
+ * absent file, or a delta with every section empty, means the run proposed no
+ * durable knowledge and the pipeline behaves exactly as it did before this
+ * protocol existed. Provenance (`producedBy`, the consuming/producing
+ * execution) is *not* a field: Argus binds it from the run that wrote the file.
+ */
+export interface KnowledgeDelta {
+  schemaVersion: 1;
+  claims?: DeltaProposedClaim[];
+  revisions?: DeltaProposedRevision[];
+  evidence?: DeltaProposedEvidence[];
+  justifications?: DeltaProposedJustification[];
+  /** Exact revisions this execution declares it relied on. Agent-declared: Argus
+   *  proves the reference exists and is well formed, not that the model
+   *  reasoned from it. Recorded through the Phase 2 consumption edge. */
+  consumed?: ClaimRef[];
+  /** Artifacts this execution produced. Recorded through the Phase 2
+   *  production edge; paths are containment-checked against the run's roots. */
+  artifacts?: ArtifactRef[];
+  metadata?: { summary?: string };
+}
+
+/**
+ * Where a staged delta is in its life.
+ *
+ * - `staged` — parsed, validated against the ledger as it stood, waiting for
+ *   its phase to be accepted. Not canonical.
+ * - `applied` — committed atomically to `knowledge.json` when its phase
+ *   succeeded. `result` says what it became.
+ * - `rejected` — refused: at intake (malformed, unresolved reference, stale
+ *   precondition) or at commit (the ledger moved, or a sibling delta in the
+ *   same phase conflicted). Nothing from it entered the ledger.
+ * - `superseded` — its attempt failed, was revised, was aborted, or lost a
+ *   candidate selection. Kept as diagnostic evidence; never canonical.
+ */
+export type KnowledgeDeltaStatus = "staged" | "applied" | "rejected" | "superseded";
+
+/** What one applied delta became, in canonical terms. */
+export interface KnowledgeDeltaApplyResult {
+  status: "applied";
+  deltaId: string;
+  appliedAt: string;
+  /** Local id → the canonical revision-1 identity Argus minted for it. */
+  createdClaims: Array<{ localId: string; claim: ClaimRef }>;
+  /** Each revision proposal → the revision it created and the one it superseded. */
+  createdRevisions: Array<{ localId?: string; claim: ClaimRef; supersedes: ClaimRef }>;
+  evidenceIds: string[];
+  justificationIds: string[];
+  consumptions: ClaimConsumption[];
+  artifacts: ArtifactProduction[];
+}
+
+/**
+ * A delta as Argus staged it: stable identity, the execution provenance that
+ * distinguishes it from any other attempt's proposal, and its status. The
+ * staging identity is (instance, phase, attempt, run); an older attempt's
+ * delta can never be mistaken for a newer one's.
+ */
+export interface KnowledgeDeltaRecord {
+  id: string;
+  runId: string;
+  instanceId: string;
+  phaseId: string;
+  attempt: number;
+  step: string;
+  status: KnowledgeDeltaStatus;
+  /** When Argus read the agent's file. */
+  receivedAt: string;
+  updatedAt: string;
+  /** The validated proposal. Absent when the document could not be parsed or
+   *  failed structural validation (then `reason` says why). */
+  delta?: KnowledgeDelta;
+  /** Why it is `rejected` or `superseded`. */
+  reason?: string;
+  /** Present once `applied`. */
+  result?: KnowledgeDeltaApplyResult;
+}
+
+/**
+ * The ledger's own record of an applied delta (ledger version 3). Lives in
+ * `knowledge.json` beside the records it created, so "which canonical
+ * records came from this run?" is answerable from the ledger alone, and so a
+ * commit is idempotent: a delta whose id is already here is not applied twice.
+ */
+export interface AppliedKnowledgeDelta {
+  id: string;
+  execution: RunExecutionRef;
+  attempt: number;
+  appliedAt: string;
+  /** Every claim revision this delta created — new claims and revisions alike. */
+  claims: ClaimRef[];
+  evidence: string[];
+  justifications: string[];
+  consumptions: ClaimRef[];
+  artifacts: ArtifactRef[];
+}
+
+/** `GET /api/knowledge/executions/:runId/deltas`. */
+export interface KnowledgeDeltasResponse {
+  runId: string;
+  deltas: KnowledgeDeltaRecord[];
+}
