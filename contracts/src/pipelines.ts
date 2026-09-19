@@ -332,6 +332,13 @@ export interface AgentInvocationRecord {
   /** Where this run may leave its KnowledgeDelta (`ARGUS_KNOWLEDGE_DELTA_FILE`).
    *  Absent on records written before the protocol existed. */
   knowledgeDeltaFile?: string | null;
+  /**
+   * Every Argus-owned channel this invocation was offered, with the access it
+   * needs and whether the runtime could honour it. A channel `unavailable`
+   * here also appears in `limitations`. Absent on records written before the
+   * channel model existed.
+   */
+  channels?: InvocationChannelRecord[];
   timeoutSeconds: number | null;
   deadlineAt: string | null;
   /** `git rev-parse HEAD` in cwd at launch, when cwd is a repository. */
@@ -441,6 +448,63 @@ export interface PhaseDef {
   /** Run this phase's single step as N competing candidates and let `checks`
    *  select one. Requires exactly one step and attempt-scoped isolation. */
   candidates?: CandidatePolicy;
+  /**
+   * Whether this phase's runs *depend on* being able to write a KnowledgeDelta.
+   *
+   * The delta channel is offered to every run (`ARGUS_KNOWLEDGE_DELTA_FILE`),
+   * and emitting one stays optional either way — this says nothing about
+   * whether the agent must write a file. `"required"` makes the *channel* a
+   * precondition of the launch: a runtime that cannot make the path writable
+   * refuses the step under strict enforcement instead of launching an agent
+   * whose proposals could never arrive. Absent = `"optional"`: an unwritable
+   * channel is recorded as an invocation limitation and the step still runs.
+   */
+  knowledgeDelta?: "optional" | "required";
+}
+
+// ── Harness: Argus-owned invocation channels ─────────────────────────────────
+
+/**
+ * The structured files and directories Argus itself owns for one invocation,
+ * each named to the agent by an environment variable. They are the protocol
+ * between the agent process and Argus — a result decision, a KnowledgeDelta
+ * proposal, file artifacts — and unlike the working tree they live outside the
+ * repository, so a filesystem restriction must not cut the agent off from them.
+ */
+export type InvocationChannelKind = "result" | "knowledge-delta" | "artifact-dir" | "memory-dir";
+
+/** What the agent process needs to be able to do with a channel's path. */
+export type InvocationChannelAccess = "read" | "write";
+
+/**
+ * One channel as the invocation record shows it: what was offered, what
+ * access it needs, whether the launch depended on it, and whether the runtime
+ * could honour it.
+ *
+ * `status`:
+ * - `granted` — the runtime maps the path into its sandbox, or runs no sandbox
+ *   the path could fall outside of;
+ * - `unavailable` — the runtime's effective filesystem mode cannot reach the
+ *   path; `reason` says why. Under strict enforcement a `required` channel in
+ *   this state refuses the launch; an optional one is recorded and the step
+ *   runs (its protocol is offered but cannot be fulfilled);
+ * - `unmanaged` — no capability profile was declared, so Argus does not shape
+ *   the runtime's filesystem at all and makes no claim: the CLI's own defaults
+ *   decide, exactly as before capability profiles existed.
+ */
+export interface InvocationChannelRecord {
+  kind: InvocationChannelKind;
+  /** The variable the agent learns the path from (`ARGUS_RESULT_FILE`, …). */
+  envVar: string;
+  /** The path as the agent sees it: a file for `result`/`knowledge-delta`, a
+   *  directory otherwise. */
+  path: string;
+  access: InvocationChannelAccess;
+  /** Whether the launch depends on this channel being available. */
+  required: boolean;
+  status: "granted" | "unavailable" | "unmanaged";
+  /** Why the channel is unavailable. Absent otherwise. */
+  reason?: string;
 }
 
 export interface PipelineDefinition {

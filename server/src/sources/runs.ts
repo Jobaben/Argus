@@ -35,13 +35,28 @@ export function runLogPath(id: string): string {
 }
 
 /**
- * The per-run file a result-producing step writes its structured decision to.
+ * The per-run file a result-producing step writes its structured decision to:
+ * `results/<runId>/result.json`.
  *
  * Beside the run rather than beside the instance: the file belongs to one
  * attempt of one step, so a retry writes a fresh path and can never read back
- * the previous attempt's decision.
+ * the previous attempt's decision. In a directory of its own, like the
+ * KnowledgeDelta file, because the directory is what a sandbox is granted
+ * (docs/HARNESS.md § Argus-owned invocation channels): admitting this run's
+ * result must not admit every other run's.
  */
 export function runResultPath(id: string): string {
+  return path.join(runResultDir(id), "result.json");
+}
+
+/** The directory a run's result channel grants — one per run. */
+export function runResultDir(id: string): string {
+  return path.join(paths.argus(), "results", id);
+}
+
+/** Where result files lived before they had a directory each: `results/<runId>.json`.
+ *  Still read, so a run in flight across the upgrade settles, and still pruned. */
+export function legacyRunResultPath(id: string): string {
   return path.join(paths.argus(), "results", `${id}.json`);
 }
 
@@ -58,16 +73,22 @@ export async function readRunResult(
 ): Promise<{ result?: unknown; resultError?: string }> {
   if (!RUN_ID_RE.test(id)) return {};
   let raw: string;
+  let file = runResultPath(id);
   try {
-    raw = await readFile(runResultPath(id), "utf8");
+    raw = await readFile(file, "utf8");
   } catch {
-    return {};
+    try {
+      file = legacyRunResultPath(id);
+      raw = await readFile(file, "utf8");
+    } catch {
+      return {};
+    }
   }
   try {
     return { result: JSON.parse(raw) as unknown };
   } catch (e) {
     return {
-      resultError: `the result file at ${runResultPath(id)} could not be parsed as JSON: ${
+      resultError: `the result file at ${file} could not be parsed as JSON: ${
         e instanceof Error ? e.message : String(e)
       }`,
     };
@@ -301,7 +322,8 @@ export async function pruneRuns(scheduleId: string, keep: number): Promise<void>
     drop.flatMap((r) => [
       rm(runJsonPath(r.id), { force: true }),
       rm(runLogPath(r.id), { force: true }),
-      rm(runResultPath(r.id), { force: true }),
+      rm(runResultDir(r.id), { recursive: true, force: true }),
+      rm(legacyRunResultPath(r.id), { force: true }),
       rm(runInvocationDir(r.id), { recursive: true, force: true }),
       // The run's KnowledgeDelta staging (its proposal and Argus's record).
       // The canonical audit trail outlives it: an applied delta is recorded

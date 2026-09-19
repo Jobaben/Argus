@@ -1,9 +1,33 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { prepareInvocation, resolveCapabilities, resolveTimeoutSeconds } from "./invocation.js";
+import {
+  prepareInvocation,
+  resolveCapabilities,
+  resolveTimeoutSeconds,
+  settleChannels,
+} from "./invocation.js";
+import { invocationChannels } from "./channels.js";
+import { codexRuntime } from "../runtimes/index.js";
 import type { InvocationInputs } from "./invocation.js";
+import type { InvocationChannel } from "../runtimes/types.js";
 import type { Run } from "../sources/scheduleTypes.js";
-import type { PhaseDef, PhaseStep, PipelineDefinition } from "../sources/pipelineTypes.js";
+import type {
+  InvocationChannelRecord,
+  PhaseDef,
+  PhaseStep,
+  PipelineDefinition,
+} from "../sources/pipelineTypes.js";
+
+/** The result channel alone, as the engine would build it. */
+function channelsOf(resultFile: string): InvocationChannel[] {
+  return invocationChannels({
+    resultFile,
+    knowledgeDeltaFile: null,
+    artifactDir: null,
+    memoryDir: null,
+    phaseDef: {},
+  });
+}
 
 function makeRun(over: Partial<Run> = {}): Run {
   return {
@@ -187,4 +211,298 @@ test("prepareInvocation: capabilities (and hooks) reach the runtime only when a 
   const withProfile = prepareInvocation(baseInputs({ phaseDef: makePhase({ capabilities: {} }) }));
   assert.deepEqual(withProfile.record.capabilities, {});
   assert.ok(withProfile.plan.args.includes("--settings"));
+});
+
+// ── prepareInvocation: Argus-owned channels ──────────────────────────────────
+//
+// The channel model (harness/channels.ts, docs/HARNESS.md § Argus-owned
+// invocation channels): one list of the paths the agent must reach, mapped by
+// the runtime, with required-vs-optional decided by what the phase depends on.
+
+const RESULT = "/home/op/.claude/argus/results/run-1/result.json";
+const DELTA = "/home/op/.claude/argus/knowledge-deltas/run-1/delta.json";
+
+const channelStatus = (
+  prepared: ReturnType<typeof prepareInvocation>,
+  kind: InvocationChannelRecord["kind"],
+) => prepared.record.channels?.find((c) => c.kind === kind);
+
+test("channels: a result-publishing step under Claude read-only can still write its result file", () => {
+  const prepared = prepareInvocation(
+    baseInputs({
+      resultFile: RESULT,
+      knowledgeDeltaFile: DELTA,
+      phaseDef: makePhase({
+        capabilities: { filesystem: "read-only", tools: { allow: ["Read"] } },
+        result: { artifact: "decision", schema: { type: "object" } },
+      }),
+    }),
+  );
+  assert.deepEqual(prepared.blocking, []);
+  assert.deepEqual(prepared.record.limitations, []);
+  const added = prepared.plan.args.filter((_, i) => prepared.plan.args[i - 1] === "--add-dir");
+  assert.ok(
+    added.includes("/home/op/.claude/argus/results/run-1"),
+    "the result directory is admitted",
+  );
+  assert.ok(added.includes("/home/op/.claude/argus/knowledge-deltas/run-1"));
+  assert.ok(added.includes("/art"));
+  // The repository itself stays denied: the channel does not widen the profile.
+  const denied = prepared.plan.args[prepared.plan.args.indexOf("--disallowedTools") + 1];
+  assert.ok(denied.includes("Edit(///repo/**)"));
+  assert.deepEqual(channelStatus(prepared, "result"), {
+    kind: "result",
+    envVar: "ARGUS_RESULT_FILE",
+    path: RESULT,
+    access: "write",
+    required: true,
+    status: "granted",
+  });
+});
+
+test("channels: Codex workspace-write can write the KnowledgeDelta file while the repository stays sandboxed", () => {
+  const prepared = prepareInvocation(
+    baseInputs({
+      run: makeRun({ runtime: "codex" }),
+      knowledgeDeltaFile: DELTA,
+      phaseDef: makePhase({ capabilities: { filesystem: "workspace-write" } }),
+    }),
+  );
+  assert.deepEqual(prepared.blocking, []);
+  const roots = prepared.plan.args[prepared.plan.args.indexOf("-c") + 1];
+  assert.equal(
+    roots,
+    'sandbox_workspace_write.writable_roots=["/home/op/.claude/argus/knowledge-deltas/run-1","/art"]',
+  );
+  assert.equal(channelStatus(prepared, "knowledge-delta")?.status, "granted");
+  assert.equal(channelStatus(prepared, "knowledge-delta")?.required, false);
+});
+
+test("channels: strict enforcement refuses a runtime that cannot deliver a required channel, before any launch", () => {
+  const prepared = prepareInvocation(
+    baseInputs({
+      run: makeRun({ runtime: "codex" }),
+      resultFile: RESULT,
+      knowledgeDeltaFile: DELTA,
+      phaseDef: makePhase({
+        capabilities: { filesystem: "read-only" },
+        result: { artifact: "decision", schema: { type: "object" } },
+      }),
+    }),
+  );
+  // Deterministic: the one required channel blocks; the optional ones are
+  // recorded beside it but do not.
+  assert.deepEqual(prepared.blocking, [
+    "Codex read-only sandbox prevents writing the result file (ARGUS_RESULT_FILE)",
+  ]);
+  assert.deepEqual(prepared.record.limitations, [
+    "Codex read-only sandbox prevents writing the result file (ARGUS_RESULT_FILE)",
+    "Codex read-only sandbox prevents writing the KnowledgeDelta file (ARGUS_KNOWLEDGE_DELTA_FILE)",
+    "Codex read-only sandbox prevents writing the artifact directory (ARGUS_ARTIFACT_DIR)",
+  ]);
+  assert.equal(channelStatus(prepared, "result")?.status, "unavailable");
+  assert.equal(channelStatus(prepared, "artifact-dir")?.required, false);
+  // Same inputs, same verdict: nothing here depends on the environment.
+  assert.deepEqual(
+    prepareInvocation(
+      baseInputs({
+        run: makeRun({ runtime: "codex" }),
+        resultFile: RESULT,
+        knowledgeDeltaFile: DELTA,
+        phaseDef: makePhase({
+          capabilities: { filesystem: "read-only" },
+          result: { artifact: "decision", schema: { type: "object" } },
+        }),
+      }),
+    ).blocking,
+    prepared.blocking,
+  );
+});
+
+test("channels: best-effort launches the same invocation and records the limitation explicitly", () => {
+  const prepared = prepareInvocation(
+    baseInputs({
+      run: makeRun({ runtime: "codex" }),
+      resultFile: RESULT,
+      knowledgeDeltaFile: DELTA,
+      phaseDef: makePhase({
+        capabilities: { filesystem: "read-only", enforcement: "best-effort" },
+        result: { artifact: "decision", schema: { type: "object" } },
+      }),
+    }),
+  );
+  assert.deepEqual(prepared.blocking, []);
+  assert.ok(
+    prepared.record.limitations.includes(
+      "Codex read-only sandbox prevents writing the result file (ARGUS_RESULT_FILE)",
+    ),
+  );
+  assert.deepEqual(channelStatus(prepared, "result"), {
+    kind: "result",
+    envVar: "ARGUS_RESULT_FILE",
+    path: RESULT,
+    access: "write",
+    required: true,
+    status: "unavailable",
+    reason: "Codex read-only sandbox prevents writing the result file (ARGUS_RESULT_FILE)",
+  });
+});
+
+test("channels: an unwritable optional KnowledgeDelta channel never blocks a strict launch — it is recorded", () => {
+  const prepared = prepareInvocation(
+    baseInputs({
+      run: makeRun({ runtime: "codex" }),
+      knowledgeDeltaFile: DELTA,
+      phaseDef: makePhase({ capabilities: { filesystem: "read-only" } }),
+    }),
+  );
+  assert.deepEqual(prepared.blocking, []);
+  assert.deepEqual(prepared.record.limitations, [
+    "Codex read-only sandbox prevents writing the KnowledgeDelta file (ARGUS_KNOWLEDGE_DELTA_FILE)",
+    "Codex read-only sandbox prevents writing the artifact directory (ARGUS_ARTIFACT_DIR)",
+  ]);
+  assert.equal(channelStatus(prepared, "knowledge-delta")?.status, "unavailable");
+});
+
+test('channels: knowledgeDelta: "required" makes the delta channel a launch precondition', () => {
+  const prepared = prepareInvocation(
+    baseInputs({
+      run: makeRun({ runtime: "codex" }),
+      knowledgeDeltaFile: DELTA,
+      phaseDef: makePhase({
+        capabilities: { filesystem: "read-only" },
+        knowledgeDelta: "required",
+      }),
+    }),
+  );
+  assert.deepEqual(prepared.blocking, [
+    "Codex read-only sandbox prevents writing the KnowledgeDelta file (ARGUS_KNOWLEDGE_DELTA_FILE)",
+  ]);
+  assert.equal(channelStatus(prepared, "knowledge-delta")?.required, true);
+});
+
+test("channels: the artifact directory is required exactly when the phase declares an artifact check", () => {
+  const offered = prepareInvocation(
+    baseInputs({
+      run: makeRun({ runtime: "codex" }),
+      phaseDef: makePhase({ capabilities: { filesystem: "read-only" } }),
+    }),
+  );
+  assert.equal(channelStatus(offered, "artifact-dir")?.required, false);
+  assert.deepEqual(offered.blocking, []);
+
+  const used = prepareInvocation(
+    baseInputs({
+      run: makeRun({ runtime: "codex" }),
+      phaseDef: makePhase({
+        capabilities: { filesystem: "read-only" },
+        checks: [{ kind: "artifact", path: "report.md" }],
+      }),
+    }),
+  );
+  assert.equal(channelStatus(used, "artifact-dir")?.required, true);
+  assert.deepEqual(used.blocking, [
+    "Codex read-only sandbox prevents writing the artifact directory (ARGUS_ARTIFACT_DIR)",
+  ]);
+});
+
+test("channels: a profile limitation and a required channel gap block together; an optional gap rides along in the record only", () => {
+  const prepared = prepareInvocation(
+    baseInputs({
+      run: makeRun({ runtime: "codex" }),
+      resultFile: RESULT,
+      knowledgeDeltaFile: DELTA,
+      phaseDef: makePhase({
+        capabilities: { filesystem: "read-only", maxTurns: 3 },
+        result: { artifact: "decision", schema: { type: "object" } },
+      }),
+    }),
+  );
+  assert.deepEqual(prepared.blocking, [
+    'Codex cannot enforce "maxTurns" for this invocation',
+    "Codex read-only sandbox prevents writing the result file (ARGUS_RESULT_FILE)",
+  ]);
+  assert.equal(prepared.record.limitations.length, 4);
+});
+
+test("channels: a legacy invocation (no profile) is byte-identical to the runtime's plain plan and claims nothing about channels", () => {
+  const run = makeRun({ runtime: "codex" });
+  const prepared = prepareInvocation(baseInputs({ run, knowledgeDeltaFile: DELTA }));
+  const plain = codexRuntime.streamPlan({
+    prompt: run.prompt,
+    sessionId: run.sessionId,
+    model: run.model,
+    reasoningEffort: run.reasoningEffort,
+    systemPrompt: "SYSTEM PROMPT",
+  });
+  assert.deepEqual(prepared.plan.args, plain.args);
+  assert.equal("channels" in prepared.plan, false);
+  assert.deepEqual(prepared.blocking, []);
+  assert.deepEqual(prepared.record.limitations, []);
+  assert.deepEqual(
+    prepared.record.channels?.map((c) => [c.kind, c.status]),
+    [
+      ["knowledge-delta", "unmanaged"],
+      ["artifact-dir", "unmanaged"],
+    ],
+  );
+  // The record still names the paths the agent was handed.
+  assert.equal(channelStatus(prepared, "knowledge-delta")?.path, DELTA);
+  assert.equal(prepared.record.knowledgeDeltaFile, DELTA);
+});
+
+test("channels: a runtime that fails to answer for a channel is treated as unable to deliver it", () => {
+  // The totality rule: a plan that maps the profile but says nothing about a
+  // channel has not made it reachable, and the gap is reported, not assumed
+  // away. A reported verdict is taken as is.
+  const channels = channelsOf(RESULT);
+  const silent = settleChannels(channels, [], "Some Runtime");
+  assert.equal(silent[0].status, "unavailable");
+  assert.equal(
+    silent[0].reason,
+    "Some Runtime did not account for the result file (ARGUS_RESULT_FILE)",
+  );
+  const absent = settleChannels(channels, undefined, "Some Runtime");
+  assert.equal(absent[0].status, "unavailable");
+  const answered = settleChannels(
+    channels,
+    [{ channel: channels[0], status: "granted" }],
+    "Some Runtime",
+  );
+  assert.deepEqual(answered, [{ channel: channels[0], status: "granted" }]);
+});
+
+test("invocationChannels: fixed order, directories derived from file paths, required from the phase", () => {
+  const list = invocationChannels({
+    resultFile: RESULT,
+    knowledgeDeltaFile: DELTA,
+    artifactDir: "/art",
+    memoryDir: "/mem",
+    phaseDef: { checks: [{ kind: "artifact", path: "x.md" }], knowledgeDelta: "optional" },
+  });
+  assert.deepEqual(
+    list.map((c) => [c.kind, c.envVar, c.dir, c.access, c.required]),
+    [
+      ["result", "ARGUS_RESULT_FILE", "/home/op/.claude/argus/results/run-1", "write", true],
+      [
+        "knowledge-delta",
+        "ARGUS_KNOWLEDGE_DELTA_FILE",
+        "/home/op/.claude/argus/knowledge-deltas/run-1",
+        "write",
+        false,
+      ],
+      ["artifact-dir", "ARGUS_ARTIFACT_DIR", "/art", "write", true],
+      ["memory-dir", "ARGUS_MEMORY_DIR", "/mem", "write", true],
+    ],
+  );
+  assert.deepEqual(
+    invocationChannels({
+      resultFile: null,
+      knowledgeDeltaFile: null,
+      artifactDir: null,
+      memoryDir: null,
+      phaseDef: {},
+    }),
+    [],
+  );
 });

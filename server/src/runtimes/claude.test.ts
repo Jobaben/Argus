@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { claudeRuntime } from "./claude.js";
-import type { CapabilityRequest } from "./types.js";
+import type { CapabilityRequest, InvocationChannel } from "./types.js";
 import type { CapabilityProfile } from "@argus/contracts";
 
 const RESET = { ...process.env };
@@ -22,6 +22,19 @@ function withEnv(vars: Record<string, string | undefined>, fn: () => void): void
 
 const SESSION_ID = "11111111-1111-1111-1111-111111111111";
 
+/** An Argus-owned write channel, as the engine hands one to the runtime. */
+function artifactChannel(dir: string, required = false): InvocationChannel {
+  return {
+    kind: "artifact-dir",
+    envVar: "ARGUS_ARTIFACT_DIR",
+    path: dir,
+    dir,
+    access: "write",
+    required,
+    label: "artifact directory",
+  };
+}
+
 function request(
   profile: CapabilityProfile,
   overrides: Partial<Omit<CapabilityRequest, "profile">> = {},
@@ -30,7 +43,7 @@ function request(
     profile,
     invocationDir: "/inv",
     cwd: "/work",
-    artifactDir: null,
+    channels: [],
     ...overrides,
   };
 }
@@ -212,32 +225,33 @@ test("hooks materialize settings.json with Stop and PreToolUse(AskUserQuestion) 
   assert.equal(plan.args[si + 1], "/inv/settings.json");
 });
 
-test("--add-dir is emitted per additionalDirectories entry, plus artifactDir whenever it's set", () => {
+test("--add-dir is emitted per additionalDirectories entry, plus every channel's directory", () => {
   const plan = claudeRuntime.streamPlan({
     prompt: "p",
     sessionId: SESSION_ID,
     capabilities: request(
       { additionalDirectories: ["/a", "/b"] },
-      { artifactDir: "/artifacts/run-1" },
+      { channels: [artifactChannel("/artifacts/run-1")] },
     ),
   });
   const dirs = plan.args
     .map((a, i) => (a === "--add-dir" ? plan.args[i + 1] : null))
     .filter((v): v is string => v !== null);
   assert.deepEqual(dirs, ["/a", "/b", "/artifacts/run-1"]);
+  assert.equal(plan.channels?.[0].status, "granted");
 });
 
-test("artifactDir is always added when capabilities is passed, even with no profile fields", () => {
+test("a channel is always added when capabilities is passed, even with no profile fields", () => {
   const plan = claudeRuntime.streamPlan({
     prompt: "p",
     sessionId: SESSION_ID,
-    capabilities: request({}, { artifactDir: "/artifacts/run-2" }),
+    capabilities: request({}, { channels: [artifactChannel("/artifacts/run-2")] }),
   });
   const ai = plan.args.indexOf("--add-dir");
   assert.equal(plan.args[ai + 1], "/artifacts/run-2");
 });
 
-test("no add-dir at all when capabilities is absent, whatever artifactDir would have been", () => {
+test("no add-dir at all when capabilities is absent, whatever channels there would have been", () => {
   const plan = claudeRuntime.streamPlan({ prompt: "p", sessionId: SESSION_ID });
   assert.equal(plan.args.includes("--add-dir"), false);
 });
@@ -332,7 +346,7 @@ test("read-only with a comma in cwd reports a limitation instead of emitting a s
     sessionId: SESSION_ID,
     capabilities: request(
       { filesystem: "read-only" },
-      { cwd: "/tmp/a,b", invocationDir: "/i", artifactDir: null },
+      { cwd: "/tmp/a,b", invocationDir: "/i", channels: [] },
     ),
   });
   assert.ok(

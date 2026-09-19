@@ -11,11 +11,21 @@
 
 import { randomUUID } from "node:crypto";
 import { claudeHome } from "../claudeHome.js";
-import { EMPTY_ENVELOPE, basename, clip, extraArgs, unsupportedCapabilities } from "./types.js";
+import {
+  EMPTY_ENVELOPE,
+  basename,
+  channelGranted,
+  channelUnavailable,
+  clip,
+  extraArgs,
+  unsupportedCapabilities,
+} from "./types.js";
 import type {
   AgentRuntime,
   AnalysisPlanOptions,
   CapabilityRequest,
+  ChannelOutcome,
+  InvocationChannel,
   MaterializedFile,
   RunEnvelope,
   RunPlanOptions,
@@ -47,6 +57,48 @@ interface ClaudeCapabilityResult {
   args: string[];
   files: MaterializedFile[];
   limitations: string[];
+  channels: ChannelOutcome[];
+}
+
+/** Is `dir` the root itself or somewhere beneath it? Lexical, on the paths as
+ *  given — the same view the `Edit(//root/**)` deny rule takes. */
+function isWithin(dir: string, root: string): boolean {
+  const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "");
+  const d = norm(dir);
+  const r = norm(root);
+  return d === r || d.startsWith(`${r}/`);
+}
+
+/**
+ * Claude Code's answer for every Argus-owned channel: `--add-dir` on the
+ * channel's directory, which admits it to the invocation's working set
+ * whatever `filesystem` says about the repository. Claude Code has no OS
+ * sandbox, so a path outside the working directory is reachable once it is
+ * added; the one thing that can still stand in the way is the read-only
+ * profile's own `Edit(//root/**)` deny rule, when a channel happens to live
+ * *under* a denied root (a working directory that is the operator's home,
+ * say). That case is deterministic from the paths alone and is reported
+ * rather than left to fail at write time.
+ */
+function claudeChannels(
+  channels: InvocationChannel[],
+  deniedRoots: string[],
+  args: string[],
+): ChannelOutcome[] {
+  return channels.map((channel) => {
+    args.push("--add-dir", channel.dir);
+    if (channel.access === "write") {
+      const under = deniedRoots.find((root) => isWithin(channel.dir, root));
+      if (under !== undefined) {
+        return channelUnavailable(
+          channel,
+          "Claude Code",
+          `read-only denies edits under ${under}, which contains`,
+        );
+      }
+    }
+    return channelGranted(channel);
+  });
 }
 
 /**
@@ -55,8 +107,8 @@ interface ClaudeCapabilityResult {
  * drift on what a profile means.
  */
 function buildClaudeCapabilities(cap: CapabilityRequest | undefined): ClaudeCapabilityResult {
-  if (!cap) return { args: [], files: [], limitations: [] };
-  const { profile, invocationDir, cwd, artifactDir, memoryDir, knowledgeDeltaDir, hooks } = cap;
+  if (!cap) return { args: [], files: [], limitations: [], channels: [] };
+  const { profile, invocationDir, cwd, channels, hooks } = cap;
   const args: string[] = [];
   const files: MaterializedFile[] = [];
   const limitations = unsupportedCapabilities(profile, "Claude Code", [
@@ -65,14 +117,16 @@ function buildClaudeCapabilities(cap: CapabilityRequest | undefined): ClaudeCapa
 
   const allow = [...(profile.tools?.allow ?? [])];
   const deny = [...(profile.tools?.deny ?? [])];
+  const deniedRoots: string[] = [];
 
   if (profile.filesystem === "read-only") {
     // An `Edit(path)` rule governs every built-in file-editing tool — Edit,
     // Write, MultiEdit, NotebookEdit — per Claude Code's permission rules;
     // `Write(path)` rules are accepted but never consulted, so this is the one
-    // rule shape that actually denies writes under these roots. The artifact
-    // directory is outside them on purpose: a read-only researcher still
-    // writes its report there.
+    // rule shape that actually denies writes under these roots. Argus's own
+    // channels (the artifact directory, the result and delta files) are
+    // outside them on purpose: a read-only researcher still writes its report
+    // and its proposal there.
     for (const root of [cwd, ...(profile.additionalDirectories ?? [])]) {
       if (/[,\r\n]/.test(root)) {
         // The rules travel comma-joined in one flag; a comma in the path would
@@ -81,6 +135,7 @@ function buildClaudeCapabilities(cap: CapabilityRequest | undefined): ClaudeCapa
         continue;
       }
       deny.push(`Edit(//${root}/**)`);
+      deniedRoots.push(root);
     }
 
     const bashAllowRules = allow.filter((r) => r === "Bash" || r.startsWith("Bash("));
@@ -110,16 +165,12 @@ function buildClaudeCapabilities(cap: CapabilityRequest | undefined): ClaudeCapa
   }
 
   for (const dir of profile.additionalDirectories ?? []) args.push("--add-dir", dir);
-  // The engine created artifactDir for this invocation to write into; keep it
-  // reachable no matter what the profile said about the rest of the filesystem.
-  if (artifactDir) args.push("--add-dir", artifactDir);
-  // Same story for this pipeline's memory directory, when `memory` is enabled:
-  // an agent told to append to NOTES.md must be able to, whatever `filesystem`
-  // says about the rest of the tree.
-  if (memoryDir) args.push("--add-dir", memoryDir);
-  // And for the run's KnowledgeDelta: proposing knowledge is a write to a
-  // directory Argus owns, and must be possible under any `filesystem` value.
-  if (knowledgeDeltaDir) args.push("--add-dir", knowledgeDeltaDir);
+  // Every Argus-owned channel — the artifact directory, the result file's and
+  // the KnowledgeDelta file's directories, the memory directory — is admitted
+  // the same way, no matter what the profile said about the rest of the
+  // filesystem: the protocol between the agent and Argus is not the agent's
+  // to be restricted from.
+  const channelOutcomes = claudeChannels(channels, deniedRoots, args);
 
   if (profile.settingSources !== undefined) {
     args.push("--setting-sources", profile.settingSources.join(","));
@@ -150,7 +201,7 @@ function buildClaudeCapabilities(cap: CapabilityRequest | undefined): ClaudeCapa
     args.push("--settings", settingsPath);
   }
 
-  return { args, files, limitations };
+  return { args, files, limitations, channels: channelOutcomes };
 }
 
 /**
@@ -376,7 +427,9 @@ export const claudeRuntime: AgentRuntime = {
       ],
       stdin: prompt,
       env: {},
-      ...(capabilities ? { files: cap.files, limitations: cap.limitations } : {}),
+      ...(capabilities
+        ? { files: cap.files, limitations: cap.limitations, channels: cap.channels }
+        : {}),
     };
   },
 
@@ -409,7 +462,9 @@ export const claudeRuntime: AgentRuntime = {
         // ignore the var but would reject the unknown flag.
         CLAUDE_CODE_FORWARD_SUBAGENT_TEXT: "1",
       },
-      ...(capabilities ? { files: cap.files, limitations: cap.limitations } : {}),
+      ...(capabilities
+        ? { files: cap.files, limitations: cap.limitations, channels: cap.channels }
+        : {}),
     };
   },
 

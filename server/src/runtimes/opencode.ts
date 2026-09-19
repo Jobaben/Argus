@@ -41,7 +41,14 @@
  */
 
 import { opencodeHome } from "../opencodeHome.js";
-import { EMPTY_ENVELOPE, basename, clip, extraArgs, unsupportedCapabilities } from "./types.js";
+import {
+  EMPTY_ENVELOPE,
+  basename,
+  channelGranted,
+  clip,
+  extraArgs,
+  unsupportedCapabilities,
+} from "./types.js";
 import type {
   AgentRuntime,
   AnalysisPlanOptions,
@@ -57,10 +64,23 @@ import type { ActivityEvent, ReasoningEffort } from "@argus/contracts";
  * flags, no MCP allowlist, no settings-source override, nothing — so every
  * key a profile sets is reported as a limitation rather than silently
  * dropped.
+ *
+ * The same absence answers for Argus's own channels: `opencode run --auto`
+ * runs its tools unsandboxed and auto-approved, so a path outside the working
+ * directory is as reachable as one inside it. Every channel is granted — not
+ * because OpenCode scopes it, but because nothing stands in the way. (A
+ * `filesystem: "read-only"` profile is still reported unenforceable above; the
+ * two statements are both true.)
  */
-function opencodeLimitations(cap: CapabilityRequest | undefined): string[] {
-  if (!cap) return [];
-  return unsupportedCapabilities(cap.profile, "OpenCode", []);
+function opencodeCapabilities(
+  cap: CapabilityRequest | undefined,
+): Pick<SpawnPlan, "files" | "limitations" | "channels"> {
+  if (!cap) return {};
+  return {
+    files: [],
+    limitations: unsupportedCapabilities(cap.profile, "OpenCode", []),
+    channels: cap.channels.map(channelGranted),
+  };
 }
 
 /**
@@ -335,7 +355,7 @@ export const opencodeRuntime: AgentRuntime = {
       args: runArgs({ model, reasoningEffort }),
       stdin: composePrompt(prompt, systemPrompt),
       env: {},
-      ...(capabilities ? { files: [], limitations: opencodeLimitations(capabilities) } : {}),
+      ...opencodeCapabilities(capabilities),
     };
   },
 
@@ -353,7 +373,7 @@ export const opencodeRuntime: AgentRuntime = {
       args: runArgs({ model, reasoningEffort }),
       stdin: composePrompt(prompt, systemPrompt),
       env: {},
-      ...(capabilities ? { files: [], limitations: opencodeLimitations(capabilities) } : {}),
+      ...opencodeCapabilities(capabilities),
     };
   },
 

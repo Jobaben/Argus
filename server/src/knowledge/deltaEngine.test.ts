@@ -1,6 +1,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { KnowledgeDeltaRecord, PhaseFailurePayload, PipelineInstance } from "@argus/contracts";
@@ -8,7 +9,8 @@ import { createEngine } from "../pipelineEngine.js";
 import type { Engine } from "../pipelineEngine.js";
 import { createPipeline, validatePipelineInput } from "../sources/pipelines.js";
 import { readInstance, writeInstance } from "../sources/instances.js";
-import { readRun, writeRun } from "../sources/runs.js";
+import { readInvocation, readRun, writeRun } from "../sources/runs.js";
+import { knowledgeDeltaDir } from "./staging.js";
 import { readJournal } from "../sources/journal.js";
 import { createClaim, createEvidence, createRevision, readLedger } from "./store.js";
 import { readDeltaRecord, stagedDeltaPath } from "./staging.js";
@@ -972,4 +974,512 @@ test("impact integration: rule revision → changed support → affected decisio
   const introducedBy = ledger.deltas.find((d) => d.claims.some((c) => c.id === decision.id))!;
   assert.equal(introducedBy.id, planRecord.id);
   assert.equal(introducedBy.execution.runId, rec.calls[0].runId);
+});
+
+// ── Hardening: the channel model at the engine ──────────────────────────────
+//
+// docs/HARNESS.md § Argus-owned invocation channels. The delta file, the
+// result file and the artifact directory are one list the runtime maps; a
+// required channel the runtime cannot reach refuses the launch under strict
+// enforcement, an optional one is recorded, and a legacy run is untouched.
+
+const DECISION = { artifact: "decision", schema: { type: "object" } };
+
+test("strict enforcement: a result-publishing Codex step under read-only is refused before any process launches", async () => {
+  await seed([
+    {
+      id: "judge",
+      name: "Judge",
+      runtime: "codex",
+      capabilities: { filesystem: "read-only" },
+      result: DECISION,
+      retry: { attempts: 3, backoffSeconds: 0 },
+      steps: [step()],
+    },
+  ]);
+  const rec = recordingSpawn();
+  const e = engine(rec.spawn);
+  const inst = (await e.start("p1", "manual"))!;
+  await e.drain();
+
+  assert.equal(rec.calls.length, 0, "nothing was spawned");
+  const after = await instance(inst.id);
+  assert.equal(after.status, "failed");
+  assert.equal(after.phases[0].status, "failed");
+  assert.equal(failure(after, "judge").failureClass, "configuration");
+  assert.match(
+    failure(after, "judge").reason!,
+    /Codex read-only sandbox prevents writing the result file \(ARGUS_RESULT_FILE\)/,
+  );
+  // Never retried: the definition is what is wrong.
+  assert.equal(after.phases[0].retryAt ?? null, null);
+  const runId = after.phases[0].steps[0].runId!;
+  assert.equal((await readRun(runId))?.run.termination, "spawn-failed");
+  // The record says what Argus would have launched, channel by channel.
+  const record = (await readInvocation(runId))!;
+  const result = record.channels?.find((c) => c.kind === "result");
+  assert.equal(result?.required, true);
+  assert.equal(result?.status, "unavailable");
+  const delta = record.channels?.find((c) => c.kind === "knowledge-delta");
+  assert.equal(delta?.required, false);
+  assert.equal(delta?.status, "unavailable");
+  assert.equal(record.limitations.length, 3);
+  // Deterministic: a second instance is refused for the same reason.
+  const again = (await e.start("p1", "manual"))!;
+  await e.drain();
+  assert.equal(rec.calls.length, 0);
+  assert.equal(failure(await instance(again.id), "judge").reason, failure(after, "judge").reason);
+});
+
+test('strict enforcement: knowledgeDelta: "required" refuses a runtime that cannot write the delta; optional launches with the gap recorded', async () => {
+  await seed([
+    {
+      id: "learn",
+      name: "Learn",
+      runtime: "codex",
+      capabilities: { filesystem: "read-only" },
+      knowledgeDelta: "required",
+      steps: [step()],
+    },
+  ]);
+  const rec = recordingSpawn();
+  const e = engine(rec.spawn);
+  const inst = (await e.start("p1", "manual"))!;
+  await e.drain();
+  assert.equal(rec.calls.length, 0);
+  const refused = await instance(inst.id);
+  assert.equal(failure(refused, "learn").failureClass, "configuration");
+  assert.match(
+    failure(refused, "learn").reason!,
+    /KnowledgeDelta file \(ARGUS_KNOWLEDGE_DELTA_FILE\)/,
+  );
+});
+
+test("an optional KnowledgeDelta channel the runtime cannot write launches, with the gap on the record — no silent mismatch", async () => {
+  await seed([
+    {
+      id: "learn",
+      name: "Learn",
+      runtime: "codex",
+      capabilities: { filesystem: "read-only" },
+      steps: [step()],
+    },
+  ]);
+  const rec = recordingSpawn();
+  const e = engine(rec.spawn);
+  const inst = (await e.start("p1", "manual"))!;
+  assert.equal(rec.calls.length, 1);
+  assert.ok(rec.calls[0].env.ARGUS_KNOWLEDGE_DELTA_FILE, "the protocol is still offered");
+  const record = (await readInvocation(rec.calls[0].runId))!;
+  assert.deepEqual(
+    record.channels?.map((c) => [c.kind, c.required, c.status]),
+    [
+      ["knowledge-delta", false, "unavailable"],
+      ["artifact-dir", false, "unavailable"],
+    ],
+  );
+  assert.ok(
+    record.limitations.includes(
+      "Codex read-only sandbox prevents writing the KnowledgeDelta file (ARGUS_KNOWLEDGE_DELTA_FILE)",
+    ),
+  );
+  assert.equal((await instance(inst.id)).phases[0].status, "running");
+});
+
+test("best-effort enforcement: the same required channel gap launches and is recorded on the invocation", async () => {
+  await seed([
+    {
+      id: "judge",
+      name: "Judge",
+      runtime: "codex",
+      capabilities: { filesystem: "read-only", enforcement: "best-effort" },
+      result: DECISION,
+      steps: [step()],
+    },
+  ]);
+  const rec = recordingSpawn();
+  const e = engine(rec.spawn);
+  const inst = (await e.start("p1", "manual"))!;
+  assert.equal(rec.calls.length, 1);
+  assert.equal((await instance(inst.id)).phases[0].status, "running");
+  const record = (await readInvocation(rec.calls[0].runId))!;
+  const result = record.channels?.find((c) => c.kind === "result");
+  assert.ok(result);
+  assert.equal(result.status, "unavailable");
+  assert.equal(result.required, true);
+  assert.equal(
+    result.reason,
+    "Codex read-only sandbox prevents writing the result file (ARGUS_RESULT_FILE)",
+  );
+  assert.ok(record.limitations.includes(result.reason ?? ""));
+});
+
+/** A working directory that is not Argus's own home: in production the
+ *  repository never contains `~/.claude/argus`, and a read-only profile denies
+ *  edits under the whole working directory — channels included, if they were
+ *  in there (a case the Claude Code adapter reports, see channels.test.ts). */
+function workDir(): string {
+  return mkdtempSync(path.join(tmpdir(), "argus-knowledge-work-"));
+}
+
+test("a supported runtime under a restrictive profile has every channel granted and admitted to its sandbox", async () => {
+  const work = workDir();
+  await seed([
+    {
+      id: "judge",
+      name: "Judge",
+      cwd: work,
+      capabilities: { filesystem: "read-only", tools: { allow: ["Read"] } },
+      result: DECISION,
+      checks: [{ kind: "artifact", path: "report.md" }],
+      steps: [step()],
+    },
+  ]);
+  const rec = recordingSpawn();
+  const e = engine(rec.spawn);
+  await e.start("p1", "manual");
+  assert.equal(rec.calls.length, 1);
+  const call = rec.calls[0];
+  const record = (await readInvocation(call.runId))!;
+  assert.deepEqual(
+    record.channels?.map((c) => [c.kind, c.required, c.status, c.path]),
+    [
+      ["result", true, "granted", call.env.ARGUS_RESULT_FILE],
+      ["knowledge-delta", false, "granted", call.env.ARGUS_KNOWLEDGE_DELTA_FILE],
+      ["artifact-dir", true, "granted", call.env.ARGUS_ARTIFACT_DIR],
+    ],
+  );
+  assert.deepEqual(record.limitations, []);
+  const added = record.args.filter((_, i) => record.args[i - 1] === "--add-dir");
+  assert.deepEqual(added, [
+    path.dirname(call.env.ARGUS_RESULT_FILE),
+    knowledgeDeltaDir(call.runId),
+    call.env.ARGUS_ARTIFACT_DIR,
+  ]);
+  // The repository itself is still denied under the profile.
+  const denied = record.args[record.args.indexOf("--disallowedTools") + 1];
+  assert.ok(denied.includes(`Edit(//${work}/**)`));
+});
+
+test("Claude Code read-only with the working directory containing Argus's home: the channels are honestly unavailable", async () => {
+  // `home` is both ARGUS_CLAUDE_HOME and the phase's cwd here, so every channel
+  // sits under the root the read-only rule denies. The required result channel
+  // refuses the launch; nothing pretends the result could have been written.
+  await seed([
+    {
+      id: "judge",
+      name: "Judge",
+      capabilities: { filesystem: "read-only" },
+      result: DECISION,
+      steps: [step()],
+    },
+  ]);
+  const rec = recordingSpawn();
+  const e = engine(rec.spawn);
+  const inst = (await e.start("p1", "manual"))!;
+  await e.drain();
+  assert.equal(rec.calls.length, 0);
+  const after = await instance(inst.id);
+  assert.equal(failure(after, "judge").failureClass, "configuration");
+  assert.match(
+    failure(after, "judge").reason!,
+    /Claude Code read-only denies edits under .*, which contains the result file/,
+  );
+});
+
+test("legacy: a run with no profile records unmanaged channels and an argv without any channel flag", async () => {
+  await seed([{ id: "only", name: "Only", steps: [step()] }]);
+  const rec = recordingSpawn();
+  const e = engine(rec.spawn);
+  await e.start("p1", "manual");
+  const record = (await readInvocation(rec.calls[0].runId))!;
+  assert.deepEqual(record.limitations, []);
+  assert.deepEqual(
+    record.channels?.map((c) => [c.kind, c.status]),
+    [
+      ["knowledge-delta", "unmanaged"],
+      ["artifact-dir", "unmanaged"],
+    ],
+  );
+  assert.equal(record.args.includes("--add-dir"), false);
+  assert.equal(record.args.includes("--settings"), false);
+});
+
+// ── Hardening: artifact provenance is rechecked at the commit boundary ──────
+
+test("an artifact that vanished between intake and commit refuses the whole attempt's commit, and canonical knowledge is unchanged", async () => {
+  await seedRule();
+  await seed([{ id: "impl", name: "Impl", gated: true, steps: [step("a"), step("b")] }]);
+  const rec = recordingSpawn();
+  const e = engine(rec.spawn);
+  const inst = (await e.start("p1", "manual"))!;
+  const before = JSON.stringify(await readLedger());
+
+  // Step a proposes a claim; step b declares an artifact that exists at intake.
+  writeDelta(rec.calls[0], {
+    schemaVersion: 1,
+    claims: [{ localId: "c", kind: "conclusion", statement: "from a" }],
+  });
+  const report = path.join(rec.calls[1].env.ARGUS_ARTIFACT_DIR, "report.md");
+  writeFileSync(report, "# report");
+  writeDelta(rec.calls[1], {
+    schemaVersion: 1,
+    artifacts: [{ location: "artifact-dir", path: "report.md" }],
+  });
+  await complete(e, inst, "impl", rec.calls[0].runId);
+  await complete(e, inst, "impl", rec.calls[1].runId);
+  const waiting = await instance(inst.id);
+  assert.equal(waiting.status, "awaiting-approval");
+  assert.equal((await readDeltaRecord(rec.calls[1].runId))?.status, "staged");
+
+  // The artifact disappears while the gate waits.
+  rmSync(report);
+
+  const res = await e.approve(inst.id);
+  assert.equal(res.code, 200);
+  const after = await instance(inst.id);
+  assert.equal(after.phases[0].status, "failed");
+  assert.equal(failure(after, "impl").failureClass, "knowledge-delta");
+  assert.match(
+    failure(after, "impl").reason!,
+    /artifact artifact-dir:report\.md does not exist in the run's artifact-dir/,
+  );
+  assert.equal(after.phases[0].knowledge?.status, "rejected");
+  // Atomic: the sibling's valid claim was not applied either.
+  assert.equal(JSON.stringify(await readLedger()), before);
+  for (const call of rec.calls) {
+    const record = (await readDeltaRecord(call.runId))!;
+    assert.equal(record.status, "rejected");
+    assert.match(record.reason!, /report\.md does not exist/);
+  }
+  assert.ok((await readJournal(inst.id)).some((j) => j.kind === "knowledge.rejected"));
+});
+
+test("an artifact still present at commit is recorded exactly as before", async () => {
+  await seed([{ id: "impl", name: "Impl", gated: true, steps: [step()] }]);
+  const rec = recordingSpawn();
+  const e = engine(rec.spawn);
+  const inst = (await e.start("p1", "manual"))!;
+  writeFileSync(path.join(rec.calls[0].env.ARGUS_ARTIFACT_DIR, "report.md"), "# report");
+  writeDelta(rec.calls[0], {
+    schemaVersion: 1,
+    artifacts: [{ location: "artifact-dir", path: "report.md" }],
+  });
+  await complete(e, inst, "impl", rec.calls[0].runId);
+  await e.approve(inst.id);
+  const after = await instance(inst.id);
+  assert.equal(after.status, "succeeded");
+  assert.deepEqual(
+    (await readLedger()).artifacts.map((a) => a.artifact),
+    [{ location: "artifact-dir", path: "report.md" }],
+  );
+});
+
+// ── Hardening: retry isolation under the channel model ──────────────────────
+
+test("retry under a read-only profile: every attempt gets its own channels, and only the succeeding attempt's delta commits", async () => {
+  await seedRule();
+  const marker = path.join(home, "second-attempt");
+  await seed([
+    {
+      id: "plan",
+      name: "Plan",
+      cwd: workDir(),
+      capabilities: { filesystem: "read-only", tools: { allow: ["Read"] } },
+      steps: [step()],
+      checks: [{ kind: "command", run: `test -f "${marker}"`, label: "marker" }],
+      retry: { attempts: 2, backoffSeconds: 0, retryOn: ["verification"] },
+    },
+  ]);
+  const rec = recordingSpawn();
+  const e = engine(rec.spawn);
+  const inst = (await e.start("p1", "manual"))!;
+  writeDelta(rec.calls[0], {
+    schemaVersion: 1,
+    claims: [{ localId: "first", kind: "fact", statement: "from attempt 1" }],
+  });
+  await complete(e, inst, "plan", rec.calls[0].runId);
+  await e.drain();
+  assert.equal((await readDeltaRecord(rec.calls[0].runId))?.status, "superseded");
+
+  writeFileSync(marker, "go");
+  await e.reconcile();
+  await e.drain();
+  assert.equal(rec.calls.length, 2);
+  writeDelta(rec.calls[1], {
+    schemaVersion: 1,
+    claims: [{ localId: "second", kind: "fact", statement: "from attempt 2" }],
+  });
+  await complete(e, inst, "plan", rec.calls[1].runId);
+  await e.drain();
+
+  assert.equal((await instance(inst.id)).status, "succeeded");
+  // Each attempt's record names that attempt's own delta path, granted under
+  // the profile — never the other attempt's.
+  const records = await Promise.all(rec.calls.map((c) => readInvocation(c.runId)));
+  for (const [i, record] of records.entries()) {
+    const delta = record!.channels?.find((c) => c.kind === "knowledge-delta");
+    assert.ok(delta);
+    assert.equal(delta.status, "granted");
+    assert.equal(delta.path, rec.calls[i].env.ARGUS_KNOWLEDGE_DELTA_FILE);
+    assert.ok(record!.args.includes(knowledgeDeltaDir(rec.calls[i].runId)));
+  }
+  assert.notEqual(records[0]!.knowledgeDeltaFile, records[1]!.knowledgeDeltaFile);
+  const ledger = await readLedger();
+  assert.deepEqual(
+    ledger.claims.filter((c) => c.kind === "fact").map((c) => c.statement),
+    ["from attempt 2"],
+  );
+  assert.equal((await readDeltaRecord(rec.calls[1].runId))?.status, "applied");
+});
+
+// ── Candidate phases ────────────────────────────────────────────────────────
+
+function gitAvailable(): boolean {
+  try {
+    return spawnSync("git", ["--version"], { stdio: "ignore" }).status === 0;
+  } catch {
+    return false;
+  }
+}
+
+/** A real repository with one commit, as a candidates phase's `cwd`. */
+function makeRepo(): string {
+  const dir = mkdtempSync(path.join(tmpdir(), "argus-knowledge-repo-"));
+  const git = (...args: string[]) =>
+    spawnSync("git", ["-c", "user.email=t@e.com", "-c", "user.name=T", ...args], {
+      cwd: dir,
+      stdio: "ignore",
+    });
+  git("init", "-q", "-b", "main");
+  writeFileSync(path.join(dir, "README.md"), "base\n");
+  git("add", ".");
+  git("commit", "-q", "-m", "init");
+  return dir;
+}
+
+test("candidates: a losing candidate's staged delta is superseded and only the winner's becomes canonical", async (t) => {
+  if (!gitAvailable()) return t.skip("git not available");
+  await seedRule();
+  const repo = makeRepo();
+  await seed([
+    {
+      id: "impl",
+      name: "Implement",
+      cwd: repo,
+      workspace: { scope: "attempt" },
+      checks: [{ kind: "file", path: "done.txt", label: "wrote it" }],
+      candidates: { count: 2, select: "first-verified" },
+      steps: [step("code")],
+    },
+  ]);
+  const rec = recordingSpawn();
+  const e = engine(rec.spawn);
+  const inst = (await e.start("p1", "manual"))!;
+  assert.equal(rec.calls.length, 2);
+  const [a, b] = rec.calls;
+  assert.notEqual(a.cwd, b.cwd, "each candidate has its own worktree");
+  assert.notEqual(a.env.ARGUS_KNOWLEDGE_DELTA_FILE, b.env.ARGUS_KNOWLEDGE_DELTA_FILE);
+
+  // Candidate A proposes knowledge but never writes done.txt: it will fail
+  // its checks. Its delta is valid on its own and is staged at completion.
+  writeDelta(a, {
+    schemaVersion: 1,
+    claims: [{ localId: "a", kind: "fact", statement: "candidate A learned this" }],
+  });
+  await complete(e, inst, "impl", a.runId);
+  await e.drain();
+  // A's checks failed; the phase is still open (B may yet win). A's delta is
+  // staged but not canonical, and cannot become so: only a succeeded step's
+  // delta is eligible at the commit, and A's step is retired at selection.
+  const mid = await instance(inst.id);
+  assert.equal(mid.phases[0].status, "running");
+  assert.equal(mid.phases[0].steps[0].verification?.status, "failed");
+  assert.equal((await readDeltaRecord(a.runId))?.status, "staged");
+  assert.equal((await readLedger()).claims.length, 1, "nothing canonical yet");
+
+  // Candidate B does the work, declares its artifact in its own tree, and wins.
+  writeFileSync(path.join(b.cwd, "done.txt"), "ok\n");
+  writeDelta(b, {
+    schemaVersion: 1,
+    claims: [{ localId: "b", kind: "fact", statement: "candidate B learned this" }],
+    artifacts: [{ location: "repository", path: "done.txt" }],
+  });
+  await complete(e, inst, "impl", b.runId);
+  await e.drain();
+
+  const after = await instance(inst.id);
+  assert.equal(after.status, "succeeded");
+  assert.equal(after.phases[0].selectedCandidate, 1);
+  assert.equal(after.phases[0].knowledge?.status, "applied");
+  assert.deepEqual(after.phases[0].knowledge?.deltas, [
+    after.phases[0].steps[1].knowledgeDelta!.id,
+  ]);
+  assert.equal(after.phases[0].steps[0].knowledgeDelta?.status, "superseded");
+  assert.equal(after.phases[0].steps[1].knowledgeDelta?.status, "applied");
+
+  const ledger = await readLedger();
+  assert.deepEqual(
+    ledger.claims.filter((c) => c.kind === "fact").map((c) => c.statement),
+    ["candidate B learned this"],
+  );
+  assert.equal(ledger.deltas.length, 1);
+  assert.equal(ledger.deltas[0].execution.runId, b.runId);
+  // The artifact recheck at commit ran against the winner's own worktree.
+  assert.deepEqual(
+    ledger.artifacts.map((x) => [x.execution.runId, x.artifact.path]),
+    [[b.runId, "done.txt"]],
+  );
+  assert.equal((await readDeltaRecord(a.runId))?.status, "superseded");
+  assert.equal((await readDeltaRecord(b.runId))?.status, "applied");
+  const kinds = (await readJournal(inst.id)).map((j) => j.kind);
+  assert.ok(kinds.includes("knowledge.superseded"));
+  assert.ok(kinds.includes("knowledge.applied"));
+});
+
+test("candidates: a still-running loser is killed before it can stage anything, and the winner's delta commits alone", async (t) => {
+  if (!gitAvailable()) return t.skip("git not available");
+  const repo = makeRepo();
+  await seed([
+    {
+      id: "impl",
+      name: "Implement",
+      cwd: repo,
+      workspace: { scope: "attempt" },
+      checks: [{ kind: "file", path: "done.txt", label: "wrote it" }],
+      candidates: { count: 2, select: "first-verified" },
+      steps: [step("code")],
+    },
+  ]);
+  const rec = recordingSpawn();
+  const e = engine(rec.spawn, { kill: () => true });
+  const inst = (await e.start("p1", "manual"))!;
+  const [a, b] = rec.calls;
+  // A has written its proposal but has not finished when B wins.
+  writeDelta(a, {
+    schemaVersion: 1,
+    claims: [{ localId: "a", kind: "fact", statement: "from the loser" }],
+  });
+  writeFileSync(path.join(b.cwd, "done.txt"), "ok\n");
+  writeDelta(b, {
+    schemaVersion: 1,
+    claims: [{ localId: "b", kind: "fact", statement: "from the winner" }],
+  });
+  await complete(e, inst, "impl", b.runId);
+  await e.drain();
+
+  const after = await instance(inst.id);
+  assert.equal(after.status, "succeeded");
+  assert.equal(after.phases[0].steps[0].status, "aborted");
+  assert.equal("knowledgeDelta" in after.phases[0].steps[0], false);
+  assert.equal(await readDeltaRecord(a.runId), null, "the loser's file was never staged");
+  const ledger = await readLedger();
+  assert.deepEqual(
+    ledger.claims.map((c) => c.statement),
+    ["from the winner"],
+  );
+  // A completion arriving from the killed loser afterwards changes nothing.
+  await complete(e, inst, "impl", a.runId);
+  assert.equal(await readDeltaRecord(a.runId), null);
+  assert.equal((await readLedger()).claims.length, 1);
 });

@@ -248,9 +248,16 @@ pipeline can set an `env` policy once and one review phase can add
 - `mcpServers` (present, even `{}`) → written to
   `<invocationDir>/mcp.json` as `{ "mcpServers": {...} }`, passed as
   `--mcp-config <path> --strict-mcp-config`.
-- `additionalDirectories` → one `--add-dir <dir>` per entry — **and** the
-  phase's own artifact directory always gets an `--add-dir` too, regardless of
-  `filesystem`, so a read-only step can still leave its declared artifacts.
+- `additionalDirectories` → one `--add-dir <dir>` per entry — **and** every
+  Argus-owned invocation channel (§3a: the result file's directory, the
+  KnowledgeDelta file's directory, the artifact directory, the memory
+  directory) gets an `--add-dir` too, regardless of `filesystem`, so a
+  read-only step can still leave its result, its proposal and its declared
+  artifacts. The one case Claude Code cannot honour is a channel that sits
+  _under_ a root the read-only `Edit(//root/**)` rule denies (a working
+  directory that is the operator's home, say): that is decided from the
+  paths alone and reported per channel (`"Claude Code read-only denies edits
+under <root>, which contains the result file (ARGUS_RESULT_FILE)"`).
 - `settingSources` → `--setting-sources user,project,local` (only the ones
   named).
 - `permissionMode` → `--permission-mode <mode>`.
@@ -286,14 +293,17 @@ pipeline can set an `env` policy once and one review phase can add
 
 - `filesystem` → `--sandbox` (`read-only` / `workspace-write` /
   `danger-full-access` for `"unrestricted"`).
-- `additionalDirectories` (plus the artifact directory, when the **effective**
-  sandbox is `workspace-write`) → `-c
+- `additionalDirectories` (plus every Argus-owned write channel — §3a — when
+  the **effective** sandbox is `workspace-write`) → `-c
 sandbox_workspace_write.writable_roots=[...]`. "Effective" means the
   profile's own `filesystem`, else `ARGUS_CODEX_SANDBOX`, else
   `workspace-write` — the same resolution order that decides which sandbox the
-  process actually runs under, so the artifact directory is writable whenever
-  the run is, whether that came from the profile or the operator's own
-  default.
+  process actually runs under, so a channel is writable whenever the run is,
+  whether that came from the profile or the operator's own default. Under an
+  effective `read-only` sandbox Codex has no way to admit a write at all, so
+  every write channel is reported unavailable (`"Codex read-only sandbox
+prevents writing the result file (ARGUS_RESULT_FILE)"`, one per channel);
+  `danger-full-access` needs nothing. Reads are allowed under every sandbox.
 - `mcpServers` → one `-c mcp_servers.<name>.<field>=<value>` per field
   (`type`, `command`, `args`, `env.*`, `url`, `headers.*`), TOML-quoted. `env`
   and `headers` keys are restricted to `[A-Za-z_][A-Za-z0-9_-]*` at validation
@@ -302,28 +312,108 @@ sandbox_workspace_write.writable_roots=[...]`. "Effective" means the
 
 ### Limitations, per runtime
 
-| Runtime         | What it cannot do                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Claude Code** | Bash stays a bare shell under `read-only` unless `tools.allow` scopes it to specific commands — Claude Code has no OS-level sandbox, only tool permission rules.                                                                                                                                                                                                                                                                                                           |
-| **Codex**       | `mcpServers` narrows nothing: there is no flag scoping a run to _only_ the declared servers, so whatever is in `config.toml` stays reachable alongside them (`"Codex cannot exclude MCP servers configured in config.toml"`). A `read-only` **effective** sandbox (declared, or inherited from `ARGUS_CODEX_SANDBOX` when the profile leaves `filesystem` unset) with an artifact directory also can't write artifacts (`"read-only sandbox prevents writing artifacts"`). |
-| **OpenCode**    | Enforces **none** of `CapabilityProfile`'s keys — every key a profile sets becomes its own limitation string (`"OpenCode cannot enforce \"filesystem\" for this invocation"`, one per key present).                                                                                                                                                                                                                                                                        |
-| **Qwen Code**   | Same as OpenCode: zero keys supported, every declared key becomes a limitation.                                                                                                                                                                                                                                                                                                                                                                                            |
+| Runtime         | What it cannot do                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Claude Code** | Bash stays a bare shell under `read-only` unless `tools.allow` scopes it to specific commands — Claude Code has no OS-level sandbox, only tool permission rules.                                                                                                                                                                                                                                                                                                                                                    |
+| **Codex**       | `mcpServers` narrows nothing: there is no flag scoping a run to _only_ the declared servers, so whatever is in `config.toml` stays reachable alongside them (`"Codex cannot exclude MCP servers configured in config.toml"`). A `read-only` **effective** sandbox (declared, or inherited from `ARGUS_CODEX_SANDBOX` when the profile leaves `filesystem` unset) cannot write any Argus-owned channel — result file, KnowledgeDelta file, artifact or memory directory — each reported as its own limitation (§3a). |
+| **OpenCode**    | Enforces **none** of `CapabilityProfile`'s keys — every key a profile sets becomes its own limitation string (`"OpenCode cannot enforce \"filesystem\" for this invocation"`, one per key present).                                                                                                                                                                                                                                                                                                                 |
+| **Qwen Code**   | Same as OpenCode: zero keys supported, every declared key becomes a limitation.                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
 `unsupportedCapabilities()` (in `runtimes/types.ts`) is what produces those
 strings — it is handed each runtime's list of keys it _can_ map (empty for
 OpenCode and Qwen), and reports every key the profile sets that isn't on that
 list. `env` and `enforcement` are never in that list for any runtime: they
-are engine-owned (§4), never a runtime's to enforce or report on.
+are engine-owned (§4), never a runtime's to enforce or report on. Whether a
+runtime can reach Argus's _own_ files is a separate question with its own
+per-channel answer — §3a.
 
 ### `enforcement: "strict" | "best-effort"`
 
-Default is `"strict"`. When a resolved profile has any limitation and
-enforcement is strict, the step **does not launch** — it fails immediately
-under the `configuration` class (never retried; see §2), and the invocation
-record still shows what Argus would have run. `"best-effort"` records the
-same limitations but launches anyway: useful for a phase whose declared
-profile is aspirational (e.g. "prefer read-only" on a runtime that can't do
-it) rather than a hard requirement.
+Default is `"strict"`. When a resolved profile has any limitation — a key the
+runtime cannot enforce, or a **required** invocation channel (§3a) the
+runtime cannot reach — and enforcement is strict, the step **does not
+launch**: it fails immediately under the `configuration` class (never
+retried; see §2), and the invocation record still shows what Argus would have
+run. An _optional_ channel the runtime cannot reach is recorded as a
+limitation but never refuses a launch. `"best-effort"` records the same
+limitations but launches anyway: useful for a phase whose declared profile is
+aspirational (e.g. "prefer read-only" on a runtime that can't do it) rather
+than a hard requirement.
+
+### 3a. Argus-owned invocation channels
+
+Beyond the working tree, Argus hands every agent process a small set of files
+and directories that _it_ owns — the protocol between the agent and Argus.
+Each is named to the agent by one environment variable, lives outside the
+repository (under `~/.claude/argus/`), and must stay reachable whatever
+`filesystem` says about the rest of the disk: a read-only researcher still
+writes its report, its decision and its proposal there.
+
+| Channel             | Env var                      | Direction     | Required access | Launch depends on it when…                                                                                                                                                              |
+| ------------------- | ---------------------------- | ------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Result file         | `ARGUS_RESULT_FILE`          | agent → Argus | write           | the step publishes the phase's `result` (always required then: the routing reads it). `results/<runId>/result.json` — a directory per run, so granting it admits this run's result only |
+| KnowledgeDelta file | `ARGUS_KNOWLEDGE_DELTA_FILE` | agent → Argus | write           | the phase declares `knowledgeDelta: "required"`. Offered to every run; emitting a delta stays optional either way (KNOWLEDGE-LEDGER.md §12.5)                                           |
+| Artifact directory  | `ARGUS_ARTIFACT_DIR`         | agent → Argus | write when used | the phase declares an `artifact` check. Offered to every run                                                                                                                            |
+| Memory directory    | `ARGUS_MEMORY_DIR`           | agent ↔ Argus | write           | `memory.enabled` is set (every step's prompt then asks the agent to append to `NOTES.md`)                                                                                               |
+| _Semantic context_  | _(Phase 4, not yet)_         | Argus → agent | read            | _Will arrive through the same list with `access: "read"`; no runtime change needed. Not implemented — see KNOWLEDGE-LEDGER.md §15._                                                     |
+
+The model (`harness/channels.ts`, `InvocationChannel` in `runtimes/types.ts`):
+`prepareInvocation` builds **one** list of channels — kind, env var, path, the
+directory access must be granted on, `read`/`write`, and whether the launch
+depends on it — and hands the whole list to the runtime inside the
+`CapabilityRequest`. The runtime maps every entry through the one mechanism it
+has (`--add-dir`, `writable_roots`, or nothing because it runs no sandbox) and
+answers for every entry with a `ChannelOutcome`: `granted`, or `unavailable`
+with a reason. A channel the runtime does not answer for is treated as
+unavailable — a protocol path is never presumed writable. Nothing on the
+runtime side is special-cased by kind: the result file, the delta file and the
+artifact directory are the same thing to an adapter, and Phase 4's read-only
+context file will be one more entry.
+
+What an `unavailable` verdict means is the engine's decision, from `required`
+and `enforcement`:
+
+|                  | `enforcement: "strict"` (default)                                  | `enforcement: "best-effort"`  |
+| ---------------- | ------------------------------------------------------------------ | ----------------------------- |
+| required channel | **refused before launch** — `configuration` failure, never retried | launches; limitation recorded |
+| optional channel | launches; limitation recorded                                      | launches; limitation recorded |
+
+"Recorded" means the reason is in the invocation record's `limitations` _and_
+in its `channels` array (§8), status `unavailable`. There is no silent case:
+an agent is never told "you may write here" without the record saying whether
+it actually could. The variable is still set and the system-prompt contract
+still describes the protocol — the record, not the prompt, is where the
+mismatch is stated.
+
+**Without a capability profile** nothing changes from before profiles
+existed: Argus does not shape the runtime's filesystem at all, the CLI's own
+defaults decide, and the record lists the channels offered with status
+`unmanaged` — no claim either way. A pipeline that uses no structured result,
+no KnowledgeDelta and no file artifacts, with or without a profile, launches
+exactly as it always did.
+
+**Runtime matrix** (pinned by `runtimes/channels.test.ts`):
+
+| Runtime         | Effective filesystem mode                                          | Result file · KnowledgeDelta · artifact dir · memory dir (write)                   | Read channels |
+| --------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------- | ------------- |
+| **Claude Code** | any                                                                | ✅ `--add-dir` on each channel's directory                                         | ✅            |
+| **Claude Code** | `read-only`, channel _under_ `cwd`/`additionalDirectories`         | ❌ the `Edit(//root/**)` deny rule covers it; reported from the paths              | ✅            |
+| **Codex**       | `workspace-write` (declared, or the `ARGUS_CODEX_SANDBOX` default) | ✅ named in `sandbox_workspace_write.writable_roots`                               | ✅            |
+| **Codex**       | `unrestricted` / `danger-full-access`                              | ✅ nothing to add                                                                  | ✅            |
+| **Codex**       | `read-only` (declared, or via `ARGUS_CODEX_SANDBOX`)               | ❌ no way to admit a write; one limitation per channel                             | ✅            |
+| **OpenCode**    | any (the profile's `filesystem` is itself unenforceable)           | ✅ `opencode run --auto` runs unsandboxed; nothing stands in the way               | ✅            |
+| **Qwen Code**   | any, no `--sandbox` in `ARGUS_QWEN_ARGS`                           | ✅ `--approval-mode yolo` runs unsandboxed                                         | ✅            |
+| **Qwen Code**   | `--sandbox` / `-s` in `ARGUS_QWEN_ARGS`                            | ❌ the container mounts the project and the CLI's home, not Argus's data directory | ❌            |
+
+Two consequences worth stating plainly. A `filesystem: "read-only"` profile
+on **Codex** with a structured result (or `knowledgeDelta: "required"`, or an
+`artifact` check) is a configuration error under strict enforcement — the
+agent would be asked for a file its sandbox refuses; declare
+`workspace-write` (the channels are the only writable roots outside the tree)
+or `best-effort`. And the same profile on **OpenCode** or **Qwen Code** is
+refused for a different reason — the profile itself cannot be enforced — while
+the channels would have been reachable; under `best-effort` such a run
+launches unrestricted and its channels are granted.
 
 ### Configuration precedence
 
@@ -408,11 +498,11 @@ The directory itself:
 
 - `ARGUS_ARTIFACT_DIR` — set on every step's environment, pointing at
   `~/.claude/argus/artifacts/<instanceId>/<phaseId>/`. Argus creates the
-  directory, adds it to the runtime's writable set no matter what
-  `filesystem` says elsewhere (`--add-dir` for Claude Code; a Codex
-  `read-only` sandbox cannot write there at all, which is reported as a
-  limitation), and passes it to `checks` of kind `artifact` as their search
-  root.
+  directory, hands it to the runtime as an invocation channel (§3a — admitted
+  to the sandbox no matter what `filesystem` says elsewhere, or reported
+  unavailable when the runtime cannot; **required** exactly when the phase
+  declares an `artifact` check), and passes it to `checks` of kind `artifact`
+  as their search root.
 - `{{artifactDir}}` in a step's prompt interpolates to _this phase's own_
   artifact directory; `{{artifactDir.<phaseId>}}` interpolates to an earlier
   phase's (from `ArtifactDirs.byPhase`, built from every phase's
@@ -664,6 +754,25 @@ or is unknown):
   "materializedFiles": ["/home/user/.claude/argus/invocations/run_8f2a/settings.json"],
   "artifactDir": "/home/user/.claude/argus/artifacts/inst_71c0/implement",
   "resultFile": null,
+  "knowledgeDeltaFile": "/home/user/.claude/argus/knowledge-deltas/run_8f2a/delta.json",
+  "channels": [
+    {
+      "kind": "knowledge-delta",
+      "envVar": "ARGUS_KNOWLEDGE_DELTA_FILE",
+      "path": "/home/user/.claude/argus/knowledge-deltas/run_8f2a/delta.json",
+      "access": "write",
+      "required": false,
+      "status": "granted"
+    },
+    {
+      "kind": "artifact-dir",
+      "envVar": "ARGUS_ARTIFACT_DIR",
+      "path": "/home/user/.claude/argus/artifacts/inst_71c0/implement",
+      "access": "write",
+      "required": false,
+      "status": "granted"
+    }
+  ],
   "timeoutSeconds": 1800,
   "deadlineAt": "2026-09-10T14:32:00.000Z",
   "gitHead": "3f1a9c2e8b0d4f6a7c1e2b3d4f5a6b7c8d9e0f10",
@@ -681,8 +790,12 @@ shows _that_ `DOCS_TOKEN` was set, just not to what), and every other
 those can carry a secret. The materialized `mcp.json` a runtime actually reads
 still carries the real values — an agent needs them to work — this record
 just isn't where they get archived. `limitations` is what the chosen runtime
-could not enforce of the declared profile; empty means every declared key was
-honoured (or no profile was declared at all).
+could not enforce of the declared profile, plus every Argus-owned channel it
+could not reach (§3a); empty means every declared key was honoured and every
+channel is reachable (or no profile was declared at all). `channels` lists
+each channel the invocation was offered — its env var, path, access, whether
+the launch depended on it, and `granted` / `unavailable` (with the reason) /
+`unmanaged` (no profile: the CLI's defaults decided).
 
 **Journal kinds** (`server/src/sources/journal.ts`, append-only, per
 instance) that this feature adds:
@@ -1285,14 +1398,14 @@ When enabled:
 
 - `ARGUS_MEMORY_DIR` is set on every step's environment (a per-invocation
   identifier — never inherited by a nested Argus child, §4) pointing at the
-  directory (not the file), and added to the runtime's writable set the same
-  way the artifact directory always is: `--add-dir` for Claude Code,
-  `sandbox_workspace_write.writable_roots` for Codex under an effective
-  `workspace-write` sandbox (a `read-only` one reports "read-only sandbox
-  prevents writing memory notes", the same shape as the existing artifact
-  limitation). OpenCode and Qwen Code have no per-invocation directory control
-  at all (§3) — the variable is still set, but neither runtime can widen its
-  own sandbox to honour it.
+  directory (not the file), and handed to the runtime as a **required**
+  invocation channel (§3a) like the artifact directory: `--add-dir` for
+  Claude Code, `sandbox_workspace_write.writable_roots` for Codex under an
+  effective `workspace-write` sandbox (a `read-only` one reports "Codex
+  read-only sandbox prevents writing the memory directory
+  (ARGUS_MEMORY_DIR)", and refuses the launch under strict enforcement).
+  OpenCode and Qwen Code run unsandboxed, so the directory is reachable
+  without any flag.
 - `{{memory}}` interpolates the tail of `NOTES.md`, capped to `maxBytes` (and
   then to `contextLimits.placeholderBytes` on top, same as any other
   placeholder — the smaller of the two governs in practice).

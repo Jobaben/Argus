@@ -19,12 +19,20 @@ import { execFile } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildChildEnv } from "./childEnv.js";
+import { invocationChannels } from "./channels.js";
 import { runtimeFor, resolveRuntimeId } from "../runtimes/index.js";
-import type { CapabilityRequest, MaterializedFile, SpawnPlan } from "../runtimes/types.js";
+import type {
+  CapabilityRequest,
+  ChannelOutcome,
+  InvocationChannel,
+  MaterializedFile,
+  SpawnPlan,
+} from "../runtimes/types.js";
 import type { Run } from "../sources/scheduleTypes.js";
 import type {
   AgentInvocationRecord,
   CapabilityProfile,
+  InvocationChannelRecord,
   PhaseDef,
   PhaseStep,
   PipelineDefinition,
@@ -92,9 +100,9 @@ export interface InvocationInputs {
   /** The isolated worktree the step runs in, when its phase declared one. */
   workspace?: WorkspaceRecord | null;
   resultFile: string | null;
-  /** Where this run may leave its KnowledgeDelta; its directory is made
-   *  writable under every capability profile. Absent = the protocol is off
-   *  for this invocation (tests that build one by hand). */
+  /** Where this run may leave its KnowledgeDelta. One of the Argus-owned
+   *  channels the runtime is asked to make reachable. Absent = the protocol is
+   *  off for this invocation (tests that build one by hand). */
   knowledgeDeltaFile?: string | null;
   timeoutSeconds: number | null;
   gitHead: string | null;
@@ -111,9 +119,50 @@ export interface PreparedInvocation {
   record: AgentInvocationRecord;
   /**
    * Limitations that forbid the launch: the profile asked for a restriction the
-   * runtime cannot enforce and enforcement is strict. Empty means launch.
+   * runtime cannot enforce, or a channel the launch depends on is unreachable,
+   * and enforcement is strict. Empty means launch.
    */
   blocking: string[];
+}
+
+/**
+ * The runtime's verdicts on the channels it was handed, made total: a runtime
+ * that answers for a channel decides it; one that fails to mention a channel
+ * has not made it reachable, and the gap is reported as such rather than
+ * assumed away. Fail closed — a protocol path is never presumed writable.
+ */
+export function settleChannels(
+  channels: InvocationChannel[],
+  reported: ChannelOutcome[] | undefined,
+  runtimeLabel: string,
+): ChannelOutcome[] {
+  return channels.map((channel) => {
+    const verdict = reported?.find(
+      (o) => o.channel.kind === channel.kind && o.channel.path === channel.path,
+    );
+    if (verdict) return verdict;
+    return {
+      channel,
+      status: "unavailable",
+      reason: `${runtimeLabel} did not account for the ${channel.label} (${channel.envVar})`,
+    };
+  });
+}
+
+function channelRecord(
+  channel: InvocationChannel,
+  status: InvocationChannelRecord["status"],
+  reason?: string,
+): InvocationChannelRecord {
+  return {
+    kind: channel.kind,
+    envVar: channel.envVar,
+    path: channel.path,
+    access: channel.access,
+    required: channel.required,
+    status,
+    ...(reason !== undefined ? { reason } : {}),
+  };
 }
 
 export function prepareInvocation(inputs: InvocationInputs): PreparedInvocation {
@@ -121,16 +170,22 @@ export function prepareInvocation(inputs: InvocationInputs): PreparedInvocation 
   const runtimeId = resolveRuntimeId(run.runtime);
   const runtime = runtimeFor(runtimeId);
   const profile = resolveCapabilities(def, phaseDef, stepDef);
+  // Every Argus-owned path this invocation is told about, with the access it
+  // needs and whether the launch depends on it. Built once, here; the runtime
+  // maps the whole list and answers for every entry.
+  const channels = invocationChannels({
+    resultFile: inputs.resultFile,
+    knowledgeDeltaFile: inputs.knowledgeDeltaFile ?? null,
+    artifactDir: inputs.artifactDir,
+    memoryDir: inputs.memoryDir ?? null,
+    phaseDef,
+  });
   const capabilities: CapabilityRequest | undefined = profile
     ? {
         profile,
         invocationDir: inputs.invocationDir,
         cwd: run.cwd,
-        artifactDir: inputs.artifactDir,
-        memoryDir: inputs.memoryDir ?? null,
-        knowledgeDeltaDir: inputs.knowledgeDeltaFile
-          ? path.dirname(inputs.knowledgeDeltaFile)
-          : null,
+        channels,
         hooks: {
           stop: invocationHookCommand(),
           gate: invocationHookCommand("needs-input"),
@@ -146,8 +201,31 @@ export function prepareInvocation(inputs: InvocationInputs): PreparedInvocation 
     capabilities,
   });
   const files = plan.files ?? [];
-  const limitations = plan.limitations ?? [];
   const strict = (profile?.enforcement ?? "strict") === "strict";
+
+  // What each channel's availability means. With a profile, the runtime was
+  // asked to map every channel and its verdicts stand: an unreachable channel
+  // is a recorded limitation always, and a refusal when the launch depends on
+  // it and enforcement is strict. Without a profile Argus does not shape the
+  // runtime's filesystem at all — the CLI's own defaults apply, exactly as
+  // before capability profiles existed — so it records the channels it offered
+  // and claims nothing about them.
+  let channelRecords: InvocationChannelRecord[];
+  let channelLimitations: string[] = [];
+  let channelBlocking: string[] = [];
+  if (profile) {
+    const outcomes = settleChannels(channels, plan.channels, runtime.label);
+    channelRecords = outcomes.map((o) => channelRecord(o.channel, o.status, o.reason));
+    const unavailable = outcomes.filter((o) => o.status === "unavailable");
+    channelLimitations = unavailable.map((o) => o.reason ?? `${o.channel.label} is unavailable`);
+    channelBlocking = unavailable
+      .filter((o) => o.channel.required)
+      .map((o) => o.reason ?? `${o.channel.label} is unavailable`);
+  } else {
+    channelRecords = channels.map((c) => channelRecord(c, "unmanaged"));
+  }
+  const profileLimitations = plan.limitations ?? [];
+  const limitations = [...profileLimitations, ...channelLimitations];
 
   const child = buildChildEnv(inputs.parentEnv, profile?.env, plan.env, inputs.argusEnv);
   const deadlineAt =
@@ -174,6 +252,7 @@ export function prepareInvocation(inputs: InvocationInputs): PreparedInvocation 
     ...(inputs.workspace !== undefined ? { workspace: inputs.workspace } : {}),
     resultFile: inputs.resultFile,
     knowledgeDeltaFile: inputs.knowledgeDeltaFile ?? null,
+    channels: channelRecords,
     timeoutSeconds: inputs.timeoutSeconds,
     deadlineAt,
     gitHead: inputs.gitHead,
@@ -185,7 +264,11 @@ export function prepareInvocation(inputs: InvocationInputs): PreparedInvocation 
     env: child.env,
     files,
     record,
-    blocking: strict ? limitations : [],
+    // Strict: a profile the runtime cannot enforce, or a required channel it
+    // cannot reach, refuses the launch. An optional channel it cannot reach is
+    // on the record but never a reason not to run. Best-effort: never refuse;
+    // the record carries every limitation either way.
+    blocking: strict ? [...profileLimitations, ...channelBlocking] : [],
   };
 }
 

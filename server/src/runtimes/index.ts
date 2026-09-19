@@ -21,6 +21,9 @@ import type { AgentRuntimeId } from "@argus/contracts";
 export type {
   AgentRuntime,
   AnalysisPlanOptions,
+  CapabilityRequest,
+  ChannelOutcome,
+  InvocationChannel,
   RunEnvelope,
   RunPlanOptions,
   SpawnPlan,
