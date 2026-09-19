@@ -3,7 +3,11 @@
 import type { AgentRuntimeId, ReasoningEffort } from "./runtimes.js";
 import type { Trigger } from "./schedules.js";
 import type { AutoApprove, Rubric } from "./verdict.js";
-import type { KnowledgeDeltaStatus } from "./knowledge.js";
+import type {
+  InvocationKnowledgeContext,
+  KnowledgeContextSpec,
+  KnowledgeDeltaStatus,
+} from "./knowledge.js";
 
 export interface PhaseStep {
   name: string;
@@ -21,6 +25,13 @@ export interface PhaseStep {
   stallSeconds?: number;
   /** Narrows or replaces the phase's capability profile for this one step. */
   capabilities?: CapabilityProfile;
+  /**
+   * The canonical knowledge this step's run receives as a read-only
+   * KnowledgeContext (`ARGUS_KNOWLEDGE_CONTEXT_FILE`). Replaces the phase's
+   * `knowledgeContext` for this one step. Absent on both = no semantic
+   * context: no file, no channel, exactly as before Phase 4.
+   */
+  knowledgeContext?: KnowledgeContextSpec;
 }
 
 /**
@@ -332,6 +343,17 @@ export interface AgentInvocationRecord {
   /** Where this run may leave its KnowledgeDelta (`ARGUS_KNOWLEDGE_DELTA_FILE`).
    *  Absent on records written before the protocol existed. */
   knowledgeDeltaFile?: string | null;
+  /** Where this run's read-only KnowledgeContext was materialized
+   *  (`ARGUS_KNOWLEDGE_CONTEXT_FILE`). Null when the step declared no
+   *  semantic context; absent on records written before Phase 4. */
+  knowledgeContextFile?: string | null;
+  /**
+   * Exactly what Argus supplied: the exact revisions in the context and the
+   * SHA-256 of the file as written. Independent of the agent's later
+   * `consumed` declaration, and stable however the ledger changes afterwards.
+   * Null when no context was supplied; absent on pre-Phase-4 records.
+   */
+  knowledgeContext?: InvocationKnowledgeContext | null;
   /**
    * Every Argus-owned channel this invocation was offered, with the access it
    * needs and whether the runtime could honour it. A channel `unavailable`
@@ -460,6 +482,13 @@ export interface PhaseDef {
    * channel is recorded as an invocation limitation and the step still runs.
    */
   knowledgeDelta?: "optional" | "required";
+  /**
+   * The canonical knowledge every step of this phase receives as a read-only
+   * KnowledgeContext, unless a step declares its own. Selectors are resolved
+   * against one ledger snapshot when the phase attempt is prepared; the exact
+   * revisions each run received are on its invocation record.
+   */
+  knowledgeContext?: KnowledgeContextSpec;
 }
 
 // ── Harness: Argus-owned invocation channels ─────────────────────────────────
@@ -471,7 +500,8 @@ export interface PhaseDef {
  * proposal, file artifacts — and unlike the working tree they live outside the
  * repository, so a filesystem restriction must not cut the agent off from them.
  */
-export type InvocationChannelKind = "result" | "knowledge-delta" | "artifact-dir" | "memory-dir";
+export type InvocationChannelKind =
+  "result" | "knowledge-delta" | "knowledge-context" | "artifact-dir" | "memory-dir";
 
 /** What the agent process needs to be able to do with a channel's path. */
 export type InvocationChannelAccess = "read" | "write";
@@ -496,8 +526,8 @@ export interface InvocationChannelRecord {
   kind: InvocationChannelKind;
   /** The variable the agent learns the path from (`ARGUS_RESULT_FILE`, …). */
   envVar: string;
-  /** The path as the agent sees it: a file for `result`/`knowledge-delta`, a
-   *  directory otherwise. */
+  /** The path as the agent sees it: a file for `result`/`knowledge-delta`/
+   *  `knowledge-context`, a directory otherwise. */
   path: string;
   access: InvocationChannelAccess;
   /** Whether the launch depends on this channel being available. */

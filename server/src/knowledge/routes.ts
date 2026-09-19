@@ -5,8 +5,12 @@ import type {
   ClaimKind,
   ClaimsResponse,
   ConsumptionsResponse,
+  ExecutionContextReport,
   KnowledgeDeltasResponse,
+  SuppliedToReport,
 } from "@argus/contracts";
+import { readInvocation, readInvocationRunIds } from "../sources/runs.js";
+import { compareSuppliedConsumed, readKnowledgeContext } from "./context.js";
 import {
   CLAIM_ID_RE,
   CLAIM_KINDS,
@@ -15,8 +19,10 @@ import {
   UnknownClaimError,
   consumersReport,
   dependentsReport,
+  executionOf,
   executionProvenance,
   parseClaimKey,
+  sameRef,
   refOf,
   resolveKey,
   revisionsOf,
@@ -159,6 +165,76 @@ export function knowledgeRoutes(): Hono {
     const report = executionProvenance(ledger, runId);
     if (!report) return c.json({ error: "not found" }, 404);
     return c.json(report);
+  });
+
+  // ── KnowledgeContext (Phase 4) ───────────────────────────────────────────
+  // What Argus *supplied* to a run, as distinct from what the run declared it
+  // consumed. The authoritative record is the run's invocation record (exact
+  // refs + the file's sha256), written before the process started; both
+  // reads derive from it rather than from a second store. The comparison
+  // with the ledger's consumption edges is computed per read.
+
+  /** Exactly which claim revisions run `:runId` received, the file's hash,
+   *  the ledger's consumptions for the run, and the three-way comparison.
+   *  404 when the run has no invocation record or was launched without a
+   *  semantic context. */
+  routes.get("/executions/:runId/context", async (c) => {
+    const runId = c.req.param("runId");
+    if (!EXECUTION_ID_RE.test(runId)) return c.json({ error: "not found" }, 404);
+    const invocation = await readInvocation(runId);
+    if (!invocation?.knowledgeContext || !invocation.knowledgeContextFile) {
+      return c.json({ error: "not found" }, 404);
+    }
+    const ledger = await readLedger();
+    const supplied = invocation.knowledgeContext.claims.map((r) => ({
+      id: r.id,
+      revision: r.revision,
+    }));
+    const consumed = ledger.consumptions
+      .filter((k) => k.execution.runId === runId)
+      .map((k) => ({ id: k.claim.id, revision: k.claim.revision }));
+    const body: ExecutionContextReport = {
+      execution: executionOf(ledger, runId) ?? {
+        runId,
+        instanceId: invocation.instanceId,
+        phaseId: invocation.phaseId,
+      },
+      context: { ...invocation.knowledgeContext, file: invocation.knowledgeContextFile },
+      supplied,
+      consumed,
+      comparison: compareSuppliedConsumed(supplied, consumed),
+      projection: await readKnowledgeContext(invocation.knowledgeContextFile),
+    };
+    return c.json(body);
+  });
+
+  /** Which runs were supplied this exact revision — derived from the
+   *  invocation records still on disk, oldest launch first. */
+  routes.get("/claims/:key/supplied-to", async (c) => {
+    const ledger = await readLedger();
+    const claim = claimFor(ledger, c.req.param("key"));
+    if (!claim) return c.json({ error: "not found" }, 404);
+    const ref = refOf(claim);
+    const records = await Promise.all((await readInvocationRunIds()).map(readInvocation));
+    const executions = records
+      .flatMap((inv) =>
+        inv?.knowledgeContext?.claims.some((r) => sameRef(r, ref))
+          ? [
+              {
+                execution: { runId: inv.runId, instanceId: inv.instanceId, phaseId: inv.phaseId },
+                suppliedAt: inv.startedAt,
+                sha256: inv.knowledgeContext.sha256,
+              },
+            ]
+          : [],
+      )
+      .sort(
+        (a, b) =>
+          a.suppliedAt.localeCompare(b.suppliedAt) ||
+          a.execution.runId.localeCompare(b.execution.runId),
+      );
+    const body: SuppliedToReport = { claim: ref, executions };
+    return c.json(body);
   });
 
   // ── KnowledgeDeltas (Phase 3) ────────────────────────────────────────────

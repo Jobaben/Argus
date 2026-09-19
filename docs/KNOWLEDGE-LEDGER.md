@@ -3,7 +3,9 @@
 _Phase 1: the semantic kernel and its persistence model. Phase 2: the
 execution provenance bridge and deterministic impact analysis. Phase 3: the
 KnowledgeDelta protocol — how agent executions propose knowledge and how Argus
-alone validates and commits it._
+alone validates and commits it. Phase 4: the KnowledgeContext protocol —
+how Argus supplies exact canonical knowledge to an execution and records what
+it supplied, independently of what the agent later declares it consumed._
 
 ## 1. Why it exists
 
@@ -1122,9 +1124,11 @@ prove — that the model internally reasoned from the claim merely because it
 declared consumption. The same is true of a justification: Argus proves the
 premises exist and the graph stays acyclic, not that the derivation is sound.
 This distinction is deliberate and must remain explicit: what the ledger holds
-is _structurally valid, agent-declared_ semantic dependency. A later phase can
-make consumption more deterministic by controlling the semantic context Argus
-supplies to an invocation and recording exactly what was supplied.
+is _structurally valid, agent-declared_ semantic dependency. Phase 4 (§13)
+adds the other half: Argus controls the semantic context it supplies to an
+invocation, records exactly what it supplied, and classifies each declared
+consumption against that record — without ever turning "supplied" into
+"consumed".
 
 ### 12.12 Failure semantics
 
@@ -1187,7 +1191,380 @@ Read surface (open, like every dashboard read; there is deliberately no write):
 - A record found `rejected` for the current attempt on re-intake is a refusal
   again; a record `staged` for the current attempt is reused (same id).
 
-## 13. Persistence
+## 13. KnowledgeContext protocol (Phase 4)
+
+Phase 3 left the _input_ side of the agent boundary soft. A run declared
+`consumed: ["RULE-17:v2"]`, and Argus could prove the reference was exact and
+existed — but not that the agent had ever been _given_ RULE-17:v2. Phase 4
+closes that with the mirror image of the delta file: Argus selects exact
+revisions, writes them to a read-only file beside the run, and records on the
+invocation precisely what it supplied.
+
+```
+             ARGUS
+Knowledge Ledger  (one snapshot per phase attempt)
+      │
+      │ KnowledgeContext        Argus-controlled input   argus/invocations/<runId>/knowledge-context.json
+      ▼                                                  $ARGUS_KNOWLEDGE_CONTEXT_FILE, read-only
+    Agent
+      │
+      │ KnowledgeDelta          agent-proposed output    argus/knowledge-deltas/<runId>/delta.json
+      ▼                                                  $ARGUS_KNOWLEDGE_DELTA_FILE, write
+Knowledge Ledger  (committed at phase acceptance, §12.7)
+```
+
+Two facts come out of one run, and they are **never collapsed**:
+
+| Fact         | Meaning                                                        | Who asserts it | Where it lives                                                             |
+| ------------ | -------------------------------------------------------------- | -------------- | -------------------------------------------------------------------------- |
+| **supplied** | Argus can prove this exact revision was in the run's context   | Argus          | `AgentInvocationRecord.knowledgeContext` (exact refs + sha256 of the file) |
+| **consumed** | the agent declares it materially relied on this exact revision | the agent      | `ClaimConsumption` in `knowledge.json` (Phase 2 edge, via the delta)       |
+
+An agent may receive ten claims and rely on three. Supplying a claim creates
+no consumption edge, and impact analysis (§10) reads consumptions only. What
+Phase 4 adds to the consumption edge is a classification — which side of the
+line it fell on — not a new kind of edge.
+
+### 13.1 Authoring: selectors on a step or its phase
+
+The narrowest useful scope is the step: each invocation may need different
+knowledge. A phase may also declare a spec, which every step of the phase
+receives unless the step declares its own (a step's spec _replaces_ the
+phase's; selector lists are never merged). There is no pipeline-level spec —
+"every run receives everything" is the anti-pattern this protocol exists to
+avoid.
+
+```jsonc
+{
+  "id": "implement",
+  "name": "Implement",
+  "knowledgeContext": { "claims": ["RULE-17", "CONSTRAINT-4:v1"] }, // every step of the phase
+  "steps": [
+    { "name": "code", "prompt": "…" }, // receives the phase's
+    {
+      "name": "verify",
+      "prompt": "…",
+      "knowledgeContext": { "claims": [{ "id": "DECISION-3", "revision": "active" }] }, // its own
+    },
+  ],
+}
+```
+
+A selector is one of two things, and the difference is _when_ it is resolved:
+
+| Selector   | Authored as                                                | Means                                                                          |
+| ---------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| **exact**  | `"RULE-17:v2"` or `{ "id": "RULE-17", "revision": 2 }`     | always that historical revision, superseded or not                             |
+| **active** | `"RULE-17"` or `{ "id": "RULE-17", "revision": "active" }` | the active revision _at the moment the phase attempt is prepared_, then frozen |
+
+Strings are normalized to the object form when the definition is saved, so a
+persisted definition never depends on how a selector was spelled. Two rules
+are enforced at save time, ledger-free (`parseKnowledgeContextSpec`):
+
+- **shape** — a selector that is not a claim id, an `ID:vN`, or the object
+  form; a revision below 1; an unknown key; an empty list; more than 64
+  entries — is a `400` naming the entry (`phase 0: step "code":
+knowledgeContext.claims[1] must be a claim id …`);
+- **one selector per claim id.** A context is a set of claims keyed by
+  logical id — each selector answers "which revision of X does this step
+  see" — so `["RULE-17:v2", "RULE-17"]` is refused (`RULE-17 is already
+selected by claims[0]; each claim id may appear once`). The alternative
+  (two revisions of one claim presented as simultaneously _the_ claim) is
+  exactly the ambiguity exact references exist to remove. Deduplicating
+  silently was rejected because a duplicate is an authoring mistake worth
+  hearing about.
+
+Whether the claims **exist** is not checked at save time: a definition may
+legitimately name a claim a later phase will create. That check happens at
+launch (§13.3).
+
+### 13.2 Resolution: one snapshot per phase attempt
+
+```
+startPhase(attempt)
+  ↓ any step of the phase declares a knowledgeContext?  → readLedger() once   ← the snapshot
+  ↓ for each planned run: resolveKnowledgeContext(snapshot, spec)             ← pure
+  │     exact  → getClaim(id, revision)        (may be superseded; lifecycle says so)
+  │     active → activeRevision(id)            (the highest revision in the snapshot)
+  ↓ prompt gains one line naming the exact refs the file will hold
+launchStep(run)
+  ↓ write argus/invocations/<runId>/knowledge-context.json atomically, chmod 0444
+  ↓ prepareInvocation: channel { kind: "knowledge-context", access: "read", required: true }
+  ↓ invocation record: knowledgeContextFile, knowledgeContext { schemaVersion, claims, sha256 }
+  ↓ journal knowledge.supplied
+  ↓ spawn
+```
+
+**The resolution boundary is the snapshot.** Every selector of every run of
+one phase attempt — exact and active alike — is answered from the one ledger
+document read when the attempt was planned. Consequences, all deterministic:
+
+- The runs of one attempt cannot disagree about what "active" meant.
+- A revision committed between planning and spawn, or while the agents run,
+  is by construction not in any of their files. The run received what the
+  snapshot said; the invocation record says so; a newer revision appearing
+  immediately afterwards is expected and harmless, because history is what
+  the record holds.
+- A retry or a revise plans a **new** attempt and reads a **new** snapshot —
+  the second attempt may see v3 where the first saw v2, and each attempt's
+  runs record their own.
+- Nothing attempts a transaction between process spawn and later ledger
+  writes. The record is the proof; the file is immutable once written.
+
+Support state never blocks selection. `unsupported` and `contested` revisions
+are supplied with that state written on them: a contested rule may be exactly
+what the step is asked to reason about, and hiding semantic uncertainty from
+the agent would be worse than exposing it. An exact selector may name a
+superseded revision (it exists — that is what "historical" means) and the
+projection says `lifecycle: "superseded", supersededBy: "RULE-17:v2"`. An
+active selector, by definition, only ever resolves to an active revision.
+
+### 13.3 What refuses a launch
+
+| Condition                                                                          | When           | Effect                                                                                                                                                                                      |
+| ---------------------------------------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| malformed selector, duplicate id, empty or oversized list                          | pipeline save  | `400` (`PipelineValidationError`)                                                                                                                                                           |
+| claim id unknown to the snapshot                                                   | phase planning | the step fails as **`configuration`** before any process starts: `knowledge context unknown-claim: knowledgeContext.claims[1] (NOPE-1 (active)): claim NOPE-1 does not exist in the ledger` |
+| exact revision unknown to the snapshot                                             | phase planning | same, `unknown-revision: … revision v7 of RULE-17 does not exist`                                                                                                                           |
+| runtime cannot make the file readable (Qwen container sandbox; strict enforcement) | launch         | `configuration` — the read channel is `required` (HARNESS.md §3a)                                                                                                                           |
+
+`configuration` is the right class: the definition names knowledge the ledger
+does not hold, and running again cannot change that. It is never retried. The
+run record carries the reason (`termination: "spawn-failed"`), the phase
+fails under `configuration`, and no context file is written.
+
+### 13.4 The agent-facing document
+
+`ARGUS_KNOWLEDGE_CONTEXT_FILE` names one JSON document (`contracts/src/knowledge.ts`
+→ `KnowledgeContext`). It is a **projection**, not a serialized ledger: each
+entry carries what an agent needs to reason correctly from the claim without
+touching the ledger, and nothing else.
+
+```jsonc
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-19T10:00:00.000Z",
+  "claims": [
+    {
+      "ref": "RULE-17:v2", // the immutable identity to cite in `consumed`
+      "id": "RULE-17",
+      "revision": 2,
+      "kind": "business-rule",
+      "statement": "Kobra customer comments are limited to 500 characters",
+      "lifecycle": "active", // or "superseded", with "supersededBy": "RULE-17:v3"
+      "support": "supported", // or "unsupported" | "contested" — never hidden
+      "revisionNote": "Kobra 4.2 raised the limit",
+      "evidence": [
+        {
+          "direction": "supports",
+          "source": { "type": "document", "uri": "https://kobra.example/release-notes/4.2" },
+        },
+      ],
+    },
+    {
+      "ref": "CONSTRAINT-4:v1",
+      "id": "CONSTRAINT-4",
+      "revision": 1,
+      "kind": "constraint",
+      "statement": "Validation runs server-side",
+      "structuredValue": { "where": "server" }, // when the claim has one; opaque
+      "lifecycle": "active",
+      "support": "supported",
+      "producedBy": { "instanceId": "inst-0", "phaseId": "plan", "runId": "run-0" },
+      "evidence": [{ "direction": "supports", "source": { "type": "human", "who": "architect" } }],
+    },
+  ],
+  "metadata": {
+    "selection": [
+      // how each entry was chosen — inspection, not instruction
+      {
+        "selector": { "id": "RULE-17", "revision": "active" },
+        "resolved": { "id": "RULE-17", "revision": 2 },
+      },
+      {
+        "selector": { "id": "CONSTRAINT-4", "revision": 1 },
+        "resolved": { "id": "CONSTRAINT-4", "revision": 1 },
+      },
+    ],
+  },
+}
+```
+
+What is deliberately **not** there: record ids and timestamps of evidence,
+the justification graph, consumptions, artifact productions, applied deltas,
+any claim that was not selected, and any storage or locking detail. The
+document is deterministic for one snapshot and one spec — same bytes, same
+hash — and `claims` follow the spec's order.
+
+The file is written with the atomic writer and then made read-only (`0444`).
+The mode is a guard against an accidental overwrite by a tool, not the
+security boundary; the runtime's sandbox or deny rules are (HARNESS.md §3a),
+and the invocation record's hash is the proof of what was supplied whatever
+happens to the file afterwards.
+
+### 13.5 The system prompt and the run prompt
+
+`STEP_CONTRACT` gains a third pure constant, `KNOWLEDGE_CONTEXT_CONTRACT`,
+phrased conditionally so the cacheable prefix is identical for every run:
+
+> Semantic context. If the `ARGUS_KNOWLEDGE_CONTEXT_FILE` environment variable
+> is set, Argus has supplied canonical semantic context … as a read-only JSON
+> file at that path; read it before reasoning about the task. Each entry's
+> `ref` (`ID:vN`) is an immutable historical identity … Never modify the file.
+> Use only what is relevant. If you write a KnowledgeDelta that declares an
+> existing claim as consumed, name the exact revision you relied upon, as
+> given by its ref.
+
+A step that received a context additionally gets one line in its prompt
+(beside the artifact and memory instructions) naming the exact refs:
+`Semantic context supplied. Argus has placed 2 canonical claim revisions
+(RULE-17:v2, CONSTRAINT-4:v1) as read-only JSON at the path in …`. The file is
+the channel; the prompt only makes sure the agent knows it is there. Nothing
+tells the agent the ledger's architecture, and nothing obliges it to use every
+supplied claim.
+
+### 13.6 Supplied provenance: where it lives and why
+
+`run_456 was supplied RULE-17:v2` is recorded **once**, on the run's
+invocation record:
+
+```jsonc
+// argus/invocations/run_456/invocation.json
+{
+  "knowledgeContextFile": "…/argus/invocations/run_456/knowledge-context.json",
+  "knowledgeContext": {
+    "schemaVersion": 1,
+    "claims": [
+      { "id": "RULE-17", "revision": 2 },
+      { "id": "CONSTRAINT-4", "revision": 1 },
+    ],
+    "sha256": "3b7c…",
+  },
+  "channels": [
+    // …
+    {
+      "kind": "knowledge-context",
+      "envVar": "ARGUS_KNOWLEDGE_CONTEXT_FILE",
+      "access": "read",
+      "required": true,
+      "status": "granted",
+    },
+  ],
+}
+```
+
+**Decision: derive from the invocation record; do not copy edges into
+`knowledge.json`.** The reasoning:
+
+1. The invocation record is already the immutable, Argus-authored account of
+   what one run was launched with — argv, environment names, channels. "This
+   run was supplied RULE-17:v2" is one more fact about the launch, known at
+   the same instant, by the same code, and written to the same file before
+   the process exists. One writer, one record, nothing to reconcile.
+2. `knowledge.json` holds knowledge and the edges created when knowledge is
+   _accepted_. A supplied edge would be the only record written at launch,
+   and the only one existing for runs that never succeeded — every failed or
+   aborted run would become a ledger write under the ledger mutex.
+3. The reverse query — _which runs received RULE-17:v2?_ — is a filter over
+   invocation records, which are bounded by run retention. It needs no index
+   at Argus's volumes and no second authoritative store.
+
+The trade-off, stated plainly: invocation records are pruned with their runs
+(like the result file and the delta staging), so the supplied set of a pruned
+run is gone. The **consumption edge outlives pruning** and now carries its
+classification (§13.7), so for every run that committed a delta the
+distinction that matters for impact — was this consumed claim supplied or
+discovered — is durable in the ledger even after the run's files age out.
+
+Both directions are exposed:
+
+```
+GET /api/knowledge/executions/run_456/context      →  what did run_456 receive?
+GET /api/knowledge/claims/RULE-17:v2/supplied-to    →  which runs received RULE-17:v2?
+```
+
+The first returns the record's exact refs, hash and file path, the ledger's
+consumptions for the run, the three-way comparison, and — while the file
+still exists — the materialized projection. The second scans invocation
+records for the exact revision (a different revision of the same id is not a
+match), oldest launch first.
+
+### 13.7 Supplied versus consumed
+
+At intake (§12.6) Argus reads the run's invocation record and copies its
+supplied refs onto the staged `KnowledgeDeltaRecord` as `supplied` (empty
+for a run launched without a context; absent only when the record cannot be
+read). At commit the pure `applyKnowledgeDeltas` receives them on the
+`DeltaProposal` and classifies every `consumed` entry:
+
+| Case                   | Example                                      | Result                                                                     |
+| ---------------------- | -------------------------------------------- | -------------------------------------------------------------------------- |
+| supplied and consumed  | supplied `RULE-17:v2`, consumed `RULE-17:v2` | `ClaimConsumption.source = "supplied-context"` — the normal case           |
+| supplied, not consumed | supplied `CONSTRAINT-4:v1`, not declared     | **no consumption edge**. Allowed: the agent did not need everything it got |
+| consumed, not supplied | consumed `FACT-2:v1`, never supplied         | `source = "agent-discovered"`. Allowed and recorded, never refused         |
+| no invocation record   | (hand-registered via the admin API)          | `source` absent — no claim either way                                      |
+
+`source` is the smallest representation that preserves the distinction: one
+optional field on the Phase 2 edge, so `executionProvenance(runId).consumed[]`
+and `GET /claims/:key/consumers` show it, `knowledge.json` stays at version 3
+(the field is additive), and records written before Phase 4 simply lack it.
+
+A consumed-but-not-supplied claim is **not rejected**. The agent may have
+learned it from source code, a document, an MCP server or any other tool it
+was allowed. What Phase 4 adds is that Argus now knows — and says — that it
+did not supply it. Whether a policy should later require consumption to stay
+within supplied context is a decision for a later phase, and one this record
+makes possible.
+
+### 13.8 Impact stays consumption-based
+
+Nothing in `analyzeImpact` reads a supplied set, and this is deliberate. A run
+that received `RULE-A`, `RULE-B`, `RULE-C` and declared `consumed: [RULE-B]`
+is impacted when `RULE-B` changes and untouched when `RULE-A` does. Were
+supply to count as dependency, every context payload would become blast
+radius and the impact set would be dominated by false positives — the exact
+failure the exact-reference discipline exists to prevent. The
+`contextEngine.test.ts` scenario "supplied ≠ consumed" pins this from both
+sides: revising the supplied-only claim yields `executions: []`; revising the
+consumed one lists the run and its artifact.
+
+### 13.9 The worked example, Phase 4
+
+```
+Ledger:   RULE-17:v1 (superseded) → RULE-17:v2 "Comment max is 500"     CONSTRAINT-4:v1 "Validate server-side"
+Step:     implement/code   knowledgeContext: { claims: ["RULE-17", "CONSTRAINT-4:v1"] }
+```
+
+1. `startPhase` reads one snapshot; `RULE-17` (active) resolves to **v2**,
+   `CONSTRAINT-4:v1` is taken exactly.
+2. `launchStep` writes `argus/invocations/run_456/knowledge-context.json`
+   (`claims[].ref = ["RULE-17:v2", "CONSTRAINT-4:v1"]`, `0444`), records
+   `knowledgeContext: { claims: [RULE-17:v2, CONSTRAINT-4:v1], sha256 }`,
+   journals `knowledge.supplied`, and spawns with
+   `ARGUS_KNOWLEDGE_CONTEXT_FILE` set. Under a Claude Code profile the argv
+   carries `--add-dir <invocation dir>` and `Edit(//<invocation dir>/**)` in
+   `--disallowedTools`.
+3. The agent reads the file, implements the validator, and writes a delta:
+   `{ "consumed": ["RULE-17:v2"], "artifacts": [{ "location": "artifact-dir", "path": "context-as-seen.json" }] }`.
+4. Intake copies `supplied: [RULE-17:v2, CONSTRAINT-4:v1]` onto the staged
+   record; the phase's checks pass; the commit records
+   `ClaimConsumption { RULE-17:v2, run_456, source: "supplied-context" }` and
+   the artifact. No edge for `CONSTRAINT-4:v1`.
+5. Later, `RULE-17:v3` supersedes v2. `GET /claims/RULE-17:v2/impact` lists
+   `run_456` (`consumed-affected-claim`) and its artifact. The invocation
+   record still says v2; the file still says v2.
+6. `CONSTRAINT-4` is revised. `GET /claims/CONSTRAINT-4:v1/impact` lists no
+   execution: it was supplied, not consumed.
+7. `GET /executions/run_456/context` answers
+   `comparison: { suppliedAndConsumed: [RULE-17:v2], suppliedNotConsumed: [CONSTRAINT-4:v1], consumedNotSupplied: [] }`;
+   `GET /claims/RULE-17:v2/supplied-to` answers `[run_456]`.
+
+This exact scenario runs against real child processes in
+`harness/e2e.test.ts` ("knowledge context: …"), with the fake agent copying
+the file it read into its artifact directory so the test compares the bytes
+the agent saw with the bytes Argus wrote.
+
+## 14. Persistence
 
 **Authoritative store:** `~/.claude/argus/knowledge.json`, one JSON document:
 
@@ -1232,7 +1609,7 @@ grow past what one read per request tolerates, the kernel is unchanged — only
 The on-disk records carry **no derived state**: no `lifecycle`, no `support`,
 no `truth`, no `currency`, no `impacted`. Every read surface derives them.
 
-## 14. Important invariants
+## 15. Important invariants
 
 1. **Append-only.** No record is updated or deleted. A claim changes by
    revision; evidence, justifications, consumptions and artifact productions
@@ -1285,8 +1662,20 @@ no `truth`, no `currency`, no `impacted`. Every read surface derives them.
     profile the runtime answers whether `ARGUS_KNOWLEDGE_DELTA_FILE` is
     writable; an unwritable channel is on the invocation record, and refuses
     the launch when the phase declared it required (HARNESS.md §3a).
+19. **Supplied ≠ consumed.** What Argus put in a run's context is recorded on
+    the invocation (exact refs, sha256) and never becomes a consumption; what
+    the agent declares consumed is the only dependency edge, classified as
+    `supplied-context` or `agent-discovered`. Impact reads consumptions only.
+20. **Exact revisions are supplied, from one snapshot.** An `active` selector
+    is resolved when the phase attempt is planned and frozen; the file and
+    the record name the exact revision, never "active". A later revision
+    never alters a prepared run's context.
+21. **The context file is Argus → agent, read-only.** It lives in the run's
+    own invocation directory, is a `required` read channel, is made `0444`,
+    and under Claude Code is denied for edits; a runtime that cannot make it
+    readable refuses the launch under strict enforcement.
 
-## 15. What Phases 1–3 deliberately do NOT do
+## 16. What Phases 1–4 deliberately do NOT do
 
 - **No automatic pipeline invalidation.** A superseded rule changes what
   `evaluateSupport` and `analyzeImpact` return; it does not touch any
@@ -1321,50 +1710,57 @@ no `truth`, no `currency`, no `impacted`. Every read surface derives them.
   them, revise phases, modify code, open remediation agents, resolve
   contradictions or alter any execution status. It ends at "new knowledge
   committed → the ImpactSet shows the consequences".
-- **No semantic context delivery.** Argus does not yet choose which claims an
-  agent should read, materialize them, or record what it supplied; a
-  `consumed` entry is the agent's declaration.
+- **No automatic context selection.** Phase 4 supplies exactly what a step's
+  author selected — exact or active revisions by claim id. No semantic
+  search, embeddings, vector store, tag or domain filters, automatic
+  graph-neighbourhood expansion, or LLM-chosen context.
+- **No enforcement of "consume only what was supplied".** A
+  consumed-but-not-supplied claim is recorded as `agent-discovered`, never
+  refused.
+- **No business-rule discovery, Jira ingestion, discovery agents or
+  repository-wide extraction.** The context file is the delivery primitive
+  those would build on; none of them exists.
 - **No inferred deltas.** Nothing parses a transcript, a diff or a prompt into
   a delta. The agent writes the file or there is no delta.
 
-## 16. How this prepares the next steps
+## 17. How this prepares the next steps
 
-With Phase 3, every run has a trusted way to put facts into the ledger, and
-every fact in the ledger can be traced back to the delta and the run that
-proposed it. `executionProvenance` and `analyzeImpact` are now fed by the
-pipeline itself rather than by an operator. What remains soft is the _input_
-side: an agent declares what it consumed, but Argus did not choose what it
-read.
+With Phase 4 the agent boundary is closed in both directions. A run's
+semantic input is chosen by its author, resolved deterministically, delivered
+read-only and recorded exactly; its semantic output is proposed through the
+delta, validated, and committed at acceptance; and every consumption edge
+says whether it fell inside or outside what Argus supplied.
 
-The smallest coherent Phase 4 is therefore **controlled semantic context
-delivery**: Argus selects the exact claim revisions relevant to an agent task
-(by kind, by explicit reference from the phase definition, by the phase's
-declared dependencies), materializes them as a machine-readable context file
-beside the run — the mirror image of the delta file — and records which
-revisions were supplied to the invocation. Consumption then has a
-deterministic floor ("the run was given exactly these revisions") that the
-agent's declaration refines rather than invents, and a revision proposal can
-be checked against what the run was actually shown. Business-rule discovery —
-an agent proposing `business-rule` claims from a repository — becomes a
-pipeline authored on top of the protocol that already exists, not a new
-mechanism. Whether Argus then offers a re-run, opens an issue, or marks a phase
-for review remains a separate decision, and because the phase record and the
-ledger are separate, it can be made without rewriting either.
+The smallest coherent Phase 5 is **deterministic semantic context selection
+and business-rule discovery orchestration**: a pipeline whose early phase is
+allowed to _discover_ candidate business rules from repository evidence
+(source, documents, tests) and propose them — through the existing
+KnowledgeDelta, with `source-code` and `document` evidence, as ordinary
+`business-rule` claims — while every downstream phase receives only
+explicitly selected canonical knowledge through the KnowledgeContext. The
+new work is orchestration and authoring: a way for a later step's spec to
+select what an earlier step of the same instance created (the local-id →
+canonical mapping already exists on the applied delta), and a review gate
+between discovery and use. Nothing about the ledger, the delta or the context
+primitive has to change for that; whether discovered rules are then
+re-verified, contradicted or acted on remains a separate decision, and a
+human's.
 
-## 17. Where the code lives
+## 18. Where the code lives
 
-| Path                                | Role                                                                                                                                        |
-| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `contracts/src/knowledge.ts`        | wire types: Claim, ClaimRef, Evidence, Justification, ClaimConsumption, ArtifactProduction, ExecutionProvenance, ImpactSet                  |
-| `server/src/knowledge/kernel.ts`    | pure transitions and queries; the only definition of support; the provenance transitions and `executionProvenance`                          |
-| `server/src/knowledge/impact.ts`    | `analyzeImpact` — the pure, deterministic impact algorithm                                                                                  |
-| `server/src/knowledge/validate.ts`  | untrusted body → typed proposal (the future agent boundary)                                                                                 |
-| `server/src/knowledge/store.ts`     | the authoritative JSON document (v3); mints ids, stamps time, upgrades v1/v2; `commitKnowledgeDeltas` under the ledger mutex                |
-| `server/src/knowledge/delta.ts`     | the KnowledgeDelta protocol's pure half: `validateKnowledgeDelta`, `applyKnowledgeDeltas` (preflight + atomic application)                  |
-| `server/src/knowledge/staging.ts`   | per-run staging: the agent's file, Argus's record, status transitions                                                                       |
-| `server/src/harness/channels.ts`    | the Argus-owned invocation channels the delta file is one of: kind, env var, path, access, required (HARNESS.md §3a)                        |
-| `server/src/knowledge/routes.ts`    | `/api/knowledge` (mounted and admin-gated in `app.ts`), including the delta inspection reads                                                |
-| `server/src/pipelineTransitions.ts` | `succeedPhase` (the hold), `applyKnowledgeCommit` (the verdict), `stagedDeltaIds`                                                           |
-| `server/src/pipelineEngine.ts`      | `intakeKnowledgeDelta`, `verifyDeltaArtifacts`, `commitPhaseKnowledge`, `settleKnowledge`, `retireStagedDeltas`; `KNOWLEDGE_DELTA_CONTRACT` |
-| `server/src/knowledge/*.test.ts`    | kernel semantics, impact scenarios, persistence roundtrip, HTTP contract, delta validation/application, engine lifecycle                    |
-| `docs/API.md` § Knowledge Ledger    | endpoint reference                                                                                                                          |
+| Path                                | Role                                                                                                                                                                                                                                      |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `contracts/src/knowledge.ts`        | wire types: Claim, ClaimRef, Evidence, Justification, ClaimConsumption, ArtifactProduction, ExecutionProvenance, ImpactSet                                                                                                                |
+| `server/src/knowledge/kernel.ts`    | pure transitions and queries; the only definition of support; the provenance transitions and `executionProvenance`                                                                                                                        |
+| `server/src/knowledge/impact.ts`    | `analyzeImpact` — the pure, deterministic impact algorithm                                                                                                                                                                                |
+| `server/src/knowledge/validate.ts`  | untrusted body → typed proposal (the future agent boundary)                                                                                                                                                                               |
+| `server/src/knowledge/store.ts`     | the authoritative JSON document (v3); mints ids, stamps time, upgrades v1/v2; `commitKnowledgeDeltas` under the ledger mutex                                                                                                              |
+| `server/src/knowledge/delta.ts`     | the KnowledgeDelta protocol's pure half: `validateKnowledgeDelta`, `applyKnowledgeDeltas` (preflight + atomic application)                                                                                                                |
+| `server/src/knowledge/staging.ts`   | per-run staging: the agent's file, Argus's record, status transitions                                                                                                                                                                     |
+| `server/src/knowledge/context.ts`   | the KnowledgeContext protocol: `parseKnowledgeContextSpec`, `resolveKnowledgeContext` (pure, one snapshot), projection, hash, the per-run file                                                                                            |
+| `server/src/harness/channels.ts`    | the Argus-owned invocation channels the delta file and the read-only context file are two of: kind, env var, path, access, required (HARNESS.md §3a)                                                                                      |
+| `server/src/knowledge/routes.ts`    | `/api/knowledge` (mounted and admin-gated in `app.ts`), including the delta inspection reads and the context reads (`/executions/:runId/context`, `/claims/:key/supplied-to`)                                                             |
+| `server/src/pipelineTransitions.ts` | `succeedPhase` (the hold), `applyKnowledgeCommit` (the verdict), `stagedDeltaIds`                                                                                                                                                         |
+| `server/src/pipelineEngine.ts`      | `intakeKnowledgeDelta`, `verifyDeltaArtifacts`, `commitPhaseKnowledge`, `settleKnowledge`, `retireStagedDeltas`; `KNOWLEDGE_DELTA_CONTRACT`; the per-attempt ledger snapshot, `knowledgeContextInstruction`, `KNOWLEDGE_CONTEXT_CONTRACT` |
+| `server/src/knowledge/*.test.ts`    | kernel semantics, impact scenarios, persistence roundtrip, HTTP contract, delta validation/application, engine lifecycle, context resolution and delivery                                                                                 |
+| `docs/API.md` § Knowledge Ledger    | endpoint reference                                                                                                                                                                                                                        |

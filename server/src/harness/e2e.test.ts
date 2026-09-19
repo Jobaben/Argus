@@ -1069,3 +1069,183 @@ test(
     assert.equal(existsSync(path.join(h.home, "argus", "knowledge.json")), false);
   },
 );
+
+// ── 13. KnowledgeContext: Argus supplies, the agent reads, consumption is classified ──
+
+test(
+  "knowledge context: the agent reads exactly the revisions Argus resolved and froze; consumption, not supply, drives impact",
+  posixOnly,
+  async (t) => {
+    const h: Harness = await startHarness({ git: true });
+    t.after(() => h.close());
+    const knowledge = await import("../knowledge/store.js");
+    const context = await import("../knowledge/context.js");
+    const impact = await import("../knowledge/impact.js");
+    // Ledger: RULE-17 at v2 (v1 superseded), CONSTRAINT-4:v1.
+    await knowledge.createClaim(
+      { id: "RULE-17", kind: "business-rule", statement: "Comment max is 180" },
+      new Date(),
+    );
+    await knowledge.createRevision(
+      "RULE-17",
+      { statement: "Comment max is 500", revisionNote: "Kobra 4.2 raised the limit" },
+      new Date(),
+    );
+    await knowledge.createClaim(
+      { id: "CONSTRAINT-4", kind: "constraint", statement: "Validate server-side" },
+      new Date(),
+    );
+    for (const claim of ["RULE-17:v2", "CONSTRAINT-4:v1"]) {
+      await knowledge.createEvidence(
+        {
+          claim: { id: claim.split(":")[0], revision: Number(claim.split(":v")[1]) },
+          direction: "supports",
+          source: { type: "document", uri: `spec://${claim}` },
+        },
+        new Date(),
+      );
+    }
+
+    // The agent reads the context, then consumes RULE-17:v2 only and produces an artifact.
+    const delta = JSON.stringify({
+      schemaVersion: 1,
+      consumed: ["RULE-17:v2"],
+      artifacts: [{ location: "artifact-dir", path: "context-as-seen.json" }],
+    });
+    const def = await h.seed([
+      {
+        id: "implement",
+        name: "Implement",
+        steps: [
+          {
+            name: "code",
+            prompt: [
+              "Implement the comment validator.",
+              "FAKE: read-context context-as-seen.json",
+              `FAKE: write-delta ${delta}`,
+            ].join("\n"),
+            knowledgeContext: { claims: ["RULE-17", "CONSTRAINT-4:v1"] },
+          },
+        ],
+        capabilities: { filesystem: "read-only", tools: { allow: ["Read"] }, mcpServers: {} },
+        checks: [{ kind: "artifact", path: "context-as-seen.json" }],
+      },
+    ]);
+    const inst = (await h.engine.start(def.id, "manual"))!;
+    const done = await waitForInstance(
+      inst.id,
+      (i) => i.status !== "running",
+      "instance to settle",
+    );
+    await h.engine.drain();
+    assert.equal(done.status, "succeeded", JSON.stringify(done.phases[0].payload));
+    const phase = phaseOf(done, "implement");
+    const runId = runIdOf(phase);
+    assert.equal(phase.knowledge?.status, "applied");
+
+    // Argus resolved the active selector to v2 and froze it; the record proves it.
+    const invocation = (await readInvocation(runId))!;
+    assert.equal(invocation.knowledgeContextFile, context.knowledgeContextFile(runId));
+    assert.deepEqual(invocation.knowledgeContext?.claims, [
+      { id: "RULE-17", revision: 2 },
+      { id: "CONSTRAINT-4", revision: 1 },
+    ]);
+    const onDisk = await readFile(invocation.knowledgeContextFile!, "utf8");
+    assert.equal(invocation.knowledgeContext?.sha256, context.sha256Hex(onDisk));
+    assert.equal(
+      invocation.channels?.find((c) => c.kind === "knowledge-context")?.status,
+      "granted",
+    );
+
+    // The child saw the variable, was granted the directory, and was denied edits under it.
+    const seen = await readSeen(inst.id, "implement");
+    assert.ok(seen.envNames.includes("ARGUS_KNOWLEDGE_CONTEXT_FILE"));
+    assert.ok(
+      seen.argv.includes(path.dirname(invocation.knowledgeContextFile!)),
+      "--add-dir names the invocation dir",
+    );
+    const denied = argAfter(seen.argv, "--disallowedTools") ?? "";
+    assert.ok(
+      denied.includes(`Edit(//${path.dirname(invocation.knowledgeContextFile!)}/**)`),
+      denied,
+    );
+    assert.match(
+      argAfter(seen.argv, "--append-system-prompt") ?? "",
+      /ARGUS_KNOWLEDGE_CONTEXT_FILE/,
+    );
+    assert.match(seen.prompt, /Semantic context supplied.*RULE-17:v2, CONSTRAINT-4:v1/);
+
+    // What the agent read is byte-for-byte what Argus wrote, and names the exact refs.
+    const copied = await readFile(
+      path.join(artifactDirFor(inst.id, "implement"), "context-as-seen.json"),
+      "utf8",
+    );
+    assert.equal(copied, onDisk);
+    const ctx = JSON.parse(copied) as { claims: Array<{ ref: string; statement: string }> };
+    assert.deepEqual(
+      ctx.claims.map((c) => c.ref),
+      ["RULE-17:v2", "CONSTRAINT-4:v1"],
+    );
+    assert.equal(ctx.claims[0].statement, "Comment max is 500");
+
+    // Supplied ≠ consumed: one edge, classified; CONSTRAINT-4 was supplied only.
+    const ledger = await knowledge.readLedger();
+    assert.deepEqual(
+      ledger.consumptions.map((c) => [c.claim.id, c.claim.revision, c.source]),
+      [["RULE-17", 2, "supplied-context"]],
+    );
+
+    // The reads over HTTP.
+    const report = (await (
+      await fetch(`${h.baseUrl}/api/knowledge/executions/${runId}/context`)
+    ).json()) as any;
+    assert.deepEqual(report.comparison, {
+      suppliedAndConsumed: [{ id: "RULE-17", revision: 2 }],
+      suppliedNotConsumed: [{ id: "CONSTRAINT-4", revision: 1 }],
+      consumedNotSupplied: [],
+    });
+    assert.deepEqual(
+      report.projection.claims.map((c: { ref: string }) => c.ref),
+      ["RULE-17:v2", "CONSTRAINT-4:v1"],
+    );
+    const suppliedTo = (await (
+      await fetch(`${h.baseUrl}/api/knowledge/claims/RULE-17:v2/supplied-to`)
+    ).json()) as any;
+    assert.deepEqual(
+      suppliedTo.executions.map((e: { execution: { runId: string } }) => e.execution.runId),
+      [runId],
+    );
+
+    // Later: RULE-17:v3 supersedes v2. The impact set finds the consuming run and its artifact.
+    await knowledge.createRevision("RULE-17", { statement: "Comment max is 1000" }, new Date());
+    const set = impact.analyzeImpact(await knowledge.readLedger(), { id: "RULE-17", revision: 2 });
+    assert.deepEqual(set.root.conditions, ["superseded"]);
+    assert.deepEqual(
+      set.executions.map((x) => x.execution.runId),
+      [runId],
+    );
+    assert.deepEqual(
+      set.artifacts.map((a) => a.artifact.path),
+      ["context-as-seen.json"],
+    );
+    // The historical record is untouched by v3.
+    assert.deepEqual((await readInvocation(runId))!.knowledgeContext?.claims[0], {
+      id: "RULE-17",
+      revision: 2,
+    });
+
+    // CONSTRAINT-4 was supplied but not consumed: changing it alone impacts nothing.
+    await knowledge.createRevision(
+      "CONSTRAINT-4",
+      { statement: "Validate client-side" },
+      new Date(),
+    );
+    const unrelated = impact.analyzeImpact(await knowledge.readLedger(), {
+      id: "CONSTRAINT-4",
+      revision: 1,
+    });
+    assert.deepEqual(unrelated.root.conditions, ["superseded"]);
+    assert.deepEqual(unrelated.executions, []);
+    assert.deepEqual(unrelated.artifacts, []);
+  },
+);

@@ -13,8 +13,10 @@ import type {
   ClaimView,
   ConsumersReport,
   DependentsReport,
+  ExecutionContextReport,
   ExecutionProvenance,
   ImpactSet,
+  SuppliedToReport,
   SupportReport,
 } from "@argus/contracts";
 
@@ -748,4 +750,151 @@ test("delta inspection reads the staged record beside the run; the result appear
     body: "{}",
   });
   assert.equal(res.status, 404);
+});
+
+// ── KnowledgeContext inspection (Phase 4) ───────────────────────────────────
+//
+// What a run *received* comes from its invocation record, never from the
+// ledger; what it *consumed* comes from the ledger. The routes join the two.
+
+async function seedInvocation(runId: string, over: Record<string, unknown> = {}) {
+  const runs = await import("../sources/runs.js");
+  const context = await import("./context.js");
+  const file = context.knowledgeContextFile(runId);
+  await runs.writeInvocation({
+    runId,
+    instanceId: "inst-1",
+    phaseId: "implement",
+    step: "code",
+    attempt: 0,
+    runtime: "claude",
+    bin: "claude",
+    args: [],
+    cwd: "/repo",
+    envNames: [],
+    envStripped: [],
+    capabilities: null,
+    limitations: [],
+    materializedFiles: [],
+    artifactDir: null,
+    resultFile: null,
+    knowledgeDeltaFile: null,
+    knowledgeContextFile: file,
+    knowledgeContext: {
+      schemaVersion: 1,
+      claims: [
+        { id: "RULE-7", revision: 1 },
+        { id: "FACT-12", revision: 1 },
+      ],
+      sha256: "cd".repeat(32),
+    },
+    channels: [],
+    timeoutSeconds: null,
+    deadlineAt: null,
+    gitHead: null,
+    startedAt: "2026-09-19T10:00:00.000Z",
+    ...over,
+  } as any);
+  return file;
+}
+
+test("GET /executions/:runId/context: exact supplied refs, hash, consumptions and the three-way comparison; projection when the file is present", async () => {
+  const app = makeApp();
+  await seedExample(app);
+  const file = await seedInvocation("run-ctx");
+  // The run consumed one supplied claim and one it found on its own.
+  const reg = await post(app, "/api/knowledge/executions/run-ctx/consumptions", {
+    instanceId: "inst-1",
+    phaseId: "implement",
+    claims: ["RULE-7:v1", "DECISION-21:v1"],
+  });
+  assert.equal(reg.status, 201);
+
+  const missingFile = await get(app, "/api/knowledge/executions/run-ctx/context");
+  assert.equal(missingFile.status, 200);
+  const body: ExecutionContextReport = missingFile.body;
+  assert.deepEqual(body.execution, {
+    runId: "run-ctx",
+    instanceId: "inst-1",
+    phaseId: "implement",
+  });
+  assert.deepEqual(body.context, {
+    schemaVersion: 1,
+    claims: [
+      { id: "RULE-7", revision: 1 },
+      { id: "FACT-12", revision: 1 },
+    ],
+    sha256: "cd".repeat(32),
+    file,
+  });
+  assert.deepEqual(body.supplied, body.context.claims);
+  assert.deepEqual(body.consumed, [
+    { id: "RULE-7", revision: 1 },
+    { id: "DECISION-21", revision: 1 },
+  ]);
+  assert.deepEqual(body.comparison, {
+    suppliedAndConsumed: [{ id: "RULE-7", revision: 1 }],
+    suppliedNotConsumed: [{ id: "FACT-12", revision: 1 }],
+    consumedNotSupplied: [{ id: "DECISION-21", revision: 1 }],
+  });
+  // The file was never written for this hand-made record: no projection.
+  assert.equal(body.projection, null);
+
+  const { writeKnowledgeContextFile } = await import("./context.js");
+  await writeKnowledgeContextFile(
+    file,
+    JSON.stringify({ schemaVersion: 1, generatedAt: "t", claims: [] }) + "\n",
+  );
+  const withFile = await get(app, "/api/knowledge/executions/run-ctx/context");
+  assert.deepEqual(withFile.body.projection, { schemaVersion: 1, generatedAt: "t", claims: [] });
+});
+
+test("GET /executions/:runId/context: 404 for an unknown run, a malformed id, and a run launched without a context", async () => {
+  const app = makeApp();
+  assert.equal((await get(app, "/api/knowledge/executions/nope/context")).status, 404);
+  assert.equal((await get(app, "/api/knowledge/executions/..%2Fx/context")).status, 404);
+  await seedInvocation("run-plain", { knowledgeContextFile: null, knowledgeContext: null });
+  assert.equal((await get(app, "/api/knowledge/executions/run-plain/context")).status, 404);
+});
+
+test("GET /claims/:key/supplied-to: the runs whose invocation records carry that exact revision, oldest first; 404 for an unknown claim", async () => {
+  const app = makeApp();
+  await seedExample(app);
+  await seedInvocation("run-b", { startedAt: "2026-09-19T11:00:00.000Z" });
+  await seedInvocation("run-a", { startedAt: "2026-09-19T10:00:00.000Z" });
+  await seedInvocation("run-plain", { knowledgeContextFile: null, knowledgeContext: null });
+  // A run that received a *different* revision of RULE-7 is not a match.
+  await post(app, "/api/knowledge/claims/RULE-7/revise", { statement: "500" });
+  await seedInvocation("run-v2", {
+    knowledgeContext: {
+      schemaVersion: 1,
+      claims: [{ id: "RULE-7", revision: 2 }],
+      sha256: "ef".repeat(32),
+    },
+  });
+
+  const res = await get(app, "/api/knowledge/claims/RULE-7:v1/supplied-to");
+  assert.equal(res.status, 200);
+  const body: SuppliedToReport = res.body;
+  assert.deepEqual(body.claim, { id: "RULE-7", revision: 1 });
+  assert.deepEqual(
+    body.executions.map((e) => e.execution.runId),
+    ["run-a", "run-b"],
+  );
+  assert.deepEqual(body.executions[0], {
+    execution: { runId: "run-a", instanceId: "inst-1", phaseId: "implement" },
+    suppliedAt: "2026-09-19T10:00:00.000Z",
+    sha256: "cd".repeat(32),
+  });
+  // The active revision is v2 now: a bare key resolves to it.
+  const active = await get(app, "/api/knowledge/claims/RULE-7/supplied-to");
+  assert.deepEqual(
+    active.body.executions.map((e: any) => e.execution.runId),
+    ["run-v2"],
+  );
+  assert.deepEqual(
+    (await get(app, "/api/knowledge/claims/DECISION-21/supplied-to")).body.executions,
+    [],
+  );
+  assert.equal((await get(app, "/api/knowledge/claims/NOPE/supplied-to")).status, 404);
 });

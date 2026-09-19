@@ -31,7 +31,8 @@ import {
   ARGUS_SERVER_SECRETS,
   matchesEnvPattern,
 } from "../harness/childEnv.js";
-import type { AgentRuntimeId, ReasoningEffort } from "@argus/contracts";
+import type { AgentRuntimeId, KnowledgeContextSpec, ReasoningEffort } from "@argus/contracts";
+import { KnowledgeContextError, parseKnowledgeContextSpec } from "../knowledge/context.js";
 
 // The crash-safe, mutex-serialized single-file store (shared with schedules).
 const store = createJsonArrayStore<PipelineDefinition>({
@@ -865,8 +866,30 @@ function validateStep(raw: unknown, ctx: string): PhaseStep {
   if (stallSeconds !== undefined) step.stallSeconds = stallSeconds;
   const capabilities = validateCapabilities(s.capabilities, stepCtx);
   if (capabilities) step.capabilities = capabilities;
+  const knowledgeContext = validateKnowledgeContext(s.knowledgeContext, stepCtx);
+  if (knowledgeContext) step.knowledgeContext = knowledgeContext;
 
   return step;
+}
+
+/**
+ * The semantic context a step (or every step of a phase) receives — Phase 4
+ * (`docs/KNOWLEDGE-LEDGER.md` § KnowledgeContext). Shape only: selectors are
+ * well formed, each claim id appears once, strings are normalized to the
+ * object form. Whether the claims *exist* is a question for the ledger at
+ * launch, where a selector that cannot be resolved refuses the step as a
+ * `configuration` failure — a claim a later phase will create may be named
+ * by a definition saved before it exists.
+ */
+function validateKnowledgeContext(raw: unknown, ctx: string): KnowledgeContextSpec | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  try {
+    return parseKnowledgeContextSpec(raw);
+  } catch (e) {
+    if (e instanceof KnowledgeContextError)
+      throw new PipelineValidationError(`${ctx}: ${e.message}`);
+    throw e;
+  }
 }
 
 /**
@@ -970,6 +993,7 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
   const workspace = validateWorkspace(p.workspace, `phase ${i}`);
   const candidates = validateCandidates(p.candidates, `phase ${i}`);
   const knowledgeDelta = validateKnowledgeDelta(p.knowledgeDelta, `phase ${i}`);
+  const knowledgeContext = validateKnowledgeContext(p.knowledgeContext, `phase ${i}`);
 
   return {
     id,
@@ -991,6 +1015,7 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
     ...(workspace ? { workspace } : {}),
     ...(candidates ? { candidates } : {}),
     ...(knowledgeDelta ? { knowledgeDelta } : {}),
+    ...(knowledgeContext ? { knowledgeContext } : {}),
   };
 }
 

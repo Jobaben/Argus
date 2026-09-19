@@ -5,6 +5,45 @@ All notable changes to Argus are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Controlled semantic context delivery (Knowledge Ledger Phase 4).** A
+  step — or every step of a phase — may declare `knowledgeContext: { claims:
+[...] }`, naming exact claim revisions (`"RULE-17:v2"`) or the active
+  revision of a claim (`"RULE-17"`). When the phase attempt is planned, Argus
+  resolves every selector against **one** ledger snapshot, freezes the
+  result, and writes it as a read-only JSON `KnowledgeContext`
+  (`argus/invocations/<runId>/knowledge-context.json`, `0444`) the agent
+  finds at `ARGUS_KNOWLEDGE_CONTEXT_FILE` — the mirror image of the
+  KnowledgeDelta file. Each entry carries the exact `ref`, kind, statement,
+  `structuredValue`, lifecycle (including `supersededBy`), support state and
+  direct evidence; unsupported, contested and superseded revisions are
+  supplied as requested with that state exposed, never hidden. The
+  invocation record now proves what was supplied
+  (`knowledgeContextFile`, `knowledgeContext: { schemaVersion, claims,
+sha256 }`), the context is a new **read** channel in the unified channel
+  model (`required`; Claude Code admits the directory and denies edits under
+  it, Codex never lists it as writable, Qwen Code's container sandbox refuses
+  the launch under strict enforcement), and the journal gains
+  `knowledge.supplied`. Two inspection reads answer both directions:
+  `GET /api/knowledge/executions/:runId/context` (what did this run receive,
+  with the supplied/consumed comparison and the projection) and
+  `GET /api/knowledge/claims/:key/supplied-to` (which runs received this
+  exact revision), both derived from the invocation records rather than a
+  second store. A malformed selector or a duplicate claim id is a `400` at
+  save; a claim or revision the snapshot does not hold fails the step as
+  `configuration` before any process starts. Steps without a
+  `knowledgeContext` launch exactly as before: no file, no variable, no
+  channel.
+- **Supplied ≠ consumed.** A consumption committed from a KnowledgeDelta is
+  now classified against what Argus supplied to the run:
+  `ClaimConsumption.source` is `"supplied-context"` or `"agent-discovered"`
+  (absent on admin-registered or pre-Phase-4 records). Supplying a claim
+  never creates a consumption, a consumed-but-not-supplied claim is recorded
+  rather than refused, and impact analysis stays consumption-based: a
+  supplied-only claim changing does not impact the run. The staged delta
+  record carries the run's `supplied` refs beside its `consumed` list.
+
 ### Changed
 
 - **Argus-owned invocation channels (Knowledge Ledger Phase 3 hardening).**

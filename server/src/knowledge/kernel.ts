@@ -10,6 +10,7 @@ import type {
   ClaimSupport,
   ClaimView,
   ConsumedClaimStatus,
+  ConsumptionSource,
   ConsumersReport,
   DependentsReport,
   Evidence,
@@ -482,6 +483,9 @@ function resolveExecution(ledger: KnowledgeLedger, input: RunExecutionRef): RunE
 export interface RecordConsumptionInput {
   execution: RunExecutionRef;
   claim: ClaimRef;
+  /** Whether Argus supplied the revision to the run (Phase 4). Absent when
+   *  the caller has no invocation record to answer from. */
+  source?: ConsumptionSource;
 }
 
 /**
@@ -511,6 +515,7 @@ export function recordConsumption(
     claim: { id: input.claim.id, revision: input.claim.revision },
     execution,
     createdAt: now,
+    ...(input.source !== undefined ? { source: input.source } : {}),
   };
   return {
     ledger: { ...ledger, consumptions: [...ledger.consumptions, consumption] },
@@ -809,7 +814,11 @@ export function executionOf(ledger: KnowledgeLedger, runId: string): RunExecutio
 
 /** Whether a consumed revision is still the active, supported one. Total: a
  *  dangling reference in a hand-edited file reads as `unsupported`. */
-export function consumedStatus(ledger: KnowledgeLedger, ref: ClaimRef): ConsumedClaimStatus {
+export function consumedStatus(
+  ledger: KnowledgeLedger,
+  ref: ClaimRef,
+  source?: ConsumptionSource,
+): ConsumedClaimStatus {
   const lifecycle = lifecycleOf(ledger, ref);
   const support = evaluate(ledger, ref, newEvaluation());
   return {
@@ -817,6 +826,7 @@ export function consumedStatus(ledger: KnowledgeLedger, ref: ClaimRef): Consumed
     lifecycle,
     support,
     current: lifecycle === "active" && support === "supported",
+    ...(source !== undefined ? { source } : {}),
   };
 }
 
@@ -837,7 +847,7 @@ export function executionProvenance(
   if (!execution) return null;
   const consumed = ledger.consumptions
     .filter((c) => c.execution.runId === runId)
-    .map((c) => consumedStatus(ledger, c.claim));
+    .map((c) => consumedStatus(ledger, c.claim, c.source));
   return {
     execution,
     consumed,

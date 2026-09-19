@@ -229,7 +229,25 @@ export interface ClaimConsumption {
   claim: ClaimRef;
   execution: RunExecutionRef;
   createdAt: string;
+  /**
+   * Where the consumed revision came from, relative to what Argus supplied
+   * to the run (Phase 4). Set when the consumption was committed from a
+   * KnowledgeDelta whose run's invocation record is known: `supplied-context`
+   * when Argus can prove the revision was in the run's KnowledgeContext,
+   * `agent-discovered` when it was not (the agent found it independently —
+   * source code, a document, a tool). Absent on records registered through
+   * the admin API or written before Phase 4: no claim either way.
+   */
+  source?: ConsumptionSource;
 }
+
+/**
+ * The provenance of a consumption relative to Argus's own record of what it
+ * supplied. Supplied and consumed are two facts kept deliberately separate:
+ * this is the smallest representation that preserves the distinction on the
+ * consumption edge itself, without making every supplied claim a dependency.
+ */
+export type ConsumptionSource = "supplied-context" | "agent-discovered";
 
 /**
  * The smallest useful artifact identity: where a path is rooted, and the path.
@@ -270,6 +288,8 @@ export interface ConsumedClaimStatus {
   support: ClaimSupport;
   /** `true` iff `lifecycle === "active" && support === "supported"`. */
   current: boolean;
+  /** Carried from the consumption record; see {@link ClaimConsumption.source}. */
+  source?: ConsumptionSource;
 }
 
 /**
@@ -556,6 +576,15 @@ export interface KnowledgeDeltaRecord {
   reason?: string;
   /** Present once `applied`. */
   result?: KnowledgeDeltaApplyResult;
+  /**
+   * The exact revisions Argus supplied to the run as its KnowledgeContext
+   * (Phase 4), copied from the run's invocation record at intake so the
+   * commit can classify each `consumed` entry ({@link ConsumptionSource})
+   * and so the record shows supplied and consumed side by side. Absent when
+   * the invocation record could not be read; empty when the run was launched
+   * with no semantic context.
+   */
+  supplied?: ClaimRef[];
 }
 
 /**
@@ -581,4 +610,137 @@ export interface AppliedKnowledgeDelta {
 export interface KnowledgeDeltasResponse {
   runId: string;
   deltas: KnowledgeDeltaRecord[];
+}
+
+// ── KnowledgeContext protocol (Phase 4) ─────────────────────────────────────
+//
+// The opposite direction of the KnowledgeDelta protocol. Argus selects exact
+// claim revisions for one run, materializes them as a read-only file the agent
+// learns of from `ARGUS_KNOWLEDGE_CONTEXT_FILE`, and records on the invocation
+// what it supplied. Two facts, never collapsed:
+//
+//   SUPPLIED  — Argus can prove this revision was in the run's context
+//               (the invocation record: exact refs + the file's sha256).
+//   CONSUMED  — the agent declares it materially relied on this revision
+//               (the KnowledgeDelta's `consumed`, a Phase 2 consumption edge).
+//
+// Supplying a claim never creates a consumption; impact analysis stays
+// consumption-based. What Phase 4 adds is that Argus now knows which side of
+// the line each consumption falls on (`ClaimConsumption.source`).
+
+/**
+ * How a step's author names one claim the run should receive. Either an
+ * exact historical revision — always that revision, even once superseded —
+ * or `"active"`: resolved to the active revision when the phase attempt is
+ * prepared, then frozen. The invocation provenance always stores the resolved
+ * exact revision, never `"active"`. Authored as `"RULE-17:v2"`, `"RULE-17"`
+ * (active) or the object form; stored normalized to the object form.
+ */
+export type KnowledgeContextSelector = { id: string; revision: number | "active" };
+
+/** What a step (or every step of a phase) receives. Each logical claim id
+ *  may appear once: a context is a set of claims keyed by id. */
+export interface KnowledgeContextSpec {
+  claims: KnowledgeContextSelector[];
+}
+
+/** One direct evidence record, as the agent-facing projection shows it: the
+ *  direction and the source, without ledger ids or timestamps. */
+export interface KnowledgeContextEvidence {
+  direction: SupportDirection;
+  source: EvidenceSource;
+  note?: string;
+}
+
+/**
+ * One claim revision in a KnowledgeContext — an agent-facing projection of
+ * the ledger's {@link ClaimView}, with the derived state at generation time.
+ * `ref` is the immutable identity the agent must use when it declares
+ * consumption. Lifecycle and support are exposed, never hidden: a contested
+ * or superseded revision may be exactly what a step is asked to reason about.
+ */
+export interface KnowledgeContextClaim {
+  /** `RULE-17:v2` — the exact revision identity. */
+  ref: string;
+  id: string;
+  revision: number;
+  kind: ClaimKind;
+  statement: string;
+  structuredValue?: unknown;
+  lifecycle: ClaimLifecycle;
+  /** The revision that replaced this one, when `lifecycle` is `superseded`. */
+  supersededBy?: string;
+  support: ClaimSupport;
+  revisionNote?: string;
+  /** The execution that derived this revision, when the ledger knows one. */
+  producedBy?: ExecutionRef;
+  /** Direct evidence on this revision, in ledger order. Absent when none. */
+  evidence?: KnowledgeContextEvidence[];
+}
+
+/**
+ * The versioned wire format of the semantic context Argus supplies to one
+ * run — the document at `ARGUS_KNOWLEDGE_CONTEXT_FILE`. Immutable once the
+ * run is prepared: a revision created while the agent runs never appears in
+ * it, and the invocation record proves what it contained.
+ */
+export interface KnowledgeContext {
+  schemaVersion: 1;
+  generatedAt: string;
+  claims: KnowledgeContextClaim[];
+  metadata?: {
+    /** How each entry was selected, in `claims` order: the authored selector
+     *  and the exact revision it resolved to. */
+    selection?: Array<{ selector: KnowledgeContextSelector; resolved: ClaimRef }>;
+  };
+}
+
+/** What the invocation record keeps about the context it supplied: enough
+ *  to prove exactly which revisions the run received, and to verify the
+ *  file against it, even if the ledger has changed since. */
+export interface InvocationKnowledgeContext {
+  schemaVersion: 1;
+  /** The exact revisions supplied, in file order. */
+  claims: ClaimRef[];
+  /** SHA-256 (hex) of the file's bytes as written. */
+  sha256: string;
+}
+
+/** The supplied-vs-consumed comparison for one run, derived per read. */
+export interface SuppliedConsumedComparison {
+  /** Supplied and declared consumed: the normal case. */
+  suppliedAndConsumed: ClaimRef[];
+  /** Supplied, not declared consumed: allowed — the agent did not need it. */
+  suppliedNotConsumed: ClaimRef[];
+  /** Declared consumed, never supplied: allowed and recorded — the agent
+   *  found it independently. */
+  consumedNotSupplied: ClaimRef[];
+}
+
+/** `GET /api/knowledge/executions/:runId/context` — what a run received. */
+export interface ExecutionContextReport {
+  execution: RunExecutionRef;
+  context: InvocationKnowledgeContext & {
+    /** Where the file was materialized. */
+    file: string;
+  };
+  /** The exact revisions Argus supplied, in file order (`context.claims`). */
+  supplied: ClaimRef[];
+  /** The exact revisions the ledger records this run as having consumed. */
+  consumed: ClaimRef[];
+  comparison: SuppliedConsumedComparison;
+  /** The materialized document, when the file is still on disk. */
+  projection: KnowledgeContext | null;
+}
+
+/** `GET /api/knowledge/claims/:key/supplied-to` — which runs received this
+ *  exact revision, derived from the invocation records still on disk. */
+export interface SuppliedToReport {
+  claim: ClaimRef;
+  executions: Array<{
+    execution: RunExecutionRef;
+    /** When the invocation was prepared. */
+    suppliedAt: string;
+    sha256: string;
+  }>;
 }

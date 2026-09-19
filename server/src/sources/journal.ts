@@ -54,6 +54,7 @@ export type JournalKind =
   | "workspace.created"
   | "workspace.removed"
   | "memory.trimmed"
+  | "knowledge.supplied"
   | "knowledge.staged"
   | "knowledge.rejected"
   | "knowledge.applied"

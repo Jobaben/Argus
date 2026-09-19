@@ -250,3 +250,144 @@ test("without capabilities no runtime reports on channels at all: the legacy pla
     assert.equal("limitations" in p, false, id);
   }
 });
+
+// ── The read channel (Phase 4: KnowledgeContext) ────────────────────────────
+//
+// Argus → agent. Every runtime must make the file *readable*; the ones that
+// can are also asked not to make it *writable*. Granting is about reads, so a
+// Codex read-only sandbox — which refuses every write channel — grants it.
+
+const CONTEXT_FILE = "/home/op/.claude/argus/invocations/run-1/knowledge-context.json";
+
+function withContext(): InvocationChannel[] {
+  return invocationChannels({
+    resultFile: null,
+    knowledgeDeltaFile: "/home/op/.claude/argus/knowledge-deltas/run-1/delta.json",
+    knowledgeContextFile: CONTEXT_FILE,
+    artifactDir: null,
+    memoryDir: null,
+    phaseDef: {},
+  });
+}
+
+function planWithContext(runtime: AgentRuntimeId, profile: CapabilityProfile, cwd = "/work/repo") {
+  return RUNTIMES[runtime].streamPlan({
+    prompt: "p",
+    sessionId: "s",
+    capabilities: { profile, invocationDir: "/inv", cwd, channels: withContext() },
+  });
+}
+
+test("read channel: the KnowledgeContext channel is read access, required, and ordered after the delta file", () => {
+  const [delta, context] = withContext();
+  assert.equal(delta.kind, "knowledge-delta");
+  assert.deepEqual(context, {
+    kind: "knowledge-context",
+    envVar: "ARGUS_KNOWLEDGE_CONTEXT_FILE",
+    path: CONTEXT_FILE,
+    dir: "/home/op/.claude/argus/invocations/run-1",
+    access: "read",
+    required: true,
+    label: "KnowledgeContext file",
+  });
+  // Absent when the step has no context: the legacy list is byte-identical.
+  assert.deepEqual(
+    channels().map((c) => c.kind),
+    ["result", "knowledge-delta", "artifact-dir"],
+  );
+});
+
+test("Claude Code: the context directory is admitted with --add-dir and denied for edits under every filesystem mode", () => {
+  for (const filesystem of MODES) {
+    const p = planWithContext("claude", { filesystem });
+    assert.equal(statuses(p.channels)["knowledge-context"], "granted", filesystem);
+    assert.equal(statuses(p.channels)["knowledge-delta"], "granted", filesystem);
+    const added = p.args.filter((_, i) => p.args[i - 1] === "--add-dir");
+    assert.ok(added.includes("/home/op/.claude/argus/invocations/run-1"), filesystem);
+    const di = p.args.indexOf("--disallowedTools");
+    const denied = di > -1 ? p.args[di + 1].split(",") : [];
+    assert.ok(
+      denied.includes("Edit(///home/op/.claude/argus/invocations/run-1/**)"),
+      `${filesystem}: the context directory is denied for edits (${denied.join(",")})`,
+    );
+    // The delta directory stays writable: only the read channel is denied.
+    assert.equal(
+      denied.some((d) => d.includes("knowledge-deltas")),
+      false,
+      filesystem,
+    );
+    assert.deepEqual(p.limitations, []);
+  }
+});
+
+test("Claude Code: a read channel already under a read-only-denied root needs no second deny rule and stays granted", () => {
+  const p = planWithContext("claude", { filesystem: "read-only" }, "/home/op");
+  const s = statuses(p.channels);
+  assert.equal(s["knowledge-context"], "granted");
+  assert.equal(s["knowledge-delta"], "unavailable");
+  const denied = p.args[p.args.indexOf("--disallowedTools") + 1].split(",");
+  assert.deepEqual(denied, ["Edit(///home/op/**)", "Bash"]);
+});
+
+test("Claude Code: a context path the rule grammar cannot express is readable but reported as a limitation", () => {
+  const channel: InvocationChannel = {
+    kind: "knowledge-context",
+    envVar: "ARGUS_KNOWLEDGE_CONTEXT_FILE",
+    path: "/odd,dir/run-1/knowledge-context.json",
+    dir: "/odd,dir/run-1",
+    access: "read",
+    required: true,
+    label: "KnowledgeContext file",
+  };
+  const p = RUNTIMES.claude.streamPlan({
+    prompt: "p",
+    capabilities: {
+      profile: { filesystem: "workspace-write" },
+      invocationDir: "/inv",
+      cwd: "/work",
+      channels: [channel],
+    },
+  });
+  assert.equal(p.channels?.[0].status, "granted");
+  assert.deepEqual(p.limitations, [
+    "Claude Code cannot deny edits to the KnowledgeContext file (ARGUS_KNOWLEDGE_CONTEXT_FILE): its path contains a comma",
+  ]);
+});
+
+test("Codex: the context file is readable under every sandbox and never named in writable_roots", () => {
+  for (const filesystem of MODES) {
+    const p = planWithContext("codex", { filesystem });
+    assert.equal(statuses(p.channels)["knowledge-context"], "granted", filesystem);
+    const ci = p.args.indexOf("-c");
+    const roots = ci > -1 ? p.args[ci + 1] : "";
+    assert.equal(roots.includes("invocations/run-1"), false, filesystem);
+    if (filesystem === "workspace-write") assert.ok(roots.includes("knowledge-deltas/run-1"));
+  }
+  assert.equal(
+    statuses(planWithContext("codex", { filesystem: "read-only" }).channels)["knowledge-delta"],
+    "unavailable",
+  );
+});
+
+test("OpenCode: the context file is reachable (unsandboxed); the profile itself stays unenforceable", () => {
+  for (const filesystem of MODES) {
+    const p = planWithContext("opencode", { filesystem });
+    assert.equal(statuses(p.channels)["knowledge-context"], "granted", filesystem);
+    assert.deepEqual(p.limitations, [`OpenCode cannot enforce "filesystem" for this invocation`]);
+  }
+});
+
+test("Qwen Code: the context file is reachable unsandboxed and unavailable inside the container sandbox, like every channel", () => {
+  withEnv({ ARGUS_QWEN_ARGS: undefined }, () => {
+    assert.equal(statuses(planWithContext("qwen", {}).channels)["knowledge-context"], "granted");
+  });
+  withEnv({ ARGUS_QWEN_ARGS: "--sandbox" }, () => {
+    const p = planWithContext("qwen", {});
+    const context = p.channels?.find((o) => o.channel.kind === "knowledge-context");
+    assert.equal(context?.status, "unavailable");
+    assert.equal(
+      context?.reason,
+      "Qwen Code container sandbox (--sandbox in ARGUS_QWEN_ARGS) does not mount the KnowledgeContext file (ARGUS_KNOWLEDGE_CONTEXT_FILE)",
+    );
+  });
+});
