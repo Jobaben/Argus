@@ -1198,6 +1198,9 @@ export function createApp(deps: AppDeps): Hono {
     "runtime",
     "capabilities",
     "workspace",
+    // Phase-level execution fields — `checks`, `retry`, `workspace`,
+    // `candidates` — are not listed separately: they only ever arrive inside
+    // `phases`, and a per-phase key here would not be a key of the input.
   ] as const;
   function changesExecution(current: PipelineDefinition, patch: Partial<PipelineInput>): boolean {
     return EXECUTION_KEYS.some((k) => k in patch && !isDeepStrictEqual(patch[k], current[k]));

@@ -1057,3 +1057,377 @@ test("keep leaves the worktree directory behind, and the phase's checks run insi
   // keep: the directory outlives the instance.
   assert.equal(existsSync(tree), true);
 });
+
+// ── 17. candidates: best-of-N with verifier-gated selection ─────────────────
+
+/** A candidates phase over a real repository: `count` drafts, one `file` check. */
+function candidateSeed(
+  pipelines: any,
+  repo: string,
+  over: Record<string, unknown> = {},
+  phaseOver: Record<string, unknown> = {},
+) {
+  return seed(pipelines, [
+    {
+      id: "impl",
+      name: "Implement",
+      cwd: repo,
+      gated: false,
+      workspace: { scope: "attempt" },
+      checks: [{ kind: "file", path: "done.txt", label: "wrote it" }],
+      candidates: { count: 3, select: "first-verified", ...over },
+      steps: [{ name: "code", prompt: "implement it" }],
+      ...phaseOver,
+    },
+  ]);
+}
+
+const signalOf = (e: any, inst: any, runId: string, type = "completed") =>
+  e.onSignal(inst.id, {
+    instanceId: inst.id,
+    phaseId: "impl",
+    runId,
+    type,
+    token: inst.signalToken,
+  });
+
+test("candidates launch N isolated drafts of one step, each with its own tree and artifacts", async (t) => {
+  if (!gitAvailable()) return t.skip("git not available");
+  const { engine, pipelines, instances, journalSrc } = await load();
+  const repo = makeRepo();
+  await candidateSeed(pipelines, repo);
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const inst = await e.start("p1", "manual");
+
+  assert.equal(rec.calls.length, 3);
+  const started = await instances.readInstance(inst!.id);
+  const steps = started.phases[0].steps;
+  assert.deepEqual(
+    steps.map((s: any) => s.candidate),
+    [0, 1, 2],
+  );
+  // One worktree each, named for the candidate, and all three really exist.
+  for (let i = 0; i < 3; i++) {
+    const tree = path.join(paths.worktreesDir(), inst!.id, `impl-attempt0-c${i}`);
+    assert.equal(rec.calls[i].run.cwd, tree);
+    assert.equal(steps[i].workspace.path, tree);
+    assert.equal(steps[i].workspace.branch, `argus/${inst!.id}/impl/0-c${i}`);
+    assert.equal(existsSync(path.join(tree, "README.md")), true);
+    // One artifact directory each: c1 must not satisfy c0's `artifact` checks.
+    const art = path.join(phaseArtifactDir(paths.artifactsDir(), inst!.id, "impl"), `c${i}`);
+    assert.equal(rec.calls[i].env.ARGUS_ARTIFACT_DIR, art);
+    assert.equal(existsSync(art), true);
+  }
+  // The phase itself has no tree until one is selected.
+  assert.equal(started.phases[0].workspace ?? null, null);
+  const j = await journalSrc.readJournal(inst!.id);
+  assert.ok(j.some((x: any) => x.kind === "phase.started" && x.detail === "3 candidates"));
+});
+
+test("first-verified: the first passing draft wins and its siblings are killed as superseded", async (t) => {
+  if (!gitAvailable()) return t.skip("git not available");
+  const { engine, pipelines, instances, runsSrc, journalSrc } = await load();
+  const repo = makeRepo();
+  await candidateSeed(pipelines, repo);
+  const rec = recordingSpawn();
+  // Only candidate 1 does the work the check looks for. The handles carry this
+  // process's own pid so `isAlive` is true for the siblings — the kill itself is
+  // the injected stub, so nothing is ever actually signalled.
+  const spawn = (run: any, log: string, env: Record<string, string>, prepared: any) => {
+    if (run.cwd.endsWith("-c1")) writeFileSync(path.join(run.cwd, "done.txt"), "ok\n", "utf8");
+    return { ...rec.spawn(run, log, env, prepared), pid: process.pid };
+  };
+  const killed: { pid: number; signal?: string }[] = [];
+  const e = engine.createEngine(
+    baseDeps({
+      spawn,
+      killGraceMs: 60_000,
+      kill: (pid: number, signal?: string) => (killed.push({ pid, signal }), true),
+    }),
+  );
+  const inst = await e.start("p1", "manual");
+  const steps = (await instances.readInstance(inst!.id)).phases[0].steps;
+
+  // c0 reports first and fails its checks; c1 reports next and passes.
+  await signalOf(e, inst, steps[0].runId);
+  await e.drain();
+  const mid = await instances.readInstance(inst!.id);
+  assert.equal(mid.phases[0].status, "running");
+  assert.equal(mid.phases[0].steps[0].verification.status, "failed");
+
+  await signalOf(e, inst, steps[1].runId);
+  await e.drain();
+
+  const after = await instances.readInstance(inst!.id);
+  assert.equal(after.status, "succeeded");
+  assert.equal(after.phases[0].status, "succeeded");
+  assert.equal(after.phases[0].selectedCandidate, 1);
+  assert.equal(after.phases[0].verification.status, "passed");
+  assert.equal(after.phases[0].workspace.branch, `argus/${inst!.id}/impl/0-c1`);
+  // c2 never reported: superseded, not failed.
+  assert.equal(after.phases[0].steps[2].status, "aborted");
+  assert.match(after.phases[0].steps[2].failure.reason, /superseded by candidate 1/);
+  const c2 = await runsSrc.readRun(steps[2].runId);
+  assert.equal(c2.run.termination, "killed");
+  assert.match(c2.run.error, /superseded by candidate 1/);
+  assert.ok(killed.some((k) => k.pid === process.pid));
+  // The losers' directories go; their branches stay as evidence.
+  assert.equal(existsSync(path.join(paths.worktreesDir(), inst!.id, "impl-attempt0-c0")), false);
+  assert.equal(existsSync(path.join(paths.worktreesDir(), inst!.id, "impl-attempt0-c2")), false);
+  assert.equal(gitIn(repo, ["rev-parse", "--verify", `argus/${inst!.id}/impl/0-c0`]).status, 0);
+  const j = await journalSrc.readJournal(inst!.id);
+  assert.ok(j.some((x: any) => x.kind === "phase.candidate-selected" && /c1 of 3/.test(x.detail)));
+});
+
+test("cheapest-verified waits for every draft, then takes the cheapest that passed", async (t) => {
+  if (!gitAvailable()) return t.skip("git not available");
+  const { engine, pipelines, instances, runsSrc } = await load();
+  const repo = makeRepo();
+  await candidateSeed(pipelines, repo, { count: 3, select: "cheapest-verified" });
+  const rec = recordingSpawn();
+  // All three do the work; only their prices differ.
+  const spawn = (run: any, log: string, env: Record<string, string>, prepared: any) => {
+    writeFileSync(path.join(run.cwd, "done.txt"), "ok\n", "utf8");
+    return rec.spawn(run, log, env, prepared);
+  };
+  const e = engine.createEngine(baseDeps({ spawn }));
+  const inst = await e.start("p1", "manual");
+  const steps = (await instances.readInstance(inst!.id)).phases[0].steps;
+  const costs = [3.5, 0.75, 1.25];
+  for (let i = 0; i < 3; i++) await runsSrc.patchRun(steps[i].runId, { costUsd: costs[i] });
+
+  await signalOf(e, inst, steps[0].runId);
+  await e.drain();
+  // A verified candidate does not end it: the cheap one may still be running.
+  assert.equal((await instances.readInstance(inst!.id)).phases[0].status, "running");
+  await signalOf(e, inst, steps[1].runId);
+  await e.drain();
+  assert.equal((await instances.readInstance(inst!.id)).phases[0].status, "running");
+  await signalOf(e, inst, steps[2].runId);
+  await e.drain();
+
+  const after = await instances.readInstance(inst!.id);
+  assert.equal(after.phases[0].status, "succeeded");
+  assert.equal(after.phases[0].selectedCandidate, 1);
+  assert.deepEqual(
+    after.phases[0].candidateOutcomes.map((o: any) => [o.candidate, o.verified, o.costUsd]),
+    [
+      [0, true, 3.5],
+      [1, true, 0.75],
+      [2, true, 1.25],
+    ],
+  );
+});
+
+test("every candidate failing its checks fails the phase once, under the verification class", async (t) => {
+  if (!gitAvailable()) return t.skip("git not available");
+  const { engine, pipelines, instances } = await load();
+  const repo = makeRepo();
+  await candidateSeed(pipelines, repo, { count: 2, select: "first-verified" });
+  const rec = recordingSpawn();
+  let failures = 0;
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn, onFailure: () => failures++ }));
+  const inst = await e.start("p1", "manual");
+  const steps = (await instances.readInstance(inst!.id)).phases[0].steps;
+  // Nobody wrote done.txt.
+  await signalOf(e, inst, steps[0].runId);
+  await e.drain();
+  assert.equal((await instances.readInstance(inst!.id)).status, "running");
+  await signalOf(e, inst, steps[1].runId);
+  await e.drain();
+
+  const after = await instances.readInstance(inst!.id);
+  assert.equal(after.status, "failed");
+  assert.equal(after.phases[0].status, "failed");
+  assert.equal(after.phases[0].selectedCandidate, null);
+  assert.equal(after.phases[0].payload.failureClass, "verification");
+  assert.match(after.phases[0].payload.reason, /no candidate passed its checks/);
+  assert.match(after.phases[0].payload.reason, /c0 \(claude\): [^;]*wrote it/);
+  assert.match(after.phases[0].payload.reason, /c1 \(claude\): [^;]*wrote it/);
+  assert.equal(after.phases[0].candidateOutcomes.length, 2);
+  assert.equal(failures, 1);
+});
+
+test("a candidate that dies before its checks simply loses; a surviving one still wins", async (t) => {
+  if (!gitAvailable()) return t.skip("git not available");
+  const { engine, pipelines, instances } = await load();
+  const repo = makeRepo();
+  await candidateSeed(pipelines, repo, { count: 2, select: "first-verified" });
+  const rec = recordingSpawn();
+  const spawn = (run: any, log: string, env: Record<string, string>, prepared: any) => {
+    if (run.cwd.endsWith("-c1")) writeFileSync(path.join(run.cwd, "done.txt"), "ok\n", "utf8");
+    return rec.spawn(run, log, env, prepared);
+  };
+  const e = engine.createEngine(baseDeps({ spawn }));
+  const inst = await e.start("p1", "manual");
+  const steps = (await instances.readInstance(inst!.id)).phases[0].steps;
+
+  await signalOf(e, inst, steps[0].runId, "failed");
+  await e.drain();
+  const mid = await instances.readInstance(inst!.id);
+  // One dead draft is not a dead phase.
+  assert.equal(mid.status, "running");
+  assert.equal(mid.phases[0].status, "running");
+  assert.equal(mid.phases[0].steps[0].failure.class, "signal");
+
+  await signalOf(e, inst, steps[1].runId);
+  await e.drain();
+  const after = await instances.readInstance(inst!.id);
+  assert.equal(after.status, "succeeded");
+  assert.equal(after.phases[0].selectedCandidate, 1);
+});
+
+test("variants apply runtime, model and effort per candidate, cycled to fill the count", async (t) => {
+  if (!gitAvailable()) return t.skip("git not available");
+  const { engine, pipelines } = await load();
+  const repo = makeRepo();
+  await candidateSeed(pipelines, repo, {
+    count: 4,
+    select: "first-verified",
+    variants: [
+      { runtime: "claude", model: "opus" },
+      { runtime: "codex", reasoningEffort: "high" },
+    ],
+  });
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  await e.start("p1", "manual");
+
+  assert.equal(rec.calls.length, 4);
+  assert.deepEqual(
+    rec.calls.map((c: any) => [c.run.runtime, c.run.model ?? null, c.run.reasoningEffort ?? null]),
+    [
+      ["claude", "opus", null],
+      ["codex", null, "high"],
+      ["claude", "opus", null],
+      ["codex", null, "high"],
+    ],
+  );
+  // Same prompt either side of the variant: the only thing being sampled is the
+  // model's answer (the artifact directory apart, which is per candidate).
+  const stripped = rec.calls.map((c: any) => c.run.prompt.replace(/\/c\d+/g, "/cN"));
+  assert.equal(new Set(stripped).size, 1);
+});
+
+test("a restart between a candidate's checks and the selection re-decides from disk", async (t) => {
+  if (!gitAvailable()) return t.skip("git not available");
+  const { engine, pipelines, instances } = await load();
+  const repo = makeRepo();
+  await candidateSeed(pipelines, repo, { count: 2, select: "cheapest-verified" });
+  const rec = recordingSpawn();
+  const spawn = (run: any, log: string, env: Record<string, string>, prepared: any) => {
+    writeFileSync(path.join(run.cwd, "done.txt"), "ok\n", "utf8");
+    return rec.spawn(run, log, env, prepared);
+  };
+  const e = engine.createEngine(baseDeps({ spawn }));
+  const inst = await e.start("p1", "manual");
+  const steps = (await instances.readInstance(inst!.id)).phases[0].steps;
+  await signalOf(e, inst, steps[0].runId);
+  await signalOf(e, inst, steps[1].runId);
+  await e.drain();
+  // Rewind the record to the instant before selection: both verified, nothing
+  // selected — exactly what a crash in that window leaves on disk.
+  const stalled = await instances.readInstance(inst!.id);
+  stalled.status = "running";
+  stalled.endedAt = null;
+  stalled.phases[0].status = "running";
+  delete stalled.phases[0].selectedCandidate;
+  delete stalled.phases[0].candidateOutcomes;
+  delete stalled.phases[0].verification;
+  for (const s of stalled.phases[0].steps) s.status = "succeeded";
+  await instances.writeInstance(stalled);
+
+  // A fresh engine, as after a restart.
+  const e2 = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  await e2.reconcile();
+  await e2.drain();
+
+  const healed = await instances.readInstance(inst!.id);
+  assert.equal(healed.phases[0].status, "succeeded");
+  assert.equal(healed.phases[0].selectedCandidate, 0);
+  assert.equal(healed.status, "succeeded");
+});
+
+test("an aborted candidates phase leaves no worktree behind", async (t) => {
+  if (!gitAvailable()) return t.skip("git not available");
+  const { engine, pipelines } = await load();
+  const repo = makeRepo();
+  await candidateSeed(pipelines, repo, { count: 3, select: "first-verified" });
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const inst = await e.start("p1", "manual");
+  for (let i = 0; i < 3; i++) {
+    assert.equal(
+      existsSync(path.join(paths.worktreesDir(), inst!.id, `impl-attempt0-c${i}`)),
+      true,
+    );
+  }
+  await e.abort(inst!.id);
+  await e.drain();
+  for (let i = 0; i < 3; i++) {
+    assert.equal(
+      existsSync(path.join(paths.worktreesDir(), inst!.id, `impl-attempt0-c${i}`)),
+      false,
+    );
+  }
+});
+
+test("only the winner's payload and result reach the next phase", async (t) => {
+  if (!gitAvailable()) return t.skip("git not available");
+  const { engine, pipelines, instances } = await load();
+  const repo = makeRepo();
+  await seed(pipelines, [
+    {
+      id: "impl",
+      name: "Implement",
+      cwd: repo,
+      gated: false,
+      workspace: { scope: "attempt" },
+      checks: [{ kind: "file", path: "done.txt", label: "wrote it" }],
+      candidates: { count: 2, select: "first-verified" },
+      steps: [{ name: "code", prompt: "implement it" }],
+    },
+    {
+      id: "ship",
+      name: "Ship",
+      cwd: repo,
+      gated: false,
+      needs: ["impl"],
+      steps: [{ name: "go", prompt: "ship this: {{previous.payload}}" }],
+    },
+  ]);
+  const rec = recordingSpawn();
+  const spawn = (run: any, log: string, env: Record<string, string>, prepared: any) => {
+    if (run.cwd.endsWith("-c1")) writeFileSync(path.join(run.cwd, "done.txt"), "ok\n", "utf8");
+    return rec.spawn(run, log, env, prepared);
+  };
+  const e = engine.createEngine(baseDeps({ spawn }));
+  const inst = await e.start("p1", "manual");
+  const steps = (await instances.readInstance(inst!.id)).phases[0].steps;
+
+  await e.onSignal(inst!.id, {
+    instanceId: inst!.id,
+    phaseId: "impl",
+    runId: steps[0].runId,
+    type: "completed",
+    token: inst!.signalToken,
+    payload: { from: "the losing draft" },
+  });
+  await e.drain();
+  await e.onSignal(inst!.id, {
+    instanceId: inst!.id,
+    phaseId: "impl",
+    runId: steps[1].runId,
+    type: "completed",
+    token: inst!.signalToken,
+    payload: { from: "the winning draft" },
+  });
+  await e.drain();
+
+  const after = await instances.readInstance(inst!.id);
+  assert.deepEqual(after.phases[0].payload, { from: "the winning draft" });
+  const shipPrompt = rec.calls[rec.calls.length - 1].run.prompt;
+  assert.match(shipPrompt, /the winning draft/);
+  assert.doesNotMatch(shipPrompt, /the losing draft/);
+});

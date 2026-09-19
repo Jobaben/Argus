@@ -11,6 +11,9 @@ import {
 } from "./sources/dag.js";
 import { RouteEvaluationError, evaluateRoutes, validateResult } from "./sources/routing.js";
 import type {
+  AgentRuntimeId,
+  CandidateOutcome,
+  CandidatePolicy,
   DependencyEdge,
   PhaseFailureClass,
   PhaseProgress,
@@ -20,6 +23,8 @@ import type {
   RetryableClass,
   RetryPolicy,
   RouteDecision,
+  StepProgress,
+  StepStatus,
   VerificationReport,
 } from "./sources/pipelineTypes.js";
 
@@ -70,6 +75,18 @@ export interface TransitionResult {
   /** Set by {@link applyVerification} when the report was taken; absent when it
    *  was refused as stale. */
   verificationApplied?: boolean;
+  /**
+   * One candidate of a `candidates` phase whose own `checks` Argus must now run,
+   * inside that candidate's worktree. The phase stays `running`: the selection
+   * is not decidable until enough candidates have reported.
+   */
+  verifyCandidate?: { phaseId: string; candidate: number };
+  /**
+   * Set whenever a candidate of a `candidates` phase moved. The engine answers
+   * it by re-evaluating the selection ({@link selectCandidate}) with the run
+   * records the cost comparison needs, which is I/O and therefore not done here.
+   */
+  candidatesMoved?: string;
   /** Set by {@link advance} when the signal matched nothing it may drive and
    *  the instance was returned untouched. */
   ignored?: "unknown-phase" | "phase-not-running" | "unknown-run";
@@ -146,16 +163,20 @@ function publishArtifact(def: PipelineDefinition, inst: PipelineInstance, phaseI
 function resolvePhaseResult(
   def: PipelineDefinition,
   phase: PhaseProgress,
+  /** Which of the phase's steps may have delivered the result. Defaults to all
+   *  of them; a `candidates` phase passes only the winner, because the losers'
+   *  submissions are drafts the phase decided against, not contradictions. */
+  steps: StepProgress[] = phase.steps,
 ): { ok: true; value?: unknown } | { ok: false; reason: string } {
   const phaseDef = def.phases.find((p) => p.id === phase.id);
   if (!phaseDef?.result) return { ok: true };
   const artifact = phaseDef.result.artifact;
   const wanted = resultStepName(phaseDef);
 
-  const unreadable = phase.steps.find((s) => s.resultError);
+  const unreadable = steps.find((s) => s.resultError);
   if (unreadable) return { ok: false, reason: `result "${artifact}": ${unreadable.resultError}` };
 
-  const submitted = phase.steps.filter((s) => s.result !== undefined);
+  const submitted = steps.filter((s) => s.result !== undefined);
   if (new Set(submitted.map((s) => JSON.stringify(s.result))).size > 1) {
     return {
       ok: false,
@@ -396,6 +417,16 @@ export function advance(
   inst: PipelineInstance,
   signal: PipelineSignal,
   nowISO: string,
+  /**
+   * How a `failed` signal was classed, when the caller already knows (a
+   * deadline, a dead run record, an invocation Argus refused to make).
+   *
+   * Read only on a candidates phase, which records the class per candidate
+   * because its phase-level payload belongs to whichever candidate wins. An
+   * ordinary phase's class is applied by the engine after the transition, as
+   * it always was.
+   */
+  failureClass?: PhaseFailureClass,
 ): TransitionResult {
   // Located by id, not by a cursor: with a fan-out, several phases are live at
   // once and the signalling one is whichever sent it.
@@ -411,6 +442,15 @@ export function advance(
   // can't terminalize or advance the instance behind the tracked run's back.
   const step = phase.steps.find((s) => s.runId === signal.runId);
   if (!step) return { instance: inst, startPhases: [], ignored: "unknown-run" };
+
+  // A candidate is not a step of a phase in the ordinary sense: its failure
+  // does not fail the phase, and its success does not conclude it. Everything
+  // about that lives in one place rather than as conditions sprinkled below.
+  const phaseDef = def.phases.find((p) => p.id === phase.id);
+  if (phaseDef?.candidates && step.candidate !== undefined) {
+    return advanceCandidate(inst, phase, step, signal, nowISO, failureClass);
+  }
+
   step.status = signal.type === "failed" ? "failed" : "succeeded";
   if (signal.payload !== undefined) phase.payload = signal.payload;
   // A structured result belongs to the step that submitted it until every step
@@ -528,6 +568,326 @@ export function applyVerification(
   return { ...settle(def, inst, nowISO), verificationApplied: true };
 }
 
+// ── Candidates: best-of-N with verifier-gated selection ──────────────────────
+
+/**
+ * Where one candidate has got to, as selection sees it.
+ *
+ * Three states, and the middle one is the whole point: a candidate that has
+ * *finished running* is not yet a candidate that has *won*. It has won when its
+ * own copy of the phase's checks passed inside its own worktree.
+ */
+export type CandidateState = "running" | "verified" | "lost";
+
+/**
+ * One candidate as the selectors read it: the persisted step, joined with the
+ * cost and duration its run reported.
+ *
+ * The join is the caller's job (the engine reads the run records), which keeps
+ * every rule below a pure function of plain data — and makes "cheapest wins"
+ * testable without a filesystem.
+ */
+export interface CandidateRecord {
+  candidate: number;
+  status: StepStatus;
+  /** Whether its checks passed. Null = it never reached them. */
+  verified: boolean | null;
+  /** When its checks finished, for "first". Null = they did not. */
+  verifiedAt: string | null;
+  costUsd: number | null;
+  durationMs: number | null;
+  runtime: AgentRuntimeId | null;
+  model: string | null;
+  /** Why it lost, when it did. */
+  reason?: string;
+  /** How its own failure was classed, for {@link candidateFailureClass}. */
+  failureClass?: PhaseFailureClass;
+}
+
+export function candidateState(record: CandidateRecord): CandidateState {
+  if (record.verified === true) return "verified";
+  if (record.verified === false) return "lost";
+  if (record.status === "failed" || record.status === "aborted" || record.status === "skipped") {
+    return "lost";
+  }
+  return "running";
+}
+
+/** The record for one persisted candidate step, before the run join. */
+export function candidateRecordOf(step: StepProgress): CandidateRecord {
+  const verification = step.verification;
+  return {
+    candidate: step.candidate ?? 0,
+    status: step.status,
+    verified:
+      verification?.status === "passed" ? true : verification?.status === "failed" ? false : null,
+    verifiedAt: verification?.endedAt ?? null,
+    costUsd: null,
+    durationMs: null,
+    runtime: null,
+    model: null,
+    ...(step.failure ? { reason: step.failure.reason, failureClass: step.failure.class } : {}),
+  };
+}
+
+/** What the selection concluded, without acting on it. */
+export type CandidateSelection =
+  { kind: "pending" } | { kind: "selected"; candidate: number } | { kind: "none" };
+
+/** Nulls sort last: an unknown cost is not a cheap one. */
+function orMax(n: number | null): number {
+  return n == null ? Number.POSITIVE_INFINITY : n;
+}
+
+/**
+ * Which candidate the phase keeps, if the question can be answered yet.
+ *
+ * `first-verified` answers as soon as one candidate's checks pass — the whole
+ * point being that the siblings are then killed rather than paid for. Among
+ * several already-verified candidates (a restart re-evaluating, or two reports
+ * landing in the same tick) the earliest to finish its checks wins, then the
+ * lowest index: a rule that reads the same off the persisted records however
+ * many times it is applied.
+ *
+ * `cheapest-verified` waits for every candidate to settle and then buys the
+ * cheapest verified draft, tie-broken by duration and then by index.
+ *
+ * Pure and total: `pending` means "ask again later", `none` means "nothing can
+ * still win".
+ */
+export function selectCandidate(
+  policy: CandidatePolicy,
+  records: CandidateRecord[],
+): CandidateSelection {
+  const verified = records.filter((r) => candidateState(r) === "verified");
+  const running = records.filter((r) => candidateState(r) === "running");
+
+  if (policy.select === "first-verified") {
+    if (verified.length > 0) {
+      const winner = [...verified].sort(
+        (a, b) =>
+          (a.verifiedAt ?? "").localeCompare(b.verifiedAt ?? "") || a.candidate - b.candidate,
+      )[0];
+      return { kind: "selected", candidate: winner.candidate };
+    }
+    return running.length > 0 ? { kind: "pending" } : { kind: "none" };
+  }
+
+  // cheapest-verified: no decision until the last candidate has had its say,
+  // because the one still running may be the cheap one.
+  if (running.length > 0) return { kind: "pending" };
+  if (verified.length === 0) return { kind: "none" };
+  const winner = [...verified].sort(
+    (a, b) =>
+      orMax(a.costUsd) - orMax(b.costUsd) ||
+      orMax(a.durationMs) - orMax(b.durationMs) ||
+      a.candidate - b.candidate,
+  )[0];
+  return { kind: "selected", candidate: winner.candidate };
+}
+
+/**
+ * How a phase whose every candidate lost is classed for the retry policy.
+ *
+ * The last candidate to settle is the one whose story the phase tells, so its
+ * class is used when every candidate agrees with it. When they disagree, a
+ * `verification` failure outranks the rest — a candidate that got as far as the
+ * checks and was rejected by them is the most informative thing that happened,
+ * and it is the class an author who opted into retrying verification meant.
+ * Failing both, `exit-code`: something ran and did not work out.
+ */
+export function candidateFailureClass(records: CandidateRecord[]): PhaseFailureClass {
+  const classes = records.map((r) => r.failureClass).filter((c): c is PhaseFailureClass => !!c);
+  if (classes.length === 0) return "exit-code";
+  const last = classes[classes.length - 1];
+  if (classes.every((c) => c === last)) return last;
+  if (classes.includes("verification")) return "verification";
+  return "exit-code";
+}
+
+/** One line per candidate: what it was, and why it is not the answer. */
+export function candidateFailureReason(records: CandidateRecord[]): string {
+  const lines = [...records]
+    .sort((a, b) => a.candidate - b.candidate)
+    .map((r) => {
+      const who = [r.runtime, r.model].filter(Boolean).join(" ");
+      const label = who ? `c${r.candidate} (${who})` : `c${r.candidate}`;
+      return `${label}: ${r.reason ?? (r.verified === false ? "checks failed" : r.status)}`;
+    });
+  return `no candidate passed its checks — ${lines.join("; ")}`;
+}
+
+/** The outcomes written onto the phase once it settles, newest evidence first
+ *  in candidate order so the board can list them without re-sorting. */
+export function toCandidateOutcomes(records: CandidateRecord[]): CandidateOutcome[] {
+  return [...records]
+    .sort((a, b) => a.candidate - b.candidate)
+    .map((r) => ({
+      candidate: r.candidate,
+      status: r.status,
+      verified: r.verified,
+      costUsd: r.costUsd,
+      durationMs: r.durationMs,
+      runtime: r.runtime,
+      model: r.model,
+      ...(r.reason ? { reason: r.reason } : {}),
+    }));
+}
+
+/**
+ * One candidate reported. Nothing about the phase is decided here.
+ *
+ * A candidate's payload, result and failure are held on its own step: the phase
+ * publishes exactly one of them, and which one is a question only the selection
+ * can answer. So this records what arrived and hands the caller a
+ * `candidatesMoved` flag, and the engine re-runs the selection with the run
+ * records it alone can read.
+ */
+function advanceCandidate(
+  inst: PipelineInstance,
+  phase: PhaseProgress,
+  step: StepProgress,
+  signal: PipelineSignal,
+  nowISO: string,
+  failureClass?: PhaseFailureClass,
+): TransitionResult {
+  if (signal.payload !== undefined) step.payload = signal.payload;
+  if (signal.result !== undefined) step.result = signal.result;
+  if (signal.resultError !== undefined) step.resultError = signal.resultError;
+  touch(inst, nowISO);
+
+  if (signal.type === "completed") {
+    step.status = "succeeded";
+    // Even a phase with no `checks` goes through verification: an empty check
+    // list passes trivially, and one code path for "is this candidate any
+    // good" is worth more than the microseconds it costs.
+    step.verification = { status: "running", startedAt: nowISO, checks: [] };
+    return {
+      instance: inst,
+      startPhases: [],
+      verifyCandidate: { phaseId: phase.id, candidate: step.candidate ?? 0 },
+      candidatesMoved: phase.id,
+    };
+  }
+
+  // `needs-input` has nowhere to go on a candidate: the gate of a candidates
+  // phase opens after selection, on the winner, so a draft that stops to ask a
+  // question has stopped without delivering one. It loses, and says so.
+  const reason =
+    signal.type === "needs-input"
+      ? "candidate asked for input; a candidate phase gates on its winner, not on a draft"
+      : (payloadReason(step.payload) ?? DEFAULT_FAIL_REASON);
+  step.status = "failed";
+  step.failure = { class: failureClass ?? "signal", reason };
+  return { instance: inst, startPhases: [], candidatesMoved: phase.id };
+}
+
+/**
+ * Record one candidate's own verification report.
+ *
+ * Refused unless that candidate is still `succeeded` under a `running` report —
+ * a revise, an abort or a selection that already happened has decided
+ * otherwise, and a report from the losing side of that decision must not
+ * reopen it.
+ */
+export function applyCandidateVerification(
+  inst: PipelineInstance,
+  phaseId: string,
+  candidate: number,
+  report: VerificationReport,
+  nowISO: string,
+): TransitionResult {
+  const phase = inst.phases.find((p) => p.id === phaseId);
+  const step = phase?.steps.find((s) => s.candidate === candidate);
+  if (!phase || !step || phase.status !== "running" || step.verification?.status !== "running") {
+    return { instance: inst, startPhases: [] };
+  }
+  step.verification = report;
+  if (report.status !== "passed") {
+    step.failure = { class: "verification", reason: verificationFailureReason(report) };
+  }
+  touch(inst, nowISO);
+  return {
+    instance: inst,
+    startPhases: [],
+    verificationApplied: true,
+    candidatesMoved: phaseId,
+  };
+}
+
+/**
+ * The selection landed: one candidate is the phase's work and the rest are not.
+ *
+ * The winner's worktree, verification report, payload and result become the
+ * phase's own — a downstream phase reading `{{previous.payload}}` must never see
+ * a draft the pipeline threw away. The losers are marked `aborted` rather than
+ * `failed`: nothing went wrong with them, they were simply not chosen, and a
+ * board that says "failed" about three-quarters of a successful phase is a
+ * board nobody trusts.
+ *
+ * The caller has already killed whatever was still running (and removed the
+ * losing worktrees); this only writes down what that means.
+ */
+export function applyCandidateSelection(
+  def: PipelineDefinition,
+  inst: PipelineInstance,
+  phaseId: string,
+  candidate: number,
+  outcomes: CandidateOutcome[],
+  nowISO: string,
+): TransitionResult {
+  const phase = inst.phases.find((p) => p.id === phaseId);
+  const winner = phase?.steps.find((s) => s.candidate === candidate);
+  if (!phase || !winner || phase.status !== "running") {
+    return { instance: inst, startPhases: [] };
+  }
+  for (const s of phase.steps) {
+    if (s === winner) continue;
+    if (s.status === "pending" || s.status === "running" || s.status === "succeeded") {
+      s.status = "aborted";
+      s.failure ??= { class: "exit-code", reason: `superseded by candidate ${candidate}` };
+    }
+  }
+  phase.selectedCandidate = candidate;
+  phase.candidateOutcomes = outcomes;
+  phase.payload = winner.payload ?? null;
+  phase.verification = winner.verification;
+  phase.workspace = winner.workspace ?? null;
+
+  const resolved = resolvePhaseResult(def, phase, [winner]);
+  if (!resolved.ok) {
+    phase.status = "failed";
+    phase.payload = withReason(phase.payload, resolved.reason);
+    return settle(def, inst, nowISO, [{ phaseId, reason: resolved.reason }]);
+  }
+  if (resolved.value !== undefined) phase.result = resolved.value;
+  return concludePhase(def, inst, phase, nowISO);
+}
+
+/**
+ * Every candidate lost. The phase fails once, with every draft's fate in the
+ * reason — the point of running N of them is that the N failures together say
+ * more than any one of them, and a retry (or a person) gets all of it.
+ */
+export function applyCandidatesExhausted(
+  def: PipelineDefinition,
+  inst: PipelineInstance,
+  phaseId: string,
+  failureClass: PhaseFailureClass,
+  reason: string,
+  outcomes: CandidateOutcome[],
+  nowISO: string,
+): TransitionResult {
+  const phase = inst.phases.find((p) => p.id === phaseId);
+  if (!phase || phase.status !== "running") return { instance: inst, startPhases: [] };
+  phase.selectedCandidate = null;
+  phase.candidateOutcomes = outcomes;
+  phase.status = "failed";
+  phase.payload = withFailureClass(withReason(phase.payload, reason), failureClass);
+  failLeftoverSteps(phase);
+  return settle(def, inst, nowISO);
+}
+
 /**
  * Fail a phase that is about to launch but whose definition is gone: the
  * pipeline was edited under a live instance and no longer names this phase.
@@ -602,10 +962,18 @@ export function applyRevise(
 function restartPhase(phase: PhaseProgress): void {
   phase.attempt += 1;
   phase.status = "running";
-  phase.steps = phase.steps.map((s) => ({ name: s.name, runId: null, status: "pending" }));
+  // One entry per declared step, not per candidate run: `startPhase` plans the
+  // attempt afresh and overwrites this, and a candidate phase's next attempt
+  // may not even have the same `count`.
+  const names = [...new Set(phase.steps.map((s) => s.name))];
+  phase.steps = names.map((name) => ({ name, runId: null, status: "pending" }));
   // A fresh attempt is verified afresh; the previous report stays in the
   // journal, and in the payload's reason, not on the live phase.
   delete phase.verification;
+  // So is a fresh attempt selected afresh. The previous attempt's outcomes are
+  // evidence about a run that no longer exists.
+  delete phase.selectedCandidate;
+  delete phase.candidateOutcomes;
 }
 
 export function applyAbort(inst: PipelineInstance, nowISO: string): PipelineInstance {

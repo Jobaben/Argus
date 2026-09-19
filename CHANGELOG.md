@@ -110,6 +110,32 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Candidates — a phase can run N drafts of its step and let its checks pick
+  one.** A phase ran its step once; a bad draw was found at the checks and cost
+  a sequential retry at the same price. A phase can now declare
+  `candidates: { count, select, variants? }` and Argus launches `count` runs of
+  its single step at once, each in a git worktree, artifact directory and
+  `changed-files` baseline of its own, each verified by the phase's own
+  `checks` inside its own tree. `select: "first-verified"` takes the first
+  draft whose checks pass and kills the rest (recorded as **superseded**, not
+  failed); `"cheapest-verified"` lets them all finish and buys the cheapest
+  verified one, tie-broken by duration. The winner's payload, result,
+  verification report and worktree become the phase's — so
+  `{{previous.payload}}`, `produces` and routing see one draft, never a
+  mixture — and a gated phase opens its gate on the winner. `variants` gives
+  each candidate its own runtime, model or reasoning effort, cycled when
+  shorter than `count`, so the same step can be drafted on Claude Code **and**
+  Codex and the checks decide which lands. A candidate that dies before its
+  checks simply loses; the phase fails only when none can still win, once, with
+  every draft's fate in the reason and the retry policy applied as usual.
+  Requires exactly one step and an effective `workspace.scope: "attempt"`, both
+  refused at save time with the reason. Candidate runs are ordinary runs: they
+  cost what they cost, take a concurrency slot each, and queue past the global
+  cap. The board badges each draft `c1`/`c2`…, marks the winner selected, and
+  summarises the phase as `2/3 verified · c2 selected`. Evidence:
+  Trae Agent 70.6 → 75.2% from its ensemble alone, AutoCodeRover +7 points from
+  three samples — and, crucially, sampling without a verifier plateaus. See
+  [docs/HARNESS.md § 12](docs/HARNESS.md).
 - **Webhook and after-pipeline triggers.** A schedule or pipeline's trigger
   can now be `{ "kind": "webhook" }` — fired by
   `POST /api/hooks/{pipelines,schedules}/:id`, authenticated with a per-definition

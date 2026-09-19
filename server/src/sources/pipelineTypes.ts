@@ -4,6 +4,8 @@
  * from this path.
  */
 
+export type { AgentRuntimeId, ReasoningEffort } from "@argus/contracts";
+
 export type {
   AgentInvocationRecord,
   ApproveRequest,
@@ -22,6 +24,10 @@ export type {
   DependencyEdge,
   InstanceStatus,
   PhaseDef,
+  CandidatePolicy,
+  CandidateVariant,
+  CandidateOutcome,
+  StepFailure,
   PhaseFailurePayload,
   PhaseProgress,
   PhaseStatus,

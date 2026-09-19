@@ -1,6 +1,9 @@
 import { useState } from "react";
 import type {
   AgentRuntimeId,
+  AgentRuntimeInfo,
+  CandidatePolicy,
+  CandidateVariant,
   Dependency,
   PhaseDef,
   PhaseStep,
@@ -119,6 +122,149 @@ function IsolationSelect({
       <option value="instance">Shared worktree per instance</option>
       <option value="attempt">Fresh worktree per attempt</option>
     </select>
+  );
+}
+
+/**
+ * Best-of-N, as the form writes it.
+ *
+ * Two requirements the server enforces are enforced here too, by disabling the
+ * control rather than by letting a save fail: a candidates phase must have
+ * exactly one step (a selection replaces the whole phase's result with one
+ * candidate's), and it must run under attempt-scoped isolation (without a
+ * worktree each, the candidates are not samples of the same task — they are N
+ * agents editing one checkout). The reason is stated inline, because a greyed
+ * control that does not say why is a bug report waiting to happen.
+ */
+function CandidateFields({
+  phase,
+  index,
+  pipelineWorkspace,
+  fieldClass,
+  runtimes,
+  aliasesFor,
+  effective,
+  onChange,
+}: {
+  phase: PhaseDef;
+  index: number;
+  pipelineWorkspace: WorkspacePolicy | undefined;
+  fieldClass: string;
+  runtimes: AgentRuntimeInfo[];
+  aliasesFor: (id: AgentRuntimeId) => string[] | undefined;
+  effective: (phase?: PhaseDef, step?: PhaseStep) => AgentRuntimeId;
+  onChange: (patch: Partial<PhaseDef>) => void;
+}) {
+  const scope = (phase.workspace ?? pipelineWorkspace)?.scope;
+  const blockers: string[] = [];
+  if (phase.steps.length !== 1) blockers.push("the phase must have exactly one step");
+  if (scope !== "attempt") blockers.push('isolation must be "Fresh worktree per attempt"');
+  const allowed = blockers.length === 0;
+  const policy = phase.candidates;
+
+  const write = (next: CandidatePolicy | undefined) => onChange({ candidates: next });
+  const setVariant = (i: number, patch: CandidateVariant) => {
+    if (!policy) return;
+    const variants = Array.from(
+      { length: policy.count },
+      (_, k) => policy.variants?.[k] ?? ({} as CandidateVariant),
+    );
+    const merged = { ...variants[i], ...patch };
+    // An emptied variant is removed rather than kept as `{}`: cycling over
+    // variants is only meaningful for entries that say something.
+    variants[i] = Object.fromEntries(
+      Object.entries(merged).filter(([, v]) => v !== undefined),
+    ) as CandidateVariant;
+    const trimmed = variants.slice(
+      0,
+      variants.reduce((last, v, k) => (Object.keys(v).length > 0 ? k + 1 : last), 0),
+    );
+    write({ ...policy, ...(trimmed.length > 0 ? { variants: trimmed } : { variants: undefined }) });
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-ink-faint">
+          Candidates
+        </span>
+        <select
+          className={fieldClass}
+          disabled={!allowed}
+          aria-label={`Candidates (phase ${index + 1})`}
+          title="Run this step several times at once and let the phase's checks pick the winner."
+          value={policy ? String(policy.count) : ""}
+          onChange={(e) =>
+            write(
+              e.target.value === ""
+                ? undefined
+                : {
+                    ...(policy ?? { select: "first-verified" as const }),
+                    count: Number(e.target.value),
+                  },
+            )
+          }
+        >
+          <option value="">Off — one run of this step</option>
+          {[2, 3, 4, 5, 6, 7, 8].map((n) => (
+            <option key={n} value={n}>
+              {n} candidates
+            </option>
+          ))}
+        </select>
+        {policy && (
+          <select
+            className={fieldClass}
+            aria-label={`Candidate selection (phase ${index + 1})`}
+            value={policy.select}
+            onChange={(e) =>
+              write({ ...policy, select: e.target.value as CandidatePolicy["select"] })
+            }
+          >
+            <option value="first-verified">First verified wins (kill the rest)</option>
+            <option value="cheapest-verified">Cheapest verified wins (run all)</option>
+          </select>
+        )}
+      </div>
+      {!allowed && (
+        <p className="text-[11px] text-ink-faint">Candidates needs {blockers.join(" and ")}.</p>
+      )}
+      {policy && (
+        <div className="space-y-1.5 border-l border-line pl-3">
+          <p className="text-[11px] text-ink-faint">
+            Each candidate gets its own worktree and artifact directory. Leave a row blank to run
+            the step exactly as declared; naming a runtime drafts the same step on two CLIs and lets
+            the checks choose.
+          </p>
+          {Array.from({ length: policy.count }, (_, i) => {
+            const variant = policy.variants?.[i] ?? {};
+            const runtime = variant.runtime ?? effective(phase, phase.steps[0]);
+            return (
+              <div key={i} className="flex flex-wrap items-center gap-2">
+                <span className="w-7 shrink-0 font-mono text-[11px] text-ink-faint">c{i + 1}</span>
+                <RuntimeSelect
+                  fieldClass={fieldClass}
+                  label="Use step runtime"
+                  ariaLabel={`Candidate ${i + 1} runtime (phase ${index + 1})`}
+                  value={variant.runtime}
+                  runtimes={runtimes}
+                  onChange={(r) => setVariant(i, { runtime: r, model: undefined })}
+                />
+                <ModelSelect
+                  key={`candidate:${index}:${i}:${runtime}`}
+                  fieldClass={fieldClass}
+                  label="Use step model"
+                  ariaLabel={`Candidate ${i + 1} model (phase ${index + 1})`}
+                  value={variant.model}
+                  {...(aliasesFor(runtime) ? { aliases: aliasesFor(runtime) } : {})}
+                  onChange={(m) => setVariant(i, { model: m })}
+                />
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -690,6 +836,17 @@ export function PipelineForm({
             phase={phase}
             index={pi}
             fieldClass={FIELD_BASE}
+            onChange={(patch) => setPhase(pi, patch)}
+          />
+
+          <CandidateFields
+            phase={phase}
+            index={pi}
+            pipelineWorkspace={form.workspace}
+            fieldClass={FIELD_BASE}
+            runtimes={runtimes}
+            aliasesFor={aliasesFor}
+            effective={effective}
             onChange={(patch) => setPhase(pi, patch)}
           />
 

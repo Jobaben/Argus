@@ -49,6 +49,12 @@ const LABEL: Record<EdgeState, string> = {
   skipped: "border-line text-ink-faint opacity-60",
 };
 
+/** Best-of-N in the space a phase pill has: "2/3 verified · c2 selected". */
+function candidateNote(c: NonNullable<PhasePill["candidates"]>): string {
+  const verified = `${c.verified}/${c.total} verified`;
+  return c.selected == null ? verified : `${verified} · c${c.selected + 1} selected`;
+}
+
 function chipTitle(pill: PhasePill, index: number, needNames: string[]): string {
   // A skipped phase says so in words. The DS token behind it is the quiet one,
   // which is right for the colour and wrong for the word: "idle" would promise
@@ -58,6 +64,7 @@ function chipTitle(pill: PhasePill, index: number, needNames: string[]): string 
   if (pill.gated) bits.push("gated: waits for a human");
   if ((pill.attempt ?? 0) > 0) bits.push(`attempt ${pill.attempt + 1}`);
   if (pill.retryAt && pill.status === "failed") bits.push("retry queued");
+  if (pill.candidates) bits.push(candidateNote(pill.candidates));
   if (pill.reason) bits.push(pill.reason.split("\n")[0]);
   if (pill.skipCause) bits.push(`not selected — ${pill.skipCause.source}: ${pill.skipCause.label}`);
   for (const edge of pill.edges ?? []) {
@@ -158,9 +165,20 @@ function PhaseNode({
           try {pill.attempt + 1}
         </span>
       )}
+      {/* Best-of-N replaces the step dots: N dots would all be the same step,
+          and what a reader wants is how many of the drafts survived. */}
+      {pill.candidates && (
+        <span
+          data-testid="candidate-summary"
+          className="shrink-0 whitespace-nowrap font-mono text-[8.5px] tracking-[0.02em] text-ink-faint"
+        >
+          {candidateNote(pill.candidates)}
+        </span>
+      )}
       {/* Step progress without step tiles: one dot per step, or a count once
           dots would stop being countable at a glance. */}
-      {pill.steps.length > 1 &&
+      {!pill.candidates &&
+        pill.steps.length > 1 &&
         (pill.steps.length <= 6 ? (
           <span aria-hidden="true" className="flex shrink-0 items-center gap-[3px]">
             {pill.steps.map((s, i) => (

@@ -5,6 +5,8 @@ import { mintHookToken, validateTrigger } from "./schedules.js";
 import { createJsonArrayStore } from "./jsonArrayStore.js";
 import type { Dependency, PhaseDef, PhaseStep, PipelineDefinition } from "./pipelineTypes.js";
 import type {
+  CandidatePolicy,
+  CandidateVariant,
   CapabilityProfile,
   EnvPolicy,
   McpServerSpec,
@@ -155,6 +157,121 @@ export function validateWorkspace(raw: unknown, ctx: string): WorkspacePolicy | 
 
 const WORKSPACE_KEYS = new Set(["scope", "base", "keep"]);
 const WORKSPACE_SCOPES = new Set<WorkspacePolicy["scope"]>(["instance", "attempt"]);
+
+// ── Candidates ───────────────────────────────────────────────────────────────
+
+const CANDIDATE_KEYS = new Set(["count", "select", "variants"]);
+const CANDIDATE_VARIANT_KEYS = new Set(["runtime", "model", "reasoningEffort"]);
+const CANDIDATE_SELECTORS = new Set<CandidatePolicy["select"]>([
+  "first-verified",
+  "cheapest-verified",
+]);
+export const MIN_CANDIDATES = 2;
+export const MAX_CANDIDATES = 8;
+
+function validateCandidateVariant(raw: unknown, ctx: string, i: number): CandidateVariant {
+  const where = `${ctx}: candidates.variants[${i}]`;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PipelineValidationError(`${where} must be an object`);
+  }
+  const v = raw as Record<string, unknown>;
+  for (const key of Object.keys(v)) {
+    if (!CANDIDATE_VARIANT_KEYS.has(key)) {
+      throw new PipelineValidationError(`${where} has unknown key "${key}"`);
+    }
+  }
+  // Each field is held to exactly what the step field it overrides is held to:
+  // a variant is a step override that happens to be written somewhere else.
+  const variant: CandidateVariant = {};
+  const runtime = validateRuntime(v.runtime, where);
+  if (runtime) variant.runtime = runtime;
+  if (v.model !== undefined && v.model !== null) variant.model = validateModel(v.model, where);
+  if (v.reasoningEffort !== undefined && v.reasoningEffort !== null) {
+    variant.reasoningEffort = validateReasoningEffort(v.reasoningEffort, where);
+  }
+  return variant;
+}
+
+/**
+ * Best-of-N on one phase.
+ *
+ * The shape is checked here; the two *structural* requirements — exactly one
+ * step, and attempt-scoped isolation — are checked by the caller, because the
+ * second of them can only be answered once the pipeline's own policy is known
+ * ({@link assertCandidatesRunnable}).
+ */
+export function validateCandidates(raw: unknown, ctx: string): CandidatePolicy | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PipelineValidationError(`${ctx}: candidates must be an object`);
+  }
+  const c = raw as Record<string, unknown>;
+  for (const key of Object.keys(c)) {
+    if (!CANDIDATE_KEYS.has(key)) {
+      throw new PipelineValidationError(`${ctx}: candidates has unknown key "${key}"`);
+    }
+  }
+  const count = Number(c.count);
+  if (!Number.isInteger(count) || count < MIN_CANDIDATES || count > MAX_CANDIDATES) {
+    throw new PipelineValidationError(
+      `${ctx}: candidates.count must be an integer ${MIN_CANDIDATES}-${MAX_CANDIDATES}`,
+    );
+  }
+  if (!CANDIDATE_SELECTORS.has(c.select as CandidatePolicy["select"])) {
+    throw new PipelineValidationError(
+      `${ctx}: candidates.select must be ${[...CANDIDATE_SELECTORS].join(" | ")}`,
+    );
+  }
+  const policy: CandidatePolicy = { count, select: c.select as CandidatePolicy["select"] };
+  if (c.variants !== undefined && c.variants !== null) {
+    if (!Array.isArray(c.variants)) {
+      throw new PipelineValidationError(`${ctx}: candidates.variants must be a list`);
+    }
+    if (c.variants.length > MAX_CANDIDATES) {
+      throw new PipelineValidationError(
+        `${ctx}: candidates.variants is capped at ${MAX_CANDIDATES} entries`,
+      );
+    }
+    policy.variants = c.variants.map((v, i) => validateCandidateVariant(v, ctx, i));
+  }
+  return policy;
+}
+
+/**
+ * The two things a `candidates` phase needs that its own object cannot say.
+ *
+ * One step, because selection replaces a phase's result with one candidate's
+ * and there is no defined answer for "which of three steps did candidate 2
+ * win with". Attempt-scoped isolation, because without a worktree per
+ * candidate the candidates are not independent samples of the same task — they
+ * are N agents editing one checkout.
+ *
+ * Separated from {@link validateCandidates} because the isolation in force is
+ * `phase.workspace ?? pipeline.workspace`, and a phase alone cannot see the
+ * second half of that.
+ */
+export function assertCandidatesRunnable(
+  phases: PhaseDef[],
+  pipelineWorkspace: WorkspacePolicy | undefined,
+): void {
+  phases.forEach((phase, i) => {
+    if (!phase.candidates) return;
+    if (phase.steps.length !== 1) {
+      throw new PipelineValidationError(
+        `phase ${i}: candidates requires exactly one step (this phase has ${phase.steps.length}) — ` +
+          "a selection replaces the phase's whole result with one candidate's",
+      );
+    }
+    const scope = (phase.workspace ?? pipelineWorkspace)?.scope;
+    if (scope !== "attempt") {
+      throw new PipelineValidationError(
+        `phase ${i}: candidates requires workspace.scope "attempt" on the phase or the pipeline ` +
+          `(effective isolation: ${scope ? `"${scope}"` : "none"}) — without a worktree per ` +
+          "candidate they would all be editing the same checkout",
+      );
+    }
+  });
+}
 
 // ── Capability profiles ──────────────────────────────────────────────────────
 
@@ -768,6 +885,7 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
   const capabilities = validateCapabilities(p.capabilities, `phase ${i}`);
   const checks = validateChecks(p.checks, `phase ${i}`);
   const workspace = validateWorkspace(p.workspace, `phase ${i}`);
+  const candidates = validateCandidates(p.candidates, `phase ${i}`);
 
   return {
     id,
@@ -786,6 +904,7 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
     ...(capabilities ? { capabilities } : {}),
     ...(checks ? { checks } : {}),
     ...(workspace ? { workspace } : {}),
+    ...(candidates ? { candidates } : {}),
   };
 }
 
@@ -860,6 +979,7 @@ export function validatePipelineInput(raw: unknown): PipelineInput {
   if (capabilities) input.capabilities = capabilities;
   const workspace = validateWorkspace(r.workspace, "pipeline");
   if (workspace) input.workspace = workspace;
+  assertCandidatesRunnable(phases, workspace);
   return input;
 }
 
@@ -1011,6 +1131,10 @@ export async function updatePipeline(
     if (merged.trigger?.kind === "webhook" && !merged.hookToken) {
       merged.hookToken = mintHookToken();
     }
+    // A PATCH can carry phases without a workspace (or the other way round), so
+    // the candidate requirements are re-checked against what the save actually
+    // produces rather than against the fragment that was sent.
+    assertCandidatesRunnable(merged.phases, merged.workspace);
     list[idx] = merged;
     await writePipelines(list);
     return merged;

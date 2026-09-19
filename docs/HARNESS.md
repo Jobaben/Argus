@@ -15,7 +15,7 @@ The pieces this document covers live in `server/src/harness/`:
 - `childEnv.ts` — the one place a child process's environment is assembled.
 - `verification.ts` — Argus's own deterministic checks over a phase's work.
 - `workspace.ts` — the git worktree a phase's steps run in, when one is
-  declared (§11).
+  declared (§11), and one per candidate when a phase runs best-of-N (§12).
 - the runtimes (`server/src/runtimes/*.ts`) — map the runtime-neutral
   `CapabilityProfile` onto one CLI's actual flags, and report what they
   couldn't.
@@ -712,6 +712,15 @@ placeholder; substitute a real, existing directory.
       "gated": false,
       "needs": ["plan"],
       "timeoutSeconds": 3600,
+      // Best-of-N (§12): two drafts of the same step, one on each CLI, and the
+      // checks below decide. Requires the attempt-scoped worktree declared here
+      // and the single step the phase already had.
+      "workspace": { "scope": "attempt" },
+      "candidates": {
+        "count": 2,
+        "select": "first-verified",
+        "variants": [{ "runtime": "claude" }, { "runtime": "codex" }],
+      },
       "retry": {
         "attempts": 2,
         "backoffSeconds": 60,
@@ -799,7 +808,20 @@ choices are legible:
   fails the phase).
 - `retry.retryOn` on `implement` deliberately opts into `"verification"`: a
   typecheck failure is worth a second attempt with the failure reason handed
-  back in the prompt (`retryNote`).
+  back in the prompt (`retryNote`). With `candidates`, a retry re-runs the
+  whole set — so the two attempts here are two _rounds_ of two drafts, and the
+  phase only fails when neither round produced a draft that typechecks and
+  touched the right files.
+- `implement` is the phase worth spending on, so it is the one with
+  `candidates`: two drafts, one per CLI, `first-verified` so the loser is
+  killed the moment the winner's checks pass. It needs
+  `workspace: { scope: "attempt" }` — declared on the phase here rather than
+  pipeline-wide, because the read-only phases have nothing to isolate. Note
+  that `review` reads `{{artifactDir.implement}}/summary.md`: that resolves to
+  the phase's directory, and the winning draft's files are one level down in
+  `c0/` or `c1/` (§12) — a phase that must hand files on from a candidate
+  should write them into the working tree and commit, which is the branch the
+  worktree exists to produce.
 - Only `implement` and `verify` need `workspace-write`; `plan`'s `maxTurns`
   caps a phase that should be a short structured answer, not an open-ended
   session.
@@ -941,3 +963,173 @@ whatever `cwd` it was launched with; only a new attempt resolves a workspace.
 - **Nothing merges the branch.** Argus creates it and leaves it; landing the
   work is a later phase's job (a `command` check, an agent that opens a PR) or
   a human's.
+
+## 12. Candidates
+
+A phase runs its step once. If that run is a bad draw — the model went down a
+wrong path, the test it wrote does not compile, the patch touches the wrong
+file — Argus finds out at the checks and then does the only thing it can: fail
+the phase, and maybe retry it, sequentially, at the same price.
+
+A `candidates` phase runs the step **N times at once**, in N separate
+worktrees, and lets the phase's own `checks` decide which draft the pipeline
+keeps.
+
+This is the single best-evidenced lever in the harness literature (see
+[HARNESS-RESEARCH.md §2](HARNESS-RESEARCH.md) #1–#2). Trae Agent's SWE-bench
+Verified score moved **70.6% → 75.2% from its candidate ensemble alone**, and
+monotonically in N; AutoCodeRover gained **+7 points from three samples**. The
+qualifier matters more than the numbers: sampling _without_ a verifier
+plateaus (Large Language Monkeys), because picking by majority vote or by a
+reward model is not the same as picking the one that passes. Argus has a real
+verifier already — §6 — so candidates is the two halves put together.
+
+```jsonc
+{
+  "id": "implement",
+  "cwd": "/path/to/repo",
+  "workspace": { "scope": "attempt" },
+  "steps": [{ "name": "code", "prompt": "Implement {{artifacts.plan}}." }],
+  "checks": [
+    { "kind": "command", "run": "npm run typecheck", "label": "typecheck" },
+    { "kind": "command", "run": "npm test", "label": "tests" },
+  ],
+  "candidates": {
+    "count": 2,
+    "select": "first-verified",
+    "variants": [{ "runtime": "claude" }, { "runtime": "codex" }],
+  },
+}
+```
+
+| Field      | Meaning                                                                                                                                  |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `count`    | How many independent runs of the step launch at once. Integer, 2–8.                                                                      |
+| `select`   | `"first-verified"` or `"cheapest-verified"` — see below.                                                                                 |
+| `variants` | Per-candidate `{ runtime?, model?, reasoningEffort? }`, **cycled** when shorter than `count`. Absent means `count` identical candidates. |
+
+### Requirements
+
+Both are refused with a `400` naming the reason, at authoring time — and
+re-checked on the _merged_ definition after a `PATCH`, so clearing a
+pipeline-wide workspace under a phase that relies on it is refused too:
+
+- **Exactly one step in the phase.** A selection replaces the phase's whole
+  result with one candidate's, and "which of three steps did candidate 2 win
+  with" has no answer.
+- **An effective `workspace.scope: "attempt"`** (on the phase or inherited
+  from the pipeline, §11). Without a worktree each, the candidates are not
+  independent samples of the same task — they are N agents editing one
+  checkout.
+
+### What each candidate gets
+
+Everything that could otherwise be shared, isn't:
+
+| Per candidate `i`        | Value                                                                                                  |
+| ------------------------ | ------------------------------------------------------------------------------------------------------ |
+| worktree                 | `.../worktrees/<instanceId>/<phaseId>-attempt<N>-c<i>`, branch `argus/<instanceId>/<phaseId>/<N>-c<i>` |
+| artifact directory       | `<phaseArtifactDir>/c<i>` — also what `ARGUS_ARTIFACT_DIR` and `{{artifactDir}}` point at              |
+| `changed-files` baseline | `<phaseId>.<attempt>.c<i>.baseline.json`                                                               |
+| verification report      | `StepProgress.verification` — the phase's `checks`, run in **that** worktree                           |
+| result file              | the run's own `ARGUS_RESULT_FILE`; nothing is shared, so nothing races                                 |
+
+The candidate index rides on the _attempt_ component of the branch
+(`…/impl/0-c1`, not `…/impl/0/c1`) because git's ref namespace is a
+filesystem: `argus/i/impl/0` and `argus/i/impl/0/c1` cannot both exist, and a
+phase that gained candidates between attempts would start failing on the
+collision.
+
+The prompts are identical apart from what the variant changes and the
+artifact directory, which is per candidate by necessity.
+
+Variant overrides resolve narrowest-first like everything else:
+`variant → step → phase → pipeline → server default`.
+
+### Selection
+
+**`first-verified`** — the first candidate whose checks pass wins. Its
+siblings are killed at once (`termination: "killed"`, `error: "superseded by
+candidate k"`, SIGTERM then SIGKILL after the grace period, exactly the
+existing kill path), their steps go to `aborted`, and their worktrees are
+removed. This is the cheap mode: you stop paying for the drafts you are not
+going to use.
+
+**`cheapest-verified`** — every candidate runs to its own checks. Among the
+verified ones the lowest `costUsd` wins; ties break on the shortest duration,
+then on the lowest index. A candidate whose run reported no cost sorts **last**:
+an unknown price is not a cheap one. This is the mode for "I want the best
+value", and it costs N runs by construction.
+
+When a winner is chosen, its payload, its declared `result`, its verification
+report and its worktree become the **phase's** — so `{{previous.payload}}`,
+`produces` and a route condition downstream see one draft, never a mixture.
+The phase then concludes exactly as any other: a gated phase opens its gate
+**after** selection, on the winner, and a revise re-runs the whole set as a new
+attempt.
+
+A candidate that fails before verification — spawn, exit-code, signal, timeout,
+an invocation Argus refused to make, or an agent that signalled `needs-input`
+(a draft has nowhere to take a question) — simply **loses**. The phase fails
+only when no candidate can still win, and then once, with every draft's fate in
+the reason:
+
+```
+no candidate passed its checks — c0 (claude opus): verification failed: tests (exit 1);
+c1 (codex): timed out after 3600s
+```
+
+The phase's failure class is the class every candidate shared, if they shared
+one; otherwise `verification` if any candidate reached the checks; otherwise
+`exit-code`. The phase's `retry` policy then applies as usual, and a retry
+re-runs the whole set.
+
+`PhaseProgress` records `selectedCandidate` and a `candidateOutcomes` entry per
+draft (status, verified, cost, duration, runtime, model, and why it lost) — the
+losers' processes are gone, and this is what remains to explain the choice.
+
+### Cost
+
+Candidate runs are ordinary runs: they appear in the Ledger, count against the
+budget, and cost what they cost. `count: 3` is up to three times the phase's
+spend — `first-verified` recovers part of that by killing the losers, and
+`cheapest-verified` recovers none of it by design. Nothing here is free; what
+the evidence says is that it is often worth it.
+
+Each candidate also takes a **concurrency slot**. `count` is bounded by the
+server's global cap (`maxConcurrent`), and candidates past the cap queue for a
+slot like any other step — a `count: 8` phase on a 4-slot server runs four,
+then four. The deadline clock starts at spawn, so queueing never eats a
+candidate's timeout budget (§7).
+
+### Restarts
+
+Everything a selection needs is on disk, and the decision is a pure function of
+it (`selectCandidate` in `pipelineTransitions.ts`). So:
+
+- a candidate whose checks were running when Argus stopped is verified again,
+  keyed by attempt **and** candidate, so a duplicate report is a no-op;
+- a candidate whose process died without signalling is healed into a loss by
+  the ordinary reconcile path;
+- a restart that lands between the last report and the selection it implied
+  simply asks the question again, and gets the same answer.
+
+### Limitations
+
+- **One step per phase.** Enforced, for the reason above. A multi-step phase
+  that wants best-of-N splits the step it wants sampled into its own phase.
+- **No Verdict-based selection.** Selection is by deterministic `checks` only.
+  Judging the drafts with a rubric (the Verdict watcher already scores runs) is
+  the natural next selector and is deliberately not built yet: the evidence is
+  specifically that selection _without execution_ plateaus, so an
+  execution-gated selector had to come first.
+- **No cross-candidate merging.** The winner is taken whole. Argus never
+  combines two drafts, and nothing merges the winning branch — landing the work
+  is still a later phase's job or a human's (§11).
+- **Losing worktrees go, losing branches stay.** A loser's directory is removed
+  as soon as it loses (or when the phase gives up), unless `workspace.keep` is
+  set. Its branch survives, so `git checkout argus/<instance>/<phase>/<n>-c<i>`
+  still shows what that draft committed — but anything it left _uncommitted_ is
+  gone with the directory, exactly as in §11.
+- **`needs-input` from a candidate is a loss**, not a pause. The gate of a
+  candidates phase belongs to its winner.

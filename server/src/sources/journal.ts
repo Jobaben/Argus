@@ -39,6 +39,7 @@ export type JournalKind =
   | "step.exit-mismatch"
   | "phase.verifying"
   | "phase.verified"
+  | "phase.candidate-selected"
   | "phase.signalled"
   | "phase.succeeded"
   | "phase.failed"

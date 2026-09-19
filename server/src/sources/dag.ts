@@ -159,6 +159,11 @@ export function describeCondition(when: RouteCondition | undefined): string {
  * step, because two concurrent siblings racing to write one phase-level
  * decision is not a routing rule — it is a coin toss. Null when the phase
  * declares no result at all.
+ *
+ * A `candidates` phase has one step and therefore one answer, and every
+ * candidate of it publishes — to its own run's result file, never to a shared
+ * one. There is no race: the files are per run, and the phase takes the
+ * winner's after selection, not the first to arrive.
  */
 export function resultStepName(phase: PhaseDef): string | null {
   if (!phase.result) return null;

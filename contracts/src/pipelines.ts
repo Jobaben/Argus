@@ -151,6 +151,73 @@ export interface WorkspaceRecord {
 }
 
 /**
+ * One candidate's deviation from the step it is a copy of.
+ *
+ * Absent fields inherit exactly what the step would have used, so a policy
+ * with no `variants` runs `count` identical attempts and differs only in the
+ * sampling. A variant that names a `runtime` is the interesting case: the same
+ * step drafted on Claude Code and on Codex, with the phase's own checks
+ * deciding which draft the pipeline keeps.
+ */
+export interface CandidateVariant {
+  runtime?: AgentRuntimeId;
+  model?: string;
+  reasoningEffort?: ReasoningEffort;
+}
+
+/**
+ * Best-of-N for one phase: run the step several times at once and let the
+ * phase's own `checks` pick the winner.
+ *
+ * The evidence for this is the strongest single lever in the harness
+ * literature — repeated sampling raises coverage, but only a real verifier
+ * turns coverage into a result, and selection without one plateaus. Argus
+ * already has both halves: deterministic `checks`, and a fresh git worktree
+ * per attempt. A candidate is one attempt-scoped worktree per draft, verified
+ * on its own, and the losers are thrown away.
+ *
+ * Requires a phase with exactly one step and an effective
+ * `workspace.scope: "attempt"` (declared on the phase or inherited from the
+ * pipeline); without isolation the candidates would be editing each other's
+ * files, which is not sampling but corruption.
+ */
+export interface CandidatePolicy {
+  /** How many independent attempts of the step run at once. 2..8. */
+  count: number;
+  /**
+   * `first-verified` — the first candidate whose checks pass wins and the rest
+   * are killed. `cheapest-verified` — every candidate runs to its checks; among
+   * the verified, the lowest cost (then the shortest duration) wins.
+   */
+  select: "first-verified" | "cheapest-verified";
+  /** Per-candidate overrides, cycled when shorter than `count`. Absent = identical candidates. */
+  variants?: CandidateVariant[];
+}
+
+/** How one candidate of a phase ended, kept on the phase once it settles so
+ *  the board can explain a selection after the losers' runs are gone. */
+export interface CandidateOutcome {
+  candidate: number;
+  status: StepStatus;
+  /** Whether this candidate's checks passed. Null = it never reached them. */
+  verified: boolean | null;
+  costUsd: number | null;
+  durationMs: number | null;
+  runtime: AgentRuntimeId | null;
+  model: string | null;
+  /** One line: why it lost, when it did. */
+  reason?: string;
+}
+
+/** Why one candidate step ended the way it did — per candidate, because a
+ *  phase's own payload can only carry one story and a candidate phase has
+ *  `count` of them. */
+export interface StepFailure {
+  class: PhaseFailureClass;
+  reason: string;
+}
+
+/**
  * A deterministic check Argus runs itself once every step of a phase has
  * reported success — the difference between "the agent said the tests pass"
  * and "the tests pass". A failing check fails the phase under the
@@ -339,6 +406,9 @@ export interface PhaseDef {
    *  `cwd`. Overrides the pipeline's policy; absent = the pipeline's, else the
    *  phase's own `cwd` exactly as before workspaces existed. */
   workspace?: WorkspacePolicy;
+  /** Run this phase's single step as N competing candidates and let `checks`
+   *  select one. Requires exactly one step and attempt-scoped isolation. */
+  candidates?: CandidatePolicy;
 }
 
 export interface PipelineDefinition {
@@ -427,6 +497,28 @@ export interface StepProgress {
   result?: unknown;
   /** Why the step's declared result could not be read (e.g. a torn file). */
   resultError?: string;
+  /**
+   * The agent's own closing payload for this run.
+   *
+   * Ordinarily a phase keeps one payload, because ordinarily one step's report
+   * is the phase's report. A candidate phase has `count` of them and may
+   * publish only the winner's, so each candidate's is held here until selection
+   * copies one onto the phase.
+   */
+  payload?: unknown;
+  /** Why this step ended badly, when it did. Held per step for the same reason
+   *  as {@link StepProgress.payload}. */
+  failure?: StepFailure;
+  /** Which candidate of a `candidates` phase this run is (0-based). Absent on
+   *  an ordinary step. */
+  candidate?: number;
+  /** This candidate's own verification report: the phase's `checks` run inside
+   *  this candidate's worktree, against its own baseline and artifact
+   *  directory. Absent on an ordinary step, which is verified phase-wide. */
+  verification?: VerificationReport;
+  /** The worktree this candidate ran in. Absent on an ordinary step, whose
+   *  phase records the one tree they shared. */
+  workspace?: WorkspaceRecord | null;
 }
 
 export interface PhaseProgress {
@@ -455,8 +547,15 @@ export interface PhaseProgress {
   /** Where this attempt's steps were told to leave file artifacts. */
   artifactDir?: string | null;
   /** The isolated worktree this attempt's steps ran in, when the phase declared
-   *  a policy. Null = the phase ran in its own `cwd`. */
+   *  a policy. Null = the phase ran in its own `cwd`. On a `candidates` phase
+   *  this becomes the *winning* candidate's tree once one is selected. */
   workspace?: WorkspaceRecord | null;
+  /** Which candidate won, on a `candidates` phase that settled. Null while the
+   *  selection is still open, or when no candidate could win. */
+  selectedCandidate?: number | null;
+  /** How every candidate ended, written once the phase settles — the losers'
+   *  runs are the evidence for a selection, and they outlive their processes. */
+  candidateOutcomes?: CandidateOutcome[];
 }
 
 /** What the engine writes into `PhaseProgress.payload` when a phase fails.

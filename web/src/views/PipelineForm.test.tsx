@@ -461,4 +461,95 @@ describe("PipelineForm", () => {
       keep: true,
     });
   });
+  // ── Candidates ─────────────────────────────────────────────────────────────
+
+  it("refuses candidates until the phase has one step and attempt-scoped isolation", async () => {
+    const user = userEvent.setup();
+    render(<PipelineForm initial={EMPTY_PIPELINE} onSubmit={vi.fn()} onCancel={vi.fn()} />);
+    const control = () => screen.getByLabelText("Candidates (phase 1)") as HTMLSelectElement;
+
+    // One step already, but no isolation.
+    expect(control().disabled).toBe(true);
+    expect(screen.getByText(/isolation must be "Fresh worktree per attempt"/)).toBeTruthy();
+
+    // The wrong isolation is still the wrong isolation.
+    await user.selectOptions(screen.getByLabelText("Isolation (phase 1)"), "instance");
+    expect(control().disabled).toBe(true);
+
+    await user.selectOptions(screen.getByLabelText("Isolation (phase 1)"), "attempt");
+    expect(control().disabled).toBe(false);
+
+    // A second step takes it away again, and says which requirement broke.
+    await user.click(screen.getByRole("button", { name: /add step/i }));
+    expect(control().disabled).toBe(true);
+    expect(screen.getByText(/exactly one step/)).toBeTruthy();
+  });
+
+  it("enables candidates from pipeline-wide isolation too", async () => {
+    const user = userEvent.setup();
+    render(<PipelineForm initial={EMPTY_PIPELINE} onSubmit={vi.fn()} onCancel={vi.fn()} />);
+    await user.selectOptions(screen.getByLabelText("Isolation"), "attempt");
+    expect((screen.getByLabelText("Candidates (phase 1)") as HTMLSelectElement).disabled).toBe(
+      false,
+    );
+  });
+
+  it("serialises a candidates policy with per-candidate runtime and model variants", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    render(<PipelineForm initial={EMPTY_PIPELINE} onSubmit={onSubmit} onCancel={vi.fn()} />);
+
+    await user.type(screen.getByPlaceholderText("Pipeline name"), "Best of N");
+    await user.type(screen.getByPlaceholderText("Phase name"), "Implement");
+    await user.type(screen.getByPlaceholderText(/Working directory/), "/repo");
+    await user.type(screen.getByPlaceholderText("Step name"), "code");
+    await user.type(screen.getByPlaceholderText("Step prompt"), "write it");
+    await user.selectOptions(screen.getByLabelText("Isolation (phase 1)"), "attempt");
+
+    await user.selectOptions(screen.getByLabelText("Candidates (phase 1)"), "2");
+    await user.selectOptions(
+      screen.getByLabelText("Candidate selection (phase 1)"),
+      "cheapest-verified",
+    );
+    await user.selectOptions(screen.getByLabelText("Candidate 1 runtime (phase 1)"), "claude");
+    await user.selectOptions(screen.getByLabelText("Candidate 1 model (phase 1)"), "opus");
+    await user.selectOptions(screen.getByLabelText("Candidate 2 runtime (phase 1)"), "codex");
+
+    await user.click(screen.getByRole("button", { name: /save pipeline/i }));
+    expect(onSubmit.mock.calls[0][0].phases[0].candidates).toEqual({
+      count: 2,
+      select: "cheapest-verified",
+      variants: [{ runtime: "claude", model: "opus" }, { runtime: "codex" }],
+    });
+  });
+
+  it("turning candidates off leaves no policy behind", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    render(
+      <PipelineForm
+        initial={{
+          ...EMPTY_PIPELINE,
+          name: "Loaded",
+          phases: [
+            {
+              id: "p1",
+              name: "Implement",
+              cwd: "/repo",
+              gated: false,
+              workspace: { scope: "attempt" },
+              steps: [{ name: "code", prompt: "write it" }],
+              candidates: { count: 3, select: "first-verified" },
+            },
+          ],
+        }}
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+      />,
+    );
+    expect((screen.getByLabelText("Candidates (phase 1)") as HTMLSelectElement).value).toBe("3");
+    await user.selectOptions(screen.getByLabelText("Candidates (phase 1)"), "");
+    await user.click(screen.getByRole("button", { name: /save pipeline/i }));
+    expect(onSubmit.mock.calls[0][0].phases[0].candidates).toBeUndefined();
+  });
 });

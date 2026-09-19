@@ -699,3 +699,149 @@ test("workspace: a patch sets it, and an explicit null clears it", async () => {
   );
   assert.equal("workspace" in cleared, false);
 });
+
+// ── Candidates ───────────────────────────────────────────────────────────────
+
+/** A one-step phase with attempt-scoped isolation: the shape candidates needs. */
+const candidatePhase = (over: Record<string, unknown> = {}) => ({
+  id: "impl",
+  name: "Implement",
+  cwd: home,
+  gated: false,
+  workspace: { scope: "attempt" },
+  steps: [{ name: "code", prompt: "go" }],
+  candidates: { count: 3, select: "first-verified" },
+  ...over,
+});
+
+test("candidates: a well-formed policy round-trips, variants and all", async () => {
+  const m = await fresh();
+  const input = m.validatePipelineInput(
+    goodInput({
+      phases: [
+        candidatePhase({
+          candidates: {
+            count: 4,
+            select: "cheapest-verified",
+            variants: [
+              { runtime: "claude", model: "opus" },
+              { runtime: "codex", reasoningEffort: "high" },
+            ],
+          },
+        }),
+      ],
+    }),
+  );
+  assert.deepEqual(input.phases[0].candidates, {
+    count: 4,
+    select: "cheapest-verified",
+    variants: [
+      { runtime: "claude", model: "opus" },
+      { runtime: "codex", reasoningEffort: "high" },
+    ],
+  });
+});
+
+test("candidates: count is an integer 2-8 and select is one of the two", async () => {
+  const m = await fresh();
+  const bad = (candidates: unknown) =>
+    m.validatePipelineInput(goodInput({ phases: [candidatePhase({ candidates })] }));
+  assert.throws(
+    () => bad({ count: 1, select: "first-verified" }),
+    /candidates.count must be an integer 2-8/,
+  );
+  assert.throws(
+    () => bad({ count: 9, select: "first-verified" }),
+    /candidates.count must be an integer 2-8/,
+  );
+  assert.throws(
+    () => bad({ count: 2.5, select: "first-verified" }),
+    /candidates.count must be an integer/,
+  );
+  assert.throws(() => bad({ count: 2, select: "majority" }), /candidates.select must be/);
+  assert.throws(() => bad({ count: 2, select: "first-verified", nope: 1 }), /unknown key "nope"/);
+});
+
+test("candidates: a variant's fields are held to the step fields they override", async () => {
+  const m = await fresh();
+  const variant = (v: unknown) =>
+    m.validatePipelineInput(
+      goodInput({
+        phases: [
+          candidatePhase({ candidates: { count: 2, select: "first-verified", variants: [v] } }),
+        ],
+      }),
+    );
+  assert.throws(() => variant({ runtime: "gpt" }), /variants\[0\]: runtime must be/);
+  assert.throws(() => variant({ model: "--oops" }), /is not a valid model identifier/);
+  assert.throws(() => variant({ reasoningEffort: "extreme" }), /reasoningEffort must be/);
+  assert.throws(() => variant({ temperature: 1 }), /unknown key "temperature"/);
+});
+
+test("candidates: requires exactly one step, and says why", async () => {
+  const m = await fresh();
+  assert.throws(
+    () =>
+      m.validatePipelineInput(
+        goodInput({
+          phases: [
+            candidatePhase({
+              steps: [
+                { name: "a", prompt: "x" },
+                { name: "b", prompt: "y" },
+              ],
+            }),
+          ],
+        }),
+      ),
+    /candidates requires exactly one step \(this phase has 2\)/,
+  );
+});
+
+test("candidates: requires attempt-scoped isolation, from the phase or the pipeline", async () => {
+  const m = await fresh();
+  // No isolation at all.
+  assert.throws(
+    () =>
+      m.validatePipelineInput(goodInput({ phases: [candidatePhase({ workspace: undefined })] })),
+    /candidates requires workspace.scope "attempt".*effective isolation: none/s,
+  );
+  // Instance-scoped is isolation, but the wrong kind: one tree, shared.
+  assert.throws(
+    () =>
+      m.validatePipelineInput(
+        goodInput({ phases: [candidatePhase({ workspace: { scope: "instance" } })] }),
+      ),
+    /effective isolation: "instance"/,
+  );
+  // Inherited from the pipeline is fine.
+  const ok = m.validatePipelineInput(
+    goodInput({
+      workspace: { scope: "attempt" },
+      phases: [candidatePhase({ workspace: undefined })],
+    }),
+  );
+  assert.equal(ok.phases[0].candidates.count, 3);
+});
+
+test("candidates: a patch that removes the isolation the phase relies on is refused", async () => {
+  const m = await fresh();
+  await m.createPipeline(
+    m.validatePipelineInput(
+      goodInput({
+        workspace: { scope: "attempt" },
+        phases: [candidatePhase({ workspace: undefined })],
+      }),
+    ),
+    new Date(),
+    "pc",
+  );
+  // The patch carries no phases at all, so only the merged definition can see
+  // that clearing the pipeline's workspace strands the phase's candidates.
+  await assert.rejects(
+    m.updatePipeline("pc", m.validatePipelinePatch({ workspace: null }), new Date()),
+    /candidates requires workspace.scope "attempt"/,
+  );
+  const still = (await m.readPipelines()).find((p: { id: string }) => p.id === "pc");
+  assert.deepEqual(still.workspace, { scope: "attempt" });
+});

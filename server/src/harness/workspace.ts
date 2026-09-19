@@ -109,30 +109,47 @@ export function instanceWorktreesDir(root: string, instanceId: string): string {
   return path.join(root, safeSegment(instanceId));
 }
 
+/** A candidate index as it appears in a directory or branch name, or "" for a
+ *  run that is not one of several candidates. */
+function candidateSuffix(candidate: number | undefined): string {
+  if (candidate === undefined) return "";
+  return `-c${Math.max(0, Math.trunc(candidate))}`;
+}
+
 /**
  * The directory name of one worktree: the single tree an `instance`-scoped
- * pipeline shares, or one per phase attempt.
+ * pipeline shares, or one per phase attempt — and, when the attempt is run as
+ * several competing candidates, one per candidate.
  */
 export function worktreeDirName(
   scope: WorkspacePolicy["scope"],
   phaseId: string,
   attempt: number,
+  candidate?: number,
 ): string {
   if (scope === "instance") return "shared";
-  return `${safeSegment(phaseId)}-attempt${Math.max(0, Math.trunc(attempt))}`;
+  return `${safeSegment(phaseId)}-attempt${Math.max(0, Math.trunc(attempt))}${candidateSuffix(candidate)}`;
 }
 
 /** The branch a worktree's work lands on. Named for what it is: this instance's
- *  shared branch, or this phase attempt's own. */
+ *  shared branch, this phase attempt's own, or one candidate of that attempt.
+ *
+ *  The candidate index rides on the attempt component (`…/0-c1`) rather than
+ *  becoming a component of its own (`…/0/c1`): git refuses the filesystem for
+ *  its ref namespace, so `argus/i/impl/0` and `argus/i/impl/0/c1` could not
+ *  both exist, and a phase that gains candidates between attempts would start
+ *  failing on a name collision. */
 export function worktreeBranch(
   scope: WorkspacePolicy["scope"],
   instanceId: string,
   phaseId: string,
   attempt: number,
+  candidate?: number,
 ): string {
   const inst = refSegment(instanceId);
   if (scope === "instance") return `argus/${inst}/shared`;
-  return `argus/${inst}/${refSegment(phaseId)}/${Math.max(0, Math.trunc(attempt))}`;
+  const n = Math.max(0, Math.trunc(attempt));
+  return `argus/${inst}/${refSegment(phaseId)}/${n}${candidateSuffix(candidate)}`;
 }
 
 export interface WorkspaceTarget {
@@ -151,12 +168,14 @@ export function workspaceTarget(input: {
   phaseId: string;
   attempt: number;
   policy: WorkspacePolicy;
+  /** Which candidate of the attempt this tree is for; absent for an ordinary run. */
+  candidate?: number;
 }): WorkspaceTarget {
-  const { root, instanceId, phaseId, attempt, policy } = input;
-  const dir = worktreeDirName(policy.scope, phaseId, attempt);
+  const { root, instanceId, phaseId, attempt, policy, candidate } = input;
+  const dir = worktreeDirName(policy.scope, phaseId, attempt, candidate);
   return {
     path: path.join(instanceWorktreesDir(root, instanceId), dir),
-    branch: worktreeBranch(policy.scope, instanceId, phaseId, attempt),
+    branch: worktreeBranch(policy.scope, instanceId, phaseId, attempt, candidate),
   };
 }
 
@@ -365,6 +384,12 @@ export function plannedRemovals(
 
   for (const phase of inst.phases) {
     if (phase.workspace) consider(phase.workspace, phase.id);
+    // A candidate records its own tree on its step. Selection removes the
+    // losers as it happens; these are the ones an abort (or a crash) left
+    // behind, and nothing else would ever come back for them.
+    for (const step of phase.steps) {
+      if (step.workspace) consider(step.workspace, phase.id);
+    }
   }
   if (inst.workspace) {
     // The shared tree: kept when any phase that opted in asked to keep it.

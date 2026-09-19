@@ -210,4 +210,43 @@ describe("StepDrawer", () => {
     await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
     expect(screen.queryByText("workspace")).toBeNull();
   });
+
+  it("names which candidate a best-of-N run was, and that it won", async () => {
+    stubRun({ id: "run_0003", log: "" });
+    render(
+      <StepDrawer
+        selection={selection({
+          step: step({ candidate: { index: 1, total: 3 }, verified: true, selected: true }),
+        })}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("candidate")).toBeTruthy();
+    expect(screen.getByText("c2 of 3")).toBeTruthy();
+    expect(screen.getByText(/· selected/)).toBeTruthy();
+  });
+
+  it("calls a killed loser superseded rather than failed", async () => {
+    stubRun({ id: "run_0003", log: "" });
+    render(
+      <StepDrawer
+        selection={selection({
+          step: step({
+            status: "stopped",
+            candidate: { index: 2, total: 3 },
+            superseded: true,
+          }),
+        })}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/superseded by the winner/)).toBeTruthy();
+  });
+
+  it("says nothing about candidates for an ordinary step", async () => {
+    stubRun({ id: "run_0003", log: "" });
+    render(<StepDrawer selection={selection()} onClose={vi.fn()} />);
+    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+    expect(screen.queryByText("candidate")).toBeNull();
+  });
 });

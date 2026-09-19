@@ -238,6 +238,13 @@ export function phaseArtifactDir(root: string, instanceId: string, phaseId: stri
   return path.join(root, safeSegment(instanceId), safeSegment(phaseId));
 }
 
+/** Where one candidate of a phase attempt leaves its file artifacts: a
+ *  subdirectory of the phase's own, so the candidates cannot satisfy each
+ *  other's `artifact` checks and the winner's files stay identifiable. */
+export function candidateArtifactDir(phaseDir: string, candidate: number): string {
+  return path.join(phaseDir, `c${Math.max(0, Math.trunc(candidate))}`);
+}
+
 /** Where a phase attempt's working-tree baseline is kept, beside the run
  *  invocation records, out of the agent's reach. */
 export function phaseBaselinePath(
@@ -245,10 +252,14 @@ export function phaseBaselinePath(
   instanceId: string,
   phaseId: string,
   attempt: number,
+  /** Which candidate of the attempt this baseline belongs to. Absent for an
+   *  ordinary attempt, whose steps all share one working tree and one baseline. */
+  candidate?: number,
 ): string {
+  const suffix = candidate === undefined ? "" : `.c${Math.max(0, Math.trunc(candidate))}`;
   return path.join(
     root,
     safeSegment(instanceId),
-    `${safeSegment(phaseId)}.${Math.max(0, Math.trunc(attempt))}.baseline.json`,
+    `${safeSegment(phaseId)}.${Math.max(0, Math.trunc(attempt))}${suffix}.baseline.json`,
   );
 }
