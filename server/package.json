@@ -16,7 +16,7 @@
   "dependencies": {
     "@argus/contracts": "*",
     "@hono/node-server": "^2.1.0",
-    "chokidar": "^4.0.3",
+    "chokidar": "^5.0.0",
     "hono": "^4.13.1",
     "ws": "^8.21.3"
   },
