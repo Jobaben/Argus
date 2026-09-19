@@ -29,6 +29,8 @@
  *   FAKE: write-result <json>               write ARGUS_RESULT_FILE
  *   FAKE: malformed-result                  write `{not json` to ARGUS_RESULT_FILE
  *   FAKE: write-delta <json>                write ARGUS_KNOWLEDGE_DELTA_FILE (a KnowledgeDelta)
+ *   FAKE: read-context <name>               copy ARGUS_KNOWLEDGE_CONTEXT_FILE into ARGUS_ARTIFACT_DIR/<name>
+ *                                           (proves the agent could read the context it was supplied)
  *   FAKE: sleep <ms>                        stay alive for <ms>
  *   FAKE: exit <code>                       process exit code (default 0)
  *   FAKE: outcome <succeeded|failed|blocked> [reason]   the ARGUS_OUTCOME line
@@ -147,6 +149,14 @@ async function execute(prompt) {
         const file = process.env.ARGUS_KNOWLEDGE_DELTA_FILE;
         if (!file) throw new Error("write-delta without ARGUS_KNOWLEDGE_DELTA_FILE");
         writeFileAt(file, rest);
+        break;
+      }
+      case "read-context": {
+        const file = process.env.ARGUS_KNOWLEDGE_CONTEXT_FILE;
+        const dir = process.env.ARGUS_ARTIFACT_DIR;
+        if (!file) throw new Error("read-context without ARGUS_KNOWLEDGE_CONTEXT_FILE");
+        if (!dir) throw new Error("read-context without ARGUS_ARTIFACT_DIR");
+        writeFileAt(path.join(dir, rest), readFileSync(file, "utf8"));
         break;
       }
       case "sleep":

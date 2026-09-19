@@ -12,8 +12,10 @@
  * runtime maps the list (docs/HARNESS.md § Argus-owned invocation channels),
  * and `prepareInvocation` decides what an unreachable channel means.
  *
- * Pure. Phase 4's read-only semantic-context file will be one more entry with
- * `access: "read"`; nothing on the runtime side needs to change for it.
+ * Pure. The KnowledgeContext file (Phase 4) is the one read channel: Argus →
+ * agent, `access: "read"`, through the same list — a runtime that grants a
+ * directory grants it whichever way the data flows, and the one thing a
+ * runtime does differently for a read channel is refuse to make it writable.
  */
 
 import path from "node:path";
@@ -25,6 +27,9 @@ export interface ChannelInputs {
   resultFile: string | null;
   /** `ARGUS_KNOWLEDGE_DELTA_FILE`. Null only when the protocol is off (tests). */
   knowledgeDeltaFile: string | null;
+  /** `ARGUS_KNOWLEDGE_CONTEXT_FILE`, when the step declares a
+   *  `knowledgeContext`. Null = no semantic context for this run. */
+  knowledgeContextFile?: string | null;
   /** `ARGUS_ARTIFACT_DIR`. */
   artifactDir: string | null;
   /** `ARGUS_MEMORY_DIR`, when the pipeline's `memory` is enabled. */
@@ -41,7 +46,7 @@ export function phaseUsesArtifacts(phaseDef: Pick<PhaseDef, "checks">): boolean 
 
 /**
  * Every channel this invocation offers, in a fixed order (result, delta,
- * artifacts, memory) so records and argv are deterministic.
+ * context, artifacts, memory) so records and argv are deterministic.
  *
  * Which channels are *required* — the ones a runtime must be able to deliver
  * or the launch is refused under strict enforcement — follows from what the
@@ -57,7 +62,11 @@ export function phaseUsesArtifacts(phaseDef: Pick<PhaseDef, "checks">): boolean 
  * - the KnowledgeDelta file only when the phase says `knowledgeDelta:
  *   "required"`. The protocol is offered to every run and emitting a delta
  *   stays optional, so an ordinary step never fails to launch over it; a
- *   phase whose purpose is to propose knowledge opts in to the guarantee.
+ *   phase whose purpose is to propose knowledge opts in to the guarantee;
+ * - the KnowledgeContext file whenever the step has one: the step was
+ *   authored to reason from that context, and an agent that cannot read it
+ *   would run without the premises its author selected. Read access only —
+ *   the agent never writes it.
  */
 export function invocationChannels(inputs: ChannelInputs): InvocationChannel[] {
   const out: InvocationChannel[] = [];
@@ -81,6 +90,17 @@ export function invocationChannels(inputs: ChannelInputs): InvocationChannel[] {
       access: "write",
       required: inputs.phaseDef.knowledgeDelta === "required",
       label: "KnowledgeDelta file",
+    });
+  }
+  if (inputs.knowledgeContextFile) {
+    out.push({
+      kind: "knowledge-context",
+      envVar: "ARGUS_KNOWLEDGE_CONTEXT_FILE",
+      path: inputs.knowledgeContextFile,
+      dir: path.dirname(inputs.knowledgeContextFile),
+      access: "read",
+      required: true,
+      label: "KnowledgeContext file",
     });
   }
   if (inputs.artifactDir) {

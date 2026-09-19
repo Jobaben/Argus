@@ -349,13 +349,13 @@ repository (under `~/.claude/argus/`), and must stay reachable whatever
 `filesystem` says about the rest of the disk: a read-only researcher still
 writes its report, its decision and its proposal there.
 
-| Channel             | Env var                      | Direction     | Required access | Launch depends on it when…                                                                                                                                                              |
-| ------------------- | ---------------------------- | ------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Result file         | `ARGUS_RESULT_FILE`          | agent → Argus | write           | the step publishes the phase's `result` (always required then: the routing reads it). `results/<runId>/result.json` — a directory per run, so granting it admits this run's result only |
-| KnowledgeDelta file | `ARGUS_KNOWLEDGE_DELTA_FILE` | agent → Argus | write           | the phase declares `knowledgeDelta: "required"`. Offered to every run; emitting a delta stays optional either way (KNOWLEDGE-LEDGER.md §12.5)                                           |
-| Artifact directory  | `ARGUS_ARTIFACT_DIR`         | agent → Argus | write when used | the phase declares an `artifact` check. Offered to every run                                                                                                                            |
-| Memory directory    | `ARGUS_MEMORY_DIR`           | agent ↔ Argus | write           | `memory.enabled` is set (every step's prompt then asks the agent to append to `NOTES.md`)                                                                                               |
-| _Semantic context_  | _(Phase 4, not yet)_         | Argus → agent | read            | _Will arrive through the same list with `access: "read"`; no runtime change needed. Not implemented — see KNOWLEDGE-LEDGER.md §15._                                                     |
+| Channel             | Env var                        | Direction     | Required access | Launch depends on it when…                                                                                                                                                                                                                |
+| ------------------- | ------------------------------ | ------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Result file         | `ARGUS_RESULT_FILE`            | agent → Argus | write           | the step publishes the phase's `result` (always required then: the routing reads it). `results/<runId>/result.json` — a directory per run, so granting it admits this run's result only                                                   |
+| KnowledgeDelta file | `ARGUS_KNOWLEDGE_DELTA_FILE`   | agent → Argus | write           | the phase declares `knowledgeDelta: "required"`. Offered to every run; emitting a delta stays optional either way (KNOWLEDGE-LEDGER.md §12.5)                                                                                             |
+| Artifact directory  | `ARGUS_ARTIFACT_DIR`           | agent → Argus | write when used | the phase declares an `artifact` check. Offered to every run                                                                                                                                                                              |
+| Memory directory    | `ARGUS_MEMORY_DIR`             | agent ↔ Argus | write           | `memory.enabled` is set (every step's prompt then asks the agent to append to `NOTES.md`)                                                                                                                                                 |
+| KnowledgeContext    | `ARGUS_KNOWLEDGE_CONTEXT_FILE` | Argus → agent | **read**        | the step (or its phase) declares a `knowledgeContext` — always required then: the step was authored to reason from it. `invocations/<runId>/knowledge-context.json`, per run, `0444`; the agent never writes it (KNOWLEDGE-LEDGER.md §13) |
 
 The model (`harness/channels.ts`, `InvocationChannel` in `runtimes/types.ts`):
 `prepareInvocation` builds **one** list of channels — kind, env var, path, the
@@ -367,8 +367,13 @@ answers for every entry with a `ChannelOutcome`: `granted`, or `unavailable`
 with a reason. A channel the runtime does not answer for is treated as
 unavailable — a protocol path is never presumed writable. Nothing on the
 runtime side is special-cased by kind: the result file, the delta file and the
-artifact directory are the same thing to an adapter, and Phase 4's read-only
-context file will be one more entry.
+artifact directory are the same thing to an adapter. The one distinction an
+adapter makes is by **access**: a `read` channel (the KnowledgeContext file)
+must be reachable and, where the runtime can express it, must _not_ be made
+writable — Claude Code adds an `Edit(//<dir>/**)` deny rule beside the
+`--add-dir`; Codex never lists it in `writable_roots`; OpenCode and Qwen Code
+run unsandboxed and can express neither, which is the same limitation their
+profiles already carry.
 
 What an `unavailable` verdict means is the engine's decision, from `required`
 and `enforcement`:
@@ -394,16 +399,23 @@ exactly as it always did.
 
 **Runtime matrix** (pinned by `runtimes/channels.test.ts`):
 
-| Runtime         | Effective filesystem mode                                          | Result file · KnowledgeDelta · artifact dir · memory dir (write)                   | Read channels |
-| --------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------- | ------------- |
-| **Claude Code** | any                                                                | ✅ `--add-dir` on each channel's directory                                         | ✅            |
-| **Claude Code** | `read-only`, channel _under_ `cwd`/`additionalDirectories`         | ❌ the `Edit(//root/**)` deny rule covers it; reported from the paths              | ✅            |
-| **Codex**       | `workspace-write` (declared, or the `ARGUS_CODEX_SANDBOX` default) | ✅ named in `sandbox_workspace_write.writable_roots`                               | ✅            |
-| **Codex**       | `unrestricted` / `danger-full-access`                              | ✅ nothing to add                                                                  | ✅            |
-| **Codex**       | `read-only` (declared, or via `ARGUS_CODEX_SANDBOX`)               | ❌ no way to admit a write; one limitation per channel                             | ✅            |
-| **OpenCode**    | any (the profile's `filesystem` is itself unenforceable)           | ✅ `opencode run --auto` runs unsandboxed; nothing stands in the way               | ✅            |
-| **Qwen Code**   | any, no `--sandbox` in `ARGUS_QWEN_ARGS`                           | ✅ `--approval-mode yolo` runs unsandboxed                                         | ✅            |
-| **Qwen Code**   | `--sandbox` / `-s` in `ARGUS_QWEN_ARGS`                            | ❌ the container mounts the project and the CLI's home, not Argus's data directory | ❌            |
+| Runtime         | Effective filesystem mode                                          | Result file · KnowledgeDelta · artifact dir · memory dir (write)                   | Read channels                                                                                                                    |
+| --------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| **Claude Code** | any                                                                | ✅ `--add-dir` on each channel's directory                                         | ✅ `--add-dir` + `Edit(//<dir>/**)` denied: readable, not editable (a path with a comma cannot carry the deny rule → limitation) |
+| **Claude Code** | `read-only`, channel _under_ `cwd`/`additionalDirectories`         | ❌ the `Edit(//root/**)` deny rule covers it; reported from the paths              | ✅ readable; the root's own deny rule already covers it                                                                          |
+| **Codex**       | `workspace-write` (declared, or the `ARGUS_CODEX_SANDBOX` default) | ✅ named in `sandbox_workspace_write.writable_roots`                               | ✅ reads are unrestricted; never listed in `writable_roots`, so the sandbox refuses writes                                       |
+| **Codex**       | `unrestricted` / `danger-full-access`                              | ✅ nothing to add                                                                  | ✅ (no sandbox: writes cannot be prevented)                                                                                      |
+| **Codex**       | `read-only` (declared, or via `ARGUS_CODEX_SANDBOX`)               | ❌ no way to admit a write; one limitation per channel                             | ✅ readable; the sandbox refuses every write                                                                                     |
+| **OpenCode**    | any (the profile's `filesystem` is itself unenforceable)           | ✅ `opencode run --auto` runs unsandboxed; nothing stands in the way               | ✅ readable (writes cannot be prevented — the profile is unenforceable regardless)                                               |
+| **Qwen Code**   | any, no `--sandbox` in `ARGUS_QWEN_ARGS`                           | ✅ `--approval-mode yolo` runs unsandboxed                                         | ✅ readable (writes cannot be prevented — as above)                                                                              |
+| **Qwen Code**   | `--sandbox` / `-s` in `ARGUS_QWEN_ARGS`                            | ❌ the container mounts the project and the CLI's home, not Argus's data directory | ❌ unavailable; the channel is required, so a strict launch is refused                                                           |
+
+Where a runtime cannot prevent a write to the context file, the file's `0444`
+mode guards against an accidental overwrite and the invocation record's
+`knowledgeContext.sha256` remains the proof of what Argus supplied — an agent
+that rewrote its own context changed a file, not the record. Without a
+capability profile the read channel is `unmanaged` like every other: the CLI
+reads it exactly as it would any file.
 
 Two consequences worth stating plainly. A `filesystem: "read-only"` profile
 on **Codex** with a structured result (or `knowledgeDelta: "required"`, or an
@@ -755,6 +767,15 @@ or is unknown):
   "artifactDir": "/home/user/.claude/argus/artifacts/inst_71c0/implement",
   "resultFile": null,
   "knowledgeDeltaFile": "/home/user/.claude/argus/knowledge-deltas/run_8f2a/delta.json",
+  "knowledgeContextFile": "/home/user/.claude/argus/invocations/run_8f2a/knowledge-context.json",
+  "knowledgeContext": {
+    "schemaVersion": 1,
+    "claims": [
+      { "id": "RULE-17", "revision": 2 },
+      { "id": "CONSTRAINT-4", "revision": 1 }
+    ],
+    "sha256": "3b7c9e…"
+  },
   "channels": [
     {
       "kind": "knowledge-delta",
@@ -762,6 +783,14 @@ or is unknown):
       "path": "/home/user/.claude/argus/knowledge-deltas/run_8f2a/delta.json",
       "access": "write",
       "required": false,
+      "status": "granted"
+    },
+    {
+      "kind": "knowledge-context",
+      "envVar": "ARGUS_KNOWLEDGE_CONTEXT_FILE",
+      "path": "/home/user/.claude/argus/invocations/run_8f2a/knowledge-context.json",
+      "access": "read",
+      "required": true,
       "status": "granted"
     },
     {
@@ -795,7 +824,12 @@ could not reach (§3a); empty means every declared key was honoured and every
 channel is reachable (or no profile was declared at all). `channels` lists
 each channel the invocation was offered — its env var, path, access, whether
 the launch depended on it, and `granted` / `unavailable` (with the reason) /
-`unmanaged` (no profile: the CLI's defaults decided).
+`unmanaged` (no profile: the CLI's defaults decided). `knowledgeContextFile`
+and `knowledgeContext` (Phase 4) say exactly which claim revisions Argus
+supplied to the run and the SHA-256 of the file as written — `null` when the
+step declared no `knowledgeContext`, absent on older records. They are the
+authoritative "supplied" provenance
+(`GET /api/knowledge/executions/:runId/context`, KNOWLEDGE-LEDGER.md §13.6).
 
 **Journal kinds** (`server/src/sources/journal.ts`, append-only, per
 instance) that this feature adds:
@@ -808,6 +842,7 @@ instance) that this feature adds:
 | `phase.verifying`    | Every step of a phase reported success and Argus started running its `checks`.                                                                                                                                                              |
 | `phase.verified`     | The checks finished — `passed`, or `failed` naming which checks and why.                                                                                                                                                                    |
 | `memory.trimmed`     | A settled instance's pipeline had `memory` enabled and `NOTES.md` had grown past `maxBytes`; Argus trimmed its head back down to the cap (§13).                                                                                             |
+| `knowledge.supplied` | A step's KnowledgeContext was materialized and recorded, immediately before the spawn; the detail names the exact refs and the first 12 hex of the file's sha256 (KNOWLEDGE-LEDGER.md §13).                                                 |
 
 **`Run.termination`** (`@argus/contracts`) records _how_ a run ended when
 Argus knows more than the exit code: `"exited"` (its own doing), `"timed-out"`

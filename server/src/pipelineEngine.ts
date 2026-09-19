@@ -58,6 +58,16 @@ import {
   updateDeltaStatus,
   writeDeltaRecord,
 } from "./knowledge/staging.js";
+import {
+  KnowledgeContextError,
+  effectiveContextSpec,
+  knowledgeContextFile,
+  resolveKnowledgeContext,
+  writeKnowledgeContextFile,
+} from "./knowledge/context.js";
+import type { ResolvedKnowledgeContext } from "./knowledge/context.js";
+import { formatClaimRef } from "./knowledge/kernel.js";
+import { readLedger } from "./knowledge/store.js";
 import { markPipelineStarted, readPipelines } from "./sources/pipelines.js";
 import { accumulateRun } from "./sources/totals.js";
 import {
@@ -99,7 +109,12 @@ import { KeyedMutex } from "./mutex.js";
 import { spawnPipelineProcess } from "./pipelineProcess.js";
 import type { PipelineProcessHandle } from "./pipelineProcess.js";
 import type { SpawnPlan } from "./runtimes/index.js";
-import type { AgentRuntimeId, KnowledgeDeltaRecord, StepKnowledgeDelta } from "@argus/contracts";
+import type {
+  AgentRuntimeId,
+  ClaimRef,
+  KnowledgeDeltaRecord,
+  StepKnowledgeDelta,
+} from "@argus/contracts";
 import type { Run } from "./sources/scheduleTypes.js";
 import type {
   PhaseDef,
@@ -133,7 +148,20 @@ interface PlannedRun {
   /** Full values of any placeholder {@link interpolate} trimmed, for the
    *  engine to write under this run's invocation directory. */
   contextFiles: { path: string; contents: string }[];
+  /** The semantic context this run receives, resolved at planning against
+   *  the attempt's one ledger snapshot. Null = the step declares none. */
+  knowledgeContext: PlannedKnowledgeContext | null;
 }
+
+/**
+ * A step's `knowledgeContext` after resolution against the phase attempt's
+ * ledger snapshot: the frozen document, or the reason it could not be built
+ * (an unknown claim or revision), which fails the step as `configuration`
+ * before any process starts. Resolved once per attempt, at planning, so every
+ * run of the attempt saw the same ledger and the prompt can name what the
+ * run will find in the file.
+ */
+type PlannedKnowledgeContext = { resolved: ResolvedKnowledgeContext } | { error: string };
 import type {
   CandidateRecord,
   KnowledgeCommitVerdict,
@@ -224,8 +252,26 @@ export const KNOWLEDGE_DELTA_CONTRACT =
   "accepted; a delta that fails validation fails this step. Ordinary work that establishes no " +
   "durable knowledge writes no file.";
 
+/**
+ * The KnowledgeContext half of the agent contract (docs/KNOWLEDGE-LEDGER.md
+ * § KnowledgeContext protocol). A pure constant like the two above — phrased
+ * conditionally on the variable, because most runs have no context and the
+ * system-prompt prefix must be the same for every run. It says where the
+ * context is, that each ref is immutable historical identity, and how to
+ * declare consumption against it. It does not describe the ledger and does
+ * not ask the agent to use everything it was given.
+ */
+export const KNOWLEDGE_CONTEXT_CONTRACT =
+  "Semantic context. If the ARGUS_KNOWLEDGE_CONTEXT_FILE environment variable is set, Argus " +
+  "has supplied canonical semantic context — business rules, facts, constraints, decisions — as " +
+  "a read-only JSON file at that path; read it before reasoning about the task. Each entry's " +
+  '"ref" (ID:vN) is an immutable historical identity: it names exactly that revision, whose ' +
+  "lifecycle and support are stated in the entry. Never modify the file. Use only what is " +
+  "relevant. If you write a KnowledgeDelta that declares an existing claim as consumed, name the " +
+  "exact revision you relied upon, as given by its ref.";
+
 /** Everything Argus itself tells a step's agent, in one constant. */
-export const STEP_CONTRACT = `${OUTCOME_CONTRACT}\n\n${KNOWLEDGE_DELTA_CONTRACT}`;
+export const STEP_CONTRACT = `${OUTCOME_CONTRACT}\n\n${KNOWLEDGE_DELTA_CONTRACT}\n\n${KNOWLEDGE_CONTEXT_CONTRACT}`;
 
 /**
  * The instruction a result-producing step gets appended to its prompt.
@@ -287,6 +333,23 @@ export function memoryInstruction(memory: PipelineDefinition["memory"] | undefin
     "\n\nDurable notes for this pipeline live at $ARGUS_MEMORY_DIR/NOTES.md. Append what a " +
     "future run of this pipeline must know (decisions, gotchas, what was tried); keep it under " +
     `${cap} bytes — Argus trims the head beyond that.`
+  );
+}
+
+/**
+ * The instruction a step gets when Argus supplied it a KnowledgeContext:
+ * how many revisions, exactly which, and where. The refs in the prompt are
+ * the same refs the file carries; the file is the channel, the prompt only
+ * makes sure the agent knows the context is there and what it is called.
+ */
+export function knowledgeContextInstruction(supplied: ClaimRef[]): string {
+  if (supplied.length === 0) return "";
+  const refs = supplied.map(formatClaimRef).join(", ");
+  return (
+    `\n\nSemantic context supplied. Argus has placed ${supplied.length} canonical claim ` +
+    `revision${supplied.length === 1 ? "" : "s"} (${refs}) as read-only JSON at the path in ` +
+    "the ARGUS_KNOWLEDGE_CONTEXT_FILE environment variable. Read it before reasoning about " +
+    "this task; treat each ref as the exact revision to cite if you declare it consumed."
   );
 }
 
@@ -919,6 +982,15 @@ export function createEngine(deps: EngineDeps): Engine {
         .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
       if (siblings[0]) previousInstanceSummary = summarizeInstance(siblings[0]);
     }
+    // Semantic context (Phase 4): one ledger snapshot per phase attempt, read
+    // only when some step of the phase declares a `knowledgeContext`. Every
+    // selector of every run of this attempt — exact and active alike — is
+    // resolved against this one document, so the runs of one attempt cannot
+    // disagree about which revision "active" meant, and a revision committed
+    // while the agents run is, by construction, not in any of their files.
+    // A retry or a revise plans a new attempt and reads a new snapshot.
+    const contextSpecs = phaseDef.steps.map((sd) => effectiveContextSpec(phaseDef, sd));
+    const ledgerSnapshot = contextSpecs.some((spec) => spec !== null) ? await readLedger() : null;
     // What is actually launched: one run per declared step, or `count` runs of
     // the single step a candidates phase has.
     const units = candidates
@@ -958,6 +1030,27 @@ export function createEngine(deps: EngineDeps): Engine {
           : undefined;
       const runId = deps.newId();
       const publishes = stepDef.name === publishingStep;
+      // This run's semantic context, frozen now. A selector the snapshot
+      // cannot resolve is carried to the launch as the reason the step will
+      // not start — the definition names knowledge the ledger does not hold.
+      const contextSpec = effectiveContextSpec(phaseDef, stepDef);
+      let knowledgeContext: PlannedKnowledgeContext | null = null;
+      if (contextSpec && ledgerSnapshot) {
+        try {
+          knowledgeContext = {
+            resolved: resolveKnowledgeContext(ledgerSnapshot, contextSpec, startedAt),
+          };
+        } catch (e) {
+          knowledgeContext = {
+            error:
+              e instanceof KnowledgeContextError
+                ? `knowledge context ${e.code}: ${e.message}`
+                : e instanceof Error
+                  ? e.message
+                  : String(e),
+          };
+        }
+      }
       // Narrowest wins: a candidate's variant names its runtime, else the step,
       // else its phase, else the pipeline, else the server default. Resolved and
       // written down here, so a mixed-runtime pipeline stays readable on the
@@ -996,6 +1089,9 @@ export function createEngine(deps: EngineDeps): Engine {
           (publishes ? resultInstruction(phaseDef.result) : "") +
           artifactInstruction(phaseDef.checks, own) +
           memoryInstruction(memoryPolicy) +
+          (knowledgeContext && "resolved" in knowledgeContext
+            ? knowledgeContextInstruction(knowledgeContext.resolved.supplied)
+            : "") +
           noteSuffix,
         cwd,
         status: "running",
@@ -1029,6 +1125,7 @@ export function createEngine(deps: EngineDeps): Engine {
         artifactDir: own,
         workspace,
         contextFiles: rendered.contextFiles,
+        knowledgeContext,
       });
     }
     // Record the runIds on the instance up front, then persist once (no write races).
@@ -1099,6 +1196,7 @@ export function createEngine(deps: EngineDeps): Engine {
         workspace: unit.workspace,
         memoryDir,
         contextFiles: unit.contextFiles,
+        knowledgeContext: unit.knowledgeContext,
       });
       void journal(inst.id, {
         at: nowISO(),
@@ -1276,6 +1374,8 @@ export function createEngine(deps: EngineDeps): Engine {
     /** Full values of any placeholder {@link interpolate} trimmed for this
      *  run's prompt, to write under its own invocation directory. */
     contextFiles: { path: string; contents: string }[];
+    /** The run's semantic context as planned, or null for a step without one. */
+    knowledgeContext: PlannedKnowledgeContext | null;
   }
 
   type Launched =
@@ -1329,10 +1429,35 @@ export function createEngine(deps: EngineDeps): Engine {
     const deltaFile = knowledgeDeltaFile(run.id);
     env.ARGUS_KNOWLEDGE_DELTA_FILE = deltaFile;
     const invocationDir = runInvocationDir(run.id);
+    // A semantic context the planning snapshot could not resolve refuses the
+    // step here, as a `configuration` failure: the definition names knowledge
+    // the ledger does not hold, and running again cannot change that.
+    if (ctx.knowledgeContext && "error" in ctx.knowledgeContext) {
+      sem.release();
+      const reason = ctx.knowledgeContext.error;
+      await writeRun({
+        ...run,
+        status: "failed",
+        termination: "spawn-failed",
+        error: reason,
+        endedAt: nowISO(),
+      });
+      return { failure: "configuration", reason };
+    }
+    // The read-only KnowledgeContext (docs/KNOWLEDGE-LEDGER.md § KnowledgeContext
+    // protocol): materialized in the run's own invocation directory before the
+    // process exists, named to the agent by the variable, and recorded on the
+    // invocation — exact refs and the file's hash — as what Argus supplied.
+    const resolvedContext = ctx.knowledgeContext?.resolved ?? null;
+    const contextFile = resolvedContext ? knowledgeContextFile(run.id) : null;
+    if (contextFile) env.ARGUS_KNOWLEDGE_CONTEXT_FILE = contextFile;
     let prepared: PreparedInvocation;
     try {
       await mkdir(invocationDir, { recursive: true });
       await ensureKnowledgeDeltaDir(run.id);
+      if (contextFile && resolvedContext) {
+        await writeKnowledgeContextFile(contextFile, resolvedContext.text);
+      }
       // The clock the deadline runs from: now, with the slot held and the
       // process about to start.
       run.startedAt = nowISO();
@@ -1351,6 +1476,17 @@ export function createEngine(deps: EngineDeps): Engine {
         workspace: ctx.workspace,
         resultFile,
         knowledgeDeltaFile: deltaFile,
+        knowledgeContext:
+          contextFile && resolvedContext
+            ? {
+                file: contextFile,
+                record: {
+                  schemaVersion: 1,
+                  claims: resolvedContext.supplied,
+                  sha256: resolvedContext.sha256,
+                },
+              }
+            : null,
         timeoutSeconds: ctx.timeoutSeconds,
         gitHead: ctx.gitHead,
         parentEnv: parentEnv(),
@@ -1358,6 +1494,15 @@ export function createEngine(deps: EngineDeps): Engine {
       });
       run.deadlineAt = prepared.record.deadlineAt;
       await writeInvocation(prepared.record);
+      if (resolvedContext) {
+        void journal(ctx.inst.id, {
+          at: run.startedAt,
+          kind: "knowledge.supplied",
+          phaseId: ctx.phaseDef.id,
+          runId: run.id,
+          detail: `${resolvedContext.supplied.map(formatClaimRef).join(", ")} (sha256 ${resolvedContext.sha256.slice(0, 12)})`,
+        });
+      }
       for (const file of prepared.files) await writeFile(file.path, file.contents, "utf8");
       // Any placeholder {@link interpolate} trimmed for this run's prompt: the
       // full value, so the agent can still read the whole thing if it needs to.
@@ -2043,6 +2188,19 @@ export function createEngine(deps: EngineDeps): Engine {
     const file = await readAgentDelta(runId);
     if (file.kind === "none") return { ok: true, staged: null };
 
+    // What Argus supplied to this run, from its invocation record: the exact
+    // revisions of its KnowledgeContext, or none. Copied onto the staged
+    // record so the commit can classify each consumed entry as supplied or
+    // agent-discovered, and so the two lists sit side by side for a reader.
+    // Absent (not empty) when the record cannot be read: no claim either way.
+    const invocation = await readInvocation(runId);
+    const supplied = invocation
+      ? (invocation.knowledgeContext?.claims ?? []).map((c) => ({
+          id: c.id,
+          revision: c.revision,
+        }))
+      : undefined;
+
     const base: Omit<KnowledgeDeltaRecord, "status"> = {
       id: `KD-${deps.newId()}`,
       runId,
@@ -2052,6 +2210,7 @@ export function createEngine(deps: EngineDeps): Engine {
       step: step.name,
       receivedAt: at,
       updatedAt: at,
+      ...(supplied !== undefined ? { supplied } : {}),
     };
     const reject = async (
       reason: string,
@@ -2103,6 +2262,7 @@ export function createEngine(deps: EngineDeps): Engine {
       delta,
       execution: { runId, instanceId: inst.id, phaseId },
       attempt: phase.attempt,
+      ...(supplied !== undefined ? { supplied } : {}),
     };
     try {
       await preflightKnowledgeDeltas([proposal], deps.now());
@@ -2230,6 +2390,7 @@ export function createEngine(deps: EngineDeps): Engine {
         delta: record.delta,
         execution: { runId: step.runId, instanceId: inst.id, phaseId: phase.id },
         attempt: phase.attempt,
+        ...(record.supplied !== undefined ? { supplied: record.supplied } : {}),
       });
     }
     const at = nowISO();

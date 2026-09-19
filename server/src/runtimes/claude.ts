@@ -79,14 +79,34 @@ function isWithin(dir: string, root: string): boolean {
  * *under* a denied root (a working directory that is the operator's home,
  * say). That case is deterministic from the paths alone and is reported
  * rather than left to fail at write time.
+ *
+ * A **read** channel (the KnowledgeContext file) is admitted the same way and
+ * then denied for edits: `--add-dir` alone would make its directory editable
+ * under `workspace-write`, and Argus → agent data is not the agent's to
+ * change. The deny rule is appended to `deny` by the caller, which is why the
+ * list is threaded through; a path the rule grammar cannot express (a comma)
+ * is a limitation, since the channel stays readable but its integrity would
+ * rest on the agent's good behaviour alone.
  */
 function claudeChannels(
   channels: InvocationChannel[],
   deniedRoots: string[],
   args: string[],
+  deny: string[],
+  limitations: string[],
 ): ChannelOutcome[] {
   return channels.map((channel) => {
     args.push("--add-dir", channel.dir);
+    if (channel.access === "read") {
+      if (/[,\r\n]/.test(channel.dir)) {
+        limitations.push(
+          `Claude Code cannot deny edits to the ${channel.label} (${channel.envVar}): its path contains a comma`,
+        );
+      } else if (!deniedRoots.some((root) => isWithin(channel.dir, root))) {
+        deny.push(`Edit(//${channel.dir}/**)`);
+      }
+      return channelGranted(channel);
+    }
     if (channel.access === "write") {
       const under = deniedRoots.find((root) => isWithin(channel.dir, root));
       if (under !== undefined) {
@@ -152,9 +172,6 @@ function buildClaudeCapabilities(cap: CapabilityRequest | undefined): ClaudeCapa
   // "workspace-write" needs no extra rules: Claude Code's default already
   // scopes edits to cwd + additional dirs. "unrestricted" needs none either.
 
-  if (allow.length) args.push("--allowedTools", allow.join(","));
-  if (deny.length) args.push("--disallowedTools", deny.join(","));
-
   if (profile.mcpServers !== undefined) {
     const mcpPath = `${invocationDir}/mcp.json`;
     files.push({
@@ -170,7 +187,12 @@ function buildClaudeCapabilities(cap: CapabilityRequest | undefined): ClaudeCapa
   // the same way, no matter what the profile said about the rest of the
   // filesystem: the protocol between the agent and Argus is not the agent's
   // to be restricted from.
-  const channelOutcomes = claudeChannels(channels, deniedRoots, args);
+  const channelOutcomes = claudeChannels(channels, deniedRoots, args, deny, limitations);
+
+  // The tool rules go on argv after the channels have had their say: a read
+  // channel adds its own Edit deny, and the rules travel in one flag each.
+  if (allow.length) args.push("--allowedTools", allow.join(","));
+  if (deny.length) args.push("--disallowedTools", deny.join(","));
 
   if (profile.settingSources !== undefined) {
     args.push("--setting-sources", profile.settingSources.join(","));

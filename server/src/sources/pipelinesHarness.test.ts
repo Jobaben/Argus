@@ -1033,3 +1033,93 @@ test("knowledgeDelta: optional | required on a phase, absent by default, anythin
     /knowledgeDelta must be/,
   );
 });
+
+// ── knowledgeContext: which canonical knowledge a step receives (Phase 4) ───
+
+test("knowledgeContext: accepted on a step and on a phase, normalized to the object form, absent by default", async () => {
+  const m = await fresh();
+  const phase = (over: Record<string, unknown>) => ({
+    id: "implement",
+    name: "Implement",
+    cwd: home,
+    gated: false,
+    steps: [{ name: "s", prompt: "p" }],
+    ...over,
+  });
+  const plain = m.validatePipelineInput(goodInput({ phases: [phase({})] }));
+  assert.equal("knowledgeContext" in plain.phases[0], false);
+  assert.equal("knowledgeContext" in plain.phases[0].steps[0], false);
+
+  const onPhase = m.validatePipelineInput(
+    goodInput({
+      phases: [phase({ knowledgeContext: { claims: ["RULE-17:v2", "CONSTRAINT-4"] } })],
+    }),
+  );
+  assert.deepEqual(onPhase.phases[0].knowledgeContext, {
+    claims: [
+      { id: "RULE-17", revision: 2 },
+      { id: "CONSTRAINT-4", revision: "active" },
+    ],
+  });
+
+  const onStep = m.validatePipelineInput(
+    goodInput({
+      phases: [
+        phase({
+          steps: [
+            {
+              name: "s",
+              prompt: "p",
+              knowledgeContext: { claims: [{ id: "DECISION-3", revision: "active" }] },
+            },
+          ],
+        }),
+      ],
+    }),
+  );
+  assert.deepEqual(onStep.phases[0].steps[0].knowledgeContext, {
+    claims: [{ id: "DECISION-3", revision: "active" }],
+  });
+  assert.equal("knowledgeContext" in onStep.phases[0], false);
+});
+
+test("knowledgeContext: malformed selectors and duplicate claim ids are refused as 400-class authoring errors", async () => {
+  const m = await fresh();
+  const phase = (over: Record<string, unknown>) => ({
+    id: "implement",
+    name: "Implement",
+    cwd: home,
+    gated: false,
+    steps: [{ name: "s", prompt: "p" }],
+    ...over,
+  });
+  const cases: [unknown, RegExp][] = [
+    [{ claims: [] }, /phase 0: knowledgeContext.claims must name at least one claim/],
+    [
+      { claims: ["RULE-17:v2", "RULE-17"] },
+      /phase 0: knowledgeContext.claims\[1\]: RULE-17 is already selected by claims\[0\]/,
+    ],
+    [{ claims: [{ id: "RULE-17" }] }, /revision must be a positive integer or "active"/],
+    [{ claims: ["not a ref!"] }, /knowledgeContext.claims\[0\] must be a claim id/],
+    ["RULE-17", /knowledgeContext must be an object/],
+    [{ claims: ["RULE-17"], tags: ["x"] }, /unknown key "tags"/],
+  ];
+  for (const [knowledgeContext, re] of cases) {
+    assert.throws(
+      () => m.validatePipelineInput(goodInput({ phases: [phase({ knowledgeContext })] })),
+      (e: unknown) => e instanceof m.PipelineValidationError && re.test((e as Error).message),
+      `phase: ${JSON.stringify(knowledgeContext)}`,
+    );
+  }
+  assert.throws(
+    () =>
+      m.validatePipelineInput(
+        goodInput({
+          phases: [
+            phase({ steps: [{ name: "s", prompt: "p", knowledgeContext: { claims: [] } }] }),
+          ],
+        }),
+      ),
+    /phase 0: step "s": knowledgeContext.claims must name at least one claim/,
+  );
+});

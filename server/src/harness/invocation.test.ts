@@ -506,3 +506,89 @@ test("invocationChannels: fixed order, directories derived from file paths, requ
     [],
   );
 });
+
+// ── prepareInvocation: the KnowledgeContext (Phase 4) ────────────────────────
+
+const CONTEXT_FILE = "/home/op/.claude/argus/invocations/run-1/knowledge-context.json";
+const CONTEXT_RECORD = {
+  schemaVersion: 1 as const,
+  claims: [
+    { id: "RULE-17", revision: 2 },
+    { id: "CONSTRAINT-4", revision: 1 },
+  ],
+  sha256: "ab".repeat(32),
+};
+
+test("knowledge context: the invocation record carries the file, the exact refs and the hash, and a required read channel", () => {
+  const prepared = prepareInvocation(
+    baseInputs({
+      knowledgeDeltaFile: DELTA,
+      knowledgeContext: { file: CONTEXT_FILE, record: CONTEXT_RECORD },
+      phaseDef: makePhase({ capabilities: { filesystem: "workspace-write" } }),
+    }),
+  );
+  assert.deepEqual(prepared.blocking, []);
+  assert.equal(prepared.record.knowledgeContextFile, CONTEXT_FILE);
+  assert.deepEqual(prepared.record.knowledgeContext, CONTEXT_RECORD);
+  assert.deepEqual(channelStatus(prepared, "knowledge-context"), {
+    kind: "knowledge-context",
+    envVar: "ARGUS_KNOWLEDGE_CONTEXT_FILE",
+    path: CONTEXT_FILE,
+    access: "read",
+    required: true,
+    status: "granted",
+  });
+  assert.deepEqual(
+    prepared.record.channels?.map((c) => c.kind),
+    ["knowledge-delta", "knowledge-context", "artifact-dir"],
+  );
+  const denied = prepared.plan.args[prepared.plan.args.indexOf("--disallowedTools") + 1];
+  assert.ok(denied.includes("Edit(///home/op/.claude/argus/invocations/run-1/**)"));
+});
+
+test("knowledge context: absent means no file, no record entry and no channel — the legacy record shape", () => {
+  const prepared = prepareInvocation(baseInputs({ knowledgeDeltaFile: DELTA }));
+  assert.equal(prepared.record.knowledgeContextFile, null);
+  assert.equal(prepared.record.knowledgeContext, null);
+  assert.equal(channelStatus(prepared, "knowledge-context"), undefined);
+  assert.equal("ARGUS_KNOWLEDGE_CONTEXT_FILE" in prepared.env, false);
+});
+
+test("knowledge context: a runtime that cannot deliver the read channel refuses the launch under strict enforcement and records it under best-effort", () => {
+  const inputs = (enforcement?: "strict" | "best-effort") =>
+    baseInputs({
+      run: makeRun({ runtime: "qwen" }),
+      knowledgeDeltaFile: DELTA,
+      knowledgeContext: { file: CONTEXT_FILE, record: CONTEXT_RECORD },
+      phaseDef: makePhase({
+        capabilities: { ...(enforcement ? { enforcement } : {}) },
+      }),
+    });
+  const before = process.env.ARGUS_QWEN_ARGS;
+  process.env.ARGUS_QWEN_ARGS = "--sandbox";
+  try {
+    const strict = prepareInvocation(inputs());
+    assert.deepEqual(strict.blocking, [
+      "Qwen Code container sandbox (--sandbox in ARGUS_QWEN_ARGS) does not mount the KnowledgeContext file (ARGUS_KNOWLEDGE_CONTEXT_FILE)",
+    ]);
+    assert.equal(channelStatus(strict, "knowledge-context")?.status, "unavailable");
+    // The record still says exactly what would have been supplied.
+    assert.deepEqual(strict.record.knowledgeContext, CONTEXT_RECORD);
+
+    const lenient = prepareInvocation(inputs("best-effort"));
+    assert.deepEqual(lenient.blocking, []);
+    assert.ok(lenient.record.limitations.some((l) => l.includes("ARGUS_KNOWLEDGE_CONTEXT_FILE")));
+  } finally {
+    if (before === undefined) delete process.env.ARGUS_QWEN_ARGS;
+    else process.env.ARGUS_QWEN_ARGS = before;
+  }
+});
+
+test("knowledge context: without a capability profile the channel is offered and recorded unmanaged, exactly like the others", () => {
+  const prepared = prepareInvocation(
+    baseInputs({ knowledgeContext: { file: CONTEXT_FILE, record: CONTEXT_RECORD } }),
+  );
+  assert.equal(channelStatus(prepared, "knowledge-context")?.status, "unmanaged");
+  assert.deepEqual(prepared.record.knowledgeContext, CONTEXT_RECORD);
+  assert.equal(prepared.plan.args.includes("--add-dir"), false);
+});

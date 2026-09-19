@@ -113,6 +113,21 @@ export async function writeInvocation(record: AgentInvocationRecord): Promise<vo
   await atomicWriteJson(runInvocationPath(record.runId), record);
 }
 
+/**
+ * Every run id with an invocation directory on disk, unsorted. A directory
+ * scan — invocation records are per run and pruned with the run, so the
+ * volume is bounded by retention. Used to answer the reverse provenance
+ * question "which runs were supplied this claim revision?" from the records
+ * themselves rather than from a second store.
+ */
+export async function readInvocationRunIds(): Promise<string[]> {
+  try {
+    return (await readdir(paths.invocationsDir())).filter((n) => RUN_ID_RE.test(n));
+  } catch {
+    return [];
+  }
+}
+
 /** The invocation record, or null when the run predates them or is unknown. */
 export async function readInvocation(id: string): Promise<AgentInvocationRecord | null> {
   if (!RUN_ID_RE.test(id)) return null;

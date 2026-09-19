@@ -1570,13 +1570,14 @@ flags, and a complete worked pipeline: [docs/HARNESS.md](HARNESS.md).
 
 ### `PipelineDefinition` / `PhaseDef` / `PhaseStep` fields
 
-| Field            | On                    | Type                       | Validation                                                                                                                                                                                                                                                            |
-| ---------------- | --------------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`             | phase                 | string                     | `^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$` — one path segment, 1-80 chars, never `.`/`..`. It names the phase's artifact and changed-files-baseline directories on disk, not just a graph label.                                                                             |
-| `capabilities`   | pipeline, phase, step | `CapabilityProfile`        | See below. Merges by key, narrowest wins (step ▸ phase ▸ pipeline).                                                                                                                                                                                                   |
-| `timeoutSeconds` | phase, step           | integer                    | 1–86400. A step's own value overrides its phase's; absent on both = no limit.                                                                                                                                                                                         |
-| `checks`         | phase                 | `PhaseCheck[]`             | Up to 50 entries. Run once every step of the phase has reported success; a failing check fails the phase under the `verification` class.                                                                                                                              |
-| `knowledgeDelta` | phase                 | `"optional" \| "required"` | Default `"optional"`. `"required"` makes the KnowledgeDelta channel (`ARGUS_KNOWLEDGE_DELTA_FILE`) a launch precondition: a runtime that cannot make it writable is refused under strict enforcement. Emitting a delta stays optional either way. See HARNESS.md §3a. |
+| Field              | On                    | Type                       | Validation                                                                                                                                                                                                                                                                                   |
+| ------------------ | --------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`               | phase                 | string                     | `^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$` — one path segment, 1-80 chars, never `.`/`..`. It names the phase's artifact and changed-files-baseline directories on disk, not just a graph label.                                                                                                    |
+| `capabilities`     | pipeline, phase, step | `CapabilityProfile`        | See below. Merges by key, narrowest wins (step ▸ phase ▸ pipeline).                                                                                                                                                                                                                          |
+| `timeoutSeconds`   | phase, step           | integer                    | 1–86400. A step's own value overrides its phase's; absent on both = no limit.                                                                                                                                                                                                                |
+| `checks`           | phase                 | `PhaseCheck[]`             | Up to 50 entries. Run once every step of the phase has reported success; a failing check fails the phase under the `verification` class.                                                                                                                                                     |
+| `knowledgeDelta`   | phase                 | `"optional" \| "required"` | Default `"optional"`. `"required"` makes the KnowledgeDelta channel (`ARGUS_KNOWLEDGE_DELTA_FILE`) a launch precondition: a runtime that cannot make it writable is refused under strict enforcement. Emitting a delta stays optional either way. See HARNESS.md §3a.                        |
+| `knowledgeContext` | phase, step           | `{ claims: Selector[] }`   | 1–64 selectors, each `"ID"` (active revision), `"ID:vN"` (exact) or `{ id, revision: N \| "active" }`; normalized to the object form. Each claim id at most once. A step's spec replaces its phase's. Existence is checked at launch (`configuration` failure). See KNOWLEDGE-LEDGER.md §13. |
 
 `CapabilityProfile`:
 
@@ -2504,24 +2505,26 @@ A `:key` is a bare claim id (`RULE-7`, meaning its **active** revision) or a
 revision (`RULE-7:v1`). A `:runId` is an Argus run id. Unknown or malformed
 keys are `404`.
 
-| Method + path                                        | Effect                                                                                                    |
-| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `GET /api/knowledge/claims`                          | `{ claims: ClaimView[] }` — every revision with derived `lifecycle` and `support`; `?kind=` `?lifecycle=` |
-| `GET /api/knowledge/claims/:key`                     | `ClaimDetail` — the resolved revision plus every revision of its id, oldest first                         |
-| `GET /api/knowledge/claims/:key/support`             | `SupportReport` — why: each evidence record and each justification with its force                         |
-| `GET /api/knowledge/claims/:key/dependents`          | `DependentsReport` — `direct` and `transitive` dependents of that exact revision                          |
-| `GET /api/knowledge/claims/:key/consumers`           | `ConsumersReport` — the consumption records naming that exact revision, in recording order                |
-| `GET /api/knowledge/claims/:key/impact`              | `ImpactSet` — what rests on that revision being current and supported, and why (see below)                |
-| `GET /api/knowledge/executions/:runId/provenance`    | `ExecutionProvenance` — what the run consumed (with currency now) and produced; `404` if nothing is known |
-| `GET /api/knowledge/deltas/:id`                      | `KnowledgeDeltaRecord` — a staged/applied/rejected/superseded KnowledgeDelta with its provenance          |
-| `GET /api/knowledge/deltas/:id/result`               | `KnowledgeDeltaApplyResult` — local id → canonical identity and every record created; `404` until applied |
-| `GET /api/knowledge/executions/:runId/deltas`        | `{ runId, deltas: KnowledgeDeltaRecord[] }` — the run's deltas (at most one, by protocol)                 |
-| `POST /api/knowledge/claims`                         | (admin) propose revision 1 of a claim → `201 ClaimView`                                                   |
-| `POST /api/knowledge/claims/:id/revise`              | (admin) supersede the active revision → `201 ClaimView`; takes an id, never a `:vN` key                   |
-| `POST /api/knowledge/evidence`                       | (admin) attach evidence to a revision → `201 Evidence`                                                    |
-| `POST /api/knowledge/justifications`                 | (admin) record a derivation → `201 Justification`; `400` on unknown refs or a cycle                       |
-| `POST /api/knowledge/executions/:runId/consumptions` | (admin) "this run consumed these exact revisions" → `201`, or `200` when every edge already existed       |
-| `POST /api/knowledge/executions/:runId/artifacts`    | (admin) "this run produced these artifacts" → `201`, or `200` when every record already existed           |
+| Method + path                                        | Effect                                                                                                                                                                                                    |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/knowledge/claims`                          | `{ claims: ClaimView[] }` — every revision with derived `lifecycle` and `support`; `?kind=` `?lifecycle=`                                                                                                 |
+| `GET /api/knowledge/claims/:key`                     | `ClaimDetail` — the resolved revision plus every revision of its id, oldest first                                                                                                                         |
+| `GET /api/knowledge/claims/:key/support`             | `SupportReport` — why: each evidence record and each justification with its force                                                                                                                         |
+| `GET /api/knowledge/claims/:key/dependents`          | `DependentsReport` — `direct` and `transitive` dependents of that exact revision                                                                                                                          |
+| `GET /api/knowledge/claims/:key/consumers`           | `ConsumersReport` — the consumption records naming that exact revision, in recording order                                                                                                                |
+| `GET /api/knowledge/claims/:key/impact`              | `ImpactSet` — what rests on that revision being current and supported, and why (see below)                                                                                                                |
+| `GET /api/knowledge/executions/:runId/provenance`    | `ExecutionProvenance` — what the run consumed (with currency now) and produced; `404` if nothing is known                                                                                                 |
+| `GET /api/knowledge/deltas/:id`                      | `KnowledgeDeltaRecord` — a staged/applied/rejected/superseded KnowledgeDelta with its provenance                                                                                                          |
+| `GET /api/knowledge/deltas/:id/result`               | `KnowledgeDeltaApplyResult` — local id → canonical identity and every record created; `404` until applied                                                                                                 |
+| `GET /api/knowledge/executions/:runId/deltas`        | `{ runId, deltas: KnowledgeDeltaRecord[] }` — the run's deltas (at most one, by protocol)                                                                                                                 |
+| `GET /api/knowledge/executions/:runId/context`       | `ExecutionContextReport` — exactly which revisions Argus **supplied** to the run, the file's sha256, the run's consumptions, the supplied/consumed comparison and the projection; `404` without a context |
+| `GET /api/knowledge/claims/:key/supplied-to`         | `SuppliedToReport` — the runs whose invocation records carry that exact revision, oldest launch first                                                                                                     |
+| `POST /api/knowledge/claims`                         | (admin) propose revision 1 of a claim → `201 ClaimView`                                                                                                                                                   |
+| `POST /api/knowledge/claims/:id/revise`              | (admin) supersede the active revision → `201 ClaimView`; takes an id, never a `:vN` key                                                                                                                   |
+| `POST /api/knowledge/evidence`                       | (admin) attach evidence to a revision → `201 Evidence`                                                                                                                                                    |
+| `POST /api/knowledge/justifications`                 | (admin) record a derivation → `201 Justification`; `400` on unknown refs or a cycle                                                                                                                       |
+| `POST /api/knowledge/executions/:runId/consumptions` | (admin) "this run consumed these exact revisions" → `201`, or `200` when every edge already existed                                                                                                       |
+| `POST /api/knowledge/executions/:runId/artifacts`    | (admin) "this run produced these artifacts" → `201`, or `200` when every record already existed                                                                                                           |
 
 Proposal bodies:
 
@@ -2580,7 +2583,10 @@ for containment, and a differing `gitHead` for an already-recorded path is
 `400`. Consumption is never inferred from prompts or transcripts: it is what
 this endpoint was told.
 
-`ExecutionProvenance` is `{ execution, consumed: [{ claim, lifecycle, support, current }], produced: { claims: ClaimView[], justifications, artifacts: ArtifactRef[] }, currency: "current" | "stale" }`.
+`ExecutionProvenance` is `{ execution, consumed: [{ claim, lifecycle, support, current, source? }], produced: { claims: ClaimView[], justifications, artifacts: ArtifactRef[] }, currency: "current" | "stale" }`.
+`source` (Phase 4) is `"supplied-context"` when Argus can prove the revision
+was in the run's KnowledgeContext, `"agent-discovered"` when it was not, and
+absent on consumptions registered through this API or before Phase 4.
 `produced` is joined from Phase 1's `producedBy` on `runId`; `currency` is
 `stale` when any consumed revision is superseded, unsupported or contested. It
 is derived per read and says nothing about — and changes nothing in — the
@@ -2609,6 +2615,37 @@ The record the reads return:
 
 The wire contract, local references, revision preconditions, staging and the
 commit boundary: [KNOWLEDGE-LEDGER.md §12](KNOWLEDGE-LEDGER.md#12-knowledgedelta-protocol-phase-3).
+A staged record also carries `supplied: ClaimRef[]` — the exact revisions the
+run's KnowledgeContext held, copied from its invocation record at intake.
+
+KnowledgeContexts (Phase 4) have **no write endpoint either**: a step (or its
+phase) declares `knowledgeContext`, Argus resolves the selectors against one
+ledger snapshot when the phase attempt is planned, writes the read-only file
+the agent finds at `ARGUS_KNOWLEDGE_CONTEXT_FILE`, and records what it
+supplied on the invocation. The inspection reads:
+
+```jsonc
+// GET /api/knowledge/executions/run_456/context
+{ "execution": { "runId": "run_456", "instanceId": "inst-1", "phaseId": "implement" },
+  "context": { "schemaVersion": 1, "claims": [{ "id": "RULE-17", "revision": 2 }, { "id": "CONSTRAINT-4", "revision": 1 }],
+               "sha256": "3b7c…", "file": "/home/user/.claude/argus/invocations/run_456/knowledge-context.json" },
+  "supplied": [{ "id": "RULE-17", "revision": 2 }, { "id": "CONSTRAINT-4", "revision": 1 }],
+  "consumed": [{ "id": "RULE-17", "revision": 2 }],                 // from the ledger
+  "comparison": { "suppliedAndConsumed": [{ "id": "RULE-17", "revision": 2 }],
+                  "suppliedNotConsumed": [{ "id": "CONSTRAINT-4", "revision": 1 }],
+                  "consumedNotSupplied": [] },
+  "projection": { "schemaVersion": 1, "generatedAt": "…", "claims": [{ "ref": "RULE-17:v2", … }], "metadata": { "selection": […] } } }  // null once the file is pruned
+
+// GET /api/knowledge/claims/RULE-17:v2/supplied-to
+{ "claim": { "id": "RULE-17", "revision": 2 },
+  "executions": [{ "execution": { "runId": "run_456", "instanceId": "inst-1", "phaseId": "implement" },
+                   "suppliedAt": "2026-09-19T10:00:00.000Z", "sha256": "3b7c…" }] }
+```
+
+Both derive from the immutable per-run invocation records (pruned with the
+runs) and the ledger; nothing about "supplied" is stored twice. The protocol,
+selectors, the resolution snapshot and the supplied/consumed rules:
+[KNOWLEDGE-LEDGER.md §13](KNOWLEDGE-LEDGER.md#13-knowledgecontext-protocol-phase-4).
 
 `ImpactSet` is the answer to "what rests on this revision, and why?":
 

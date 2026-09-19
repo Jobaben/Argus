@@ -29,6 +29,7 @@ import type {
   SpawnPlan,
 } from "../runtimes/types.js";
 import type { Run } from "../sources/scheduleTypes.js";
+import type { InvocationKnowledgeContext } from "@argus/contracts";
 import type {
   AgentInvocationRecord,
   CapabilityProfile,
@@ -104,6 +105,13 @@ export interface InvocationInputs {
    *  channels the runtime is asked to make reachable. Absent = the protocol is
    *  off for this invocation (tests that build one by hand). */
   knowledgeDeltaFile?: string | null;
+  /**
+   * The read-only KnowledgeContext Argus materialized for this run, when the
+   * step declares one: where the file is, and exactly what it holds (exact
+   * refs, sha256). The channel it becomes is `required` — the step was
+   * authored to reason from this context. Absent/null = no semantic context.
+   */
+  knowledgeContext?: { file: string; record: InvocationKnowledgeContext } | null;
   timeoutSeconds: number | null;
   gitHead: string | null;
   /** The environment the policy is applied to — Argus's own, in production. */
@@ -176,6 +184,7 @@ export function prepareInvocation(inputs: InvocationInputs): PreparedInvocation 
   const channels = invocationChannels({
     resultFile: inputs.resultFile,
     knowledgeDeltaFile: inputs.knowledgeDeltaFile ?? null,
+    knowledgeContextFile: inputs.knowledgeContext?.file ?? null,
     artifactDir: inputs.artifactDir,
     memoryDir: inputs.memoryDir ?? null,
     phaseDef,
@@ -252,6 +261,8 @@ export function prepareInvocation(inputs: InvocationInputs): PreparedInvocation 
     ...(inputs.workspace !== undefined ? { workspace: inputs.workspace } : {}),
     resultFile: inputs.resultFile,
     knowledgeDeltaFile: inputs.knowledgeDeltaFile ?? null,
+    knowledgeContextFile: inputs.knowledgeContext?.file ?? null,
+    knowledgeContext: inputs.knowledgeContext?.record ?? null,
     channels: channelRecords,
     timeoutSeconds: inputs.timeoutSeconds,
     deadlineAt,

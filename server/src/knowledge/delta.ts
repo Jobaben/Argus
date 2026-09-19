@@ -402,6 +402,16 @@ export interface DeltaProposal {
    *  the delta creates is attributed to exactly this execution. */
   execution: RunExecutionRef;
   attempt: number;
+  /**
+   * The exact revisions Argus supplied to the run as its KnowledgeContext
+   * (Phase 4), from the invocation record. When present, every `consumed`
+   * entry is classified on commit — `supplied-context` if it is in this
+   * list, `agent-discovered` otherwise. Absent = unknown (no record to
+   * answer from): the consumption is recorded without a `source`. Never
+   * adds a consumption: a supplied revision the agent did not declare stays
+   * merely supplied.
+   */
+  supplied?: ClaimRef[];
 }
 
 export interface ApplyDeltasOptions {
@@ -661,8 +671,18 @@ export function applyKnowledgeDeltas(
       applied.justifications.push(r.justification.id);
     });
     d.consumed?.forEach((c, i) => {
+      const source =
+        p.supplied === undefined
+          ? undefined
+          : p.supplied.some((s) => sameRef(s, c))
+            ? "supplied-context"
+            : "agent-discovered";
       const r = wrap(`consumed[${i}]`, () =>
-        recordConsumption(next, { execution: p.execution, claim: c }, opts.now),
+        recordConsumption(
+          next,
+          { execution: p.execution, claim: c, ...(source ? { source } : {}) },
+          opts.now,
+        ),
       );
       next = r.ledger;
       result.consumptions.push(r.consumption);
