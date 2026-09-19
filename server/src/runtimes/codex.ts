@@ -35,11 +35,20 @@
 import { readFileSync } from "node:fs";
 import { codexHome, codexPaths } from "../codexHome.js";
 import { log } from "../log.js";
-import { EMPTY_ENVELOPE, basename, clip, extraArgs, unsupportedCapabilities } from "./types.js";
+import {
+  EMPTY_ENVELOPE,
+  basename,
+  channelGranted,
+  channelUnavailable,
+  clip,
+  extraArgs,
+  unsupportedCapabilities,
+} from "./types.js";
 import type {
   AgentRuntime,
   AnalysisPlanOptions,
   CapabilityRequest,
+  ChannelOutcome,
   RunEnvelope,
   RunPlanOptions,
   SpawnPlan,
@@ -117,6 +126,7 @@ interface CodexCapabilityResult {
   /** `-c key=value` pairs (flattened; every other element is the value). */
   capArgs: string[];
   limitations: string[];
+  channels: ChannelOutcome[];
 }
 
 /** TOML-quote a string the way a `-c key="value"` pair needs — JSON's quoting
@@ -134,35 +144,40 @@ function tomlStringArray(values: string[]): string {
  * config overrides. Shared by `batchPlan` and `streamPlan`.
  */
 function buildCodexCapabilities(cap: CapabilityRequest | undefined): CodexCapabilityResult {
-  if (!cap) return { sandbox: null, capArgs: [], limitations: [] };
-  const { profile, artifactDir, memoryDir, knowledgeDeltaDir } = cap;
+  if (!cap) return { sandbox: null, capArgs: [], limitations: [], channels: [] };
+  const { profile, channels } = cap;
   const limitations = unsupportedCapabilities(profile, "Codex", [...CODEX_SUPPORTED_CAPABILITIES]);
   const capArgs: string[] = [];
 
   const sandbox =
     profile.filesystem === "unrestricted" ? "danger-full-access" : (profile.filesystem ?? null);
   // What the process will actually run under, whether the profile said so or
-  // the operator's default did: the artifact directory must be writable in
-  // either case, or a required-artifact check fails for the wrong reason.
+  // the operator's default did: a channel must be writable in either case, or
+  // a required artifact, a result or a proposal fails for the wrong reason.
   const effectiveSandbox = sandbox ?? codexSandbox();
 
+  // Every Argus-owned channel, through the one mechanism Codex has for it.
+  // `workspace-write` admits a directory by naming it in `writable_roots`;
+  // `danger-full-access` needs nothing; `read-only` has no way to admit a
+  // write at all, so a write channel is reported unavailable — required or
+  // not, the engine decides what that means. Reads are allowed under every
+  // Codex sandbox, so a read channel is always reachable.
   const writableRoots = [...(profile.additionalDirectories ?? [])];
-  if (artifactDir && effectiveSandbox === "workspace-write") writableRoots.push(artifactDir);
-  if (memoryDir && effectiveSandbox === "workspace-write") writableRoots.push(memoryDir);
-  if (knowledgeDeltaDir && effectiveSandbox === "workspace-write") {
-    writableRoots.push(knowledgeDeltaDir);
-  }
+  const channelOutcomes: ChannelOutcome[] = channels.map((channel) => {
+    if (channel.access === "read") return channelGranted(channel);
+    switch (effectiveSandbox) {
+      case "workspace-write":
+        writableRoots.push(channel.dir);
+        return channelGranted(channel);
+      case "read-only":
+        return channelUnavailable(channel, "Codex", "read-only sandbox prevents writing");
+      default:
+        return channelGranted(channel);
+    }
+  });
   if (writableRoots.length) {
     capArgs.push("-c", `sandbox_workspace_write.writable_roots=${tomlStringArray(writableRoots)}`);
   }
-  if (artifactDir && effectiveSandbox === "read-only") {
-    limitations.push("read-only sandbox prevents writing artifacts");
-  }
-  if (memoryDir && effectiveSandbox === "read-only") {
-    limitations.push("read-only sandbox prevents writing memory notes");
-  }
-  // No limitation for the KnowledgeDelta directory under read-only: a delta
-  // is optional, and an agent that cannot write one simply proposes nothing.
 
   if (profile.mcpServers !== undefined) {
     for (const [name, spec] of Object.entries(profile.mcpServers)) {
@@ -187,7 +202,7 @@ function buildCodexCapabilities(cap: CapabilityRequest | undefined): CodexCapabi
     limitations.push("Codex cannot exclude MCP servers configured in config.toml");
   }
 
-  return { sandbox, capArgs, limitations };
+  return { sandbox, capArgs, limitations, channels: channelOutcomes };
 }
 
 /** Codex has no `--append-system-prompt`, so Argus-owned instructions ride at
@@ -506,7 +521,7 @@ export const codexRuntime: AgentRuntime = {
       }),
       stdin: composePrompt(prompt, systemPrompt),
       env: {},
-      ...(capabilities ? { files: [], limitations: cap.limitations } : {}),
+      ...(capabilities ? { files: [], limitations: cap.limitations, channels: cap.channels } : {}),
     };
   },
 
@@ -530,7 +545,7 @@ export const codexRuntime: AgentRuntime = {
       }),
       stdin: composePrompt(prompt, systemPrompt),
       env: {},
-      ...(capabilities ? { files: [], limitations: cap.limitations } : {}),
+      ...(capabilities ? { files: [], limitations: cap.limitations, channels: cap.channels } : {}),
     };
   },
 

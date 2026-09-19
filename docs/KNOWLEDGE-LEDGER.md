@@ -857,13 +857,42 @@ Argus follows its result-file convention. Every step run is launched with:
 | ---------------------------- | ----------------------------------------------------- |
 | `ARGUS_KNOWLEDGE_DELTA_FILE` | `~/.claude/argus/knowledge-deltas/<runId>/delta.json` |
 
-The directory exists before the process starts and is made writable under
-every capability profile (Claude Code: `--add-dir`; Codex: a
-`sandbox_workspace_write.writable_roots` entry), the same way the artifact
-directory is — a read-only researcher may still propose what it learned. It is
-a per-invocation identifier: never inherited from Argus's own environment,
-never settable through `env.set`, recorded on the invocation record as
-`knowledgeDeltaFile`.
+The directory exists before the process starts. The file is one of the
+**Argus-owned invocation channels** (HARNESS.md §3a) — the same model that
+carries the result file and the artifact directory — so under a capability
+profile the runtime is asked to make it reachable whatever `filesystem` says
+about the working tree (Claude Code: `--add-dir`; Codex: a
+`sandbox_workspace_write.writable_roots` entry under `workspace-write`), and
+must answer whether it could. A read-only researcher may still propose what it
+learned. It is a per-invocation identifier: never inherited from Argus's own
+environment, never settable through `env.set`, recorded on the invocation
+record as `knowledgeDeltaFile` and, with its access and availability, in the
+record's `channels`.
+
+**Offered versus required.** The channel is offered to every run and emitting
+a delta is optional — an ordinary step writes no file and nothing about the
+channel can fail its launch. A phase whose purpose _is_ to propose knowledge
+can declare `knowledgeDelta: "required"` on its `PhaseDef`; the channel then
+becomes a precondition of the launch, and a runtime that cannot make the path
+writable (Codex under an effective `read-only` sandbox; Qwen Code inside its
+container sandbox) refuses the step under strict enforcement with a
+`configuration` failure — before any process starts — or, under
+`enforcement: "best-effort"`, launches with the limitation recorded.
+`"required"` says nothing about whether the agent must write a delta: it
+guarantees only that a proposal _could_ arrive. When the channel is merely
+offered and the runtime cannot reach it, the run still launches and the
+invocation record says so (`channels[].status: "unavailable"`, plus the reason
+in `limitations`): Argus never exposes the protocol silently to a process that
+cannot use it. Without a capability profile Argus does not manage the
+runtime's filesystem at all, exactly as before, and the record marks the
+channel `unmanaged`.
+
+| Runtime     | Can write the delta file under…                                                                            |
+| ----------- | ---------------------------------------------------------------------------------------------------------- |
+| Claude Code | every `filesystem` mode (`--add-dir`), unless the working directory itself contains Argus's data directory |
+| Codex       | `workspace-write` (declared or the `ARGUS_CODEX_SANDBOX` default) and `unrestricted`; **not** `read-only`  |
+| OpenCode    | always — it runs unsandboxed (the profile's `filesystem` is itself unenforceable and reported)             |
+| Qwen Code   | always, unless `ARGUS_QWEN_ARGS` puts the run in the CLI's `--sandbox` container                           |
 
 The system prompt carries one constant, `KNOWLEDGE_DELTA_CONTRACT` (beside
 `OUTCOME_CONTRACT`, in `STEP_CONTRACT`), which says roughly:
@@ -951,7 +980,21 @@ The transitions stay pure: `succeedPhase` only _holds_ the phase (`running`,
 `knowledge.status: "pending"`) and hands the engine the phase id, exactly as
 `advance` holds a phase under `verification.status: "running"` and hands it
 `verify`. The engine's `settleKnowledge` persists the held instance first,
-commits, applies the verdict and continues with what the verdict settled. A
+**rechecks every declared artifact**, commits, applies the verdict and
+continues with what the verdict settled.
+
+The artifact recheck closes the gap between intake and commit: intake proved
+an artifact existed when the run finished, not that it still does after checks
+ran and a gate waited. Before the ledger is touched, `verifyDeltaArtifacts`
+re-establishes, for every artifact of every delta in the attempt, exactly what
+it established at intake — the run has the root the location names (its
+artifact directory; its worktree or working directory, from the invocation
+record), the path resolves inside that root, and something exists there. Never
+the contents: what the file _is_ remains the agent's claim. One artifact that
+vanished refuses the whole attempt's commit — the sibling's valid claims too —
+with `KnowledgeDelta commit refused: … artifact: <location>:<path> does not
+exist in the run's <location>`, every record moves to `rejected`, and
+`knowledge.json` is not written. A
 gated phase's staged deltas are untouched while it waits: approval is the
 acceptance condition, and only approval commits. If the human revises instead,
 the staged deltas are superseded before the new attempt's steps replace the
@@ -1003,6 +1046,16 @@ attempt 2 → emits delta D2 → succeeds                 D2: applied
 
 Only D2 is canonical. D1 remains on disk as diagnostic evidence, never as
 knowledge. An `applied` record is never demoted by a later sweep.
+
+A `candidates` phase (HARNESS.md §12) takes the same path with no special
+case: each candidate is a step with its own run, worktree and delta file; a
+candidate whose checks failed keeps its delta staged (its step is still
+`succeeded`) until the selection, where the losers are marked `aborted`,
+`stagedDeltaIds` admits only the winner's delta to the commit, and the losers'
+records are superseded on the same instance write. A candidate killed
+mid-flight never completes, so its file is never even read. Both lifecycles
+are covered end to end in `knowledge/deltaEngine.test.ts` ("candidates: …"),
+against a real repository.
 
 ### 12.10 Atomic application
 
@@ -1085,11 +1138,11 @@ an author may opt in with `retry.retryOn: ["knowledge-delta"]`; the retry note
 then carries the exact refusal (the revision that moved, the unresolved local
 id), which is what a second attempt needs.
 
-| Where                     | Trigger                                                                                                                             | Effect                                                                                            |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| intake (step completion)  | invalid JSON · schema · duplicate/undeclared local id · bare id · missing artifact · unknown reference · stale precondition · cycle | step `failed`, phase `failed` (`knowledge-delta`), run outcome `failed`, record `rejected`        |
-| commit (phase acceptance) | stale precondition (the ledger moved while checks ran or a gate waited) · conflict between sibling deltas · unreadable ledger       | phase `failed` (`knowledge-delta`), `phase.knowledge.status: "rejected"`, every record `rejected` |
-| attempt abandoned         | verification failed · agent failed · timeout · revise · abort · lost candidate                                                      | records `superseded`; nothing canonical                                                           |
+| Where                     | Trigger                                                                                                                                                                                                      | Effect                                                                                            |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| intake (step completion)  | invalid JSON · schema · duplicate/undeclared local id · bare id · missing artifact · unknown reference · stale precondition · cycle                                                                          | step `failed`, phase `failed` (`knowledge-delta`), run outcome `failed`, record `rejected`        |
+| commit (phase acceptance) | a declared artifact no longer exists (or no longer resolves inside its root) · stale precondition (the ledger moved while checks ran or a gate waited) · conflict between sibling deltas · unreadable ledger | phase `failed` (`knowledge-delta`), `phase.knowledge.status: "rejected"`, every record `rejected` |
+| attempt abandoned         | verification failed · agent failed · timeout · revise · abort · lost candidate                                                                                                                               | records `superseded`; nothing canonical                                                           |
 
 Refusal codes (`KnowledgeDeltaError.code`): `invalid-json`, `schema`,
 `local-reference`, `unknown-reference`, `stale-revision`, `conflict`,
@@ -1224,6 +1277,14 @@ no `truth`, no `currency`, no `impacted`. Every read surface derives them.
     transition; a stale precondition or a conflict refuses everything.
 16. **Consumption is agent-declared, structurally verified.** Argus proves the
     reference; it does not claim to prove the reasoning.
+17. **Artifact provenance is re-proven at commit.** What intake established
+    about a declared artifact — a real root, a contained path, an existing
+    file — is established again immediately before the canonical write, and a
+    failure refuses the whole attempt's commit. Contents are never inspected.
+18. **The delta channel is never exposed silently.** Under a capability
+    profile the runtime answers whether `ARGUS_KNOWLEDGE_DELTA_FILE` is
+    writable; an unwritable channel is on the invocation record, and refuses
+    the launch when the phase declared it required (HARNESS.md §3a).
 
 ## 15. What Phases 1–3 deliberately do NOT do
 
@@ -1292,17 +1353,18 @@ ledger are separate, it can be made without rewriting either.
 
 ## 17. Where the code lives
 
-| Path                                | Role                                                                                                                         |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `contracts/src/knowledge.ts`        | wire types: Claim, ClaimRef, Evidence, Justification, ClaimConsumption, ArtifactProduction, ExecutionProvenance, ImpactSet   |
-| `server/src/knowledge/kernel.ts`    | pure transitions and queries; the only definition of support; the provenance transitions and `executionProvenance`           |
-| `server/src/knowledge/impact.ts`    | `analyzeImpact` — the pure, deterministic impact algorithm                                                                   |
-| `server/src/knowledge/validate.ts`  | untrusted body → typed proposal (the future agent boundary)                                                                  |
-| `server/src/knowledge/store.ts`     | the authoritative JSON document (v3); mints ids, stamps time, upgrades v1/v2; `commitKnowledgeDeltas` under the ledger mutex |
-| `server/src/knowledge/delta.ts`     | the KnowledgeDelta protocol's pure half: `validateKnowledgeDelta`, `applyKnowledgeDeltas` (preflight + atomic application)   |
-| `server/src/knowledge/staging.ts`   | per-run staging: the agent's file, Argus's record, status transitions                                                        |
-| `server/src/knowledge/routes.ts`    | `/api/knowledge` (mounted and admin-gated in `app.ts`), including the delta inspection reads                                 |
-| `server/src/pipelineTransitions.ts` | `succeedPhase` (the hold), `applyKnowledgeCommit` (the verdict), `stagedDeltaIds`                                            |
-| `server/src/pipelineEngine.ts`      | `intakeKnowledgeDelta`, `commitPhaseKnowledge`, `settleKnowledge`, `retireStagedDeltas`; `KNOWLEDGE_DELTA_CONTRACT`          |
-| `server/src/knowledge/*.test.ts`    | kernel semantics, impact scenarios, persistence roundtrip, HTTP contract, delta validation/application, engine lifecycle     |
-| `docs/API.md` § Knowledge Ledger    | endpoint reference                                                                                                           |
+| Path                                | Role                                                                                                                                        |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `contracts/src/knowledge.ts`        | wire types: Claim, ClaimRef, Evidence, Justification, ClaimConsumption, ArtifactProduction, ExecutionProvenance, ImpactSet                  |
+| `server/src/knowledge/kernel.ts`    | pure transitions and queries; the only definition of support; the provenance transitions and `executionProvenance`                          |
+| `server/src/knowledge/impact.ts`    | `analyzeImpact` — the pure, deterministic impact algorithm                                                                                  |
+| `server/src/knowledge/validate.ts`  | untrusted body → typed proposal (the future agent boundary)                                                                                 |
+| `server/src/knowledge/store.ts`     | the authoritative JSON document (v3); mints ids, stamps time, upgrades v1/v2; `commitKnowledgeDeltas` under the ledger mutex                |
+| `server/src/knowledge/delta.ts`     | the KnowledgeDelta protocol's pure half: `validateKnowledgeDelta`, `applyKnowledgeDeltas` (preflight + atomic application)                  |
+| `server/src/knowledge/staging.ts`   | per-run staging: the agent's file, Argus's record, status transitions                                                                       |
+| `server/src/harness/channels.ts`    | the Argus-owned invocation channels the delta file is one of: kind, env var, path, access, required (HARNESS.md §3a)                        |
+| `server/src/knowledge/routes.ts`    | `/api/knowledge` (mounted and admin-gated in `app.ts`), including the delta inspection reads                                                |
+| `server/src/pipelineTransitions.ts` | `succeedPhase` (the hold), `applyKnowledgeCommit` (the verdict), `stagedDeltaIds`                                                           |
+| `server/src/pipelineEngine.ts`      | `intakeKnowledgeDelta`, `verifyDeltaArtifacts`, `commitPhaseKnowledge`, `settleKnowledge`, `retireStagedDeltas`; `KNOWLEDGE_DELTA_CONTRACT` |
+| `server/src/knowledge/*.test.ts`    | kernel semantics, impact scenarios, persistence roundtrip, HTTP contract, delta validation/application, engine lifecycle                    |
+| `docs/API.md` § Knowledge Ledger    | endpoint reference                                                                                                                          |

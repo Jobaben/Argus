@@ -192,7 +192,7 @@ const CAP_REQUEST: CapabilityRequest = {
   },
   invocationDir: "/inv",
   cwd: "/work",
-  artifactDir: null,
+  channels: [],
 };
 
 test("Qwen Code has no per-invocation control at all: every present key is a limitation", () => {
@@ -219,7 +219,7 @@ test("no capabilities means no files/limitations on the plan at all", () => {
 test("an empty profile reports no limitations", () => {
   const plan = qwenRuntime.batchPlan({
     prompt: "p",
-    capabilities: { profile: {}, invocationDir: "/inv", cwd: "/work", artifactDir: null },
+    capabilities: { profile: {}, invocationDir: "/inv", cwd: "/work", channels: [] },
   });
   assert.deepEqual(plan.limitations, []);
 });

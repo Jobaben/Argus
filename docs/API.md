@@ -1518,7 +1518,9 @@ that names no step, and a multi-step result phase with no `resultStep`. A
 definition with no `when` edges validates exactly as it did before.
 
 **Delivering the result.** A result-producing step is spawned with
-`ARGUS_RESULT_FILE` — a per-run path — and its prompt carries the schema. The
+`ARGUS_RESULT_FILE` — a per-run path, `~/.claude/argus/results/<runId>/result.json`,
+in a directory of its own so a sandbox can be granted this run's result without
+every other run's (HARNESS.md §3a) — and its prompt carries the schema. The
 stop hook parses that file and sends the value as `result` on the completion
 signal; a file that exists but does not parse arrives as `resultError` instead.
 Runtimes with no command hook have the same file read on the reconcile tick.
@@ -1568,12 +1570,13 @@ flags, and a complete worked pipeline: [docs/HARNESS.md](HARNESS.md).
 
 ### `PipelineDefinition` / `PhaseDef` / `PhaseStep` fields
 
-| Field            | On                    | Type                | Validation                                                                                                                                                                                |
-| ---------------- | --------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`             | phase                 | string              | `^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$` — one path segment, 1-80 chars, never `.`/`..`. It names the phase's artifact and changed-files-baseline directories on disk, not just a graph label. |
-| `capabilities`   | pipeline, phase, step | `CapabilityProfile` | See below. Merges by key, narrowest wins (step ▸ phase ▸ pipeline).                                                                                                                       |
-| `timeoutSeconds` | phase, step           | integer             | 1–86400. A step's own value overrides its phase's; absent on both = no limit.                                                                                                             |
-| `checks`         | phase                 | `PhaseCheck[]`      | Up to 50 entries. Run once every step of the phase has reported success; a failing check fails the phase under the `verification` class.                                                  |
+| Field            | On                    | Type                       | Validation                                                                                                                                                                                                                                                            |
+| ---------------- | --------------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`             | phase                 | string                     | `^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$` — one path segment, 1-80 chars, never `.`/`..`. It names the phase's artifact and changed-files-baseline directories on disk, not just a graph label.                                                                             |
+| `capabilities`   | pipeline, phase, step | `CapabilityProfile`        | See below. Merges by key, narrowest wins (step ▸ phase ▸ pipeline).                                                                                                                                                                                                   |
+| `timeoutSeconds` | phase, step           | integer                    | 1–86400. A step's own value overrides its phase's; absent on both = no limit.                                                                                                                                                                                         |
+| `checks`         | phase                 | `PhaseCheck[]`             | Up to 50 entries. Run once every step of the phase has reported success; a failing check fails the phase under the `verification` class.                                                                                                                              |
+| `knowledgeDelta` | phase                 | `"optional" \| "required"` | Default `"optional"`. `"required"` makes the KnowledgeDelta channel (`ARGUS_KNOWLEDGE_DELTA_FILE`) a launch precondition: a runtime that cannot make it writable is refused under strict enforcement. Emitting a delta stays optional either way. See HARNESS.md §3a. |
 
 `CapabilityProfile`:
 
@@ -1653,7 +1656,10 @@ environment **by name** (never by value), the resolved capability profile —
 with `env.set` and every MCP server's `env`/`headers` values replaced by
 `"<redacted>"` (keys kept; the materialized `mcp.json` still carries the real
 values) — and what the runtime couldn't enforce of it, the config files
-materialized for the invocation, the artifact directory, the deadline, and
+materialized for the invocation, the artifact directory, every Argus-owned
+invocation channel it was offered (`channels[]`: env var, path, access,
+whether the launch depended on it, and `granted` / `unavailable` /
+`unmanaged` — HARNESS.md §3a), the deadline, and
 the repository state (`git rev-parse HEAD`) it started against. Returns the
 `AgentInvocationRecord`, or `404` when the run predates invocation records or
 is unknown. See [docs/HARNESS.md § 8](HARNESS.md#8-observability--reproducibility)

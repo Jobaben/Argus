@@ -969,6 +969,7 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
   const checks = validateChecks(p.checks, `phase ${i}`);
   const workspace = validateWorkspace(p.workspace, `phase ${i}`);
   const candidates = validateCandidates(p.candidates, `phase ${i}`);
+  const knowledgeDelta = validateKnowledgeDelta(p.knowledgeDelta, `phase ${i}`);
 
   return {
     id,
@@ -989,7 +990,29 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
     ...(checks ? { checks } : {}),
     ...(workspace ? { workspace } : {}),
     ...(candidates ? { candidates } : {}),
+    ...(knowledgeDelta ? { knowledgeDelta } : {}),
   };
+}
+
+const KNOWLEDGE_DELTA_MODES = new Set<NonNullable<PhaseDef["knowledgeDelta"]>>([
+  "optional",
+  "required",
+]);
+
+/**
+ * Whether a phase's launch depends on the KnowledgeDelta channel being
+ * writable (see `PhaseDef.knowledgeDelta`). Undefined/null = optional, the
+ * protocol as every phase has had it: offered, never a reason not to launch.
+ * Says nothing about whether the agent must write a delta.
+ */
+function validateKnowledgeDelta(raw: unknown, ctx: string): PhaseDef["knowledgeDelta"] {
+  if (raw === undefined || raw === null) return undefined;
+  if (!KNOWLEDGE_DELTA_MODES.has(raw as NonNullable<PhaseDef["knowledgeDelta"]>)) {
+    throw new PipelineValidationError(
+      `${ctx}: knowledgeDelta must be ${[...KNOWLEDGE_DELTA_MODES].join(" | ")}`,
+    );
+  }
+  return raw as PhaseDef["knowledgeDelta"];
 }
 
 const RETRYABLE: readonly string[] = [

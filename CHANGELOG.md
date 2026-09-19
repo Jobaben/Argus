@@ -5,6 +5,54 @@ All notable changes to Argus are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Argus-owned invocation channels (Knowledge Ledger Phase 3 hardening).**
+  The structured files Argus hands an agent — `ARGUS_RESULT_FILE`,
+  `ARGUS_KNOWLEDGE_DELTA_FILE`, `ARGUS_ARTIFACT_DIR`, `ARGUS_MEMORY_DIR` —
+  are now one model (`harness/channels.ts`): each with its env var, path,
+  required access and whether the launch depends on it. Every runtime
+  receives the whole list inside the capability request and answers for
+  every entry, instead of each channel being bolted on separately. Under a
+  capability profile a channel the runtime cannot reach is always recorded on
+  the invocation record (`channels[]`, plus `limitations`); a **required**
+  one — the result file of a publishing step, the artifact directory of a
+  phase with an `artifact` check, the memory directory when `memory` is on,
+  the delta file when the new phase field `knowledgeDelta: "required"` is
+  set — refuses the launch under strict enforcement as a `configuration`
+  failure, and launches with the limitation recorded under `best-effort`.
+  Without a profile nothing changes: the CLI's defaults decide and the record
+  says `unmanaged`. The runtime matrix (Claude Code, Codex, OpenCode, Qwen
+  Code × filesystem mode) is documented in HARNESS.md §3a and pinned by
+  `runtimes/channels.test.ts`. Codex's former "read-only sandbox prevents
+  writing artifacts" / "memory notes" limitation strings are replaced by one
+  per-channel sentence naming the runtime, the mode and the variable.
+- **KnowledgeDelta artifacts are re-verified at commit.** Intake proved a
+  declared artifact existed when the run finished; the commit boundary now
+  re-establishes the same deterministic facts — a real root, a path inside
+  it, an existing file — immediately before the canonical write. An artifact
+  that vanished while checks ran or a gate waited refuses the whole attempt's
+  commit (sibling deltas included) under `knowledge-delta`; contents are
+  never inspected.
+
+### Fixed
+
+- A result-publishing step under a restrictive capability profile is now
+  deterministically able to write its result file on runtimes that can grant
+  it (Claude Code: `--add-dir`; Codex `workspace-write`: `writable_roots`),
+  and is refused before spawn — rather than failing later with a missing
+  result — on ones that cannot. Previously only the artifact, memory and
+  delta directories were added to the writable set and the result file was
+  left to the runtime's accidental behaviour. The result file moves from
+  `results/<runId>.json` to `results/<runId>/result.json`, a directory per
+  run, so granting the channel admits this run's result and no other's; the
+  old path is still read (a run in flight across the upgrade settles) and
+  still pruned.
+- Codex under an effective `read-only` sandbox can no longer be told to
+  propose knowledge without Argus knowing: the KnowledgeDelta channel is
+  reported unavailable on the invocation record (and refuses the launch when
+  the phase requires it) instead of failing silently at write time.
+
 ### Added
 
 - **The Knowledge Ledger (Phase 3): the KnowledgeDelta protocol.** Agent

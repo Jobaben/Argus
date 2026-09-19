@@ -47,6 +47,7 @@ import {
 } from "./harness/memory.js";
 import { isStalled, resolveStallSeconds } from "./harness/stall.js";
 import { KnowledgeDeltaError, isEmptyDelta, parseKnowledgeDelta } from "./knowledge/delta.js";
+import { validArtifactPath } from "./knowledge/kernel.js";
 import type { DeltaProposal } from "./knowledge/delta.js";
 import { commitKnowledgeDeltas, preflightKnowledgeDeltas } from "./knowledge/store.js";
 import {
@@ -2092,28 +2093,10 @@ export function createEngine(deps: EngineDeps): Engine {
 
     // Artifacts the agent claims to have produced must exist where the run
     // could have produced them — its artifact directory, or its working tree.
-    // Path containment is already validated; existence is the one further
-    // fact Argus can check deterministically, and it checks it now, while the
-    // worktree the run used still exists.
-    const invocation = await readInvocation(runId);
-    const phaseDef = def.phases.find((p) => p.id === phaseId);
-    const roots = {
-      "artifact-dir": invocation?.artifactDir ?? phase.artifactDir ?? null,
-      repository: invocation?.workspace?.path ?? invocation?.cwd ?? phaseDef?.cwd ?? null,
-    };
-    for (const a of delta.artifacts ?? []) {
-      const root = roots[a.location];
-      if (!root)
-        return reject(`artifact ${a.location}:${a.path}: the run has no ${a.location}`, delta);
-      try {
-        await stat(path.join(root, ...a.path.split("/")));
-      } catch {
-        return reject(
-          `artifact ${a.location}:${a.path} does not exist in the run's ${a.location}`,
-          delta,
-        );
-      }
-    }
+    // Checked now, while the worktree the run used still exists, and again at
+    // the commit boundary, so nothing that vanished in between is recorded.
+    const missing = await verifyDeltaArtifacts(def, phase, runId, delta);
+    if (missing) return reject(missing, delta);
 
     const proposal: DeltaProposal = {
       id: base.id,
@@ -2146,6 +2129,55 @@ export function createEngine(deps: EngineDeps): Engine {
     return { ok: true, staged: step.knowledgeDelta };
   }
 
+  /**
+   * The deterministic facts Argus can establish about the artifacts a delta
+   * declares: that the run *has* the root the location names (its artifact
+   * directory; its worktree or working directory), that the path stays inside
+   * that root, and that something exists there. Nothing about contents — the
+   * agent's claim about what the file *is* stays the agent's.
+   *
+   * Run at intake and again at commit, against the same roots (the invocation
+   * record's, which do not change between the two). A staged delta whose
+   * artifact was removed while checks ran or a gate waited is refused at the
+   * commit boundary rather than persisted as provenance for a file that is not
+   * there. Returns the refusal, or null when every artifact still holds.
+   */
+  async function verifyDeltaArtifacts(
+    def: PipelineDefinition,
+    phase: PhaseProgress,
+    runId: string,
+    delta: NonNullable<KnowledgeDeltaRecord["delta"]>,
+  ): Promise<string | null> {
+    if (!delta.artifacts?.length) return null;
+    const invocation = await readInvocation(runId);
+    const phaseDef = def.phases.find((p) => p.id === phase.id);
+    const roots = {
+      "artifact-dir": invocation?.artifactDir ?? phase.artifactDir ?? null,
+      repository: invocation?.workspace?.path ?? invocation?.cwd ?? phaseDef?.cwd ?? null,
+    };
+    for (const a of delta.artifacts) {
+      const root = roots[a.location];
+      if (!root) return `artifact ${a.location}:${a.path}: the run has no ${a.location}`;
+      // The same containment rule the ledger enforces on write, applied to
+      // the resolved path as well as the declared one: a path that escapes its
+      // root is refused here even if the declared form slipped past validation.
+      const resolvedRoot = path.resolve(root);
+      const resolved = path.resolve(resolvedRoot, ...a.path.split("/"));
+      if (
+        !validArtifactPath(a.path) ||
+        (resolved !== resolvedRoot && !resolved.startsWith(resolvedRoot + path.sep))
+      ) {
+        return `artifact ${a.location}:${a.path} is not inside the run's ${a.location}`;
+      }
+      try {
+        await stat(resolved);
+      } catch {
+        return `artifact ${a.location}:${a.path} does not exist in the run's ${a.location}`;
+      }
+    }
+    return null;
+  }
+
   function describeDelta(delta: NonNullable<KnowledgeDeltaRecord["delta"]>): string {
     const parts = [
       [delta.claims?.length ?? 0, "claim"],
@@ -2174,6 +2206,7 @@ export function createEngine(deps: EngineDeps): Engine {
    * phase fails with the reason, and nothing was written.
    */
   async function commitPhaseKnowledge(
+    def: PipelineDefinition,
     inst: PipelineInstance,
     phase: PhaseProgress,
   ): Promise<KnowledgeCommitVerdict> {
@@ -2200,6 +2233,20 @@ export function createEngine(deps: EngineDeps): Engine {
       });
     }
     const at = nowISO();
+    // The declared artifacts, checked again now: intake proved they existed
+    // when the run finished, not that they still do after checks ran and a
+    // gate waited. One missing artifact refuses the whole attempt's commit
+    // before the ledger is touched, so no sibling's delta lands without it.
+    for (const p of proposals) {
+      const missing = await verifyDeltaArtifacts(def, phase, p.execution.runId, p.delta);
+      if (missing) {
+        const reason = `KnowledgeDelta commit refused: delta ${p.id} (run ${p.execution.runId}): artifact: ${missing}`;
+        for (const q of proposals) {
+          await updateDeltaStatus(q.execution.runId, "rejected", { at, reason });
+        }
+        return { ok: false, reason };
+      }
+    }
     try {
       const results = await commitKnowledgeDeltas(proposals, deps.now());
       for (const [i, p] of proposals.entries()) {
@@ -2244,7 +2291,7 @@ export function createEngine(deps: EngineDeps): Engine {
       const phase = out.instance.phases.find((p) => p.id === phaseId);
       if (!phase || phase.knowledge?.status !== "pending") continue;
       await saveInstance(out.instance);
-      const verdict = await commitPhaseKnowledge(out.instance, phase);
+      const verdict = await commitPhaseKnowledge(def, out.instance, phase);
       const next = applyKnowledgeCommit(def, out.instance, phaseId, verdict, nowISO());
       if (!next.knowledgeApplied) continue;
       void journal(out.instance.id, {

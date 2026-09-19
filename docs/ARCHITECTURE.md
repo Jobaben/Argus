@@ -227,7 +227,12 @@ The split follows the same ownership rule as the rest of the server:
   `limitations` strings rather than silently dropping them — the same
   discipline the runtime seam already applied to argv, envelopes and
   activity (see above). Two runtimes (OpenCode, Qwen Code) currently map
-  none of it: every declared key on either becomes a limitation.
+  none of it: every declared key on either becomes a limitation. Argus's own
+  invocation channels — the result file, the KnowledgeDelta file, the
+  artifact and memory directories — reach the runtimes as one list
+  (`harness/channels.ts`), and each runtime answers per channel whether its
+  sandbox can reach it; the engine decides what that means from whether the
+  launch depends on the channel (HARNESS.md §3a).
 - **`pipelineTransitions.ts` stays pure.** `applyVerification` — the function
   that turns a `VerificationReport` into a phase's next status — takes an
   instance and a report and returns what the instance becomes; it has no

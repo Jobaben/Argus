@@ -1005,3 +1005,31 @@ test("candidates: a patch that removes the isolation the phase relies on is refu
   const still = (await m.readPipelines()).find((p: { id: string }) => p.id === "pc");
   assert.deepEqual(still.workspace, { scope: "attempt" });
 });
+
+// ── knowledgeDelta: whether the delta channel is a launch precondition ──────
+
+test("knowledgeDelta: optional | required on a phase, absent by default, anything else refused", async () => {
+  const m = await fresh();
+  const phase = (over: Record<string, unknown>) => ({
+    id: "learn",
+    name: "Learn",
+    cwd: home,
+    gated: false,
+    steps: [{ name: "s", prompt: "p" }],
+    ...over,
+  });
+  const plain = m.validatePipelineInput(goodInput({ phases: [phase({})] }));
+  assert.equal("knowledgeDelta" in plain.phases[0], false);
+  for (const mode of ["optional", "required"]) {
+    const ok = m.validatePipelineInput(goodInput({ phases: [phase({ knowledgeDelta: mode })] }));
+    assert.equal(ok.phases[0].knowledgeDelta, mode);
+  }
+  assert.throws(
+    () => m.validatePipelineInput(goodInput({ phases: [phase({ knowledgeDelta: "always" })] })),
+    /phase 0: knowledgeDelta must be optional \| required/,
+  );
+  assert.throws(
+    () => m.validatePipelineInput(goodInput({ phases: [phase({ knowledgeDelta: true })] })),
+    /knowledgeDelta must be/,
+  );
+});

@@ -8,6 +8,9 @@ export type { AgentRuntimeId, ReasoningEffort } from "@argus/contracts";
 
 export type {
   AgentInvocationRecord,
+  InvocationChannelAccess,
+  InvocationChannelKind,
+  InvocationChannelRecord,
   ApproveRequest,
   CapabilityProfile,
   PhaseArtifact,
