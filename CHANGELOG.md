@@ -110,6 +110,47 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Context discipline: bounded placeholders, pipeline memory, richer retry
+  feedback and stall detection.** Five loops the harness research pointed at
+  directly (docs/HARNESS-RESEARCH.md §2 #4–#7, §4):
+  - **Every interpolated placeholder value is capped**, by default 16 KiB
+    (`PipelineDefinition.contextLimits.placeholderBytes`, 1 KiB–256 KiB). Over
+    the cap, Argus keeps the head (2/3) and tail (1/3) with a one-line marker
+    naming where the full value was written under the run's invocation
+    directory (`context/<placeholder>.txt`), UTF-8 safe. Two new
+    placeholders: `{{trigger.payload}}` (the instance's firing payload) and
+    `{{previous.instance}}` (a one-paragraph summary of the pipeline's last
+    settled instance — status, when it ended, which phase failed and why,
+    which candidate won). Argus's own injected prompt blocks (result,
+    artifact, memory, retry-note instructions) now always ride _after_ the
+    agent's own prompt, in a fixed order, with the retry note last —
+    recency is what a model weighs most ("lost in the middle").
+  - **Pipeline memory** (`PipelineDefinition.memory: { enabled, maxBytes? }`,
+    off by default): durable notes at `~/.claude/argus/memory/<pipelineId>/NOTES.md`,
+    read via `{{memory}}` (tail-capped to `maxBytes`, default 8 KiB) and
+    writable by the agent through `$ARGUS_MEMORY_DIR` (added to Claude Code's
+    `--add-dir` / Codex's `writable_roots` the same way the artifact
+    directory is). Trimmed back to its cap on a line boundary after each
+    instance settles (`memory.trimmed` journal entry); never created until
+    enabled, never deleted by Argus.
+  - **Every retryable failure class now hands the next attempt something to
+    repair against**, not just `verification`/`signal`: `verification` names
+    each failed check with the tail of its own output, `exit-code` carries the
+    exit code plus a tail of the run's own error/result text, and
+    `timeout`/`spawn`/`signal` carry their existing one-line reason — each
+    bounded, the whole note capped at ~2 KiB, and headed
+    `Previous attempt (n of m) failed — <class>:`.
+  - **Stall detection**: `PhaseDef.stallSeconds` / `PhaseStep.stallSeconds`
+    (minimum 30, absent = off) kills a step whose transcript has gone quiet
+    for that long even though its process is still alive — a hard timeout
+    sized for the worst case never notices a stuck-but-alive run. Reuses the
+    existing reconcile tick rather than a second timer system; classed as
+    `timeout` for the retry policy, with its own `termination: "stalled"` and
+    `step.stalled` journal entry so it reads distinctly from a hard timeout.
+  - **`WorkspacePolicy.scope` gains `"none"`**, so one phase can opt out of a
+    pipeline-wide isolation policy and run in its own `cwd`.
+  - See docs/HARNESS.md §13.
+
 - **Candidates — a phase can run N drafts of its step and let its checks pick
   one.** A phase ran its step once; a bad draw was found at the checks and cost
   a sequential retry at the same price. A phase can now declare

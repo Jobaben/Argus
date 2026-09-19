@@ -422,6 +422,44 @@ describe("PipelineForm", () => {
     expect("workspace" in cleared.phases[0]).toBe(false);
   });
 
+  it('offers "none" so a phase can opt out of a pipeline-wide policy', async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    render(<PipelineForm initial={EMPTY_PIPELINE} onSubmit={onSubmit} onCancel={vi.fn()} />);
+    await user.type(screen.getByPlaceholderText("Pipeline name"), "Opt out");
+    await user.type(screen.getByPlaceholderText("Phase name"), "Readonly");
+    await user.type(screen.getByPlaceholderText(/Working directory/), "/repo");
+    await user.type(screen.getByPlaceholderText("Step name"), "look");
+    await user.type(screen.getByPlaceholderText("Step prompt"), "run");
+
+    await user.selectOptions(screen.getByLabelText("Isolation"), "instance");
+    await user.selectOptions(screen.getByLabelText("Isolation (phase 1)"), "none");
+    await user.click(screen.getByRole("button", { name: /save pipeline/i }));
+
+    const arg = onSubmit.mock.calls[0][0];
+    expect(arg.workspace).toEqual({ scope: "instance" });
+    expect(arg.phases[0].workspace).toEqual({ scope: "none" });
+  });
+
+  it("submits a phase's timeout and stall limit", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    render(<PipelineForm initial={EMPTY_PIPELINE} onSubmit={onSubmit} onCancel={vi.fn()} />);
+    await user.type(screen.getByPlaceholderText("Pipeline name"), "Timed");
+    await user.type(screen.getByPlaceholderText("Phase name"), "Build");
+    await user.type(screen.getByPlaceholderText(/Working directory/), "/repo");
+    await user.type(screen.getByPlaceholderText("Step name"), "compile");
+    await user.type(screen.getByPlaceholderText("Step prompt"), "run");
+
+    await user.type(screen.getByLabelText("Timeout in seconds (phase 1)"), "900");
+    await user.type(screen.getByLabelText("Stall limit in seconds (phase 1)"), "120");
+    await user.click(screen.getByRole("button", { name: /save pipeline/i }));
+
+    const arg = onSubmit.mock.calls[0][0];
+    expect(arg.phases[0].timeoutSeconds).toBe(900);
+    expect(arg.phases[0].stallSeconds).toBe(120);
+  });
+
   it("shows the isolation a pipeline was loaded with and preserves base/keep across a change", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn().mockResolvedValue(undefined);

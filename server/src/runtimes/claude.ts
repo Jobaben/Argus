@@ -56,7 +56,7 @@ interface ClaudeCapabilityResult {
  */
 function buildClaudeCapabilities(cap: CapabilityRequest | undefined): ClaudeCapabilityResult {
   if (!cap) return { args: [], files: [], limitations: [] };
-  const { profile, invocationDir, cwd, artifactDir, hooks } = cap;
+  const { profile, invocationDir, cwd, artifactDir, memoryDir, hooks } = cap;
   const args: string[] = [];
   const files: MaterializedFile[] = [];
   const limitations = unsupportedCapabilities(profile, "Claude Code", [
@@ -113,6 +113,10 @@ function buildClaudeCapabilities(cap: CapabilityRequest | undefined): ClaudeCapa
   // The engine created artifactDir for this invocation to write into; keep it
   // reachable no matter what the profile said about the rest of the filesystem.
   if (artifactDir) args.push("--add-dir", artifactDir);
+  // Same story for this pipeline's memory directory, when `memory` is enabled:
+  // an agent told to append to NOTES.md must be able to, whatever `filesystem`
+  // says about the rest of the tree.
+  if (memoryDir) args.push("--add-dir", memoryDir);
 
   if (profile.settingSources !== undefined) {
     args.push("--setting-sources", profile.settingSources.join(","));

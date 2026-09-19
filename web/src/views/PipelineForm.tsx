@@ -121,6 +121,7 @@ function IsolationSelect({
       <option value="">{inheritLabel}</option>
       <option value="instance">Shared worktree per instance</option>
       <option value="attempt">Fresh worktree per attempt</option>
+      <option value="none">None (opt out, run in the working directory)</option>
     </select>
   );
 }
@@ -778,6 +779,40 @@ export function PipelineForm({
                 }))
               }
             />
+            <label className="flex items-center gap-1.5 text-[12px] text-ink-faint">
+              Timeout (s)
+              <input
+                type="number"
+                min={1}
+                max={86400}
+                className={`${FIELD_BASE} w-24 py-1`}
+                aria-label={`Timeout in seconds (phase ${pi + 1})`}
+                title="Kill a step's process if it runs longer than this. Blank = no limit."
+                value={phase.timeoutSeconds ?? ""}
+                onChange={(e) =>
+                  setPhase(pi, {
+                    timeoutSeconds: e.target.value === "" ? undefined : Number(e.target.value),
+                  })
+                }
+              />
+            </label>
+            <label className="flex items-center gap-1.5 text-[12px] text-ink-faint">
+              Stall (s)
+              <input
+                type="number"
+                min={30}
+                max={86400}
+                className={`${FIELD_BASE} w-24 py-1`}
+                aria-label={`Stall limit in seconds (phase ${pi + 1})`}
+                title="Kill a step if its transcript goes this many seconds without new activity, even though it is still alive. Blank = off. Minimum 30."
+                value={phase.stallSeconds ?? ""}
+                onChange={(e) =>
+                  setPhase(pi, {
+                    stallSeconds: e.target.value === "" ? undefined : Number(e.target.value),
+                  })
+                }
+              />
+            </label>
           </div>
 
           {form.phases.length > 1 && (

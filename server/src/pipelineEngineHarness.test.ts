@@ -577,7 +577,7 @@ test("a verification-triggered retry carries a repair note naming the failed che
   await waitFor(() => rec.calls.length === 2);
 
   const retryRun = rec.calls[1].run;
-  assert.match(retryRun.prompt, /Previous attempt failed/);
+  assert.match(retryRun.prompt, /Previous attempt \(1 of 2\) failed — verification:/);
   assert.match(retryRun.prompt, /missing\.txt/);
 
   const after = await instances.readInstance(inst!.id);
@@ -815,26 +815,161 @@ test("reconcile resumes a verification that was running when Argus stopped", asy
   assert.equal(inst.phases[0].verification.status, "passed");
 });
 
-// ── 15. retryNote / failureClassOfRecord (pure) ─────────────────────────────
+// ── 15. retryNote / failureClassOfRecord (pure) ──────────────────────────────
 
-test("retryNote is empty for infrastructure failures and carries the reason for verification/signal", () => {
-  assert.equal(retryNote(null), "");
-  assert.equal(retryNote(undefined), "");
-  assert.equal(retryNote({ failureClass: "spawn", reason: "no bin" }), "");
-  assert.equal(retryNote({ failureClass: "exit-code", reason: "exit 1" }), "");
-  assert.equal(
-    retryNote({ failureClass: "verification", reason: "checks failed" }),
-    "\n\nPrevious attempt failed: checks failed",
-  );
-  assert.equal(
-    retryNote({ failureClass: "signal", reason: "  trimmed  " }),
-    "\n\nPrevious attempt failed: trimmed",
-  );
-  assert.equal(retryNote({ failureClass: "verification" }), "");
+test("retryNote is empty with no class, or configuration (never retried)", () => {
+  assert.equal(retryNote({ attempt: 1, maxAttempts: 2 }), "");
+  assert.equal(retryNote({ failureClass: "configuration", attempt: 1, maxAttempts: 2 }), "");
 });
 
-test("failureClassOfRecord classes a run from its termination and pid", () => {
+test("retryNote: signal, timeout and spawn carry the one-line reason as-is", () => {
+  assert.equal(
+    retryNote({ failureClass: "signal", reason: "  trimmed  ", attempt: 1, maxAttempts: 3 }),
+    "\n\nPrevious attempt (1 of 3) failed — signal:\ntrimmed",
+  );
+  assert.equal(
+    retryNote({
+      failureClass: "timeout",
+      reason: "timed out after 900s",
+      attempt: 2,
+      maxAttempts: 3,
+    }),
+    "\n\nPrevious attempt (2 of 3) failed — timeout:\ntimed out after 900s",
+  );
+  assert.equal(
+    retryNote({
+      failureClass: "timeout",
+      reason: "stalled: no output for 120s",
+      attempt: 1,
+      maxAttempts: 2,
+    }),
+    "\n\nPrevious attempt (1 of 2) failed — timeout:\nstalled: no output for 120s",
+  );
+  assert.equal(
+    retryNote({
+      failureClass: "spawn",
+      reason: "ENOENT: no such binary",
+      attempt: 1,
+      maxAttempts: 2,
+    }),
+    "\n\nPrevious attempt (1 of 2) failed — spawn:\nENOENT: no such binary",
+  );
+  // No reason at all: nothing worth restating.
+  assert.equal(retryNote({ failureClass: "spawn", attempt: 1, maxAttempts: 2 }), "");
+});
+
+test("retryNote: verification lists each failed check with its output tail", () => {
+  const note = retryNote({
+    failureClass: "verification",
+    attempt: 1,
+    maxAttempts: 2,
+    verification: {
+      status: "failed",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      checks: [
+        {
+          kind: "command",
+          label: "unit tests",
+          status: "failed",
+          detail: "exit 1",
+          durationMs: 1,
+          output: "FAIL src/x.test.ts\nAssertionError",
+        },
+        { kind: "command", label: "lint", status: "passed", detail: "exit 0", durationMs: 1 },
+        { kind: "artifact", label: "report", status: "failed", detail: "missing", durationMs: 1 },
+      ],
+    },
+  });
+  assert.equal(
+    note,
+    "\n\nPrevious attempt (1 of 2) failed — verification:\n" +
+      "unit tests: FAIL src/x.test.ts\nAssertionError\n" +
+      "report:",
+  );
+  // Passing checks never appear, and a check with no output tail is blank, not "undefined".
+  assert.ok(!note.includes("lint"));
+});
+
+test("retryNote: verification caps a long output tail at ~600 chars per check", () => {
+  const long = "x".repeat(1000);
+  const note = retryNote({
+    failureClass: "verification",
+    attempt: 1,
+    maxAttempts: 1,
+    verification: {
+      status: "failed",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      checks: [
+        {
+          kind: "command",
+          label: "t",
+          status: "failed",
+          detail: "exit 1",
+          durationMs: 1,
+          output: long,
+        },
+      ],
+    },
+  });
+  assert.equal(note, `\n\nPrevious attempt (1 of 1) failed — verification:\nt: ${"x".repeat(600)}`);
+});
+
+test("retryNote: exit-code carries the code plus a tail of the run's own text", () => {
+  assert.equal(
+    retryNote({
+      failureClass: "exit-code",
+      exitCode: 1,
+      runText: "  npm ERR! Test failed  ",
+      attempt: 1,
+      maxAttempts: 2,
+    }),
+    "\n\nPrevious attempt (1 of 2) failed — exit-code:\nexit code 1: npm ERR! Test failed",
+  );
+  // No text at all: still names the exit code.
+  assert.equal(
+    retryNote({ failureClass: "exit-code", exitCode: 137, attempt: 1, maxAttempts: 2 }),
+    "\n\nPrevious attempt (1 of 2) failed — exit-code:\nexit code 137",
+  );
+});
+
+test("retryNote: exit-code caps its own text tail at ~800 chars", () => {
+  const long = "e".repeat(1200);
+  const note = retryNote({
+    failureClass: "exit-code",
+    exitCode: 1,
+    runText: long,
+    attempt: 1,
+    maxAttempts: 1,
+  });
+  assert.equal(
+    note,
+    `\n\nPrevious attempt (1 of 1) failed — exit-code:\nexit code 1: ${"e".repeat(800)}`,
+  );
+});
+
+test("retryNote caps the whole note at ~2KiB even with several large failed checks", () => {
+  const checks = Array.from({ length: 6 }, (_, i) => ({
+    kind: "command" as const,
+    label: `check-${i}`,
+    status: "failed" as const,
+    detail: "exit 1",
+    durationMs: 1,
+    output: "y".repeat(600),
+  }));
+  const note = retryNote({
+    failureClass: "verification",
+    attempt: 1,
+    maxAttempts: 1,
+    verification: { status: "failed", startedAt: "2026-01-01T00:00:00.000Z", checks },
+  });
+  const header = "\n\nPrevious attempt (1 of 1) failed — verification:\n";
+  assert.ok(note.length <= header.length + 2000);
+  assert.ok(note.startsWith(header.slice(0, 10)));
+});
+
+test("failureClassOfRecord classes a run from its termination and pid, stall counted as timeout", () => {
   assert.equal(failureClassOfRecord({ termination: "timed-out", pid: 123 } as any), "timeout");
+  assert.equal(failureClassOfRecord({ termination: "stalled", pid: 123 } as any), "timeout");
   assert.equal(failureClassOfRecord({ pid: null } as any), "spawn");
   assert.equal(failureClassOfRecord({ pid: 123 } as any), "exit-code");
 });
@@ -1430,4 +1565,268 @@ test("only the winner's payload and result reach the next phase", async (t) => {
   const shipPrompt = rec.calls[rec.calls.length - 1].run.prompt;
   assert.match(shipPrompt, /the winning draft/);
   assert.doesNotMatch(shipPrompt, /the losing draft/);
+});
+
+// ── 17. workspace scope "none" ───────────────────────────────────────────────
+
+test('workspace scope "none" opts a phase out of a pipeline-wide policy: no worktree, runs in cwd', async () => {
+  const { engine, pipelines, instances } = await load();
+  await seed(
+    pipelines,
+    [
+      {
+        id: "readonly",
+        name: "Readonly",
+        cwd: home,
+        gated: false,
+        workspace: { scope: "none" },
+        steps: [{ name: "s", prompt: "p" }],
+      },
+    ],
+    // Pipeline-wide isolation every other phase would inherit — but a git
+    // repo is never required here, because "none" never asks git for anything.
+    { workspace: { scope: "instance" } },
+  );
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const inst = await e.start("p1", "manual");
+  assert.equal(rec.calls.length, 1);
+  assert.equal(rec.calls[0].run.cwd, home, "ran in the phase's own cwd, not a worktree");
+
+  const after = await instances.readInstance(inst!.id);
+  assert.equal(after.phases[0].workspace ?? null, null);
+  assert.equal(after.workspace ?? null, null, "the shared instance worktree was never created");
+});
+
+// ── 18. pipeline memory ──────────────────────────────────────────────────────
+
+test("memory disabled: {{memory}} is empty and ARGUS_MEMORY_DIR is never set", async () => {
+  const { engine, pipelines } = await load();
+  await seed(pipelines, [
+    {
+      id: "only",
+      name: "Only",
+      cwd: home,
+      gated: false,
+      steps: [{ name: "s", prompt: "notes: {{memory}}" }],
+    },
+  ]);
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  await e.start("p1", "manual");
+  assert.equal(rec.calls[0].run.prompt, "notes: ");
+  assert.ok(!("ARGUS_MEMORY_DIR" in rec.calls[0].env));
+});
+
+test("memory enabled: ARGUS_MEMORY_DIR is set, {{memory}} reads NOTES.md, and the instruction is appended", async () => {
+  const { engine, pipelines } = await load();
+  const { memoryNotesPath, ensureMemoryDir } = await import("./harness/memory.js");
+  await seed(
+    pipelines,
+    [
+      {
+        id: "only",
+        name: "Only",
+        cwd: home,
+        gated: false,
+        steps: [{ name: "s", prompt: "notes: {{memory}}" }],
+      },
+    ],
+    { memory: { enabled: true, maxBytes: 4096 } },
+  );
+  const dir = await ensureMemoryDir("p1");
+  writeFileSync(memoryNotesPath("p1"), "remember the deploy gotcha", "utf8");
+
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  await e.start("p1", "manual");
+
+  assert.equal(rec.calls[0].env.ARGUS_MEMORY_DIR, dir);
+  assert.match(rec.calls[0].run.prompt, /notes: remember the deploy gotcha/);
+  assert.match(
+    rec.calls[0].run.prompt,
+    /Durable notes for this pipeline live at \$ARGUS_MEMORY_DIR\/NOTES\.md/,
+  );
+  assert.match(rec.calls[0].run.prompt, /keep it under 4096 bytes/);
+});
+
+test("a settled instance trims NOTES.md back to its cap, and journals memory.trimmed", async () => {
+  const { engine, pipelines, instances, journalSrc } = await load();
+  const { memoryNotesPath, ensureMemoryDir } = await import("./harness/memory.js");
+  await seed(
+    pipelines,
+    [{ id: "only", name: "Only", cwd: home, gated: false, steps: [{ name: "s", prompt: "p" }] }],
+    { memory: { enabled: true, maxBytes: 1024 } },
+  );
+  await ensureMemoryDir("p1");
+  const long = Array.from({ length: 200 }, (_, i) => `note ${i}: ${"x".repeat(20)}`).join("\n");
+  writeFileSync(memoryNotesPath("p1"), long, "utf8");
+
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const inst = await e.start("p1", "manual");
+  const runId = inst!.phases[0].steps[0].runId;
+  await e.onSignal(inst!.id, {
+    instanceId: inst!.id,
+    phaseId: "only",
+    runId,
+    type: "completed",
+    token: inst!.signalToken,
+  });
+  await e.drain();
+  await waitFor(async () => (await instances.readInstance(inst!.id)).status === "succeeded");
+  // The trim is detached off the settlement; give it a tick to land.
+  await waitFor(
+    () => Buffer.byteLength(readFileSync(memoryNotesPath("p1"), "utf8"), "utf8") <= 1024,
+  );
+
+  const j = await journalSrc.readJournal(inst!.id);
+  assert.ok(j.some((entry: any) => entry.kind === "memory.trimmed"));
+});
+
+test("never created until enabled: no pipeline ever writes a memory directory it didn't opt into", async () => {
+  const { engine, pipelines } = await load();
+  await seed(pipelines, [
+    { id: "only", name: "Only", cwd: home, gated: false, steps: [{ name: "s", prompt: "p" }] },
+  ]);
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  await e.start("p1", "manual");
+  assert.equal(existsSync(path.join(home, "argus", "memory")), false);
+});
+
+// ── 19. {{previous.instance}} ────────────────────────────────────────────────
+
+test("{{previous.instance}} summarizes the last settled instance of the same pipeline", async () => {
+  const { engine, pipelines, instances } = await load();
+  await seed(pipelines, [
+    {
+      id: "only",
+      name: "Only",
+      cwd: home,
+      gated: false,
+      steps: [{ name: "s", prompt: "last time: {{previous.instance}}" }],
+    },
+  ]);
+  const rec = recordingSpawn();
+  const e = engine.createEngine(
+    baseDeps({ spawn: rec.spawn, now: () => new Date(2026, 5, 30, 12, 0) }),
+  );
+
+  // First instance: no history yet.
+  const first = await e.start("p1", "manual");
+  assert.match(rec.calls[0].run.prompt, /^last time: $/);
+  await e.onSignal(first!.id, {
+    instanceId: first!.id,
+    phaseId: "only",
+    runId: first!.phases[0].steps[0].runId,
+    type: "failed",
+    token: first!.signalToken,
+    payload: { reason: "the build broke" },
+  });
+  await e.drain();
+  await waitFor(async () => (await instances.readInstance(first!.id)).status === "failed");
+
+  // Second instance, started later: sees the first's outcome.
+  const e2 = engine.createEngine(
+    baseDeps({ spawn: rec.spawn, now: () => new Date(2026, 5, 30, 13, 0) }),
+  );
+  await e2.start("p1", "manual");
+  const secondPrompt = rec.calls[1].run.prompt;
+  assert.match(secondPrompt, /last time: Previous run failed/);
+  assert.match(secondPrompt, /the build broke/);
+});
+
+// ── 20. stall detection ──────────────────────────────────────────────────────
+
+test("a step stalled past stallSeconds is killed, classed as timeout, and journaled distinctly from a hard timeout", async () => {
+  const { engine, pipelines, instances, runsSrc, journalSrc } = await load();
+  await seed(pipelines, [
+    {
+      id: "only",
+      name: "Only",
+      cwd: home,
+      gated: false,
+      stallSeconds: 30,
+      steps: [{ name: "s", prompt: "p" }],
+    },
+  ]);
+  const killed: number[] = [];
+  const kill = (pid: number) => {
+    killed.push(pid);
+    return true;
+  };
+  let clock = new Date(2026, 5, 30, 12, 0, 0);
+  const e = engine.createEngine(
+    baseDeps({ spawn: () => ({ pid: 999, done: new Promise(() => {}) }), kill, now: () => clock }),
+  );
+  const inst = await e.start("p1", "manual");
+  const runId = inst!.phases[0].steps[0].runId;
+
+  // Well within the stall window: nothing happens.
+  await e.reconcile();
+  assert.equal((await instances.readInstance(inst!.id)).phases[0].status, "running");
+  assert.deepEqual(killed, []);
+
+  // Past it: killed and failed, distinctly from a hard timeout.
+  clock = new Date(clock.getTime() + 31_000);
+  await e.reconcile();
+  await waitFor(async () => (await instances.readInstance(inst!.id)).phases[0].status === "failed");
+  assert.deepEqual(killed, [999]);
+
+  const got = await runsSrc.readRun(runId);
+  assert.equal(got!.run.termination, "stalled");
+  assert.match(got!.run.error, /stalled: no output for 30s/);
+
+  const after = await instances.readInstance(inst!.id);
+  assert.equal((after.phases[0].payload as any).failureClass, "timeout");
+  assert.equal((after.phases[0].payload as any).kind, "stalled");
+
+  const j = await journalSrc.readJournal(inst!.id);
+  assert.ok(j.some((entry: any) => entry.kind === "step.stalled"));
+  assert.ok(!j.some((entry: any) => entry.kind === "step.timed-out"));
+});
+
+test("stall detection: the retry policy treats a stall as a timeout, and retries it", async () => {
+  const { engine, pipelines, instances } = await load();
+  await seed(pipelines, [
+    {
+      id: "only",
+      name: "Only",
+      cwd: home,
+      gated: false,
+      stallSeconds: 30,
+      retry: { attempts: 2, backoffSeconds: 0, retryOn: ["timeout"] },
+      steps: [{ name: "s", prompt: "p" }],
+    },
+  ]);
+  let clock = new Date(2026, 5, 30, 12, 0, 0);
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn, kill: () => true, now: () => clock }));
+  await e.start("p1", "manual");
+  clock = new Date(clock.getTime() + 31_000);
+  await e.reconcile(); // detects and kills the stall
+  await e.reconcile(); // runs the now-due retry
+  await waitFor(() => rec.calls.length === 2);
+  const inst2 = (await instances.readInstance((await instances.readInstances())[0].id))!;
+  assert.equal(inst2.phases[0].attempt, 1);
+});
+
+test("stallSeconds absent: no stall check ever runs, however long a step is quiet", async () => {
+  const { engine, pipelines, instances } = await load();
+  await seed(pipelines, [
+    { id: "only", name: "Only", cwd: home, gated: false, steps: [{ name: "s", prompt: "p" }] },
+  ]);
+  let clock = new Date(2026, 5, 30, 12, 0, 0);
+  const e = engine.createEngine(
+    baseDeps({
+      spawn: () => ({ pid: 1, done: new Promise(() => {}) }),
+      kill: () => true,
+      now: () => clock,
+    }),
+  );
+  const inst = await e.start("p1", "manual");
+  clock = new Date(clock.getTime() + 3600_000);
+  await e.reconcile();
+  assert.equal((await instances.readInstance(inst!.id)).phases[0].status, "running");
 });

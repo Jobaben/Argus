@@ -27,6 +27,8 @@ export type {
   CandidatePolicy,
   CandidateVariant,
   CandidateOutcome,
+  ContextLimits,
+  MemoryPolicy,
   StepFailure,
   PhaseFailurePayload,
   PhaseProgress,

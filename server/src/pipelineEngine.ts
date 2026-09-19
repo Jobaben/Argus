@@ -35,6 +35,16 @@ import {
   workspacePolicyFor,
   workspaceTarget,
 } from "./harness/workspace.js";
+import {
+  DEFAULT_MEMORY_BYTES,
+  ensureMemoryDir,
+  isSettled,
+  memoryDirFor,
+  readMemoryNotes,
+  summarizeInstance,
+  trimMemoryIfNeeded,
+} from "./harness/memory.js";
+import { isStalled, resolveStallSeconds } from "./harness/stall.js";
 import { markPipelineStarted, readPipelines } from "./sources/pipelines.js";
 import { accumulateRun } from "./sources/totals.js";
 import {
@@ -66,6 +76,7 @@ import {
   withFailureClass,
 } from "./pipelineTransitions.js";
 import { interpolate, livePhases, previousPayloadFor, resultStepName } from "./sources/dag.js";
+import type { VerificationReport } from "./sources/pipelineTypes.js";
 import { journal } from "./sources/journal.js";
 import { isAlive } from "./scheduler.js";
 import { claudeRuntime, parseEnvelopeFor, resolveRuntimeId, runtimeFor } from "./runtimes/index.js";
@@ -104,6 +115,9 @@ interface PlannedRun {
   candidate: number | undefined;
   artifactDir: string;
   workspace: WorkspaceRecord | null;
+  /** Full values of any placeholder {@link interpolate} trimmed, for the
+   *  engine to write under this run's invocation directory. */
+  contextFiles: { path: string; contents: string }[];
 }
 import type { CandidateRecord, RouteOutcome, TransitionResult } from "./pipelineTransitions.js";
 import type {
@@ -210,6 +224,24 @@ export function artifactInstruction(checks: PhaseDef["checks"], artifactDir: str
 }
 
 /**
+ * The instruction a step gets when its pipeline has `memory` enabled.
+ *
+ * Argus states where the file is and what it is for; what to actually write
+ * in it is the author's business (or the agent's own judgment) — this is only
+ * the fixed, system-owned part: the path, and the cap Argus itself enforces
+ * after the fact (§ harness/memory.ts `trimMemoryIfNeeded`).
+ */
+export function memoryInstruction(memory: PipelineDefinition["memory"] | undefined): string {
+  if (!memory?.enabled) return "";
+  const cap = memory.maxBytes ?? DEFAULT_MEMORY_BYTES;
+  return (
+    "\n\nDurable notes for this pipeline live at $ARGUS_MEMORY_DIR/NOTES.md. Append what a " +
+    "future run of this pipeline must know (decisions, gotchas, what was tried); keep it under " +
+    `${cap} bytes — Argus trims the head beyond that.`
+  );
+}
+
+/**
  * Build the invocation for a step run, with the outcome contract carried into
  * the agent's instructions.
  *
@@ -292,6 +324,10 @@ export interface EngineDeps {
   tailer?: {
     track(runId: string, instanceId: string, runtime?: AgentRuntimeId | null): void;
     untrack(runId: string): void;
+    /** This process's most recent observed activity per tracked run, for
+     *  stall detection. Optional so existing test doubles need not implement
+     *  it; absent means every stall check falls back to `startedAt`. */
+    latest?(): Map<string, { at: string }>;
   };
 }
 
@@ -391,21 +427,108 @@ export function recoverRunOutcome(run: Run): RecoveredOutcome {
 
 /** How a run that ended without a considered agent verdict is classed for the
  *  retry policy, from what its record shows: never started, killed at its
- *  deadline, or exited on its own. */
+ *  deadline (or for going quiet — a stall is a timeout that noticed sooner),
+ *  or exited on its own. */
 export function failureClassOfRecord(run: Run): RetryableClass {
-  if (run.termination === "timed-out") return "timeout";
+  if (run.termination === "timed-out" || run.termination === "stalled") return "timeout";
   return run.pid == null ? "spawn" : "exit-code";
 }
 
-/** A retry re-runs the same prompt. When the previous attempt failed on the
- *  work itself — the agent's own verdict, or Argus's checks — the next attempt
- *  is told why, so it is a repair rather than a replay. Infrastructure failures
- *  (a process that never started, a dead exit) carry nothing worth repeating. */
-export function retryNote(payload: unknown): string {
-  const p = (payload ?? {}) as PhaseFailurePayload;
-  if (p.failureClass !== "verification" && p.failureClass !== "signal") return "";
-  const reason = typeof p.reason === "string" ? p.reason.trim() : "";
-  return reason ? `\n\nPrevious attempt failed: ${reason}` : "";
+/** Bound on the whole retry note, across every class — generous enough for a
+ *  handful of failed checks' output tails, small enough that a retry prompt
+ *  never balloons past what one bad attempt is worth repeating. */
+const RETRY_NOTE_MAX_BYTES = 2000;
+/** Per-check output tail kept in a verification retry note. */
+const VERIFICATION_TAIL_CHARS = 600;
+/** Tail of a run's own error/result text kept in an exit-code retry note. */
+const EXIT_CODE_TAIL_CHARS = 800;
+
+export interface RetryNoteInput {
+  failureClass?: PhaseFailureClass;
+  /** The phase's own one-line reason — used as-is for `timeout`, `spawn` and
+   *  `signal`, which already carry everything worth repeating. */
+  reason?: string;
+  /** The failed attempt's own checks, when the class is `verification`. */
+  verification?: VerificationReport;
+  /** The failed run's exit code, when the class is `exit-code`. */
+  exitCode?: number | null;
+  /** The failed run's own error/result text, when the class is `exit-code`. */
+  runText?: string | null;
+  /** Which attempt just failed (1-based) and how many the policy allows, for
+   *  the note's own header. */
+  attempt: number;
+  maxAttempts: number;
+}
+
+/**
+ * A retry re-runs the same prompt. Every retryable class now hands the next
+ * attempt *something* worth repairing against — this is the best-evidenced
+ * loop in the harness literature (Aider, CodeRabbit; see
+ * docs/HARNESS-RESEARCH.md §2 #4) — bounded per class so a chatty check
+ * output can never balloon the prompt:
+ *
+ *  - `verification`: each failed check by name, with the tail of its output.
+ *  - `exit-code`: the exit code plus the tail of the run's own error/result text.
+ *  - `timeout` (including a stall — "stalled: no output for Ns"), `spawn` and
+ *    `signal`: the one-line reason already computed where the failure was
+ *    recorded — there is nothing more specific to add.
+ *
+ * Pure, so every class is unit-testable without touching a run record: the
+ * caller (which does the I/O to read the failed run and the report) hands in
+ * exactly what it found.
+ */
+export function retryNote(input: RetryNoteInput): string {
+  const cls = input.failureClass;
+  if (!cls || cls === "configuration") return "";
+
+  let body = "";
+  if (cls === "verification" && input.verification) {
+    body = input.verification.checks
+      .filter((c) => c.status === "failed")
+      .map((c) => `${c.label}: ${(c.output ?? "").trim().slice(-VERIFICATION_TAIL_CHARS)}`)
+      .join("\n");
+  } else if (cls === "exit-code") {
+    const tail = (input.runText ?? "").trim().slice(-EXIT_CODE_TAIL_CHARS);
+    body = `exit code ${input.exitCode ?? "unknown"}${tail ? `: ${tail}` : ""}`;
+  } else {
+    // timeout (incl. stalled), spawn, signal
+    body = (input.reason ?? "").trim();
+  }
+  body = body.trim();
+  if (!body) return "";
+  if (body.length > RETRY_NOTE_MAX_BYTES) body = `…${body.slice(-(RETRY_NOTE_MAX_BYTES - 1))}`;
+  return `\n\nPrevious attempt (${input.attempt} of ${input.maxAttempts}) failed — ${cls}:\n${body}`;
+}
+
+/**
+ * Gather what {@link retryNote} needs for one failed phase, doing the one bit
+ * of I/O it can't do itself: reading the failed run's own record for an
+ * `exit-code` class. Every other class reads only what is already on the
+ * phase (`payload`, `verification`).
+ */
+async function buildRetryNote(def: PipelineDefinition, phase: PhaseProgress): Promise<string> {
+  const payload = (phase.payload ?? {}) as PhaseFailurePayload;
+  const policy = def.phases.find((p) => p.id === phase.id)?.retry;
+  const attempt = (phase.retries ?? 0) + 1;
+  let exitCode: number | null = null;
+  let runText: string | null = null;
+  if (payload.failureClass === "exit-code") {
+    const failedStep = phase.steps.find((s) => s.status === "failed" && s.runId);
+    if (failedStep?.runId) {
+      const got = await readRun(failedStep.runId);
+      exitCode = got?.run.exitCode ?? null;
+      runText = got?.run.error ?? got?.run.resultSummary ?? null;
+    }
+  }
+  return retryNote({
+    failureClass: payload.failureClass,
+    reason: typeof payload.reason === "string" ? payload.reason : undefined,
+    verification: phase.verification,
+    exitCode,
+    runText,
+    attempt,
+    maxAttempts: policy?.attempts ?? attempt,
+  });
 }
 
 export interface Engine {
@@ -463,10 +586,12 @@ export function createEngine(deps: EngineDeps): Engine {
 
   /** Instances whose worktrees this process has already cleaned up. */
   const cleaned = new Set<string>();
+  /** Instances whose memory notes this process has already trimmed. */
+  const memoryChecked = new Set<string>();
 
   /**
    * Persist an instance, and — once it has settled — remove the worktrees it
-   * created.
+   * created and trim its pipeline's memory notes if they have grown past cap.
    *
    * Every write of an instance goes through here rather than through
    * `writeInstance` directly, because an instance can reach a terminal status
@@ -482,7 +607,12 @@ export function createEngine(deps: EngineDeps): Engine {
       // Alive again — a revise of a failed instance, a scheduled retry. What it
       // creates from here is cleaned up by the settlement that follows.
       cleaned.delete(inst.id);
+      memoryChecked.delete(inst.id);
       return;
+    }
+    if (!memoryChecked.has(inst.id)) {
+      memoryChecked.add(inst.id);
+      void track(trimMemoryFor(inst));
     }
     if (cleaned.has(inst.id)) return;
     // Steps as well as phases: a candidates phase records a tree per candidate
@@ -494,6 +624,28 @@ export function createEngine(deps: EngineDeps): Engine {
     if (!anyTree) return;
     cleaned.add(inst.id);
     void track(cleanupWorkspaces(inst));
+  }
+
+  /** Trim one settled instance's pipeline's `NOTES.md` back to its cap, when
+   *  `memory` is enabled and the file has grown past it. Never throws — a
+   *  file Argus cannot trim is a warning in the log, never a settlement that
+   *  fails to finish. */
+  async function trimMemoryFor(inst: PipelineInstance): Promise<void> {
+    const def = await defFor(inst);
+    if (!def?.memory?.enabled) return;
+    const cap = def.memory.maxBytes ?? DEFAULT_MEMORY_BYTES;
+    try {
+      const trimmed = await trimMemoryIfNeeded(def.id, cap);
+      if (trimmed) {
+        await journal(inst.id, {
+          at: nowISO(),
+          kind: "memory.trimmed",
+          detail: `NOTES.md trimmed to ${cap} bytes`,
+        });
+      }
+    } catch (e) {
+      log.warn("pipeline memory could not be trimmed", { pipelineId: def.id, err: e });
+    }
   }
 
   /** Remove every worktree of a settled instance whose policy did not ask for
@@ -666,7 +818,10 @@ export function createEngine(deps: EngineDeps): Engine {
     // winner's becomes the phase's at selection, and a shared one would be a
     // directory nothing ever ran in.
     const candidates = phaseDef.candidates;
-    if (policy && !candidates) {
+    // "none" is a phase opting *out* of a pipeline-wide policy it inherited —
+    // the same as no policy at all for this one phase: it runs in its own
+    // `cwd`, no worktree is created or recorded.
+    if (policy && policy.scope !== "none" && !candidates) {
       try {
         progress.workspace = await ensureWorkspace(inst, phaseDef, progress, policy);
       } catch (e) {
@@ -689,6 +844,31 @@ export function createEngine(deps: EngineDeps): Engine {
     // candidate of a candidates phase is that step — each writes to its own
     // run's result file, and the phase takes the winner's.
     const publishingStep = resultStepName(phaseDef);
+
+    // Pipeline memory (§B): read once per phase-start, and only when a step
+    // actually asks for it — the common case is a pipeline with `memory` off,
+    // or a phase whose prompt has nothing to do with it, and neither should
+    // pay for a file read it never uses.
+    const promptsHere = phaseDef.steps.map((s) => s.prompt).join("\n");
+    const memoryPolicy = def.memory;
+    const memoryDir = memoryPolicy?.enabled ? memoryDirFor(def.id) : null;
+    const memoryText =
+      memoryPolicy?.enabled && promptsHere.includes("{{memory}}")
+        ? await readMemoryNotes(def.id, memoryPolicy.maxBytes ?? DEFAULT_MEMORY_BYTES)
+        : "";
+    if (memoryDir) await ensureMemoryDir(def.id);
+
+    // `{{previous.instance}}` (§B): the most recent settled instance of this
+    // pipeline that started before this one. Not gated on `memory.enabled` —
+    // it costs one instance listing, already read from disk elsewhere, and
+    // says nothing a pipeline needs to opt into.
+    let previousInstanceSummary = "";
+    if (promptsHere.includes("{{previous.instance}}")) {
+      const siblings = (await readInstances({ pipelineId: def.id }))
+        .filter((i) => i.id !== inst.id && i.createdAt < inst.createdAt && isSettled(i))
+        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+      if (siblings[0]) previousInstanceSummary = summarizeInstance(siblings[0]);
+    }
     // What is actually launched: one run per declared step, or `count` runs of
     // the single step a candidates phase has.
     const units = candidates
@@ -701,7 +881,7 @@ export function createEngine(deps: EngineDeps): Engine {
     const planned: PlannedRun[] = [];
     for (const { stepDef, candidate } of units) {
       let workspace = progress.workspace ?? null;
-      if (candidates && policy) {
+      if (candidates && policy && policy.scope !== "none") {
         try {
           workspace = await ensureWorkspace(inst, phaseDef, progress, policy, candidate);
         } catch (e) {
@@ -739,14 +919,33 @@ export function createEngine(deps: EngineDeps): Engine {
         def.runtime,
       );
       const timeoutSeconds = resolveTimeoutSeconds(phaseDef, stepDef);
+      const stallSeconds = resolveStallSeconds(phaseDef, stepDef);
+      // Argus-injected blocks ride after the agent's own prompt, in a fixed
+      // order, with the retry note last: the note is what matters most on a
+      // retry, and recency in the prompt is what the model weighs most (see
+      // docs/HARNESS-RESEARCH.md §2 #5, "lost in the middle").
+      const rendered = interpolate(
+        stepDef.prompt,
+        prevPayload,
+        inst.artifacts ?? {},
+        { own, byPhase },
+        {
+          triggerPayload: inst.triggerPayload,
+          memory: memoryText,
+          previousInstanceSummary,
+          maxPlaceholderBytes: def.contextLimits?.placeholderBytes,
+          contextDir: runInvocationDir(runId),
+        },
+      );
       const run: Run = {
         id: runId,
         scheduleId: `pipeline:${inst.pipelineId}`,
         scheduleName: `${inst.pipelineName} · ${phaseDef.name}`,
         prompt:
-          interpolate(stepDef.prompt, prevPayload, inst.artifacts ?? {}, { own, byPhase }) +
+          rendered.prompt +
           (publishes ? resultInstruction(phaseDef.result) : "") +
           artifactInstruction(phaseDef.checks, own) +
+          memoryInstruction(memoryPolicy) +
           noteSuffix,
         cwd,
         status: "running",
@@ -769,6 +968,7 @@ export function createEngine(deps: EngineDeps): Engine {
         // The deadline is set at spawn, not here: a step may wait for a
         // concurrency slot first, and waiting is not running.
         deadlineAt: null,
+        stallSeconds,
       };
       planned.push({
         stepDef,
@@ -778,6 +978,7 @@ export function createEngine(deps: EngineDeps): Engine {
         candidate,
         artifactDir: own,
         workspace,
+        contextFiles: rendered.contextFiles,
       });
     }
     // Record the runIds on the instance up front, then persist once (no write races).
@@ -846,6 +1047,8 @@ export function createEngine(deps: EngineDeps): Engine {
         timeoutSeconds,
         gitHead,
         workspace: unit.workspace,
+        memoryDir,
+        contextFiles: unit.contextFiles,
       });
       void journal(inst.id, {
         at: nowISO(),
@@ -1018,6 +1221,11 @@ export function createEngine(deps: EngineDeps): Engine {
     gitHead: string | null;
     /** The worktree the step runs in, when its phase declared a policy. */
     workspace: WorkspaceRecord | null;
+    /** This pipeline's durable-notes directory, when `memory` is enabled. */
+    memoryDir: string | null;
+    /** Full values of any placeholder {@link interpolate} trimmed for this
+     *  run's prompt, to write under its own invocation directory. */
+    contextFiles: { path: string; contents: string }[];
   }
 
   type Launched =
@@ -1053,6 +1261,8 @@ export function createEngine(deps: EngineDeps): Engine {
     // (or a nested tool) does not have to derive it from `pwd`. Per-invocation,
     // and therefore stripped from the inherited environment by buildChildEnv.
     if (ctx.workspace) env.ARGUS_WORKSPACE = ctx.workspace.path;
+    // This pipeline's durable-notes directory, when `memory` is enabled.
+    if (ctx.memoryDir) env.ARGUS_MEMORY_DIR = ctx.memoryDir;
     // The result file is named for every runtime, hook or no hook: the agent
     // writes the same file either way, and a runtime without a command hook has
     // it read off disk on the next reconcile tick instead.
@@ -1080,6 +1290,7 @@ export function createEngine(deps: EngineDeps): Engine {
         argusEnv: env,
         invocationDir,
         artifactDir: ctx.artifactDir,
+        memoryDir: ctx.memoryDir,
         workspace: ctx.workspace,
         resultFile,
         timeoutSeconds: ctx.timeoutSeconds,
@@ -1090,6 +1301,12 @@ export function createEngine(deps: EngineDeps): Engine {
       run.deadlineAt = prepared.record.deadlineAt;
       await writeInvocation(prepared.record);
       for (const file of prepared.files) await writeFile(file.path, file.contents, "utf8");
+      // Any placeholder {@link interpolate} trimmed for this run's prompt: the
+      // full value, so the agent can still read the whole thing if it needs to.
+      for (const file of ctx.contextFiles) {
+        await mkdir(path.dirname(file.path), { recursive: true });
+        await writeFile(file.path, file.contents, "utf8");
+      }
     } catch (e) {
       sem.release();
       await writeRun({
@@ -1181,7 +1398,9 @@ export function createEngine(deps: EngineDeps): Engine {
         // A run Argus itself ended (deadline, abort) keeps the reason Argus
         // wrote; the exit code of a killed process explains nothing.
         const endedByArgus =
-          got?.run.termination === "timed-out" || got?.run.termination === "killed";
+          got?.run.termination === "timed-out" ||
+          got?.run.termination === "stalled" ||
+          got?.run.termination === "killed";
         await patchRun(run.id, {
           status: res.code === 0 && !endedByArgus ? "succeeded" : "failed",
           endedAt: nowISO(),
@@ -1285,6 +1504,35 @@ export function createEngine(deps: EngineDeps): Engine {
         });
       },
     );
+  }
+
+  /**
+   * A step's process is still alive, but its transcript has gone quiet for at
+   * least its `stallSeconds` (§D, harness/stall.ts) — killed the same way a
+   * hard timeout is, under the same `timeout` retry class (a stall is a
+   * timeout that noticed sooner), with its own termination and reason so the
+   * two are distinguishable in the record.
+   */
+  async function expireStalledStep(
+    runId: string,
+    instanceId: string,
+    phaseId: string,
+    stallSeconds: number,
+  ): Promise<void> {
+    const got = await readRun(runId);
+    if (!got || got.run.status !== "running") return;
+    const reason = `stalled: no output for ${stallSeconds}s`;
+    await failStep(instanceId, phaseId, runId, "timeout", reason, { kind: "stalled" }, async () => {
+      await patchRun(runId, { termination: "stalled", error: reason });
+      await stopRun(got.run.pid);
+      void journal(instanceId, {
+        at: nowISO(),
+        kind: "step.stalled",
+        phaseId,
+        runId,
+        detail: reason,
+      });
+    });
   }
 
   /**
@@ -1468,7 +1716,7 @@ export function createEngine(deps: EngineDeps): Engine {
           (p) => p.status === "failed" && p.retryAt && Date.parse(p.retryAt) <= now.getTime(),
         );
         for (const phase of due) {
-          const note = retryNote(phase.payload);
+          const note = await buildRetryNote(def, phase);
           const res = applyRetry(inst, phase.id, nowISO());
           if (res.startPhases.length === 0) continue;
           await saveInstance(res.instance);
@@ -2162,7 +2410,9 @@ export function createEngine(deps: EngineDeps): Engine {
         // patchRun (not a full writeRun spread): the signal path patches
         // `outcome` concurrently, and a stale full-object write would drop it.
         const endedByArgus =
-          got.run.termination === "timed-out" || got.run.termination === "killed";
+          got.run.termination === "timed-out" ||
+          got.run.termination === "stalled" ||
+          got.run.termination === "killed";
         await patchRun(runId, {
           status: parsed && parsed.isError === false && !endedByArgus ? "succeeded" : "failed",
           endedAt: ended.toISOString(),
@@ -2210,6 +2460,44 @@ export function createEngine(deps: EngineDeps): Engine {
     // 2. Start any retry whose backoff has elapsed. Before healing, so a phase
     //    that just became due is retried rather than re-examined as an orphan.
     await runDueRetries(now);
+
+    // 2.5 Stall detection (§D): a running step whose transcript has gone
+    //     quiet longer than its declared `stallSeconds`, even though the
+    //     process is still alive, is killed like a timeout. Reuses this same
+    //     reconcile tick rather than a second timer system, and covers both
+    //     this process's own runs and adopted ones — the run tailer's
+    //     `latest()` only knows about runs *this* process is tailing, so
+    //     `Run.lastActivityAt` (refreshed here, persisted) is what a restart
+    //     falls back to until the tailer catches up.
+    for (const candidate of await readInstances()) {
+      if (candidate.status !== "running") continue;
+      const def = candidate.definition ?? defs.find((d) => d.id === candidate.pipelineId);
+      if (!def) continue;
+      for (const i of livePhases(candidate)) {
+        const phase = candidate.phases[i];
+        if (phase.status !== "running") continue;
+        const phaseDef = def.phases.find((p) => p.id === phase.id);
+        if (!phaseDef) continue;
+        for (const step of phase.steps) {
+          if (step.status !== "running" || !step.runId) continue;
+          const stepDef = phaseDef.candidates
+            ? phaseDef.steps[0]
+            : phaseDef.steps.find((s) => s.name === step.name);
+          const stallSeconds = resolveStallSeconds(phaseDef, stepDef ?? {});
+          if (!stallSeconds) continue;
+          const got = await readRun(step.runId);
+          if (!got || got.run.status !== "running" || got.run.termination) continue;
+          const observed = deps.tailer?.latest?.().get(step.runId)?.at ?? null;
+          if (observed && observed !== got.run.lastActivityAt) {
+            await patchRun(step.runId, { lastActivityAt: observed });
+          }
+          const lastActivityAt = observed ?? got.run.lastActivityAt ?? null;
+          if (isStalled({ stallSeconds, lastActivityAt, startedAt: got.run.startedAt, now })) {
+            await expireStalledStep(step.runId, candidate.id, phase.id, stallSeconds);
+          }
+        }
+      }
+    }
 
     // 3. Heal running instances whose live-phase runs ended without signalling.
     //    Each instance is healed under its lock, re-reading fresh state inside,

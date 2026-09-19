@@ -36,6 +36,7 @@ export type JournalKind =
   | "phase.started"
   | "step.spawned"
   | "step.timed-out"
+  | "step.stalled"
   | "step.exit-mismatch"
   | "phase.verifying"
   | "phase.verified"
@@ -52,6 +53,7 @@ export type JournalKind =
   | "route.failure"
   | "workspace.created"
   | "workspace.removed"
+  | "memory.trimmed"
   | "instance.ended";
 
 export interface JournalEntry {

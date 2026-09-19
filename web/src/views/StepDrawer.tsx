@@ -233,6 +233,14 @@ export function StepDrawer({
           <Field label="started">{new Date(step.startedAt).toLocaleString()}</Field>
         )}
         {step.durationMs != null && <Field label="duration">{formatMs(step.durationMs)}</Field>}
+        {run?.deadlineAt && run.startedAt && (
+          <Field label="timeout">
+            {formatMs(Math.max(0, Date.parse(run.deadlineAt) - Date.parse(run.startedAt)))}
+          </Field>
+        )}
+        {run?.stallSeconds != null && (
+          <Field label="stall">no output for {run.stallSeconds}s</Field>
+        )}
         {step.tokens != null && <Field label="tokens">{formatTokens(step.tokens)}</Field>}
         {step.costUsd != null && <Field label="cost">{formatUsd(step.costUsd)}</Field>}
         {step.currentActivity && <Field label="activity">{step.currentActivity}</Field>}

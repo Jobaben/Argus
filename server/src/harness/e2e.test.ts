@@ -707,7 +707,7 @@ test(
     const retryRunId = runIdOf(phaseOf(retried, "make"));
     assert.notEqual(retryRunId, firstRunId);
     const retryPrompt = (await run(retryRunId)).prompt;
-    assert.match(retryPrompt, /Previous attempt failed/);
+    assert.match(retryPrompt, /Previous attempt \(1 of 2\) failed — verification:/);
     assert.match(retryPrompt, /must-exist\.txt/);
 
     assert.ok(

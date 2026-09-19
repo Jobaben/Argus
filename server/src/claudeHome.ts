@@ -48,6 +48,9 @@ export const paths = {
   artifactsDir: () => path.join(claudeHome(), "argus", "artifacts"),
   /** Per-instance git worktrees a phase's steps run in, when one is declared. */
   worktreesDir: () => path.join(claudeHome(), "argus", "worktrees"),
+  /** Per-pipeline durable notes (`<pipelineId>/NOTES.md`), when a pipeline
+   *  opts into `memory`. Never created until then, never deleted by Argus. */
+  memoryDir: () => path.join(claudeHome(), "argus", "memory"),
   vaultFile: () => path.join(claudeHome(), "argus", "vault.sqlite"),
   settingsFile: () => path.join(claudeHome(), "settings.json"),
   hooksDir: () => path.join(claudeHome(), "hooks"),

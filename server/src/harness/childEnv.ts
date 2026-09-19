@@ -14,8 +14,8 @@
  * for `ARGUS_WEBHOOK_URL` and the per-invocation identifiers a nested Argus
  * process could use to impersonate or interfere with a different run
  * (`ARGUS_SIGNAL_TOKEN`, `ARGUS_SIGNAL_URL`, `ARGUS_RESULT_FILE`,
- * `ARGUS_ARTIFACT_DIR`, `ARGUS_WORKSPACE`, `ARGUS_INSTANCE_ID`,
- * `ARGUS_PHASE_ID`, `ARGUS_RUN_ID`).
+ * `ARGUS_ARTIFACT_DIR`, `ARGUS_WORKSPACE`, `ARGUS_MEMORY_DIR`,
+ * `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`, `ARGUS_RUN_ID`).
  *
  * The rule this module enforces: an agent must never be able to administer
  * the harness that runs it. `buildChildEnv` is the one place that assembles
@@ -56,6 +56,10 @@ export const ARGUS_PER_INVOCATION_IDENTIFIERS: readonly string[] = [
   // The hook keys its Stop-payload handling off this; a wrong value loses the
   // completion signal.
   "ARGUS_RUNTIME",
+  // This pipeline's own durable-notes directory (only set when `memory` is
+  // enabled) — never inherited, for the same reason as `ARGUS_ARTIFACT_DIR`:
+  // a nested Argus child must not write another pipeline's notes.
+  "ARGUS_MEMORY_DIR",
 ];
 
 /** The baseline that `inherit: "minimal"` passes through even without `allow`. */

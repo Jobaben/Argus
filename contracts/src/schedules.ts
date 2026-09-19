@@ -147,12 +147,26 @@ export interface Run {
   outcome?: RunOutcome | null;
   /** When the harness will kill this run if it is still alive. Null = no limit. */
   deadlineAt?: string | null;
+  /** The `stallSeconds` in force for this run (step, else phase), for the
+   *  harness's own stall check and for display. Null/absent = stall detection
+   *  is off for this run. */
+  stallSeconds?: number | null;
+  /**
+   * Last time the harness observed new transcript/stream activity for this
+   * run, from the run tailer. Persisted (not just held in memory) so a
+   * restart mid-run does not misjudge a stall from a stale in-memory clock.
+   * Null/absent = no activity observed yet; the stall check falls back to
+   * `startedAt`.
+   */
+  lastActivityAt?: string | null;
   /**
    * How the process ended, when the harness knows more than the exit code:
-   * `timed-out` — killed at its deadline; `killed` — aborted/cancelled by
-   * Argus; `spawn-failed` — never started. Absent = it exited on its own.
+   * `timed-out` — killed at its deadline; `stalled` — killed for going quiet
+   * longer than `stallSeconds` while still alive; `killed` —
+   * aborted/cancelled by Argus; `spawn-failed` — never started. Absent = it
+   * exited on its own.
    */
-  termination?: "exited" | "timed-out" | "killed" | "spawn-failed";
+  termination?: "exited" | "timed-out" | "stalled" | "killed" | "spawn-failed";
   /**
    * The budget ladder step that governed this run, when one did.
    *

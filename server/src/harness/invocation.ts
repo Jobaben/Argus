@@ -87,6 +87,8 @@ export interface InvocationInputs {
   argusEnv: Record<string, string>;
   invocationDir: string;
   artifactDir: string | null;
+  /** This pipeline's durable-notes directory, when `memory` is enabled. */
+  memoryDir?: string | null;
   /** The isolated worktree the step runs in, when its phase declared one. */
   workspace?: WorkspaceRecord | null;
   resultFile: string | null;
@@ -121,6 +123,7 @@ export function prepareInvocation(inputs: InvocationInputs): PreparedInvocation 
         invocationDir: inputs.invocationDir,
         cwd: run.cwd,
         artifactDir: inputs.artifactDir,
+        memoryDir: inputs.memoryDir ?? null,
         hooks: {
           stop: invocationHookCommand(),
           gate: invocationHookCommand("needs-input"),

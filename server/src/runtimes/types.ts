@@ -66,6 +66,10 @@ export interface CapabilityRequest {
   /** Where the agent may write artifacts (absolute), or null. Must remain
    *  writable even under `filesystem: "read-only"`. */
   artifactDir: string | null;
+  /** This pipeline's durable-notes directory (absolute), when `memory` is
+   *  enabled; otherwise null. Added to the writable set the same way as
+   *  `artifactDir`, so a `workspace-write` profile can append to `NOTES.md`. */
+  memoryDir?: string | null;
   /**
    * Shell command lines for Argus's own completion hooks, so a runtime that can
    * carry hooks per invocation can register them itself instead of relying on

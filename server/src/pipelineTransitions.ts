@@ -94,7 +94,7 @@ export interface TransitionResult {
 
 /** Kept for definitions and tests that predate `{{artifacts.<name>}}`. */
 export function applyTemplate(prompt: string, prevPayload: unknown): string {
-  return interpolate(prompt, prevPayload);
+  return interpolate(prompt, prevPayload).prompt;
 }
 
 function touch(inst: PipelineInstance, nowISO: string): void {

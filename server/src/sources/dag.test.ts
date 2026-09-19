@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   DagValidationError,
+  DEFAULT_PLACEHOLDER_BYTES,
+  capPlaceholder,
   currentIndex,
   instanceOutcome,
   interpolate,
@@ -12,6 +14,8 @@ import {
   readyPhases,
   resolveNeeds,
   topoOrder,
+  utf8SlicePrefix,
+  utf8SliceSuffix,
   validateDag,
 } from "./dag.js";
 import type {
@@ -244,12 +248,12 @@ test("currentPhaseIndex prefers the gate a human has to act on", () => {
 // ── Artifacts ───────────────────────────────────────────────────────────────
 
 test("the pre-Weave template still works, and artifacts interpolate by name", () => {
-  assert.equal(interpolate("say {{previous.payload}}", "hello"), "say hello");
+  assert.equal(interpolate("say {{previous.payload}}", "hello").prompt, "say hello");
   assert.equal(
     interpolate("use {{artifacts.plan}} and {{artifacts.review}}", null, {
       plan: "the plan",
       review: { ok: true },
-    }),
+    }).prompt,
     'use the plan and {"ok":true}',
   );
 });
@@ -257,8 +261,8 @@ test("the pre-Weave template still works, and artifacts interpolate by name", ()
 test("regression: an unknown artifact becomes empty, never a literal template marker", () => {
   // A `{{artifacts.foo}}` reaching the model is worse than a gap: the model
   // tries to make sense of it.
-  assert.equal(interpolate("x {{artifacts.missing}} y", null, {}), "x  y");
-  assert.equal(interpolate("x {{previous.payload}} y", null), "x  y");
+  assert.equal(interpolate("x {{artifacts.missing}} y", null, {}).prompt, "x  y");
+  assert.equal(interpolate("x {{previous.payload}} y", null).prompt, "x  y");
 });
 
 test("previousPayloadFor picks a phase's dependency, and is stable with several", () => {
@@ -274,4 +278,136 @@ test("previousPayloadFor picks a phase's dependency, and is stable with several"
   // should name artifacts instead.
   assert.equal(previousPayloadFor(def(phases), inst, "d"), "from c");
   assert.equal(previousPayloadFor(def(phases), inst, "a"), null, "a root has no previous");
+});
+
+// ── Bounded interpolation (context discipline) ───────────────────────────────
+
+test("utf8SlicePrefix/utf8SliceSuffix never split a multi-byte character", () => {
+  // "é" is 2 bytes in UTF-8 (0xC3 0xA9); a naive byte slice at an odd offset
+  // would cut it in half and produce invalid UTF-8 (or a replacement char).
+  const s = "é".repeat(10); // 20 bytes
+  for (let n = 0; n <= 21; n++) {
+    const prefix = utf8SlicePrefix(s, n);
+    const suffix = utf8SliceSuffix(s, n);
+    assert.ok(Buffer.byteLength(prefix, "utf8") <= n);
+    assert.ok(Buffer.byteLength(suffix, "utf8") <= n);
+    // Every character kept is a whole "é", never a stray byte.
+    assert.ok([...prefix].every((c) => c === "é"));
+    assert.ok([...suffix].every((c) => c === "é"));
+  }
+  assert.equal(utf8SlicePrefix(s, 1000), s);
+  assert.equal(utf8SliceSuffix(s, 1000), s);
+  assert.equal(utf8SlicePrefix(s, 0), "");
+  assert.equal(utf8SliceSuffix(s, 0), "");
+});
+
+test("capPlaceholder leaves a value under the cap untouched", () => {
+  const { text, trimmed } = capPlaceholder("previous.payload", "short value", 100, "/tmp/x.txt");
+  assert.equal(text, "short value");
+  assert.equal(trimmed, false);
+});
+
+test("capPlaceholder over the cap keeps head 2/3 + tail 1/3 with a marker naming the full path", () => {
+  const value = "H".repeat(200) + "T".repeat(100);
+  const { text, trimmed } = capPlaceholder(
+    "artifacts.plan",
+    value,
+    90,
+    "/inv/context/artifacts.plan.txt",
+  );
+  assert.equal(trimmed, true);
+  assert.ok(text.startsWith("H".repeat(60)), "keeps roughly the first 2/3 of the budget");
+  assert.ok(text.endsWith("T".repeat(30)), "keeps roughly the last 1/3 of the budget");
+  assert.match(
+    text,
+    /\[… Argus trimmed \d+ bytes of \{\{artifacts\.plan\}\} — the full value is at \/inv\/context\/artifacts\.plan\.txt …\]/,
+  );
+});
+
+test("capPlaceholder is UTF-8 safe: trimming never splits a multi-byte character", () => {
+  const value = "é".repeat(50) + "x".repeat(50);
+  const { text } = capPlaceholder("memory", value, 40, "/x.txt");
+  // The whole trimmed prompt must still be valid UTF-8 text with no stray
+  // replacement characters or half-characters.
+  assert.ok(!text.includes("�"));
+});
+
+test("interpolate caps {{previous.payload}} and {{artifacts.<name>}} by default at 16 KiB", () => {
+  const big = "z".repeat(DEFAULT_PLACEHOLDER_BYTES + 1000);
+  const { prompt, contextFiles } = interpolate(
+    "payload: {{previous.payload}}",
+    big,
+    {},
+    undefined,
+    {
+      contextDir: "/inv",
+    },
+  );
+  assert.ok(prompt.length < big.length + 200, "the rendered prompt is capped, not the raw value");
+  assert.match(prompt, /Argus trimmed \d+ bytes of \{\{previous\.payload\}\}/);
+  assert.equal(contextFiles.length, 1);
+  assert.equal(contextFiles[0].path, "/inv/context/previous.payload.txt");
+  assert.equal(
+    contextFiles[0].contents,
+    big,
+    "the full, untrimmed value is described for the engine to write",
+  );
+});
+
+test("interpolate respects a pipeline's own placeholderBytes override", () => {
+  const value = "a".repeat(500);
+  const capped = interpolate("{{artifacts.x}}", null, { x: value }, undefined, {
+    maxPlaceholderBytes: 100,
+    contextDir: "/inv",
+  });
+  assert.notEqual(capped.prompt, value);
+  const uncapped = interpolate("{{artifacts.x}}", null, { x: value }, undefined, {
+    maxPlaceholderBytes: 1000,
+  });
+  assert.equal(uncapped.prompt, value);
+});
+
+test("interpolate: no contextDir means no context files are produced, even when trimming happens", () => {
+  const big = "q".repeat(DEFAULT_PLACEHOLDER_BYTES + 10);
+  const { prompt, contextFiles } = interpolate("{{previous.payload}}", big);
+  assert.equal(contextFiles.length, 0);
+  assert.match(prompt, /Argus trimmed/);
+});
+
+test("interpolate: {{trigger.payload}} renders the instance's firing payload, JSON-stringified", () => {
+  assert.equal(
+    interpolate("fired with {{trigger.payload}}", null, {}, undefined, {
+      triggerPayload: { a: 1 },
+    }).prompt,
+    'fired with {"a":1}',
+  );
+  // Absent trigger payload interpolates to empty, same as any other unknown.
+  assert.equal(interpolate("x {{trigger.payload}} y", null).prompt, "x  y");
+});
+
+test("interpolate: {{memory}} and {{previous.instance}} render whatever the engine looked up", () => {
+  assert.equal(
+    interpolate("Notes: {{memory}}", null, {}, undefined, { memory: "remember X" }).prompt,
+    "Notes: remember X",
+  );
+  assert.equal(interpolate("Notes: {{memory}}", null).prompt, "Notes: ");
+  assert.equal(
+    interpolate("Last time: {{previous.instance}}", null, {}, undefined, {
+      previousInstanceSummary: "Previous run failed.",
+    }).prompt,
+    "Last time: Previous run failed.",
+  );
+  assert.equal(interpolate("Last time: {{previous.instance}}", null).prompt, "Last time: ");
+});
+
+test("interpolate: artifactDir placeholders are never capped, however long the path", () => {
+  const longPath = "/very/".repeat(5000) + "artifacts";
+  const { prompt, contextFiles } = interpolate(
+    "{{artifactDir}} and {{artifactDir.other}}",
+    null,
+    {},
+    { own: longPath, byPhase: { other: longPath } },
+  );
+  assert.equal(prompt, `${longPath} and ${longPath}`);
+  assert.equal(contextFiles.length, 0);
 });

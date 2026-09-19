@@ -16,6 +16,8 @@ The pieces this document covers live in `server/src/harness/`:
 - `verification.ts` — Argus's own deterministic checks over a phase's work.
 - `workspace.ts` — the git worktree a phase's steps run in, when one is
   declared (§11), and one per candidate when a phase runs best-of-N (§12).
+- `memory.ts` — a pipeline's durable, cross-instance notes (§13).
+- `stall.ts` — deciding whether a still-alive step has gone quiet too long (§7).
 - the runtimes (`server/src/runtimes/*.ts`) — map the runtime-neutral
   `CapabilityProfile` onto one CLI's actual flags, and report what they
   couldn't.
@@ -166,10 +168,9 @@ considered verdict. An author who wants a flaky test suite retried opts
 Argus to re-run a prompt whose own agent already decided it failed, which is
 allowed but is rarely what you want.
 
-A retried attempt is told why the previous one failed (`retryNote()` appends
-the reason to the prompt) only for `"verification"` and `"signal"` — the two
-classes that come with a considered reason worth repairing against;
-`"spawn"`/`"exit-code"`/`"timeout"` carry nothing worth restating.
+A retried attempt is told why the previous one failed: `retryNote()` appends a
+bounded, class-specific note to the prompt for **every** retryable class, not
+only `"verification"`/`"signal"` — see §13.
 
 ## 3. Capability profiles
 
@@ -577,6 +578,52 @@ every step in it); absent on both means no limit. A limit turns into a
 }
 ```
 
+### Stalls: a step can be alive and say nothing forever
+
+`timeoutSeconds` is sized for the worst case a phase should ever take —
+generous, because a hard kill at half that would fail runs that were simply
+working. That leaves a gap a hard timeout can't close: a process wedged on a
+hung tool call, spinning without producing output, or stuck in a loop, well
+inside its timeout budget. Stuck-detection is close to universal in the
+harnesses the research survey looked at (OpenHands, Symphony;
+docs/HARNESS-RESEARCH.md §2 #7), and Argus already had the raw material — the
+run tailer's own notion of when a run last said anything.
+
+`stallSeconds` (`PhaseDef.stallSeconds` / `PhaseStep.stallSeconds`, narrowest
+wins like `timeoutSeconds`; absent = off; minimum 30 — anything shorter is
+indistinguishable from an ordinary gap between tool calls) kills a step whose
+transcript has gone quiet that long, even while its process is alive:
+
+- **No second timer system.** Stall detection is checked on the existing
+  reconcile tick (`server/src/harness/stall.ts`'s `isStalled`, a pure
+  function; the engine's `reconcile()` calls it), not a new
+  per-step `setTimeout`. Practically this means a stall is noticed within one
+  tick of crossing `stallSeconds`, not at the exact instant.
+- **The reference clock is the run's own `lastActivityAt`**, refreshed from
+  the run tailer's latest observed activity each tick and **persisted** on the
+  `Run` record — so a restart does not misjudge a stall from a stale
+  in-memory clock; a run with no observed activity yet falls back to its
+  `startedAt`.
+- A stalled step is killed exactly like a timed-out one — SIGTERM, then
+  SIGKILL after `killGraceMs` — but records `run.termination = "stalled"` (not
+  `"timed-out"`) and a `step.stalled` journal entry (not `step.timed-out`),
+  with the reason `"stalled: no output for Ns"`. The phase fails under the
+  `timeout` failure class (§2) — a stall is a timeout that noticed sooner, and
+  `retry.retryOn: ["timeout"]` opts into retrying either.
+- Only a step confirmed still `running`, with no `termination` already
+  recorded, is ever stamped — the same non-overwrite discipline `expireStep`
+  uses for a hard timeout.
+
+```json
+{
+  "id": "run_9a1c",
+  "stallSeconds": 120,
+  "lastActivityAt": "2026-09-10T14:12:03.000Z",
+  "termination": "stalled",
+  "error": "stalled: no output for 120s"
+}
+```
+
 ## 8. Observability & reproducibility
 
 **`AgentInvocationRecord`** — written to
@@ -633,16 +680,20 @@ instance) that this feature adds:
 | Kind                 | When                                                                                                                                                                                                                                        |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `step.timed-out`     | A step's process was killed at its `deadlineAt` (live, or discovered on reconcile after a restart).                                                                                                                                         |
+| `step.stalled`       | A step's process was killed for going quiet longer than its `stallSeconds` while still alive (§7).                                                                                                                                          |
 | `step.exit-mismatch` | A step's completion signal was accepted as `completed`, and its process then exited non-zero. The phase is not unwound — the signal already decided — but the run carries both `outcome: "succeeded"` and the non-zero `exitCode`. See §10. |
 | `phase.verifying`    | Every step of a phase reported success and Argus started running its `checks`.                                                                                                                                                              |
 | `phase.verified`     | The checks finished — `passed`, or `failed` naming which checks and why.                                                                                                                                                                    |
+| `memory.trimmed`     | A settled instance's pipeline had `memory` enabled and `NOTES.md` had grown past `maxBytes`; Argus trimmed its head back down to the cap (§13).                                                                                             |
 
 **`Run.termination`** (`@argus/contracts`) records _how_ a run ended when
 Argus knows more than the exit code: `"exited"` (its own doing), `"timed-out"`
-(killed at its deadline), `"killed"` (aborted/cancelled/superseded by Argus
-for some other reason), `"spawn-failed"` (never started at all — covers both
-the `spawn` and `configuration` failure classes, since neither ever produced
-a process). Absent means the process simply exited on its own.
+(killed at its deadline), `"stalled"` (killed for going quiet longer than
+`stallSeconds` while still alive — §7), `"killed"`
+(aborted/cancelled/superseded by Argus for some other reason), `"spawn-failed"`
+(never started at all — covers both the `spawn` and `configuration` failure
+classes, since neither ever produced a process). Absent means the process
+simply exited on its own.
 
 ## 9. Reference pipeline
 
@@ -893,15 +944,19 @@ the work a **git worktree** of its own:
 }
 ```
 
-| Field   | Meaning                                                                                                                                      |
-| ------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `scope` | `"instance"` — one worktree per pipeline instance, shared by every phase that opts in. `"attempt"` — a fresh worktree per phase attempt.     |
-| `base`  | The ref the worktree is cut from. Default: `HEAD` of the repository at the phase's `cwd`. Validated as a ref: no whitespace, no leading `-`. |
-| `keep`  | Keep the directory after the instance ends. Default `false` — the directory is removed, the branch is kept.                                  |
+| Field   | Meaning                                                                                                                                                                                                                                                          |
+| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scope` | `"instance"` — one worktree per pipeline instance, shared by every phase that opts in. `"attempt"` — a fresh worktree per phase attempt. `"none"` — this phase opts _out_ of a policy it would otherwise inherit and runs in its own `cwd`, no worktree created. |
+| `base`  | The ref the worktree is cut from. Default: `HEAD` of the repository at the phase's `cwd`. Validated as a ref: no whitespace, no leading `-`.                                                                                                                     |
+| `keep`  | Keep the directory after the instance ends. Default `false` — the directory is removed, the branch is kept.                                                                                                                                                      |
 
 Narrowest wins, as everywhere else: `phase.workspace ?? pipeline.workspace`.
 Absent at both levels, nothing changes — the phase runs in its own `cwd`
-exactly as it did before this existed.
+exactly as it did before workspaces existed — and `scope: "none"` on a phase
+means the same thing for that one phase even when the pipeline (or another
+phase) declares a policy: a read-only research phase in an otherwise
+`workspace: { scope: "instance" }` pipeline has nothing to isolate and no
+reason to pay for a worktree it will never write to.
 
 **Names.** The directory is
 `~/.claude/argus/worktrees/<instanceId>/shared` or
@@ -1133,3 +1188,151 @@ it (`selectCandidate` in `pipelineTransitions.ts`). So:
   gone with the directory, exactly as in §11.
 - **`needs-input` from a candidate is a loss**, not a pause. The gate of a
   candidates phase belongs to its winner.
+
+## 13. Context and memory
+
+Four pieces of evidence point the same direction (docs/HARNESS-RESEARCH.md
+§2 #4–#7, §4): a retry that carries the failing output back is the
+best-evidenced repair loop there is; where in the prompt something sits (and
+how much of it) matters, and an over-long context hurts; state that survives
+past one session is how long-horizon work gets anywhere; and stuck-detection
+is close to universal in the harnesses that get this right. This section is
+the four of them.
+
+### Placeholders
+
+| Placeholder                 | Value                                                                                                                                   | Capped |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| `{{previous.payload}}`      | The phase's dependency's payload (the last one, in declaration order, if several).                                                      | yes    |
+| `{{artifacts.<name>}}`      | A `produces`-published phase payload, by name.                                                                                          | yes    |
+| `{{artifactDir}}`           | This phase's own file-artifact directory.                                                                                               | no     |
+| `{{artifactDir.<phaseId>}}` | An earlier phase's file-artifact directory.                                                                                             | no     |
+| `{{trigger.payload}}`       | The instance's firing payload (`PipelineInstance.triggerPayload`), JSON-stringified.                                                    | yes    |
+| `{{memory}}`                | This pipeline's `NOTES.md`, tail-capped to its own `memory.maxBytes` — empty when `memory` is disabled or nothing has been written yet. | yes    |
+| `{{previous.instance}}`     | A one-paragraph summary of the most recent _settled_ instance of this pipeline, before this one — empty when there is none.             | yes    |
+
+An unknown placeholder (of any kind) interpolates to empty, same as it always
+has — a template marker reaching the model is worse than a gap, because the
+model tries to make sense of it.
+
+**Every capped value is bounded**, by default 16 KiB
+(`DEFAULT_PLACEHOLDER_BYTES`), overridable per pipeline via
+`contextLimits.placeholderBytes` (1 KiB–256 KiB):
+
+```jsonc
+{ "contextLimits": { "placeholderBytes": 32768 } }
+```
+
+Over the cap, `capPlaceholder()` (`server/src/sources/dag.ts`) keeps the head
+(2/3 of the budget) and the tail (1/3), joined by a one-line marker:
+
+```
+[… Argus trimmed 41214 bytes of {{artifacts.plan}} — the full value is at
+/home/user/.claude/argus/invocations/run_8f2a/context/artifacts.plan.txt …]
+```
+
+The trimming is UTF-8 safe — it backs off over continuation bytes so it never
+splits a multi-byte character — and the full, untrimmed value is written to
+that path (under the run's own invocation directory) so the agent can read the
+whole thing if the head and tail aren't enough. `interpolate()` itself stays
+pure: it returns which files to write (`InterpolateResult.contextFiles`), and
+the engine writes them alongside the run's other materialized files.
+`{{artifactDir}}`/`{{artifactDir.<phaseId>}}` are paths, not values that could
+run long, so they are never capped.
+
+**Placement.** A step's prompt is the agent's own words, first. Everything
+Argus injects rides _after_ it, in a fixed order, short: the result
+instruction (§ pipelineEngine.ts `resultInstruction`), the artifact
+instruction (`artifactInstruction`), the memory instruction (below), and
+last — because recency is what a model weighs most, and a retry note is the
+part most worth remembering — the retry note (§ Retry feedback, below). None
+of this reorders the `OUTCOME_CONTRACT` system-prompt mechanism (§1), which is
+a pure constant carried separately so the prompt cache prefix holds across
+every run.
+
+### Pipeline memory
+
+Externalised state is how work that spans more than one instance survives at
+all — Anthropic's own long-running-harness pattern is exactly this: a durable
+place outside any one session's context that the next session reads first.
+Argus's version is `memory`, off by default:
+
+```jsonc
+{ "memory": { "enabled": true, "maxBytes": 8192 } }
+```
+
+| Field      | Meaning                                                                              |
+| ---------- | ------------------------------------------------------------------------------------ |
+| `enabled`  | Required. `false` (or the field absent) is the same as before this existed.          |
+| `maxBytes` | Cap on `NOTES.md`'s size. Default 8 KiB (8192). Range 1 KiB (1024) – 64 KiB (65536). |
+
+The file lives at `~/.claude/argus/memory/<pipelineId>/NOTES.md`
+(`harness/memory.ts`'s `memoryNotesPath`) — **never created until `enabled` is
+true, and never deleted by Argus**: deleting the pipeline leaves the file
+behind (the same conservative default as a losing candidate's branch, §12).
+When enabled:
+
+- `ARGUS_MEMORY_DIR` is set on every step's environment (a per-invocation
+  identifier — never inherited by a nested Argus child, §4) pointing at the
+  directory (not the file), and added to the runtime's writable set the same
+  way the artifact directory always is: `--add-dir` for Claude Code,
+  `sandbox_workspace_write.writable_roots` for Codex under an effective
+  `workspace-write` sandbox (a `read-only` one reports "read-only sandbox
+  prevents writing memory notes", the same shape as the existing artifact
+  limitation). OpenCode and Qwen Code have no per-invocation directory control
+  at all (§3) — the variable is still set, but neither runtime can widen its
+  own sandbox to honour it.
+- `{{memory}}` interpolates the tail of `NOTES.md`, capped to `maxBytes` (and
+  then to `contextLimits.placeholderBytes` on top, same as any other
+  placeholder — the smaller of the two governs in practice).
+- Every step's prompt gets a fixed instruction appended:
+
+  > Durable notes for this pipeline live at $ARGUS_MEMORY_DIR/NOTES.md. Append
+  > what a future run of this pipeline must know (decisions, gotchas, what was
+  > tried); keep it under N bytes — Argus trims the head beyond that.
+
+- **After each instance settles** (succeeded, failed or aborted — the same
+  moment worktree cleanup runs, §11), Argus checks `NOTES.md`'s size and, if
+  it exceeds `maxBytes`, trims its head back down to the cap on a line
+  boundary (`trimMemoryIfNeeded`, keeping the newest content), journaling
+  `memory.trimmed`. A file within the cap, or one that was never written,
+  costs one read and nothing else.
+
+`{{previous.instance}}` (above) is not gated on `memory.enabled` — it costs
+one instance listing Argus already has to read, and says nothing a pipeline
+needs to opt into. `summarizeInstance()` (`harness/memory.ts`, pure) is what
+builds it: status, when it ended, which phase failed and why in one line, and
+which candidate won, if any —
+
+```
+Previous run failed (ended 2026-09-19T14:02:11.000Z); phase "implement"
+failed: verification failed: typecheck (exit 1).
+```
+
+### Retry feedback
+
+`retryNote()` (`server/src/pipelineEngine.ts`) now hands the next attempt
+something to repair against for **every** retryable class, not only
+`"verification"`/`"signal"` as before — each bounded, the whole note capped at
+~2 KiB, and headed `Previous attempt (n of m) failed — <class>:`, appended
+last in the prompt (above):
+
+| Class          | What the note carries                                                                                                                                                                    |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `verification` | Each failed check by name, with the tail (~600 chars) of its own output — read straight off the failed attempt's `VerificationReport`, still on the phase until the retry overwrites it. |
+| `exit-code`    | The exit code, plus a tail (~800 chars) of the failed run's own `error`/`resultSummary` text.                                                                                            |
+| `timeout`      | The reason already computed where the failure was recorded: `"timed out after Ns"` or, for a stall, `"stalled: no output for Ns"`.                                                       |
+| `spawn`        | The spawn error, in one line.                                                                                                                                                            |
+| `signal`       | Unchanged: the agent's own reported reason.                                                                                                                                              |
+
+`configuration` failures are never retried (§2) and so never get a note.
+
+### Stalls
+
+See §7 — stall detection is a timeout mechanism, documented there beside the
+rest of timeout enforcement.
+
+### `WorkspacePolicy.scope: "none"`
+
+See §11 — a phase can opt out of a pipeline-wide isolation policy and run in
+its own `cwd`, no worktree created.

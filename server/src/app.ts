@@ -1198,9 +1198,13 @@ export function createApp(deps: AppDeps): Hono {
     "runtime",
     "capabilities",
     "workspace",
+    "memory",
     // Phase-level execution fields — `checks`, `retry`, `workspace`,
-    // `candidates` — are not listed separately: they only ever arrive inside
-    // `phases`, and a per-phase key here would not be a key of the input.
+    // `candidates`, `stallSeconds` — are not listed separately: they only
+    // ever arrive inside `phases`, and a per-phase key here would not be a
+    // key of the input. `contextLimits` is left off deliberately: it only
+    // affects how much of a placeholder's *value* reaches the prompt, never
+    // what the phase does, so editing it while an instance is running is safe.
   ] as const;
   function changesExecution(current: PipelineDefinition, patch: Partial<PipelineInput>): boolean {
     return EXECUTION_KEYS.some((k) => k in patch && !isDeepStrictEqual(patch[k], current[k]));

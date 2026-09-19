@@ -8,8 +8,10 @@ import type {
   CandidatePolicy,
   CandidateVariant,
   CapabilityProfile,
+  ContextLimits,
   EnvPolicy,
   McpServerSpec,
+  MemoryPolicy,
   PhaseCheck,
   RetryableClass,
   WorkspacePolicy,
@@ -56,6 +58,8 @@ export interface PipelineInput {
   runtime?: AgentRuntimeId;
   capabilities?: CapabilityProfile;
   workspace?: WorkspacePolicy;
+  contextLimits?: ContextLimits;
+  memory?: MemoryPolicy;
 }
 
 // Model names are passed as a `--model <value>` argv pair to the agent CLI.
@@ -103,6 +107,18 @@ function validateTimeout(raw: unknown, ctx: string): number | undefined {
   const n = Number(raw);
   if (!Number.isInteger(n) || n < 1 || n > 86400) {
     throw new PipelineValidationError(`${ctx}: timeoutSeconds must be an integer 1-86400`);
+  }
+  return n;
+}
+
+/** Kill a still-alive step whose transcript has gone quiet this long.
+ *  Undefined/null = off. Minimum 30 — anything shorter is indistinguishable
+ *  from ordinary gaps between tool calls and would fire on healthy runs. */
+function validateStallSeconds(raw: unknown, ctx: string): number | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 30 || n > 86400) {
+    throw new PipelineValidationError(`${ctx}: stallSeconds must be an integer 30-86400`);
   }
   return n;
 }
@@ -156,7 +172,7 @@ export function validateWorkspace(raw: unknown, ctx: string): WorkspacePolicy | 
 }
 
 const WORKSPACE_KEYS = new Set(["scope", "base", "keep"]);
-const WORKSPACE_SCOPES = new Set<WorkspacePolicy["scope"]>(["instance", "attempt"]);
+const WORKSPACE_SCOPES = new Set<WorkspacePolicy["scope"]>(["instance", "attempt", "none"]);
 
 // ── Candidates ───────────────────────────────────────────────────────────────
 
@@ -271,6 +287,70 @@ export function assertCandidatesRunnable(
       );
     }
   });
+}
+
+// ── Context and memory ───────────────────────────────────────────────────────
+
+const CONTEXT_LIMITS_KEYS = new Set(["placeholderBytes"]);
+const MIN_PLACEHOLDER_BYTES = 1024;
+const MAX_PLACEHOLDER_BYTES = 262_144;
+
+/** Per-placeholder byte cap on interpolated prompt text. Undefined/null =
+ *  every placeholder uses the 16 KiB default (`DEFAULT_PLACEHOLDER_BYTES`). */
+export function validateContextLimits(raw: unknown, ctx: string): ContextLimits | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PipelineValidationError(`${ctx}: contextLimits must be an object`);
+  }
+  const c = raw as Record<string, unknown>;
+  for (const key of Object.keys(c)) {
+    if (!CONTEXT_LIMITS_KEYS.has(key)) {
+      throw new PipelineValidationError(`${ctx}: contextLimits has unknown key "${key}"`);
+    }
+  }
+  if (c.placeholderBytes === undefined || c.placeholderBytes === null) return {};
+  const n = Number(c.placeholderBytes);
+  if (!Number.isInteger(n) || n < MIN_PLACEHOLDER_BYTES || n > MAX_PLACEHOLDER_BYTES) {
+    throw new PipelineValidationError(
+      `${ctx}: contextLimits.placeholderBytes must be an integer ${MIN_PLACEHOLDER_BYTES}-${MAX_PLACEHOLDER_BYTES}`,
+    );
+  }
+  return { placeholderBytes: n };
+}
+
+const MEMORY_KEYS = new Set(["enabled", "maxBytes"]);
+const MIN_MEMORY_BYTES = 1024;
+const MAX_MEMORY_BYTES = 65_536;
+
+/**
+ * Durable, cross-instance notes for a pipeline (`NOTES.md`). Undefined/null =
+ * off — `{{memory}}` interpolates to empty and no `ARGUS_MEMORY_DIR` is set.
+ */
+export function validateMemory(raw: unknown, ctx: string): MemoryPolicy | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PipelineValidationError(`${ctx}: memory must be an object`);
+  }
+  const m = raw as Record<string, unknown>;
+  for (const key of Object.keys(m)) {
+    if (!MEMORY_KEYS.has(key)) {
+      throw new PipelineValidationError(`${ctx}: memory has unknown key "${key}"`);
+    }
+  }
+  if (typeof m.enabled !== "boolean") {
+    throw new PipelineValidationError(`${ctx}: memory.enabled must be a boolean`);
+  }
+  const policy: MemoryPolicy = { enabled: m.enabled };
+  if (m.maxBytes !== undefined && m.maxBytes !== null) {
+    const n = Number(m.maxBytes);
+    if (!Number.isInteger(n) || n < MIN_MEMORY_BYTES || n > MAX_MEMORY_BYTES) {
+      throw new PipelineValidationError(
+        `${ctx}: memory.maxBytes must be an integer ${MIN_MEMORY_BYTES}-${MAX_MEMORY_BYTES}`,
+      );
+    }
+    policy.maxBytes = n;
+  }
+  return policy;
 }
 
 // ── Capability profiles ──────────────────────────────────────────────────────
@@ -781,6 +861,8 @@ function validateStep(raw: unknown, ctx: string): PhaseStep {
   const stepCtx = `${ctx}: step "${step.name}"`;
   const timeoutSeconds = validateTimeout(s.timeoutSeconds, stepCtx);
   if (timeoutSeconds !== undefined) step.timeoutSeconds = timeoutSeconds;
+  const stallSeconds = validateStallSeconds(s.stallSeconds, stepCtx);
+  if (stallSeconds !== undefined) step.stallSeconds = stallSeconds;
   const capabilities = validateCapabilities(s.capabilities, stepCtx);
   if (capabilities) step.capabilities = capabilities;
 
@@ -882,6 +964,7 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
   }
 
   const timeoutSeconds = validateTimeout(p.timeoutSeconds, `phase ${i}`);
+  const stallSeconds = validateStallSeconds(p.stallSeconds, `phase ${i}`);
   const capabilities = validateCapabilities(p.capabilities, `phase ${i}`);
   const checks = validateChecks(p.checks, `phase ${i}`);
   const workspace = validateWorkspace(p.workspace, `phase ${i}`);
@@ -901,6 +984,7 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
     ...(autoApprove ? { autoApprove } : {}),
     ...(runtime ? { runtime } : {}),
     ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
+    ...(stallSeconds !== undefined ? { stallSeconds } : {}),
     ...(capabilities ? { capabilities } : {}),
     ...(checks ? { checks } : {}),
     ...(workspace ? { workspace } : {}),
@@ -980,6 +1064,10 @@ export function validatePipelineInput(raw: unknown): PipelineInput {
   const workspace = validateWorkspace(r.workspace, "pipeline");
   if (workspace) input.workspace = workspace;
   assertCandidatesRunnable(phases, workspace);
+  const contextLimits = validateContextLimits(r.contextLimits, "pipeline");
+  if (contextLimits) input.contextLimits = contextLimits;
+  const memory = validateMemory(r.memory, "pipeline");
+  if (memory) input.memory = memory;
   return input;
 }
 
@@ -1016,6 +1104,9 @@ export function validatePipelinePatch(raw: unknown): Partial<PipelineInput> {
   if ("runtime" in r) patch.runtime = validateRuntime(r.runtime, "pipeline");
   if ("capabilities" in r) patch.capabilities = validateCapabilities(r.capabilities, "pipeline");
   if ("workspace" in r) patch.workspace = validateWorkspace(r.workspace, "pipeline");
+  if ("contextLimits" in r)
+    patch.contextLimits = validateContextLimits(r.contextLimits, "pipeline");
+  if ("memory" in r) patch.memory = validateMemory(r.memory, "pipeline");
   return patch;
 }
 
@@ -1071,6 +1162,8 @@ export async function createPipeline(
     ...(input.runtime ? { runtime: input.runtime } : {}),
     ...(input.capabilities ? { capabilities: input.capabilities } : {}),
     ...(input.workspace ? { workspace: input.workspace } : {}),
+    ...(input.contextLimits ? { contextLimits: input.contextLimits } : {}),
+    ...(input.memory ? { memory: input.memory } : {}),
     // Minted on first save of a webhook trigger; rotated only via the
     // dedicated endpoint, never by an ordinary edit.
     ...(input.trigger?.kind === "webhook" ? { hookToken: mintHookToken() } : {}),
@@ -1125,6 +1218,15 @@ export async function updatePipeline(
     if ("workspace" in patch) {
       if (patch.workspace) merged.workspace = patch.workspace;
       else delete merged.workspace;
+    }
+    // Same null-clears-the-override story for contextLimits and memory.
+    if ("contextLimits" in patch) {
+      if (patch.contextLimits) merged.contextLimits = patch.contextLimits;
+      else delete merged.contextLimits;
+    }
+    if ("memory" in patch) {
+      if (patch.memory) merged.memory = patch.memory;
+      else delete merged.memory;
     }
     // Mint a hook token the first time this pipeline's trigger becomes
     // "webhook"; keep whatever token it already had otherwise.

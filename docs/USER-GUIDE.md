@@ -726,6 +726,25 @@ not the same fact as a broken one. This is Argus grading its own retry loop,
 not the agent's output (that's [Verdict](#24-verdict)) or a run's shape
 against its own history (that's [Watchtower](#22-watchtower)).
 
+**Memory:** a pipeline can turn on `memory` (via the API — see
+[HARNESS.md §13](HARNESS.md#13-context-and-memory)) to keep a small durable
+notes file, `NOTES.md`, that survives from one instance to the next. Off by
+default. Once enabled, a step's prompt can read the notes back with
+`{{memory}}` and append to them at `$ARGUS_MEMORY_DIR/NOTES.md` — handy for a
+pipeline that should remember a decision, a gotcha, or something a previous
+run tried and learned from, without re-deriving it every time. Argus trims the
+file back to its cap after each instance settles, and never deletes it, even
+if the pipeline itself is later deleted.
+
+**Stall detection:** a step's `timeoutSeconds` catches a run that goes on too
+long; it does nothing for one that is technically still alive but has stopped
+producing any output at all — stuck on a hung command, say. A phase (or a
+step) can additionally set a **stall** limit (`stallSeconds`, editable right
+beside the timeout field in the phase panel): if that many seconds pass with
+no new activity from the step, Argus kills it and fails the phase the same way
+it would a timeout, distinguishing the two in the run's record and journal so
+you can tell "it ran out of time" from "it went quiet."
+
 **How steps complete:** the Stop-hook and gate-hook installed by Setup let
 each spawned agent signal "step finished" / "needs input" back to Argus
 (`POST /api/instances/:id/signal`, authenticated by a per-instance token —

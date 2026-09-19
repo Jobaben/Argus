@@ -14,6 +14,10 @@ export interface PhaseStep {
   runtime?: AgentRuntimeId;
   /** Wall-clock limit for this step's process; overrides the phase's. */
   timeoutSeconds?: number;
+  /** Kill this step if its transcript goes this many seconds without new
+   *  activity, even though the process is still alive. Overrides the phase's.
+   *  Absent = off. Minimum 30. */
+  stallSeconds?: number;
   /** Narrows or replaces the phase's capability profile for this one step. */
   capabilities?: CapabilityProfile;
 }
@@ -130,8 +134,11 @@ export interface CapabilityProfile {
  */
 export interface WorkspacePolicy {
   /** "instance": one worktree per pipeline instance, shared by every phase that
-   *  opts in. "attempt": a fresh worktree per phase attempt. */
-  scope: "instance" | "attempt";
+   *  opts in. "attempt": a fresh worktree per phase attempt. "none": this phase
+   *  opts out of a pipeline-wide policy and runs in its own `cwd` — the only
+   *  reason `scope` is ever read on a phase that inherited a policy it does not
+   *  want. */
+  scope: "instance" | "attempt" | "none";
   /** Ref the worktree is created from. Default: HEAD of the repository at `cwd`. */
   base?: string;
   /** Keep the worktree directory after the instance ends. Default false: the
@@ -398,6 +405,13 @@ export interface PhaseDef {
   runtime?: AgentRuntimeId;
   /** Wall-clock limit for each step's process. Absent = no limit. */
   timeoutSeconds?: number;
+  /** Kill a step of this phase if its transcript goes this many seconds
+   *  without new activity, even though the process is still alive — a
+   *  process can be alive and silent forever, and a hard timeout sized for
+   *  the worst case is a poor stand-in for noticing that nothing is
+   *  happening. A step that declares its own `stallSeconds` uses that
+   *  instead. Absent = off. Minimum 30. */
+  stallSeconds?: number;
   /** What this phase's agents may do. Absent = the pipeline's profile, else the CLI's defaults. */
   capabilities?: CapabilityProfile;
   /** Deterministic checks that must pass before the phase counts as succeeded. */
@@ -433,6 +447,17 @@ export interface PipelineDefinition {
    *  Absent = no isolation: every phase runs in its own `cwd`. */
   workspace?: WorkspacePolicy;
   /**
+   * Caps on what an interpolated placeholder value may cost the prompt.
+   * Absent = the 16 KiB default for every placeholder.
+   */
+  contextLimits?: ContextLimits;
+  /**
+   * Durable notes this pipeline's own runs may read and append to, across
+   * instances. Absent/disabled = `{{memory}}` interpolates to empty and no
+   * `ARGUS_MEMORY_DIR` is set. See `NOTES.md` under `harness/memory.ts`.
+   */
+  memory?: MemoryPolicy;
+  /**
    * Bearer credential for `POST /api/hooks/pipelines/:id`, minted once this
    * pipeline's `trigger` first becomes `kind: "webhook"` and kept stable
    * across later edits — regenerated only via
@@ -458,6 +483,31 @@ export interface PipelineInput {
   runtime?: AgentRuntimeId;
   capabilities?: CapabilityProfile;
   workspace?: WorkspacePolicy;
+  contextLimits?: ContextLimits;
+  memory?: MemoryPolicy;
+}
+
+/** Per-placeholder byte cap on interpolated prompt text (§ dag.ts `interpolate`). */
+export interface ContextLimits {
+  /** Bytes a single `{{placeholder}}` value may contribute before Argus trims
+   *  it (head 2/3, tail 1/3, with a marker naming where the full value is on
+   *  disk). Default 16 KiB (16384). Range 1 KiB (1024) – 256 KiB (262144). */
+  placeholderBytes?: number;
+}
+
+/**
+ * Durable, cross-instance notes for one pipeline (`NOTES.md`), opt-in.
+ *
+ * Off by default: most pipelines have nothing worth remembering between runs,
+ * and a file every instance can write to is a shared-mutable-state surface
+ * that should be asked for, not assumed.
+ */
+export interface MemoryPolicy {
+  enabled: boolean;
+  /** Bytes `NOTES.md` may grow to before Argus trims its head (oldest
+   *  content) back down to this cap, on a line boundary. Default 8 KiB
+   *  (8192). Range 1 KiB (1024) – 64 KiB (65536). */
+  maxBytes?: number;
 }
 
 export type InstanceStatus = "running" | "awaiting-approval" | "failed" | "succeeded" | "aborted";

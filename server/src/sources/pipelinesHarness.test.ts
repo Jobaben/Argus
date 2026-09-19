@@ -286,6 +286,49 @@ test("validation rejects an out-of-range or non-integer timeoutSeconds", async (
   );
 });
 
+test("validation stores step and phase stallSeconds at the bounds", async () => {
+  const m = await fresh();
+  const input = m.validatePipelineInput(
+    goodInput({
+      phases: [
+        {
+          id: "x",
+          name: "X",
+          cwd: home,
+          gated: false,
+          stallSeconds: 86400,
+          steps: [{ name: "s", prompt: "p", stallSeconds: 30 }],
+        },
+      ],
+    }),
+  );
+  assert.equal(input.phases[0].stallSeconds, 86400);
+  assert.equal(input.phases[0].steps[0].stallSeconds, 30);
+});
+
+test("validation rejects a stallSeconds under 30 (a hard-timeout-sized value is not a stall)", async () => {
+  const m = await fresh();
+  const bad = (stallSeconds: unknown) =>
+    goodInput({
+      phases: [
+        {
+          id: "x",
+          name: "X",
+          cwd: home,
+          gated: false,
+          stallSeconds,
+          steps: [{ name: "s", prompt: "p" }],
+        },
+      ],
+    });
+  assert.throws(() => m.validatePipelineInput(bad(29)), /stallSeconds must be an integer 30-86400/);
+  assert.throws(() => m.validatePipelineInput(bad(0)), /stallSeconds must be an integer 30-86400/);
+  assert.throws(
+    () => m.validatePipelineInput(bad(30.5)),
+    /stallSeconds must be an integer 30-86400/,
+  );
+});
+
 test("validation omits timeoutSeconds and capabilities when absent", async () => {
   const m = await fresh();
   const input = m.validatePipelineInput(goodInput());
@@ -590,11 +633,11 @@ test("workspace: absent stays absent, and a valid policy round-trips", async () 
   assert.equal(m.validateWorkspace({ scope: "attempt", base: "  main  " }, "ctx").base, "main");
 });
 
-test("workspace: scope is one of two values, and unknown keys are rejected", async () => {
+test("workspace: scope is one of three values, and unknown keys are rejected", async () => {
   const m = await fresh();
   assert.throws(
     () => m.validateWorkspace({}, "ctx"),
-    /workspace.scope must be instance \| attempt/,
+    /workspace.scope must be instance \| attempt \| none/,
   );
   assert.throws(() => m.validateWorkspace({ scope: "phase" }, "ctx"), /workspace.scope must be/);
   assert.throws(() => m.validateWorkspace("instance", "ctx"), /workspace must be an object/);
@@ -603,6 +646,27 @@ test("workspace: scope is one of two values, and unknown keys are rejected", asy
     () => m.validateWorkspace({ scope: "instance", branch: "x" }, "ctx"),
     /workspace has unknown key "branch"/,
   );
+});
+
+test("workspace: scope 'none' round-trips, so a phase can opt out of a pipeline-wide policy", async () => {
+  const m = await fresh();
+  assert.deepEqual(m.validateWorkspace({ scope: "none" }, "ctx"), { scope: "none" });
+  const input = m.validatePipelineInput(
+    goodInput({
+      workspace: { scope: "instance" },
+      phases: [
+        {
+          id: "readonly",
+          name: "Readonly",
+          cwd: home,
+          gated: false,
+          workspace: { scope: "none" },
+          steps: [{ name: "s", prompt: "go" }],
+        },
+      ],
+    }),
+  );
+  assert.deepEqual(input.phases[0].workspace, { scope: "none" });
 });
 
 test("workspace: base must be a ref, not a flag or several arguments", async () => {
@@ -698,6 +762,102 @@ test("workspace: a patch sets it, and an explicit null clears it", async () => {
     new Date(),
   );
   assert.equal("workspace" in cleared, false);
+});
+
+// ── Context limits and memory ────────────────────────────────────────────────
+
+test("contextLimits: absent stays absent, and a valid override round-trips within bounds", async () => {
+  const m = await fresh();
+  assert.equal(m.validateContextLimits(undefined, "ctx"), undefined);
+  assert.equal(m.validateContextLimits(null, "ctx"), undefined);
+  assert.deepEqual(m.validateContextLimits({ placeholderBytes: 32768 }, "ctx"), {
+    placeholderBytes: 32768,
+  });
+  assert.deepEqual(m.validateContextLimits({}, "ctx"), {});
+});
+
+test("contextLimits: placeholderBytes is bounded 1 KiB - 256 KiB, and unknown keys are rejected", async () => {
+  const m = await fresh();
+  assert.throws(
+    () => m.validateContextLimits({ placeholderBytes: 1023 }, "ctx"),
+    /placeholderBytes must be an integer 1024-262144/,
+  );
+  assert.throws(
+    () => m.validateContextLimits({ placeholderBytes: 262145 }, "ctx"),
+    /placeholderBytes must be an integer 1024-262144/,
+  );
+  assert.throws(
+    () => m.validateContextLimits({ tooMuch: 1 }, "ctx"),
+    /contextLimits has unknown key "tooMuch"/,
+  );
+  assert.throws(() => m.validateContextLimits("nope", "ctx"), /contextLimits must be an object/);
+});
+
+test("contextLimits: accepted on a pipeline and read back off the definition", async () => {
+  const m = await fresh();
+  const def = await m.createPipeline(
+    m.validatePipelineInput(goodInput({ contextLimits: { placeholderBytes: 4096 } })),
+    new Date(),
+    "pc",
+  );
+  assert.deepEqual(def.contextLimits, { placeholderBytes: 4096 });
+});
+
+test("memory: off by default, and a valid policy round-trips", async () => {
+  const m = await fresh();
+  assert.equal(m.validateMemory(undefined, "ctx"), undefined);
+  assert.equal(m.validateMemory(null, "ctx"), undefined);
+  assert.deepEqual(m.validateMemory({ enabled: true }, "ctx"), { enabled: true });
+  assert.deepEqual(m.validateMemory({ enabled: true, maxBytes: 16384 }, "ctx"), {
+    enabled: true,
+    maxBytes: 16384,
+  });
+  assert.deepEqual(m.validateMemory({ enabled: false }, "ctx"), { enabled: false });
+});
+
+test("memory: enabled is required and must be a boolean, maxBytes is bounded 1-64 KiB", async () => {
+  const m = await fresh();
+  assert.throws(() => m.validateMemory({}, "ctx"), /memory.enabled must be a boolean/);
+  assert.throws(
+    () => m.validateMemory({ enabled: "yes" }, "ctx"),
+    /memory.enabled must be a boolean/,
+  );
+  assert.throws(
+    () => m.validateMemory({ enabled: true, maxBytes: 1023 }, "ctx"),
+    /memory.maxBytes must be an integer 1024-65536/,
+  );
+  assert.throws(
+    () => m.validateMemory({ enabled: true, maxBytes: 65537 }, "ctx"),
+    /memory.maxBytes must be an integer 1024-65536/,
+  );
+  assert.throws(
+    () => m.validateMemory({ enabled: true, extra: 1 }, "ctx"),
+    /memory has unknown key "extra"/,
+  );
+});
+
+test("memory: a patch sets it, an explicit null clears it, and it counts as an execution key", async () => {
+  const m = await fresh();
+  const def = await m.createPipeline(
+    m.validatePipelineInput(goodInput({ memory: { enabled: true, maxBytes: 4096 } })),
+    new Date(),
+    "pm",
+  );
+  assert.deepEqual(def.memory, { enabled: true, maxBytes: 4096 });
+
+  const patched = await m.updatePipeline(
+    "pm",
+    m.validatePipelinePatch({ memory: { enabled: false } }),
+    new Date(),
+  );
+  assert.deepEqual(patched.memory, { enabled: false });
+
+  const cleared = await m.updatePipeline(
+    "pm",
+    m.validatePipelinePatch({ memory: null }),
+    new Date(),
+  );
+  assert.equal("memory" in cleared, false);
 });
 
 // ── Candidates ───────────────────────────────────────────────────────────────
