@@ -113,6 +113,15 @@ the budget an engine change needs.
 | 5   | Bounded interpolation, pipeline memory, richer retry feedback, stall timeout        | `sources/dag.ts`, `pipelineEngine.ts`, `runTailer.ts`, `childEnv.ts`   | 4          | Sonnet / medium |
 | 6   | Documentation: HARNESS.md sections, README runtime table, USER-GUIDE, CHANGELOG     | docs                                                                   | 1–5        | Sonnet / low    |
 
+All six items landed in this wave (see the CHANGELOG under Unreleased and
+HARNESS.md §11–§13). Two deviations from the sketches worth knowing: candidate
+branches are named `argus/<inst>/<phase>/<attempt>-c<i>` because git refs are a
+filesystem and `<attempt>` and `<attempt>/c1` cannot coexist; and
+`WorkspacePolicy.scope` gained `"none"` so a phase can opt out of a pipeline's
+isolation. Measured at the end: server 1705 tests, web 1095, every CI gate
+green, initial payload 120.6 kB gzip against a budget raised from 120 to 122
+with the reason written into the check.
+
 ### Contract sketches
 
 ```ts

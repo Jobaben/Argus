@@ -17,11 +17,11 @@ import {
   RuntimeSelect,
   SkeletonRows,
   TimeAgo,
-  TriggerFields,
   useClock,
   useFlip,
   useTicker,
 } from "../ds";
+import { TriggerFields } from "../ds/TriggerFields";
 import { runtimeCommand, useRuntimes } from "../useRuntimes";
 import { useVerdictTrends } from "../useVerdict";
 import { VerdictSparkline } from "./VerdictPanel";

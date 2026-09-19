@@ -10,13 +10,8 @@ import type {
   PipelineInput,
   WorkspacePolicy,
 } from "../types";
-import {
-  AlertStrip,
-  ModelSelect,
-  ReasoningEffortSelect,
-  RuntimeSelect,
-  TriggerFields,
-} from "../ds";
+import { AlertStrip, ModelSelect, ReasoningEffortSelect, RuntimeSelect } from "../ds";
+import { TriggerFields } from "../ds/TriggerFields";
 import { useRuntimes } from "../useRuntimes";
 import { graphColumns, graphEdges } from "./phaseGraphLayout";
 import { EdgeConditions, ResultEditor } from "./PipelineRoutes";
