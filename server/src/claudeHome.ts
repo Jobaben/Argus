@@ -35,6 +35,7 @@ export const paths = {
   briefingFile: () => path.join(claudeHome(), "argus", "briefing.json"),
   watchtowerFile: () => path.join(claudeHome(), "argus", "watchtower.json"),
   autopsyFile: () => path.join(claudeHome(), "argus", "autopsies.json"),
+  tuningFile: () => path.join(claudeHome(), "argus", "tuning.json"),
   verdictFile: () => path.join(claudeHome(), "argus", "verdicts.json"),
   incidentsFile: () => path.join(claudeHome(), "argus", "incidents.json"),
   sentinelFile: () => path.join(claudeHome(), "argus", "sentinel.json"),
@@ -45,7 +46,21 @@ export const paths = {
   invocationsDir: () => path.join(claudeHome(), "argus", "invocations"),
   /** Per-instance, per-phase directories where step agents leave file artifacts. */
   artifactsDir: () => path.join(claudeHome(), "argus", "artifacts"),
+  /** Per-instance git worktrees a phase's steps run in, when one is declared. */
+  worktreesDir: () => path.join(claudeHome(), "argus", "worktrees"),
+  /** Per-pipeline durable notes (`<pipelineId>/NOTES.md`), when a pipeline
+   *  opts into `memory`. Never created until then, never deleted by Argus. */
+  memoryDir: () => path.join(claudeHome(), "argus", "memory"),
   vaultFile: () => path.join(claudeHome(), "argus", "vault.sqlite"),
   settingsFile: () => path.join(claudeHome(), "settings.json"),
   hooksDir: () => path.join(claudeHome(), "hooks"),
+  /** Dedupe ledger for `after`-triggered chain fires: `{ [sourceInstanceId]: targetId[] }`. */
+  chainsFile: () => path.join(claudeHome(), "argus", "chains.json"),
+  /** The Knowledge Ledger: the one authoritative store of claims, evidence and
+   *  justifications. See docs/KNOWLEDGE-LEDGER.md. */
+  knowledgeFile: () => path.join(claudeHome(), "argus", "knowledge.json"),
+  /** Per-run KnowledgeDelta staging: `<runId>/delta.json` is the one file an
+   *  agent may write (`ARGUS_KNOWLEDGE_DELTA_FILE`); `<runId>/staged.json` is
+   *  Argus's record of it. Never canonical — see docs/KNOWLEDGE-LEDGER.md. */
+  knowledgeDeltasDir: () => path.join(claudeHome(), "argus", "knowledge-deltas"),
 };

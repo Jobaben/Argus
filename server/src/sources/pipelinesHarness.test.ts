@@ -286,6 +286,49 @@ test("validation rejects an out-of-range or non-integer timeoutSeconds", async (
   );
 });
 
+test("validation stores step and phase stallSeconds at the bounds", async () => {
+  const m = await fresh();
+  const input = m.validatePipelineInput(
+    goodInput({
+      phases: [
+        {
+          id: "x",
+          name: "X",
+          cwd: home,
+          gated: false,
+          stallSeconds: 86400,
+          steps: [{ name: "s", prompt: "p", stallSeconds: 30 }],
+        },
+      ],
+    }),
+  );
+  assert.equal(input.phases[0].stallSeconds, 86400);
+  assert.equal(input.phases[0].steps[0].stallSeconds, 30);
+});
+
+test("validation rejects a stallSeconds under 30 (a hard-timeout-sized value is not a stall)", async () => {
+  const m = await fresh();
+  const bad = (stallSeconds: unknown) =>
+    goodInput({
+      phases: [
+        {
+          id: "x",
+          name: "X",
+          cwd: home,
+          gated: false,
+          stallSeconds,
+          steps: [{ name: "s", prompt: "p" }],
+        },
+      ],
+    });
+  assert.throws(() => m.validatePipelineInput(bad(29)), /stallSeconds must be an integer 30-86400/);
+  assert.throws(() => m.validatePipelineInput(bad(0)), /stallSeconds must be an integer 30-86400/);
+  assert.throws(
+    () => m.validatePipelineInput(bad(30.5)),
+    /stallSeconds must be an integer 30-86400/,
+  );
+});
+
 test("validation omits timeoutSeconds and capabilities when absent", async () => {
   const m = await fresh();
   const input = m.validatePipelineInput(goodInput());
@@ -573,4 +616,510 @@ test("mcpServers env/headers reject a key with = or a space, and accept a hyphen
     "ctx",
   );
   assert.deepEqual(out.mcpServers.x.headers, { "X-Api-Key": "v" });
+});
+
+// ── workspace (isolation) ───────────────────────────────────────────────────
+
+test("workspace: absent stays absent, and a valid policy round-trips", async () => {
+  const m = await fresh();
+  assert.equal(m.validateWorkspace(undefined, "ctx"), undefined);
+  assert.equal(m.validateWorkspace(null, "ctx"), undefined);
+  assert.deepEqual(m.validateWorkspace({ scope: "instance" }, "ctx"), { scope: "instance" });
+  assert.deepEqual(
+    m.validateWorkspace({ scope: "attempt", base: "origin/main", keep: true }, "ctx"),
+    { scope: "attempt", base: "origin/main", keep: true },
+  );
+  // Trimmed, like every other string the validators accept.
+  assert.equal(m.validateWorkspace({ scope: "attempt", base: "  main  " }, "ctx").base, "main");
+});
+
+test("workspace: scope is one of three values, and unknown keys are rejected", async () => {
+  const m = await fresh();
+  assert.throws(
+    () => m.validateWorkspace({}, "ctx"),
+    /workspace.scope must be instance \| attempt \| none/,
+  );
+  assert.throws(() => m.validateWorkspace({ scope: "phase" }, "ctx"), /workspace.scope must be/);
+  assert.throws(() => m.validateWorkspace("instance", "ctx"), /workspace must be an object/);
+  assert.throws(() => m.validateWorkspace([], "ctx"), /workspace must be an object/);
+  assert.throws(
+    () => m.validateWorkspace({ scope: "instance", branch: "x" }, "ctx"),
+    /workspace has unknown key "branch"/,
+  );
+});
+
+test("workspace: scope 'none' round-trips, so a phase can opt out of a pipeline-wide policy", async () => {
+  const m = await fresh();
+  assert.deepEqual(m.validateWorkspace({ scope: "none" }, "ctx"), { scope: "none" });
+  const input = m.validatePipelineInput(
+    goodInput({
+      workspace: { scope: "instance" },
+      phases: [
+        {
+          id: "readonly",
+          name: "Readonly",
+          cwd: home,
+          gated: false,
+          workspace: { scope: "none" },
+          steps: [{ name: "s", prompt: "go" }],
+        },
+      ],
+    }),
+  );
+  assert.deepEqual(input.phases[0].workspace, { scope: "none" });
+});
+
+test("workspace: base must be a ref, not a flag or several arguments", async () => {
+  const m = await fresh();
+  assert.throws(
+    () => m.validateWorkspace({ scope: "attempt", base: "" }, "ctx"),
+    /workspace.base must be a non-empty string/,
+  );
+  assert.throws(
+    () => m.validateWorkspace({ scope: "attempt", base: 7 }, "ctx"),
+    /workspace.base must be a non-empty string/,
+  );
+  assert.throws(
+    () => m.validateWorkspace({ scope: "attempt", base: "main --force" }, "ctx"),
+    /is not a valid git ref/,
+  );
+  assert.throws(
+    () => m.validateWorkspace({ scope: "attempt", base: "-b" }, "ctx"),
+    /is not a valid git ref/,
+  );
+});
+
+test("workspace: keep must be a boolean", async () => {
+  const m = await fresh();
+  assert.throws(
+    () => m.validateWorkspace({ scope: "attempt", keep: "yes" }, "ctx"),
+    /workspace.keep must be a boolean/,
+  );
+  assert.deepEqual(m.validateWorkspace({ scope: "attempt", keep: null }, "ctx"), {
+    scope: "attempt",
+  });
+});
+
+test("workspace: accepted on a pipeline and on a phase, and the phase's error names it", async () => {
+  const m = await fresh();
+  const input = m.validatePipelineInput(
+    goodInput({
+      workspace: { scope: "instance" },
+      phases: [
+        {
+          id: "brainstorm",
+          name: "Brainstorm",
+          cwd: home,
+          gated: false,
+          workspace: { scope: "attempt", base: "main" },
+          steps: [{ name: "bs", prompt: "go" }],
+        },
+      ],
+    }),
+  );
+  assert.deepEqual(input.workspace, { scope: "instance" });
+  assert.deepEqual(input.phases[0].workspace, { scope: "attempt", base: "main" });
+
+  assert.throws(
+    () =>
+      m.validatePipelineInput(
+        goodInput({
+          phases: [
+            {
+              id: "brainstorm",
+              name: "Brainstorm",
+              cwd: home,
+              gated: false,
+              workspace: { scope: "nope" },
+              steps: [{ name: "bs", prompt: "go" }],
+            },
+          ],
+        }),
+      ),
+    /phase 0: workspace.scope must be/,
+  );
+});
+
+test("workspace: a patch sets it, and an explicit null clears it", async () => {
+  const m = await fresh();
+  const def = await m.createPipeline(
+    m.validatePipelineInput(goodInput({ workspace: { scope: "instance", keep: true } })),
+    new Date(),
+    "pw",
+  );
+  assert.deepEqual(def.workspace, { scope: "instance", keep: true });
+
+  const patched = await m.updatePipeline(
+    "pw",
+    m.validatePipelinePatch({ workspace: { scope: "attempt" } }),
+    new Date(),
+  );
+  assert.deepEqual(patched.workspace, { scope: "attempt" });
+
+  const cleared = await m.updatePipeline(
+    "pw",
+    m.validatePipelinePatch({ workspace: null }),
+    new Date(),
+  );
+  assert.equal("workspace" in cleared, false);
+});
+
+// ── Context limits and memory ────────────────────────────────────────────────
+
+test("contextLimits: absent stays absent, and a valid override round-trips within bounds", async () => {
+  const m = await fresh();
+  assert.equal(m.validateContextLimits(undefined, "ctx"), undefined);
+  assert.equal(m.validateContextLimits(null, "ctx"), undefined);
+  assert.deepEqual(m.validateContextLimits({ placeholderBytes: 32768 }, "ctx"), {
+    placeholderBytes: 32768,
+  });
+  assert.deepEqual(m.validateContextLimits({}, "ctx"), {});
+});
+
+test("contextLimits: placeholderBytes is bounded 1 KiB - 256 KiB, and unknown keys are rejected", async () => {
+  const m = await fresh();
+  assert.throws(
+    () => m.validateContextLimits({ placeholderBytes: 1023 }, "ctx"),
+    /placeholderBytes must be an integer 1024-262144/,
+  );
+  assert.throws(
+    () => m.validateContextLimits({ placeholderBytes: 262145 }, "ctx"),
+    /placeholderBytes must be an integer 1024-262144/,
+  );
+  assert.throws(
+    () => m.validateContextLimits({ tooMuch: 1 }, "ctx"),
+    /contextLimits has unknown key "tooMuch"/,
+  );
+  assert.throws(() => m.validateContextLimits("nope", "ctx"), /contextLimits must be an object/);
+});
+
+test("contextLimits: accepted on a pipeline and read back off the definition", async () => {
+  const m = await fresh();
+  const def = await m.createPipeline(
+    m.validatePipelineInput(goodInput({ contextLimits: { placeholderBytes: 4096 } })),
+    new Date(),
+    "pc",
+  );
+  assert.deepEqual(def.contextLimits, { placeholderBytes: 4096 });
+});
+
+test("memory: off by default, and a valid policy round-trips", async () => {
+  const m = await fresh();
+  assert.equal(m.validateMemory(undefined, "ctx"), undefined);
+  assert.equal(m.validateMemory(null, "ctx"), undefined);
+  assert.deepEqual(m.validateMemory({ enabled: true }, "ctx"), { enabled: true });
+  assert.deepEqual(m.validateMemory({ enabled: true, maxBytes: 16384 }, "ctx"), {
+    enabled: true,
+    maxBytes: 16384,
+  });
+  assert.deepEqual(m.validateMemory({ enabled: false }, "ctx"), { enabled: false });
+});
+
+test("memory: enabled is required and must be a boolean, maxBytes is bounded 1-64 KiB", async () => {
+  const m = await fresh();
+  assert.throws(() => m.validateMemory({}, "ctx"), /memory.enabled must be a boolean/);
+  assert.throws(
+    () => m.validateMemory({ enabled: "yes" }, "ctx"),
+    /memory.enabled must be a boolean/,
+  );
+  assert.throws(
+    () => m.validateMemory({ enabled: true, maxBytes: 1023 }, "ctx"),
+    /memory.maxBytes must be an integer 1024-65536/,
+  );
+  assert.throws(
+    () => m.validateMemory({ enabled: true, maxBytes: 65537 }, "ctx"),
+    /memory.maxBytes must be an integer 1024-65536/,
+  );
+  assert.throws(
+    () => m.validateMemory({ enabled: true, extra: 1 }, "ctx"),
+    /memory has unknown key "extra"/,
+  );
+});
+
+test("memory: a patch sets it, an explicit null clears it, and it counts as an execution key", async () => {
+  const m = await fresh();
+  const def = await m.createPipeline(
+    m.validatePipelineInput(goodInput({ memory: { enabled: true, maxBytes: 4096 } })),
+    new Date(),
+    "pm",
+  );
+  assert.deepEqual(def.memory, { enabled: true, maxBytes: 4096 });
+
+  const patched = await m.updatePipeline(
+    "pm",
+    m.validatePipelinePatch({ memory: { enabled: false } }),
+    new Date(),
+  );
+  assert.deepEqual(patched.memory, { enabled: false });
+
+  const cleared = await m.updatePipeline(
+    "pm",
+    m.validatePipelinePatch({ memory: null }),
+    new Date(),
+  );
+  assert.equal("memory" in cleared, false);
+});
+
+// ── Candidates ───────────────────────────────────────────────────────────────
+
+/** A one-step phase with attempt-scoped isolation: the shape candidates needs. */
+const candidatePhase = (over: Record<string, unknown> = {}) => ({
+  id: "impl",
+  name: "Implement",
+  cwd: home,
+  gated: false,
+  workspace: { scope: "attempt" },
+  steps: [{ name: "code", prompt: "go" }],
+  candidates: { count: 3, select: "first-verified" },
+  ...over,
+});
+
+test("candidates: a well-formed policy round-trips, variants and all", async () => {
+  const m = await fresh();
+  const input = m.validatePipelineInput(
+    goodInput({
+      phases: [
+        candidatePhase({
+          candidates: {
+            count: 4,
+            select: "cheapest-verified",
+            variants: [
+              { runtime: "claude", model: "opus" },
+              { runtime: "codex", reasoningEffort: "high" },
+            ],
+          },
+        }),
+      ],
+    }),
+  );
+  assert.deepEqual(input.phases[0].candidates, {
+    count: 4,
+    select: "cheapest-verified",
+    variants: [
+      { runtime: "claude", model: "opus" },
+      { runtime: "codex", reasoningEffort: "high" },
+    ],
+  });
+});
+
+test("candidates: count is an integer 2-8 and select is one of the two", async () => {
+  const m = await fresh();
+  const bad = (candidates: unknown) =>
+    m.validatePipelineInput(goodInput({ phases: [candidatePhase({ candidates })] }));
+  assert.throws(
+    () => bad({ count: 1, select: "first-verified" }),
+    /candidates.count must be an integer 2-8/,
+  );
+  assert.throws(
+    () => bad({ count: 9, select: "first-verified" }),
+    /candidates.count must be an integer 2-8/,
+  );
+  assert.throws(
+    () => bad({ count: 2.5, select: "first-verified" }),
+    /candidates.count must be an integer/,
+  );
+  assert.throws(() => bad({ count: 2, select: "majority" }), /candidates.select must be/);
+  assert.throws(() => bad({ count: 2, select: "first-verified", nope: 1 }), /unknown key "nope"/);
+});
+
+test("candidates: a variant's fields are held to the step fields they override", async () => {
+  const m = await fresh();
+  const variant = (v: unknown) =>
+    m.validatePipelineInput(
+      goodInput({
+        phases: [
+          candidatePhase({ candidates: { count: 2, select: "first-verified", variants: [v] } }),
+        ],
+      }),
+    );
+  assert.throws(() => variant({ runtime: "gpt" }), /variants\[0\]: runtime must be/);
+  assert.throws(() => variant({ model: "--oops" }), /is not a valid model identifier/);
+  assert.throws(() => variant({ reasoningEffort: "extreme" }), /reasoningEffort must be/);
+  assert.throws(() => variant({ temperature: 1 }), /unknown key "temperature"/);
+});
+
+test("candidates: requires exactly one step, and says why", async () => {
+  const m = await fresh();
+  assert.throws(
+    () =>
+      m.validatePipelineInput(
+        goodInput({
+          phases: [
+            candidatePhase({
+              steps: [
+                { name: "a", prompt: "x" },
+                { name: "b", prompt: "y" },
+              ],
+            }),
+          ],
+        }),
+      ),
+    /candidates requires exactly one step \(this phase has 2\)/,
+  );
+});
+
+test("candidates: requires attempt-scoped isolation, from the phase or the pipeline", async () => {
+  const m = await fresh();
+  // No isolation at all.
+  assert.throws(
+    () =>
+      m.validatePipelineInput(goodInput({ phases: [candidatePhase({ workspace: undefined })] })),
+    /candidates requires workspace.scope "attempt".*effective isolation: none/s,
+  );
+  // Instance-scoped is isolation, but the wrong kind: one tree, shared.
+  assert.throws(
+    () =>
+      m.validatePipelineInput(
+        goodInput({ phases: [candidatePhase({ workspace: { scope: "instance" } })] }),
+      ),
+    /effective isolation: "instance"/,
+  );
+  // Inherited from the pipeline is fine.
+  const ok = m.validatePipelineInput(
+    goodInput({
+      workspace: { scope: "attempt" },
+      phases: [candidatePhase({ workspace: undefined })],
+    }),
+  );
+  assert.equal(ok.phases[0].candidates.count, 3);
+});
+
+test("candidates: a patch that removes the isolation the phase relies on is refused", async () => {
+  const m = await fresh();
+  await m.createPipeline(
+    m.validatePipelineInput(
+      goodInput({
+        workspace: { scope: "attempt" },
+        phases: [candidatePhase({ workspace: undefined })],
+      }),
+    ),
+    new Date(),
+    "pc",
+  );
+  // The patch carries no phases at all, so only the merged definition can see
+  // that clearing the pipeline's workspace strands the phase's candidates.
+  await assert.rejects(
+    m.updatePipeline("pc", m.validatePipelinePatch({ workspace: null }), new Date()),
+    /candidates requires workspace.scope "attempt"/,
+  );
+  const still = (await m.readPipelines()).find((p: { id: string }) => p.id === "pc");
+  assert.deepEqual(still.workspace, { scope: "attempt" });
+});
+
+// ── knowledgeDelta: whether the delta channel is a launch precondition ──────
+
+test("knowledgeDelta: optional | required on a phase, absent by default, anything else refused", async () => {
+  const m = await fresh();
+  const phase = (over: Record<string, unknown>) => ({
+    id: "learn",
+    name: "Learn",
+    cwd: home,
+    gated: false,
+    steps: [{ name: "s", prompt: "p" }],
+    ...over,
+  });
+  const plain = m.validatePipelineInput(goodInput({ phases: [phase({})] }));
+  assert.equal("knowledgeDelta" in plain.phases[0], false);
+  for (const mode of ["optional", "required"]) {
+    const ok = m.validatePipelineInput(goodInput({ phases: [phase({ knowledgeDelta: mode })] }));
+    assert.equal(ok.phases[0].knowledgeDelta, mode);
+  }
+  assert.throws(
+    () => m.validatePipelineInput(goodInput({ phases: [phase({ knowledgeDelta: "always" })] })),
+    /phase 0: knowledgeDelta must be optional \| required/,
+  );
+  assert.throws(
+    () => m.validatePipelineInput(goodInput({ phases: [phase({ knowledgeDelta: true })] })),
+    /knowledgeDelta must be/,
+  );
+});
+
+// ── knowledgeContext: which canonical knowledge a step receives (Phase 4) ───
+
+test("knowledgeContext: accepted on a step and on a phase, normalized to the object form, absent by default", async () => {
+  const m = await fresh();
+  const phase = (over: Record<string, unknown>) => ({
+    id: "implement",
+    name: "Implement",
+    cwd: home,
+    gated: false,
+    steps: [{ name: "s", prompt: "p" }],
+    ...over,
+  });
+  const plain = m.validatePipelineInput(goodInput({ phases: [phase({})] }));
+  assert.equal("knowledgeContext" in plain.phases[0], false);
+  assert.equal("knowledgeContext" in plain.phases[0].steps[0], false);
+
+  const onPhase = m.validatePipelineInput(
+    goodInput({
+      phases: [phase({ knowledgeContext: { claims: ["RULE-17:v2", "CONSTRAINT-4"] } })],
+    }),
+  );
+  assert.deepEqual(onPhase.phases[0].knowledgeContext, {
+    claims: [
+      { id: "RULE-17", revision: 2 },
+      { id: "CONSTRAINT-4", revision: "active" },
+    ],
+  });
+
+  const onStep = m.validatePipelineInput(
+    goodInput({
+      phases: [
+        phase({
+          steps: [
+            {
+              name: "s",
+              prompt: "p",
+              knowledgeContext: { claims: [{ id: "DECISION-3", revision: "active" }] },
+            },
+          ],
+        }),
+      ],
+    }),
+  );
+  assert.deepEqual(onStep.phases[0].steps[0].knowledgeContext, {
+    claims: [{ id: "DECISION-3", revision: "active" }],
+  });
+  assert.equal("knowledgeContext" in onStep.phases[0], false);
+});
+
+test("knowledgeContext: malformed selectors and duplicate claim ids are refused as 400-class authoring errors", async () => {
+  const m = await fresh();
+  const phase = (over: Record<string, unknown>) => ({
+    id: "implement",
+    name: "Implement",
+    cwd: home,
+    gated: false,
+    steps: [{ name: "s", prompt: "p" }],
+    ...over,
+  });
+  const cases: [unknown, RegExp][] = [
+    [{ claims: [] }, /phase 0: knowledgeContext.claims must name at least one claim/],
+    [
+      { claims: ["RULE-17:v2", "RULE-17"] },
+      /phase 0: knowledgeContext.claims\[1\]: RULE-17 is already selected by claims\[0\]/,
+    ],
+    [{ claims: [{ id: "RULE-17" }] }, /revision must be a positive integer or "active"/],
+    [{ claims: ["not a ref!"] }, /knowledgeContext.claims\[0\] must be a claim id/],
+    ["RULE-17", /knowledgeContext must be an object/],
+    [{ claims: ["RULE-17"], tags: ["x"] }, /unknown key "tags"/],
+  ];
+  for (const [knowledgeContext, re] of cases) {
+    assert.throws(
+      () => m.validatePipelineInput(goodInput({ phases: [phase({ knowledgeContext })] })),
+      (e: unknown) => e instanceof m.PipelineValidationError && re.test((e as Error).message),
+      `phase: ${JSON.stringify(knowledgeContext)}`,
+    );
+  }
+  assert.throws(
+    () =>
+      m.validatePipelineInput(
+        goodInput({
+          phases: [
+            phase({ steps: [{ name: "s", prompt: "p", knowledgeContext: { claims: [] } }] }),
+          ],
+        }),
+      ),
+    /phase 0: step "s": knowledgeContext.claims must name at least one claim/,
+  );
 });

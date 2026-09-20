@@ -47,7 +47,15 @@
 
 import { qwenHome } from "../qwenHome.js";
 import { deriveStreamJsonActivity, topLevelObjectSpans } from "./claude.js";
-import { EMPTY_ENVELOPE, basename, clip, extraArgs, unsupportedCapabilities } from "./types.js";
+import {
+  EMPTY_ENVELOPE,
+  basename,
+  channelGranted,
+  channelUnavailable,
+  clip,
+  extraArgs,
+  unsupportedCapabilities,
+} from "./types.js";
 import type {
   AgentRuntime,
   AnalysisPlanOptions,
@@ -59,14 +67,48 @@ import type {
 import type { ActivityEvent } from "@argus/contracts";
 
 /**
+ * Whether the operator has turned on Qwen Code's container sandbox through
+ * `ARGUS_QWEN_ARGS` (`--sandbox` / `-s`, optionally with a value). Inside it
+ * the CLI mounts the project directory and its own home, not Argus's data
+ * directory — so a path Argus owns is not there to be written.
+ */
+export function qwenSandboxed(): boolean {
+  return extraArgs(process.env.ARGUS_QWEN_ARGS).some(
+    (a) => a === "-s" || a === "--sandbox" || a.startsWith("--sandbox="),
+  );
+}
+
+/**
  * Qwen Code has no per-invocation capability control — `--approval-mode` is
  * the only knob, and it's already spoken for by the yolo/default split
  * between an ordinary run and an analysis pass — so every key a profile sets
  * is reported as a limitation rather than silently dropped.
+ *
+ * Argus's own channels are a separate question with a more useful answer:
+ * `--approval-mode yolo` runs the write and shell tools unsandboxed, so every
+ * channel is reachable — unless the operator's `ARGUS_QWEN_ARGS` puts the
+ * run in the CLI's container sandbox, where Argus's directories are not
+ * mounted and every channel is reported unavailable rather than left to fail
+ * at write time.
  */
-function qwenLimitations(cap: CapabilityRequest | undefined): string[] {
-  if (!cap) return [];
-  return unsupportedCapabilities(cap.profile, "Qwen Code", []);
+function qwenCapabilities(
+  cap: CapabilityRequest | undefined,
+): Pick<SpawnPlan, "files" | "limitations" | "channels"> {
+  if (!cap) return {};
+  const sandboxed = qwenSandboxed();
+  return {
+    files: [],
+    limitations: unsupportedCapabilities(cap.profile, "Qwen Code", []),
+    channels: cap.channels.map((channel) =>
+      sandboxed
+        ? channelUnavailable(
+            channel,
+            "Qwen Code",
+            "container sandbox (--sandbox in ARGUS_QWEN_ARGS) does not mount",
+          )
+        : channelGranted(channel),
+    ),
+  };
 }
 
 /** Aliases for the models Qwen Code ships pointed at by default. A local
@@ -262,7 +304,7 @@ export const qwenRuntime: AgentRuntime = {
       args: qwenArgs({ outputFormat: "json", approvalMode: "yolo", model }),
       stdin: composePrompt(prompt, systemPrompt),
       env: runEnv(),
-      ...(capabilities ? { files: [], limitations: qwenLimitations(capabilities) } : {}),
+      ...qwenCapabilities(capabilities),
     };
   },
 
@@ -272,7 +314,7 @@ export const qwenRuntime: AgentRuntime = {
       args: qwenArgs({ outputFormat: "stream-json", approvalMode: "yolo", model }),
       stdin: composePrompt(prompt, systemPrompt),
       env: runEnv(),
-      ...(capabilities ? { files: [], limitations: qwenLimitations(capabilities) } : {}),
+      ...qwenCapabilities(capabilities),
     };
   },
 

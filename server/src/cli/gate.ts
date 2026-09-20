@@ -93,7 +93,10 @@ export async function runGate(options: GateOptions, io: GateIo): Promise<number>
     );
   }
   if (!login.ok) {
-    return fail(login.status, explainRefusal("login", login.status, await readJson(login), options.url));
+    return fail(
+      login.status,
+      explainRefusal("login", login.status, await readJson(login), options.url),
+    );
   }
   const session = sessionFromSetCookie(login.headers.get("set-cookie"), SESSION_COOKIE);
   if (!session) return fail(login.status, "login answered without a session cookie");

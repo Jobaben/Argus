@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { buildClaudeArgs, OUTCOME_CONTRACT } from "./pipelineEngine.js";
+import { buildClaudeArgs, OUTCOME_CONTRACT, STEP_CONTRACT } from "./pipelineEngine.js";
 
 let home: string;
 beforeEach(() => {
@@ -742,7 +742,9 @@ test("buildClaudeArgs appends the contract to the system prompt", () => {
   const args = buildClaudeArgs(run);
   const i = args.indexOf("--append-system-prompt");
   assert.notEqual(i, -1, "expected --append-system-prompt in args");
-  assert.equal(args[i + 1], OUTCOME_CONTRACT);
+  assert.equal(args[i + 1], STEP_CONTRACT);
+  assert.ok(STEP_CONTRACT.startsWith(OUTCOME_CONTRACT));
+  assert.match(STEP_CONTRACT, /ARGUS_KNOWLEDGE_DELTA_FILE/);
 });
 
 test("buildClaudeArgs keeps -p, stream-json output with --verbose, and the session id", () => {

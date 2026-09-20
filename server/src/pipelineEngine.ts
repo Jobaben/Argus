@@ -1,10 +1,11 @@
 import { closeSync, openSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   encodeProject,
   killRunProcess,
   patchRun,
+  readInvocation,
   readRun,
   readRunResult,
   runInvocationDir,
@@ -16,6 +17,7 @@ import {
 import { paths } from "./claudeHome.js";
 import { atomicWriteJson } from "./sources/atomicWrite.js";
 import {
+  candidateArtifactDir,
   phaseArtifactDir,
   phaseBaselinePath,
   prepareInvocation,
@@ -27,6 +29,51 @@ import type { PreparedInvocation } from "./harness/invocation.js";
 import { buildChildEnv } from "./harness/childEnv.js";
 import { runChecks, snapshotWorkingTree } from "./harness/verification.js";
 import type { WorkingTreeSnapshot } from "./harness/verification.js";
+import {
+  createWorktree,
+  plannedRemovals,
+  removeWorktree,
+  workspacePolicyFor,
+  workspaceTarget,
+} from "./harness/workspace.js";
+import {
+  DEFAULT_MEMORY_BYTES,
+  ensureMemoryDir,
+  isSettled,
+  memoryDirFor,
+  readMemoryNotes,
+  summarizeInstance,
+  trimMemoryIfNeeded,
+} from "./harness/memory.js";
+import { isStalled, resolveStallSeconds } from "./harness/stall.js";
+import { KnowledgeDeltaError, isEmptyDelta, parseKnowledgeDelta } from "./knowledge/delta.js";
+import { validArtifactPath } from "./knowledge/kernel.js";
+import type { DeltaProposal } from "./knowledge/delta.js";
+import {
+  commitKnowledgeDeltas,
+  preflightKnowledgeDeltas,
+  registerSuppliedContext,
+} from "./knowledge/store.js";
+import {
+  ensureKnowledgeDeltaDir,
+  knowledgeDeltaFile,
+  readAgentDelta,
+  readDeltaRecord,
+  updateDeltaStatus,
+  writeDeltaRecord,
+} from "./knowledge/staging.js";
+import {
+  KnowledgeContextError,
+  describeIntegrityFailure,
+  effectiveContextSpec,
+  knowledgeContextFile,
+  resolveKnowledgeContext,
+  verifyKnowledgeContextIntegrity,
+  writeKnowledgeContextFile,
+} from "./knowledge/context.js";
+import type { ResolvedKnowledgeContext } from "./knowledge/context.js";
+import { formatClaimRef, suppliedContextOf } from "./knowledge/kernel.js";
+import { readLedger } from "./knowledge/store.js";
 import { markPipelineStarted, readPipelines } from "./sources/pipelines.js";
 import { accumulateRun } from "./sources/totals.js";
 import {
@@ -40,16 +87,26 @@ import {
   advance,
   applyAbort,
   applyApprove,
+  applyKnowledgeCommit,
+  applyCandidateSelection,
+  applyCandidateVerification,
+  applyCandidatesExhausted,
   applyRevise,
   applyRetry,
   applyUnlaunchable,
   applyVerification,
+  candidateFailureClass,
+  candidateFailureReason,
+  candidateRecordOf,
   retryDelayMs,
+  selectCandidate,
   shouldRetry,
   initInstance,
+  toCandidateOutcomes,
   withFailureClass,
 } from "./pipelineTransitions.js";
 import { interpolate, livePhases, previousPayloadFor, resultStepName } from "./sources/dag.js";
+import type { VerificationReport } from "./sources/pipelineTypes.js";
 import { journal } from "./sources/journal.js";
 import { isAlive } from "./scheduler.js";
 import { claudeRuntime, parseEnvelopeFor, resolveRuntimeId, runtimeFor } from "./runtimes/index.js";
@@ -58,16 +115,65 @@ import { KeyedMutex } from "./mutex.js";
 import { spawnPipelineProcess } from "./pipelineProcess.js";
 import type { PipelineProcessHandle } from "./pipelineProcess.js";
 import type { SpawnPlan } from "./runtimes/index.js";
-import type { AgentRuntimeId } from "@argus/contracts";
+import type {
+  AgentRuntimeId,
+  ClaimRef,
+  KnowledgeDeltaRecord,
+  StepKnowledgeDelta,
+} from "@argus/contracts";
 import type { Run } from "./sources/scheduleTypes.js";
 import type {
   PhaseDef,
   PhaseFailureClass,
   PhaseFailurePayload,
+  PhaseProgress,
   PhaseStep,
   RetryableClass,
+  StepProgress,
+  WorkspacePolicy,
+  WorkspaceRecord,
 } from "./sources/pipelineTypes.js";
-import type { RouteOutcome, TransitionResult } from "./pipelineTransitions.js";
+
+/**
+ * One run of one step, planned but not yet launched.
+ *
+ * A candidates phase plans `count` of these from a single `stepDef`, each with
+ * a worktree, an artifact directory and a baseline of its own — which is why
+ * the per-run context is a record here rather than being derived from the
+ * phase at launch time.
+ */
+interface PlannedRun {
+  stepDef: PhaseStep;
+  run: Run;
+  publishes: boolean;
+  timeoutSeconds: number | null;
+  /** Which candidate this run is, on a `candidates` phase. */
+  candidate: number | undefined;
+  artifactDir: string;
+  workspace: WorkspaceRecord | null;
+  /** Full values of any placeholder {@link interpolate} trimmed, for the
+   *  engine to write under this run's invocation directory. */
+  contextFiles: { path: string; contents: string }[];
+  /** The semantic context this run receives, resolved at planning against
+   *  the attempt's one ledger snapshot. Null = the step declares none. */
+  knowledgeContext: PlannedKnowledgeContext | null;
+}
+
+/**
+ * A step's `knowledgeContext` after resolution against the phase attempt's
+ * ledger snapshot: the frozen document, or the reason it could not be built
+ * (an unknown claim or revision), which fails the step as `configuration`
+ * before any process starts. Resolved once per attempt, at planning, so every
+ * run of the attempt saw the same ledger and the prompt can name what the
+ * run will find in the file.
+ */
+type PlannedKnowledgeContext = { resolved: ResolvedKnowledgeContext } | { error: string };
+import type {
+  CandidateRecord,
+  KnowledgeCommitVerdict,
+  RouteOutcome,
+  TransitionResult,
+} from "./pipelineTransitions.js";
 import type {
   PipelineDefinition,
   PipelineInstance,
@@ -127,6 +233,53 @@ export const OUTCOME_CONTRACT =
   "with deferred work unfinished, report `ARGUS_OUTCOME: blocked`.";
 
 /**
+ * The Knowledge Ledger's half of the agent contract (docs/KNOWLEDGE-LEDGER.md
+ * § KnowledgeDelta protocol). Like {@link OUTCOME_CONTRACT} it is a pure
+ * constant — the per-run file path travels in the environment, never in the
+ * text — so the system-prompt prefix stays cacheable. Deliberately short: it
+ * says that a delta is optional, where it goes, what shape it has, and the two
+ * rules an agent must not break (no invented canonical ids; exact revisions
+ * only). Everything else is Argus's to validate, and the whole architecture
+ * does not belong in every prompt.
+ */
+export const KNOWLEDGE_DELTA_CONTRACT =
+  "Knowledge Ledger (optional). Only if this task establishes or revises durable semantic " +
+  "knowledge that later work should rely on — a business rule, fact, assumption, constraint, " +
+  "conclusion or decision — write one JSON KnowledgeDelta to the file path in the " +
+  "ARGUS_KNOWLEDGE_DELTA_FILE environment variable before you finish. Shape: " +
+  '{"schemaVersion":1,"claims":[{"localId":"<label>","kind":"business-rule","statement":"..."}],' +
+  '"revisions":[{"claimId":"<existing id>","expectedRevision":<its current revision>,"statement":"..."}],' +
+  '"justifications":[{"conclusion":{"local":"<label>"},"premises":["<ID>:v<N>"]}],' +
+  '"evidence":[{"claim":{"local":"<label>"},"source":{"type":"source-code","path":"..."}}],' +
+  '"consumed":["<ID>:v<N>"],"artifacts":[{"location":"repository","path":"<relative path>"}]}. ' +
+  "Every section is optional. Do not invent canonical ids: a new claim gets a localId of your " +
+  "choosing and Argus assigns its identity. Reference existing claims only by exact revision " +
+  "(ID:vN), never by bare id. Argus validates the delta and applies it only once the phase is " +
+  "accepted; a delta that fails validation fails this step. Ordinary work that establishes no " +
+  "durable knowledge writes no file.";
+
+/**
+ * The KnowledgeContext half of the agent contract (docs/KNOWLEDGE-LEDGER.md
+ * § KnowledgeContext protocol). A pure constant like the two above — phrased
+ * conditionally on the variable, because most runs have no context and the
+ * system-prompt prefix must be the same for every run. It says where the
+ * context is, that each ref is immutable historical identity, and how to
+ * declare consumption against it. It does not describe the ledger and does
+ * not ask the agent to use everything it was given.
+ */
+export const KNOWLEDGE_CONTEXT_CONTRACT =
+  "Semantic context. If the ARGUS_KNOWLEDGE_CONTEXT_FILE environment variable is set, Argus " +
+  "has supplied canonical semantic context — business rules, facts, constraints, decisions — as " +
+  "a read-only JSON file at that path; read it before reasoning about the task. Each entry's " +
+  '"ref" (ID:vN) is an immutable historical identity: it names exactly that revision, whose ' +
+  "lifecycle and support are stated in the entry. Never modify the file. Use only what is " +
+  "relevant. If you write a KnowledgeDelta that declares an existing claim as consumed, name the " +
+  "exact revision you relied upon, as given by its ref.";
+
+/** Everything Argus itself tells a step's agent, in one constant. */
+export const STEP_CONTRACT = `${OUTCOME_CONTRACT}\n\n${KNOWLEDGE_DELTA_CONTRACT}\n\n${KNOWLEDGE_CONTEXT_CONTRACT}`;
+
+/**
  * The instruction a result-producing step gets appended to its prompt.
  *
  * Not part of {@link OUTCOME_CONTRACT}: that is a pure constant so the prompt
@@ -172,6 +325,41 @@ export function artifactInstruction(checks: PhaseDef["checks"], artifactDir: str
 }
 
 /**
+ * The instruction a step gets when its pipeline has `memory` enabled.
+ *
+ * Argus states where the file is and what it is for; what to actually write
+ * in it is the author's business (or the agent's own judgment) — this is only
+ * the fixed, system-owned part: the path, and the cap Argus itself enforces
+ * after the fact (§ harness/memory.ts `trimMemoryIfNeeded`).
+ */
+export function memoryInstruction(memory: PipelineDefinition["memory"] | undefined): string {
+  if (!memory?.enabled) return "";
+  const cap = memory.maxBytes ?? DEFAULT_MEMORY_BYTES;
+  return (
+    "\n\nDurable notes for this pipeline live at $ARGUS_MEMORY_DIR/NOTES.md. Append what a " +
+    "future run of this pipeline must know (decisions, gotchas, what was tried); keep it under " +
+    `${cap} bytes — Argus trims the head beyond that.`
+  );
+}
+
+/**
+ * The instruction a step gets when Argus supplied it a KnowledgeContext:
+ * how many revisions, exactly which, and where. The refs in the prompt are
+ * the same refs the file carries; the file is the channel, the prompt only
+ * makes sure the agent knows the context is there and what it is called.
+ */
+export function knowledgeContextInstruction(supplied: ClaimRef[]): string {
+  if (supplied.length === 0) return "";
+  const refs = supplied.map(formatClaimRef).join(", ");
+  return (
+    `\n\nSemantic context supplied. Argus has placed ${supplied.length} canonical claim ` +
+    `revision${supplied.length === 1 ? "" : "s"} (${refs}) as read-only JSON at the path in ` +
+    "the ARGUS_KNOWLEDGE_CONTEXT_FILE environment variable. Read it before reasoning about " +
+    "this task; treat each ref as the exact revision to cite if you declare it consumed."
+  );
+}
+
+/**
  * Build the invocation for a step run, with the outcome contract carried into
  * the agent's instructions.
  *
@@ -186,7 +374,7 @@ export function buildStepPlan(run: Run): SpawnPlan {
     sessionId: run.sessionId,
     model: run.model,
     reasoningEffort: run.reasoningEffort,
-    systemPrompt: OUTCOME_CONTRACT,
+    systemPrompt: STEP_CONTRACT,
   });
 }
 
@@ -197,7 +385,7 @@ export function buildClaudeArgs(run: Run): string[] {
     prompt: run.prompt,
     sessionId: run.sessionId,
     model: run.model,
-    systemPrompt: OUTCOME_CONTRACT,
+    systemPrompt: STEP_CONTRACT,
   }).args;
 }
 
@@ -254,6 +442,10 @@ export interface EngineDeps {
   tailer?: {
     track(runId: string, instanceId: string, runtime?: AgentRuntimeId | null): void;
     untrack(runId: string): void;
+    /** This process's most recent observed activity per tracked run, for
+     *  stall detection. Optional so existing test doubles need not implement
+     *  it; absent means every stall check falls back to `startedAt`. */
+    latest?(): Map<string, { at: string }>;
   };
 }
 
@@ -353,25 +545,118 @@ export function recoverRunOutcome(run: Run): RecoveredOutcome {
 
 /** How a run that ended without a considered agent verdict is classed for the
  *  retry policy, from what its record shows: never started, killed at its
- *  deadline, or exited on its own. */
+ *  deadline (or for going quiet — a stall is a timeout that noticed sooner),
+ *  or exited on its own. */
 export function failureClassOfRecord(run: Run): RetryableClass {
-  if (run.termination === "timed-out") return "timeout";
+  if (run.termination === "timed-out" || run.termination === "stalled") return "timeout";
   return run.pid == null ? "spawn" : "exit-code";
 }
 
-/** A retry re-runs the same prompt. When the previous attempt failed on the
- *  work itself — the agent's own verdict, or Argus's checks — the next attempt
- *  is told why, so it is a repair rather than a replay. Infrastructure failures
- *  (a process that never started, a dead exit) carry nothing worth repeating. */
-export function retryNote(payload: unknown): string {
-  const p = (payload ?? {}) as PhaseFailurePayload;
-  if (p.failureClass !== "verification" && p.failureClass !== "signal") return "";
-  const reason = typeof p.reason === "string" ? p.reason.trim() : "";
-  return reason ? `\n\nPrevious attempt failed: ${reason}` : "";
+/** Bound on the whole retry note, across every class — generous enough for a
+ *  handful of failed checks' output tails, small enough that a retry prompt
+ *  never balloons past what one bad attempt is worth repeating. */
+const RETRY_NOTE_MAX_BYTES = 2000;
+/** Per-check output tail kept in a verification retry note. */
+const VERIFICATION_TAIL_CHARS = 600;
+/** Tail of a run's own error/result text kept in an exit-code retry note. */
+const EXIT_CODE_TAIL_CHARS = 800;
+
+export interface RetryNoteInput {
+  failureClass?: PhaseFailureClass;
+  /** The phase's own one-line reason — used as-is for `timeout`, `spawn` and
+   *  `signal`, which already carry everything worth repeating. */
+  reason?: string;
+  /** The failed attempt's own checks, when the class is `verification`. */
+  verification?: VerificationReport;
+  /** The failed run's exit code, when the class is `exit-code`. */
+  exitCode?: number | null;
+  /** The failed run's own error/result text, when the class is `exit-code`. */
+  runText?: string | null;
+  /** Which attempt just failed (1-based) and how many the policy allows, for
+   *  the note's own header. */
+  attempt: number;
+  maxAttempts: number;
+}
+
+/**
+ * A retry re-runs the same prompt. Every retryable class now hands the next
+ * attempt *something* worth repairing against — this is the best-evidenced
+ * loop in the harness literature (Aider, CodeRabbit; see
+ * docs/HARNESS-RESEARCH.md §2 #4) — bounded per class so a chatty check
+ * output can never balloon the prompt:
+ *
+ *  - `verification`: each failed check by name, with the tail of its output.
+ *  - `exit-code`: the exit code plus the tail of the run's own error/result text.
+ *  - `timeout` (including a stall — "stalled: no output for Ns"), `spawn` and
+ *    `signal`: the one-line reason already computed where the failure was
+ *    recorded — there is nothing more specific to add.
+ *
+ * Pure, so every class is unit-testable without touching a run record: the
+ * caller (which does the I/O to read the failed run and the report) hands in
+ * exactly what it found.
+ */
+export function retryNote(input: RetryNoteInput): string {
+  const cls = input.failureClass;
+  if (!cls || cls === "configuration") return "";
+
+  let body = "";
+  if (cls === "verification" && input.verification) {
+    body = input.verification.checks
+      .filter((c) => c.status === "failed")
+      .map((c) => `${c.label}: ${(c.output ?? "").trim().slice(-VERIFICATION_TAIL_CHARS)}`)
+      .join("\n");
+  } else if (cls === "exit-code") {
+    const tail = (input.runText ?? "").trim().slice(-EXIT_CODE_TAIL_CHARS);
+    body = `exit code ${input.exitCode ?? "unknown"}${tail ? `: ${tail}` : ""}`;
+  } else {
+    // timeout (incl. stalled), spawn, signal
+    body = (input.reason ?? "").trim();
+  }
+  body = body.trim();
+  if (!body) return "";
+  if (body.length > RETRY_NOTE_MAX_BYTES) body = `…${body.slice(-(RETRY_NOTE_MAX_BYTES - 1))}`;
+  return `\n\nPrevious attempt (${input.attempt} of ${input.maxAttempts}) failed — ${cls}:\n${body}`;
+}
+
+/**
+ * Gather what {@link retryNote} needs for one failed phase, doing the one bit
+ * of I/O it can't do itself: reading the failed run's own record for an
+ * `exit-code` class. Every other class reads only what is already on the
+ * phase (`payload`, `verification`).
+ */
+async function buildRetryNote(def: PipelineDefinition, phase: PhaseProgress): Promise<string> {
+  const payload = (phase.payload ?? {}) as PhaseFailurePayload;
+  const policy = def.phases.find((p) => p.id === phase.id)?.retry;
+  const attempt = (phase.retries ?? 0) + 1;
+  let exitCode: number | null = null;
+  let runText: string | null = null;
+  if (payload.failureClass === "exit-code") {
+    const failedStep = phase.steps.find((s) => s.status === "failed" && s.runId);
+    if (failedStep?.runId) {
+      const got = await readRun(failedStep.runId);
+      exitCode = got?.run.exitCode ?? null;
+      runText = got?.run.error ?? got?.run.resultSummary ?? null;
+    }
+  }
+  return retryNote({
+    failureClass: payload.failureClass,
+    reason: typeof payload.reason === "string" ? payload.reason : undefined,
+    verification: phase.verification,
+    exitCode,
+    runText,
+    attempt,
+    maxAttempts: policy?.attempts ?? attempt,
+  });
 }
 
 export interface Engine {
-  start(pipelineId: string, trigger?: "manual" | "scheduled"): Promise<PipelineInstance | null>;
+  start(
+    pipelineId: string,
+    trigger?: PipelineInstance["trigger"],
+    /** Set for `trigger: "webhook"` (the request body) or `"chained"` (the
+     *  source instance's outcome) — omitted for `"manual"`/`"scheduled"`. */
+    firing?: { triggerPayload?: unknown; chainedFrom?: string },
+  ): Promise<PipelineInstance | null>;
   onSignal(instanceId: string, signal: PipelineSignal): Promise<ActionResult>;
   /** Open a gate. `phaseId` names which paused phase when a fan-out has more
    *  than one waiting; absent, the single paused phase is meant. */
@@ -415,6 +700,171 @@ export function createEngine(deps: EngineDeps): Engine {
   }
   async function drain(): Promise<void> {
     while (detached.size > 0) await Promise.allSettled([...detached]);
+  }
+
+  /** Instances whose worktrees this process has already cleaned up. */
+  const cleaned = new Set<string>();
+  /** Instances whose memory notes this process has already trimmed. */
+  const memoryChecked = new Set<string>();
+
+  /**
+   * Persist an instance, and — once it has settled — remove the worktrees it
+   * created and trim its pipeline's memory notes if they have grown past cap.
+   *
+   * Every write of an instance goes through here rather than through
+   * `writeInstance` directly, because an instance can reach a terminal status
+   * from a dozen places (a signal, a deadline, a failed check, an abort, a
+   * reconcile pass), and a cleanup hook on each of them is a cleanup hook
+   * somebody eventually forgets. The removal is detached and never throws into
+   * the transition that caused it: a worktree Argus cannot delete is a warning
+   * in the log, never a pipeline that fails to finish.
+   */
+  async function saveInstance(inst: PipelineInstance): Promise<void> {
+    await retireStagedDeltas(inst);
+    await writeInstance(inst);
+    if (inst.status === "running" || inst.status === "awaiting-approval") {
+      // Alive again — a revise of a failed instance, a scheduled retry. What it
+      // creates from here is cleaned up by the settlement that follows.
+      cleaned.delete(inst.id);
+      memoryChecked.delete(inst.id);
+      return;
+    }
+    if (!memoryChecked.has(inst.id)) {
+      memoryChecked.add(inst.id);
+      void track(trimMemoryFor(inst));
+    }
+    if (cleaned.has(inst.id)) return;
+    // Steps as well as phases: a candidates phase records a tree per candidate
+    // and never one of its own until a winner is chosen, so an instance aborted
+    // mid-selection has trees that only the steps know about.
+    const anyTree =
+      inst.workspace ||
+      inst.phases.some((p) => p.workspace || p.steps.some((step) => step.workspace));
+    if (!anyTree) return;
+    cleaned.add(inst.id);
+    void track(cleanupWorkspaces(inst));
+  }
+
+  /** Trim one settled instance's pipeline's `NOTES.md` back to its cap, when
+   *  `memory` is enabled and the file has grown past it. Never throws — a
+   *  file Argus cannot trim is a warning in the log, never a settlement that
+   *  fails to finish. */
+  async function trimMemoryFor(inst: PipelineInstance): Promise<void> {
+    const def = await defFor(inst);
+    if (!def?.memory?.enabled) return;
+    const cap = def.memory.maxBytes ?? DEFAULT_MEMORY_BYTES;
+    try {
+      const trimmed = await trimMemoryIfNeeded(def.id, cap);
+      if (trimmed) {
+        await journal(inst.id, {
+          at: nowISO(),
+          kind: "memory.trimmed",
+          detail: `NOTES.md trimmed to ${cap} bytes`,
+        });
+      }
+    } catch (e) {
+      log.warn("pipeline memory could not be trimmed", { pipelineId: def.id, err: e });
+    }
+  }
+
+  /** Remove every worktree of a settled instance whose policy did not ask for
+   *  it to be kept. The branches are never touched: they are the deliverable. */
+  async function cleanupWorkspaces(inst: PipelineInstance): Promise<void> {
+    const def = await defFor(inst);
+    if (!def) return;
+    for (const removal of plannedRemovals(def, inst)) {
+      await removeWorkspace(inst.id, removal.repoCwd, removal.path, removal.branch);
+    }
+  }
+
+  /** One worktree, gone. Never throws — a directory Argus could not remove must
+   *  not take a transition (or an instance's settlement) down with it. Returns
+   *  whether it is actually gone, so a caller that was about to forget the
+   *  record can keep it and let the instance's own cleanup try again. */
+  async function removeWorkspace(
+    instanceId: string,
+    repoCwd: string,
+    workspacePath: string,
+    branch: string,
+  ): Promise<boolean> {
+    try {
+      await removeWorktree({ repoCwd, path: workspacePath });
+      // Awaited, unlike the engine's other journal calls: this one runs off the
+      // transition path already, and a settled instance's evidence should be on
+      // disk by the time `drain()` says the settlement is finished.
+      await journal(instanceId, {
+        at: nowISO(),
+        kind: "workspace.removed",
+        detail: `${branch} at ${workspacePath}`,
+      });
+      return true;
+    } catch (e) {
+      log.warn("workspace could not be removed", { instanceId, path: workspacePath, err: e });
+      return false;
+    }
+  }
+
+  /**
+   * The worktree this phase attempt runs in, created (or re-attached) before
+   * anything is planned.
+   *
+   * `scope: "instance"` resolves to one tree per instance, shared by every
+   * phase that opts in and recorded on the instance the first time it is used —
+   * the record is kept as it was, so the base commit it was cut from stays the
+   * one it was cut from however many phases reuse it. `scope: "attempt"` gives
+   * each attempt its own, and the superseded attempt's tree is removed as the
+   * new one is created unless the policy says to keep it.
+   *
+   * Throws {@link WorkspaceError} (with git's own words) when the repository,
+   * the base ref or git itself is not what the definition assumed: the caller
+   * turns that into a `configuration` failure of the phase.
+   */
+  async function ensureWorkspace(
+    inst: PipelineInstance,
+    phaseDef: PhaseDef,
+    progress: PhaseProgress,
+    policy: WorkspacePolicy,
+    /** One candidate of this attempt, when the phase runs best-of-N: each gets
+     *  its own tree, because candidates that share a checkout are not samples. */
+    candidate?: number,
+  ): Promise<WorkspaceRecord> {
+    const target = workspaceTarget({
+      root: paths.worktreesDir(),
+      instanceId: inst.id,
+      phaseId: phaseDef.id,
+      attempt: progress.attempt,
+      policy,
+      ...(candidate === undefined ? {} : { candidate }),
+    });
+    const previous = candidate === undefined ? progress.workspace : undefined;
+    if (previous && previous.path !== target.path && policy.keep !== true) {
+      await removeWorkspace(inst.id, phaseDef.cwd, previous.path, previous.branch);
+    }
+    // A restart finds the directory already there (reused as it stands) or the
+    // branch already there without it (checked out again, keeping its commits).
+    const shared =
+      policy.scope === "instance" && inst.workspace?.path === target.path ? inst.workspace : null;
+    const created = await createWorktree({
+      repoCwd: phaseDef.cwd,
+      path: target.path,
+      branch: target.branch,
+      ...(policy.base ? { base: policy.base } : {}),
+    });
+    const record = shared ?? created;
+    if (policy.scope === "instance") inst.workspace = record;
+    if (!shared) {
+      void journal(inst.id, {
+        at: nowISO(),
+        kind: "workspace.created",
+        phaseId: phaseDef.id,
+        attempt: progress.attempt,
+        detail:
+          candidate === undefined
+            ? `${record.branch} at ${record.path}`
+            : `c${candidate}: ${record.branch} at ${record.path}`,
+      });
+    }
+    return record;
   }
 
   async function loadDef(pipelineId: string): Promise<PipelineDefinition | undefined> {
@@ -478,35 +928,178 @@ export function createEngine(deps: EngineDeps): Engine {
     // as absent, which is the honest answer.
     const prevPayload = previousPayloadFor(def, inst, phaseDef.id);
     const startedAt = nowISO();
+    // Isolation first: the worktree is what the steps' `cwd` will be, so it has
+    // to exist before a single run is planned — and a tree that cannot be
+    // created is a definition Argus cannot honour, not a step that failed.
+    const policy = workspacePolicyFor(def, phaseDef);
+    // Best-of-N: `count` runs of the phase's one step, each in a worktree of
+    // its own. The phase-level tree is *not* created for such an attempt — the
+    // winner's becomes the phase's at selection, and a shared one would be a
+    // directory nothing ever ran in.
+    const candidates = phaseDef.candidates;
+    // "none" is a phase opting *out* of a pipeline-wide policy it inherited —
+    // the same as no policy at all for this one phase: it runs in its own
+    // `cwd`, no worktree is created or recorded.
+    if (policy && policy.scope !== "none" && !candidates) {
+      try {
+        progress.workspace = await ensureWorkspace(inst, phaseDef, progress, policy);
+      } catch (e) {
+        await failPhaseConfiguration(
+          def,
+          inst,
+          phaseDef.id,
+          e instanceof Error ? e.message : String(e),
+        );
+        return;
+      }
+    }
     const artifactDir = phaseArtifactDir(paths.artifactsDir(), inst.id, phaseDef.id);
     progress.artifactDir = artifactDir;
-    const dirs = {
-      own: artifactDir,
-      byPhase: Object.fromEntries(
-        inst.phases.flatMap((p) => (p.artifactDir ? [[p.id, p.artifactDir]] : [])),
-      ) as Record<string, string>,
-    };
+    const byPhase = Object.fromEntries(
+      inst.phases.flatMap((p) => (p.artifactDir ? [[p.id, p.artifactDir]] : [])),
+    ) as Record<string, string>;
     // Exactly one step may publish the phase's result; only that step is told
-    // about it, so concurrent siblings cannot race to write a decision.
+    // about it, so concurrent siblings cannot race to write a decision. Every
+    // candidate of a candidates phase is that step — each writes to its own
+    // run's result file, and the phase takes the winner's.
     const publishingStep = resultStepName(phaseDef);
-    const planned = phaseDef.steps.map((stepDef) => {
+
+    // Pipeline memory (§B): read once per phase-start, and only when a step
+    // actually asks for it — the common case is a pipeline with `memory` off,
+    // or a phase whose prompt has nothing to do with it, and neither should
+    // pay for a file read it never uses.
+    const promptsHere = phaseDef.steps.map((s) => s.prompt).join("\n");
+    const memoryPolicy = def.memory;
+    const memoryDir = memoryPolicy?.enabled ? memoryDirFor(def.id) : null;
+    const memoryText =
+      memoryPolicy?.enabled && promptsHere.includes("{{memory}}")
+        ? await readMemoryNotes(def.id, memoryPolicy.maxBytes ?? DEFAULT_MEMORY_BYTES)
+        : "";
+    if (memoryDir) await ensureMemoryDir(def.id);
+
+    // `{{previous.instance}}` (§B): the most recent settled instance of this
+    // pipeline that started before this one. Not gated on `memory.enabled` —
+    // it costs one instance listing, already read from disk elsewhere, and
+    // says nothing a pipeline needs to opt into.
+    let previousInstanceSummary = "";
+    if (promptsHere.includes("{{previous.instance}}")) {
+      const siblings = (await readInstances({ pipelineId: def.id }))
+        .filter((i) => i.id !== inst.id && i.createdAt < inst.createdAt && isSettled(i))
+        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+      if (siblings[0]) previousInstanceSummary = summarizeInstance(siblings[0]);
+    }
+    // Semantic context (Phase 4): one ledger snapshot per phase attempt, read
+    // only when some step of the phase declares a `knowledgeContext`. Every
+    // selector of every run of this attempt — exact and active alike — is
+    // resolved against this one document, so the runs of one attempt cannot
+    // disagree about which revision "active" meant, and a revision committed
+    // while the agents run is, by construction, not in any of their files.
+    // A retry or a revise plans a new attempt and reads a new snapshot.
+    const contextSpecs = phaseDef.steps.map((sd) => effectiveContextSpec(phaseDef, sd));
+    const ledgerSnapshot = contextSpecs.some((spec) => spec !== null) ? await readLedger() : null;
+    // What is actually launched: one run per declared step, or `count` runs of
+    // the single step a candidates phase has.
+    const units = candidates
+      ? Array.from({ length: candidates.count }, (_, i) => ({
+          stepDef: phaseDef.steps[0],
+          candidate: i as number | undefined,
+        }))
+      : phaseDef.steps.map((stepDef) => ({ stepDef, candidate: undefined as number | undefined }));
+
+    const planned: PlannedRun[] = [];
+    for (const { stepDef, candidate } of units) {
+      let workspace = progress.workspace ?? null;
+      if (candidates && policy && policy.scope !== "none") {
+        try {
+          workspace = await ensureWorkspace(inst, phaseDef, progress, policy, candidate);
+        } catch (e) {
+          await failPhaseConfiguration(
+            def,
+            inst,
+            phaseDef.id,
+            e instanceof Error ? e.message : String(e),
+          );
+          return;
+        }
+      }
+      // Where this run's work actually happens: its worktree, else the phase's
+      // own directory exactly as before workspaces existed.
+      const cwd = workspace?.path ?? phaseDef.cwd;
+      const own =
+        candidate === undefined ? artifactDir : candidateArtifactDir(artifactDir, candidate);
+      // Cycled, so `count: 4` with two variants alternates them. Absent = the
+      // step's own settings, which is what makes `count` alone mean "sample the
+      // same thing N times".
+      const variant =
+        candidates && candidate !== undefined && candidates.variants?.length
+          ? candidates.variants[candidate % candidates.variants.length]
+          : undefined;
       const runId = deps.newId();
       const publishes = stepDef.name === publishingStep;
-      // Narrowest wins: a step names its runtime, else its phase, else the
-      // pipeline, else the server default. Resolved and written down here, so a
-      // mixed-runtime pipeline stays readable on the board and in the record.
-      const runtime = resolveRuntimeId(stepDef.runtime, phaseDef.runtime, def.runtime);
+      // This run's semantic context, frozen now. A selector the snapshot
+      // cannot resolve is carried to the launch as the reason the step will
+      // not start — the definition names knowledge the ledger does not hold.
+      const contextSpec = effectiveContextSpec(phaseDef, stepDef);
+      let knowledgeContext: PlannedKnowledgeContext | null = null;
+      if (contextSpec && ledgerSnapshot) {
+        try {
+          knowledgeContext = {
+            resolved: resolveKnowledgeContext(ledgerSnapshot, contextSpec, startedAt),
+          };
+        } catch (e) {
+          knowledgeContext = {
+            error:
+              e instanceof KnowledgeContextError
+                ? `knowledge context ${e.code}: ${e.message}`
+                : e instanceof Error
+                  ? e.message
+                  : String(e),
+          };
+        }
+      }
+      // Narrowest wins: a candidate's variant names its runtime, else the step,
+      // else its phase, else the pipeline, else the server default. Resolved and
+      // written down here, so a mixed-runtime pipeline stays readable on the
+      // board and in the record.
+      const runtime = resolveRuntimeId(
+        variant?.runtime,
+        stepDef.runtime,
+        phaseDef.runtime,
+        def.runtime,
+      );
       const timeoutSeconds = resolveTimeoutSeconds(phaseDef, stepDef);
+      const stallSeconds = resolveStallSeconds(phaseDef, stepDef);
+      // Argus-injected blocks ride after the agent's own prompt, in a fixed
+      // order, with the retry note last: the note is what matters most on a
+      // retry, and recency in the prompt is what the model weighs most (see
+      // docs/HARNESS-RESEARCH.md §2 #5, "lost in the middle").
+      const rendered = interpolate(
+        stepDef.prompt,
+        prevPayload,
+        inst.artifacts ?? {},
+        { own, byPhase },
+        {
+          triggerPayload: inst.triggerPayload,
+          memory: memoryText,
+          previousInstanceSummary,
+          maxPlaceholderBytes: def.contextLimits?.placeholderBytes,
+          contextDir: runInvocationDir(runId),
+        },
+      );
       const run: Run = {
         id: runId,
         scheduleId: `pipeline:${inst.pipelineId}`,
         scheduleName: `${inst.pipelineName} · ${phaseDef.name}`,
         prompt:
-          interpolate(stepDef.prompt, prevPayload, inst.artifacts ?? {}, dirs) +
+          rendered.prompt +
           (publishes ? resultInstruction(phaseDef.result) : "") +
-          artifactInstruction(phaseDef.checks, artifactDir) +
+          artifactInstruction(phaseDef.checks, own) +
+          memoryInstruction(memoryPolicy) +
+          (knowledgeContext && "resolved" in knowledgeContext
+            ? knowledgeContextInstruction(knowledgeContext.resolved.supplied)
+            : "") +
           noteSuffix,
-        cwd: phaseDef.cwd,
+        cwd,
         status: "running",
         trigger: "scheduled",
         queuedAt: startedAt,
@@ -516,10 +1109,10 @@ export function createEngine(deps: EngineDeps): Engine {
         pid: null,
         exitCode: null,
         sessionId: runtimeFor(runtime).capabilities.presetSessionId ? deps.newId() : null,
-        model: stepDef.model ?? def.model,
-        reasoningEffort: stepDef.reasoningEffort ?? def.reasoningEffort,
+        model: variant?.model ?? stepDef.model ?? def.model,
+        reasoningEffort: variant?.reasoningEffort ?? stepDef.reasoningEffort ?? def.reasoningEffort,
         runtime,
-        project: encodeProject(phaseDef.cwd),
+        project: encodeProject(cwd),
         resultSummary: null,
         error: null,
         instanceId: inst.id,
@@ -527,61 +1120,89 @@ export function createEngine(deps: EngineDeps): Engine {
         // The deadline is set at spawn, not here: a step may wait for a
         // concurrency slot first, and waiting is not running.
         deadlineAt: null,
+        stallSeconds,
       };
-      return { stepDef, run, publishes, timeoutSeconds };
-    });
+      planned.push({
+        stepDef,
+        run,
+        publishes,
+        timeoutSeconds,
+        candidate,
+        artifactDir: own,
+        workspace,
+        contextFiles: rendered.contextFiles,
+        knowledgeContext,
+      });
+    }
     // Record the runIds on the instance up front, then persist once (no write races).
-    progress.steps = planned.map(({ stepDef, run }) => ({
+    progress.steps = planned.map(({ stepDef, run, candidate, workspace }) => ({
       name: stepDef.name,
       runId: run.id,
       status: "running" as const,
+      ...(candidate === undefined ? {} : { candidate }),
+      ...(candidate === undefined ? {} : { workspace }),
     }));
     progress.status = "running";
-    await writeInstance(inst);
+    await saveInstance(inst);
     void journal(inst.id, {
       at: startedAt,
       kind: "phase.started",
       phaseId: phaseDef.id,
       attempt: progress.attempt,
-      detail: `${planned.length} step${planned.length === 1 ? "" : "s"}`,
+      detail: candidates
+        ? `${planned.length} candidates`
+        : `${planned.length} step${planned.length === 1 ? "" : "s"}`,
     });
     // Every attempt starts with an empty artifact directory: a file left by a
     // previous attempt must never satisfy this attempt's checks or mislead the
     // agent about what it has already done.
     await rm(artifactDir, { recursive: true, force: true });
     await mkdir(artifactDir, { recursive: true });
-    // A working-tree baseline for `changed-files` checks, kept out of the
-    // agent's reach (beside the invocation records, not in the artifact dir).
-    let baseline: WorkingTreeSnapshot | null = null;
-    if (phaseDef.checks?.some((c) => c.kind === "changed-files")) {
-      baseline = await snapshotWorkingTree(phaseDef.cwd);
-      const file = phaseBaselinePath(
-        paths.invocationsDir(),
-        inst.id,
-        phaseDef.id,
-        progress.attempt,
-      );
-      if (baseline) await atomicWriteJson(file, baseline);
-      else await rm(file, { force: true });
+    for (const unit of planned) {
+      if (unit.artifactDir !== artifactDir) await mkdir(unit.artifactDir, { recursive: true });
     }
 
-    // Launch each step: acquire a slot, spawn, and persist the pid. Callers on
+    // Launch each run: acquire a slot, spawn, and persist the pid. Callers on
     // the HTTP request path (start/approve/revise) await these launches so the
     // spawn is observable when they return. The concurrency cap still applies —
     // a launch past the cap waits for a slot, which is fine here because these
-    // callers hold no slot of their own.
-    const gitHead = baseline?.head ?? (await readGitHead(phaseDef.cwd));
+    // callers hold no slot of their own. Candidates are ordinary runs in that
+    // respect: `count` of them take `count` slots, and queue when the cap is
+    // smaller than the count.
     const unlaunchable: { run: Run; reason: string }[] = [];
-    for (const { stepDef, run, publishes, timeoutSeconds } of planned) {
+    for (const unit of planned) {
+      const { stepDef, run, publishes, timeoutSeconds, candidate } = unit;
+      // A working-tree baseline for `changed-files` checks, kept out of the
+      // agent's reach (beside the invocation records, not in the artifact dir).
+      // Per candidate, because each candidate has a tree of its own and is
+      // judged on what *it* changed.
+      let baseline: WorkingTreeSnapshot | null = null;
+      if (phaseDef.checks?.some((c) => c.kind === "changed-files")) {
+        baseline = await snapshotWorkingTree(run.cwd);
+        const file = phaseBaselinePath(
+          paths.invocationsDir(),
+          inst.id,
+          phaseDef.id,
+          progress.attempt,
+          candidate,
+        );
+        if (baseline) await atomicWriteJson(file, baseline);
+        else await rm(file, { force: true });
+      }
+      const gitHead = baseline?.head ?? (await readGitHead(run.cwd));
       const launched = await launchStep(run, {
         def,
         phaseDef,
         stepDef,
         inst,
         publishes,
-        artifactDir,
+        artifactDir: unit.artifactDir,
         timeoutSeconds,
         gitHead,
+        workspace: unit.workspace,
+        memoryDir,
+        contextFiles: unit.contextFiles,
+        knowledgeContext: unit.knowledgeContext,
       });
       void journal(inst.id, {
         at: nowISO(),
@@ -589,16 +1210,17 @@ export function createEngine(deps: EngineDeps): Engine {
         phaseId: phaseDef.id,
         runId: run.id,
         detail:
-          "handle" in launched
+          ("handle" in launched
             ? `pid ${run.pid ?? "unknown"}`
             : launched.failure === "configuration"
               ? `not launched: ${launched.reason}`
-              : "spawn failed",
+              : "spawn failed") + (candidate === undefined ? "" : ` (c${candidate})`),
       });
       if ("handle" in launched) trackStep(run, launched.handle, startedAt, inst.id, phaseDef.id);
       else if (launched.failure === "configuration")
         unlaunchable.push({ run, reason: launched.reason });
     }
+
     // A step Argus refused to launch as declared fails its phase now, under the
     // `configuration` class — never retried, because the definition is what is
     // wrong. (A spawn *error* keeps its existing path: the run record says
@@ -611,11 +1233,18 @@ export function createEngine(deps: EngineDeps): Engine {
       );
     }
     if (unlaunchable.length > 0) {
-      await writeInstance(inst);
-      // Siblings that did launch belong to a phase that has already failed.
-      await killPhaseRuns(inst, [phaseDef.id], "stopped: phase failed");
-      queueReadyPhases(inst.id, def, inst, readyAfterFailure);
-      if (inst.status === "failed") deps.onFailure?.(inst);
+      await saveInstance(inst);
+      if (candidates) {
+        // A candidate Argus would not launch as declared is one candidate lost,
+        // not a phase lost: the others may still win, and the phase only fails
+        // when none of them can.
+        await settleCandidates(def, inst, phaseDef.id);
+      } else {
+        // Siblings that did launch belong to a phase that has already failed.
+        await killPhaseRuns(inst, [phaseDef.id], "stopped: phase failed");
+        queueReadyPhases(inst.id, def, inst, readyAfterFailure);
+        if (inst.status === "failed") deps.onFailure?.(inst);
+      }
     }
     deps.onChange?.();
   }
@@ -631,12 +1260,32 @@ export function createEngine(deps: EngineDeps): Engine {
     inst: PipelineInstance,
     phaseId: string,
   ): Promise<void> {
-    const reason = `phase "${phaseId}" no longer exists in pipeline "${def.name}"`;
     log.warn("phase cannot be launched: not in the pipeline definition", {
       instanceId: inst.id,
       pipelineId: def.id,
       phaseId,
     });
+    await failPhaseConfiguration(
+      def,
+      inst,
+      phaseId,
+      `phase "${phaseId}" no longer exists in pipeline "${def.name}"`,
+    );
+  }
+
+  /**
+   * A phase that cannot be launched at all: nothing was spawned for this
+   * attempt, so there is nothing to kill. The phase fails under
+   * `configuration` — never retried, because what is wrong is the definition,
+   * not the weather — the instance settles, and whatever that makes ready is
+   * queued exactly as after any other failure.
+   */
+  async function failPhaseConfiguration(
+    def: PipelineDefinition,
+    inst: PipelineInstance,
+    phaseId: string,
+    reason: string,
+  ): Promise<void> {
     const res = applyUnlaunchable(def, inst, phaseId, reason, nowISO());
     const phase = res.instance.phases.find((p) => p.id === phaseId);
     if (phase?.status === "failed") {
@@ -649,7 +1298,7 @@ export function createEngine(deps: EngineDeps): Engine {
       });
     }
     noteRouting(def, res.instance, res.routing);
-    await writeInstance(res.instance);
+    await saveInstance(res.instance);
     if (res.instance.status === "succeeded" || res.instance.status === "failed") {
       void journal(inst.id, { at: nowISO(), kind: "instance.ended", detail: res.instance.status });
     }
@@ -684,6 +1333,7 @@ export function createEngine(deps: EngineDeps): Engine {
         payload: { reason, ...extra },
       },
       nowISO(),
+      failureClass,
     );
     const phase = res.instance.phases.find((p) => p.id === phaseId);
     if (phase?.status === "failed") {
@@ -723,6 +1373,15 @@ export function createEngine(deps: EngineDeps): Engine {
     artifactDir: string;
     timeoutSeconds: number | null;
     gitHead: string | null;
+    /** The worktree the step runs in, when its phase declared a policy. */
+    workspace: WorkspaceRecord | null;
+    /** This pipeline's durable-notes directory, when `memory` is enabled. */
+    memoryDir: string | null;
+    /** Full values of any placeholder {@link interpolate} trimmed for this
+     *  run's prompt, to write under its own invocation directory. */
+    contextFiles: { path: string; contents: string }[];
+    /** The run's semantic context as planned, or null for a step without one. */
+    knowledgeContext: PlannedKnowledgeContext | null;
   }
 
   type Launched =
@@ -754,6 +1413,12 @@ export function createEngine(deps: EngineDeps): Engine {
       // Where this phase's file artifacts go; later phases read them from here.
       ARGUS_ARTIFACT_DIR: ctx.artifactDir,
     };
+    // The isolated worktree the step is already running in, named so a script
+    // (or a nested tool) does not have to derive it from `pwd`. Per-invocation,
+    // and therefore stripped from the inherited environment by buildChildEnv.
+    if (ctx.workspace) env.ARGUS_WORKSPACE = ctx.workspace.path;
+    // This pipeline's durable-notes directory, when `memory` is enabled.
+    if (ctx.memoryDir) env.ARGUS_MEMORY_DIR = ctx.memoryDir;
     // The result file is named for every runtime, hook or no hook: the agent
     // writes the same file either way, and a runtime without a command hook has
     // it read off disk on the next reconcile tick instead.
@@ -763,10 +1428,42 @@ export function createEngine(deps: EngineDeps): Engine {
       await mkdir(path.dirname(resultFile), { recursive: true });
       env.ARGUS_RESULT_FILE = resultFile;
     }
+    // Where this run may propose semantic knowledge (docs/KNOWLEDGE-LEDGER.md
+    // § KnowledgeDelta protocol). Named for every run, like the result file:
+    // an agent that has nothing to propose writes nothing, and the engine
+    // reads the file — or its absence — when the run completes.
+    const deltaFile = knowledgeDeltaFile(run.id);
+    env.ARGUS_KNOWLEDGE_DELTA_FILE = deltaFile;
     const invocationDir = runInvocationDir(run.id);
+    // A semantic context the planning snapshot could not resolve refuses the
+    // step here, as a `configuration` failure: the definition names knowledge
+    // the ledger does not hold, and running again cannot change that.
+    if (ctx.knowledgeContext && "error" in ctx.knowledgeContext) {
+      sem.release();
+      const reason = ctx.knowledgeContext.error;
+      await writeRun({
+        ...run,
+        status: "failed",
+        termination: "spawn-failed",
+        error: reason,
+        endedAt: nowISO(),
+      });
+      return { failure: "configuration", reason };
+    }
+    // The read-only KnowledgeContext (docs/KNOWLEDGE-LEDGER.md § KnowledgeContext
+    // protocol): materialized in the run's own invocation directory before the
+    // process exists, named to the agent by the variable, and recorded on the
+    // invocation — exact refs and the file's hash — as what Argus supplied.
+    const resolvedContext = ctx.knowledgeContext?.resolved ?? null;
+    const contextFile = resolvedContext ? knowledgeContextFile(run.id) : null;
+    if (contextFile) env.ARGUS_KNOWLEDGE_CONTEXT_FILE = contextFile;
     let prepared: PreparedInvocation;
     try {
       await mkdir(invocationDir, { recursive: true });
+      await ensureKnowledgeDeltaDir(run.id);
+      if (contextFile && resolvedContext) {
+        await writeKnowledgeContextFile(contextFile, resolvedContext.text);
+      }
       // The clock the deadline runs from: now, with the slot held and the
       // process about to start.
       run.startedAt = nowISO();
@@ -777,11 +1474,25 @@ export function createEngine(deps: EngineDeps): Engine {
         stepDef: ctx.stepDef,
         instanceId: ctx.inst.id,
         attempt: ctx.inst.phases.find((p) => p.id === ctx.phaseDef.id)?.attempt ?? 0,
-        systemPrompt: OUTCOME_CONTRACT,
+        systemPrompt: STEP_CONTRACT,
         argusEnv: env,
         invocationDir,
         artifactDir: ctx.artifactDir,
+        memoryDir: ctx.memoryDir,
+        workspace: ctx.workspace,
         resultFile,
+        knowledgeDeltaFile: deltaFile,
+        knowledgeContext:
+          contextFile && resolvedContext
+            ? {
+                file: contextFile,
+                record: {
+                  schemaVersion: 1,
+                  claims: resolvedContext.supplied,
+                  sha256: resolvedContext.sha256,
+                },
+              }
+            : null,
         timeoutSeconds: ctx.timeoutSeconds,
         gitHead: ctx.gitHead,
         parentEnv: parentEnv(),
@@ -789,7 +1500,40 @@ export function createEngine(deps: EngineDeps): Engine {
       });
       run.deadlineAt = prepared.record.deadlineAt;
       await writeInvocation(prepared.record);
+      // Durable supplied provenance (Phase 4.1, docs/KNOWLEDGE-LEDGER.md
+      // §13.10): the identity of the context — exact refs, hash, when — goes
+      // into `knowledge.json` *before* the process exists, so the answer to
+      // "what did this run receive?" outlives the invocation directory that
+      // is pruned with the run. Idempotent on the run id, so a retried
+      // preparation or a reconcile re-observing the launch adds nothing; a
+      // *different* context for the same run throws, and the throw is caught
+      // below as a launch failure rather than rewriting history.
+      if (resolvedContext) {
+        await registerSuppliedContext(
+          { runId: run.id, instanceId: ctx.inst.id, phaseId: ctx.phaseDef.id },
+          {
+            claims: resolvedContext.supplied,
+            sha256: resolvedContext.sha256,
+            attempt: prepared.record.attempt,
+            schemaVersion: 1,
+          },
+          new Date(run.startedAt),
+        );
+        void journal(ctx.inst.id, {
+          at: run.startedAt,
+          kind: "knowledge.supplied",
+          phaseId: ctx.phaseDef.id,
+          runId: run.id,
+          detail: `${resolvedContext.supplied.map(formatClaimRef).join(", ")} (sha256 ${resolvedContext.sha256.slice(0, 12)})`,
+        });
+      }
       for (const file of prepared.files) await writeFile(file.path, file.contents, "utf8");
+      // Any placeholder {@link interpolate} trimmed for this run's prompt: the
+      // full value, so the agent can still read the whole thing if it needs to.
+      for (const file of ctx.contextFiles) {
+        await mkdir(path.dirname(file.path), { recursive: true });
+        await writeFile(file.path, file.contents, "utf8");
+      }
     } catch (e) {
       sem.release();
       await writeRun({
@@ -881,7 +1625,9 @@ export function createEngine(deps: EngineDeps): Engine {
         // A run Argus itself ended (deadline, abort) keeps the reason Argus
         // wrote; the exit code of a killed process explains nothing.
         const endedByArgus =
-          got?.run.termination === "timed-out" || got?.run.termination === "killed";
+          got?.run.termination === "timed-out" ||
+          got?.run.termination === "stalled" ||
+          got?.run.termination === "killed";
         await patchRun(run.id, {
           status: res.code === 0 && !endedByArgus ? "succeeded" : "failed",
           endedAt: nowISO(),
@@ -988,6 +1734,35 @@ export function createEngine(deps: EngineDeps): Engine {
   }
 
   /**
+   * A step's process is still alive, but its transcript has gone quiet for at
+   * least its `stallSeconds` (§D, harness/stall.ts) — killed the same way a
+   * hard timeout is, under the same `timeout` retry class (a stall is a
+   * timeout that noticed sooner), with its own termination and reason so the
+   * two are distinguishable in the record.
+   */
+  async function expireStalledStep(
+    runId: string,
+    instanceId: string,
+    phaseId: string,
+    stallSeconds: number,
+  ): Promise<void> {
+    const got = await readRun(runId);
+    if (!got || got.run.status !== "running") return;
+    const reason = `stalled: no output for ${stallSeconds}s`;
+    await failStep(instanceId, phaseId, runId, "timeout", reason, { kind: "stalled" }, async () => {
+      await patchRun(runId, { termination: "stalled", error: reason });
+      await stopRun(got.run.pid);
+      void journal(instanceId, {
+        at: nowISO(),
+        kind: "step.stalled",
+        phaseId,
+        runId,
+        detail: reason,
+      });
+    });
+  }
+
+  /**
    * Fail a running step from outside the signal path (deadline, or any other
    * harness-side verdict), under the instance lock. Only a step still tracked
    * as running is failed: a completion signal that landed first has already
@@ -1014,7 +1789,14 @@ export function createEngine(deps: EngineDeps): Engine {
       if (beforeTransition) await beforeTransition();
       const res = failStepInPlace(def, inst, phaseId, runId, failureClass, reason, extra);
       await patchRun(runId, { outcome: "failed" });
-      await writeInstance(res.instance);
+      await saveInstance(res.instance);
+      if (res.candidatesMoved) {
+        // One candidate timed out. Its siblings are the point of running
+        // several, so they are left alone and the selection is re-asked.
+        await settleCandidates(def, res.instance, res.candidatesMoved);
+        deps.onChange?.();
+        return;
+      }
       await killPhaseRuns(res.instance, [phaseId], "stopped: phase failed");
       queueReadyPhases(instanceId, def, res.instance, res.startPhases);
       if (res.instance.status === "failed") deps.onFailure?.(res.instance);
@@ -1161,10 +1943,10 @@ export function createEngine(deps: EngineDeps): Engine {
           (p) => p.status === "failed" && p.retryAt && Date.parse(p.retryAt) <= now.getTime(),
         );
         for (const phase of due) {
-          const note = retryNote(phase.payload);
+          const note = await buildRetryNote(def, phase);
           const res = applyRetry(inst, phase.id, nowISO());
           if (res.startPhases.length === 0) continue;
-          await writeInstance(res.instance);
+          await saveInstance(res.instance);
           void journal(inst.id, {
             at: nowISO(),
             kind: "phase.retrying",
@@ -1194,7 +1976,11 @@ export function createEngine(deps: EngineDeps): Engine {
     }
   }
 
-  async function start(pipelineId: string, trigger: "manual" | "scheduled" = "manual") {
+  async function start(
+    pipelineId: string,
+    trigger: PipelineInstance["trigger"] = "manual",
+    firing?: { triggerPayload?: unknown; chainedFrom?: string },
+  ) {
     const def = await loadDef(pipelineId);
     if (!def) throw new Error("pipeline not found");
     if (def.overlapPolicy === "skip") {
@@ -1212,8 +1998,9 @@ export function createEngine(deps: EngineDeps): Engine {
       trigger,
       { instanceId: deps.newId(), token: deps.newId() },
       nowISO(),
+      firing,
     );
-    await writeInstance(instance);
+    await saveInstance(instance);
     await markPipelineStarted(def.id, instance.createdAt);
     void journal(instance.id, {
       at: instance.createdAt,
@@ -1306,7 +2093,9 @@ export function createEngine(deps: EngineDeps): Engine {
           /* no baseline recorded (not a git repository, or no changed-files check) */
         }
         const report = await runChecks(phaseDef.checks ?? [], {
-          cwd: phaseDef.cwd,
+          // The checks look at the work, so they look where the work happened:
+          // the phase's worktree when it had one, its own cwd otherwise.
+          cwd: phase.workspace?.path ?? phaseDef.cwd,
           artifactDir: phase.artifactDir ?? null,
           baseline,
           now: deps.now,
@@ -1320,7 +2109,7 @@ export function createEngine(deps: EngineDeps): Engine {
           if (!fresh || fresh.status !== "running") return;
           const current = fresh.phases.find((p) => p.id === phaseId);
           if (!current || current.attempt !== attempt) return;
-          const res = applyVerification(def, fresh, phaseId, report, nowISO());
+          let res = applyVerification(def, fresh, phaseId, report, nowISO());
           if (!res.verificationApplied) return;
           const failed = report.status === "failed";
           void journal(instanceId, {
@@ -1341,8 +2130,9 @@ export function createEngine(deps: EngineDeps): Engine {
                 ?.reason ?? "verification failed";
             noteFailure(def, res.instance, phaseId, "verification", reason);
           }
+          res = await settleKnowledge(def, res);
           noteRouting(def, res.instance, res.routing);
-          await writeInstance(res.instance);
+          await saveInstance(res.instance);
           if (res.instance.status === "succeeded" || res.instance.status === "failed") {
             void journal(instanceId, {
               at: nowISO(),
@@ -1357,6 +2147,741 @@ export function createEngine(deps: EngineDeps): Engine {
       })()
         .catch((e: unknown) =>
           log.error("phase verification failed to run", { instanceId, phaseId, err: e }),
+        )
+        .finally(() => verifying.delete(key)),
+    );
+  }
+
+  // ── Knowledge deltas ───────────────────────────────────────────────────────
+  //
+  // The engine's side of docs/KNOWLEDGE-LEDGER.md § KnowledgeDelta protocol.
+  // Three moments, none of which touch `knowledge.json` except the middle one:
+  //
+  //   intake   — a run completed; its delta file is read, validated against
+  //              the ledger as it stands, and staged beside the run (or
+  //              refused, failing the step under `knowledge-delta`);
+  //   commit   — the phase crossed every acceptance condition; every staged
+  //              delta of *this attempt* is applied as one ledger transition,
+  //              or none is, and the phase succeeds or fails on the verdict;
+  //   retire   — an attempt failed, was revised, was aborted, or lost a
+  //              selection; its staged deltas are superseded and can never
+  //              become canonical.
+
+  /** The phase and step a completion signal would drive, when both are live. */
+  function liveStep(inst: PipelineInstance, phaseId: string, runId: string): boolean {
+    const phase = inst.phases.find((p) => p.id === phaseId);
+    if (!phase || phase.status !== "running") return false;
+    const step = phase.steps.find((s) => s.runId === runId);
+    return step?.status === "running";
+  }
+
+  type Intake =
+    | { ok: true; staged: StepKnowledgeDelta | null }
+    | { ok: false; reason: string; failure: RetryableClass };
+
+  /**
+   * The context-integrity gate (Phase 4.1, docs/KNOWLEDGE-LEDGER.md §13.11).
+   *
+   * Argus hashed the KnowledgeContext file when it materialized it and wrote
+   * that hash into the ledger. Before a completion is accepted, the file is
+   * re-hashed: the bytes the agent was given must be the bytes Argus supplied,
+   * or the provenance record is a promise Argus cannot keep. A mismatch — or a
+   * file that has disappeared — refuses the completion deterministically, so
+   * nothing the run proposed reaches the ledger.
+   *
+   * Three things it deliberately is not:
+   *
+   * - **Not a currency check.** A claim revised in the ledger while the agent
+   *   ran leaves the file untouched; the run continues on the historical
+   *   revision it was given. Only changed *bytes* fail here.
+   * - **Not a check on legacy runs.** No durable supplied record (the run was
+   *   launched without a semantic context, or predates Phase 4.1) means
+   *   nothing to verify, and the completion proceeds exactly as before.
+   * - **Not a read of the contents.** The refusal names the run, the two
+   *   hashes and the path — never a byte of the context.
+   *
+   * Returns the refusal, or null when the completion may proceed.
+   */
+  async function checkContextIntegrity(
+    inst: PipelineInstance,
+    phaseId: string,
+    runId: string,
+  ): Promise<Intake | null> {
+    const ledger = await readLedger();
+    const supplied = suppliedContextOf(ledger, runId);
+    if (!supplied) return null;
+    const invocation = await readInvocation(runId);
+    const file = invocation?.knowledgeContextFile ?? knowledgeContextFile(runId);
+    const result = await verifyKnowledgeContextIntegrity(file, supplied.sha256);
+    if (result.status === "unchanged") return null;
+    const reason = describeIntegrityFailure(runId, result);
+    void journal(inst.id, {
+      at: nowISO(),
+      kind: "knowledge.integrity",
+      phaseId,
+      runId,
+      detail: `${result.status}: expected sha256 ${result.expected?.slice(0, 12)}${
+        result.actual ? `, found ${result.actual.slice(0, 12)}` : ""
+      }`,
+    });
+    return { ok: false, reason, failure: "knowledge-context-integrity" };
+  }
+
+  /**
+   * Everything Argus checks before a step's completion — and the semantic
+   * output it carries — is accepted: the context it was given is unchanged
+   * (above), then its KnowledgeDelta is read, validated and staged (below).
+   * Order matters: a run whose input Argus cannot vouch for never gets its
+   * proposal staged, so a tampered context can never become canonical
+   * knowledge.
+   */
+  async function acceptCompletion(
+    def: PipelineDefinition,
+    inst: PipelineInstance,
+    phaseId: string,
+    runId: string,
+  ): Promise<Intake> {
+    return (
+      (await checkContextIntegrity(inst, phaseId, runId)) ??
+      (await intakeKnowledgeDelta(def, inst, phaseId, runId))
+    );
+  }
+
+  /**
+   * Read, validate, preflight and stage the delta a completed run may have
+   * written. Sets `step.knowledgeDelta` on the in-memory instance when one
+   * was staged, so the transition that follows sees it. Never touches the
+   * ledger: `preflightKnowledgeDeltas` is a dry run against the current
+   * snapshot, there so a proposal that is already refusable — an unknown
+   * revision, a precondition that no longer holds, a cycle — fails the step
+   * at once rather than after a gate has waited on a person. The proposal is
+   * checked again, against the snapshot of that moment, at commit.
+   */
+  async function intakeKnowledgeDelta(
+    def: PipelineDefinition,
+    inst: PipelineInstance,
+    phaseId: string,
+    runId: string,
+  ): Promise<Intake> {
+    const phase = inst.phases.find((p) => p.id === phaseId);
+    const step = phase?.steps.find((s) => s.runId === runId);
+    if (!phase || !step) return { ok: true, staged: null };
+    const at = nowISO();
+
+    // Staged already (a restart between the record write and the instance
+    // write): the record decides, exactly as it did the first time.
+    const existing = await readDeltaRecord(runId);
+    if (existing && existing.attempt === phase.attempt) {
+      if (existing.status === "rejected") {
+        return {
+          ok: false,
+          reason: existing.reason ?? "KnowledgeDelta was rejected",
+          failure: "knowledge-delta",
+        };
+      }
+      step.knowledgeDelta = { id: existing.id, status: existing.status };
+      return { ok: true, staged: step.knowledgeDelta };
+    }
+
+    const file = await readAgentDelta(runId);
+    if (file.kind === "none") return { ok: true, staged: null };
+
+    // What Argus supplied to this run. Copied onto the staged record so the
+    // commit can classify each consumed entry as supplied or agent-discovered
+    // (ClaimConsumption.source), and so the two lists sit side by side for a
+    // reader.
+    //
+    // One deterministic answer, from two sources with a fixed precedence
+    // (docs/KNOWLEDGE-LEDGER.md §13.7): the ledger's **durable** supplied
+    // record first — it is written before the process starts and survives
+    // every pruning path — and the invocation record only when there is
+    // none. They cannot
+    // disagree (the durable record is registered from the same resolution
+    // that produced the invocation record's, and a conflicting registration
+    // is refused), so the precedence matters only for availability: a
+    // recovery path where the invocation directory is gone still classifies
+    // correctly. Absent (not empty) when neither can be read: no claim either
+    // way, and every consumption is recorded without a `source`. A run
+    // launched *with* no context has an invocation record saying so, which is
+    // positive evidence of an empty supply — never the same as unknown.
+    const durable = suppliedContextOf(await readLedger(), runId);
+    const invocation = durable ? null : await readInvocation(runId);
+    const supplied = durable
+      ? durable.claims.map((c) => ({ id: c.id, revision: c.revision }))
+      : invocation
+        ? (invocation.knowledgeContext?.claims ?? []).map((c) => ({
+            id: c.id,
+            revision: c.revision,
+          }))
+        : undefined;
+
+    const base: Omit<KnowledgeDeltaRecord, "status"> = {
+      id: `KD-${deps.newId()}`,
+      runId,
+      instanceId: inst.id,
+      phaseId,
+      attempt: phase.attempt,
+      step: step.name,
+      receivedAt: at,
+      updatedAt: at,
+      ...(supplied !== undefined ? { supplied } : {}),
+    };
+    const reject = async (
+      reason: string,
+      delta?: KnowledgeDeltaRecord["delta"],
+    ): Promise<Intake> => {
+      const full = `KnowledgeDelta rejected: ${reason}`;
+      await writeDeltaRecord({
+        ...base,
+        status: "rejected",
+        reason: full,
+        ...(delta ? { delta } : {}),
+      });
+      void journal(inst.id, {
+        at,
+        kind: "knowledge.rejected",
+        phaseId,
+        runId,
+        attempt: phase.attempt,
+        detail: `${base.id}: ${reason}`,
+      });
+      return { ok: false, reason: full, failure: "knowledge-delta" };
+    };
+
+    if (file.kind === "unreadable") return reject(file.reason);
+    let delta: KnowledgeDeltaRecord["delta"];
+    try {
+      delta = parseKnowledgeDelta(file.text);
+    } catch (e) {
+      return reject(
+        e instanceof KnowledgeDeltaError
+          ? `${e.code}: ${e.message}`
+          : e instanceof Error
+            ? e.message
+            : String(e),
+      );
+    }
+    // A document that proposes nothing is the same as no document.
+    if (isEmptyDelta(delta)) return { ok: true, staged: null };
+
+    // Artifacts the agent claims to have produced must exist where the run
+    // could have produced them — its artifact directory, or its working tree.
+    // Checked now, while the worktree the run used still exists, and again at
+    // the commit boundary, so nothing that vanished in between is recorded.
+    const missing = await verifyDeltaArtifacts(def, phase, runId, delta);
+    if (missing) return reject(missing, delta);
+
+    const proposal: DeltaProposal = {
+      id: base.id,
+      delta,
+      execution: { runId, instanceId: inst.id, phaseId },
+      attempt: phase.attempt,
+      ...(supplied !== undefined ? { supplied } : {}),
+    };
+    try {
+      await preflightKnowledgeDeltas([proposal], deps.now());
+    } catch (e) {
+      return reject(
+        e instanceof KnowledgeDeltaError
+          ? `${e.code}: ${e.message}`
+          : e instanceof Error
+            ? e.message
+            : String(e),
+        delta,
+      );
+    }
+    await writeDeltaRecord({ ...base, status: "staged", delta });
+    step.knowledgeDelta = { id: base.id, status: "staged" };
+    void journal(inst.id, {
+      at,
+      kind: "knowledge.staged",
+      phaseId,
+      runId,
+      attempt: phase.attempt,
+      detail: `${base.id}: ${describeDelta(delta)}`,
+    });
+    return { ok: true, staged: step.knowledgeDelta };
+  }
+
+  /**
+   * The deterministic facts Argus can establish about the artifacts a delta
+   * declares: that the run *has* the root the location names (its artifact
+   * directory; its worktree or working directory), that the path stays inside
+   * that root, and that something exists there. Nothing about contents — the
+   * agent's claim about what the file *is* stays the agent's.
+   *
+   * Run at intake and again at commit, against the same roots (the invocation
+   * record's, which do not change between the two). A staged delta whose
+   * artifact was removed while checks ran or a gate waited is refused at the
+   * commit boundary rather than persisted as provenance for a file that is not
+   * there. Returns the refusal, or null when every artifact still holds.
+   */
+  async function verifyDeltaArtifacts(
+    def: PipelineDefinition,
+    phase: PhaseProgress,
+    runId: string,
+    delta: NonNullable<KnowledgeDeltaRecord["delta"]>,
+  ): Promise<string | null> {
+    if (!delta.artifacts?.length) return null;
+    const invocation = await readInvocation(runId);
+    const phaseDef = def.phases.find((p) => p.id === phase.id);
+    const roots = {
+      "artifact-dir": invocation?.artifactDir ?? phase.artifactDir ?? null,
+      repository: invocation?.workspace?.path ?? invocation?.cwd ?? phaseDef?.cwd ?? null,
+    };
+    for (const a of delta.artifacts) {
+      const root = roots[a.location];
+      if (!root) return `artifact ${a.location}:${a.path}: the run has no ${a.location}`;
+      // The same containment rule the ledger enforces on write, applied to
+      // the resolved path as well as the declared one: a path that escapes its
+      // root is refused here even if the declared form slipped past validation.
+      const resolvedRoot = path.resolve(root);
+      const resolved = path.resolve(resolvedRoot, ...a.path.split("/"));
+      if (
+        !validArtifactPath(a.path) ||
+        (resolved !== resolvedRoot && !resolved.startsWith(resolvedRoot + path.sep))
+      ) {
+        return `artifact ${a.location}:${a.path} is not inside the run's ${a.location}`;
+      }
+      try {
+        await stat(resolved);
+      } catch {
+        return `artifact ${a.location}:${a.path} does not exist in the run's ${a.location}`;
+      }
+    }
+    return null;
+  }
+
+  function describeDelta(delta: NonNullable<KnowledgeDeltaRecord["delta"]>): string {
+    const parts = [
+      [delta.claims?.length ?? 0, "claim"],
+      [delta.revisions?.length ?? 0, "revision"],
+      [delta.evidence?.length ?? 0, "evidence"],
+      [delta.justifications?.length ?? 0, "justification"],
+      [delta.consumed?.length ?? 0, "consumed"],
+      [delta.artifacts?.length ?? 0, "artifact"],
+    ] as const;
+    return parts
+      .filter(([n]) => n > 0)
+      .map(
+        ([n, what]) =>
+          `${n} ${what}${n === 1 || what === "evidence" || what === "consumed" ? "" : "s"}`,
+      )
+      .join(", ");
+  }
+
+  /**
+   * Apply a held phase's staged deltas as one ledger transition and return
+   * the verdict. Reads each step's staged record (refusing one staged for
+   * another attempt — the instance says which attempt this is), commits them
+   * in step order under the ledger mutex, and moves the records to `applied`
+   * or `rejected`. Any refusal — a stale precondition, a conflict between two
+   * steps, an unreadable ledger — is a verdict, never a thrown error: the
+   * phase fails with the reason, and nothing was written.
+   */
+  async function commitPhaseKnowledge(
+    def: PipelineDefinition,
+    inst: PipelineInstance,
+    phase: PhaseProgress,
+  ): Promise<KnowledgeCommitVerdict> {
+    const wanted = phase.knowledge?.deltas ?? [];
+    const proposals: DeltaProposal[] = [];
+    for (const step of phase.steps) {
+      const id = step.knowledgeDelta?.id;
+      if (!id || !wanted.includes(id) || !step.runId) continue;
+      const record = await readDeltaRecord(step.runId);
+      if (!record || record.id !== id || !record.delta) {
+        return { ok: false, reason: `KnowledgeDelta ${id} is not staged for run ${step.runId}` };
+      }
+      if (record.attempt !== phase.attempt) {
+        return {
+          ok: false,
+          reason: `KnowledgeDelta ${id} was staged for attempt ${record.attempt}, not ${phase.attempt}`,
+        };
+      }
+      proposals.push({
+        id,
+        delta: record.delta,
+        execution: { runId: step.runId, instanceId: inst.id, phaseId: phase.id },
+        attempt: phase.attempt,
+        ...(record.supplied !== undefined ? { supplied: record.supplied } : {}),
+      });
+    }
+    const at = nowISO();
+    // The declared artifacts, checked again now: intake proved they existed
+    // when the run finished, not that they still do after checks ran and a
+    // gate waited. One missing artifact refuses the whole attempt's commit
+    // before the ledger is touched, so no sibling's delta lands without it.
+    for (const p of proposals) {
+      const missing = await verifyDeltaArtifacts(def, phase, p.execution.runId, p.delta);
+      if (missing) {
+        const reason = `KnowledgeDelta commit refused: delta ${p.id} (run ${p.execution.runId}): artifact: ${missing}`;
+        for (const q of proposals) {
+          await updateDeltaStatus(q.execution.runId, "rejected", { at, reason });
+        }
+        return { ok: false, reason };
+      }
+    }
+    try {
+      const results = await commitKnowledgeDeltas(proposals, deps.now());
+      for (const [i, p] of proposals.entries()) {
+        await updateDeltaStatus(p.execution.runId, "applied", { at, result: results[i] });
+      }
+      return { ok: true };
+    } catch (e) {
+      const reason = `KnowledgeDelta commit refused: ${
+        e instanceof KnowledgeDeltaError
+          ? `${e.code}: ${e.message}`
+          : e instanceof Error
+            ? e.message
+            : String(e)
+      }`;
+      for (const p of proposals) {
+        await updateDeltaStatus(p.execution.runId, "rejected", { at, reason });
+      }
+      return { ok: false, reason };
+    }
+  }
+
+  /**
+   * Take a transition through the knowledge commit it asked for.
+   *
+   * A transition that met every other acceptance condition of a phase with
+   * staged deltas has held it `running` under `knowledge.status: "pending"`
+   * and named it in `commitKnowledge`. The held state is persisted *first*
+   * — so a crash after the ledger write is healed by committing again, which
+   * is idempotent — then the deltas are committed and the verdict applied.
+   * Returns the transition the caller should continue with: what the verdict
+   * settled (the successors it made ready, the routes it decided), merged
+   * with what the original transition had already settled.
+   */
+  async function settleKnowledge(
+    def: PipelineDefinition,
+    res: TransitionResult,
+  ): Promise<TransitionResult> {
+    if (!res.commitKnowledge?.length) return res;
+    let out: TransitionResult = { ...res };
+    delete out.commitKnowledge;
+    for (const phaseId of res.commitKnowledge) {
+      const phase = out.instance.phases.find((p) => p.id === phaseId);
+      if (!phase || phase.knowledge?.status !== "pending") continue;
+      await saveInstance(out.instance);
+      const verdict = await commitPhaseKnowledge(def, out.instance, phase);
+      const next = applyKnowledgeCommit(def, out.instance, phaseId, verdict, nowISO());
+      if (!next.knowledgeApplied) continue;
+      void journal(out.instance.id, {
+        at: nowISO(),
+        kind: verdict.ok ? "knowledge.applied" : "knowledge.rejected",
+        phaseId,
+        attempt: phase.attempt,
+        detail: verdict.ok
+          ? `${phase.knowledge.deltas.length} delta${phase.knowledge.deltas.length === 1 ? "" : "s"}: ${phase.knowledge.deltas.join(", ")}`
+          : verdict.reason,
+      });
+      if (!verdict.ok) noteFailure(def, next.instance, phaseId, "knowledge-delta", verdict.reason);
+      out = {
+        ...next,
+        startPhases: [...new Set([...out.startPhases, ...next.startPhases])],
+        routing: mergeRouting(out.routing, next.routing),
+      };
+    }
+    return out;
+  }
+
+  function mergeRouting(a?: RouteOutcome, b?: RouteOutcome): RouteOutcome | undefined {
+    if (!a) return b;
+    if (!b) return a;
+    return {
+      decisions: [...a.decisions, ...b.decisions],
+      skipped: [...a.skipped, ...b.skipped],
+      failures: [...a.failures, ...b.failures],
+    };
+  }
+
+  /** Move the named steps' staged deltas to `superseded`, on disk and on the
+   *  instance. An `applied` delta is never touched. */
+  async function supersedeDeltas(
+    inst: PipelineInstance,
+    phase: PhaseProgress,
+    steps: StepProgress[],
+    reason: string,
+  ): Promise<void> {
+    for (const step of steps) {
+      if (step.knowledgeDelta?.status !== "staged" || !step.runId) continue;
+      await updateDeltaStatus(step.runId, "superseded", { at: nowISO(), reason });
+      step.knowledgeDelta = { ...step.knowledgeDelta, status: "superseded" };
+      void journal(inst.id, {
+        at: nowISO(),
+        kind: "knowledge.superseded",
+        phaseId: phase.id,
+        runId: step.runId,
+        attempt: phase.attempt,
+        detail: `${step.knowledgeDelta.id}: ${reason}`,
+      });
+    }
+  }
+
+  /**
+   * Every staged delta on an attempt that can no longer be accepted — a
+   * failed, aborted or skipped phase, or a step that failed, was aborted (a
+   * losing candidate) or was skipped — is superseded. Run on every instance
+   * write, because an attempt can end from a dozen places and a hook on each
+   * is a hook somebody forgets. Cheap when nothing is staged (the common case:
+   * one pass over the steps, no I/O).
+   */
+  async function retireStagedDeltas(inst: PipelineInstance): Promise<void> {
+    for (const phase of inst.phases) {
+      const phaseOver =
+        phase.status === "failed" || phase.status === "aborted" || phase.status === "skipped";
+      const doomed = phase.steps.filter(
+        (s) =>
+          s.knowledgeDelta?.status === "staged" &&
+          (phaseOver || s.status === "failed" || s.status === "aborted" || s.status === "skipped"),
+      );
+      if (doomed.length === 0) continue;
+      await supersedeDeltas(
+        inst,
+        phase,
+        doomed,
+        phaseOver
+          ? `phase attempt ${phase.attempt} ${phase.status}`
+          : `step ${doomed.map((s) => `${s.name} ${s.status}`).join(", ")}`,
+      );
+    }
+  }
+
+  // ── Candidates ─────────────────────────────────────────────────────────────
+
+  /**
+   * Every candidate of a phase, as the selectors need to read it: what the
+   * instance persisted, joined with what the run records say it cost.
+   *
+   * The join lives here rather than in the transitions because cost and
+   * duration are not on the instance — they are read off the run at display
+   * time — and `cheapest-verified` is precisely a rule about them.
+   */
+  async function candidateRecordsFor(phase: PhaseProgress): Promise<CandidateRecord[]> {
+    const records: CandidateRecord[] = [];
+    for (const step of phase.steps) {
+      if (step.candidate === undefined) continue;
+      const got = step.runId ? await readRun(step.runId) : null;
+      records.push({
+        ...candidateRecordOf(step),
+        costUsd: got?.run.costUsd ?? null,
+        durationMs: got?.run.durationMs ?? null,
+        runtime: got?.run.runtime ?? null,
+        model: got?.run.model ?? null,
+      });
+    }
+    return records;
+  }
+
+  /** Remove the worktrees of the candidates that did not win. The branches
+   *  survive, as everywhere else: a losing draft is still evidence, and a
+   *  `keep` policy keeps its directory too. */
+  async function removeCandidateTrees(
+    def: PipelineDefinition,
+    inst: PipelineInstance,
+    phaseDef: PhaseDef,
+    phase: PhaseProgress,
+    keptCandidate: number | null,
+  ): Promise<void> {
+    if (workspacePolicyFor(def, phaseDef)?.keep === true) return;
+    for (const step of phase.steps) {
+      if (step.candidate === undefined || step.candidate === keptCandidate) continue;
+      if (!step.workspace) continue;
+      const tree = step.workspace;
+      // The record is only forgotten once the directory is: a tree the kill
+      // raced (the agent still writing as git was asked to take it away) stays
+      // on the step, and the instance's own cleanup collects it at settlement.
+      if (await removeWorkspace(inst.id, phaseDef.cwd, tree.path, tree.branch)) {
+        step.workspace = null;
+      }
+    }
+  }
+
+  /**
+   * Ask a candidates phase whether it has an answer yet, and act on it.
+   *
+   * Called after anything that could move a candidate — a signal, a report from
+   * its checks, a deadline, a run found dead after a restart — always under the
+   * instance lock, with the in-memory instance. Three outcomes, and the first is
+   * the common one:
+   *
+   *  - nothing decided yet, so nothing happens;
+   *  - a winner, whose worktree, payload, result and verification become the
+   *    phase's; the siblings still running are killed (`first-verified` exists
+   *    to stop paying for them) and their trees removed;
+   *  - nobody left who could win, so the phase fails once, with every
+   *    candidate's fate in the reason and the retry policy applied as usual.
+   */
+  async function settleCandidates(
+    def: PipelineDefinition,
+    inst: PipelineInstance,
+    phaseId: string,
+  ): Promise<void> {
+    const phase = inst.phases.find((p) => p.id === phaseId);
+    const phaseDef = def.phases.find((p) => p.id === phaseId);
+    if (!phase || !phaseDef?.candidates || phase.status !== "running") return;
+    const records = await candidateRecordsFor(phase);
+    const decision = selectCandidate(phaseDef.candidates, records);
+    if (decision.kind === "pending") return;
+    const outcomes = toCandidateOutcomes(records);
+
+    let res: TransitionResult;
+    if (decision.kind === "selected") {
+      const winner = decision.candidate;
+      // Kill first, transition second: the reason is written onto the run
+      // record before the process dies, so the close handler reports "superseded
+      // by candidate k" rather than inventing something from an exit code.
+      for (const step of phase.steps) {
+        if (step.candidate === undefined || step.candidate === winner || !step.runId) continue;
+        const got = await readRun(step.runId);
+        if (got && got.run.status === "running" && isAlive(got.run.pid)) {
+          if (!got.run.termination) {
+            await patchRun(step.runId, {
+              termination: "killed",
+              error: `superseded by candidate ${winner}`,
+            });
+          }
+          await stopRun(got.run.pid);
+        }
+        deps.tailer?.untrack(step.runId);
+      }
+      await removeCandidateTrees(def, inst, phaseDef, phase, winner);
+      res = applyCandidateSelection(def, inst, phaseId, winner, outcomes, nowISO());
+      void journal(inst.id, {
+        at: nowISO(),
+        kind: "phase.candidate-selected",
+        phaseId,
+        attempt: phase.attempt,
+        detail: `c${winner} of ${records.length} (${phaseDef.candidates.select})`,
+      });
+      res = await settleKnowledge(def, res);
+    } else {
+      const failureClass = candidateFailureClass(records);
+      const reason = candidateFailureReason(records);
+      await removeCandidateTrees(def, inst, phaseDef, phase, null);
+      res = applyCandidatesExhausted(def, inst, phaseId, failureClass, reason, outcomes, nowISO());
+      if (failureClass === "configuration") {
+        // Every candidate was refused as declared, so the definition is what is
+        // wrong and another attempt cannot help. Journalled, never retried.
+        void journal(inst.id, {
+          at: nowISO(),
+          kind: "phase.failed",
+          phaseId,
+          attempt: phase.attempt,
+          detail: `configuration: ${reason}`,
+        });
+      } else {
+        // The class is already on the payload; this is what schedules the retry
+        // and writes the `phase.failed` entry, exactly as for any other failure.
+        noteFailure(def, res.instance, phaseId, failureClass, reason);
+      }
+    }
+
+    noteRouting(def, res.instance, res.routing);
+    await saveInstance(res.instance);
+    if (res.instance.status === "succeeded" || res.instance.status === "failed") {
+      void journal(inst.id, { at: nowISO(), kind: "instance.ended", detail: res.instance.status });
+    }
+    queueReadyPhases(inst.id, def, res.instance, res.startPhases);
+    if (res.instance.status === "failed") deps.onFailure?.(res.instance);
+    deps.onChange?.();
+  }
+
+  /**
+   * Run one candidate's copy of the phase's checks, inside that candidate's own
+   * worktree, against its own baseline and artifact directory.
+   *
+   * The same shape as {@link queueVerification} and for the same reasons — off
+   * the lock because a test suite takes as long as a test suite, keyed so a
+   * crash mid-verification is re-run by reconcile and a stale report is a no-op
+   * — but keyed by candidate as well as attempt, because a candidates phase has
+   * `count` independent verdicts rather than one.
+   */
+  function queueCandidateVerification(
+    instanceId: string,
+    def: PipelineDefinition,
+    phaseId: string,
+    attempt: number,
+    candidate: number,
+  ): void {
+    const key = `${instanceId}:${phaseId}:${attempt}:c${candidate}`;
+    if (verifying.has(key)) return;
+    verifying.add(key);
+    const phaseDef = def.phases.find((p) => p.id === phaseId);
+    void track(
+      (async () => {
+        if (!phaseDef) return;
+        const inst = await readInstance(instanceId);
+        const phase = inst?.phases.find((p) => p.id === phaseId);
+        const step = phase?.steps.find((s) => s.candidate === candidate);
+        if (!inst || !phase || !step) return;
+        const count = phaseDef.checks?.length ?? 0;
+        void journal(instanceId, {
+          at: nowISO(),
+          kind: "phase.verifying",
+          phaseId,
+          attempt,
+          detail: `c${candidate}: ${count} check${count === 1 ? "" : "s"}`,
+        });
+        let baseline: WorkingTreeSnapshot | null = null;
+        try {
+          baseline = JSON.parse(
+            await readFile(
+              phaseBaselinePath(paths.invocationsDir(), instanceId, phaseId, attempt, candidate),
+              "utf8",
+            ),
+          ) as WorkingTreeSnapshot;
+        } catch {
+          /* no baseline recorded (not a git repository, or no changed-files check) */
+        }
+        const own = candidateArtifactDir(
+          phase.artifactDir ?? phaseArtifactDir(paths.artifactsDir(), instanceId, phaseId),
+          candidate,
+        );
+        const report = await runChecks(phaseDef.checks ?? [], {
+          // This candidate's tree, not the phase's: the whole point is that each
+          // draft is judged on what it alone did.
+          cwd: step.workspace?.path ?? phase.workspace?.path ?? phaseDef.cwd,
+          artifactDir: own,
+          baseline,
+          now: deps.now,
+          env: buildChildEnv(parentEnv(), resolveCapabilities(def, phaseDef, {})?.env).env,
+        });
+        await locks.withLock(instanceId, async () => {
+          const fresh = await readInstance(instanceId);
+          if (!fresh || fresh.status !== "running") return;
+          const current = fresh.phases.find((p) => p.id === phaseId);
+          if (!current || current.attempt !== attempt) return;
+          const res = applyCandidateVerification(fresh, phaseId, candidate, report, nowISO());
+          if (!res.verificationApplied) return;
+          void journal(instanceId, {
+            at: nowISO(),
+            kind: "phase.verified",
+            phaseId,
+            attempt,
+            detail:
+              report.status === "passed"
+                ? `c${candidate} passed: ${report.checks.length} check${report.checks.length === 1 ? "" : "s"}`
+                : `c${candidate} failed: ${report.checks
+                    .filter((c) => c.status === "failed")
+                    .map((c) => c.label)
+                    .join(", ")}`,
+          });
+          await saveInstance(res.instance);
+          await settleCandidates(def, res.instance, phaseId);
+          deps.onChange?.();
+        });
+      })()
+        .catch((e: unknown) =>
+          log.error("candidate verification failed to run", {
+            instanceId,
+            phaseId,
+            candidate,
+            err: e,
+          }),
         )
         .finally(() => verifying.delete(key)),
     );
@@ -1383,9 +2908,29 @@ export function createEngine(deps: EngineDeps): Engine {
       if (inst.status !== "running") return { ok: true, code: 200 }; // paused/terminal → idempotent ignore
       const def = await defFor(inst);
       if (!def) return { ok: false, code: 404 };
-      const res = advance(def, inst, signal, nowISO());
+      // A completion is accepted only once Argus has re-verified the semantic
+      // context it supplied (Phase 4.1) and read, validated and staged any
+      // KnowledgeDelta the run wrote — both *before* the transition, so a
+      // refusal fails the step under its own class instead of the step
+      // succeeding with the proposal silently dropped, and a staged delta is
+      // on the step by the time the transition decides whether the phase may
+      // conclude.
+      const intake =
+        signal.type === "completed" && liveStep(inst, signal.phaseId, signal.runId)
+          ? await acceptCompletion(def, inst, signal.phaseId, signal.runId)
+          : null;
+      let res =
+        intake && !intake.ok
+          ? failStepInPlace(def, inst, signal.phaseId, signal.runId, intake.failure, intake.reason)
+          : advance(def, inst, signal, nowISO());
       const outcome: Run["outcome"] | undefined =
-        signal.type === "failed" ? "failed" : signal.type === "completed" ? "succeeded" : undefined;
+        intake && !intake.ok
+          ? "failed"
+          : signal.type === "failed"
+            ? "failed"
+            : signal.type === "completed"
+              ? "succeeded"
+              : undefined;
       if (res.ignored) {
         // The instance is untouched; say so where someone debugging will look,
         // instead of journalling the signal as if it had landed. The run did
@@ -1414,9 +2959,12 @@ export function createEngine(deps: EngineDeps): Engine {
         });
         return { ok: true, code: 202 };
       }
-      const { instance, startPhases: ready, routing, verify } = res;
+      res = await settleKnowledge(def, res);
+      const { instance, startPhases: ready, routing, verify, verifyCandidate } = res;
       noteRouting(def, instance, routing);
-      if (signal.type === "failed") {
+      // A candidate's failure is not the phase's: it loses, the phase carries
+      // on, and `settleCandidates` below decides whether anything is left.
+      if (signal.type === "failed" && !res.candidatesMoved) {
         // An agent that signalled failure has considered the work, so this
         // class is excluded from the default retry set — but an author who
         // opted into it gets it.
@@ -1425,16 +2973,43 @@ export function createEngine(deps: EngineDeps): Engine {
       // One write: the route decision, the skips it implies, the phase
       // statuses, the failure class and any scheduled retry land together or
       // not at all.
-      await writeInstance(instance);
+      await saveInstance(instance);
       queueVerifications(instanceId, def, instance, verify);
+      if (verifyCandidate) {
+        const phase = instance.phases.find((p) => p.id === verifyCandidate.phaseId);
+        if (phase) {
+          queueCandidateVerification(
+            instanceId,
+            def,
+            verifyCandidate.phaseId,
+            phase.attempt,
+            verifyCandidate.candidate,
+          );
+        }
+      }
       if (outcome) await patchRun(signal.runId, { outcome });
       void journal(instance.id, {
         at: nowISO(),
         kind: "phase.signalled",
         phaseId: signal.phaseId,
         runId: signal.runId,
-        detail: signal.type,
+        detail:
+          intake && !intake.ok
+            ? `${signal.type} (${
+                intake.failure === "knowledge-context-integrity"
+                  ? "knowledge context integrity"
+                  : "knowledge delta refused"
+              })`
+            : signal.type,
       });
+      if (res.candidatesMoved) {
+        // Everything after this — the phase's own conclusion, its journal
+        // entries, the next phases — is the selection's business, not the
+        // signalling candidate's.
+        await settleCandidates(def, instance, res.candidatesMoved);
+        deps.onChange?.();
+        return { ok: true, code: 202 };
+      }
       if (instance.status === "succeeded" || instance.status === "failed") {
         void journal(instance.id, {
           at: nowISO(),
@@ -1467,14 +3042,25 @@ export function createEngine(deps: EngineDeps): Engine {
       if (!inst) return { ok: false, code: 404, error: "instance not found" };
       const def = await defFor(inst);
       if (!def) return { ok: false, code: 404, error: "pipeline not found" };
-      let res;
+      let res: TransitionResult;
       try {
         res = applyApprove(def, inst, answers, nowISO(), options.phaseId);
       } catch (e) {
         return { ok: false, code: 409, error: e instanceof Error ? e.message : String(e) };
       }
-      await writeInstance(res.instance);
-      if (noteRouting(def, res.instance, res.routing)) await writeInstance(res.instance);
+      // The gate is the acceptance condition: a staged delta commits here,
+      // after the human's approval, never when the agent finished.
+      res = await settleKnowledge(def, res);
+      await saveInstance(res.instance);
+      if (res.instance.status === "succeeded" || res.instance.status === "failed") {
+        void journal(inst.id, {
+          at: nowISO(),
+          kind: "instance.ended",
+          detail: res.instance.status,
+        });
+      }
+      if (res.instance.status === "failed") deps.onFailure?.(res.instance);
+      if (noteRouting(def, res.instance, res.routing)) await saveInstance(res.instance);
       await startPhases(def, res.instance, res.startPhases);
       deps.onChange?.();
       return { ok: true, code: 200 };
@@ -1495,6 +3081,16 @@ export function createEngine(deps: EngineDeps): Engine {
       // phase's straggler runs must not happen if the instance can't be revised
       // (e.g. it isn't awaiting approval), or a rejected 409 would still have
       // torn down live work.
+      // The paused phase's staged deltas are the attempt a human is about to
+      // discard: superseded now, while the steps that reference them still
+      // exist, so they can never be committed by the attempt that follows.
+      const target = options.phaseId
+        ? inst.phases.find((p) => p.id === options.phaseId)
+        : (inst.phases.find((p) => p.status === "awaiting-approval") ??
+          inst.phases.find((p) => p.status === "failed"));
+      if (target && (target.status === "awaiting-approval" || target.status === "failed")) {
+        await supersedeDeltas(inst, target, target.steps, `attempt ${target.attempt} revised`);
+      }
       let res;
       try {
         res = applyRevise(inst, nowISO(), options.phaseId);
@@ -1508,7 +3104,7 @@ export function createEngine(deps: EngineDeps): Engine {
         res.startPhases.map((i) => res.instance.phases[i].id),
         "superseded by a revise",
       );
-      await writeInstance(res.instance);
+      await saveInstance(res.instance);
       const suffix = note ? `\n\nRevision note: ${note}` : "";
       await startPhases(def, res.instance, res.startPhases, suffix);
       deps.onChange?.();
@@ -1533,7 +3129,7 @@ export function createEngine(deps: EngineDeps): Engine {
         inst.phases.map((p) => p.id),
         "aborted",
       );
-      await writeInstance(aborted);
+      await saveInstance(aborted);
       deps.onChange?.();
       return { ok: true, code: 200 };
     });
@@ -1590,7 +3186,9 @@ export function createEngine(deps: EngineDeps): Engine {
         // patchRun (not a full writeRun spread): the signal path patches
         // `outcome` concurrently, and a stale full-object write would drop it.
         const endedByArgus =
-          got.run.termination === "timed-out" || got.run.termination === "killed";
+          got.run.termination === "timed-out" ||
+          got.run.termination === "stalled" ||
+          got.run.termination === "killed";
         await patchRun(runId, {
           status: parsed && parsed.isError === false && !endedByArgus ? "succeeded" : "failed",
           endedAt: ended.toISOString(),
@@ -1639,6 +3237,44 @@ export function createEngine(deps: EngineDeps): Engine {
     //    that just became due is retried rather than re-examined as an orphan.
     await runDueRetries(now);
 
+    // 2.5 Stall detection (§D): a running step whose transcript has gone
+    //     quiet longer than its declared `stallSeconds`, even though the
+    //     process is still alive, is killed like a timeout. Reuses this same
+    //     reconcile tick rather than a second timer system, and covers both
+    //     this process's own runs and adopted ones — the run tailer's
+    //     `latest()` only knows about runs *this* process is tailing, so
+    //     `Run.lastActivityAt` (refreshed here, persisted) is what a restart
+    //     falls back to until the tailer catches up.
+    for (const candidate of await readInstances()) {
+      if (candidate.status !== "running") continue;
+      const def = candidate.definition ?? defs.find((d) => d.id === candidate.pipelineId);
+      if (!def) continue;
+      for (const i of livePhases(candidate)) {
+        const phase = candidate.phases[i];
+        if (phase.status !== "running") continue;
+        const phaseDef = def.phases.find((p) => p.id === phase.id);
+        if (!phaseDef) continue;
+        for (const step of phase.steps) {
+          if (step.status !== "running" || !step.runId) continue;
+          const stepDef = phaseDef.candidates
+            ? phaseDef.steps[0]
+            : phaseDef.steps.find((s) => s.name === step.name);
+          const stallSeconds = resolveStallSeconds(phaseDef, stepDef ?? {});
+          if (!stallSeconds) continue;
+          const got = await readRun(step.runId);
+          if (!got || got.run.status !== "running" || got.run.termination) continue;
+          const observed = deps.tailer?.latest?.().get(step.runId)?.at ?? null;
+          if (observed && observed !== got.run.lastActivityAt) {
+            await patchRun(step.runId, { lastActivityAt: observed });
+          }
+          const lastActivityAt = observed ?? got.run.lastActivityAt ?? null;
+          if (isStalled({ stallSeconds, lastActivityAt, startedAt: got.run.startedAt, now })) {
+            await expireStalledStep(step.runId, candidate.id, phase.id, stallSeconds);
+          }
+        }
+      }
+    }
+
     // 3. Heal running instances whose live-phase runs ended without signalling.
     //    Each instance is healed under its lock, re-reading fresh state inside,
     //    so a genuine completion signal landing mid-pass is never clobbered by a
@@ -1654,17 +3290,54 @@ export function createEngine(deps: EngineDeps): Engine {
         const inst = await readInstance(candidate.id);
         if (!inst || inst.status !== "running") return;
         let current = inst;
+        // A phase whose knowledge commit was pending when Argus stopped is
+        // committed again: the commit is idempotent on delta id, so a ledger
+        // already carrying the deltas simply concludes the phase.
+        for (const i of livePhases(current)) {
+          const phase = current.phases[i];
+          if (phase.status !== "running" || phase.knowledge?.status !== "pending") continue;
+          const res = await settleKnowledge(def, {
+            instance: current,
+            startPhases: [],
+            commitKnowledge: [phase.id],
+          });
+          noteRouting(def, res.instance, res.routing);
+          await saveInstance(res.instance);
+          if (res.instance.status === "succeeded" || res.instance.status === "failed") {
+            void journal(current.id, {
+              at: nowISO(),
+              kind: "instance.ended",
+              detail: res.instance.status,
+            });
+          }
+          queueReadyPhases(current.id, def, res.instance, res.startPhases);
+          if (res.instance.status === "failed") deps.onFailure?.(res.instance);
+          deps.onChange?.();
+          current = res.instance;
+        }
+        if (current.status !== "running") return;
         // A phase whose checks were running when Argus stopped is verified
         // again: the checks are Argus's own and deterministic, and the
         // attempt key makes a duplicate report a no-op.
         for (const i of livePhases(current)) {
           const phase = current.phases[i];
+          if (phase.status !== "running") continue;
           if (
-            phase.status === "running" &&
             phase.verification?.status === "running" &&
             !verifying.has(`${current.id}:${phase.id}:${phase.attempt}`)
           ) {
             queueVerification(current.id, def, phase.id, phase.attempt);
+          }
+          // The same for each candidate that was being verified when Argus
+          // stopped. Keyed by candidate as well as attempt, so a duplicate
+          // report is the same no-op it is for an ordinary phase.
+          for (const step of phase.steps) {
+            if (step.candidate === undefined) continue;
+            if (step.verification?.status !== "running") continue;
+            if (verifying.has(`${current.id}:${phase.id}:${phase.attempt}:c${step.candidate}`)) {
+              continue;
+            }
+            queueCandidateVerification(current.id, def, phase.id, phase.attempt, step.candidate);
           }
         }
         // Every live phase: with a fan-out, a died-without-signalling run can
@@ -1733,24 +3406,35 @@ export function createEngine(deps: EngineDeps): Engine {
             !restarted && got && runtimeFor(got.run.runtime).outcomeFromRecord
               ? recoverRunOutcome(got.run)
               : null;
-          const signalType = recovered?.signalType ?? "failed";
+          let signalType = recovered?.signalType ?? "failed";
           // A recovered *completion* may carry a declared result. Read it the
           // same way the stop hook would; this is the whole completion
           // protocol for a runtime with no hook to install.
           const recoveredResult = signalType === "completed" ? await readRunResult(s.runId) : {};
-          const payload = recovered
-            ? recovered.payload
-            : restarted
-              ? { reason: "Argus restarted mid-run — revise to retry", kind: "restarted" }
-              : {
-                  reason: got?.run.error ?? "run ended without emitting a completion signal",
-                };
-          const {
-            instance,
-            startPhases: ready,
-            routing,
-            verify,
-          } = advance(
+          // And it goes through the same acceptance the signal path applies:
+          // the supplied context is re-verified and any KnowledgeDelta staged
+          // — or refused, which turns the recovered completion into a
+          // `knowledge-delta` or `knowledge-context-integrity` failure.
+          const intake =
+            signalType === "completed"
+              ? await acceptCompletion(def, current, phaseId, s.runId)
+              : null;
+          const knowledgeRefused = intake && !intake.ok ? intake.reason : null;
+          if (knowledgeRefused) signalType = "failed";
+          const payload = knowledgeRefused
+            ? { reason: knowledgeRefused }
+            : recovered
+              ? recovered.payload
+              : restarted
+                ? { reason: "Argus restarted mid-run — revise to retry", kind: "restarted" }
+                : {
+                    reason: got?.run.error ?? "run ended without emitting a completion signal",
+                  };
+          const recordClass: RetryableClass =
+            intake && !intake.ok
+              ? intake.failure
+              : (recovered?.failureClass ?? (got ? failureClassOfRecord(got.run) : "spawn"));
+          let res = advance(
             def,
             current,
             {
@@ -1760,39 +3444,79 @@ export function createEngine(deps: EngineDeps): Engine {
               type: signalType,
               token: current.signalToken,
               payload,
-              ...recoveredResult,
+              ...(knowledgeRefused ? {} : recoveredResult),
             },
             nowISO(),
+            signalType === "failed" ? recordClass : undefined,
           );
-          if (recovered) await patchRun(s.runId, { outcome: recovered.outcome });
-          if (signalType === "failed") {
+          if (recovered) {
+            await patchRun(s.runId, { outcome: knowledgeRefused ? "failed" : recovered.outcome });
+          }
+          if (signalType === "failed" && !res.candidatesMoved) {
             // Class the failure from what the run record shows, so retry
             // policies keep distinguishing infrastructure from an agent's
             // considered failed/blocked conclusion.
-            const failureClass: RetryableClass =
-              recovered?.failureClass ?? (got ? failureClassOfRecord(got.run) : "spawn");
             const reason =
+              knowledgeRefused ??
               recovered?.failureReason ??
               (payload as { reason?: string }).reason ??
               "run ended without emitting a completion signal";
-            noteFailure(def, instance, phaseId, failureClass, reason);
+            noteFailure(def, res.instance, phaseId, recordClass, reason);
           }
+          res = await settleKnowledge(def, res);
+          const {
+            instance,
+            startPhases: ready,
+            routing,
+            verify,
+            verifyCandidate,
+            candidatesMoved,
+          } = res;
           noteRouting(def, instance, routing);
-          await writeInstance(instance);
+          await saveInstance(instance);
           queueVerifications(instance.id, def, instance, verify);
+          if (verifyCandidate) {
+            const healed = instance.phases.find((p) => p.id === verifyCandidate.phaseId);
+            if (healed) {
+              queueCandidateVerification(
+                instance.id,
+                def,
+                verifyCandidate.phaseId,
+                healed.attempt,
+                verifyCandidate.candidate,
+              );
+            }
+          }
           void journal(instance.id, {
             at: nowISO(),
             kind: "phase.signalled",
             phaseId,
             runId: s.runId,
-            detail: recovered ? `run-record fallback: ${recovered.outcome}` : "reconcile: failed",
+            detail: knowledgeRefused
+              ? `harness: ${intake && !intake.ok ? intake.failure : "knowledge-delta"}`
+              : recovered
+                ? `run-record fallback: ${recovered.outcome}`
+                : "reconcile: failed",
           });
-          queueReadyPhases(instance.id, def, instance, ready);
           deps.tailer?.untrack(s.runId);
+          if (candidatesMoved) await settleCandidates(def, instance, candidatesMoved);
+          else queueReadyPhases(instance.id, def, instance, ready);
           if (instance.status === "failed") deps.onFailure?.(instance);
           deps.onChange?.();
           current = instance;
           if (current.status !== "running" && current.status !== "awaiting-approval") break;
+        }
+        // A restart can land between a candidate's last report and the
+        // selection that report implied. The decision is a pure function of
+        // what is on disk, so it is simply asked again — and answers `pending`,
+        // harmlessly, for every phase still genuinely waiting.
+        if (current.status === "running") {
+          for (const i of livePhases(current)) {
+            const phase = current.phases[i];
+            if (phase.status !== "running") continue;
+            if (!def.phases.find((p) => p.id === phase.id)?.candidates) continue;
+            await settleCandidates(def, current, phase.id);
+          }
         }
       });
     }

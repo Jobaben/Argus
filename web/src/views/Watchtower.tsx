@@ -7,7 +7,6 @@ import {
   formatUsd,
   Handoff,
   HealthCounter,
-  Page,
   Section,
   SegmentedControl,
   SkeletonGrid,
@@ -269,7 +268,12 @@ function QualityTrends() {
   );
 }
 
-export default function Watchtower() {
+/**
+ * The Watchtower half of Health. No `Page` of its own: `Health` supplies the
+ * heading and the switch to Monitors, so this is the content alone, with the
+ * severity filter on its first row rather than in a page header it no longer has.
+ */
+export function WatchtowerPanel() {
   const { report, loading, error, reset, restore } = useWatchtower();
   const [filter, setFilter] = useState<Filter>("all");
   const [busyKey, setBusyKey] = useState<string | null>(null);
@@ -296,23 +300,26 @@ export default function Watchtower() {
   };
 
   return (
-    <Page
-      title="Watchtower"
-      crumbs={[{ label: "Monitors", href: "#/monitors" }]}
-      actions={
-        report.anomalies.length > 0 ? (
-          <SegmentedControl
-            segments={[
-              { value: "all", label: `All ${report.anomalies.length}` },
-              { value: "critical", label: `Critical ${report.summary.critical}` },
-            ]}
-            value={filter}
-            onChange={(v) => setFilter(v)}
-            label="Filter anomalies by severity"
-          />
-        ) : undefined
-      }
-    >
+    <>
+      <div className="mb-6 flex flex-wrap items-start gap-x-6 gap-y-3">
+        <p className="max-w-prose text-sm text-ink-faint">
+          Learned envelopes, and the runs that leave them — a run that succeeded but took four times
+          as long or cost four times as much as it usually does.
+        </p>
+        {report.anomalies.length > 0 && (
+          <span className="ml-auto">
+            <SegmentedControl
+              segments={[
+                { value: "all", label: `All ${report.anomalies.length}` },
+                { value: "critical", label: `Critical ${report.summary.critical}` },
+              ]}
+              value={filter}
+              onChange={(v) => setFilter(v)}
+              label="Filter anomalies by severity"
+            />
+          </span>
+        )}
+      </div>
       <section className="mb-8 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <HealthCounter label="Envelopes" value={report.summary.ready} tone="live" />
         <HealthCounter label="Warming up" value={report.summary.warming} tone="queue" />
@@ -390,6 +397,8 @@ export default function Watchtower() {
           </>
         )}
       </Handoff>
-    </Page>
+    </>
   );
 }
+
+export default WatchtowerPanel;

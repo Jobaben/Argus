@@ -116,7 +116,7 @@ export function eventsFrom(incidents: Incident[], anomalies: Anomaly[]): VaultEv
       severity: anomaly.severity,
       subject: anomaly.name,
       detail: anomaly.detail,
-      href: "#/watchtower",
+      href: "#/health/watchtower",
     });
   }
   return out;

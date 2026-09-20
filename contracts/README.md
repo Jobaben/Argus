@@ -43,4 +43,5 @@ producer change that breaks a consumer fails `npm run typecheck` in CI.
 | `insight.ts`   | Derived board signal (situation strip)                      |
 | `catalog.ts`   | Sessions, projects, stats, inventory, tasks, search, cron   |
 | `admin.ts`     | Auth status, users, setup prerequisites, totals, health     |
+| `knowledge.ts` | Knowledge Ledger: claims, evidence, justifications, support |
 | `live.ts`      | The WebSocket frame union                                   |

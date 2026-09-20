@@ -385,5 +385,9 @@ export function formatTrigger(trigger: Trigger | null | undefined): string {
           : "every day";
       return `every ${every}, ${trigger.startTime ?? "—"}–${trigger.endTime ?? "—"}, ${days}`;
     }
+    case "webhook":
+      return "webhook";
+    case "after":
+      return `after pipeline (${trigger.on ?? "any"})`;
   }
 }

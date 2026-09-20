@@ -180,3 +180,96 @@ test("rejects an invalid model or reasoning effort", async () => {
     /reasoningEffort/,
   );
 });
+
+// ── webhook / after triggers ─────────────────────────────────────────────────
+
+test("validateTrigger accepts a bare webhook trigger and rejects a stray cadence field", async () => {
+  const m = await fresh();
+  assert.deepEqual(m.validateTrigger({ kind: "webhook" }), { kind: "webhook" });
+  assert.throws(
+    () => m.validateTrigger({ kind: "webhook", everyMinutes: 5 }),
+    (e: Error) => e.name === "ScheduleValidationError",
+  );
+});
+
+test("a webhook trigger mints a hookToken on create, stable across edits", async () => {
+  const m = await fresh();
+  const input = m.validateInput({ ...getInput(), trigger: { kind: "webhook" } });
+  const created = await m.createSchedule(input, new Date(2026, 5, 22, 10, 0), "id-hook");
+  assert.equal(typeof created.hookToken, "string");
+  assert.ok(created.hookToken.length > 20);
+
+  const updated = await m.updateSchedule(
+    "id-hook",
+    m.validatePatch({ name: "renamed" }),
+    new Date(2026, 5, 22, 11, 0),
+  );
+  assert.equal(updated?.hookToken, created.hookToken);
+});
+
+test("a non-webhook schedule never gets a hookToken", async () => {
+  const m = await fresh();
+  const created = await m.createSchedule(
+    m.validateInput(getInput()),
+    new Date(2026, 5, 22, 10, 0),
+    "id-plain",
+  );
+  assert.equal(created.hookToken, undefined);
+});
+
+test("rotateScheduleHookToken mints a fresh token, refuses a non-webhook schedule", async () => {
+  const m = await fresh();
+  const created = await m.createSchedule(
+    m.validateInput({ ...getInput(), trigger: { kind: "webhook" } }),
+    new Date(2026, 5, 22, 10, 0),
+    "id-rotate",
+  );
+  const rotated = await m.rotateScheduleHookToken("id-rotate", new Date(2026, 5, 22, 11, 0));
+  assert.notEqual(rotated.hookToken, created.hookToken);
+
+  const plain = await m.createSchedule(
+    m.validateInput(getInput()),
+    new Date(2026, 5, 22, 10, 0),
+    "id-not-hook",
+  );
+  await assert.rejects(
+    () => m.rotateScheduleHookToken("id-not-hook", new Date()),
+    (e: Error) => e.name === "ScheduleValidationError",
+  );
+  void plain;
+});
+
+test("an after trigger must name a pipeline that exists", async () => {
+  const m = await fresh();
+  const input = m.validateInput({
+    ...getInput(),
+    trigger: { kind: "after", pipelineId: "does-not-exist", on: "succeeded" },
+  });
+  await assert.rejects(
+    () => m.createSchedule(input, new Date(), "id-after"),
+    (e: Error) => e.name === "ScheduleValidationError",
+  );
+});
+
+test("an after trigger fires once the named pipeline exists", async () => {
+  const schedules = await fresh();
+  // Same temp home — the pipeline store resolves it the same way.
+  const pipelines = await import(`./pipelines.js?${Math.random()}`);
+  const pipeline = await pipelines.createPipeline(
+    pipelines.validatePipelineInput({
+      name: "Source",
+      phases: [
+        { id: "p", name: "p", cwd: home, gated: false, steps: [{ name: "s", prompt: "go" }] },
+      ],
+      trigger: null,
+    }),
+    new Date(),
+    "pipeline-1",
+  );
+  const input = schedules.validateInput({
+    ...getInput(),
+    trigger: { kind: "after", pipelineId: pipeline.id, on: "succeeded" },
+  });
+  const created = await schedules.createSchedule(input, new Date(), "id-after-2");
+  assert.equal(created.trigger.pipelineId, pipeline.id);
+});

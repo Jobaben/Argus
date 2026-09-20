@@ -8,12 +8,16 @@ after the fact. None of it is required — a phase that declares no
 `capabilities`, no `checks` and no `timeoutSeconds` runs exactly as it always
 did, on the CLI's own defaults.
 
-The four pieces this document covers live in `server/src/harness/`:
+The pieces this document covers live in `server/src/harness/`:
 
 - `invocation.ts` — resolves capabilities, asks the runtime to map them onto
   flags/config, applies the environment policy, and writes down what it did.
 - `childEnv.ts` — the one place a child process's environment is assembled.
 - `verification.ts` — Argus's own deterministic checks over a phase's work.
+- `workspace.ts` — the git worktree a phase's steps run in, when one is
+  declared (§11), and one per candidate when a phase runs best-of-N (§12).
+- `memory.ts` — a pipeline's durable, cross-instance notes (§13).
+- `stall.ts` — deciding whether a still-alive step has gone quiet too long (§7).
 - the runtimes (`server/src/runtimes/*.ts`) — map the runtime-neutral
   `CapabilityProfile` onto one CLI's actual flags, and report what they
   couldn't.
@@ -121,6 +125,10 @@ process ends (exit code / OS signal)
 agent's own completion signal arrives          Stop hook, or ARGUS_OUTCOME + reconcile fallback
         │                                     agent reported `failed`/`blocked` → "signal"
         ▼
+supplied KnowledgeContext re-hashed (if any)   bytes changed or file gone
+        │                                          → "knowledge-context-integrity"
+        │                                     (KNOWLEDGE-LEDGER.md §13.11)
+        ▼
 declared result schema validated (if `result`) missing/unparseable/schema-invalid → "signal"
         │                                     (the agent reported, but nothing routable; classed
         │                                      with a bad route condition, under the same policy)
@@ -131,23 +139,44 @@ deterministic checks run (if `checks`)         a failing CheckResult → "verifi
 gate opens (if `gated`) or auto-approves
         │
         ▼
+staged KnowledgeDeltas commit (if any)         a refused commit → "knowledge-delta"
+        │                                     (stale revision precondition, conflicting
+        │                                      sibling deltas; see KNOWLEDGE-LEDGER.md §12)
+        ▼
 succeeded
 ```
 
+A delta the run wrote is also validated at the completion signal itself: a
+malformed or refusable document fails the step under `"knowledge-delta"`
+before any of the rungs below it, so an agent's proposal is never silently
+dropped.
+
+Ahead of even that, a run Argus supplied a KnowledgeContext to has its context
+file re-hashed against the value recorded at launch. Changed or missing bytes
+fail the step under `"knowledge-context-integrity"` **before** the delta is
+read, so a run whose input Argus can no longer vouch for never stages a
+proposal, let alone commits one. This matters most where read-only enforcement
+is best-effort: the `0444` mode and the runtime's deny rules are the guard, and
+this check is the proof. A claim _revised in the ledger_ while the agent ran is
+not tampering — the file is untouched and integrity passes (KNOWLEDGE-LEDGER.md
+§13.11).
+
 `PhaseFailureClass` (in `@argus/contracts`) is the closed set:
 
-| Class           | Meaning                                                                                                                                                                                                                           | Retried by default?                                     |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| `spawn`         | The process never started — preparing the invocation threw, `deps.spawn` itself threw, or (found by `reconcile()` after a restart) a step recorded `running` had no process behind it at all. `run.termination = "spawn-failed"`. | **Yes**                                                 |
-| `exit-code`     | The process ended (any way) without Argus's own timeout and without the agent signalling failure.                                                                                                                                 | **Yes**                                                 |
-| `signal`        | The agent's _own_ completion signal declared `failed` or `blocked` — it considered the work and reported on it. (Named for the pipeline `signal` the agent posts, **not** an OS process signal.)                                  | No — opt in via `retry.retryOn`                         |
-| `timeout`       | Argus killed the process at its `deadlineAt`.                                                                                                                                                                                     | No — opt in                                             |
-| `verification`  | Every step reported success, but a `checks` entry failed.                                                                                                                                                                         | No — opt in                                             |
-| `configuration` | The declared capability profile could not be enforced under strict enforcement — the step never launched with more capability than its author asked for.                                                                          | **Never** — the definition is what's wrong, not the run |
+| Class                         | Meaning                                                                                                                                                                                                                                                                                                                                                      | Retried by default?                                     |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------- |
+| `spawn`                       | The process never started — preparing the invocation threw, `deps.spawn` itself threw, or (found by `reconcile()` after a restart) a step recorded `running` had no process behind it at all. `run.termination = "spawn-failed"`.                                                                                                                            | **Yes**                                                 |
+| `exit-code`                   | The process ended (any way) without Argus's own timeout and without the agent signalling failure.                                                                                                                                                                                                                                                            | **Yes**                                                 |
+| `signal`                      | The agent's _own_ completion signal declared `failed` or `blocked` — it considered the work and reported on it. (Named for the pipeline `signal` the agent posts, **not** an OS process signal.)                                                                                                                                                             | No — opt in via `retry.retryOn`                         |
+| `timeout`                     | Argus killed the process at its `deadlineAt`.                                                                                                                                                                                                                                                                                                                | No — opt in                                             |
+| `verification`                | Every step reported success, but a `checks` entry failed.                                                                                                                                                                                                                                                                                                    | No — opt in                                             |
+| `knowledge-delta`             | The run wrote a KnowledgeDelta Argus refused — malformed, an unresolved or inexact reference, a stale `expectedRevision`, a cycle, a claimed artifact that does not exist — or the phase commit was refused (the ledger moved while a gate waited; two steps' deltas conflicted). The refusal is the reason, so a retry can propose from the current ledger. | No — opt in                                             |
+| `knowledge-context-integrity` | The KnowledgeContext Argus materialized for the run no longer hashes to the value recorded at launch — the file was modified, or removed, while the agent ran. The completion is refused and nothing the run proposed becomes canonical. The reason names the run, the expected hash, the hash found and the path; never the contents.                       | No — opt in                                             |
+| `configuration`               | The declared capability profile could not be enforced under strict enforcement — the step never launched with more capability than its author asked for.                                                                                                                                                                                                     | **Never** — the definition is what's wrong, not the run |
 
 The class is written onto the phase's payload (`withFailureClass`) whenever a
 phase fails, whether or not that failure ends up scheduling a retry — a
-terminal failure with no attempts left still names which of the six classes
+terminal failure with no attempts left still names which of the eight classes
 it was, never just "failed".
 
 **A completion signal is authoritative over the exit code that follows it.**
@@ -164,10 +193,9 @@ considered verdict. An author who wants a flaky test suite retried opts
 Argus to re-run a prompt whose own agent already decided it failed, which is
 allowed but is rarely what you want.
 
-A retried attempt is told why the previous one failed (`retryNote()` appends
-the reason to the prompt) only for `"verification"` and `"signal"` — the two
-classes that come with a considered reason worth repairing against;
-`"spawn"`/`"exit-code"`/`"timeout"` carry nothing worth restating.
+A retried attempt is told why the previous one failed: `retryNote()` appends a
+bounded, class-specific note to the prompt for **every** retryable class, not
+only `"verification"`/`"signal"` — see §13.
 
 ## 3. Capability profiles
 
@@ -235,9 +263,16 @@ pipeline can set an `env` policy once and one review phase can add
 - `mcpServers` (present, even `{}`) → written to
   `<invocationDir>/mcp.json` as `{ "mcpServers": {...} }`, passed as
   `--mcp-config <path> --strict-mcp-config`.
-- `additionalDirectories` → one `--add-dir <dir>` per entry — **and** the
-  phase's own artifact directory always gets an `--add-dir` too, regardless of
-  `filesystem`, so a read-only step can still leave its declared artifacts.
+- `additionalDirectories` → one `--add-dir <dir>` per entry — **and** every
+  Argus-owned invocation channel (§3a: the result file's directory, the
+  KnowledgeDelta file's directory, the artifact directory, the memory
+  directory) gets an `--add-dir` too, regardless of `filesystem`, so a
+  read-only step can still leave its result, its proposal and its declared
+  artifacts. The one case Claude Code cannot honour is a channel that sits
+  _under_ a root the read-only `Edit(//root/**)` rule denies (a working
+  directory that is the operator's home, say): that is decided from the
+  paths alone and reported per channel (`"Claude Code read-only denies edits
+under <root>, which contains the result file (ARGUS_RESULT_FILE)"`).
 - `settingSources` → `--setting-sources user,project,local` (only the ones
   named).
 - `permissionMode` → `--permission-mode <mode>`.
@@ -273,14 +308,17 @@ pipeline can set an `env` policy once and one review phase can add
 
 - `filesystem` → `--sandbox` (`read-only` / `workspace-write` /
   `danger-full-access` for `"unrestricted"`).
-- `additionalDirectories` (plus the artifact directory, when the **effective**
-  sandbox is `workspace-write`) → `-c
+- `additionalDirectories` (plus every Argus-owned write channel — §3a — when
+  the **effective** sandbox is `workspace-write`) → `-c
 sandbox_workspace_write.writable_roots=[...]`. "Effective" means the
   profile's own `filesystem`, else `ARGUS_CODEX_SANDBOX`, else
   `workspace-write` — the same resolution order that decides which sandbox the
-  process actually runs under, so the artifact directory is writable whenever
-  the run is, whether that came from the profile or the operator's own
-  default.
+  process actually runs under, so a channel is writable whenever the run is,
+  whether that came from the profile or the operator's own default. Under an
+  effective `read-only` sandbox Codex has no way to admit a write at all, so
+  every write channel is reported unavailable (`"Codex read-only sandbox
+prevents writing the result file (ARGUS_RESULT_FILE)"`, one per channel);
+  `danger-full-access` needs nothing. Reads are allowed under every sandbox.
 - `mcpServers` → one `-c mcp_servers.<name>.<field>=<value>` per field
   (`type`, `command`, `args`, `env.*`, `url`, `headers.*`), TOML-quoted. `env`
   and `headers` keys are restricted to `[A-Za-z_][A-Za-z0-9_-]*` at validation
@@ -289,28 +327,120 @@ sandbox_workspace_write.writable_roots=[...]`. "Effective" means the
 
 ### Limitations, per runtime
 
-| Runtime         | What it cannot do                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Claude Code** | Bash stays a bare shell under `read-only` unless `tools.allow` scopes it to specific commands — Claude Code has no OS-level sandbox, only tool permission rules.                                                                                                                                                                                                                                                                                                           |
-| **Codex**       | `mcpServers` narrows nothing: there is no flag scoping a run to _only_ the declared servers, so whatever is in `config.toml` stays reachable alongside them (`"Codex cannot exclude MCP servers configured in config.toml"`). A `read-only` **effective** sandbox (declared, or inherited from `ARGUS_CODEX_SANDBOX` when the profile leaves `filesystem` unset) with an artifact directory also can't write artifacts (`"read-only sandbox prevents writing artifacts"`). |
-| **OpenCode**    | Enforces **none** of `CapabilityProfile`'s keys — every key a profile sets becomes its own limitation string (`"OpenCode cannot enforce \"filesystem\" for this invocation"`, one per key present).                                                                                                                                                                                                                                                                        |
-| **Qwen Code**   | Same as OpenCode: zero keys supported, every declared key becomes a limitation.                                                                                                                                                                                                                                                                                                                                                                                            |
+| Runtime         | What it cannot do                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Claude Code** | Bash stays a bare shell under `read-only` unless `tools.allow` scopes it to specific commands — Claude Code has no OS-level sandbox, only tool permission rules.                                                                                                                                                                                                                                                                                                                                                    |
+| **Codex**       | `mcpServers` narrows nothing: there is no flag scoping a run to _only_ the declared servers, so whatever is in `config.toml` stays reachable alongside them (`"Codex cannot exclude MCP servers configured in config.toml"`). A `read-only` **effective** sandbox (declared, or inherited from `ARGUS_CODEX_SANDBOX` when the profile leaves `filesystem` unset) cannot write any Argus-owned channel — result file, KnowledgeDelta file, artifact or memory directory — each reported as its own limitation (§3a). |
+| **OpenCode**    | Enforces **none** of `CapabilityProfile`'s keys — every key a profile sets becomes its own limitation string (`"OpenCode cannot enforce \"filesystem\" for this invocation"`, one per key present).                                                                                                                                                                                                                                                                                                                 |
+| **Qwen Code**   | Same as OpenCode: zero keys supported, every declared key becomes a limitation.                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
 `unsupportedCapabilities()` (in `runtimes/types.ts`) is what produces those
 strings — it is handed each runtime's list of keys it _can_ map (empty for
 OpenCode and Qwen), and reports every key the profile sets that isn't on that
 list. `env` and `enforcement` are never in that list for any runtime: they
-are engine-owned (§4), never a runtime's to enforce or report on.
+are engine-owned (§4), never a runtime's to enforce or report on. Whether a
+runtime can reach Argus's _own_ files is a separate question with its own
+per-channel answer — §3a.
 
 ### `enforcement: "strict" | "best-effort"`
 
-Default is `"strict"`. When a resolved profile has any limitation and
-enforcement is strict, the step **does not launch** — it fails immediately
-under the `configuration` class (never retried; see §2), and the invocation
-record still shows what Argus would have run. `"best-effort"` records the
-same limitations but launches anyway: useful for a phase whose declared
-profile is aspirational (e.g. "prefer read-only" on a runtime that can't do
-it) rather than a hard requirement.
+Default is `"strict"`. When a resolved profile has any limitation — a key the
+runtime cannot enforce, or a **required** invocation channel (§3a) the
+runtime cannot reach — and enforcement is strict, the step **does not
+launch**: it fails immediately under the `configuration` class (never
+retried; see §2), and the invocation record still shows what Argus would have
+run. An _optional_ channel the runtime cannot reach is recorded as a
+limitation but never refuses a launch. `"best-effort"` records the same
+limitations but launches anyway: useful for a phase whose declared profile is
+aspirational (e.g. "prefer read-only" on a runtime that can't do it) rather
+than a hard requirement.
+
+### 3a. Argus-owned invocation channels
+
+Beyond the working tree, Argus hands every agent process a small set of files
+and directories that _it_ owns — the protocol between the agent and Argus.
+Each is named to the agent by one environment variable, lives outside the
+repository (under `~/.claude/argus/`), and must stay reachable whatever
+`filesystem` says about the rest of the disk: a read-only researcher still
+writes its report, its decision and its proposal there.
+
+| Channel             | Env var                        | Direction     | Required access | Launch depends on it when…                                                                                                                                                                                                                                                                                |
+| ------------------- | ------------------------------ | ------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Result file         | `ARGUS_RESULT_FILE`            | agent → Argus | write           | the step publishes the phase's `result` (always required then: the routing reads it). `results/<runId>/result.json` — a directory per run, so granting it admits this run's result only                                                                                                                   |
+| KnowledgeDelta file | `ARGUS_KNOWLEDGE_DELTA_FILE`   | agent → Argus | write           | the phase declares `knowledgeDelta: "required"`. Offered to every run; emitting a delta stays optional either way (KNOWLEDGE-LEDGER.md §12.5)                                                                                                                                                             |
+| Artifact directory  | `ARGUS_ARTIFACT_DIR`           | agent → Argus | write when used | the phase declares an `artifact` check. Offered to every run                                                                                                                                                                                                                                              |
+| Memory directory    | `ARGUS_MEMORY_DIR`             | agent ↔ Argus | write           | `memory.enabled` is set (every step's prompt then asks the agent to append to `NOTES.md`)                                                                                                                                                                                                                 |
+| KnowledgeContext    | `ARGUS_KNOWLEDGE_CONTEXT_FILE` | Argus → agent | **read**        | the step (or its phase) declares a `knowledgeContext` — always required then: the step was authored to reason from it. `invocations/<runId>/knowledge-context.json`, per run, `0444`; the agent never writes it, and Argus re-hashes it before accepting the completion (KNOWLEDGE-LEDGER.md §13, §13.11) |
+
+The model (`harness/channels.ts`, `InvocationChannel` in `runtimes/types.ts`):
+`prepareInvocation` builds **one** list of channels — kind, env var, path, the
+directory access must be granted on, `read`/`write`, and whether the launch
+depends on it — and hands the whole list to the runtime inside the
+`CapabilityRequest`. The runtime maps every entry through the one mechanism it
+has (`--add-dir`, `writable_roots`, or nothing because it runs no sandbox) and
+answers for every entry with a `ChannelOutcome`: `granted`, or `unavailable`
+with a reason. A channel the runtime does not answer for is treated as
+unavailable — a protocol path is never presumed writable. Nothing on the
+runtime side is special-cased by kind: the result file, the delta file and the
+artifact directory are the same thing to an adapter. The one distinction an
+adapter makes is by **access**: a `read` channel (the KnowledgeContext file)
+must be reachable and, where the runtime can express it, must _not_ be made
+writable — Claude Code adds an `Edit(//<dir>/**)` deny rule beside the
+`--add-dir`; Codex never lists it in `writable_roots`; OpenCode and Qwen Code
+run unsandboxed and can express neither, which is the same limitation their
+profiles already carry.
+
+What an `unavailable` verdict means is the engine's decision, from `required`
+and `enforcement`:
+
+|                  | `enforcement: "strict"` (default)                                  | `enforcement: "best-effort"`  |
+| ---------------- | ------------------------------------------------------------------ | ----------------------------- |
+| required channel | **refused before launch** — `configuration` failure, never retried | launches; limitation recorded |
+| optional channel | launches; limitation recorded                                      | launches; limitation recorded |
+
+"Recorded" means the reason is in the invocation record's `limitations` _and_
+in its `channels` array (§8), status `unavailable`. There is no silent case:
+an agent is never told "you may write here" without the record saying whether
+it actually could. The variable is still set and the system-prompt contract
+still describes the protocol — the record, not the prompt, is where the
+mismatch is stated.
+
+**Without a capability profile** nothing changes from before profiles
+existed: Argus does not shape the runtime's filesystem at all, the CLI's own
+defaults decide, and the record lists the channels offered with status
+`unmanaged` — no claim either way. A pipeline that uses no structured result,
+no KnowledgeDelta and no file artifacts, with or without a profile, launches
+exactly as it always did.
+
+**Runtime matrix** (pinned by `runtimes/channels.test.ts`):
+
+| Runtime         | Effective filesystem mode                                          | Result file · KnowledgeDelta · artifact dir · memory dir (write)                   | Read channels                                                                                                                    |
+| --------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| **Claude Code** | any                                                                | ✅ `--add-dir` on each channel's directory                                         | ✅ `--add-dir` + `Edit(//<dir>/**)` denied: readable, not editable (a path with a comma cannot carry the deny rule → limitation) |
+| **Claude Code** | `read-only`, channel _under_ `cwd`/`additionalDirectories`         | ❌ the `Edit(//root/**)` deny rule covers it; reported from the paths              | ✅ readable; the root's own deny rule already covers it                                                                          |
+| **Codex**       | `workspace-write` (declared, or the `ARGUS_CODEX_SANDBOX` default) | ✅ named in `sandbox_workspace_write.writable_roots`                               | ✅ reads are unrestricted; never listed in `writable_roots`, so the sandbox refuses writes                                       |
+| **Codex**       | `unrestricted` / `danger-full-access`                              | ✅ nothing to add                                                                  | ✅ (no sandbox: writes cannot be prevented)                                                                                      |
+| **Codex**       | `read-only` (declared, or via `ARGUS_CODEX_SANDBOX`)               | ❌ no way to admit a write; one limitation per channel                             | ✅ readable; the sandbox refuses every write                                                                                     |
+| **OpenCode**    | any (the profile's `filesystem` is itself unenforceable)           | ✅ `opencode run --auto` runs unsandboxed; nothing stands in the way               | ✅ readable (writes cannot be prevented — the profile is unenforceable regardless)                                               |
+| **Qwen Code**   | any, no `--sandbox` in `ARGUS_QWEN_ARGS`                           | ✅ `--approval-mode yolo` runs unsandboxed                                         | ✅ readable (writes cannot be prevented — as above)                                                                              |
+| **Qwen Code**   | `--sandbox` / `-s` in `ARGUS_QWEN_ARGS`                            | ❌ the container mounts the project and the CLI's home, not Argus's data directory | ❌ unavailable; the channel is required, so a strict launch is refused                                                           |
+
+Where a runtime cannot prevent a write to the context file, the file's `0444`
+mode guards against an accidental overwrite and the invocation record's
+`knowledgeContext.sha256` remains the proof of what Argus supplied — an agent
+that rewrote its own context changed a file, not the record. Without a
+capability profile the read channel is `unmanaged` like every other: the CLI
+reads it exactly as it would any file.
+
+Two consequences worth stating plainly. A `filesystem: "read-only"` profile
+on **Codex** with a structured result (or `knowledgeDelta: "required"`, or an
+`artifact` check) is a configuration error under strict enforcement — the
+agent would be asked for a file its sandbox refuses; declare
+`workspace-write` (the channels are the only writable roots outside the tree)
+or `best-effort`. And the same profile on **OpenCode** or **Qwen Code** is
+refused for a different reason — the profile itself cannot be enforced — while
+the channels would have been reachable; under `best-effort` such a run
+launches unrestricted and its channels are granted.
 
 ### Configuration precedence
 
@@ -367,10 +497,10 @@ always applied; there is nothing to "fail to enforce" here).
   freshly-computed values, never be inherited from Argus's own process (which
   would let a nested Argus child impersonate or interfere with the run that
   spawned it): `ARGUS_SIGNAL_TOKEN`, `ARGUS_SIGNAL_URL`, `ARGUS_RESULT_FILE`,
-  `ARGUS_ARTIFACT_DIR`, `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`, `ARGUS_RUN_ID`,
-  `ARGUS_STEP_NAME`, and `ARGUS_RUNTIME` (the hook keys its Stop-payload
-  handling off this one, so a value inherited from a different invocation
-  would misparse the signal).
+  `ARGUS_KNOWLEDGE_DELTA_FILE`, `ARGUS_ARTIFACT_DIR`, `ARGUS_INSTANCE_ID`,
+  `ARGUS_PHASE_ID`, `ARGUS_RUN_ID`, `ARGUS_STEP_NAME`, and `ARGUS_RUNTIME` (the
+  hook keys its Stop-payload handling off this one, so a value inherited from a
+  different invocation would misparse the signal).
 
 The invocation record never stores a variable's _value_ — only names
 (`envNames`, sorted; `envStripped`, sorted). Reconstructing what Argus ran
@@ -395,11 +525,11 @@ The directory itself:
 
 - `ARGUS_ARTIFACT_DIR` — set on every step's environment, pointing at
   `~/.claude/argus/artifacts/<instanceId>/<phaseId>/`. Argus creates the
-  directory, adds it to the runtime's writable set no matter what
-  `filesystem` says elsewhere (`--add-dir` for Claude Code; a Codex
-  `read-only` sandbox cannot write there at all, which is reported as a
-  limitation), and passes it to `checks` of kind `artifact` as their search
-  root.
+  directory, hands it to the runtime as an invocation channel (§3a — admitted
+  to the sandbox no matter what `filesystem` says elsewhere, or reported
+  unavailable when the runtime cannot; **required** exactly when the phase
+  declares an `artifact` check), and passes it to `checks` of kind `artifact`
+  as their search root.
 - `{{artifactDir}}` in a step's prompt interpolates to _this phase's own_
   artifact directory; `{{artifactDir.<phaseId>}}` interpolates to an earlier
   phase's (from `ArtifactDirs.byPhase`, built from every phase's
@@ -575,6 +705,52 @@ every step in it); absent on both means no limit. A limit turns into a
 }
 ```
 
+### Stalls: a step can be alive and say nothing forever
+
+`timeoutSeconds` is sized for the worst case a phase should ever take —
+generous, because a hard kill at half that would fail runs that were simply
+working. That leaves a gap a hard timeout can't close: a process wedged on a
+hung tool call, spinning without producing output, or stuck in a loop, well
+inside its timeout budget. Stuck-detection is close to universal in the
+harnesses the research survey looked at (OpenHands, Symphony;
+docs/HARNESS-RESEARCH.md §2 #7), and Argus already had the raw material — the
+run tailer's own notion of when a run last said anything.
+
+`stallSeconds` (`PhaseDef.stallSeconds` / `PhaseStep.stallSeconds`, narrowest
+wins like `timeoutSeconds`; absent = off; minimum 30 — anything shorter is
+indistinguishable from an ordinary gap between tool calls) kills a step whose
+transcript has gone quiet that long, even while its process is alive:
+
+- **No second timer system.** Stall detection is checked on the existing
+  reconcile tick (`server/src/harness/stall.ts`'s `isStalled`, a pure
+  function; the engine's `reconcile()` calls it), not a new
+  per-step `setTimeout`. Practically this means a stall is noticed within one
+  tick of crossing `stallSeconds`, not at the exact instant.
+- **The reference clock is the run's own `lastActivityAt`**, refreshed from
+  the run tailer's latest observed activity each tick and **persisted** on the
+  `Run` record — so a restart does not misjudge a stall from a stale
+  in-memory clock; a run with no observed activity yet falls back to its
+  `startedAt`.
+- A stalled step is killed exactly like a timed-out one — SIGTERM, then
+  SIGKILL after `killGraceMs` — but records `run.termination = "stalled"` (not
+  `"timed-out"`) and a `step.stalled` journal entry (not `step.timed-out`),
+  with the reason `"stalled: no output for Ns"`. The phase fails under the
+  `timeout` failure class (§2) — a stall is a timeout that noticed sooner, and
+  `retry.retryOn: ["timeout"]` opts into retrying either.
+- Only a step confirmed still `running`, with no `termination` already
+  recorded, is ever stamped — the same non-overwrite discipline `expireStep`
+  uses for a hard timeout.
+
+```json
+{
+  "id": "run_9a1c",
+  "stallSeconds": 120,
+  "lastActivityAt": "2026-09-10T14:12:03.000Z",
+  "termination": "stalled",
+  "error": "stalled: no output for 120s"
+}
+```
+
 ## 8. Observability & reproducibility
 
 **`AgentInvocationRecord`** — written to
@@ -605,6 +781,42 @@ or is unknown):
   "materializedFiles": ["/home/user/.claude/argus/invocations/run_8f2a/settings.json"],
   "artifactDir": "/home/user/.claude/argus/artifacts/inst_71c0/implement",
   "resultFile": null,
+  "knowledgeDeltaFile": "/home/user/.claude/argus/knowledge-deltas/run_8f2a/delta.json",
+  "knowledgeContextFile": "/home/user/.claude/argus/invocations/run_8f2a/knowledge-context.json",
+  "knowledgeContext": {
+    "schemaVersion": 1,
+    "claims": [
+      { "id": "RULE-17", "revision": 2 },
+      { "id": "CONSTRAINT-4", "revision": 1 }
+    ],
+    "sha256": "3b7c9e…"
+  },
+  "channels": [
+    {
+      "kind": "knowledge-delta",
+      "envVar": "ARGUS_KNOWLEDGE_DELTA_FILE",
+      "path": "/home/user/.claude/argus/knowledge-deltas/run_8f2a/delta.json",
+      "access": "write",
+      "required": false,
+      "status": "granted"
+    },
+    {
+      "kind": "knowledge-context",
+      "envVar": "ARGUS_KNOWLEDGE_CONTEXT_FILE",
+      "path": "/home/user/.claude/argus/invocations/run_8f2a/knowledge-context.json",
+      "access": "read",
+      "required": true,
+      "status": "granted"
+    },
+    {
+      "kind": "artifact-dir",
+      "envVar": "ARGUS_ARTIFACT_DIR",
+      "path": "/home/user/.claude/argus/artifacts/inst_71c0/implement",
+      "access": "write",
+      "required": false,
+      "status": "granted"
+    }
+  ],
   "timeoutSeconds": 1800,
   "deadlineAt": "2026-09-10T14:32:00.000Z",
   "gitHead": "3f1a9c2e8b0d4f6a7c1e2b3d4f5a6b7c8d9e0f10",
@@ -622,8 +834,17 @@ shows _that_ `DOCS_TOKEN` was set, just not to what), and every other
 those can carry a secret. The materialized `mcp.json` a runtime actually reads
 still carries the real values — an agent needs them to work — this record
 just isn't where they get archived. `limitations` is what the chosen runtime
-could not enforce of the declared profile; empty means every declared key was
-honoured (or no profile was declared at all).
+could not enforce of the declared profile, plus every Argus-owned channel it
+could not reach (§3a); empty means every declared key was honoured and every
+channel is reachable (or no profile was declared at all). `channels` lists
+each channel the invocation was offered — its env var, path, access, whether
+the launch depended on it, and `granted` / `unavailable` (with the reason) /
+`unmanaged` (no profile: the CLI's defaults decided). `knowledgeContextFile`
+and `knowledgeContext` (Phase 4) say exactly which claim revisions Argus
+supplied to the run and the SHA-256 of the file as written — `null` when the
+step declared no `knowledgeContext`, absent on older records. They are the
+authoritative "supplied" provenance
+(`GET /api/knowledge/executions/:runId/context`, KNOWLEDGE-LEDGER.md §13.6).
 
 **Journal kinds** (`server/src/sources/journal.ts`, append-only, per
 instance) that this feature adds:
@@ -631,16 +852,21 @@ instance) that this feature adds:
 | Kind                 | When                                                                                                                                                                                                                                        |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `step.timed-out`     | A step's process was killed at its `deadlineAt` (live, or discovered on reconcile after a restart).                                                                                                                                         |
+| `step.stalled`       | A step's process was killed for going quiet longer than its `stallSeconds` while still alive (§7).                                                                                                                                          |
 | `step.exit-mismatch` | A step's completion signal was accepted as `completed`, and its process then exited non-zero. The phase is not unwound — the signal already decided — but the run carries both `outcome: "succeeded"` and the non-zero `exitCode`. See §10. |
 | `phase.verifying`    | Every step of a phase reported success and Argus started running its `checks`.                                                                                                                                                              |
 | `phase.verified`     | The checks finished — `passed`, or `failed` naming which checks and why.                                                                                                                                                                    |
+| `memory.trimmed`     | A settled instance's pipeline had `memory` enabled and `NOTES.md` had grown past `maxBytes`; Argus trimmed its head back down to the cap (§13).                                                                                             |
+| `knowledge.supplied` | A step's KnowledgeContext was materialized and recorded, immediately before the spawn; the detail names the exact refs and the first 12 hex of the file's sha256 (KNOWLEDGE-LEDGER.md §13).                                                 |
 
 **`Run.termination`** (`@argus/contracts`) records _how_ a run ended when
 Argus knows more than the exit code: `"exited"` (its own doing), `"timed-out"`
-(killed at its deadline), `"killed"` (aborted/cancelled/superseded by Argus
-for some other reason), `"spawn-failed"` (never started at all — covers both
-the `spawn` and `configuration` failure classes, since neither ever produced
-a process). Absent means the process simply exited on its own.
+(killed at its deadline), `"stalled"` (killed for going quiet longer than
+`stallSeconds` while still alive — §7), `"killed"`
+(aborted/cancelled/superseded by Argus for some other reason), `"spawn-failed"`
+(never started at all — covers both the `spawn` and `configuration` failure
+classes, since neither ever produced a process). Absent means the process
+simply exited on its own.
 
 ## 9. Reference pipeline
 
@@ -710,6 +936,15 @@ placeholder; substitute a real, existing directory.
       "gated": false,
       "needs": ["plan"],
       "timeoutSeconds": 3600,
+      // Best-of-N (§12): two drafts of the same step, one on each CLI, and the
+      // checks below decide. Requires the attempt-scoped worktree declared here
+      // and the single step the phase already had.
+      "workspace": { "scope": "attempt" },
+      "candidates": {
+        "count": 2,
+        "select": "first-verified",
+        "variants": [{ "runtime": "claude" }, { "runtime": "codex" }],
+      },
       "retry": {
         "attempts": 2,
         "backoffSeconds": 60,
@@ -797,7 +1032,20 @@ choices are legible:
   fails the phase).
 - `retry.retryOn` on `implement` deliberately opts into `"verification"`: a
   typecheck failure is worth a second attempt with the failure reason handed
-  back in the prompt (`retryNote`).
+  back in the prompt (`retryNote`). With `candidates`, a retry re-runs the
+  whole set — so the two attempts here are two _rounds_ of two drafts, and the
+  phase only fails when neither round produced a draft that typechecks and
+  touched the right files.
+- `implement` is the phase worth spending on, so it is the one with
+  `candidates`: two drafts, one per CLI, `first-verified` so the loser is
+  killed the moment the winner's checks pass. It needs
+  `workspace: { scope: "attempt" }` — declared on the phase here rather than
+  pipeline-wide, because the read-only phases have nothing to isolate. Note
+  that `review` reads `{{artifactDir.implement}}/summary.md`: that resolves to
+  the phase's directory, and the winning draft's files are one level down in
+  `c0/` or `c1/` (§12) — a phase that must hand files on from a candidate
+  should write them into the working tree and commit, which is the branch the
+  worktree exists to produce.
 - Only `implement` and `verify` need `workspace-write`; `plan`'s `maxTurns`
   caps a phase that should be a short structured answer, not an open-ended
   session.
@@ -843,3 +1091,422 @@ choices are legible:
   `outcome: "succeeded"` and the non-zero `exitCode`, and the journal gets a
   `step.exit-mismatch` entry naming the phase and run, for anyone reconciling
   the two by hand.
+
+## 11. Workspace isolation
+
+A phase's steps run in the phase's `cwd`. For a pipeline that reads, that is
+right; for one that writes, it means every phase — and every attempt of every
+phase — is editing the same checkout. Two branches of a fan-out overwrite each
+other's files, a failed attempt leaves its half-done edits for the retry to
+trip over, and "what did this phase actually change?" is only answerable while
+nothing else is running.
+
+A pipeline or a phase can instead declare a `WorkspacePolicy`, and Argus gives
+the work a **git worktree** of its own:
+
+```jsonc
+{
+  "workspace": { "scope": "instance" }, // pipeline-wide default
+  "phases": [
+    {
+      "id": "implement",
+      "cwd": "/src/app",
+      "workspace": { "scope": "attempt", "base": "origin/main" }, // overrides it
+    },
+  ],
+}
+```
+
+| Field   | Meaning                                                                                                                                                                                                                                                          |
+| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scope` | `"instance"` — one worktree per pipeline instance, shared by every phase that opts in. `"attempt"` — a fresh worktree per phase attempt. `"none"` — this phase opts _out_ of a policy it would otherwise inherit and runs in its own `cwd`, no worktree created. |
+| `base`  | The ref the worktree is cut from. Default: `HEAD` of the repository at the phase's `cwd`. Validated as a ref: no whitespace, no leading `-`.                                                                                                                     |
+| `keep`  | Keep the directory after the instance ends. Default `false` — the directory is removed, the branch is kept.                                                                                                                                                      |
+
+Narrowest wins, as everywhere else: `phase.workspace ?? pipeline.workspace`.
+Absent at both levels, nothing changes — the phase runs in its own `cwd`
+exactly as it did before workspaces existed — and `scope: "none"` on a phase
+means the same thing for that one phase even when the pipeline (or another
+phase) declares a policy: a read-only research phase in an otherwise
+`workspace: { scope: "instance" }` pipeline has nothing to isolate and no
+reason to pay for a worktree it will never write to.
+
+**Names.** The directory is
+`~/.claude/argus/worktrees/<instanceId>/shared` or
+`.../<instanceId>/<phaseId>-attempt<N>`; the branch is
+`argus/<instanceId>/shared` or `argus/<instanceId>/<phaseId>/<attempt>`. Both
+segments go through the same `safeSegment` sanitizing the artifact directories
+use (§5), plus git's own ref rules, so an identifier can never name a
+directory outside the worktrees root or a branch git refuses.
+
+**What runs there.** Everything about the attempt: each step's `cwd` and the
+`project` its transcript is filed under, `ARGUS_WORKSPACE` in the child
+environment (a per-invocation identifier, so it is never inherited from the
+parent — §4), the `changed-files` baseline snapshot, and the phase's `checks`
+— a `command` check is the repository's own script and must see what the agent
+saw. The invocation record and `PhaseProgress.workspace` both carry the
+`WorkspaceRecord` (`path`, `branch`, `base`, resolved `baseHead`), and the
+step drawer shows the branch.
+
+**The deliverable is the branch; uncommitted changes are discarded.** When the
+instance settles — succeeded, failed or aborted — Argus runs
+`git worktree remove --force` on every tree whose policy did not say `keep`,
+and `pruneInstances` catches any that no settlement ever removed. The branch
+is never deleted, by either path. So a phase that must hand its work on has to
+**commit** it: anything left dirty in the tree goes with the directory. (One
+phase asking to `keep` a shared `instance` tree keeps it for all of them — the
+conservative reading, since a directory kept by mistake costs disk and one
+removed by mistake costs work.)
+
+**Failure is `configuration`.** A `cwd` that is not inside a git work tree, a
+`base` that does not resolve, a directory in the way, git missing entirely —
+each fails the phase before anything is spawned, under the `configuration`
+class, with git's own stderr in the reason. Never retried: running it again
+cannot help, because what is wrong is the definition. The journal gets
+`workspace.created` and `workspace.removed` entries either side of the work.
+
+**Restarts.** Creation is idempotent, because Argus restarts: a directory that
+is already this branch's worktree is reused as it stands (uncommitted work and
+all), and a branch that exists without a directory — its tree already cleaned
+up — is checked out again rather than re-cut from `base`, so the first
+attempt's commits come back with it. A step that is still running keeps
+whatever `cwd` it was launched with; only a new attempt resolves a workspace.
+
+**Limitations.**
+
+- **Not a security boundary.** A worktree is a directory, not a jail. Nothing
+  stops an agent from `cd`-ing out of it, and Argus's `filesystem` capability
+  is still tool permission rules for every runtime but Codex, whose sandbox
+  remains the only OS-level boundary here (§10).
+- **Claude Code's own directory handling is unaffected.** `--add-dir` (from
+  `additionalDirectories` and the artifact directory) still points where it
+  pointed; a phase that hands the agent the original repository as an extra
+  directory has handed it the original repository.
+- **One repository per phase.** The worktree is cut from the repository at the
+  phase's `cwd`; a phase working across several repositories isolates only
+  that one.
+- **`{{workspace}}` is not a placeholder.** The run's `cwd` _is_ the worktree,
+  so a prompt does not need to name it; `ARGUS_WORKSPACE` is there for a
+  script that does.
+- **Nothing merges the branch.** Argus creates it and leaves it; landing the
+  work is a later phase's job (a `command` check, an agent that opens a PR) or
+  a human's.
+
+## 12. Candidates
+
+A phase runs its step once. If that run is a bad draw — the model went down a
+wrong path, the test it wrote does not compile, the patch touches the wrong
+file — Argus finds out at the checks and then does the only thing it can: fail
+the phase, and maybe retry it, sequentially, at the same price.
+
+A `candidates` phase runs the step **N times at once**, in N separate
+worktrees, and lets the phase's own `checks` decide which draft the pipeline
+keeps.
+
+This is the single best-evidenced lever in the harness literature (see
+[HARNESS-RESEARCH.md §2](HARNESS-RESEARCH.md) #1–#2). Trae Agent's SWE-bench
+Verified score moved **70.6% → 75.2% from its candidate ensemble alone**, and
+monotonically in N; AutoCodeRover gained **+7 points from three samples**. The
+qualifier matters more than the numbers: sampling _without_ a verifier
+plateaus (Large Language Monkeys), because picking by majority vote or by a
+reward model is not the same as picking the one that passes. Argus has a real
+verifier already — §6 — so candidates is the two halves put together.
+
+```jsonc
+{
+  "id": "implement",
+  "cwd": "/path/to/repo",
+  "workspace": { "scope": "attempt" },
+  "steps": [{ "name": "code", "prompt": "Implement {{artifacts.plan}}." }],
+  "checks": [
+    { "kind": "command", "run": "npm run typecheck", "label": "typecheck" },
+    { "kind": "command", "run": "npm test", "label": "tests" },
+  ],
+  "candidates": {
+    "count": 2,
+    "select": "first-verified",
+    "variants": [{ "runtime": "claude" }, { "runtime": "codex" }],
+  },
+}
+```
+
+| Field      | Meaning                                                                                                                                  |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `count`    | How many independent runs of the step launch at once. Integer, 2–8.                                                                      |
+| `select`   | `"first-verified"` or `"cheapest-verified"` — see below.                                                                                 |
+| `variants` | Per-candidate `{ runtime?, model?, reasoningEffort? }`, **cycled** when shorter than `count`. Absent means `count` identical candidates. |
+
+### Requirements
+
+Both are refused with a `400` naming the reason, at authoring time — and
+re-checked on the _merged_ definition after a `PATCH`, so clearing a
+pipeline-wide workspace under a phase that relies on it is refused too:
+
+- **Exactly one step in the phase.** A selection replaces the phase's whole
+  result with one candidate's, and "which of three steps did candidate 2 win
+  with" has no answer.
+- **An effective `workspace.scope: "attempt"`** (on the phase or inherited
+  from the pipeline, §11). Without a worktree each, the candidates are not
+  independent samples of the same task — they are N agents editing one
+  checkout.
+
+### What each candidate gets
+
+Everything that could otherwise be shared, isn't:
+
+| Per candidate `i`        | Value                                                                                                    |
+| ------------------------ | -------------------------------------------------------------------------------------------------------- |
+| worktree                 | `.../worktrees/<instanceId>/<phaseId>-attempt<N>-c<i>`, branch `argus/<instanceId>/<phaseId>/<N>-c<i>`   |
+| artifact directory       | `<phaseArtifactDir>/c<i>` — also what `ARGUS_ARTIFACT_DIR` and `{{artifactDir}}` point at                |
+| `changed-files` baseline | `<phaseId>.<attempt>.c<i>.baseline.json`                                                                 |
+| verification report      | `StepProgress.verification` — the phase's `checks`, run in **that** worktree                             |
+| result file              | the run's own `ARGUS_RESULT_FILE`; nothing is shared, so nothing races                                   |
+| knowledge delta file     | the run's own `ARGUS_KNOWLEDGE_DELTA_FILE`; a losing candidate's staged delta is superseded at selection |
+
+The candidate index rides on the _attempt_ component of the branch
+(`…/impl/0-c1`, not `…/impl/0/c1`) because git's ref namespace is a
+filesystem: `argus/i/impl/0` and `argus/i/impl/0/c1` cannot both exist, and a
+phase that gained candidates between attempts would start failing on the
+collision.
+
+The prompts are identical apart from what the variant changes and the
+artifact directory, which is per candidate by necessity.
+
+Variant overrides resolve narrowest-first like everything else:
+`variant → step → phase → pipeline → server default`.
+
+### Selection
+
+**`first-verified`** — the first candidate whose checks pass wins. Its
+siblings are killed at once (`termination: "killed"`, `error: "superseded by
+candidate k"`, SIGTERM then SIGKILL after the grace period, exactly the
+existing kill path), their steps go to `aborted`, and their worktrees are
+removed. This is the cheap mode: you stop paying for the drafts you are not
+going to use.
+
+**`cheapest-verified`** — every candidate runs to its own checks. Among the
+verified ones the lowest `costUsd` wins; ties break on the shortest duration,
+then on the lowest index. A candidate whose run reported no cost sorts **last**:
+an unknown price is not a cheap one. This is the mode for "I want the best
+value", and it costs N runs by construction.
+
+When a winner is chosen, its payload, its declared `result`, its verification
+report and its worktree become the **phase's** — so `{{previous.payload}}`,
+`produces` and a route condition downstream see one draft, never a mixture.
+The phase then concludes exactly as any other: a gated phase opens its gate
+**after** selection, on the winner, and a revise re-runs the whole set as a new
+attempt.
+
+A candidate that fails before verification — spawn, exit-code, signal, timeout,
+an invocation Argus refused to make, or an agent that signalled `needs-input`
+(a draft has nowhere to take a question) — simply **loses**. The phase fails
+only when no candidate can still win, and then once, with every draft's fate in
+the reason:
+
+```
+no candidate passed its checks — c0 (claude opus): verification failed: tests (exit 1);
+c1 (codex): timed out after 3600s
+```
+
+The phase's failure class is the class every candidate shared, if they shared
+one; otherwise `verification` if any candidate reached the checks; otherwise
+`exit-code`. The phase's `retry` policy then applies as usual, and a retry
+re-runs the whole set.
+
+`PhaseProgress` records `selectedCandidate` and a `candidateOutcomes` entry per
+draft (status, verified, cost, duration, runtime, model, and why it lost) — the
+losers' processes are gone, and this is what remains to explain the choice.
+
+### Cost
+
+Candidate runs are ordinary runs: they appear in the Ledger, count against the
+budget, and cost what they cost. `count: 3` is up to three times the phase's
+spend — `first-verified` recovers part of that by killing the losers, and
+`cheapest-verified` recovers none of it by design. Nothing here is free; what
+the evidence says is that it is often worth it.
+
+Each candidate also takes a **concurrency slot**. `count` is bounded by the
+server's global cap (`maxConcurrent`), and candidates past the cap queue for a
+slot like any other step — a `count: 8` phase on a 4-slot server runs four,
+then four. The deadline clock starts at spawn, so queueing never eats a
+candidate's timeout budget (§7).
+
+### Restarts
+
+Everything a selection needs is on disk, and the decision is a pure function of
+it (`selectCandidate` in `pipelineTransitions.ts`). So:
+
+- a candidate whose checks were running when Argus stopped is verified again,
+  keyed by attempt **and** candidate, so a duplicate report is a no-op;
+- a candidate whose process died without signalling is healed into a loss by
+  the ordinary reconcile path;
+- a restart that lands between the last report and the selection it implied
+  simply asks the question again, and gets the same answer.
+
+### Limitations
+
+- **One step per phase.** Enforced, for the reason above. A multi-step phase
+  that wants best-of-N splits the step it wants sampled into its own phase.
+- **No Verdict-based selection.** Selection is by deterministic `checks` only.
+  Judging the drafts with a rubric (the Verdict watcher already scores runs) is
+  the natural next selector and is deliberately not built yet: the evidence is
+  specifically that selection _without execution_ plateaus, so an
+  execution-gated selector had to come first.
+- **No cross-candidate merging.** The winner is taken whole. Argus never
+  combines two drafts, and nothing merges the winning branch — landing the work
+  is still a later phase's job or a human's (§11).
+- **Losing worktrees go, losing branches stay.** A loser's directory is removed
+  as soon as it loses (or when the phase gives up), unless `workspace.keep` is
+  set. Its branch survives, so `git checkout argus/<instance>/<phase>/<n>-c<i>`
+  still shows what that draft committed — but anything it left _uncommitted_ is
+  gone with the directory, exactly as in §11.
+- **`needs-input` from a candidate is a loss**, not a pause. The gate of a
+  candidates phase belongs to its winner.
+
+## 13. Context and memory
+
+Four pieces of evidence point the same direction (docs/HARNESS-RESEARCH.md
+§2 #4–#7, §4): a retry that carries the failing output back is the
+best-evidenced repair loop there is; where in the prompt something sits (and
+how much of it) matters, and an over-long context hurts; state that survives
+past one session is how long-horizon work gets anywhere; and stuck-detection
+is close to universal in the harnesses that get this right. This section is
+the four of them.
+
+### Placeholders
+
+| Placeholder                 | Value                                                                                                                                   | Capped |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| `{{previous.payload}}`      | The phase's dependency's payload (the last one, in declaration order, if several).                                                      | yes    |
+| `{{artifacts.<name>}}`      | A `produces`-published phase payload, by name.                                                                                          | yes    |
+| `{{artifactDir}}`           | This phase's own file-artifact directory.                                                                                               | no     |
+| `{{artifactDir.<phaseId>}}` | An earlier phase's file-artifact directory.                                                                                             | no     |
+| `{{trigger.payload}}`       | The instance's firing payload (`PipelineInstance.triggerPayload`), JSON-stringified.                                                    | yes    |
+| `{{memory}}`                | This pipeline's `NOTES.md`, tail-capped to its own `memory.maxBytes` — empty when `memory` is disabled or nothing has been written yet. | yes    |
+| `{{previous.instance}}`     | A one-paragraph summary of the most recent _settled_ instance of this pipeline, before this one — empty when there is none.             | yes    |
+
+An unknown placeholder (of any kind) interpolates to empty, same as it always
+has — a template marker reaching the model is worse than a gap, because the
+model tries to make sense of it.
+
+**Every capped value is bounded**, by default 16 KiB
+(`DEFAULT_PLACEHOLDER_BYTES`), overridable per pipeline via
+`contextLimits.placeholderBytes` (1 KiB–256 KiB):
+
+```jsonc
+{ "contextLimits": { "placeholderBytes": 32768 } }
+```
+
+Over the cap, `capPlaceholder()` (`server/src/sources/dag.ts`) keeps the head
+(2/3 of the budget) and the tail (1/3), joined by a one-line marker:
+
+```
+[… Argus trimmed 41214 bytes of {{artifacts.plan}} — the full value is at
+/home/user/.claude/argus/invocations/run_8f2a/context/artifacts.plan.txt …]
+```
+
+The trimming is UTF-8 safe — it backs off over continuation bytes so it never
+splits a multi-byte character — and the full, untrimmed value is written to
+that path (under the run's own invocation directory) so the agent can read the
+whole thing if the head and tail aren't enough. `interpolate()` itself stays
+pure: it returns which files to write (`InterpolateResult.contextFiles`), and
+the engine writes them alongside the run's other materialized files.
+`{{artifactDir}}`/`{{artifactDir.<phaseId>}}` are paths, not values that could
+run long, so they are never capped.
+
+**Placement.** A step's prompt is the agent's own words, first. Everything
+Argus injects rides _after_ it, in a fixed order, short: the result
+instruction (§ pipelineEngine.ts `resultInstruction`), the artifact
+instruction (`artifactInstruction`), the memory instruction (below), and
+last — because recency is what a model weighs most, and a retry note is the
+part most worth remembering — the retry note (§ Retry feedback, below). None
+of this reorders the `OUTCOME_CONTRACT` system-prompt mechanism (§1), which is
+a pure constant carried separately so the prompt cache prefix holds across
+every run.
+
+### Pipeline memory
+
+Externalised state is how work that spans more than one instance survives at
+all — Anthropic's own long-running-harness pattern is exactly this: a durable
+place outside any one session's context that the next session reads first.
+Argus's version is `memory`, off by default:
+
+```jsonc
+{ "memory": { "enabled": true, "maxBytes": 8192 } }
+```
+
+| Field      | Meaning                                                                              |
+| ---------- | ------------------------------------------------------------------------------------ |
+| `enabled`  | Required. `false` (or the field absent) is the same as before this existed.          |
+| `maxBytes` | Cap on `NOTES.md`'s size. Default 8 KiB (8192). Range 1 KiB (1024) – 64 KiB (65536). |
+
+The file lives at `~/.claude/argus/memory/<pipelineId>/NOTES.md`
+(`harness/memory.ts`'s `memoryNotesPath`) — **never created until `enabled` is
+true, and never deleted by Argus**: deleting the pipeline leaves the file
+behind (the same conservative default as a losing candidate's branch, §12).
+When enabled:
+
+- `ARGUS_MEMORY_DIR` is set on every step's environment (a per-invocation
+  identifier — never inherited by a nested Argus child, §4) pointing at the
+  directory (not the file), and handed to the runtime as a **required**
+  invocation channel (§3a) like the artifact directory: `--add-dir` for
+  Claude Code, `sandbox_workspace_write.writable_roots` for Codex under an
+  effective `workspace-write` sandbox (a `read-only` one reports "Codex
+  read-only sandbox prevents writing the memory directory
+  (ARGUS_MEMORY_DIR)", and refuses the launch under strict enforcement).
+  OpenCode and Qwen Code run unsandboxed, so the directory is reachable
+  without any flag.
+- `{{memory}}` interpolates the tail of `NOTES.md`, capped to `maxBytes` (and
+  then to `contextLimits.placeholderBytes` on top, same as any other
+  placeholder — the smaller of the two governs in practice).
+- Every step's prompt gets a fixed instruction appended:
+
+  > Durable notes for this pipeline live at $ARGUS_MEMORY_DIR/NOTES.md. Append
+  > what a future run of this pipeline must know (decisions, gotchas, what was
+  > tried); keep it under N bytes — Argus trims the head beyond that.
+
+- **After each instance settles** (succeeded, failed or aborted — the same
+  moment worktree cleanup runs, §11), Argus checks `NOTES.md`'s size and, if
+  it exceeds `maxBytes`, trims its head back down to the cap on a line
+  boundary (`trimMemoryIfNeeded`, keeping the newest content), journaling
+  `memory.trimmed`. A file within the cap, or one that was never written,
+  costs one read and nothing else.
+
+`{{previous.instance}}` (above) is not gated on `memory.enabled` — it costs
+one instance listing Argus already has to read, and says nothing a pipeline
+needs to opt into. `summarizeInstance()` (`harness/memory.ts`, pure) is what
+builds it: status, when it ended, which phase failed and why in one line, and
+which candidate won, if any —
+
+```
+Previous run failed (ended 2026-09-19T14:02:11.000Z); phase "implement"
+failed: verification failed: typecheck (exit 1).
+```
+
+### Retry feedback
+
+`retryNote()` (`server/src/pipelineEngine.ts`) now hands the next attempt
+something to repair against for **every** retryable class, not only
+`"verification"`/`"signal"` as before — each bounded, the whole note capped at
+~2 KiB, and headed `Previous attempt (n of m) failed — <class>:`, appended
+last in the prompt (above):
+
+| Class          | What the note carries                                                                                                                                                                    |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `verification` | Each failed check by name, with the tail (~600 chars) of its own output — read straight off the failed attempt's `VerificationReport`, still on the phase until the retry overwrites it. |
+| `exit-code`    | The exit code, plus a tail (~800 chars) of the failed run's own `error`/`resultSummary` text.                                                                                            |
+| `timeout`      | The reason already computed where the failure was recorded: `"timed out after Ns"` or, for a stall, `"stalled: no output for Ns"`.                                                       |
+| `spawn`        | The spawn error, in one line.                                                                                                                                                            |
+| `signal`       | Unchanged: the agent's own reported reason.                                                                                                                                              |
+
+`configuration` failures are never retried (§2) and so never get a note.
+
+### Stalls
+
+See §7 — stall detection is a timeout mechanism, documented there beside the
+rest of timeout enforcement.
+
+### `WorkspacePolicy.scope: "none"`
+
+See §11 — a phase can opt out of a pipeline-wide isolation policy and run in
+its own `cwd`, no worktree created.

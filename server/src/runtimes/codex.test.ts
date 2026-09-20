@@ -2,8 +2,21 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { codexRuntime, estimateCodexCost, parseCodexEnvelope } from "./codex.js";
 import { deriveCodexActivity } from "./codex.js";
-import type { CapabilityRequest } from "./types.js";
+import type { CapabilityRequest, InvocationChannel } from "./types.js";
 import type { CapabilityProfile } from "@argus/contracts";
+
+/** An Argus-owned write channel, as the engine hands one to the runtime. */
+function artifactChannel(dir: string, required = false): InvocationChannel {
+  return {
+    kind: "artifact-dir",
+    envVar: "ARGUS_ARTIFACT_DIR",
+    path: dir,
+    dir,
+    access: "write",
+    required,
+    label: "artifact directory",
+  };
+}
 
 const RESET = { ...process.env };
 function withEnv(vars: Record<string, string | undefined>, fn: () => void): void {
@@ -242,7 +255,7 @@ function capRequest(
     profile,
     invocationDir: "/inv",
     cwd: "/work",
-    artifactDir: null,
+    channels: [],
     ...overrides,
   };
 }
@@ -288,12 +301,12 @@ test("additionalDirectories becomes a writable_roots -c override", () => {
   assert.equal(plan.args[i + 1], 'sandbox_workspace_write.writable_roots=["/a","/b"]');
 });
 
-test("artifactDir joins writable_roots under workspace-write", () => {
+test("a write channel joins writable_roots under workspace-write and is granted", () => {
   const plan = codexRuntime.streamPlan({
     prompt: "p",
     capabilities: capRequest(
       { filesystem: "workspace-write", additionalDirectories: ["/a"] },
-      { artifactDir: "/artifacts/run-1" },
+      { channels: [artifactChannel("/artifacts/run-1")] },
     ),
   });
   const i = plan.args.indexOf("-c");
@@ -301,15 +314,26 @@ test("artifactDir joins writable_roots under workspace-write", () => {
     plan.args[i + 1],
     'sandbox_workspace_write.writable_roots=["/a","/artifacts/run-1"]',
   );
+  assert.equal(plan.channels?.[0].status, "granted");
 });
 
-test("read-only with an artifactDir reports a limitation instead of adding it to writable_roots", () => {
+test("read-only reports a write channel unavailable instead of adding it to writable_roots", () => {
   const plan = codexRuntime.streamPlan({
     prompt: "p",
-    capabilities: capRequest({ filesystem: "read-only" }, { artifactDir: "/artifacts/run-2" }),
+    capabilities: capRequest(
+      { filesystem: "read-only" },
+      { channels: [artifactChannel("/artifacts/run-2")] },
+    ),
   });
   assert.equal(plan.args.includes("-c"), false);
-  assert.ok(plan.limitations?.includes("read-only sandbox prevents writing artifacts"));
+  // Channel availability is its own verdict, not a profile limitation: the
+  // engine decides whether it blocks from whether the channel is required.
+  assert.deepEqual(plan.limitations, []);
+  assert.equal(plan.channels?.[0].status, "unavailable");
+  assert.equal(
+    plan.channels?.[0].reason,
+    "Codex read-only sandbox prevents writing the artifact directory (ARGUS_ARTIFACT_DIR)",
+  );
 });
 
 test("mcpServers becomes dotted -c overrides per server, and is always a limitation", () => {
@@ -394,20 +418,28 @@ test("the artifact dir is writable under the operator's default sandbox when the
   withEnv({ ARGUS_CODEX_SANDBOX: undefined }, () => {
     const plan = codexRuntime.streamPlan({
       prompt: "p",
-      capabilities: capRequest({ additionalDirectories: [] }, { artifactDir: "/art" }),
+      capabilities: capRequest(
+        { additionalDirectories: [] },
+        { channels: [artifactChannel("/art")] },
+      ),
     });
     const i = plan.args.indexOf("-c");
     assert.ok(i > -1, "expected a sandbox_workspace_write.writable_roots override");
     assert.ok(plan.args[i + 1].includes("/art"), plan.args[i + 1]);
+    assert.equal(plan.channels?.[0].status, "granted");
   });
 });
 
-test("a read-only ARGUS_CODEX_SANDBOX reports the artifact-writing limitation even with no filesystem capability set", () => {
+test("a read-only ARGUS_CODEX_SANDBOX reports the artifact channel unavailable even with no filesystem capability set", () => {
   withEnv({ ARGUS_CODEX_SANDBOX: "read-only" }, () => {
     const plan = codexRuntime.streamPlan({
       prompt: "p",
-      capabilities: capRequest({ additionalDirectories: [] }, { artifactDir: "/art" }),
+      capabilities: capRequest(
+        { additionalDirectories: [] },
+        { channels: [artifactChannel("/art")] },
+      ),
     });
-    assert.ok(plan.limitations?.includes("read-only sandbox prevents writing artifacts"));
+    assert.equal(plan.channels?.[0].status, "unavailable");
+    assert.match(plan.channels?.[0].reason ?? "", /read-only sandbox prevents writing/);
   });
 });

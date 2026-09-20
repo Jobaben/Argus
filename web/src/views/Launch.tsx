@@ -9,7 +9,6 @@ import {
   Handoff,
   ModelSelect,
   ReasoningEffortSelect,
-  Page,
   RuntimeSelect,
   SkeletonRows,
 } from "../ds";
@@ -125,7 +124,15 @@ function LaunchForm({
   );
 }
 
-export default function Launch() {
+/**
+ * The Scheduler's One-off sub-tab: fire a single headless run right now.
+ *
+ * A one-off run is a schedule with no trigger — same form fields, same run
+ * rows, same machinery on the server — which is why it lives inside the
+ * Scheduler rather than as a destination of its own. No `Page` here: the
+ * Scheduler supplies the heading and the sub-tab switch.
+ */
+export function LaunchPanel() {
   const { runs, loading, error, launch, cancelRun } = useLaunch();
   const [form, setForm] = useState<LaunchInput>(EMPTY);
   const live = runs.filter((r) => r.status === "running").length;
@@ -156,7 +163,7 @@ export default function Launch() {
   );
 
   return (
-    <Page title="Launch">
+    <>
       <p className="mb-4 max-w-prose text-sm text-ink-dim">
         Fire a single headless agent run right now — <span className="font-mono">claude -p</span>,{" "}
         <span className="font-mono">codex exec</span>,{" "}
@@ -249,6 +256,8 @@ export default function Launch() {
           </ul>
         )}
       </Handoff>
-    </Page>
+    </>
   );
 }
+
+export default LaunchPanel;

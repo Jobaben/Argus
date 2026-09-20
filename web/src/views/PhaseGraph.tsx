@@ -1,7 +1,12 @@
 import { useEffect, useRef } from "react";
 import type { DsStatus, PhasePill } from "../ds";
 import { DURATION, STATUS, useSyncedDelay } from "../ds";
-import { LANE_GEOMETRY, type EdgeState, type LaneLayout } from "./laneGraphLayout";
+import {
+  LANE_GEOMETRY,
+  MAX_TILE_HEIGHT_PX,
+  type EdgeState,
+  type LaneLayout,
+} from "./laneGraphLayout";
 
 /**
  * The pipeline's shape as a lane graph: one node per phase, stages as rows,
@@ -27,9 +32,6 @@ const PHASE_DOT: Record<DsStatus, string> = {
   stopped: "bg-idle",
 };
 
-/** Roughly twelve plain stages; a longer graph scrolls inside its tile. */
-const MAX_TILE_HEIGHT_PX = 640;
-
 /**
  * Edge strokes by state. Same colour brighter and heavier when the edge is
  * incident to the selected node, so selection never repaints a taken edge as
@@ -47,6 +49,12 @@ const LABEL: Record<EdgeState, string> = {
   skipped: "border-line text-ink-faint opacity-60",
 };
 
+/** Best-of-N in the space a phase pill has: "2/3 verified · c2 selected". */
+function candidateNote(c: NonNullable<PhasePill["candidates"]>): string {
+  const verified = `${c.verified}/${c.total} verified`;
+  return c.selected == null ? verified : `${verified} · c${c.selected + 1} selected`;
+}
+
 function chipTitle(pill: PhasePill, index: number, needNames: string[]): string {
   // A skipped phase says so in words. The DS token behind it is the quiet one,
   // which is right for the colour and wrong for the word: "idle" would promise
@@ -56,6 +64,7 @@ function chipTitle(pill: PhasePill, index: number, needNames: string[]): string 
   if (pill.gated) bits.push("gated: waits for a human");
   if ((pill.attempt ?? 0) > 0) bits.push(`attempt ${pill.attempt + 1}`);
   if (pill.retryAt && pill.status === "failed") bits.push("retry queued");
+  if (pill.candidates) bits.push(candidateNote(pill.candidates));
   if (pill.reason) bits.push(pill.reason.split("\n")[0]);
   if (pill.skipCause) bits.push(`not selected — ${pill.skipCause.source}: ${pill.skipCause.label}`);
   for (const edge of pill.edges ?? []) {
@@ -156,9 +165,20 @@ function PhaseNode({
           try {pill.attempt + 1}
         </span>
       )}
+      {/* Best-of-N replaces the step dots: N dots would all be the same step,
+          and what a reader wants is how many of the drafts survived. */}
+      {pill.candidates && (
+        <span
+          data-testid="candidate-summary"
+          className="shrink-0 whitespace-nowrap font-mono text-[8.5px] tracking-[0.02em] text-ink-faint"
+        >
+          {candidateNote(pill.candidates)}
+        </span>
+      )}
       {/* Step progress without step tiles: one dot per step, or a count once
           dots would stop being countable at a glance. */}
-      {pill.steps.length > 1 &&
+      {!pill.candidates &&
+        pill.steps.length > 1 &&
         (pill.steps.length <= 6 ? (
           <span aria-hidden="true" className="flex shrink-0 items-center gap-[3px]">
             {pill.steps.map((s, i) => (
@@ -178,6 +198,7 @@ export function PhaseGraph({
   phases,
   layout,
   laneW,
+  tileWidth,
   stacked,
   selectedId,
   onSelect,
@@ -186,6 +207,9 @@ export function PhaseGraph({
   layout: LaneLayout;
   /** The node width the layout was computed with. */
   laneW: number;
+  /** The graph's width plus the tile's own chrome, so the graph never scrolls
+   *  sideways inside it. */
+  tileWidth: number;
   /** Whether the graph sits above the focus panel (fits the card) or beside it. */
   stacked: boolean;
   selectedId: string | null;
@@ -198,14 +222,23 @@ export function PhaseGraph({
 
   // A long graph scrolls inside its tile; keep the phase being asked about in
   // view when the selection moves (a gate opening, a failure landing).
+  //
+  // The tile's own scroll position, never `scrollIntoView`: that scrolls every
+  // scrollable ancestor including the window, so a status change on a card
+  // below the fold used to yank the whole page to it. The node is absolutely
+  // positioned inside the tile's content box, so its offsets are already tile
+  // coordinates. Vertical only — sideways overflow is clipped by design.
   const tileRef = useRef<HTMLDivElement>(null);
   const nodeEls = useRef(new Map<string, HTMLButtonElement>());
   useEffect(() => {
     const tile = tileRef.current;
     const el = selectedId ? nodeEls.current.get(selectedId) : undefined;
-    if (!tile || !el || typeof el.scrollIntoView !== "function") return;
-    if (tile.scrollHeight <= tile.clientHeight && tile.scrollWidth <= tile.clientWidth) return;
-    el.scrollIntoView({ block: "nearest", inline: "nearest" });
+    if (!tile || !el) return;
+    const top = el.offsetTop;
+    const bottom = top + el.offsetHeight;
+    if (top < tile.scrollTop) tile.scrollTop = top;
+    else if (bottom > tile.scrollTop + tile.clientHeight)
+      tile.scrollTop = bottom - tile.clientHeight;
   }, [selectedId]);
 
   const hot = (e: { from: string; to: string }) =>
@@ -214,14 +247,19 @@ export function PhaseGraph({
   const edges = [...layout.edges].sort((a, b) => Number(hot(a)) - Number(hot(b)));
 
   return (
+    // Clipped sideways, not scrolled: the lanes are already sized to fit the
+    // tile, so anything left over is sub-pixel — a device-pixel rounding at
+    // fractional display scaling, or a scrollbar a pixel wider than the 16 we
+    // budgeted for. That is a bar across the bottom of the card and nothing to
+    // read by dragging it.
     <div
       ref={tileRef}
       role="group"
       aria-label="Phases"
       data-testid="phase-graph"
       data-stacked={stacked ? "true" : undefined}
-      style={{ maxHeight: MAX_TILE_HEIGHT_PX, width: stacked ? undefined : layout.width }}
-      className={`relative overflow-auto rounded-tile border border-line/80 bg-ground-2/70 ${
+      style={{ maxHeight: MAX_TILE_HEIGHT_PX, width: stacked ? undefined : tileWidth }}
+      className={`relative overflow-x-clip overflow-y-auto rounded-tile border border-line/80 bg-ground-2/70 ${
         stacked ? "w-full" : "shrink-0"
       }`}
     >

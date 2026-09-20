@@ -294,8 +294,12 @@ may send the session token as `X-Argus-Session` instead of the cookie.
 | `POST /api/auth/logout` | invalidate the current session                                                                      |
 
 Admin-gated routes (all others are unaffected): `POST/PUT/PATCH/DELETE
-/api/pipelines*`, `POST /api/pipelines/:id/start`, and `POST
-/api/instances/:id/{approve,revise,abort}`. Unauthenticated calls get `401`
+/api/pipelines*`, `POST /api/pipelines/:id/start`, `POST
+/api/pipelines/:id/hook-token/rotate`, and `POST
+/api/instances/:id/{approve,revise,abort}`. Schedules (including `POST
+/api/schedules/:id/hook-token/rotate`) are not admin-gated — they carry no
+credential of their own beyond the token/session layer above, same as every
+other schedule route. Unauthenticated calls get `401`
 with `code: "auth_required"` (or `"auth_setup_required"` before first-run
 setup). `POST /api/instances/:id/signal` is **not** admin-gated — it is called
 by headless agent hooks and authenticates with its own per-instance token. To
@@ -386,19 +390,20 @@ first. `endedAt: null` means still in flight — render through `windowEnd`.
 
 ## Scheduler
 
-| Method + path                      | Effect                                                             |
-| ---------------------------------- | ------------------------------------------------------------------ |
-| `GET /api/schedules`               | list schedules, each with a computed `nextRun`                     |
-| `POST /api/schedules`              | create a schedule (validated) → `201`                              |
-| `PUT /api/schedules/:id`           | patch a schedule → `200`, `404` if unknown                         |
-| `DELETE /api/schedules/:id`        | delete a schedule                                                  |
-| `POST /api/schedules/:id/run`      | fire now → `202`, or `409` when `overlap=skip` and a run is live   |
-| `GET /api/runs?scheduleId=&limit=` | run history (newest first)                                         |
-| `GET /api/runs/:id`                | one run plus the tail of its log                                   |
-| `GET /api/runs/:id/activity`       | the live activity retained for a running step (see below)          |
-| `GET /api/runs/:id/recording`      | the run as a Flight Recorder timeline (see below)                  |
-| `GET /api/runs/:id/invocation`     | what Argus launched for this run (see § Harness) → `404` if none   |
-| `POST /api/runs/:id/cancel`        | kill a running run → `200`, `409` if not running, `404` if unknown |
+| Method + path                               | Effect                                                                                               |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `GET /api/schedules`                        | list schedules, each with a computed `nextRun`                                                       |
+| `POST /api/schedules`                       | create a schedule (validated) → `201`                                                                |
+| `PUT /api/schedules/:id`                    | patch a schedule → `200`, `404` if unknown                                                           |
+| `DELETE /api/schedules/:id`                 | delete a schedule                                                                                    |
+| `POST /api/schedules/:id/run`               | fire now → `202`, or `409` when `overlap=skip` and a run is live                                     |
+| `POST /api/schedules/:id/hook-token/rotate` | regenerate a `kind: "webhook"` schedule's `hookToken` → `200`, `400` if the trigger is not `webhook` |
+| `GET /api/runs?scheduleId=&limit=`          | run history (newest first)                                                                           |
+| `GET /api/runs/:id`                         | one run plus the tail of its log                                                                     |
+| `GET /api/runs/:id/activity`                | the live activity retained for a running step (see below)                                            |
+| `GET /api/runs/:id/recording`               | the run as a Flight Recorder timeline (see below)                                                    |
+| `GET /api/runs/:id/invocation`              | what Argus launched for this run (see § Harness) → `404` if none                                     |
+| `POST /api/runs/:id/cancel`                 | kill a running run → `200`, `409` if not running, `404` if unknown                                   |
 
 Create/patch body fields: `name`, `prompt`, `cwd` (must exist), `trigger`,
 `enabled` (default `true`), `overlapPolicy` (`skip`|`allow`, default `skip`),
@@ -407,6 +412,87 @@ and `catchUp` (boolean, default `false`) — when `true`, a slot missed beyond
 the firing grace (machine asleep, Argus down) fires **once** on the next
 scheduler tick instead of being skipped; only the most recent missed slot is
 run.
+
+## Webhook and chained triggers (v0.4)
+
+Two more trigger kinds, available to both schedules (`trigger`) and pipelines
+(`trigger`, which may also be `null` for manual-only): `{ "kind": "webhook" }`
+and `{ "kind": "after", "pipelineId": "<id>", "on": "succeeded" | "failed" | "any" }`.
+Neither has a cadence — the scheduler's tick never fires them
+(`shouldFire`/`nextFireAfter` always report "not due" for these two kinds);
+each fires from its own path below.
+
+**`webhook`.** Saving a definition with `trigger.kind: "webhook"` mints a
+`hookToken` (32 random bytes, base64url) on the definition and returns it in
+every `GET`/`POST`/`PUT`/`PATCH` response from then on — this is a single-user
+control plane behind `ARGUS_TOKEN`, so the token is returned in the clear the
+same way `ARGUS_TOKEN` itself is a plaintext shared secret. The token is
+**stable across edits**; it changes only via:
+
+| Method + path                               | Effect                                                           |
+| ------------------------------------------- | ---------------------------------------------------------------- |
+| `POST /api/pipelines/:id/hook-token/rotate` | mint a fresh `hookToken` → `200`, `400` if not a webhook trigger |
+| `POST /api/schedules/:id/hook-token/rotate` | same, for a schedule                                             |
+
+Fire the hook itself with:
+
+| Method + path                   | Effect                                   |
+| ------------------------------- | ---------------------------------------- |
+| `POST /api/hooks/pipelines/:id` | start an instance → `202 { instanceId }` |
+| `POST /api/hooks/schedules/:id` | fire a scheduled run → `202 { runId }`   |
+
+Both routes authenticate with `Authorization: Bearer <hookToken>` — the
+definition's own token, checked in constant time against exactly the one
+definition named in the path. **`ARGUS_TOKEN` is never accepted here**: a
+caller presenting a correct `ARGUS_TOKEN` but no (or the wrong) `hookToken`
+still gets `401`. A target whose trigger isn't `kind: "webhook"`, or whose id
+doesn't exist, is `404` either way — the route never reveals which pipelines
+or schedules exist to an unauthenticated prober. A disabled definition is
+`409`. `overlapPolicy: "skip"` is honoured exactly like the scheduler's own
+overlap check: a pipeline hook returns `409 { instanceId }` naming the
+instance already in flight; a schedule hook returns `409 { runId }`.
+
+The request body, if any, must be JSON and no larger than 64 KiB (`413`
+otherwise, before it is parsed). For a pipeline, it becomes the new instance's
+`triggerPayload` and the instance's `trigger` reads `"webhook"`. A schedule has
+nowhere to carry a payload — its hook just fires the schedule's own prompt,
+exactly like `POST /api/schedules/:id/run`, with `trigger: "webhook"` on the
+resulting run.
+
+Unlike every other mutating route, the two hook routes are **exempt from the
+Origin/CSRF check** (a webhook sender is a server, not a browser a CSRF page
+could drive) — but **not** from the Host allowlist, which still applies. Argus
+binds loopback by default, so reaching a hook from another machine needs the
+same non-default setup any remote access does: bind a routable `ARGUS_HOST`,
+set `ARGUS_TOKEN` (mandatory once the bind is non-loopback — see
+[Security](#security)), and add the sender's host to `ARGUS_ALLOWED_HOSTS` if
+it addresses Argus by a name other than the bind address. `ARGUS_TOKEN` still
+gates every _other_ route in that setup; it simply isn't the hook's own
+credential.
+
+**`after`.** Chains a pipeline or schedule to fire once a **pipeline**
+instance ends (only pipelines may be a chain's source; both pipelines and
+schedules may be a chain's target). `on: "succeeded"` fires only on a
+succeeded source instance, `"failed"` fires on a failed or aborted one, `"any"`
+fires on either. `pipelineId` must name an existing pipeline; a pipeline
+cannot name itself, and a direct two-pipeline cycle (A after B, B after A) is
+refused at save time with `400` — a longer cycle through several pipelines is
+not detected, but the scheduler fires at most once per source instance, so it
+runs down rather than spinning.
+
+Chaining is evaluated on the same scheduler tick as everything else, right
+after ordinary cadence firing, and is idempotent across restarts: a small
+ledger (`~/.claude/argus/chains.json`, capped to the most recent 500 source
+instances) records which targets have already fired for which source
+instance, so a tick that runs twice — or a restart mid-tick — cannot double-fire
+a chain. Only instances that ended **after** the target's own `updatedAt` are
+considered, so saving a new `after` trigger never reaches into history and
+fires off something that finished before the trigger existed.
+
+A chained pipeline instance carries `trigger: "chained"`, `chainedFrom:
+"<source instance id>"`, and `triggerPayload: { sourceInstanceId,
+sourcePipelineId, status }`. A chained schedule run carries `trigger:
+"chained"` and fires its ordinary prompt, exactly like a normal scheduled run.
 
 ### `POST /api/launch`
 
@@ -1432,7 +1518,9 @@ that names no step, and a multi-step result phase with no `resultStep`. A
 definition with no `when` edges validates exactly as it did before.
 
 **Delivering the result.** A result-producing step is spawned with
-`ARGUS_RESULT_FILE` — a per-run path — and its prompt carries the schema. The
+`ARGUS_RESULT_FILE` — a per-run path, `~/.claude/argus/results/<runId>/result.json`,
+in a directory of its own so a sandbox can be granted this run's result without
+every other run's (HARNESS.md §3a) — and its prompt carries the schema. The
 stop hook parses that file and sends the value as `result` on the completion
 signal; a file that exists but does not parse arrives as `resultError` instead.
 Runtimes with no command hook have the same file read on the reconcile tick.
@@ -1482,12 +1570,14 @@ flags, and a complete worked pipeline: [docs/HARNESS.md](HARNESS.md).
 
 ### `PipelineDefinition` / `PhaseDef` / `PhaseStep` fields
 
-| Field            | On                    | Type                | Validation                                                                                                                                                                                |
-| ---------------- | --------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`             | phase                 | string              | `^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$` — one path segment, 1-80 chars, never `.`/`..`. It names the phase's artifact and changed-files-baseline directories on disk, not just a graph label. |
-| `capabilities`   | pipeline, phase, step | `CapabilityProfile` | See below. Merges by key, narrowest wins (step ▸ phase ▸ pipeline).                                                                                                                       |
-| `timeoutSeconds` | phase, step           | integer             | 1–86400. A step's own value overrides its phase's; absent on both = no limit.                                                                                                             |
-| `checks`         | phase                 | `PhaseCheck[]`      | Up to 50 entries. Run once every step of the phase has reported success; a failing check fails the phase under the `verification` class.                                                  |
+| Field              | On                    | Type                       | Validation                                                                                                                                                                                                                                                                                   |
+| ------------------ | --------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`               | phase                 | string                     | `^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$` — one path segment, 1-80 chars, never `.`/`..`. It names the phase's artifact and changed-files-baseline directories on disk, not just a graph label.                                                                                                    |
+| `capabilities`     | pipeline, phase, step | `CapabilityProfile`        | See below. Merges by key, narrowest wins (step ▸ phase ▸ pipeline).                                                                                                                                                                                                                          |
+| `timeoutSeconds`   | phase, step           | integer                    | 1–86400. A step's own value overrides its phase's; absent on both = no limit.                                                                                                                                                                                                                |
+| `checks`           | phase                 | `PhaseCheck[]`             | Up to 50 entries. Run once every step of the phase has reported success; a failing check fails the phase under the `verification` class.                                                                                                                                                     |
+| `knowledgeDelta`   | phase                 | `"optional" \| "required"` | Default `"optional"`. `"required"` makes the KnowledgeDelta channel (`ARGUS_KNOWLEDGE_DELTA_FILE`) a launch precondition: a runtime that cannot make it writable is refused under strict enforcement. Emitting a delta stays optional either way. See HARNESS.md §3a.                        |
+| `knowledgeContext` | phase, step           | `{ claims: Selector[] }`   | 1–64 selectors, each `"ID"` (active revision), `"ID:vN"` (exact) or `{ id, revision: N \| "active" }`; normalized to the object form. Each claim id at most once. A step's spec replaces its phase's. Existence is checked at launch (`configuration` failure). See KNOWLEDGE-LEDGER.md §13. |
 
 `CapabilityProfile`:
 
@@ -1505,11 +1595,11 @@ flags, and a complete worked pipeline: [docs/HARNESS.md](HARNESS.md).
 
 `EnvPolicy`:
 
-| Key              | Type                     | Validation                                                                                                                                                                                                                                                                       |
-| ---------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `inherit`        | `"all"\|"minimal"`       | default `"all"`                                                                                                                                                                                                                                                                  |
-| `allow` / `deny` | `string[]`               | each an env-var name, optionally with one trailing `*`                                                                                                                                                                                                                           |
-| `set`            | `Record<string, string>` | keys must be valid env-var names and may not name a reserved Argus control variable (`ARGUS_TOKEN`, `ARGUS_WEBHOOK_URL`, `ARGUS_SIGNAL_*`, `ARGUS_RUN_ID`, `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`, `ARGUS_RESULT_FILE`, `ARGUS_ARTIFACT_DIR`, `ARGUS_STEP_NAME`, `ARGUS_RUNTIME`) |
+| Key              | Type                     | Validation                                                                                                                                                                                                                                                                                                     |
+| ---------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inherit`        | `"all"\|"minimal"`       | default `"all"`                                                                                                                                                                                                                                                                                                |
+| `allow` / `deny` | `string[]`               | each an env-var name, optionally with one trailing `*`                                                                                                                                                                                                                                                         |
+| `set`            | `Record<string, string>` | keys must be valid env-var names and may not name a reserved Argus control variable (`ARGUS_TOKEN`, `ARGUS_WEBHOOK_URL`, `ARGUS_SIGNAL_*`, `ARGUS_RUN_ID`, `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`, `ARGUS_RESULT_FILE`, `ARGUS_KNOWLEDGE_DELTA_FILE`, `ARGUS_ARTIFACT_DIR`, `ARGUS_STEP_NAME`, `ARGUS_RUNTIME`) |
 
 `PhaseCheck` (discriminated on `kind`; each kind accepts only its own fields
 plus the common `label`, ≤120 chars):
@@ -1567,7 +1657,10 @@ environment **by name** (never by value), the resolved capability profile —
 with `env.set` and every MCP server's `env`/`headers` values replaced by
 `"<redacted>"` (keys kept; the materialized `mcp.json` still carries the real
 values) — and what the runtime couldn't enforce of it, the config files
-materialized for the invocation, the artifact directory, the deadline, and
+materialized for the invocation, the artifact directory, every Argus-owned
+invocation channel it was offered (`channels[]`: env var, path, access,
+whether the launch depended on it, and `granted` / `unavailable` /
+`unmanaged` — HARNESS.md §3a), the deadline, and
 the repository state (`git rev-parse HEAD`) it started against. Returns the
 `AgentInvocationRecord`, or `404` when the run predates invocation records or
 is unknown. See [docs/HARNESS.md § 8](HARNESS.md#8-observability--reproducibility)
@@ -1958,6 +2051,89 @@ cost is up to one tick of latency. The rules:
   The phase's **worst** step decides; averaging would let one excellent step
   carry a bad one through a gate set to catch exactly that.
 
+## Tuning
+
+**Analyze** on a pipeline card asks one bounded pass per phase whether that
+phase's settings fit the work its steps describe. Reading a report is open;
+producing one spawns agents, so the `POST` is **admin-gated** beside the
+pipeline routes. Nothing here writes to the definition: a proposal is applied
+by the client through `PUT /api/pipelines/:id`, with its validators and its
+running-instances refusal.
+
+| Method + path                  | Effect                                                                     |
+| ------------------------------ | -------------------------------------------------------------------------- |
+| `GET /api/pipelines/:id/tune`  | the newest report for the pipeline, or `report: null`                      |
+| `POST /api/pipelines/:id/tune` | start a pass (admin) → `202` with the `running` seed; `409` while one runs |
+
+### `GET /api/pipelines/:id/tune`
+
+```jsonc
+{
+  "report": {
+    "id": "…",
+    "pipelineId": "…",
+    "status": "ready", // running | ready | failed | skipped
+    "startedAt": "2026-09-17T10:00:00.000Z",
+    "endedAt": "2026-09-17T10:02:10.000Z",
+    "phasesDone": 2,
+    "phasesTotal": 2,
+    "phases": [
+      {
+        "phaseId": "plan",
+        "phaseName": "Plan",
+        "status": "ready", // pending | running | ready | failed | skipped
+        "summary": "A short plan does not need the flagship model.",
+        "proposals": [
+          {
+            "scope": "step", // step | phase
+            "stepName": "draft",
+            "stepIndex": 0,
+            "field": "model", // model | reasoningEffort | timeoutSeconds | maxTurns
+            "current": "opus",
+            "proposed": "haiku",
+            "inheritedFrom": "step", // step | phase | pipeline | cli
+            "before": "opus",
+            "after": "haiku",
+            "reason": "'Write a plan' is a short read; the flagship model is overkill.",
+          },
+        ],
+        "unchanged": [], // steps the pass left alone
+        "warnings": [], // proposals dropped in validation, one line each
+        "costUsd": 0.004,
+        "tokens": 1900,
+        "durationMs": 6100,
+        "error": null,
+      },
+    ],
+    "costUsd": 0.008,
+    "tokens": 3800,
+    "error": null,
+  },
+  "unavailable": null, // why a pass cannot start, when it can't
+}
+```
+
+Two things are absent on purpose. There is **no field that can carry prompt
+text**: a step's prompt is input to the pass and never output, the parser drops
+any `field` outside the closed set (a `"field": "prompt"` becomes a warning,
+not a proposal), and the client rebuilds each step by whitelisted assignment.
+And **"no change" is not a proposal**: a phase whose settings already fit
+comes back `ready` with `proposals: []`, and a value equal to the current one
+is dropped — pressing Analyze cannot by itself manufacture a diff.
+
+Every other value is re-derived rather than trusted: step names must match
+exactly, a model must be on the resolved runtime's roster (`GET /api/runtimes`),
+an effort must exist for that runtime (Claude Code lists none), and integers
+must sit inside the same bounds the authoring validator enforces.
+
+Phases are analysed **one at a time** through the shared analysis runner —
+each gets its own dedicated pass and prompt; only the scheduling is serial —
+and the report is persisted after every phase, so the drawer follows progress
+on `tuning:changed`. A `disabled` or `budget-blocked` runner skips every
+remaining phase; any other failure marks that phase `failed` and carries on.
+A `running` report older than 15 minutes is treated as abandoned by a restart
+and a new `POST` replaces it.
+
 ## Autopsy
 
 Bounded `claude -p` postmortems for failed runs. Reading is open; producing one
@@ -2189,25 +2365,28 @@ session — it cannot execute anything.
 
 ## Pipelines (v0.3)
 
-| Method + path                      | Effect                                                                                                                                                                                                                                                             |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `GET /api/pipelines`               | list pipeline definitions                                                                                                                                                                                                                                          |
-| `POST /api/pipelines`              | create a definition (validated) — **admin**                                                                                                                                                                                                                        |
-| `PUT /api/pipelines/:id`           | replace a definition — **admin**; `409 { code: "instances-running", instances }` when the edit changes what runs (`phases`, `model`, `reasoningEffort`, `runtime`, `capabilities`) while an instance is running or awaiting approval — `?force=1` saves regardless |
-| `PATCH /api/pipelines/:id`         | update some fields (`enabled`, `trigger`, …) — **admin**; the same `409` rule applies to the execution fields                                                                                                                                                      |
-| `DELETE /api/pipelines/:id`        | delete a definition — **admin**                                                                                                                                                                                                                                    |
-| `POST /api/pipelines/:id/start`    | start an instance manually → `202`, or `409` on overlap — **admin**                                                                                                                                                                                                |
-| `GET /api/pipelines/:id/instances` | instances for a pipeline (newest first)                                                                                                                                                                                                                            |
-| `GET /api/overview`                | command-center rows: `{ definition, latest, cost }` per pipeline, attention-first                                                                                                                                                                                  |
-| `GET /api/instances/:id`           | full pipeline instance                                                                                                                                                                                                                                             |
-| `POST /api/instances/:id/signal`   | ingest a signal `{ phaseId, runId, type, token, payload?, result?, resultError? }`; `403` on bad token                                                                                                                                                             |
-| `GET /api/instances/:id/phases/:phaseId/review` | what a paused phase left for a human: payload, result, checks, artifact listing; `409` unless waiting or failed                                                                                                                                       |
-| `GET /api/instances/:id/phases/:phaseId/artifact?path=` | one artifact's text (clipped at 512 KiB) or metadata; `400` on a path that escapes the directory                                                                                                                                                  |
-| `POST /api/instances/:id/approve`  | advance past a gate (optional `{ answers, phaseId }`) — **admin**                                                                                                                                                                                                  |
-| `POST /api/instances/:id/revise`   | re-run the paused phase with the human's note (optional `{ note, phaseId }`) — **admin**                                                                                                                                                                           |
-| `POST /api/instances/:id/abort`    | abort the instance — **admin**                                                                                                                                                                                                                                     |
-| `GET /api/setup`                   | prerequisite status `{ ok, prereqs[] }`                                                                                                                                                                                                                            |
-| `POST /api/setup/apply`            | install fixable prerequisites, then re-check → `{ ok, prereqs[] }`                                                                                                                                                                                                 |
+| Method + path                                           | Effect                                                                                                                                                                                                                                                             |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET /api/pipelines`                                    | list pipeline definitions                                                                                                                                                                                                                                          |
+| `POST /api/pipelines`                                   | create a definition (validated) — **admin**                                                                                                                                                                                                                        |
+| `PUT /api/pipelines/:id`                                | replace a definition — **admin**; `409 { code: "instances-running", instances }` when the edit changes what runs (`phases`, `model`, `reasoningEffort`, `runtime`, `capabilities`) while an instance is running or awaiting approval — `?force=1` saves regardless |
+| `PATCH /api/pipelines/:id`                              | update some fields (`enabled`, `trigger`, …) — **admin**; the same `409` rule applies to the execution fields                                                                                                                                                      |
+| `DELETE /api/pipelines/:id`                             | delete a definition — **admin**                                                                                                                                                                                                                                    |
+| `POST /api/pipelines/:id/start`                         | start an instance manually → `202`, or `409` on overlap — **admin**                                                                                                                                                                                                |
+| `GET /api/pipelines/:id/instances`                      | instances for a pipeline (newest first)                                                                                                                                                                                                                            |
+| `GET /api/pipelines/:id/reliability?days=30`            | first-attempt pass rate, lucky passes, stalls and cost/duration per phase over a trailing window (`days` clamped to 1–365); `404` for an unknown pipeline                                                                                                          |
+| `GET /api/pipelines/:id/tune`                           | newest settings-tuning report for a pipeline, or why none can run                                                                                                                                                                                                  |
+| `POST /api/pipelines/:id/tune`                          | start one tuning pass per phase → `202` with a `running` report; `409` while one runs — **admin**                                                                                                                                                                  |
+| `GET /api/overview`                                     | command-center rows: `{ definition, latest, cost }` per pipeline, attention-first                                                                                                                                                                                  |
+| `GET /api/instances/:id`                                | full pipeline instance                                                                                                                                                                                                                                             |
+| `POST /api/instances/:id/signal`                        | ingest a signal `{ phaseId, runId, type, token, payload?, result?, resultError? }`; `403` on bad token                                                                                                                                                             |
+| `GET /api/instances/:id/phases/:phaseId/review`         | what a paused phase left for a human: payload, result, checks, artifact listing; `409` unless waiting or failed                                                                                                                                                    |
+| `GET /api/instances/:id/phases/:phaseId/artifact?path=` | one artifact's text (clipped at 512 KiB) or metadata; `400` on a path that escapes the directory                                                                                                                                                                   |
+| `POST /api/instances/:id/approve`                       | advance past a gate (optional `{ answers, phaseId }`) — **admin**                                                                                                                                                                                                  |
+| `POST /api/instances/:id/revise`                        | re-run the paused phase with the human's note (optional `{ note, phaseId }`) — **admin**                                                                                                                                                                           |
+| `POST /api/instances/:id/abort`                         | abort the instance — **admin**                                                                                                                                                                                                                                     |
+| `GET /api/setup`                                        | prerequisite status `{ ok, prereqs[] }`                                                                                                                                                                                                                            |
+| `POST /api/setup/apply`                                 | install fixable prerequisites, then re-check → `{ ok, prereqs[] }`                                                                                                                                                                                                 |
 
 WS frame `{ "type": "pipelines:changed" }` is pushed on any pipeline mutation.
 
@@ -2224,12 +2403,30 @@ A definition, a phase (`phases[]`) and a step (`phases[].steps[]`) may each
 carry `runtime`; see [Naming a runtime](#naming-a-runtime) for the resolution
 order. One pipeline can therefore mix runtimes phase by phase.
 
+### Reliability
+
+`GET /api/pipelines/:id/reliability?days=30` answers a question binary
+pass/fail hides: how often a pipeline's phases pass on the first try, and
+where they lose attempts when they don't. It reads only the settled
+(`succeeded`/`failed`/`aborted`) instances that ended within the window and
+returns a `PipelineReliability`: overall `firstAttemptSuccessRate` and
+`luckyPassRate` (a "lucky pass" succeeded only after a retry or a human
+revise — `PhaseProgress.attempt > 1`), a per-day `trend` of
+succeeded-vs-failed, and one `PhaseReliability` per phase with its pass/fail
+split, `failureClasses` tally, `stalls` (timeout failures) and mean
+duration/cost. Every rate is `null` — never `NaN` or `0` — when its
+denominator is empty, so an unproven pipeline reads as "no evidence" rather
+than "perfect" or "broken". See `server/src/sources/reliability.ts` for the
+exact derivation and the "first attempt" rule it applies.
+
 ### Emitting signals from a run
 
 The engine spawns each phase's run with `ARGUS_SIGNAL_URL`,
 `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`, `ARGUS_RUN_ID`, `ARGUS_SIGNAL_TOKEN` and
 `ARGUS_RUNTIME` — plus `ARGUS_RESULT_FILE` on the one step that publishes a
-declared result. `hooks/argus-signal.mjs` reads these and POSTs a signal. One
+declared result, and `ARGUS_KNOWLEDGE_DELTA_FILE` on every step (where the run
+may leave a KnowledgeDelta; Argus reads it itself at completion, the hook does
+not). `hooks/argus-signal.mjs` reads the signal variables and POSTs a signal. One
 hook file serves every runtime that has hooks at all:
 
 - **Claude Code** — a `Stop` hook in `settings.json` (no arg) to report the
@@ -2287,11 +2484,208 @@ log retains the delivery failure instead of silently hiding it.
 Argus surfaces missing prerequisites (including this hook) via `GET /api/setup`;
 the web UI's setup banner installs the fixable ones with `POST /api/setup/apply`.
 
-| Env var                     | Meaning                                                        |
-| --------------------------- | -------------------------------------------------------------- |
-| `ARGUS_STEP_NAME`           | label of the running step, injected into the run's environment |
-| `ARGUS_RESULT_FILE`         | where a result-producing step writes its decision JSON         |
-| `ARGUS_MAX_CONCURRENT_RUNS` | cap on concurrent `claude -p` processes (default 4)            |
+| Env var                      | Meaning                                                               |
+| ---------------------------- | --------------------------------------------------------------------- |
+| `ARGUS_STEP_NAME`            | label of the running step, injected into the run's environment        |
+| `ARGUS_RESULT_FILE`          | where a result-producing step writes its decision JSON                |
+| `ARGUS_KNOWLEDGE_DELTA_FILE` | where a step may write a KnowledgeDelta (see KNOWLEDGE-LEDGER.md §12) |
+| `ARGUS_MAX_CONCURRENT_RUNS`  | cap on concurrent `claude -p` processes (default 4)                   |
+
+## Knowledge Ledger
+
+The semantic provenance graph: claims, the evidence that grounds them, the
+justifications that derive one from others, and — since Phase 2 — the
+executions that consumed exact claim revisions and the artifacts those
+executions produced. Support, currency and impact are **derived** on every
+read by deterministic functions — no record stores a verdict. Reads are open;
+every proposal and registration is admin-gated. Design, invariants and the
+worked example: [KNOWLEDGE-LEDGER.md](KNOWLEDGE-LEDGER.md).
+
+A `:key` is a bare claim id (`RULE-7`, meaning its **active** revision) or a
+revision (`RULE-7:v1`). A `:runId` is an Argus run id. Unknown or malformed
+keys are `404`.
+
+| Method + path                                        | Effect                                                                                                                                                                                                                                                                                                                                            |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/knowledge/claims`                          | `{ claims: ClaimView[] }` — every revision with derived `lifecycle` and `support`; `?kind=` `?lifecycle=`                                                                                                                                                                                                                                         |
+| `GET /api/knowledge/claims/:key`                     | `ClaimDetail` — the resolved revision plus every revision of its id, oldest first                                                                                                                                                                                                                                                                 |
+| `GET /api/knowledge/claims/:key/support`             | `SupportReport` — why: each evidence record and each justification with its force                                                                                                                                                                                                                                                                 |
+| `GET /api/knowledge/claims/:key/dependents`          | `DependentsReport` — `direct` and `transitive` dependents of that exact revision                                                                                                                                                                                                                                                                  |
+| `GET /api/knowledge/claims/:key/consumers`           | `ConsumersReport` — the consumption records naming that exact revision, in recording order                                                                                                                                                                                                                                                        |
+| `GET /api/knowledge/claims/:key/impact`              | `ImpactSet` — what rests on that revision being current and supported, and why (see below)                                                                                                                                                                                                                                                        |
+| `GET /api/knowledge/executions/:runId/provenance`    | `ExecutionProvenance` — what the run consumed (with currency now) and produced; `404` if nothing is known                                                                                                                                                                                                                                         |
+| `GET /api/knowledge/deltas/:id`                      | `KnowledgeDeltaRecord` — a staged/applied/rejected/superseded KnowledgeDelta with its provenance                                                                                                                                                                                                                                                  |
+| `GET /api/knowledge/deltas/:id/result`               | `KnowledgeDeltaApplyResult` — local id → canonical identity and every record created; `404` until applied                                                                                                                                                                                                                                         |
+| `GET /api/knowledge/executions/:runId/deltas`        | `{ runId, deltas: KnowledgeDeltaRecord[] }` — the run's deltas (at most one, by protocol)                                                                                                                                                                                                                                                         |
+| `GET /api/knowledge/executions/:runId/context`       | `ExecutionContextReport` — exactly which revisions Argus **supplied** to the run, the file's sha256, the run's consumptions, the supplied/consumed comparison and (when still on disk) the projection. Answered from the ledger's durable supplied record, so it survives run/invocation pruning; `404` only when the run was supplied no context |
+| `GET /api/knowledge/claims/:key/supplied-to`         | `SuppliedToReport` — the runs the ledger records as supplied that exact revision, oldest launch first; pruned runs included                                                                                                                                                                                                                       |
+| `POST /api/knowledge/claims`                         | (admin) propose revision 1 of a claim → `201 ClaimView`                                                                                                                                                                                                                                                                                           |
+| `POST /api/knowledge/claims/:id/revise`              | (admin) supersede the active revision → `201 ClaimView`; takes an id, never a `:vN` key                                                                                                                                                                                                                                                           |
+| `POST /api/knowledge/evidence`                       | (admin) attach evidence to a revision → `201 Evidence`                                                                                                                                                                                                                                                                                            |
+| `POST /api/knowledge/justifications`                 | (admin) record a derivation → `201 Justification`; `400` on unknown refs or a cycle                                                                                                                                                                                                                                                               |
+| `POST /api/knowledge/executions/:runId/consumptions` | (admin) "this run consumed these exact revisions" → `201`, or `200` when every edge already existed                                                                                                                                                                                                                                               |
+| `POST /api/knowledge/executions/:runId/artifacts`    | (admin) "this run produced these artifacts" → `201`, or `200` when every record already existed                                                                                                                                                                                                                                                   |
+
+Proposal bodies:
+
+```jsonc
+// POST /api/knowledge/claims
+{ "id": "RULE-7",                 // optional; minted from the kind when absent (RULE-3f9a1c2b)
+  "kind": "business-rule",        // fact | assumption | business-rule | constraint | conclusion | decision
+  "statement": "Kobra comment maximum is 180",
+  "structuredValue": { "when": [], "then": [] },   // optional, opaque, ≤ 64 KiB
+  "producedBy": { "instanceId": "…", "phaseId": "…", "runId": "…" } }   // optional
+
+// POST /api/knowledge/claims/RULE-7/revise
+{ "statement": "Kobra comment maximum is 500", "revisionNote": "Kobra 4.2 raised the limit" }
+
+// POST /api/knowledge/evidence
+{ "claim": "RULE-7",              // "ID" (active revision) | "ID:vN" | { "id", "revision"? }
+  "direction": "supports",        // default; or "opposes"
+  "source": { "type": "document", "uri": "https://…" } }
+// source.type ∈ run | phase | artifact | verification | source-code | git-commit | document | human
+
+// POST /api/knowledge/justifications
+{ "conclusion": "CONCLUSION-19",
+  "premises": ["FACT-12", "RULE-7:v1"],   // ≥ 1, ≤ 64, conjunctive, stored as exact revisions
+  "direction": "supports",
+  "producedBy": { "instanceId": "inst-1", "phaseId": "plan", "runId": "run-9" } }
+```
+
+A bare id in a body is resolved to the active revision **at write time** and
+stored as that revision; the persisted edge never floats. `400` carries
+`{ error }` naming the field or the refused invariant (`unknown claim X`,
+`would form a cycle: …`, `already exists`).
+
+`SupportReport.justifications[].force` is `{ "inForce": true }` or
+`{ "inForce": false, "failing": [{ "premise": { "id", "revision" }, "reason": "superseded" | "unsupported" | "contested" | "missing" }] }`.
+
+Execution provenance registrations:
+
+```jsonc
+// POST /api/knowledge/executions/run_456/consumptions
+{ "instanceId": "inst-1", "phaseId": "implement",   // optional locators; must agree with earlier records of the run
+  "claims": ["DECISION-3", "CONCLUSION-8:v1"] }     // ≥ 1, ≤ 64; bare ids resolve to the active revision at write time
+// → { "execution": { "runId", "instanceId"?, "phaseId"? }, "consumptions": ClaimConsumption[] }
+
+// POST /api/knowledge/executions/run_456/artifacts
+{ "artifacts": [{ "location": "repository",          // artifact-dir | repository
+                  "path": "src/CustomerCommentValidator.cs",   // relative POSIX path inside its root
+                  "gitHead": "9f3c2a1" }] }           // repository only, optional
+// → { "execution": …, "artifacts": ArtifactProduction[] }
+```
+
+Both are idempotent on their identity — `(runId, claim)` and
+`(runId, location, path)` — and answer `200` with the original records when
+nothing was new. Run **existence** is not checked (run files are pruned into
+the Vault); run, instance and phase ids are validated for shape, artifact paths
+for containment, and a differing `gitHead` for an already-recorded path is
+`400`. Consumption is never inferred from prompts or transcripts: it is what
+this endpoint was told.
+
+`ExecutionProvenance` is `{ execution, consumed: [{ claim, lifecycle, support, current, source? }], produced: { claims: ClaimView[], justifications, artifacts: ArtifactRef[] }, currency: "current" | "stale" }`.
+`source` (Phase 4) is `"supplied-context"` when Argus can prove the revision
+was in the run's KnowledgeContext, `"agent-discovered"` when it was not, and
+absent on consumptions registered through this API or before Phase 4.
+`produced` is joined from Phase 1's `producedBy` on `runId`; `currency` is
+`stale` when any consumed revision is superseded, unsupported or contested. It
+is derived per read and says nothing about — and changes nothing in — the
+run's own status.
+
+KnowledgeDeltas (Phase 3) have **no write endpoint**: an agent run writes one
+JSON document to the path in `ARGUS_KNOWLEDGE_DELTA_FILE`, Argus stages it when
+the run completes and commits it — atomically, with every sibling step's delta
+of the same attempt — only when the phase is accepted (checks passed, gate
+approved). A refused delta fails the phase under the `knowledge-delta` class.
+The record the reads return:
+
+```jsonc
+{ "id": "KD-…", "runId": "run_8f2a", "instanceId": "inst_71c0", "phaseId": "plan", "attempt": 0, "step": "think",
+  "status": "staged" | "applied" | "rejected" | "superseded",
+  "receivedAt": "…", "updatedAt": "…",
+  "delta": { "schemaVersion": 1, "claims": [{ "localId": "c", "kind": "conclusion", "statement": "…" }], "justifications": […], "consumed": ["RULE-17:v2"], … },
+  "reason": "…",                       // rejected / superseded
+  "result": {                          // applied
+    "status": "applied", "deltaId": "KD-…", "appliedAt": "…",
+    "createdClaims": [{ "localId": "c", "claim": { "id": "CONCLUSION-7c1e02ab", "revision": 1 } }],
+    "createdRevisions": [{ "localId"?: "…", "claim": { "id": "RULE-17", "revision": 3 }, "supersedes": { "id": "RULE-17", "revision": 2 } }],
+    "evidenceIds": ["EV-…"], "justificationIds": ["J-…"],
+    "consumptions": ClaimConsumption[], "artifacts": ArtifactProduction[] } }
+```
+
+The wire contract, local references, revision preconditions, staging and the
+commit boundary: [KNOWLEDGE-LEDGER.md §12](KNOWLEDGE-LEDGER.md#12-knowledgedelta-protocol-phase-3).
+A staged record also carries `supplied: ClaimRef[]` — the exact revisions the
+run's KnowledgeContext held, from the ledger's durable supplied record (or, for
+a run launched before Phase 4.1, its invocation record) at intake.
+
+KnowledgeContexts (Phase 4) have **no write endpoint either**: a step (or its
+phase) declares `knowledgeContext`, Argus resolves the selectors against one
+ledger snapshot when the phase attempt is planned, writes the read-only file
+the agent finds at `ARGUS_KNOWLEDGE_CONTEXT_FILE`, and records what it
+supplied — durably, in `knowledge.json`, before the process starts. There is
+no mutation endpoint for supplied provenance and none is planned: only Argus's
+invocation lifecycle may assert it. The inspection reads:
+
+```jsonc
+// GET /api/knowledge/executions/run_456/context
+{ "execution": { "runId": "run_456", "instanceId": "inst-1", "phaseId": "implement" },
+  "context": { "schemaVersion": 1, "claims": [{ "id": "RULE-17", "revision": 2 }, { "id": "CONSTRAINT-4", "revision": 1 }],
+               "sha256": "3b7c…", "suppliedAt": "2026-09-19T10:00:00.000Z",
+               "file": "/home/user/.claude/argus/invocations/run_456/knowledge-context.json",
+               "projectionAvailable": true },
+  "supplied": [{ "id": "RULE-17", "revision": 2 }, { "id": "CONSTRAINT-4", "revision": 1 }],
+  "consumed": [{ "id": "RULE-17", "revision": 2 }],                 // from the ledger
+  "comparison": { "suppliedAndConsumed": [{ "id": "RULE-17", "revision": 2 }],
+                  "suppliedNotConsumed": [{ "id": "CONSTRAINT-4", "revision": 1 }],
+                  "consumedNotSupplied": [] },
+  "projection": { "schemaVersion": 1, "generatedAt": "…", "claims": [{ "ref": "RULE-17:v2", … }], "metadata": { "selection": […] } } }
+
+// the same run after its invocation directory has been pruned
+{ "execution": { "runId": "run_456", "instanceId": "inst-1", "phaseId": "implement" },
+  "context": { "schemaVersion": 1, "claims": [{ "id": "RULE-17", "revision": 2 }, { "id": "CONSTRAINT-4", "revision": 1 }],
+               "sha256": "3b7c…", "suppliedAt": "2026-09-19T10:00:00.000Z",
+               "file": null, "projectionAvailable": false },
+  "supplied": [ … ], "consumed": [ … ], "comparison": { … },
+  "projection": null }              // never rebuilt from today's ledger
+
+// GET /api/knowledge/claims/RULE-17:v2/supplied-to
+{ "claim": { "id": "RULE-17", "revision": 2 },
+  "executions": [{ "execution": { "runId": "run_456", "instanceId": "inst-1", "phaseId": "implement" },
+                   "suppliedAt": "2026-09-19T10:00:00.000Z", "sha256": "3b7c…", "attempt": 0 }] }
+```
+
+Both read the ledger's durable `supplied` records, so the exact refs, hash and
+timestamp outlive run and invocation pruning. The materialized **projection**
+is an operational artifact and does not: when it is gone, `file` is `null`,
+`projectionAvailable` is `false` and `projection` is `null` — the API never
+reconstructs the document from the current ledger and presents it as what the
+run received. The protocol, selectors, the resolution snapshot, the durable
+record and the supplied/consumed rules:
+[KNOWLEDGE-LEDGER.md §13](KNOWLEDGE-LEDGER.md#13-knowledgecontext-protocol-phase-4-hardened-in-phase-41).
+
+`ImpactSet` is the answer to "what rests on this revision, and why?":
+
+```jsonc
+{ "root": { "claim", "lifecycle", "support", "conditions": ["superseded" | "unsupported" | "contested"] },
+  "semantic": {
+    "affectedClaims": [{ "claim", "reasons": ImpactReason[], "support": { "ifRootHeld", "actual" }, "producedBy"? }],
+    "affectedJustifications": [{ "id", "conclusion", "inForce": { "ifRootHeld", "actual" } }] },
+  "executions": [{ "execution", "reasons": ["consumed-affected-claim"], "consumed": ClaimRef[] }],
+  "artifacts":  [{ "execution", "artifact", "reasons": ["produced-by-affected-execution"] }],
+  "paths": [{ "target": ImpactNode, "hops": [{ "via": "premise-of" | "consumed-by" | "produced", "justification"?, "to": ImpactNode }] }] }
+// ImpactReason ∈ premise-superseded | premise-unsupported | premise-contested | support-changed
+//              | consumed-affected-claim | produced-by-affected-execution
+```
+
+A node is affected only when its derived state differs between the ledger as
+it stands and the same ledger with the root held active and supported — so a
+conclusion with an independent justification still in force is not affected,
+and nothing downstream of it is. `executions` lists **consumers** only; the
+run that produced an affected claim appears as its `producedBy`. Every list
+is deduplicated and stably ordered, and `paths` carries one shortest
+explanation per node. An active, supported root has `conditions: []` and
+empty lists.
 
 ## Derived views
 

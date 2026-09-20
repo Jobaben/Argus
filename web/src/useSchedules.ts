@@ -41,6 +41,21 @@ export function useSchedules() {
     (runId: string) => mutate(`/api/runs/${runId}/cancel`, "POST"),
     [mutate],
   );
+  const rotateHookToken = useCallback(
+    (id: string) => mutate(`/api/schedules/${id}/hook-token/rotate`, "POST"),
+    [mutate],
+  );
 
-  return { schedules: data, loading, error, refresh, create, update, remove, runNow, cancelRun };
+  return {
+    schedules: data,
+    loading,
+    error,
+    refresh,
+    create,
+    update,
+    remove,
+    runNow,
+    cancelRun,
+    rotateHookToken,
+  };
 }

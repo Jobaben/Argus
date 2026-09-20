@@ -24,6 +24,13 @@ import {
 } from "./sources/autopsy.js";
 import { analysisEnabled, createAnalysisRunner, type AnalysisRunner } from "./sources/analysis.js";
 import {
+  isTuningInFlight,
+  performPipelineTuning,
+  readTuningReport,
+  seedTuningReport,
+  writeTuningReport,
+} from "./sources/tuning.js";
+import {
   buildVerdictTrends,
   failingVerdicts,
   performVerdict,
@@ -60,6 +67,7 @@ import {
   createSchedule,
   deleteSchedule,
   readSchedulesWithNext,
+  rotateScheduleHookToken,
   updateSchedule,
   validateInput,
   validatePatch,
@@ -80,6 +88,7 @@ import {
   createPipeline,
   deletePipeline,
   readPipelines,
+  rotatePipelineHookToken,
   updatePipeline,
   validatePipelinePatch,
   validatePipelineInput,
@@ -87,6 +96,7 @@ import {
   type PipelineInput,
 } from "./sources/pipelines.js";
 import { readInstance, readInstances } from "./sources/instances.js";
+import { deriveReliability, withStepMetrics } from "./sources/reliability.js";
 import { buildPhaseReview, readPhaseArtifact, resolveArtifactPath } from "./sources/artifacts.js";
 import {
   buildBriefing,
@@ -146,7 +156,7 @@ import type { ActivityEvent } from "./runTailer.js";
 import { defaultSpawn, fireOneOff, fireRun, isAlive } from "./scheduler.js";
 import { LaunchValidationError, validateLaunchInput } from "./sources/launch.js";
 import type { ArgusConfig } from "./config.js";
-import { securityMiddleware } from "./security.js";
+import { safeEqual, securityMiddleware } from "./security.js";
 import { conditionalGet } from "./httpCache.js";
 import { requestLog } from "./requestLog.js";
 import { log } from "./log.js";
@@ -169,6 +179,7 @@ import {
   type UserStore,
 } from "./userStore.js";
 import { VERSION } from "./version.js";
+import { knowledgeRoutes } from "./knowledge/routes.js";
 import { mountWebApp } from "./static.js";
 import { buildRunFailurePayload, postWebhook } from "./notify.js";
 
@@ -455,11 +466,15 @@ export function createApp(deps: AppDeps): Hono {
   app.on(["POST", "PUT", "PATCH", "DELETE"], "/api/pipelines", admin);
   app.on(["POST", "PUT", "PATCH", "DELETE"], "/api/pipelines/:id", admin);
   app.use("/api/pipelines/:id/start", admin);
+  // Rotating a hook token is a pipeline-definition mutation like any other.
+  app.use("/api/pipelines/:id/hook-token/rotate", admin);
   // Instance gate controls run/steer pipelines. /signal is NOT admin-gated:
   // it is called by headless agent hooks and carries its own per-instance
   // token, verified by the engine.
   // Producing a postmortem spawns an agent; relaunching spawns a real run.
   app.on(["POST"], "/api/runs/:id/autopsy", admin);
+  // Tuning a pipeline's settings spawns one agent pass per phase.
+  app.on(["POST"], "/api/pipelines/:id/tune", admin);
   app.on(["POST"], "/api/runs/:id/verdict", admin);
   // Incident actions mutate shared operator state; diagnosing spawns an agent.
   app.use("/api/sentinel/policy", admin);
@@ -477,6 +492,10 @@ export function createApp(deps: AppDeps): Hono {
   app.use("/api/fleet/label", admin);
   app.use("/api/omnibar/plan", admin);
   app.use("/api/omnibar/execute", admin);
+  // Knowledge Ledger: proposals (claims, revisions, evidence, justifications)
+  // are admin writes; reads stay open like every other dashboard read.
+  app.on(["POST", "PUT", "PATCH", "DELETE"], "/api/knowledge/*", admin);
+  app.route("/api/knowledge", knowledgeRoutes());
 
   app.get("/api/setup", async (c) =>
     c.json(await import("./setup/prereqs.js").then((m) => m.checkAll())),
@@ -718,6 +737,18 @@ export function createApp(deps: AppDeps): Hono {
       return c.json(run, 202);
     } catch (e) {
       return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+    }
+  });
+
+  // Regenerates the schedule's webhook credential. The old token stops
+  // working the instant this returns — an ordinary save never does this.
+  app.post("/api/schedules/:id/hook-token/rotate", async (c) => {
+    try {
+      const updated = await rotateScheduleHookToken(c.req.param("id"), new Date());
+      if (!updated) return c.json({ error: "not found" }, 404);
+      return c.json(updated);
+    } catch (e) {
+      return fail(c, e, ScheduleValidationError);
     }
   });
 
@@ -1165,7 +1196,21 @@ export function createApp(deps: AppDeps): Hono {
    * enabled and overlap policy change nothing about work already in flight and
    * save freely.
    */
-  const EXECUTION_KEYS = ["phases", "model", "reasoningEffort", "runtime", "capabilities"] as const;
+  const EXECUTION_KEYS = [
+    "phases",
+    "model",
+    "reasoningEffort",
+    "runtime",
+    "capabilities",
+    "workspace",
+    "memory",
+    // Phase-level execution fields — `checks`, `retry`, `workspace`,
+    // `candidates`, `stallSeconds` — are not listed separately: they only
+    // ever arrive inside `phases`, and a per-phase key here would not be a
+    // key of the input. `contextLimits` is left off deliberately: it only
+    // affects how much of a placeholder's *value* reaches the prompt, never
+    // what the phase does, so editing it while an instance is running is safe.
+  ] as const;
   function changesExecution(current: PipelineDefinition, patch: Partial<PipelineInput>): boolean {
     return EXECUTION_KEYS.some((k) => k in patch && !isDeepStrictEqual(patch[k], current[k]));
   }
@@ -1232,9 +1277,184 @@ export function createApp(deps: AppDeps): Hono {
     }
   });
 
+  // Regenerates the pipeline's webhook credential. The old token stops
+  // working the instant this returns — an ordinary save never does this.
+  app.post("/api/pipelines/:id/hook-token/rotate", async (c) => {
+    try {
+      const updated = await rotatePipelineHookToken(c.req.param("id"), new Date());
+      if (!updated) return c.json({ error: "not found" }, 404);
+      return c.json(updated);
+    } catch (e) {
+      return fail(c, e, PipelineValidationError);
+    }
+  });
+
   app.get("/api/pipelines/:id/instances", async (c) =>
     c.json({ instances: await readInstances({ pipelineId: c.req.param("id") }) }),
   );
+
+  // First-attempt pass rate, lucky passes and stalls over a trailing window —
+  // see sources/reliability.ts for the derivation and its "first attempt" rule.
+  app.get("/api/pipelines/:id/reliability", async (c) => {
+    const id = c.req.param("id");
+    const def = (await readPipelines()).find((d) => d.id === id);
+    if (!def) return c.json({ error: "not found" }, 404);
+    const daysRaw = Number(c.req.query("days"));
+    const days = Number.isFinite(daysRaw) ? Math.min(365, Math.max(1, daysRaw)) : 30;
+    const [instances, runs] = await Promise.all([readInstances({ pipelineId: id }), readRuns()]);
+    return c.json(deriveReliability(id, withStepMetrics(instances, runs), new Date(), days));
+  });
+
+  // ── Tuning ────────────────────────────────────────────────────────────────
+  // Reading a report is open; producing one spawns an agent per phase, so the
+  // POST sits behind the admin gate. Nothing here writes to the definition: a
+  // proposal is applied by the client through the ordinary pipeline update,
+  // with its validators and its running-instances refusal.
+
+  app.get("/api/pipelines/:id/tune", async (c) => {
+    const id = c.req.param("id");
+    const def = (await readPipelines()).find((d) => d.id === id);
+    if (!def) return c.json({ error: "not found" }, 404);
+    const report = await readTuningReport(def.id);
+    return c.json({
+      report,
+      unavailable: analysisEnabled() ? null : "tuning passes are disabled (ARGUS_ANALYSIS=off)",
+    });
+  });
+
+  app.post("/api/pipelines/:id/tune", async (c) => {
+    const id = c.req.param("id");
+    const def = (await readPipelines()).find((d) => d.id === id);
+    if (!def) return c.json({ error: "not found" }, 404);
+    const now = new Date();
+    if (isTuningInFlight(await readTuningReport(def.id), now)) {
+      return c.json({ error: "a tuning pass is already running for this pipeline" }, 409);
+    }
+    const seed = await writeTuningReport(seedTuningReport(def, randomUUID(), now));
+    broadcast({ type: "tuning:changed" });
+    // Not awaited: one pass per phase at up to 90s each would hold the request
+    // open for minutes. The report is persisted after every phase and the
+    // client re-fetches on each ping.
+    void performPipelineTuning(def, seed, {
+      runner: analysis,
+      now: () => new Date(),
+      onProgress: async () => broadcast({ type: "tuning:changed" }),
+    }).catch((err) => log.error("tuning pass failed", { pipelineId: def.id, err }));
+    return c.json({ report: seed, unavailable: null }, 202);
+  });
+
+  // ── Webhooks ──────────────────────────────────────────────────────────────
+  // POST /api/hooks/{pipelines,schedules}/:id — fires a definition whose
+  // trigger is `kind: "webhook"`. Authenticated by that definition's own
+  // `hookToken` (see security.ts's `isHookRoute`, which exempts these two
+  // routes from the shared `ARGUS_TOKEN` gate and the Origin/CSRF check, but
+  // not from the Host allowlist), never by `ARGUS_TOKEN` itself. Reaching this
+  // route from another machine needs the same `ARGUS_HOST`/`ARGUS_TOKEN` setup
+  // any non-loopback bind already requires — see README.md and docs/API.md.
+
+  const MAX_HOOK_BODY_BYTES = 64 * 1024;
+
+  function hookBearer(header: string | undefined): string | null {
+    if (!header) return null;
+    const m = /^Bearer\s+(.+)$/i.exec(header.trim());
+    return m ? m[1] : null;
+  }
+
+  /** Reads and JSON-parses the webhook body, capped at 64 KiB. An empty body
+   *  is a valid webhook (no payload); anything over the cap is a 413 before
+   *  it is ever parsed. */
+  async function hookBody(
+    c: Context,
+  ): Promise<{ ok: true; value: unknown } | { ok: false; res: Response }> {
+    const buf = await c.req.arrayBuffer();
+    if (buf.byteLength > MAX_HOOK_BODY_BYTES) {
+      return { ok: false, res: c.json({ error: "payload too large" }, 413) };
+    }
+    if (buf.byteLength === 0) return { ok: true, value: undefined };
+    try {
+      return { ok: true, value: JSON.parse(new TextDecoder().decode(buf)) as unknown };
+    } catch {
+      return { ok: false, res: c.json({ error: "invalid JSON body" }, 400) };
+    }
+  }
+
+  app.post("/api/hooks/pipelines/:id", async (c) => {
+    const id = c.req.param("id");
+    const def = (await readPipelines()).find((d) => d.id === id);
+    // Wrong kind and unknown id both 404, identically: a prober guessing ids
+    // learns nothing about which pipelines exist or how they're triggered.
+    if (!def || def.trigger?.kind !== "webhook") return c.json({ error: "not found" }, 404);
+    if (!def.hookToken || !safeEqual(hookBearer(c.req.header("authorization")), def.hookToken)) {
+      return c.json({ error: "unauthorized" }, 401);
+    }
+    if (!def.enabled) return c.json({ error: "pipeline is disabled" }, 409);
+    const body = await hookBody(c);
+    if (!body.ok) return body.res;
+    // Checked here, not left to engine.start()'s own overlap guard, so a
+    // skip can name the instance already in flight instead of just "busy".
+    if (def.overlapPolicy === "skip") {
+      const busy = (await readInstances({ pipelineId: id })).find(
+        (i) => i.status === "running" || i.status === "awaiting-approval",
+      );
+      if (busy) {
+        return c.json(
+          { error: "an instance is already running (overlap=skip)", instanceId: busy.id },
+          409,
+        );
+      }
+    }
+    try {
+      const inst = await engine.start(id, "webhook", { triggerPayload: body.value });
+      if (!inst) return c.json({ error: "an instance is already running (overlap=skip)" }, 409);
+      return c.json({ instanceId: inst.id }, 202);
+    } catch (e) {
+      if (e instanceof PreflightError) return c.json({ error: e.message, reasons: e.reasons }, 412);
+      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+    }
+  });
+
+  app.post("/api/hooks/schedules/:id", async (c) => {
+    const id = c.req.param("id");
+    const schedule = (await readSchedules()).find((s) => s.id === id);
+    if (!schedule || schedule.trigger.kind !== "webhook")
+      return c.json({ error: "not found" }, 404);
+    if (
+      !schedule.hookToken ||
+      !safeEqual(hookBearer(c.req.header("authorization")), schedule.hookToken)
+    ) {
+      return c.json({ error: "unauthorized" }, 401);
+    }
+    if (!schedule.enabled) return c.json({ error: "schedule is disabled" }, 409);
+    // The body is validated (and size-capped) the same way as the pipeline
+    // hook even though a scheduled run has nowhere to carry it: it fires its
+    // prompt exactly like any other scheduled run, per the trigger's own doc.
+    const body = await hookBody(c);
+    if (!body.ok) return body.res;
+    if (schedule.overlapPolicy === "skip") {
+      const live = (await readRuns({ scheduleId: id })).find(
+        (r) => r.status === "running" && isAlive(r.pid),
+      );
+      if (live) {
+        return c.json(
+          { error: "a run is already in progress (overlap=skip)", runId: live.id },
+          409,
+        );
+      }
+    }
+    try {
+      const run = await fireRun(schedule, "webhook", {
+        now: () => new Date(),
+        spawn: defaultSpawn,
+        tickMs: config.schedulerTickMs,
+        newId: () => randomUUID(),
+        onChange: () => broadcast({ type: "schedules:changed" }),
+        onFailure: notifyRunFailed,
+      });
+      return c.json({ runId: run.id }, 202);
+    } catch (e) {
+      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+    }
+  });
 
   app.get("/api/overview", async (c) => {
     const [defs, insts, runs] = await Promise.all([readPipelines(), readInstances(), readRuns()]);
@@ -1344,8 +1564,7 @@ export function createApp(deps: AppDeps): Hono {
   app.get("/api/instances/:id/phases/:phaseId/review", async (c) => {
     const inst = await readInstance(c.req.param("id"));
     if (!inst) return c.json({ error: "not found" }, 404);
-    const def =
-      inst.definition ?? (await readPipelines()).find((d) => d.id === inst.pipelineId);
+    const def = inst.definition ?? (await readPipelines()).find((d) => d.id === inst.pipelineId);
     const res = await buildPhaseReview(inst, c.req.param("phaseId"), def);
     return res.ok ? c.json(res.review) : c.json({ error: res.error }, res.code);
   });

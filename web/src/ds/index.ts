@@ -72,7 +72,6 @@ export {
 export { createVelocityTracker, flickOutcome } from "./gesture";
 export { MoreMenu } from "./MoreMenu";
 export type { MoreItem } from "./MoreMenu";
-export { TriggerFields } from "./TriggerFields";
 export { RubricFields } from "./RubricFields";
 export { slugify } from "./slug";
 export { ModelSelect } from "./ModelSelect";

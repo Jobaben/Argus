@@ -109,6 +109,30 @@ built underneath. See the changelog for the itemised list.
   limit; Launch keeps the directory between firings. The derivations behind all of
   it (`scheduleHealth`, `projectMonth`, `sessionList`) are pure and tested.
 
+## Harness wave (2026-09)
+
+Driven by [HARNESS-RESEARCH.md](HARNESS-RESEARCH.md): ~130 externally graded
+harness entries, ranked principles, a gap table, and a redesign verdict (none
+needed — the evidence points at Argus's own shape). Landed, all opt-in:
+
+- **Workspace isolation** — `workspace: { scope: instance | attempt | none }`
+  on pipelines and phases; git worktree under `~/.claude/argus/worktrees/`,
+  runs, baselines and checks execute inside it; `ARGUS_WORKSPACE`.
+- **Candidates** — best-of-N per step with `first-verified` /
+  `cheapest-verified` selection and per-candidate runtime/model variants.
+- **Context discipline** — capped placeholders with the full value on disk,
+  `{{trigger.payload}}`, `{{memory}}`, `{{previous.instance}}`, pipeline
+  memory (`NOTES.md`), class-specific retry notes, `stallSeconds`.
+- **Triggers** — `webhook` (per-definition hook token) and `after` (pipeline
+  chaining with a dedupe ledger).
+- **Reliability** — `GET /api/pipelines/:id/reliability` and a card per
+  pipeline: first-attempt success, lucky passes, failure classes, trend.
+
+Deferred with reasons recorded in HARNESS-RESEARCH.md §4: Verdict-based
+candidate selection (the natural next selector), trajectory-level judging,
+provenance tagging of the outcome marker, VM-level isolation (out of reach for
+a dependency-less design).
+
 ## Quality backlog
 
 - **A scan is still O(files on disk), even when warm.** Retention-by-membership

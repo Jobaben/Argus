@@ -36,9 +36,11 @@ export type JournalKind =
   | "phase.started"
   | "step.spawned"
   | "step.timed-out"
+  | "step.stalled"
   | "step.exit-mismatch"
   | "phase.verifying"
   | "phase.verified"
+  | "phase.candidate-selected"
   | "phase.signalled"
   | "phase.succeeded"
   | "phase.failed"
@@ -49,6 +51,15 @@ export type JournalKind =
   | "route.selection"
   | "route.skip"
   | "route.failure"
+  | "workspace.created"
+  | "workspace.removed"
+  | "memory.trimmed"
+  | "knowledge.supplied"
+  | "knowledge.integrity"
+  | "knowledge.staged"
+  | "knowledge.rejected"
+  | "knowledge.applied"
+  | "knowledge.superseded"
   | "instance.ended";
 
 export interface JournalEntry {

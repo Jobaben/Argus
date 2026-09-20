@@ -4,8 +4,13 @@
  * from this path.
  */
 
+export type { AgentRuntimeId, ReasoningEffort } from "@argus/contracts";
+
 export type {
   AgentInvocationRecord,
+  InvocationChannelAccess,
+  InvocationChannelKind,
+  InvocationChannelRecord,
   ApproveRequest,
   CapabilityProfile,
   PhaseArtifact,
@@ -22,6 +27,12 @@ export type {
   DependencyEdge,
   InstanceStatus,
   PhaseDef,
+  CandidatePolicy,
+  CandidateVariant,
+  CandidateOutcome,
+  ContextLimits,
+  MemoryPolicy,
+  StepFailure,
   PhaseFailurePayload,
   PhaseProgress,
   PhaseStatus,
@@ -39,4 +50,6 @@ export type {
   SignalType,
   StepProgress,
   StepStatus,
+  WorkspacePolicy,
+  WorkspaceRecord,
 } from "@argus/contracts";

@@ -94,7 +94,7 @@ describe("SituationStrip", () => {
       "href",
       "#/command",
     );
-    expect(screen.getByRole("link", { name: /down/i })).toHaveAttribute("href", "#/monitors");
+    expect(screen.getByRole("link", { name: /down/i })).toHaveAttribute("href", "#/health");
     expect(screen.getByRole("link", { name: /open issues/i })).toHaveAttribute("href", "#/issues");
   });
 

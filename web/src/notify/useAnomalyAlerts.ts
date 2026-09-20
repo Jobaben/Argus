@@ -48,7 +48,7 @@ export function useAnomalyAlerts() {
           tone: anomaly.severity === "critical" ? "fail" : "info",
           title,
           detail: anomaly.detail,
-          href: "#/watchtower",
+          href: "#/health/watchtower",
         });
         if (
           anomaly.severity === "critical" &&

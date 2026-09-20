@@ -57,4 +57,36 @@ describe("useRunActivity", () => {
     expect(result.current.size).toBe(1);
     unmount();
   });
+
+  it("keeps the same map when a frame repeats the line already shown", async () => {
+    // The server flushes a batch per run per second; a repeated line is a
+    // heartbeat, not a change, and must not re-render the board.
+    const { result, unmount } = renderHook(() => useRunActivity());
+    await waitFor(() => expect(sockets.length).toBe(1));
+    const frame = {
+      type: "run:activity",
+      runId: "r1",
+      instanceId: "i1",
+      events: [{ at: "2026-07-07T10:00:00.000Z", kind: "tool", label: "Bash: npm ci" }],
+    };
+    act(() => {
+      sockets[0].open();
+      sockets[0].emit(frame);
+    });
+    await waitFor(() => expect(result.current.get("r1")?.label).toBe("Bash: npm ci"));
+    const before = result.current;
+    act(() => {
+      sockets[0].emit(frame);
+    });
+    expect(result.current).toBe(before);
+    act(() => {
+      sockets[0].emit({
+        ...frame,
+        events: [{ at: "2026-07-07T10:00:03.000Z", kind: "tool", label: "Bash: npm test" }],
+      });
+    });
+    expect(result.current).not.toBe(before);
+    expect(result.current.get("r1")?.label).toBe("Bash: npm test");
+    unmount();
+  });
 });

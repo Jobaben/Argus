@@ -15,8 +15,9 @@ two speak OpenAI-compatible endpoints, so a model served locally by
 workaround. See [Agent runtimes](#agent-runtimes).
 
 📖 **[User Guide](docs/USER-GUIDE.md)** — every feature, with screenshots:
-Command Center, Briefing, Chronicle, Scheduler, Monitors, Issues, Pipelines,
-Users, Search, and all the monitoring tabs.
+Command Center, Briefing, Chronicle, Scheduler (with one-off runs), Pipelines,
+Health (monitors and learned envelopes), Issues, Budget, and the reference pages
+behind the ⋯ menu.
 
 ## Stack
 
@@ -146,6 +147,64 @@ privileged single-user control plane:
   advised: with `ARGUS_HOST` pointed at a non-loopback interface and no token,
   the server refuses to start rather than opening an unauthenticated port that
   can execute agents with your credentials.
+- **Webhook-triggered schedules and pipelines** (`trigger.kind: "webhook"`)
+  are fired by `POST /api/hooks/{pipelines,schedules}/:id`, authenticated by
+  that definition's own `hookToken` — not by `ARGUS_TOKEN`, which never
+  substitutes for it. These two routes skip the Origin/CSRF check (a webhook
+  sender is a server, not a browser) but **not** the Host allowlist. Reaching
+  one from another machine needs the same non-default setup as any other
+  remote access: a routable `ARGUS_HOST`, `ARGUS_TOKEN` set (still required
+  for the bind itself, and still gating every other route), and the sender's
+  host in `ARGUS_ALLOWED_HOSTS` if it isn't the bind address. Rotate a hook's
+  token (`POST /api/{pipelines,schedules}/:id/hook-token/rotate`) if it ever
+  leaks; the old one stops working immediately.
+
+## The harness
+
+Inside one phase's run, Argus decides what the agent may do, checks its work
+deterministically, and writes down enough to explain the run afterwards. The
+primitives, all opt-in and all documented in
+**[docs/HARNESS.md](docs/HARNESS.md)**:
+
+- **Capability profiles** and an **environment policy** mapped onto each CLI's
+  own flags, with unenforceable keys reported rather than assumed.
+- **Verification checks** (`command`, `file`, `artifact`, `changed-files`) that
+  decide phase success — the agent's own "done" never does.
+- **Workspace isolation**: a git worktree per instance or per attempt, so
+  parallel and repeated work never shares a working tree. No container, no
+  new dependency; the branch is the deliverable.
+- **Candidates**: N drafts of a step at once, each in its own worktree, on the
+  same or different runtimes and models, with the first (or cheapest) one that
+  passes the checks selected and the rest killed.
+- **Retries that carry the evidence back** — failed checks with their output,
+  exit codes with the error tail, stalls — and a **stall timeout** beside the
+  wall-clock one.
+- **Bounded context**: every `{{…}}` placeholder is capped with the full value
+  written to disk, and an opt-in **pipeline memory** file survives across
+  instances.
+- **Webhook** and **after-pipeline** triggers, and a **reliability** view per
+  pipeline: first-attempt pass rate, lucky passes, failure classes over time.
+
+Each of these traces to an externally graded result — a leaderboard entry, a
+peer-reviewed ablation, or an independent evaluation — in
+**[docs/HARNESS-RESEARCH.md](docs/HARNESS-RESEARCH.md)**, which also records
+what the evidence argued _against_ building.
+
+## The Knowledge Ledger
+
+Execution provenance says which run produced an output. The Knowledge Ledger
+says _why it is believed_: an append-only graph of claims (facts, assumptions,
+business rules, constraints, conclusions, decisions), the evidence that grounds
+them and the justifications that derive one from others. A claim changes by
+revision — the old revision stays addressable and nothing that referenced it is
+retargeted — and support (`supported | unsupported | contested`) is derived by
+one deterministic function, never stored. It also records which run
+**consumed** which exact revision and which artifacts that run produced, so
+when a business rule is superseded Argus can compute — deterministically, with
+an explanation path — which conclusions lost support, which runs built on
+them, and which files now need semantic reevaluation, without ever rewriting a
+run's own status. Inspect it at `/api/knowledge`; the design and its worked
+example are in **[docs/KNOWLEDGE-LEDGER.md](docs/KNOWLEDGE-LEDGER.md)**.
 
 ## Getting around
 
@@ -156,8 +215,8 @@ pipeline waiting at a gate or firing a schedule now. Three characters and Enter
 usually gets there.
 
 `?` lists every keyboard shortcut. `g` then a letter jumps to a destination
-(`g c` Command Center, `g b` Briefing, `g h` Chronicle, `g l` Launch, `g s`
-Scheduler, `g m` Monitors, `g i` Issues, `g p` Pipelines, `g u` Budget, `g a`
+(`g c` Command Center, `g b` Briefing, `g h` Chronicle, `g s` Scheduler, `g p`
+Pipelines, `g m` Health, `g i` Issues, `g u` Budget, `g n` Sentinel, `g a`
 Agents); `/` goes to transcript search.
 
 ## Quick start
@@ -300,8 +359,8 @@ Under `~/.claude` unless noted:
 | Transcripts       | `projects/<proj>/<session>.jsonl`               | Sessions list + full transcript view  |
 | Codex transcripts | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`  | the same list, view and search        |
 | Qwen transcripts  | `~/.qwen/projects/<proj>/chats/<session>.jsonl` | the same list, view and search        |
-| Prompt history    | `history.jsonl`                                 | global activity feed                  |
-| Tasks             | `tasks/<id>/`                                   | task-queue metadata                   |
+| Prompt history    | `history.jsonl`                                 | `GET /api/activity` (API only)        |
+| Tasks             | `tasks/<id>/`                                   | `GET /api/tasks` (API only)           |
 | Argus schedules   | `argus/schedules.json`                          | Scheduler triggers + run history      |
 | Argus pipelines   | `argus/pipelines.json`, `argus/instances/`      | multi-phase pipeline defs + instances |
 
@@ -312,7 +371,7 @@ history).
 This is distinct from Claude Code's **native cron routines**, which are
 session-scoped (harness-managed, visible only via `CronList` inside a live
 Claude session) and are **not** stored on disk; Argus, a disk reader, cannot
-surface those — the Cron tab explains why.
+surface those — `GET /api/cron` says so and why.
 
 ## API
 

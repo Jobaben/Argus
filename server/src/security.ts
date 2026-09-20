@@ -2,8 +2,12 @@ import { timingSafeEqual } from "node:crypto";
 import type { Context, Next } from "hono";
 import type { ArgusConfig } from "./config.js";
 
-/** Constant-time string compare — avoids leaking the token via response timing. */
-function safeEqual(a: string | null, b: string): boolean {
+/**
+ * Constant-time string compare — avoids leaking the token via response timing.
+ * Exported for the other per-definition bearer credentials that must be
+ * checked the same way (the webhook routes' `hookToken`, in app.ts).
+ */
+export function safeEqual(a: string | null, b: string): boolean {
   if (a === null) return false;
   const ab = Buffer.from(a);
   const bb = Buffer.from(b);
@@ -157,6 +161,26 @@ export function isSessionBootstrap(path: string): boolean {
 }
 
 /**
+ * The webhook routes (`POST /api/hooks/{pipelines,schedules}/:id`) authenticate
+ * with the *definition's own* `hookToken`, checked inside the route against
+ * the one definition it names — never the shared `ARGUS_TOKEN`, which unlocks
+ * the whole control plane. They are exempt from the shared-token gate below,
+ * so a caller presenting a correct `ARGUS_TOKEN` but no (or the wrong)
+ * `hookToken` still reaches the route and is rejected there on the route's own
+ * terms, not waved through by a credential that was never meant to authorize
+ * a webhook. They are also exempt from the Origin/CSRF check just below: a
+ * webhook sender is a server, not a browser driven by a page the user
+ * visited, and has no way to present an allowlisted Origin. They are **not**
+ * exempt from the Host allowlist above — DNS-rebinding is exactly as much a
+ * risk for a webhook as for anything else.
+ */
+const HOOK_ROUTE_SHAPES = [/^\/api\/hooks\/(pipelines|schedules)\/[^/]+$/];
+
+export function isHookRoute(path: string): boolean {
+  return HOOK_ROUTE_SHAPES.some((re) => re.test(path));
+}
+
+/**
  * Whether a request carries a valid account session.
  *
  * Injected rather than imported so this module keeps owning the *policy* ("a
@@ -173,7 +197,12 @@ export function securityMiddleware(cfg: ArgusConfig, hasSession: SessionCheck = 
     if (!isHostAllowed(c.req.header("host"), cfg)) {
       return c.json({ error: "forbidden: host not allowed" }, 403);
     }
-    if (cfg.token && !isSelfAuthenticating(c.req.path) && !isSessionBootstrap(c.req.path)) {
+    if (
+      cfg.token &&
+      !isSelfAuthenticating(c.req.path) &&
+      !isSessionBootstrap(c.req.path) &&
+      !isHookRoute(c.req.path)
+    ) {
       const supplied =
         bearer(c.req.header("authorization")) ?? c.req.header("x-argus-token") ?? null;
       // Two acceptable credentials: the shared token (CLIs, reverse proxies)
@@ -190,6 +219,7 @@ export function securityMiddleware(cfg: ArgusConfig, hasSession: SessionCheck = 
     }
     if (
       MUTATING.has(c.req.method) &&
+      !isHookRoute(c.req.path) &&
       !isOriginAllowed(c.req.header("origin"), c.req.header("host"), cfg)
     ) {
       return c.json({ error: "forbidden: cross-origin request rejected" }, 403);

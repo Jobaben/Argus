@@ -5,7 +5,265 @@ All notable changes to Argus are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Durable supplied provenance and context integrity (Knowledge Ledger
+  Phase 4.1).** Phase 4 recorded what Argus supplied to a run on the run's
+  invocation record — authoritative while that record exists, and pruned with
+  the run. Semantic input provenance is part of the reasoning history and
+  should not age out with a log file, so it now lives in the ledger:
+  `knowledge.json` gains a `supplied` array (document **version 4**; v1/v2/v3
+  files upgrade in memory with the new array empty) holding one
+  `SuppliedContext` per run — the execution ref, the attempt, the
+  KnowledgeContext schema version, the **exact** claim revisions in file
+  order, the file's `sha256` and when it was materialized. It is registered
+  between the invocation record and the spawn, is idempotent on the run id,
+  and **fails closed**: registering a different claim list or hash for the
+  same run is refused rather than overwriting history. There is no mutation
+  API for it; only Argus's invocation lifecycle may assert what it supplied.
+  The record attests _supply for an attempted invocation_ — not that the
+  process ran, which stays the run record's question. Run and instance
+  pruning now destroy the invocation record and the materialized context file
+  but never the semantic facts: heavy operational records are prunable, small
+  semantic provenance is durable.
+- **Context integrity verified at completion.** The `sha256` Argus took when
+  it materialized a KnowledgeContext is now used. Before a step's completion —
+  and the semantic output it carries — is accepted, the file is re-hashed on
+  both completion paths (the stop-hook signal and the reconcile fallback).
+  Changed bytes, or a file that has disappeared, fail the step deterministically
+  under a new `knowledge-context-integrity` failure class (not retried by
+  default, opt-in via `retry.retryOn`), **before** the KnowledgeDelta is even
+  staged — so a run whose input Argus can no longer vouch for never commits
+  knowledge. The reason names the run, the expected hash, the hash found and
+  the path, and never the context's contents; the journal gains
+  `knowledge.integrity`. Integrity is about **bytes, not currency**: a claim
+  revised in the ledger while the agent runs leaves the file untouched, so the
+  run legitimately completes on the historical revision it was given —
+  staleness stays a derived read (`ExecutionCurrency`, `analyzeImpact`), never
+  a failure at completion. A run launched without a semantic context performs
+  no check and behaves exactly as before.
+- **Controlled semantic context delivery (Knowledge Ledger Phase 4).** A
+  step — or every step of a phase — may declare `knowledgeContext: { claims:
+[...] }`, naming exact claim revisions (`"RULE-17:v2"`) or the active
+  revision of a claim (`"RULE-17"`). When the phase attempt is planned, Argus
+  resolves every selector against **one** ledger snapshot, freezes the
+  result, and writes it as a read-only JSON `KnowledgeContext`
+  (`argus/invocations/<runId>/knowledge-context.json`, `0444`) the agent
+  finds at `ARGUS_KNOWLEDGE_CONTEXT_FILE` — the mirror image of the
+  KnowledgeDelta file. Each entry carries the exact `ref`, kind, statement,
+  `structuredValue`, lifecycle (including `supersededBy`), support state and
+  direct evidence; unsupported, contested and superseded revisions are
+  supplied as requested with that state exposed, never hidden. The
+  invocation record now proves what was supplied
+  (`knowledgeContextFile`, `knowledgeContext: { schemaVersion, claims,
+sha256 }`), the context is a new **read** channel in the unified channel
+  model (`required`; Claude Code admits the directory and denies edits under
+  it, Codex never lists it as writable, Qwen Code's container sandbox refuses
+  the launch under strict enforcement), and the journal gains
+  `knowledge.supplied`. Two inspection reads answer both directions:
+  `GET /api/knowledge/executions/:runId/context` (what did this run receive,
+  with the supplied/consumed comparison and the projection) and
+  `GET /api/knowledge/claims/:key/supplied-to` (which runs received this
+  exact revision), both derived from the invocation records rather than a
+  second store. A malformed selector or a duplicate claim id is a `400` at
+  save; a claim or revision the snapshot does not hold fails the step as
+  `configuration` before any process starts. Steps without a
+  `knowledgeContext` launch exactly as before: no file, no variable, no
+  channel.
+- **Supplied ≠ consumed.** A consumption committed from a KnowledgeDelta is
+  now classified against what Argus supplied to the run:
+  `ClaimConsumption.source` is `"supplied-context"` or `"agent-discovered"`
+  (absent on admin-registered or pre-Phase-4 records). Supplying a claim
+  never creates a consumption, a consumed-but-not-supplied claim is recorded
+  rather than refused, and impact analysis stays consumption-based: a
+  supplied-only claim changing does not impact the run. The staged delta
+  record carries the run's `supplied` refs beside its `consumed` list.
+
 ### Changed
+
+- `GET /api/knowledge/executions/:runId/context` and
+  `GET /api/knowledge/claims/:key/supplied-to` now answer from the ledger's
+  durable supplied records instead of scanning retained invocation
+  directories, so both survive normal pruning. The context report adds
+  `context.suppliedAt` and `context.projectionAvailable`, and `context.file`
+  is now nullable: once the invocation directory is gone the durable refs and
+  hash are still returned while the materialized projection is reported
+  unavailable — it is never reconstructed from the current ledger and
+  presented as what the run received. `supplied-to` entries carry the phase
+  `attempt`. Consumption classification (`ClaimConsumption.source`) now reads
+  the durable record first and the invocation record only as a fallback, so a
+  recovery path with no invocation directory still classifies correctly;
+  `source` is still set only from positive evidence, and pre-Phase-4 records
+  are never upgraded retrospectively.
+- **Argus-owned invocation channels (Knowledge Ledger Phase 3 hardening).**
+  The structured files Argus hands an agent — `ARGUS_RESULT_FILE`,
+  `ARGUS_KNOWLEDGE_DELTA_FILE`, `ARGUS_ARTIFACT_DIR`, `ARGUS_MEMORY_DIR` —
+  are now one model (`harness/channels.ts`): each with its env var, path,
+  required access and whether the launch depends on it. Every runtime
+  receives the whole list inside the capability request and answers for
+  every entry, instead of each channel being bolted on separately. Under a
+  capability profile a channel the runtime cannot reach is always recorded on
+  the invocation record (`channels[]`, plus `limitations`); a **required**
+  one — the result file of a publishing step, the artifact directory of a
+  phase with an `artifact` check, the memory directory when `memory` is on,
+  the delta file when the new phase field `knowledgeDelta: "required"` is
+  set — refuses the launch under strict enforcement as a `configuration`
+  failure, and launches with the limitation recorded under `best-effort`.
+  Without a profile nothing changes: the CLI's defaults decide and the record
+  says `unmanaged`. The runtime matrix (Claude Code, Codex, OpenCode, Qwen
+  Code × filesystem mode) is documented in HARNESS.md §3a and pinned by
+  `runtimes/channels.test.ts`. Codex's former "read-only sandbox prevents
+  writing artifacts" / "memory notes" limitation strings are replaced by one
+  per-channel sentence naming the runtime, the mode and the variable.
+- **KnowledgeDelta artifacts are re-verified at commit.** Intake proved a
+  declared artifact existed when the run finished; the commit boundary now
+  re-establishes the same deterministic facts — a real root, a path inside
+  it, an existing file — immediately before the canonical write. An artifact
+  that vanished while checks ran or a gate waited refuses the whole attempt's
+  commit (sibling deltas included) under `knowledge-delta`; contents are
+  never inspected.
+
+### Fixed
+
+- A result-publishing step under a restrictive capability profile is now
+  deterministically able to write its result file on runtimes that can grant
+  it (Claude Code: `--add-dir`; Codex `workspace-write`: `writable_roots`),
+  and is refused before spawn — rather than failing later with a missing
+  result — on ones that cannot. Previously only the artifact, memory and
+  delta directories were added to the writable set and the result file was
+  left to the runtime's accidental behaviour. The result file moves from
+  `results/<runId>.json` to `results/<runId>/result.json`, a directory per
+  run, so granting the channel admits this run's result and no other's; the
+  old path is still read (a run in flight across the upgrade settles) and
+  still pruned.
+- Codex under an effective `read-only` sandbox can no longer be told to
+  propose knowledge without Argus knowing: the KnowledgeDelta channel is
+  reported unavailable on the invocation record (and refuses the launch when
+  the phase requires it) instead of failing silently at write time.
+
+### Added
+
+- **The Knowledge Ledger (Phase 3): the KnowledgeDelta protocol.** Agent
+  executions can now _propose_ semantic knowledge, and Argus alone validates
+  and commits it. Every step run is handed `ARGUS_KNOWLEDGE_DELTA_FILE`, a
+  per-run path (writable under every capability profile) where it may leave
+  one typed JSON document: new claims (by delta-local id — Argus mints the
+  canonical identity and the apply result exposes the mapping), revisions
+  guarded by an `expectedRevision` precondition, evidence, justifications, the
+  exact revisions the run declares it consumed, and the artifacts it produced.
+  References to existing knowledge must be exact revisions; a bare id, an
+  invented canonical id or an agent-asserted `producedBy` is refused. When the
+  run completes Argus reads the file itself (the Stop hook is unchanged),
+  validates it, preflights it against the ledger and **stages** it beside the
+  run; it becomes canonical only when the phase crosses every deterministic
+  acceptance condition — checks passed, gate approved — as one atomic ledger
+  transition covering every sibling step's delta of that attempt, or none. A
+  stale precondition (the ledger moved), two steps revising the same revision,
+  a cycle or an unresolved reference refuses the whole commit and fails the
+  phase under the new `knowledge-delta` failure class (retryable on opt-in,
+  with the exact refusal in the retry note). A failed, revised, aborted or
+  losing attempt's deltas are superseded and never enter the ledger.
+  `knowledge.json` is now version 3 with a `deltas` array recording which run,
+  in which attempt, introduced which records; commits are idempotent on delta
+  id, so a restart mid-commit is healed by reconcile. Inspection:
+  `GET /api/knowledge/deltas/:id`, `/deltas/:id/result`,
+  `/executions/:runId/deltas`. Consumption is agent-declared and structurally
+  verified — Argus proves the reference, not the reasoning.
+- **The Knowledge Ledger (Phase 2): execution provenance and deterministic
+  impact analysis.** Phase 1 could say which run _produced_ a claim; it could
+  not say which later run _relied on_ one, so it could not answer "which
+  executions and artifacts were built on premises that are no longer
+  current?". The ledger now records two more explicit, immutable edges —
+  **run R consumed exact revision `RULE-17:v1`** and **run R produced artifact
+  `src/Validator.cs`** — registered through
+  `POST /api/knowledge/executions/:runId/consumptions` and `/artifacts`
+  (admin-gated, idempotent on their identity, never inferred from a prompt or
+  transcript). `GET /api/knowledge/executions/:runId/provenance` joins both
+  directions and derives the run's **semantic currency** (`current | stale`)
+  on every read: a run that `succeeded` stays `succeeded` forever, and what
+  can change is whether its premises still hold. `GET
+/api/knowledge/claims/:key/impact` returns a deterministic `ImpactSet`: the
+  claims whose support _actually changed_ (a conclusion with an independent
+  justification still in force is not impacted, and nothing downstream of it
+  is), the justifications that lost or gained force, the consuming runs, the
+  artifacts they produced, and one machine-readable explanation path per node
+  with a closed reason taxonomy that keeps `premise-superseded` apart from
+  `premise-unsupported` and `premise-contested`. `knowledge.json` is now
+  version 2; a version 1 file is read as-is and upgraded by its next write.
+  Nothing re-runs, invalidates or marks a phase. See `docs/KNOWLEDGE-LEDGER.md`
+  §8–§11.
+- **The Knowledge Ledger (Phase 1): semantic provenance beside execution
+  provenance.** Argus could say which phase and run produced an output; it
+  could not say _why_ a conclusion is believed, which facts, business rules
+  and assumptions it rests on, or what would lose support if one of them
+  changed. `~/.claude/argus/knowledge.json` now holds an append-only graph of
+  **claims** (`fact`, `assumption`, `business-rule`, `constraint`,
+  `conclusion`, `decision`), **evidence** pointing at Argus's own execution
+  records (runs, phases, artifacts, verification, source, commits, documents,
+  human assertions) and **justifications** ("these premise revisions support
+  or oppose this conclusion revision"). A claim changes by _revision_ —
+  `RULE-17:v1` stays addressable and every justification that named it keeps
+  naming it — and support (`supported | unsupported | contested`) is derived
+  by one deterministic function, never stored and never set by an agent.
+  `GET /api/knowledge/claims[/:key[/support|/dependents]]` read it; four
+  admin-gated `POST`s propose to it. The semantic graph is a separate concept
+  from the pipeline DAG and touches nothing in it. See
+  `docs/KNOWLEDGE-LEDGER.md`.
+
+### Fixed
+
+- **A scheduled or one-off run whose CLI exits 0 after reporting an error is
+  now recorded `failed`, not `succeeded`.** The scheduler decided a run's
+  status from the exit code alone, and threw away the `is_error` verdict every
+  runtime's envelope parser already extracted — so `claude -p` ending with
+  `"is_error": true, "result": "Invalid API key · Please run /login"` and a
+  clean exit landed as a green run with the refusal as its summary. Exit 0 is
+  now a precondition and the envelope is the verdict: a `true` `isError` fails
+  the run with the CLI's own message as its error (so it reaches failure
+  notifications and Issues), a non-zero exit still names the exit code, and a
+  clean exit with no envelope to read is unchanged. Pipeline steps already
+  behaved this way on the reconcile path; this brings schedules in line.
+
+### Changed
+
+- **The nav is eight tabs, not eleven.** Watchtower and Sentinel had been
+  added to a bar laid out for nine, and six surfaces were answering "is
+  anything wrong?" in slightly different words. Now: **Launch is the
+  Scheduler's One-off sub-tab** (`#/schedules/oneoff`) — a one-off run is a
+  schedule with no trigger, and the two pages shared a form and a run list.
+  **Monitors and Watchtower are the two halves of Health** (`#/health`,
+  `#/health/watchtower`) — both per-schedule, both read-only, both about the
+  same objects. **Sentinel moved to the ⋯ menu**: it holds the stateful record
+  of signals the Briefing already surfaces, so it is where you go with an
+  incident in hand, not where you learn about one. **Sessions gained a menu
+  entry** — it was the main reading surface with no way in but a run row.
+  Every old hash (`#/launch`, `#/monitors`, `#/watchtower`, `#/projects`,
+  `#/activity`, `#/tasks`) is rewritten in place to where its content went, so
+  bookmarks, archived alert links and older `argus tail` output keep landing.
+  `g m` now opens Health; `g l` and `g w` are retired.
+- **The Briefing's "Awaiting approval" card opens the review drawer.** It
+  linked to the Pipelines page, which can only _stop_ an instance; approve and
+  revise live in the Command Center's drawer and nowhere else. The card now
+  deep-links to that instance's drawer, the same link the palette and
+  `argus tail` already used. The situation strip's **running** count likewise
+  goes to the Chronicle, which shows every run in flight, rather than to the
+  one-off list, which shows only launches.
+- **Budget and Stats each say which spend they count.** Budget meters the runs
+  Argus launched; Stats reads Claude Code's own telemetry, interactive sessions
+  included. Two pages about dollars with no word on why the figures differ
+  read as a bug.
+
+### Removed
+
+- **Projects, Activity and Tasks pages, and the Scheduler's Cron sub-tab.**
+  Projects was a card per folder with a session count and, per its own guide
+  entry, "informational only" — it is now a filter on Sessions
+  (`#/sessions/:project`), which is where its palette entries land. Activity
+  listed the last hundred prompts with nothing to click and nothing linking to
+  it. Tasks read Claude Code's internal `.lock` files, "mostly diagnostic".
+  The Cron sub-tab was three panels explaining that it could show nothing. The
+  `GET /api/activity`, `/api/projects`, `/api/tasks` and `/api/cron` endpoints
+  are unchanged.
 
 - **The review drawer shows the agent's closing note as a document instead of
   dumping the Stop-hook event.** A phase's payload is usually the whole event
@@ -57,6 +315,122 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Context discipline: bounded placeholders, pipeline memory, richer retry
+  feedback and stall detection.** Five loops the harness research pointed at
+  directly (docs/HARNESS-RESEARCH.md §2 #4–#7, §4):
+  - **Every interpolated placeholder value is capped**, by default 16 KiB
+    (`PipelineDefinition.contextLimits.placeholderBytes`, 1 KiB–256 KiB). Over
+    the cap, Argus keeps the head (2/3) and tail (1/3) with a one-line marker
+    naming where the full value was written under the run's invocation
+    directory (`context/<placeholder>.txt`), UTF-8 safe. Two new
+    placeholders: `{{trigger.payload}}` (the instance's firing payload) and
+    `{{previous.instance}}` (a one-paragraph summary of the pipeline's last
+    settled instance — status, when it ended, which phase failed and why,
+    which candidate won). Argus's own injected prompt blocks (result,
+    artifact, memory, retry-note instructions) now always ride _after_ the
+    agent's own prompt, in a fixed order, with the retry note last —
+    recency is what a model weighs most ("lost in the middle").
+  - **Pipeline memory** (`PipelineDefinition.memory: { enabled, maxBytes? }`,
+    off by default): durable notes at `~/.claude/argus/memory/<pipelineId>/NOTES.md`,
+    read via `{{memory}}` (tail-capped to `maxBytes`, default 8 KiB) and
+    writable by the agent through `$ARGUS_MEMORY_DIR` (added to Claude Code's
+    `--add-dir` / Codex's `writable_roots` the same way the artifact
+    directory is). Trimmed back to its cap on a line boundary after each
+    instance settles (`memory.trimmed` journal entry); never created until
+    enabled, never deleted by Argus.
+  - **Every retryable failure class now hands the next attempt something to
+    repair against**, not just `verification`/`signal`: `verification` names
+    each failed check with the tail of its own output, `exit-code` carries the
+    exit code plus a tail of the run's own error/result text, and
+    `timeout`/`spawn`/`signal` carry their existing one-line reason — each
+    bounded, the whole note capped at ~2 KiB, and headed
+    `Previous attempt (n of m) failed — <class>:`.
+  - **Stall detection**: `PhaseDef.stallSeconds` / `PhaseStep.stallSeconds`
+    (minimum 30, absent = off) kills a step whose transcript has gone quiet
+    for that long even though its process is still alive — a hard timeout
+    sized for the worst case never notices a stuck-but-alive run. Reuses the
+    existing reconcile tick rather than a second timer system; classed as
+    `timeout` for the retry policy, with its own `termination: "stalled"` and
+    `step.stalled` journal entry so it reads distinctly from a hard timeout.
+  - **`WorkspacePolicy.scope` gains `"none"`**, so one phase can opt out of a
+    pipeline-wide isolation policy and run in its own `cwd`.
+  - See docs/HARNESS.md §13.
+
+- **Candidates — a phase can run N drafts of its step and let its checks pick
+  one.** A phase ran its step once; a bad draw was found at the checks and cost
+  a sequential retry at the same price. A phase can now declare
+  `candidates: { count, select, variants? }` and Argus launches `count` runs of
+  its single step at once, each in a git worktree, artifact directory and
+  `changed-files` baseline of its own, each verified by the phase's own
+  `checks` inside its own tree. `select: "first-verified"` takes the first
+  draft whose checks pass and kills the rest (recorded as **superseded**, not
+  failed); `"cheapest-verified"` lets them all finish and buys the cheapest
+  verified one, tie-broken by duration. The winner's payload, result,
+  verification report and worktree become the phase's — so
+  `{{previous.payload}}`, `produces` and routing see one draft, never a
+  mixture — and a gated phase opens its gate on the winner. `variants` gives
+  each candidate its own runtime, model or reasoning effort, cycled when
+  shorter than `count`, so the same step can be drafted on Claude Code **and**
+  Codex and the checks decide which lands. A candidate that dies before its
+  checks simply loses; the phase fails only when none can still win, once, with
+  every draft's fate in the reason and the retry policy applied as usual.
+  Requires exactly one step and an effective `workspace.scope: "attempt"`, both
+  refused at save time with the reason. Candidate runs are ordinary runs: they
+  cost what they cost, take a concurrency slot each, and queue past the global
+  cap. The board badges each draft `c1`/`c2`…, marks the winner selected, and
+  summarises the phase as `2/3 verified · c2 selected`. Evidence:
+  Trae Agent 70.6 → 75.2% from its ensemble alone, AutoCodeRover +7 points from
+  three samples — and, crucially, sampling without a verifier plateaus. See
+  [docs/HARNESS.md § 12](docs/HARNESS.md).
+- **Webhook and after-pipeline triggers.** A schedule or pipeline's trigger
+  can now be `{ "kind": "webhook" }` — fired by
+  `POST /api/hooks/{pipelines,schedules}/:id`, authenticated with a per-definition
+  `hookToken` (minted on first save, shown with a copy button and a **Rotate**
+  action in the trigger editor, never `ARGUS_TOKEN`) — or
+  `{ "kind": "after", "pipelineId", "on": "succeeded" | "failed" | "any" }`,
+  which chains a pipeline or schedule to fire once a chosen **pipeline**'s
+  instance ends. Chaining runs on the ordinary scheduler tick and is
+  restart-safe: a small ledger (`~/.claude/argus/chains.json`) fires each
+  source instance into each matching target at most once. A pipeline instance
+  or schedule run fired this way carries `trigger: "webhook"` or `"chained"`
+  (plus `triggerPayload`/`chainedFrom` on the instance) instead of
+  `"manual"`/`"scheduled"`, shown as a badge wherever those already were. A
+  self-chain and a direct two-pipeline cycle are refused at save time. See
+  [docs/API.md § Webhook and chained triggers](docs/API.md).
+- **Workspace isolation — a phase can run in a git worktree of its own.** Every
+  phase of a pipeline used to edit the same checkout, so two branches of a
+  fan-out overwrote each other and a failed attempt left its half-done edits
+  for the next one. A pipeline or a phase can now declare
+  `workspace: { scope: "instance" | "attempt", base?, keep? }`: Argus creates a
+  worktree under `~/.claude/argus/worktrees/<instanceId>/` on a branch named
+  `argus/<instanceId>/shared` (one per instance, shared by every phase that
+  opts in) or `argus/<instanceId>/<phaseId>/<attempt>` (one per attempt), and
+  the phase's steps — their `cwd`, their transcripts' project, their
+  `changed-files` baseline and the phase's `checks` — all run there instead of
+  in the phase's own `cwd`. `ARGUS_WORKSPACE` names it to the agent. The
+  branch is the deliverable: the directory is removed when the instance
+  settles (or is pruned) unless `keep: true`, and whatever was left
+  uncommitted goes with it. A worktree Argus cannot create — not a repository,
+  an unresolvable `base`, no git — fails the phase under `configuration` with
+  git's own words, and is never retried. Restart-safe: a tree that is already
+  there is reused, and a branch whose tree was removed is checked out again
+  with its commits. Not a security boundary — Codex's sandbox remains the only
+  OS-level one. See [docs/HARNESS.md § 11](docs/HARNESS.md).
+- **Analyze — a settings review for a pipeline, one agent per phase.** Whether
+  a step's model, reasoning effort, timeout and turn cap fit the work its prompt
+  describes was something an author judged once, when writing the pipeline, and
+  rarely revisited. **Analyze** on a pipeline card now asks one bounded pass
+  per phase exactly that, and opens a drawer of proposals — each with the
+  current value, the proposed one, where the current value is inherited from
+  and the words in the prompt that led there — for the author to tick and
+  apply. Two things it will not do. It never touches a prompt: the response
+  schema has no field for one, the parser drops any field outside the four
+  tunable ones, and the client rebuilds each step by whitelisted assignment.
+  And it never forces a change: a phase whose settings already fit comes back
+  "No changes recommended", a proposal equal to the current value is dropped,
+  and nothing is saved until a ticked proposal is applied through the same
+  admin-gated update — with the same running-instances confirm — as a hand
+  edit. `GET`/`POST /api/pipelines/:id/tune`; reports in `argus/tuning.json`.
 - **`argus tail` — a terminal frontend, for the window that isn't a browser.**
   When the machine running Argus is one you only reach through a terminal — an
   SSH session, or a Claude Code session driven from your phone through Remote
@@ -307,6 +681,21 @@ All notable changes to Argus are documented here. The format follows
   the `ARGUS_AGENT`, `ARGUS_CODEX_HOME`, `ARGUS_CLAUDE_BIN`, `ARGUS_CODEX_BIN`,
   `ARGUS_CODEX_SANDBOX`, `ARGUS_CLAUDE_ARGS`, `ARGUS_CODEX_ARGS`,
   `ARGUS_CODEX_MODELS` and `ARGUS_ANALYSIS_RUNTIME` environment variables.
+
+- **Reliability — first-attempt pass rate and lucky passes, per pipeline.**
+  Binary pass/fail on the board hides the run that only succeeded after a
+  retry the harness quietly absorbed (AgentLens: 0.5–23% of "passing" agent
+  trajectories are exactly this). Each pipeline card now has a
+  **Reliability ▾** disclosure covering the trailing 30 days: the share of
+  settled instances that passed with every phase on attempt 1, the share of
+  successful instances that needed a retry or a human revise to get there, a
+  day-by-day sparkline of succeeded vs. failed instances, and a per-phase
+  table of first-try / lucky / failed counts, timeout-classed stalls and the
+  dominant failure class. A rate is `null` — shown as "—" — rather than 0%
+  when nothing has settled yet, so an unproven pipeline never reads as a
+  broken one. `GET /api/pipelines/:id/reliability?days=` (1–365, default 30);
+  the derivation is pure over the instance record alone, in
+  `server/src/sources/reliability.ts`.
 
 ### Fixed
 

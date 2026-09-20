@@ -4,6 +4,8 @@ import { paths } from "../claudeHome.js";
 import { atomicWriteJson } from "./atomicWrite.js";
 import { cached, invalidate, patchCached } from "./cache.js";
 import { createFileMemo } from "./fileMemo.js";
+import { log } from "../log.js";
+import { instanceWorktreesDir, plannedRemovals, removeWorktree } from "../harness/workspace.js";
 import type { PipelineInstance } from "./pipelineTypes.js";
 
 export const INSTANCE_KEEP = 50;
@@ -103,11 +105,55 @@ export async function readInstances(
   return out;
 }
 
+/**
+ * The isolated worktrees of an instance falling out of retention.
+ *
+ * Normally they are already gone: the engine removes them as the instance
+ * settles. This catches the ones no settlement ever removed — an Argus that
+ * stopped mid-run, a removal git refused at the time — because once the
+ * instance record is deleted, nothing remembers the directories exist. Never
+ * throws: retention must not depend on git.
+ */
+async function pruneWorktrees(inst: PipelineInstance): Promise<void> {
+  const def = inst.definition;
+  if (!def) return;
+  if (!inst.workspace && !inst.phases.some((p) => p.workspace)) return;
+  const recorded = new Set(
+    [...inst.phases.map((p) => p.workspace), inst.workspace].flatMap((w) => (w ? [w.path] : [])),
+  );
+  const plan = plannedRemovals(def, inst);
+  let removed = 0;
+  for (const removal of plan) {
+    try {
+      await removeWorktree({ repoCwd: removal.repoCwd, path: removal.path });
+      removed++;
+    } catch (e) {
+      log.warn("pruned instance's worktree could not be removed", {
+        instanceId: inst.id,
+        path: removal.path,
+        err: e,
+      });
+    }
+  }
+  // The per-instance directory itself goes only once every tree it held was
+  // removed — a `keep` policy (or a removal git refused) keeps the directory.
+  if (removed === recorded.size) {
+    await rm(instanceWorktreesDir(paths.worktreesDir(), inst.id), {
+      recursive: true,
+      force: true,
+    }).catch(() => {});
+  }
+}
+
 export async function pruneInstances(pipelineId: string, keep: number): Promise<void> {
   const mine = await readInstances({ pipelineId });
   const drop = mine.slice(keep);
   await Promise.all(
     drop.map(async (i) => {
+      // Before the record: the worktrees are found *through* it, and an
+      // instance deleted first would leave them on disk with nothing left that
+      // knows they exist. A tree whose policy asked to be kept is left alone.
+      await pruneWorktrees(i);
       await rm(instancePath(i.id), { force: true });
       // The instance's file artifacts and working-tree baselines go with it.
       await rm(path.join(paths.artifactsDir(), i.id), { recursive: true, force: true });

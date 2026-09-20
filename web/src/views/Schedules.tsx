@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useSchedules } from "../useSchedules";
+import { usePipelines } from "../usePipelines";
 import { useRuns } from "../useRuns";
 import type { Run, ScheduleInput, ScheduleWithNext, VerdictTrend } from "../types";
 import {
@@ -16,16 +17,17 @@ import {
   RuntimeSelect,
   SkeletonRows,
   TimeAgo,
-  TriggerFields,
   useClock,
   useFlip,
   useTicker,
 } from "../ds";
+import { TriggerFields } from "../ds/TriggerFields";
 import { runtimeCommand, useRuntimes } from "../useRuntimes";
 import { useVerdictTrends } from "../useVerdict";
 import { VerdictSparkline } from "./VerdictPanel";
-import { CronPanel } from "./Cron";
+import { LaunchPanel } from "./Launch";
 import { RunRow } from "./RunRow";
+import { useHashRoute } from "../useHashRoute";
 import {
   scheduleHealthById,
   summarizeSchedules,
@@ -200,10 +202,21 @@ function ScheduleForm({
   initial,
   onSubmit,
   onCancel,
+  pipelines = [],
+  scheduleId,
+  hookToken,
+  onRotateHook,
 }: {
   initial: ScheduleInput;
   onSubmit: (input: ScheduleInput) => Promise<void>;
   onCancel: () => void;
+  /** Sources for an "after pipeline" trigger — only pipelines may chain. */
+  pipelines?: { id: string; name: string }[];
+  /** This schedule's own id, once saved — undefined while authoring a new one. */
+  scheduleId?: string;
+  /** Set once this schedule has a webhook trigger and has been saved once. */
+  hookToken?: string;
+  onRotateHook?: () => Promise<void>;
 }) {
   const [form, setForm] = useState<ScheduleInput>(initial);
   const [err, setErr] = useState<string | null>(null);
@@ -265,6 +278,16 @@ function ScheduleForm({
           fieldClass={field}
           value={form.trigger}
           onChange={(t) => setForm({ ...form, trigger: t ?? { kind: "daily", time: "02:00" } })}
+          pipelines={pipelines}
+          hook={
+            hookToken && scheduleId && onRotateHook
+              ? {
+                  url: `${window.location.origin}/api/hooks/schedules/${scheduleId}`,
+                  token: hookToken,
+                  onRotate: onRotateHook,
+                }
+              : undefined
+          }
         />
         <RuntimeSelect
           fieldClass={field}
@@ -580,7 +603,10 @@ export default function Schedules() {
   // Rows come and go and change places as health changes; FLIP glides them
   // there instead of letting the list teleport under the reader.
   const flip = useFlip();
-  const { schedules, loading, error, create, update, remove, runNow, cancelRun } = useSchedules();
+  const { schedules, loading, error, create, update, remove, runNow, cancelRun, rotateHookToken } =
+    useSchedules();
+  // Sources for an "after pipeline" trigger — only pipelines may chain.
+  const { pipelines } = usePipelines();
   // One run list for every card. Each card used to fetch its own
   // `/api/runs?scheduleId=…`, so a page with twelve schedules opened thirteen
   // requests and kept thirteen conditional polls alive — and still could not
@@ -596,7 +622,9 @@ export default function Schedules() {
   const [mode, setMode] = useState<
     { kind: "none" } | { kind: "new" } | { kind: "edit"; id: string }
   >({ kind: "none" });
-  const [subTab, setSubTab] = useState<"schedules" | "cron">("schedules");
+  // The sub-tab lives in the hash (`#/schedules`, `#/schedules/oneoff`) so a
+  // link to "fire one now" lands on the form and a reload keeps the tab.
+  const subTab: "schedules" | "oneoff" = useHashRoute()[1] === "oneoff" ? "oneoff" : "schedules";
   const [filter, setFilter] = useState<Filter>("all");
 
   const editing = mode.kind === "edit" ? schedules.find((s) => s.id === mode.id) : undefined;
@@ -629,31 +657,29 @@ export default function Schedules() {
         ) : null
       }
     >
-      <div className="mb-6 flex items-center gap-1">
-        <button
-          type="button"
-          onClick={() => setSubTab("schedules")}
-          aria-pressed={subTab === "schedules"}
+      <nav aria-label="Scheduler views" className="mb-6 flex items-center gap-1">
+        <a
+          href="#/schedules"
+          aria-current={subTab === "schedules" ? "page" : undefined}
           className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
             subTab === "schedules" ? "bg-surface-2 text-ink" : "text-ink-dim hover:text-ink"
           }`}
         >
           Schedules
-        </button>
-        <button
-          type="button"
-          onClick={() => setSubTab("cron")}
-          aria-pressed={subTab === "cron"}
+        </a>
+        <a
+          href="#/schedules/oneoff"
+          aria-current={subTab === "oneoff" ? "page" : undefined}
           className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
-            subTab === "cron" ? "bg-surface-2 text-ink" : "text-ink-dim hover:text-ink"
+            subTab === "oneoff" ? "bg-surface-2 text-ink" : "text-ink-dim hover:text-ink"
           }`}
         >
-          Cron
-        </button>
-      </div>
+          One-off
+        </a>
+      </nav>
 
-      {subTab === "cron" ? (
-        <CronPanel />
+      {subTab === "oneoff" ? (
+        <LaunchPanel />
       ) : (
         <>
           {error && (
@@ -666,6 +692,7 @@ export default function Schedules() {
             <div className="mb-6">
               <ScheduleForm
                 initial={EMPTY}
+                pipelines={pipelines}
                 onCancel={() => setMode({ kind: "none" })}
                 onSubmit={async (input) => {
                   await create(input);
@@ -680,6 +707,10 @@ export default function Schedules() {
               <ScheduleForm
                 key={editing.id}
                 initial={editing}
+                pipelines={pipelines}
+                scheduleId={editing.id}
+                hookToken={editing.hookToken}
+                onRotateHook={() => rotateHookToken(editing.id).then(() => {})}
                 onCancel={() => setMode({ kind: "none" })}
                 onSubmit={async (input) => {
                   await update(editing.id, input);

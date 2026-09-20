@@ -15,16 +15,26 @@ This skill reads the same in Claude Code (`/argus-tail`) and Codex
 ## The command
 
 ```bash
-argus tail                 # snapshot + follow the live feed for 60s, then exit
-argus tail --for 0         # snapshot only: what is running / waiting / recent
-argus tail --for 5m --until-idle   # keep following until nothing is running
-argus tail --json          # one JSON object per line, when you need to parse
+bash -ic 'argus tail --url "http://$ARGUS_HOST:$ARGUS_PORT" --token "$ARGUS_TOKEN"'                       # snapshot + follow the live feed for 60s, then exit
+bash -ic 'argus tail --url "http://$ARGUS_HOST:$ARGUS_PORT" --token "$ARGUS_TOKEN" --for 0'               # snapshot only: what is running / waiting / recent
+bash -ic 'argus tail --url "http://$ARGUS_HOST:$ARGUS_PORT" --token "$ARGUS_TOKEN" --for 5m --until-idle' # keep following until nothing is running
+bash -ic 'argus tail --url "http://$ARGUS_HOST:$ARGUS_PORT" --token "$ARGUS_TOKEN" --json'                # one JSON object per line, when you need to parse
 ```
 
-`argus` must be on PATH on this machine (it is wherever Argus runs). If the
-server is on another port, `--url http://127.0.0.1:<port>`; if it was started
-with `ARGUS_TOKEN`, the same variable (or `--token`) must be set in your shell,
-and the error message will say so.
+`argus` must be on PATH on this machine (it is wherever Argus runs). On this
+machine the CLI's `127.0.0.1:7777` default is wrong — the real server is on a
+non-loopback address. Environment variables `$ARGUS_HOST`, `$ARGUS_PORT`, and
+`$ARGUS_TOKEN` are only visible to an _interactive_ shell (a `.bashrc` guard
+hides them from a plain script/tool shell). Always run through `bash -ic '...'`
+to pick them up. The `--token` flag should always be included when Argus has
+authentication enabled.
+
+**If connection fails**, check that Argus is running:
+
+```bash
+ps aux | grep -i "argus server" | grep -v grep
+ss -tlnp | grep node
+```
 
 ## Reading the output
 
@@ -51,13 +61,13 @@ estimates and are marked `~`.
 
 ## How to relay it
 
-- Run `argus tail` with the default window, then summarise in a few lines:
-  what is running (and what it is doing), what needs a decision, what finished
-  since last time. Quote failure reasons verbatim; they are the useful part.
-- Asked to "keep an eye on it": run `argus tail --for 5m --until-idle` (stay
+- Run `bash -ic 'argus tail --url "http://$ARGUS_HOST:$ARGUS_PORT" --token "$ARGUS_TOKEN"'` with the default window, then summarise in a few lines: what is
+  running (and what it is doing), what needs a decision, what finished since
+  last time. Quote failure reasons verbatim; they are the useful part.
+- Asked to "keep an eye on it": run `bash -ic 'argus tail --url "http://$ARGUS_HOST:$ARGUS_PORT" --token "$ARGUS_TOKEN" --for 5m --until-idle'` (stay
   under your tool timeout), report, and run it again if they want more. Each
   run's snapshot catches anything you missed between calls.
-- Asked "is it done yet?": `argus tail --for 0` answers immediately.
+- Asked "is it done yet?": `bash -ic 'argus tail --url "http://$ARGUS_HOST:$ARGUS_PORT" --token "$ARGUS_TOKEN" --for 0'` answers immediately.
 - A ⏸ line means a person must decide. It carries a review link (the Command
   Center's review drawer, where they can read what the phase produced) and the
   matching `argus approve <instanceId> [--phase <id>]` command. Relay both; do
@@ -68,8 +78,8 @@ estimates and are marked `~`.
 Only when the person tells you to — never on your own judgement:
 
 ```bash
-argus approve <instanceId> [--phase <phaseId>]                    # continue the pipeline
-argus revise  <instanceId> --note "<what to change>" [--phase <phaseId>]   # run the phase again
+bash -ic 'argus approve --url "http://$ARGUS_HOST:$ARGUS_PORT" --token "$ARGUS_TOKEN" <instanceId> [--phase <phaseId>]'                    # continue the pipeline
+bash -ic 'argus revise  --url "http://$ARGUS_HOST:$ARGUS_PORT" --token "$ARGUS_TOKEN" <instanceId> --note "<what to change>" [--phase <phaseId>]'   # run the phase again
 ```
 
 Both need an Argus account: `ARGUS_USER` and `ARGUS_PASSWORD` in your shell
@@ -78,5 +88,6 @@ session lasts for the one call. `--phase` is only needed when the ⏸ line shows
 one, i.e. more than one phase is waiting. Relay the command's one output line
 verbatim — on exit 1 it names the reason (wrong password, no account yet, the
 instance is no longer waiting).
-- If the command exits 1, relay its stderr line as-is — it names the fix
-  (server not running, wrong port, missing token).
+
+If the command exits 1, relay its stderr line as-is — it names the fix
+(server not running, wrong port, missing token).

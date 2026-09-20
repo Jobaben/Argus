@@ -181,3 +181,83 @@ test("forgetting a deleted instance: a pruned id is not served from the memo", a
   );
   assert.equal(await m.readInstance("drop"), null);
 });
+
+// ── worktrees go with the instance ──────────────────────────────────────────
+
+test("pruneInstances removes the instance's worktrees, keeping the branch and any kept tree", async () => {
+  const { spawnSync } = await import("node:child_process");
+  if (spawnSync("git", ["--version"]).status !== 0) return;
+  const { existsSync, mkdtempSync: mkTmp, writeFileSync } = await import("node:fs");
+  const m = await fresh();
+  const workspaceMod = await import("../harness/workspace.js");
+  const { paths } = await import("../claudeHome.js");
+
+  const git = (dir: string, args: string[]) =>
+    spawnSync("git", ["-c", "user.email=t@e.com", "-c", "user.name=T", ...args], { cwd: dir });
+  const repo = mkTmp(path.join(tmpdir(), "argus-instances-repo-"));
+  git(repo, ["init", "-q", "-b", "main"]);
+  writeFileSync(path.join(repo, "README.md"), "base\n");
+  git(repo, ["add", "."]);
+  git(repo, ["commit", "-q", "-m", "init"]);
+
+  const root = paths.worktreesDir();
+  const dropped = await workspaceMod.createWorktree({
+    repoCwd: repo,
+    path: path.join(root, "drop", "a-attempt0"),
+    branch: "argus/drop/a/0",
+    root,
+  });
+  const kept = await workspaceMod.createWorktree({
+    repoCwd: repo,
+    path: path.join(root, "drop", "b-attempt0"),
+    branch: "argus/drop/b/0",
+    root,
+  });
+
+  const phase = (id: string, workspace: unknown) => ({
+    id,
+    name: id,
+    gated: false,
+    status: "succeeded" as const,
+    steps: [],
+    attempt: 0,
+    payload: null,
+    workspace,
+  });
+  const definition = {
+    id: "p1",
+    name: "feature pipeline",
+    phases: [
+      { id: "a", name: "A", cwd: repo, gated: false, steps: [], workspace: { scope: "attempt" } },
+      {
+        id: "b",
+        name: "B",
+        cwd: repo,
+        gated: false,
+        steps: [],
+        workspace: { scope: "attempt", keep: true },
+      },
+    ],
+    trigger: null,
+    enabled: true,
+    overlapPolicy: "skip" as const,
+    lastStartedAt: null,
+    createdAt: new Date(2026, 5, 30, 8, 0).toISOString(),
+    updatedAt: new Date(2026, 5, 30, 8, 0).toISOString(),
+  };
+  await m.writeInstance({
+    ...makeInstance("drop", "p1", new Date(2026, 5, 30, 9, 0).toISOString()),
+    status: "succeeded",
+    phases: [phase("a", dropped), phase("b", kept)],
+    definition,
+  });
+  await m.writeInstance(makeInstance("keep", "p1", new Date(2026, 5, 30, 10, 0).toISOString()));
+
+  await m.pruneInstances("p1", 1);
+
+  assert.equal(await m.readInstance("drop"), null);
+  assert.equal(existsSync(dropped.path), false);
+  // The branch outlives the instance record; the kept tree outlives both.
+  assert.equal(git(repo, ["rev-parse", "--verify", "argus/drop/a/0"]).status, 0);
+  assert.equal(existsSync(kept.path), true);
+});

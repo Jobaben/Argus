@@ -196,14 +196,51 @@ export function StepDrawer({
         <Field label="job">
           <span className="font-mono">{runId ?? "—"}</span>
         </Field>
+        {step.candidate && (
+          // Best-of-N: which draft this is, and what became of it. Stated in
+          // words rather than as a status token, because "aborted" is exactly
+          // the wrong word for a draft that simply was not the one chosen.
+          <Field label="candidate">
+            <span className="font-mono">
+              c{step.candidate.index + 1} of {step.candidate.total}
+            </span>
+            {step.selected
+              ? " · selected"
+              : step.superseded
+                ? " · superseded by the winner"
+                : step.verified === true
+                  ? " · checks passed"
+                  : step.verified === false
+                    ? " · checks failed"
+                    : ""}
+          </Field>
+        )}
         {step.model && <Field label="model">{step.model}</Field>}
         {step.runtime && (
           <Field label="runtime">{runtimeLabel(step.runtime) || step.runtime}</Field>
+        )}
+        {step.workspace && (
+          // The branch is the deliverable of an isolated phase; the directory it
+          // ran in is disposable, so it rides along as the title rather than
+          // taking a line of its own.
+          <Field label="workspace">
+            <span className="font-mono" title={step.workspace.path}>
+              {step.workspace.branch}
+            </span>
+          </Field>
         )}
         {step.startedAt && (
           <Field label="started">{new Date(step.startedAt).toLocaleString()}</Field>
         )}
         {step.durationMs != null && <Field label="duration">{formatMs(step.durationMs)}</Field>}
+        {run?.deadlineAt && run.startedAt && (
+          <Field label="timeout">
+            {formatMs(Math.max(0, Date.parse(run.deadlineAt) - Date.parse(run.startedAt)))}
+          </Field>
+        )}
+        {run?.stallSeconds != null && (
+          <Field label="stall">no output for {run.stallSeconds}s</Field>
+        )}
         {step.tokens != null && <Field label="tokens">{formatTokens(step.tokens)}</Field>}
         {step.costUsd != null && <Field label="cost">{formatUsd(step.costUsd)}</Field>}
         {step.currentActivity && <Field label="activity">{step.currentActivity}</Field>}

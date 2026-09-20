@@ -40,7 +40,7 @@ export const DEFAULT_TIMEOUT_MS = 90_000;
 export const DEFAULT_MAX_OUTPUT_BYTES = 256 * 1024;
 
 /** What a pass is for. Appears in logs; keeps the ledger explicable. */
-export type AnalysisKind = "autopsy" | "verdict" | "diagnose" | "plan";
+export type AnalysisKind = "autopsy" | "verdict" | "diagnose" | "plan" | "tune";
 
 export interface AnalysisRequest {
   kind: AnalysisKind;

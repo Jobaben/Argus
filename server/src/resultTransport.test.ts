@@ -11,7 +11,13 @@ import { resultStepName } from "./sources/dag.js";
 import { createEngine } from "./pipelineEngine.js";
 import { createPipeline, validatePipelineInput } from "./sources/pipelines.js";
 import { readInstance } from "./sources/instances.js";
-import { readRun, readRunResult, runResultPath, writeRun } from "./sources/runs.js";
+import {
+  legacyRunResultPath,
+  readRun,
+  readRunResult,
+  runResultPath,
+  writeRun,
+} from "./sources/runs.js";
 import type { EngineDeps } from "./pipelineEngine.js";
 import type { PhaseDef } from "./sources/pipelineTypes.js";
 
@@ -357,13 +363,27 @@ test("a hookless runtime's malformed result file is reported, not parsed from pr
   assert.match(String(after!.phases[0].steps[0].resultError), /could not be parsed/);
 });
 
-test("the result file lives beside the run it belongs to", async () => {
+test("the result file lives in a directory of its own beside the run it belongs to", async () => {
   const file = runResultPath("run-9");
-  assert.equal(path.basename(file), "run-9.json");
-  assert.equal(path.basename(path.dirname(file)), "results");
+  assert.equal(path.basename(file), "result.json");
+  assert.equal(path.basename(path.dirname(file)), "run-9");
+  assert.equal(path.basename(path.dirname(path.dirname(file))), "results");
   // And it is readable back through the same helper the engine uses.
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify({ accepted: true }));
   assert.deepEqual(await readRunResult("run-9"), { result: { accepted: true } });
   assert.equal(readFileSync(file, "utf8"), '{"accepted":true}');
+});
+
+test("a result written at the pre-directory path is still read, so a run in flight across the upgrade settles", async () => {
+  const legacy = legacyRunResultPath("run-10");
+  assert.equal(path.basename(legacy), "run-10.json");
+  mkdirSync(path.dirname(legacy), { recursive: true });
+  writeFileSync(legacy, JSON.stringify({ accepted: false }));
+  assert.deepEqual(await readRunResult("run-10"), { result: { accepted: false } });
+  // The new location wins when both exist.
+  const file = runResultPath("run-10");
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify({ accepted: true }));
+  assert.deepEqual(await readRunResult("run-10"), { result: { accepted: true } });
 });

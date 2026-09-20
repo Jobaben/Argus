@@ -71,6 +71,21 @@ export function usePipelines() {
     (id: string) => mutate(`/api/pipelines/${id}/start`, "POST"),
     [mutate],
   );
+  const rotateHookToken = useCallback(
+    (id: string) => mutate(`/api/pipelines/${id}/hook-token/rotate`, "POST"),
+    [mutate],
+  );
 
-  return { pipelines: data, loading, error, refresh, create, update, remove, setEnabled, runNow };
+  return {
+    pipelines: data,
+    loading,
+    error,
+    refresh,
+    create,
+    update,
+    remove,
+    setEnabled,
+    runNow,
+    rotateHookToken,
+  };
 }
