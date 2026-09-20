@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, within, cleanup } from "@testing-library/react";
-import type { PhaseArtifactContent, PhaseReview } from "../types";
+import type { ChangeProposalPreview, PhaseArtifactContent, PhaseReview } from "../types";
 import { GateDrawer, type GateSelection } from "./GateDrawer";
 
 // The drawer's read side, canned per test. The artifact content mock answers
@@ -703,5 +703,220 @@ describe("GateDrawer — business-rule verification", () => {
     mockReview.review = review();
     open();
     expect(screen.queryByTestId("gate-rule-verification")).toBeNull();
+  });
+});
+
+// ── Change intent (Phase 7) ──────────────────────────────────────────────────
+
+function changePreview(over: Partial<ChangeProposalPreview> = {}): ChangeProposalPreview {
+  return {
+    proposalId: "CP-12",
+    runId: "run-1",
+    step: "reason",
+    attempt: 1,
+    status: "staged",
+    readiness: "ready",
+    request: {
+      id: "CR-1",
+      summary: "Kobra now supports 500-character customer comments.",
+      details: "The integration team confirmed the new limit.",
+    },
+    current: [
+      {
+        ref: "RULE-42:v1",
+        claim: { id: "RULE-42", revision: 1 },
+        kind: "business-rule",
+        statement: "Kobra customer comments must not exceed 180 characters.",
+        support: "supported",
+        lifecycle: "active",
+        conformance: "holds",
+        conformanceAt: "abc123def456",
+      },
+    ],
+    semantic: {
+      deltaId: "KD-9",
+      runId: "run-1",
+      step: "reason",
+      attempt: 1,
+      status: "staged",
+      proposedClaims: [
+        {
+          ref: { display: "local:d1", local: "d1" },
+          kind: "decision",
+          statement: "The 500-character limit applies only when BookingEngine == Kobra.",
+          evidence: [],
+          justifications: [
+            {
+              conclusion: { display: "local:d1", local: "d1" },
+              premises: [
+                { display: "local:r42", local: "r42" },
+                { display: "CONSTRAINT-8:v1", claim: { id: "CONSTRAINT-8", revision: 1 } },
+              ],
+              direction: "supports",
+            },
+          ],
+        },
+      ],
+      proposedRevisions: [
+        {
+          claimId: "RULE-42",
+          expectedRevision: 1,
+          ref: {
+            display: "RULE-42:v2 (proposed)",
+            claim: { id: "RULE-42", revision: 2 },
+            proposed: true,
+          },
+          kind: "business-rule",
+          statement: "Kobra customer comments must not exceed 500 characters.",
+          current: {
+            claim: { id: "RULE-42", revision: 1 },
+            statement: "Kobra customer comments must not exceed 180 characters.",
+            support: "supported",
+            lifecycle: "active",
+          },
+          evidence: [],
+          justifications: [],
+        },
+      ],
+      evidence: [],
+      justifications: [],
+      consumed: [],
+      artifacts: [],
+      warnings: [],
+    },
+    preserved: [
+      {
+        ref: "CONSTRAINT-8:v1",
+        claim: { id: "CONSTRAINT-8", revision: 1 },
+        kind: "constraint",
+        statement: "Comment validation is enforced server-side.",
+      },
+    ],
+    acceptanceCriteria: [
+      {
+        id: "AC-1",
+        statement: "A Kobra comment of 500 characters is accepted.",
+        kind: "behavior",
+        relatesTo: [{ local: "r42" }],
+      },
+      {
+        id: "AC-2",
+        statement: "A Kobra comment of 501 characters is rejected.",
+        kind: "behavior",
+        relatesTo: [{ local: "r42" }],
+      },
+      {
+        id: "AC-3",
+        statement: "Non-Kobra comment limits are unchanged.",
+        kind: "regression",
+        relatesTo: [{ id: "CONSTRAINT-8", revision: 1 }],
+      },
+    ],
+    unresolved: [],
+    classification: [{ rule: { id: "RULE-42", revision: 1 }, disposition: "revised" }],
+    warnings: [],
+    summary: "Raise the Kobra limit; keep server-side validation.",
+    ...over,
+  };
+}
+
+describe("GateDrawer — change intent", () => {
+  it("shows the request, the current rule with its conformance, and the proposed transition", () => {
+    mockReview.review = review({
+      changeProposals: [changePreview()],
+      changeIntent: {
+        requestId: "CR-1",
+        readiness: "ready",
+        selected: 1,
+        revised: 1,
+        created: 1,
+        decisions: 1,
+        preserved: 1,
+        acceptanceCriteria: 3,
+        unresolved: 0,
+        warnings: 0,
+        requiresReview: true,
+      },
+    });
+    open();
+    const panel = screen.getByTestId("gate-change-proposal");
+
+    // What was asked for, verbatim, and whether the intent is fit to implement.
+    expect(screen.getByTestId("change-request")).toHaveTextContent(/500-character customer/);
+    expect(screen.getByTestId("change-readiness")).toHaveTextContent("ready");
+
+    // CURRENT — the rule's own support beside what the implementation does.
+    // Collapsing these two is how a bug becomes a requirement.
+    const current = within(screen.getByLabelText("Current rules"));
+    expect(current.getByText(/must not exceed 180 characters/)).toBeTruthy();
+    expect(panel).toHaveTextContent(/rule: supported/);
+    expect(panel).toHaveTextContent(/impl: holds @abc123de/);
+
+    // PROPOSED — before and after, plus the decision that follows.
+    const revisions = within(screen.getByLabelText("Proposed revisions"));
+    expect(revisions.getByText(/must not exceed 500 characters/)).toBeTruthy();
+    expect(
+      within(screen.getByLabelText("Decisions")).getByText(/BookingEngine == Kobra/),
+    ).toBeTruthy();
+
+    // PRESERVED — named by exact ref, with no new claim invented to say so.
+    expect(screen.getByTestId("change-preserved")).toHaveTextContent(/CONSTRAINT-8:v1/);
+
+    // ACCEPTANCE CRITERIA — their own section, never rendered as claims.
+    const criteria = screen.getByTestId("change-acceptance-criteria");
+    expect(criteria).toHaveTextContent(/AC-1/);
+    expect(criteria).toHaveTextContent(/501 characters is rejected/);
+    expect(criteria).toHaveTextContent(/regression/);
+
+    expect(screen.getByTestId("change-unresolved-none")).toHaveTextContent("none");
+    expect(panel).toHaveTextContent(/Nothing here is canonical yet/);
+  });
+
+  it("marks an unfinished proposal needs-input and lists what is unknown", () => {
+    mockReview.review = review({
+      changeProposals: [
+        changePreview({
+          readiness: "needs-input",
+          semantic: undefined,
+          acceptanceCriteria: [],
+          unresolved: [{ id: "Q-1", question: "What should the new maximum be?" }],
+          warnings: [
+            {
+              code: "unresolved-questions",
+              subject: "Q-1",
+              message: "1 question is unresolved, so this proposal is not implementation-ready",
+            },
+          ],
+        }),
+      ],
+    });
+    open();
+    expect(screen.getByTestId("change-readiness")).toHaveTextContent("needs-input");
+    expect(screen.getByTestId("change-unresolved")).toHaveTextContent(
+      /What should the new maximum be\?/,
+    );
+    expect(screen.getByTestId("change-warnings")).toHaveTextContent(/not implementation-ready/);
+    // No acceptance criteria is itself worth seeing, rather than an empty list.
+    expect(screen.getByTestId("gate-change-proposal")).toHaveTextContent(
+      /no observable way to judge/,
+    );
+  });
+
+  it("says plainly when a failed phase's proposal never became canonical", () => {
+    mockReview.review = review({
+      changeProposals: [changePreview({ status: "rejected" })],
+      canApprove: false,
+      status: "failed",
+    });
+    open();
+    expect(screen.getByTestId("gate-change-proposal")).toHaveTextContent(
+      /None of this became canonical/,
+    );
+  });
+
+  it("renders nothing for an ordinary phase", () => {
+    mockReview.review = review();
+    open();
+    expect(screen.queryByTestId("gate-change-proposal")).toBeNull();
   });
 });

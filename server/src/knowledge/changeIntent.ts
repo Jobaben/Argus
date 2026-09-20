@@ -284,6 +284,18 @@ const REQUEST_ID_RE = CLAIM_ID_RE;
  * into a pipeline.
  */
 export function validateChangeRequest(raw: unknown, ctx: string): ChangeRequest {
+  try {
+    return changeRequestShape(raw, ctx);
+  } catch (e) {
+    // The shared field validators throw the base class; at this boundary every
+    // refusal is a typed change refusal.
+    if (e instanceof ChangeProposalError) throw e;
+    if (e instanceof KnowledgeValidationError) fail("schema", e.message);
+    throw e;
+  }
+}
+
+function changeRequestShape(raw: unknown, ctx: string): ChangeRequest {
   const r = record(raw, ctx);
   const out: ChangeRequest = {
     id: "",
@@ -453,6 +465,16 @@ function list<T>(raw: unknown, name: string, item: (v: unknown, ctx: string) => 
  * can never smuggle in a delta shape the KnowledgeDelta protocol would refuse.
  */
 export function validateChangeProposal(raw: unknown): ChangeProposal {
+  try {
+    return changeProposalShape(raw);
+  } catch (e) {
+    if (e instanceof ChangeProposalError) throw e;
+    if (e instanceof KnowledgeValidationError) fail("schema", e.message);
+    throw e;
+  }
+}
+
+function changeProposalShape(raw: unknown): ChangeProposal {
   let r: Record<string, unknown>;
   try {
     r = record(raw, "proposal");
@@ -873,12 +895,19 @@ export function checkChangeProposal(
   const fatal = fatalChangeWarnings(warnings, ctx.policy);
   const readiness = changeReadiness(proposal, warnings);
   if (fatal.length === 0) return { warnings, readiness, refusal: null };
-  const code: ChangeProposalErrorCode = fatal.some((f) => f.code === "selected-rule-unclassified")
+  // Most fundamental first, so a proposal with several problems is named by
+  // the one a reader should fix first: a rule nobody accounted for, then a
+  // reference that points at nothing, then an accounting that contradicts the
+  // proposal, then a change nobody can judge.
+  const has = (code: ChangeProposalWarningCode) => fatal.some((f) => f.code === code);
+  const code: ChangeProposalErrorCode = has("selected-rule-unclassified")
     ? "incomplete"
-    : fatal.some((f) => f.code === "acceptance-criteria-missing")
-      ? "acceptance-criteria"
-      : fatal.some((f) => f.code === "acceptance-criterion-unknown-ref")
-        ? "local-reference"
+    : has("acceptance-criterion-unknown-ref")
+      ? "local-reference"
+      : has("acceptance-criteria-missing") &&
+          !has("preserved-and-revised") &&
+          !has("classification-mismatch")
+        ? "acceptance-criteria"
         : "contradiction";
   return {
     warnings,

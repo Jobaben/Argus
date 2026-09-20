@@ -1213,3 +1213,128 @@ test("there is no admin mutation for a verification", async () => {
   );
   assert.equal((await post(app, "/api/knowledge/verifications", { outcome: "holds" })).status, 404);
 });
+
+// ── Change intent (Phase 7) ──────────────────────────────────────────────────
+//
+// The read surface over change provenance, and the absence of a write one.
+// "Which requested change caused RULE-7:v2?" is a different question from "why
+// is RULE-7:v2 supported?", and the API keeps them on different routes.
+
+/** Record one accepted change proposal for RULE-7:v2, as a gate's commit would. */
+async function seedChangeProposal() {
+  const { mutateLedger } = await import("./store.js");
+  const { recordChangeProposal, reviseClaim } = await import("./kernel.js");
+  await mutateLedger((ledger) => {
+    const revised = reviseClaim(
+      ledger,
+      { id: "RULE-7", statement: "Kobra comment maximum is 500" },
+      "2026-09-20T12:00:00.000Z",
+    );
+    const { ledger: next } = recordChangeProposal(
+      revised.ledger,
+      {
+        id: "CP-12",
+        request: {
+          id: "CR-1",
+          summary: "Kobra now supports 500-character comments.",
+          requestedBy: "product",
+        },
+        execution: { runId: "run-change", instanceId: "inst-1", phaseId: "change" },
+        attempt: 0,
+        deltaId: "KD-1",
+        readiness: "ready",
+        semanticChanges: [{ id: "RULE-7", revision: 2 }],
+        revised: [{ from: { id: "RULE-7", revision: 1 }, to: { id: "RULE-7", revision: 2 } }],
+        created: [],
+        decisions: [],
+        constraints: [],
+        preserved: [{ id: "FACT-12", revision: 1 }],
+        acceptanceCriteria: [
+          {
+            id: "AC-1",
+            statement: "A 500-character comment is accepted.",
+            kind: "behavior",
+            relatesTo: [{ id: "RULE-7", revision: 2 }],
+          },
+        ],
+        unresolved: [],
+        classification: [{ rule: { id: "RULE-7", revision: 1 }, disposition: "revised" }],
+      },
+      "2026-09-20T12:00:00.000Z",
+    );
+    return { ledger: next, result: null };
+  });
+}
+
+test("accepted change proposals are listed, and filtered by the request they answer", async () => {
+  const app = makeApp();
+  await seedExample(app);
+  await seedChangeProposal();
+
+  const all = await get(app, "/api/knowledge/change-proposals");
+  assert.equal(all.status, 200);
+  assert.deepEqual(
+    all.body.proposals.map((p: any) => [p.id, p.request.id, p.readiness]),
+    [["CP-12", "CR-1", "ready"]],
+  );
+  assert.deepEqual(
+    (await get(app, "/api/knowledge/change-proposals?request=CR-1")).body.proposals.map(
+      (p: any) => p.id,
+    ),
+    ["CP-12"],
+  );
+  assert.deepEqual(
+    (await get(app, "/api/knowledge/change-proposals?request=CR-9")).body.proposals,
+    [],
+  );
+  assert.equal((await get(app, "/api/knowledge/change-proposals?request=not a id")).status, 400);
+});
+
+test("a claim revision names the requested change that caused it — and only that revision", async () => {
+  const app = makeApp();
+  await seedExample(app);
+  await seedChangeProposal();
+
+  const caused = await get(app, "/api/knowledge/claims/RULE-7:v2/change-proposal");
+  assert.equal(caused.status, 200);
+  assert.equal(caused.body.id, "CP-12");
+  assert.equal(caused.body.request.summary, "Kobra now supports 500-character comments.");
+  assert.deepEqual(caused.body.acceptanceCriteria[0].relatesTo, [{ id: "RULE-7", revision: 2 }]);
+
+  // v1 was not caused by this change; a claim nobody proposed has no record.
+  assert.equal((await get(app, "/api/knowledge/claims/RULE-7:v1/change-proposal")).status, 404);
+  assert.equal((await get(app, "/api/knowledge/claims/FACT-12/change-proposal")).status, 404);
+  assert.equal((await get(app, "/api/knowledge/claims/NOPE/change-proposal")).status, 404);
+
+  // And change provenance is not justification: the support route says nothing
+  // about the request, and the change route says nothing about support.
+  const support = await get(app, "/api/knowledge/claims/RULE-7:v2/support");
+  assert.equal(JSON.stringify(support.body).includes("CR-1"), false);
+});
+
+test("one proposal reads by id; an unknown id is 404", async () => {
+  const app = makeApp();
+  await seedExample(app);
+  await seedChangeProposal();
+  const one = await get(app, "/api/knowledge/change-proposals/CP-12");
+  assert.equal(one.status, 200);
+  assert.equal(one.body.acceptedAt, "2026-09-20T12:00:00.000Z");
+  assert.equal((await get(app, "/api/knowledge/change-proposals/CP-99")).status, 404);
+  assert.equal((await get(app, "/api/knowledge/change-proposals/not%20an%20id")).status, 404);
+  assert.equal(
+    (await get(app, "/api/knowledge/executions/run-change/change-proposal")).status,
+    404,
+  );
+});
+
+test("there is no admin mutation for a change proposal", async () => {
+  const app = makeApp();
+  await seedExample(app);
+  for (const url of [
+    "/api/knowledge/change-proposals",
+    "/api/knowledge/change-proposals/CP-12",
+    "/api/knowledge/claims/RULE-7:v1/change-proposal",
+  ]) {
+    assert.equal((await post(app, url, { readiness: "ready" })).status, 404);
+  }
+});

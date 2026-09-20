@@ -38,6 +38,15 @@
  *                                           name them). Syntax:
  *                                             verify-context <holds|violated|unverifiable> \
  *                                               <path> [check:<label>] <note...>
+ *   FAKE: propose-change <new-limit> [note] write ARGUS_CHANGE_PROPOSAL_FILE: revise every business
+ *                                           rule in ARGUS_CHANGE_REQUEST_FILE's `relevant` list to
+ *                                           the new limit, preserve every constraint in
+ *                                           ARGUS_KNOWLEDGE_CONTEXT_FILE, add a decision, and give
+ *                                           each revision two behavioural acceptance criteria plus
+ *                                           one regression criterion (canonical ids are minted at
+ *                                           an earlier phase's commit, so no prompt can name them)
+ *   FAKE: read-change-context <name>        copy ARGUS_CHANGE_CONTEXT_FILE into ARGUS_ARTIFACT_DIR/<name>
+ *                                           (proves the implementation run received the accepted intent)
  *   FAKE: read-context <name>               copy ARGUS_KNOWLEDGE_CONTEXT_FILE into ARGUS_ARTIFACT_DIR/<name>
  *                                           (proves the agent could read the context it was supplied)
  *   FAKE: consume-context <relpath|->       write a KnowledgeDelta declaring every ref in
@@ -237,6 +246,104 @@ async function execute(prompt) {
               : {}),
           }),
         );
+        break;
+      }
+      case "propose-change": {
+        // "The agent read the requested change and the rules it was given, and
+        // answered with a structured transition" — the one thing a
+        // change-intent step must be able to do that a static prompt cannot,
+        // because the canonical refs were minted when an earlier phase
+        // committed, and the request arrives per run.
+        const requestFile = process.env.ARGUS_CHANGE_REQUEST_FILE;
+        const contextFile = process.env.ARGUS_KNOWLEDGE_CONTEXT_FILE;
+        const target = process.env.ARGUS_CHANGE_PROPOSAL_FILE;
+        if (!requestFile) throw new Error("propose-change without ARGUS_CHANGE_REQUEST_FILE");
+        if (!contextFile) throw new Error("propose-change without ARGUS_KNOWLEDGE_CONTEXT_FILE");
+        if (!target) throw new Error("propose-change without ARGUS_CHANGE_PROPOSAL_FILE");
+        const words = rest.split(/\s+/);
+        const limit = words.shift();
+        const note = words.join(" ");
+        const input = JSON.parse(readFileSync(requestFile, "utf8"));
+        const context = JSON.parse(readFileSync(contextFile, "utf8"));
+        const rules = input.relevant.filter((r) => r.kind === "business-rule");
+        const constraints = context.claims.filter((c) => c.kind === "constraint");
+        const revisions = rules.map((r, i) => ({
+          claimId: r.claim.id,
+          expectedRevision: r.claim.revision,
+          statement: r.statement.replace(/\d+/, limit),
+          localId: `r${i}`,
+          revisionNote: input.request.summary,
+        }));
+        const criteria = [];
+        for (const [i] of rules.entries()) {
+          criteria.push({
+            id: `AC-${criteria.length + 1}`,
+            statement: `A comment of ${limit} characters is accepted.`,
+            kind: "behavior",
+            relatesTo: [{ local: `r${i}` }],
+          });
+          criteria.push({
+            id: `AC-${criteria.length + 1}`,
+            statement: `A comment of ${Number(limit) + 1} characters is rejected.`,
+            kind: "behavior",
+            relatesTo: [{ local: `r${i}` }],
+          });
+        }
+        if (constraints.length > 0) {
+          criteria.push({
+            id: `AC-${criteria.length + 1}`,
+            statement: "Behaviour governed by the preserved constraints is unchanged.",
+            kind: "regression",
+            relatesTo: [constraints[0].ref],
+          });
+        }
+        writeFileAt(
+          target,
+          JSON.stringify({
+            schemaVersion: 1,
+            semanticDelta: {
+              schemaVersion: 1,
+              revisions,
+              claims: [
+                {
+                  localId: "d0",
+                  kind: "decision",
+                  statement: `The ${limit}-character limit applies only to the requested integration.`,
+                },
+              ],
+              evidence: revisions.map((r) => ({
+                claim: { local: r.localId },
+                source: {
+                  type: "document",
+                  uri: `argus:change-request/${input.request.id}`,
+                  title: input.request.summary,
+                },
+              })),
+              justifications: [
+                {
+                  conclusion: { local: "d0" },
+                  premises: [
+                    ...revisions.map((r) => ({ local: r.localId })),
+                    ...constraints.map((c) => c.ref),
+                  ],
+                },
+              ],
+              consumed: context.claims.map((c) => c.ref),
+            },
+            preserved: constraints.map((c) => c.ref),
+            classification: rules.map((r) => ({ rule: r.ref, disposition: "revised" })),
+            acceptanceCriteria: criteria,
+            metadata: { summary: note || input.request.summary },
+          }),
+        );
+        break;
+      }
+      case "read-change-context": {
+        const file = process.env.ARGUS_CHANGE_CONTEXT_FILE;
+        const dir = process.env.ARGUS_ARTIFACT_DIR;
+        if (!file) throw new Error("read-change-context without ARGUS_CHANGE_CONTEXT_FILE");
+        if (!dir) throw new Error("read-change-context without ARGUS_ARTIFACT_DIR");
+        writeFileAt(path.join(dir, rest), readFileSync(file, "utf8"));
         break;
       }
       case "read-context": {
