@@ -25,7 +25,8 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { readInstance } from "../sources/instances.js";
 import { readInvocation, readRun } from "../sources/runs.js";
@@ -50,6 +51,19 @@ import type { Harness } from "./e2eSupport.js";
 import type { Engine } from "../pipelineEngine.js";
 import type { PhaseFailurePayload, PhaseProgress } from "../sources/pipelineTypes.js";
 import type { Run } from "../sources/scheduleTypes.js";
+
+/** Commit everything in a harness working tree, so a run has a real head. */
+function commitAll(dir: string, message: string): void {
+  const git = (...args: string[]) => spawnSync("git", args, { cwd: dir, stdio: "ignore" });
+  git("add", "-A");
+  git("commit", "-q", "-m", message);
+}
+
+/** `git rev-parse HEAD`, for asserting that evidence names the run's commit. */
+function gitHead(dir: string): string {
+  const out = spawnSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" });
+  return out.stdout.trim();
+}
 
 // The suite owns these process-wide overrides; each harness re-sets them, and
 // nothing outside this file should inherit them.
@@ -1247,5 +1261,295 @@ test(
     assert.deepEqual(unrelated.root.conditions, ["superseded"]);
     assert.deepEqual(unrelated.executions, []);
     assert.deepEqual(unrelated.artifacts, []);
+  },
+);
+
+// ── 14. Business-rule discovery, end to end (Phase 5) ───────────────────────
+
+test(
+  "business-rule discovery: repository evidence becomes a canonical rule only at the gate, and reaches implementation and impact",
+  posixOnly,
+  async (t) => {
+    const h: Harness = await startHarness({ git: true });
+    t.after(() => h.close());
+    const knowledge = await import("../knowledge/store.js");
+    const impact = await import("../knowledge/impact.js");
+    const { formatClaimRef } = await import("../knowledge/kernel.js");
+
+    // The repository under investigation: a booking module whose Kobra
+    // adapter truncates the customer comment at 180 characters.
+    await mkdir(path.join(h.cwd, "src", "Booking"), { recursive: true });
+    await writeFile(
+      path.join(h.cwd, "src", "Booking", "Booking.cs"),
+      "public sealed class Booking\n{\n    public string Comment { get; set; }\n}\n",
+    );
+    await writeFile(
+      path.join(h.cwd, "src", "Booking", "KobraAdapter.cs"),
+      [
+        "public static class KobraAdapter",
+        "{",
+        "    public const int MaxCustomerCommentLength = 180;",
+        "",
+        "    public static string MapComment(string comment) =>",
+        "        comment.Length > MaxCustomerCommentLength",
+        "            ? comment.Substring(0, MaxCustomerCommentLength)",
+        "            : comment;",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    commitAll(h.cwd, "booking module");
+    const head = gitHead(h.cwd);
+
+    // What the discovery agent proposes: one business rule, one assumption
+    // behind it, and source-code evidence for both. Nothing canonical.
+    const source = (file: string, startLine: number, endLine: number, symbol?: string) => ({
+      type: "source-code",
+      path: `src/Booking/${file}`,
+      gitHead: head,
+      ...(symbol ? { symbol } : {}),
+      startLine,
+      endLine,
+    });
+    const discoveryDelta = JSON.stringify({
+      schemaVersion: 1,
+      claims: [
+        {
+          localId: "kobra-origin",
+          kind: "assumption",
+          statement:
+            "The 180-character ceiling is a Kobra integration constraint, not an arbitrary implementation choice.",
+        },
+        {
+          localId: "comment-limit",
+          kind: "business-rule",
+          statement: "Kobra bookings restrict customer comments to 180 characters.",
+        },
+      ],
+      evidence: [
+        {
+          claim: { local: "kobra-origin" },
+          source: source("KobraAdapter.cs", 3, 3, "KobraAdapter.MaxCustomerCommentLength"),
+          note: "the constant is named for Kobra, not for the UI",
+        },
+        {
+          claim: { local: "comment-limit" },
+          source: source("KobraAdapter.cs", 5, 8, "KobraAdapter.MapComment"),
+          note: "MapComment truncates at MaxCustomerCommentLength",
+        },
+        {
+          claim: { local: "comment-limit" },
+          source: source("Booking.cs", 1, 4, "Booking.Comment"),
+        },
+      ],
+      justifications: [
+        {
+          conclusion: { local: "comment-limit" },
+          premises: [{ local: "kobra-origin" }],
+          note: "a domain constraint rather than a display truncation",
+        },
+      ],
+      metadata: { summary: "One rule and the assumption it rests on, from the Kobra adapter." },
+    });
+
+    const def = await h.seed([
+      {
+        id: "discover",
+        name: "Discover",
+        gated: true,
+        discovery: { scope: { paths: ["src/Booking"], label: "Kobra booking" } },
+        steps: [
+          {
+            name: "investigate",
+            prompt: [
+              "Investigate the booking module for business rules.",
+              `FAKE: write-delta ${discoveryDelta}`,
+            ].join("\n"),
+          },
+        ],
+        capabilities: { filesystem: "read-only", tools: { allow: ["Read"] }, mcpServers: {} },
+      },
+      {
+        id: "plan",
+        name: "Plan",
+        needs: ["discover"],
+        knowledgeContext: { fromPhases: [{ phaseId: "discover", kinds: ["business-rule"] }] },
+        steps: [
+          {
+            name: "plan",
+            prompt: ["Plan the change.", "FAKE: read-context rules-as-planned.json"].join("\n"),
+          },
+        ],
+      },
+      {
+        id: "implement",
+        name: "Implement",
+        needs: ["plan"],
+        knowledgeContext: { fromPhases: [{ phaseId: "discover", kinds: ["business-rule"] }] },
+        steps: [
+          {
+            name: "code",
+            prompt: [
+              "Implement the validator.",
+              "FAKE: write-file src/Booking/CommentValidator.cs // enforces the comment limit",
+              "FAKE: consume-context src/Booking/CommentValidator.cs",
+            ].join("\n"),
+          },
+        ],
+      },
+    ]);
+
+    const inst = (await h.engine.start(def.id, "manual"))!;
+    const parked = await waitForInstance(
+      inst.id,
+      (i) => phaseOf(i, "discover").status === "awaiting-approval",
+      "discovery to park at its gate",
+    );
+    await h.engine.drain();
+
+    // ── Before approval: candidate, not canonical ──────────────────────────
+    assert.equal(parked.status, "awaiting-approval");
+    assert.equal(phaseOf(parked, "discover").steps[0].knowledgeDelta?.status, "staged");
+    assert.deepEqual(phaseOf(parked, "discover").discovery, {
+      candidates: 2,
+      newRules: 1,
+      revisions: 0,
+      assumptions: 1,
+      facts: 0,
+      constraints: 0,
+      conclusions: 0,
+      evidence: 3,
+      warnings: 0,
+      requiresReview: true,
+    });
+    const before = await knowledge.readLedger();
+    assert.deepEqual(before.claims, [], "no canonical claim exists before the gate opens");
+    assert.equal(phaseOf(parked, "plan").status, "pending");
+
+    // The agent was told the discovery contract and its bounded scope.
+    const discoverRun = runIdOf(phaseOf(parked, "discover"));
+    const seen = await readSeen(inst.id, "discover");
+    assert.match(seen.prompt, /Business-rule discovery/);
+    assert.match(seen.prompt, /Scope for this invocation \(Kobra booking\): src\/Booking/);
+    assert.match(seen.prompt, /is not itself one/);
+
+    // ── The review surface: everything a decision needs, no transcript ─────
+    const review = (await (
+      await fetch(`${h.baseUrl}/api/instances/${inst.id}/phases/discover/review`)
+    ).json()) as any;
+    assert.equal(review.status, "awaiting-approval");
+    assert.equal(review.canApprove, true);
+    assert.equal(review.discovery.newRules, 1);
+    const preview = review.knowledge[0];
+    assert.equal(preview.status, "staged");
+    assert.equal(preview.runId, discoverRun);
+    assert.equal(
+      preview.summary,
+      "One rule and the assumption it rests on, from the Kobra adapter.",
+    );
+    assert.deepEqual(
+      preview.proposedClaims.map((c: { ref: { display: string }; kind: string }) => [
+        c.ref.display,
+        c.kind,
+      ]),
+      [
+        ["local:kobra-origin", "assumption"],
+        ["local:comment-limit", "business-rule"],
+      ],
+    );
+    const rulePreview = preview.proposedClaims[1];
+    assert.equal(rulePreview.evidence.length, 2);
+    assert.equal(rulePreview.evidence[0].source.path, "src/Booking/KobraAdapter.cs");
+    assert.equal(rulePreview.evidence[0].source.gitHead, head);
+    assert.equal(rulePreview.justifications[0].premises[0].display, "local:kobra-origin");
+    assert.deepEqual(preview.warnings, []);
+    // The preview never pretends a canonical id exists yet.
+    assert.doesNotMatch(JSON.stringify(preview.proposedClaims), /RULE-/);
+
+    // ── Approve: the candidates become canonical, atomically ───────────────
+    assert.equal((await h.engine.approve(inst.id)).code, 200);
+    const done = await waitForInstance(
+      inst.id,
+      (i) => i.status !== "running" && i.status !== "awaiting-approval",
+      "the pipeline to settle",
+    );
+    await h.engine.drain();
+    assert.equal(done.status, "succeeded", JSON.stringify(done.phases.map((p) => p.payload)));
+
+    const ledger = await knowledge.readLedger();
+    const rule = ledger.claims.find((c) => c.kind === "business-rule")!;
+    const assumption = ledger.claims.find((c) => c.kind === "assumption")!;
+    assert.ok(rule && assumption);
+    assert.match(rule.id, /^RULE-/);
+    assert.equal(rule.revision, 1);
+    assert.deepEqual(rule.producedBy, {
+      runId: discoverRun,
+      instanceId: inst.id,
+      phaseId: "discover",
+    });
+    // The assumption survives as its own claim, with the derivation intact.
+    assert.deepEqual(ledger.justifications[0].conclusion, { id: rule.id, revision: 1 });
+    assert.deepEqual(ledger.justifications[0].premises, [{ id: assumption.id, revision: 1 }]);
+    // Evidence is provenance, not a copy of the source.
+    assert.equal(ledger.evidence.length, 3);
+    assert.doesNotMatch(JSON.stringify(ledger), /Substring/);
+    assert.equal(phaseOf(done, "discover").discovery?.requiresReview, false);
+
+    // ── The same-instance handoff: exactly the rule, by exact ref ──────────
+    const ruleRef = formatClaimRef({ id: rule.id, revision: 1 });
+    const planRun = runIdOf(phaseOf(done, "plan"));
+    assert.deepEqual((await readInvocation(planRun))!.knowledgeContext?.claims, [
+      { id: rule.id, revision: 1 },
+    ]);
+    const planned = JSON.parse(
+      await readFile(path.join(artifactDirFor(inst.id, "plan"), "rules-as-planned.json"), "utf8"),
+    ) as { claims: { ref: string; kind: string }[] };
+    assert.deepEqual(
+      planned.claims.map((c) => [c.ref, c.kind]),
+      [[ruleRef, "business-rule"]],
+    );
+    // The assumption was NOT handed on: the author chose which kinds flow.
+    assert.equal(planned.claims.length, 1);
+
+    // ── Implementation consumes it and records what it built ───────────────
+    const implRun = runIdOf(phaseOf(done, "implement"));
+    assert.deepEqual((await readInvocation(implRun))!.knowledgeContext?.claims, [
+      { id: rule.id, revision: 1 },
+    ]);
+    assert.deepEqual(
+      ledger.consumptions.map((c) => [formatClaimRef(c.claim), c.source, c.execution.runId]),
+      [[ruleRef, "supplied-context", implRun]],
+    );
+    assert.deepEqual(
+      ledger.artifacts.map((a) => [a.artifact.path, a.execution.runId]),
+      [["src/Booking/CommentValidator.cs", implRun]],
+    );
+
+    // ── Later: the rule is revised. Impact reaches the artifact. ───────────
+    await knowledge.createRevision(
+      rule.id,
+      {
+        statement: "Kobra bookings restrict customer comments to 500 characters.",
+        revisionNote: "Kobra 4.2 raised the limit",
+      },
+      new Date(),
+    );
+    const set = impact.analyzeImpact(await knowledge.readLedger(), { id: rule.id, revision: 1 });
+    assert.deepEqual(set.root.conditions, ["superseded"]);
+    assert.deepEqual(
+      set.executions.map((x) => x.execution.runId),
+      [implRun],
+    );
+    assert.deepEqual(
+      set.artifacts.map((a) => a.artifact.path),
+      ["src/Booking/CommentValidator.cs"],
+    );
+    // The historical evidence still names the commit it was gathered at: a
+    // later revision creates a record, it never rewrites one.
+    assert.equal(
+      (ledger.evidence[0].source as { gitHead?: string }).gitHead,
+      head,
+      "source evidence stays bound to the commit discovery ran on",
+    );
   },
 );

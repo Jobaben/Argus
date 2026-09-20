@@ -73,6 +73,13 @@ import {
 } from "./knowledge/context.js";
 import type { ResolvedKnowledgeContext } from "./knowledge/context.js";
 import { formatClaimRef, suppliedContextOf } from "./knowledge/kernel.js";
+import {
+  checkDiscoveryDelta,
+  discoveryInstruction,
+  previewKnowledgeDelta,
+  summarizeDiscovery,
+  type DiscoveryContext,
+} from "./knowledge/discovery.js";
 import { readLedger } from "./knowledge/store.js";
 import { markPipelineStarted, readPipelines } from "./sources/pipelines.js";
 import { accumulateRun } from "./sources/totals.js";
@@ -1044,7 +1051,10 @@ export function createEngine(deps: EngineDeps): Engine {
       if (contextSpec && ledgerSnapshot) {
         try {
           knowledgeContext = {
-            resolved: resolveKnowledgeContext(ledgerSnapshot, contextSpec, startedAt),
+            resolved: resolveKnowledgeContext(ledgerSnapshot, contextSpec, startedAt, {
+              instanceId: inst.id,
+              phaseStatus: (id) => inst.phases.find((ph) => ph.id === id)?.status ?? null,
+            }),
           };
         } catch (e) {
           knowledgeContext = {
@@ -1094,6 +1104,7 @@ export function createEngine(deps: EngineDeps): Engine {
           rendered.prompt +
           (publishes ? resultInstruction(phaseDef.result) : "") +
           artifactInstruction(phaseDef.checks, own) +
+          discoveryInstruction(phaseDef.discovery) +
           memoryInstruction(memoryPolicy) +
           (knowledgeContext && "resolved" in knowledgeContext
             ? knowledgeContextInstruction(knowledgeContext.resolved.supplied)
@@ -1143,6 +1154,11 @@ export function createEngine(deps: EngineDeps): Engine {
       ...(candidate === undefined ? {} : { workspace }),
     }));
     progress.status = "running";
+    // A fresh attempt starts with no discovery summary: the previous
+    // attempt's counts describe candidates that are already superseded, and
+    // leaving them on the board would say "1 rule waiting on you" about a
+    // proposal nobody can accept any more.
+    delete progress.discovery;
     await saveInstance(inst);
     void journal(inst.id, {
       at: startedAt,
@@ -2371,6 +2387,24 @@ export function createEngine(deps: EngineDeps): Engine {
     const missing = await verifyDeltaArtifacts(def, phase, runId, delta);
     if (missing) return reject(missing, delta);
 
+    // Business-rule discovery (Phase 5): the deterministic half of the
+    // discovery contract. Every business rule must carry evidence, and every
+    // source-code evidence path must be safe, in the declared scope, at the
+    // commit Argus recorded for this run, and actually there. Fail-closed:
+    // a rule nobody can go and check is worse than no rule. What the checks
+    // deliberately do NOT decide is whether the rule the agent read out of
+    // the code is the rule the business has — that is what the gate is for.
+    const phaseDef = def.phases.find((pd) => pd.id === phaseId);
+    if (phaseDef?.discovery) {
+      const verdict = await checkDiscoveryDelta(
+        delta,
+        await readLedger(),
+        await discoveryContextFor(def, phase, runId, phaseDef.discovery),
+        supplied,
+      );
+      if (verdict.refusal) return reject(verdict.refusal, delta);
+    }
+
     const proposal: DeltaProposal = {
       id: base.id,
       delta,
@@ -2392,6 +2426,7 @@ export function createEngine(deps: EngineDeps): Engine {
     }
     await writeDeltaRecord({ ...base, status: "staged", delta });
     step.knowledgeDelta = { id: base.id, status: "staged" };
+    if (phaseDef?.discovery) await refreshDiscoverySummary(def, phase);
     void journal(inst.id, {
       at,
       kind: "knowledge.staged",
@@ -2401,6 +2436,78 @@ export function createEngine(deps: EngineDeps): Engine {
       detail: `${base.id}: ${describeDelta(delta)}`,
     });
     return { ok: true, staged: step.knowledgeDelta };
+  }
+
+  /**
+   * What a discovery check needs to know about the run: the tree it worked in
+   * and the commit Argus recorded for it.
+   *
+   * Read from the invocation record, with the phase definition as the
+   * fallback — the same precedence {@link verifyDeltaArtifacts} uses for the
+   * `repository` root, and for the same reason: the record is what the run
+   * actually got, the definition is only where it would have gone. A run with
+   * no recorded head leaves `gitHead` null, which makes an agent-supplied
+   * commit unverifiable rather than wrong: Argus refuses what it can
+   * disprove, never what it merely cannot confirm.
+   */
+  async function discoveryContextFor(
+    def: PipelineDefinition,
+    phase: PhaseProgress,
+    runId: string,
+    policy: NonNullable<PhaseDef["discovery"]>,
+  ): Promise<DiscoveryContext> {
+    const invocation = await readInvocation(runId);
+    const phaseDef = def.phases.find((p) => p.id === phase.id);
+    return {
+      policy,
+      repoRoot: invocation?.workspace?.path ?? invocation?.cwd ?? phaseDef?.cwd ?? null,
+      gitHead: invocation?.gitHead ?? null,
+    };
+  }
+
+  /**
+   * Recompute a discovery phase's {@link DiscoverySummary} from the attempt's
+   * staged deltas (Phase 5 §17).
+   *
+   * Counts only — routing, status and observability. The candidates
+   * themselves stay in the staged KnowledgeDelta, which is the one
+   * authoritative form of the proposal; duplicating them onto the instance
+   * would create a second copy that could drift from it.
+   *
+   * `requiresReview` is true exactly while the candidates are not canonical,
+   * so the board can say "4 candidates, waiting on you" and then "4
+   * candidates, committed" without anyone reading the ledger.
+   */
+  async function refreshDiscoverySummary(
+    def: PipelineDefinition,
+    phase: PhaseProgress,
+  ): Promise<void> {
+    const ledger = await readLedger();
+    const previews = [];
+    const deltas = [];
+    for (const step of phase.steps) {
+      if (!step.runId || !step.knowledgeDelta) continue;
+      const record = await readDeltaRecord(step.runId);
+      if (!record?.delta || record.attempt !== phase.attempt) continue;
+      const phaseDef = def.phases.find((p) => p.id === phase.id);
+      const warnings = phaseDef?.discovery
+        ? (
+            await checkDiscoveryDelta(
+              record.delta,
+              ledger,
+              await discoveryContextFor(def, phase, step.runId, phaseDef.discovery),
+              record.supplied,
+            )
+          ).warnings
+        : undefined;
+      previews.push(previewKnowledgeDelta(record, ledger, warnings));
+      deltas.push(record.delta);
+    }
+    phase.discovery = summarizeDiscovery(
+      previews,
+      deltas,
+      phase.knowledge?.status !== "applied" && previews.some((p) => p.status === "staged"),
+    );
   }
 
   /**
@@ -2512,14 +2619,40 @@ export function createEngine(deps: EngineDeps): Engine {
     // when the run finished, not that they still do after checks ran and a
     // gate waited. One missing artifact refuses the whole attempt's commit
     // before the ledger is touched, so no sibling's delta lands without it.
+    const phaseDef = def.phases.find((pd) => pd.id === phase.id);
+    const refuseAll = async (reason: string): Promise<KnowledgeCommitVerdict> => {
+      for (const q of proposals) {
+        await updateDeltaStatus(q.execution.runId, "rejected", { at, reason });
+      }
+      return { ok: false, reason };
+    };
     for (const p of proposals) {
       const missing = await verifyDeltaArtifacts(def, phase, p.execution.runId, p.delta);
       if (missing) {
-        const reason = `KnowledgeDelta commit refused: delta ${p.id} (run ${p.execution.runId}): artifact: ${missing}`;
-        for (const q of proposals) {
-          await updateDeltaStatus(q.execution.runId, "rejected", { at, reason });
+        return refuseAll(
+          `KnowledgeDelta commit refused: delta ${p.id} (run ${p.execution.runId}): artifact: ${missing}`,
+        );
+      }
+      // The discovery evidence, checked again at the commit boundary. Intake
+      // proved the source files existed when the run finished, not that they
+      // still do after checks ran and a person deliberated at the gate. A
+      // rule whose evidence has gone missing in the meantime is refused
+      // rather than committed as provenance for a file that is not there —
+      // the same discipline the artifact check above applies, for the same
+      // reason. One refusal refuses the whole attempt's commit, so no
+      // sibling's delta lands without it.
+      if (phaseDef?.discovery) {
+        const verdict = await checkDiscoveryDelta(
+          p.delta,
+          await readLedger(),
+          await discoveryContextFor(def, phase, p.execution.runId, phaseDef.discovery),
+          p.supplied,
+        );
+        if (verdict.refusal) {
+          return refuseAll(
+            `KnowledgeDelta commit refused: delta ${p.id} (run ${p.execution.runId}): ${verdict.refusal}`,
+          );
         }
-        return { ok: false, reason };
       }
     }
     try {
@@ -2569,6 +2702,11 @@ export function createEngine(deps: EngineDeps): Engine {
       const verdict = await commitPhaseKnowledge(def, out.instance, phase);
       const next = applyKnowledgeCommit(def, out.instance, phaseId, verdict, nowISO());
       if (!next.knowledgeApplied) continue;
+      // The candidates are canonical now (or refused): the phase's discovery
+      // summary is recomputed so `requiresReview` stops saying a decision is
+      // outstanding once it has been made.
+      const settledPhase = next.instance.phases.find((p) => p.id === phaseId);
+      if (settledPhase?.discovery) await refreshDiscoverySummary(def, settledPhase);
       void journal(out.instance.id, {
         at: nowISO(),
         kind: verdict.ok ? "knowledge.applied" : "knowledge.rejected",

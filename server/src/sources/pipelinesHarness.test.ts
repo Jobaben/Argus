@@ -1123,3 +1123,157 @@ test("knowledgeContext: malformed selectors and duplicate claim ids are refused 
     /phase 0: step "s": knowledgeContext.claims must name at least one claim/,
   );
 });
+
+// ── discovery + fromPhases: business-rule discovery authoring (Phase 5) ─────
+
+const discoveryPhases = (over: Record<string, unknown> = {}) => [
+  {
+    id: "discover",
+    name: "Discover",
+    cwd: home,
+    gated: true,
+    steps: [{ name: "investigate", prompt: "look" }],
+    ...over,
+  },
+  {
+    id: "plan",
+    name: "Plan",
+    cwd: home,
+    gated: false,
+    needs: ["discover"],
+    steps: [{ name: "plan", prompt: "plan" }],
+  },
+];
+
+test("discovery: a scope is accepted, normalized and deduplicated; absent by default", async () => {
+  const m = await fresh();
+  const plain = m.validatePipelineInput(goodInput({ phases: discoveryPhases() }));
+  assert.equal("discovery" in plain.phases[0], false);
+
+  const withScope = m.validatePipelineInput(
+    goodInput({
+      phases: discoveryPhases({
+        discovery: {
+          scope: {
+            paths: ["src/Booking/", "src/Booking", "src/Kobra"],
+            label: "Kobra booking",
+            note: "Focus on the comment length.",
+          },
+          evidence: "required",
+        },
+      }),
+    }),
+  );
+  assert.deepEqual(withScope.phases[0].discovery, {
+    scope: {
+      paths: ["src/Booking", "src/Kobra"],
+      label: "Kobra booking",
+      note: "Focus on the comment length.",
+    },
+    evidence: "required",
+  });
+  // "." is the whole tree, and has to be written out.
+  const whole = m.validatePipelineInput(
+    goodInput({ phases: discoveryPhases({ discovery: { scope: { paths: ["."] } } }) }),
+  );
+  assert.deepEqual(whole.phases[0].discovery, { scope: { paths: ["."] } });
+});
+
+test("discovery: an unsafe or empty scope is a 400-class authoring error", async () => {
+  const m = await fresh();
+  const cases: [unknown, RegExp][] = [
+    [{}, /discovery.scope must be an object/],
+    [{ scope: { paths: [] } }, /must name at least one repository-relative path/],
+    [{ scope: { paths: ["../outside"] } }, /repository-relative POSIX path/],
+    [{ scope: { paths: ["/etc"] } }, /repository-relative POSIX path/],
+    [{ scope: { paths: ["src"], extra: 1 } }, /discovery.scope has unknown key "extra"/],
+    [{ scope: { paths: ["src"] }, evidence: "maybe" }, /discovery.evidence must be/],
+    [{ scope: { paths: ["src"] }, mode: "auto" }, /discovery has unknown key "mode"/],
+    ["src", /discovery must be an object/],
+  ];
+  for (const [discovery, re] of cases) {
+    assert.throws(
+      () => m.validatePipelineInput(goodInput({ phases: discoveryPhases({ discovery }) })),
+      (e: unknown) => e instanceof m.PipelineValidationError && re.test((e as Error).message),
+      `discovery: ${JSON.stringify(discovery)}`,
+    );
+  }
+});
+
+test("fromPhases: accepted when the named phase is a dependency, normalized to the object form", async () => {
+  const m = await fresh();
+  const phases = discoveryPhases();
+  (phases[1] as Record<string, unknown>).knowledgeContext = {
+    fromPhases: [{ phaseId: "discover", kinds: ["business-rule", "constraint"] }],
+  };
+  const def = m.validatePipelineInput(goodInput({ phases }));
+  assert.deepEqual(def.phases[1].knowledgeContext, {
+    fromPhases: [{ phaseId: "discover", kinds: ["business-rule", "constraint"] }],
+  });
+
+  // The linear shorthand counts as a dependency too: with no `needs` anywhere,
+  // every phase implicitly needs the one before it.
+  const linear = m.validatePipelineInput(
+    goodInput({
+      phases: [
+        { id: "discover", name: "D", cwd: home, gated: true, steps: [{ name: "s", prompt: "p" }] },
+        {
+          id: "plan",
+          name: "P",
+          cwd: home,
+          gated: false,
+          steps: [{ name: "s", prompt: "p", knowledgeContext: { fromPhases: ["discover"] } }],
+        },
+      ],
+    }),
+  );
+  assert.deepEqual(linear.phases[1].steps[0].knowledgeContext, {
+    fromPhases: [{ phaseId: "discover" }],
+  });
+});
+
+test("fromPhases: an unknown phase, its own phase, or one it does not depend on is refused", async () => {
+  const m = await fresh();
+  const withContext = (knowledgeContext: unknown, onIndex = 1) => {
+    const phases = discoveryPhases();
+    (phases[onIndex] as Record<string, unknown>).knowledgeContext = knowledgeContext;
+    return goodInput({ phases });
+  };
+  assert.throws(
+    () => m.validatePipelineInput(withContext({ fromPhases: ["ghost"] })),
+    /phase "plan": knowledgeContext.fromPhases names unknown phase "ghost"/,
+  );
+  assert.throws(
+    () => m.validatePipelineInput(withContext({ fromPhases: ["plan"] })),
+    /cannot name its own phase/,
+  );
+  // A phase that merely sits earlier in the list, with no dependency edge, has
+  // no guaranteed ordering — so the handoff would be a race.
+  assert.throws(
+    () =>
+      m.validatePipelineInput(
+        goodInput({
+          phases: [
+            {
+              id: "a",
+              name: "A",
+              cwd: home,
+              gated: false,
+              needs: [],
+              steps: [{ name: "s", prompt: "p" }],
+            },
+            {
+              id: "b",
+              name: "B",
+              cwd: home,
+              gated: false,
+              needs: [],
+              steps: [{ name: "s", prompt: "p" }],
+              knowledgeContext: { fromPhases: ["a"] },
+            },
+          ],
+        }),
+      ),
+    /is not a dependency of this phase; add it to needs/,
+  );
+});

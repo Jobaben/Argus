@@ -33,20 +33,25 @@ import { createHash } from "node:crypto";
 import { chmod, readFile } from "node:fs/promises";
 import path from "node:path";
 import type {
+  ClaimKind,
   ClaimRef,
   ContextIntegrityResult,
   KnowledgeContext,
   KnowledgeContextClaim,
   KnowledgeContextSelector,
   KnowledgeContextSpec,
+  PhaseProducedSelector,
   SuppliedConsumedComparison,
 } from "@argus/contracts";
 import { atomicWriteFile } from "../sources/atomicWrite.js";
 import { runInvocationDir } from "../sources/runs.js";
 import {
   CLAIM_ID_RE,
+  CLAIM_KINDS,
+  EXECUTION_ID_RE,
   KnowledgeValidationError,
   activeRevision,
+  claimsProducedByPhase,
   evidenceOf,
   formatClaimRef,
   getClaim,
@@ -61,7 +66,13 @@ import {
 /** Why a spec or a resolution was refused. `spec` is an authoring error
  *  (refused when the pipeline is saved); the rest are ledger-dependent and
  *  refuse the *launch* as a `configuration` failure. */
-export type KnowledgeContextErrorCode = "spec" | "unknown-claim" | "unknown-revision";
+export type KnowledgeContextErrorCode =
+  | "spec"
+  | "unknown-claim"
+  | "unknown-revision"
+  | "unknown-phase"
+  | "phase-not-accepted"
+  | "too-many-claims";
 
 export class KnowledgeContextError extends KnowledgeValidationError {
   constructor(
@@ -140,31 +151,115 @@ export function parseKnowledgeContextSpec(raw: unknown): KnowledgeContextSpec {
   }
   const r = raw as Record<string, unknown>;
   for (const k of Object.keys(r)) {
-    if (k !== "claims") fail("spec", `knowledgeContext has unknown key "${k}"`);
+    if (k !== "claims" && k !== "fromPhases") {
+      fail("spec", `knowledgeContext has unknown key "${k}"`);
+    }
   }
-  if (!Array.isArray(r.claims)) fail("spec", "knowledgeContext.claims must be a list");
-  if (r.claims.length === 0) {
+  const hasClaims = r.claims !== undefined && r.claims !== null;
+  const hasPhases = r.fromPhases !== undefined && r.fromPhases !== null;
+  if (!hasClaims && !hasPhases) {
     fail(
       "spec",
-      "knowledgeContext.claims must name at least one claim (omit knowledgeContext for none)",
+      "knowledgeContext must name claims or fromPhases (omit knowledgeContext for no semantic context)",
     );
   }
-  if (r.claims.length > CONTEXT_MAX_CLAIMS) {
-    fail("spec", `knowledgeContext.claims may name at most ${CONTEXT_MAX_CLAIMS} claims`);
-  }
-  const claims = r.claims.map((c, i) => parseSelector(c, `knowledgeContext.claims[${i}]`));
-  const seen = new Map<string, number>();
-  claims.forEach((sel, i) => {
-    const first = seen.get(sel.id);
-    if (first !== undefined) {
+  const out: KnowledgeContextSpec = {};
+
+  if (hasClaims) {
+    if (!Array.isArray(r.claims)) fail("spec", "knowledgeContext.claims must be a list");
+    if (r.claims.length === 0) {
       fail(
         "spec",
-        `knowledgeContext.claims[${i}]: ${sel.id} is already selected by claims[${first}]; each claim id may appear once`,
+        "knowledgeContext.claims must name at least one claim (omit knowledgeContext for none)",
       );
     }
-    seen.set(sel.id, i);
-  });
-  return { claims };
+    if (r.claims.length > CONTEXT_MAX_CLAIMS) {
+      fail("spec", `knowledgeContext.claims may name at most ${CONTEXT_MAX_CLAIMS} claims`);
+    }
+    const claims = r.claims.map((c, i) => parseSelector(c, `knowledgeContext.claims[${i}]`));
+    const seen = new Map<string, number>();
+    claims.forEach((sel, i) => {
+      const first = seen.get(sel.id);
+      if (first !== undefined) {
+        fail(
+          "spec",
+          `knowledgeContext.claims[${i}]: ${sel.id} is already selected by claims[${first}]; each claim id may appear once`,
+        );
+      }
+      seen.set(sel.id, i);
+    });
+    out.claims = claims;
+  }
+
+  if (hasPhases) {
+    if (!Array.isArray(r.fromPhases)) fail("spec", "knowledgeContext.fromPhases must be a list");
+    if (r.fromPhases.length === 0) {
+      fail("spec", "knowledgeContext.fromPhases must name at least one phase");
+    }
+    if (r.fromPhases.length > CONTEXT_MAX_PHASES) {
+      fail("spec", `knowledgeContext.fromPhases may name at most ${CONTEXT_MAX_PHASES} phases`);
+    }
+    const fromPhases = r.fromPhases.map((f, i) =>
+      parsePhaseSelector(f, `knowledgeContext.fromPhases[${i}]`),
+    );
+    const seen = new Map<string, number>();
+    fromPhases.forEach((sel, i) => {
+      const first = seen.get(sel.phaseId);
+      if (first !== undefined) {
+        fail(
+          "spec",
+          `knowledgeContext.fromPhases[${i}]: phase "${sel.phaseId}" is already selected by fromPhases[${first}]`,
+        );
+      }
+      seen.set(sel.phaseId, i);
+    });
+    out.fromPhases = fromPhases;
+  }
+  return out;
+}
+
+/** Phases one spec may draw from. Small on purpose: a step that needs a
+ *  dozen upstream phases' output is not selecting, it is dumping. */
+export const CONTEXT_MAX_PHASES = 8;
+
+/**
+ * One `fromPhases` entry: `"discover-rules"` or
+ * `{ phaseId, kinds?: ClaimKind[] }`. Normalized to the object form, and the
+ * kinds list is deduplicated but not reordered, so what a definition persists
+ * does not depend on how it was spelled.
+ */
+function parsePhaseSelector(raw: unknown, ctx: string): PhaseProducedSelector {
+  if (typeof raw === "string") return { phaseId: phaseId(raw.trim(), ctx) };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    fail("spec", `${ctx} must be a phase id or an object { phaseId, kinds }`);
+  }
+  const r = raw as Record<string, unknown>;
+  for (const k of Object.keys(r)) {
+    if (k !== "phaseId" && k !== "kinds") fail("spec", `${ctx} has unknown key "${k}"`);
+  }
+  const out: PhaseProducedSelector = {
+    phaseId: phaseId(typeof r.phaseId === "string" ? r.phaseId.trim() : "", `${ctx}.phaseId`),
+  };
+  if (r.kinds !== undefined && r.kinds !== null) {
+    if (!Array.isArray(r.kinds)) fail("spec", `${ctx}.kinds must be a list of claim kinds`);
+    if (r.kinds.length === 0) {
+      fail("spec", `${ctx}.kinds must name at least one kind (omit it for every kind)`);
+    }
+    const kinds: ClaimKind[] = [];
+    for (const [i, k] of r.kinds.entries()) {
+      if (typeof k !== "string" || !CLAIM_KINDS.includes(k as ClaimKind)) {
+        fail("spec", `${ctx}.kinds[${i}] must be one of ${CLAIM_KINDS.join(" | ")}`);
+      }
+      if (!kinds.includes(k as ClaimKind)) kinds.push(k as ClaimKind);
+    }
+    out.kinds = kinds;
+  }
+  return out;
+}
+
+function phaseId(raw: string, ctx: string): string {
+  if (!raw || !EXECUTION_ID_RE.test(raw)) fail("spec", `${ctx} must be a phase id`);
+  return raw;
 }
 
 /** The spec a step's run receives: its own, else its phase's, else none. A
@@ -204,26 +299,16 @@ export function resolveKnowledgeContext(
   ledger: KnowledgeLedger,
   spec: KnowledgeContextSpec,
   now: string,
+  scope?: KnowledgeContextScope,
 ): ResolvedKnowledgeContext {
   const selection: NonNullable<KnowledgeContext["metadata"]>["selection"] = [];
   const claims: KnowledgeContextClaim[] = [];
   const supplied: ClaimRef[] = [];
-  spec.claims.forEach((sel, i) => {
-    const where = `knowledgeContext.claims[${i}] (${formatSelector(sel)})`;
-    const claim =
-      sel.revision === "active"
-        ? activeRevision(ledger, sel.id)
-        : getClaim(ledger, { id: sel.id, revision: sel.revision });
-    if (!claim) {
-      if (!activeRevision(ledger, sel.id)) {
-        fail("unknown-claim", `${where}: claim ${sel.id} does not exist in the ledger`);
-      }
-      fail(
-        "unknown-revision",
-        `${where}: revision v${sel.revision} of ${sel.id} does not exist in the ledger`,
-      );
-    }
-    const ref: ClaimRef = { id: claim.id, revision: claim.revision };
+  /** Claim ids already selected. A context is a set keyed by id (§ spec). */
+  const taken = new Set<string>();
+
+  const project = (ref: ClaimRef) => {
+    const claim = getClaim(ledger, ref)!;
     const next = supersededBy(ledger, ref);
     const evidence = evidenceOf(ledger, ref).map((e) => ({
       direction: e.direction,
@@ -245,8 +330,65 @@ export function resolveKnowledgeContext(
       ...(evidence.length ? { evidence } : {}),
     });
     supplied.push(ref);
+    taken.add(ref.id);
+  };
+
+  (spec.claims ?? []).forEach((sel, i) => {
+    const where = `knowledgeContext.claims[${i}] (${formatSelector(sel)})`;
+    const claim =
+      sel.revision === "active"
+        ? activeRevision(ledger, sel.id)
+        : getClaim(ledger, { id: sel.id, revision: sel.revision });
+    if (!claim) {
+      if (!activeRevision(ledger, sel.id)) {
+        fail("unknown-claim", `${where}: claim ${sel.id} does not exist in the ledger`);
+      }
+      fail(
+        "unknown-revision",
+        `${where}: revision v${sel.revision} of ${sel.id} does not exist in the ledger`,
+      );
+    }
+    const ref: ClaimRef = { id: claim.id, revision: claim.revision };
+    project(ref);
     selection.push({ selector: sel, resolved: ref });
   });
+
+  (spec.fromPhases ?? []).forEach((sel, i) => {
+    const where = `knowledgeContext.fromPhases[${i}] (${sel.phaseId})`;
+    if (!scope) {
+      fail(
+        "spec",
+        `${where}: a fromPhases selector can only be resolved inside a pipeline instance`,
+      );
+    }
+    const status = scope.phaseStatus(sel.phaseId);
+    if (status === null) {
+      fail("unknown-phase", `${where}: this pipeline has no phase "${sel.phaseId}"`);
+    }
+    if (!ACCEPTED_PHASE_STATUS.has(status)) {
+      fail(
+        "phase-not-accepted",
+        `${where}: phase "${sel.phaseId}" is ${status}; a fromPhases selector reads only what an accepted phase committed`,
+      );
+    }
+    for (const ref of producedRefs(ledger, scope.instanceId, sel)) {
+      if (taken.has(ref.id)) continue;
+      project(ref);
+      selection.push({
+        selector: { id: ref.id, revision: ref.revision },
+        resolved: ref,
+        fromPhase: sel.phaseId,
+      });
+    }
+  });
+
+  if (claims.length > CONTEXT_MAX_CLAIMS) {
+    fail(
+      "too-many-claims",
+      `knowledgeContext resolved to ${claims.length} claims; a context may carry at most ${CONTEXT_MAX_CLAIMS}. Narrow the fromPhases selector with kinds.`,
+    );
+  }
+
   const context: KnowledgeContext = {
     schemaVersion: 1,
     generatedAt: now,
@@ -256,6 +398,65 @@ export function resolveKnowledgeContext(
   const text = serializeKnowledgeContext(context);
   return { context, supplied, text, sha256: sha256Hex(text) };
 }
+
+/**
+ * The exact revisions one `fromPhases` selector resolves to, from the applied
+ * delta provenance ({@link claimsProducedByPhase}) — never from a staged
+ * record and never by scanning the ledger for claims that name the phase.
+ *
+ * One revision per logical id: if the phase committed RULE-42:v1 and later,
+ * in the same accepted attempt, RULE-42:v2, the *highest* revision the phase
+ * produced is what a downstream step receives, because that is the state the
+ * phase actually left the claim in. The order is first-appearance order, so
+ * the context file reads in the order the phase created things.
+ */
+function producedRefs(
+  ledger: KnowledgeLedger,
+  instanceId: string,
+  sel: PhaseProducedSelector,
+): ClaimRef[] {
+  const order: string[] = [];
+  const best = new Map<string, ClaimRef>();
+  for (const ref of claimsProducedByPhase(ledger, instanceId, sel.phaseId)) {
+    const claim = getClaim(ledger, ref);
+    if (!claim) continue;
+    if (sel.kinds && !sel.kinds.includes(claim.kind)) continue;
+    const held = best.get(ref.id);
+    if (!held) order.push(ref.id);
+    if (!held || ref.revision > held.revision) best.set(ref.id, ref);
+  }
+  return order.map((id) => best.get(id)!);
+}
+
+/**
+ * The instance a `fromPhases` selector is resolved inside. Supplied by the
+ * engine at phase-attempt planning; absent for a plain ledger resolution
+ * (a test, an API preview), in which case a `fromPhases` selector is refused
+ * rather than silently resolving to nothing.
+ */
+export interface KnowledgeContextScope {
+  instanceId: string;
+  /** The named phase's status on this instance, or null when the pipeline has
+   *  no such phase. */
+  phaseStatus: (phaseId: string) => string | null;
+}
+
+/**
+ * Which phase statuses a `fromPhases` selector may read from.
+ *
+ * `succeeded` is the ordinary case — the phase crossed every acceptance
+ * condition and its delta committed. `skipped` is admitted because a routed
+ * DAG may legitimately bypass discovery and still run the phases after it;
+ * the phase committed nothing, so the selector contributes nothing, which is
+ * the honest answer rather than a refused launch.
+ *
+ * Everything else refuses the launch as a `configuration` failure. In
+ * particular `awaiting-approval`: a discovery phase parked at its gate has
+ * staged candidates and committed nothing, and a downstream step that quietly
+ * received an empty context in that state would look like it had been told
+ * there was no knowledge, rather than that the knowledge was not accepted yet.
+ */
+const ACCEPTED_PHASE_STATUS = new Set(["succeeded", "skipped"]);
 
 /** The one serialization of a context: pretty JSON, trailing newline. The
  *  hash on the invocation record is over exactly these bytes. */

@@ -6,6 +6,7 @@ import type {
   ClaimsResponse,
   ConsumptionsResponse,
   ExecutionContextReport,
+  KnowledgeDeltaPreview,
   KnowledgeDeltasResponse,
   SuppliedToReport,
 } from "@argus/contracts";
@@ -32,6 +33,7 @@ import {
   type KnowledgeLedger,
 } from "./kernel.js";
 import { analyzeImpact } from "./impact.js";
+import { previewKnowledgeDelta } from "./discovery.js";
 import { readDeltaRecord, readDeltaRecordById } from "./staging.js";
 import {
   createClaim,
@@ -246,6 +248,26 @@ export function knowledgeRoutes(): Hono {
     const record = await readDeltaRecordById(id);
     if (!record) return c.json({ error: "not found" }, 404);
     return c.json(record);
+  });
+
+  /**
+   * The deterministic candidate preview of one delta (Phase 5): what would
+   * become canonical if its phase were approved, with the ledger's current
+   * state for anything it revises and every structural warning.
+   *
+   * Derived per read and read-only — the same projection the gate review
+   * embeds, exposed on its own so a reviewer, `argus tail` or a script can
+   * inspect a candidate by delta id. It carries no filesystem warnings: those
+   * need the run's working tree, which the engine has at intake and commit
+   * and this route deliberately does not go looking for.
+   */
+  routes.get("/deltas/:id/preview", async (c) => {
+    const id = c.req.param("id");
+    if (!CLAIM_ID_RE.test(id)) return c.json({ error: "not found" }, 404);
+    const record = await readDeltaRecordById(id);
+    if (!record) return c.json({ error: "not found" }, 404);
+    const body: KnowledgeDeltaPreview = previewKnowledgeDelta(record, await readLedger());
+    return c.json(body);
   });
 
   /** The application result alone: local id → canonical identity, and every

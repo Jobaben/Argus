@@ -151,6 +151,17 @@ malformed or refusable document fails the step under `"knowledge-delta"`
 before any of the rungs below it, so an agent's proposal is never silently
 dropped.
 
+On a phase that declares `discovery` (business-rule discovery,
+KNOWLEDGE-LEDGER.md §14), the same intake applies the discovery invariants:
+every proposed business rule must carry supporting evidence, and every
+`source-code` evidence path must be repository-relative, inside the phase's
+declared scope, at the commit Argus recorded for the run, and point at a file
+that is actually there. A failure is a `"knowledge-delta"` refusal like any
+other. The source-path and existence checks run **again** at the commit
+boundary, exactly as the declared-artifact checks do, so a file deleted while
+a person deliberated at the gate refuses the commit rather than being recorded
+as provenance for something that is gone.
+
 Ahead of even that, a run Argus supplied a KnowledgeContext to has its context
 file re-hashed against the value recorded at launch. Changed or missing bytes
 fail the step under `"knowledge-context-integrity"` **before** the delta is
@@ -163,16 +174,16 @@ not tampering — the file is untouched and integrity passes (KNOWLEDGE-LEDGER.m
 
 `PhaseFailureClass` (in `@argus/contracts`) is the closed set:
 
-| Class                         | Meaning                                                                                                                                                                                                                                                                                                                                                      | Retried by default?                                     |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------- |
-| `spawn`                       | The process never started — preparing the invocation threw, `deps.spawn` itself threw, or (found by `reconcile()` after a restart) a step recorded `running` had no process behind it at all. `run.termination = "spawn-failed"`.                                                                                                                            | **Yes**                                                 |
-| `exit-code`                   | The process ended (any way) without Argus's own timeout and without the agent signalling failure.                                                                                                                                                                                                                                                            | **Yes**                                                 |
-| `signal`                      | The agent's _own_ completion signal declared `failed` or `blocked` — it considered the work and reported on it. (Named for the pipeline `signal` the agent posts, **not** an OS process signal.)                                                                                                                                                             | No — opt in via `retry.retryOn`                         |
-| `timeout`                     | Argus killed the process at its `deadlineAt`.                                                                                                                                                                                                                                                                                                                | No — opt in                                             |
-| `verification`                | Every step reported success, but a `checks` entry failed.                                                                                                                                                                                                                                                                                                    | No — opt in                                             |
-| `knowledge-delta`             | The run wrote a KnowledgeDelta Argus refused — malformed, an unresolved or inexact reference, a stale `expectedRevision`, a cycle, a claimed artifact that does not exist — or the phase commit was refused (the ledger moved while a gate waited; two steps' deltas conflicted). The refusal is the reason, so a retry can propose from the current ledger. | No — opt in                                             |
-| `knowledge-context-integrity` | The KnowledgeContext Argus materialized for the run no longer hashes to the value recorded at launch — the file was modified, or removed, while the agent ran. The completion is refused and nothing the run proposed becomes canonical. The reason names the run, the expected hash, the hash found and the path; never the contents.                       | No — opt in                                             |
-| `configuration`               | The declared capability profile could not be enforced under strict enforcement — the step never launched with more capability than its author asked for.                                                                                                                                                                                                     | **Never** — the definition is what's wrong, not the run |
+| Class                         | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Retried by default?                                     |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `spawn`                       | The process never started — preparing the invocation threw, `deps.spawn` itself threw, or (found by `reconcile()` after a restart) a step recorded `running` had no process behind it at all. `run.termination = "spawn-failed"`.                                                                                                                                                                                                                                                                  | **Yes**                                                 |
+| `exit-code`                   | The process ended (any way) without Argus's own timeout and without the agent signalling failure.                                                                                                                                                                                                                                                                                                                                                                                                  | **Yes**                                                 |
+| `signal`                      | The agent's _own_ completion signal declared `failed` or `blocked` — it considered the work and reported on it. (Named for the pipeline `signal` the agent posts, **not** an OS process signal.)                                                                                                                                                                                                                                                                                                   | No — opt in via `retry.retryOn`                         |
+| `timeout`                     | Argus killed the process at its `deadlineAt`.                                                                                                                                                                                                                                                                                                                                                                                                                                                      | No — opt in                                             |
+| `verification`                | Every step reported success, but a `checks` entry failed.                                                                                                                                                                                                                                                                                                                                                                                                                                          | No — opt in                                             |
+| `knowledge-delta`             | The run wrote a KnowledgeDelta Argus refused — malformed, an unresolved or inexact reference, a stale `expectedRevision`, a cycle, a claimed artifact that does not exist, or (on a `discovery` phase) a business rule with no evidence or source evidence that is out of scope, at the wrong commit or missing — or the phase commit was refused (the ledger moved while a gate waited; two steps' deltas conflicted). The refusal is the reason, so a retry can propose from the current ledger. | No — opt in                                             |
+| `knowledge-context-integrity` | The KnowledgeContext Argus materialized for the run no longer hashes to the value recorded at launch — the file was modified, or removed, while the agent ran. The completion is refused and nothing the run proposed becomes canonical. The reason names the run, the expected hash, the hash found and the path; never the contents.                                                                                                                                                             | No — opt in                                             |
+| `configuration`               | The declared capability profile could not be enforced under strict enforcement — the step never launched with more capability than its author asked for.                                                                                                                                                                                                                                                                                                                                           | **Never** — the definition is what's wrong, not the run |
 
 The class is written onto the phase's payload (`withFailureClass`) whenever a
 phase fails, whether or not that failure ends up scheduling a retry — a
@@ -1510,3 +1521,79 @@ rest of timeout enforcement.
 
 See §11 — a phase can opt out of a pipeline-wide isolation policy and run in
 its own `cwd`, no worktree created.
+
+## 14. Business-rule discovery phases
+
+A phase that declares `discovery` asks its agents to read a bounded repository
+scope and propose the business rules it appears to enforce, as a
+KnowledgeDelta. The semantics — candidate versus canonical, the evidence
+invariant, the review surface, the handoff to later phases — are
+KNOWLEDGE-LEDGER.md §14. This section is the harness side: what the agent is
+told, and what Argus checks before anything it says is staged.
+
+```jsonc
+{
+  "id": "discover-rules",
+  "gated": true,
+  "discovery": {
+    "scope": { "paths": ["src/Booking"], "label": "Kobra booking" },
+    "evidence": "required", // default; "warn" makes a rule without evidence a review warning
+  },
+  "steps": [{ "name": "investigate", "prompt": "Investigate the booking module." }],
+}
+```
+
+**What the agent is told.** One reusable instruction block is appended after
+the author's own prompt, in the same position as the result and artifact
+instructions (§5). It carries the fixed discovery contract — what counts as a
+business rule, what is only an implementation observation, that evidence is
+mandatory, that uncertainty goes in an explicit `assumption` claim, that an
+existing rule is revised rather than duplicated — plus this phase's scope. The
+author writes _what question to answer_; Argus writes _what the protocol is_.
+The delta's own shape stays in the system-prompt `KNOWLEDGE_DELTA_CONTRACT`
+(§3a), so the model never gets two versions of it to reconcile.
+
+**What Argus checks, deterministically.** At intake, and again at the commit
+boundary:
+
+| Check                                                                     | On failure        |
+| ------------------------------------------------------------------------- | ----------------- |
+| every proposed `business-rule` has supporting evidence in the same delta  | `knowledge-delta` |
+| a `business-rule` revision brings _fresh_ evidence for its new statement  | `knowledge-delta` |
+| every `source-code` path is repository-relative and inside `scope.paths`  | `knowledge-delta` |
+| every `source-code` path resolves to a file that exists in the run's tree | `knowledge-delta` |
+| a supplied `gitHead` matches the commit on the run's invocation record    | `knowledge-delta` |
+
+`evidence: "warn"` downgrades the first two to review warnings and nothing
+else. A run with no recorded git head leaves an agent-supplied commit
+_unverifiable_ rather than wrong: Argus refuses what it can disprove, never
+what it merely cannot confirm.
+
+**The scope is a semantic bound, not a sandbox.** It constrains what the agent
+is asked to investigate and what its evidence may point at; it does not stop
+the process reading anything. The capability profile (§3) remains the security
+boundary, and a discovery phase is usually `filesystem: "read-only"` with a
+narrow `tools.allow` for exactly that reason.
+
+**The gate.** A discovery phase is normally `gated: true`. Its review carries
+`knowledge` — one candidate preview per step that staged a delta on this
+attempt, with the proposed rules, the evidence under each, what a revision
+would replace, and the deterministic warnings — and `discovery`, the counts.
+A reviewer decides from that; the agent's transcript is not required reading.
+Revise supersedes the attempt's candidates and nothing becomes canonical;
+approve commits them through the ordinary §2 ladder.
+
+**Downstream.** A later phase receives what an accepted discovery phase
+committed by naming it:
+
+```jsonc
+{
+  "knowledgeContext": {
+    "fromPhases": [{ "phaseId": "discover-rules", "kinds": ["business-rule"] }],
+  },
+}
+```
+
+resolved from the ledger's applied-delta provenance, so a phase still waiting
+at its gate supplies nothing (KNOWLEDGE-LEDGER.md §14.10). The named phase
+must be a transitive `needs` dependency — checked when the pipeline is saved.

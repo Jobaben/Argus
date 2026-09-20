@@ -31,6 +31,10 @@
  *   FAKE: write-delta <json>                write ARGUS_KNOWLEDGE_DELTA_FILE (a KnowledgeDelta)
  *   FAKE: read-context <name>               copy ARGUS_KNOWLEDGE_CONTEXT_FILE into ARGUS_ARTIFACT_DIR/<name>
  *                                           (proves the agent could read the context it was supplied)
+ *   FAKE: consume-context <relpath|->       write a KnowledgeDelta declaring every ref in
+ *                                           ARGUS_KNOWLEDGE_CONTEXT_FILE as consumed, optionally with
+ *                                           a repository artifact (canonical ids are minted at an
+ *                                           earlier phase's commit, so no prompt can name them)
  *   FAKE: sleep <ms>                        stay alive for <ms>
  *   FAKE: exit <code>                       process exit code (default 0)
  *   FAKE: outcome <succeeded|failed|blocked> [reason]   the ARGUS_OUTCOME line
@@ -149,6 +153,31 @@ async function execute(prompt) {
         const file = process.env.ARGUS_KNOWLEDGE_DELTA_FILE;
         if (!file) throw new Error("write-delta without ARGUS_KNOWLEDGE_DELTA_FILE");
         writeFileAt(file, rest);
+        break;
+      }
+      case "consume-context": {
+        // "The agent read the context it was given and relied on it" — the
+        // one thing a discovery-downstream step must be able to do that a
+        // static prompt cannot: the canonical refs are minted at the earlier
+        // phase's commit, so no test could write them into a prompt in
+        // advance. Every ref in the context file is declared consumed, with
+        // an optional repository artifact ("-" for none).
+        const file = process.env.ARGUS_KNOWLEDGE_CONTEXT_FILE;
+        const target = process.env.ARGUS_KNOWLEDGE_DELTA_FILE;
+        if (!file) throw new Error("consume-context without ARGUS_KNOWLEDGE_CONTEXT_FILE");
+        if (!target) throw new Error("consume-context without ARGUS_KNOWLEDGE_DELTA_FILE");
+        const context = JSON.parse(readFileSync(file, "utf8"));
+        const artifact = rest.trim();
+        writeFileAt(
+          target,
+          JSON.stringify({
+            schemaVersion: 1,
+            consumed: context.claims.map((c) => c.ref),
+            ...(artifact && artifact !== "-"
+              ? { artifacts: [{ location: "repository", path: artifact }] }
+              : {}),
+          }),
+        );
         break;
       }
       case "read-context": {

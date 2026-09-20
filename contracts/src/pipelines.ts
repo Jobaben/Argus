@@ -4,8 +4,11 @@ import type { AgentRuntimeId, ReasoningEffort } from "./runtimes.js";
 import type { Trigger } from "./schedules.js";
 import type { AutoApprove, Rubric } from "./verdict.js";
 import type {
+  DiscoveryPolicy,
+  DiscoverySummary,
   InvocationKnowledgeContext,
   KnowledgeContextSpec,
+  KnowledgeDeltaPreview,
   KnowledgeDeltaStatus,
 } from "./knowledge.js";
 
@@ -499,6 +502,19 @@ export interface PhaseDef {
    * revisions each run received are on its invocation record.
    */
   knowledgeContext?: KnowledgeContextSpec;
+  /**
+   * Turn this phase into a **business-rule discovery phase** (Phase 5): its
+   * steps are instructed to read a bounded repository scope and propose the
+   * business rules the code appears to enforce, and the KnowledgeDelta they
+   * write is held to the discovery invariants (evidence for every rule,
+   * source paths that exist inside the declared scope at the run's commit).
+   *
+   * Absent = an ordinary phase, behaving in every respect exactly as before
+   * Phase 5 existed. Discovery adds no new commit path: the candidates are
+   * staged and become canonical only when the phase is accepted, which is why
+   * a discovery phase is normally `gated: true`.
+   */
+  discovery?: DiscoveryPolicy;
 }
 
 // ── Harness: Argus-owned invocation channels ─────────────────────────────────
@@ -763,6 +779,10 @@ export interface PhaseProgress {
   /** The atomic commit of this attempt's staged KnowledgeDeltas, when it had
    *  any. Absent on a phase whose runs proposed no knowledge. */
   knowledge?: PhaseKnowledgeCommit;
+  /** What this attempt's discovery run proposed, in counts (Phase 5). Derived
+   *  from the attempt's staged deltas when they were staged, and rewritten
+   *  when the commit settles. Absent on a phase without `discovery`. */
+  discovery?: DiscoverySummary;
 }
 
 /** What the engine writes into `PhaseProgress.payload` when a phase fails.
@@ -900,6 +920,15 @@ export interface PhaseReview {
   artifacts: PhaseArtifact[];
   /** The listing hit its cap; more files exist on disk. */
   truncated?: boolean;
+  /**
+   * The candidate knowledge this attempt staged, one preview per step that
+   * wrote a KnowledgeDelta (Phase 5). Derived per read from the staged
+   * records and the ledger; nothing here is canonical, and approving is what
+   * makes it so. Absent when no step of the attempt proposed knowledge.
+   */
+  knowledge?: KnowledgeDeltaPreview[];
+  /** The counts for a discovery phase's candidates. Absent otherwise. */
+  discovery?: DiscoverySummary;
 }
 
 /** One artifact's bytes, for the read-only viewer. */

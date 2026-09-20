@@ -31,8 +31,21 @@ import {
   ARGUS_SERVER_SECRETS,
   matchesEnvPattern,
 } from "../harness/childEnv.js";
-import type { AgentRuntimeId, KnowledgeContextSpec, ReasoningEffort } from "@argus/contracts";
+import type {
+  AgentRuntimeId,
+  DiscoveryPolicy,
+  DiscoveryScope,
+  KnowledgeContextSpec,
+  ReasoningEffort,
+} from "@argus/contracts";
 import { KnowledgeContextError, parseKnowledgeContextSpec } from "../knowledge/context.js";
+import {
+  DISCOVERY_LABEL_MAX_CHARS,
+  DISCOVERY_NOTE_MAX_CHARS,
+  DISCOVERY_SCOPE_MAX_PATHS,
+} from "../knowledge/discovery.js";
+import { validArtifactPath } from "../knowledge/kernel.js";
+import { resolveNeeds } from "./dag.js";
 
 // The crash-safe, mutex-serialized single-file store (shared with schedules).
 const store = createJsonArrayStore<PipelineDefinition>({
@@ -994,6 +1007,7 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
   const candidates = validateCandidates(p.candidates, `phase ${i}`);
   const knowledgeDelta = validateKnowledgeDelta(p.knowledgeDelta, `phase ${i}`);
   const knowledgeContext = validateKnowledgeContext(p.knowledgeContext, `phase ${i}`);
+  const discovery = validateDiscovery(p.discovery, `phase ${i}`);
 
   return {
     id,
@@ -1016,7 +1030,95 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
     ...(candidates ? { candidates } : {}),
     ...(knowledgeDelta ? { knowledgeDelta } : {}),
     ...(knowledgeContext ? { knowledgeContext } : {}),
+    ...(discovery ? { discovery } : {}),
   };
+}
+
+/**
+ * A phase's business-rule discovery policy (Phase 5, `PhaseDef.discovery`).
+ *
+ * The scope is the part worth being strict about, because it is not just
+ * prompt text: it is the containment rule every `source-code` evidence path
+ * is checked against at intake and at commit. So its paths get the same
+ * treatment as an artifact path — repository-relative, POSIX, no `..` — and
+ * `"."` (the whole tree) has to be written out rather than being what an
+ * empty list quietly means.
+ */
+function validateDiscovery(raw: unknown, ctx: string): DiscoveryPolicy | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PipelineValidationError(`${ctx}: discovery must be an object { scope: { paths } }`);
+  }
+  const d = raw as Record<string, unknown>;
+  for (const k of Object.keys(d)) {
+    if (k !== "scope" && k !== "evidence") {
+      throw new PipelineValidationError(`${ctx}: discovery has unknown key "${k}"`);
+    }
+  }
+  if (!d.scope || typeof d.scope !== "object" || Array.isArray(d.scope)) {
+    throw new PipelineValidationError(`${ctx}: discovery.scope must be an object { paths }`);
+  }
+  const raw_scope = d.scope as Record<string, unknown>;
+  for (const k of Object.keys(raw_scope)) {
+    if (k !== "paths" && k !== "label" && k !== "note") {
+      throw new PipelineValidationError(`${ctx}: discovery.scope has unknown key "${k}"`);
+    }
+  }
+  if (!Array.isArray(raw_scope.paths) || raw_scope.paths.length === 0) {
+    throw new PipelineValidationError(
+      `${ctx}: discovery.scope.paths must name at least one repository-relative path (use ["."] for the whole tree)`,
+    );
+  }
+  if (raw_scope.paths.length > DISCOVERY_SCOPE_MAX_PATHS) {
+    throw new PipelineValidationError(
+      `${ctx}: discovery.scope.paths is capped at ${DISCOVERY_SCOPE_MAX_PATHS} paths`,
+    );
+  }
+  const paths: string[] = [];
+  for (const [i, entry] of raw_scope.paths.entries()) {
+    if (typeof entry !== "string" || !entry.trim()) {
+      throw new PipelineValidationError(`${ctx}: discovery.scope.paths[${i}] must be a string`);
+    }
+    const value = entry.trim().replace(/\/+$/, "");
+    const normalized = value === "" || value === "." ? "." : value;
+    if (normalized !== "." && !validArtifactPath(normalized)) {
+      throw new PipelineValidationError(
+        `${ctx}: discovery.scope.paths[${i}] must be a repository-relative POSIX path inside the repository`,
+      );
+    }
+    if (!paths.includes(normalized)) paths.push(normalized);
+  }
+  const scope: DiscoveryScope = { paths };
+  if (raw_scope.label !== undefined && raw_scope.label !== null) {
+    if (typeof raw_scope.label !== "string" || !raw_scope.label.trim()) {
+      throw new PipelineValidationError(`${ctx}: discovery.scope.label must be a string`);
+    }
+    if (raw_scope.label.length > DISCOVERY_LABEL_MAX_CHARS) {
+      throw new PipelineValidationError(
+        `${ctx}: discovery.scope.label exceeds ${DISCOVERY_LABEL_MAX_CHARS} characters`,
+      );
+    }
+    scope.label = raw_scope.label.trim();
+  }
+  if (raw_scope.note !== undefined && raw_scope.note !== null) {
+    if (typeof raw_scope.note !== "string" || !raw_scope.note.trim()) {
+      throw new PipelineValidationError(`${ctx}: discovery.scope.note must be a string`);
+    }
+    if (raw_scope.note.length > DISCOVERY_NOTE_MAX_CHARS) {
+      throw new PipelineValidationError(
+        `${ctx}: discovery.scope.note exceeds ${DISCOVERY_NOTE_MAX_CHARS} characters`,
+      );
+    }
+    scope.note = raw_scope.note.trim();
+  }
+  const out: DiscoveryPolicy = { scope };
+  if (d.evidence !== undefined && d.evidence !== null) {
+    if (d.evidence !== "required" && d.evidence !== "warn") {
+      throw new PipelineValidationError(`${ctx}: discovery.evidence must be "required" | "warn"`);
+    }
+    out.evidence = d.evidence;
+  }
+  return out;
 }
 
 const KNOWLEDGE_DELTA_MODES = new Set<NonNullable<PhaseDef["knowledgeDelta"]>>([
@@ -1090,6 +1192,75 @@ function validateGraph(phases: PhaseDef[]): void {
     throw new PipelineValidationError(e instanceof DagValidationError ? e.message : String(e));
   }
   routeChecked(() => validateRoutes(phases));
+  validateProducedByPhaseSelectors(phases);
+}
+
+/**
+ * `knowledgeContext.fromPhases` names a phase of *this* pipeline that is
+ * guaranteed to have run first (Phase 5 §downstream selection).
+ *
+ * Both halves are authoring errors and both are caught here, where the whole
+ * graph is in hand:
+ *
+ * - **The phase must exist.** A typo would otherwise surface as a refused
+ *   launch, at 3am, on an instance nobody is watching.
+ * - **It must be a transitive dependency.** "The claims phase X committed"
+ *   only means something once X has committed them; two phases that merely
+ *   sit side by side in the list have no ordering, so a selector across them
+ *   would be a race. Reachability through `needs` — which, for a linear
+ *   pipeline, is exactly "an earlier phase" — is the condition that makes the
+ *   handoff deterministic.
+ */
+function validateProducedByPhaseSelectors(phases: PhaseDef[]): void {
+  const needs = resolveNeeds(phases);
+  const known = new Set(phases.map((p) => p.id));
+  /** Every phase that must finish before `id`, transitively. */
+  const ancestorsOf = (id: string): Set<string> => {
+    const seen = new Set<string>();
+    const queue = [...(needs.get(id) ?? [])];
+    while (queue.length) {
+      const next = queue.shift()!;
+      if (seen.has(next)) continue;
+      seen.add(next);
+      queue.push(...(needs.get(next) ?? []));
+    }
+    return seen;
+  };
+  for (const phase of phases) {
+    const specs: Array<{ where: string; spec: KnowledgeContextSpec }> = [];
+    if (phase.knowledgeContext) {
+      specs.push({ where: `phase "${phase.id}"`, spec: phase.knowledgeContext });
+    }
+    for (const step of phase.steps) {
+      if (step.knowledgeContext) {
+        specs.push({
+          where: `phase "${phase.id}": step "${step.name}"`,
+          spec: step.knowledgeContext,
+        });
+      }
+    }
+    if (specs.length === 0) continue;
+    const ancestors = ancestorsOf(phase.id);
+    for (const { where, spec } of specs) {
+      for (const sel of spec.fromPhases ?? []) {
+        if (!known.has(sel.phaseId)) {
+          throw new PipelineValidationError(
+            `${where}: knowledgeContext.fromPhases names unknown phase "${sel.phaseId}"`,
+          );
+        }
+        if (sel.phaseId === phase.id) {
+          throw new PipelineValidationError(
+            `${where}: knowledgeContext.fromPhases cannot name its own phase`,
+          );
+        }
+        if (!ancestors.has(sel.phaseId)) {
+          throw new PipelineValidationError(
+            `${where}: knowledgeContext.fromPhases names "${sel.phaseId}", which is not a dependency of this phase; add it to needs so it is guaranteed to have committed first`,
+          );
+        }
+      }
+    }
+  }
 }
 
 export function validatePipelineInput(raw: unknown): PipelineInput {

@@ -611,8 +611,16 @@ export interface RecordSuppliedContextInput {
   execution: RunExecutionRef;
   /** The phase attempt the invocation belonged to, when known. */
   attempt?: number;
-  /** The exact revisions supplied, in context-file order. At least one — a
-   *  run launched without a semantic context gets no record at all. */
+  /**
+   * The exact revisions supplied, in context-file order.
+   *
+   * May be **empty**: since Phase 5 a spec can select "whatever the discovery
+   * phase committed", and an accepted phase is allowed to have committed
+   * nothing. The run still received a context file, so the record still
+   * exists — and it says, durably, that the file it was given held no
+   * revisions. That is a different fact from a run launched with no semantic
+   * context at all, which gets no record.
+   */
   claims: ClaimRef[];
   /** SHA-256 (hex) of the materialized context file's bytes. */
   sha256: string;
@@ -648,8 +656,8 @@ export function recordSuppliedContext(
   now: string,
 ): { ledger: KnowledgeLedger; supplied: SuppliedContext; added: boolean } {
   const execution = resolveExecution(ledger, input.execution);
-  if (!Array.isArray(input.claims) || input.claims.length === 0) {
-    throw new KnowledgeValidationError("supplied context must name at least one claim revision");
+  if (!Array.isArray(input.claims)) {
+    throw new KnowledgeValidationError("supplied context claims must be a list");
   }
   const claims = input.claims.map((c) => {
     if (
@@ -737,6 +745,43 @@ export function suppliedToReport(ledger: KnowledgeLedger, ref: ClaimRef): Suppli
         a.execution.runId.localeCompare(b.execution.runId),
     );
   return { claim: { id: ref.id, revision: ref.revision }, executions };
+}
+
+/**
+ * "Which canonical claim revisions did this phase of this instance commit?"
+ * — the Phase 5 handoff from an accepted phase to a later phase's
+ * KnowledgeContext.
+ *
+ * Answered from the ledger's **applied delta provenance** and nothing else.
+ * Three properties follow, and all three are the point:
+ *
+ * - **A staged proposal cannot appear here.** `ledger.deltas` holds applied
+ *   deltas only. A discovery phase waiting at a gate has committed nothing,
+ *   so a downstream selector resolves to nothing — candidate knowledge can
+ *   never leak downstream, by construction rather than by a check somebody
+ *   has to remember to write.
+ * - **It is exact.** The refs are the ones the commit minted, not claims that
+ *   happen to name the phase in `producedBy` and not claims that look recent.
+ *   A superseded attempt's records are not in `deltas` at all.
+ * - **It is historically stable.** A later revision of one of these claims
+ *   creates a *new* record; it does not retarget this one. Asking the same
+ *   question tomorrow gives the same answer.
+ *
+ * In commit order, then delta order, each revision once.
+ */
+export function claimsProducedByPhase(
+  ledger: KnowledgeLedger,
+  instanceId: string,
+  phaseId: string,
+): ClaimRef[] {
+  const out: ClaimRef[] = [];
+  for (const d of ledger.deltas) {
+    if (d.execution.instanceId !== instanceId || d.execution.phaseId !== phaseId) continue;
+    for (const c of d.claims) {
+      if (!out.some((x) => sameRef(x, c))) out.push({ id: c.id, revision: c.revision });
+    }
+  }
+  return out;
 }
 
 // ── Support ─────────────────────────────────────────────────────────────────
