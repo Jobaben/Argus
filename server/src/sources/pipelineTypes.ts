@@ -34,6 +34,7 @@ export type {
   MemoryPolicy,
   StepFailure,
   PhaseFailurePayload,
+  PhaseKnowledgeCommit,
   PhaseProgress,
   PhaseStatus,
   PhaseStep,

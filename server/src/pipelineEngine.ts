@@ -133,7 +133,62 @@ import {
   updateProposalStatus,
   writeProposalRecord,
 } from "./knowledge/changeStaging.js";
-import { acceptedChangeProposalOfPhase } from "./knowledge/kernel.js";
+import {
+  acceptedChangeProposalOfPhase,
+  changeProposalById,
+  changeRealizationById,
+  changeRealizationOfPhase,
+  formatCriterionRef,
+  formatRepositoryState,
+  realizationIntentCurrency,
+  sameRepositoryState,
+} from "./knowledge/kernel.js";
+import {
+  deriveImplementationScope,
+  describeScope,
+  implementationScopeInstruction,
+  implementationScopeText,
+} from "./knowledge/implementationScope.js";
+import {
+  buildRemediationContext,
+  evaluateCompletion,
+  implementationScopeFile,
+  remediationContextFile,
+  remediationContextText,
+  remediationInstruction,
+  repositoryStateFrom,
+  technicalResultFrom,
+  type CompletionVerdict,
+} from "./knowledge/realization.js";
+import {
+  AcceptanceVerificationError,
+  acceptanceCheckLabels,
+  acceptanceCheckRefusal,
+  acceptanceInstruction,
+  acceptanceProposalMissing,
+  bindAcceptanceChecks,
+  checkAcceptanceReport,
+  describeAcceptanceReport,
+  parseAcceptanceReport,
+  previewAcceptance,
+  summarizeAcceptance,
+  type AcceptanceContext,
+} from "./knowledge/acceptance.js";
+import {
+  acceptanceVerificationFile,
+  ensureAcceptanceDir,
+  readAcceptanceRecord,
+  readAgentAcceptance,
+  updateAcceptanceStatus,
+  writeAcceptanceRecord,
+} from "./knowledge/acceptanceStaging.js";
+import {
+  closeRealization,
+  openChangeRealization,
+  recordRealizationAttempt,
+} from "./knowledge/store.js";
+import type { AcceptanceProposal } from "./knowledge/store.js";
+import { sha256Hex } from "./knowledge/context.js";
 
 import { readLedger } from "./knowledge/store.js";
 import { markPipelineStarted, readPipelines } from "./sources/pipelines.js";
@@ -150,6 +205,8 @@ import {
   applyAbort,
   applyApprove,
   applyKnowledgeCommit,
+  applyRemediation,
+  commitFailureClass,
   applyCandidateSelection,
   applyCandidateVerification,
   applyCandidatesExhausted,
@@ -167,7 +224,13 @@ import {
   toCandidateOutcomes,
   withFailureClass,
 } from "./pipelineTransitions.js";
-import { interpolate, livePhases, previousPayloadFor, resultStepName } from "./sources/dag.js";
+import {
+  interpolate,
+  livePhases,
+  previousPayloadFor,
+  resolveNeeds,
+  resultStepName,
+} from "./sources/dag.js";
 import type { VerificationReport } from "./sources/pipelineTypes.js";
 import { journal } from "./sources/journal.js";
 import { isAlive } from "./scheduler.js";
@@ -178,15 +241,26 @@ import { spawnPipelineProcess } from "./pipelineProcess.js";
 import type { PipelineProcessHandle } from "./pipelineProcess.js";
 import type { SpawnPlan } from "./runtimes/index.js";
 import type {
+  AcceptanceCriterion,
+  AcceptanceVerification,
+  AcceptanceVerificationRecord,
   AcceptedChangeProposal,
   AgentRuntimeId,
   ChangeProposalRecord,
+  ChangeRealization,
+  ChangeRealizationAttempt,
   ChangeRequest,
   ChangeRuleState,
   ClaimRef,
+  ImplementationScope,
+  InvocationChannelKind,
   KnowledgeDelta,
   KnowledgeDeltaRecord,
+  RemediationContext,
+  RepositoryStateRef,
+  RuleVerification,
   RuleVerificationRecord,
+  RunExecutionRef,
   StepKnowledgeDelta,
 } from "@argus/contracts";
 import type { Run } from "./sources/scheduleTypes.js";
@@ -231,7 +305,35 @@ interface PlannedRun {
   /** The accepted change proposal this run implements, resolved at planning
    *  from the ledger. Null = the phase declares no `changeContext`. */
   changeContext: PlannedChangeContext | null;
+  /** The change realization this run is an attempt of (Phase 8). Null = the
+   *  phase declares no `implementation`. */
+  realization: PlannedRealization | null;
+  /** The acceptance criteria this run must answer for (Phase 8). Null = the
+   *  phase declares no `acceptanceVerification`. */
+  acceptance: PlannedAcceptance | null;
 }
+
+/**
+ * An implementation phase attempt's realization (Phase 8): the durable record
+ * it belongs to, which attempt it is, the deterministic scope its agent
+ * receives, and — from attempt 2 — exactly what the previous attempt left
+ * unmet. Or the reason the attempt may not start at all: a stale semantic
+ * target, an exhausted attempt budget, an unusable accepted proposal.
+ */
+type PlannedRealization =
+  | {
+      realization: ChangeRealization;
+      attempt: number;
+      kind: "implementation" | "remediation";
+      scope: ImplementationScope;
+      scopeText: string;
+      remediation: { context: RemediationContext; text: string } | null;
+    }
+  | { error: string };
+
+/** An acceptance-verification phase attempt's accountability (Phase 8): which
+ *  accepted proposal, and every criterion of it. */
+type PlannedAcceptance = { proposalId: string; required: AcceptanceCriterion[] };
 
 /**
  * A step's `knowledgeContext` after resolution against the phase attempt's
@@ -1114,6 +1216,86 @@ export function createEngine(deps: EngineDeps): Engine {
         }))
       : phaseDef.steps.map((stepDef) => ({ stepDef, candidate: undefined as number | undefined }));
 
+    // The accepted change intent this phase acts on (Phase 7 §downstream
+    // handoff), resolved once per attempt from the same snapshot: it is a
+    // phase-level selector, and every run of the attempt must receive exactly
+    // the same approved intent. Resolved from the ledger's *accepted*
+    // proposals only, so a proposal still staged at its gate resolves to
+    // nothing and refuses the launch.
+    let phaseChangeContext: PlannedChangeContext | null = null;
+    if (phaseDef.changeContext) {
+      const spec = phaseDef.changeContext;
+      const accepted = ledgerSnapshot
+        ? acceptedChangeProposalOfPhase(ledgerSnapshot, inst.id, spec.fromPhase)
+        : null;
+      if (!accepted) {
+        phaseChangeContext = {
+          error:
+            `change context: phase "${spec.fromPhase}" has no accepted ChangeProposal on this ` +
+            "instance; a staged proposal waiting at a gate is deliberately not readable here",
+        };
+      } else if ((spec.requireReady ?? true) && accepted.readiness !== "ready") {
+        phaseChangeContext = {
+          error:
+            `change context: the accepted proposal ${accepted.id} from phase ` +
+            `"${spec.fromPhase}" is ${accepted.readiness}; it has unresolved questions or ` +
+            "uncovered rule changes, so it may not drive an implementation",
+        };
+      } else {
+        phaseChangeContext = { accepted, text: buildChangeContext(accepted, startedAt).text };
+      }
+    }
+    // The change realization this attempt belongs to (Phase 8). Opened before
+    // any run is planned — and therefore before any agent exists — so "which
+    // implementation run was intended to realize CP-12?" is answerable even if
+    // every one of them crashes.
+    const plannedRealization = await planRealization(
+      def,
+      inst,
+      phaseDef,
+      progress,
+      phaseChangeContext,
+      ledgerSnapshot,
+      startedAt,
+    );
+    if (plannedRealization && "realization" in plannedRealization) {
+      progress.realization = {
+        id: plannedRealization.realization.id,
+        proposalId: plannedRealization.realization.proposalId,
+        attempt: plannedRealization.attempt,
+        kind: plannedRealization.kind,
+        maxAttempts: plannedRealization.realization.maxAttempts,
+      };
+    } else {
+      delete progress.realization;
+    }
+    // The acceptance criteria this attempt must answer for (Phase 8). Exactly
+    // the accepted proposal's own, so there is no second selection mechanism
+    // here any more than there is for rules.
+    const plannedAcceptance =
+      phaseDef.acceptanceVerification && phaseChangeContext && "accepted" in phaseChangeContext
+        ? {
+            proposalId: phaseChangeContext.accepted.id,
+            required: phaseChangeContext.accepted.acceptanceCriteria,
+          }
+        : null;
+    if (plannedAcceptance && ledgerSnapshot) {
+      const linked = changeRealizationOfPhase(
+        ledgerSnapshot,
+        inst.id,
+        phaseDef.acceptanceVerification!.implementationPhase,
+      );
+      if (linked) {
+        progress.realization = {
+          id: linked.id,
+          proposalId: linked.proposalId,
+          attempt: Math.max(1, linked.attempts.length + 1),
+          kind: linked.attempts.length > 0 ? "remediation" : "implementation",
+          maxAttempts: linked.maxAttempts,
+        };
+      }
+    }
+
     const planned: PlannedRun[] = [];
     for (const { stepDef, candidate } of units) {
       let workspace = progress.workspace ?? null;
@@ -1201,29 +1383,7 @@ export function createEngine(deps: EngineDeps): Engine {
       // handoff). Resolved from the ledger's *accepted* proposals only, so a
       // proposal still staged at its gate resolves to nothing and refuses the
       // launch — unapproved intent can never reach an implementation run.
-      let changeContext: PlannedChangeContext | null = null;
-      if (phaseDef.changeContext) {
-        const spec = phaseDef.changeContext;
-        const accepted = ledgerSnapshot
-          ? acceptedChangeProposalOfPhase(ledgerSnapshot, inst.id, spec.fromPhase)
-          : null;
-        if (!accepted) {
-          changeContext = {
-            error:
-              `change context: phase "${spec.fromPhase}" has no accepted ChangeProposal on this ` +
-              "instance; a staged proposal waiting at a gate is deliberately not readable here",
-          };
-        } else if ((spec.requireReady ?? true) && accepted.readiness !== "ready") {
-          changeContext = {
-            error:
-              `change context: the accepted proposal ${accepted.id} from phase ` +
-              `"${spec.fromPhase}" is ${accepted.readiness}; it has unresolved questions or ` +
-              "uncovered rule changes, so it may not drive an implementation",
-          };
-        } else {
-          changeContext = { accepted, text: buildChangeContext(accepted, startedAt).text };
-        }
-      }
+      const changeContext = phaseChangeContext;
       // Narrowest wins: a candidate's variant names its runtime, else the step,
       // else its phase, else the pipeline, else the server default. Resolved and
       // written down here, so a mixed-runtime pipeline stays readable on the
@@ -1288,6 +1448,25 @@ export function createEngine(deps: EngineDeps): Engine {
           changeContextInstruction(
             changeContext && "accepted" in changeContext ? changeContext.accepted : null,
           ) +
+          // Targeted implementation (Phase 8): where the ledger says this
+          // change lives, and — on a remediation — exactly what the previous
+          // attempt left unmet. Both are provenance Argus derived, never an
+          // agent's recollection of a previous transcript.
+          implementationScopeInstruction(
+            plannedRealization && "realization" in plannedRealization
+              ? plannedRealization.scope
+              : null,
+          ) +
+          remediationInstruction(
+            plannedRealization && "realization" in plannedRealization
+              ? (plannedRealization.remediation?.context ?? null)
+              : null,
+          ) +
+          acceptanceInstruction(
+            phaseDef.acceptanceVerification,
+            plannedAcceptance?.proposalId ?? null,
+            plannedAcceptance?.required ?? [],
+          ) +
           memoryInstruction(memoryPolicy) +
           (knowledgeContext && "resolved" in knowledgeContext
             ? knowledgeContextInstruction(knowledgeContext.resolved.supplied)
@@ -1328,6 +1507,8 @@ export function createEngine(deps: EngineDeps): Engine {
         knowledgeContext,
         changeIntent,
         changeContext,
+        realization: plannedRealization,
+        acceptance: plannedAcceptance,
       });
     }
     // Record the runIds on the instance up front, then persist once (no write races).
@@ -1350,6 +1531,9 @@ export function createEngine(deps: EngineDeps): Engine {
     // And the change-intent summary: a superseded attempt's proposal describes
     // a transition nobody can accept any more.
     delete progress.changeIntent;
+    // And the acceptance summary: an abandoned attempt's criterion outcomes
+    // describe an implementation that is no longer the one being judged.
+    delete progress.acceptanceVerification;
     await saveInstance(inst);
     void journal(inst.id, {
       at: startedAt,
@@ -1412,6 +1596,8 @@ export function createEngine(deps: EngineDeps): Engine {
         knowledgeContext: unit.knowledgeContext,
         changeIntent: unit.changeIntent,
         changeContext: unit.changeContext,
+        realization: unit.realization,
+        acceptance: unit.acceptance,
       });
       void journal(inst.id, {
         at: nowISO(),
@@ -1464,6 +1650,187 @@ export function createEngine(deps: EngineDeps): Engine {
    * to kill; the phase fails under `configuration`, the instance settles, and
    * whatever that makes ready is queued exactly as after any other failure.
    */
+  // ── Change realization (Phase 8) ──────────────────────────────────────────
+  //
+  // The loop the whole phase exists for:
+  //
+  //   accepted ChangeProposal
+  //     ↓ deterministic scope from provenance Argus already holds
+  //   implementation run       (KnowledgeContext + ChangeContext + scope)
+  //     ↓ Argus's own PhaseChecks
+  //   verification run         (RuleVerification + AcceptanceVerification)
+  //     ↓ the completion invariant, evaluated from Argus's records alone
+  //   succeeded  |  targeted remediation  |  a terminal, explained failure
+  //
+  // Four separate dimensions decide it and none of them is an agent's word
+  // about its own work. `ARGUS_OUTCOME: succeeded` decides one of them.
+
+  /**
+   * `${instanceId}:${phaseId}:${attempt}` for every implementation attempt
+   * whose repository state this process has already snapshotted. In memory
+   * only, and deliberately: it prevents a repeat within one process, and a
+   * restart legitimately takes a fresh reading.
+   */
+  const implementationSnapshots = new Set<string>();
+
+  /** Phase statuses from which a phase never moves again. */
+  const TERMINAL_PHASE: PhaseProgress["status"][] = ["succeeded", "failed", "skipped", "aborted"];
+
+  /** The largest `maxAttempts` an author may configure, and the default. */
+  const REALIZATION_ATTEMPT_CAP = 8;
+  const DEFAULT_REALIZATION_ATTEMPTS = 2;
+
+  /**
+   * Open (or continue) the realization an implementation phase attempt belongs
+   * to, and derive everything its runs receive.
+   *
+   * Three things refuse the launch here rather than after an agent has run:
+   *
+   * - **a stale semantic target** — the accepted proposal's revisions are no
+   *   longer the domain's active ones, so implementing them would realize
+   *   intent the business has already moved past (§preflight). Configurable
+   *   off for a deliberately historical operation;
+   * - **an exhausted attempt budget** — the loop's bound, checked before the
+   *   spawn so an exhausted realization terminates rather than looping;
+   * - **an unusable proposal** — no accepted intent resolved at all, which the
+   *   `changeContext` error already says.
+   */
+  async function planRealization(
+    def: PipelineDefinition,
+    inst: PipelineInstance,
+    phaseDef: PhaseDef,
+    progress: PhaseProgress,
+    changeContext: PlannedChangeContext | null,
+    ledger: Awaited<ReturnType<typeof readLedger>> | null,
+    now: string,
+  ): Promise<PlannedRealization | null> {
+    const policy = phaseDef.implementation;
+    if (!policy) return null;
+    if (!changeContext || "error" in changeContext) {
+      // The changeContext error is already the launch refusal; saying it twice
+      // would only make the failure reason worse.
+      return null;
+    }
+    if (!ledger) return { error: "change realization: the ledger could not be read" };
+    const accepted = changeContext.accepted;
+    const maxAttempts = Math.min(
+      REALIZATION_ATTEMPT_CAP,
+      Math.max(1, policy.maxAttempts ?? DEFAULT_REALIZATION_ATTEMPTS),
+    );
+
+    // Preflight: is the intent this proposal carries still the current intent?
+    if (policy.requireCurrentIntent !== false) {
+      const currency = realizationIntentCurrency(ledger, accepted.semanticChanges);
+      if (!currency.current) {
+        return {
+          error:
+            `change realization: the accepted proposal ${accepted.id} targets ` +
+            `${currency.superseded.map((x) => formatClaimRef(x.from)).join(", ")}, which ` +
+            `${currency.superseded.length === 1 ? "is" : "are"} no longer the active revision` +
+            `${currency.superseded.length === 1 ? "" : "s"} (now ` +
+            `${currency.superseded.map((x) => formatClaimRef(x.to)).join(", ")}). The domain has ` +
+            "moved past this intent; a new change decision is required, not an implementation of " +
+            "the old one",
+        };
+      }
+    }
+
+    const existing = changeRealizationOfPhase(ledger, inst.id, phaseDef.id);
+    const scope =
+      existing?.scope ??
+      deriveImplementationScope(ledger, accepted, {
+        includePreserved: policy.includePreserved ?? true,
+        now,
+      });
+    // The scope is derived once and frozen on the realization: a remediation
+    // realizes the same accepted intent as attempt 1, against the same
+    // provenance, and a scope that drifted between attempts would make the
+    // history unreadable.
+    let realization: ChangeRealization;
+    try {
+      realization = (
+        await openChangeRealization(
+          {
+            proposalId: accepted.id,
+            target: accepted.semanticChanges,
+            instanceId: inst.id,
+            phaseId: phaseDef.id,
+            ...(realizationVerifierOf(def, phaseDef.id)
+              ? { verificationPhaseId: realizationVerifierOf(def, phaseDef.id)! }
+              : {}),
+            maxAttempts,
+            scope,
+          },
+          deps.now(),
+        )
+      ).realization;
+    } catch (e) {
+      return { error: `change realization: ${e instanceof Error ? e.message : String(e)}` };
+    }
+    if (realization.outcome) {
+      return {
+        error: `change realization ${realization.id} already ended as ${realization.outcome.status}: ${realization.outcome.reason}`,
+      };
+    }
+    const attempt = realization.attempts.length + 1;
+    if (attempt > realization.maxAttempts) {
+      return {
+        error:
+          `change realization ${realization.id} has used all ${realization.maxAttempts} configured ` +
+          "attempts; autonomous remediation is bounded and this one is exhausted",
+      };
+    }
+    const kind: "implementation" | "remediation" = attempt === 1 ? "implementation" : "remediation";
+    let remediation: { context: RemediationContext; text: string } | null = null;
+    if (kind === "remediation") {
+      const previous = realization.attempts[realization.attempts.length - 1];
+      const verdict: CompletionVerdict = {
+        outcome: previous.outcome,
+        reason: previous.reason ?? previous.outcome,
+        ruleResults: previous.ruleResults,
+        acceptanceResults: previous.acceptanceResults,
+        remediable: true,
+      };
+      const runs = previous.verification.map((v) => v.runId);
+      const context = buildRemediationContext({
+        realization,
+        proposal: accepted,
+        ledger,
+        attempt,
+        previous: verdict,
+        ruleVerifications: ledger.verifications.filter((v) => runs.includes(v.execution.runId)),
+        acceptanceVerifications: ledger.acceptanceVerifications.filter((v) =>
+          runs.includes(v.execution.runId),
+        ),
+        now,
+      });
+      remediation = { context, text: remediationContextText(context) };
+    }
+    void journal(inst.id, {
+      at: now,
+      kind: attempt === 1 ? "realization.started" : "realization.remediation-started",
+      phaseId: phaseDef.id,
+      attempt: progress.attempt,
+      detail: `${realization.id} → ${accepted.id} (attempt ${attempt}/${realization.maxAttempts}; ${describeScope(scope)})`,
+    });
+    return {
+      realization,
+      attempt,
+      kind,
+      scope,
+      scopeText: implementationScopeText(scope),
+      remediation,
+    };
+  }
+
+  /** The phase that verifies one implementation phase's realization, from the
+   *  definition alone: the one whose `acceptanceVerification` names it. */
+  function realizationVerifierOf(def: PipelineDefinition, phaseId: string): string | null {
+    return (
+      def.phases.find((p) => p.acceptanceVerification?.implementationPhase === phaseId)?.id ?? null
+    );
+  }
+
   async function failUnlaunchable(
     def: PipelineDefinition,
     inst: PipelineInstance,
@@ -1595,6 +1962,10 @@ export function createEngine(deps: EngineDeps): Engine {
     changeIntent: PlannedChangeIntent | null;
     /** The accepted change intent this run implements, or null. */
     changeContext: PlannedChangeContext | null;
+    /** The realization this run is an attempt of (Phase 8), or null. */
+    realization: PlannedRealization | null;
+    /** The acceptance criteria this run must answer for (Phase 8), or null. */
+    acceptance: PlannedAcceptance | null;
   }
 
   /**
@@ -1698,8 +2069,17 @@ export function createEngine(deps: EngineDeps): Engine {
     // § KnowledgeDelta protocol). Named for every run, like the result file:
     // an agent that has nothing to propose writes nothing, and the engine
     // reads the file — or its absence — when the run completes.
-    const deltaFile = knowledgeDeltaFile(run.id);
-    env.ARGUS_KNOWLEDGE_DELTA_FILE = deltaFile;
+    //
+    // The one exception (Phase 8 §protocol channels match phase
+    // responsibilities): a change-intent run's semantic half travels inside
+    // its ChangeProposal, and a run that writes both files is refused
+    // outright — so it is not told a path whose use would fail the step. The
+    // refusal itself does not depend on the variable: the engine reads the
+    // per-run path either way, so an agent that writes there unbidden is
+    // still caught.
+    const offersDelta = ctx.phaseDef.changeIntent === undefined;
+    const deltaFile = offersDelta ? knowledgeDeltaFile(run.id) : null;
+    if (deltaFile) env.ARGUS_KNOWLEDGE_DELTA_FILE = deltaFile;
     const invocationDir = runInvocationDir(run.id);
     // A semantic context the planning snapshot could not resolve refuses the
     // step here, as a `configuration` failure: the definition names knowledge
@@ -1712,7 +2092,12 @@ export function createEngine(deps: EngineDeps): Engine {
         ? ctx.knowledgeContext.error
         : null) ??
       (ctx.changeIntent && "error" in ctx.changeIntent ? ctx.changeIntent.error : null) ??
-      (ctx.changeContext && "error" in ctx.changeContext ? ctx.changeContext.error : null);
+      (ctx.changeContext && "error" in ctx.changeContext ? ctx.changeContext.error : null) ??
+      // Phase 8's two preconditions: the accepted intent this realization
+      // targets must still be the domain's current intent, and the attempt
+      // budget must not be spent. Both refuse the launch as `configuration`
+      // rather than starting an agent against work that cannot count.
+      (ctx.realization && "error" in ctx.realization ? ctx.realization.error : null);
     if (plannedError) {
       sem.release();
       const reason = plannedError;
@@ -1759,7 +2144,20 @@ export function createEngine(deps: EngineDeps): Engine {
       ctx.changeContext && "accepted" in ctx.changeContext ? ctx.changeContext : null;
     const changeFile = plannedChange ? changeContextFile(run.id) : null;
     if (changeFile) env.ARGUS_CHANGE_CONTEXT_FILE = changeFile;
+    // The Phase 8 channels: the deterministic scope of the change this run is
+    // realizing, the exact failures a remediation is fixing, and the file an
+    // acceptance-verification run answers in. All three are Argus-owned, and
+    // the two read ones are hashed at launch and re-hashed at completion.
+    const plannedRealization =
+      ctx.realization && "realization" in ctx.realization ? ctx.realization : null;
+    const scopeFile = plannedRealization ? implementationScopeFile(run.id) : null;
+    if (scopeFile) env.ARGUS_IMPLEMENTATION_SCOPE_FILE = scopeFile;
+    const remediationFile = plannedRealization?.remediation ? remediationContextFile(run.id) : null;
+    if (remediationFile) env.ARGUS_REMEDIATION_CONTEXT_FILE = remediationFile;
+    const acceptanceFile = ctx.acceptance ? acceptanceVerificationFile(run.id) : null;
+    if (acceptanceFile) env.ARGUS_ACCEPTANCE_VERIFICATION_FILE = acceptanceFile;
     let prepared: PreparedInvocation;
+    const suppliedInputs: { kind: InvocationChannelKind; path: string; sha256: string }[] = [];
     try {
       await mkdir(invocationDir, { recursive: true });
       await ensureKnowledgeDeltaDir(run.id);
@@ -1769,7 +2167,35 @@ export function createEngine(deps: EngineDeps): Engine {
       }
       if (proposalFile) await ensureChangeProposalDir(run.id);
       if (requestFile && plannedIntent) await writeReadOnlyInput(requestFile, plannedIntent.text);
-      if (changeFile && plannedChange) await writeReadOnlyInput(changeFile, plannedChange.text);
+      if (acceptanceFile) await ensureAcceptanceDir(run.id);
+      // Every Argus-owned read-only input, written and hashed in one place, so
+      // the completion can prove the bytes the agent read are the bytes Argus
+      // supplied (Phase 8 §ChangeContext integrity). The KnowledgeContext is
+      // not here: its hash is durable in the ledger, which is stronger.
+      if (changeFile && plannedChange) {
+        await writeReadOnlyInput(changeFile, plannedChange.text);
+        suppliedInputs.push({
+          kind: "change-context",
+          path: changeFile,
+          sha256: sha256Hex(plannedChange.text),
+        });
+      }
+      if (scopeFile && plannedRealization) {
+        await writeReadOnlyInput(scopeFile, plannedRealization.scopeText);
+        suppliedInputs.push({
+          kind: "implementation-scope",
+          path: scopeFile,
+          sha256: sha256Hex(plannedRealization.scopeText),
+        });
+      }
+      if (remediationFile && plannedRealization?.remediation) {
+        await writeReadOnlyInput(remediationFile, plannedRealization.remediation.text);
+        suppliedInputs.push({
+          kind: "remediation-context",
+          path: remediationFile,
+          sha256: sha256Hex(plannedRealization.remediation.text),
+        });
+      }
       // The clock the deadline runs from: now, with the slot held and the
       // process about to start.
       run.startedAt = nowISO();
@@ -1792,6 +2218,10 @@ export function createEngine(deps: EngineDeps): Engine {
         changeRequestFile: requestFile,
         changeProposalFile: proposalFile,
         changeContextFile: changeFile,
+        implementationScopeFile: scopeFile,
+        remediationContextFile: remediationFile,
+        acceptanceVerificationFile: acceptanceFile,
+        suppliedInputs,
         knowledgeContext:
           contextFile && resolvedContext
             ? {
@@ -2441,6 +2871,7 @@ export function createEngine(deps: EngineDeps): Engine {
             noteFailure(def, res.instance, phaseId, "verification", reason);
           }
           res = await settleKnowledge(def, res);
+          res = await settleRealizations(def, res);
           noteRouting(def, res.instance, res.routing);
           await saveInstance(res.instance);
           if (res.instance.status === "succeeded" || res.instance.status === "failed") {
@@ -2538,6 +2969,56 @@ export function createEngine(deps: EngineDeps): Engine {
   }
 
   /**
+   * The same gate for the Argus-owned read-only inputs Phase 8 added: the
+   * ChangeContext, the ImplementationScope and the RemediationContext
+   * (docs/KNOWLEDGE-LEDGER.md §Phase 8, context integrity).
+   *
+   * Phase 7 materialized the ChangeContext read-only but never checked it
+   * again, so an implementation could have been driven by bytes nobody could
+   * vouch for. This closes that, by exactly the Phase 4.1 model: hash at
+   * launch, re-hash at completion, deterministic failure on a mismatch or a
+   * missing file.
+   *
+   * It asks **one** question — *did the bytes supplied to this invocation
+   * change?* — and deliberately not *is this still the newest proposal?*. An
+   * accepted ChangeProposal's identity is immutable, so a newer proposal
+   * accepted while the agent ran is never tampering; a realization that has
+   * been overtaken is a `stale` realization, decided at close-out from the
+   * ledger, not an integrity failure here.
+   *
+   * A record with no `suppliedInputs` (written before Phase 8, or a run that
+   * received none) has nothing to verify and passes, exactly as a
+   * pre-Phase-4.1 context does.
+   */
+  async function checkSuppliedInputs(
+    inst: PipelineInstance,
+    phaseId: string,
+    runId: string,
+  ): Promise<Intake | null> {
+    const invocation = await readInvocation(runId);
+    const inputs = invocation?.suppliedInputs ?? [];
+    for (const input of inputs) {
+      const result = await verifyKnowledgeContextIntegrity(input.path, input.sha256);
+      if (result.status === "unchanged") continue;
+      const reason =
+        result.status === "missing"
+          ? `change context integrity: run ${runId}'s ${input.kind} file is missing at ${input.path} (expected sha256 ${input.sha256})`
+          : `change context integrity: run ${runId}'s ${input.kind} file changed during execution at ${input.path} (expected sha256 ${input.sha256}, found ${result.actual})`;
+      void journal(inst.id, {
+        at: nowISO(),
+        kind: "knowledge.integrity",
+        phaseId,
+        runId,
+        detail: `${input.kind} ${result.status}: expected sha256 ${input.sha256.slice(0, 12)}${
+          result.actual ? `, found ${result.actual.slice(0, 12)}` : ""
+        }`,
+      });
+      return { ok: false, reason, failure: "change-context-integrity" };
+    }
+    return null;
+  }
+
+  /**
    * Everything Argus checks before a step's completion — and the semantic
    * output it carries — is accepted: the context it was given is unchanged
    * (above), then its KnowledgeDelta is read, validated and staged (below).
@@ -2553,6 +3034,11 @@ export function createEngine(deps: EngineDeps): Engine {
   ): Promise<Intake> {
     const refused = await checkContextIntegrity(inst, phaseId, runId);
     if (refused) return refused;
+    // The Phase 8 inputs, under the same rule and before anything is staged: a
+    // run whose accepted intent Argus cannot vouch for must not have its
+    // conformance or acceptance results become durable.
+    const tampered = await checkSuppliedInputs(inst, phaseId, runId);
+    if (tampered) return tampered;
     // Change intent (Phase 7) is read *before* the delta, because on a
     // change-intent phase the proposal carries the delta: the semantic half of
     // a ChangeProposal is staged through exactly the KnowledgeDelta machinery,
@@ -2570,7 +3056,13 @@ export function createEngine(deps: EngineDeps): Engine {
     // failure class — and the same rule that nothing becomes durable before
     // the phase is accepted.
     const verification = await intakeRuleVerification(def, inst, phaseId, runId);
-    return verification.ok ? delta : verification;
+    if (!verification.ok) return verification;
+    // Acceptance verification (Phase 8) rides the same boundary again, on its
+    // own channel and its own record. Independent of the rule results by
+    // construction: neither can rewrite the other, and a phase that answers
+    // both writes two files.
+    const acceptance = await intakeAcceptance(def, inst, phaseId, runId);
+    return acceptance.ok ? delta : acceptance;
   }
 
   /**
@@ -2938,6 +3430,13 @@ export function createEngine(deps: EngineDeps): Engine {
     }
 
     const ctx = await verificationContextFor(def, phase, runId, policy);
+    // The exact repository state this run examined, snapshotted at completion
+    // (Phase 8). Recorded beside `gitHead` rather than instead of it: the head
+    // still answers a head-scoped conformance question, and this answers the
+    // stricter one a realization has to ask — *was it this implementation?*
+    const verifiedState = repositoryStateFrom(
+      await snapshotWorkingTree(await runCwd(def, phase, runId)),
+    );
     const base: Omit<RuleVerificationRecord, "status"> = {
       id: `RV-${deps.newId()}`,
       runId,
@@ -2949,6 +3448,7 @@ export function createEngine(deps: EngineDeps): Engine {
       updatedAt: at,
       selected: ctx.selected,
       ...(ctx.gitHead ? { gitHead: ctx.gitHead } : {}),
+      ...(verifiedState ? { repository: verifiedState } : {}),
     };
     const reject = async (
       reason: string,
@@ -3090,9 +3590,295 @@ export function createEngine(deps: EngineDeps): Engine {
           evidence: bound.evidence,
           attempt: phase.attempt,
           ...(record.gitHead ? { gitHead: record.gitHead } : {}),
+          ...(record.repository ? { repositoryState: record.repository } : {}),
           ...(v.reason !== undefined ? { reason: v.reason } : {}),
           ...(v.note !== undefined ? { note: v.note } : {}),
           policy: holdsPolicy(policy),
+        });
+      }
+    }
+    return { ok: true, proposals };
+  }
+
+  // ── Acceptance verification (Phase 8) ─────────────────────────────────────
+  //
+  // The same three moments as every other semantic output, on a fourth
+  // channel: intake stages what the run wrote, the commit makes it durable in
+  // the phase's one ledger transition, and a retired attempt supersedes it.
+  //
+  // What is deliberately *not* shared with rule verification: the record, the
+  // read model, the completeness rule, and the failure class. A criterion is
+  // bound to `CP-12/AC-1` and a rule to a `ClaimRef`, and "every rule holds
+  // and AC-3 is violated" must remain something Argus can say.
+
+  /** What an acceptance check needs to know about the run that wrote the
+   *  report: which accepted change it answers for, every criterion of it, and
+   *  the run's own world. */
+  async function acceptanceContextFor(
+    def: PipelineDefinition,
+    phase: PhaseProgress,
+    runId: string,
+    policy: NonNullable<PhaseDef["acceptanceVerification"]>,
+    proposalId: string,
+  ): Promise<AcceptanceContext> {
+    const invocation = await readInvocation(runId);
+    const phaseDef = def.phases.find((p) => p.id === phase.id);
+    const ledger = await readLedger();
+    const proposal = changeProposalById(ledger, proposalId);
+    return {
+      policy,
+      proposalId,
+      required: proposal?.acceptanceCriteria ?? [],
+      repoRoot: invocation?.workspace?.path ?? invocation?.cwd ?? phaseDef?.cwd ?? null,
+      gitHead: invocation?.gitHead ?? null,
+      checkLabels: acceptanceCheckLabels(phaseDef?.checks, checkLabel),
+    };
+  }
+
+  /**
+   * Which accepted proposal a run was answering for, read back from the
+   * ChangeContext Argus materialized for it.
+   *
+   * Deliberately read from that file rather than re-resolved from the ledger:
+   * the file *is* the record of what this run was given, it survives a restart
+   * between the launch and the completion, and re-resolving would let a
+   * proposal accepted while the agent ran retarget a finished run.
+   */
+  async function acceptanceProposalOf(runId: string): Promise<string | null> {
+    const invocation = await readInvocation(runId);
+    const file = invocation?.changeContextFile ?? changeContextFile(runId);
+    try {
+      const parsed = JSON.parse(await readFile(file, "utf8")) as { proposalId?: string };
+      return typeof parsed.proposalId === "string" ? parsed.proposalId : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Read, validate and stage the acceptance results a completed run wrote.
+   *
+   * The same asymmetry with a KnowledgeDelta as a verification report has:
+   * **no file is not "nothing proposed"**. A run given an accepted change with
+   * criteria has an obligation to answer them, so an absent report refuses the
+   * step rather than letting the phase succeed as though the criteria had been
+   * considered. A proposal that declares no criteria has nothing to answer.
+   */
+  async function intakeAcceptance(
+    def: PipelineDefinition,
+    inst: PipelineInstance,
+    phaseId: string,
+    runId: string,
+  ): Promise<Intake> {
+    const phaseDef = def.phases.find((pd) => pd.id === phaseId);
+    const policy = phaseDef?.acceptanceVerification;
+    if (!policy) return { ok: true, staged: null };
+    const phase = inst.phases.find((p) => p.id === phaseId);
+    const step = phase?.steps.find((sp) => sp.runId === runId);
+    if (!phase || !step) return { ok: true, staged: null };
+    const at = nowISO();
+
+    const existing = await readAcceptanceRecord(runId);
+    if (existing && existing.attempt === phase.attempt) {
+      if (existing.status === "rejected") {
+        return {
+          ok: false,
+          reason: existing.reason ?? "acceptance verification was rejected",
+          failure: "acceptance-verification",
+        };
+      }
+      step.acceptanceVerification = { id: existing.id, status: existing.status };
+      return { ok: true, staged: null };
+    }
+
+    const proposalId = await acceptanceProposalOf(runId);
+    if (!proposalId) {
+      return {
+        ok: false,
+        reason:
+          "acceptance verification rejected: this phase declares acceptanceVerification but the run received no ChangeContext naming an accepted change to answer for",
+        failure: "acceptance-verification",
+      };
+    }
+    const ctx = await acceptanceContextFor(def, phase, runId, policy, proposalId);
+    const state = repositoryStateFrom(await snapshotWorkingTree(await runCwd(def, phase, runId)));
+    const base: Omit<AcceptanceVerificationRecord, "status"> = {
+      id: `AVR-${deps.newId()}`,
+      runId,
+      instanceId: inst.id,
+      phaseId,
+      attempt: phase.attempt,
+      step: step.name,
+      receivedAt: at,
+      updatedAt: at,
+      proposalId,
+      required: ctx.required,
+      ...(state ? { repository: state } : {}),
+    };
+    const reject = async (
+      reason: string,
+      report?: AcceptanceVerificationRecord["report"],
+    ): Promise<Intake> => {
+      const full = `acceptance verification rejected: ${reason}`;
+      await writeAcceptanceRecord({
+        ...base,
+        status: "rejected",
+        reason: full,
+        ...(report ? { report } : {}),
+      });
+      void journal(inst.id, {
+        at,
+        kind: "acceptance.rejected",
+        phaseId,
+        runId,
+        attempt: phase.attempt,
+        detail: `${base.id}: ${reason}`,
+      });
+      return { ok: false, reason: full, failure: "acceptance-verification" };
+    };
+
+    const file = await readAgentAcceptance(runId);
+    if (file.kind === "none") {
+      if (ctx.required.length === 0) return { ok: true, staged: null };
+      return reject(
+        `the accepted change ${proposalId} declares ${ctx.required.length} acceptance criteri${
+          ctx.required.length === 1 ? "on" : "a"
+        } (${ctx.required.map((c) => c.id).join(", ")}) but the run wrote no acceptance-verification file; every one must receive an outcome`,
+      );
+    }
+    if (file.kind === "unreadable") return reject(file.reason);
+    let report: AcceptanceVerificationRecord["report"];
+    try {
+      report = parseAcceptanceReport(file.text);
+    } catch (e) {
+      return reject(
+        e instanceof AcceptanceVerificationError
+          ? `${e.code}: ${e.message}`
+          : e instanceof Error
+            ? e.message
+            : String(e),
+      );
+    }
+    const refusal = await checkAcceptanceReport(report, ctx);
+    if (refusal) return reject(`${refusal.code}: ${refusal.message}`, report);
+
+    await writeAcceptanceRecord({ ...base, status: "staged", report });
+    step.acceptanceVerification = { id: base.id, status: "staged" };
+    await refreshAcceptanceSummary(phase, proposalId);
+    void journal(inst.id, {
+      at,
+      kind: "acceptance.staged",
+      phaseId,
+      runId,
+      attempt: phase.attempt,
+      detail: `${base.id}: ${describeAcceptanceReport(report)} @ ${formatRepositoryState(state ?? undefined)}`,
+    });
+    return { ok: true, staged: null };
+  }
+
+  /** Where one run's work actually happened: its worktree, else the phase's
+   *  own directory. The tree a repository-state snapshot must be taken of. */
+  async function runCwd(
+    def: PipelineDefinition,
+    phase: PhaseProgress,
+    runId: string,
+  ): Promise<string> {
+    const invocation = await readInvocation(runId);
+    return (
+      invocation?.workspace?.path ??
+      invocation?.cwd ??
+      phase.workspace?.path ??
+      def.phases.find((p) => p.id === phase.id)?.cwd ??
+      process.cwd()
+    );
+  }
+
+  /** Recompute an acceptance phase's summary from the attempt's staged
+   *  records. Counts only; the results stay in the staged record. */
+  async function refreshAcceptanceSummary(phase: PhaseProgress, proposalId: string): Promise<void> {
+    const previews = [];
+    for (const step of phase.steps) {
+      if (!step.runId || !step.acceptanceVerification) continue;
+      const record = await readAcceptanceRecord(step.runId);
+      if (!record?.report || record.attempt !== phase.attempt) continue;
+      previews.push(previewAcceptance(record));
+    }
+    phase.acceptanceVerification = summarizeAcceptance(
+      proposalId,
+      previews,
+      phase.knowledge?.status !== "applied" && previews.some((p) => p.status === "staged"),
+    );
+  }
+
+  /**
+   * The acceptance proposals a held phase would commit, resolved into the
+   * durable records they become — or a refusal.
+   *
+   * This is where an agent's citation of a deterministic check meets Argus's
+   * own report, exactly as it does for rule verification: every `check`
+   * evidence record is bound to the phase's {@link VerificationReport}, and a
+   * `satisfied` outcome citing a check Argus observed **failing** refuses the
+   * commit. An agent can cite a test; it cannot claim one passed.
+   */
+  async function acceptanceProposalsOf(
+    inst: PipelineInstance,
+    phase: PhaseProgress,
+  ): Promise<{ ok: true; proposals: AcceptanceProposal[] } | { ok: false; reason: string }> {
+    const wanted = phase.knowledge?.acceptanceVerifications ?? [];
+    if (wanted.length === 0) return { ok: true, proposals: [] };
+    const ledger = await readLedger();
+    const proposals: AcceptanceProposal[] = [];
+    for (const step of phase.steps) {
+      const id = step.acceptanceVerification?.id;
+      if (!id || !wanted.includes(id) || !step.runId) continue;
+      const record = await readAcceptanceRecord(step.runId);
+      if (!record || record.id !== id || !record.report) {
+        return {
+          ok: false,
+          reason: `acceptance verification ${id} is not staged for run ${step.runId}`,
+        };
+      }
+      if (record.attempt !== phase.attempt) {
+        return {
+          ok: false,
+          reason: `acceptance verification ${id} was staged for attempt ${record.attempt}, not ${phase.attempt}`,
+        };
+      }
+      const missingProposal = acceptanceProposalMissing(ledger, record.proposalId);
+      if (missingProposal) {
+        return { ok: false, reason: `acceptance verification ${id}: ${missingProposal}` };
+      }
+      const results = (step.verification ?? phase.verification)?.checks ?? [];
+      for (const c of record.report.criteria) {
+        const bound = bindAcceptanceChecks(c.evidence, results);
+        if (bound.missing.length > 0) {
+          return {
+            ok: false,
+            reason: `acceptance verification ${id}: ${formatCriterionRef(
+              record.proposalId,
+              c.criterionId,
+            )} cites check${bound.missing.length === 1 ? "" : "s"} ${bound.missing
+              .map((l) => `"${l}"`)
+              .join(", ")}, which this phase's verification report does not contain`,
+          };
+        }
+        const forged = acceptanceCheckRefusal(
+          record.proposalId,
+          c.criterionId,
+          c.outcome,
+          bound.evidence,
+        );
+        if (forged) return { ok: false, reason: `acceptance verification ${id}: ${forged}` };
+        proposals.push({
+          proposalId: record.proposalId,
+          criterionId: c.criterionId,
+          outcome: c.outcome,
+          execution: { runId: step.runId, instanceId: inst.id, phaseId: phase.id },
+          evidence: bound.evidence,
+          attempt: phase.attempt,
+          ...(record.repository ? { repository: record.repository } : {}),
+          ...(c.reason !== undefined ? { reason: c.reason } : {}),
+          ...(c.note !== undefined ? { note: c.note } : {}),
         });
       }
     }
@@ -3209,18 +3995,27 @@ export function createEngine(deps: EngineDeps): Engine {
     // gate waited. One missing artifact refuses the whole attempt's commit
     // before the ledger is touched, so no sibling's delta lands without it.
     const phaseDef = def.phases.find((pd) => pd.id === phase.id);
-    const refuseAll = async (reason: string): Promise<KnowledgeCommitVerdict> => {
+    // Every refusal refuses the *whole* attempt: a phase that revises a rule,
+    // verifies one and answers four criteria leaves all of it durable or none
+    // of it. `failureClass` names which half was refused, so a retry policy
+    // that opted into one class is not triggered by another.
+    const refuseAll = async (
+      reason: string,
+      failureClass?: RetryableClass,
+    ): Promise<KnowledgeCommitVerdict> => {
       for (const q of proposals) {
         await updateDeltaStatus(q.execution.runId, "rejected", { at, reason });
       }
       await refuseChangeProposals(phase, reason, at);
-      return { ok: false, reason };
+      await refuseAcceptance(phase, reason, at);
+      return { ok: false, reason, ...(failureClass ? { failureClass } : {}) };
     };
     for (const p of proposals) {
       const missing = await verifyDeltaArtifacts(def, phase, p.execution.runId, p.delta);
       if (missing) {
         return refuseAll(
           `KnowledgeDelta commit refused: delta ${p.id} (run ${p.execution.runId}): artifact: ${missing}`,
+          "knowledge-delta",
         );
       }
       // The discovery evidence, checked again at the commit boundary. Intake
@@ -3241,6 +4036,7 @@ export function createEngine(deps: EngineDeps): Engine {
         if (verdict.refusal) {
           return refuseAll(
             `KnowledgeDelta commit refused: delta ${p.id} (run ${p.execution.runId}): ${verdict.refusal}`,
+            "knowledge-delta",
           );
         }
       }
@@ -3253,7 +4049,7 @@ export function createEngine(deps: EngineDeps): Engine {
       const reason = `rule-verification commit refused: ${verifications.reason}`;
       await refuseVerifications(phase, reason, at);
       await refuseChangeProposals(phase, reason, at);
-      return refuseAll(reason);
+      return refuseAll(reason, "rule-verification");
     }
     // The attempt's accepted change intent (Phase 7). Gathered before the write
     // so the request that caused a revision, and the revision itself, are one
@@ -3264,7 +4060,19 @@ export function createEngine(deps: EngineDeps): Engine {
       const reason = `change-proposal commit refused: ${changes.reason}`;
       await refuseVerifications(phase, reason, at);
       await refuseChangeProposals(phase, reason, at);
-      return refuseAll(reason);
+      return refuseAll(reason, "change-proposal");
+    }
+    // The attempt's acceptance results (Phase 8), resolved against the checks
+    // Argus itself ran. Gathered before the write for the same reason as the
+    // conformance results: a forged or failing check reference refuses the
+    // whole attempt rather than landing half of it.
+    const acceptance = await acceptanceProposalsOf(inst, phase);
+    if (!acceptance.ok) {
+      const reason = `acceptance-verification commit refused: ${acceptance.reason}`;
+      await refuseVerifications(phase, reason, at);
+      await refuseChangeProposals(phase, reason, at);
+      await refuseAcceptance(phase, reason, at);
+      return refuseAll(reason, "acceptance-verification");
     }
     try {
       const results = await commitPhaseSemantics(
@@ -3272,6 +4080,7 @@ export function createEngine(deps: EngineDeps): Engine {
         verifications.proposals,
         deps.now(),
         changes.acceptances,
+        acceptance.proposals,
       );
       for (const [i, p] of proposals.entries()) {
         await updateDeltaStatus(p.execution.runId, "applied", { at, result: results.deltas[i] });
@@ -3289,6 +4098,23 @@ export function createEngine(deps: EngineDeps): Engine {
           },
         });
       }
+      // And the acceptance sidecar keeps the durable results it became.
+      for (const step of phase.steps) {
+        if (!step.runId || !step.acceptanceVerification) continue;
+        if (
+          !(phase.knowledge?.acceptanceVerifications ?? []).includes(step.acceptanceVerification.id)
+        ) {
+          continue;
+        }
+        await updateAcceptanceStatus(step.runId, "applied", {
+          at,
+          result: {
+            criteria: results.acceptanceVerifications.filter(
+              (v) => v.execution.runId === step.runId,
+            ),
+          },
+        });
+      }
       // And the change-intent sidecar keeps the durable proposal it became, so
       // "what did this attempt make canonical, and why?" is answerable from the
       // record beside the run as well as from the ledger.
@@ -3303,7 +4129,19 @@ export function createEngine(deps: EngineDeps): Engine {
       }
       return { ok: true };
     } catch (e) {
-      const reason = `${verifications.proposals.length > 0 && proposals.length === 0 ? "rule-verification" : "KnowledgeDelta"} commit refused: ${
+      // The ledger itself refused the transition. Which half it was about is
+      // not decidable from the throw, so the reason names the half that was
+      // the *only* thing at stake when there was one, and the class falls back
+      // to what the attempt staged.
+      const half =
+        proposals.length > 0
+          ? "KnowledgeDelta"
+          : verifications.proposals.length > 0
+            ? "rule-verification"
+            : acceptance.proposals.length > 0
+              ? "acceptance-verification"
+              : "KnowledgeDelta";
+      const reason = `${half} commit refused: ${
         e instanceof KnowledgeDeltaError
           ? `${e.code}: ${e.message}`
           : e instanceof Error
@@ -3315,7 +4153,22 @@ export function createEngine(deps: EngineDeps): Engine {
       }
       await refuseVerifications(phase, reason, at);
       await refuseChangeProposals(phase, reason, at);
+      await refuseAcceptance(phase, reason, at);
       return { ok: false, reason };
+    }
+  }
+
+  /** Mark this attempt's staged acceptance records rejected, so the refusal is
+   *  readable beside the run as well as on the phase. */
+  async function refuseAcceptance(phase: PhaseProgress, reason: string, at: string): Promise<void> {
+    for (const step of phase.steps) {
+      if (!step.runId || !step.acceptanceVerification) continue;
+      if (
+        !(phase.knowledge?.acceptanceVerifications ?? []).includes(step.acceptanceVerification.id)
+      ) {
+        continue;
+      }
+      await updateAcceptanceStatus(step.runId, "rejected", { at, reason });
     }
   }
 
@@ -3735,15 +4588,13 @@ export function createEngine(deps: EngineDeps): Engine {
       // the phase: a commit that carried only conformance results failed as
       // `rule-verification`, not as a knowledge delta.
       if (!verdict.ok) {
+        // The same class the transition wrote onto the phase: derived from
+        // what the attempt staged unless the commit said which half it was.
         noteFailure(
           def,
           next.instance,
           phaseId,
-          changes.length > 0
-            ? "change-proposal"
-            : phase.knowledge.deltas.length === 0 && verifications.length > 0
-              ? "rule-verification"
-              : "knowledge-delta",
+          verdict.failureClass ?? commitFailureClass(phase.knowledge),
           verdict.reason,
         );
       }
@@ -3754,6 +4605,356 @@ export function createEngine(deps: EngineDeps): Engine {
       };
     }
     return out;
+  }
+
+  /**
+   * Drive every change realization of this instance through whatever the
+   * transition just settled (Phase 8).
+   *
+   * Called immediately after {@link settleKnowledge}, inside the same instance
+   * lock, so it sees the phases in exactly the state the transition left them
+   * and its own writes are saved with them. Idempotent: an attempt already
+   * recorded on the realization is never recorded twice, and a realization
+   * that already has an outcome is left alone — so a restart, a reconcile or a
+   * second transition in the same window heals rather than duplicating.
+   */
+  async function settleRealizations(
+    def: PipelineDefinition,
+    res: TransitionResult,
+  ): Promise<TransitionResult> {
+    let out = res;
+    for (const phaseDef of def.phases) {
+      if (!phaseDef.implementation) continue;
+      out = await settleRealization(def, out, phaseDef);
+    }
+    return out;
+  }
+
+  /** The phases that must run again for a remediation: the verifier, and every
+   *  phase between the implementation and it. Earlier accepted work —
+   *  discovery, change intent, the human approval — is historical input and is
+   *  never re-run. */
+  function realizationPhases(
+    def: PipelineDefinition,
+    implId: string,
+    verifierId: string,
+  ): string[] {
+    const needs = resolveNeeds(def.phases);
+    const ancestors = (id: string): Set<string> => {
+      const seen = new Set<string>();
+      const queue = [...(needs.get(id) ?? [])];
+      while (queue.length) {
+        const next = queue.shift()!;
+        if (seen.has(next)) continue;
+        seen.add(next);
+        queue.push(...(needs.get(next) ?? []));
+      }
+      return seen;
+    };
+    const verifierAncestors = ancestors(verifierId);
+    return def.phases
+      .map((p) => p.id)
+      .filter(
+        (id) =>
+          id !== implId &&
+          (id === verifierId || (verifierAncestors.has(id) && ancestors(id).has(implId))),
+      );
+  }
+
+  async function settleRealization(
+    def: PipelineDefinition,
+    res: TransitionResult,
+    implPhaseDef: PhaseDef,
+  ): Promise<TransitionResult> {
+    const inst = res.instance;
+    const impl = inst.phases.find((p) => p.id === implPhaseDef.id);
+    if (!impl) return res;
+    const ledger = await readLedger();
+    const link = impl.realization;
+    // A phase that ended without carrying its link — an abort, a launch the
+    // preflight refused after the realization was opened, a crash between the
+    // ledger write and the instance write — must not leave a realization
+    // reading `running` forever. It is closed with what actually happened.
+    if (!link) {
+      const orphan = changeRealizationOfPhase(ledger, inst.id, implPhaseDef.id);
+      if (orphan && !orphan.outcome && TERMINAL_PHASE.includes(impl.status)) {
+        await closeRealization(orphan.id, {
+          status: "failed",
+          reason: `the implementation phase ended ${impl.status} without completing an attempt`,
+          unmetRules: [],
+          unmetCriteria: [],
+          completedAt: nowISO(),
+        });
+      }
+      return res;
+    }
+    const realization = changeRealizationById(ledger, link.id);
+    if (!realization || realization.outcome) return res;
+    const attempt = realization.attempts.length + 1;
+    if (link.attempt !== attempt) return res;
+    const proposal = changeProposalById(ledger, realization.proposalId);
+    if (!proposal) return res;
+    const verifierId = realizationVerifierOf(def, implPhaseDef.id);
+    const verifier = verifierId ? inst.phases.find((p) => p.id === verifierId) : undefined;
+    const at = nowISO();
+
+    // The implementation's own repository state, taken the moment the phase
+    // concludes and before the verification phase is queued — so what the
+    // verifier is asked about and what the implementation produced are the
+    // same tree, and a verifier that modified it is caught rather than
+    // credited.
+    //
+    // Once per (phase, attempt): a transition may reach here several times
+    // while the verification runs, and re-snapshotting would both cost a
+    // `git status` each time and, on a tree an agent is still writing to,
+    // answer differently. A restart re-snapshots, which is the honest
+    // behaviour when the in-memory note is gone.
+    let repository = link.repository;
+    const snapshotKey = `${inst.id}:${implPhaseDef.id}:${attempt}`;
+    if (impl.status === "succeeded" && !repository && !implementationSnapshots.has(snapshotKey)) {
+      implementationSnapshots.add(snapshotKey);
+      repository =
+        repositoryStateFrom(await snapshotWorkingTree(implCwd(def, implPhaseDef, impl))) ??
+        undefined;
+      impl.realization = { ...link, ...(repository ? { repository } : {}) };
+      void journal(inst.id, {
+        at,
+        kind: "realization.implementation-completed",
+        phaseId: implPhaseDef.id,
+        attempt: impl.attempt,
+        detail: `${realization.id} attempt ${attempt} @ ${formatRepositoryState(repository)}`,
+      });
+    }
+
+    // Which half, if either, has ended? Every terminal status counts, not just
+    // `failed`: an aborted or routed-out phase ends the attempt as surely as a
+    // failed one, and leaving the realization `running` would be a completion
+    // question nothing would ever answer.
+    if (!TERMINAL_PHASE.includes(impl.status)) return res;
+    const verifierDone = !verifier || TERMINAL_PHASE.includes(verifier.status);
+    if (impl.status === "succeeded" && !verifierDone) return res;
+
+    const runsOf = (phase: PhaseProgress | undefined): RunExecutionRef[] =>
+      (phase?.steps ?? []).flatMap((st) =>
+        st.runId ? [{ runId: st.runId, instanceId: inst.id, phaseId: phase!.id }] : [],
+      );
+    const verificationRuns = runsOf(verifier);
+    const verificationRunIds = verificationRuns.map((r) => r.runId);
+    const ruleVerifications = ledger.verifications.filter((v) =>
+      verificationRunIds.includes(v.execution.runId),
+    );
+    const acceptanceVerifications = ledger.acceptanceVerifications.filter((v) =>
+      verificationRunIds.includes(v.execution.runId),
+    );
+    const verificationState = await verifiedRepositoryState(
+      ruleVerifications,
+      acceptanceVerifications,
+    );
+
+    const implementation: "succeeded" | "failed" | "blocked" =
+      impl.status !== "succeeded"
+        ? isBlocker(impl)
+          ? "blocked"
+          : "failed"
+        : verifier && verifier.status !== "succeeded"
+          ? "failed"
+          : "succeeded";
+    const verdict = evaluateCompletion({
+      ledger,
+      proposal,
+      implementation,
+      ...(technicalResultFrom([impl.verification, verifier?.verification])
+        ? { technical: technicalResultFrom([impl.verification, verifier?.verification])! }
+        : {}),
+      implementationState: impl.status === "succeeded" ? (repository ?? null) : null,
+      verificationState: impl.status === "succeeded" ? verificationState : null,
+      ruleVerifications,
+      acceptanceVerifications,
+      ...(def.phases.find((p) => p.id === verifierId)?.acceptanceVerification
+        ? {
+            acceptancePolicy: def.phases.find((p) => p.id === verifierId)!.acceptanceVerification!,
+          }
+        : {}),
+    });
+
+    // The last precondition, and the one §stale intent exists for: the
+    // implementation may be perfect and the business may have moved on while
+    // it ran. The attempt's results stay historically true about the exact
+    // revisions they named; what may not happen is presenting the realization
+    // as *current* completion.
+    const currency = realizationIntentCurrency(ledger, realization.target);
+    const outcome = currency.current ? verdict.outcome : "stale-intent";
+    const reason = currency.current
+      ? verdict.reason
+      : `the semantic target moved while this realization ran: ${currency.superseded
+          .map((x) => `${formatClaimRef(x.from)} → ${formatClaimRef(x.to)}`)
+          .join(
+            ", ",
+          )}. The implementation's own results stand for the revisions they named; this realization is not current completion`;
+
+    const record: ChangeRealizationAttempt = {
+      attempt,
+      kind: link.kind,
+      implementation: runsOf(impl),
+      verification: verificationRuns,
+      ...(repository ? { repository } : {}),
+      ...(technicalResultFrom([impl.verification, verifier?.verification])
+        ? { technical: technicalResultFrom([impl.verification, verifier?.verification])! }
+        : {}),
+      ruleResults: verdict.ruleResults,
+      acceptanceResults: verdict.acceptanceResults,
+      outcome,
+      reason,
+      startedAt: realization.createdAt,
+      endedAt: at,
+    };
+    try {
+      await recordRealizationAttempt(realization.id, record);
+    } catch (e) {
+      log.error("realization attempt could not be recorded", {
+        instanceId: inst.id,
+        realizationId: realization.id,
+        err: e,
+      });
+      return res;
+    }
+    if (verifier) {
+      void journal(inst.id, {
+        at,
+        kind: "realization.verification-completed",
+        phaseId: verifier.id,
+        attempt: verifier.attempt,
+        detail: `${realization.id} attempt ${attempt}: ${outcome} — ${reason}`,
+      });
+    }
+
+    // ── Succeeded ────────────────────────────────────────────────────────────
+    if (outcome === "succeeded") {
+      await closeRealization(realization.id, {
+        status: "succeeded",
+        ...(repository ? { repository } : {}),
+        reason,
+        unmetRules: [],
+        unmetCriteria: [],
+        completedAt: at,
+      });
+      void journal(inst.id, {
+        at,
+        kind: "realization.succeeded",
+        phaseId: implPhaseDef.id,
+        detail: `${realization.id} → ${proposal.id} @ ${formatRepositoryState(repository)} after ${attempt} attempt${attempt === 1 ? "" : "s"}`,
+      });
+      return res;
+    }
+
+    const unmetRules = verdict.ruleResults.filter((r) => r.outcome !== "holds");
+    const unmetCriteria = verdict.acceptanceResults.filter((r) => r.outcome !== "satisfied");
+
+    // ── Stale intent: stop, never remediate ─────────────────────────────────
+    if (outcome === "stale-intent") {
+      await closeRealization(realization.id, {
+        status: "stale",
+        ...(repository ? { repository } : {}),
+        reason,
+        unmetRules,
+        unmetCriteria,
+        completedAt: at,
+      });
+      void journal(inst.id, {
+        at,
+        kind: "realization.stale",
+        phaseId: implPhaseDef.id,
+        detail: `${realization.id}: ${reason}`,
+      });
+      return res;
+    }
+
+    // ── Another targeted attempt, or a terminal failure ─────────────────────
+    const attemptsLeft = realization.maxAttempts - attempt;
+    if (verdict.remediable && attemptsLeft > 0 && verifierId && inst.status !== "aborted") {
+      const next = applyRemediation(
+        inst,
+        implPhaseDef.id,
+        realizationPhases(def, implPhaseDef.id, verifierId),
+        at,
+      );
+      void journal(inst.id, {
+        at,
+        kind: "realization.remediation-started",
+        phaseId: implPhaseDef.id,
+        detail: `${realization.id}: attempt ${attempt} ${outcome} (${reason}); ${attemptsLeft} attempt${attemptsLeft === 1 ? "" : "s"} left`,
+      });
+      return {
+        ...res,
+        instance: next.instance,
+        startPhases: [...new Set([...res.startPhases, ...next.startPhases])],
+      };
+    }
+
+    // Why no further attempt is taken, when one could otherwise have been. The
+    // three reasons are different facts and the record says which: a spent
+    // budget, an aborted instance, and a realization with no verifier at all.
+    const blocked =
+      inst.status === "aborted"
+        ? "the instance was aborted"
+        : !verifierId
+          ? "this realization has no verification phase, so nothing can decide it"
+          : attemptsLeft <= 0
+            ? `the realization's ${realization.maxAttempts}-attempt budget is exhausted`
+            : null;
+    const terminal = verdict.remediable && blocked ? `${reason}; ${blocked}` : reason;
+    await closeRealization(realization.id, {
+      status: "failed",
+      ...(repository ? { repository } : {}),
+      reason: terminal,
+      unmetRules,
+      unmetCriteria,
+      completedAt: at,
+    });
+    void journal(inst.id, {
+      at,
+      kind: "realization.failed",
+      phaseId: implPhaseDef.id,
+      detail: `${realization.id}: ${terminal}`,
+    });
+    return res;
+  }
+
+  /** Where an implementation phase's work happened: its worktree, else its own
+   *  `cwd`. Synchronous, because the phase record already knows. */
+  function implCwd(def: PipelineDefinition, phaseDef: PhaseDef, phase: PhaseProgress): string {
+    return phase.workspace?.path ?? phaseDef.cwd;
+  }
+
+  /** Did the implementation phase fail because the agent reported a blocker?
+   *  `ARGUS_OUTCOME: blocked` becomes a `signal` failure whose reason the hook
+   *  prefixes with `blocked`, which is the existing mechanism Phase 8 reuses
+   *  rather than inventing a second one. */
+  function isBlocker(phase: PhaseProgress): boolean {
+    const reason = (phase.payload as PhaseFailurePayload | null)?.reason ?? "";
+    return /^blocked\b/i.test(reason.trim());
+  }
+
+  /**
+   * The one repository state every result of this attempt's verification was
+   * bound to, or null when they disagree (or none exists).
+   *
+   * Disagreement is not smoothed over: two verification runs that examined
+   * different trees cannot jointly prove anything about one implementation, so
+   * the completion check sees `null` and fails closed as `state-mismatch`.
+   */
+  async function verifiedRepositoryState(
+    rules: RuleVerification[],
+    acceptance: AcceptanceVerification[],
+  ): Promise<RepositoryStateRef | null> {
+    const states: (RepositoryStateRef | undefined)[] = [
+      ...rules.map((r) => r.repositoryState),
+      ...acceptance.map((a) => a.repository),
+    ];
+    const present = states.filter((x): x is RepositoryStateRef => x !== undefined);
+    if (present.length === 0) return null;
+    const first = present[0];
+    return present.every((s) => sameRepositoryState(s, first)) ? first : null;
   }
 
   function mergeRouting(a?: RouteOutcome, b?: RouteOutcome): RouteOutcome | undefined {
@@ -3787,6 +4988,18 @@ export function createEngine(deps: EngineDeps): Engine {
           runId: step.runId,
           attempt: phase.attempt,
           detail: `${step.knowledgeDelta.id}: ${reason}`,
+        });
+      }
+      if (step.acceptanceVerification?.status === "staged") {
+        await updateAcceptanceStatus(step.runId, "superseded", { at: nowISO(), reason });
+        step.acceptanceVerification = { ...step.acceptanceVerification, status: "superseded" };
+        void journal(inst.id, {
+          at: nowISO(),
+          kind: "acceptance.superseded",
+          phaseId: phase.id,
+          runId: step.runId,
+          attempt: phase.attempt,
+          detail: `${step.acceptanceVerification.id}: ${reason}`,
         });
       }
       if (step.ruleVerification?.status === "staged") {
@@ -3833,6 +5046,7 @@ export function createEngine(deps: EngineDeps): Engine {
         (s) =>
           (s.knowledgeDelta?.status === "staged" ||
             s.ruleVerification?.status === "staged" ||
+            s.acceptanceVerification?.status === "staged" ||
             s.changeProposal?.status === "staged") &&
           (phaseOver || s.status === "failed" || s.status === "aborted" || s.status === "skipped"),
       );
@@ -3956,6 +5170,7 @@ export function createEngine(deps: EngineDeps): Engine {
         detail: `c${winner} of ${records.length} (${phaseDef.candidates.select})`,
       });
       res = await settleKnowledge(def, res);
+      res = await settleRealizations(def, res);
     } else {
       const failureClass = candidateFailureClass(records);
       const reason = candidateFailureReason(records);
@@ -4158,6 +5373,7 @@ export function createEngine(deps: EngineDeps): Engine {
         return { ok: true, code: 202 };
       }
       res = await settleKnowledge(def, res);
+      res = await settleRealizations(def, res);
       const { instance, startPhases: ready, routing, verify, verifyCandidate } = res;
       noteRouting(def, instance, routing);
       // A candidate's failure is not the phase's: it loses, the phase carries
@@ -4249,6 +5465,7 @@ export function createEngine(deps: EngineDeps): Engine {
       // The gate is the acceptance condition: a staged delta commits here,
       // after the human's approval, never when the agent finished.
       res = await settleKnowledge(def, res);
+      res = await settleRealizations(def, res);
       await saveInstance(res.instance);
       if (res.instance.status === "succeeded" || res.instance.status === "failed") {
         void journal(inst.id, {
@@ -4327,7 +5544,13 @@ export function createEngine(deps: EngineDeps): Engine {
         inst.phases.map((p) => p.id),
         "aborted",
       );
-      await saveInstance(aborted);
+      // An abort ends every realization this instance was driving: a
+      // completion question nothing will ever answer is not left `running`.
+      const def = await defFor(aborted);
+      const settled = def
+        ? await settleRealizations(def, { instance: aborted, startPhases: [] })
+        : { instance: aborted };
+      await saveInstance(settled.instance);
       deps.onChange?.();
       return { ok: true, code: 200 };
     });
@@ -4494,11 +5717,14 @@ export function createEngine(deps: EngineDeps): Engine {
         for (const i of livePhases(current)) {
           const phase = current.phases[i];
           if (phase.status !== "running" || phase.knowledge?.status !== "pending") continue;
-          const res = await settleKnowledge(def, {
-            instance: current,
-            startPhases: [],
-            commitKnowledge: [phase.id],
-          });
+          const res = await settleRealizations(
+            def,
+            await settleKnowledge(def, {
+              instance: current,
+              startPhases: [],
+              commitKnowledge: [phase.id],
+            }),
+          );
           noteRouting(def, res.instance, res.routing);
           await saveInstance(res.instance);
           if (res.instance.status === "succeeded" || res.instance.status === "failed") {
@@ -4662,6 +5888,7 @@ export function createEngine(deps: EngineDeps): Engine {
             noteFailure(def, res.instance, phaseId, recordClass, reason);
           }
           res = await settleKnowledge(def, res);
+          res = await settleRealizations(def, res);
           const {
             instance,
             startPhases: ready,

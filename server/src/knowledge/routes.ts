@@ -1,7 +1,13 @@
 import { Hono, type Context } from "hono";
 import type {
+  AcceptanceConformanceReport,
+  AcceptanceVerificationPreview,
   AcceptedChangeProposal,
   ArtifactProductionsResponse,
+  ChangeRealizationResultsResponse,
+  ChangeRealizationRunsResponse,
+  ChangeRealizationView,
+  ChangeRealizationsResponse,
   ChangeProposalPreview,
   ChangeProposalsResponse,
   ClaimDetail,
@@ -29,7 +35,14 @@ import {
   changeProposalOfClaim,
   changeProposals,
   changeProposalsForRequest,
+  changeRealizationById,
+  changeRealizations,
+  changeRealizationsForProposal,
+  acceptanceConformance,
+  acceptanceVerificationsOfProposal,
+  acceptanceVerificationsOfRun,
   consumersReport,
+  realizationView,
   dependentsReport,
   executionOf,
   executionProvenance,
@@ -53,6 +66,8 @@ import { readVerificationRecord, readVerificationRecordById } from "./verificati
 import { previewRuleVerification } from "./ruleVerification.js";
 import { readProposalRecord, readProposalRecordById } from "./changeStaging.js";
 import { previewChangeProposal } from "./changeIntent.js";
+import { readAcceptanceRecord, readAcceptanceRecordById } from "./acceptanceStaging.js";
+import { previewAcceptance } from "./acceptance.js";
 import {
   createClaim,
   createEvidence,
@@ -485,6 +500,146 @@ export function knowledgeRoutes(): Hono {
     const proposal = changeProposalOfClaim(ledger, refOf(claim));
     if (!proposal) return c.json({ error: "not found" }, 404);
     return c.json(proposal);
+  });
+
+  // ── Change realization (Phase 8) ─────────────────────────────────────────
+  //
+  // Read-only, like every other semantic surface. There is deliberately **no**
+  // write API for completion state: a realization is opened, advanced and
+  // closed by the pipeline engine as its phases cross their acceptance
+  // boundaries, and an HTTP route that could mark one `succeeded` would be a
+  // way to declare a change implemented without any of the four dimensions
+  // having been established.
+
+  /** Every realization, newest first; `?proposal=<id>` narrows to the attempts
+   *  made against one accepted change — including the ones that failed, which
+   *  is how the history explains how the implementation converged. */
+  routes.get("/realizations", async (c) => {
+    const ledger = await readLedger();
+    const proposalId = c.req.query("proposal");
+    if (proposalId !== undefined && !CLAIM_ID_RE.test(proposalId)) {
+      return c.json({ error: "proposal must be a change-proposal id" }, 400);
+    }
+    const realizations: ChangeRealizationView[] = proposalId
+      ? changeRealizationsForProposal(ledger, proposalId).map(realizationView)
+      : changeRealizations(ledger);
+    const body: ChangeRealizationsResponse = { realizations };
+    return c.json(body);
+  });
+
+  /** One realization: its target, its scope, every attempt with what each one
+   *  failed on, and its terminal verdict when it has one. */
+  routes.get("/realizations/:id", async (c) => {
+    const id = c.req.param("id");
+    if (!CLAIM_ID_RE.test(id)) return c.json({ error: "not found" }, 404);
+    const realization = changeRealizationById(await readLedger(), id);
+    if (!realization) return c.json({ error: "not found" }, 404);
+    return c.json(realizationView(realization));
+  });
+
+  /** Which runs participated: the implementation (and remediation) executions,
+   *  and the verification executions, across every attempt. */
+  routes.get("/realizations/:id/runs", async (c) => {
+    const id = c.req.param("id");
+    if (!CLAIM_ID_RE.test(id)) return c.json({ error: "not found" }, 404);
+    const realization = changeRealizationById(await readLedger(), id);
+    if (!realization) return c.json({ error: "not found" }, 404);
+    const body: ChangeRealizationRunsResponse = {
+      realizationId: realization.id,
+      implementation: realization.attempts.flatMap((a) => a.implementation),
+      verification: realization.attempts.flatMap((a) => a.verification),
+    };
+    return c.json(body);
+  });
+
+  /** The durable semantic records this realization's attempts produced, in
+   *  commit order and unfiltered: the rule verifications and the acceptance
+   *  verifications that did (or did not) prove it. */
+  routes.get("/realizations/:id/results", async (c) => {
+    const id = c.req.param("id");
+    if (!CLAIM_ID_RE.test(id)) return c.json({ error: "not found" }, 404);
+    const ledger = await readLedger();
+    const realization = changeRealizationById(ledger, id);
+    if (!realization) return c.json({ error: "not found" }, 404);
+    const runs = new Set(realization.attempts.flatMap((a) => a.verification.map((v) => v.runId)));
+    const body: ChangeRealizationResultsResponse = {
+      realizationId: realization.id,
+      proposalId: realization.proposalId,
+      rules: ledger.verifications.filter((v) => runs.has(v.execution.runId)),
+      acceptance: ledger.acceptanceVerifications.filter((v) => runs.has(v.execution.runId)),
+    };
+    return c.json(body);
+  });
+
+  /**
+   * Is one accepted criterion satisfied? `?gitHead=` scopes the question to a
+   * commit, exactly as the rule-conformance route does — and, exactly as
+   * there, a result recorded against a *dirty* tree never answers a question
+   * about a bare commit, because it cannot.
+   */
+  routes.get("/change-proposals/:id/criteria/:criterionId", async (c) => {
+    const id = c.req.param("id");
+    const criterionId = c.req.param("criterionId");
+    if (!CLAIM_ID_RE.test(id) || !CLAIM_ID_RE.test(criterionId)) {
+      return c.json({ error: "not found" }, 404);
+    }
+    const ledger = await readLedger();
+    if (!changeProposalById(ledger, id)) return c.json({ error: "not found" }, 404);
+    const gitHead = c.req.query("gitHead");
+    const body: AcceptanceConformanceReport = acceptanceConformance(
+      ledger,
+      id,
+      criterionId,
+      gitHead ? { gitHead } : undefined,
+    );
+    return c.json(body);
+  });
+
+  /** Every acceptance result recorded for one accepted change, in commit
+   *  order. Nothing is overwritten, so a criterion answered at three
+   *  repository states has three records. */
+  routes.get("/change-proposals/:id/acceptance", async (c) => {
+    const id = c.req.param("id");
+    if (!CLAIM_ID_RE.test(id)) return c.json({ error: "not found" }, 404);
+    const ledger = await readLedger();
+    if (!changeProposalById(ledger, id)) return c.json({ error: "not found" }, 404);
+    return c.json({ proposalId: id, acceptance: acceptanceVerificationsOfProposal(ledger, id) });
+  });
+
+  /** The acceptance results one run produced. */
+  routes.get("/executions/:runId/acceptance", async (c) => {
+    const runId = c.req.param("runId");
+    if (!EXECUTION_ID_RE.test(runId)) return c.json({ error: "not found" }, 404);
+    const ledger = await readLedger();
+    return c.json({ runId, acceptance: acceptanceVerificationsOfRun(ledger, runId) });
+  });
+
+  /** The acceptance proposal one run staged, if any. */
+  routes.get("/executions/:runId/acceptance-proposal", async (c) => {
+    const runId = c.req.param("runId");
+    if (!EXECUTION_ID_RE.test(runId)) return c.json({ error: "not found" }, 404);
+    const record = await readAcceptanceRecord(runId);
+    if (!record) return c.json({ error: "not found" }, 404);
+    return c.json(record);
+  });
+
+  /** The deterministic review projection of one staged acceptance proposal. */
+  routes.get("/acceptance/:id/preview", async (c) => {
+    const id = c.req.param("id");
+    if (!CLAIM_ID_RE.test(id)) return c.json({ error: "not found" }, 404);
+    const record = await readAcceptanceRecordById(id);
+    if (!record) return c.json({ error: "not found" }, 404);
+    const body: AcceptanceVerificationPreview = previewAcceptance(record);
+    return c.json(body);
+  });
+
+  /** One staged acceptance record by its staging id. */
+  routes.get("/acceptance/:id", async (c) => {
+    const id = c.req.param("id");
+    if (!CLAIM_ID_RE.test(id)) return c.json({ error: "not found" }, 404);
+    const record = await readAcceptanceRecordById(id);
+    if (!record) return c.json({ error: "not found" }, 404);
+    return c.json(record);
   });
 
   // ── Proposals (admin) ────────────────────────────────────────────────────

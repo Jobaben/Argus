@@ -222,7 +222,9 @@ not tampering — the file is untouched and integrity passes (KNOWLEDGE-LEDGER.m
 | `knowledge-context-integrity` | The KnowledgeContext Argus materialized for the run no longer hashes to the value recorded at launch — the file was modified, or removed, while the agent ran. The completion is refused and nothing the run proposed becomes canonical. The reason names the run, the expected hash, the hash found and the path; never the contents.                                                                                                                                                                                                                                                                                                      | No — opt in                                             |
 | `rule-verification`           | The run emitted a rule-verification proposal Argus refused — malformed, a rule it was not supplied, a supplied rule left without an outcome (or no file written at all), an outcome with no evidence, an `unverifiable` with no reason, a `check` label the phase does not declare, source evidence that is not a real file inside the repository — or the phase commit was refused (a cited check absent from the report; a `holds` whose check did not pass under `holds: "deterministic-check"`). The refusal names exactly what was missing (KNOWLEDGE-LEDGER.md §15.7).                                                                | No — opt in                                             |
 | `change-proposal`             | The run emitted a ChangeProposal Argus refused — malformed, no file written at all, a supplied rule left unclassified, a classification that contradicts the semantic delta, a claim both preserved and revised, an acceptance criterion naming a local id the delta does not declare, a business-rule change with no acceptance criteria under a `required` policy, or a separate KnowledgeDelta file written beside it — or the phase commit was refused (a local reference the commit did not create; the ledger moved under the proposal's `expectedRevision`). The refusal names exactly what was missing (KNOWLEDGE-LEDGER.md §16.8). | No — opt in                                             |
-| `configuration`               | The declared capability profile could not be enforced under strict enforcement — the step never launched with more capability than its author asked for.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | **Never** — the definition is what's wrong, not the run |
+| `change-context-integrity`    | An Argus-owned **read-only input** the run was given — its ChangeContext, its ImplementationScope, its RemediationContext — no longer hashes to what Argus recorded at launch. The exact counterpart of `knowledge-context-integrity`, and it asks the same question: _did the bytes supplied to this invocation change?_, never _is this still the newest proposal?_. The completion is refused and nothing the run proposed becomes durable (KNOWLEDGE-LEDGER.md §17.8).                                                                                                                                                                  | No — opt in                                             |
+| `acceptance-verification`     | The run emitted an acceptance-verification proposal Argus refused — malformed, a criterion the accepted proposal does not declare, a required criterion left without an outcome (or no file written at all), an outcome with no evidence, an `unverifiable` with no reason, a `check` label the phase does not declare, a report written against a different accepted change, source evidence that is not a real file inside the repository — or the phase commit was refused (a cited check absent from the report; a `satisfied` citing a check Argus observed failing) (KNOWLEDGE-LEDGER.md §17.7).                                      | No — opt in                                             |
+| `configuration`               | The declared capability profile could not be enforced under strict enforcement, or a change realization's preconditions do not hold (the accepted intent's target revisions are no longer active; the attempt budget is spent) — the step never launched.                                                                                                                                                                                                                                                                                                                                                                                   | **Never** — the definition is what's wrong, not the run |
 
 The class is written onto the phase's payload (`withFailureClass`) whenever a
 phase fails, whether or not that failure ends up scheduling a retry — a
@@ -414,17 +416,20 @@ repository (under `~/.claude/argus/`), and must stay reachable whatever
 `filesystem` says about the rest of the disk: a read-only researcher still
 writes its report, its decision and its proposal there.
 
-| Channel             | Env var                        | Direction     | Required access | Launch depends on it when…                                                                                                                                                                                                                                                                                |
-| ------------------- | ------------------------------ | ------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Result file         | `ARGUS_RESULT_FILE`            | agent → Argus | write           | the step publishes the phase's `result` (always required then: the routing reads it). `results/<runId>/result.json` — a directory per run, so granting it admits this run's result only                                                                                                                   |
-| KnowledgeDelta file | `ARGUS_KNOWLEDGE_DELTA_FILE`   | agent → Argus | write           | the phase declares `knowledgeDelta: "required"`. Offered to every run; emitting a delta stays optional either way (KNOWLEDGE-LEDGER.md §12.5)                                                                                                                                                             |
-| Artifact directory  | `ARGUS_ARTIFACT_DIR`           | agent → Argus | write when used | the phase declares an `artifact` check. Offered to every run                                                                                                                                                                                                                                              |
-| Memory directory    | `ARGUS_MEMORY_DIR`             | agent ↔ Argus | write           | `memory.enabled` is set (every step's prompt then asks the agent to append to `NOTES.md`)                                                                                                                                                                                                                 |
-| KnowledgeContext    | `ARGUS_KNOWLEDGE_CONTEXT_FILE` | Argus → agent | **read**        | the step (or its phase) declares a `knowledgeContext` — always required then: the step was authored to reason from it. `invocations/<runId>/knowledge-context.json`, per run, `0444`; the agent never writes it, and Argus re-hashes it before accepting the completion (KNOWLEDGE-LEDGER.md §13, §13.11) |
-| Rule verification   | `ARGUS_RULE_VERIFICATION_FILE` | agent → Argus | write           | the phase declares `ruleVerification` — always required then: the conformance report _is_ the phase's output, not an optional proposal. `rule-verifications/<runId>/verification.json`, a directory per run (KNOWLEDGE-LEDGER.md §15.6)                                                                   |
-| Change request      | `ARGUS_CHANGE_REQUEST_FILE`    | Argus → agent | **read**        | the phase declares `changeIntent` — always required then: it is the phase's input. The requested change verbatim plus, per accountable rule, its support and its current implementation conformance. `invocations/<runId>/change-request.json`, per run, `0444` (KNOWLEDGE-LEDGER.md §16.4)               |
-| Change proposal     | `ARGUS_CHANGE_PROPOSAL_FILE`   | agent → Argus | write           | the phase declares `changeIntent` — always required then: the proposal _is_ the phase's output. `change-proposals/<runId>/proposal.json`, a directory per run (KNOWLEDGE-LEDGER.md §16.5)                                                                                                                 |
-| Change context      | `ARGUS_CHANGE_CONTEXT_FILE`    | Argus → agent | **read**        | the phase declares `changeContext` — always required then: the step was authored to implement that accepted intent. The approved proposal as exact canonical refs, never restated statements. `invocations/<runId>/change-context.json`, per run, `0444` (KNOWLEDGE-LEDGER.md §16.11)                     |
+| Channel                 | Env var                              | Direction     | Required access | Launch depends on it when…                                                                                                                                                                                                                                                                                                                |
+| ----------------------- | ------------------------------------ | ------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Result file             | `ARGUS_RESULT_FILE`                  | agent → Argus | write           | the step publishes the phase's `result` (always required then: the routing reads it). `results/<runId>/result.json` — a directory per run, so granting it admits this run's result only                                                                                                                                                   |
+| KnowledgeDelta file     | `ARGUS_KNOWLEDGE_DELTA_FILE`         | agent → Argus | write           | the phase declares `knowledgeDelta: "required"`. Offered to every run; emitting a delta stays optional either way (KNOWLEDGE-LEDGER.md §12.5)                                                                                                                                                                                             |
+| Artifact directory      | `ARGUS_ARTIFACT_DIR`                 | agent → Argus | write when used | the phase declares an `artifact` check. Offered to every run                                                                                                                                                                                                                                                                              |
+| Memory directory        | `ARGUS_MEMORY_DIR`                   | agent ↔ Argus | write           | `memory.enabled` is set (every step's prompt then asks the agent to append to `NOTES.md`)                                                                                                                                                                                                                                                 |
+| KnowledgeContext        | `ARGUS_KNOWLEDGE_CONTEXT_FILE`       | Argus → agent | **read**        | the step (or its phase) declares a `knowledgeContext` — always required then: the step was authored to reason from it. `invocations/<runId>/knowledge-context.json`, per run, `0444`; the agent never writes it, and Argus re-hashes it before accepting the completion (KNOWLEDGE-LEDGER.md §13, §13.11)                                 |
+| Rule verification       | `ARGUS_RULE_VERIFICATION_FILE`       | agent → Argus | write           | the phase declares `ruleVerification` — always required then: the conformance report _is_ the phase's output, not an optional proposal. `rule-verifications/<runId>/verification.json`, a directory per run (KNOWLEDGE-LEDGER.md §15.6)                                                                                                   |
+| Change request          | `ARGUS_CHANGE_REQUEST_FILE`          | Argus → agent | **read**        | the phase declares `changeIntent` — always required then: it is the phase's input. The requested change verbatim plus, per accountable rule, its support and its current implementation conformance. `invocations/<runId>/change-request.json`, per run, `0444` (KNOWLEDGE-LEDGER.md §16.4)                                               |
+| Change proposal         | `ARGUS_CHANGE_PROPOSAL_FILE`         | agent → Argus | write           | the phase declares `changeIntent` — always required then: the proposal _is_ the phase's output. `change-proposals/<runId>/proposal.json`, a directory per run (KNOWLEDGE-LEDGER.md §16.5)                                                                                                                                                 |
+| Change context          | `ARGUS_CHANGE_CONTEXT_FILE`          | Argus → agent | **read**        | the phase declares `changeContext` — always required then: the step was authored to implement that accepted intent. The approved proposal as exact canonical refs, never restated statements. `invocations/<runId>/change-context.json`, per run, `0444`; re-hashed before the completion is accepted (KNOWLEDGE-LEDGER.md §16.11, §17.8) |
+| Implementation scope    | `ARGUS_IMPLEMENTATION_SCOPE_FILE`    | Argus → agent | **read**        | the phase declares `implementation` — always required then: the run was authored to realize that scope. Where the ledger says the change lives, with a closed reason code per target. `invocations/<runId>/implementation-scope.json`, per run, `0444`, re-hashed at completion (KNOWLEDGE-LEDGER.md §17.5)                               |
+| Remediation context     | `ARGUS_REMEDIATION_CONTEXT_FILE`     | Argus → agent | **read**        | the attempt is a remediation (2..n) — always required then. The exact rules and criteria the previous attempt left unmet, from Argus's own accepted results rather than the previous agent's transcript. `invocations/<runId>/remediation-context.json`, per run, `0444`, re-hashed at completion (KNOWLEDGE-LEDGER.md §17.10)            |
+| Acceptance verification | `ARGUS_ACCEPTANCE_VERIFICATION_FILE` | agent → Argus | write           | the phase declares `acceptanceVerification` — always required then: the criterion outcomes _are_ the phase's output. `acceptance-verifications/<runId>/acceptance.json`, a directory per run (KNOWLEDGE-LEDGER.md §17.7)                                                                                                                  |
 
 The model (`harness/channels.ts`, `InvocationChannel` in `runtimes/types.ts`):
 `prepareInvocation` builds **one** list of channels — kind, env var, path, the
@@ -437,7 +442,8 @@ with a reason. A channel the runtime does not answer for is treated as
 unavailable — a protocol path is never presumed writable. Nothing on the
 runtime side is special-cased by kind: the result file, the delta file and the
 artifact directory are the same thing to an adapter. The one distinction an
-adapter makes is by **access**: a `read` channel (the KnowledgeContext file)
+adapter makes is by **access**: a `read` channel (the KnowledgeContext file,
+and the change-context, implementation-scope and remediation-context files)
 must be reachable and, where the runtime can express it, must _not_ be made
 writable — Claude Code adds an `Edit(//<dir>/**)` deny rule beside the
 `--add-dir`; Codex never lists it in `writable_roots`; OpenCode and Qwen Code
@@ -1900,3 +1906,68 @@ phase must be a `changeIntent` phase and a transitive `needs` dependency,
 checked when the pipeline is saved.
 
 Phase 7 stops there. Nothing implements, re-runs or re-verifies anything.
+
+### Change realization (Phase 8)
+
+A phase that declares `implementation` beside its `changeContext` becomes the
+implementation half of a **change realization** — a durable, bounded
+`implement → verify → remediate → verify` loop against one accepted change.
+A later phase declaring `acceptanceVerification` is its verification half.
+
+```jsonc
+{
+  "id": "implement",
+  "needs": ["change-intent"],
+  "knowledgeContext": { "fromPhases": [{ "phaseId": "change-intent" }] },
+  "changeContext": { "fromPhase": "change-intent" },
+  "implementation": { "maxAttempts": 2 },  // default 2, cap 8; 1 = no remediation
+},
+{
+  "id": "verify",
+  "needs": ["implement"],
+  "knowledgeContext": { "fromPhases": [{ "phaseId": "change-intent" }] },
+  "changeContext": { "fromPhase": "change-intent" },
+  "ruleVerification": { "holds": "deterministic-check" },
+  "acceptanceVerification": { "implementationPhase": "implement" },
+  "checks": [{ "kind": "command", "run": "npm test", "label": "tests" }],
+}
+```
+
+**What the implementation run receives.** Three read channels, never one blob:
+its KnowledgeContext (what the domain says), its ChangeContext (the accepted
+transition), and `ARGUS_IMPLEMENTATION_SCOPE_FILE` — where the ledger says the
+change lives, derived from the `ImpactSet` of the superseded revisions, the
+`source-code` evidence grounding the changed and preserved rules, the locations
+accepted verifications cited, and the request's own paths. Every target carries
+a closed reason code. A change nothing has ever implemented reports
+`scope-incomplete` rather than an empty list.
+
+**What decides completion.** Four independent dimensions, none of which is an
+agent's word about its own work:
+
+```
+implementation execution succeeded   (ARGUS_OUTCOME / the phase's status)
+  ∧ every mandatory PhaseCheck passed (Argus's own VerificationReport)
+  ∧ every targeted rule `holds`       (RuleVerification, this attempt's runs)
+  ∧ every required criterion `satisfied` (AcceptanceVerification, same runs)
+  ∧ the verification examined the state the implementation produced
+  ∧ the semantic target is still the domain's current intent
+```
+
+The repository state is `gitHead` **plus** the content hash of any uncommitted
+work, so two dirty trees at one commit are two different states and a
+verification of one never answers for the other. A mismatch between what the
+implementation produced and what the verification examined fails closed.
+
+**What happens when it is unmet.** Argus writes a `RemediationContext` naming
+the exact failing rules and criteria (with the evidence the verifier cited, and
+what already holds so a fix does not undo it), re-opens the implementation
+phase and resets the phases that verify it — and nothing else. Discovery and
+change intent are accepted history. The loop is bounded by `maxAttempts`, and
+four outcomes stop it even with attempts remaining: a `blocked` implementation,
+an `unverifiable` required criterion, a superseded semantic target, and a
+repository-state mismatch.
+
+A remediation is **not** a retry: the phase's `retry` budget is untouched, and
+the journal says `realization.remediation-started` rather than
+`phase.retrying`. See KNOWLEDGE-LEDGER.md §17 for the full model.

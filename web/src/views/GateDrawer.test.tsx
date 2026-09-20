@@ -920,3 +920,150 @@ describe("GateDrawer — change intent", () => {
     expect(screen.queryByTestId("gate-change-proposal")).toBeNull();
   });
 });
+
+// ── Acceptance verification and change realization (Phase 8) ─────────────────
+//
+// The state the panel exists to make visible: every business rule holds, and
+// the criterion that says "non-Kobra behaviour is unchanged" is violated. A
+// reviewer who could not see both dimensions at once would eventually approve
+// exactly that, and call the change done.
+
+function acceptancePreview(over: Record<string, unknown> = {}) {
+  return {
+    recordId: "AVR-1",
+    runId: "run-b",
+    step: "verify",
+    attempt: 1,
+    status: "staged" as const,
+    proposalId: "CP-12",
+    repository: {
+      gitHead: "abc123def4567890abc123def4567890abc123de",
+      workingTree: { snapshotHash: "f".repeat(64), dirty: 2 },
+    },
+    satisfied: [
+      {
+        ref: "CP-12/AC-1",
+        criterionId: "AC-1",
+        statement: "A Kobra comment of 500 characters is accepted.",
+        kind: "behavior" as const,
+        relatesTo: [{ id: "RULE-42", revision: 2 }],
+        outcome: "satisfied" as const,
+        evidence: [
+          {
+            type: "check" as const,
+            label: "kobra-comment-500",
+            status: "passed" as const,
+            exitCode: 0,
+            detail: "exit 0",
+          },
+        ],
+      },
+    ],
+    violated: [
+      {
+        ref: "CP-12/AC-3",
+        criterionId: "AC-3",
+        statement: "Non-Kobra comment limits are unchanged.",
+        kind: "regression" as const,
+        relatesTo: [{ id: "CONSTRAINT-8", revision: 1 }],
+        outcome: "violated" as const,
+        evidence: [{ type: "source-code" as const, path: "src/Booking/LegacyValidator.cs" }],
+        note: "the legacy cap moved to 500 too",
+      },
+    ],
+    unverifiable: [],
+    missing: [],
+    summary: "Two of three criteria answered against the working tree.",
+    ...over,
+  };
+}
+
+describe("GateDrawer — acceptance criteria", () => {
+  it("shows criterion outcomes beside the rule outcomes, never merged into them", () => {
+    mockReview.review = review({
+      ruleVerifications: [verificationPreview({ violated: [], unverifiable: [], missing: [] })],
+      ruleVerification: {
+        selected: 1,
+        holds: 1,
+        violated: 0,
+        unverifiable: 0,
+        requiresReview: true,
+      },
+      acceptanceVerifications: [acceptancePreview()],
+      acceptanceVerification: {
+        proposalId: "CP-12",
+        required: 2,
+        satisfied: 1,
+        violated: 1,
+        unverifiable: 0,
+        requiresReview: true,
+      },
+    } as never);
+    open();
+
+    // Every rule holds …
+    expect(screen.getByTestId("gate-rule-verification")).toHaveTextContent(/1 holds · 0 violated/);
+    // … and the change is still not complete.
+    const panel = screen.getByTestId("gate-acceptance-verification");
+    expect(panel).toHaveTextContent(/1 satisfied · 1 violated · 0 unverifiable/);
+    expect(panel).toHaveTextContent(/for CP-12/);
+    expect(panel).toHaveTextContent(/at abc123de/);
+    expect(panel).toHaveTextContent(/\+2 uncommitted/);
+    expect(panel).toHaveTextContent(/Nothing here is durable yet/);
+
+    const violated = within(screen.getByLabelText("Violated"));
+    expect(violated.getByText(/Non-Kobra comment limits are unchanged/)).toBeTruthy();
+    // The criterion is addressed by the pair, and names the revision it is
+    // evidence for.
+    expect(panel).toHaveTextContent(/CP-12\/AC-3/);
+    expect(panel).toHaveTextContent(/CONSTRAINT-8:v1/);
+    // A cited check shows as Argus observed it.
+    expect(panel).toHaveTextContent(/check: kobra-comment-500 \(passed, exit 0\)/);
+  });
+
+  it("names a criterion the agent left without an outcome", () => {
+    mockReview.review = review({
+      acceptanceVerifications: [
+        acceptancePreview({ satisfied: [], violated: [], missing: ["AC-2"], status: "rejected" }),
+      ],
+      canApprove: false,
+      status: "failed",
+    } as never);
+    open();
+    expect(screen.getByTestId("gate-acceptance-missing")).toHaveTextContent(
+      /No outcome submitted for AC-2/,
+    );
+    expect(screen.getByTestId("gate-acceptance-verification")).toHaveTextContent(
+      /None of this became durable/,
+    );
+  });
+
+  it("says which accepted change is being realized, and which attempt this is", () => {
+    mockReview.review = review({
+      realization: {
+        id: "CR-7",
+        proposalId: "CP-12",
+        attempt: 2,
+        kind: "remediation",
+        maxAttempts: 2,
+        repository: {
+          gitHead: "abc123def4567890abc123def4567890abc123de",
+          workingTree: { snapshotHash: "f".repeat(64), dirty: 1 },
+        },
+      },
+    } as never);
+    open();
+    const header = screen.getByTestId("gate-realization");
+    expect(header).toHaveTextContent(/Realizing CP-12/);
+    expect(header).toHaveTextContent(/CR-7/);
+    expect(header).toHaveTextContent(/remediation attempt 2 of 2/);
+    expect(header).toHaveTextContent(/abc123de with 1 uncommitted file/);
+  });
+
+  it("is absent entirely on an ordinary phase", () => {
+    mockReview.review = review();
+    open();
+    expect(screen.queryByTestId("gate-acceptance-verification")).toBeNull();
+    expect(screen.queryByTestId("gate-realization")).toBeNull();
+  });
+});

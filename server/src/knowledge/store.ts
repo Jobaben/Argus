@@ -1,8 +1,12 @@
 import { readFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import type {
+  AcceptanceVerification,
   AcceptedChangeProposal,
   ArtifactProduction,
+  ChangeRealization,
+  ChangeRealizationAttempt,
+  ChangeRealizationOutcome,
   Claim,
   ClaimConsumption,
   ClaimRef,
@@ -22,7 +26,10 @@ import {
   addClaim,
   addEvidence,
   addJustification,
+  appendRealizationAttempt,
+  closeChangeRealization,
   emptyLedger,
+  recordAcceptanceVerification,
   recordArtifact,
   recordChangeProposal,
   recordConsumption,
@@ -30,6 +37,8 @@ import {
   recordSuppliedContext,
   resolveKey,
   reviseClaim,
+  startChangeRealization,
+  type StartRealizationInput,
   KnowledgeValidationError,
   formatClaimRef,
   type ClaimKey,
@@ -44,7 +53,7 @@ import type {
   ProposedRevision,
 } from "./validate.js";
 import { KIND_PREFIX, applyKnowledgeDeltas, type DeltaProposal } from "./delta.js";
-import type { RecordVerificationInput } from "./kernel.js";
+import type { RecordAcceptanceInput, RecordVerificationInput } from "./kernel.js";
 import { resolveChangeAcceptance, type ChangeProposalAcceptance } from "./changeIntent.js";
 
 export type { ChangeProposalAcceptance };
@@ -83,12 +92,15 @@ function mint(prefix: string): string {
  * and `artifacts`; a version 2 file (Phase 2) gains an empty `deltas`; a
  * version 3 file (Phase 3) gains an empty `supplied`; a version 4 file
  * (Phase 4.1) gains an empty `verifications`; a version 5 file (Phase 6)
- * gains an empty `changeProposals`. The upgrade is written back
- * only by the next successful transition, and it adds nothing but empty
+ * gains an empty `changeProposals`; a version 6 file (Phase 7) gains empty
+ * `acceptanceVerifications` and `changeRealizations`. The upgrade is written
+ * back only by the next successful transition, and it adds nothing but empty
  * arrays and a version number, so nothing an earlier phase recorded changes.
- * In particular an upgraded document claims **no** supplied provenance and
- * **no** conformance for the runs and rules it already holds: unknown stays
- * unknown (`unverified`, never `holds`), never retro-inferred.
+ * In particular an upgraded document claims **no** supplied provenance, **no**
+ * conformance, **no** acceptance result and **no** realization for the runs,
+ * rules and changes it already holds: unknown stays unknown (`unverified`,
+ * never `holds`, never `satisfied`), never retro-inferred, and no accepted
+ * change gains a realization nobody ran.
  * Anything else is another shape: readable as empty, never overwritten.
  */
 export function upgradeLedger(v: unknown): KnowledgeLedger | null {
@@ -97,6 +109,11 @@ export function upgradeLedger(v: unknown): KnowledgeLedger | null {
   const phase1 =
     Array.isArray(r.claims) && Array.isArray(r.evidence) && Array.isArray(r.justifications);
   if (!phase1) return null;
+  /** Everything a document of `version` does not yet have, all empty. */
+  const added = {
+    acceptanceVerifications: [],
+    changeRealizations: [],
+  };
   if (r.version === 1) {
     return {
       ...r,
@@ -107,6 +124,7 @@ export function upgradeLedger(v: unknown): KnowledgeLedger | null {
       supplied: [],
       verifications: [],
       changeProposals: [],
+      ...added,
     } as unknown as KnowledgeLedger;
   }
   const phase2 = Array.isArray(r.consumptions) && Array.isArray(r.artifacts);
@@ -118,6 +136,7 @@ export function upgradeLedger(v: unknown): KnowledgeLedger | null {
       supplied: [],
       verifications: [],
       changeProposals: [],
+      ...added,
     } as unknown as KnowledgeLedger;
   }
   if (r.version === 3 && phase2 && Array.isArray(r.deltas)) {
@@ -127,6 +146,7 @@ export function upgradeLedger(v: unknown): KnowledgeLedger | null {
       supplied: [],
       verifications: [],
       changeProposals: [],
+      ...added,
     } as unknown as KnowledgeLedger;
   }
   if (r.version === 4 && phase2 && Array.isArray(r.deltas) && Array.isArray(r.supplied)) {
@@ -135,6 +155,7 @@ export function upgradeLedger(v: unknown): KnowledgeLedger | null {
       version: LEDGER_VERSION,
       verifications: [],
       changeProposals: [],
+      ...added,
     } as unknown as KnowledgeLedger;
   }
   const phase6 =
@@ -143,9 +164,23 @@ export function upgradeLedger(v: unknown): KnowledgeLedger | null {
     Array.isArray(r.supplied) &&
     Array.isArray(r.verifications);
   if (r.version === 5 && phase6) {
-    return { ...r, version: LEDGER_VERSION, changeProposals: [] } as unknown as KnowledgeLedger;
+    return {
+      ...r,
+      version: LEDGER_VERSION,
+      changeProposals: [],
+      ...added,
+    } as unknown as KnowledgeLedger;
   }
-  if (r.version === LEDGER_VERSION && phase6 && Array.isArray(r.changeProposals)) {
+  const phase7 = phase6 && Array.isArray(r.changeProposals);
+  if (r.version === 6 && phase7) {
+    return { ...r, version: LEDGER_VERSION, ...added } as unknown as KnowledgeLedger;
+  }
+  if (
+    r.version === LEDGER_VERSION &&
+    phase7 &&
+    Array.isArray(r.acceptanceVerifications) &&
+    Array.isArray(r.changeRealizations)
+  ) {
     return r as unknown as KnowledgeLedger;
   }
   return null;
@@ -384,11 +419,18 @@ export async function commitKnowledgeDeltas(
  *  to it. `id` is minted by the caller's commit, never by the agent. */
 export type VerificationProposal = Omit<RecordVerificationInput, "id">;
 
+/** One accepted acceptance-criterion result with the execution provenance
+ *  Argus binds to it (Phase 8). `id` is minted by the commit, never by the
+ *  agent, exactly as a rule verification's is. */
+export type AcceptanceProposal = Omit<RecordAcceptanceInput, "id">;
+
 export interface PhaseSemanticsResult {
   deltas: KnowledgeDeltaApplyResult[];
   verifications: RuleVerification[];
   /** The durable change-provenance records this commit wrote (Phase 7). */
   changeProposals: AcceptedChangeProposal[];
+  /** The durable acceptance-criterion results this commit wrote (Phase 8). */
+  acceptanceVerifications: AcceptanceVerification[];
 }
 
 /**
@@ -421,6 +463,7 @@ export async function commitPhaseSemantics(
   verifications: VerificationProposal[],
   now: Date,
   acceptances: ChangeProposalAcceptance[] = [],
+  acceptanceResults: AcceptanceProposal[] = [],
 ): Promise<PhaseSemanticsResult> {
   return mutateLedger((ledger) => {
     const { ledger: afterDeltas, results } = applyKnowledgeDeltas(ledger, proposals, {
@@ -453,9 +496,71 @@ export async function commitPhaseSemantics(
       next = r.ledger;
       changes.push(r.proposal);
     }
+    // Acceptance criteria last of all: they name an accepted proposal, which
+    // the step above may have just written, and the criterion's statement is
+    // taken from *that* record rather than from the agent's document.
+    const acceptancesOut: AcceptanceVerification[] = [];
+    for (const a of acceptanceResults) {
+      const working = next;
+      let id: string;
+      do id = mint("AV");
+      while (working.acceptanceVerifications.some((x) => x.id === id));
+      const r = recordAcceptanceVerification(next, { ...a, id }, now.toISOString());
+      next = r.ledger;
+      acceptancesOut.push(r.verification);
+    }
     return {
       ledger: next,
-      result: { deltas: results, verifications: recorded, changeProposals: changes },
+      result: {
+        deltas: results,
+        verifications: recorded,
+        changeProposals: changes,
+        acceptanceVerifications: acceptancesOut,
+      },
     };
+  });
+}
+
+// ── Change realization (Phase 8) ────────────────────────────────────────────
+
+/**
+ * Open (or re-open idempotently) the realization one implementation phase
+ * drives. Called at the phase attempt's launch, before any agent exists, so
+ * "which run was intended to realize CP-12?" is answerable even if the run
+ * then crashes.
+ */
+export async function openChangeRealization(
+  input: Omit<StartRealizationInput, "id">,
+  now: Date,
+): Promise<{ realization: ChangeRealization; added: boolean }> {
+  return mutateLedger((ledger) => {
+    let id: string;
+    do id = mint("CR");
+    while (ledger.changeRealizations.some((r) => r.id === id));
+    const r = startChangeRealization(ledger, { ...input, id }, now.toISOString());
+    return { ledger: r.ledger, result: { realization: r.realization, added: r.added } };
+  });
+}
+
+/** Append one attempt's verdict. Idempotent on the attempt number. */
+export async function recordRealizationAttempt(
+  realizationId: string,
+  attempt: ChangeRealizationAttempt,
+): Promise<ChangeRealization> {
+  return mutateLedger((ledger) => {
+    const r = appendRealizationAttempt(ledger, realizationId, attempt);
+    return { ledger: r.ledger, result: r.realization };
+  });
+}
+
+/** Write the realization's terminal verdict. Idempotent on an identical
+ *  status; a different one is refused rather than rewriting a conclusion. */
+export async function closeRealization(
+  realizationId: string,
+  outcome: ChangeRealizationOutcome,
+): Promise<ChangeRealization> {
+  return mutateLedger((ledger) => {
+    const r = closeChangeRealization(ledger, realizationId, outcome);
+    return { ledger: r.ledger, result: r.realization };
   });
 }

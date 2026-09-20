@@ -128,6 +128,23 @@ async function complete(
     ...extra,
   });
 }
+/**
+ * The persisted run record, once it exists.
+ *
+ * `waitForCalls` observes the spawn, which the engine records *before* it
+ * writes the run file; a test that read the file the instant the call appeared
+ * would be racing an atomic tmp+rename write it has no reason to.
+ */
+async function readRunWhenWritten(runId: string, timeoutMs = 2000) {
+  const start = Date.now();
+  for (;;) {
+    const record = await readRun(runId);
+    if (record) return record;
+    if (Date.now() - start > timeoutMs) throw new Error(`run ${runId} was never persisted`);
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
 /** The persisted instance, which these tests always expect to exist. */
 async function readInst(id: string): Promise<PipelineInstance> {
   return (await readInstance(id))!;
@@ -170,9 +187,11 @@ test("the worked example runs its selected branch and succeeds with the other sk
   assert.equal(statusOf(current, "publish"), "running");
   assert.equal(statusOf(current, "repair"), "skipped");
 
-  // The published result reaches the branch it selected.
-  const shipRun = await readRun(rec.calls[1].runId);
-  assert.equal(shipRun!.run.prompt, 'ship {"accepted":true}');
+  // The published result reaches the branch it selected. The run record is
+  // written just *after* the spawn the poll above observed, so wait for it
+  // rather than racing it.
+  const shipRun = await readRunWhenWritten(rec.calls[1].runId);
+  assert.equal(shipRun.run.prompt, 'ship {"accepted":true}');
 
   await complete(e, inst!, rec, "publish");
   await waitForCalls(rec, 3);

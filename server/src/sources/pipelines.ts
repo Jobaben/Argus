@@ -32,9 +32,11 @@ import {
   matchesEnvPattern,
 } from "../harness/childEnv.js";
 import type {
+  AcceptanceVerificationPolicy,
   AgentRuntimeId,
   ClaimKind,
   DiscoveryPolicy,
+  ImplementationPolicy,
   DiscoveryScope,
   KnowledgeContextSpec,
   ChangeContextSpec,
@@ -48,7 +50,7 @@ import {
   DISCOVERY_NOTE_MAX_CHARS,
   DISCOVERY_SCOPE_MAX_PATHS,
 } from "../knowledge/discovery.js";
-import { CLAIM_KINDS, validArtifactPath } from "../knowledge/kernel.js";
+import { CLAIM_KINDS, REALIZATION_MAX_ATTEMPTS, validArtifactPath } from "../knowledge/kernel.js";
 import { ChangeProposalError, validateChangeRequest } from "../knowledge/changeIntent.js";
 import { resolveNeeds } from "./dag.js";
 
@@ -1016,6 +1018,12 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
   const ruleVerification = validateRuleVerification(p.ruleVerification, `phase ${i}`);
   const changeIntent = validateChangeIntent(p.changeIntent, `phase ${i}`, gated);
   const changeContext = validateChangeContext(p.changeContext, `phase ${i}`);
+  const implementation = validateImplementation(p.implementation, `phase ${i}`, changeContext);
+  const acceptanceVerification = validateAcceptanceVerification(
+    p.acceptanceVerification,
+    `phase ${i}`,
+    changeContext,
+  );
 
   return {
     id,
@@ -1042,7 +1050,141 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
     ...(ruleVerification ? { ruleVerification } : {}),
     ...(changeIntent ? { changeIntent } : {}),
     ...(changeContext ? { changeContext } : {}),
+    ...(implementation ? { implementation } : {}),
+    ...(acceptanceVerification ? { acceptanceVerification } : {}),
   };
+}
+
+/**
+ * A phase's implementation policy (Phase 8, `PhaseDef.implementation`).
+ *
+ * Two authoring rules worth being strict about here, where the author can see
+ * them, rather than at 3am on an instance nobody is watching:
+ *
+ * - it requires a `changeContext`. The accepted proposal a realization targets
+ *   is the one that selector resolves; a second selection mechanism would be a
+ *   second answer to "which change is this realizing?";
+ * - `maxAttempts` is bounded. The loop is `implement → verify → implement`,
+ *   and the whole point of the bound is that it is the author's, is small, and
+ *   exists.
+ */
+function validateImplementation(
+  raw: unknown,
+  ctx: string,
+  changeContext: ChangeContextSpec | undefined,
+): ImplementationPolicy | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PipelineValidationError(`${ctx}: implementation must be an object`);
+  }
+  const v = raw as Record<string, unknown>;
+  for (const k of Object.keys(v)) {
+    if (
+      k !== "maxAttempts" &&
+      k !== "requireCurrentIntent" &&
+      k !== "includePreserved" &&
+      k !== "note"
+    ) {
+      throw new PipelineValidationError(`${ctx}: implementation has unknown key "${k}"`);
+    }
+  }
+  if (!changeContext) {
+    throw new PipelineValidationError(
+      `${ctx}: an implementation phase must also declare changeContext — the accepted ChangeProposal it realizes is the one that selector resolves`,
+    );
+  }
+  const out: ImplementationPolicy = {};
+  if (v.maxAttempts !== undefined && v.maxAttempts !== null) {
+    if (
+      typeof v.maxAttempts !== "number" ||
+      !Number.isInteger(v.maxAttempts) ||
+      v.maxAttempts < 1 ||
+      v.maxAttempts > REALIZATION_MAX_ATTEMPTS
+    ) {
+      throw new PipelineValidationError(
+        `${ctx}: implementation.maxAttempts must be an integer between 1 and ${REALIZATION_MAX_ATTEMPTS}`,
+      );
+    }
+    out.maxAttempts = v.maxAttempts;
+  }
+  for (const flag of ["requireCurrentIntent", "includePreserved"] as const) {
+    if (v[flag] === undefined || v[flag] === null) continue;
+    if (typeof v[flag] !== "boolean") {
+      throw new PipelineValidationError(`${ctx}: implementation.${flag} must be a boolean`);
+    }
+    out[flag] = v[flag];
+  }
+  if (v.note !== undefined && v.note !== null) {
+    if (typeof v.note !== "string" || !v.note.trim()) {
+      throw new PipelineValidationError(`${ctx}: implementation.note must be a string`);
+    }
+    if (v.note.length > DISCOVERY_NOTE_MAX_CHARS) {
+      throw new PipelineValidationError(
+        `${ctx}: implementation.note exceeds ${DISCOVERY_NOTE_MAX_CHARS} characters`,
+      );
+    }
+    out.note = v.note.trim();
+  }
+  return out;
+}
+
+/**
+ * A phase's acceptance-verification policy (Phase 8,
+ * `PhaseDef.acceptanceVerification`).
+ *
+ * Like the implementation half it requires a `changeContext`: the criteria a
+ * run must answer for are exactly the accepted proposal's own, and there is no
+ * second way to select them. `implementationPhase` is checked against the
+ * whole graph in {@link validateRealizationPhases}.
+ */
+function validateAcceptanceVerification(
+  raw: unknown,
+  ctx: string,
+  changeContext: ChangeContextSpec | undefined,
+): AcceptanceVerificationPolicy | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PipelineValidationError(`${ctx}: acceptanceVerification must be an object`);
+  }
+  const v = raw as Record<string, unknown>;
+  for (const k of Object.keys(v)) {
+    if (k !== "implementationPhase" && k !== "require" && k !== "note") {
+      throw new PipelineValidationError(`${ctx}: acceptanceVerification has unknown key "${k}"`);
+    }
+  }
+  if (!changeContext) {
+    throw new PipelineValidationError(
+      `${ctx}: an acceptanceVerification phase must also declare changeContext — its criteria are the accepted ChangeProposal's own`,
+    );
+  }
+  if (typeof v.implementationPhase !== "string" || !v.implementationPhase.trim()) {
+    throw new PipelineValidationError(
+      `${ctx}: acceptanceVerification.implementationPhase must name the implementation phase it verifies`,
+    );
+  }
+  const out: AcceptanceVerificationPolicy = {
+    implementationPhase: v.implementationPhase.trim(),
+  };
+  if (v.require !== undefined && v.require !== null) {
+    if (v.require !== "all" && v.require !== "behavioral") {
+      throw new PipelineValidationError(
+        `${ctx}: acceptanceVerification.require must be "all" | "behavioral"`,
+      );
+    }
+    out.require = v.require;
+  }
+  if (v.note !== undefined && v.note !== null) {
+    if (typeof v.note !== "string" || !v.note.trim()) {
+      throw new PipelineValidationError(`${ctx}: acceptanceVerification.note must be a string`);
+    }
+    if (v.note.length > DISCOVERY_NOTE_MAX_CHARS) {
+      throw new PipelineValidationError(
+        `${ctx}: acceptanceVerification.note exceeds ${DISCOVERY_NOTE_MAX_CHARS} characters`,
+      );
+    }
+    out.note = v.note.trim();
+  }
+  return out;
 }
 
 /**
@@ -1377,6 +1519,87 @@ function validateGraph(phases: PhaseDef[]): void {
   routeChecked(() => validateRoutes(phases));
   validateProducedByPhaseSelectors(phases);
   validateChangeContextSelectors(phases);
+  validateRealizationPhases(phases);
+}
+
+/**
+ * The two halves of a change realization name each other correctly (Phase 8).
+ *
+ * A realization is `implement → verify`, and the link between the halves is
+ * what makes "which implementation state am I verifying?" answerable at all.
+ * Every condition here is an authoring error that would otherwise surface as
+ * a launch refusal on a live instance:
+ *
+ * - an `implementation` phase needs exactly one verifier, because two would be
+ *   two answers to whether the change is realized and none would be one;
+ * - `acceptanceVerification.implementationPhase` must name a real
+ *   `implementation` phase, and must be a dependency, so the implementation is
+ *   guaranteed to have happened before its verification looks at the tree;
+ * - both halves must target the **same** accepted proposal, or the criteria
+ *   being answered would belong to a different change from the one being
+ *   implemented.
+ */
+function validateRealizationPhases(phases: PhaseDef[]): void {
+  const needs = resolveNeeds(phases);
+  const known = new Map(phases.map((p) => [p.id, p]));
+  const ancestorsOf = (id: string): Set<string> => {
+    const seen = new Set<string>();
+    const queue = [...(needs.get(id) ?? [])];
+    while (queue.length) {
+      const next = queue.shift()!;
+      if (seen.has(next)) continue;
+      seen.add(next);
+      queue.push(...(needs.get(next) ?? []));
+    }
+    return seen;
+  };
+  for (const phase of phases) {
+    const spec = phase.acceptanceVerification;
+    if (!spec) continue;
+    const where = `phase "${phase.id}"`;
+    const impl = known.get(spec.implementationPhase);
+    if (!impl) {
+      throw new PipelineValidationError(
+        `${where}: acceptanceVerification.implementationPhase names unknown phase "${spec.implementationPhase}"`,
+      );
+    }
+    if (impl.id === phase.id) {
+      throw new PipelineValidationError(
+        `${where}: acceptanceVerification.implementationPhase cannot name its own phase`,
+      );
+    }
+    if (!impl.implementation) {
+      throw new PipelineValidationError(
+        `${where}: acceptanceVerification.implementationPhase names "${impl.id}", which declares no implementation policy and so drives no change realization`,
+      );
+    }
+    if (!ancestorsOf(phase.id).has(impl.id)) {
+      throw new PipelineValidationError(
+        `${where}: acceptanceVerification.implementationPhase names "${impl.id}", which is not a dependency of this phase; add it to needs so the implementation is guaranteed to have happened first`,
+      );
+    }
+    if (phase.changeContext?.fromPhase !== impl.changeContext?.fromPhase) {
+      throw new PipelineValidationError(
+        `${where}: it verifies "${impl.id}" but resolves its accepted change from a different phase ("${phase.changeContext?.fromPhase}" vs "${impl.changeContext?.fromPhase}"); both halves of a realization must answer for the same accepted change`,
+      );
+    }
+  }
+  for (const phase of phases) {
+    if (!phase.implementation) continue;
+    const verifiers = phases.filter(
+      (p) => p.acceptanceVerification?.implementationPhase === phase.id,
+    );
+    if (verifiers.length === 0) {
+      throw new PipelineValidationError(
+        `phase "${phase.id}": an implementation phase needs a later phase declaring acceptanceVerification.implementationPhase: "${phase.id}" — without one nothing would ever decide whether the change was realized`,
+      );
+    }
+    if (verifiers.length > 1) {
+      throw new PipelineValidationError(
+        `phase "${phase.id}": ${verifiers.length} phases verify it (${verifiers.map((v) => `"${v.id}"`).join(", ")}); a change realization has exactly one verification half`,
+      );
+    }
+  }
 }
 
 /**

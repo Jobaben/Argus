@@ -5,6 +5,8 @@ import { useArtifactContent, useGateReview } from "../useGateReview";
 import type { GateActionOptions } from "../useOverview";
 import type {
   AcceptanceCriterion,
+  AcceptanceVerificationPreview,
+  AcceptanceVerificationPreviewEntry,
   ChangeProposalPreview,
   ChangeProposalWarning,
   ChangeRuleState,
@@ -12,6 +14,7 @@ import type {
   KnowledgeDeltaPreview,
   KnowledgeDeltaWarning,
   PhaseArtifact,
+  PhaseRealizationRef,
   PhaseReview,
   PreviewClaim,
   PreviewEvidence,
@@ -438,6 +441,7 @@ function describeVerificationEvidence(e: VerificationEvidence): string {
 
 const OUTCOME_TONE: Record<string, string> = {
   holds: "border-ok/40 text-ok",
+  satisfied: "border-ok/40 text-ok",
   violated: "border-fail/40 text-fail",
   unverifiable: "border-await/40 text-await",
 };
@@ -552,6 +556,153 @@ function RuleVerification({
       <VerificationGroup label="Holds" entries={holds} />
       <VerificationGroup label="Violated" entries={violated} />
       <VerificationGroup label="Unverifiable" entries={unverifiable} />
+      {previews.some((p) => p.summary) && (
+        <p className="text-[11.5px] text-ink-faint">
+          {previews
+            .map((p) => p.summary)
+            .filter(Boolean)
+            .join(" ")}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Which accepted change this phase attempt is realizing, and which attempt it
+ * is (Phase 8).
+ *
+ * Small on purpose. The decision a reviewer makes at a realization's gate is
+ * the same one they always make — are these results right? — but they need one
+ * thing the rest of the drawer cannot tell them: whether they are looking at
+ * the first implementation or at a targeted remediation of it, and how many
+ * attempts the author allowed. A remediation's results are not the first
+ * attempt's, and approving them is not the same decision.
+ */
+function RealizationHeader({ realization }: { realization: PhaseRealizationRef }) {
+  return (
+    <p data-testid="gate-realization" className="text-[12px] text-ink-faint">
+      Realizing <span className="font-mono text-ink-dim">{realization.proposalId}</span> ·{" "}
+      <span className="font-mono text-ink-dim">{realization.id}</span> · {realization.kind} attempt{" "}
+      {realization.attempt} of {realization.maxAttempts}.{" "}
+      {realization.repository?.gitHead
+        ? `The implementation left ${realization.repository.gitHead.slice(0, 8)}${
+            realization.repository.workingTree
+              ? ` with ${realization.repository.workingTree.dirty} uncommitted file${
+                  realization.repository.workingTree.dirty === 1 ? "" : "s"
+                }`
+              : " clean"
+          }.`
+        : ""}
+    </p>
+  );
+}
+
+/**
+ * Acceptance verification — the review surface for a staged set of
+ * acceptance-criterion results (Phase 8).
+ *
+ * Rendered **beside** the business-rule panel and never merged into it,
+ * because the two answer different questions and a reviewer has to be able to
+ * see the state that matters most:
+ *
+ *   every rule holds   ·   AC-3 violated   →   the change is NOT complete
+ *
+ * A reviewer who could see only one dimension would eventually approve exactly
+ * that. So each row names the criterion, its own statement, the exact
+ * revisions it is evidence for, and the evidence the verifier cited — with a
+ * cited check shown as Argus observed it, never as the agent described it.
+ */
+function AcceptanceRow({ entry }: { entry: AcceptanceVerificationPreviewEntry }) {
+  return (
+    <li className="rounded-lg border border-line bg-surface px-3 py-2">
+      <div className="flex flex-wrap items-baseline gap-2">
+        <span
+          className={`rounded border px-1 font-mono text-[8.5px] uppercase tracking-[0.1em] ${
+            OUTCOME_TONE[entry.outcome] ?? "border-line text-ink-faint"
+          }`}
+        >
+          {entry.outcome}
+        </span>
+        <span className="font-mono text-[10px] text-ink-faint">{entry.ref}</span>
+        <span className="font-mono text-[9.5px] text-ink-faint">{entry.kind}</span>
+        {entry.relatesTo.length > 0 && (
+          <span
+            className="font-mono text-[9.5px] text-ink-faint"
+            title="The exact revisions this criterion is evidence for."
+          >
+            {entry.relatesTo
+              .map((r: { id: string; revision: number }) => `${r.id}:v${r.revision}`)
+              .join(", ")}
+          </span>
+        )}
+      </div>
+      <p className="mt-1 text-[12.5px] leading-relaxed text-ink">{entry.statement}</p>
+      {entry.reason && <p className="mt-0.5 text-[11.5px] text-await">{entry.reason}</p>}
+      {entry.note && <p className="mt-0.5 text-[11px] text-ink-faint">{entry.note}</p>}
+      <VerificationEvidenceList evidence={entry.evidence} />
+    </li>
+  );
+}
+
+function AcceptanceGroup({
+  label,
+  entries,
+}: {
+  label: string;
+  entries: AcceptanceVerificationPreviewEntry[];
+}) {
+  if (entries.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-1">
+      <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint">
+        {label} ({entries.length})
+      </p>
+      <ul className="flex flex-col gap-1.5" aria-label={label}>
+        {entries.map((e) => (
+          <AcceptanceRow key={`${e.ref}-${e.outcome}`} entry={e} />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function AcceptanceVerification({
+  previews,
+  summary,
+  canApprove,
+}: {
+  previews: AcceptanceVerificationPreview[];
+  summary: PhaseReview["acceptanceVerification"];
+  canApprove: boolean;
+}) {
+  const satisfied = previews.flatMap((p) => p.satisfied);
+  const violated = previews.flatMap((p) => p.violated);
+  const unverifiable = previews.flatMap((p) => p.unverifiable);
+  const missing = previews.flatMap((p) => p.missing);
+  const state = previews.find((p) => p.repository)?.repository;
+  const proposalId = summary?.proposalId ?? previews[0]?.proposalId;
+  return (
+    <div data-testid="gate-acceptance-verification" className="flex flex-col gap-2">
+      <p className="text-[12px] text-ink-faint">
+        {`${summary?.satisfied ?? satisfied.length} satisfied · ${
+          summary?.violated ?? violated.length
+        } violated · ${summary?.unverifiable ?? unverifiable.length} unverifiable`}
+        {proposalId ? ` · for ${proposalId}` : ""}
+        {state?.gitHead ? ` · at ${state.gitHead.slice(0, 8)}` : ""}
+        {state?.workingTree ? ` (+${state.workingTree.dirty} uncommitted)` : ""}.{" "}
+        {canApprove
+          ? "Nothing here is durable yet; approving records it against this exact implementation."
+          : "None of this became durable: the phase did not reach its commit."}
+      </p>
+      {missing.length > 0 && (
+        <p data-testid="gate-acceptance-missing" className="text-[11.5px] text-fail">
+          No outcome submitted for {missing.join(", ")}.
+        </p>
+      )}
+      <AcceptanceGroup label="Satisfied" entries={satisfied} />
+      <AcceptanceGroup label="Violated" entries={violated} />
+      <AcceptanceGroup label="Unverifiable" entries={unverifiable} />
       {previews.some((p) => p.summary) && (
         <p className="text-[11.5px] text-ink-faint">
           {previews
@@ -1176,6 +1327,24 @@ function GatePanel({
               <RuleVerification
                 previews={review.ruleVerifications}
                 summary={review.ruleVerification}
+                canApprove={review.canApprove}
+              />
+            </section>
+          )}
+
+          {review.realization && (
+            <section>
+              <Heading>Change realization</Heading>
+              <RealizationHeader realization={review.realization} />
+            </section>
+          )}
+
+          {review.acceptanceVerifications && review.acceptanceVerifications.length > 0 && (
+            <section>
+              <Heading>Acceptance criteria</Heading>
+              <AcceptanceVerification
+                previews={review.acceptanceVerifications}
+                summary={review.acceptanceVerification}
                 canApprove={review.canApprove}
               />
             </section>

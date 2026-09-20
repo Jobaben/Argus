@@ -33,6 +33,7 @@ import type { InvocationKnowledgeContext } from "@argus/contracts";
 import type {
   AgentInvocationRecord,
   CapabilityProfile,
+  InvocationChannelKind,
   InvocationChannelRecord,
   PhaseDef,
   PhaseStep,
@@ -128,6 +129,24 @@ export interface InvocationInputs {
    *  declares `changeContext`. `required`: the step was authored to implement
    *  that accepted intent. */
   changeContextFile?: string | null;
+  /** Where this run's read-only ImplementationScope was materialized, when its
+   *  phase declares `implementation` (Phase 8). `required`: the step was
+   *  authored to realize that accepted change. */
+  implementationScopeFile?: string | null;
+  /** Where this run's read-only RemediationContext was materialized, on a
+   *  remediation attempt. Null on a first attempt, which has no failures. */
+  remediationContextFile?: string | null;
+  /** Where this run must leave its AcceptanceVerificationReport, when its
+   *  phase declares `acceptanceVerification`. `required`: it is the phase's
+   *  output. */
+  acceptanceVerificationFile?: string | null;
+  /**
+   * Every Argus-owned read-only input besides the KnowledgeContext, with the
+   * SHA-256 of the bytes as written (Phase 8). Recorded so the completion can
+   * ask the one integrity question that matters — *did the bytes supplied to
+   * this invocation change?* — without re-deriving the document.
+   */
+  suppliedInputs?: Array<{ kind: InvocationChannelKind; path: string; sha256: string }>;
   timeoutSeconds: number | null;
   gitHead: string | null;
   /** The environment the policy is applied to — Argus's own, in production. */
@@ -205,6 +224,9 @@ export function prepareInvocation(inputs: InvocationInputs): PreparedInvocation 
     changeRequestFile: inputs.changeRequestFile ?? null,
     changeProposalFile: inputs.changeProposalFile ?? null,
     changeContextFile: inputs.changeContextFile ?? null,
+    implementationScopeFile: inputs.implementationScopeFile ?? null,
+    remediationContextFile: inputs.remediationContextFile ?? null,
+    acceptanceVerificationFile: inputs.acceptanceVerificationFile ?? null,
     artifactDir: inputs.artifactDir,
     memoryDir: inputs.memoryDir ?? null,
     phaseDef,
@@ -287,6 +309,10 @@ export function prepareInvocation(inputs: InvocationInputs): PreparedInvocation 
     changeRequestFile: inputs.changeRequestFile ?? null,
     changeProposalFile: inputs.changeProposalFile ?? null,
     changeContextFile: inputs.changeContextFile ?? null,
+    implementationScopeFile: inputs.implementationScopeFile ?? null,
+    remediationContextFile: inputs.remediationContextFile ?? null,
+    acceptanceVerificationFile: inputs.acceptanceVerificationFile ?? null,
+    ...(inputs.suppliedInputs?.length ? { suppliedInputs: inputs.suppliedInputs } : {}),
     channels: channelRecords,
     timeoutSeconds: inputs.timeoutSeconds,
     deadlineAt,

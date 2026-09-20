@@ -16,6 +16,7 @@ import type {
   CandidatePolicy,
   DependencyEdge,
   PhaseFailureClass,
+  PhaseKnowledgeCommit,
   PhaseProgress,
   PipelineDefinition,
   PipelineInstance,
@@ -573,6 +574,20 @@ export function stagedChangeProposalIds(phase: PhaseProgress): string[] {
 }
 
 /**
+ * The acceptance-criterion results this attempt would commit (Phase 8): one
+ * per step whose run staged one and whose step *succeeded*. Exactly the same
+ * eligibility rule as {@link stagedDeltaIds}, so an abandoned attempt's
+ * acceptance results can no more become durable than its claims can.
+ */
+export function stagedAcceptanceIds(phase: PhaseProgress): string[] {
+  return phase.steps.flatMap((s) =>
+    s.status === "succeeded" && s.acceptanceVerification?.status === "staged"
+      ? [s.acceptanceVerification.id]
+      : [],
+  );
+}
+
+/**
  * The last rung of the acceptance ladder. A phase whose attempt staged no
  * KnowledgeDelta succeeds here exactly as it always did. One that did stays
  * `running` under `knowledge.status: "pending"` — the same shape as a phase
@@ -591,13 +606,20 @@ function succeedPhase(
   const deltas = stagedDeltaIds(phase);
   const verifications = stagedVerificationIds(phase);
   const changeProposals = stagedChangeProposalIds(phase);
-  if (deltas.length > 0 || verifications.length > 0 || changeProposals.length > 0) {
+  const acceptanceVerifications = stagedAcceptanceIds(phase);
+  if (
+    deltas.length > 0 ||
+    verifications.length > 0 ||
+    changeProposals.length > 0 ||
+    acceptanceVerifications.length > 0
+  ) {
     phase.status = "running";
     phase.knowledge = {
       status: "pending",
       deltas,
       ...(verifications.length > 0 ? { verifications } : {}),
       ...(changeProposals.length > 0 ? { changeProposals } : {}),
+      ...(acceptanceVerifications.length > 0 ? { acceptanceVerifications } : {}),
       startedAt: nowISO,
     };
     return { ...settle(def, inst, nowISO), commitKnowledge: [phase.id] };
@@ -608,7 +630,16 @@ function succeedPhase(
 }
 
 /** What the engine learned from committing a phase's staged deltas. */
-export type KnowledgeCommitVerdict = { ok: true } | { ok: false; reason: string };
+export type KnowledgeCommitVerdict =
+  | { ok: true }
+  /**
+   * `failureClass` is set when the engine knows which half of the commit was
+   * refused — a forged acceptance check is not a knowledge-delta failure, and
+   * a retry policy that opted into one class must not be triggered by the
+   * other. Absent, the class is derived below from what the attempt staged,
+   * exactly as it was before Phase 8.
+   */
+  | { ok: false; reason: string; failureClass?: RetryableClass };
 
 /**
  * Record the outcome of committing a phase attempt's staged KnowledgeDeltas.
@@ -635,6 +666,7 @@ export function applyKnowledgeCommit(
   const held = phase.knowledge;
   const heldVerifications = held.verifications ?? [];
   const heldChanges = held.changeProposals ?? [];
+  const heldAcceptance = held.acceptanceVerifications ?? [];
   const mark = (status: "applied" | "rejected") => {
     for (const s of phase.steps) {
       if (s.knowledgeDelta && held.deltas.includes(s.knowledgeDelta.id)) {
@@ -642,6 +674,9 @@ export function applyKnowledgeCommit(
       }
       if (s.ruleVerification && heldVerifications.includes(s.ruleVerification.id)) {
         s.ruleVerification = { ...s.ruleVerification, status };
+      }
+      if (s.acceptanceVerification && heldAcceptance.includes(s.acceptanceVerification.id)) {
+        s.acceptanceVerification = { ...s.acceptanceVerification, status };
       }
       if (s.changeProposal && heldChanges.includes(s.changeProposal.id)) {
         // A change proposal is `accepted`, not `applied`: what became canonical
@@ -663,21 +698,28 @@ export function applyKnowledgeCommit(
   phase.knowledge = { ...held, status: "rejected", endedAt: nowISO, reason: verdict.reason };
   mark("rejected");
   phase.status = "failed";
-  // The commit is one transition over every half, so one failure class names
-  // it. `change-proposal` when a change proposal was at stake — it is the
-  // outermost thing the attempt was doing; `rule-verification` when only
-  // conformance results were; `knowledge-delta` otherwise, unchanged from
-  // Phase 3.
   phase.payload = withFailureClass(
     withReason(phase.payload, verdict.reason),
-    heldChanges.length > 0
-      ? "change-proposal"
-      : held.deltas.length === 0 && heldVerifications.length > 0
-        ? "rule-verification"
-        : "knowledge-delta",
+    verdict.failureClass ?? commitFailureClass(held),
   );
   failLeftoverSteps(phase);
   return { ...settle(def, inst, nowISO), knowledgeApplied: true };
+}
+
+/**
+ * Which class a refused commit falls under when the caller did not say.
+ *
+ * The commit is one transition over every half, so one class has to name it:
+ * `change-proposal` when a change proposal was at stake — it is the outermost
+ * thing the attempt was doing; then the conformance halves when no delta was;
+ * `knowledge-delta` otherwise, unchanged from Phase 3.
+ */
+export function commitFailureClass(held: PhaseKnowledgeCommit): RetryableClass {
+  if ((held.changeProposals ?? []).length > 0) return "change-proposal";
+  if (held.deltas.length > 0) return "knowledge-delta";
+  if ((held.verifications ?? []).length > 0) return "rule-verification";
+  if ((held.acceptanceVerifications ?? []).length > 0) return "acceptance-verification";
+  return "knowledge-delta";
 }
 
 /** One line naming what failed, for the phase's failure reason. */
@@ -1133,6 +1175,70 @@ function restartPhase(phase: PhaseProgress): void {
   // evidence about a run that no longer exists.
   delete phase.selectedCandidate;
   delete phase.candidateOutcomes;
+}
+
+/**
+ * Re-open one implementation phase for a **targeted remediation** attempt, and
+ * put the phases that verify it back to `pending` so they run again against
+ * the new implementation (Phase 8).
+ *
+ * Deliberately not {@link applyRetry} and deliberately not {@link applyRevise},
+ * although it shares their mechanics. The three mean different things and the
+ * history must keep them apart:
+ *
+ *   retry        the same intended work; the execution failed operationally.
+ *   revise       a person decided to try again, and reset the budget.
+ *   remediation  the implementation *executed*; Argus's own verification
+ *                proved the accepted intent is unmet, and a new attempt is
+ *                launched with the exact failures as its input.
+ *
+ * So the retry budget is untouched (a remediation is not a retry, and must not
+ * consume or reset a policy the author wrote about spawn failures), and the
+ * loop's own bound is the realization's `maxAttempts`, checked by the caller
+ * before this is ever reached.
+ *
+ * Only the named phases move. Everything earlier — discovery, change intent,
+ * the human approval that made the intent canonical — stays exactly as it was:
+ * accepted history, not work to redo. A realization never re-runs the whole
+ * pipeline.
+ */
+export function applyRemediation(
+  inst: PipelineInstance,
+  implementationPhaseId: string,
+  /** The phases downstream of it that must run again: the verification half,
+   *  and anything between. Reset to `pending`, not restarted, so `settle`
+   *  starts them in dependency order when the implementation succeeds. */
+  downstreamPhaseIds: string[],
+  nowISO: string,
+): TransitionResult {
+  const phase = inst.phases.find((p) => p.id === implementationPhaseId);
+  if (!phase) return { instance: inst, startPhases: [] };
+  for (const id of downstreamPhaseIds) {
+    const downstream = inst.phases.find((p) => p.id === id);
+    if (!downstream || downstream.id === implementationPhaseId) continue;
+    downstream.attempt += 1;
+    downstream.status = "pending";
+    downstream.payload = null;
+    const names = [...new Set(downstream.steps.map((st) => st.name))];
+    downstream.steps = names.map((name) => ({ name, runId: null, status: "pending" }));
+    delete downstream.verification;
+    delete downstream.knowledge;
+    delete downstream.result;
+    delete downstream.selectedCandidate;
+    delete downstream.candidateOutcomes;
+    delete downstream.ruleVerification;
+    delete downstream.acceptanceVerification;
+  }
+  restartPhase(phase);
+  phase.payload = null;
+  // Not `settle`: like a retry and a revise, a remediation re-opens one phase
+  // and hands the engine that phase to launch. Re-settling here would re-run
+  // routing decisions over phases that already made them.
+  inst.status = "running";
+  inst.endedAt = null;
+  inst.currentPhaseIndex = inst.phases.indexOf(phase);
+  touch(inst, nowISO);
+  return { instance: inst, startPhases: [inst.phases.indexOf(phase)] };
 }
 
 export function applyAbort(inst: PipelineInstance, nowISO: string): PipelineInstance {

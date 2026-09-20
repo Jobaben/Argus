@@ -1340,6 +1340,18 @@ export interface RuleVerification {
    * says, honestly, that it cannot be scoped to a revision.
    */
   repository?: { gitHead: string };
+  /**
+   * The repository state examined, at the precision Phase 8 needs: the head
+   * **and** the identity of any uncommitted content. Two different dirty trees
+   * share one `gitHead`, so a conformance result scoped to the head alone
+   * cannot say which implementation it examined.
+   *
+   * Absent on every record written before Phase 8, and on a run whose working
+   * tree Argus could not snapshot. Such a record answers only head-scoped
+   * questions; a state-scoped question that carries a working tree never
+   * matches it, because it cannot.
+   */
+  repositoryState?: RepositoryStateRef;
   /** At least one record for `holds` and `violated`. */
   evidence: VerificationEvidence[];
   /** Required for `unverifiable`: why conformance could not be established. */
@@ -1465,6 +1477,11 @@ export interface RuleVerificationRecord {
   selected: ClaimRef[];
   /** The repository revision Argus recorded for the run, when it had one. */
   gitHead?: string;
+  /** The exact repository state Argus snapshotted when the run completed
+   *  (Phase 8): the head *and* the identity of any uncommitted content, so a
+   *  realization can prove the verification examined the implementation it is
+   *  claiming. Absent when the working tree is not a git repository. */
+  repository?: RepositoryStateRef;
   /** The validated proposal. Absent when the document could not be parsed. */
   report?: RuleVerificationReport;
   /** Why it is `rejected` or `superseded`. */
@@ -2197,4 +2214,723 @@ export interface ChangeIntentSummary {
 /** `GET /api/knowledge/change-proposals`. Accepted proposals, newest first. */
 export interface ChangeProposalsResponse {
   proposals: AcceptedChangeProposal[];
+}
+
+// ── Targeted implementation and closed-loop realization (Phase 8) ───────────
+//
+// Phase 7 ended at *accepted intent*: a person approved a ChangeProposal, its
+// semantic delta committed, and an implementation phase could receive the
+// result as a ChangeContext. Phase 8 answers the question that follows:
+//
+//   "Has this accepted business change actually been implemented, and how do
+//    we know?"
+//
+// The answer is never one fact. Four independent dimensions have to hold, and
+// the whole phase exists to keep them apart:
+//
+//   TECHNICAL EXECUTION      the implementation run reported succeeded.
+//                            An agent's own word about its own work.
+//
+//   DETERMINISTIC CHECKS     Argus's PhaseChecks passed: it compiled, the
+//                            tests exited 0. Argus's own observation.
+//
+//   RULE CONFORMANCE         RuleVerification says the code at this exact
+//                            repository state satisfies the exact revised
+//                            rules (§Phase 6). About the domain's semantics.
+//
+//   ACCEPTANCE SATISFACTION  AcceptanceVerification says the accepted
+//                            proposal's own criteria are met at that state.
+//                            About *this change* having been carried out.
+//
+// `ARGUS_OUTCOME: succeeded` alone is not implementation. `npm test` exiting 0
+// alone is not implementation. Every rule holding is not implementation while
+// an acceptance criterion is violated, and every criterion being satisfied is
+// not implementation while a revised rule is violated. A change is realized
+// only when **all four** hold, at one repository state, against semantic
+// intent that is still current.
+
+/**
+ * The repository state a verification examined, precisely enough that two
+ * different implementations cannot be mistaken for one another.
+ *
+ * `gitHead` alone is not an identity for a working tree an agent edited
+ * without committing: two different dirty trees share one head, and a
+ * conformance result bound to the head alone would claim that what was true
+ * of one is true of the other. So a dirty tree additionally carries the
+ * identity of its uncommitted content — the hash of Argus's own
+ * `WorkingTreeSnapshot`, which is derived from the bytes of every dirty path
+ * and never from a timestamp.
+ *
+ * Absent `workingTree` means **clean at `gitHead`** — a positive statement,
+ * not an unknown. A ref with neither field is a working directory that is not
+ * a git repository at all: represented explicitly so nothing downstream
+ * invents a revision identity that does not exist.
+ */
+export interface RepositoryStateRef {
+  /** `git rev-parse HEAD` as Argus read it. Absent outside a repository. */
+  gitHead?: string;
+  /** The uncommitted content, when there was any. Absent = the tree was clean. */
+  workingTree?: {
+    /** sha256 over the sorted (path → content identity) pairs of the snapshot. */
+    snapshotHash: string;
+    /** How many paths were dirty. A locator for a reader, never identity. */
+    dirty: number;
+    /** Set when the snapshot hit Argus's entry cap and cannot identify the
+     *  tree. Such a state can never back a realization close-out. */
+    truncated?: boolean;
+  };
+}
+
+// ── Implementation scope ────────────────────────────────────────────────────
+
+/**
+ * Why one path is in an implementation's scope. A closed taxonomy, so the
+ * reason is machine-readable rather than prose a later phase would have to
+ * parse:
+ *
+ * - `impact-artifact` — an {@link ImpactSet} says an execution that consumed a
+ *   revised rule produced this artifact. The strongest reason: exact
+ *   consumption provenance, from Phase 2, not a guess.
+ * - `source-code-evidence` — a `source-code` {@link Evidence} record grounds a
+ *   rule this change revises (or its superseded predecessor). "This is where
+ *   the rule lives in the code", as discovery recorded it.
+ * - `preserved-evidence` — the same, for a revision the change deliberately
+ *   **preserves**: the regression surface, named so the agent knows what it
+ *   must not break.
+ * - `request-scope` — the requester's own `ChangeRequest.scope.paths`. A human
+ *   hint, carried through verbatim and labelled as such.
+ * - `verification-evidence` — a `source-code` record cited by an accepted
+ *   {@link RuleVerification} of a rule this change revises: where somebody
+ *   last looked when they decided whether the code conformed.
+ */
+export type ScopeReasonCode =
+  | "impact-artifact"
+  | "source-code-evidence"
+  | "preserved-evidence"
+  | "request-scope"
+  | "verification-evidence";
+
+/** One machine-readable justification for a path being in scope. Every field
+ *  beyond `code` is provenance a reader can follow back into the ledger. */
+export interface ScopeReason {
+  code: ScopeReasonCode;
+  /** The exact revision this reason is about, when it has one. */
+  claim?: ClaimRef;
+  /** The execution that produced the artifact, for `impact-artifact`. */
+  execution?: RunExecutionRef;
+  /** The evidence record id, for the evidence-derived reasons. */
+  evidenceId?: string;
+  /** One line, for a human reading the scope. Never parsed. */
+  detail?: string;
+}
+
+/** One place the implementation is expected to touch (or to leave alone), with
+ *  every reason Argus can give for it. A path may carry several reasons. */
+export interface ImplementationTarget {
+  /** Repository-relative, exactly as the evidence or the request wrote it. May
+   *  name a directory when the request's scope did. */
+  path: string;
+  /** Where it came from, `repository` for source and `artifact-dir` for a
+   *  file an earlier phase produced into its artifact directory. */
+  location: ArtifactRef["location"];
+  reasons: ScopeReason[];
+  /** True when every reason is `preserved-evidence`: this is regression
+   *  surface, not work. */
+  preserveOnly: boolean;
+}
+
+/**
+ * Whether Argus's provenance can actually name where this change has to
+ * happen.
+ *
+ * - `known-targets` — every semantic change the proposal makes has at least
+ *   one target derived from exact provenance.
+ * - `scope-incomplete` — at least one does not. A brand-new business rule that
+ *   nothing has ever implemented has no consumer execution, no artifact and no
+ *   source evidence, and the honest answer is "Argus cannot tell you where
+ *   this goes", **never** "nothing is affected".
+ *
+ * A scope is a deterministic derivation from what Argus recorded, not a claim
+ * to exhaustiveness: even `known-targets` means "these are the places the
+ * ledger knows about", and the agent may legitimately need to touch others.
+ */
+export type ImplementationScopeCompleteness = "known-targets" | "scope-incomplete";
+
+/**
+ * The deterministic implementation scope of one accepted change — the document
+ * at `ARGUS_IMPLEMENTATION_SCOPE_FILE`.
+ *
+ * Derived from provenance Argus already holds, in this order and from nothing
+ * else: the proposal's `semanticChanges`, the {@link ImpactSet} of each
+ * superseded predecessor (consumer executions and the artifacts they
+ * produced), the `source-code` evidence grounding the revised and preserved
+ * revisions, the `source-code` evidence of accepted rule verifications, and
+ * the `ChangeRequest`'s own scope paths. No model, no similarity, no
+ * heuristics.
+ */
+export interface ImplementationScope {
+  schemaVersion: 1;
+  generatedAt: string;
+  proposalId: string;
+  /** The exact revisions this change introduced. */
+  semanticChanges: ClaimRef[];
+  /** The exact revisions it deliberately preserved. */
+  preserved: ClaimRef[];
+  targets: ImplementationTarget[];
+  /** Executions whose work the change impacts, from `analyzeImpact`. */
+  impactedExecutions: RunExecutionRef[];
+  completeness: ImplementationScopeCompleteness;
+  /** The semantic changes with no derivable target. Empty iff
+   *  `completeness` is `known-targets`. */
+  withoutTargets: ClaimRef[];
+  /** The requester's own `scope.paths`, carried through verbatim. */
+  requestedPaths: string[];
+}
+
+// ── Acceptance verification ─────────────────────────────────────────────────
+
+/**
+ * An acceptance criterion, addressed globally and unambiguously.
+ *
+ * `AC-1` is proposal-local by design (§Phase 7) — two changes may both have an
+ * `AC-1` meaning entirely different things — so nothing outside one proposal
+ * may address a criterion by its bare id. The pair is the identity, written
+ * `CP-12/AC-1`.
+ */
+export interface AcceptanceCriterionRef {
+  proposalId: string;
+  criterionId: string;
+}
+
+/**
+ * The acceptance question's three answers, deliberately mirroring
+ * {@link RuleVerificationOutcome} without being it.
+ *
+ * - `satisfied` — sufficient evidence that the implementation meets this
+ *   accepted criterion.
+ * - `violated` — sufficient evidence that it does not.
+ * - `unverifiable` — the verifier could not establish either. Requires a
+ *   reason. Not every criterion can be made executable, and saying so is the
+ *   honest answer rather than rounding up to `satisfied`.
+ *
+ * Deliberately **not** mapped onto rule verification. "Non-Kobra behaviour is
+ * unchanged" is not a business rule revision and has no claim to be verified
+ * against; it is evidence that one change was carried out correctly.
+ */
+export type AcceptanceOutcome = "satisfied" | "violated" | "unverifiable";
+
+/** The fourth value, which exists only in the read model: **nobody looked**
+ *  at this criterion, at this repository state. Never collapsed with
+ *  `unverifiable`, for the reason `unverified` is never collapsed with it in
+ *  Phase 6. */
+export type AcceptanceConformanceStatus = AcceptanceOutcome | "unverified";
+
+/**
+ * "Execution E concluded that the implementation at repository state S does
+ * (or does not) satisfy criterion CP-12/AC-1."
+ *
+ * Immutable once written and never retargeted: a later repository state, or a
+ * later proposal, produces a *new* record. Identity is
+ * `(execution.runId, proposalId, criterionId)` — one run answers one criterion
+ * once — which makes committing again after a crash a no-op rather than a
+ * duplicate.
+ *
+ * What it is not: evidence about a claim, a justification, or an input to
+ * support evaluation. `ledger.acceptanceVerifications` is read by the
+ * acceptance queries and the realization close-out, and by nothing else.
+ */
+export interface AcceptanceVerification {
+  id: string;
+  /** The accepted proposal whose criterion this is. */
+  proposalId: string;
+  /** The criterion's proposal-local id (`AC-3`). */
+  criterionId: string;
+  /** The criterion's statement, frozen as the accepted proposal holds it, so
+   *  the record still reads after a pruning path removes the run. */
+  statement: string;
+  kind: AcceptanceCriterionKind;
+  outcome: AcceptanceOutcome;
+  execution: RunExecutionRef;
+  attempt?: number;
+  /** The repository state examined, as **Argus** recorded it — never the
+   *  agent's claim about it. Absent when the working tree was not a git
+   *  repository, which the record then says honestly. */
+  repository?: RepositoryStateRef;
+  /** The same evidence union rule verification uses: a cited `check` whose
+   *  status Argus binds, a source location, an artifact, an observation. */
+  evidence: VerificationEvidence[];
+  /** Required for `unverifiable`. */
+  reason?: string;
+  note?: string;
+  createdAt: string;
+}
+
+/** One criterion's result as the agent proposes it. */
+export interface ProposedAcceptanceVerification {
+  /** The criterion's proposal-local id. The proposal is fixed by the run's
+   *  ChangeContext, so the agent never names it. */
+  criterionId: string;
+  outcome: AcceptanceOutcome;
+  evidence: VerificationEvidence[];
+  /** Required when `outcome` is `unverifiable`. */
+  reason?: string;
+  note?: string;
+}
+
+/**
+ * The versioned wire format of an acceptance-verification phase's structured
+ * output — the document at `ARGUS_ACCEPTANCE_VERIFICATION_FILE`.
+ *
+ * Its own channel beside `ARGUS_RULE_VERIFICATION_FILE`, for the reason the
+ * two dimensions are separate: a rule result is about the domain's semantics
+ * and is bound to a `ClaimRef`; a criterion result is about *this change*
+ * having been carried out and is bound to `CP-12/AC-1`. A phase that answers
+ * both writes both files.
+ */
+export interface AcceptanceVerificationReport {
+  schemaVersion: 1;
+  /** The proposal the run was answering for, echoed from its ChangeContext.
+   *  Optional; when present it must match, which catches a report written
+   *  against the wrong change. */
+  proposalId?: string;
+  criteria: ProposedAcceptanceVerification[];
+  metadata?: { summary?: string };
+}
+
+/** Same lifecycle as a staged {@link RuleVerificationReport}: nothing is
+ *  durable until the phase crosses its acceptance boundary. */
+export type AcceptanceVerificationStatus = "staged" | "applied" | "rejected" | "superseded";
+
+/** Why an acceptance-verification proposal was refused. Closed, so the engine
+ *  and the API can act on it. */
+export type AcceptanceVerificationErrorCode =
+  | "invalid-json"
+  | "schema"
+  | "unknown-proposal"
+  | "unknown-criterion"
+  | "incomplete"
+  | "evidence"
+  | "check-reference"
+  | "source-evidence";
+
+/**
+ * An acceptance-verification proposal as Argus staged it beside the run: which
+ * accepted proposal it answers, exactly which criteria it is accountable for,
+ * the repository state it examined, and its status.
+ */
+export interface AcceptanceVerificationRecord {
+  id: string;
+  runId: string;
+  instanceId: string;
+  phaseId: string;
+  attempt: number;
+  step: string;
+  status: AcceptanceVerificationStatus;
+  receivedAt: string;
+  updatedAt: string;
+  /** The accepted proposal this run answers for. */
+  proposalId: string;
+  /** Every criterion of that proposal: the run must account for all of them. */
+  required: AcceptanceCriterion[];
+  /** The repository state Argus recorded for the run. */
+  repository?: RepositoryStateRef;
+  report?: AcceptanceVerificationReport;
+  reason?: string;
+  result?: { criteria: AcceptanceVerification[] };
+}
+
+/** The counts an acceptance-verification phase reports for routing, status and
+ *  the board. */
+export interface AcceptanceVerificationSummary {
+  proposalId: string;
+  /** Criteria the accepted proposal carries, i.e. the ones required. */
+  required: number;
+  satisfied: number;
+  violated: number;
+  unverifiable: number;
+  requiresReview: boolean;
+}
+
+/** One criterion's proposed outcome, as the gate shows it. */
+export interface AcceptanceVerificationPreviewEntry {
+  /** `CP-12/AC-1`. */
+  ref: string;
+  criterionId: string;
+  statement: string;
+  kind: AcceptanceCriterionKind;
+  /** The exact revisions the criterion is evidence for. */
+  relatesTo: ClaimRef[];
+  outcome: AcceptanceOutcome;
+  evidence: VerificationEvidence[];
+  reason?: string;
+  note?: string;
+}
+
+/** The deterministic read model of one staged acceptance proposal. */
+export interface AcceptanceVerificationPreview {
+  recordId: string;
+  runId: string;
+  step: string;
+  attempt: number;
+  status: AcceptanceVerificationStatus;
+  proposalId: string;
+  repository?: RepositoryStateRef;
+  satisfied: AcceptanceVerificationPreviewEntry[];
+  violated: AcceptanceVerificationPreviewEntry[];
+  unverifiable: AcceptanceVerificationPreviewEntry[];
+  /** Required criteria with no submitted outcome. Empty on a staged record —
+   *  completeness is enforced before staging — and populated only on a
+   *  rejected one, where it is the reason. */
+  missing: string[];
+  summary?: string;
+}
+
+/**
+ * "Is this accepted criterion satisfied?" — derived per read, never stored,
+ * and never timeless.
+ *
+ * A `repository` scopes the question exactly as `gitHead` scopes
+ * {@link RuleConformanceReport}: only verifications that examined that state
+ * count, so a criterion satisfied at one dirty tree reads `unverified` at
+ * another, and Argus never reports a past state's conclusion as a statement
+ * about the current one.
+ */
+export interface AcceptanceConformanceReport {
+  criterion: AcceptanceCriterionRef;
+  repository?: RepositoryStateRef;
+  status: AcceptanceConformanceStatus;
+  latest?: AcceptanceVerification;
+  /** Every verification of this exact criterion, oldest first. */
+  history: AcceptanceVerification[];
+}
+
+// ── Change realization ──────────────────────────────────────────────────────
+
+/**
+ * How one attempt to realize an accepted change ended. Deliberately distinct
+ * from a technical failure class: the remediation that follows depends on
+ * *which dimension* failed.
+ *
+ * - `succeeded` — everything required held at the examined state.
+ * - `technical-failure` — the implementation execution failed, or a mandatory
+ *   deterministic check did. No semantic close-out happened; no rule or
+ *   criterion result from this attempt is durable.
+ * - `rule-violation` — the code compiled and the checks passed, and a targeted
+ *   rule revision is `violated` (or was left `unverified`/`unverifiable`).
+ * - `acceptance-violation` — every targeted rule holds and a required
+ *   criterion is `violated`.
+ * - `acceptance-unverifiable` — a required criterion could not be established
+ *   either way. More code is not obviously the answer, so this stops the loop.
+ * - `blocked` — the implementation agent reported it cannot safely implement
+ *   the accepted intent with the information it has. Not a failure of the
+ *   code; a statement that the intent needs a person.
+ * - `stale-intent` — the semantic target moved while the attempt ran. The
+ *   attempt's results stay historically true about the revisions they named;
+ *   the realization may not be presented as current completion.
+ * - `state-mismatch` — the repository state the verification examined is not
+ *   the one the implementation produced. Fail-closed: Argus will not claim a
+ *   verification proves an implementation it did not look at.
+ */
+export type ChangeAttemptOutcome =
+  | "succeeded"
+  | "technical-failure"
+  | "rule-violation"
+  | "acceptance-violation"
+  | "acceptance-unverifiable"
+  | "blocked"
+  | "stale-intent"
+  | "state-mismatch";
+
+/**
+ * The externally useful state of a realization.
+ *
+ * - `running` — an attempt is in flight.
+ * - `succeeded` — every required dimension held, at one repository state, with
+ *   the semantic target still current.
+ * - `needs-remediation` — the implementation ran and accepted verification
+ *   found unmet rules or criteria that another targeted attempt could fix, and
+ *   attempts remain.
+ * - `failed` — terminal without success: the attempt budget is exhausted, the
+ *   implementation is blocked, a required criterion is unverifiable, or a
+ *   technical failure ended it.
+ * - `stale` — the accepted intent this realization targets was superseded.
+ *   Remediation stops; a new change decision is required, not more code.
+ */
+export type ChangeRealizationStatus =
+  "running" | "succeeded" | "needs-remediation" | "failed" | "stale";
+
+/** One rule's outcome inside a realization attempt, as the durable record
+ *  keeps it: the ref, what was concluded, and the {@link RuleVerification}
+ *  that concluded it. The full record stays in `ledger.verifications`. */
+export interface RealizationRuleResult {
+  rule: ClaimRef;
+  /** `unverified` when the verification phase produced no result for it. */
+  outcome: RuleConformanceStatus;
+  verificationId?: string;
+}
+
+/** One criterion's outcome inside a realization attempt. */
+export interface RealizationAcceptanceResult {
+  criterionId: string;
+  outcome: AcceptanceConformanceStatus;
+  verificationId?: string;
+}
+
+/** What Argus's own deterministic checks said about one attempt. Bound from
+ *  the phases' own {@link VerificationReport}s, never from an agent's claim. */
+export interface RealizationTechnicalResult {
+  status: "passed" | "failed";
+  /** Labels that passed and labels that failed, in report order. */
+  passed: string[];
+  failed: Array<{ label: string; detail?: string }>;
+}
+
+/**
+ * One attempt to realize the accepted change: an implementation (or
+ * remediation) execution, the deterministic checks over it, and the semantic
+ * verification of what it produced.
+ *
+ * Append-only. A remediation never rewrites the attempt it is remediating —
+ * that history is how anyone later explains how the implementation converged.
+ */
+export interface ChangeRealizationAttempt {
+  /** 1-based. Attempt 1 is the implementation; 2..n are remediations. */
+  attempt: number;
+  kind: "implementation" | "remediation";
+  /** The runs that did the work, with their instance and phase. */
+  implementation: RunExecutionRef[];
+  /** The runs that verified it. Empty when the attempt never got that far. */
+  verification: RunExecutionRef[];
+  /** The repository state the implementation produced, as Argus read it. */
+  repository?: RepositoryStateRef;
+  technical?: RealizationTechnicalResult;
+  ruleResults: RealizationRuleResult[];
+  acceptanceResults: RealizationAcceptanceResult[];
+  outcome: ChangeAttemptOutcome;
+  /** One sentence naming exactly what was unmet. */
+  reason?: string;
+  startedAt: string;
+  endedAt?: string;
+}
+
+/** The terminal verdict of a realization, written exactly once and never
+ *  rewritten. Its presence is what makes the realization no longer `running`. */
+export interface ChangeRealizationOutcome {
+  status: Exclude<ChangeRealizationStatus, "running">;
+  /** The repository state the success is bound to. Required for `succeeded`
+   *  when the working tree was a git repository. */
+  repository?: RepositoryStateRef;
+  /** One sentence: why it ended this way. */
+  reason: string;
+  /** The exact rules still unmet, for a terminal non-success. */
+  unmetRules: RealizationRuleResult[];
+  /** The exact criteria still unmet. */
+  unmetCriteria: RealizationAcceptanceResult[];
+  completedAt: string;
+}
+
+/**
+ * The durable record of one attempt-chain to realize an accepted
+ * {@link AcceptedChangeProposal} (ledger version 7).
+ *
+ * It answers, from the ledger alone and forever:
+ *
+ *   "Was CP-12 implemented, and verified how?"
+ *   "Which implementation runs participated?"
+ *   "Which repository state completed it?"
+ *   "Which rule verifications and which acceptance verifications proved it?"
+ *   "What remediation attempts happened, and what did each one fail on?"
+ *
+ * Mutable in exactly two controlled ways and in no other: `attempts` is
+ * appended to, and `outcome` is written once. Everything else — identity, the
+ * proposal it targets, the scope it was derived with — is frozen at creation.
+ * A realization that already has an `outcome` refuses a second, different one
+ * rather than rewriting what was concluded.
+ */
+export interface ChangeRealization {
+  id: string;
+  schemaVersion: 1;
+  /** The accepted proposal this realization targets. Frozen: a realization is
+   *  never retargeted at a newer proposal (§stale intent). */
+  proposalId: string;
+  /** The exact revisions the proposal introduced, as they were when this
+   *  realization started — what "the semantic target" means for it. */
+  target: ClaimRef[];
+  instanceId: string;
+  /** The implementation phase whose attempts this realization chains. */
+  phaseId: string;
+  /** The phase that verifies them. */
+  verificationPhaseId?: string;
+  /** Attempts allowed in total (1 = no remediation). */
+  maxAttempts: number;
+  /** The deterministic scope the implementation was launched against. */
+  scope: ImplementationScope;
+  attempts: ChangeRealizationAttempt[];
+  /** Written once, at the terminal transition. Absent while `running`. */
+  outcome?: ChangeRealizationOutcome;
+  createdAt: string;
+}
+
+/** The realization's status, derived rather than stored twice. */
+export interface ChangeRealizationView extends ChangeRealization {
+  status: ChangeRealizationStatus;
+  /** The attempt in flight, or the last one. */
+  currentAttempt: number;
+  /** Attempts still available after the current one. */
+  attemptsRemaining: number;
+}
+
+/** `GET /api/knowledge/realizations`. Newest first. */
+export interface ChangeRealizationsResponse {
+  realizations: ChangeRealizationView[];
+}
+
+/** `GET /api/knowledge/realizations/:id/runs`. */
+export interface ChangeRealizationRunsResponse {
+  realizationId: string;
+  implementation: RunExecutionRef[];
+  verification: RunExecutionRef[];
+}
+
+/** `GET /api/knowledge/realizations/:id/results`: the durable semantic records
+ *  this realization's attempts produced, unfiltered and in commit order. */
+export interface ChangeRealizationResultsResponse {
+  realizationId: string;
+  proposalId: string;
+  rules: RuleVerification[];
+  acceptance: AcceptanceVerification[];
+}
+
+// ── Remediation ─────────────────────────────────────────────────────────────
+
+/** One rule a remediation must fix, with everything the agent needs to fix it
+ *  and nothing it would have to infer from a transcript. */
+export interface RemediationFailedRule {
+  rule: ClaimRef;
+  ref: string;
+  statement?: string;
+  outcome: RuleConformanceStatus;
+  /** The verifier's own words, when it gave any. */
+  reason?: string;
+  note?: string;
+  /** The evidence the verifier cited — where it looked, which check failed. */
+  evidence: VerificationEvidence[];
+}
+
+/** One criterion a remediation must satisfy. */
+export interface RemediationFailedCriterion {
+  criterionId: string;
+  ref: string;
+  statement: string;
+  kind: AcceptanceCriterionKind;
+  relatesTo: ClaimRef[];
+  outcome: AcceptanceConformanceStatus;
+  reason?: string;
+  note?: string;
+  evidence: VerificationEvidence[];
+  verificationHint?: string;
+}
+
+/**
+ * The versioned wire format of a remediation's input — the document at
+ * `ARGUS_REMEDIATION_CONTEXT_FILE`.
+ *
+ * Written by Argus from its own accepted verification results, so the
+ * remediation agent is told exactly what is unmet rather than having to read
+ * the previous agent's transcript and guess. Present only on a remediation
+ * attempt; attempt 1 has no failures to describe.
+ */
+export interface RemediationContext {
+  schemaVersion: 1;
+  generatedAt: string;
+  realizationId: string;
+  proposalId: string;
+  /** Which attempt this document is for (2..n). */
+  attempt: number;
+  /** What the previous attempt failed on, as a class. */
+  previousOutcome: ChangeAttemptOutcome;
+  failedRules: RemediationFailedRule[];
+  failedCriteria: RemediationFailedCriterion[];
+  /** Deterministic checks Argus observed failing. */
+  technicalFailures: Array<{ label: string; detail?: string }>;
+  /** The scope entries the failures point at — the files the previous attempt
+   *  produced or the evidence the failures cited — so remediation is targeted
+   *  rather than a fresh start. */
+  affectedTargets: ImplementationTarget[];
+  /** Rules and criteria that already hold, named so a remediation does not
+   *  undo them. References only. */
+  satisfied: { rules: string[]; criteria: string[] };
+}
+
+// ── Phase policies ──────────────────────────────────────────────────────────
+
+/**
+ * Turns a phase into the **implementation half of a change realization**
+ * (Phase 8).
+ *
+ * The phase must also declare a `changeContext`: the accepted proposal it
+ * realizes is the one that selector resolves, never a second selection
+ * mechanism. What this policy adds is the durable {@link ChangeRealization},
+ * the deterministic {@link ImplementationScope} the run receives, and the
+ * bound on how many times the loop may come back.
+ *
+ * Absent = an ordinary phase, behaving in every respect exactly as before
+ * Phase 8 existed — including a phase that declares `changeContext` alone,
+ * which is Phase 7's implementation handoff and stays exactly as it was.
+ */
+export interface ImplementationPolicy {
+  /**
+   * Total implementation attempts, including the first. `1` means no
+   * autonomous remediation at all; the default is `2` (one implementation,
+   * one targeted remediation). Capped, because an unbounded
+   * implement → verify → implement loop is the failure mode this bound
+   * exists to prevent.
+   */
+  maxAttempts?: number;
+  /**
+   * Refuse to launch when the accepted proposal's semantic target is no longer
+   * the active revision (§preflight). Default `true`: an implementation of
+   * intent the domain has already moved past is work nobody wants.
+   */
+  requireCurrentIntent?: boolean;
+  /** Include the source evidence of **preserved** revisions in the scope, as
+   *  regression surface. Default `true`. */
+  includePreserved?: boolean;
+  /** One sentence narrowing what this phase should do. Author-written. */
+  note?: string;
+}
+
+/**
+ * Turns a phase into the **verification half of a change realization**
+ * (Phase 8): it decides whether the accepted proposal's acceptance criteria
+ * are satisfied by the implementation it can see.
+ *
+ * Ordinarily declared together with `ruleVerification` — the two dimensions
+ * are independent and both are required for completion — and with a
+ * `changeContext` naming the same change-intent phase, which is where the
+ * criteria come from.
+ */
+export interface AcceptanceVerificationPolicy {
+  /**
+   * The implementation phase of the realization this verifies. It must be a
+   * dependency of this phase and must declare `implementation`. This is the
+   * link that makes "which implementation state am I verifying?" answerable.
+   */
+  implementationPhase: string;
+  /**
+   * What the realization requires of each criterion. `all` (the default)
+   * requires every criterion of the accepted proposal to be `satisfied`;
+   * `behavioral` requires it of `behavior`, `invariant` and `verification`
+   * criteria and accepts `unverifiable` for `regression` ones. Nothing
+   * downgrades a `violated`.
+   */
+  require?: "all" | "behavioral";
+  /** One sentence narrowing what "satisfied" means here. */
+  note?: string;
+}
+
+/** A staged acceptance proposal as the instance record sees it. */
+export interface StepAcceptanceVerification {
+  id: string;
+  status: AcceptanceVerificationStatus;
 }

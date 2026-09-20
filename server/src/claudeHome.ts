@@ -73,4 +73,7 @@ export const paths = {
    *  `<runId>/staged.json` is Argus's record of it. Never canonical until the
    *  phase is approved — see docs/KNOWLEDGE-LEDGER.md § Phase 7. */
   changeProposalsDir: () => path.join(claudeHome(), "argus", "change-proposals"),
+  /** Phase 8: one directory per run, holding the acceptance-verification
+   *  document the agent wrote and Argus's staged record of it. */
+  acceptanceVerificationsDir: () => path.join(claudeHome(), "argus", "acceptance-verifications"),
 };

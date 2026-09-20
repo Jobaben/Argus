@@ -4,6 +4,9 @@ import type { AgentRuntimeId, ReasoningEffort } from "./runtimes.js";
 import type { Trigger } from "./schedules.js";
 import type { AutoApprove, Rubric } from "./verdict.js";
 import type {
+  AcceptanceVerificationPolicy,
+  AcceptanceVerificationPreview,
+  AcceptanceVerificationSummary,
   ChangeContextSpec,
   ChangeIntentPolicy,
   ChangeIntentSummary,
@@ -11,6 +14,7 @@ import type {
   ChangeProposalStatus,
   DiscoveryPolicy,
   DiscoverySummary,
+  ImplementationPolicy,
   InvocationKnowledgeContext,
   KnowledgeContextSpec,
   KnowledgeDeltaPreview,
@@ -18,7 +22,9 @@ import type {
   RuleVerificationPolicy,
   RuleVerificationPreview,
   RuleVerificationStatus,
+  RepositoryStateRef,
   RuleVerificationSummary,
+  StepAcceptanceVerification,
 } from "./knowledge.js";
 
 export interface PhaseStep {
@@ -97,7 +103,26 @@ export type RetryableClass =
    * its reasoning — but retryable on opt-in, since the refusal names exactly
    * what was missing.
    */
-  | "change-proposal";
+  | "change-proposal"
+  /**
+   * An Argus-owned read-only input the run was given — its ChangeContext, its
+   * ImplementationScope, its RemediationContext — no longer hashes to what
+   * Argus recorded at launch (Phase 8). The exact counterpart of
+   * `knowledge-context-integrity`, and it asks the same question: *did the
+   * bytes supplied to this invocation change?*, never *is this still the
+   * newest proposal?* Accepted intent is immutable, so a newer proposal is
+   * never tampering. The completion is refused and nothing the run proposed
+   * becomes durable. Not retried by default.
+   */
+  | "change-context-integrity"
+  /**
+   * The run emitted an acceptance-verification proposal Argus refused:
+   * malformed, a criterion the accepted proposal does not declare, a required
+   * criterion left without an outcome, an outcome with no evidence, a check
+   * reference naming no check of this phase, or a report written against a
+   * different accepted change (Phase 8). Not retried by default.
+   */
+  | "acceptance-verification";
 
 /**
  * Every way a phase can fail. The retryable classes are the subset an author
@@ -412,6 +437,31 @@ export interface AgentInvocationRecord {
    *  `changeContext`; absent on records written before Phase 7. */
   changeContextFile?: string | null;
   /**
+   * Every Argus-owned **read-only input** materialized for this invocation
+   * besides the KnowledgeContext, with the SHA-256 of the bytes as written
+   * (Phase 8): the ChangeContext, the ImplementationScope, the
+   * RemediationContext.
+   *
+   * The integrity counterpart of {@link knowledgeContext}'s hash, and there
+   * for the same reason: at completion the bytes must still hash to this, or
+   * the step fails before anything it proposed is staged. Absent on records
+   * written before Phase 8, which is not a failure — there is nothing to
+   * verify, exactly as for a pre-Phase-4.1 context.
+   */
+  suppliedInputs?: Array<{ kind: InvocationChannelKind; path: string; sha256: string }>;
+  /** Where this run's read-only {@link ImplementationScope} was materialized
+   *  (`ARGUS_IMPLEMENTATION_SCOPE_FILE`). Null on a phase that is not an
+   *  implementation phase; absent on records written before Phase 8. */
+  implementationScopeFile?: string | null;
+  /** Where this run's read-only {@link RemediationContext} was materialized
+   *  (`ARGUS_REMEDIATION_CONTEXT_FILE`). Null on a first attempt, which has no
+   *  failures to remediate; absent on records written before Phase 8. */
+  remediationContextFile?: string | null;
+  /** Where this run must leave its {@link AcceptanceVerificationReport}
+   *  (`ARGUS_ACCEPTANCE_VERIFICATION_FILE`). Null on a phase that is not an
+   *  acceptance-verification phase; absent on records before Phase 8. */
+  acceptanceVerificationFile?: string | null;
+  /**
    * Every Argus-owned channel this invocation was offered, with the access it
    * needs and whether the runtime could honour it. A channel `unavailable`
    * here also appears in `limitations`. Absent on records written before the
@@ -601,6 +651,31 @@ export interface PhaseDef {
    * resolves — a staged one refuses the launch.
    */
   changeContext?: ChangeContextSpec;
+  /**
+   * Turn this phase into the **implementation half of a change realization**
+   * (Phase 8): its runs receive the deterministic {@link ImplementationScope}
+   * of the accepted change they were handed as a `changeContext`, and Argus
+   * opens a durable {@link ChangeRealization} that the matching verification
+   * phase closes out.
+   *
+   * Requires `changeContext` on the same phase — the proposal this realizes is
+   * the one that selector resolves, and there is no second selection
+   * mechanism. Absent = an ordinary phase, including one that declares
+   * `changeContext` alone, which is Phase 7's handoff unchanged.
+   */
+  implementation?: ImplementationPolicy;
+  /**
+   * Turn this phase into the **acceptance-verification half of a change
+   * realization** (Phase 8): its runs must decide, for every acceptance
+   * criterion of the accepted proposal, whether the implementation satisfies
+   * it — and write the answer as a structured
+   * {@link AcceptanceVerificationReport}.
+   *
+   * Independent of `ruleVerification`, and normally declared beside it: rule
+   * conformance and acceptance satisfaction are different questions, and a
+   * realization needs both.
+   */
+  acceptanceVerification?: AcceptanceVerificationPolicy;
 }
 
 // ── Harness: Argus-owned invocation channels ─────────────────────────────────
@@ -620,6 +695,9 @@ export type InvocationChannelKind =
   | "change-request"
   | "change-proposal"
   | "change-context"
+  | "implementation-scope"
+  | "remediation-context"
+  | "acceptance-verification"
   | "artifact-dir"
   | "memory-dir";
 
@@ -824,6 +902,14 @@ export interface StepProgress {
    * judged, what is unresolved. Absent when the run wrote no proposal.
    */
   changeProposal?: StepChangeProposal;
+  /**
+   * The acceptance-verification proposal this step's run emitted, as Argus
+   * staged it (Phase 8). Its own sidecar beside
+   * {@link StepProgress.ruleVerification} because the two answer different
+   * questions: a rule result is bound to a `ClaimRef`, a criterion result to
+   * `CP-12/AC-1`. Absent when the run wrote no acceptance file.
+   */
+  acceptanceVerification?: StepAcceptanceVerification;
 }
 
 /** A staged delta as the instance record sees it; the full record lives
@@ -873,6 +959,13 @@ export interface PhaseKnowledgeCommit {
    * either both there or neither is. Absent on a phase that staged none.
    */
   changeProposals?: string[];
+  /**
+   * The acceptance-verification record ids this attempt commits (Phase 8).
+   * Committed in the *same* ledger transition as the rest, so a realization's
+   * three rule verifications and four acceptance verifications are all durable
+   * or none of them are. Absent on a phase that staged none.
+   */
+  acceptanceVerifications?: string[];
   startedAt: string;
   endedAt?: string | null;
   /** Why the commit was refused. */
@@ -927,6 +1020,36 @@ export interface PhaseProgress {
   /** What this attempt's change-intent run proposed, in counts (Phase 7).
    *  Absent on a phase without `changeIntent`. */
   changeIntent?: ChangeIntentSummary;
+  /** What this attempt's acceptance-verification run concluded, in counts
+   *  (Phase 8). Absent on a phase without `acceptanceVerification`. */
+  acceptanceVerification?: AcceptanceVerificationSummary;
+  /**
+   * The change realization this phase's attempt belongs to (Phase 8): which
+   * durable {@link ChangeRealization} it is an attempt of, which attempt, and
+   * what that attempt was launched to do. Written on both halves of a
+   * realization — the implementation phase and the verification phase — so the
+   * board can draw the loop without reading the ledger. Absent on a phase
+   * that is not part of one.
+   */
+  realization?: PhaseRealizationRef;
+}
+
+/** A phase attempt's link into the durable realization it belongs to. */
+export interface PhaseRealizationRef {
+  id: string;
+  proposalId: string;
+  /** 1-based; the same number as the {@link ChangeRealizationAttempt}. */
+  attempt: number;
+  kind: "implementation" | "remediation";
+  /** Attempts allowed in total, so the board can say "2 of 3". */
+  maxAttempts: number;
+  /**
+   * The repository state this attempt's implementation produced, snapshotted
+   * when the implementation phase concluded. Carried on the live instance
+   * because the verification that follows must be proven to have examined
+   * *this* state; it becomes durable on the realization attempt at close-out.
+   */
+  repository?: RepositoryStateRef;
 }
 
 /** What the engine writes into `PhaseProgress.payload` when a phase fails.
@@ -1094,6 +1217,24 @@ export interface PhaseReview {
   changeProposals?: ChangeProposalPreview[];
   /** The counts for a change-intent phase's proposal. Absent otherwise. */
   changeIntent?: ChangeIntentSummary;
+  /**
+   * The acceptance-verification results this attempt staged, one preview per
+   * step that wrote one (Phase 8) — grouped by outcome, each row naming the
+   * criterion and the exact revisions it is evidence for. Shown beside
+   * `ruleVerifications` and never merged with them: a reviewer must be able to
+   * see "every rule holds, and AC-3 is violated", which is not a complete
+   * change.
+   */
+  acceptanceVerifications?: AcceptanceVerificationPreview[];
+  /** The counts for an acceptance-verification phase's results. */
+  acceptanceVerification?: AcceptanceVerificationSummary;
+  /**
+   * The change realization this phase attempt belongs to (Phase 8), so a
+   * reviewer at a gate can see *which* accepted change is being realized and
+   * *which attempt* they are looking at — a remediation's results are not the
+   * first attempt's, and approving them is not the same decision.
+   */
+  realization?: PhaseRealizationRef;
 }
 
 /** One artifact's bytes, for the read-only viewer. */

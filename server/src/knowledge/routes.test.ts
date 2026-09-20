@@ -1338,3 +1338,229 @@ test("there is no admin mutation for a change proposal", async () => {
     assert.equal((await post(app, url, { readiness: "ready" })).status, 404);
   }
 });
+
+// ── Change realization (Phase 8) ────────────────────────────────────────────
+
+/** One realization over CP-12: a failed first attempt, a successful
+ *  remediation, and the durable results of both. As a pipeline's acceptance
+ *  boundaries would have written them. */
+async function seedRealization() {
+  const { mutateLedger } = await import("./store.js");
+  const {
+    appendRealizationAttempt,
+    closeChangeRealization,
+    recordAcceptanceVerification,
+    recordRuleVerification,
+    startChangeRealization,
+  } = await import("./kernel.js");
+  const at = "2026-09-20T13:00:00.000Z";
+  const state = { gitHead: "abc123abc123abc123abc123abc123abc123abcd" };
+  await mutateLedger((ledger) => {
+    let next = startChangeRealization(
+      ledger,
+      {
+        id: "CR-R1",
+        proposalId: "CP-12",
+        target: [{ id: "RULE-7", revision: 2 }],
+        instanceId: "inst-1",
+        phaseId: "implement",
+        verificationPhaseId: "verify",
+        maxAttempts: 2,
+        scope: {
+          schemaVersion: 1,
+          generatedAt: at,
+          proposalId: "CP-12",
+          semanticChanges: [{ id: "RULE-7", revision: 2 }],
+          preserved: [{ id: "FACT-12", revision: 1 }],
+          targets: [
+            {
+              path: "src/Booking/Validator.cs",
+              location: "repository",
+              reasons: [{ code: "source-code-evidence", claim: { id: "RULE-7", revision: 1 } }],
+              preserveOnly: false,
+            },
+          ],
+          impactedExecutions: [],
+          completeness: "known-targets",
+          withoutTargets: [],
+          requestedPaths: [],
+        },
+      },
+      at,
+    ).ledger;
+    for (const [runId, outcome] of [
+      ["run-verify-1", "violated"],
+      ["run-verify-2", "holds"],
+    ] as const) {
+      next = recordRuleVerification(
+        next,
+        {
+          id: `RV-${runId}`,
+          rule: { id: "RULE-7", revision: 2 },
+          outcome,
+          execution: { runId },
+          repositoryState: state,
+          evidence: [{ type: "observation", note: "read the validator" }],
+        },
+        at,
+      ).ledger;
+      next = recordAcceptanceVerification(
+        next,
+        {
+          id: `AV-${runId}`,
+          proposalId: "CP-12",
+          criterionId: "AC-1",
+          outcome: outcome === "holds" ? "satisfied" : "violated",
+          execution: { runId },
+          repository: state,
+          evidence: [{ type: "observation", note: "ran it" }],
+        },
+        at,
+      ).ledger;
+    }
+    for (const [n, runId, outcome] of [
+      [1, "run-impl-1", "rule-violation"],
+      [2, "run-impl-2", "succeeded"],
+    ] as const) {
+      next = appendRealizationAttempt(next, "CR-R1", {
+        attempt: n,
+        kind: n === 1 ? "implementation" : "remediation",
+        implementation: [{ runId }],
+        verification: [{ runId: `run-verify-${n}` }],
+        repository: state,
+        ruleResults: [
+          { rule: { id: "RULE-7", revision: 2 }, outcome: n === 1 ? "violated" : "holds" },
+        ],
+        acceptanceResults: [{ criterionId: "AC-1", outcome: n === 1 ? "violated" : "satisfied" }],
+        outcome,
+        startedAt: at,
+        endedAt: at,
+      }).ledger;
+    }
+    next = closeChangeRealization(next, "CR-R1", {
+      status: "succeeded",
+      repository: state,
+      reason: "every targeted rule holds and every required criterion is satisfied",
+      unmetRules: [],
+      unmetCriteria: [],
+      completedAt: at,
+    }).ledger;
+    return { ledger: next, result: null };
+  });
+}
+
+test("realizations are listed with a derived status, and filtered by the change they realize", async () => {
+  const app = makeApp();
+  await seedExample(app);
+  await seedChangeProposal();
+  await seedRealization();
+
+  const all = await get(app, "/api/knowledge/realizations");
+  assert.equal(all.status, 200);
+  assert.deepEqual(
+    all.body.realizations.map((r: any) => [r.id, r.proposalId, r.status, r.attemptsRemaining]),
+    [["CR-R1", "CP-12", "succeeded", 0]],
+  );
+  assert.deepEqual(
+    (await get(app, "/api/knowledge/realizations?proposal=CP-12")).body.realizations.map(
+      (r: any) => r.id,
+    ),
+    ["CR-R1"],
+  );
+  assert.deepEqual(
+    (await get(app, "/api/knowledge/realizations?proposal=CP-99")).body.realizations,
+    [],
+  );
+  assert.equal((await get(app, "/api/knowledge/realizations?proposal=not a id")).status, 400);
+});
+
+test("one realization answers the six questions the phase exists for", async () => {
+  const app = makeApp();
+  await seedExample(app);
+  await seedChangeProposal();
+  await seedRealization();
+
+  // Was CP-12 implemented, and at which repository revision?
+  const one = await get(app, "/api/knowledge/realizations/CR-R1");
+  assert.equal(one.status, 200);
+  assert.equal(one.body.status, "succeeded");
+  assert.equal(one.body.outcome.repository.gitHead.startsWith("abc123"), true);
+  // What remediation attempts occurred, and what did each fail on?
+  assert.deepEqual(
+    one.body.attempts.map((a: any) => [a.attempt, a.kind, a.outcome]),
+    [
+      [1, "implementation", "rule-violation"],
+      [2, "remediation", "succeeded"],
+    ],
+  );
+  // Which runs participated?
+  const runs = await get(app, "/api/knowledge/realizations/CR-R1/runs");
+  assert.deepEqual(
+    runs.body.implementation.map((r: any) => r.runId),
+    ["run-impl-1", "run-impl-2"],
+  );
+  assert.deepEqual(
+    runs.body.verification.map((r: any) => r.runId),
+    ["run-verify-1", "run-verify-2"],
+  );
+  // Which verifications proved it — both dimensions, both attempts, nothing
+  // overwritten?
+  const results = await get(app, "/api/knowledge/realizations/CR-R1/results");
+  assert.deepEqual(
+    results.body.rules.map((r: any) => r.outcome),
+    ["violated", "holds"],
+  );
+  assert.deepEqual(
+    results.body.acceptance.map((r: any) => r.outcome),
+    ["violated", "satisfied"],
+  );
+  assert.equal((await get(app, "/api/knowledge/realizations/CR-NOPE")).status, 404);
+});
+
+test("acceptance conformance is scoped, and unverified is the answer for a state nobody examined", async () => {
+  const app = makeApp();
+  await seedExample(app);
+  await seedChangeProposal();
+  await seedRealization();
+
+  const here = await get(
+    app,
+    "/api/knowledge/change-proposals/CP-12/criteria/AC-1?gitHead=abc123abc123abc123abc123abc123abc123abcd",
+  );
+  assert.equal(here.body.status, "satisfied");
+  assert.equal(here.body.history.length, 2);
+  const elsewhere = await get(
+    app,
+    "/api/knowledge/change-proposals/CP-12/criteria/AC-1?gitHead=def456def456def456def456def456def456def4",
+  );
+  assert.equal(elsewhere.body.status, "unverified");
+  // The full history is always the full history, however the question is scoped.
+  assert.equal(elsewhere.body.history.length, 2);
+  // Every result for one change, and for one run.
+  assert.equal(
+    (await get(app, "/api/knowledge/change-proposals/CP-12/acceptance")).body.acceptance.length,
+    2,
+  );
+  assert.equal(
+    (await get(app, "/api/knowledge/executions/run-verify-2/acceptance")).body.acceptance.length,
+    1,
+  );
+  assert.equal((await get(app, "/api/knowledge/change-proposals/CP-99/criteria/AC-1")).status, 404);
+});
+
+test("there is no write API for completion state", async () => {
+  const app = makeApp();
+  await seedExample(app);
+  await seedChangeProposal();
+  await seedRealization();
+  for (const url of [
+    "/api/knowledge/realizations",
+    "/api/knowledge/realizations/CR-R1",
+    "/api/knowledge/change-proposals/CP-12/acceptance",
+    "/api/knowledge/change-proposals/CP-12/criteria/AC-1",
+  ]) {
+    assert.equal((await post(app, url, { status: "succeeded" })).status, 404, url);
+  }
+  // …and the realization is untouched by the attempt.
+  assert.equal((await get(app, "/api/knowledge/realizations/CR-R1")).body.status, "succeeded");
+});

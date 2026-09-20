@@ -12,7 +12,12 @@ the rules it establishes reach the phases that follow. Phase 6: business-rule
 verification and implementation conformance — whether the code at one exact
 repository revision does what one exact rule revision says, recorded as its
 own append-only dimension and kept rigorously apart from whether the rule
-itself is well founded._
+itself is well founded. Phase 7: change-intent orchestration — a requested
+business change becomes a structured, reviewable semantic transition. Phase 8:
+targeted implementation and closed-loop realization — an accepted change is
+implemented against exact semantic intent, verified on four independent
+dimensions at one proven repository state, and selectively remediated until it
+is realized or a bounded loop ends with the exact criteria that remain unmet._
 
 ## 1. Why it exists
 
@@ -3284,12 +3289,730 @@ KnowledgeContext, and CP-12 as a ChangeContext.
   it. There is no `POST` that could record one around the review.
 - **No ATMS environments or alternative worlds.**
 
-## 17. Persistence
+## 17. Targeted implementation and closed-loop realization (Phase 8)
+
+Phase 7 ended at **accepted intent**: a person approved a ChangeProposal, its
+semantic delta committed, and a later phase could receive the result as a
+ChangeContext. Phase 8 answers the question that follows, and it is the one
+the whole ledger was built to be able to answer:
+
+> Has this accepted business change actually been implemented, and how do we
+> know?
+
+### 17.1 The completion invariant
+
+The answer is never one fact. An agent saying
+
+```
+ARGUS_OUTCOME: succeeded
+```
+
+is one agent's word about its own work. `npm test → 0` is Argus's own
+observation, and says nothing about the domain. `RULE-42:v2 → holds` is about
+the domain and says nothing about whether _this change_ was carried out. Each
+of them is necessary; none is sufficient. So:
+
+```
+ChangeRealizationComplete  ⟺
+      the implementation execution succeeded
+    ∧ every mandatory deterministic PhaseCheck passed
+    ∧ every targeted business-rule revision  `holds`     at the examined state
+    ∧ every required acceptance criterion    `satisfied` at that same state
+    ∧ the verification examined the state the implementation produced
+    ∧ the semantic target is still the domain's current intent
+```
+
+Evaluated by one pure function, `evaluateCompletion` (`knowledge/realization.ts`),
+from records Argus wrote — never from a model's opinion, and never from an
+agent's report about itself. The six conjuncts in order, and what each one
+refuses:
+
+| #   | Dimension        | Decided from                                       | Failure class                                     |
+| --- | ---------------- | -------------------------------------------------- | ------------------------------------------------- |
+| 1   | execution        | the run's `ARGUS_OUTCOME` / the phase's status     | `blocked`, `technical-failure`                    |
+| 2   | checks           | the phase's own `VerificationReport`               | `technical-failure`                               |
+| 3   | rule conformance | `ledger.verifications` for this attempt's runs     | `rule-violation`                                  |
+| 4   | acceptance       | `ledger.acceptanceVerifications` for the same runs | `acceptance-violation`, `acceptance-unverifiable` |
+| 5   | state binding    | the two `RepositoryStateRef`s                      | `state-mismatch`                                  |
+| 6   | intent currency  | `activeRevision` of every targeted ref             | `stale-intent`                                    |
+
+The order is the order the dimensions fail in, and it is what keeps the
+classes apart: a compile error is never reported as a rule violation, and a
+rule violation is never reported as an acceptance violation — because the
+remediation each one needs is different.
+
+**The four dimensions are never merged.** This is the state Phase 8 exists to
+be able to name:
+
+```
+RULE-42:v2   support = supported   conformance = holds
+npm test     exit 0
+AC-1         satisfied
+AC-2         satisfied
+AC-3         "Non-Kobra behaviour unchanged"        violated
+                              ↓
+                  the change is NOT complete
+```
+
+and so is its inverse (every criterion satisfied, a targeted rule violated).
+Neither result rewrites the other; completion _combines_ them.
+
+### 17.2 Change realization, the durable record
+
+One attempt-chain against one accepted proposal (ledger **version 7**):
+
+```ts
+interface ChangeRealization {
+  id: string; // CR-…
+  schemaVersion: 1;
+  proposalId: string; // the accepted CP it realizes — frozen
+  target: ClaimRef[]; // the revisions that CP introduced
+  instanceId: string;
+  phaseId: string; // the implementation phase
+  verificationPhaseId?: string;
+  maxAttempts: number; // the loop's bound, the author's
+  scope: ImplementationScope; // derived once, frozen
+  attempts: ChangeRealizationAttempt[];
+  outcome?: ChangeRealizationOutcome; // written once, never rewritten
+  createdAt: string;
+}
+```
+
+It is the one record in the ledger that is not write-once, and it is mutable
+in exactly two guarded ways and no others:
+
+- **`attempts` is appended to.** An attempt number the realization already
+  holds is a no-op when identical and a **refusal** when it differs, so a
+  remediation can never rewrite the attempt it is remediating.
+- **`outcome` is written once.** A second, different verdict is refused rather
+  than turning a failed realization into a success, or a success into a stale
+  one. Its presence is what makes the realization no longer `running` — the
+  status is derived (`realizationView`), never stored twice.
+
+```ts
+interface ChangeRealizationAttempt {
+  attempt: number; // 1 = implementation, 2..n = remediation
+  kind: "implementation" | "remediation";
+  implementation: RunExecutionRef[];
+  verification: RunExecutionRef[];
+  repository?: RepositoryStateRef;
+  technical?: RealizationTechnicalResult;
+  ruleResults: RealizationRuleResult[];
+  acceptanceResults: RealizationAcceptanceResult[];
+  outcome: ChangeAttemptOutcome;
+  reason?: string;
+  startedAt: string;
+  endedAt?: string;
+}
+```
+
+Two levels of history, both preserved. Within one realization the attempts are
+the record of how the implementation converged; across realizations, a second
+run of the pipeline against the same CP opens a _second_ realization and the
+first stands untouched.
+
+Identity is `(instanceId, phaseId)`: one implementation phase of one instance
+drives one realization, however many attempts it takes. Opening it again is a
+no-op — which is what makes a restart between the ledger write and the
+instance write safe — and opening it against a **different** proposal is
+refused rather than retargeting a running attempt at intent it never received.
+
+The externally useful states:
+
+| Status              | Means                                                                        |
+| ------------------- | ---------------------------------------------------------------------------- |
+| `running`           | an attempt is in flight                                                      |
+| `succeeded`         | every required dimension held, at one state, with the target still current   |
+| `needs-remediation` | recorded on the _attempt_; the realization re-opens the implementation phase |
+| `failed`            | terminal without success: budget exhausted, blocked, unverifiable, technical |
+| `stale`             | the accepted intent was superseded; a new decision is needed, not more code  |
+
+### 17.3 Repository-state identity
+
+A conformance result is a statement about one implementation, and `gitHead`
+alone does not name one when the agent left its work uncommitted:
+
+```
+HEAD abc123   +   validator accepts 501     ← attempt 1, the defect
+HEAD abc123   +   validator rejects 501     ← attempt 2, the fix
+```
+
+Two different implementations, one commit. A verification bound to the head
+alone would claim the second's result about the first. So Phase 8 adds:
+
+```ts
+interface RepositoryStateRef {
+  gitHead?: string;
+  workingTree?: { snapshotHash: string; dirty: number; truncated?: boolean };
+}
+```
+
+`snapshotHash` is sha256 over the sorted `(path → content identity)` pairs of
+Argus's own `WorkingTreeSnapshot` — content hashes, never timestamps — so it is
+derived from what the files _say_. No new subsystem: the snapshot already
+existed for `changed-files` checks.
+
+Three rules, all fail-closed:
+
+- **absent `workingTree` means clean at `gitHead`** — a positive statement, and
+  a clean state never matches a dirty one;
+- **neither field means "not a repository"** — an honest absence of identity,
+  which matches nothing, itself included;
+- **a truncated snapshot identifies nothing.** Argus will not assert an
+  identity it could not compute.
+
+A record written before Phase 8 carries a `gitHead` and no state. It answers a
+**clean** question at that head and nothing else: a question that carries a
+working tree is about content such a record never saw, so the answer is
+`unverified` rather than a silent match (`repositoryStateAnswers`).
+
+`RuleVerification` gains `repositoryState` beside its existing `repository`;
+`ruleConformance(rule, gitHead)` is unchanged and still answers the head-scoped
+question, and `ruleConformanceAtState(rule, state)` answers the stricter one a
+realization has to ask.
+
+### 17.4 The critical binding: verified state = implemented state
+
+```
+implementation phase concludes  →  snapshot            (state I)
+      ↓
+verification runs               →  snapshot at intake  (state V)
+      ↓
+close-out:  I ≠ V  →  state-mismatch, fail closed
+```
+
+Argus does not introduce a branch or worktree subsystem to guarantee this (a
+pipeline that wants isolation already has `workspace`). It **proves** it, and
+refuses when it cannot: a verifier that ran in a different tree, or modified
+the one it was given, did not verify the implementation, and no amount of
+green output makes it so. Two verification runs that examined different trees
+also produce no single state, and are refused for the same reason.
+
+The one case that proceeds without a binding is a working directory that is
+not a git repository at all. The limitation is then explicit — the realization
+records no repository — rather than a fabricated revision identity.
+
+### 17.5 Deterministic implementation scope
+
+Before an implementation agent is launched, Argus answers one question from
+its own records and nothing else:
+
+> Where, in this repository, does the ledger say this change lives?
+
+```
+revised RULE-42:v1 → v2
+      ↓ analyzeImpact(RULE-42:v1)              Phase 2, called, not re-derived
+  consumer executions → the artifacts they produced       impact-artifact
+      ↓ evidenceOf(RULE-42:v1 / :v2)           Phase 1/5 source-code evidence
+  where the rule lives in the code                        source-code-evidence
+      ↓ verificationsOfClaim(RULE-42:v1)       Phase 6 conformance evidence
+  where somebody last looked                              verification-evidence
+      ↓ preserved revisions' own evidence                 preserved-evidence
+      ↓ ChangeRequest.scope.paths                         request-scope
+```
+
+```ts
+interface ImplementationScope {
+  schemaVersion: 1;
+  generatedAt: string;
+  proposalId: string;
+  semanticChanges: ClaimRef[];
+  preserved: ClaimRef[];
+  targets: ImplementationTarget[]; // path + location + reasons
+  impactedExecutions: RunExecutionRef[];
+  completeness: "known-targets" | "scope-incomplete";
+  withoutTargets: ClaimRef[];
+  requestedPaths: string[];
+}
+```
+
+Every reason is a closed `ScopeReasonCode` carrying the exact claim, execution
+or evidence record it came from — machine-readable, so a later phase can route
+on it without parsing prose:
+
+```
+src/Booking/CustomerCommentValidator.cs
+  impact-artifact        RULE-42:v1 → consumed by run_impl_17 → produced this
+src/Booking/KobraAdapter.cs
+  source-code-evidence   EV-1 grounds RULE-42:v1
+src/Booking/ServerValidation.cs
+  preserved-evidence     CONSTRAINT-8:v1 must keep behaving as it does
+src/Booking
+  request-scope          the change request named it
+```
+
+**It never claims to be exhaustive.** `known-targets` means "these are the
+places the ledger knows about", and the agent may legitimately need to touch
+others — the scope is guidance and provenance, not a filesystem boundary (the
+capability profile is that, if anything is).
+
+And the case that matters most: a **new** business rule nothing has ever
+implemented has no consumer execution, no artifact and no source evidence.
+`analyzeImpact` is empty. Argus reports `scope-incomplete` and names the
+revisions it cannot place — never an empty target list that would read as
+_nothing to do_. The requester's own `scope.paths` are delivered to the agent
+but deliberately do **not** count as provenance: a request naming a directory
+must not make a change with no implementation history read as fully scoped.
+
+### 17.6 Acceptance-criterion verification
+
+Phase 7 introduced acceptance criteria and deliberately kept them out of the
+claim graph. Phase 8 gives them first-class verification results, on their own
+dimension:
+
+```
+RULE-42:v2   "Kobra comments max = 500"    a domain rule that outlives the
+                                           change.  Bound to a ClaimRef.
+CP-12/AC-3   "Non-Kobra behaviour is       evidence that ONE change was done
+              unchanged."                  right.  Bound to a proposal.
+```
+
+AC-3 is not a business-rule revision and has nothing to be verified _against_;
+mapping it onto `RuleVerification` would have required inventing a claim for
+every criterion, which is exactly what §16.6 forbids. So it gets its own
+channel, record, read model and failure class.
+
+```ts
+interface AcceptanceVerification {
+  id: string;
+  proposalId: string; // CP-12
+  criterionId: string; // AC-3        → "CP-12/AC-3"
+  statement: string; // frozen from the ACCEPTED proposal
+  kind: AcceptanceCriterionKind;
+  outcome: "satisfied" | "violated" | "unverifiable";
+  execution: RunExecutionRef;
+  attempt?: number;
+  repository?: RepositoryStateRef;
+  evidence: VerificationEvidence[]; // the Phase 6 union, reused as-is
+  reason?: string; // required for `unverifiable`
+  note?: string;
+  createdAt: string;
+}
+```
+
+**Identity is the pair.** `AC-1` is proposal-local by design — two changes may
+both have one, meaning entirely different things — so nothing outside a
+proposal addresses a criterion by its bare id, and a report written against
+CP-11 can never answer CP-12. The statement is read from the accepted
+proposal, never from the agent's document: a durable result is always about
+the sentence a person approved.
+
+Four answers, and the same distinction Phase 6 draws:
+
+| Status         | Means                                                         |
+| -------------- | ------------------------------------------------------------- |
+| `satisfied`    | sufficient evidence the implementation meets the criterion    |
+| `violated`     | sufficient evidence it does not                               |
+| `unverifiable` | somebody looked and could not settle it. Requires a reason    |
+| `unverified`   | **read model only** — nobody looked, at this repository state |
+
+`acceptanceConformance(proposalId, criterionId, state?)` scopes the question
+to an exact repository state, exactly as `ruleConformance` scopes to a commit:
+a criterion satisfied against one implementation reads `unverified` against a
+different one at the same head, and `history` is always the full history
+however the question was scoped.
+
+### 17.7 The protocol
+
+Four Argus-owned channels, through the existing invocation-channel model
+(HARNESS.md §3a), and deliberately four rather than one:
+
+| Channel                              | Direction       | When                                        |
+| ------------------------------------ | --------------- | ------------------------------------------- |
+| `ARGUS_IMPLEMENTATION_SCOPE_FILE`    | read, required  | the phase declares `implementation`         |
+| `ARGUS_REMEDIATION_CONTEXT_FILE`     | read, required  | attempt 2..n only                           |
+| `ARGUS_ACCEPTANCE_VERIFICATION_FILE` | write, required | the phase declares `acceptanceVerification` |
+| `ARGUS_CHANGE_CONTEXT_FILE`          | read, required  | unchanged from Phase 7                      |
+
+```
+KnowledgeContext      what the domain currently says        (§13)
+      +
+ChangeContext         the accepted transition to realize    (§16.11)
+      +
+ImplementationScope   where the ledger says it lives        (§17.5)
+      ↓
+implementation run
+      ↓  repository changes, artifacts, an optional KnowledgeDelta
+Argus's PhaseChecks
+      ↓
+verification run
+      ↓  ARGUS_RULE_VERIFICATION_FILE   +  ARGUS_ACCEPTANCE_VERIFICATION_FILE
+staged records (NOT canonical)
+      ↓  completeness · exact refs · evidence floors · check labels · realpath
+      ↓  PhaseChecks → check evidence bound from Argus's own report
+      ↓  gate, when configured → phase acceptance, ONE ledger transition
+RuleVerification  +  AcceptanceVerification  +  the realization attempt
+```
+
+Three documents, never one blob. `ImplementationScope` names `RULE-42:v2` and
+what it _says_ arrives through the KnowledgeContext — a second copy of a
+claim's sentence in a second file is a second thing to drift.
+
+The acceptance document:
+
+```json
+{
+  "schemaVersion": 1,
+  "proposalId": "CP-12",
+  "criteria": [
+    {
+      "criterionId": "AC-1",
+      "outcome": "satisfied",
+      "evidence": [{ "type": "check", "label": "kobra-comment-500" }]
+    },
+    {
+      "criterionId": "AC-2",
+      "outcome": "violated",
+      "evidence": [{ "type": "source-code", "path": "src/Booking/Validator.cs" }],
+      "note": "501 is accepted too"
+    },
+    {
+      "criterionId": "AC-3",
+      "outcome": "satisfied",
+      "evidence": [{ "type": "check", "label": "non-kobra-unchanged" }]
+    }
+  ]
+}
+```
+
+What Argus validates, all from structured data:
+
+1. **Completeness.** `required = satisfied ∪ violated ∪ unverifiable`, each
+   criterion exactly once. A **missing** criterion refuses the whole document
+   (say `unverifiable` instead); an **extra** one refuses it too — and the
+   classic form of an extra one is a criterion belonging to a different
+   proposal.
+2. **Proposal identity.** An echoed `proposalId` that is not the run's own
+   refuses the document before anything else is read.
+3. **Evidence floors.** `satisfied`/`violated` must cite evidence;
+   `unverifiable` must give a reason.
+4. **Check references.** A cited label must be one the phase declares; its
+   `status`, `exitCode` and `detail` are bound from Argus's own report at the
+   commit boundary, and any `status` the agent wrote is stripped at
+   validation. A `satisfied` outcome citing a check Argus observed **failing**
+   refuses the commit.
+5. **Source evidence.** Repository-relative, real, inside the run's tree
+   through every symlink (`realpath`), at the commit Argus recorded.
+6. **No file is not silence.** A run given an accepted change with criteria has
+   an obligation to answer them; an absent report refuses the step.
+
+An agent may _create_ a test — that is ordinary implementation work — but
+creating one proves nothing. Only Argus's subsequent deterministic execution
+of it, cited as a `check`, is evidence.
+
+### 17.8 ChangeContext integrity, closed
+
+Phase 7 materialized the ChangeContext read-only and never checked it again,
+so an implementation could have been driven by bytes nobody could vouch for.
+Phase 8 closes that by exactly the Phase 4.1 model, for all three read inputs:
+
+```
+materialize  →  record path + sha256 on the invocation
+      ↓
+launch
+      ↓
+completion   →  re-hash
+      ↓
+mismatch or missing  →  `change-context-integrity`, deterministic failure,
+                        before anything the run proposed is staged
+```
+
+It asks **one** question — _did the bytes supplied to this invocation change?_
+— and deliberately not _is this still the newest proposal?_. An accepted
+ChangeProposal's identity is immutable, so a newer proposal accepted while the
+agent ran is never tampering; a realization that has been overtaken is a
+`stale` realization, decided at close-out from the ledger. A record with no
+`suppliedInputs` (written before Phase 8) has nothing to verify and passes,
+exactly as a pre-Phase-4.1 context does.
+
+The ChangeContext is built from the **accepted proposal in the ledger**, never
+from an earlier phase's invocation file, so implementation and remediation
+never depend on a transient record that pruning may have removed.
+
+### 17.9 Channels match phase responsibilities
+
+While touching invocation construction, one asymmetry Phase 7 left is closed:
+a change-intent phase was offered `ARGUS_KNOWLEDGE_DELTA_FILE` even though a
+run that writes both a delta and a proposal is refused outright. It is no
+longer offered there — advertising a protocol whose use would fail the step is
+worse than not advertising it. Every other phase is offered the delta channel
+exactly as before; this is the only suppression, and it is decided from the
+phase definition (`channels.ts`), not by a new mechanism.
+
+### 17.10 Targeted remediation
+
+When accepted verification finds the change unmet, Argus builds the
+remediation's input **from its own accepted results** — never from the previous
+agent's transcript:
+
+```ts
+interface RemediationContext {
+  schemaVersion: 1;
+  realizationId: string;
+  proposalId: string;
+  attempt: number; // 2..n
+  previousOutcome: ChangeAttemptOutcome;
+  failedRules: RemediationFailedRule[]; // ref, statement, outcome, evidence
+  failedCriteria: RemediationFailedCriterion[]; // CP-12/AC-2, statement, evidence
+  technicalFailures: Array<{ label; detail? }>;
+  affectedTargets: ImplementationTarget[]; // narrowed by the failures
+  satisfied: { rules: string[]; criteria: string[] }; // do not break these
+}
+```
+
+`affectedTargets` is the scope narrowed to what the failures actually point
+at — the files the failing evidence cited, plus the targets whose reasons name
+a failing rule. Attempt 2 is told _this file, this criterion_, not _here is the
+whole change again_.
+
+**Only the realization re-runs.** `applyRemediation` re-opens the
+implementation phase and resets the phases between it and its verifier to
+`pending`. Everything earlier — discovery, change intent, the human approval
+that made the intent canonical — is accepted history and is never re-run.
+
+Three things that share mechanics and must not share semantics:
+
+```
+retry        the same intended work; the execution failed operationally.
+             consumes the author's retry budget.
+revise       a person decided to try again, and reset that budget.
+remediation  the implementation EXECUTED; Argus's own verification proved the
+             accepted intent unmet, and a new attempt is launched with the
+             exact failures as its input. The retry budget is untouched; the
+             bound is the realization's own `maxAttempts`.
+```
+
+They are separate journal kinds (`realization.remediation-started` vs
+`phase.retrying` vs `phase.revised`) and separate durable facts.
+
+### 17.11 The loop is bounded
+
+`implementation.maxAttempts` (default 2, hard cap 8, validated when the
+pipeline is **saved**) is the only thing that decides how many times the loop
+may come back. Exhaustion is a clear terminal state — `failed`, with a reason
+naming the budget — never another automatic attempt. And three outcomes stop
+the loop even with attempts remaining, because more code is not the answer:
+
+- `blocked` — the agent reported it cannot safely implement the accepted
+  intent with the information it has (reusing `ARGUS_OUTCOME: blocked`, not a
+  new mechanism);
+- `acceptance-unverifiable` — a required criterion cannot be established
+  either way; a person is needed;
+- `stale-intent` / `state-mismatch` — the premises of the loop no longer hold.
+
+### 17.12 Stale intent
+
+Two preconditions, at the two moments that matter:
+
+**Before launching.** If any revision the accepted proposal introduced is no
+longer the **active** revision of its id, the launch is refused as a
+`configuration` failure and no agent starts:
+
+```
+CP-12 targets RULE-42:v2
+current active revision is RULE-42:v3
+  → "the domain has moved past this intent; a new change decision is
+     required, not an implementation of the old one"
+```
+
+(`implementation.requireCurrentIntent: false` allows a deliberately historical
+operation.)
+
+**Before declaring success.** The same check runs again at close-out. The
+attempt's results stay historically true about the exact revisions they
+named — a verification of `RULE-42:v2` is a fact about v2 forever — but the
+realization closes `stale` rather than `succeeded`, remediation stops, and the
+reason names the supersession. A perfect implementation of v2 is not current
+completion when the business has decided v3.
+
+### 17.13 Atomic close-out
+
+A realization's verification phase commits **everything or nothing** in one
+ledger transition: its deltas, its rule verifications, its accepted change
+proposals and its acceptance verifications, through the one extended
+`commitPhaseSemantics`. Three rule results and four criterion results are
+seven records that land together or not at all; a forged check reference, a
+`satisfied` resting on a failing check, a criterion whose proposal is not in
+the ledger — any of them refuses the whole attempt before the ledger is
+touched, and the phase fails under `acceptance-verification`.
+
+The attempt record and the terminal verdict are separate, idempotent ledger
+transitions that follow it, so a crash anywhere in the sequence heals by
+running it again.
+
+### 17.14 The worked example, Phase 8
+
+`harness/realizationE2e.test.ts`, with real child processes, the real Stop
+hook, a real git repository and real `node` check processes:
+
+```
+RULE-42:v1       "Kobra comments max = 180"        supported, holds @baseline
+CONSTRAINT-8:v1  "Validation is enforced server-side"
+
+request          "Kobra now supports 500-character comments."
+  ↓ change intent (gated) — a human approves
+RULE-42:v2 "max = 500"   preserved CONSTRAINT-8:v1
+AC-1 500 accepted · AC-2 501 rejected · AC-3 non-Kobra unchanged
+
+  ↓ ImplementationScope: kobraCommentValidator.mjs (source-code-evidence),
+    src/Booking (request-scope), completeness = known-targets
+  ↓ attempt 1 — a real defect: accepts(500) AND accepts(501)
+  ↓ PhaseChecks: syntax ✓  non-kobra-unchanged ✓        ← green, and wrong
+  ↓ verification
+RULE-42:v2 → violated        AC-1 satisfied · AC-2 violated · AC-3 satisfied
+  → attempt 1: rule-violation                       (needs remediation)
+
+  ↓ RemediationContext: RULE-42:v2 violated, CP/AC-2 violated,
+    already satisfied: CP/AC-1, CP/AC-3
+  ↓ attempt 2 — the boundary is enforced
+  ↓ re-verification
+RULE-42:v2 → holds           AC-1 · AC-2 · AC-3 all satisfied
+  → realization SUCCEEDED, bound to the exact repository state examined
+
+durable history, nothing rewritten:
+  RULE-42:v1 @baseline holds
+  RULE-42:v2 violated          (attempt 1)
+  RULE-42:v2 holds             (attempt 2)
+  CP-12/AC-2 violated          (attempt 1)
+  CP-12/AC-2 satisfied         (attempt 2)
+  attempts: [1 implementation rule-violation, 2 remediation succeeded]
+
+support(RULE-42:v2) = supported throughout.  No opposing evidence exists
+anywhere in the ledger: a breach is never a doubt.
+```
+
+### 17.15 Authoring a realization
+
+```jsonc
+{
+  "id": "implement",
+  "name": "Implement",
+  "needs": ["change-intent"],
+  "knowledgeContext": { "fromPhases": [{ "phaseId": "change-intent" }] },
+  "changeContext": { "fromPhase": "change-intent" },
+  "implementation": {
+    "maxAttempts": 2,          // default 2, cap 8; 1 = no autonomous remediation
+    "requireCurrentIntent": true,  // default
+    "includePreserved": true,      // default: regression surface in the scope
+  },
+  "steps": [{ "name": "build", "prompt": "Realize the accepted change." }],
+},
+{
+  "id": "verify",
+  "name": "Verify",
+  "needs": ["implement"],
+  "knowledgeContext": { "fromPhases": [{ "phaseId": "change-intent" }] },
+  "changeContext": { "fromPhase": "change-intent" },
+  "ruleVerification": { "holds": "deterministic-check" },
+  "acceptanceVerification": {
+    "implementationPhase": "implement",
+    "require": "all",          // default; "behavioral" accepts an
+                               // `unverifiable` regression criterion
+  },
+  "checks": [{ "kind": "command", "run": "npm test", "label": "tests" }],
+  "steps": [{ "name": "check", "prompt": "Verify the implementation." }],
+}
+```
+
+Refused when the pipeline is **saved**, where the author can see it:
+
+- an `implementation` or `acceptanceVerification` phase with no
+  `changeContext` — the accepted proposal is the one that selector resolves,
+  and a second selection mechanism would be a second answer to "which change
+  is this?";
+- an `implementation` phase with no verifier, or with two: nothing would ever
+  decide the change, or two things would;
+- a verifier whose `implementationPhase` is not an `implementation` phase, or
+  is not a dependency of it;
+- two halves resolving their accepted change from _different_ phases;
+- `maxAttempts` outside 1..8.
+
+### 17.16 Impact-driven re-evaluation
+
+`analyzeImpact` already names the historical runs and artifacts a revised rule
+affects, and Phase 8 adds no daemon over it. What it adds is the primitive
+those reports were missing: given an `ImpactSet`, the implementation artifacts
+and consumer executions it names are exactly what an `ImplementationScope`
+derives from, so an operator who decides a stale artifact should be reworked
+authors a realization against the accepted change that superseded it. Nothing
+schedules that, and nothing rewrites the system on its own.
+
+### 17.17 The review surface
+
+The gate drawer gains an **Acceptance criteria** panel beside the Phase 6
+one — beside, never merged, for the reason the dimensions exist — and a
+one-line realization header:
+
+```
+Change realization
+Realizing CP-12 · CR-7 · remediation attempt 2 of 2.
+The implementation left abc123de with 1 uncommitted file.
+
+Business-rule verification
+1 holds · 0 violated · 0 unverifiable · at abc123de
+  holds      RULE-42:v2    rule: supported
+  Kobra customer comments must not exceed 500 characters
+  ✓ src/Booking/kobraCommentValidator.mjs
+
+Acceptance criteria
+3 satisfied · 0 violated · 0 unverifiable · for CP-12 · at abc123de
+  SATISFIED (3)
+    satisfied  CP-12/AC-1  behavior    RULE-42:v2
+    A Kobra comment of 500 characters is accepted.
+    ✓ check: kobra-comment-500 (passed, exit 0)
+    satisfied  CP-12/AC-2  behavior    RULE-42:v2
+    satisfied  CP-12/AC-3  regression  CONSTRAINT-8:v1
+```
+
+No new graph UI, no project-management dashboard, no transcript inspection.
+
+### 17.18 The API
+
+Read-only, like every other semantic surface:
+
+```
+GET /api/knowledge/realizations[?proposal=CP-12]
+GET /api/knowledge/realizations/:id
+GET /api/knowledge/realizations/:id/runs
+GET /api/knowledge/realizations/:id/results
+GET /api/knowledge/change-proposals/:id/criteria/:criterionId[?gitHead=]
+GET /api/knowledge/change-proposals/:id/acceptance
+GET /api/knowledge/executions/:runId/acceptance
+GET /api/knowledge/executions/:runId/acceptance-proposal
+GET /api/knowledge/acceptance/:id[/preview]
+```
+
+There is deliberately **no** write API for completion state. A realization is
+opened, advanced and closed by the pipeline engine as its phases cross their
+acceptance boundaries; a route that could mark one `succeeded` would be a way
+to declare a change implemented without any of the dimensions having been
+established.
+
+### 17.19 What Phase 8 deliberately does NOT do
+
+- **No PR creation or merge, no deployment, no Jira, no Slack.** A realization
+  ends at a verified repository state.
+- **No unbounded remediation.** The bound is the author's, small, and enforced
+  before a spawn.
+- **No re-running of earlier accepted work.** Discovery and change intent are
+  historical inputs; only the implementation/verification pair re-runs.
+- **No canonical-intent revision by an implementation agent.** An
+  implementation realizes the accepted proposal; if it cannot, it reports a
+  blocker rather than rewriting what the business is taken to have decided.
+- **No new impact algorithm.** `analyzeImpact` is called, not duplicated.
+- **No worktree/branch subsystem.** The state binding is proven, and refused
+  when it cannot be.
+- **No confidence scores, no semantic similarity, no LLM adjudication of
+  completion.** Every conjunct of the invariant is decided from a record.
+- **No automatic stakeholder approval, no production telemetry, no
+  cross-repository orchestration, no ATMS worlds, no graph visualization.**
+
+## 18. Persistence
 
 **Authoritative store:** `~/.claude/argus/knowledge.json`, one JSON document:
 
 ```json
-{ "version": 6, "claims": [...], "evidence": [...], "justifications": [...], "consumptions": [...], "artifacts": [...], "deltas": [...], "supplied": [...], "verifications": [...], "changeProposals": [...] }
+{ "version": 7, "claims": [...], "evidence": [...], "justifications": [...], "consumptions": [...], "artifacts": [...], "deltas": [...], "supplied": [...], "verifications": [...], "changeProposals": [...], "acceptanceVerifications": [...], "changeRealizations": [...] }
 ```
 
 Written through the same discipline as `pipelines.json` and `schedules.json`:
@@ -3304,13 +4027,18 @@ added `deltas`, the ledger's own record of every KnowledgeDelta it applied;
 **version 4** (Phase 4.1) added `supplied`, the durable record of what Argus
 put into each run's context (§13.10); **version 5** (Phase 6) added
 `verifications`, implementation conformance bound to an exact claim revision
-and an exact repository revision (§15.3).
-A version 1, 2, 3 or 4 file is read as version 5 with the missing arrays empty
+and an exact repository revision (§15.3); **version 6** (Phase 7) added
+`changeProposals`, the durable record of the requested change that caused a
+revision to exist (§16.11); **version 7** (Phase 8) added
+`acceptanceVerifications` and `changeRealizations` (§17.2, §17.6).
+A version 1–6 file is read as version 7 with the missing arrays empty
 and is rewritten in that shape by the next successful transition — nothing an
 earlier phase recorded changes, no supplied provenance is invented for the runs
 it already holds, no rule gains a conformance it never had (an upgraded rule is
 `unverified`, never `holds`), no revision gains a request that never asked for
-it, and reading alone never writes. Any other version
+it, no criterion gains a result nobody established (`unverified`, never
+`satisfied`), no accepted change gains a realization nobody ran, and reading
+alone never writes. Any other version
 is treated as foreign: readable as empty, never overwritten.
 
 **Staging stores:** `~/.claude/argus/knowledge-deltas/<runId>/` — `delta.json`
@@ -3318,16 +4046,23 @@ is treated as foreign: readable as empty, never overwritten.
 `~/.claude/argus/rule-verifications/<runId>/` — `verification.json` (the
 agent's document) and `staged.json` (Argus's record, §15.10) — and
 `~/.claude/argus/change-proposals/<runId>/` — `proposal.json` (the agent's
-document) and `staged.json` (Argus's record, §16.5). Per run, like
+document) and `staged.json` (Argus's record, §16.5) — and
+`~/.claude/argus/acceptance-verifications/<runId>/` — `acceptance.json` (the
+agent's document) and `staged.json` (Argus's record, §17.7). Per run, like
 the result file and the invocation directory — and pruned with the run, like
-them; the ledger's own `deltas`, `verifications` and `changeProposals` records
+them; the ledger's own `deltas`, `verifications`, `changeProposals`,
+`acceptanceVerifications` and `changeRealizations` records
 are what outlive pruning. Never canonical; written with the same atomic writer.
 
 **The retention rule, once:** heavy operational records (run json, log,
-invocation directory, materialized context file, delta, verification and
-change-proposal staging) are prunable; small semantic provenance (claims,
+invocation directory, materialized context, change-context, implementation-scope
+and remediation-context files, delta, verification, change-proposal and
+acceptance staging) are prunable; small semantic provenance (claims,
 evidence, justifications, consumptions, artifact productions, applied deltas,
-supplied contexts, rule verifications, accepted change proposals) is durable.
+supplied contexts, rule verifications, accepted change proposals, acceptance
+verifications, change realizations) is durable. A realization therefore still
+answers "was CP-12 implemented, by which runs, at which repository state, and
+proved by what?" long after every run log has been pruned.
 §13.12
 tabulates what that means for the context queries.
 
@@ -3349,7 +4084,7 @@ grow past what one read per request tolerates, the kernel is unchanged — only
 The on-disk records carry **no derived state**: no `lifecycle`, no `support`,
 no `truth`, no `currency`, no `impacted`. Every read surface derives them.
 
-## 18. Important invariants
+## 19. Important invariants
 
 1. **Append-only.** No record is updated or deleted. A claim changes by
    revision; evidence, justifications, consumptions and artifact productions
@@ -3502,8 +4237,60 @@ no `truth`, no `currency`, no `impacted`. Every read surface derives them.
     selector resolves exclusively from the ledger's accepted proposals, so a
     proposal staged at a gate resolves to nothing — by construction, not by a
     check (§16.11).
+42. **Completion is a conjunction, and no conjunct is an agent's word about
+    its own work.** Execution success, deterministic checks, rule conformance
+    and acceptance satisfaction are four independent dimensions; a realization
+    succeeds only when all four hold, at one proven repository state, against
+    intent that is still current. `ARGUS_OUTCOME: succeeded`, a green test
+    suite, and "every rule holds" are each necessary and none is sufficient
+    (§17.1).
+43. **The four dimensions never rewrite one another.** A violated criterion
+    leaves its rule's conformance exactly as it was, and a violated rule leaves
+    every satisfied criterion satisfied. Completion combines them; nothing
+    merges them (§17.1, §17.6).
+44. **A conformance result names the implementation it examined, not just the
+    commit.** Two dirty working trees at one `gitHead` are two different
+    `RepositoryStateRef`s, distinguished by the content hash of Argus's own
+    snapshot. A record with no state answers only a clean question at its head
+    (§17.3).
+45. **The verified state is the implemented state, or nothing is claimed.**
+    The state the implementation produced and the state the verification
+    examined must be the same, and a mismatch — or two verification runs that
+    disagree — fails closed as `state-mismatch` (§17.4).
+46. **A criterion is addressed by `(proposal, criterion)`.** `AC-1` is
+    proposal-local; CP-11's AC-1 can never satisfy CP-12's, and a result's
+    statement is read from the accepted proposal rather than from the agent's
+    document (§17.6).
+47. **Every required criterion is accounted for, or the whole result is
+    refused.** `required = satisfied ∪ violated ∪ unverifiable`, each exactly
+    once; a missing one, an extra one, or no file at all refuses the document —
+    and `unverified` (nobody looked) is never collapsed with `unverifiable`
+    (somebody looked and could not tell) (§17.6, §17.7).
+48. **An implementation scope is derived, never guessed, and never claims to
+    be complete.** Every target carries a closed reason code naming the exact
+    claim, execution or evidence record it came from; a change nothing has ever
+    implemented reports `scope-incomplete`, never an empty "nothing to do"
+    (§17.5).
+49. **A realization is append-only in its attempts and write-once in its
+    verdict.** A remediation never rewrites the attempt it is remediating, and
+    a realization that ended cannot be re-ended differently (§17.2).
+50. **A realization is never retargeted.** Its `proposalId`, its `target` and
+    its `scope` are frozen at creation; a newer proposal accepted while it runs
+    makes it `stale`, not re-aimed (§17.2, §17.12).
+51. **Autonomous remediation is bounded by the author.** `maxAttempts` is
+    validated when the pipeline is saved, checked before every spawn, and its
+    exhaustion is a terminal state with a reason — never another attempt. A
+    blocker, an unverifiable required criterion, a stale target and a state
+    mismatch stop the loop with attempts still remaining (§17.11).
+52. **Remediation is not retry and not revise.** Three different facts, three
+    journal kinds, three budgets: a remediation leaves the phase's retry budget
+    untouched and re-runs only the implementation/verification pair (§17.10).
+53. **Accepted intent is checked for bytes, never for currency.** The
+    ChangeContext, the ImplementationScope and the RemediationContext are
+    hashed at launch and re-hashed at completion; a newer proposal is not
+    tampering, and staleness is decided from the ledger at close-out (§17.8).
 
-## 19. What Phases 1–7 deliberately do NOT do
+## 20. What Phases 1–8 deliberately do NOT do
 
 - **No automatic pipeline invalidation.** A superseded rule changes what
   `evaluateSupport` and `analyzeImpact` return; it does not touch any
@@ -3595,8 +4382,30 @@ no `truth`, no `currency`, no `impacted`. Every read surface derives them.
 - **No mutation API for change intent.** A proposal becomes canonical exactly
   one way: an agent proposes it, a person approves the gate, and the phase's
   commit writes it (§16.15).
+- **No PR creation or merge, no deployment, no Jira, no Slack, no stakeholder
+  approval, no production telemetry.** A realization ends at a verified
+  repository state (§17.19).
+- **No unbounded remediation.** The `implement → verify → implement` loop is
+  bounded by the author's `maxAttempts`, and four outcomes stop it even with
+  attempts remaining.
+- **No re-running of earlier accepted work.** A remediation re-opens the
+  implementation phase and the phases between it and its verifier, and nothing
+  else: discovery and change intent are historical inputs.
+- **No canonical-intent revision by an implementation agent.** An
+  implementation realizes the accepted proposal; when it cannot, it reports a
+  structured blocker rather than rewriting what the business decided.
+- **No second impact algorithm.** `analyzeImpact` is called by scope
+  derivation, not duplicated by it.
+- **No worktree or branch subsystem.** The verified-state binding is _proven_
+  from snapshots that already existed, and refused when it cannot be.
+- **No mutation API for completion state.** Only the pipeline engine's own
+  acceptance boundaries open, advance and close a realization.
+- **No confidence scores on completion, and no LLM adjudication of it.** Every
+  conjunct of the invariant is decided from a record Argus wrote.
+- **No global daemon re-evaluating impacted work.** `analyzeImpact` still
+  reports; nothing schedules a realization because a rule changed (§17.16).
 
-## 20. How this prepares the next steps
+## 21. How this prepares the next steps
 
 With Phase 4 the agent boundary is closed in both directions. A run's
 semantic input is chosen by its author, resolved deterministically, delivered
@@ -3682,17 +4491,40 @@ complete: the domain's current semantics, the intended transition with its
 exact canonical refs, the revisions that must keep behaving as they do, and the
 observable criteria the work will be judged by.
 
-The smallest coherent **Phase 8** is therefore **targeted implementation and
-closed-loop re-verification driven by an accepted ChangeProposal**: determine
-the exact affected implementation scope from the proposal's semantic changes
-and the existing consumption edges, execute implementation agents against
-KnowledgeContext + ChangeContext, run the phase's deterministic checks, verify
-business-rule conformance for the revised rules at the resulting commit, and
-re-run only the work whose semantic dependencies the change actually impacted.
-Every input for that already exists — `analyzeImpact` names what a revision
-affects, `ChangeContext` names what was intended, `RuleVerification` closes the
-loop — so the new work is scope determination and execution orchestration, not
-new storage.
+Phase 8 closes the loop on that. An accepted proposal now becomes a durable
+**ChangeRealization**: a deterministic implementation scope derived from
+provenance Argus already held, an implementation run against
+KnowledgeContext + ChangeContext + scope, Argus's own deterministic checks, and
+two independent semantic verifications — rule conformance and acceptance
+satisfaction — bound to the exact repository state the implementation produced.
+Where the change is unmet, a _targeted_ remediation receives the exact failing
+rules and criteria and only the implementation/verification pair re-runs, under
+a bound the author wrote:
+
+```
+accepted ChangeProposal
+      ↓  deterministic scope: ImpactSet ∪ source evidence ∪ request scope
+ImplementationScope         (known-targets, or an honest scope-incomplete)
+      ↓  KnowledgeContext + ChangeContext + ImplementationScope
+implementation run
+      ↓  PhaseChecks                          Argus's own observation
+verification run
+      ↓  RuleVerification   +   AcceptanceVerification
+      ↓  one ledger transition, at the phase's acceptance boundary
+ChangeRealization
+      succeeded            every dimension held, at one proven state
+      needs-remediation    → targeted remediation → re-verification
+      failed / stale       the exact rules and criteria that remain unmet
+```
+
+The foundational loop is therefore complete: Argus can discover what the
+business says, represent and revise it with provenance, reason about an
+explicit requested change, implement it with agents, independently verify both
+technical and business correctness, and selectively remediate what is unmet —
+with every step of that chain decided from a record rather than from a model's
+opinion. What remains beyond it is delivery (pull requests, deployment,
+ticketing), organization-wide mining, and semantic search: capabilities that
+build _on_ this foundation rather than completing it.
 
 The smallest coherent Phase 5 was **deterministic semantic context selection
 and business-rule discovery orchestration**: a pipeline whose early phase is
@@ -3709,29 +4541,33 @@ primitive has to change for that; whether discovered rules are then
 re-verified, contradicted or acted on remains a separate decision, and a
 human's.
 
-## 21. Where the code lives
+## 22. Where the code lives
 
-| Path                                          | Role                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `contracts/src/knowledge.ts`                  | wire types: Claim, ClaimRef, Evidence, Justification, ClaimConsumption, ArtifactProduction, ExecutionProvenance, ImpactSet, SuppliedContext, ContextIntegrityResult, RuleVerification, ChangeRequest, ChangeProposal, AcceptanceCriterion, AcceptedChangeProposal, ChangeContext                                                                                                                                                                                                                                                                             |
-| `server/src/knowledge/kernel.ts`              | pure transitions and queries; the only definition of support; the provenance transitions and `executionProvenance`                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `server/src/knowledge/impact.ts`              | `analyzeImpact` — the pure, deterministic impact algorithm                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `server/src/knowledge/validate.ts`            | untrusted body → typed proposal; the structural `source-code` evidence rules (repository-relative path, line range, commit sha)                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `server/src/knowledge/store.ts`               | the authoritative JSON document (v6); mints ids, stamps time, upgrades v1–v5; `commitPhaseSemantics` (deltas + verifications + accepted change proposals in one transition) and `registerSuppliedContext` under the ledger mutex                                                                                                                                                                                                                                                                                                                             |
-| `server/src/knowledge/delta.ts`               | the KnowledgeDelta protocol's pure half: `validateKnowledgeDelta`, `applyKnowledgeDeltas` (preflight + atomic application)                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `server/src/knowledge/staging.ts`             | per-run staging: the agent's file, Argus's record, status transitions                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `server/src/knowledge/context.ts`             | the KnowledgeContext protocol: `parseKnowledgeContextSpec`, `resolveKnowledgeContext` (pure, one snapshot, `claims` + `fromPhases`), projection, hash, the per-run file, `verifyKnowledgeContextIntegrity`                                                                                                                                                                                                                                                                                                                                                   |
-| `server/src/knowledge/ruleVerification.ts`    | business-rule verification (Phase 6): `RULE_VERIFICATION_CONTRACT` and `verificationInstruction`, `validateRuleVerificationReport`, `selectedRules`, `completenessRefusal`, `checkRuleVerification`, `bindCheckEvidence`, `holdsPolicyRefusal`, `previewRuleVerification`, `summarizeRuleVerification`                                                                                                                                                                                                                                                       |
-| `server/src/knowledge/verificationStaging.ts` | per-run verification staging: the agent's file, Argus's record, status transitions                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `server/src/knowledge/changeIntent.ts`        | change-intent orchestration (Phase 7): `CHANGE_INTENT_CONTRACT` and `changeIntentInstruction`, `validateChangeRequest`, `validateChangeProposal`, `selectedChangeRules`, `buildChangeIntentInput`, `changeProposalWarnings`, `checkChangeProposal`, `changeReadiness`, `resolveChangeAcceptance`, `buildChangeContext`, `previewChangeProposal`, `summarizeChangeIntent`                                                                                                                                                                                     |
-| `server/src/knowledge/changeStaging.ts`       | per-run change-proposal staging: the agent's file, Argus's record, status transitions                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `server/src/knowledge/sourcePath.ts`          | `realpath`-based repository containment for every source-code evidence record Argus validates (§15.13)                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `server/src/knowledge/discovery.ts`           | business-rule discovery (Phase 5): `DISCOVERY_CONTRACT` and `discoveryInstruction`, the source-evidence checks, `semanticWarnings`, `checkDiscoveryDelta`, `previewKnowledgeDelta`, `summarizeDiscovery`                                                                                                                                                                                                                                                                                                                                                     |
-| `server/src/harness/channels.ts`              | the Argus-owned invocation channels the delta file, the read-only context file and the three change-intent files are part of: kind, env var, path, access, required (HARNESS.md §3a)                                                                                                                                                                                                                                                                                                                                                                         |
-| `server/src/knowledge/routes.ts`              | `/api/knowledge` (mounted and admin-gated in `app.ts`), including the delta inspection reads, the context reads (`/executions/:runId/context`, `/claims/:key/supplied-to`) and the change-provenance reads (`/change-proposals`, `/claims/:key/change-proposal`)                                                                                                                                                                                                                                                                                             |
-| `server/src/pipelineTransitions.ts`           | `succeedPhase` (the hold), `applyKnowledgeCommit` (the verdict), `stagedDeltaIds`, `stagedVerificationIds`, `stagedChangeProposalIds`                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `server/src/pipelineEngine.ts`                | `acceptCompletion`, `checkContextIntegrity`, `intakeKnowledgeDelta`, `verifyDeltaArtifacts`, `commitPhaseKnowledge`, `settleKnowledge`, `retireStagedDeltas`; `KNOWLEDGE_DELTA_CONTRACT`; the per-attempt ledger snapshot, `knowledgeContextInstruction`, `KNOWLEDGE_CONTEXT_CONTRACT`; the discovery checks at intake and commit, and `refreshDiscoverySummary`; `intakeRuleVerification`, `verificationProposalsOf`, `refreshVerificationSummary`; `resolveChangeRequest`, `intakeChangeProposal`, `changeAcceptancesOf`, `refreshChangeIntentSummary`     |
-| `server/src/sources/artifacts.ts`             | the gate review, including the candidate-knowledge previews a discovery phase's reviewer reads, the conformance previews a verification phase's reviewer reads and the change-proposal previews a change-intent phase's reviewer reads                                                                                                                                                                                                                                                                                                                       |
-| `web/src/views/GateDrawer.tsx`                | the one place a human decides on a gate; the Candidate knowledge panel (rules, revisions, evidence, warnings), the Business-rule verification panel (outcomes grouped, each row showing the rule's own support) and the Change intent panel (request, current rules with their conformance, proposed transition, preserved, decisions, acceptance criteria, unresolved)                                                                                                                                                                                      |
-| `server/src/knowledge/*.test.ts`              | kernel semantics, impact scenarios, persistence roundtrip, HTTP contract, delta validation/application, engine lifecycle, context resolution and delivery; `contextDurability.test.ts` for durable supply, retention and integrity; `discovery.test.ts` and `discoveryEngine.test.ts` for Phase 5; `ruleVerification.test.ts` and `verificationEngine.test.ts` for Phase 6; `changeIntent.test.ts` and `changeEngine.test.ts` for Phase 7, with `harness/verificationE2e.test.ts` and `harness/changeIntentE2e.test.ts` for the real-process worked examples |
-| `docs/API.md` § Knowledge Ledger              | endpoint reference                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Path                                          | Role                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `contracts/src/knowledge.ts`                  | wire types: Claim, ClaimRef, Evidence, Justification, ClaimConsumption, ArtifactProduction, ExecutionProvenance, ImpactSet, SuppliedContext, ContextIntegrityResult, RuleVerification, ChangeRequest, ChangeProposal, AcceptanceCriterion, AcceptedChangeProposal, ChangeContext, RepositoryStateRef, ImplementationScope, AcceptanceVerification, ChangeRealization, RemediationContext                                                                                                                                                                                                                                                                                                                               |
+| `server/src/knowledge/kernel.ts`              | pure transitions and queries; the only definition of support; the provenance transitions and `executionProvenance`; the Phase 8 records (`recordAcceptanceVerification`, `startChangeRealization`, `appendRealizationAttempt`, `closeChangeRealization`) and the repository-state predicates (`sameRepositoryState`, `repositoryStateAnswers`)                                                                                                                                                                                                                                                                                                                                                                         |
+| `server/src/knowledge/impact.ts`              | `analyzeImpact` — the pure, deterministic impact algorithm                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `server/src/knowledge/validate.ts`            | untrusted body → typed proposal; the structural `source-code` evidence rules (repository-relative path, line range, commit sha)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `server/src/knowledge/store.ts`               | the authoritative JSON document (v7); mints ids, stamps time, upgrades v1–v6; `commitPhaseSemantics` (deltas + rule verifications + accepted change proposals + acceptance verifications in one transition), `openChangeRealization` / `recordRealizationAttempt` / `closeRealization`, and `registerSuppliedContext` under the ledger mutex                                                                                                                                                                                                                                                                                                                                                                           |
+| `server/src/knowledge/delta.ts`               | the KnowledgeDelta protocol's pure half: `validateKnowledgeDelta`, `applyKnowledgeDeltas` (preflight + atomic application)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `server/src/knowledge/staging.ts`             | per-run staging: the agent's file, Argus's record, status transitions                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `server/src/knowledge/context.ts`             | the KnowledgeContext protocol: `parseKnowledgeContextSpec`, `resolveKnowledgeContext` (pure, one snapshot, `claims` + `fromPhases`), projection, hash, the per-run file, `verifyKnowledgeContextIntegrity`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `server/src/knowledge/ruleVerification.ts`    | business-rule verification (Phase 6): `RULE_VERIFICATION_CONTRACT` and `verificationInstruction`, `validateRuleVerificationReport`, `selectedRules`, `completenessRefusal`, `checkRuleVerification`, `bindCheckEvidence`, `holdsPolicyRefusal`, `previewRuleVerification`, `summarizeRuleVerification`                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `server/src/knowledge/verificationStaging.ts` | per-run verification staging: the agent's file, Argus's record, status transitions                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `server/src/knowledge/changeIntent.ts`        | change-intent orchestration (Phase 7): `CHANGE_INTENT_CONTRACT` and `changeIntentInstruction`, `validateChangeRequest`, `validateChangeProposal`, `selectedChangeRules`, `buildChangeIntentInput`, `changeProposalWarnings`, `checkChangeProposal`, `changeReadiness`, `resolveChangeAcceptance`, `buildChangeContext`, `previewChangeProposal`, `summarizeChangeIntent`                                                                                                                                                                                                                                                                                                                                               |
+| `server/src/knowledge/changeStaging.ts`       | per-run change-proposal staging: the agent's file, Argus's record, status transitions                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `server/src/knowledge/implementationScope.ts` | deterministic implementation scope (Phase 8): `deriveImplementationScope` (ImpactSet ∪ source evidence ∪ verification evidence ∪ preserved evidence ∪ request scope, with closed reason codes), `implementationScopeInstruction`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `server/src/knowledge/acceptance.ts`          | acceptance-criterion verification (Phase 8): `ACCEPTANCE_VERIFICATION_CONTRACT` and `acceptanceInstruction`, `validateAcceptanceReport`, `acceptanceCompletenessRefusal`, `checkAcceptanceReport`, `bindAcceptanceChecks`, `acceptanceCheckRefusal`, `previewAcceptance`, `summarizeAcceptance`                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `server/src/knowledge/acceptanceStaging.ts`   | per-run acceptance staging: the agent's file, Argus's record, status transitions                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `server/src/knowledge/realization.ts`         | the completion invariant (Phase 8): `evaluateCompletion`, `requiredRules`, `repositoryStateFrom`, `technicalResultFrom`, `buildRemediationContext`, `remediationInstruction`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `server/src/knowledge/sourcePath.ts`          | `realpath`-based repository containment for every source-code evidence record Argus validates (§15.13)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `server/src/knowledge/discovery.ts`           | business-rule discovery (Phase 5): `DISCOVERY_CONTRACT` and `discoveryInstruction`, the source-evidence checks, `semanticWarnings`, `checkDiscoveryDelta`, `previewKnowledgeDelta`, `summarizeDiscovery`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `server/src/harness/channels.ts`              | every Argus-owned invocation channel — the delta file, the read-only context file, the three change-intent files and Phase 8's implementation-scope, remediation-context and acceptance-verification files: kind, env var, path, access, required (HARNESS.md §3a)                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `server/src/knowledge/routes.ts`              | `/api/knowledge` (mounted and admin-gated in `app.ts`), including the delta inspection reads, the context reads (`/executions/:runId/context`, `/claims/:key/supplied-to`) and the change-provenance reads (`/change-proposals`, `/claims/:key/change-proposal`)                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `server/src/pipelineTransitions.ts`           | `succeedPhase` (the hold), `applyKnowledgeCommit` (the verdict), `stagedDeltaIds`, `stagedVerificationIds`, `stagedChangeProposalIds`, `stagedAcceptanceIds`, and `applyRemediation` — which re-opens one implementation phase and the phases that verify it, and nothing else                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `server/src/pipelineEngine.ts`                | `acceptCompletion`, `checkContextIntegrity`, `intakeKnowledgeDelta`, `verifyDeltaArtifacts`, `commitPhaseKnowledge`, `settleKnowledge`, `retireStagedDeltas`; `KNOWLEDGE_DELTA_CONTRACT`; the per-attempt ledger snapshot, `knowledgeContextInstruction`, `KNOWLEDGE_CONTEXT_CONTRACT`; the discovery checks at intake and commit, and `refreshDiscoverySummary`; `intakeRuleVerification`, `verificationProposalsOf`, `refreshVerificationSummary`; `resolveChangeRequest`, `intakeChangeProposal`, `changeAcceptancesOf`, `refreshChangeIntentSummary`                                                                                                                                                               |
+| `server/src/sources/artifacts.ts`             | the gate review, including the candidate-knowledge previews a discovery phase's reviewer reads, the conformance previews a verification phase's reviewer reads and the change-proposal previews a change-intent phase's reviewer reads                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `web/src/views/GateDrawer.tsx`                | the one place a human decides on a gate; the Candidate knowledge panel, the Business-rule verification panel, the Change intent panel, and Phase 8's Change realization header and Acceptance criteria panel — shown _beside_ the rule panel, never merged with it                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `server/src/knowledge/*.test.ts`              | kernel semantics, impact scenarios, persistence roundtrip, HTTP contract, delta validation/application, engine lifecycle, context resolution and delivery; `contextDurability.test.ts` for durable supply, retention and integrity; `discovery.test.ts` and `discoveryEngine.test.ts` for Phase 5; `ruleVerification.test.ts` and `verificationEngine.test.ts` for Phase 6; `changeIntent.test.ts` and `changeEngine.test.ts` for Phase 7; `implementationScope.test.ts`, `acceptance.test.ts`, `realization.test.ts` and `realizationEngine.test.ts` for Phase 8, with `harness/verificationE2e.test.ts`, `harness/changeIntentE2e.test.ts` and `harness/realizationE2e.test.ts` for the real-process worked examples |
+| `docs/API.md` § Knowledge Ledger              | endpoint reference                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |

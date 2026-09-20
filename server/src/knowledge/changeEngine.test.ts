@@ -19,7 +19,7 @@ import { readInvocation } from "../sources/runs.js";
 import { buildPhaseReview } from "../sources/artifacts.js";
 import { readJournal } from "../sources/journal.js";
 import { readProposalRecord } from "./changeStaging.js";
-import { readDeltaRecord } from "./staging.js";
+import { knowledgeDeltaFile, readDeltaRecord } from "./staging.js";
 import {
   commitPhaseSemantics,
   createClaim,
@@ -655,7 +655,11 @@ test("a change-intent run may not also write a KnowledgeDelta file", async () =>
   const e = engine(rec.spawn);
   const inst = (await e.start("p1", "manual"))!;
   writeProposal(rec.calls[0], kobraProposal());
-  const deltaFile = rec.calls[0].env.ARGUS_KNOWLEDGE_DELTA_FILE!;
+  // The variable is deliberately NOT set on a change-intent phase (Phase 8):
+  // the agent is never told a path whose use would fail the step. The refusal
+  // must hold anyway, for an agent that writes there unbidden.
+  assert.equal(rec.calls[0].env.ARGUS_KNOWLEDGE_DELTA_FILE, undefined);
+  const deltaFile = knowledgeDeltaFile(rec.calls[0].runId);
   mkdirSync(path.dirname(deltaFile), { recursive: true });
   writeFileSync(
     deltaFile,
@@ -1080,4 +1084,45 @@ test("a malformed request supplied at start fails the phase rather than falling 
   // Silently answering the pipeline's default request instead would have the
   // run answer a different question from the one somebody asked.
   assert.equal(rec.calls.length, 0);
+});
+
+test("a change-intent phase is not offered the KnowledgeDelta channel at all", async () => {
+  await seedKnowledge();
+  await seed([changePhase()]);
+  const rec = recordingSpawn();
+  const e = engine(rec.spawn);
+  await e.start("p1", "manual");
+  const invocation = await readInvocation(rec.calls[0].runId);
+  // No variable, no channel, no record — advertising a protocol whose use the
+  // phase would categorically reject is worse than not advertising it.
+  assert.equal(rec.calls[0].env.ARGUS_KNOWLEDGE_DELTA_FILE, undefined);
+  assert.equal(invocation?.knowledgeDeltaFile, null);
+  assert.equal(
+    (invocation?.channels ?? []).some((c) => c.kind === "knowledge-delta"),
+    false,
+  );
+  // …and the two channels the phase *is* accountable for are both there.
+  assert.deepEqual(
+    (invocation?.channels ?? [])
+      .filter((c) => c.kind.startsWith("change-"))
+      .map((c) => [c.kind, c.access, c.required]),
+    [
+      ["change-request", "read", true],
+      ["change-proposal", "write", true],
+    ],
+  );
+});
+
+test("an ordinary phase is still offered the KnowledgeDelta channel exactly as before", async () => {
+  await seed([{ id: "plan", name: "Plan", steps: [{ name: "s", prompt: "p" }] }]);
+  const rec = recordingSpawn();
+  const e = engine(rec.spawn);
+  await e.start("p1", "manual");
+  const invocation = await readInvocation(rec.calls[0].runId);
+  assert.ok(rec.calls[0].env.ARGUS_KNOWLEDGE_DELTA_FILE);
+  assert.equal(invocation?.knowledgeDeltaFile, rec.calls[0].env.ARGUS_KNOWLEDGE_DELTA_FILE);
+  assert.equal(
+    (invocation?.channels ?? []).some((c) => c.kind === "knowledge-delta"),
+    true,
+  );
 });
