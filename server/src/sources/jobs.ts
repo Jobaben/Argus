@@ -38,14 +38,34 @@ async function listJobShorts(): Promise<string[]> {
   }
 }
 
-function deriveName(state: JobState, short: string): string {
-  if (state.name && state.name.trim()) return state.name.trim();
+/**
+ * The `nameSource` values that mark a name Claude Code derived from the job's
+ * own prompt rather than one a human chose. Confirmed against the job-state
+ * schema in CLI 2.1.273, which declares
+ * `nameSource: enum(["user", "auto", "collision"])`: `"auto"` is written by the
+ * labeller that summarises the prompt, `"user"` is a `--name` value, and
+ * `"collision"` is that same human name with a disambiguating suffix.
+ */
+const DERIVED_NAME_SOURCES = new Set(["auto"]);
+
+/**
+ * Picks the label for a job tile. A prompt-derived name reads as a sentence
+ * rather than a title, so the working directory's last segment beats it — but
+ * only when `nameSource` positively identifies it as derived. An absent or
+ * unrecognised value keeps the older behaviour of trusting the name, because
+ * Claude Code owns this field and every job written before it existed would
+ * otherwise lose the name its owner set with `--name`.
+ */
+export function deriveName(state: JobState, short: string): string {
+  const name = state.name?.trim() ?? "";
+  if (name && !DERIVED_NAME_SOURCES.has(state.nameSource ?? "")) return name;
   if (state.cwd) {
     // Last path segment of cwd, tolerant of both / and \ separators.
     const seg = state.cwd.split(/[\\/]/).filter(Boolean).pop();
     if (seg) return seg;
   }
-  return short;
+  // A derived label still beats the hex short id when there is no cwd.
+  return name || short;
 }
 
 function toAgent(short: string, state: JobState, live: boolean, pid: number | null): Agent {
