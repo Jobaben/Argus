@@ -17,7 +17,11 @@
 
 import { open, readdir, lstat } from "node:fs/promises";
 import path from "node:path";
-import type { KnowledgeDeltaPreview, RuleVerificationPreview } from "@argus/contracts";
+import type {
+  ChangeProposalPreview,
+  KnowledgeDeltaPreview,
+  RuleVerificationPreview,
+} from "@argus/contracts";
 import type {
   PhaseArtifact,
   PhaseArtifactContent,
@@ -27,6 +31,8 @@ import type {
   PipelineInstance,
 } from "./pipelineTypes.js";
 import { readDeltaRecord } from "../knowledge/staging.js";
+import { readProposalRecord } from "../knowledge/changeStaging.js";
+import { previewChangeProposal } from "../knowledge/changeIntent.js";
 import { readVerificationRecord } from "../knowledge/verificationStaging.js";
 import { previewRuleVerification } from "../knowledge/ruleVerification.js";
 import { readLedger } from "../knowledge/store.js";
@@ -211,6 +217,7 @@ export async function buildPhaseReview(
   const { artifacts, truncated } = await listPhaseArtifacts(phase.artifactDir, requiredPaths);
   const knowledge = await previewStagedKnowledge(phase, phaseDef);
   const ruleVerifications = await previewStagedVerifications(phase);
+  const changeProposals = await previewStagedChangeProposals(phase, phaseDef);
   const review: PhaseReview = {
     instanceId: inst.id,
     phaseId,
@@ -229,6 +236,8 @@ export async function buildPhaseReview(
     ...(phase.discovery ? { discovery: phase.discovery } : {}),
     ...(ruleVerifications.length ? { ruleVerifications } : {}),
     ...(phase.ruleVerification ? { ruleVerification: phase.ruleVerification } : {}),
+    ...(changeProposals.length ? { changeProposals } : {}),
+    ...(phase.changeIntent ? { changeIntent: phase.changeIntent } : {}),
   };
   return { ok: true, review };
 }
@@ -264,6 +273,45 @@ async function previewStagedVerifications(
     const record = await readVerificationRecord(step.runId!);
     if (!record?.report || record.attempt !== phase.attempt) continue;
     out.push(previewRuleVerification(record, ledger));
+  }
+  return out;
+}
+
+/**
+ * The change proposals this attempt staged, as the gate shows them
+ * (Phase 7 §review surface).
+ *
+ * The same three properties as the other two previews — nothing here is
+ * canonical, this attempt only, and it never fails the review — plus the one
+ * the phase exists for: the reviewer sees the requested change, what the rules
+ * currently say, whether the implementation currently does them, and what the
+ * proposal would make true, in one place and without opening a transcript.
+ */
+async function previewStagedChangeProposals(
+  phase: PhaseProgress,
+  phaseDef: PipelineDefinition["phases"][number] | undefined,
+): Promise<ChangeProposalPreview[]> {
+  const steps = phase.steps.filter((s) => s.runId && s.changeProposal);
+  if (steps.length === 0) return [];
+  let ledger = null;
+  try {
+    ledger = await readLedger();
+  } catch {
+    ledger = null;
+  }
+  const out: ChangeProposalPreview[] = [];
+  for (const step of steps) {
+    const record = await readProposalRecord(step.runId!);
+    if (!record?.proposal || record.attempt !== phase.attempt) continue;
+    const deltaRecord = record.deltaId ? await readDeltaRecord(step.runId!) : null;
+    out.push(
+      previewChangeProposal(
+        record,
+        ledger,
+        deltaRecord?.id === record.deltaId ? deltaRecord : null,
+        phaseDef?.changeIntent,
+      ),
+    );
   }
   return out;
 }

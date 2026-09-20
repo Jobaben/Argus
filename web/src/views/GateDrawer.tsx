@@ -4,6 +4,10 @@ import { Markdown } from "../ds/Markdown";
 import { useArtifactContent, useGateReview } from "../useGateReview";
 import type { GateActionOptions } from "../useOverview";
 import type {
+  AcceptanceCriterion,
+  ChangeProposalPreview,
+  ChangeProposalWarning,
+  ChangeRuleState,
   EvidenceSource,
   KnowledgeDeltaPreview,
   KnowledgeDeltaWarning,
@@ -560,6 +564,259 @@ function RuleVerification({
   );
 }
 
+/**
+ * Change intent — the review surface for a staged ChangeProposal (Phase 7).
+ *
+ * The one decision a reviewer makes here is whether the *intent* is right, and
+ * to make it they need four things that no transcript shows compactly:
+ *
+ *   REQUESTED   what somebody asked for, verbatim
+ *   CURRENT     what the domain says now, and whether the code does it
+ *   PROPOSED    the exact revisions and new claims that would follow
+ *   JUDGED BY   the acceptance criteria, plus what is still unresolved
+ *
+ * The panel keeps the three kinds of statement visibly apart, because
+ * collapsing any two of them is how a request quietly becomes a rule, or a
+ * bug quietly becomes a requirement:
+ *
+ *   request  ≠  rule  ≠  implementation
+ *
+ * So a current rule shows its support *and* its conformance side by side, a
+ * proposed revision is rendered by the same candidate-knowledge machinery as
+ * any other staged delta, and acceptance criteria are shown under their own
+ * heading — never as claims.
+ */
+function ReadinessTag({ readiness }: { readiness: ChangeProposalPreview["readiness"] }) {
+  const ready = readiness === "ready";
+  return (
+    <span
+      data-testid="change-readiness"
+      className={`rounded border px-1 font-mono text-[8.5px] uppercase tracking-[0.1em] ${
+        ready ? "border-ok/40 text-ok" : "border-await/40 text-await"
+      }`}
+      title={
+        ready
+          ? "Every relevant rule is accounted for and nothing is unresolved."
+          : "Unresolved questions or uncovered rule changes: this proposal cannot drive an implementation."
+      }
+    >
+      {readiness}
+    </span>
+  );
+}
+
+const CONFORMANCE_TONE: Record<string, string> = {
+  holds: "text-ok",
+  violated: "text-fail",
+  unverifiable: "text-await",
+  unverified: "text-ink-faint",
+};
+
+function CurrentRule({ rule }: { rule: ChangeRuleState }) {
+  return (
+    <li className="rounded-lg border border-line bg-surface px-3 py-2">
+      <div className="flex flex-wrap items-baseline gap-2">
+        <KindTag kind={rule.kind} />
+        <span className="font-mono text-[10px] text-ink-faint">{rule.ref}</span>
+        <span className="font-mono text-[9.5px] text-ink-faint" title="The rule's own support.">
+          rule: {rule.support}
+        </span>
+        <span
+          className={`font-mono text-[9.5px] ${CONFORMANCE_TONE[rule.conformance] ?? "text-ink-faint"}`}
+          title="What the implementation does. Independent of whether the rule is well founded."
+        >
+          impl: {rule.conformance}
+          {rule.conformanceAt ? ` @${rule.conformanceAt.slice(0, 8)}` : ""}
+        </span>
+      </div>
+      <p className="mt-1 text-[12.5px] leading-relaxed text-ink">{rule.statement}</p>
+    </li>
+  );
+}
+
+function ChangeWarnings({ warnings }: { warnings: ChangeProposalWarning[] }) {
+  if (warnings.length === 0) return null;
+  return (
+    <ul data-testid="change-warnings" className="mt-1 flex flex-col gap-1" aria-label="Warnings">
+      {warnings.map((w, i) => (
+        <li key={i} className="flex min-w-0 items-baseline gap-2 text-[11.5px] text-await">
+          <span aria-hidden="true">!</span>
+          <span className="min-w-0 break-words">{w.message}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function AcceptanceCriteria({ criteria }: { criteria: AcceptanceCriterion[] }) {
+  if (criteria.length === 0) return null;
+  return (
+    <ol
+      data-testid="change-acceptance-criteria"
+      className="flex flex-col gap-1"
+      aria-label="Acceptance criteria"
+    >
+      {criteria.map((c) => (
+        <li key={c.id} className="flex min-w-0 items-baseline gap-2 text-[12px]">
+          <span className="font-mono text-[10px] text-ink-faint">{c.id}</span>
+          <span className="rounded border border-line px-1 font-mono text-[8.5px] uppercase tracking-[0.1em] text-ink-faint">
+            {c.kind}
+          </span>
+          <span className="min-w-0 break-words text-ink">{c.statement}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function ChangeProposalPanel({
+  previews,
+  summary,
+  canApprove,
+}: {
+  previews: ChangeProposalPreview[];
+  summary: PhaseReview["changeIntent"];
+  canApprove: boolean;
+}) {
+  return (
+    <div data-testid="gate-change-proposal" className="flex flex-col gap-3">
+      {previews.map((p) => {
+        const revisions = p.semantic?.proposedRevisions ?? [];
+        const claims = p.semantic?.proposedClaims ?? [];
+        const decisions = claims.filter((c) => c.kind === "decision");
+        const others = claims.filter((c) => c.kind !== "decision");
+        return (
+          <div key={p.proposalId} className="flex flex-col gap-2">
+            <div className="flex flex-wrap items-baseline gap-2">
+              <ReadinessTag readiness={p.readiness} />
+              <span className="font-mono text-[10px] text-ink-faint">{p.request.id}</span>
+            </div>
+            <p data-testid="change-request" className="text-[12.5px] leading-relaxed text-ink">
+              {p.request.summary}
+            </p>
+            {p.request.details && (
+              <p className="text-[11.5px] leading-relaxed text-ink-faint">{p.request.details}</p>
+            )}
+            <p className="text-[12px] text-ink-faint">
+              {`${summary?.revised ?? revisions.length} revision${(summary?.revised ?? revisions.length) === 1 ? "" : "s"} · ${summary?.created ?? claims.length} new claim${(summary?.created ?? claims.length) === 1 ? "" : "s"} · ${summary?.preserved ?? p.preserved.length} preserved · ${p.acceptanceCriteria.length} criteri${p.acceptanceCriteria.length === 1 ? "on" : "a"}`}
+              .{" "}
+              {canApprove
+                ? "Nothing here is canonical yet; approving commits the semantic change and records the request that caused it."
+                : "None of this became canonical: the phase did not reach its commit."}
+            </p>
+            <ChangeWarnings warnings={p.warnings} />
+            {p.semantic?.warnings && p.semantic.warnings.length > 0 && (
+              <Warnings warnings={p.semantic.warnings} />
+            )}
+
+            {p.current.length > 0 && (
+              <div className="flex flex-col gap-1">
+                <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint">
+                  Current ({p.current.length})
+                </p>
+                <ul className="flex flex-col gap-1.5" aria-label="Current rules">
+                  {p.current.map((r) => (
+                    <CurrentRule key={r.ref} rule={r} />
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {(revisions.length > 0 || others.length > 0) && (
+              <div className="flex flex-col gap-1">
+                <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint">
+                  Proposed ({revisions.length + others.length})
+                </p>
+                {revisions.length > 0 && (
+                  <ul className="flex flex-col gap-1.5" aria-label="Proposed revisions">
+                    {revisions.map((r, i) => (
+                      <CandidateRevision key={`${r.claimId}-${i}`} revision={r} />
+                    ))}
+                  </ul>
+                )}
+                {others.length > 0 && (
+                  <ul className="flex flex-col gap-1.5" aria-label="Proposed claims">
+                    {others.map((c, i) => (
+                      <CandidateClaim key={`${c.ref.display}-${i}`} claim={c} />
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
+            {p.preserved.length > 0 && (
+              <div className="flex flex-col gap-1">
+                <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint">
+                  Preserved ({p.preserved.length})
+                </p>
+                <ul data-testid="change-preserved" className="flex flex-col gap-0.5">
+                  {p.preserved.map((c) => (
+                    <li key={c.ref} className="flex min-w-0 items-baseline gap-2 text-[11.5px]">
+                      <span aria-hidden="true" className="text-ok">
+                        ✓
+                      </span>
+                      <span className="font-mono text-[10px] text-ink-faint">{c.ref}</span>
+                      <span className="min-w-0 break-words text-ink-dim">{c.statement}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {decisions.length > 0 && (
+              <div className="flex flex-col gap-1">
+                <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint">
+                  Decisions ({decisions.length})
+                </p>
+                <ul className="flex flex-col gap-1.5" aria-label="Decisions">
+                  {decisions.map((c, i) => (
+                    <CandidateClaim key={`${c.ref.display}-${i}`} claim={c} />
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="flex flex-col gap-1">
+              <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint">
+                Acceptance criteria ({p.acceptanceCriteria.length})
+              </p>
+              {p.acceptanceCriteria.length === 0 ? (
+                <p className="text-[11.5px] text-fail">
+                  None. There is no observable way to judge whether this change was implemented.
+                </p>
+              ) : (
+                <AcceptanceCriteria criteria={p.acceptanceCriteria} />
+              )}
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint">
+                Unresolved ({p.unresolved.length})
+              </p>
+              {p.unresolved.length === 0 ? (
+                <p data-testid="change-unresolved-none" className="text-[11.5px] text-ink-faint">
+                  none
+                </p>
+              ) : (
+                <ul data-testid="change-unresolved" className="flex flex-col gap-0.5">
+                  {p.unresolved.map((q) => (
+                    <li key={q.id} className="flex min-w-0 items-baseline gap-2 text-[12px]">
+                      <span className="font-mono text-[10px] text-ink-faint">{q.id}</span>
+                      <span className="min-w-0 break-words text-await">{q.question}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            {p.summary && <p className="text-[11.5px] text-ink-faint">{p.summary}</p>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function ArtifactList({
   artifacts,
   selected,
@@ -897,6 +1154,17 @@ function GatePanel({
               <CandidateKnowledge
                 previews={review.knowledge}
                 discovery={review.discovery}
+                canApprove={review.canApprove}
+              />
+            </section>
+          )}
+
+          {review.changeProposals && review.changeProposals.length > 0 && (
+            <section>
+              <Heading>Change intent</Heading>
+              <ChangeProposalPanel
+                previews={review.changeProposals}
+                summary={review.changeIntent}
                 canApprove={review.canApprove}
               />
             </section>

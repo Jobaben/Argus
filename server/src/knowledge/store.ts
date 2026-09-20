@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import type {
+  AcceptedChangeProposal,
   ArtifactProduction,
   Claim,
   ClaimConsumption,
@@ -23,6 +24,7 @@ import {
   addJustification,
   emptyLedger,
   recordArtifact,
+  recordChangeProposal,
   recordConsumption,
   recordRuleVerification,
   recordSuppliedContext,
@@ -43,6 +45,9 @@ import type {
 } from "./validate.js";
 import { KIND_PREFIX, applyKnowledgeDeltas, type DeltaProposal } from "./delta.js";
 import type { RecordVerificationInput } from "./kernel.js";
+import { resolveChangeAcceptance, type ChangeProposalAcceptance } from "./changeIntent.js";
+
+export type { ChangeProposalAcceptance };
 
 /**
  * The Knowledge Ledger's one authoritative store: `~/.claude/argus/knowledge.json`.
@@ -77,7 +82,8 @@ function mint(prefix: string): string {
  * version 1 file (Phase 1: no provenance arrays) gains empty `consumptions`
  * and `artifacts`; a version 2 file (Phase 2) gains an empty `deltas`; a
  * version 3 file (Phase 3) gains an empty `supplied`; a version 4 file
- * (Phase 4.1) gains an empty `verifications`. The upgrade is written back
+ * (Phase 4.1) gains an empty `verifications`; a version 5 file (Phase 6)
+ * gains an empty `changeProposals`. The upgrade is written back
  * only by the next successful transition, and it adds nothing but empty
  * arrays and a version number, so nothing an earlier phase recorded changes.
  * In particular an upgraded document claims **no** supplied provenance and
@@ -100,6 +106,7 @@ export function upgradeLedger(v: unknown): KnowledgeLedger | null {
       deltas: [],
       supplied: [],
       verifications: [],
+      changeProposals: [],
     } as unknown as KnowledgeLedger;
   }
   const phase2 = Array.isArray(r.consumptions) && Array.isArray(r.artifacts);
@@ -110,6 +117,7 @@ export function upgradeLedger(v: unknown): KnowledgeLedger | null {
       deltas: [],
       supplied: [],
       verifications: [],
+      changeProposals: [],
     } as unknown as KnowledgeLedger;
   }
   if (r.version === 3 && phase2 && Array.isArray(r.deltas)) {
@@ -118,18 +126,26 @@ export function upgradeLedger(v: unknown): KnowledgeLedger | null {
       version: LEDGER_VERSION,
       supplied: [],
       verifications: [],
+      changeProposals: [],
     } as unknown as KnowledgeLedger;
   }
   if (r.version === 4 && phase2 && Array.isArray(r.deltas) && Array.isArray(r.supplied)) {
-    return { ...r, version: LEDGER_VERSION, verifications: [] } as unknown as KnowledgeLedger;
+    return {
+      ...r,
+      version: LEDGER_VERSION,
+      verifications: [],
+      changeProposals: [],
+    } as unknown as KnowledgeLedger;
   }
-  if (
-    r.version === LEDGER_VERSION &&
+  const phase6 =
     phase2 &&
     Array.isArray(r.deltas) &&
     Array.isArray(r.supplied) &&
-    Array.isArray(r.verifications)
-  ) {
+    Array.isArray(r.verifications);
+  if (r.version === 5 && phase6) {
+    return { ...r, version: LEDGER_VERSION, changeProposals: [] } as unknown as KnowledgeLedger;
+  }
+  if (r.version === LEDGER_VERSION && phase6 && Array.isArray(r.changeProposals)) {
     return r as unknown as KnowledgeLedger;
   }
   return null;
@@ -371,33 +387,40 @@ export type VerificationProposal = Omit<RecordVerificationInput, "id">;
 export interface PhaseSemanticsResult {
   deltas: KnowledgeDeltaApplyResult[];
   verifications: RuleVerification[];
+  /** The durable change-provenance records this commit wrote (Phase 7). */
+  changeProposals: AcceptedChangeProposal[];
 }
 
 /**
- * Commit a phase attempt's accepted semantics — its staged KnowledgeDeltas and
- * its staged conformance results — as **one** ledger transition.
+ * Commit a phase attempt's accepted semantics as **one** ledger transition:
+ * its staged KnowledgeDeltas, its staged conformance results, and the change
+ * proposals a person approved.
  *
  * Inside the ledger mutex: read the document, apply every delta proposal to
- * that one snapshot, then append every verification to the result, and write
- * once. A refusal anywhere throws before the write, so a phase that verifies
- * ten rules either has all ten in `knowledge.json` or none of them, and a
- * phase that both revises a rule and verifies one never leaves half of that
- * durable.
+ * that one snapshot, append every verification, then record every accepted
+ * change proposal, and write once. A refusal anywhere throws before the write,
+ * so a phase that revises a rule, verifies one and records the request that
+ * caused the revision leaves all three durable or none of them.
  *
- * Deltas go first so a verification may name a revision the same phase's delta
- * just created — the ordering is a convenience, not a licence: the rules a
- * verification phase is accountable for come from its supplied context, which
- * was resolved before the run started.
+ * The order is the dependency order, not a licence:
  *
- * Idempotent on both halves: a delta already in `ledger.deltas` is skipped,
- * and a verification whose `(runId, rule)` is already recorded is a no-op. So
- * committing again after a crash between the ledger write and the instance
- * write is safe.
+ *   deltas → verifications → change proposals
+ *
+ * A verification may name a revision the same phase's delta just created, and
+ * a change proposal's acceptance criteria must be resolved against exactly
+ * what that delta minted — `local:r42` becomes `RULE-42:v2` here or the whole
+ * transition is refused.
+ *
+ * Idempotent on all three: a delta already in `ledger.deltas` is skipped, a
+ * verification whose `(runId, rule)` is recorded is a no-op, and a run that
+ * already has an accepted change proposal keeps it. So committing again after
+ * a crash between the ledger write and the instance write is safe.
  */
 export async function commitPhaseSemantics(
   proposals: DeltaProposal[],
   verifications: VerificationProposal[],
   now: Date,
+  acceptances: ChangeProposalAcceptance[] = [],
 ): Promise<PhaseSemanticsResult> {
   return mutateLedger((ledger) => {
     const { ledger: afterDeltas, results } = applyKnowledgeDeltas(ledger, proposals, {
@@ -415,6 +438,24 @@ export async function commitPhaseSemantics(
       next = r.ledger;
       recorded.push(r.verification);
     }
-    return { ledger: next, result: { deltas: results, verifications: recorded } };
+    // Change provenance last: its references may name revisions the deltas
+    // above just minted, and resolving them needs the post-apply ledger.
+    const changes: AcceptedChangeProposal[] = [];
+    for (const acceptance of acceptances) {
+      const applied = acceptance.deltaId
+        ? (results.find((r) => r.deltaId === acceptance.deltaId) ?? null)
+        : null;
+      const r = recordChangeProposal(
+        next,
+        resolveChangeAcceptance(acceptance, applied, next),
+        now.toISOString(),
+      );
+      next = r.ledger;
+      changes.push(r.proposal);
+    }
+    return {
+      ledger: next,
+      result: { deltas: results, verifications: recorded, changeProposals: changes },
+    };
   });
 }

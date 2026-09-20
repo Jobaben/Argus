@@ -1,6 +1,9 @@
 import { Hono, type Context } from "hono";
 import type {
+  AcceptedChangeProposal,
   ArtifactProductionsResponse,
+  ChangeProposalPreview,
+  ChangeProposalsResponse,
   ClaimDetail,
   ClaimKind,
   ClaimVerificationsResponse,
@@ -22,6 +25,10 @@ import {
   EXECUTION_ID_RE,
   KnowledgeValidationError,
   UnknownClaimError,
+  changeProposalById,
+  changeProposalOfClaim,
+  changeProposals,
+  changeProposalsForRequest,
   consumersReport,
   dependentsReport,
   executionOf,
@@ -44,6 +51,8 @@ import { previewKnowledgeDelta } from "./discovery.js";
 import { readDeltaRecord, readDeltaRecordById } from "./staging.js";
 import { readVerificationRecord, readVerificationRecordById } from "./verificationStaging.js";
 import { previewRuleVerification } from "./ruleVerification.js";
+import { readProposalRecord, readProposalRecordById } from "./changeStaging.js";
+import { previewChangeProposal } from "./changeIntent.js";
 import {
   createClaim,
   createEvidence,
@@ -388,6 +397,94 @@ export function knowledgeRoutes(): Hono {
     const record = await readDeltaRecord(runId);
     const body: KnowledgeDeltasResponse = { runId, deltas: record ? [record] : [] };
     return c.json(body);
+  });
+
+  // ── Change intent (Phase 7) ───────────────────────────────────────────────
+  //
+  // Reads only. There is deliberately no mutation here: a change proposal
+  // becomes canonical exactly one way — an agent proposes it, a person
+  // approves the gate, and the phase's commit writes it — and an HTTP route
+  // that could record one would be a second path around the review that the
+  // whole phase exists to guarantee.
+
+  /**
+   * Accepted change proposals, newest first. `?request=<id>` narrows to the
+   * ones answering one request, which is how "what have we proposed about this
+   * ticket?" is answered: a request may legitimately be answered more than
+   * once (a revised gate, a second phase).
+   */
+  routes.get("/change-proposals", async (c) => {
+    const ledger = await readLedger();
+    const requestId = c.req.query("request");
+    if (requestId !== undefined && !CLAIM_ID_RE.test(requestId)) {
+      return c.json({ error: "request must be a change-request id" }, 400);
+    }
+    const proposals = requestId
+      ? changeProposalsForRequest(ledger, requestId)
+      : changeProposals(ledger);
+    const body: ChangeProposalsResponse = { proposals };
+    return c.json(body);
+  });
+
+  /**
+   * One proposal by id: the durable accepted record when it exists, otherwise
+   * the staged record beside its run.
+   *
+   * The two are deliberately distinguishable rather than merged — the response
+   * either has `acceptedAt` or a `status` of `staged`/`rejected`/`superseded`,
+   * and nothing staged ever reads as accepted.
+   */
+  routes.get("/change-proposals/:id", async (c) => {
+    const id = c.req.param("id");
+    if (!CLAIM_ID_RE.test(id)) return c.json({ error: "not found" }, 404);
+    const accepted: AcceptedChangeProposal | null = changeProposalById(await readLedger(), id);
+    if (accepted) return c.json(accepted);
+    const record = await readProposalRecordById(id);
+    if (!record) return c.json({ error: "not found" }, 404);
+    return c.json(record);
+  });
+
+  /** The deterministic review projection of one staged proposal: the request,
+   *  the current rules with their conformance, the proposed transition, what
+   *  is preserved, the criteria, the unresolved questions and the warnings. */
+  routes.get("/change-proposals/:id/preview", async (c) => {
+    const id = c.req.param("id");
+    if (!CLAIM_ID_RE.test(id)) return c.json({ error: "not found" }, 404);
+    const record = await readProposalRecordById(id);
+    if (!record) return c.json({ error: "not found" }, 404);
+    const deltaRecord = record.deltaId ? await readDeltaRecord(record.runId) : null;
+    const body: ChangeProposalPreview = previewChangeProposal(
+      record,
+      await readLedger(),
+      deltaRecord?.id === record.deltaId ? deltaRecord : null,
+    );
+    return c.json(body);
+  });
+
+  /** The proposal one run staged, if any. */
+  routes.get("/executions/:runId/change-proposal", async (c) => {
+    const runId = c.req.param("runId");
+    if (!EXECUTION_ID_RE.test(runId)) return c.json({ error: "not found" }, 404);
+    const record = await readProposalRecord(runId);
+    if (!record) return c.json({ error: "not found" }, 404);
+    return c.json(record);
+  });
+
+  /**
+   * Which requested change caused this **exact** claim revision to exist.
+   *
+   * Change provenance, not justification: this answers "who asked for it?",
+   * while `GET /claims/:key/support` answers "why is it well founded?". A
+   * revision nobody proposed through a change phase has no record here, which
+   * is the honest answer rather than an invented one.
+   */
+  routes.get("/claims/:key/change-proposal", async (c) => {
+    const ledger = await readLedger();
+    const claim = claimFor(ledger, c.req.param("key"));
+    if (!claim) return c.json({ error: "not found" }, 404);
+    const proposal = changeProposalOfClaim(ledger, refOf(claim));
+    if (!proposal) return c.json({ error: "not found" }, 404);
+    return c.json(proposal);
   });
 
   // ── Proposals (admin) ────────────────────────────────────────────────────

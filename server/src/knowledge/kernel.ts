@@ -1,4 +1,5 @@
 import type {
+  AcceptedChangeProposal,
   AppliedKnowledgeDelta,
   ArtifactProduction,
   ArtifactRef,
@@ -9,6 +10,11 @@ import type {
   ClaimRef,
   ClaimSupport,
   ClaimView,
+  ChangeProposalReadiness,
+  ResolvedAcceptanceCriterion,
+  ResolvedUnresolvedQuestion,
+  RuleClassification,
+  ChangeRequest,
   ConsumedClaimStatus,
   ConsumptionSource,
   ConsumersReport,
@@ -81,11 +87,14 @@ import type {
  * (Phase 6) added `verifications` — implementation conformance, bound to an
  * exact claim revision and an exact repository revision, and kept strictly
  * apart from the support model it must never contaminate.
+ * Version 6 (Phase 7) added `changeProposals` — the durable record of a
+ * requested change a person approved, linking the request to the exact
+ * revisions it caused and the acceptance criteria that judge them.
  * Older files are upgraded on read by `store.ts` (the new arrays start empty);
- * the kernel only ever sees version 5.
+ * the kernel only ever sees version 6.
  */
 export interface KnowledgeLedger {
-  version: 5;
+  version: 6;
   /** Every claim revision, in the order it was added. */
   claims: Claim[];
   evidence: Evidence[];
@@ -109,9 +118,19 @@ export interface KnowledgeLedger {
    * exactly as supported as it was.
    */
   verifications: RuleVerification[];
+  /**
+   * Accepted change proposals, in acceptance order (Phase 7).
+   *
+   * Change **provenance**, deliberately its own array and deliberately read by
+   * nothing but the change queries: a proposal is not evidence, not a
+   * justification and not a claim, so support evaluation and impact analysis
+   * never see it. "The business asked for this" is a historical fact about
+   * intent, never an argument that a claim is true.
+   */
+  changeProposals: AcceptedChangeProposal[];
 }
 
-export const LEDGER_VERSION = 5 as const;
+export const LEDGER_VERSION = 6 as const;
 
 export function emptyLedger(): KnowledgeLedger {
   return {
@@ -124,6 +143,7 @@ export function emptyLedger(): KnowledgeLedger {
     deltas: [],
     supplied: [],
     verifications: [],
+    changeProposals: [],
   };
 }
 
@@ -464,6 +484,7 @@ function executionRecordsOf(ledger: KnowledgeLedger, runId: string): RunExecutio
     ...ledger.artifacts.filter((a) => a.execution.runId === runId).map((a) => a.execution),
     ...ledger.deltas.filter((d) => d.execution.runId === runId).map((d) => d.execution),
     ...ledger.supplied.filter((s) => s.execution.runId === runId).map((s) => s.execution),
+    ...ledger.changeProposals.filter((c) => c.execution.runId === runId).map((c) => c.execution),
   ];
 }
 
@@ -1261,4 +1282,226 @@ export function executionProvenance(
     },
     currency: consumed.every((c) => c.current) ? "current" : "stale",
   };
+}
+
+// ── Change provenance (Phase 7) ─────────────────────────────────────────────
+//
+// "Which requested change caused us to intentionally introduce or revise this
+// claim?" — a different question from "why is this claim supported?", and
+// answered by a different record on purpose. A justification is an argument
+// and bears on support; an accepted change proposal is a historical fact about
+// intent and bears on nothing. If the two were the same edge, "the business
+// asked for it" would become an argument that a rule is true.
+
+/** Most acceptance criteria one proposal may carry. A change is a bounded
+ *  piece of intent, not a test plan. */
+export const ACCEPTANCE_CRITERIA_MAX = 64;
+export const UNRESOLVED_MAX = 32;
+export const CLASSIFICATION_MAX = 64;
+export const CHANGE_SUMMARY_MAX_CHARS = 2000;
+
+export interface RecordChangeProposalInput {
+  /** Argus's id for the record. */
+  id: string;
+  request: ChangeRequest;
+  execution: RunExecutionRef;
+  attempt?: number;
+  deltaId?: string;
+  readiness: ChangeProposalReadiness;
+  semanticChanges: ClaimRef[];
+  revised: Array<{ from: ClaimRef; to: ClaimRef }>;
+  created: ClaimRef[];
+  decisions: ClaimRef[];
+  constraints: ClaimRef[];
+  preserved: ClaimRef[];
+  acceptanceCriteria: ResolvedAcceptanceCriterion[];
+  unresolved: ResolvedUnresolvedQuestion[];
+  classification: RuleClassification[];
+}
+
+const READINESS: readonly ChangeProposalReadiness[] = ["ready", "needs-input"];
+
+/**
+ * Record one accepted change proposal.
+ *
+ * Three invariants, all of them the point of Phase 7:
+ *
+ * - **Every reference is canonical and exact.** A delta-local id can never
+ *   reach the ledger: the commit resolved them, and an unresolved one refuses
+ *   the whole transition rather than persisting a dangling label.
+ * - **Nothing else in the ledger moves.** No evidence, no justification, no
+ *   claim: the returned ledger differs from the input by exactly one entry in
+ *   `changeProposals`. Approving a change never makes a claim *more*
+ *   supported — its delta's evidence does that, or nothing does.
+ * - **Identity is the run.** One change-intent run produces one accepted
+ *   proposal. Recording the identical record again is a no-op (`added:
+ *   false`), which is what makes committing again after a crash safe;
+ *   recording a *different* proposal for the same run is refused rather than
+ *   rewriting what was approved.
+ */
+export function recordChangeProposal(
+  ledger: KnowledgeLedger,
+  input: RecordChangeProposalInput,
+  now: string,
+): { ledger: KnowledgeLedger; proposal: AcceptedChangeProposal; added: boolean } {
+  const execution = resolveExecution(ledger, input.execution);
+  requireRecordId(input.id, "change proposal");
+  if (!input.request || typeof input.request !== "object") {
+    throw new KnowledgeValidationError("change proposal must carry the request it answered");
+  }
+  requireRecordId(input.request.id, "change request");
+  if (typeof input.request.summary !== "string" || !input.request.summary.trim()) {
+    throw new KnowledgeValidationError("change request summary is required");
+  }
+  if (!READINESS.includes(input.readiness)) {
+    throw new KnowledgeValidationError(
+      `change proposal readiness must be one of ${READINESS.join(" | ")}`,
+    );
+  }
+  if (input.attempt !== undefined && (!Number.isInteger(input.attempt) || input.attempt < 0)) {
+    throw new KnowledgeValidationError("change proposal attempt must be a non-negative integer");
+  }
+  if (input.acceptanceCriteria.length > ACCEPTANCE_CRITERIA_MAX) {
+    throw new KnowledgeValidationError(
+      `change proposal acceptance criteria exceed ${ACCEPTANCE_CRITERIA_MAX} entries`,
+    );
+  }
+  if (input.unresolved.length > UNRESOLVED_MAX) {
+    throw new KnowledgeValidationError(
+      `change proposal unresolved questions exceed ${UNRESOLVED_MAX} entries`,
+    );
+  }
+  if (input.classification.length > CLASSIFICATION_MAX) {
+    throw new KnowledgeValidationError(
+      `change proposal classification exceeds ${CLASSIFICATION_MAX} entries`,
+    );
+  }
+  const mustExist = (ref: ClaimRef, ctx: string) => {
+    if (!getClaim(ledger, ref)) {
+      throw new KnowledgeValidationError(
+        `change proposal ${ctx} names unknown claim revision ${formatClaimRef(ref)}`,
+      );
+    }
+  };
+  input.semanticChanges.forEach((r, i) => mustExist(r, `semanticChanges[${i}]`));
+  input.created.forEach((r, i) => mustExist(r, `created[${i}]`));
+  input.decisions.forEach((r, i) => mustExist(r, `decisions[${i}]`));
+  input.constraints.forEach((r, i) => mustExist(r, `constraints[${i}]`));
+  input.preserved.forEach((r, i) => mustExist(r, `preserved[${i}]`));
+  input.revised.forEach((r, i) => {
+    mustExist(r.from, `revised[${i}].from`);
+    mustExist(r.to, `revised[${i}].to`);
+  });
+  input.classification.forEach((c, i) => mustExist(c.rule, `classification[${i}].rule`));
+  input.acceptanceCriteria.forEach((a, i) =>
+    a.relatesTo.forEach((r, k) => mustExist(r, `acceptanceCriteria[${i}].relatesTo[${k}]`)),
+  );
+  input.unresolved.forEach((q, i) =>
+    (q.blocks ?? []).forEach((r, k) => mustExist(r, `unresolved[${i}].blocks[${k}]`)),
+  );
+
+  const existing = ledger.changeProposals.find(
+    (c) => c.id === input.id || c.execution.runId === execution.runId,
+  );
+  if (existing) {
+    if (existing.id !== input.id) {
+      throw new KnowledgeValidationError(
+        `run ${execution.runId} already has accepted change proposal ${existing.id}; refusing to record ${input.id} as well`,
+      );
+    }
+    return { ledger, proposal: existing, added: false };
+  }
+
+  const proposal: AcceptedChangeProposal = compact({
+    id: input.id,
+    schemaVersion: 1 as const,
+    request: { ...input.request },
+    execution,
+    attempt: input.attempt,
+    deltaId: input.deltaId,
+    readiness: input.readiness,
+    semanticChanges: input.semanticChanges.map(plainRef),
+    revised: input.revised.map((r) => ({ from: plainRef(r.from), to: plainRef(r.to) })),
+    created: input.created.map(plainRef),
+    decisions: input.decisions.map(plainRef),
+    constraints: input.constraints.map(plainRef),
+    preserved: input.preserved.map(plainRef),
+    acceptanceCriteria: input.acceptanceCriteria.map((a) => ({
+      ...a,
+      relatesTo: a.relatesTo.map(plainRef),
+    })),
+    unresolved: input.unresolved.map((q) =>
+      compact({ ...q, blocks: q.blocks ? q.blocks.map(plainRef) : undefined }),
+    ),
+    classification: input.classification.map((c) => compact({ ...c, rule: plainRef(c.rule) })),
+    acceptedAt: now,
+  });
+  return {
+    ledger: { ...ledger, changeProposals: [...ledger.changeProposals, proposal] },
+    proposal,
+    added: true,
+  };
+}
+
+const plainRef = (r: ClaimRef): ClaimRef => ({ id: r.id, revision: r.revision });
+
+/** Accepted proposals, newest first. */
+export function changeProposals(ledger: KnowledgeLedger): AcceptedChangeProposal[] {
+  return [...ledger.changeProposals].sort(
+    (a, b) => b.acceptedAt.localeCompare(a.acceptedAt) || b.id.localeCompare(a.id),
+  );
+}
+
+/** One accepted proposal by its id. */
+export function changeProposalById(
+  ledger: KnowledgeLedger,
+  id: string,
+): AcceptedChangeProposal | null {
+  return ledger.changeProposals.find((c) => c.id === id) ?? null;
+}
+
+/** Every accepted proposal answering one request, oldest first: a request may
+ *  legitimately be answered more than once (a revised gate, a second phase). */
+export function changeProposalsForRequest(
+  ledger: KnowledgeLedger,
+  requestId: string,
+): AcceptedChangeProposal[] {
+  return ledger.changeProposals.filter((c) => c.request.id === requestId);
+}
+
+/**
+ * The accepted proposal that introduced one **exact** claim revision, or null.
+ *
+ * Exact, like everything else here: `RULE-42:v2` was introduced by CP-12;
+ * `RULE-42:v3` was not, and asking about v3 must not return v2's proposal
+ * merely because they share a logical id.
+ */
+export function changeProposalOfClaim(
+  ledger: KnowledgeLedger,
+  ref: ClaimRef,
+): AcceptedChangeProposal | null {
+  return ledger.changeProposals.find((c) => c.semanticChanges.some((r) => sameRef(r, ref))) ?? null;
+}
+
+/**
+ * The accepted proposal an earlier phase of this instance produced, or null.
+ *
+ * Resolved exclusively from the ledger — which holds only *accepted*
+ * proposals — so a proposal staged at a gate resolves to nothing by
+ * construction rather than by a check somebody has to remember to write. That
+ * is the whole no-staged-leakage guarantee of the downstream handoff.
+ *
+ * The latest one wins when a phase was revised and accepted more than once:
+ * an earlier attempt's proposal describes intent that was superseded before
+ * anybody acted on it.
+ */
+export function acceptedChangeProposalOfPhase(
+  ledger: KnowledgeLedger,
+  instanceId: string,
+  phaseId: string,
+): AcceptedChangeProposal | null {
+  const matches = ledger.changeProposals.filter(
+    (c) => c.execution.instanceId === instanceId && c.execution.phaseId === phaseId,
+  );
+  return matches.length > 0 ? matches[matches.length - 1] : null;
 }

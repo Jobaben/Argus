@@ -7,6 +7,106 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Change-intent orchestration (Knowledge Ledger Phase 7).** A phase may now
+  declare `changeIntent: { request?, kinds?, acceptanceCriteria?, note? }`,
+  which turns it into a **change-intent phase**: it is given an explicit
+  requested business change plus the current conformance of the rules it is
+  accountable for, and must answer with a structured **ChangeProposal** —
+  what semantics would change, what stays exactly as it is, what decisions
+  follow, how success will be judged, and what is still unknown. Phase 7 stops
+  before implementation: it writes no code, re-runs nothing and remediates
+  nothing.
+- **Three things that look alike are kept apart, and that is the whole
+  point.** A requested change, the canonical semantics and the implementation's
+  behaviour are three different facts, and collapsing any two of them is how an
+  organization's semantics quietly become whatever somebody last filed, or
+  whatever the code last happened to do:
+
+  ```
+  REQUESTED CHANGE        "Kobra now supports 500-character comments."   ← somebody's words
+  CURRENT SEMANTICS       RULE-42:v1 "max = 180"        support: supported
+  CURRENT IMPLEMENTATION  RULE-42:v1 @abc123 → holds    (a fact about the code)
+  PROPOSED TRANSITION     revise RULE-42:v1 → v2 "max = 500"
+                          preserve CONSTRAINT-8:v1
+                          decide "only when BookingEngine == Kobra"
+                          accept when 500 passes and 501 fails
+  ```
+
+  A `ChangeRequest` is never written into the ledger as a claim; it is carried,
+  frozen, on the accepted proposal that answered it.
+
+- **The semantic half of a proposal is an ordinary KnowledgeDelta.** There is no
+  second path to canonical: a proposal's `semanticDelta` is staged as that run's
+  delta and commits through exactly the Phase 3 boundary, with the same
+  preflight, the same `expectedRevision` concurrency and the same atomicity. A
+  change-intent run may not also write a KnowledgeDelta file — one run, one
+  account of what it proposes.
+- **Acceptance criteria are first-class, and are not business rules.** A rule
+  describes domain semantics that outlive any change; a criterion describes the
+  evidence that _one_ change was carried out. Criteria live on the accepted
+  proposal, outside the claim graph, and their references are rewritten from
+  delta-local ids to the canonical revisions the commit minted — `AC-1 relates
+to local:r42` becomes `AC-1 relates to RULE-42:v2`, and a local id the commit
+  did not create refuses the whole transition.
+- **Unresolved questions instead of invented values.** Asked to "increase the
+  Kobra comment limit" with no new maximum stated, an agent reports an
+  `UnresolvedQuestion` rather than choosing `500` and justifying it. Readiness
+  is derived, never asserted: `ready` when every relevant rule is accounted for,
+  nothing is unresolved and every proposed business-rule change carries a
+  criterion; `needs-input` otherwise. A `needs-input` proposal may still be
+  approved — its delta commits — but by default it cannot drive an
+  implementation.
+- **Every relevant rule is accounted for, or the proposal is refused.** Each
+  business rule the phase's `knowledgeContext` supplied must be classified
+  `revised`, `preserved`, `not-relevant` or `unresolved`, and the classification
+  must agree with the semantic delta. Silence about a supplied rule is
+  indistinguishable from not having considered it.
+- **Durable change provenance (`knowledge.json` version 6).** Approving writes
+  an `AcceptedChangeProposal` in the **same ledger transition** as the semantic
+  delta, so the ledger can answer _"what requested change caused RULE-42:v2 to
+  exist?"_, _"what acceptance criteria were associated with it?"_ and _"which
+  run was later intended to realize CP-12?"_ forever. It is deliberately **not**
+  a justification: "the business asked for it" is a historical fact about
+  intent, never an argument that a claim is true, so it creates no evidence, no
+  justification, and never enters support evaluation or `analyzeImpact`.
+- **Existing defect versus requested change.** Where the implementation already
+  violates a rule the change revises, Argus warns `change-may-be-implemented`
+  (the code may already do the requested thing) — and still revises the rule
+  only because the _request_ asked for it. The recorded violation of `v1`
+  stands, bound to v1 and to the commit it was about; `RULE-42:v2` starts
+  `unverified`. A violated rule the change does _not_ revise is reported
+  separately as a pre-existing defect. Verification history is never rewritten
+  to make the past agree with a requested future.
+- **The downstream handoff (`changeContext`).** A later phase declares
+  `changeContext: { fromPhase, requireReady? }` and its steps receive
+  `ARGUS_CHANGE_CONTEXT_FILE`: the accepted proposal as **exact canonical
+  refs** — what this change introduced, what must keep behaving as it does, the
+  decisions, and the acceptance criteria — beside the KnowledgeContext that says
+  what those refs mean. References, never restatements. It resolves only from
+  the ledger's accepted proposals, so a proposal waiting at a gate refuses the
+  launch: unapproved intent cannot leak into an implementation run, by
+  construction rather than by a check.
+- **The gate review is extended, not replaced.** The drawer gains a **Change
+  intent** panel: the request, the current rules with their support _and_ their
+  conformance side by side, the proposed transition, what is preserved, the
+  decisions, the acceptance criteria, the unresolved questions and the
+  deterministic warnings. No transcript inspection.
+- **A change-intent phase must be gated.** Saving an ungated one is a 400: an
+  ungated one would be a pipeline that rewrites the domain because somebody
+  filed a ticket, and no later check can recover a review that never happened.
+- **Three new Argus-owned invocation channels** — `ARGUS_CHANGE_REQUEST_FILE`
+  (read-only: the request plus current conformance),
+  `ARGUS_CHANGE_PROPOSAL_FILE` (the phase's output) and
+  `ARGUS_CHANGE_CONTEXT_FILE` (read-only: accepted intent) — all required when
+  their phase declares them, and all per run.
+- **New reads** under `/api/knowledge`: `GET /change-proposals` (with
+  `?request=`), `GET /change-proposals/:id`, `GET /change-proposals/:id/preview`,
+  `GET /claims/:key/change-proposal` and
+  `GET /executions/:runId/change-proposal`. There is **no write endpoint**, by
+  design: a proposal becomes canonical exactly one way, through the gate.
+- A new `change-proposal` failure class, opt-in for retry like the other
+  semantic classes, carrying the exact refusal so a second attempt can propose
+  from the current ledger.
 - **Business-rule verification and implementation conformance (Knowledge
   Ledger Phase 6).** A phase may now declare `ruleVerification: { kinds?,
 holds?, note? }`, which turns it into a **business-rule verification phase**:

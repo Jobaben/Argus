@@ -68,4 +68,9 @@ export const paths = {
    *  `<runId>/staged.json` is Argus's record of it. Never durable until the
    *  phase is accepted — see docs/KNOWLEDGE-LEDGER.md § Phase 6. */
   ruleVerificationsDir: () => path.join(claudeHome(), "argus", "rule-verifications"),
+  /** Per-run change-proposal staging: `<runId>/proposal.json` is the one file
+   *  a change-intent agent may write (`ARGUS_CHANGE_PROPOSAL_FILE`);
+   *  `<runId>/staged.json` is Argus's record of it. Never canonical until the
+   *  phase is approved — see docs/KNOWLEDGE-LEDGER.md § Phase 7. */
+  changeProposalsDir: () => path.join(claudeHome(), "argus", "change-proposals"),
 };

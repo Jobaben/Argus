@@ -4,6 +4,11 @@ import type { AgentRuntimeId, ReasoningEffort } from "./runtimes.js";
 import type { Trigger } from "./schedules.js";
 import type { AutoApprove, Rubric } from "./verdict.js";
 import type {
+  ChangeContextSpec,
+  ChangeIntentPolicy,
+  ChangeIntentSummary,
+  ChangeProposalPreview,
+  ChangeProposalStatus,
   DiscoveryPolicy,
   DiscoverySummary,
   InvocationKnowledgeContext,
@@ -82,7 +87,17 @@ export type RetryableClass =
    * concluded — but retryable on opt-in, since the refusal names exactly
    * what was missing.
    */
-  | "rule-verification";
+  | "rule-verification"
+  /**
+   * The run emitted a ChangeProposal Argus refused: malformed, a rule it was
+   * supplied left unclassified, a claim both preserved and revised, an
+   * acceptance criterion naming a local id the semantic delta does not
+   * declare, or a business-rule change with no acceptance criteria under a
+   * `required` policy (Phase 7). Not retried by default — the agent reported
+   * its reasoning — but retryable on opt-in, since the refusal names exactly
+   * what was missing.
+   */
+  | "change-proposal";
 
 /**
  * Every way a phase can fail. The retryable classes are the subset an author
@@ -384,6 +399,18 @@ export interface AgentInvocationRecord {
    *  (`ARGUS_RULE_VERIFICATION_FILE`). Null on a phase that is not a
    *  verification phase; absent on records written before Phase 6. */
   ruleVerificationFile?: string | null;
+  /** Where this run's read-only {@link ChangeIntentInput} was materialized
+   *  (`ARGUS_CHANGE_REQUEST_FILE`). Null on a phase that is not a
+   *  change-intent phase; absent on records written before Phase 7. */
+  changeRequestFile?: string | null;
+  /** Where this run must leave its {@link ChangeProposal}
+   *  (`ARGUS_CHANGE_PROPOSAL_FILE`). Null on a phase that is not a
+   *  change-intent phase; absent on records written before Phase 7. */
+  changeProposalFile?: string | null;
+  /** Where this run's read-only {@link ChangeContext} was materialized
+   *  (`ARGUS_CHANGE_CONTEXT_FILE`). Null when the phase declared no
+   *  `changeContext`; absent on records written before Phase 7. */
+  changeContextFile?: string | null;
   /**
    * Every Argus-owned channel this invocation was offered, with the access it
    * needs and whether the runtime could honour it. A channel `unavailable`
@@ -549,6 +576,31 @@ export interface PhaseDef {
    * staged and become durable only when the phase is accepted.
    */
   ruleVerification?: RuleVerificationPolicy;
+  /**
+   * Turn this phase into a **change-intent phase** (Phase 7): its steps are
+   * given an explicit {@link ChangeRequest} plus the current conformance of
+   * the rules they were supplied, and must answer with a structured
+   * {@link ChangeProposal} — what semantics would change, what stays, what
+   * follows, how success is judged and what is still unknown.
+   *
+   * Nothing it proposes becomes canonical before the gate. A change-intent
+   * phase must be `gated`, which is enforced when the pipeline is saved.
+   *
+   * Absent = an ordinary phase, behaving in every respect exactly as before
+   * Phase 7 existed.
+   */
+  changeIntent?: ChangeIntentPolicy;
+  /**
+   * Give every step of this phase the accepted {@link ChangeProposal} of an
+   * earlier phase of the same instance, as a read-only
+   * {@link ChangeContext} (`ARGUS_CHANGE_CONTEXT_FILE`).
+   *
+   * The downstream half of Phase 7: an implementation run receives *what the
+   * domain currently says* through its `knowledgeContext` and *what this
+   * change intends to make true* through this. Only an accepted proposal
+   * resolves — a staged one refuses the launch.
+   */
+  changeContext?: ChangeContextSpec;
 }
 
 // ── Harness: Argus-owned invocation channels ─────────────────────────────────
@@ -565,6 +617,9 @@ export type InvocationChannelKind =
   | "knowledge-delta"
   | "knowledge-context"
   | "rule-verification"
+  | "change-request"
+  | "change-proposal"
+  | "change-context"
   | "artifact-dir"
   | "memory-dir";
 
@@ -592,7 +647,7 @@ export interface InvocationChannelRecord {
   /** The variable the agent learns the path from (`ARGUS_RESULT_FILE`, …). */
   envVar: string;
   /** The path as the agent sees it: a file for `result`/`knowledge-delta`/
-   *  `knowledge-context`, a directory otherwise. */
+   *  `knowledge-context`/`rule-verification`/`change-*`, a directory otherwise. */
   path: string;
   access: InvocationChannelAccess;
   /** Whether the launch depends on this channel being available. */
@@ -761,6 +816,14 @@ export interface StepProgress {
    * Absent when the run wrote no verification file.
    */
   ruleVerification?: StepRuleVerification;
+  /**
+   * The ChangeProposal this step's run emitted, as Argus staged it (Phase 7).
+   * Its own sidecar beside {@link StepProgress.knowledgeDelta}: the semantic
+   * half of a proposal *is* a delta and is staged as one, and this record is
+   * everything the delta has no place for — what is preserved, how success is
+   * judged, what is unresolved. Absent when the run wrote no proposal.
+   */
+  changeProposal?: StepChangeProposal;
 }
 
 /** A staged delta as the instance record sees it; the full record lives
@@ -775,6 +838,13 @@ export interface StepKnowledgeDelta {
 export interface StepRuleVerification {
   id: string;
   status: RuleVerificationStatus;
+}
+
+/** A staged change proposal as the instance record sees it; the full record
+ *  lives beside the run (`GET /api/knowledge/change-proposals/:id`). */
+export interface StepChangeProposal {
+  id: string;
+  status: ChangeProposalStatus;
 }
 
 /**
@@ -796,6 +866,13 @@ export interface PhaseKnowledgeCommit {
    * either both durable or neither. Absent on a phase that staged none.
    */
   verifications?: string[];
+  /**
+   * The change-proposal record ids this attempt accepts (Phase 7). Committed
+   * in the *same* ledger transition as `deltas`, so a proposal's canonical
+   * semantics and the durable record of the request that caused them are
+   * either both there or neither is. Absent on a phase that staged none.
+   */
+  changeProposals?: string[];
   startedAt: string;
   endedAt?: string | null;
   /** Why the commit was refused. */
@@ -847,6 +924,9 @@ export interface PhaseProgress {
   /** What this attempt's verification runs concluded, in counts (Phase 6).
    *  Absent on a phase without `ruleVerification`. */
   ruleVerification?: RuleVerificationSummary;
+  /** What this attempt's change-intent run proposed, in counts (Phase 7).
+   *  Absent on a phase without `changeIntent`. */
+  changeIntent?: ChangeIntentSummary;
 }
 
 /** What the engine writes into `PhaseProgress.payload` when a phase fails.
@@ -1003,6 +1083,17 @@ export interface PhaseReview {
   ruleVerifications?: RuleVerificationPreview[];
   /** The counts for a verification phase's results. Absent otherwise. */
   ruleVerification?: RuleVerificationSummary;
+  /**
+   * The change proposals this attempt staged, one preview per step that wrote
+   * one (Phase 7). Nothing here is canonical: the requested change, the
+   * current rules with their conformance, the proposed transition, what is
+   * preserved, the acceptance criteria and what is still unresolved — so the
+   * decision can be made without opening a transcript. Absent when no step of
+   * the attempt proposed a change.
+   */
+  changeProposals?: ChangeProposalPreview[];
+  /** The counts for a change-intent phase's proposal. Absent otherwise. */
+  changeIntent?: ChangeIntentSummary;
 }
 
 /** One artifact's bytes, for the read-only viewer. */

@@ -1581,3 +1581,620 @@ export interface ExecutionVerificationsResponse {
   runId: string;
   verifications: RuleVerification[];
 }
+
+// ── Change-intent orchestration (Phase 7) ───────────────────────────────────
+//
+// Phase 5 answered "what business rules does this organization have?". Phase 6
+// answered "does the implementation satisfy them?". Phase 7 answers a third,
+// different question, and the one a person actually arrives with:
+//
+//   "We want the business to work differently. What does that mean?"
+//
+// Three things that look alike and are not, and the whole phase exists to keep
+// them apart:
+//
+//   REQUESTED CHANGE      "Kobra now supports 500-character comments."
+//                         a {@link ChangeRequest}. Somebody's words. Neither
+//                         canonical knowledge nor evidence that any particular
+//                         reading of it is correct.
+//
+//   CURRENT SEMANTICS     RULE-42:v1 "Kobra comments max = 180", supported.
+//                         the ledger. Reaches the agent as a KnowledgeContext.
+//
+//   CURRENT IMPLEMENTATION RULE-42:v1 @abc123 → holds (or violated, or
+//                         unverified). a {@link RuleVerification}. A fact
+//                         about the code, never about what the business wants.
+//
+// and the output, which is a fourth thing again:
+//
+//   PROPOSED TRANSITION   revise RULE-42:v1 → v2 "max = 500", preserve
+//                         CONSTRAINT-8:v1, decide "only when engine == Kobra",
+//                         accept when 500 passes and 501 fails.
+//                         a {@link ChangeProposal}: *reviewed intent*, not
+//                         canonical until a person approves it.
+//
+// Phase 7 stops there. It proposes semantics; it never writes code, never
+// re-runs an implementation, and never infers what the business *wants* from
+// what the code currently *does*.
+//
+// The semantic half of a proposal is an ordinary {@link KnowledgeDelta} — the
+// one mechanism that turns a proposal into canonical claims — so nothing here
+// duplicates mutation logic, and a change proposal becomes canonical through
+// exactly the Phase 3 commit boundary. What Phase 7 adds around it is the
+// material a delta has no place for: what is deliberately *unchanged*, how
+// success will be judged, what is still unknown, and which request caused
+// any of it.
+
+/**
+ * The bounded target of one requested change. Free-form on purpose: unlike a
+ * {@link DiscoveryScope}, nothing is checked against it — no evidence path is
+ * contained by it — because Phase 7 reads no code. It narrows the agent's
+ * attention and appears in the review, and that is all.
+ */
+export interface ChangeRequestScope {
+  /** Repository-relative paths or areas the requester believes are involved. */
+  paths?: string[];
+  /** A short name for what is changing ("Kobra booking comments"). */
+  label?: string;
+  /** One sentence narrowing the request. Requester-written, never Argus's. */
+  note?: string;
+}
+
+/**
+ * The structured form of "we want the business to work differently".
+ *
+ * Deliberately *not* a claim. A request is somebody's words about a desired
+ * future; a claim is what the organization holds to be the case. Conflating
+ * them is precisely how a Jira ticket becomes organizational truth without
+ * anyone deciding that it should. So a ChangeRequest is never written into
+ * `knowledge.json` as a claim — it is carried, frozen, on the
+ * {@link AcceptedChangeProposal} that answered it.
+ *
+ * `claims` names canonical revisions the *requester* believes are involved.
+ * It is a hint, not a selection: which rules the change agent is accountable
+ * for classifying comes from the phase's KnowledgeContext, exactly as a
+ * verification phase's accountability does.
+ */
+export interface ChangeRequest {
+  /** Stable identity, so several proposals can answer the same request.
+   *  Authored, or minted by Argus from the phase attempt when absent. */
+  id: string;
+  /** One line: what is wanted. */
+  summary: string;
+  /** The longer form, when there is one. */
+  details?: string;
+  scope?: ChangeRequestScope;
+  /** Canonical revisions the requester thinks are involved. A hint. */
+  claims?: ClaimRef[];
+  /** Constraints the requester supplied in their own words. Not canonical
+   *  constraints — those are `constraint` claims, and a genuinely new one is
+   *  proposed through the semantic delta like anything else. */
+  constraints?: string[];
+  /** Who asked. Free-form. */
+  requestedBy?: string;
+  /** When Argus received it (bound by Argus at phase-attempt planning). */
+  receivedAt?: string;
+}
+
+/**
+ * A reference inside a change proposal: a claim the proposal's own semantic
+ * delta creates (by its delta-local id) or an **exact** existing revision.
+ * The same rule as {@link DeltaClaimRef} and for the same reason — a bare id
+ * could be silently retargeted by a later revision — and the same string form
+ * (`RULE-42:v2`) is accepted.
+ */
+export type ChangeClaimRef = DeltaClaimRef;
+
+/** What an acceptance criterion is *about*. A closed vocabulary so a later
+ *  phase can route on it without parsing prose.
+ *
+ *  - `behavior` — an externally observable behaviour the change introduces.
+ *  - `invariant` — something that must hold throughout, new or not.
+ *  - `regression` — something that must keep working exactly as before.
+ *  - `verification` — a check or test that must exist and pass. */
+export type AcceptanceCriterionKind = "behavior" | "invariant" | "regression" | "verification";
+
+/**
+ * One observable condition that demonstrates the requested change was
+ * implemented correctly.
+ *
+ * **Not a business rule, and never stored as one.** A business rule describes
+ * domain semantics that outlive any particular change ("Kobra comments max =
+ * 500"); an acceptance criterion describes the evidence that one change was
+ * carried out ("a 501-character Kobra comment is rejected"). Storing criteria
+ * as claims would fill the ledger with per-change assertions that nothing
+ * supersedes and nobody would ever revise, and would make "what does the
+ * business say?" unanswerable. So criteria live on the
+ * {@link AcceptedChangeProposal} — durable, addressable, and outside the claim
+ * graph.
+ *
+ * They may *reference* exact rule revisions, and after the commit they do:
+ * `relatesTo` is rewritten from delta-local ids to the canonical refs the
+ * commit minted ({@link ResolvedAcceptanceCriterion}).
+ *
+ * Deliberately not a test DSL. `verificationHint` is one line of prose for a
+ * human or a later agent; Argus never executes it.
+ */
+export interface AcceptanceCriterion {
+  /** Proposal-local identity (`AC-1`). Unique within one proposal. */
+  id: string;
+  statement: string;
+  kind: AcceptanceCriterionKind;
+  /** The proposed or existing semantics this criterion is evidence for. */
+  relatesTo: ChangeClaimRef[];
+  /** One line on how it could be checked. Never executed by Argus. */
+  verificationHint?: string;
+}
+
+/** An acceptance criterion as it is persisted on an accepted proposal: every
+ *  reference resolved to a canonical revision. A delta-local id can never
+ *  appear here — that is the point of resolving at commit. */
+export interface ResolvedAcceptanceCriterion extends Omit<AcceptanceCriterion, "relatesTo"> {
+  relatesTo: ClaimRef[];
+}
+
+/**
+ * Something the requested change does not determine.
+ *
+ * The alternative to this type is an agent inventing a number. Asked to
+ * "increase the Kobra comment limit" with no new maximum stated, a model will
+ * produce `500` and a justification for it, and the fact that nobody ever
+ * decided `500` disappears. An unresolved question keeps that fact, and keeps
+ * the proposal out of `ready`.
+ */
+export interface UnresolvedQuestion {
+  /** Proposal-local identity (`Q-1`). */
+  id: string;
+  question: string;
+  /** The proposed or existing semantics that cannot be settled without an
+   *  answer. Resolved to canonical refs at commit. */
+  blocks?: ChangeClaimRef[];
+  note?: string;
+}
+
+/** An unresolved question as persisted: references resolved, no local ids. */
+export interface ResolvedUnresolvedQuestion extends Omit<UnresolvedQuestion, "blocks"> {
+  blocks?: ClaimRef[];
+}
+
+/**
+ * How one rule Argus held the change agent accountable for was accounted for.
+ *
+ * - `revised` — this proposal revises it.
+ * - `preserved` — it stays exactly as it is, deliberately, and the
+ *   implementation must not change its behaviour.
+ * - `not-relevant` — the request does not bear on it.
+ * - `unresolved` — whether it changes cannot be decided without an answer to
+ *   an {@link UnresolvedQuestion}.
+ *
+ * Every selected rule must carry one of these. Silence is the failure mode
+ * this exists to close: a change agent that simply never mentions a rule it
+ * was given looks exactly like one that decided the rule was unaffected.
+ */
+export type RuleChangeDisposition = "revised" | "preserved" | "not-relevant" | "unresolved";
+
+export interface RuleClassification {
+  rule: ClaimRef;
+  disposition: RuleChangeDisposition;
+  /** One line: why. Required for `not-relevant` — the disposition that is
+   *  otherwise indistinguishable from not having looked. */
+  note?: string;
+}
+
+/**
+ * Whether the proposal is fit to drive an implementation.
+ *
+ * - `ready` — every selected rule is accounted for, nothing is unresolved,
+ *   and every proposed business-rule change carries acceptance criteria.
+ * - `needs-input` — something is missing. The proposal may still be approved
+ *   (its semantic delta, if any, commits), and the accepted record says
+ *   `needs-input` forever; what it may not do is silently drive an
+ *   implementation. A {@link ChangeContextSpec} refuses it by default.
+ *
+ * Derived deterministically from the proposal, never asserted by the agent.
+ */
+export type ChangeProposalReadiness = "ready" | "needs-input";
+
+/**
+ * The versioned wire format of a change-intent phase's output — the document
+ * at `ARGUS_CHANGE_PROPOSAL_FILE`.
+ *
+ * `semanticDelta` is an ordinary {@link KnowledgeDelta} and is the *only* way
+ * anything here becomes canonical: rule revisions, new constraints and
+ * decisions go in it, are staged as that run's delta, and commit through the
+ * Phase 3 boundary. Everything beside it — what is preserved, how success is
+ * judged, what is unknown — is change material, not claim material, and is
+ * persisted on the accepted proposal instead.
+ *
+ * A change-intent run writes this file and **not** an
+ * `ARGUS_KNOWLEDGE_DELTA_FILE`: one run, one account of what it proposes.
+ */
+export interface ChangeProposal {
+  schemaVersion: 1;
+  /** The canonical semantic mutations this change would make. Absent or empty
+   *  = the request implies no semantic difference, which is a legitimate (and
+   *  warned) answer. */
+  semanticDelta?: KnowledgeDelta;
+  /** Existing revisions this change deliberately leaves untouched. Exact refs
+   *  only: "the rule as it is right now", not "whatever RULE-9 becomes". */
+  preserved?: ClaimRef[];
+  /** One entry per rule Argus held this run accountable for. */
+  classification?: RuleClassification[];
+  acceptanceCriteria?: AcceptanceCriterion[];
+  unresolved?: UnresolvedQuestion[];
+  metadata?: { summary?: string };
+}
+
+/** Same lifecycle as a staged {@link KnowledgeDelta}. Nothing is canonical
+ *  until the phase crosses its acceptance boundary. */
+export type ChangeProposalStatus = "staged" | "accepted" | "rejected" | "superseded";
+
+/** Why a change proposal was refused. Closed, so the engine and the API can
+ *  act on it. */
+export type ChangeProposalErrorCode =
+  | "invalid-json"
+  | "schema"
+  | "unknown-claim"
+  | "local-reference"
+  | "incomplete"
+  | "contradiction"
+  | "acceptance-criteria"
+  | "delta";
+
+/**
+ * A change proposal as Argus staged it beside the run: the request it was
+ * answering, exactly which rules it was accountable for, the staged delta
+ * carrying its semantic half, and its status.
+ *
+ * Per run, like a staged delta, so a retry or a revise writes a fresh path and
+ * an abandoned attempt's proposal can never be credited to a later one.
+ */
+export interface ChangeProposalRecord {
+  id: string;
+  runId: string;
+  instanceId: string;
+  phaseId: string;
+  attempt: number;
+  step: string;
+  status: ChangeProposalStatus;
+  receivedAt: string;
+  updatedAt: string;
+  /** The request this run was given, frozen at launch. */
+  request: ChangeRequest;
+  /** The exact rules Argus supplied this run and requires a classification for. */
+  selected: ClaimRef[];
+  /** Everything Argus supplied as KnowledgeContext, when it recorded any. */
+  supplied?: ClaimRef[];
+  /** The repository revision Argus recorded for the run, when it had one.
+   *  What the conformance projection was scoped to. */
+  gitHead?: string;
+  /** The validated proposal. Absent when the document could not be parsed. */
+  proposal?: ChangeProposal;
+  /** The staged {@link KnowledgeDeltaRecord} carrying `semanticDelta`, when
+   *  the proposal had semantic content. The two records commit together. */
+  deltaId?: string;
+  /** Derived at intake from the validated proposal. */
+  readiness?: ChangeProposalReadiness;
+  /** Why it is `rejected` or `superseded`. */
+  reason?: string;
+  /** The durable record it became, once `accepted`. */
+  result?: { proposal: AcceptedChangeProposal };
+}
+
+/**
+ * The durable record of a change that a person approved (ledger version 6).
+ *
+ * Lives in `knowledge.json` beside the records its delta created, so three
+ * questions are answerable from the ledger alone, forever:
+ *
+ *   "What requested change caused RULE-42:v2 to exist?"
+ *   "What acceptance criteria were associated with RULE-42:v2?"
+ *   "Which implementation run was later intended to realize CP-12?"
+ *
+ * This is **change provenance**, and it is deliberately not justification.
+ * A justification answers *why is this claim supported?* — an argument from
+ * premises, which bears on support. Change provenance answers *which request
+ * made us intentionally introduce or revise it?* — a historical fact about
+ * intent, which bears on nothing. Conflating them would make "the business
+ * asked for it" an argument that a rule is true.
+ *
+ * Immutable once written, and never retargeted: a later `RULE-42:v3` does not
+ * change what this proposal says it did, exactly as a consumption or a
+ * verification does not.
+ */
+export interface AcceptedChangeProposal {
+  id: string;
+  schemaVersion: 1;
+  /** The request, frozen as it was when the run was launched. */
+  request: ChangeRequest;
+  /** The run that produced the proposal, with its instance and phase. */
+  execution: RunExecutionRef;
+  attempt?: number;
+  /** The applied {@link KnowledgeDelta} that carried the semantic half. */
+  deltaId?: string;
+  readiness: ChangeProposalReadiness;
+  /** Every canonical revision this change created — new claims and revisions
+   *  alike — in commit order. */
+  semanticChanges: ClaimRef[];
+  /** Revisions, as before-and-after pairs. */
+  revised: Array<{ from: ClaimRef; to: ClaimRef }>;
+  /** New claims of any kind (revision 1). */
+  created: ClaimRef[];
+  /** The subset of `created` that are `decision` claims, for the downstream
+   *  handoff, which cares about them specifically. */
+  decisions: ClaimRef[];
+  /** The subset of `created` that are `constraint` claims. */
+  constraints: ClaimRef[];
+  /** Existing revisions this change deliberately left untouched. */
+  preserved: ClaimRef[];
+  /** Every reference resolved to canonical identity. */
+  acceptanceCriteria: ResolvedAcceptanceCriterion[];
+  unresolved: ResolvedUnresolvedQuestion[];
+  classification: RuleClassification[];
+  acceptedAt: string;
+}
+
+/**
+ * Why a reviewer should look twice at a change proposal. Every code is decided
+ * from **exact structured information** — the proposal, the ledger, the
+ * conformance records — never from similarity, embeddings or a model's
+ * opinion, exactly as {@link KnowledgeDeltaWarningCode} is.
+ *
+ * - `no-semantic-change` — the request produced no proposed semantic
+ *   difference at all. Sometimes correct (the rule already says it); always
+ *   worth a second look.
+ * - `selected-rule-unclassified` — a rule Argus supplied and held the run
+ *   accountable for is neither revised, preserved, not-relevant nor
+ *   unresolved. **Refuses the proposal**: silence about a supplied rule is
+ *   indistinguishable from not having considered it.
+ * - `preserved-and-revised` — the same claim is listed as preserved *and*
+ *   revised. **Refuses the proposal**: a contradiction, not a judgement call.
+ * - `classification-mismatch` — a rule classified `revised` that the semantic
+ *   delta does not revise, or classified `preserved`/`not-relevant` while the
+ *   delta revises it. **Refuses the proposal**: the accounting and the
+ *   proposal must describe the same change, or the accounting is decoration.
+ * - `acceptance-criterion-unknown-ref` — a criterion names a delta-local id
+ *   the semantic delta does not declare. **Refuses the proposal**.
+ * - `acceptance-criteria-missing` — a proposed business-rule change carries no
+ *   acceptance criterion referencing it. Refuses under the default
+ *   `acceptanceCriteria: "required"`; under `"warn"` it is a warning and the
+ *   proposal reads `needs-input`.
+ * - `unresolved-questions` — the proposal carries unresolved questions, so it
+ *   is not implementation-ready.
+ * - `implementation-already-violates` — the current implementation is already
+ *   non-conformant with a selected rule this proposal does **not** revise: a
+ *   pre-existing defect the change does not address. From the exact
+ *   {@link RuleVerification} record, never from an agent's reading.
+ * - `change-may-be-implemented` — the current implementation already violates
+ *   a rule this proposal revises: the code may already do the requested thing
+ *   and the rule is only now catching up. Still not a reason to revise the
+ *   rule — the *request* is — and never a licence to rewrite the violation.
+ * - `implementation-unverified` — no accepted verification exists for a
+ *   selected rule at the run's repository revision, so nothing is known about
+ *   whether the code does what the rule says.
+ * - `request-claim-unknown` — the request named a canonical revision the
+ *   ledger does not hold.
+ */
+export type ChangeProposalWarningCode =
+  | "no-semantic-change"
+  | "selected-rule-unclassified"
+  | "preserved-and-revised"
+  | "classification-mismatch"
+  | "acceptance-criterion-unknown-ref"
+  | "acceptance-criteria-missing"
+  | "unresolved-questions"
+  | "implementation-already-violates"
+  | "change-may-be-implemented"
+  | "implementation-unverified"
+  | "request-claim-unknown";
+
+export interface ChangeProposalWarning {
+  code: ChangeProposalWarningCode;
+  /** One sentence, naming the subject and what is wrong with it. */
+  message: string;
+  /** The display form of what the warning is about (`RULE-42:v1`, `AC-2`). */
+  subject?: string;
+}
+
+/**
+ * One rule's current state as the change agent receives it and the reviewer
+ * sees it: what the business says, whether that is well founded, and whether
+ * the code currently does it.
+ *
+ * The two halves are shown together and never merged. `support` is about the
+ * rule; `conformance` is about the code. A rule may be `supported` and
+ * `violated` at once — that is a bug — and a change proposal must be able to
+ * say so without either fact contaminating the other.
+ */
+export interface ChangeRuleState {
+  /** `RULE-42:v1`. */
+  ref: string;
+  claim: ClaimRef;
+  kind: ClaimKind;
+  statement: string;
+  support: ClaimSupport;
+  lifecycle: ClaimLifecycle;
+  /** Conformance scoped to the repository revision the change is analysed at.
+   *  `unverified` means nobody looked at this commit — never "it is fine". */
+  conformance: RuleConformanceStatus;
+  /** The commit the deciding verification examined, when there is one. */
+  conformanceAt?: string;
+  /** When it was recorded. */
+  verifiedAt?: string;
+}
+
+/**
+ * The versioned wire format of the input Argus materializes for a
+ * change-intent run — the document at `ARGUS_CHANGE_REQUEST_FILE`.
+ *
+ * It carries the two things the agent cannot be trusted to derive: the request
+ * verbatim, and the *current conformance* of the rules it is accountable for.
+ * The current **semantics** deliberately arrive separately, through the
+ * ordinary KnowledgeContext, so there is exactly one channel for "what the
+ * ledger holds" and the request never becomes a place to restate it.
+ */
+export interface ChangeIntentInput {
+  schemaVersion: 1;
+  generatedAt: string;
+  request: ChangeRequest;
+  /** The rules this run must classify, with their current state. */
+  relevant: ChangeRuleState[];
+  /** The repository revision `relevant[].conformance` is scoped to. */
+  gitHead?: string;
+}
+
+/**
+ * Turns a phase into a **change-intent phase** (Phase 7).
+ *
+ * The phase is otherwise ordinary: the same steps, the same gate, the same
+ * commit boundary. What `changeIntent` changes:
+ *
+ * - the run receives a {@link ChangeIntentInput} (the request plus current
+ *   conformance) and is instructed to answer with a {@link ChangeProposal};
+ * - the rules it is accountable for classifying are exactly the ones its
+ *   `knowledgeContext` supplied — there is no second selection mechanism;
+ * - its proposal's `semanticDelta` is staged as the run's KnowledgeDelta and
+ *   commits through the Phase 3 boundary, atomically with the accepted
+ *   proposal record.
+ *
+ * A change-intent phase **must** be `gated`. Phase 7 exists so that a
+ * requested change is reviewed before it becomes canonical semantics; an
+ * ungated one would be a pipeline that rewrites the domain because somebody
+ * filed a ticket.
+ */
+export interface ChangeIntentPolicy {
+  /**
+   * The request, authored on the phase. An instance whose trigger payload
+   * carries `changeRequest` overrides it — the run-specific request is more
+   * specific than the pipeline's default. One of the two must resolve, or the
+   * phase fails as a `configuration` error rather than inventing a request.
+   */
+  request?: ChangeRequest;
+  /**
+   * Which supplied claim kinds must be classified. Default
+   * `["business-rule"]`: a context may carry facts and constraints for the
+   * agent to reason *with*, and a change does not have to account for each.
+   */
+  kinds?: ClaimKind[];
+  /**
+   * Whether a proposed business-rule change must carry an acceptance
+   * criterion referencing it. Default `"required"` — fail-closed, because an
+   * implementation-ready proposal with no way to judge success is the failure
+   * this phase is meant to prevent. `"warn"` downgrades it to a warning and
+   * the proposal reads `needs-input`.
+   */
+  acceptanceCriteria?: "required" | "warn";
+  /** One sentence narrowing what this phase should reason about. */
+  note?: string;
+}
+
+/**
+ * How a later phase receives an accepted {@link ChangeProposal} (Phase 7 §23).
+ *
+ * Resolved exclusively from the ledger's **accepted** change proposals for the
+ * named phase of this same instance — never from a staged record — so a
+ * proposal parked at a gate resolves to nothing and refuses the launch rather
+ * than leaking unapproved intent into an implementation run.
+ */
+export interface ChangeContextSpec {
+  /** A phase of the same pipeline, which must run before this one. */
+  fromPhase: string;
+  /** Refuse the launch when the accepted proposal is `needs-input`. Default
+   *  `true`: an implementation driven by intent nobody finished deciding is
+   *  exactly what readiness exists to prevent. */
+  requireReady?: boolean;
+}
+
+/**
+ * The versioned wire format of the accepted intent a later run receives — the
+ * document at `ARGUS_CHANGE_CONTEXT_FILE`.
+ *
+ * The contract between intent reasoning and implementation. It carries
+ * **references**, not restatements: `semanticChanges` names `RULE-42:v2`, and
+ * what RULE-42:v2 *says* arrives through the run's KnowledgeContext. A second
+ * copy of a claim's sentence in a second file is a second thing to drift.
+ */
+export interface ChangeContext {
+  schemaVersion: 1;
+  generatedAt: string;
+  proposalId: string;
+  request: ChangeRequest;
+  readiness: ChangeProposalReadiness;
+  /** Canonical revisions this change created. */
+  semanticChanges: ClaimRef[];
+  revised: Array<{ from: ClaimRef; to: ClaimRef }>;
+  created: ClaimRef[];
+  decisions: ClaimRef[];
+  constraints: ClaimRef[];
+  /** Exact revisions that must keep behaving as they do. */
+  preserved: ClaimRef[];
+  acceptanceCriteria: ResolvedAcceptanceCriterion[];
+  unresolved: ResolvedUnresolvedQuestion[];
+}
+
+/** An existing revision as a change preview names it: the ref, and the
+ *  statement when the ledger still holds it. */
+export interface ChangeClaimSummary {
+  ref: string;
+  claim: ClaimRef;
+  kind?: ClaimKind;
+  statement?: string;
+}
+
+/**
+ * The deterministic read model of one staged change proposal: everything a
+ * reviewer needs, in the order they need it, without reading a transcript.
+ *
+ *   Requested change → CURRENT (rule + support + conformance) → PROPOSED →
+ *   PRESERVED → DECISIONS → ACCEPTANCE CRITERIA → UNRESOLVED → warnings
+ *
+ * `semantic` is the ordinary {@link KnowledgeDeltaPreview} of the proposal's
+ * delta, so proposed revisions, their before-and-after and their own
+ * deterministic warnings are shown by exactly the machinery Phase 5 built.
+ * Derived per read; mutates nothing and mints no id.
+ */
+export interface ChangeProposalPreview {
+  proposalId: string;
+  runId: string;
+  step: string;
+  attempt: number;
+  status: ChangeProposalStatus;
+  readiness: ChangeProposalReadiness;
+  request: ChangeRequest;
+  /** The rules this run was accountable for, with their support and the
+   *  conformance of the implementation at the run's commit. */
+  current: ChangeRuleState[];
+  /** The semantic half, previewed as any staged delta is. Absent when the
+   *  proposal proposes no semantic change. */
+  semantic?: KnowledgeDeltaPreview;
+  preserved: ChangeClaimSummary[];
+  acceptanceCriteria: AcceptanceCriterion[];
+  unresolved: UnresolvedQuestion[];
+  classification: RuleClassification[];
+  warnings: ChangeProposalWarning[];
+  summary?: string;
+}
+
+/** The counts a change-intent phase reports for routing, status and the board.
+ *  The proposal itself stays in the staged record, which is the one
+ *  authoritative form of it. */
+export interface ChangeIntentSummary {
+  requestId: string;
+  readiness: ChangeProposalReadiness;
+  /** Selected rules, i.e. the ones a classification is required for. */
+  selected: number;
+  revised: number;
+  created: number;
+  decisions: number;
+  preserved: number;
+  acceptanceCriteria: number;
+  unresolved: number;
+  warnings: number;
+  /** True while the proposal is staged and not yet accepted. */
+  requiresReview: boolean;
+}
+
+/** `GET /api/knowledge/change-proposals`. Accepted proposals, newest first. */
+export interface ChangeProposalsResponse {
+  proposals: AcceptedChangeProposal[];
+}

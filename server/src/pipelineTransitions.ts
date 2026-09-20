@@ -561,6 +561,18 @@ export function stagedVerificationIds(phase: PhaseProgress): string[] {
 }
 
 /**
+ * The change proposals this attempt would accept (Phase 7): one per step whose
+ * run staged one and whose step *succeeded*. Exactly the same eligibility rule
+ * as {@link stagedDeltaIds}, so an abandoned attempt's reasoning can no more
+ * become canonical intent than its claims can become canonical knowledge.
+ */
+export function stagedChangeProposalIds(phase: PhaseProgress): string[] {
+  return phase.steps.flatMap((s) =>
+    s.status === "succeeded" && s.changeProposal?.status === "staged" ? [s.changeProposal.id] : [],
+  );
+}
+
+/**
  * The last rung of the acceptance ladder. A phase whose attempt staged no
  * KnowledgeDelta succeeds here exactly as it always did. One that did stays
  * `running` under `knowledge.status: "pending"` — the same shape as a phase
@@ -578,12 +590,14 @@ function succeedPhase(
 ): TransitionResult {
   const deltas = stagedDeltaIds(phase);
   const verifications = stagedVerificationIds(phase);
-  if (deltas.length > 0 || verifications.length > 0) {
+  const changeProposals = stagedChangeProposalIds(phase);
+  if (deltas.length > 0 || verifications.length > 0 || changeProposals.length > 0) {
     phase.status = "running";
     phase.knowledge = {
       status: "pending",
       deltas,
       ...(verifications.length > 0 ? { verifications } : {}),
+      ...(changeProposals.length > 0 ? { changeProposals } : {}),
       startedAt: nowISO,
     };
     return { ...settle(def, inst, nowISO), commitKnowledge: [phase.id] };
@@ -620,6 +634,7 @@ export function applyKnowledgeCommit(
   }
   const held = phase.knowledge;
   const heldVerifications = held.verifications ?? [];
+  const heldChanges = held.changeProposals ?? [];
   const mark = (status: "applied" | "rejected") => {
     for (const s of phase.steps) {
       if (s.knowledgeDelta && held.deltas.includes(s.knowledgeDelta.id)) {
@@ -627,6 +642,14 @@ export function applyKnowledgeCommit(
       }
       if (s.ruleVerification && heldVerifications.includes(s.ruleVerification.id)) {
         s.ruleVerification = { ...s.ruleVerification, status };
+      }
+      if (s.changeProposal && heldChanges.includes(s.changeProposal.id)) {
+        // A change proposal is `accepted`, not `applied`: what became canonical
+        // is its delta, and what became durable is the record of the request.
+        s.changeProposal = {
+          ...s.changeProposal,
+          status: status === "applied" ? "accepted" : "rejected",
+        };
       }
     }
   };
@@ -640,14 +663,18 @@ export function applyKnowledgeCommit(
   phase.knowledge = { ...held, status: "rejected", endedAt: nowISO, reason: verdict.reason };
   mark("rejected");
   phase.status = "failed";
-  // The commit is one transition over both halves, so one failure class names
-  // it. `rule-verification` when only conformance results were at stake;
-  // `knowledge-delta` otherwise, unchanged from Phase 3.
+  // The commit is one transition over every half, so one failure class names
+  // it. `change-proposal` when a change proposal was at stake — it is the
+  // outermost thing the attempt was doing; `rule-verification` when only
+  // conformance results were; `knowledge-delta` otherwise, unchanged from
+  // Phase 3.
   phase.payload = withFailureClass(
     withReason(phase.payload, verdict.reason),
-    held.deltas.length === 0 && heldVerifications.length > 0
-      ? "rule-verification"
-      : "knowledge-delta",
+    heldChanges.length > 0
+      ? "change-proposal"
+      : held.deltas.length === 0 && heldVerifications.length > 0
+        ? "rule-verification"
+        : "knowledge-delta",
   );
   failLeftoverSteps(phase);
   return { ...settle(def, inst, nowISO), knowledgeApplied: true };

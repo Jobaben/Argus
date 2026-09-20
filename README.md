@@ -214,6 +214,19 @@ never gets reported as "holds now", and a new rule revision starts
 apart: a rule whose implementation is in breach stays exactly as supported as
 it was, because a bug is not a doubt about the domain.
 
+A third dimension starts from the other end: someone wants the business to work
+differently. A change-intent phase is given the requested change verbatim, the
+rules it affects and what the implementation currently does about them, and
+answers with a reviewable **change proposal** — which exact rule revisions it
+would create, which existing ones it deliberately preserves, the decisions that
+follow, the observable acceptance criteria that would demonstrate success, and
+anything the request leaves genuinely unresolved (rather than a value the model
+chose). Nothing becomes canonical until a person approves the gate, and the
+accepted proposal is kept forever, so "what requested change caused this rule
+revision, and how was it meant to be judged?" stays answerable. A request is
+not a rule, and a rule is not its implementation: the code already disagreeing
+with a rule is reported as a defect, never treated as what the business wants.
+
 Inspect it all at `/api/knowledge`; the design and its worked example are in
 **[docs/KNOWLEDGE-LEDGER.md](docs/KNOWLEDGE-LEDGER.md)**.
 
