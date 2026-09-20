@@ -2,6 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { mkdtempSync, symlinkSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 // The reference hook lives at <repo>/hooks/argus-signal.mjs; import its pure
 // type-resolution helper. The module guards its side effects behind an
 // is-main check, so importing it here is safe.
@@ -233,5 +236,41 @@ test("the hook process reports delivery failure and exits non-zero", async () =>
 
   assert.equal(code, 1);
   assert.equal(stdout, '{"continue":true}', "Codex still receives its hook response");
+  assert.match(stderr, /\[argus-signal\] hook failed:/);
+});
+
+test("the hook runs when it is invoked through a symlink", async () => {
+  const hook = fileURLToPath(new URL("../../hooks/argus-signal.mjs", import.meta.url));
+  // A developer who symlinks the hook into ~/.claude/hooks instead of copying it
+  // gets an argv[1] that Node never resolves, while `import.meta.url` is already
+  // the realpath. An is-main check comparing the two unresolved would silently
+  // skip every signal, which reads as "run ended without emitting a completion
+  // signal" long after the run itself succeeded.
+  const dir = mkdtempSync(path.join(tmpdir(), "argus-hook-symlink-"));
+  const link = path.join(dir, "argus-signal.mjs");
+  symlinkSync(hook, link);
+
+  const child = spawn(process.execPath, [link], {
+    env: {
+      ...process.env,
+      ARGUS_RUNTIME: "claude",
+      ARGUS_SIGNAL_URL: "http://127.0.0.1:1/api/signal",
+      ARGUS_INSTANCE_ID: "i1",
+      ARGUS_PHASE_ID: "p1",
+      ARGUS_RUN_ID: "r1",
+      ARGUS_SIGNAL_TOKEN: "t1",
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let stderr = "";
+  child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
+  child.stdin.end(JSON.stringify({ last_assistant_message: "done" }));
+  const code = await new Promise<number | null>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", resolve);
+  });
+
+  rmSync(dir, { recursive: true, force: true });
+  assert.equal(code, 1, "main() must run through a symlink, so delivery is attempted");
   assert.match(stderr, /\[argus-signal\] hook failed:/);
 });

@@ -38,7 +38,7 @@
 // ARGUS_SIGNAL_TOKEN / ARGUS_RESULT_FILE from the environment the engine
 // injected. No-ops when not running under a pipeline (env unset), so it is safe
 // to register globally.
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 /** A final message reporting a failed/blocked outcome via the sentinel line,
@@ -266,4 +266,27 @@ function main() {
   });
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) main();
+/**
+ * True when this module is the process entry point, including when it was
+ * invoked through a symlink.
+ *
+ * Node resolves `import.meta.url` to the realpath, while `process.argv[1]`
+ * keeps whatever path the caller typed. Comparing the two unresolved means a
+ * hook symlinked into `~/.claude/hooks` never runs `main()` — it exits 0 in
+ * silence, and the phase it should have completed fails minutes later with
+ * "run ended without emitting a completion signal", which points at the agent
+ * rather than at the hook. Setup copies the file, so this only bites the
+ * person who linked it, which is to say whoever is working on Argus itself.
+ */
+function isMain() {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  if (import.meta.url === pathToFileURL(entry).href) return true;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(entry)).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isMain()) main();
