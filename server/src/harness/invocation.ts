@@ -112,6 +112,11 @@ export interface InvocationInputs {
    * authored to reason from this context. Absent/null = no semantic context.
    */
   knowledgeContext?: { file: string; record: InvocationKnowledgeContext } | null;
+  /** Where this run must leave its rule-verification report, when its phase
+   *  declares `ruleVerification` (Phase 6). The channel it becomes is
+   *  `required`: it is the phase's output, not an optional proposal.
+   *  Absent/null = this is not a verification phase. */
+  ruleVerificationFile?: string | null;
   timeoutSeconds: number | null;
   gitHead: string | null;
   /** The environment the policy is applied to — Argus's own, in production. */
@@ -185,6 +190,7 @@ export function prepareInvocation(inputs: InvocationInputs): PreparedInvocation 
     resultFile: inputs.resultFile,
     knowledgeDeltaFile: inputs.knowledgeDeltaFile ?? null,
     knowledgeContextFile: inputs.knowledgeContext?.file ?? null,
+    ruleVerificationFile: inputs.ruleVerificationFile ?? null,
     artifactDir: inputs.artifactDir,
     memoryDir: inputs.memoryDir ?? null,
     phaseDef,
@@ -263,6 +269,7 @@ export function prepareInvocation(inputs: InvocationInputs): PreparedInvocation 
     knowledgeDeltaFile: inputs.knowledgeDeltaFile ?? null,
     knowledgeContextFile: inputs.knowledgeContext?.file ?? null,
     knowledgeContext: inputs.knowledgeContext?.record ?? null,
+    ruleVerificationFile: inputs.ruleVerificationFile ?? null,
     channels: channelRecords,
     timeoutSeconds: inputs.timeoutSeconds,
     deadlineAt,

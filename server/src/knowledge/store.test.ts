@@ -110,13 +110,13 @@ test("persist a graph, reload it: identities, revisions and edges are unchanged"
     assert.equal("lifecycle" in c, false);
     assert.equal("support" in c, false);
   }
-  assert.equal(after.version, 4);
+  assert.equal(after.version, 5);
 });
 
 test("a missing file reads as an empty ledger and the first write creates it", async () => {
   const s = await fresh();
   assert.deepEqual(await s.readLedger(), {
-    version: 4,
+    version: 5,
     claims: [],
     evidence: [],
     justifications: [],
@@ -124,12 +124,13 @@ test("a missing file reads as an empty ledger and the first write creates it", a
     artifacts: [],
     deltas: [],
     supplied: [],
+    verifications: [],
   });
   await s.createClaim({ id: "A", kind: "fact", statement: "a" }, NOW);
   assert.equal(JSON.parse(readFileSync(file(), "utf8")).claims.length, 1);
 });
 
-test("a Phase 1 (version 1) document is read as version 4 and upgraded by the next write", async () => {
+test("a Phase 1 (version 1) document is read as version 5 and upgraded by the next write", async () => {
   const s = await fresh();
   const k = await kernel();
   mkdirSync(path.dirname(file()), { recursive: true });
@@ -144,13 +145,16 @@ test("a Phase 1 (version 1) document is read as version 4 and upgraded by the ne
   writeFileSync(file(), JSON.stringify(v1Doc));
 
   const read = await s.readLedger();
-  assert.equal(read.version, 4);
+  assert.equal(read.version, 5);
   assert.deepEqual(read.consumptions, []);
   assert.deepEqual(read.artifacts, []);
   assert.deepEqual(read.deltas, []);
   // An upgrade claims no supplied provenance for the runs already recorded:
   // historical unknown stays unknown (Phase 4.1 §15).
   assert.deepEqual(read.supplied, []);
+  // And no conformance: an upgraded rule is `unverified`, never `holds`
+  // (Phase 6 §17).
+  assert.deepEqual(read.verifications, []);
   assert.deepEqual(read.claims, v1Doc.claims);
   // Reading alone rewrites nothing.
   assert.equal(readFileSync(file(), "utf8"), JSON.stringify(v1Doc));
@@ -158,11 +162,12 @@ test("a Phase 1 (version 1) document is read as version 4 and upgraded by the ne
   // The first transition persists the upgraded shape, records intact.
   await s.registerConsumptions({ runId: "run-1" }, { claims: [{ id: "RULE-7" }] }, NOW);
   const disk = JSON.parse(readFileSync(file(), "utf8"));
-  assert.equal(disk.version, 4);
+  assert.equal(disk.version, 5);
   assert.deepEqual(disk.claims, v1Doc.claims);
   assert.equal(disk.consumptions.length, 1);
   assert.deepEqual(disk.deltas, []);
   assert.deepEqual(disk.supplied, []);
+  assert.deepEqual(disk.verifications, []);
   assert.equal(disk.consumptions[0].source, undefined);
   assert.deepEqual(k.consumersOf(disk, { id: "RULE-7", revision: 1 })[0].execution, {
     runId: "run-1",

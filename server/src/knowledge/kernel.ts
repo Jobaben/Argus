@@ -20,11 +20,16 @@ import type {
   Justification,
   JustificationForce,
   JustificationStatus,
+  RuleConformanceReport,
+  RuleVerification,
+  RuleVerificationHoldsPolicy,
+  RuleVerificationOutcome,
   RunExecutionRef,
   SuppliedContext,
   SuppliedToReport,
   SupportDirection,
   SupportReport,
+  VerificationEvidence,
 } from "@argus/contracts";
 
 /**
@@ -72,12 +77,15 @@ import type {
  * answerable from this document alone and a commit is idempotent on delta id.
  * Version 4 (Phase 4.1) added `supplied` — the durable half of the
  * KnowledgeContext protocol, so "which exact revisions did run_456 receive?"
- * outlives the invocation record that is pruned with the run.
+ * outlives the invocation record that is pruned with the run. Version 5
+ * (Phase 6) added `verifications` — implementation conformance, bound to an
+ * exact claim revision and an exact repository revision, and kept strictly
+ * apart from the support model it must never contaminate.
  * Older files are upgraded on read by `store.ts` (the new arrays start empty);
- * the kernel only ever sees version 4.
+ * the kernel only ever sees version 5.
  */
 export interface KnowledgeLedger {
-  version: 4;
+  version: 5;
   /** Every claim revision, in the order it was added. */
   claims: Claim[];
   evidence: Evidence[];
@@ -91,9 +99,19 @@ export interface KnowledgeLedger {
   /** Execution → the exact context Argus supplied it, in launch order. One
    *  record per run. See {@link recordSuppliedContext}. */
   supplied: SuppliedContext[];
+  /**
+   * Implementation-conformance results, in commit order (Phase 6).
+   *
+   * Deliberately its own array and deliberately read by nothing but the
+   * conformance queries: a verification is *not* evidence, *not* a
+   * justification and *not* a claim, so support evaluation and impact
+   * analysis never see it. A rule whose implementation is violated stays
+   * exactly as supported as it was.
+   */
+  verifications: RuleVerification[];
 }
 
-export const LEDGER_VERSION = 4 as const;
+export const LEDGER_VERSION = 5 as const;
 
 export function emptyLedger(): KnowledgeLedger {
   return {
@@ -105,6 +123,7 @@ export function emptyLedger(): KnowledgeLedger {
     artifacts: [],
     deltas: [],
     supplied: [],
+    verifications: [],
   };
 }
 
@@ -782,6 +801,186 @@ export function claimsProducedByPhase(
     }
   }
   return out;
+}
+
+// ── Business-rule verification (Phase 6) ────────────────────────────────────
+
+/** How many evidence records one verification may carry. Evidence is a list
+ *  of references, never content, so the cap is about sanity, not size. */
+export const VERIFICATION_EVIDENCE_MAX = 32;
+export const VERIFICATION_REASON_MAX_CHARS = 1000;
+export const VERIFICATION_OUTCOMES: readonly RuleVerificationOutcome[] = [
+  "holds",
+  "violated",
+  "unverifiable",
+];
+
+/**
+ * Do two commit shas name the same commit, allowing either to be abbreviated?
+ *
+ * Argus records `git rev-parse HEAD` (40 hex); a person or an agent may write
+ * the short form they saw in a log. One being a prefix of the other is the
+ * honest comparison, case-insensitively because git prints lowercase but
+ * people paste anything.
+ */
+export function sameCommit(a: string, b: string): boolean {
+  const x = a.toLowerCase();
+  const y = b.toLowerCase();
+  return x.startsWith(y) || y.startsWith(x);
+}
+
+export interface RecordVerificationInput {
+  execution: RunExecutionRef;
+  rule: ClaimRef;
+  outcome: RuleVerificationOutcome;
+  evidence: VerificationEvidence[];
+  attempt?: number;
+  gitHead?: string;
+  reason?: string;
+  note?: string;
+  policy?: RuleVerificationHoldsPolicy;
+  /** Argus's id for the record. */
+  id: string;
+}
+
+/**
+ * Record one implementation-conformance result.
+ *
+ * Three invariants, all of them the point of Phase 6:
+ *
+ * - **The rule must exist, exactly.** A verification names one immutable
+ *   revision; a superseded one is fine (verifying `RULE-42:v1` after v2 exists
+ *   is a historical statement and stays attached to v1), an unknown one is
+ *   refused.
+ * - **Nothing else in the ledger moves.** No evidence, no justification, no
+ *   consumption: the returned ledger differs from the input by exactly one
+ *   entry in `verifications`. A `violated` outcome therefore cannot change the
+ *   rule's support, by construction rather than by a rule somebody has to
+ *   remember.
+ * - **Identity is `(runId, rule)`.** One run verifies one rule once.
+ *   Recording the identical result again is a no-op (`added: false`), which is
+ *   what makes committing again after a crash safe; recording a *different*
+ *   outcome for the same pair is refused rather than silently overwriting a
+ *   past conclusion.
+ */
+export function recordRuleVerification(
+  ledger: KnowledgeLedger,
+  input: RecordVerificationInput,
+  now: string,
+): { ledger: KnowledgeLedger; verification: RuleVerification; added: boolean } {
+  const execution = resolveExecution(ledger, input.execution);
+  requireRecordId(input.id, "verification");
+  if (!getClaim(ledger, input.rule)) {
+    throw new KnowledgeValidationError(
+      `verification names unknown claim revision ${formatClaimRef(input.rule)}`,
+    );
+  }
+  if (!VERIFICATION_OUTCOMES.includes(input.outcome)) {
+    throw new KnowledgeValidationError(
+      `verification outcome must be one of ${VERIFICATION_OUTCOMES.join(" | ")}`,
+    );
+  }
+  if (!Array.isArray(input.evidence)) {
+    throw new KnowledgeValidationError("verification evidence must be a list");
+  }
+  if (input.evidence.length > VERIFICATION_EVIDENCE_MAX) {
+    throw new KnowledgeValidationError(
+      `verification evidence exceeds ${VERIFICATION_EVIDENCE_MAX} entries`,
+    );
+  }
+  if (input.outcome !== "unverifiable" && input.evidence.length === 0) {
+    throw new KnowledgeValidationError(
+      `a ${input.outcome} verification of ${formatClaimRef(input.rule)} must cite at least one evidence record`,
+    );
+  }
+  if (input.outcome === "unverifiable" && !input.reason?.trim()) {
+    throw new KnowledgeValidationError(
+      `an unverifiable verification of ${formatClaimRef(input.rule)} must give a reason`,
+    );
+  }
+  if (input.gitHead !== undefined && !SHA_RE.test(input.gitHead)) {
+    throw new KnowledgeValidationError("verification gitHead must be a hex commit sha");
+  }
+  if (input.attempt !== undefined && (!Number.isInteger(input.attempt) || input.attempt < 0)) {
+    throw new KnowledgeValidationError("verification attempt must be a non-negative integer");
+  }
+  const existing = ledger.verifications.find(
+    (v) => v.execution.runId === execution.runId && sameRef(v.rule, input.rule),
+  );
+  if (existing) {
+    if (existing.outcome !== input.outcome) {
+      throw new KnowledgeValidationError(
+        `run ${execution.runId} already verified ${formatClaimRef(input.rule)} as ${existing.outcome}; refusing to replace it with ${input.outcome}`,
+      );
+    }
+    return { ledger, verification: existing, added: false };
+  }
+  if (ledger.verifications.some((v) => v.id === input.id)) {
+    throw new KnowledgeValidationError(`verification id "${input.id}" already exists`);
+  }
+  const verification: RuleVerification = compact({
+    id: input.id,
+    rule: { id: input.rule.id, revision: input.rule.revision },
+    outcome: input.outcome,
+    execution,
+    attempt: input.attempt,
+    ...(input.gitHead ? { repository: { gitHead: input.gitHead } } : {}),
+    evidence: input.evidence.map((e) => ({ ...e })),
+    reason: input.reason,
+    note: input.note,
+    policy: input.policy,
+    createdAt: now,
+  });
+  return {
+    ledger: { ...ledger, verifications: [...ledger.verifications, verification] },
+    verification,
+    added: true,
+  };
+}
+
+/** Every verification of one **exact** revision, oldest first. A different
+ *  revision of the same id is never a match: `RULE-42:v2` inherits nothing. */
+export function verificationsOfClaim(ledger: KnowledgeLedger, ref: ClaimRef): RuleVerification[] {
+  return ledger.verifications
+    .filter((v) => sameRef(v.rule, ref))
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+}
+
+/** Every verification one execution produced, in commit order. */
+export function verificationsOfRun(ledger: KnowledgeLedger, runId: string): RuleVerification[] {
+  return ledger.verifications.filter((v) => v.execution.runId === runId);
+}
+
+/**
+ * The deterministic conformance read model (Phase 6 §17).
+ *
+ * With a `gitHead`, only verifications that examined that commit are eligible,
+ * so a rule verified at `abc123` is `unverified` at `def456`: Argus never
+ * reports a past commit's conclusion as a statement about a different one, and
+ * a stale result is *derived* rather than written back onto the old record.
+ * Without one, the latest recorded outcome for the revision is returned, and
+ * `latest.repository.gitHead` says which commit it was about.
+ *
+ * `unverified` (nobody looked) is never conflated with `unverifiable`
+ * (somebody looked and could not tell).
+ */
+export function ruleConformance(
+  ledger: KnowledgeLedger,
+  ref: ClaimRef,
+  gitHead?: string,
+): RuleConformanceReport {
+  const history = verificationsOfClaim(ledger, ref);
+  const eligible = gitHead
+    ? history.filter((v) => v.repository && sameCommit(v.repository.gitHead, gitHead))
+    : history;
+  const latest = eligible.length > 0 ? eligible[eligible.length - 1] : undefined;
+  return compact({
+    rule: { id: ref.id, revision: ref.revision },
+    gitHead,
+    status: (latest?.outcome ?? "unverified") as RuleConformanceReport["status"],
+    latest,
+    history,
+  });
 }
 
 // ── Support ─────────────────────────────────────────────────────────────────

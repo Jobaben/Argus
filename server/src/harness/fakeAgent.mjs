@@ -29,6 +29,15 @@
  *   FAKE: write-result <json>               write ARGUS_RESULT_FILE
  *   FAKE: malformed-result                  write `{not json` to ARGUS_RESULT_FILE
  *   FAKE: write-delta <json>                write ARGUS_KNOWLEDGE_DELTA_FILE (a KnowledgeDelta)
+ *   FAKE: write-verification <json>         write ARGUS_RULE_VERIFICATION_FILE verbatim
+ *   FAKE: verify-context <outcome> <note>   write ARGUS_RULE_VERIFICATION_FILE, giving every rule
+ *                                           in ARGUS_KNOWLEDGE_CONTEXT_FILE the same outcome with
+ *                                           one source-code evidence record and, when the phase
+ *                                           declares one, the named check (canonical ids are
+ *                                           minted at an earlier phase's commit, so no prompt can
+ *                                           name them). Syntax:
+ *                                             verify-context <holds|violated|unverifiable> \
+ *                                               <path> [check:<label>] <note...>
  *   FAKE: read-context <name>               copy ARGUS_KNOWLEDGE_CONTEXT_FILE into ARGUS_ARTIFACT_DIR/<name>
  *                                           (proves the agent could read the context it was supplied)
  *   FAKE: consume-context <relpath|->       write a KnowledgeDelta declaring every ref in
@@ -153,6 +162,56 @@ async function execute(prompt) {
         const file = process.env.ARGUS_KNOWLEDGE_DELTA_FILE;
         if (!file) throw new Error("write-delta without ARGUS_KNOWLEDGE_DELTA_FILE");
         writeFileAt(file, rest);
+        break;
+      }
+      case "write-verification": {
+        const file = process.env.ARGUS_RULE_VERIFICATION_FILE;
+        if (!file) throw new Error("write-verification without ARGUS_RULE_VERIFICATION_FILE");
+        writeFileAt(file, rest);
+        break;
+      }
+      case "verify-context": {
+        // "The agent read the rules it was given and answered for every one of
+        // them" — the one thing a verification step must be able to do that a
+        // static prompt cannot, because the canonical refs were minted when an
+        // earlier phase committed.
+        const contextFile = process.env.ARGUS_KNOWLEDGE_CONTEXT_FILE;
+        const target = process.env.ARGUS_RULE_VERIFICATION_FILE;
+        if (!contextFile) throw new Error("verify-context without ARGUS_KNOWLEDGE_CONTEXT_FILE");
+        if (!target) throw new Error("verify-context without ARGUS_RULE_VERIFICATION_FILE");
+        const words = rest.split(/\s+/);
+        const outcome = words.shift();
+        const sourcePath = words.shift();
+        let check = null;
+        if (words[0] && words[0].startsWith("check:")) check = words.shift().slice("check:".length);
+        const note = words.join(" ");
+        const context = JSON.parse(readFileSync(contextFile, "utf8"));
+        const evidence =
+          outcome === "unverifiable"
+            ? []
+            : [
+                ...(check ? [{ type: "check", label: check }] : []),
+                {
+                  type: "source-code",
+                  path: sourcePath,
+                  symbol: "KobraCommentValidator.MaxLength",
+                },
+              ];
+        writeFileAt(
+          target,
+          JSON.stringify({
+            schemaVersion: 1,
+            verifications: context.claims
+              .filter((c) => c.kind === "business-rule")
+              .map((c) => ({
+                rule: c.ref,
+                outcome,
+                evidence,
+                ...(outcome === "unverifiable" ? { reason: note } : { note }),
+              })),
+            metadata: { summary: note },
+          }),
+        );
         break;
       }
       case "consume-context": {

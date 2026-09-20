@@ -1189,3 +1189,395 @@ export interface KnowledgeDeltaPreview {
   summary?: string;
   warnings: KnowledgeDeltaWarning[];
 }
+
+// ── Business-rule verification (Phase 6) ────────────────────────────────────
+//
+// Phase 5 answered "what business rules does this organization have, and what
+// grounds them?". Phase 6 answers a **different** question about the same
+// rules: does the implementation, at one exact repository revision, do what a
+// rule says?
+//
+//   RULE SUPPORT              is the rule itself well founded?
+//                             derived from evidence and justifications,
+//                             never stored, never set by an agent.
+//
+//   IMPLEMENTATION CONFORMANCE does the code satisfy the rule right now?
+//                             a {@link RuleVerification} record bound to one
+//                             exact ClaimRef and one exact gitHead.
+//
+// They are orthogonal, and Phase 6 exists precisely to keep them that way. A
+// supported rule whose implementation violates it is the *normal* state of a
+// bug:
+//
+//   RULE-42:v1  support = supported          (the business really does say 180)
+//   RULE-42:v1  @abc123 → violated           (the validator allows 500)
+//
+// Recording that violation as *opposing evidence* on RULE-42:v1 would make the
+// rule read `contested` — "we are no longer sure the business has this rule" —
+// which is false, and would then propagate through justifications and impact
+// analysis as though the domain itself were in doubt. So a verification never
+// touches claim support: it creates no evidence, no justification, and appears
+// nowhere in {@link ImpactSet}. The only thing a violation says is that the
+// code and the rule disagree, which is a fact about the code.
+//
+// Two bindings make a verification meaningful, and neither is ever retargeted:
+//
+//   - the **exact claim revision**. A verification of `RULE-42:v1` says
+//     nothing about `RULE-42:v2`; the new revision starts `unverified`.
+//   - the **exact repository revision**. `holds at abc123` says nothing about
+//     `def456`; the new commit starts `unverified` too.
+//
+// History is never rewritten and never marked stale. Currency is *derived*
+// by asking a scoped question ({@link RuleConformanceReport}).
+
+/**
+ * What a verification concluded about one rule at one repository revision.
+ *
+ * - `holds` — the verifier obtained sufficient implementation or test evidence
+ *   to conclude the examined implementation satisfies the rule under the
+ *   authored verification criteria.
+ * - `violated` — the verifier obtained sufficient evidence that the examined
+ *   implementation contradicts the rule.
+ * - `unverifiable` — the verifier could not deterministically establish either
+ *   outcome from the available implementation and test evidence. An honest
+ *   "I could not tell", which is why it must carry a reason. Many business
+ *   rules have no executable expression at all, and `unverifiable` exists so
+ *   that fact is recorded rather than laundered into `holds`.
+ *
+ * Deliberately no confidence score and no fourth hedging value: a score would
+ * be an agent's opinion wearing a number, and the one thing Argus can be
+ * strict about is that uncertainty is named as uncertainty.
+ */
+export type RuleVerificationOutcome = "holds" | "violated" | "unverifiable";
+
+/**
+ * A deterministic check of the verifying phase, cited as conformance evidence.
+ *
+ * The agent names the check by its `label` only — the label the phase's own
+ * `checks` declare. Argus resolves it against the phase definition at intake
+ * (a label no check declares refuses the whole proposal) and binds `status`,
+ * `exitCode` and `detail` from the phase's {@link VerificationReport} at
+ * commit. The agent can therefore cite a test; it cannot *claim* one passed.
+ *
+ * This is what separates "an agent says it holds" from "an agent says it
+ * holds AND `customer-comment-tests` exited 0".
+ */
+export interface VerificationCheckEvidence {
+  type: "check";
+  /** The check's label on the phase's `checks`, as the report shows it. */
+  label: string;
+  /** Bound by Argus from the phase's verification report at commit. */
+  status?: "passed" | "failed";
+  exitCode?: number | null;
+  /** One line from the check result. Never its output. */
+  detail?: string;
+  note?: string;
+}
+
+/** A file the verifying phase produced, cited as conformance evidence — a
+ *  test report, a generated analysis. A reference, never a copy. */
+export interface VerificationArtifactEvidence {
+  type: "artifact";
+  artifact: ArtifactRef;
+  note?: string;
+}
+
+/**
+ * The verifier's own reading of the code, where no deterministic check can
+ * express the link. Allowed, and deliberately the weakest thing in the union:
+ * an outcome resting on this alone is an agent's word, which is why
+ * `holds` may be configured to require a passing check
+ * ({@link RuleVerificationPolicy.holds}).
+ */
+export interface VerificationObservationEvidence {
+  type: "observation";
+  note: string;
+}
+
+/**
+ * Why an implementation does or does not conform. Deliberately a *separate*
+ * union from {@link EvidenceSource}: rule-support evidence and
+ * implementation-conformance evidence answer different questions and must
+ * never be mistaken for one another — the whole point of Phase 6 is that a
+ * failing test is not an argument against the business having the rule.
+ *
+ * {@link SourceCodeEvidence} is reused as-is, because "where in the code" is
+ * the same fact in both worlds, and it stays provenance rather than content:
+ * a path, a commit, a symbol, a line range — never a snippet.
+ */
+export type VerificationEvidence =
+  | VerificationCheckEvidence
+  | SourceCodeEvidence
+  | VerificationArtifactEvidence
+  | VerificationObservationEvidence;
+
+/**
+ * "Execution E concluded that the implementation at gitHead H does (or does
+ * not) conform to exact claim revision R."
+ *
+ * Immutable once written, and never retargeted: a later revision of the rule,
+ * or a later commit of the repository, produces a *new* record. Identity is
+ * `(execution.runId, rule)` — one run verifies one rule once — which is what
+ * makes committing again after a crash a no-op rather than a duplicate.
+ *
+ * What it is not: evidence about the rule, a justification, a claim, or an
+ * input to support evaluation. `ledger.verifications` is read by the
+ * conformance queries and by nothing else.
+ */
+export interface RuleVerification {
+  id: string;
+  /** The exact claim revision verified. Always exact, never a bare id. */
+  rule: ClaimRef;
+  outcome: RuleVerificationOutcome;
+  /** The run that performed the verification, with its instance and phase. */
+  execution: RunExecutionRef;
+  /** The phase attempt the run belonged to. A locator, not identity. */
+  attempt?: number;
+  /**
+   * The repository state examined, as **Argus** recorded it for the run — the
+   * invocation record's `gitHead`, never the agent's claim about it. Absent
+   * when the run's working tree was not a git repository: then the record
+   * says, honestly, that it cannot be scoped to a revision.
+   */
+  repository?: { gitHead: string };
+  /** At least one record for `holds` and `violated`. */
+  evidence: VerificationEvidence[];
+  /** Required for `unverifiable`: why conformance could not be established. */
+  reason?: string;
+  /** The verifier's one-line note about this rule. */
+  note?: string;
+  /** Which policy `holds` was granted under, for a later reader. */
+  policy?: RuleVerificationHoldsPolicy;
+  createdAt: string;
+}
+
+/**
+ * What `holds` requires.
+ *
+ * - `agent-evidence` (default) — at least one concrete cited evidence record
+ *   of any kind. "The agent said so" with nothing attached is refused either
+ *   way; this is the floor, not an absence of one.
+ * - `deterministic-check` — additionally, at least one
+ *   {@link VerificationCheckEvidence} naming a check of this phase that
+ *   passed. A rule with no executable expression then comes back
+ *   `unverifiable`, which is the honest answer, rather than `holds`.
+ *
+ * `violated` always requires cited evidence, and `unverifiable` always
+ * requires a reason, under every policy.
+ */
+export type RuleVerificationHoldsPolicy = "agent-evidence" | "deterministic-check";
+
+/**
+ * Turns a phase into a **business-rule verification phase**.
+ *
+ * What it does *not* do is select rules. The rules a verification phase is
+ * accountable for are exactly the ones Argus supplied it through its
+ * {@link KnowledgeContextSpec} — `claims`, `fromPhases`, an accepted
+ * discovery phase's output — because that mechanism already exists, already
+ * records durably what was supplied, and already refuses to float onto a
+ * newer revision. Adding a second rule-selection vocabulary would create two
+ * answers to "which rules was this run accountable for?".
+ *
+ * So this policy says only: *this phase is expected to produce structured
+ * conformance results for the business rules it was given*, plus how strict
+ * `holds` is.
+ */
+export interface RuleVerificationPolicy {
+  /**
+   * Which supplied claim kinds must receive an outcome. Default
+   * `["business-rule"]`: a context may carry facts and assumptions for the
+   * verifier to reason *with*, and those are not things an implementation
+   * conforms to.
+   */
+  kinds?: ClaimKind[];
+  /** What `holds` requires. Default `agent-evidence`. */
+  holds?: RuleVerificationHoldsPolicy;
+  /** One sentence narrowing what "conforms" means here. Author-written. */
+  note?: string;
+}
+
+/** One rule's conformance result as the agent proposes it. `rule` must name
+ *  an exact revision (`RULE-42:v1`), never a bare id. */
+export interface ProposedRuleVerification {
+  rule: ClaimRef;
+  outcome: RuleVerificationOutcome;
+  evidence: VerificationEvidence[];
+  /** Required when `outcome` is `unverifiable`. */
+  reason?: string;
+  note?: string;
+}
+
+/**
+ * The versioned wire format of a verification phase's structured output — the
+ * document at `ARGUS_RULE_VERIFICATION_FILE`.
+ *
+ * Deliberately **not** a {@link KnowledgeDelta}. A delta proposes new
+ * canonical semantics; a verification report describes the relationship
+ * between an implementation and semantics that already exist. Overloading the
+ * delta would have made every conformance result look like a knowledge
+ * mutation, and the first thing an agent would have reached for is opposing
+ * evidence on the rule — which is exactly the contamination Phase 6 forbids.
+ *
+ * A run may still write *both* files: a verification phase that also learns
+ * something durable proposes it through the delta channel, as any phase does.
+ */
+export interface RuleVerificationReport {
+  schemaVersion: 1;
+  verifications: ProposedRuleVerification[];
+  metadata?: { summary?: string };
+}
+
+/** Same lifecycle as a staged {@link KnowledgeDelta}: nothing is canonical
+ *  until the phase crosses its acceptance boundary. */
+export type RuleVerificationStatus = "staged" | "applied" | "rejected" | "superseded";
+
+/** Why a verification proposal was refused. Closed, so the engine and the API
+ *  can act on it. */
+export type RuleVerificationErrorCode =
+  | "invalid-json"
+  | "schema"
+  | "unknown-rule"
+  | "not-selected"
+  | "incomplete"
+  | "evidence"
+  | "check-reference"
+  | "source-evidence";
+
+/**
+ * A verification proposal as Argus staged it beside the run: the identity of
+ * the attempt that produced it, exactly which rules Argus held it accountable
+ * for, and its status.
+ *
+ * Per run, like a staged delta, so a retry or a revise writes a fresh path and
+ * an abandoned attempt's results can never be credited to a later one.
+ */
+export interface RuleVerificationRecord {
+  id: string;
+  runId: string;
+  instanceId: string;
+  phaseId: string;
+  attempt: number;
+  step: string;
+  status: RuleVerificationStatus;
+  receivedAt: string;
+  updatedAt: string;
+  /** The exact rules Argus supplied this run and requires an outcome for. */
+  selected: ClaimRef[];
+  /** The repository revision Argus recorded for the run, when it had one. */
+  gitHead?: string;
+  /** The validated proposal. Absent when the document could not be parsed. */
+  report?: RuleVerificationReport;
+  /** Why it is `rejected` or `superseded`. */
+  reason?: string;
+  /** The durable records this proposal became, once `applied`. */
+  result?: { verifications: RuleVerification[] };
+}
+
+/** The counts a verification phase reports for routing, status and the board.
+ *  The detail stays in the staged record, which is the one authoritative form. */
+export interface RuleVerificationSummary {
+  /** Rules Argus supplied and required an outcome for. */
+  selected: number;
+  holds: number;
+  violated: number;
+  unverifiable: number;
+  /** True while the results are staged and not yet canonical. */
+  requiresReview: boolean;
+}
+
+/** One rule's proposed outcome, as the gate shows it. */
+export interface RuleVerificationPreviewEntry {
+  /** `RULE-42:v1`. */
+  ref: string;
+  rule: ClaimRef;
+  /** The rule's statement, when the ledger still holds the revision. */
+  statement?: string;
+  kind?: ClaimKind;
+  /** The rule's own derived state — shown beside the outcome precisely so a
+   *  reviewer can see that a `violated` implementation leaves a `supported`
+   *  rule supported. */
+  support?: ClaimSupport;
+  lifecycle?: ClaimLifecycle;
+  outcome: RuleVerificationOutcome;
+  evidence: VerificationEvidence[];
+  reason?: string;
+  note?: string;
+}
+
+/**
+ * The deterministic read model of one staged verification proposal: what would
+ * become durable if this phase were approved, grouped by outcome so a reviewer
+ * reads "Holds (4) · Violated (1) · Unverifiable (2)" and then the rows.
+ *
+ * Derived per read from the staged record and the ledger as it stands.
+ */
+export interface RuleVerificationPreview {
+  recordId: string;
+  runId: string;
+  step: string;
+  attempt: number;
+  status: RuleVerificationStatus;
+  /** The repository revision the results are bound to. */
+  gitHead?: string;
+  holds: RuleVerificationPreviewEntry[];
+  violated: RuleVerificationPreviewEntry[];
+  unverifiable: RuleVerificationPreviewEntry[];
+  /** Selected rules with no submitted outcome. Empty on a staged record —
+   *  completeness is enforced before staging — and populated only on a
+   *  rejected one, where it is the reason. */
+  missing: string[];
+  summary?: string;
+}
+
+/**
+ * The conformance question's four answers.
+ *
+ * `unverified` and `unverifiable` are different facts and are never collapsed:
+ *
+ * - `unverified` — **no accepted verification exists** for the scope asked
+ *   about. Nobody looked (at this revision of the rule, at this commit).
+ * - `unverifiable` — somebody looked and **concluded the available evidence
+ *   could not settle it**.
+ *
+ * Reporting the first as the second would claim an investigation that never
+ * happened; reporting the second as the first would lose one.
+ */
+export type RuleConformanceStatus = "holds" | "violated" | "unverifiable" | "unverified";
+
+/**
+ * "Does the implementation conform to this exact rule revision?" — derived per
+ * read, never stored, and never timeless.
+ *
+ * `gitHead` scopes the question. With one, only verifications that examined
+ * that commit count, so a rule verified `holds` at `abc123` reads
+ * `unverified` at `def456` until somebody verifies it there: Argus never says
+ * "the current implementation holds" on the strength of an older commit.
+ * Without one, `status` is the latest recorded outcome for the revision, and
+ * `latest.repository.gitHead` says which commit that was about — a statement
+ * about the past, which is the only kind of statement the record supports.
+ *
+ * `history` is always the full, unfiltered history of the revision, oldest
+ * first, so several repository revisions coexist and none is ever rewritten.
+ */
+export interface RuleConformanceReport {
+  rule: ClaimRef;
+  /** The repository revision the question was scoped to, when one was given. */
+  gitHead?: string;
+  status: RuleConformanceStatus;
+  /** The verification that decides `status`. Absent when `unverified`. */
+  latest?: RuleVerification;
+  /** Every verification of this exact revision, oldest first. */
+  history: RuleVerification[];
+}
+
+/** `GET /api/knowledge/claims/:key/verifications`. */
+export interface ClaimVerificationsResponse {
+  claim: ClaimRef;
+  verifications: RuleVerification[];
+}
+
+/** `GET /api/knowledge/executions/:runId/verifications`. */
+export interface ExecutionVerificationsResponse {
+  runId: string;
+  verifications: RuleVerification[];
+}

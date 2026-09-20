@@ -27,7 +27,7 @@ import {
 } from "./harness/invocation.js";
 import type { PreparedInvocation } from "./harness/invocation.js";
 import { buildChildEnv } from "./harness/childEnv.js";
-import { runChecks, snapshotWorkingTree } from "./harness/verification.js";
+import { checkLabel, runChecks, snapshotWorkingTree } from "./harness/verification.js";
 import type { WorkingTreeSnapshot } from "./harness/verification.js";
 import {
   createWorktree,
@@ -49,8 +49,9 @@ import { isStalled, resolveStallSeconds } from "./harness/stall.js";
 import { KnowledgeDeltaError, isEmptyDelta, parseKnowledgeDelta } from "./knowledge/delta.js";
 import { validArtifactPath } from "./knowledge/kernel.js";
 import type { DeltaProposal } from "./knowledge/delta.js";
+import type { VerificationProposal } from "./knowledge/store.js";
 import {
-  commitKnowledgeDeltas,
+  commitPhaseSemantics,
   preflightKnowledgeDeltas,
   registerSuppliedContext,
 } from "./knowledge/store.js";
@@ -80,6 +81,31 @@ import {
   summarizeDiscovery,
   type DiscoveryContext,
 } from "./knowledge/discovery.js";
+import {
+  RuleVerificationError,
+  bindCheckEvidence,
+  checkRuleVerification,
+  declaredCheckLabels,
+  describeReport,
+  holdsPolicy,
+  holdsPolicyRefusal,
+  parseRuleVerificationReport,
+  previewRuleVerification,
+  selectedRules,
+  summarizeRuleVerification,
+  verificationDeltaRefusal,
+  verificationInstruction,
+  type VerificationContext,
+} from "./knowledge/ruleVerification.js";
+import {
+  ensureRuleVerificationDir,
+  readAgentVerification,
+  readVerificationRecord,
+  ruleVerificationFile,
+  updateVerificationStatus,
+  writeVerificationRecord,
+} from "./knowledge/verificationStaging.js";
+
 import { readLedger } from "./knowledge/store.js";
 import { markPipelineStarted, readPipelines } from "./sources/pipelines.js";
 import { accumulateRun } from "./sources/totals.js";
@@ -126,6 +152,7 @@ import type {
   AgentRuntimeId,
   ClaimRef,
   KnowledgeDeltaRecord,
+  RuleVerificationRecord,
   StepKnowledgeDelta,
 } from "@argus/contracts";
 import type { Run } from "./sources/scheduleTypes.js";
@@ -1105,6 +1132,21 @@ export function createEngine(deps: EngineDeps): Engine {
           (publishes ? resultInstruction(phaseDef.result) : "") +
           artifactInstruction(phaseDef.checks, own) +
           discoveryInstruction(phaseDef.discovery) +
+          // Business-rule verification (Phase 6): the rules this run is
+          // accountable for are exactly the business rules its own
+          // KnowledgeContext supplies — there is no second selection
+          // mechanism — so the instruction can name them, and Argus can hold
+          // the answer to them.
+          verificationInstruction(
+            phaseDef.ruleVerification,
+            knowledgeContext && "resolved" in knowledgeContext
+              ? selectedRules(
+                  ledgerSnapshot,
+                  knowledgeContext.resolved.supplied,
+                  phaseDef.ruleVerification,
+                )
+              : [],
+          ) +
           memoryInstruction(memoryPolicy) +
           (knowledgeContext && "resolved" in knowledgeContext
             ? knowledgeContextInstruction(knowledgeContext.resolved.supplied)
@@ -1159,6 +1201,9 @@ export function createEngine(deps: EngineDeps): Engine {
     // leaving them on the board would say "1 rule waiting on you" about a
     // proposal nobody can accept any more.
     delete progress.discovery;
+    // Same for the verification summary: an abandoned attempt's outcomes
+    // describe results that can never become durable.
+    delete progress.ruleVerification;
     await saveInstance(inst);
     void journal(inst.id, {
       at: startedAt,
@@ -1473,10 +1518,18 @@ export function createEngine(deps: EngineDeps): Engine {
     const resolvedContext = ctx.knowledgeContext?.resolved ?? null;
     const contextFile = resolvedContext ? knowledgeContextFile(run.id) : null;
     if (contextFile) env.ARGUS_KNOWLEDGE_CONTEXT_FILE = contextFile;
+    // Where a verification phase's run must leave its conformance results
+    // (docs/KNOWLEDGE-LEDGER.md § Phase 6). Its own Argus-owned sidecar,
+    // deliberately not the KnowledgeDelta: a conformance result is not a
+    // knowledge mutation, and sharing the channel would invite an agent to
+    // express "the code violates this rule" as opposing evidence on the rule.
+    const verificationFile = ctx.phaseDef.ruleVerification ? ruleVerificationFile(run.id) : null;
+    if (verificationFile) env.ARGUS_RULE_VERIFICATION_FILE = verificationFile;
     let prepared: PreparedInvocation;
     try {
       await mkdir(invocationDir, { recursive: true });
       await ensureKnowledgeDeltaDir(run.id);
+      if (verificationFile) await ensureRuleVerificationDir(run.id);
       if (contextFile && resolvedContext) {
         await writeKnowledgeContextFile(contextFile, resolvedContext.text);
       }
@@ -1498,6 +1551,7 @@ export function createEngine(deps: EngineDeps): Engine {
         workspace: ctx.workspace,
         resultFile,
         knowledgeDeltaFile: deltaFile,
+        ruleVerificationFile: verificationFile,
         knowledgeContext:
           contextFile && resolvedContext
             ? {
@@ -2257,10 +2311,43 @@ export function createEngine(deps: EngineDeps): Engine {
     phaseId: string,
     runId: string,
   ): Promise<Intake> {
-    return (
-      (await checkContextIntegrity(inst, phaseId, runId)) ??
-      (await intakeKnowledgeDelta(def, inst, phaseId, runId))
-    );
+    const refused = await checkContextIntegrity(inst, phaseId, runId);
+    if (refused) return refused;
+    const delta = await intakeKnowledgeDelta(def, inst, phaseId, runId);
+    if (!delta.ok) return delta;
+    // Business-rule verification (Phase 6) rides the same boundary: a
+    // conformance proposal is read, validated and staged exactly as a delta
+    // is, and refused the same way. Its own channel, its own record, its own
+    // failure class — and the same rule that nothing becomes durable before
+    // the phase is accepted.
+    const verification = await intakeRuleVerification(def, inst, phaseId, runId);
+    return verification.ok ? delta : verification;
+  }
+
+  /**
+   * The exact revisions Argus supplied to a run, from the two sources that can
+   * answer, in a fixed precedence (docs/KNOWLEDGE-LEDGER.md §13.7): the
+   * ledger's **durable** supplied record first — written before the process
+   * starts and surviving every pruning path — and the invocation record only
+   * when there is none. They cannot disagree (the durable record is registered
+   * from the same resolution that produced the invocation record's, and a
+   * conflicting registration is refused), so the precedence matters only for
+   * availability: a recovery path where the invocation directory is gone still
+   * answers correctly.
+   *
+   * `undefined` (not empty) when neither can be read: no claim either way. A
+   * run launched *with* no context has an invocation record saying so, which
+   * is positive evidence of an empty supply — never the same as unknown.
+   */
+  async function suppliedFor(runId: string): Promise<ClaimRef[] | undefined> {
+    const durable = suppliedContextOf(await readLedger(), runId);
+    if (durable) return durable.claims.map((c) => ({ id: c.id, revision: c.revision }));
+    const invocation = await readInvocation(runId);
+    if (!invocation) return undefined;
+    return (invocation.knowledgeContext?.claims ?? []).map((c) => ({
+      id: c.id,
+      revision: c.revision,
+    }));
   }
 
   /**
@@ -2302,34 +2389,12 @@ export function createEngine(deps: EngineDeps): Engine {
     const file = await readAgentDelta(runId);
     if (file.kind === "none") return { ok: true, staged: null };
 
-    // What Argus supplied to this run. Copied onto the staged record so the
-    // commit can classify each consumed entry as supplied or agent-discovered
-    // (ClaimConsumption.source), and so the two lists sit side by side for a
-    // reader.
-    //
-    // One deterministic answer, from two sources with a fixed precedence
-    // (docs/KNOWLEDGE-LEDGER.md §13.7): the ledger's **durable** supplied
-    // record first — it is written before the process starts and survives
-    // every pruning path — and the invocation record only when there is
-    // none. They cannot
-    // disagree (the durable record is registered from the same resolution
-    // that produced the invocation record's, and a conflicting registration
-    // is refused), so the precedence matters only for availability: a
-    // recovery path where the invocation directory is gone still classifies
-    // correctly. Absent (not empty) when neither can be read: no claim either
-    // way, and every consumption is recorded without a `source`. A run
-    // launched *with* no context has an invocation record saying so, which is
-    // positive evidence of an empty supply — never the same as unknown.
-    const durable = suppliedContextOf(await readLedger(), runId);
-    const invocation = durable ? null : await readInvocation(runId);
-    const supplied = durable
-      ? durable.claims.map((c) => ({ id: c.id, revision: c.revision }))
-      : invocation
-        ? (invocation.knowledgeContext?.claims ?? []).map((c) => ({
-            id: c.id,
-            revision: c.revision,
-          }))
-        : undefined;
+    // What Argus supplied to this run ({@link suppliedFor}). Copied onto the
+    // staged record so the commit can classify each consumed entry as
+    // supplied or agent-discovered (ClaimConsumption.source), and so the two
+    // lists sit side by side for a reader. Absent (not empty) = unknown, and
+    // every consumption is then recorded without a `source`.
+    const supplied = await suppliedFor(runId);
 
     const base: Omit<KnowledgeDeltaRecord, "status"> = {
       id: `KD-${deps.newId()}`,
@@ -2395,6 +2460,21 @@ export function createEngine(deps: EngineDeps): Engine {
     // deliberately do NOT decide is whether the rule the agent read out of
     // the code is the rule the business has — that is what the gate is for.
     const phaseDef = def.phases.find((pd) => pd.id === phaseId);
+
+    // Business-rule verification (Phase 6): the one thing a verification
+    // phase's delta may not do is express "the code is in breach" as doubt
+    // about the rule. Structural and narrow — opposing evidence or an
+    // opposing justification aimed at one of the exact rules this run was
+    // supplied to verify — and it closes the single path by which a failing
+    // test could turn a supported rule `contested`.
+    if (phaseDef?.ruleVerification) {
+      const contamination = verificationDeltaRefusal(
+        delta,
+        selectedRules(await readLedger(), supplied, phaseDef.ruleVerification),
+      );
+      if (contamination) return reject(contamination, delta);
+    }
+
     if (phaseDef?.discovery) {
       const verdict = await checkDiscoveryDelta(
         delta,
@@ -2508,6 +2588,247 @@ export function createEngine(deps: EngineDeps): Engine {
       deltas,
       phase.knowledge?.status !== "applied" && previews.some((p) => p.status === "staged"),
     );
+  }
+
+  // ── Rule verification (Phase 6) ────────────────────────────────────────────
+  //
+  // The same three moments as a KnowledgeDelta, on their own channel:
+  //
+  //   intake   — a verification run completed; its report is read, validated
+  //              against the rules Argus supplied it, and staged beside the
+  //              run (or refused, failing the step under `rule-verification`);
+  //   commit   — the phase crossed every acceptance condition; every staged
+  //              proposal of *this attempt* is written into `knowledge.json`
+  //              in the same transition as the attempt's deltas, or none is;
+  //   retire   — an attempt failed, was revised, was aborted, or lost a
+  //              selection; its staged proposals are superseded and can never
+  //              become durable.
+  //
+  // What a verification never does, at any of the three: touch claim support.
+
+  /** What a verification check needs to know about the run: the rules it was
+   *  accountable for, the tree it worked in, the commit Argus recorded for it,
+   *  and the checks its phase declares. */
+  async function verificationContextFor(
+    def: PipelineDefinition,
+    phase: PhaseProgress,
+    runId: string,
+    policy: NonNullable<PhaseDef["ruleVerification"]>,
+  ): Promise<VerificationContext> {
+    const invocation = await readInvocation(runId);
+    const phaseDef = def.phases.find((p) => p.id === phase.id);
+    const ledger = await readLedger();
+    return {
+      policy,
+      selected: selectedRules(ledger, await suppliedFor(runId), policy),
+      repoRoot: invocation?.workspace?.path ?? invocation?.cwd ?? phaseDef?.cwd ?? null,
+      gitHead: invocation?.gitHead ?? null,
+      checkLabels: declaredCheckLabels(phaseDef?.checks, checkLabel),
+    };
+  }
+
+  /**
+   * Read, validate and stage the conformance results a completed verification
+   * run wrote. Sets `step.ruleVerification` on the in-memory instance when one
+   * was staged, so the transition that follows sees it. Never touches the
+   * ledger.
+   *
+   * The one asymmetry with a KnowledgeDelta, and it is deliberate: **no file
+   * is not "nothing proposed"**. A run supplied rules and asked to verify them
+   * has an obligation, so an absent report with a non-empty selection refuses
+   * the step rather than letting the phase succeed as though the rules had
+   * been considered. A verification phase whose context supplied no rules at
+   * all has nothing to answer for, and proceeds.
+   */
+  async function intakeRuleVerification(
+    def: PipelineDefinition,
+    inst: PipelineInstance,
+    phaseId: string,
+    runId: string,
+  ): Promise<Intake> {
+    const phaseDef = def.phases.find((pd) => pd.id === phaseId);
+    const policy = phaseDef?.ruleVerification;
+    if (!policy) return { ok: true, staged: null };
+    const phase = inst.phases.find((p) => p.id === phaseId);
+    const step = phase?.steps.find((sp) => sp.runId === runId);
+    if (!phase || !step) return { ok: true, staged: null };
+    const at = nowISO();
+
+    // Staged already (a restart between the record write and the instance
+    // write): the record decides, exactly as it did the first time.
+    const existing = await readVerificationRecord(runId);
+    if (existing && existing.attempt === phase.attempt) {
+      if (existing.status === "rejected") {
+        return {
+          ok: false,
+          reason: existing.reason ?? "rule verification was rejected",
+          failure: "rule-verification",
+        };
+      }
+      step.ruleVerification = { id: existing.id, status: existing.status };
+      return { ok: true, staged: null };
+    }
+
+    const ctx = await verificationContextFor(def, phase, runId, policy);
+    const base: Omit<RuleVerificationRecord, "status"> = {
+      id: `RV-${deps.newId()}`,
+      runId,
+      instanceId: inst.id,
+      phaseId,
+      attempt: phase.attempt,
+      step: step.name,
+      receivedAt: at,
+      updatedAt: at,
+      selected: ctx.selected,
+      ...(ctx.gitHead ? { gitHead: ctx.gitHead } : {}),
+    };
+    const reject = async (
+      reason: string,
+      report?: RuleVerificationRecord["report"],
+    ): Promise<Intake> => {
+      const full = `rule verification rejected: ${reason}`;
+      await writeVerificationRecord({
+        ...base,
+        status: "rejected",
+        reason: full,
+        ...(report ? { report } : {}),
+      });
+      void journal(inst.id, {
+        at,
+        kind: "verification.rejected",
+        phaseId,
+        runId,
+        attempt: phase.attempt,
+        detail: `${base.id}: ${reason}`,
+      });
+      return { ok: false, reason: full, failure: "rule-verification" };
+    };
+
+    const file = await readAgentVerification(runId);
+    if (file.kind === "none") {
+      if (ctx.selected.length === 0) return { ok: true, staged: null };
+      return reject(
+        `this phase supplied ${ctx.selected.length} rule${ctx.selected.length === 1 ? "" : "s"} (${ctx.selected
+          .map(formatClaimRef)
+          .join(
+            ", ",
+          )}) but the run wrote no rule-verification file; every selected rule must receive an outcome`,
+      );
+    }
+    if (file.kind === "unreadable") return reject(file.reason);
+    let report: RuleVerificationRecord["report"];
+    try {
+      report = parseRuleVerificationReport(file.text);
+    } catch (e) {
+      return reject(
+        e instanceof RuleVerificationError
+          ? `${e.code}: ${e.message}`
+          : e instanceof Error
+            ? e.message
+            : String(e),
+      );
+    }
+    const refusal = await checkRuleVerification(report, await readLedger(), ctx);
+    if (refusal) return reject(`${refusal.code}: ${refusal.message}`, report);
+
+    await writeVerificationRecord({ ...base, status: "staged", report });
+    step.ruleVerification = { id: base.id, status: "staged" };
+    await refreshVerificationSummary(phase);
+    void journal(inst.id, {
+      at,
+      kind: "verification.staged",
+      phaseId,
+      runId,
+      attempt: phase.attempt,
+      detail: `${base.id}: ${describeReport(report)}`,
+    });
+    return { ok: true, staged: null };
+  }
+
+  /** Recompute a verification phase's {@link RuleVerificationSummary} from the
+   *  attempt's staged records. Counts only; the results themselves stay in the
+   *  staged record, which is the one authoritative form of the proposal. */
+  async function refreshVerificationSummary(phase: PhaseProgress): Promise<void> {
+    const ledger = await readLedger();
+    const previews = [];
+    for (const step of phase.steps) {
+      if (!step.runId || !step.ruleVerification) continue;
+      const record = await readVerificationRecord(step.runId);
+      if (!record?.report || record.attempt !== phase.attempt) continue;
+      previews.push(previewRuleVerification(record, ledger));
+    }
+    phase.ruleVerification = summarizeRuleVerification(
+      previews,
+      phase.knowledge?.status !== "applied" && previews.some((p) => p.status === "staged"),
+    );
+  }
+
+  /**
+   * The verification proposals a held phase would commit, resolved into the
+   * durable records they become — or a refusal.
+   *
+   * This is where the agent's citation of a deterministic check meets Argus's
+   * own report: every `check` evidence record is bound to the
+   * {@link VerificationReport} of the phase (or, on a candidates phase, of the
+   * winning step), so `status`, `exitCode` and `detail` come from the run
+   * Argus performed rather than from the document the agent wrote. A cited
+   * check missing from the report refuses the commit, and under
+   * `holds: "deterministic-check"` a `holds` outcome whose checks did not pass
+   * refuses it too.
+   */
+  async function verificationProposalsOf(
+    def: PipelineDefinition,
+    inst: PipelineInstance,
+    phase: PhaseProgress,
+  ): Promise<{ ok: true; proposals: VerificationProposal[] } | { ok: false; reason: string }> {
+    const wanted = phase.knowledge?.verifications ?? [];
+    if (wanted.length === 0) return { ok: true, proposals: [] };
+    const policy = def.phases.find((pd) => pd.id === phase.id)?.ruleVerification;
+    const proposals: VerificationProposal[] = [];
+    for (const step of phase.steps) {
+      const id = step.ruleVerification?.id;
+      if (!id || !wanted.includes(id) || !step.runId) continue;
+      const record = await readVerificationRecord(step.runId);
+      if (!record || record.id !== id || !record.report) {
+        return { ok: false, reason: `rule verification ${id} is not staged for run ${step.runId}` };
+      }
+      if (record.attempt !== phase.attempt) {
+        return {
+          ok: false,
+          reason: `rule verification ${id} was staged for attempt ${record.attempt}, not ${phase.attempt}`,
+        };
+      }
+      // The checks Argus actually ran for this attempt: the phase's report,
+      // or this candidate's own when the phase ran candidates.
+      const results = (step.verification ?? phase.verification)?.checks ?? [];
+      for (const v of record.report.verifications) {
+        const bound = bindCheckEvidence(v.evidence, results);
+        if (bound.missing.length > 0) {
+          return {
+            ok: false,
+            reason: `rule verification ${id}: ${formatClaimRef(v.rule)} cites check${
+              bound.missing.length === 1 ? "" : "s"
+            } ${bound.missing.map((l) => `"${l}"`).join(", ")}, which this phase's verification report does not contain`,
+          };
+        }
+        const policyRefusal = holdsPolicyRefusal(v.rule, v.outcome, bound.evidence, policy);
+        if (policyRefusal) {
+          return { ok: false, reason: `rule verification ${id}: ${policyRefusal}` };
+        }
+        proposals.push({
+          execution: { runId: step.runId, instanceId: inst.id, phaseId: phase.id },
+          rule: v.rule,
+          outcome: v.outcome,
+          evidence: bound.evidence,
+          attempt: phase.attempt,
+          ...(record.gitHead ? { gitHead: record.gitHead } : {}),
+          ...(v.reason !== undefined ? { reason: v.reason } : {}),
+          ...(v.note !== undefined ? { note: v.note } : {}),
+          policy: holdsPolicy(policy),
+        });
+      }
+    }
+    return { ok: true, proposals };
   }
 
   /**
@@ -2655,14 +2976,36 @@ export function createEngine(deps: EngineDeps): Engine {
         }
       }
     }
+    // The attempt's conformance results (Phase 6), resolved against the checks
+    // Argus itself ran. Gathered before the write so a forged or unsatisfied
+    // check reference refuses the whole attempt rather than landing half of it.
+    const verifications = await verificationProposalsOf(def, inst, phase);
+    if (!verifications.ok) {
+      const reason = `rule-verification commit refused: ${verifications.reason}`;
+      await refuseVerifications(phase, reason, at);
+      return refuseAll(reason);
+    }
     try {
-      const results = await commitKnowledgeDeltas(proposals, deps.now());
+      const results = await commitPhaseSemantics(proposals, verifications.proposals, deps.now());
       for (const [i, p] of proposals.entries()) {
-        await updateDeltaStatus(p.execution.runId, "applied", { at, result: results[i] });
+        await updateDeltaStatus(p.execution.runId, "applied", { at, result: results.deltas[i] });
+      }
+      // Each run's staged record keeps the durable records its proposal
+      // became, so "what did this attempt make canonical?" is answerable from
+      // the sidecar as well as from the ledger.
+      for (const step of phase.steps) {
+        if (!step.runId || !step.ruleVerification) continue;
+        if (!(phase.knowledge?.verifications ?? []).includes(step.ruleVerification.id)) continue;
+        await updateVerificationStatus(step.runId, "applied", {
+          at,
+          result: {
+            verifications: results.verifications.filter((v) => v.execution.runId === step.runId),
+          },
+        });
       }
       return { ok: true };
     } catch (e) {
-      const reason = `KnowledgeDelta commit refused: ${
+      const reason = `${verifications.proposals.length > 0 && proposals.length === 0 ? "rule-verification" : "KnowledgeDelta"} commit refused: ${
         e instanceof KnowledgeDeltaError
           ? `${e.code}: ${e.message}`
           : e instanceof Error
@@ -2672,7 +3015,22 @@ export function createEngine(deps: EngineDeps): Engine {
       for (const p of proposals) {
         await updateDeltaStatus(p.execution.runId, "rejected", { at, reason });
       }
+      await refuseVerifications(phase, reason, at);
       return { ok: false, reason };
+    }
+  }
+
+  /** Mark every staged verification of a held phase as rejected: the commit is
+   *  one transition, so one refusal refuses all of it. */
+  async function refuseVerifications(
+    phase: PhaseProgress,
+    reason: string,
+    at: string,
+  ): Promise<void> {
+    for (const step of phase.steps) {
+      if (!step.runId || !step.ruleVerification) continue;
+      if (!(phase.knowledge?.verifications ?? []).includes(step.ruleVerification.id)) continue;
+      await updateVerificationStatus(step.runId, "rejected", { at, reason });
     }
   }
 
@@ -2707,16 +3065,47 @@ export function createEngine(deps: EngineDeps): Engine {
       // outstanding once it has been made.
       const settledPhase = next.instance.phases.find((p) => p.id === phaseId);
       if (settledPhase?.discovery) await refreshDiscoverySummary(def, settledPhase);
-      void journal(out.instance.id, {
-        at: nowISO(),
-        kind: verdict.ok ? "knowledge.applied" : "knowledge.rejected",
-        phaseId,
-        attempt: phase.attempt,
-        detail: verdict.ok
-          ? `${phase.knowledge.deltas.length} delta${phase.knowledge.deltas.length === 1 ? "" : "s"}: ${phase.knowledge.deltas.join(", ")}`
-          : verdict.reason,
-      });
-      if (!verdict.ok) noteFailure(def, next.instance, phaseId, "knowledge-delta", verdict.reason);
+      if (settledPhase?.ruleVerification) await refreshVerificationSummary(settledPhase);
+      // One commit, two journals — each written only when that half had
+      // something at stake, so a verification-only phase never logs "0 deltas"
+      // and a delta-only phase never logs a verification.
+      const verifications = phase.knowledge.verifications ?? [];
+      if (verifications.length > 0) {
+        void journal(out.instance.id, {
+          at: nowISO(),
+          kind: verdict.ok ? "verification.applied" : "verification.rejected",
+          phaseId,
+          attempt: phase.attempt,
+          detail: verdict.ok
+            ? `${verifications.length} verification proposal${verifications.length === 1 ? "" : "s"}`
+            : verdict.reason,
+        });
+      }
+      if (phase.knowledge.deltas.length > 0) {
+        void journal(out.instance.id, {
+          at: nowISO(),
+          kind: verdict.ok ? "knowledge.applied" : "knowledge.rejected",
+          phaseId,
+          attempt: phase.attempt,
+          detail: verdict.ok
+            ? `${phase.knowledge.deltas.length} delta${phase.knowledge.deltas.length === 1 ? "" : "s"}: ${phase.knowledge.deltas.join(", ")}`
+            : verdict.reason,
+        });
+      }
+      // The failure class matches what `applyKnowledgeCommit` already wrote on
+      // the phase: a commit that carried only conformance results failed as
+      // `rule-verification`, not as a knowledge delta.
+      if (!verdict.ok) {
+        noteFailure(
+          def,
+          next.instance,
+          phaseId,
+          phase.knowledge.deltas.length === 0 && verifications.length > 0
+            ? "rule-verification"
+            : "knowledge-delta",
+          verdict.reason,
+        );
+      }
       out = {
         ...next,
         startPhases: [...new Set([...out.startPhases, ...next.startPhases])],
@@ -2736,8 +3125,9 @@ export function createEngine(deps: EngineDeps): Engine {
     };
   }
 
-  /** Move the named steps' staged deltas to `superseded`, on disk and on the
-   *  instance. An `applied` delta is never touched. */
+  /** Move the named steps' staged deltas and verification proposals to
+   *  `superseded`, on disk and on the instance. An `applied` record is never
+   *  touched. */
   async function supersedeDeltas(
     inst: PipelineInstance,
     phase: PhaseProgress,
@@ -2745,22 +3135,37 @@ export function createEngine(deps: EngineDeps): Engine {
     reason: string,
   ): Promise<void> {
     for (const step of steps) {
-      if (step.knowledgeDelta?.status !== "staged" || !step.runId) continue;
-      await updateDeltaStatus(step.runId, "superseded", { at: nowISO(), reason });
-      step.knowledgeDelta = { ...step.knowledgeDelta, status: "superseded" };
-      void journal(inst.id, {
-        at: nowISO(),
-        kind: "knowledge.superseded",
-        phaseId: phase.id,
-        runId: step.runId,
-        attempt: phase.attempt,
-        detail: `${step.knowledgeDelta.id}: ${reason}`,
-      });
+      if (!step.runId) continue;
+      if (step.knowledgeDelta?.status === "staged") {
+        await updateDeltaStatus(step.runId, "superseded", { at: nowISO(), reason });
+        step.knowledgeDelta = { ...step.knowledgeDelta, status: "superseded" };
+        void journal(inst.id, {
+          at: nowISO(),
+          kind: "knowledge.superseded",
+          phaseId: phase.id,
+          runId: step.runId,
+          attempt: phase.attempt,
+          detail: `${step.knowledgeDelta.id}: ${reason}`,
+        });
+      }
+      if (step.ruleVerification?.status === "staged") {
+        await updateVerificationStatus(step.runId, "superseded", { at: nowISO(), reason });
+        step.ruleVerification = { ...step.ruleVerification, status: "superseded" };
+        void journal(inst.id, {
+          at: nowISO(),
+          kind: "verification.superseded",
+          phaseId: phase.id,
+          runId: step.runId,
+          attempt: phase.attempt,
+          detail: `${step.ruleVerification.id}: ${reason}`,
+        });
+      }
     }
   }
 
   /**
-   * Every staged delta on an attempt that can no longer be accepted — a
+   * Every staged delta and verification proposal on an attempt that can no
+   * longer be accepted — a
    * failed, aborted or skipped phase, or a step that failed, was aborted (a
    * losing candidate) or was skipped — is superseded. Run on every instance
    * write, because an attempt can end from a dozen places and a hook on each
@@ -2773,7 +3178,7 @@ export function createEngine(deps: EngineDeps): Engine {
         phase.status === "failed" || phase.status === "aborted" || phase.status === "skipped";
       const doomed = phase.steps.filter(
         (s) =>
-          s.knowledgeDelta?.status === "staged" &&
+          (s.knowledgeDelta?.status === "staged" || s.ruleVerification?.status === "staged") &&
           (phaseOver || s.status === "failed" || s.status === "aborted" || s.status === "skipped"),
       );
       if (doomed.length === 0) continue;

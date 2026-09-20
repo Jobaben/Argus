@@ -1200,6 +1200,58 @@ test("discovery: an unsafe or empty scope is a 400-class authoring error", async
   }
 });
 
+test("ruleVerification: the policy is tiny on purpose — the rules come from the context", async () => {
+  const m = await fresh();
+  // Absent = an ordinary phase.
+  assert.equal(
+    "ruleVerification" in
+      m.validatePipelineInput(goodInput({ phases: discoveryPhases() })).phases[0],
+    false,
+  );
+  const def = m.validatePipelineInput(
+    goodInput({
+      phases: discoveryPhases({
+        ruleVerification: {
+          kinds: ["business-rule", "constraint", "business-rule"],
+          holds: "deterministic-check",
+          note: "Conformance means the booking pipeline enforces it.",
+        },
+      }),
+    }),
+  );
+  assert.deepEqual(def.phases[0].ruleVerification, {
+    kinds: ["business-rule", "constraint"],
+    holds: "deterministic-check",
+    note: "Conformance means the booking pipeline enforces it.",
+  });
+  // The empty policy is meaningful: verify the business rules you were given,
+  // under the default holds rule.
+  assert.deepEqual(
+    m.validatePipelineInput(goodInput({ phases: discoveryPhases({ ruleVerification: {} }) }))
+      .phases[0].ruleVerification,
+    {},
+  );
+});
+
+test("ruleVerification: a malformed policy is a 400-class authoring error", async () => {
+  const m = await fresh();
+  const cases: [unknown, RegExp][] = [
+    ["strict", /ruleVerification must be an object/],
+    [{ rules: ["RULE-1"] }, /ruleVerification has unknown key "rules"/],
+    [{ kinds: [] }, /ruleVerification.kinds must name at least one claim kind/],
+    [{ kinds: ["widget"] }, /ruleVerification.kinds\[0\] must be one of/],
+    [{ holds: "vibes" }, /ruleVerification.holds must be/],
+    [{ note: "" }, /ruleVerification.note must be a string/],
+  ];
+  for (const [ruleVerification, re] of cases) {
+    assert.throws(
+      () => m.validatePipelineInput(goodInput({ phases: discoveryPhases({ ruleVerification }) })),
+      (e: unknown) => e instanceof m.PipelineValidationError && re.test((e as Error).message),
+      `ruleVerification: ${JSON.stringify(ruleVerification)}`,
+    );
+  }
+});
+
 test("fromPhases: accepted when the named phase is a dependency, normalized to the object form", async () => {
   const m = await fresh();
   const phases = discoveryPhases();

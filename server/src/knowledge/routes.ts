@@ -3,11 +3,15 @@ import type {
   ArtifactProductionsResponse,
   ClaimDetail,
   ClaimKind,
+  ClaimVerificationsResponse,
   ClaimsResponse,
   ConsumptionsResponse,
   ExecutionContextReport,
+  ExecutionVerificationsResponse,
   KnowledgeDeltaPreview,
   KnowledgeDeltasResponse,
+  RuleConformanceReport,
+  RuleVerificationPreview,
   SuppliedToReport,
 } from "@argus/contracts";
 import { readInvocation } from "../sources/runs.js";
@@ -26,15 +30,20 @@ import {
   refOf,
   resolveKey,
   revisionsOf,
+  ruleConformance,
   suppliedContextOf,
   suppliedToReport,
   supportReport,
+  verificationsOfClaim,
+  verificationsOfRun,
   viewOf,
   type KnowledgeLedger,
 } from "./kernel.js";
 import { analyzeImpact } from "./impact.js";
 import { previewKnowledgeDelta } from "./discovery.js";
 import { readDeltaRecord, readDeltaRecordById } from "./staging.js";
+import { readVerificationRecord, readVerificationRecordById } from "./verificationStaging.js";
+import { previewRuleVerification } from "./ruleVerification.js";
 import {
   createClaim,
   createEvidence,
@@ -278,6 +287,97 @@ export function knowledgeRoutes(): Hono {
     const record = await readDeltaRecordById(id);
     if (!record?.result) return c.json({ error: "not found" }, 404);
     return c.json(record.result);
+  });
+
+  // ── Rule verification (Phase 6) ──────────────────────────────────────────
+  //
+  // Read-only, like the delta routes and for the same reason: a verification
+  // record is created by exactly one path — an accepted verification phase's
+  // commit — and there is deliberately no admin mutation for it. Nothing here
+  // can create, edit or retarget a conformance result.
+  //
+  // The distinction these routes exist to keep legible is the one the whole
+  // phase is about: `GET /claims/:key/support` answers "is the rule well
+  // founded?"; `GET /claims/:key/conformance` answers "does the code do what
+  // it says?". They are different questions with different answers, and a
+  // violated implementation never moves the first one.
+
+  /** Every verification of this exact revision, oldest first. `RULE-42` means
+   *  the active revision; `RULE-42:v1` means exactly v1, and a verification of
+   *  v1 is never listed under v2. */
+  routes.get("/claims/:key/verifications", async (c) => {
+    const ledger = await readLedger();
+    const claim = claimFor(ledger, c.req.param("key"));
+    if (!claim) return c.json({ error: "not found" }, 404);
+    const body: ClaimVerificationsResponse = {
+      claim: refOf(claim),
+      verifications: verificationsOfClaim(ledger, refOf(claim)),
+    };
+    return c.json(body);
+  });
+
+  /**
+   * Implementation conformance for this exact revision, optionally scoped to a
+   * repository revision with `?gitHead=`.
+   *
+   * Without `gitHead` the answer is the latest recorded outcome and
+   * `latest.repository.gitHead` says which commit it was about — a statement
+   * about the past. With one, only verifications of that commit count, so a
+   * rule verified `holds` at `abc123` answers `unverified` at `def456`:
+   * conformance is never timeless.
+   */
+  routes.get("/claims/:key/conformance", async (c) => {
+    const ledger = await readLedger();
+    const claim = claimFor(ledger, c.req.param("key"));
+    if (!claim) return c.json({ error: "not found" }, 404);
+    const gitHead = c.req.query("gitHead");
+    if (gitHead !== undefined && !/^[0-9a-fA-F]{7,64}$/.test(gitHead)) {
+      return c.json({ error: "gitHead must be a hex commit sha" }, 400);
+    }
+    const body: RuleConformanceReport = ruleConformance(ledger, refOf(claim), gitHead);
+    return c.json(body);
+  });
+
+  /** Every conformance result one execution produced. */
+  routes.get("/executions/:runId/verifications", async (c) => {
+    const runId = c.req.param("runId");
+    if (!EXECUTION_ID_RE.test(runId)) return c.json({ error: "not found" }, 404);
+    const ledger = await readLedger();
+    const body: ExecutionVerificationsResponse = {
+      runId,
+      verifications: verificationsOfRun(ledger, runId),
+    };
+    return c.json(body);
+  });
+
+  /** One staged/applied/rejected/superseded verification proposal, with the
+   *  rules its run was accountable for and what it concluded. */
+  routes.get("/verifications/:id", async (c) => {
+    const id = c.req.param("id");
+    if (!CLAIM_ID_RE.test(id)) return c.json({ error: "not found" }, 404);
+    const record = await readVerificationRecordById(id);
+    if (!record) return c.json({ error: "not found" }, 404);
+    return c.json(record);
+  });
+
+  /** The deterministic review projection of one staged proposal: outcomes
+   *  grouped, each with the rule's own support beside it. */
+  routes.get("/verifications/:id/preview", async (c) => {
+    const id = c.req.param("id");
+    if (!CLAIM_ID_RE.test(id)) return c.json({ error: "not found" }, 404);
+    const record = await readVerificationRecordById(id);
+    if (!record) return c.json({ error: "not found" }, 404);
+    const body: RuleVerificationPreview = previewRuleVerification(record, await readLedger());
+    return c.json(body);
+  });
+
+  /** The proposal one run staged, if any. */
+  routes.get("/executions/:runId/verification-proposal", async (c) => {
+    const runId = c.req.param("runId");
+    if (!EXECUTION_ID_RE.test(runId)) return c.json({ error: "not found" }, 404);
+    const record = await readVerificationRecord(runId);
+    if (!record) return c.json({ error: "not found" }, 404);
+    return c.json(record);
   });
 
   /** Every delta a run emitted — at most one, by protocol — in a list so the

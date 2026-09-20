@@ -564,3 +564,144 @@ describe("GateDrawer — candidate knowledge on a failed phase", () => {
     expect(panel).not.toHaveTextContent(/approving commits it/);
   });
 });
+
+/**
+ * The Phase 6 review surface. A reviewer must be able to see, without opening
+ * a transcript, both halves of the question: what the code does, and what the
+ * rule itself stands on. A panel that showed only "VIOLATED" would eventually
+ * teach somebody to "fix" a rule whose implementation was merely in breach.
+ */
+function verificationPreview(
+  over: Partial<PhaseReview["ruleVerifications"] extends (infer T)[] | undefined ? T : never> = {},
+) {
+  return {
+    recordId: "RV-1",
+    runId: "run-a",
+    step: "verify",
+    attempt: 0,
+    status: "staged" as const,
+    gitHead: "abc123def4567890abc123def4567890abc123de",
+    holds: [
+      {
+        ref: "RULE-9:v2",
+        rule: { id: "RULE-9", revision: 2 },
+        statement: "External bookings require a CRM id",
+        kind: "business-rule" as const,
+        support: "supported" as const,
+        lifecycle: "active" as const,
+        outcome: "holds" as const,
+        evidence: [
+          {
+            type: "check" as const,
+            label: "crm-id-tests",
+            status: "passed" as const,
+            exitCode: 0,
+            detail: "exit 0",
+          },
+        ],
+      },
+    ],
+    violated: [
+      {
+        ref: "RULE-42:v1",
+        rule: { id: "RULE-42", revision: 1 },
+        statement: "Kobra customer comments must not exceed 180 characters",
+        kind: "business-rule" as const,
+        support: "supported" as const,
+        lifecycle: "active" as const,
+        outcome: "violated" as const,
+        evidence: [
+          {
+            type: "source-code" as const,
+            path: "src/Booking/KobraCommentValidator.cs",
+            startLine: 3,
+            endLine: 6,
+          },
+        ],
+        note: "MaxLength is 500",
+      },
+    ],
+    unverifiable: [
+      {
+        ref: "RULE-51:v1",
+        rule: { id: "RULE-51", revision: 1 },
+        statement: "Refunds are approved by a manager",
+        outcome: "unverifiable" as const,
+        evidence: [],
+        reason: "no code path in this repository expresses manager approval",
+      },
+    ],
+    missing: [],
+    summary: "One rule holds, one is violated, one cannot be checked here.",
+    ...over,
+  };
+}
+
+describe("GateDrawer — business-rule verification", () => {
+  it("groups the outcomes and shows each rule's own support beside its conformance", () => {
+    mockReview.review = review({
+      ruleVerifications: [verificationPreview()],
+      ruleVerification: {
+        selected: 3,
+        holds: 1,
+        violated: 1,
+        unverifiable: 1,
+        requiresReview: true,
+      },
+    });
+    open();
+    const panel = screen.getByTestId("gate-rule-verification");
+
+    // The counts and the commit the results are bound to.
+    expect(panel).toHaveTextContent(/1 holds · 1 violated · 1 unverifiable/);
+    expect(panel).toHaveTextContent(/at abc123de/);
+    expect(panel).toHaveTextContent(/Nothing here is durable yet/);
+
+    // Each outcome group, with its rows.
+    expect(within(screen.getByLabelText("Holds")).getByText(/External bookings/)).toBeTruthy();
+    const violated = within(screen.getByLabelText("Violated"));
+    expect(violated.getByText(/Kobra customer comments/)).toBeTruthy();
+
+    // THE distinction: the code is in breach and the rule still stands.
+    expect(panel).toHaveTextContent(/violated/);
+    expect(panel).toHaveTextContent(/rule: supported/);
+
+    // Evidence is concise and names the deterministic check Argus ran.
+    expect(panel).toHaveTextContent(/check: crm-id-tests \(passed, exit 0\)/);
+    expect(panel).toHaveTextContent(/src\/Booking\/KobraCommentValidator\.cs:3-6/);
+
+    // Unverifiable is its own group, with the verifier's reason rather than a
+    // silent absence.
+    const unverifiable = within(screen.getByLabelText("Unverifiable"));
+    expect(unverifiable.getByText(/no code path in this repository/)).toBeTruthy();
+  });
+
+  it("names a selected rule the agent left without an outcome", () => {
+    mockReview.review = review({
+      ruleVerifications: [
+        verificationPreview({
+          holds: [],
+          violated: [],
+          unverifiable: [],
+          missing: ["RULE-42:v1"],
+          status: "rejected",
+        }),
+      ],
+      canApprove: false,
+      status: "failed",
+    });
+    open();
+    expect(screen.getByTestId("gate-verification-missing")).toHaveTextContent(
+      /No outcome submitted for RULE-42:v1/,
+    );
+    expect(screen.getByTestId("gate-rule-verification")).toHaveTextContent(
+      /None of this became durable/,
+    );
+  });
+
+  it("is absent entirely on an ordinary phase", () => {
+    mockReview.review = review();
+    open();
+    expect(screen.queryByTestId("gate-rule-verification")).toBeNull();
+  });
+});

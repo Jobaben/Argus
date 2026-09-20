@@ -203,8 +203,19 @@ one deterministic function, never stored. It also records which run
 when a business rule is superseded Argus can compute — deterministically, with
 an explanation path — which conclusions lost support, which runs built on
 them, and which files now need semantic reevaluation, without ever rewriting a
-run's own status. Inspect it at `/api/knowledge`; the design and its worked
-example are in **[docs/KNOWLEDGE-LEDGER.md](docs/KNOWLEDGE-LEDGER.md)**.
+run's own status.
+
+A second, orthogonal dimension answers whether the _code_ does what the rules
+say. A verification phase is handed exact canonical rules, decides `holds`,
+`violated` or `unverifiable` for each, and Argus records the answer against
+that exact rule revision **and** that exact commit — so "held at `abc123`"
+never gets reported as "holds now", and a new rule revision starts
+`unverified` rather than inheriting anything. The two are kept rigorously
+apart: a rule whose implementation is in breach stays exactly as supported as
+it was, because a bug is not a doubt about the domain.
+
+Inspect it all at `/api/knowledge`; the design and its worked example are in
+**[docs/KNOWLEDGE-LEDGER.md](docs/KNOWLEDGE-LEDGER.md)**.
 
 ## Getting around
 

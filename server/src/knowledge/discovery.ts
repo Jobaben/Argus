@@ -32,8 +32,6 @@
  * canonical through exactly the Phase 3 commit boundary.
  */
 
-import { stat } from "node:fs/promises";
-import path from "node:path";
 import type {
   ArtifactRef,
   ClaimKind,
@@ -62,9 +60,11 @@ import {
   formatClaimRef,
   getClaim,
   lifecycleOf,
+  sameCommit,
   validArtifactPath,
   type KnowledgeLedger,
 } from "./kernel.js";
+import { resolveRepositoryFile } from "./sourcePath.js";
 
 /** Most paths one discovery scope may name. A scope is a bounded target, not
  *  a repository listing. */
@@ -185,19 +185,9 @@ export function withinScope(scope: DiscoveryScope, relPath: string): boolean {
   });
 }
 
-/**
- * Do two commit shas name the same commit, allowing either to be abbreviated?
- *
- * Argus records `git rev-parse HEAD` (40 hex) for the run; an agent may well
- * write the short form it saw in a log. One being a prefix of the other is
- * the honest comparison, and the comparison is case-insensitive because git
- * prints lowercase but people paste anything.
- */
-export function sameCommit(a: string, b: string): boolean {
-  const x = a.toLowerCase();
-  const y = b.toLowerCase();
-  return x.startsWith(y) || y.startsWith(x);
-}
+/** Re-exported from the kernel, where Phase 6's conformance queries need the
+ *  same comparison: an abbreviated sha and a full one name the same commit. */
+export { sameCommit } from "./kernel.js";
 
 const isLocal = (r: DeltaClaimRef): r is { local: string } => "local" in r;
 const isSourceCode = (s: EvidenceSource): s is SourceCodeEvidence => s.type === "source-code";
@@ -303,9 +293,9 @@ export function checkSourceEvidenceShape(
  * check does, so a file deleted while a gate waited refuses the commit rather
  * than being recorded as provenance for something that is gone.
  *
- * Resolution is containment-checked a second time against the resolved
- * absolute path, so a path that somehow slipped past the syntactic rule cannot
- * reach outside the root here either.
+ * Containment is decided on the **resolved real path** (`sourcePath.ts`), not
+ * lexically: a repository-internal symlink pointing outside the repository is
+ * refused as `source-path-unsafe`, however innocent the declared path looks.
  */
 export async function checkSourceEvidenceFiles(
   delta: KnowledgeDelta,
@@ -313,14 +303,14 @@ export async function checkSourceEvidenceFiles(
 ): Promise<KnowledgeDeltaWarning[]> {
   const records = sourceEvidence(delta);
   if (records.length === 0 || !repoRoot) return [];
-  const root = path.resolve(repoRoot);
   const out: KnowledgeDeltaWarning[] = [];
   const seen = new Set<string>();
   for (const { source } of records) {
     if (seen.has(source.path) || !validArtifactPath(source.path)) continue;
     seen.add(source.path);
-    const resolved = path.resolve(root, ...source.path.split("/"));
-    if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+    const verdict = await resolveRepositoryFile(repoRoot, source.path);
+    if (verdict.ok) continue;
+    if (verdict.reason === "unsafe") {
       out.push(
         warn(
           "source-path-unsafe",
@@ -330,26 +320,15 @@ export async function checkSourceEvidenceFiles(
       );
       continue;
     }
-    try {
-      const st = await stat(resolved);
-      if (!st.isFile()) {
-        out.push(
-          warn(
-            "source-file-missing",
-            source.path,
-            `source-code evidence path "${source.path}" is not a file in the run's repository`,
-          ),
-        );
-      }
-    } catch {
-      out.push(
-        warn(
-          "source-file-missing",
-          source.path,
-          `source-code evidence path "${source.path}" does not exist in the run's repository`,
-        ),
-      );
-    }
+    out.push(
+      warn(
+        "source-file-missing",
+        source.path,
+        verdict.reason === "not-a-file"
+          ? `source-code evidence path "${source.path}" is not a file in the run's repository`
+          : `source-code evidence path "${source.path}" does not exist in the run's repository`,
+      ),
+    );
   }
   return out;
 }

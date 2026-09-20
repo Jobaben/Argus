@@ -63,4 +63,9 @@ export const paths = {
    *  agent may write (`ARGUS_KNOWLEDGE_DELTA_FILE`); `<runId>/staged.json` is
    *  Argus's record of it. Never canonical — see docs/KNOWLEDGE-LEDGER.md. */
   knowledgeDeltasDir: () => path.join(claudeHome(), "argus", "knowledge-deltas"),
+  /** Per-run rule-verification staging: `<runId>/verification.json` is the one
+   *  file a verification agent may write (`ARGUS_RULE_VERIFICATION_FILE`);
+   *  `<runId>/staged.json` is Argus's record of it. Never durable until the
+   *  phase is accepted — see docs/KNOWLEDGE-LEDGER.md § Phase 6. */
+  ruleVerificationsDir: () => path.join(claudeHome(), "argus", "rule-verifications"),
 };
