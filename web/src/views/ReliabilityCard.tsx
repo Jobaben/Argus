@@ -9,6 +9,7 @@ const FAILURE_LABEL: Record<PhaseFailureClass, string> = {
   timeout: "timeout",
   verification: "verification",
   "knowledge-delta": "knowledge delta",
+  "knowledge-context-integrity": "knowledge context integrity",
   configuration: "configuration",
 };
 

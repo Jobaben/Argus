@@ -49,7 +49,11 @@ import { isStalled, resolveStallSeconds } from "./harness/stall.js";
 import { KnowledgeDeltaError, isEmptyDelta, parseKnowledgeDelta } from "./knowledge/delta.js";
 import { validArtifactPath } from "./knowledge/kernel.js";
 import type { DeltaProposal } from "./knowledge/delta.js";
-import { commitKnowledgeDeltas, preflightKnowledgeDeltas } from "./knowledge/store.js";
+import {
+  commitKnowledgeDeltas,
+  preflightKnowledgeDeltas,
+  registerSuppliedContext,
+} from "./knowledge/store.js";
 import {
   ensureKnowledgeDeltaDir,
   knowledgeDeltaFile,
@@ -60,13 +64,15 @@ import {
 } from "./knowledge/staging.js";
 import {
   KnowledgeContextError,
+  describeIntegrityFailure,
   effectiveContextSpec,
   knowledgeContextFile,
   resolveKnowledgeContext,
+  verifyKnowledgeContextIntegrity,
   writeKnowledgeContextFile,
 } from "./knowledge/context.js";
 import type { ResolvedKnowledgeContext } from "./knowledge/context.js";
-import { formatClaimRef } from "./knowledge/kernel.js";
+import { formatClaimRef, suppliedContextOf } from "./knowledge/kernel.js";
 import { readLedger } from "./knowledge/store.js";
 import { markPipelineStarted, readPipelines } from "./sources/pipelines.js";
 import { accumulateRun } from "./sources/totals.js";
@@ -1494,7 +1500,25 @@ export function createEngine(deps: EngineDeps): Engine {
       });
       run.deadlineAt = prepared.record.deadlineAt;
       await writeInvocation(prepared.record);
+      // Durable supplied provenance (Phase 4.1, docs/KNOWLEDGE-LEDGER.md
+      // §13.10): the identity of the context — exact refs, hash, when — goes
+      // into `knowledge.json` *before* the process exists, so the answer to
+      // "what did this run receive?" outlives the invocation directory that
+      // is pruned with the run. Idempotent on the run id, so a retried
+      // preparation or a reconcile re-observing the launch adds nothing; a
+      // *different* context for the same run throws, and the throw is caught
+      // below as a launch failure rather than rewriting history.
       if (resolvedContext) {
+        await registerSuppliedContext(
+          { runId: run.id, instanceId: ctx.inst.id, phaseId: ctx.phaseDef.id },
+          {
+            claims: resolvedContext.supplied,
+            sha256: resolvedContext.sha256,
+            attempt: prepared.record.attempt,
+            schemaVersion: 1,
+          },
+          new Date(run.startedAt),
+        );
         void journal(ctx.inst.id, {
           at: run.startedAt,
           kind: "knowledge.supplied",
@@ -2151,7 +2175,77 @@ export function createEngine(deps: EngineDeps): Engine {
     return step?.status === "running";
   }
 
-  type Intake = { ok: true; staged: StepKnowledgeDelta | null } | { ok: false; reason: string };
+  type Intake =
+    | { ok: true; staged: StepKnowledgeDelta | null }
+    | { ok: false; reason: string; failure: RetryableClass };
+
+  /**
+   * The context-integrity gate (Phase 4.1, docs/KNOWLEDGE-LEDGER.md §13.11).
+   *
+   * Argus hashed the KnowledgeContext file when it materialized it and wrote
+   * that hash into the ledger. Before a completion is accepted, the file is
+   * re-hashed: the bytes the agent was given must be the bytes Argus supplied,
+   * or the provenance record is a promise Argus cannot keep. A mismatch — or a
+   * file that has disappeared — refuses the completion deterministically, so
+   * nothing the run proposed reaches the ledger.
+   *
+   * Three things it deliberately is not:
+   *
+   * - **Not a currency check.** A claim revised in the ledger while the agent
+   *   ran leaves the file untouched; the run continues on the historical
+   *   revision it was given. Only changed *bytes* fail here.
+   * - **Not a check on legacy runs.** No durable supplied record (the run was
+   *   launched without a semantic context, or predates Phase 4.1) means
+   *   nothing to verify, and the completion proceeds exactly as before.
+   * - **Not a read of the contents.** The refusal names the run, the two
+   *   hashes and the path — never a byte of the context.
+   *
+   * Returns the refusal, or null when the completion may proceed.
+   */
+  async function checkContextIntegrity(
+    inst: PipelineInstance,
+    phaseId: string,
+    runId: string,
+  ): Promise<Intake | null> {
+    const ledger = await readLedger();
+    const supplied = suppliedContextOf(ledger, runId);
+    if (!supplied) return null;
+    const invocation = await readInvocation(runId);
+    const file = invocation?.knowledgeContextFile ?? knowledgeContextFile(runId);
+    const result = await verifyKnowledgeContextIntegrity(file, supplied.sha256);
+    if (result.status === "unchanged") return null;
+    const reason = describeIntegrityFailure(runId, result);
+    void journal(inst.id, {
+      at: nowISO(),
+      kind: "knowledge.integrity",
+      phaseId,
+      runId,
+      detail: `${result.status}: expected sha256 ${result.expected?.slice(0, 12)}${
+        result.actual ? `, found ${result.actual.slice(0, 12)}` : ""
+      }`,
+    });
+    return { ok: false, reason, failure: "knowledge-context-integrity" };
+  }
+
+  /**
+   * Everything Argus checks before a step's completion — and the semantic
+   * output it carries — is accepted: the context it was given is unchanged
+   * (above), then its KnowledgeDelta is read, validated and staged (below).
+   * Order matters: a run whose input Argus cannot vouch for never gets its
+   * proposal staged, so a tampered context can never become canonical
+   * knowledge.
+   */
+  async function acceptCompletion(
+    def: PipelineDefinition,
+    inst: PipelineInstance,
+    phaseId: string,
+    runId: string,
+  ): Promise<Intake> {
+    return (
+      (await checkContextIntegrity(inst, phaseId, runId)) ??
+      (await intakeKnowledgeDelta(def, inst, phaseId, runId))
+    );
+  }
 
   /**
    * Read, validate, preflight and stage the delta a completed run may have
@@ -2179,7 +2273,11 @@ export function createEngine(deps: EngineDeps): Engine {
     const existing = await readDeltaRecord(runId);
     if (existing && existing.attempt === phase.attempt) {
       if (existing.status === "rejected") {
-        return { ok: false, reason: existing.reason ?? "KnowledgeDelta was rejected" };
+        return {
+          ok: false,
+          reason: existing.reason ?? "KnowledgeDelta was rejected",
+          failure: "knowledge-delta",
+        };
       }
       step.knowledgeDelta = { id: existing.id, status: existing.status };
       return { ok: true, staged: step.knowledgeDelta };
@@ -2188,18 +2286,34 @@ export function createEngine(deps: EngineDeps): Engine {
     const file = await readAgentDelta(runId);
     if (file.kind === "none") return { ok: true, staged: null };
 
-    // What Argus supplied to this run, from its invocation record: the exact
-    // revisions of its KnowledgeContext, or none. Copied onto the staged
-    // record so the commit can classify each consumed entry as supplied or
-    // agent-discovered, and so the two lists sit side by side for a reader.
-    // Absent (not empty) when the record cannot be read: no claim either way.
-    const invocation = await readInvocation(runId);
-    const supplied = invocation
-      ? (invocation.knowledgeContext?.claims ?? []).map((c) => ({
-          id: c.id,
-          revision: c.revision,
-        }))
-      : undefined;
+    // What Argus supplied to this run. Copied onto the staged record so the
+    // commit can classify each consumed entry as supplied or agent-discovered
+    // (ClaimConsumption.source), and so the two lists sit side by side for a
+    // reader.
+    //
+    // One deterministic answer, from two sources with a fixed precedence
+    // (docs/KNOWLEDGE-LEDGER.md §13.7): the ledger's **durable** supplied
+    // record first — it is written before the process starts and survives
+    // every pruning path — and the invocation record only when there is
+    // none. They cannot
+    // disagree (the durable record is registered from the same resolution
+    // that produced the invocation record's, and a conflicting registration
+    // is refused), so the precedence matters only for availability: a
+    // recovery path where the invocation directory is gone still classifies
+    // correctly. Absent (not empty) when neither can be read: no claim either
+    // way, and every consumption is recorded without a `source`. A run
+    // launched *with* no context has an invocation record saying so, which is
+    // positive evidence of an empty supply — never the same as unknown.
+    const durable = suppliedContextOf(await readLedger(), runId);
+    const invocation = durable ? null : await readInvocation(runId);
+    const supplied = durable
+      ? durable.claims.map((c) => ({ id: c.id, revision: c.revision }))
+      : invocation
+        ? (invocation.knowledgeContext?.claims ?? []).map((c) => ({
+            id: c.id,
+            revision: c.revision,
+          }))
+        : undefined;
 
     const base: Omit<KnowledgeDeltaRecord, "status"> = {
       id: `KD-${deps.newId()}`,
@@ -2231,7 +2345,7 @@ export function createEngine(deps: EngineDeps): Engine {
         attempt: phase.attempt,
         detail: `${base.id}: ${reason}`,
       });
-      return { ok: false, reason: full };
+      return { ok: false, reason: full, failure: "knowledge-delta" };
     };
 
     if (file.kind === "unreadable") return reject(file.reason);
@@ -2794,25 +2908,20 @@ export function createEngine(deps: EngineDeps): Engine {
       if (inst.status !== "running") return { ok: true, code: 200 }; // paused/terminal → idempotent ignore
       const def = await defFor(inst);
       if (!def) return { ok: false, code: 404 };
-      // A completion may carry a KnowledgeDelta. It is read, validated and
-      // staged *before* the transition, so a refused delta fails the step
-      // under its own class instead of the step succeeding with the proposal
-      // silently dropped — and a staged one is on the step by the time the
-      // transition decides whether the phase may conclude.
+      // A completion is accepted only once Argus has re-verified the semantic
+      // context it supplied (Phase 4.1) and read, validated and staged any
+      // KnowledgeDelta the run wrote — both *before* the transition, so a
+      // refusal fails the step under its own class instead of the step
+      // succeeding with the proposal silently dropped, and a staged delta is
+      // on the step by the time the transition decides whether the phase may
+      // conclude.
       const intake =
         signal.type === "completed" && liveStep(inst, signal.phaseId, signal.runId)
-          ? await intakeKnowledgeDelta(def, inst, signal.phaseId, signal.runId)
+          ? await acceptCompletion(def, inst, signal.phaseId, signal.runId)
           : null;
       let res =
         intake && !intake.ok
-          ? failStepInPlace(
-              def,
-              inst,
-              signal.phaseId,
-              signal.runId,
-              "knowledge-delta",
-              intake.reason,
-            )
+          ? failStepInPlace(def, inst, signal.phaseId, signal.runId, intake.failure, intake.reason)
           : advance(def, inst, signal, nowISO());
       const outcome: Run["outcome"] | undefined =
         intake && !intake.ok
@@ -2884,7 +2993,14 @@ export function createEngine(deps: EngineDeps): Engine {
         kind: "phase.signalled",
         phaseId: signal.phaseId,
         runId: signal.runId,
-        detail: intake && !intake.ok ? `${signal.type} (knowledge delta refused)` : signal.type,
+        detail:
+          intake && !intake.ok
+            ? `${signal.type} (${
+                intake.failure === "knowledge-context-integrity"
+                  ? "knowledge context integrity"
+                  : "knowledge delta refused"
+              })`
+            : signal.type,
       });
       if (res.candidatesMoved) {
         // Everything after this — the phase's own conclusion, its journal
@@ -3295,12 +3411,13 @@ export function createEngine(deps: EngineDeps): Engine {
           // same way the stop hook would; this is the whole completion
           // protocol for a runtime with no hook to install.
           const recoveredResult = signalType === "completed" ? await readRunResult(s.runId) : {};
-          // And it may carry a KnowledgeDelta, staged here exactly as the
-          // signal path stages it — or refused, which turns the recovered
-          // completion into a `knowledge-delta` failure.
+          // And it goes through the same acceptance the signal path applies:
+          // the supplied context is re-verified and any KnowledgeDelta staged
+          // — or refused, which turns the recovered completion into a
+          // `knowledge-delta` or `knowledge-context-integrity` failure.
           const intake =
             signalType === "completed"
-              ? await intakeKnowledgeDelta(def, current, phaseId, s.runId)
+              ? await acceptCompletion(def, current, phaseId, s.runId)
               : null;
           const knowledgeRefused = intake && !intake.ok ? intake.reason : null;
           if (knowledgeRefused) signalType = "failed";
@@ -3313,9 +3430,10 @@ export function createEngine(deps: EngineDeps): Engine {
                 : {
                     reason: got?.run.error ?? "run ended without emitting a completion signal",
                   };
-          const recordClass: RetryableClass = knowledgeRefused
-            ? "knowledge-delta"
-            : (recovered?.failureClass ?? (got ? failureClassOfRecord(got.run) : "spawn"));
+          const recordClass: RetryableClass =
+            intake && !intake.ok
+              ? intake.failure
+              : (recovered?.failureClass ?? (got ? failureClassOfRecord(got.run) : "spawn"));
           let res = advance(
             def,
             current,
@@ -3375,7 +3493,7 @@ export function createEngine(deps: EngineDeps): Engine {
             phaseId,
             runId: s.runId,
             detail: knowledgeRefused
-              ? "harness: knowledge-delta"
+              ? `harness: ${intake && !intake.ok ? intake.failure : "knowledge-delta"}`
               : recovered
                 ? `run-record fallback: ${recovered.outcome}`
                 : "reconcile: failed",

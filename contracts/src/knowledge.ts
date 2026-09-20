@@ -717,24 +717,111 @@ export interface SuppliedConsumedComparison {
   consumedNotSupplied: ClaimRef[];
 }
 
-/** `GET /api/knowledge/executions/:runId/context` — what a run received. */
+// ── Durable supplied provenance (Phase 4.1) ─────────────────────────────────
+//
+// Phase 4 made the invocation record the single account of what Argus supplied.
+// That is true while the record exists — and invocation records are pruned with
+// their runs, so the answer to "what canonical semantic context did run_456
+// receive?" had a retention horizon that consumption provenance does not. Phase
+// 4.1 closes the asymmetry: the *identity* of the context (exact refs + hash +
+// when) is written into `knowledge.json` alongside the other semantic execution
+// provenance, and the heavy operational artifacts — the invocation record, the
+// materialized projection — stay prunable.
+//
+//   heavy operational records (invocation dir, context file)  → prunable
+//   small semantic provenance (this record, consumptions)     → durable
+
+/**
+ * "Argus supplied exactly these claim revisions to execution E." The durable,
+ * retention-proof half of the KnowledgeContext protocol: written into the
+ * ledger when the context file is materialized, before the process exists,
+ * and never rewritten.
+ *
+ * Identity is `execution.runId` — one run receives one context, once. Argus
+ * re-registering the identical record (a retried preparation, a reconcile
+ * re-observing the run) is a no-op; registering a *different* `claims` list or
+ * `sha256` for the same run is refused rather than silently overwriting
+ * history. A later revision of a supplied claim never retargets this record:
+ * `run_456 → RULE-17:v2` stays v2 forever, exactly as a consumption does.
+ *
+ * What it does **not** assert: that the process ran, or that the agent read
+ * the file. It attests supply — "this context was materialized and named to
+ * this attempted invocation". Whether the execution then ran is the run
+ * record's question ({@link ClaimConsumption} and {@link AppliedKnowledgeDelta}
+ * are the durable evidence that it ran *and* produced semantics).
+ */
+export interface SuppliedContext {
+  execution: RunExecutionRef;
+  /** The phase attempt this invocation belonged to, when known. Attempt 1 and
+   *  attempt 2 are different runs, so they are different records; this is a
+   *  locator, never part of the identity. */
+  attempt?: number;
+  /** The {@link KnowledgeContext} wire version the run received. */
+  schemaVersion: 1;
+  /** The exact revisions supplied, in context-file order. */
+  claims: ClaimRef[];
+  /** SHA-256 (hex) of the materialized context file's bytes. */
+  sha256: string;
+  /** When Argus materialized the context for launch. */
+  suppliedAt: string;
+}
+
+/**
+ * Whether the materialized context file still holds the bytes Argus recorded
+ * at launch. Checked when a run's completion is accepted, against the hash on
+ * the durable record.
+ *
+ * - `unchanged` — the file hashes to the recorded value. The only outcome that
+ *   lets a completion (and its KnowledgeDelta) proceed.
+ * - `modified` — the file exists and hashes to something else.
+ * - `missing` — the file is gone. Argus cannot confirm integrity, so it is an
+ *   integrity failure too (the durable record keeps the history either way).
+ * - `unverifiable` — the run has no durable supplied record: it was launched
+ *   without a semantic context, or predates Phase 4.1. Nothing to check.
+ */
+export type ContextIntegrityStatus = "unchanged" | "modified" | "missing" | "unverifiable";
+
+/** The outcome of one integrity check. Never carries context *contents*. */
+export interface ContextIntegrityResult {
+  status: ContextIntegrityStatus;
+  /** The hash recorded at launch. Absent when `unverifiable`. */
+  expected?: string;
+  /** The hash of the bytes found now. Present only when `modified`. */
+  actual?: string;
+  /** Where the file was expected. Absent when `unverifiable`. */
+  file?: string;
+}
+
+/** `GET /api/knowledge/executions/:runId/context` — what a run received.
+ *
+ *  Answered from the durable {@link SuppliedContext} record, so it survives
+ *  run and invocation pruning. The materialized projection is an operational
+ *  artifact and may be gone; `context.projectionAvailable` says so explicitly
+ *  rather than the API reconstructing something from today's ledger. */
 export interface ExecutionContextReport {
   execution: RunExecutionRef;
   context: InvocationKnowledgeContext & {
-    /** Where the file was materialized. */
-    file: string;
+    /** Where the file was materialized. Null once the invocation directory
+     *  has been pruned. */
+    file: string | null;
+    /** When Argus materialized it. */
+    suppliedAt: string;
+    /** Whether `projection` below could be read. False after pruning. */
+    projectionAvailable: boolean;
   };
   /** The exact revisions Argus supplied, in file order (`context.claims`). */
   supplied: ClaimRef[];
   /** The exact revisions the ledger records this run as having consumed. */
   consumed: ClaimRef[];
   comparison: SuppliedConsumedComparison;
-  /** The materialized document, when the file is still on disk. */
+  /** The materialized document, when the file is still on disk — never
+   *  rebuilt from the current ledger. */
   projection: KnowledgeContext | null;
 }
 
 /** `GET /api/knowledge/claims/:key/supplied-to` — which runs received this
- *  exact revision, derived from the invocation records still on disk. */
+ *  exact revision, from the ledger's durable supplied provenance, so a run
+ *  whose invocation record has been pruned is still listed. */
 export interface SuppliedToReport {
   claim: ClaimRef;
   executions: Array<{
@@ -742,5 +829,7 @@ export interface SuppliedToReport {
     /** When the invocation was prepared. */
     suppliedAt: string;
     sha256: string;
+    /** The phase attempt, when the record carries one. */
+    attempt?: number;
   }>;
 }

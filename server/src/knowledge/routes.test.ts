@@ -752,10 +752,28 @@ test("delta inspection reads the staged record beside the run; the result appear
   assert.equal(res.status, 404);
 });
 
-// ── KnowledgeContext inspection (Phase 4) ───────────────────────────────────
+// ── KnowledgeContext inspection (Phase 4, durable in 4.1) ───────────────────
 //
-// What a run *received* comes from its invocation record, never from the
-// ledger; what it *consumed* comes from the ledger. The routes join the two.
+// What a run *received* comes from the ledger's durable supplied record; what
+// it *consumed* comes from its consumption edges; where the file was comes
+// from the (prunable) invocation record. The routes join the three.
+
+/** The durable supplied record the engine writes at launch, seeded directly. */
+async function seedSupplied(
+  runId: string,
+  claims: Array<{ id: string; revision: number }> = [
+    { id: "RULE-7", revision: 1 },
+    { id: "FACT-12", revision: 1 },
+  ],
+  over: { sha256?: string; suppliedAt?: string; attempt?: number } = {},
+) {
+  const store = await import("./store.js");
+  return store.registerSuppliedContext(
+    { runId, instanceId: "inst-1", phaseId: "implement" },
+    { claims, sha256: over.sha256 ?? "cd".repeat(32), attempt: over.attempt ?? 0 },
+    new Date(over.suppliedAt ?? "2026-09-19T10:00:00.000Z"),
+  );
+}
 
 async function seedInvocation(runId: string, over: Record<string, unknown> = {}) {
   const runs = await import("../sources/runs.js");
@@ -802,6 +820,7 @@ test("GET /executions/:runId/context: exact supplied refs, hash, consumptions an
   const app = makeApp();
   await seedExample(app);
   const file = await seedInvocation("run-ctx");
+  await seedSupplied("run-ctx");
   // The run consumed one supplied claim and one it found on its own.
   const reg = await post(app, "/api/knowledge/executions/run-ctx/consumptions", {
     instanceId: "inst-1",
@@ -826,6 +845,8 @@ test("GET /executions/:runId/context: exact supplied refs, hash, consumptions an
     ],
     sha256: "cd".repeat(32),
     file,
+    suppliedAt: "2026-09-19T10:00:00.000Z",
+    projectionAvailable: false,
   });
   assert.deepEqual(body.supplied, body.context.claims);
   assert.deepEqual(body.consumed, [
@@ -847,6 +868,7 @@ test("GET /executions/:runId/context: exact supplied refs, hash, consumptions an
   );
   const withFile = await get(app, "/api/knowledge/executions/run-ctx/context");
   assert.deepEqual(withFile.body.projection, { schemaVersion: 1, generatedAt: "t", claims: [] });
+  assert.equal(withFile.body.context.projectionAvailable, true);
 });
 
 test("GET /executions/:runId/context: 404 for an unknown run, a malformed id, and a run launched without a context", async () => {
@@ -857,21 +879,72 @@ test("GET /executions/:runId/context: 404 for an unknown run, a malformed id, an
   assert.equal((await get(app, "/api/knowledge/executions/run-plain/context")).status, 404);
 });
 
-test("GET /claims/:key/supplied-to: the runs whose invocation records carry that exact revision, oldest first; 404 for an unknown claim", async () => {
+test("GET /executions/:runId/context: after invocation pruning the durable record still answers, and says the projection is gone", async () => {
   const app = makeApp();
   await seedExample(app);
-  await seedInvocation("run-b", { startedAt: "2026-09-19T11:00:00.000Z" });
-  await seedInvocation("run-a", { startedAt: "2026-09-19T10:00:00.000Z" });
+  const file = await seedInvocation("run-pruned");
+  await seedSupplied("run-pruned");
+  const { writeKnowledgeContextFile } = await import("./context.js");
+  await writeKnowledgeContextFile(
+    file,
+    JSON.stringify({ schemaVersion: 1, generatedAt: "t", claims: [] }) + "\n",
+  );
+  assert.equal(
+    (await get(app, "/api/knowledge/executions/run-pruned/context")).body.context
+      .projectionAvailable,
+    true,
+  );
+
+  // Prune the whole invocation directory, as `pruneRuns` does.
+  const { rm } = await import("node:fs/promises");
+  const { runInvocationDir } = await import("../sources/runs.js");
+  await rm(runInvocationDir("run-pruned"), { recursive: true, force: true });
+
+  const res = await get(app, "/api/knowledge/executions/run-pruned/context");
+  assert.equal(res.status, 200);
+  const body: ExecutionContextReport = res.body;
+  // The durable semantic facts survive: exact refs, hash, when, and the
+  // execution's own locators.
+  assert.deepEqual(body.supplied, [
+    { id: "RULE-7", revision: 1 },
+    { id: "FACT-12", revision: 1 },
+  ]);
+  assert.equal(body.context.sha256, "cd".repeat(32));
+  assert.equal(body.context.suppliedAt, "2026-09-19T10:00:00.000Z");
+  assert.deepEqual(body.execution, {
+    runId: "run-pruned",
+    instanceId: "inst-1",
+    phaseId: "implement",
+  });
+  // The operational projection does not, and the API says so rather than
+  // rebuilding anything from today's ledger.
+  assert.equal(body.context.file, null);
+  assert.equal(body.context.projectionAvailable, false);
+  assert.equal(body.projection, null);
+});
+
+test("GET /executions/:runId/context: the durable record answers even when the invocation record disagrees about nothing else", async () => {
+  // Precedence: the ledger's supplied record, not the invocation copy. A
+  // recovery path with no invocation directory still answers fully.
+  const app = makeApp();
+  await seedExample(app);
+  await seedSupplied("run-durable-only", [{ id: "RULE-7", revision: 1 }]);
+  const res = await get(app, "/api/knowledge/executions/run-durable-only/context");
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.supplied, [{ id: "RULE-7", revision: 1 }]);
+  assert.equal(res.body.context.file, null);
+  assert.equal(res.body.context.projectionAvailable, false);
+});
+
+test("GET /claims/:key/supplied-to: the runs the ledger records as supplied that exact revision, oldest first; 404 for an unknown claim", async () => {
+  const app = makeApp();
+  await seedExample(app);
+  await seedSupplied("run-b", undefined, { suppliedAt: "2026-09-19T11:00:00.000Z" });
+  await seedSupplied("run-a", undefined, { suppliedAt: "2026-09-19T10:00:00.000Z" });
   await seedInvocation("run-plain", { knowledgeContextFile: null, knowledgeContext: null });
   // A run that received a *different* revision of RULE-7 is not a match.
   await post(app, "/api/knowledge/claims/RULE-7/revise", { statement: "500" });
-  await seedInvocation("run-v2", {
-    knowledgeContext: {
-      schemaVersion: 1,
-      claims: [{ id: "RULE-7", revision: 2 }],
-      sha256: "ef".repeat(32),
-    },
-  });
+  await seedSupplied("run-v2", [{ id: "RULE-7", revision: 2 }], { sha256: "ef".repeat(32) });
 
   const res = await get(app, "/api/knowledge/claims/RULE-7:v1/supplied-to");
   assert.equal(res.status, 200);
@@ -885,7 +958,18 @@ test("GET /claims/:key/supplied-to: the runs whose invocation records carry that
     execution: { runId: "run-a", instanceId: "inst-1", phaseId: "implement" },
     suppliedAt: "2026-09-19T10:00:00.000Z",
     sha256: "cd".repeat(32),
+    attempt: 0,
   });
+  // And it survives the invocation directory going away entirely.
+  const { rm } = await import("node:fs/promises");
+  const { paths } = await import("../claudeHome.js");
+  await rm(paths.invocationsDir(), { recursive: true, force: true });
+  assert.deepEqual(
+    (await get(app, "/api/knowledge/claims/RULE-7:v1/supplied-to")).body.executions.map(
+      (e: { execution: { runId: string } }) => e.execution.runId,
+    ),
+    ["run-a", "run-b"],
+  );
   // The active revision is v2 now: a bare key resolves to it.
   const active = await get(app, "/api/knowledge/claims/RULE-7/supplied-to");
   assert.deepEqual(

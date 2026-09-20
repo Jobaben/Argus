@@ -56,7 +56,17 @@ export type RetryableClass =
    * because the retry note carries the exact refusal (e.g. the revision that
    * moved) and a second attempt can propose from the current ledger.
    */
-  | "knowledge-delta";
+  | "knowledge-delta"
+  /**
+   * The KnowledgeContext Argus materialized for the run no longer hashes to
+   * what it recorded at launch — the file was modified, or removed, while the
+   * agent ran (Phase 4.1). The completion is refused and nothing the run
+   * proposed becomes canonical: an input Argus cannot vouch for cannot back a
+   * consumption edge. Not retried by default — a tampered context is a
+   * harness or sandbox problem, not a transient one — but retryable on
+   * opt-in, since a fresh attempt materializes a fresh file.
+   */
+  | "knowledge-context-integrity";
 
 /**
  * Every way a phase can fail. The retryable classes are the subset an author

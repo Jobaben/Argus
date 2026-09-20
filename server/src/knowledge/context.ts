@@ -13,13 +13,15 @@
  *     ↓ serialize deterministically; hash                        serializeKnowledgeContext / sha256Hex
  *     ↓ argus/invocations/<runId>/knowledge-context.json         knowledgeContextFile (read-only channel)
  *     ↓ invocation record: exact refs + sha256                   (harness/invocation.ts)
+ *     ↓ knowledge.json `supplied`: the durable record            (kernel recordSuppliedContext)
  *     ↓ agent reads $ARGUS_KNOWLEDGE_CONTEXT_FILE
+ *     ↓ at completion, re-hash the file                          verifyKnowledgeContextIntegrity
  *     ↓ optional KnowledgeDelta declares `consumed`              (delta.ts classifies each entry)
  *
- * Two facts, kept apart on purpose: **supplied** (Argus-controlled, on the
- * invocation record) and **consumed** (agent-declared, a Phase 2 consumption
- * edge). Nothing here records a consumption, and nothing in impact analysis
- * reads a supplied set. The only place the two meet is
+ * Two facts, kept apart on purpose: **supplied** (Argus-controlled, durable in
+ * the ledger since Phase 4.1) and **consumed** (agent-declared, a Phase 2
+ * consumption edge). Nothing here records a consumption, and nothing in impact
+ * analysis reads a supplied set. The only place the two meet is
  * {@link compareSuppliedConsumed}, a derived comparison.
  *
  * The resolution half is pure: one ledger snapshot in, one document out, no
@@ -32,6 +34,7 @@ import { chmod, readFile } from "node:fs/promises";
 import path from "node:path";
 import type {
   ClaimRef,
+  ContextIntegrityResult,
   KnowledgeContext,
   KnowledgeContextClaim,
   KnowledgeContextSelector,
@@ -308,6 +311,48 @@ export async function writeKnowledgeContextFile(file: string, text: string): Pro
   } catch {
     // A filesystem without POSIX modes: the record's hash still stands.
   }
+}
+
+/**
+ * Does the materialized context still hold the bytes Argus recorded at launch?
+ * (Phase 4.1 §integrity.)
+ *
+ * `expected` is the hash on the run's durable supplied record. The comparison
+ * is over **bytes**, never over meaning: a claim revised in the ledger while
+ * the agent ran does not touch the file, so this still answers `unchanged` —
+ * the run legitimately continues on the historical revision it was given.
+ * Semantic currency is a separate, derived question ({@link ExecutionCurrency}).
+ *
+ * A missing file is an integrity failure, not a pass: Argus cannot confirm the
+ * agent read what it was given. The durable record keeps the history either
+ * way, so nothing is lost by refusing.
+ *
+ * The result never carries context *contents* — only the two hashes and the
+ * path, which is what a reader needs to diagnose it.
+ */
+export async function verifyKnowledgeContextIntegrity(
+  file: string,
+  expected: string,
+): Promise<ContextIntegrityResult> {
+  let text: string;
+  try {
+    text = await readFile(file, "utf8");
+  } catch {
+    return { status: "missing", expected, file };
+  }
+  const actual = sha256Hex(text);
+  return actual === expected
+    ? { status: "unchanged", expected, file }
+    : { status: "modified", expected, actual, file };
+}
+
+/** The one sentence a refused completion carries. Names the run, the hashes
+ *  and the path; never the bytes. */
+export function describeIntegrityFailure(runId: string, r: ContextIntegrityResult): string {
+  const where = r.file ? ` at ${r.file}` : "";
+  return r.status === "missing"
+    ? `knowledge context integrity: run ${runId}'s context file is missing${where} (expected sha256 ${r.expected})`
+    : `knowledge context integrity: run ${runId}'s context file changed during execution${where} (expected sha256 ${r.expected}, found ${r.actual})`;
 }
 
 /** The materialized document, or null when the file is gone (the run was

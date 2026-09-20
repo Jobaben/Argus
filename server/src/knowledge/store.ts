@@ -4,10 +4,12 @@ import type {
   ArtifactProduction,
   Claim,
   ClaimConsumption,
+  ClaimRef,
   Evidence,
   Justification,
   KnowledgeDeltaApplyResult,
   RunExecutionRef,
+  SuppliedContext,
 } from "@argus/contracts";
 import { paths } from "../claudeHome.js";
 import { atomicWriteJson } from "../sources/atomicWrite.js";
@@ -21,6 +23,7 @@ import {
   emptyLedger,
   recordArtifact,
   recordConsumption,
+  recordSuppliedContext,
   resolveKey,
   reviseClaim,
   KnowledgeValidationError,
@@ -69,11 +72,13 @@ function mint(prefix: string): string {
 /**
  * Accept the current shape, or an older document upgraded in memory: a
  * version 1 file (Phase 1: no provenance arrays) gains empty `consumptions`
- * and `artifacts`; a version 2 file (Phase 2) gains an empty `deltas`. The
- * upgrade is written back only by the next successful transition, and it adds
- * nothing but empty arrays and a version number, so nothing an earlier phase
- * recorded changes. Anything else is another shape: readable as empty, never
- * overwritten.
+ * and `artifacts`; a version 2 file (Phase 2) gains an empty `deltas`; a
+ * version 3 file (Phase 3) gains an empty `supplied`. The upgrade is written
+ * back only by the next successful transition, and it adds nothing but empty
+ * arrays and a version number, so nothing an earlier phase recorded changes.
+ * In particular an upgraded document claims **no** supplied provenance for
+ * the runs it already holds: unknown stays unknown, never retro-inferred.
+ * Anything else is another shape: readable as empty, never overwritten.
  */
 export function upgradeLedger(v: unknown): KnowledgeLedger | null {
   if (typeof v !== "object" || v === null) return null;
@@ -88,13 +93,27 @@ export function upgradeLedger(v: unknown): KnowledgeLedger | null {
       consumptions: [],
       artifacts: [],
       deltas: [],
+      supplied: [],
     } as unknown as KnowledgeLedger;
   }
   const phase2 = Array.isArray(r.consumptions) && Array.isArray(r.artifacts);
   if (r.version === 2 && phase2) {
-    return { ...r, version: LEDGER_VERSION, deltas: [] } as unknown as KnowledgeLedger;
+    return {
+      ...r,
+      version: LEDGER_VERSION,
+      deltas: [],
+      supplied: [],
+    } as unknown as KnowledgeLedger;
   }
-  if (r.version === LEDGER_VERSION && phase2 && Array.isArray(r.deltas)) {
+  if (r.version === 3 && phase2 && Array.isArray(r.deltas)) {
+    return { ...r, version: LEDGER_VERSION, supplied: [] } as unknown as KnowledgeLedger;
+  }
+  if (
+    r.version === LEDGER_VERSION &&
+    phase2 &&
+    Array.isArray(r.deltas) &&
+    Array.isArray(r.supplied)
+  ) {
     return r as unknown as KnowledgeLedger;
   }
   return null;
@@ -267,6 +286,29 @@ export async function registerArtifacts(
     }
     const resolved = artifacts[0]?.execution ?? execution;
     return { ledger: next, result: { execution: resolved, artifacts, added } };
+  });
+}
+
+// ── Durable supplied provenance (Phase 4.1) ─────────────────────────────────
+
+/**
+ * Persist "Argus supplied exactly these revisions to run R", called from the
+ * invocation lifecycle between writing the invocation record and spawning the
+ * process. Idempotent on the run: the same record twice is `added: false`,
+ * and a *different* context for the same run throws
+ * {@link KnowledgeValidationError} rather than rewriting history.
+ *
+ * There is deliberately no HTTP mutation for this. Only Argus's own launch
+ * path may assert what it supplied.
+ */
+export async function registerSuppliedContext(
+  execution: RunExecutionRef,
+  input: { claims: ClaimRef[]; sha256: string; attempt?: number; schemaVersion?: 1 },
+  now: Date,
+): Promise<{ supplied: SuppliedContext; added: boolean }> {
+  return mutateLedger((ledger) => {
+    const r = recordSuppliedContext(ledger, { execution, ...input }, now.toISOString());
+    return { ledger: r.ledger, result: { supplied: r.supplied, added: r.added } };
   });
 }
 

@@ -7,6 +7,41 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Durable supplied provenance and context integrity (Knowledge Ledger
+  Phase 4.1).** Phase 4 recorded what Argus supplied to a run on the run's
+  invocation record — authoritative while that record exists, and pruned with
+  the run. Semantic input provenance is part of the reasoning history and
+  should not age out with a log file, so it now lives in the ledger:
+  `knowledge.json` gains a `supplied` array (document **version 4**; v1/v2/v3
+  files upgrade in memory with the new array empty) holding one
+  `SuppliedContext` per run — the execution ref, the attempt, the
+  KnowledgeContext schema version, the **exact** claim revisions in file
+  order, the file's `sha256` and when it was materialized. It is registered
+  between the invocation record and the spawn, is idempotent on the run id,
+  and **fails closed**: registering a different claim list or hash for the
+  same run is refused rather than overwriting history. There is no mutation
+  API for it; only Argus's invocation lifecycle may assert what it supplied.
+  The record attests _supply for an attempted invocation_ — not that the
+  process ran, which stays the run record's question. Run and instance
+  pruning now destroy the invocation record and the materialized context file
+  but never the semantic facts: heavy operational records are prunable, small
+  semantic provenance is durable.
+- **Context integrity verified at completion.** The `sha256` Argus took when
+  it materialized a KnowledgeContext is now used. Before a step's completion —
+  and the semantic output it carries — is accepted, the file is re-hashed on
+  both completion paths (the stop-hook signal and the reconcile fallback).
+  Changed bytes, or a file that has disappeared, fail the step deterministically
+  under a new `knowledge-context-integrity` failure class (not retried by
+  default, opt-in via `retry.retryOn`), **before** the KnowledgeDelta is even
+  staged — so a run whose input Argus can no longer vouch for never commits
+  knowledge. The reason names the run, the expected hash, the hash found and
+  the path, and never the context's contents; the journal gains
+  `knowledge.integrity`. Integrity is about **bytes, not currency**: a claim
+  revised in the ledger while the agent runs leaves the file untouched, so the
+  run legitimately completes on the historical revision it was given —
+  staleness stays a derived read (`ExecutionCurrency`, `analyzeImpact`), never
+  a failure at completion. A run launched without a semantic context performs
+  no check and behaves exactly as before.
 - **Controlled semantic context delivery (Knowledge Ledger Phase 4).** A
   step — or every step of a phase — may declare `knowledgeContext: { claims:
 [...] }`, naming exact claim revisions (`"RULE-17:v2"`) or the active
@@ -46,6 +81,20 @@ sha256 }`), the context is a new **read** channel in the unified channel
 
 ### Changed
 
+- `GET /api/knowledge/executions/:runId/context` and
+  `GET /api/knowledge/claims/:key/supplied-to` now answer from the ledger's
+  durable supplied records instead of scanning retained invocation
+  directories, so both survive normal pruning. The context report adds
+  `context.suppliedAt` and `context.projectionAvailable`, and `context.file`
+  is now nullable: once the invocation directory is gone the durable refs and
+  hash are still returned while the materialized projection is reported
+  unavailable — it is never reconstructed from the current ledger and
+  presented as what the run received. `supplied-to` entries carry the phase
+  `attempt`. Consumption classification (`ClaimConsumption.source`) now reads
+  the durable record first and the invocation record only as a fallback, so a
+  recovery path with no invocation directory still classifies correctly;
+  `source` is still set only from positive evidence, and pre-Phase-4 records
+  are never upgraded retrospectively.
 - **Argus-owned invocation channels (Knowledge Ledger Phase 3 hardening).**
   The structured files Argus hands an agent — `ARGUS_RESULT_FILE`,
   `ARGUS_KNOWLEDGE_DELTA_FILE`, `ARGUS_ARTIFACT_DIR`, `ARGUS_MEMORY_DIR` —

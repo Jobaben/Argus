@@ -9,7 +9,7 @@ import type {
   KnowledgeDeltasResponse,
   SuppliedToReport,
 } from "@argus/contracts";
-import { readInvocation, readInvocationRunIds } from "../sources/runs.js";
+import { readInvocation } from "../sources/runs.js";
 import { compareSuppliedConsumed, readKnowledgeContext } from "./context.js";
 import {
   CLAIM_ID_RE,
@@ -22,10 +22,11 @@ import {
   executionOf,
   executionProvenance,
   parseClaimKey,
-  sameRef,
   refOf,
   resolveKey,
   revisionsOf,
+  suppliedContextOf,
+  suppliedToReport,
   supportReport,
   viewOf,
   type KnowledgeLedger,
@@ -167,73 +168,67 @@ export function knowledgeRoutes(): Hono {
     return c.json(report);
   });
 
-  // ── KnowledgeContext (Phase 4) ───────────────────────────────────────────
+  // ── KnowledgeContext (Phase 4, hardened in 4.1) ──────────────────────────
   // What Argus *supplied* to a run, as distinct from what the run declared it
-  // consumed. The authoritative record is the run's invocation record (exact
-  // refs + the file's sha256), written before the process started; both
-  // reads derive from it rather than from a second store. The comparison
-  // with the ledger's consumption edges is computed per read.
+  // consumed. The authoritative record is the ledger's durable
+  // `SuppliedContext` (exact refs + the file's sha256 + when), written before
+  // the process started, so both reads survive run and invocation pruning.
+  // The invocation record is the *operational* launch record and answers only
+  // for where the file was; the materialized document is an operational
+  // artifact and may be gone, which the response says outright rather than
+  // rebuilding anything from today's ledger. The comparison with the ledger's
+  // consumption edges is computed per read.
 
   /** Exactly which claim revisions run `:runId` received, the file's hash,
    *  the ledger's consumptions for the run, and the three-way comparison.
-   *  404 when the run has no invocation record or was launched without a
-   *  semantic context. */
+   *  404 only when Argus supplied the run no semantic context at all. */
   routes.get("/executions/:runId/context", async (c) => {
     const runId = c.req.param("runId");
     if (!EXECUTION_ID_RE.test(runId)) return c.json({ error: "not found" }, 404);
-    const invocation = await readInvocation(runId);
-    if (!invocation?.knowledgeContext || !invocation.knowledgeContextFile) {
-      return c.json({ error: "not found" }, 404);
-    }
     const ledger = await readLedger();
-    const supplied = invocation.knowledgeContext.claims.map((r) => ({
-      id: r.id,
-      revision: r.revision,
-    }));
+    const durable = suppliedContextOf(ledger, runId);
+    // The invocation record is consulted for the file path (and, for a run
+    // launched before Phase 4.1, for the supplied set itself).
+    const invocation = await readInvocation(runId);
+    const record = durable
+      ? { schemaVersion: durable.schemaVersion, claims: durable.claims, sha256: durable.sha256 }
+      : (invocation?.knowledgeContext ?? null);
+    if (!record) return c.json({ error: "not found" }, 404);
+    const file = invocation?.knowledgeContextFile ?? null;
+    const supplied = record.claims.map((r) => ({ id: r.id, revision: r.revision }));
     const consumed = ledger.consumptions
       .filter((k) => k.execution.runId === runId)
       .map((k) => ({ id: k.claim.id, revision: k.claim.revision }));
+    const projection = file ? await readKnowledgeContext(file) : null;
     const body: ExecutionContextReport = {
-      execution: executionOf(ledger, runId) ?? {
-        runId,
-        instanceId: invocation.instanceId,
-        phaseId: invocation.phaseId,
+      execution: executionOf(ledger, runId) ??
+        durable?.execution ?? {
+          runId,
+          instanceId: invocation?.instanceId,
+          phaseId: invocation?.phaseId,
+        },
+      context: {
+        ...record,
+        file,
+        suppliedAt: durable?.suppliedAt ?? invocation?.startedAt ?? "",
+        projectionAvailable: projection !== null,
       },
-      context: { ...invocation.knowledgeContext, file: invocation.knowledgeContextFile },
       supplied,
       consumed,
       comparison: compareSuppliedConsumed(supplied, consumed),
-      projection: await readKnowledgeContext(invocation.knowledgeContextFile),
+      projection,
     };
     return c.json(body);
   });
 
-  /** Which runs were supplied this exact revision — derived from the
-   *  invocation records still on disk, oldest launch first. */
+  /** Which runs were supplied this exact revision — from the ledger's durable
+   *  supplied provenance, oldest launch first, so a run whose invocation
+   *  directory has been pruned is still listed. */
   routes.get("/claims/:key/supplied-to", async (c) => {
     const ledger = await readLedger();
     const claim = claimFor(ledger, c.req.param("key"));
     if (!claim) return c.json({ error: "not found" }, 404);
-    const ref = refOf(claim);
-    const records = await Promise.all((await readInvocationRunIds()).map(readInvocation));
-    const executions = records
-      .flatMap((inv) =>
-        inv?.knowledgeContext?.claims.some((r) => sameRef(r, ref))
-          ? [
-              {
-                execution: { runId: inv.runId, instanceId: inv.instanceId, phaseId: inv.phaseId },
-                suppliedAt: inv.startedAt,
-                sha256: inv.knowledgeContext.sha256,
-              },
-            ]
-          : [],
-      )
-      .sort(
-        (a, b) =>
-          a.suppliedAt.localeCompare(b.suppliedAt) ||
-          a.execution.runId.localeCompare(b.execution.runId),
-      );
-    const body: SuppliedToReport = { claim: ref, executions };
+    const body: SuppliedToReport = suppliedToReport(ledger, refOf(claim));
     return c.json(body);
   });
 

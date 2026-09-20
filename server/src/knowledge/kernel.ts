@@ -21,6 +21,8 @@ import type {
   JustificationForce,
   JustificationStatus,
   RunExecutionRef,
+  SuppliedContext,
+  SuppliedToReport,
   SupportDirection,
   SupportReport,
 } from "@argus/contracts";
@@ -68,11 +70,14 @@ import type {
  * (Phase 3) added `deltas` — the ledger's own record of every KnowledgeDelta
  * it applied, so the provenance chain "canonical record ← delta ← run" is
  * answerable from this document alone and a commit is idempotent on delta id.
+ * Version 4 (Phase 4.1) added `supplied` — the durable half of the
+ * KnowledgeContext protocol, so "which exact revisions did run_456 receive?"
+ * outlives the invocation record that is pruned with the run.
  * Older files are upgraded on read by `store.ts` (the new arrays start empty);
- * the kernel only ever sees version 3.
+ * the kernel only ever sees version 4.
  */
 export interface KnowledgeLedger {
-  version: 3;
+  version: 4;
   /** Every claim revision, in the order it was added. */
   claims: Claim[];
   evidence: Evidence[];
@@ -83,9 +88,12 @@ export interface KnowledgeLedger {
   artifacts: ArtifactProduction[];
   /** Every KnowledgeDelta applied, in commit order. See `delta.ts`. */
   deltas: AppliedKnowledgeDelta[];
+  /** Execution → the exact context Argus supplied it, in launch order. One
+   *  record per run. See {@link recordSuppliedContext}. */
+  supplied: SuppliedContext[];
 }
 
-export const LEDGER_VERSION = 3 as const;
+export const LEDGER_VERSION = 4 as const;
 
 export function emptyLedger(): KnowledgeLedger {
   return {
@@ -96,6 +104,7 @@ export function emptyLedger(): KnowledgeLedger {
     consumptions: [],
     artifacts: [],
     deltas: [],
+    supplied: [],
   };
 }
 
@@ -435,6 +444,7 @@ function executionRecordsOf(ledger: KnowledgeLedger, runId: string): RunExecutio
     ...ledger.consumptions.filter((c) => c.execution.runId === runId).map((c) => c.execution),
     ...ledger.artifacts.filter((a) => a.execution.runId === runId).map((a) => a.execution),
     ...ledger.deltas.filter((d) => d.execution.runId === runId).map((d) => d.execution),
+    ...ledger.supplied.filter((s) => s.execution.runId === runId).map((s) => s.execution),
   ];
 }
 
@@ -593,6 +603,140 @@ export function recordArtifact(
     production,
     added: true,
   };
+}
+
+// ── Durable supplied provenance (Phase 4.1) ─────────────────────────────────
+
+export interface RecordSuppliedContextInput {
+  execution: RunExecutionRef;
+  /** The phase attempt the invocation belonged to, when known. */
+  attempt?: number;
+  /** The exact revisions supplied, in context-file order. At least one — a
+   *  run launched without a semantic context gets no record at all. */
+  claims: ClaimRef[];
+  /** SHA-256 (hex) of the materialized context file's bytes. */
+  sha256: string;
+  schemaVersion?: 1;
+}
+
+/**
+ * Record what Argus supplied to one execution — the durable counterpart of
+ * the invocation record's `knowledgeContext`.
+ *
+ * **Identity is the run.** A run receives one context, materialized once,
+ * before the process exists. Registering the *identical* record again (a
+ * retried preparation, a restart re-observing the run) returns the existing
+ * one with `added: false`; registering a different claim list or a different
+ * hash for the same run is **refused**, never merged and never overwritten —
+ * conflicting accounts of what a past execution was given are a bug, and
+ * silently keeping the last one would erase the history this record exists to
+ * hold.
+ *
+ * **Supplied is not consumed.** Nothing here touches `consumptions`, and
+ * impact analysis never reads this list. A supplied revision becomes a
+ * dependency only when the agent declares it consumed.
+ *
+ * Unlike a consumption, a supplied ref is **not** required to still resolve
+ * in the ledger at write time beyond well-formedness: it was in the document
+ * the agent received, which is a fact about the past. In practice every ref
+ * came from the same ledger a moment earlier, so this only matters for a
+ * hand-edited file.
+ */
+export function recordSuppliedContext(
+  ledger: KnowledgeLedger,
+  input: RecordSuppliedContextInput,
+  now: string,
+): { ledger: KnowledgeLedger; supplied: SuppliedContext; added: boolean } {
+  const execution = resolveExecution(ledger, input.execution);
+  if (!Array.isArray(input.claims) || input.claims.length === 0) {
+    throw new KnowledgeValidationError("supplied context must name at least one claim revision");
+  }
+  const claims = input.claims.map((c) => {
+    if (
+      typeof c?.id !== "string" ||
+      !CLAIM_ID_RE.test(c.id) ||
+      !Number.isInteger(c.revision) ||
+      c.revision < 1
+    ) {
+      throw new KnowledgeValidationError(
+        `supplied context names malformed claim reference ${JSON.stringify(c)}`,
+      );
+    }
+    return { id: c.id, revision: c.revision };
+  });
+  const seen = new Set<string>();
+  for (const c of claims) {
+    const key = formatClaimRef(c);
+    if (seen.has(key)) {
+      throw new KnowledgeValidationError(`supplied context lists ${key} twice`);
+    }
+    seen.add(key);
+  }
+  if (typeof input.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(input.sha256)) {
+    throw new KnowledgeValidationError("supplied context sha256 must be 64 hex characters");
+  }
+  if (input.attempt !== undefined && (!Number.isInteger(input.attempt) || input.attempt < 0)) {
+    throw new KnowledgeValidationError("supplied context attempt must be a non-negative integer");
+  }
+  const existing = ledger.supplied.find((s) => s.execution.runId === execution.runId);
+  if (existing) {
+    const same =
+      existing.sha256 === input.sha256 &&
+      existing.claims.length === claims.length &&
+      existing.claims.every((c, i) => sameRef(c, claims[i]));
+    if (!same) {
+      throw new KnowledgeValidationError(
+        `run ${execution.runId} is already recorded as supplied ` +
+          `${existing.claims.map(formatClaimRef).join(", ")} (sha256 ${existing.sha256}); ` +
+          `refusing to replace it with ${claims.map(formatClaimRef).join(", ")} (sha256 ${input.sha256})`,
+      );
+    }
+    return { ledger, supplied: existing, added: false };
+  }
+  const supplied: SuppliedContext = compact({
+    execution,
+    attempt: input.attempt,
+    schemaVersion: (input.schemaVersion ?? 1) as 1,
+    claims,
+    sha256: input.sha256,
+    suppliedAt: now,
+  });
+  return {
+    ledger: { ...ledger, supplied: [...ledger.supplied, supplied] },
+    supplied,
+    added: true,
+  };
+}
+
+/** What Argus supplied to one run, or null when it supplied nothing (or the
+ *  run predates Phase 4.1). */
+export function suppliedContextOf(ledger: KnowledgeLedger, runId: string): SuppliedContext | null {
+  return ledger.supplied.find((s) => s.execution.runId === runId) ?? null;
+}
+
+/**
+ * "Which executions were supplied this exact revision?" — the durable reverse
+ * query. A different revision of the same id is not a match, and a run whose
+ * invocation directory has been pruned is still listed: this reads the ledger,
+ * never the filesystem. Oldest launch first, ties broken by run id.
+ */
+export function suppliedToReport(ledger: KnowledgeLedger, ref: ClaimRef): SuppliedToReport {
+  const executions = ledger.supplied
+    .filter((s) => s.claims.some((c) => sameRef(c, ref)))
+    .map((s) =>
+      compact({
+        execution: s.execution,
+        suppliedAt: s.suppliedAt,
+        sha256: s.sha256,
+        attempt: s.attempt,
+      }),
+    )
+    .sort(
+      (a, b) =>
+        a.suppliedAt.localeCompare(b.suppliedAt) ||
+        a.execution.runId.localeCompare(b.execution.runId),
+    );
+  return { claim: { id: ref.id, revision: ref.revision }, executions };
 }
 
 // ── Support ─────────────────────────────────────────────────────────────────
@@ -832,17 +976,30 @@ export function consumedStatus(
 
 /**
  * Both directions of one execution's semantic provenance, plus its currency.
- * Null when the ledger holds nothing about the run. `produced` comes from
- * Phase 1's `producedBy` (matched on `runId`); `consumed` from the
- * consumption edges. The two are distinct facts: producing a claim does not
- * make a run a consumer of it, and this report never conflates them.
- * Currency is derived here and stored nowhere — the run's own status record
- * is not consulted and not touched.
+ * Null when the ledger holds no *reliance or production* record for the run.
+ * `produced` comes from Phase 1's `producedBy` (matched on `runId`);
+ * `consumed` from the consumption edges. The two are distinct facts:
+ * producing a claim does not make a run a consumer of it, and this report
+ * never conflates them. Currency is derived here and stored nowhere — the
+ * run's own status record is not consulted and not touched.
+ *
+ * A durable supplied record (Phase 4.1) is deliberately **not** enough to
+ * make this report exist: supply is what Argus handed a run, not what the run
+ * relied on, and a merely-supplied run has no semantic provenance to report.
+ * What it received is `GET /executions/:runId/context`, which reads the
+ * supplied record directly.
  */
 export function executionProvenance(
   ledger: KnowledgeLedger,
   runId: string,
 ): ExecutionProvenance | null {
+  const relied =
+    ledger.consumptions.some((c) => c.execution.runId === runId) ||
+    ledger.artifacts.some((a) => a.execution.runId === runId) ||
+    ledger.deltas.some((d) => d.execution.runId === runId) ||
+    ledger.claims.some((c) => c.producedBy?.runId === runId) ||
+    ledger.justifications.some((j) => j.producedBy?.runId === runId);
+  if (!relied) return null;
   const execution = executionOf(ledger, runId);
   if (!execution) return null;
   const consumed = ledger.consumptions
