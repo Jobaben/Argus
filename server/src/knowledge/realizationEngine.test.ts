@@ -1,6 +1,6 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -919,6 +919,11 @@ test("a ChangeContext modified during the run fails the completion deterministic
   const e = engine(rec.spawn);
   const { inst, implCall } = await toImplementation(rec, e);
   const file = implCall.env.ARGUS_CHANGE_CONTEXT_FILE!;
+  // Argus publishes the file read-only, so tampering with it takes the same
+  // step an outside hand would have to take. Writing straight over it only
+  // works when the suite happens to run as root.
+  assert.equal(statSync(file).mode & 0o777, 0o444);
+  chmodSync(file, 0o644);
   writeFileSync(file, `${readFileSync(file, "utf8")}\n`);
   await complete(e, inst, "implement", implCall.runId);
   await e.drain();

@@ -919,7 +919,12 @@ test("watchtower: reset forgets prior history, restore brings it back, both broa
     broadcast: (m) => messages.push(m),
     serveWeb: false,
   });
-  for (let i = 0; i < 12; i++) writeRunRecord(`w${i}`, {});
+  // A run is forgotten when it ended strictly before the marker, so the samples
+  // have to be dated: written with `new Date()` they can land in the same
+  // millisecond as the reset the next statement performs, and survive it.
+  const earlier = new Date(Date.now() - 60_000).toISOString();
+  for (let i = 0; i < 12; i++)
+    writeRunRecord(`w${i}`, { queuedAt: earlier, startedAt: earlier, endedAt: earlier });
 
   const reset = await app.request("/api/watchtower/schedule%3As1/reset", {
     method: "POST",
