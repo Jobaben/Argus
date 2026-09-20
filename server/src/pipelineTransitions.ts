@@ -547,6 +547,20 @@ export function stagedDeltaIds(phase: PhaseProgress): string[] {
 }
 
 /**
+ * The rule-verification proposals this attempt would commit (Phase 6): one per
+ * step whose run staged one and whose step *succeeded*. Exactly the same
+ * eligibility rule as {@link stagedDeltaIds}, so an abandoned attempt's
+ * conformance results can no more become durable than its claims can.
+ */
+export function stagedVerificationIds(phase: PhaseProgress): string[] {
+  return phase.steps.flatMap((s) =>
+    s.status === "succeeded" && s.ruleVerification?.status === "staged"
+      ? [s.ruleVerification.id]
+      : [],
+  );
+}
+
+/**
  * The last rung of the acceptance ladder. A phase whose attempt staged no
  * KnowledgeDelta succeeds here exactly as it always did. One that did stays
  * `running` under `knowledge.status: "pending"` — the same shape as a phase
@@ -563,9 +577,15 @@ function succeedPhase(
   nowISO: string,
 ): TransitionResult {
   const deltas = stagedDeltaIds(phase);
-  if (deltas.length > 0) {
+  const verifications = stagedVerificationIds(phase);
+  if (deltas.length > 0 || verifications.length > 0) {
     phase.status = "running";
-    phase.knowledge = { status: "pending", deltas, startedAt: nowISO };
+    phase.knowledge = {
+      status: "pending",
+      deltas,
+      ...(verifications.length > 0 ? { verifications } : {}),
+      startedAt: nowISO,
+    };
     return { ...settle(def, inst, nowISO), commitKnowledge: [phase.id] };
   }
   phase.status = "succeeded";
@@ -599,25 +619,36 @@ export function applyKnowledgeCommit(
     return { instance: inst, startPhases: [] };
   }
   const held = phase.knowledge;
-  if (verdict.ok) {
-    phase.knowledge = { ...held, status: "applied", endedAt: nowISO };
+  const heldVerifications = held.verifications ?? [];
+  const mark = (status: "applied" | "rejected") => {
     for (const s of phase.steps) {
       if (s.knowledgeDelta && held.deltas.includes(s.knowledgeDelta.id)) {
-        s.knowledgeDelta = { ...s.knowledgeDelta, status: "applied" };
+        s.knowledgeDelta = { ...s.knowledgeDelta, status };
+      }
+      if (s.ruleVerification && heldVerifications.includes(s.ruleVerification.id)) {
+        s.ruleVerification = { ...s.ruleVerification, status };
       }
     }
+  };
+  if (verdict.ok) {
+    phase.knowledge = { ...held, status: "applied", endedAt: nowISO };
+    mark("applied");
     phase.status = "succeeded";
     publishArtifact(def, inst, phase.id);
     return { ...settle(def, inst, nowISO), knowledgeApplied: true };
   }
   phase.knowledge = { ...held, status: "rejected", endedAt: nowISO, reason: verdict.reason };
-  for (const s of phase.steps) {
-    if (s.knowledgeDelta && held.deltas.includes(s.knowledgeDelta.id)) {
-      s.knowledgeDelta = { ...s.knowledgeDelta, status: "rejected" };
-    }
-  }
+  mark("rejected");
   phase.status = "failed";
-  phase.payload = withFailureClass(withReason(phase.payload, verdict.reason), "knowledge-delta");
+  // The commit is one transition over both halves, so one failure class names
+  // it. `rule-verification` when only conformance results were at stake;
+  // `knowledge-delta` otherwise, unchanged from Phase 3.
+  phase.payload = withFailureClass(
+    withReason(phase.payload, verdict.reason),
+    held.deltas.length === 0 && heldVerifications.length > 0
+      ? "rule-verification"
+      : "knowledge-delta",
+  );
   failLeftoverSteps(phase);
   return { ...settle(def, inst, nowISO), knowledgeApplied: true };
 }

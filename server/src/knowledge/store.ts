@@ -8,6 +8,7 @@ import type {
   Evidence,
   Justification,
   KnowledgeDeltaApplyResult,
+  RuleVerification,
   RunExecutionRef,
   SuppliedContext,
 } from "@argus/contracts";
@@ -23,6 +24,7 @@ import {
   emptyLedger,
   recordArtifact,
   recordConsumption,
+  recordRuleVerification,
   recordSuppliedContext,
   resolveKey,
   reviseClaim,
@@ -40,6 +42,7 @@ import type {
   ProposedRevision,
 } from "./validate.js";
 import { KIND_PREFIX, applyKnowledgeDeltas, type DeltaProposal } from "./delta.js";
+import type { RecordVerificationInput } from "./kernel.js";
 
 /**
  * The Knowledge Ledger's one authoritative store: `~/.claude/argus/knowledge.json`.
@@ -73,11 +76,13 @@ function mint(prefix: string): string {
  * Accept the current shape, or an older document upgraded in memory: a
  * version 1 file (Phase 1: no provenance arrays) gains empty `consumptions`
  * and `artifacts`; a version 2 file (Phase 2) gains an empty `deltas`; a
- * version 3 file (Phase 3) gains an empty `supplied`. The upgrade is written
- * back only by the next successful transition, and it adds nothing but empty
+ * version 3 file (Phase 3) gains an empty `supplied`; a version 4 file
+ * (Phase 4.1) gains an empty `verifications`. The upgrade is written back
+ * only by the next successful transition, and it adds nothing but empty
  * arrays and a version number, so nothing an earlier phase recorded changes.
- * In particular an upgraded document claims **no** supplied provenance for
- * the runs it already holds: unknown stays unknown, never retro-inferred.
+ * In particular an upgraded document claims **no** supplied provenance and
+ * **no** conformance for the runs and rules it already holds: unknown stays
+ * unknown (`unverified`, never `holds`), never retro-inferred.
  * Anything else is another shape: readable as empty, never overwritten.
  */
 export function upgradeLedger(v: unknown): KnowledgeLedger | null {
@@ -94,6 +99,7 @@ export function upgradeLedger(v: unknown): KnowledgeLedger | null {
       artifacts: [],
       deltas: [],
       supplied: [],
+      verifications: [],
     } as unknown as KnowledgeLedger;
   }
   const phase2 = Array.isArray(r.consumptions) && Array.isArray(r.artifacts);
@@ -103,16 +109,26 @@ export function upgradeLedger(v: unknown): KnowledgeLedger | null {
       version: LEDGER_VERSION,
       deltas: [],
       supplied: [],
+      verifications: [],
     } as unknown as KnowledgeLedger;
   }
   if (r.version === 3 && phase2 && Array.isArray(r.deltas)) {
-    return { ...r, version: LEDGER_VERSION, supplied: [] } as unknown as KnowledgeLedger;
+    return {
+      ...r,
+      version: LEDGER_VERSION,
+      supplied: [],
+      verifications: [],
+    } as unknown as KnowledgeLedger;
+  }
+  if (r.version === 4 && phase2 && Array.isArray(r.deltas) && Array.isArray(r.supplied)) {
+    return { ...r, version: LEDGER_VERSION, verifications: [] } as unknown as KnowledgeLedger;
   }
   if (
     r.version === LEDGER_VERSION &&
     phase2 &&
     Array.isArray(r.deltas) &&
-    Array.isArray(r.supplied)
+    Array.isArray(r.supplied) &&
+    Array.isArray(r.verifications)
   ) {
     return r as unknown as KnowledgeLedger;
   }
@@ -343,11 +359,62 @@ export async function commitKnowledgeDeltas(
   proposals: DeltaProposal[],
   now: Date,
 ): Promise<KnowledgeDeltaApplyResult[]> {
+  return (await commitPhaseSemantics(proposals, [], now)).deltas;
+}
+
+// ── Rule-verification commit (Phase 6) ──────────────────────────────────────
+
+/** One accepted conformance result with the execution provenance Argus binds
+ *  to it. `id` is minted by the caller's commit, never by the agent. */
+export type VerificationProposal = Omit<RecordVerificationInput, "id">;
+
+export interface PhaseSemanticsResult {
+  deltas: KnowledgeDeltaApplyResult[];
+  verifications: RuleVerification[];
+}
+
+/**
+ * Commit a phase attempt's accepted semantics — its staged KnowledgeDeltas and
+ * its staged conformance results — as **one** ledger transition.
+ *
+ * Inside the ledger mutex: read the document, apply every delta proposal to
+ * that one snapshot, then append every verification to the result, and write
+ * once. A refusal anywhere throws before the write, so a phase that verifies
+ * ten rules either has all ten in `knowledge.json` or none of them, and a
+ * phase that both revises a rule and verifies one never leaves half of that
+ * durable.
+ *
+ * Deltas go first so a verification may name a revision the same phase's delta
+ * just created — the ordering is a convenience, not a licence: the rules a
+ * verification phase is accountable for come from its supplied context, which
+ * was resolved before the run started.
+ *
+ * Idempotent on both halves: a delta already in `ledger.deltas` is skipped,
+ * and a verification whose `(runId, rule)` is already recorded is a no-op. So
+ * committing again after a crash between the ledger write and the instance
+ * write is safe.
+ */
+export async function commitPhaseSemantics(
+  proposals: DeltaProposal[],
+  verifications: VerificationProposal[],
+  now: Date,
+): Promise<PhaseSemanticsResult> {
   return mutateLedger((ledger) => {
-    const { ledger: next, results } = applyKnowledgeDeltas(ledger, proposals, {
+    const { ledger: afterDeltas, results } = applyKnowledgeDeltas(ledger, proposals, {
       now: now.toISOString(),
       mint,
     });
-    return { ledger: next, result: results };
+    let next = afterDeltas;
+    const recorded: RuleVerification[] = [];
+    for (const v of verifications) {
+      const working = next;
+      let id: string;
+      do id = mint("RV");
+      while (working.verifications.some((x) => x.id === id));
+      const r = recordRuleVerification(next, { ...v, id }, now.toISOString());
+      next = r.ledger;
+      recorded.push(r.verification);
+    }
+    return { ledger: next, result: { deltas: results, verifications: recorded } };
   });
 }

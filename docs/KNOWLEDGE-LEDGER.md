@@ -8,7 +8,11 @@ how Argus supplies exact canonical knowledge to an execution and records what
 it supplied, independently of what the agent later declares it consumed.
 Phase 5: business-rule discovery orchestration — how a bounded repository
 investigation becomes candidate knowledge, how a person reviews it, and how
-the rules it establishes reach the phases that follow._
+the rules it establishes reach the phases that follow. Phase 6: business-rule
+verification and implementation conformance — whether the code at one exact
+repository revision does what one exact rule revision says, recorded as its
+own append-only dimension and kept rigorously apart from whether the rule
+itself is well founded._
 
 ## 1. Why it exists
 
@@ -2259,12 +2263,496 @@ Not one step of that provenance or impact chain is computed by a model.
 - **No graph UI.** The gate review is a structured panel: candidates,
   evidence, revisions, warnings.
 
-## 15. Persistence
+## 15. Business-rule verification and implementation conformance (Phase 6)
+
+Phase 5 answered _what rules does this organization have, and what grounds
+them?_. Phase 6 answers a different question about the same rules:
+
+> Does the implementation at a particular repository revision satisfy the exact
+> canonical business rules it is supposed to satisfy?
+
+The two questions are answered by two separate models, and **keeping them
+separate is the whole of Phase 6**:
+
+```
+RULE SUPPORT                        IMPLEMENTATION CONFORMANCE
+is the rule itself well founded?    does the code do what the rule says?
+
+derived from evidence and           a RuleVerification record bound to one
+justifications; never stored;       exact ClaimRef and one exact gitHead;
+never set by an agent               appended, never derived, never inferred
+
+GET /claims/:key/support            GET /claims/:key/conformance
+```
+
+### 15.1 The critical invariant: a violation is not a doubt
+
+A rule may be perfectly well founded and the code may not do it. That is the
+ordinary state of a bug:
+
+```
+RULE-42:v1  "Kobra customer comments must not exceed 180 characters."
+            support   = supported          ← the business really does say 180
+            lifecycle = active
+
+implementation permits 500
+
+RULE-42:v1  conformance @abc123 = violated ← the code is in breach
+            support                        = supported   (unchanged)
+```
+
+Recording that violation as **opposing evidence** on `RULE-42:v1` would be
+wrong in a way that spreads. It would make the rule read `contested` — "we are
+no longer sure the business has this rule" — which is false; and `contested`
+then propagates through every justification that has the rule as a premise,
+through `analyzeImpact`, and into the currency of every run that consumed it.
+One failing test would quietly put a domain in doubt.
+
+So a verification never touches claim support:
+
+- it creates no `Evidence`, no `Justification` and no `Claim`;
+- `recordRuleVerification` appends to exactly one array (`verifications[]`),
+  and support evaluation never reads that array;
+- `analyzeImpact` does not see verifications at all (§15.11).
+
+One more path is closed explicitly. A verification run is still an ordinary
+run and may write a KnowledgeDelta if it genuinely learned something durable —
+but on a `ruleVerification` phase, a delta that attaches **opposing** evidence
+to (or justifies against) one of the exact rules the run was supplied to verify
+is refused. Narrow on purpose: it says nothing about opposing evidence in
+general, which stays a legitimate Phase 1 concept, and nothing about rules this
+run was not asked about. It closes the single structural path by which a
+failing test could turn a supported rule `contested`.
+
+This is enforced structurally rather than by convention, and asserted directly:
+`verificationEngine.test.ts` → _"MANDATORY REGRESSION: a violated
+implementation does not contest the rule"_ drives the whole engine path and
+then checks that the ledger's `claims`, `evidence` and `justifications` arrays
+are byte-identical to what they were before.
+
+### 15.2 The outcomes
+
+Three, deliberately. No confidence score, no fourth hedging value.
+
+| Outcome        | Means                                                                                                                                                    |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `holds`        | The verifier obtained sufficient implementation or test evidence to conclude the examined implementation satisfies the rule under the authored criteria. |
+| `violated`     | The verifier obtained sufficient evidence that the examined implementation contradicts the rule.                                                         |
+| `unverifiable` | The verifier could not deterministically establish either outcome from the available implementation and test evidence. Requires a reason.                |
+
+And a fourth value exists only in the **read model**, never in a record:
+
+| Status       | Means                                                                         |
+| ------------ | ----------------------------------------------------------------------------- |
+| `unverified` | No accepted verification exists for the scope asked about. **Nobody looked.** |
+
+`unverified` and `unverifiable` are never collapsed. Reporting the first as the
+second claims an investigation that never happened; reporting the second as the
+first loses one. Many business rules have no executable expression at all —
+`unverifiable` exists so that fact is recorded rather than laundered into
+`holds`, and the agent contract says so in as many words.
+
+### 15.3 The durable record
+
+`RuleVerification`, in `knowledge.json` beside the other semantic provenance
+(ledger **version 5**):
+
+```ts
+interface RuleVerification {
+  id: string;
+  rule: ClaimRef; // always exact: RULE-42:v1, never a bare id
+  outcome: "holds" | "violated" | "unverifiable";
+  execution: RunExecutionRef; // the run that performed it
+  attempt?: number;
+  repository?: { gitHead: string }; // Argus's recorded head, not the agent's claim
+  evidence: VerificationEvidence[];
+  reason?: string; // required for `unverifiable`
+  note?: string;
+  policy?: "agent-evidence" | "deterministic-check"; // what `holds` required
+  createdAt: string;
+}
+```
+
+Identity is `(execution.runId, rule)` — one run verifies one rule once.
+Recording the identical result again is a no-op, which is what makes committing
+again after a crash safe; recording a _different_ outcome for the same pair is
+refused rather than overwriting a past conclusion.
+
+**Two bindings, neither ever retargeted.** A verification of `RULE-42:v1` says
+nothing about `RULE-42:v2`, and `holds at abc123` says nothing about `def456`.
+Both are §15.9.
+
+### 15.4 Verification evidence
+
+A separate union from `EvidenceSource`, on purpose: rule-support evidence and
+implementation-conformance evidence answer different questions and must never
+be mistaken for one another.
+
+| Kind          | What it is                                                                                                         |
+| ------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `check`       | A deterministic `PhaseCheck` of the verifying phase, cited **by label**. Argus binds the outcome (§15.7).          |
+| `source-code` | The Phase 5 `SourceCodeEvidence` shape, reused as-is: path, commit, symbol, line range. Provenance, never content. |
+| `artifact`    | A file the phase produced — a test report, a generated analysis. An `ArtifactRef`, not a copy.                     |
+| `observation` | The verifier's own reading, where no deterministic check can express the link. The weakest kind.                   |
+
+No test output and no source text ever enters the ledger. A rule verified
+against a 40 000-line test log costs a label and an exit code.
+
+### 15.5 Authoring a verification phase
+
+There is deliberately **no second rule-selection mechanism**. The rules a
+verification phase is accountable for are exactly the ones its
+`knowledgeContext` supplied (§13) — explicit claims, `active` selectors,
+`fromPhases`, an accepted discovery phase's output. That mechanism already
+resolves against one snapshot, already records durably what was supplied, and
+already refuses to float onto a newer revision.
+
+So the phase-level declaration says only _this phase must produce structured
+conformance results_:
+
+```json
+{
+  "id": "verify-rules",
+  "name": "Verify rules",
+  "gated": true,
+  "steps": [{ "name": "verify", "prompt": "Check the implementation." }],
+  "knowledgeContext": { "fromPhases": [{ "phaseId": "discover", "kinds": ["business-rule"] }] },
+  "ruleVerification": { "holds": "deterministic-check" },
+  "checks": [{ "kind": "command", "run": "dotnet test", "label": "comment-length-tests" }]
+}
+```
+
+| Field   | Meaning                                                                                                      |
+| ------- | ------------------------------------------------------------------------------------------------------------ |
+| `kinds` | Which supplied claim kinds need an outcome. Default `["business-rule"]`: a fact is context to reason _with_. |
+| `holds` | `agent-evidence` (default) or `deterministic-check`. §15.8.                                                  |
+| `note`  | One author-written sentence narrowing what "conforms" means here.                                            |
+
+`ruleVerification` absent = an ordinary phase, behaving in every respect
+exactly as before Phase 6 existed.
+
+### 15.6 The protocol
+
+Its own Argus-owned sidecar, `ARGUS_RULE_VERIFICATION_FILE`, delivered through
+the Phase 3.1 channel model (HARNESS.md §3a) as a `required` write channel — it
+is the phase's output, not an optional proposal, so a runtime that cannot make
+it writable refuses the launch under strict enforcement.
+
+Deliberately **not** the KnowledgeDelta. A delta proposes new canonical
+semantics; a verification report describes the relationship between an
+implementation and semantics that already exist. Sharing the channel would have
+made every conformance result look like a knowledge mutation — and the first
+thing an agent reaches for then is opposing evidence on the rule, which is
+exactly §15.1. A run may of course write both files: a verification phase that
+also learns something durable proposes it through the delta, as any phase does.
+
+```
+KnowledgeContext (exact rules)
+      ↓  ARGUS_KNOWLEDGE_CONTEXT_FILE, read-only
+verification agent
+      ↓  ARGUS_RULE_VERIFICATION_FILE
+structured verification proposal
+      ↓  parse, validate, completeness, check references, source evidence
+staged record (rule-verifications/<runId>/staged.json — NOT canonical)
+      ↓  the phase's deterministic PhaseChecks
+      ↓  the gate, when configured
+      ↓  phase acceptance
+durable RuleVerification records (knowledge.json)
+```
+
+The document:
+
+```json
+{
+  "schemaVersion": 1,
+  "verifications": [
+    {
+      "rule": "RULE-42:v1",
+      "outcome": "violated",
+      "evidence": [
+        { "type": "check", "label": "comment-length-tests" },
+        {
+          "type": "source-code",
+          "path": "src/Booking/KobraCommentValidator.cs",
+          "startLine": 3,
+          "endLine": 6
+        }
+      ],
+      "note": "MaxLength is 500"
+    }
+  ],
+  "metadata": { "summary": "One rule checked against the Kobra adapter." }
+}
+```
+
+### 15.7 What Argus validates
+
+The agent performs semantic interpretation — deciding that
+`if (comment.Length > 180)` implements "customer comments max 180" needs a
+model, and Argus has no way to do it. Everything around that judgement is
+Argus's, and is decided from structured data alone:
+
+1. **Completeness.** `selected = holds ∪ violated ∪ unverifiable`, each rule
+   exactly once. A **missing** rule refuses the whole document (silent omission
+   would read as though a rule had been considered when it had not — say
+   `unverifiable` instead). An **extra** rule refuses it too: a result about
+   something this run was never given is unaccountable. A verification phase
+   that was supplied rules and wrote **no file at all** fails the step; "no
+   file" is not "nothing proposed" here.
+2. **Exact revision.** `rule` must be `ID:vN`; a bare id is refused before
+   anything is staged, and the ref must resolve in the ledger.
+3. **Evidence floors.** `holds` and `violated` must cite at least one evidence
+   record; `unverifiable` must give a reason. "It holds because I say so" is
+   refused under every policy.
+4. **Check references.** A cited `check` label must be one the phase's own
+   `checks` declare — decided from the phase definition at intake, so a forged
+   reference is refused long before anybody reads an outcome backed by a test
+   that does not exist. At the commit boundary the label is bound to the
+   phase's `VerificationReport`: `status`, `exitCode` and `detail` come from
+   the run **Argus** performed. Any `status` the agent wrote is stripped at
+   validation; a cited check absent from the report refuses the commit.
+5. **Source evidence.** Repository-relative, inside the run's working tree
+   through every symlink on the way (§15.13), at the commit Argus recorded.
+6. **No contamination through the delta channel.** On a `ruleVerification`
+   phase, a KnowledgeDelta opposing one of the supplied rules is refused
+   (§15.1).
+7. **Everything owned.** Ids, timestamps, the execution identity, the
+   repository revision, persistence and the acceptance boundary.
+
+A structured result is not a proof. Argus validates the _shape and the
+references_ of a semantic judgement; it does not establish that the code and the
+sentence mean the same thing. That is why a verification phase is normally
+gated.
+
+### 15.8 The `holds` policy
+
+Minimal, two values:
+
+- **`agent-evidence`** (default) — `holds` needs at least one concrete cited
+  evidence record of any kind.
+- **`deterministic-check`** — additionally, `holds` must cite a `check` of this
+  phase, **and that check must have passed** when Argus binds it. A rule with no
+  executable expression then comes back `unverifiable`, which is the honest
+  answer.
+
+This is what lets a later reader distinguish
+
+```
+agent says it holds
+```
+
+from
+
+```
+agent says it holds AND comment-length-tests exited 0
+```
+
+`violated` always requires cited evidence and `unverifiable` always requires a
+reason, under both policies. Not every rule needs a dedicated executable test —
+`unverifiable` exists precisely because many will never have one.
+
+### 15.9 Currency is derived, never written back
+
+Nothing is ever marked stale. A verification can be superseded in two
+independent ways, and both are answered by asking a _scoped_ question:
+
+**The rule changed.**
+
+```
+RULE-42:v1  verified holds        → stays holds, historically, forever
+RULE-42:v2  created               → unverified, until somebody verifies v2
+```
+
+**The implementation changed.**
+
+```
+RULE-42:v1 @ abc123  holds        → stays holds at abc123
+RULE-42:v1 @ def456               → unverified, until somebody verifies def456
+```
+
+`ruleConformance(rule, gitHead?)` is the read model:
+
+- **with** `gitHead` — only verifications that examined that commit are
+  eligible. An abbreviated sha matches a full one.
+- **without** `gitHead` — the latest recorded outcome for the revision, with
+  `latest.repository.gitHead` saying which commit it was about. That is a
+  statement about the past, which is the only kind of statement the record
+  supports.
+
+So Argus never says _"the current implementation holds"_ on the strength of an
+older commit. It says:
+
+```
+last verified holds at abc123
+current HEAD (def456) unverified
+```
+
+`history` is always the full, unfiltered history of the revision, oldest first,
+however the question was scoped. Several repository revisions coexist:
+
+```
+RULE-42:v1  @X → holds     @Y → violated     @Z → holds
+```
+
+### 15.10 Staging, atomicity and attempt isolation
+
+Identical discipline to the KnowledgeDelta, on its own channel:
+
+- a proposal is **staged beside its run** (`rule-verifications/<runId>/`), never
+  in `knowledge.json`;
+- it becomes durable only when the phase crosses its acceptance boundary —
+  checks passed, gate approved;
+- a retry, a revise, an abort or a lost candidate selection **supersedes** the
+  attempt's records, which can never become durable afterwards;
+- a phase that verifies ten rules commits all ten **in one ledger transition**
+  or none of them. `commitPhaseSemantics` applies the attempt's deltas and its
+  verifications inside a single `mutateLedger`, so a phase that both revises a
+  rule and verifies one leaves the two facts either both durable or neither;
+- the commit is idempotent on `(runId, rule)`, so a crash between the ledger
+  write and the instance write is healed by committing again;
+- a refusal anywhere — a forged check label, a cited check the report does not
+  contain, an unsatisfied `holds` policy, a rule the ledger no longer holds —
+  refuses the whole attempt before the ledger is touched, and fails the phase
+  under the `rule-verification` failure class.
+
+### 15.11 ImpactSet is unchanged
+
+`analyzeImpact` means exactly what it meant in Phase 2: semantic dependency
+impact. A rule revision still finds the decisions, consumer executions and
+artifacts that rest on it. Phase 6 adds a **separate dimension** and deliberately
+does not join them:
+
+- verifications are not semantic dependents — a verification does not _rest on_
+  the rule in the justification sense, and making it a dependent would have put
+  conformance results into an `ImpactSet` whose whole meaning is changed
+  support;
+- `ledger.verifications` is read by the conformance queries and by nothing else.
+
+"Which verification results are associated with `RULE-42:v1`?" is answerable —
+`verificationsOfClaim`, `GET /claims/RULE-42:v1/verifications` — and when
+`RULE-42:v2` appears it simply has none yet.
+
+### 15.12 The review surface
+
+A gated verification phase's `PhaseReview` carries `ruleVerifications` — one
+preview per step that wrote a report — and the phase's counts. The GateDrawer
+renders them grouped, compactly, with no transcript involved:
+
+```
+Business-rule verification
+1 holds · 1 violated · 1 unverifiable · at abc123de
+Nothing here is durable yet; approving records it against these exact rule revisions.
+
+HOLDS (1)
+  holds      RULE-9:v2     rule: supported
+  External bookings require a CRM id
+  ✓ check: crm-id-tests (passed, exit 0)
+
+VIOLATED (1)
+  violated   RULE-42:v1    rule: supported
+  Kobra customer comments must not exceed 180 characters
+  MaxLength is 500
+  ✓ src/Booking/KobraCommentValidator.cs:3-6
+
+UNVERIFIABLE (1)
+  unverifiable  RULE-51:v1
+  Refunds are approved by a manager
+  no code path in this repository expresses manager approval
+```
+
+Every row shows the rule's **own support** beside the outcome. That is not
+decoration: a reviewer who could see only `VIOLATED` would eventually start
+"fixing" rules whose implementations were merely in breach. A selected rule with
+no submitted outcome is named outright rather than being absent.
+
+### 15.13 Source-evidence containment, hardened
+
+Phase 5 checked repository containment **lexically**: relative path, no `..`,
+and `path.resolve(root, …)` under `root`. Necessary, not sufficient — a
+repository may contain a symlink of its own:
+
+```
+src/Booking/Escape.cs → /somewhere/outside/secrets.txt
+```
+
+Every lexical rule passes and the file `stat`s happily, so a rule could be
+recorded with durable evidence pointing at a file that is not in the repository
+and not at the commit the evidence claims. Nothing in Argus copies that file's
+contents anywhere, so this is a containment bug rather than a disclosure one —
+but the record would be a lie.
+
+Containment is now decided on the **resolved real path**
+(`knowledge/sourcePath.ts`): `realpath(candidate)` must stay inside
+`realpath(root)`. `realpath` resolves intermediate symlinks too, so
+`scope/link/inner.cs` fails as well. A repository reached _through_ a symlink is
+still its own root, because the root is resolved the same way. Where `realpath`
+cannot be taken the path is reported `missing` rather than `unsafe`: Argus
+refuses what it can disprove and reports what it merely cannot confirm.
+
+The rule applies to every repository source-code evidence record Argus
+validates deterministically — discovery evidence (§14.4) and verification
+evidence alike.
+
+### 15.14 The worked example, Phase 6
+
+`harness/verificationE2e.test.ts`, with real child processes, the real Stop
+hook and a real git repository:
+
+```
+RULE-42:v1  "Kobra customer comments must not exceed 180 characters."   support = supported
+
+KobraCommentValidator.cs: MaxLength = 180      commit abc123
+  → verify-rules (holds: deterministic-check, check "comment-length-tests")
+  → agent reads ARGUS_KNOWLEDGE_CONTEXT_FILE, answers for every rule in it
+  → RULE-42:v1 @abc123 = holds
+       evidence: check comment-length-tests (passed, exit 0)   ← bound by Argus
+                 src/Booking/KobraCommentValidator.cs
+
+KobraCommentValidator.cs: MaxLength = 500      commit def456
+  → ruleConformance(RULE-42:v1, def456) = unverified           ← never "holds"
+  → verify-rules again
+  → RULE-42:v1 @def456 = violated
+
+  support(RULE-42:v1) = supported                              ← UNCHANGED
+  no opposing evidence exists anywhere in the ledger
+
+business change: Kobra now permits 500
+  → RULE-42:v2 created
+  → ruleConformance(RULE-42:v2, def456) = unverified           ← v2 inherits nothing
+  → verify-rules again
+  → RULE-42:v2 @def456 = holds
+
+history, nothing rewritten:
+  RULE-42:v1 @abc123 holds
+  RULE-42:v1 @def456 violated
+  RULE-42:v2 @def456 holds
+```
+
+### 15.15 What Phase 6 deliberately does NOT do
+
+- **No automatic code remediation.** A `violated` result is a report. Nothing
+  edits a file, opens an issue or re-runs anything.
+- **No automatic re-verification.** A new commit makes a rule `unverified`; it
+  does not schedule a run.
+- **No confidence scores.** Three outcomes, and uncertainty is named as
+  uncertainty.
+- **No mutation API.** Only an accepted verification phase's commit creates a
+  record; there is no `POST`, no edit and no delete.
+- **No retargeting, ever.** A new rule revision or a new commit produces a new
+  record, never an amended one.
+- **No verification-driven rule revision.** A breach does not propose, weaken or
+  contest the rule (§15.1).
+- **No business-change decomposition, Jira/spec ingestion, requirements or
+  acceptance-criteria generation, autonomous rule correction, semantic
+  similarity, embeddings, production telemetry, domain-owner integration, ATMS
+  worlds or graph UI.** Later phases.
+
+## 16. Persistence
 
 **Authoritative store:** `~/.claude/argus/knowledge.json`, one JSON document:
 
 ```json
-{ "version": 4, "claims": [...], "evidence": [...], "justifications": [...], "consumptions": [...], "artifacts": [...], "deltas": [...], "supplied": [...] }
+{ "version": 5, "claims": [...], "evidence": [...], "justifications": [...], "consumptions": [...], "artifacts": [...], "deltas": [...], "supplied": [...], "verifications": [...] }
 ```
 
 Written through the same discipline as `pipelines.json` and `schedules.json`:
@@ -2277,23 +2765,29 @@ claim ids is refused rather than duplicated.
 **Version 2** (Phase 2) added the two provenance arrays; **version 3** (Phase 3)
 added `deltas`, the ledger's own record of every KnowledgeDelta it applied;
 **version 4** (Phase 4.1) added `supplied`, the durable record of what Argus
-put into each run's context (§13.10).
-A version 1, 2 or 3 file is read as version 4 with the missing arrays empty and
-is rewritten in that shape by the next successful transition — nothing an
+put into each run's context (§13.10); **version 5** (Phase 6) added
+`verifications`, implementation conformance bound to an exact claim revision
+and an exact repository revision (§15.3).
+A version 1, 2, 3 or 4 file is read as version 5 with the missing arrays empty
+and is rewritten in that shape by the next successful transition — nothing an
 earlier phase recorded changes, no supplied provenance is invented for the runs
-it already holds, and reading alone never writes. Any other version is
-treated as foreign: readable as empty, never overwritten.
+it already holds, no rule gains a conformance it never had (an upgraded rule is
+`unverified`, never `holds`), and reading alone never writes. Any other version
+is treated as foreign: readable as empty, never overwritten.
 
-**Staging store:** `~/.claude/argus/knowledge-deltas/<runId>/` — `delta.json`
-(the agent's document) and `staged.json` (Argus's record, §12.13). Per run,
-like the result file and the invocation directory — and pruned with the run,
-like them; the ledger's own `deltas` record is what outlives pruning. Never
-canonical; written with the same atomic writer.
+**Staging stores:** `~/.claude/argus/knowledge-deltas/<runId>/` — `delta.json`
+(the agent's document) and `staged.json` (Argus's record, §12.13) — and
+`~/.claude/argus/rule-verifications/<runId>/` — `verification.json` (the
+agent's document) and `staged.json` (Argus's record, §15.10). Per run, like
+the result file and the invocation directory — and pruned with the run, like
+them; the ledger's own `deltas` and `verifications` records are what outlive
+pruning. Never canonical; written with the same atomic writer.
 
 **The retention rule, once:** heavy operational records (run json, log,
-invocation directory, materialized context file, delta staging) are prunable;
-small semantic provenance (claims, evidence, justifications, consumptions,
-artifact productions, applied deltas, supplied contexts) is durable. §13.12
+invocation directory, materialized context file, delta and verification
+staging) are prunable; small semantic provenance (claims, evidence,
+justifications, consumptions, artifact productions, applied deltas, supplied
+contexts, rule verifications) is durable. §13.12
 tabulates what that means for the context queries.
 
 Why not the Vault: the Vault is documented as a **rebuildable read-side cache**
@@ -2314,7 +2808,7 @@ grow past what one read per request tolerates, the kernel is unchanged — only
 The on-disk records carry **no derived state**: no `lifecycle`, no `support`,
 no `truth`, no `currency`, no `impacted`. Every read surface derives them.
 
-## 16. Important invariants
+## 17. Important invariants
 
 1. **Append-only.** No record is updated or deleted. A claim changes by
    revision; evidence, justifications, consumptions and artifact productions
@@ -2411,8 +2905,34 @@ no `truth`, no `currency`, no `impacted`. Every read surface derives them.
     discovery asks a model whether a path is safe, a range is valid or a rule
     is grounded — and nothing in Argus decides whether the code really encodes
     the rule the agent read out of it (§14.9).
+29. **Rule support ≠ implementation conformance.** A verification creates no
+    evidence, no justification and no claim; it appends to `verifications[]`
+    and nothing else reads that array. A `violated` implementation leaves its
+    rule exactly as supported as it was, and never appears in an `ImpactSet`
+    (§15.1, §15.11).
+30. **A verification is bound twice and retargeted never.** It names one exact
+    `ClaimRef` and one exact `gitHead`. A new rule revision and a new commit
+    each start `unverified`; nothing rewrites, restates or marks stale an
+    older record (§15.9).
+31. **`unverified` ≠ `unverifiable`.** Nobody looked, versus somebody looked
+    and could not tell. Derived at read time from a scoped question, so Argus
+    never reports an older commit's conclusion as a statement about a newer
+    one (§15.2, §15.9).
+32. **Every selected rule gets exactly one outcome.**
+    `selected = holds ∪ violated ∪ unverifiable`. A missing rule, an
+    unsupplied rule, or no file at all refuses the whole proposal — silent
+    omission is the one thing completeness forbids (§15.7).
+33. **An agent may cite a check; it may not claim one passed.** A `check`
+    label must be one the phase declares, and its `status`, `exitCode` and
+    `detail` are bound from Argus's own `VerificationReport` at the commit
+    boundary. `holds` never rests on an agent's assertion alone (§15.7,
+    §15.8).
+34. **Repository containment is decided on the resolved real path.** For every
+    source-code evidence record Argus validates, `realpath(candidate)` must
+    stay inside `realpath(root)`; a repository-internal symlink pointing
+    outside the tree is refused, lexical containment notwithstanding (§15.13).
 
-## 17. What Phases 1–5 deliberately do NOT do
+## 18. What Phases 1–6 deliberately do NOT do
 
 - **No automatic pipeline invalidation.** A superseded rule changes what
   `evaluateSupport` and `analyzeImpact` return; it does not touch any
@@ -2475,8 +2995,22 @@ no `truth`, no `currency`, no `impacted`. Every read surface derives them.
 - **No staleness check at completion.** Integrity compares bytes. A newer
   revision of a supplied claim never fails a running step; semantic currency
   stays a derived read.
+- **No automatic remediation or re-verification.** A `violated` result is a
+  report; a new commit makes a rule `unverified`. Nothing edits code, opens an
+  issue or schedules a run (§15.15).
+- **No confidence scores on conformance, and no fourth outcome.** Uncertainty
+  is named `unverifiable`, with a reason, and is never rounded up to `holds`.
+- **No verification-driven rule revision.** A breach never proposes, weakens or
+  contests the rule it breached.
+- **No mutation API for conformance.** Only an accepted verification phase's
+  commit creates a `RuleVerification`; there is no `POST`, no edit, no delete.
+- **No change to what `ImpactSet` means.** Verifications are not semantic
+  dependents and never enter impact analysis (§15.11).
+- **No business-change decomposition, requirements or acceptance-criteria
+  generation, autonomous rule correction, production telemetry verification or
+  domain-owner integration.** Phase 7 and later.
 
-## 18. How this prepares the next steps
+## 19. How this prepares the next steps
 
 With Phase 4 the agent boundary is closed in both directions. A run's
 semantic input is chosen by its author, resolved deterministically, delivered
@@ -2508,7 +3042,43 @@ declared consumption        (knowledge.json: agent-declared, classified against 
 KnowledgeDelta              (committed whole at phase acceptance)
 ```
 
-The smallest coherent Phase 5 is **deterministic semantic context selection
+Phase 6 adds the dimension the ledger could not previously express: whether the
+code does what the rules say. It is a second, orthogonal axis over the same
+canonical rules — bound to an exact revision and an exact commit, staged and
+accepted like everything else an agent proposes, and rigorously insulated from
+the support model so a bug never reads as a doubt:
+
+```
+Knowledge Ledger
+      ↓  selectors (§13)
+KnowledgeContext — the exact rules this phase answers for
+      ↓  ARGUS_RULE_VERIFICATION_FILE
+verification agent  → structured conformance proposal
+      ↓  completeness · exact refs · evidence floors · check labels · realpath
+staged record (not canonical)
+      ↓  PhaseChecks → check evidence bound from Argus's own report
+      ↓  gate → phase acceptance
+RuleVerification (knowledge.json: rule × gitHead × outcome, append-only)
+      ↓
+ruleConformance(rule, gitHead?)  →  holds | violated | unverifiable | unverified
+```
+
+The state Argus can now hold about one rule is the state a change needs as its
+input: _what the rule says_, _what grounds it_, _what the code does about it_,
+and _at which commit each of those was last established_.
+
+The smallest coherent **Phase 7** is therefore **change-intent orchestration**:
+turn an explicit requested business change ("Kobra now permits 500 characters")
+into structured proposed rule revisions, constraints, decisions and acceptance
+criteria, using the existing canonical rules and their verification state as
+inputs — through the existing KnowledgeDelta and KnowledgeContext primitives,
+with the same candidate/gate/commit boundary. The new work is orchestration and
+authoring, not new storage: a change-intent phase reads the rules a scope owns
+and their conformance, and proposes what would have to change. Nothing about
+the ledger, the delta, the context or the verification record has to change for
+it.
+
+The smallest coherent Phase 5 was **deterministic semantic context selection
 and business-rule discovery orchestration**: a pipeline whose early phase is
 allowed to _discover_ candidate business rules from repository evidence
 (source, documents, tests) and propose them — through the existing
@@ -2523,24 +3093,27 @@ primitive has to change for that; whether discovered rules are then
 re-verified, contradicted or acted on remains a separate decision, and a
 human's.
 
-## 19. Where the code lives
+## 20. Where the code lives
 
-| Path                                | Role                                                                                                                                                                                                                                                                                                                                                             |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `contracts/src/knowledge.ts`        | wire types: Claim, ClaimRef, Evidence, Justification, ClaimConsumption, ArtifactProduction, ExecutionProvenance, ImpactSet, SuppliedContext, ContextIntegrityResult                                                                                                                                                                                              |
-| `server/src/knowledge/kernel.ts`    | pure transitions and queries; the only definition of support; the provenance transitions and `executionProvenance`                                                                                                                                                                                                                                               |
-| `server/src/knowledge/impact.ts`    | `analyzeImpact` — the pure, deterministic impact algorithm                                                                                                                                                                                                                                                                                                       |
-| `server/src/knowledge/validate.ts`  | untrusted body → typed proposal; the structural `source-code` evidence rules (repository-relative path, line range, commit sha)                                                                                                                                                                                                                                  |
-| `server/src/knowledge/store.ts`     | the authoritative JSON document (v4); mints ids, stamps time, upgrades v1/v2/v3; `commitKnowledgeDeltas` and `registerSuppliedContext` under the ledger mutex                                                                                                                                                                                                    |
-| `server/src/knowledge/delta.ts`     | the KnowledgeDelta protocol's pure half: `validateKnowledgeDelta`, `applyKnowledgeDeltas` (preflight + atomic application)                                                                                                                                                                                                                                       |
-| `server/src/knowledge/staging.ts`   | per-run staging: the agent's file, Argus's record, status transitions                                                                                                                                                                                                                                                                                            |
-| `server/src/knowledge/context.ts`   | the KnowledgeContext protocol: `parseKnowledgeContextSpec`, `resolveKnowledgeContext` (pure, one snapshot, `claims` + `fromPhases`), projection, hash, the per-run file, `verifyKnowledgeContextIntegrity`                                                                                                                                                       |
-| `server/src/knowledge/discovery.ts` | business-rule discovery (Phase 5): `DISCOVERY_CONTRACT` and `discoveryInstruction`, the source-evidence checks, `semanticWarnings`, `checkDiscoveryDelta`, `previewKnowledgeDelta`, `summarizeDiscovery`                                                                                                                                                         |
-| `server/src/harness/channels.ts`    | the Argus-owned invocation channels the delta file and the read-only context file are two of: kind, env var, path, access, required (HARNESS.md §3a)                                                                                                                                                                                                             |
-| `server/src/knowledge/routes.ts`    | `/api/knowledge` (mounted and admin-gated in `app.ts`), including the delta inspection reads and the context reads (`/executions/:runId/context`, `/claims/:key/supplied-to`)                                                                                                                                                                                    |
-| `server/src/pipelineTransitions.ts` | `succeedPhase` (the hold), `applyKnowledgeCommit` (the verdict), `stagedDeltaIds`                                                                                                                                                                                                                                                                                |
-| `server/src/pipelineEngine.ts`      | `acceptCompletion`, `checkContextIntegrity`, `intakeKnowledgeDelta`, `verifyDeltaArtifacts`, `commitPhaseKnowledge`, `settleKnowledge`, `retireStagedDeltas`; `KNOWLEDGE_DELTA_CONTRACT`; the per-attempt ledger snapshot, `knowledgeContextInstruction`, `KNOWLEDGE_CONTEXT_CONTRACT`; the discovery checks at intake and commit, and `refreshDiscoverySummary` |
-| `server/src/sources/artifacts.ts`   | the gate review, including the candidate-knowledge previews a discovery phase's reviewer reads                                                                                                                                                                                                                                                                   |
-| `web/src/views/GateDrawer.tsx`      | the one place a human decides on a gate; the Candidate knowledge panel (rules, revisions, evidence, warnings)                                                                                                                                                                                                                                                    |
-| `server/src/knowledge/*.test.ts`    | kernel semantics, impact scenarios, persistence roundtrip, HTTP contract, delta validation/application, engine lifecycle, context resolution and delivery; `contextDurability.test.ts` for durable supply, retention and integrity; `discovery.test.ts` and `discoveryEngine.test.ts` for Phase 5                                                                |
-| `docs/API.md` § Knowledge Ledger    | endpoint reference                                                                                                                                                                                                                                                                                                                                               |
+| Path                                          | Role                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `contracts/src/knowledge.ts`                  | wire types: Claim, ClaimRef, Evidence, Justification, ClaimConsumption, ArtifactProduction, ExecutionProvenance, ImpactSet, SuppliedContext, ContextIntegrityResult                                                                                                                                                                                                                                                                                    |
+| `server/src/knowledge/kernel.ts`              | pure transitions and queries; the only definition of support; the provenance transitions and `executionProvenance`                                                                                                                                                                                                                                                                                                                                     |
+| `server/src/knowledge/impact.ts`              | `analyzeImpact` — the pure, deterministic impact algorithm                                                                                                                                                                                                                                                                                                                                                                                             |
+| `server/src/knowledge/validate.ts`            | untrusted body → typed proposal; the structural `source-code` evidence rules (repository-relative path, line range, commit sha)                                                                                                                                                                                                                                                                                                                        |
+| `server/src/knowledge/store.ts`               | the authoritative JSON document (v5); mints ids, stamps time, upgrades v1–v4; `commitPhaseSemantics` (deltas + verifications in one transition) and `registerSuppliedContext` under the ledger mutex                                                                                                                                                                                                                                                   |
+| `server/src/knowledge/delta.ts`               | the KnowledgeDelta protocol's pure half: `validateKnowledgeDelta`, `applyKnowledgeDeltas` (preflight + atomic application)                                                                                                                                                                                                                                                                                                                             |
+| `server/src/knowledge/staging.ts`             | per-run staging: the agent's file, Argus's record, status transitions                                                                                                                                                                                                                                                                                                                                                                                  |
+| `server/src/knowledge/context.ts`             | the KnowledgeContext protocol: `parseKnowledgeContextSpec`, `resolveKnowledgeContext` (pure, one snapshot, `claims` + `fromPhases`), projection, hash, the per-run file, `verifyKnowledgeContextIntegrity`                                                                                                                                                                                                                                             |
+| `server/src/knowledge/ruleVerification.ts`    | business-rule verification (Phase 6): `RULE_VERIFICATION_CONTRACT` and `verificationInstruction`, `validateRuleVerificationReport`, `selectedRules`, `completenessRefusal`, `checkRuleVerification`, `bindCheckEvidence`, `holdsPolicyRefusal`, `previewRuleVerification`, `summarizeRuleVerification`                                                                                                                                                 |
+| `server/src/knowledge/verificationStaging.ts` | per-run verification staging: the agent's file, Argus's record, status transitions                                                                                                                                                                                                                                                                                                                                                                     |
+| `server/src/knowledge/sourcePath.ts`          | `realpath`-based repository containment for every source-code evidence record Argus validates (§15.13)                                                                                                                                                                                                                                                                                                                                                 |
+| `server/src/knowledge/discovery.ts`           | business-rule discovery (Phase 5): `DISCOVERY_CONTRACT` and `discoveryInstruction`, the source-evidence checks, `semanticWarnings`, `checkDiscoveryDelta`, `previewKnowledgeDelta`, `summarizeDiscovery`                                                                                                                                                                                                                                               |
+| `server/src/harness/channels.ts`              | the Argus-owned invocation channels the delta file and the read-only context file are two of: kind, env var, path, access, required (HARNESS.md §3a)                                                                                                                                                                                                                                                                                                   |
+| `server/src/knowledge/routes.ts`              | `/api/knowledge` (mounted and admin-gated in `app.ts`), including the delta inspection reads and the context reads (`/executions/:runId/context`, `/claims/:key/supplied-to`)                                                                                                                                                                                                                                                                          |
+| `server/src/pipelineTransitions.ts`           | `succeedPhase` (the hold), `applyKnowledgeCommit` (the verdict), `stagedDeltaIds`, `stagedVerificationIds`                                                                                                                                                                                                                                                                                                                                             |
+| `server/src/pipelineEngine.ts`                | `acceptCompletion`, `checkContextIntegrity`, `intakeKnowledgeDelta`, `verifyDeltaArtifacts`, `commitPhaseKnowledge`, `settleKnowledge`, `retireStagedDeltas`; `KNOWLEDGE_DELTA_CONTRACT`; the per-attempt ledger snapshot, `knowledgeContextInstruction`, `KNOWLEDGE_CONTEXT_CONTRACT`; the discovery checks at intake and commit, and `refreshDiscoverySummary`; `intakeRuleVerification`, `verificationProposalsOf`, `refreshVerificationSummary`    |
+| `server/src/sources/artifacts.ts`             | the gate review, including the candidate-knowledge previews a discovery phase's reviewer reads and the conformance previews a verification phase's reviewer reads                                                                                                                                                                                                                                                                                      |
+| `web/src/views/GateDrawer.tsx`                | the one place a human decides on a gate; the Candidate knowledge panel (rules, revisions, evidence, warnings) and the Business-rule verification panel (outcomes grouped, each row showing the rule's own support)                                                                                                                                                                                                                                     |
+| `server/src/knowledge/*.test.ts`              | kernel semantics, impact scenarios, persistence roundtrip, HTTP contract, delta validation/application, engine lifecycle, context resolution and delivery; `contextDurability.test.ts` for durable supply, retention and integrity; `discovery.test.ts` and `discoveryEngine.test.ts` for Phase 5; `ruleVerification.test.ts` and `verificationEngine.test.ts` for Phase 6, with `harness/verificationE2e.test.ts` for the real-process worked example |
+| `docs/API.md` § Knowledge Ledger              | endpoint reference                                                                                                                                                                                                                                                                                                                                                                                                                                     |

@@ -13,6 +13,9 @@ import type {
   PreviewEvidence,
   PreviewJustification,
   PreviewRevision,
+  RuleVerificationPreview,
+  RuleVerificationPreviewEntry,
+  VerificationEvidence,
 } from "../types";
 
 /**
@@ -398,6 +401,165 @@ function CandidateKnowledge({
   );
 }
 
+/**
+ * Business-rule verification — the review surface for a staged conformance
+ * proposal (Phase 6).
+ *
+ * The one thing this panel must never let a reviewer confuse is the one the
+ * whole phase exists to separate:
+ *
+ *   RULE SUPPORT               is the rule itself well founded?
+ *   IMPLEMENTATION CONFORMANCE does the code do what it says?
+ *
+ * So every row shows both, side by side — `supported · VIOLATED` is the normal
+ * reading of a bug, and a reviewer who saw only "violated" would eventually
+ * start revising rules whose implementations were merely in breach.
+ *
+ * Grouped by outcome, compact, and honest about `unverifiable`: it is given
+ * its own group with the verifier's reason rather than being folded in with
+ * the rules that hold.
+ */
+function describeVerificationEvidence(e: VerificationEvidence): string {
+  switch (e.type) {
+    case "check":
+      return `check: ${e.label}${e.status ? ` (${e.status}${e.exitCode != null ? `, exit ${e.exitCode}` : ""})` : ""}`;
+    case "source-code":
+      return describeSource(e);
+    case "artifact":
+      return `${e.artifact.location}: ${e.artifact.path}`;
+    case "observation":
+      return e.note;
+  }
+}
+
+const OUTCOME_TONE: Record<string, string> = {
+  holds: "border-ok/40 text-ok",
+  violated: "border-fail/40 text-fail",
+  unverifiable: "border-await/40 text-await",
+};
+
+function VerificationEvidenceList({ evidence }: { evidence: VerificationEvidence[] }) {
+  if (evidence.length === 0) return null;
+  return (
+    <ul className="mt-1 flex flex-col gap-0.5" aria-label="Conformance evidence">
+      {evidence.map((e, i) => {
+        const failed = e.type === "check" && e.status === "failed";
+        return (
+          <li key={i} className="flex min-w-0 items-baseline gap-2 text-[11px]">
+            <span aria-hidden="true" className={failed ? "text-fail" : "text-ok"}>
+              {failed ? "✗" : "✓"}
+            </span>
+            <span className="min-w-0 break-words font-mono text-ink-dim">
+              {describeVerificationEvidence(e)}
+            </span>
+            {"note" in e && e.note && e.type !== "observation" && (
+              <span className="min-w-0 break-words text-ink-faint">— {e.note}</span>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function VerificationRow({ entry }: { entry: RuleVerificationPreviewEntry }) {
+  return (
+    <li className="rounded-lg border border-line bg-surface px-3 py-2">
+      <div className="flex flex-wrap items-baseline gap-2">
+        <span
+          className={`rounded border px-1 font-mono text-[8.5px] uppercase tracking-[0.1em] ${
+            OUTCOME_TONE[entry.outcome] ?? "border-line text-ink-faint"
+          }`}
+        >
+          {entry.outcome}
+        </span>
+        <span className="font-mono text-[10px] text-ink-faint">{entry.ref}</span>
+        {entry.support && (
+          <span
+            className="font-mono text-[9.5px] text-ink-faint"
+            title="The rule's own support. Independent of whether the code conforms."
+          >
+            rule: {entry.support}
+          </span>
+        )}
+      </div>
+      {entry.statement && (
+        <p className="mt-1 text-[12.5px] leading-relaxed text-ink">{entry.statement}</p>
+      )}
+      {entry.reason && <p className="mt-0.5 text-[11.5px] text-await">{entry.reason}</p>}
+      {entry.note && <p className="mt-0.5 text-[11px] text-ink-faint">{entry.note}</p>}
+      <VerificationEvidenceList evidence={entry.evidence} />
+    </li>
+  );
+}
+
+function VerificationGroup({
+  label,
+  entries,
+}: {
+  label: string;
+  entries: RuleVerificationPreviewEntry[];
+}) {
+  if (entries.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-1">
+      <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint">
+        {label} ({entries.length})
+      </p>
+      <ul className="flex flex-col gap-1.5" aria-label={label}>
+        {entries.map((e) => (
+          <VerificationRow key={`${e.ref}-${e.outcome}`} entry={e} />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function RuleVerification({
+  previews,
+  summary,
+  canApprove,
+}: {
+  previews: RuleVerificationPreview[];
+  summary: PhaseReview["ruleVerification"];
+  canApprove: boolean;
+}) {
+  const holds = previews.flatMap((p) => p.holds);
+  const violated = previews.flatMap((p) => p.violated);
+  const unverifiable = previews.flatMap((p) => p.unverifiable);
+  const missing = previews.flatMap((p) => p.missing);
+  const head = previews.find((p) => p.gitHead);
+  return (
+    <div data-testid="gate-rule-verification" className="flex flex-col gap-2">
+      <p className="text-[12px] text-ink-faint">
+        {`${summary?.holds ?? holds.length} holds · ${summary?.violated ?? violated.length} violated · ${
+          summary?.unverifiable ?? unverifiable.length
+        } unverifiable`}
+        {head?.gitHead ? ` · at ${head.gitHead.slice(0, 8)}` : ""}.{" "}
+        {canApprove
+          ? "Nothing here is durable yet; approving records it against these exact rule revisions."
+          : "None of this became durable: the phase did not reach its commit."}
+      </p>
+      {missing.length > 0 && (
+        <p data-testid="gate-verification-missing" className="text-[11.5px] text-fail">
+          No outcome submitted for {missing.join(", ")}.
+        </p>
+      )}
+      <VerificationGroup label="Holds" entries={holds} />
+      <VerificationGroup label="Violated" entries={violated} />
+      <VerificationGroup label="Unverifiable" entries={unverifiable} />
+      {previews.some((p) => p.summary) && (
+        <p className="text-[11.5px] text-ink-faint">
+          {previews
+            .map((p) => p.summary)
+            .filter(Boolean)
+            .join(" ")}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function ArtifactList({
   artifacts,
   selected,
@@ -735,6 +897,17 @@ function GatePanel({
               <CandidateKnowledge
                 previews={review.knowledge}
                 discovery={review.discovery}
+                canApprove={review.canApprove}
+              />
+            </section>
+          )}
+
+          {review.ruleVerifications && review.ruleVerifications.length > 0 && (
+            <section>
+              <Heading>Business-rule verification</Heading>
+              <RuleVerification
+                previews={review.ruleVerifications}
+                summary={review.ruleVerification}
                 canApprove={review.canApprove}
               />
             </section>

@@ -507,6 +507,52 @@ test("invocationChannels: fixed order, directories derived from file paths, requ
   );
 });
 
+test("invocationChannels: a verification phase's report channel is required (Phase 6)", () => {
+  const verification = "/home/op/.claude/argus/rule-verifications/run-1/verification.json";
+  const list = invocationChannels({
+    resultFile: null,
+    knowledgeDeltaFile: DELTA,
+    ruleVerificationFile: verification,
+    artifactDir: null,
+    memoryDir: null,
+    phaseDef: { ruleVerification: {} },
+  });
+  assert.deepEqual(
+    list.map((c) => [c.kind, c.envVar, c.dir, c.access, c.required]),
+    [
+      [
+        "knowledge-delta",
+        "ARGUS_KNOWLEDGE_DELTA_FILE",
+        "/home/op/.claude/argus/knowledge-deltas/run-1",
+        "write",
+        // The delta stays optional even here: proposing knowledge is not what
+        // a verification phase is for.
+        false,
+      ],
+      [
+        "rule-verification",
+        "ARGUS_RULE_VERIFICATION_FILE",
+        "/home/op/.claude/argus/rule-verifications/run-1",
+        "write",
+        // Its output, not an optional proposal: a phase that cannot write it
+        // has no way to succeed.
+        true,
+      ],
+    ],
+  );
+  // An ordinary phase is offered no such channel at all.
+  assert.equal(
+    invocationChannels({
+      resultFile: null,
+      knowledgeDeltaFile: DELTA,
+      artifactDir: null,
+      memoryDir: null,
+      phaseDef: {},
+    }).some((c) => c.kind === "rule-verification"),
+    false,
+  );
+});
+
 // ── prepareInvocation: the KnowledgeContext (Phase 4) ────────────────────────
 
 const CONTEXT_FILE = "/home/op/.claude/argus/invocations/run-1/knowledge-context.json";

@@ -17,7 +17,7 @@
 
 import { open, readdir, lstat } from "node:fs/promises";
 import path from "node:path";
-import type { KnowledgeDeltaPreview } from "@argus/contracts";
+import type { KnowledgeDeltaPreview, RuleVerificationPreview } from "@argus/contracts";
 import type {
   PhaseArtifact,
   PhaseArtifactContent,
@@ -27,6 +27,8 @@ import type {
   PipelineInstance,
 } from "./pipelineTypes.js";
 import { readDeltaRecord } from "../knowledge/staging.js";
+import { readVerificationRecord } from "../knowledge/verificationStaging.js";
+import { previewRuleVerification } from "../knowledge/ruleVerification.js";
 import { readLedger } from "../knowledge/store.js";
 import { checkDiscoveryDelta, previewKnowledgeDelta } from "../knowledge/discovery.js";
 import { readInvocation } from "./runs.js";
@@ -208,6 +210,7 @@ export async function buildPhaseReview(
     .map((c) => c.path);
   const { artifacts, truncated } = await listPhaseArtifacts(phase.artifactDir, requiredPaths);
   const knowledge = await previewStagedKnowledge(phase, phaseDef);
+  const ruleVerifications = await previewStagedVerifications(phase);
   const review: PhaseReview = {
     instanceId: inst.id,
     phaseId,
@@ -224,8 +227,45 @@ export async function buildPhaseReview(
     ...(truncated ? { truncated } : {}),
     ...(knowledge.length ? { knowledge } : {}),
     ...(phase.discovery ? { discovery: phase.discovery } : {}),
+    ...(ruleVerifications.length ? { ruleVerifications } : {}),
+    ...(phase.ruleVerification ? { ruleVerification: phase.ruleVerification } : {}),
   };
   return { ok: true, review };
+}
+
+/**
+ * The conformance results this attempt staged, as the gate shows them
+ * (Phase 6 §review surface).
+ *
+ * The same three properties as the candidate-knowledge preview: nothing here
+ * is durable, this attempt only, and it never fails the review. One more that
+ * matters just as much — each row carries the **rule's own support** beside
+ * the outcome, so the gate reads
+ *
+ *   RULE-42:v1  "Kobra customer comments max 180"  supported  ·  VIOLATED
+ *
+ * and a reviewer can see at a glance that the rule stands and the code does
+ * not. A reviewer who could not see that distinction would eventually start
+ * "fixing" rules whose implementations were merely in breach.
+ */
+async function previewStagedVerifications(
+  phase: PhaseProgress,
+): Promise<RuleVerificationPreview[]> {
+  const steps = phase.steps.filter((s) => s.runId && s.ruleVerification);
+  if (steps.length === 0) return [];
+  let ledger = null;
+  try {
+    ledger = await readLedger();
+  } catch {
+    ledger = null;
+  }
+  const out: RuleVerificationPreview[] = [];
+  for (const step of steps) {
+    const record = await readVerificationRecord(step.runId!);
+    if (!record?.report || record.attempt !== phase.attempt) continue;
+    out.push(previewRuleVerification(record, ledger));
+  }
+  return out;
 }
 
 /**

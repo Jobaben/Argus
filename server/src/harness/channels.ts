@@ -30,13 +30,16 @@ export interface ChannelInputs {
   /** `ARGUS_KNOWLEDGE_CONTEXT_FILE`, when the step declares a
    *  `knowledgeContext`. Null = no semantic context for this run. */
   knowledgeContextFile?: string | null;
+  /** `ARGUS_RULE_VERIFICATION_FILE`, when the phase declares
+   *  `ruleVerification`. Null = this is not a verification phase. */
+  ruleVerificationFile?: string | null;
   /** `ARGUS_ARTIFACT_DIR`. */
   artifactDir: string | null;
   /** `ARGUS_MEMORY_DIR`, when the pipeline's `memory` is enabled. */
   memoryDir: string | null;
   /** The phase the step belongs to: what it declares decides which channels
    *  the launch *depends on*, as opposed to merely offers. */
-  phaseDef: Pick<PhaseDef, "checks" | "knowledgeDelta">;
+  phaseDef: Pick<PhaseDef, "checks" | "knowledgeDelta" | "ruleVerification">;
 }
 
 /** Does the phase run an `artifact` check, i.e. read the artifact directory back? */
@@ -46,7 +49,8 @@ export function phaseUsesArtifacts(phaseDef: Pick<PhaseDef, "checks">): boolean 
 
 /**
  * Every channel this invocation offers, in a fixed order (result, delta,
- * context, artifacts, memory) so records and argv are deterministic.
+ * context, rule verification, artifacts, memory) so records and argv are
+ * deterministic.
  *
  * Which channels are *required* — the ones a runtime must be able to deliver
  * or the launch is refused under strict enforcement — follows from what the
@@ -66,7 +70,12 @@ export function phaseUsesArtifacts(phaseDef: Pick<PhaseDef, "checks">): boolean 
  * - the KnowledgeContext file whenever the step has one: the step was
  *   authored to reason from that context, and an agent that cannot read it
  *   would run without the premises its author selected. Read access only —
- *   the agent never writes it.
+ *   the agent never writes it;
+ * - the rule-verification file whenever the phase declares
+ *   `ruleVerification`. Unlike the KnowledgeDelta, which every run is merely
+ *   offered, this channel *is* the phase's output: a verification phase that
+ *   cannot write its conformance results has no way to succeed, so the launch
+ *   depends on it.
  */
 export function invocationChannels(inputs: ChannelInputs): InvocationChannel[] {
   const out: InvocationChannel[] = [];
@@ -101,6 +110,17 @@ export function invocationChannels(inputs: ChannelInputs): InvocationChannel[] {
       access: "read",
       required: true,
       label: "KnowledgeContext file",
+    });
+  }
+  if (inputs.ruleVerificationFile) {
+    out.push({
+      kind: "rule-verification",
+      envVar: "ARGUS_RULE_VERIFICATION_FILE",
+      path: inputs.ruleVerificationFile,
+      dir: path.dirname(inputs.ruleVerificationFile),
+      access: "write",
+      required: true,
+      label: "rule-verification file",
     });
   }
   if (inputs.artifactDir) {

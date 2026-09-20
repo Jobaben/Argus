@@ -33,10 +33,12 @@ import {
 } from "../harness/childEnv.js";
 import type {
   AgentRuntimeId,
+  ClaimKind,
   DiscoveryPolicy,
   DiscoveryScope,
   KnowledgeContextSpec,
   ReasoningEffort,
+  RuleVerificationPolicy,
 } from "@argus/contracts";
 import { KnowledgeContextError, parseKnowledgeContextSpec } from "../knowledge/context.js";
 import {
@@ -44,7 +46,7 @@ import {
   DISCOVERY_NOTE_MAX_CHARS,
   DISCOVERY_SCOPE_MAX_PATHS,
 } from "../knowledge/discovery.js";
-import { validArtifactPath } from "../knowledge/kernel.js";
+import { CLAIM_KINDS, validArtifactPath } from "../knowledge/kernel.js";
 import { resolveNeeds } from "./dag.js";
 
 // The crash-safe, mutex-serialized single-file store (shared with schedules).
@@ -1008,6 +1010,7 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
   const knowledgeDelta = validateKnowledgeDelta(p.knowledgeDelta, `phase ${i}`);
   const knowledgeContext = validateKnowledgeContext(p.knowledgeContext, `phase ${i}`);
   const discovery = validateDiscovery(p.discovery, `phase ${i}`);
+  const ruleVerification = validateRuleVerification(p.ruleVerification, `phase ${i}`);
 
   return {
     id,
@@ -1031,7 +1034,70 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
     ...(knowledgeDelta ? { knowledgeDelta } : {}),
     ...(knowledgeContext ? { knowledgeContext } : {}),
     ...(discovery ? { discovery } : {}),
+    ...(ruleVerification ? { ruleVerification } : {}),
   };
+}
+
+/**
+ * A phase's business-rule verification policy (Phase 6,
+ * `PhaseDef.ruleVerification`).
+ *
+ * Deliberately tiny, because the interesting decision — *which* rules this
+ * phase is accountable for — is not made here. It is made by the phase's (or
+ * step's) `knowledgeContext`, which already resolves selectors against one
+ * ledger snapshot and records durably what was supplied. This policy says only
+ * that the phase must produce structured conformance results, which of the
+ * supplied kinds need an outcome, and how strict `holds` is.
+ */
+function validateRuleVerification(raw: unknown, ctx: string): RuleVerificationPolicy | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PipelineValidationError(`${ctx}: ruleVerification must be an object`);
+  }
+  const v = raw as Record<string, unknown>;
+  for (const k of Object.keys(v)) {
+    if (k !== "kinds" && k !== "holds" && k !== "note") {
+      throw new PipelineValidationError(`${ctx}: ruleVerification has unknown key "${k}"`);
+    }
+  }
+  const out: RuleVerificationPolicy = {};
+  if (v.kinds !== undefined && v.kinds !== null) {
+    if (!Array.isArray(v.kinds) || v.kinds.length === 0) {
+      throw new PipelineValidationError(
+        `${ctx}: ruleVerification.kinds must name at least one claim kind`,
+      );
+    }
+    const kinds: ClaimKind[] = [];
+    for (const [k, entry] of v.kinds.entries()) {
+      if (typeof entry !== "string" || !CLAIM_KINDS.includes(entry as ClaimKind)) {
+        throw new PipelineValidationError(
+          `${ctx}: ruleVerification.kinds[${k}] must be one of ${CLAIM_KINDS.join(" | ")}`,
+        );
+      }
+      if (!kinds.includes(entry as ClaimKind)) kinds.push(entry as ClaimKind);
+    }
+    out.kinds = kinds;
+  }
+  if (v.holds !== undefined && v.holds !== null) {
+    if (v.holds !== "agent-evidence" && v.holds !== "deterministic-check") {
+      throw new PipelineValidationError(
+        `${ctx}: ruleVerification.holds must be "agent-evidence" | "deterministic-check"`,
+      );
+    }
+    out.holds = v.holds;
+  }
+  if (v.note !== undefined && v.note !== null) {
+    if (typeof v.note !== "string" || !v.note.trim()) {
+      throw new PipelineValidationError(`${ctx}: ruleVerification.note must be a string`);
+    }
+    if (v.note.length > DISCOVERY_NOTE_MAX_CHARS) {
+      throw new PipelineValidationError(
+        `${ctx}: ruleVerification.note exceeds ${DISCOVERY_NOTE_MAX_CHARS} characters`,
+      );
+    }
+    out.note = v.note.trim();
+  }
+  return out;
 }
 
 /**
@@ -1150,6 +1216,7 @@ const RETRYABLE: readonly string[] = [
   "verification",
   "knowledge-delta",
   "knowledge-context-integrity",
+  "rule-verification",
 ];
 
 function validateRetry(raw: unknown, i: number) {

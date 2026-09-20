@@ -7,6 +7,148 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Business-rule verification and implementation conformance (Knowledge
+  Ledger Phase 6).** A phase may now declare `ruleVerification: { kinds?,
+holds?, note? }`, which turns it into a **business-rule verification phase**:
+  its agents are told to decide, for every business rule Argus supplied them
+  as semantic context, whether the implementation in their working tree
+  conforms — and to write the answer as one structured document rather than as
+  prose. The result is a new, append-only dimension of the ledger:
+  `RuleVerification`, bound to one **exact claim revision** and one **exact
+  repository revision**, so Argus can finally answer _"does the implementation
+  at this commit satisfy the exact canonical rules it is supposed to
+  satisfy?"_.
+- **Rule support and implementation conformance are separate models, and stay
+  separate.** This is the whole point of the phase. A rule may be perfectly
+  well founded while the code does not do it — that is the ordinary state of a
+  bug — so a violation is recorded as conformance, never as _opposing
+  evidence_ on the rule:
+
+  ```
+  RULE-42:v1  "Kobra customer comments must not exceed 180 characters."
+              support                  = supported    ← the business really does say 180
+              conformance @def456      = violated     ← the code is in breach
+  ```
+
+  Recording the breach as evidence against the rule would make it read
+  `contested` ("we are no longer sure the business has this rule"), and that
+  would then propagate through every justification, through `analyzeImpact`,
+  and into the currency of every run that consumed it — one failing test would
+  quietly put a domain in doubt. So a verification creates no evidence, no
+  justification and no claim; it appends to one array that support evaluation
+  and impact analysis never read. There is a mandatory regression test that
+  drives the whole engine path and then asserts the ledger's `claims`,
+  `evidence` and `justifications` are unchanged.
+
+- **Three honest outcomes, and a fourth status that is not one of them.**
+  `holds` (sufficient evidence the implementation satisfies the rule),
+  `violated` (sufficient evidence it contradicts the rule) and `unverifiable`
+  (the verifier could not establish either — with a required reason). No
+  confidence scores. In the read model there is also `unverified`: **nobody
+  looked**. `unverified` and `unverifiable` are never collapsed — the first
+  would claim an investigation that never happened, the second would lose one.
+  Many business rules have no executable expression, and `unverifiable` exists
+  so that is recorded rather than laundered into `holds`.
+- **Conformance is never timeless.** `GET
+/api/knowledge/claims/:key/conformance?gitHead=…` scopes the question to one
+  commit: a rule verified `holds` at `abc123` answers `unverified` at `def456`
+  until somebody verifies it there. Without a `gitHead` the answer is the
+  latest recorded outcome, and the report says which commit it was about.
+  Staleness is **derived**, never written back: a new rule revision and a new
+  commit each simply start `unverified`, and the old record stays bound to
+  what it examined. `RULE-42:v1 @X holds`, `@Y violated`, `RULE-42:v2 @Y
+holds` all coexist, and nothing rewrites history.
+- **The rules a phase answers for come from its KnowledgeContext.** There is
+  deliberately no second rule-selection mechanism: the phase (or step)
+  declares `knowledgeContext` as it always has — explicit claims, `active`
+  selectors, `fromPhases`, an accepted discovery phase's output — and the
+  business rules Argus supplied that run are exactly the ones it is
+  accountable for. `ruleVerification` says only _this phase must produce
+  structured conformance results_.
+- **Deterministic completeness.** `selected = holds ∪ violated ∪
+unverifiable`, each rule exactly once. A **missing** rule refuses the whole
+  proposal (silent omission would read as though a rule had been considered
+  when it had not — say `unverifiable` instead), an **extra** rule refuses it
+  too (a result about something the run was never given is unaccountable), and
+  a verification phase that wrote **no file at all** fails rather than quietly
+  succeeding. A proposal must name exact revisions: a result for `RULE-42:v1`
+  when the phase was supplied `v2` is refused, never retargeted.
+- **Check linkage: an agent may cite a test, but not claim one passed.**
+  Conformance evidence can name a deterministic `PhaseCheck` of the same phase
+  by label. Argus validates at intake that the label is one the phase declares
+  (a forged reference refuses the proposal), and at the commit boundary binds
+  `status`, `exitCode` and `detail` from its **own** `VerificationReport`; any
+  `status` the document asserted is stripped at validation. That is what lets
+  a later reader distinguish _"an agent says it holds"_ from _"an agent says it
+  holds **and** `comment-length-tests` exited 0"_. A minimal policy makes the
+  difference enforceable: `holds: "deterministic-check"` requires a `holds`
+  outcome to cite a check that passed, and `agent-evidence` (the default)
+  requires concrete cited evidence — `holds` because the agent said so is
+  refused under both.
+- **Its own Argus-owned sidecar, not the KnowledgeDelta.**
+  `ARGUS_RULE_VERIFICATION_FILE` is a new invocation channel delivered through
+  the existing channel model, `required` on a verification phase because the
+  conformance report _is_ the phase's output. Keeping it off the delta channel
+  is deliberate: a delta proposes new canonical semantics, a verification
+  describes the relationship between an implementation and semantics that
+  already exist, and sharing the channel would have invited exactly the
+  contamination above.
+- **Staged, gated, atomic.** Identical discipline to the KnowledgeDelta: the
+  proposal is staged beside its run (`rule-verifications/<runId>/`), becomes
+  durable only at the phase's acceptance boundary, and is **superseded** by a
+  retry, a revise, an abort or a lost candidate selection. A phase that
+  verifies ten rules commits all ten in one ledger transition or none of them
+  — and in the _same_ transition as that attempt's KnowledgeDeltas, so a phase
+  that both revises a rule and verifies one leaves the two facts either both
+  durable or neither. The commit is idempotent on `(runId, rule)`, so an
+  awaiting-approval proposal survives a restart and commits correctly.
+- **A structured review surface.** A gated verification phase's review carries
+  `ruleVerifications` — outcomes grouped Holds / Violated / Unverifiable, each
+  row showing the exact `ClaimRef`, the rule's statement, the **rule's own
+  support**, the outcome and the concise evidence including the checks it
+  cites — and `ruleVerification`, the counts. The GateDrawer renders it beside
+  the candidate-knowledge panel. Showing support next to conformance is not
+  decoration: a reviewer who could see only `VIOLATED` would eventually start
+  "fixing" rules whose implementations were merely in breach.
+- **Read APIs, no write API.** `GET /api/knowledge/claims/:key/verifications`
+  (history for an exact revision), `/conformance` (with optional `?gitHead=`),
+  `/api/knowledge/executions/:runId/verifications`, and the staged-record
+  reads. There is no admin mutation for a verification and none is planned:
+  only an accepted verification phase's commit may create one, and nothing
+  edits or deletes one.
+
+### Changed
+
+- **`knowledge.json` is version 5**, adding `verifications[]`. A version 1–4
+  document is read as version 5 with the new array empty and rewritten in that
+  shape by the next successful transition. An upgraded ledger claims **no**
+  conformance for the rules it already holds: an unverified rule reads
+  `unverified`, never `holds`.
+- **`PhaseFailureClass` gains `rule-verification`** — a refused conformance
+  proposal (malformed, an unsupplied rule, a supplied rule left unanswered, an
+  outcome with no evidence, a forged check label, source evidence that is not
+  a real file in the repository) or a refused commit. Not retried by default;
+  opt in through `retry.retryOn`, since the refusal names exactly what was
+  missing.
+
+### Security
+
+- **Source-evidence containment is decided on the resolved real path.** Phase 5
+  checked repository containment lexically — relative path, no `..`,
+  `path.resolve` under the root — which a repository-internal symlink defeats:
+  `src/Booking/Escape.cs → /somewhere/outside/secrets.txt` satisfies every
+  lexical rule and `stat`s happily, so a rule could be recorded with durable
+  evidence pointing at a file that is not in the repository and not at the
+  commit the evidence claims. Containment now requires
+  `realpath(candidate)` to stay inside `realpath(root)`, which also closes the
+  symlinked-directory variant (`scope/link/inner.cs`). A repository reached
+  _through_ a symlink is still its own root, and a path whose real path cannot
+  be taken is reported as missing rather than unsafe — Argus refuses what it
+  can disprove and reports what it merely cannot confirm. Applies to discovery
+  evidence and verification evidence alike.
+
+### Added
+
 - **Business-rule discovery orchestration (Knowledge Ledger Phase 5).** A
   phase may now declare `discovery: { scope: { paths, label?, note? },
 evidence? }`, which turns it into a **business-rule discovery phase**: its

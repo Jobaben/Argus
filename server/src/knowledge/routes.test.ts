@@ -1068,3 +1068,148 @@ test("GET /claims/:key/supplied-to: the runs the ledger records as supplied that
   );
   assert.equal((await get(app, "/api/knowledge/claims/NOPE/supplied-to")).status, 404);
 });
+
+// ── Rule verification (Phase 6) ─────────────────────────────────────────────
+//
+// Read-only by construction: there is no admin mutation for a conformance
+// result, and the routes exist to keep two different questions about the same
+// claim distinguishable — `/support` ("is the rule well founded?") and
+// `/conformance` ("does the code do what it says?").
+
+/** Write conformance records straight into the ledger, as an accepted
+ *  verification phase's commit would. */
+async function seedVerifications() {
+  const { mutateLedger } = await import("./store.js");
+  const { recordRuleVerification } = await import("./kernel.js");
+  const HEAD_A = "a".repeat(40);
+  const HEAD_B = "b".repeat(40);
+  await mutateLedger((ledger) => {
+    let next = ledger;
+    next = recordRuleVerification(
+      next,
+      {
+        id: "RV-1",
+        execution: { runId: "run-verify-1", instanceId: "inst-1", phaseId: "verify" },
+        rule: { id: "RULE-7", revision: 1 },
+        outcome: "holds",
+        evidence: [{ type: "observation", note: "the validator caps at 180" }],
+        gitHead: HEAD_A,
+      },
+      "2026-09-20T10:00:00.000Z",
+    ).ledger;
+    next = recordRuleVerification(
+      next,
+      {
+        id: "RV-2",
+        execution: { runId: "run-verify-2", instanceId: "inst-1", phaseId: "verify" },
+        rule: { id: "RULE-7", revision: 1 },
+        outcome: "violated",
+        evidence: [{ type: "observation", note: "the validator now caps at 500" }],
+        gitHead: HEAD_B,
+      },
+      "2026-09-20T11:00:00.000Z",
+    ).ledger;
+    return { ledger: next, result: null };
+  });
+  return { HEAD_A, HEAD_B };
+}
+
+test("verification history for a claim revision is exact and complete", async () => {
+  const app = makeApp();
+  await seedExample(app);
+  await seedVerifications();
+
+  const res = await get(app, "/api/knowledge/claims/RULE-7:v1/verifications");
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.claim, { id: "RULE-7", revision: 1 });
+  assert.deepEqual(
+    res.body.verifications.map((v: any) => [v.execution.runId, v.outcome]),
+    [
+      ["run-verify-1", "holds"],
+      ["run-verify-2", "violated"],
+    ],
+  );
+  // A different claim inherits nothing.
+  assert.deepEqual(
+    (await get(app, "/api/knowledge/claims/FACT-12/verifications")).body.verifications,
+    [],
+  );
+  assert.equal((await get(app, "/api/knowledge/claims/NOPE/verifications")).status, 404);
+});
+
+test("conformance is scoped to a repository revision and never reported as timeless", async () => {
+  const app = makeApp();
+  await seedExample(app);
+  const { HEAD_A, HEAD_B } = await seedVerifications();
+
+  const atA = await get(app, `/api/knowledge/claims/RULE-7:v1/conformance?gitHead=${HEAD_A}`);
+  assert.equal(atA.body.status, "holds");
+  const atB = await get(app, `/api/knowledge/claims/RULE-7:v1/conformance?gitHead=${HEAD_B}`);
+  assert.equal(atB.body.status, "violated");
+  // A commit nobody verified is `unverified` — not the latest answer.
+  const elsewhere = await get(
+    app,
+    `/api/knowledge/claims/RULE-7:v1/conformance?gitHead=${"c".repeat(40)}`,
+  );
+  assert.equal(elsewhere.body.status, "unverified");
+  assert.equal(elsewhere.body.latest, undefined);
+  // The full history is always there, whichever commit was asked about.
+  assert.equal(elsewhere.body.history.length, 2);
+  // Unscoped: the latest recorded outcome, with the commit it was about.
+  const unscoped = await get(app, "/api/knowledge/claims/RULE-7:v1/conformance");
+  assert.equal(unscoped.body.status, "violated");
+  assert.equal(unscoped.body.latest.repository.gitHead, HEAD_B);
+  assert.equal(
+    (await get(app, "/api/knowledge/claims/RULE-7:v1/conformance?gitHead=nope")).status,
+    400,
+  );
+});
+
+test("a violated implementation leaves the rule's support route unchanged", async () => {
+  const app = makeApp();
+  await seedExample(app);
+  const before = await get(app, "/api/knowledge/claims/RULE-7:v1/support");
+  await seedVerifications();
+  const after = await get(app, "/api/knowledge/claims/RULE-7:v1/support");
+
+  // The two questions, answered independently and differently.
+  assert.equal(after.body.support, "supported");
+  assert.deepEqual(after.body, before.body);
+  assert.equal(
+    (await get(app, "/api/knowledge/claims/RULE-7:v1/conformance")).body.status,
+    "violated",
+  );
+});
+
+test("verifications produced by one execution are listed for that run alone", async () => {
+  const app = makeApp();
+  await seedExample(app);
+  await seedVerifications();
+
+  const res = await get(app, "/api/knowledge/executions/run-verify-2/verifications");
+  assert.equal(res.status, 200);
+  assert.equal(res.body.runId, "run-verify-2");
+  assert.deepEqual(
+    res.body.verifications.map((v: any) => v.outcome),
+    ["violated"],
+  );
+  assert.deepEqual(
+    (await get(app, "/api/knowledge/executions/run-nothing/verifications")).body.verifications,
+    [],
+  );
+});
+
+test("there is no admin mutation for a verification", async () => {
+  const app = makeApp();
+  await seedExample(app);
+  assert.equal(
+    (
+      await post(app, "/api/knowledge/claims/RULE-7:v1/verifications", {
+        outcome: "holds",
+        evidence: [],
+      })
+    ).status,
+    404,
+  );
+  assert.equal((await post(app, "/api/knowledge/verifications", { outcome: "holds" })).status, 404);
+});

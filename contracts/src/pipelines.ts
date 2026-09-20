@@ -10,6 +10,10 @@ import type {
   KnowledgeContextSpec,
   KnowledgeDeltaPreview,
   KnowledgeDeltaStatus,
+  RuleVerificationPolicy,
+  RuleVerificationPreview,
+  RuleVerificationStatus,
+  RuleVerificationSummary,
 } from "./knowledge.js";
 
 export interface PhaseStep {
@@ -69,7 +73,16 @@ export type RetryableClass =
    * harness or sandbox problem, not a transient one — but retryable on
    * opt-in, since a fresh attempt materializes a fresh file.
    */
-  | "knowledge-context-integrity";
+  | "knowledge-context-integrity"
+  /**
+   * The run emitted a rule-verification proposal Argus refused: malformed, a
+   * rule it was not supplied, a supplied rule left without an outcome, an
+   * outcome with no evidence, or a check reference naming no check of this
+   * phase (Phase 6). Not retried by default — the agent reported what it
+   * concluded — but retryable on opt-in, since the refusal names exactly
+   * what was missing.
+   */
+  | "rule-verification";
 
 /**
  * Every way a phase can fail. The retryable classes are the subset an author
@@ -367,6 +380,10 @@ export interface AgentInvocationRecord {
    * Null when no context was supplied; absent on pre-Phase-4 records.
    */
   knowledgeContext?: InvocationKnowledgeContext | null;
+  /** Where this run must leave its rule-verification report
+   *  (`ARGUS_RULE_VERIFICATION_FILE`). Null on a phase that is not a
+   *  verification phase; absent on records written before Phase 6. */
+  ruleVerificationFile?: string | null;
   /**
    * Every Argus-owned channel this invocation was offered, with the access it
    * needs and whether the runtime could honour it. A channel `unavailable`
@@ -515,6 +532,23 @@ export interface PhaseDef {
    * a discovery phase is normally `gated: true`.
    */
   discovery?: DiscoveryPolicy;
+  /**
+   * Turn this phase into a **business-rule verification phase** (Phase 6): its
+   * steps are instructed to decide, for every business rule Argus supplied
+   * them as KnowledgeContext, whether the implementation at the run's
+   * repository revision conforms — and to write the answer as a structured
+   * {@link RuleVerificationReport} rather than as prose or as knowledge.
+   *
+   * The rules are not selected here: they are exactly the ones the phase's
+   * (or step's) `knowledgeContext` supplied. Every one of them must receive
+   * an outcome and nothing else may, which gives Argus a deterministic
+   * completeness check over the agent's answer.
+   *
+   * Absent = an ordinary phase, behaving in every respect exactly as before
+   * Phase 6 existed. Verification adds no new commit path: the results are
+   * staged and become durable only when the phase is accepted.
+   */
+  ruleVerification?: RuleVerificationPolicy;
 }
 
 // ── Harness: Argus-owned invocation channels ─────────────────────────────────
@@ -527,7 +561,12 @@ export interface PhaseDef {
  * repository, so a filesystem restriction must not cut the agent off from them.
  */
 export type InvocationChannelKind =
-  "result" | "knowledge-delta" | "knowledge-context" | "artifact-dir" | "memory-dir";
+  | "result"
+  | "knowledge-delta"
+  | "knowledge-context"
+  | "rule-verification"
+  | "artifact-dir"
+  | "memory-dir";
 
 /** What the agent process needs to be able to do with a channel's path. */
 export type InvocationChannelAccess = "read" | "write";
@@ -714,6 +753,14 @@ export interface StepProgress {
    * delta file. Lives on the step so a new attempt (fresh steps) starts clean.
    */
   knowledgeDelta?: StepKnowledgeDelta;
+  /**
+   * The rule-verification proposal this step's run emitted, as Argus staged
+   * it (Phase 6). A separate sidecar from {@link StepProgress.knowledgeDelta}
+   * because a conformance result is not a knowledge mutation: it describes the
+   * relationship between an implementation and rules that already exist.
+   * Absent when the run wrote no verification file.
+   */
+  ruleVerification?: StepRuleVerification;
 }
 
 /** A staged delta as the instance record sees it; the full record lives
@@ -721,6 +768,13 @@ export interface StepProgress {
 export interface StepKnowledgeDelta {
   id: string;
   status: KnowledgeDeltaStatus;
+}
+
+/** A staged verification proposal as the instance record sees it; the full
+ *  record lives beside the run. */
+export interface StepRuleVerification {
+  id: string;
+  status: RuleVerificationStatus;
 }
 
 /**
@@ -735,6 +789,13 @@ export interface PhaseKnowledgeCommit {
   status: "pending" | "applied" | "rejected";
   /** The delta ids this attempt commits, in step order. */
   deltas: string[];
+  /**
+   * The rule-verification record ids this attempt commits, in step order
+   * (Phase 6). Committed in the *same* ledger transition as `deltas`, so a
+   * phase that both revises a rule and verifies one leaves the two facts
+   * either both durable or neither. Absent on a phase that staged none.
+   */
+  verifications?: string[];
   startedAt: string;
   endedAt?: string | null;
   /** Why the commit was refused. */
@@ -783,6 +844,9 @@ export interface PhaseProgress {
    *  from the attempt's staged deltas when they were staged, and rewritten
    *  when the commit settles. Absent on a phase without `discovery`. */
   discovery?: DiscoverySummary;
+  /** What this attempt's verification runs concluded, in counts (Phase 6).
+   *  Absent on a phase without `ruleVerification`. */
+  ruleVerification?: RuleVerificationSummary;
 }
 
 /** What the engine writes into `PhaseProgress.payload` when a phase fails.
@@ -929,6 +993,16 @@ export interface PhaseReview {
   knowledge?: KnowledgeDeltaPreview[];
   /** The counts for a discovery phase's candidates. Absent otherwise. */
   discovery?: DiscoverySummary;
+  /**
+   * The conformance results this attempt staged, one preview per step that
+   * wrote a verification report (Phase 6). Nothing here is durable yet, and
+   * each row shows the rule's own support beside the outcome so a reviewer
+   * can see that a violated implementation leaves a supported rule supported.
+   * Absent when no step of the attempt proposed a verification.
+   */
+  ruleVerifications?: RuleVerificationPreview[];
+  /** The counts for a verification phase's results. Absent otherwise. */
+  ruleVerification?: RuleVerificationSummary;
 }
 
 /** One artifact's bytes, for the read-only viewer. */

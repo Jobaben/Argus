@@ -60,6 +60,10 @@ export type JournalKind =
   | "knowledge.rejected"
   | "knowledge.applied"
   | "knowledge.superseded"
+  | "verification.staged"
+  | "verification.rejected"
+  | "verification.applied"
+  | "verification.superseded"
   | "instance.ended";
 
 export interface JournalEntry {

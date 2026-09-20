@@ -10,6 +10,7 @@ const FAILURE_LABEL: Record<PhaseFailureClass, string> = {
   verification: "verification",
   "knowledge-delta": "knowledge delta",
   "knowledge-context-integrity": "knowledge context integrity",
+  "rule-verification": "rule verification",
   configuration: "configuration",
 };
 
