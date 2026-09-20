@@ -15,8 +15,9 @@
  * process could use to impersonate or interfere with a different run
  * (`ARGUS_SIGNAL_TOKEN`, `ARGUS_SIGNAL_URL`, `ARGUS_RESULT_FILE`,
  * `ARGUS_ARTIFACT_DIR`, `ARGUS_WORKSPACE`, `ARGUS_MEMORY_DIR`,
- * `ARGUS_KNOWLEDGE_DELTA_FILE`, `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`,
- * `ARGUS_RUN_ID`).
+ * `ARGUS_KNOWLEDGE_DELTA_FILE`, `ARGUS_KNOWLEDGE_CONTEXT_FILE`,
+ * `ARGUS_RULE_VERIFICATION_FILE`, the `ARGUS_CHANGE_*` files,
+ * `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`, `ARGUS_RUN_ID`).
  *
  * The rule this module enforces: an agent must never be able to administer
  * the harness that runs it. `buildChildEnv` is the one place that assembles
@@ -64,6 +65,17 @@ export const ARGUS_PER_INVOCATION_IDENTIFIERS: readonly string[] = [
   // Where this one run may propose semantic knowledge. Inherited, a nested
   // child could stage a delta under its parent's run identity.
   "ARGUS_KNOWLEDGE_DELTA_FILE",
+  // The read-only semantic context Argus supplied to this one run.
+  "ARGUS_KNOWLEDGE_CONTEXT_FILE",
+  // Where this one run must leave its conformance results.
+  "ARGUS_RULE_VERIFICATION_FILE",
+  // The change-intent channels (Phase 7): the request this run was given, the
+  // proposal it must write, and the accepted intent it implements. Inherited,
+  // a nested child could read another run's request or stage a proposal under
+  // its parent's run identity.
+  "ARGUS_CHANGE_REQUEST_FILE",
+  "ARGUS_CHANGE_PROPOSAL_FILE",
+  "ARGUS_CHANGE_CONTEXT_FILE",
 ];
 
 /** The baseline that `inherit: "minimal"` passes through even without `allow`. */

@@ -117,6 +117,17 @@ export interface InvocationInputs {
    *  `required`: it is the phase's output, not an optional proposal.
    *  Absent/null = this is not a verification phase. */
   ruleVerificationFile?: string | null;
+  /** Where this run's read-only ChangeIntentInput was materialized, when its
+   *  phase declares `changeIntent` (Phase 7). The channel it becomes is
+   *  `required`: it is the phase's input. */
+  changeRequestFile?: string | null;
+  /** Where this run must leave its ChangeProposal, when its phase declares
+   *  `changeIntent`. `required`: it is the phase's output. */
+  changeProposalFile?: string | null;
+  /** Where this run's read-only ChangeContext was materialized, when its phase
+   *  declares `changeContext`. `required`: the step was authored to implement
+   *  that accepted intent. */
+  changeContextFile?: string | null;
   timeoutSeconds: number | null;
   gitHead: string | null;
   /** The environment the policy is applied to — Argus's own, in production. */
@@ -191,6 +202,9 @@ export function prepareInvocation(inputs: InvocationInputs): PreparedInvocation 
     knowledgeDeltaFile: inputs.knowledgeDeltaFile ?? null,
     knowledgeContextFile: inputs.knowledgeContext?.file ?? null,
     ruleVerificationFile: inputs.ruleVerificationFile ?? null,
+    changeRequestFile: inputs.changeRequestFile ?? null,
+    changeProposalFile: inputs.changeProposalFile ?? null,
+    changeContextFile: inputs.changeContextFile ?? null,
     artifactDir: inputs.artifactDir,
     memoryDir: inputs.memoryDir ?? null,
     phaseDef,
@@ -270,6 +284,9 @@ export function prepareInvocation(inputs: InvocationInputs): PreparedInvocation 
     knowledgeContextFile: inputs.knowledgeContext?.file ?? null,
     knowledgeContext: inputs.knowledgeContext?.record ?? null,
     ruleVerificationFile: inputs.ruleVerificationFile ?? null,
+    changeRequestFile: inputs.changeRequestFile ?? null,
+    changeProposalFile: inputs.changeProposalFile ?? null,
+    changeContextFile: inputs.changeContextFile ?? null,
     channels: channelRecords,
     timeoutSeconds: inputs.timeoutSeconds,
     deadlineAt,

@@ -33,6 +33,14 @@ export interface ChannelInputs {
   /** `ARGUS_RULE_VERIFICATION_FILE`, when the phase declares
    *  `ruleVerification`. Null = this is not a verification phase. */
   ruleVerificationFile?: string | null;
+  /** `ARGUS_CHANGE_REQUEST_FILE`, when the phase declares `changeIntent`.
+   *  Null = this is not a change-intent phase. */
+  changeRequestFile?: string | null;
+  /** `ARGUS_CHANGE_PROPOSAL_FILE`, when the phase declares `changeIntent`. */
+  changeProposalFile?: string | null;
+  /** `ARGUS_CHANGE_CONTEXT_FILE`, when the phase declares `changeContext`.
+   *  Null = this run receives no accepted change intent. */
+  changeContextFile?: string | null;
   /** `ARGUS_ARTIFACT_DIR`. */
   artifactDir: string | null;
   /** `ARGUS_MEMORY_DIR`, when the pipeline's `memory` is enabled. */
@@ -49,8 +57,8 @@ export function phaseUsesArtifacts(phaseDef: Pick<PhaseDef, "checks">): boolean 
 
 /**
  * Every channel this invocation offers, in a fixed order (result, delta,
- * context, rule verification, artifacts, memory) so records and argv are
- * deterministic.
+ * context, rule verification, change request, change proposal, change
+ * context, artifacts, memory) so records and argv are deterministic.
  *
  * Which channels are *required* — the ones a runtime must be able to deliver
  * or the launch is refused under strict enforcement — follows from what the
@@ -75,7 +83,14 @@ export function phaseUsesArtifacts(phaseDef: Pick<PhaseDef, "checks">): boolean 
  *   `ruleVerification`. Unlike the KnowledgeDelta, which every run is merely
  *   offered, this channel *is* the phase's output: a verification phase that
  *   cannot write its conformance results has no way to succeed, so the launch
- *   depends on it.
+ *   depends on it;
+ * - the change-request and change-proposal files whenever the phase declares
+ *   `changeIntent` (Phase 7), and the change-context file whenever it declares
+ *   `changeContext`. All three are required for the same reason as the two
+ *   above: they are the phase's input and its output, not an optional
+ *   protocol. A change-intent run that cannot read the request would reason
+ *   about nothing, and one that cannot write the proposal has no way to
+ *   succeed.
  */
 export function invocationChannels(inputs: ChannelInputs): InvocationChannel[] {
   const out: InvocationChannel[] = [];
@@ -121,6 +136,39 @@ export function invocationChannels(inputs: ChannelInputs): InvocationChannel[] {
       access: "write",
       required: true,
       label: "rule-verification file",
+    });
+  }
+  if (inputs.changeRequestFile) {
+    out.push({
+      kind: "change-request",
+      envVar: "ARGUS_CHANGE_REQUEST_FILE",
+      path: inputs.changeRequestFile,
+      dir: path.dirname(inputs.changeRequestFile),
+      access: "read",
+      required: true,
+      label: "change-request file",
+    });
+  }
+  if (inputs.changeProposalFile) {
+    out.push({
+      kind: "change-proposal",
+      envVar: "ARGUS_CHANGE_PROPOSAL_FILE",
+      path: inputs.changeProposalFile,
+      dir: path.dirname(inputs.changeProposalFile),
+      access: "write",
+      required: true,
+      label: "change-proposal file",
+    });
+  }
+  if (inputs.changeContextFile) {
+    out.push({
+      kind: "change-context",
+      envVar: "ARGUS_CHANGE_CONTEXT_FILE",
+      path: inputs.changeContextFile,
+      dir: path.dirname(inputs.changeContextFile),
+      access: "read",
+      required: true,
+      label: "change-context file",
     });
   }
   if (inputs.artifactDir) {

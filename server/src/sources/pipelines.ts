@@ -37,6 +37,8 @@ import type {
   DiscoveryPolicy,
   DiscoveryScope,
   KnowledgeContextSpec,
+  ChangeContextSpec,
+  ChangeIntentPolicy,
   ReasoningEffort,
   RuleVerificationPolicy,
 } from "@argus/contracts";
@@ -47,6 +49,7 @@ import {
   DISCOVERY_SCOPE_MAX_PATHS,
 } from "../knowledge/discovery.js";
 import { CLAIM_KINDS, validArtifactPath } from "../knowledge/kernel.js";
+import { ChangeProposalError, validateChangeRequest } from "../knowledge/changeIntent.js";
 import { resolveNeeds } from "./dag.js";
 
 // The crash-safe, mutex-serialized single-file store (shared with schedules).
@@ -1011,6 +1014,8 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
   const knowledgeContext = validateKnowledgeContext(p.knowledgeContext, `phase ${i}`);
   const discovery = validateDiscovery(p.discovery, `phase ${i}`);
   const ruleVerification = validateRuleVerification(p.ruleVerification, `phase ${i}`);
+  const changeIntent = validateChangeIntent(p.changeIntent, `phase ${i}`, gated);
+  const changeContext = validateChangeContext(p.changeContext, `phase ${i}`);
 
   return {
     id,
@@ -1035,7 +1040,118 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
     ...(knowledgeContext ? { knowledgeContext } : {}),
     ...(discovery ? { discovery } : {}),
     ...(ruleVerification ? { ruleVerification } : {}),
+    ...(changeIntent ? { changeIntent } : {}),
+    ...(changeContext ? { changeContext } : {}),
   };
+}
+
+/**
+ * A phase's change-intent policy (Phase 7, `PhaseDef.changeIntent`).
+ *
+ * The one rule worth being strict about at authoring time is the gate. Phase 7
+ * exists so that a *requested* change is reviewed before it becomes canonical
+ * semantics; an ungated change-intent phase is a pipeline that rewrites the
+ * domain because somebody filed a ticket, and no later check can recover the
+ * review that never happened. So it is refused here, where the author can see
+ * it, rather than at 3am on an instance nobody is watching.
+ */
+function validateChangeIntent(
+  raw: unknown,
+  ctx: string,
+  gated: boolean,
+): ChangeIntentPolicy | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PipelineValidationError(`${ctx}: changeIntent must be an object`);
+  }
+  const v = raw as Record<string, unknown>;
+  for (const k of Object.keys(v)) {
+    if (k !== "request" && k !== "kinds" && k !== "acceptanceCriteria" && k !== "note") {
+      throw new PipelineValidationError(`${ctx}: changeIntent has unknown key "${k}"`);
+    }
+  }
+  if (!gated) {
+    throw new PipelineValidationError(
+      `${ctx}: a changeIntent phase must be gated — a proposed change to the domain's semantics is reviewed before it becomes canonical`,
+    );
+  }
+  const out: ChangeIntentPolicy = {};
+  if (v.request !== undefined && v.request !== null) {
+    try {
+      out.request = validateChangeRequest(v.request, `${ctx}: changeIntent.request`);
+    } catch (e) {
+      throw new PipelineValidationError(
+        e instanceof ChangeProposalError || e instanceof Error ? e.message : String(e),
+      );
+    }
+  }
+  if (v.kinds !== undefined && v.kinds !== null) {
+    if (!Array.isArray(v.kinds) || v.kinds.length === 0) {
+      throw new PipelineValidationError(
+        `${ctx}: changeIntent.kinds must name at least one claim kind`,
+      );
+    }
+    const kinds: ClaimKind[] = [];
+    for (const [k, entry] of v.kinds.entries()) {
+      if (typeof entry !== "string" || !CLAIM_KINDS.includes(entry as ClaimKind)) {
+        throw new PipelineValidationError(
+          `${ctx}: changeIntent.kinds[${k}] must be one of ${CLAIM_KINDS.join(" | ")}`,
+        );
+      }
+      if (!kinds.includes(entry as ClaimKind)) kinds.push(entry as ClaimKind);
+    }
+    out.kinds = kinds;
+  }
+  if (v.acceptanceCriteria !== undefined && v.acceptanceCriteria !== null) {
+    if (v.acceptanceCriteria !== "required" && v.acceptanceCriteria !== "warn") {
+      throw new PipelineValidationError(
+        `${ctx}: changeIntent.acceptanceCriteria must be "required" | "warn"`,
+      );
+    }
+    out.acceptanceCriteria = v.acceptanceCriteria;
+  }
+  if (v.note !== undefined && v.note !== null) {
+    if (typeof v.note !== "string" || !v.note.trim()) {
+      throw new PipelineValidationError(`${ctx}: changeIntent.note must be a string`);
+    }
+    if (v.note.length > DISCOVERY_NOTE_MAX_CHARS) {
+      throw new PipelineValidationError(
+        `${ctx}: changeIntent.note exceeds ${DISCOVERY_NOTE_MAX_CHARS} characters`,
+      );
+    }
+    out.note = v.note.trim();
+  }
+  return out;
+}
+
+/** A phase's downstream change-context selector (Phase 7,
+ *  `PhaseDef.changeContext`). The named phase must exist and must be a
+ *  dependency — checked across the whole graph in
+ *  {@link validateChangeContextSelectors}. */
+function validateChangeContext(raw: unknown, ctx: string): ChangeContextSpec | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PipelineValidationError(
+      `${ctx}: changeContext must be an object { fromPhase, requireReady? }`,
+    );
+  }
+  const v = raw as Record<string, unknown>;
+  for (const k of Object.keys(v)) {
+    if (k !== "fromPhase" && k !== "requireReady") {
+      throw new PipelineValidationError(`${ctx}: changeContext has unknown key "${k}"`);
+    }
+  }
+  if (typeof v.fromPhase !== "string" || !v.fromPhase.trim()) {
+    throw new PipelineValidationError(`${ctx}: changeContext.fromPhase must name a phase`);
+  }
+  const out: ChangeContextSpec = { fromPhase: v.fromPhase.trim() };
+  if (v.requireReady !== undefined && v.requireReady !== null) {
+    if (typeof v.requireReady !== "boolean") {
+      throw new PipelineValidationError(`${ctx}: changeContext.requireReady must be a boolean`);
+    }
+    out.requireReady = v.requireReady;
+  }
+  return out;
 }
 
 /**
@@ -1260,6 +1376,59 @@ function validateGraph(phases: PhaseDef[]): void {
   }
   routeChecked(() => validateRoutes(phases));
   validateProducedByPhaseSelectors(phases);
+  validateChangeContextSelectors(phases);
+}
+
+/**
+ * `changeContext.fromPhase` names a change-intent phase of *this* pipeline
+ * that is guaranteed to have run — and been approved — first (Phase 7 §23).
+ *
+ * The same three conditions as a `fromPhases` knowledge selector, for the same
+ * reasons, plus one of Phase 7's own: the named phase must actually declare
+ * `changeIntent`. A selector pointing at a phase that never produces a
+ * proposal would refuse every launch at runtime, which is an authoring error
+ * that should be reported when the pipeline is saved.
+ */
+function validateChangeContextSelectors(phases: PhaseDef[]): void {
+  const needs = resolveNeeds(phases);
+  const known = new Map(phases.map((p) => [p.id, p]));
+  const ancestorsOf = (id: string): Set<string> => {
+    const seen = new Set<string>();
+    const queue = [...(needs.get(id) ?? [])];
+    while (queue.length) {
+      const next = queue.shift()!;
+      if (seen.has(next)) continue;
+      seen.add(next);
+      queue.push(...(needs.get(next) ?? []));
+    }
+    return seen;
+  };
+  for (const phase of phases) {
+    const spec = phase.changeContext;
+    if (!spec) continue;
+    const where = `phase "${phase.id}"`;
+    const source = known.get(spec.fromPhase);
+    if (!source) {
+      throw new PipelineValidationError(
+        `${where}: changeContext.fromPhase names unknown phase "${spec.fromPhase}"`,
+      );
+    }
+    if (spec.fromPhase === phase.id) {
+      throw new PipelineValidationError(
+        `${where}: changeContext.fromPhase cannot name its own phase`,
+      );
+    }
+    if (!source.changeIntent) {
+      throw new PipelineValidationError(
+        `${where}: changeContext.fromPhase names "${spec.fromPhase}", which is not a changeIntent phase and so produces no ChangeProposal`,
+      );
+    }
+    if (!ancestorsOf(phase.id).has(spec.fromPhase)) {
+      throw new PipelineValidationError(
+        `${where}: changeContext.fromPhase names "${spec.fromPhase}", which is not a dependency of this phase; add it to needs so it is guaranteed to have been accepted first`,
+      );
+    }
+  }
 }
 
 /**

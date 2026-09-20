@@ -105,6 +105,35 @@ import {
   updateVerificationStatus,
   writeVerificationRecord,
 } from "./knowledge/verificationStaging.js";
+import {
+  ChangeProposalError,
+  buildChangeContext,
+  buildChangeIntentInput,
+  changeContextFile,
+  changeContextInstruction,
+  changeIntentInstruction,
+  changeRequestFile,
+  checkChangeProposal,
+  describeChangeProposal,
+  parseChangeProposal,
+  previewChangeProposal,
+  requestWithIdentity,
+  selectedChangeRules,
+  summarizeChangeIntent,
+  validateChangeRequest,
+  writeReadOnlyInput,
+  type ChangeIntentContext,
+} from "./knowledge/changeIntent.js";
+import type { ChangeProposalAcceptance } from "./knowledge/changeIntent.js";
+import {
+  ensureChangeProposalDir,
+  changeProposalFile,
+  readAgentProposal,
+  readProposalRecord,
+  updateProposalStatus,
+  writeProposalRecord,
+} from "./knowledge/changeStaging.js";
+import { acceptedChangeProposalOfPhase } from "./knowledge/kernel.js";
 
 import { readLedger } from "./knowledge/store.js";
 import { markPipelineStarted, readPipelines } from "./sources/pipelines.js";
@@ -149,8 +178,13 @@ import { spawnPipelineProcess } from "./pipelineProcess.js";
 import type { PipelineProcessHandle } from "./pipelineProcess.js";
 import type { SpawnPlan } from "./runtimes/index.js";
 import type {
+  AcceptedChangeProposal,
   AgentRuntimeId,
+  ChangeProposalRecord,
+  ChangeRequest,
+  ChangeRuleState,
   ClaimRef,
+  KnowledgeDelta,
   KnowledgeDeltaRecord,
   RuleVerificationRecord,
   StepKnowledgeDelta,
@@ -191,6 +225,12 @@ interface PlannedRun {
   /** The semantic context this run receives, resolved at planning against
    *  the attempt's one ledger snapshot. Null = the step declares none. */
   knowledgeContext: PlannedKnowledgeContext | null;
+  /** The change-intent input this run receives, resolved at planning. Null =
+   *  the phase is not a change-intent phase. */
+  changeIntent: PlannedChangeIntent | null;
+  /** The accepted change proposal this run implements, resolved at planning
+   *  from the ledger. Null = the phase declares no `changeContext`. */
+  changeContext: PlannedChangeContext | null;
 }
 
 /**
@@ -202,6 +242,29 @@ interface PlannedRun {
  * run will find in the file.
  */
 type PlannedKnowledgeContext = { resolved: ResolvedKnowledgeContext } | { error: string };
+
+/**
+ * A change-intent phase's input after resolution (Phase 7): the frozen
+ * request, the rules the run is accountable for with their current
+ * conformance, and the document Argus materializes for it — or the reason no
+ * request could be resolved, which fails the step as `configuration` before
+ * any process starts. A phase whose author declared `changeIntent` and whose
+ * instance supplied no request is a definition that cannot run, not a run
+ * that should invent one.
+ */
+type PlannedChangeIntent =
+  | { request: ChangeRequest; selected: ClaimRef[]; relevant: ChangeRuleState[]; text: string }
+  | { error: string };
+
+/**
+ * A downstream phase's accepted change intent after resolution (Phase 7): the
+ * approved proposal and the document Argus materializes for it, or the reason
+ * it could not be resolved — no accepted proposal for the named phase (one is
+ * still staged at its gate, or the phase committed none), or one that is not
+ * implementation-ready. Both refuse the launch rather than letting an
+ * implementation run proceed on unapproved or unfinished intent.
+ */
+type PlannedChangeContext = { accepted: AcceptedChangeProposal; text: string } | { error: string };
 import type {
   CandidateRecord,
   KnowledgeCommitVerdict,
@@ -1029,8 +1092,19 @@ export function createEngine(deps: EngineDeps): Engine {
     // disagree about which revision "active" meant, and a revision committed
     // while the agents run is, by construction, not in any of their files.
     // A retry or a revise plans a new attempt and reads a new snapshot.
+    // The same snapshot answers Phase 7's two questions — which rules a change
+    // agent is accountable for, and which accepted proposal an implementation
+    // run receives — so a change phase reads the ledger exactly once too.
     const contextSpecs = phaseDef.steps.map((sd) => effectiveContextSpec(phaseDef, sd));
-    const ledgerSnapshot = contextSpecs.some((spec) => spec !== null) ? await readLedger() : null;
+    const needsLedger =
+      contextSpecs.some((spec) => spec !== null) ||
+      phaseDef.changeIntent !== undefined ||
+      phaseDef.changeContext !== undefined;
+    const ledgerSnapshot = needsLedger ? await readLedger() : null;
+    // The repository revision a change-intent phase's conformance projection is
+    // scoped to: the phase's own tree, read once. A change phase reads no code,
+    // so this is only the commit the answer is *about* — never evidence.
+    const changeGitHead = phaseDef.changeIntent ? await readGitHead(phaseDef.cwd) : null;
     // What is actually launched: one run per declared step, or `count` runs of
     // the single step a candidates phase has.
     const units = candidates
@@ -1094,6 +1168,66 @@ export function createEngine(deps: EngineDeps): Engine {
           };
         }
       }
+      // The change-intent input (Phase 7), frozen now for the same reason the
+      // semantic context is: every run of one attempt must answer the same
+      // request against the same reading of the ledger. The rules the run is
+      // accountable for are exactly the ones its KnowledgeContext supplied —
+      // there is no second selection mechanism — and their current
+      // implementation conformance is projected at the commit the run will
+      // work at.
+      let changeIntent: PlannedChangeIntent | null = null;
+      if (phaseDef.changeIntent) {
+        const request = resolveChangeRequest(phaseDef, inst, progress.attempt, startedAt);
+        if (!request) {
+          changeIntent = {
+            error:
+              `change intent: phase "${phaseDef.id}" declares changeIntent but no ChangeRequest ` +
+              "was supplied — author one on the phase, or start the instance with a " +
+              "triggerPayload carrying `changeRequest`",
+          };
+        } else {
+          const supplied =
+            knowledgeContext && "resolved" in knowledgeContext
+              ? knowledgeContext.resolved.supplied
+              : [];
+          const selected = selectedChangeRules(ledgerSnapshot, supplied, phaseDef.changeIntent);
+          const built = buildChangeIntentInput(
+            ledgerSnapshot,
+            request,
+            selected,
+            changeGitHead,
+            startedAt,
+          );
+          changeIntent = { request, selected, relevant: built.relevant, text: built.text };
+        }
+      }
+      // The accepted change intent this run implements (Phase 7 §downstream
+      // handoff). Resolved from the ledger's *accepted* proposals only, so a
+      // proposal still staged at its gate resolves to nothing and refuses the
+      // launch — unapproved intent can never reach an implementation run.
+      let changeContext: PlannedChangeContext | null = null;
+      if (phaseDef.changeContext) {
+        const spec = phaseDef.changeContext;
+        const accepted = ledgerSnapshot
+          ? acceptedChangeProposalOfPhase(ledgerSnapshot, inst.id, spec.fromPhase)
+          : null;
+        if (!accepted) {
+          changeContext = {
+            error:
+              `change context: phase "${spec.fromPhase}" has no accepted ChangeProposal on this ` +
+              "instance; a staged proposal waiting at a gate is deliberately not readable here",
+          };
+        } else if ((spec.requireReady ?? true) && accepted.readiness !== "ready") {
+          changeContext = {
+            error:
+              `change context: the accepted proposal ${accepted.id} from phase ` +
+              `"${spec.fromPhase}" is ${accepted.readiness}; it has unresolved questions or ` +
+              "uncovered rule changes, so it may not drive an implementation",
+          };
+        } else {
+          changeContext = { accepted, text: buildChangeContext(accepted, startedAt).text };
+        }
+      }
       // Narrowest wins: a candidate's variant names its runtime, else the step,
       // else its phase, else the pipeline, else the server default. Resolved and
       // written down here, so a mixed-runtime pipeline stays readable on the
@@ -1147,6 +1281,17 @@ export function createEngine(deps: EngineDeps): Engine {
                 )
               : [],
           ) +
+          // Change-intent reasoning (Phase 7): the request, the rules this run
+          // must account for, and their current implementation conformance —
+          // context for the reasoning, never a reason to change a rule.
+          changeIntentInstruction(
+            phaseDef.changeIntent,
+            changeIntent && "error" in changeIntent ? null : (changeIntent?.request ?? null),
+            changeIntent && "error" in changeIntent ? [] : (changeIntent?.relevant ?? []),
+          ) +
+          changeContextInstruction(
+            changeContext && "accepted" in changeContext ? changeContext.accepted : null,
+          ) +
           memoryInstruction(memoryPolicy) +
           (knowledgeContext && "resolved" in knowledgeContext
             ? knowledgeContextInstruction(knowledgeContext.resolved.supplied)
@@ -1185,6 +1330,8 @@ export function createEngine(deps: EngineDeps): Engine {
         workspace,
         contextFiles: rendered.contextFiles,
         knowledgeContext,
+        changeIntent,
+        changeContext,
       });
     }
     // Record the runIds on the instance up front, then persist once (no write races).
@@ -1204,6 +1351,9 @@ export function createEngine(deps: EngineDeps): Engine {
     // Same for the verification summary: an abandoned attempt's outcomes
     // describe results that can never become durable.
     delete progress.ruleVerification;
+    // And the change-intent summary: a superseded attempt's proposal describes
+    // a transition nobody can accept any more.
+    delete progress.changeIntent;
     await saveInstance(inst);
     void journal(inst.id, {
       at: startedAt,
@@ -1264,6 +1414,8 @@ export function createEngine(deps: EngineDeps): Engine {
         memoryDir,
         contextFiles: unit.contextFiles,
         knowledgeContext: unit.knowledgeContext,
+        changeIntent: unit.changeIntent,
+        changeContext: unit.changeContext,
       });
       void journal(inst.id, {
         at: nowISO(),
@@ -1443,6 +1595,49 @@ export function createEngine(deps: EngineDeps): Engine {
     contextFiles: { path: string; contents: string }[];
     /** The run's semantic context as planned, or null for a step without one. */
     knowledgeContext: PlannedKnowledgeContext | null;
+    /** The run's change-intent input as planned (Phase 7), or null. */
+    changeIntent: PlannedChangeIntent | null;
+    /** The accepted change intent this run implements, or null. */
+    changeContext: PlannedChangeContext | null;
+  }
+
+  /**
+   * The {@link ChangeRequest} one change-intent phase attempt answers.
+   *
+   * Two sources, in a fixed precedence, and no third:
+   *
+   * - the **instance's trigger payload**, when it carries a `changeRequest`.
+   *   A request supplied when this particular run was started is more specific
+   *   than the pipeline's default, so it wins;
+   * - the phase's authored `changeIntent.request`.
+   *
+   * Null when neither resolves, or when what arrived is not a valid request —
+   * which fails the step as `configuration`. Argus never invents a request: a
+   * change-intent phase with nothing to reason about is a definition that
+   * cannot run, and running it would produce a proposal answering nothing.
+   *
+   * The request is given an identity here when its author gave it none, keyed
+   * to the phase attempt so both runs of one attempt answer the same request.
+   */
+  function resolveChangeRequest(
+    phaseDef: PhaseDef,
+    inst: PipelineInstance,
+    attempt: number,
+    now: string,
+  ): ChangeRequest | null {
+    const fromTrigger = (inst.triggerPayload as { changeRequest?: unknown } | undefined)
+      ?.changeRequest;
+    let request: ChangeRequest | null = null;
+    if (fromTrigger !== undefined && fromTrigger !== null) {
+      try {
+        request = validateChangeRequest(fromTrigger, "triggerPayload.changeRequest");
+      } catch {
+        request = null;
+      }
+    }
+    request ??= phaseDef.changeIntent?.request ?? null;
+    if (!request) return null;
+    return requestWithIdentity(request, `CR-${inst.id}-${phaseDef.id}-${attempt}`, now);
   }
 
   type Launched =
@@ -1498,10 +1693,19 @@ export function createEngine(deps: EngineDeps): Engine {
     const invocationDir = runInvocationDir(run.id);
     // A semantic context the planning snapshot could not resolve refuses the
     // step here, as a `configuration` failure: the definition names knowledge
-    // the ledger does not hold, and running again cannot change that.
-    if (ctx.knowledgeContext && "error" in ctx.knowledgeContext) {
+    // the ledger does not hold, and running again cannot change that. The two
+    // change-intent inputs (Phase 7) refuse it the same way and for the same
+    // reason: a change phase with no request, or an implementation phase whose
+    // intent is unapproved or unfinished, must not launch an agent at all.
+    const plannedError =
+      (ctx.knowledgeContext && "error" in ctx.knowledgeContext
+        ? ctx.knowledgeContext.error
+        : null) ??
+      (ctx.changeIntent && "error" in ctx.changeIntent ? ctx.changeIntent.error : null) ??
+      (ctx.changeContext && "error" in ctx.changeContext ? ctx.changeContext.error : null);
+    if (plannedError) {
       sem.release();
-      const reason = ctx.knowledgeContext.error;
+      const reason = plannedError;
       await writeRun({
         ...run,
         status: "failed",
@@ -1515,7 +1719,10 @@ export function createEngine(deps: EngineDeps): Engine {
     // protocol): materialized in the run's own invocation directory before the
     // process exists, named to the agent by the variable, and recorded on the
     // invocation — exact refs and the file's hash — as what Argus supplied.
-    const resolvedContext = ctx.knowledgeContext?.resolved ?? null;
+    const resolvedContext =
+      ctx.knowledgeContext && "resolved" in ctx.knowledgeContext
+        ? ctx.knowledgeContext.resolved
+        : null;
     const contextFile = resolvedContext ? knowledgeContextFile(run.id) : null;
     if (contextFile) env.ARGUS_KNOWLEDGE_CONTEXT_FILE = contextFile;
     // Where a verification phase's run must leave its conformance results
@@ -1525,6 +1732,23 @@ export function createEngine(deps: EngineDeps): Engine {
     // express "the code violates this rule" as opposing evidence on the rule.
     const verificationFile = ctx.phaseDef.ruleVerification ? ruleVerificationFile(run.id) : null;
     if (verificationFile) env.ARGUS_RULE_VERIFICATION_FILE = verificationFile;
+    // The change-intent channels (docs/KNOWLEDGE-LEDGER.md § Phase 7): the
+    // request Argus materializes for the run to read, and the proposal file it
+    // must answer with. Its own sidecar, deliberately not the KnowledgeDelta:
+    // a proposal carries what is preserved, how success is judged and what is
+    // unresolved, none of which are claims.
+    const plannedIntent =
+      ctx.changeIntent && "request" in ctx.changeIntent ? ctx.changeIntent : null;
+    const requestFile = plannedIntent ? changeRequestFile(run.id) : null;
+    const proposalFile = plannedIntent ? changeProposalFile(run.id) : null;
+    if (requestFile) env.ARGUS_CHANGE_REQUEST_FILE = requestFile;
+    if (proposalFile) env.ARGUS_CHANGE_PROPOSAL_FILE = proposalFile;
+    // And the downstream half: the accepted intent an implementation run acts
+    // on, read-only, naming exact canonical revisions.
+    const plannedChange =
+      ctx.changeContext && "accepted" in ctx.changeContext ? ctx.changeContext : null;
+    const changeFile = plannedChange ? changeContextFile(run.id) : null;
+    if (changeFile) env.ARGUS_CHANGE_CONTEXT_FILE = changeFile;
     let prepared: PreparedInvocation;
     try {
       await mkdir(invocationDir, { recursive: true });
@@ -1533,6 +1757,9 @@ export function createEngine(deps: EngineDeps): Engine {
       if (contextFile && resolvedContext) {
         await writeKnowledgeContextFile(contextFile, resolvedContext.text);
       }
+      if (proposalFile) await ensureChangeProposalDir(run.id);
+      if (requestFile && plannedIntent) await writeReadOnlyInput(requestFile, plannedIntent.text);
+      if (changeFile && plannedChange) await writeReadOnlyInput(changeFile, plannedChange.text);
       // The clock the deadline runs from: now, with the slot held and the
       // process about to start.
       run.startedAt = nowISO();
@@ -1552,6 +1779,9 @@ export function createEngine(deps: EngineDeps): Engine {
         resultFile,
         knowledgeDeltaFile: deltaFile,
         ruleVerificationFile: verificationFile,
+        changeRequestFile: requestFile,
+        changeProposalFile: proposalFile,
+        changeContextFile: changeFile,
         knowledgeContext:
           contextFile && resolvedContext
             ? {
@@ -2313,8 +2543,17 @@ export function createEngine(deps: EngineDeps): Engine {
   ): Promise<Intake> {
     const refused = await checkContextIntegrity(inst, phaseId, runId);
     if (refused) return refused;
-    const delta = await intakeKnowledgeDelta(def, inst, phaseId, runId);
+    // Change intent (Phase 7) is read *before* the delta, because on a
+    // change-intent phase the proposal carries the delta: the semantic half of
+    // a ChangeProposal is staged through exactly the KnowledgeDelta machinery,
+    // so there is still one path by which anything becomes canonical.
+    const proposal = await intakeChangeProposal(def, inst, phaseId, runId);
+    if (!proposal.ok) return proposal;
+    const delta = await intakeKnowledgeDelta(def, inst, phaseId, runId, proposal.semanticDelta);
     if (!delta.ok) return delta;
+    if (proposal.recordRunId) {
+      await bindProposalDelta(def, inst, phaseId, proposal.recordRunId, delta.staged?.id);
+    }
     // Business-rule verification (Phase 6) rides the same boundary: a
     // conformance proposal is read, validated and staged exactly as a delta
     // is, and refused the same way. Its own channel, its own record, its own
@@ -2365,6 +2604,11 @@ export function createEngine(deps: EngineDeps): Engine {
     inst: PipelineInstance,
     phaseId: string,
     runId: string,
+    /** The semantic half of a ChangeProposal (Phase 7), when this run is a
+     *  change-intent run. Supplied instead of the agent's delta file, which a
+     *  change-intent run may not write: one run, one account of what it
+     *  proposes. */
+    provided?: KnowledgeDelta,
   ): Promise<Intake> {
     const phase = inst.phases.find((p) => p.id === phaseId);
     const step = phase?.steps.find((s) => s.runId === runId);
@@ -2387,7 +2631,7 @@ export function createEngine(deps: EngineDeps): Engine {
     }
 
     const file = await readAgentDelta(runId);
-    if (file.kind === "none") return { ok: true, staged: null };
+    if (provided === undefined && file.kind === "none") return { ok: true, staged: null };
 
     // What Argus supplied to this run ({@link suppliedFor}). Copied onto the
     // staged record so the commit can classify each consumed entry as
@@ -2429,18 +2673,32 @@ export function createEngine(deps: EngineDeps): Engine {
       return { ok: false, reason: full, failure: "knowledge-delta" };
     };
 
-    if (file.kind === "unreadable") return reject(file.reason);
     let delta: KnowledgeDeltaRecord["delta"];
-    try {
-      delta = parseKnowledgeDelta(file.text);
-    } catch (e) {
-      return reject(
-        e instanceof KnowledgeDeltaError
-          ? `${e.code}: ${e.message}`
-          : e instanceof Error
-            ? e.message
-            : String(e),
-      );
+    if (provided !== undefined) {
+      // A change-intent run proposes semantics only through its proposal. A
+      // delta file beside it would be a second, unreviewed account of what the
+      // change means, so it refuses the step rather than being ignored.
+      if (file.kind !== "none") {
+        return reject(
+          "this is a change-intent run: propose semantics through the ChangeProposal's " +
+            "semanticDelta, not through a separate KnowledgeDelta file",
+        );
+      }
+      delta = provided;
+    } else {
+      if (file.kind === "none") return { ok: true, staged: null };
+      if (file.kind === "unreadable") return reject(file.reason);
+      try {
+        delta = parseKnowledgeDelta(file.text);
+      } catch (e) {
+        return reject(
+          e instanceof KnowledgeDeltaError
+            ? `${e.code}: ${e.message}`
+            : e instanceof Error
+              ? e.message
+              : String(e),
+        );
+      }
     }
     // A document that proposes nothing is the same as no document.
     if (isEmptyDelta(delta)) return { ok: true, staged: null };
@@ -2945,6 +3203,7 @@ export function createEngine(deps: EngineDeps): Engine {
       for (const q of proposals) {
         await updateDeltaStatus(q.execution.runId, "rejected", { at, reason });
       }
+      await refuseChangeProposals(phase, reason, at);
       return { ok: false, reason };
     };
     for (const p of proposals) {
@@ -2983,10 +3242,27 @@ export function createEngine(deps: EngineDeps): Engine {
     if (!verifications.ok) {
       const reason = `rule-verification commit refused: ${verifications.reason}`;
       await refuseVerifications(phase, reason, at);
+      await refuseChangeProposals(phase, reason, at);
+      return refuseAll(reason);
+    }
+    // The attempt's accepted change intent (Phase 7). Gathered before the write
+    // so the request that caused a revision, and the revision itself, are one
+    // transition: a ledger holding RULE-42:v2 with no record of why it exists
+    // is exactly the provenance gap this phase closes.
+    const changes = await changeAcceptancesOf(inst, phase);
+    if (!changes.ok) {
+      const reason = `change-proposal commit refused: ${changes.reason}`;
+      await refuseVerifications(phase, reason, at);
+      await refuseChangeProposals(phase, reason, at);
       return refuseAll(reason);
     }
     try {
-      const results = await commitPhaseSemantics(proposals, verifications.proposals, deps.now());
+      const results = await commitPhaseSemantics(
+        proposals,
+        verifications.proposals,
+        deps.now(),
+        changes.acceptances,
+      );
       for (const [i, p] of proposals.entries()) {
         await updateDeltaStatus(p.execution.runId, "applied", { at, result: results.deltas[i] });
       }
@@ -3003,6 +3279,18 @@ export function createEngine(deps: EngineDeps): Engine {
           },
         });
       }
+      // And the change-intent sidecar keeps the durable proposal it became, so
+      // "what did this attempt make canonical, and why?" is answerable from the
+      // record beside the run as well as from the ledger.
+      for (const step of phase.steps) {
+        if (!step.runId || !step.changeProposal) continue;
+        if (!(phase.knowledge?.changeProposals ?? []).includes(step.changeProposal.id)) continue;
+        const accepted = results.changeProposals.find((c) => c.execution.runId === step.runId);
+        await updateProposalStatus(step.runId, "accepted", {
+          at,
+          ...(accepted ? { result: { proposal: accepted } } : {}),
+        });
+      }
       return { ok: true };
     } catch (e) {
       const reason = `${verifications.proposals.length > 0 && proposals.length === 0 ? "rule-verification" : "KnowledgeDelta"} commit refused: ${
@@ -3016,7 +3304,337 @@ export function createEngine(deps: EngineDeps): Engine {
         await updateDeltaStatus(p.execution.runId, "rejected", { at, reason });
       }
       await refuseVerifications(phase, reason, at);
+      await refuseChangeProposals(phase, reason, at);
       return { ok: false, reason };
+    }
+  }
+
+  // ── Change intent (Phase 7) ────────────────────────────────────────────────
+  //
+  // The same three moments again, on their own channel:
+  //
+  //   intake   — a change-intent run completed; its proposal is read, validated
+  //              against the request and the rules Argus supplied it, and
+  //              staged beside the run. Its `semanticDelta` is handed to the
+  //              KnowledgeDelta intake, so the semantic half is staged by
+  //              exactly the Phase 3 machinery and there is still one path to
+  //              canonical;
+  //   commit   — the phase crossed every acceptance condition; the proposal's
+  //              delta and the durable record of the request that caused it are
+  //              written in the *same* ledger transition, or neither is;
+  //   retire   — an attempt failed, was revised, was aborted, or lost a
+  //              selection; its staged proposal is superseded and can never
+  //              become canonical.
+  //
+  // What a change proposal never does, at any of the three: become canonical
+  // without a person, or let the implementation's current behaviour stand in
+  // for what the business intends.
+
+  type ProposalIntake =
+    | {
+        ok: true;
+        /** The proposal's semantic half, for the delta intake. Absent when the
+         *  phase is not a change-intent phase. */
+        semanticDelta?: KnowledgeDelta;
+        /** The run whose staged proposal must be bound to the delta. */
+        recordRunId?: string;
+      }
+    | { ok: false; reason: string; failure: RetryableClass };
+
+  /**
+   * What the run was actually given, read back from the document Argus
+   * materialized for it (`ARGUS_CHANGE_REQUEST_FILE`).
+   *
+   * Deliberately read from the file rather than recomputed from the definition:
+   * that file *is* the record of what this run was asked, frozen at launch, and
+   * it survives a restart between the launch and the completion. Recomputing it
+   * would let a pipeline edited mid-flight change what a finished run is held
+   * to.
+   */
+  async function changeIntentOf(
+    runId: string,
+  ): Promise<{ request: ChangeRequest; selected: ClaimRef[]; gitHead: string | null } | null> {
+    const invocation = await readInvocation(runId);
+    const file = invocation?.changeRequestFile ?? changeRequestFile(runId);
+    try {
+      const parsed = JSON.parse(await readFile(file, "utf8")) as {
+        schemaVersion?: number;
+        request?: ChangeRequest;
+        relevant?: ChangeRuleState[];
+        gitHead?: string;
+      };
+      if (parsed.schemaVersion !== 1 || !parsed.request) return null;
+      return {
+        request: parsed.request,
+        selected: (parsed.relevant ?? []).map((r) => r.claim),
+        gitHead: parsed.gitHead ?? null,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Read, validate and stage the ChangeProposal a completed change-intent run
+   * wrote. Sets `step.changeProposal` on the in-memory instance when one was
+   * staged, so the transition that follows sees it. Never touches the ledger.
+   *
+   * The same asymmetry with a KnowledgeDelta as a verification report has, and
+   * it is deliberate: **no file is not "nothing proposed"**. A run given an
+   * explicit requested change has an obligation to answer it, so an absent
+   * proposal refuses the step rather than letting the phase succeed as though
+   * the change had been considered.
+   */
+  async function intakeChangeProposal(
+    def: PipelineDefinition,
+    inst: PipelineInstance,
+    phaseId: string,
+    runId: string,
+  ): Promise<ProposalIntake> {
+    const phaseDef = def.phases.find((pd) => pd.id === phaseId);
+    const policy = phaseDef?.changeIntent;
+    if (!policy) return { ok: true };
+    const phase = inst.phases.find((p) => p.id === phaseId);
+    const step = phase?.steps.find((sp) => sp.runId === runId);
+    if (!phase || !step) return { ok: true };
+    const at = nowISO();
+
+    // Staged already (a restart between the record write and the instance
+    // write): the record decides, exactly as it did the first time.
+    const existing = await readProposalRecord(runId);
+    if (existing && existing.attempt === phase.attempt) {
+      if (existing.status === "rejected") {
+        return {
+          ok: false,
+          reason: existing.reason ?? "the change proposal was rejected",
+          failure: "change-proposal",
+        };
+      }
+      step.changeProposal = { id: existing.id, status: existing.status };
+      return {
+        ok: true,
+        semanticDelta: existing.proposal?.semanticDelta ?? { schemaVersion: 1 },
+        recordRunId: runId,
+      };
+    }
+
+    const given = await changeIntentOf(runId);
+    const supplied = await suppliedFor(runId);
+    const base: Omit<ChangeProposalRecord, "status" | "request" | "selected"> = {
+      id: `CP-${deps.newId()}`,
+      runId,
+      instanceId: inst.id,
+      phaseId,
+      attempt: phase.attempt,
+      step: step.name,
+      receivedAt: at,
+      updatedAt: at,
+      ...(supplied !== undefined ? { supplied } : {}),
+      ...(given?.gitHead ? { gitHead: given.gitHead } : {}),
+    };
+    const reject = async (
+      reason: string,
+      extra: Partial<ChangeProposalRecord> = {},
+    ): Promise<ProposalIntake> => {
+      const full = `change proposal rejected: ${reason}`;
+      await writeProposalRecord({
+        ...base,
+        request: given?.request ?? { id: "CR-unknown", summary: "(unrecorded)" },
+        selected: given?.selected ?? [],
+        status: "rejected",
+        reason: full,
+        ...extra,
+      });
+      void journal(inst.id, {
+        at,
+        kind: "change.rejected",
+        phaseId,
+        runId,
+        attempt: phase.attempt,
+        detail: `${base.id}: ${reason}`,
+      });
+      return { ok: false, reason: full, failure: "change-proposal" };
+    };
+
+    // Argus cannot hold a run to a request it cannot read back. Refusing is
+    // the only honest option: accepting would credit the proposal with
+    // answering whatever the definition says *now*.
+    if (!given) {
+      return reject(
+        `the change-intent input Argus materialized for run ${runId} could not be read back, so what this run was asked cannot be established`,
+      );
+    }
+
+    const file = await readAgentProposal(runId);
+    if (file.kind === "none") {
+      return reject(
+        `the run wrote no change proposal; a change-intent phase must answer the requested change "${given.request.summary}" with a structured proposal`,
+      );
+    }
+    if (file.kind === "unreadable") return reject(file.reason);
+    let proposal: ChangeProposalRecord["proposal"];
+    try {
+      proposal = parseChangeProposal(file.text);
+    } catch (e) {
+      return reject(
+        e instanceof ChangeProposalError
+          ? `${e.code}: ${e.message}`
+          : e instanceof Error
+            ? e.message
+            : String(e),
+      );
+    }
+
+    const ctx: ChangeIntentContext = {
+      policy,
+      request: given.request,
+      selected: given.selected,
+      gitHead: given.gitHead,
+    };
+    const verdict = checkChangeProposal(proposal, await readLedger(), ctx);
+    if (verdict.refusal) {
+      return reject(`${verdict.refusal.code}: ${verdict.refusal.message}`, { proposal });
+    }
+
+    await writeProposalRecord({
+      ...base,
+      request: given.request,
+      selected: given.selected,
+      status: "staged",
+      proposal,
+      readiness: verdict.readiness,
+    });
+    step.changeProposal = { id: base.id, status: "staged" };
+    void journal(inst.id, {
+      at,
+      kind: "change.staged",
+      phaseId,
+      runId,
+      attempt: phase.attempt,
+      detail: `${base.id}: ${describeChangeProposal(proposal)} (${verdict.readiness})`,
+    });
+    return {
+      ok: true,
+      semanticDelta: proposal.semanticDelta ?? { schemaVersion: 1 },
+      recordRunId: runId,
+    };
+  }
+
+  /**
+   * Bind the staged proposal to the staged delta that carries its semantic
+   * half, and recompute the phase's summary.
+   *
+   * The two records are written separately — the delta by the Phase 3 intake,
+   * the proposal by Phase 7's — and this is what ties them together, so the
+   * commit knows which apply result to resolve the proposal's local references
+   * against. A proposal whose semantic delta was empty gets no `deltaId`, which
+   * is the honest record of a change that proposed no canonical mutation.
+   */
+  async function bindProposalDelta(
+    def: PipelineDefinition,
+    inst: PipelineInstance,
+    phaseId: string,
+    runId: string,
+    deltaId: string | undefined,
+  ): Promise<void> {
+    const record = await readProposalRecord(runId);
+    if (record && record.status === "staged" && record.deltaId !== deltaId) {
+      await writeProposalRecord({
+        ...record,
+        ...(deltaId ? { deltaId } : {}),
+        updatedAt: nowISO(),
+      });
+    }
+    const phase = inst.phases.find((p) => p.id === phaseId);
+    if (phase) await refreshChangeIntentSummary(def, phase);
+  }
+
+  /** Recompute a change-intent phase's {@link ChangeIntentSummary} from the
+   *  attempt's staged proposal. Counts only; the proposal itself stays in the
+   *  staged record, which is the one authoritative form of it. */
+  async function refreshChangeIntentSummary(
+    def: PipelineDefinition,
+    phase: PhaseProgress,
+  ): Promise<void> {
+    const phaseDef = def.phases.find((p) => p.id === phase.id);
+    const ledger = await readLedger();
+    let preview = null;
+    let staged = false;
+    for (const step of phase.steps) {
+      if (!step.runId || !step.changeProposal) continue;
+      const record = await readProposalRecord(step.runId);
+      if (!record?.proposal || record.attempt !== phase.attempt) continue;
+      const deltaRecord = record.deltaId ? await readDeltaRecord(step.runId) : null;
+      preview = previewChangeProposal(
+        record,
+        ledger,
+        deltaRecord?.id === record.deltaId ? deltaRecord : null,
+        phaseDef?.changeIntent,
+      );
+      staged = record.status === "staged";
+    }
+    const summary = summarizeChangeIntent(preview, phase.knowledge?.status !== "applied" && staged);
+    if (summary) phase.changeIntent = summary;
+  }
+
+  /**
+   * The change proposals a held phase would accept, resolved into the durable
+   * records they become — or a refusal.
+   *
+   * Everything here was already decided at intake; what is gathered now is the
+   * material the ledger transition needs, and the one thing that can still have
+   * changed: a staged record that belongs to another attempt, or is no longer
+   * staged at all.
+   */
+  async function changeAcceptancesOf(
+    inst: PipelineInstance,
+    phase: PhaseProgress,
+  ): Promise<
+    { ok: true; acceptances: ChangeProposalAcceptance[] } | { ok: false; reason: string }
+  > {
+    const wanted = phase.knowledge?.changeProposals ?? [];
+    if (wanted.length === 0) return { ok: true, acceptances: [] };
+    const acceptances: ChangeProposalAcceptance[] = [];
+    for (const step of phase.steps) {
+      const id = step.changeProposal?.id;
+      if (!id || !wanted.includes(id) || !step.runId) continue;
+      const record = await readProposalRecord(step.runId);
+      if (!record || record.id !== id || !record.proposal) {
+        return { ok: false, reason: `change proposal ${id} is not staged for run ${step.runId}` };
+      }
+      if (record.attempt !== phase.attempt) {
+        return {
+          ok: false,
+          reason: `change proposal ${id} was staged for attempt ${record.attempt}, not ${phase.attempt}`,
+        };
+      }
+      acceptances.push({
+        id,
+        request: record.request,
+        execution: { runId: step.runId, instanceId: inst.id, phaseId: phase.id },
+        attempt: phase.attempt,
+        ...(record.deltaId ? { deltaId: record.deltaId } : {}),
+        readiness: record.readiness ?? "needs-input",
+        preserved: record.proposal.preserved ?? [],
+        acceptanceCriteria: record.proposal.acceptanceCriteria ?? [],
+        unresolved: record.proposal.unresolved ?? [],
+        classification: record.proposal.classification ?? [],
+      });
+    }
+    return { ok: true, acceptances };
+  }
+
+  /** Mark every staged change proposal of a held phase as rejected: the commit
+   *  is one transition, so one refusal refuses all of it. */
+  async function refuseChangeProposals(
+    phase: PhaseProgress,
+    reason: string,
+    at: string,
+  ): Promise<void> {
+    for (const step of phase.steps) {
+      if (!step.runId || !step.changeProposal) continue;
+      if (!(phase.knowledge?.changeProposals ?? []).includes(step.changeProposal.id)) continue;
+      await updateProposalStatus(step.runId, "rejected", { at, reason });
     }
   }
 
@@ -3066,6 +3684,7 @@ export function createEngine(deps: EngineDeps): Engine {
       const settledPhase = next.instance.phases.find((p) => p.id === phaseId);
       if (settledPhase?.discovery) await refreshDiscoverySummary(def, settledPhase);
       if (settledPhase?.ruleVerification) await refreshVerificationSummary(settledPhase);
+      if (settledPhase?.changeIntent) await refreshChangeIntentSummary(def, settledPhase);
       // One commit, two journals — each written only when that half had
       // something at stake, so a verification-only phase never logs "0 deltas"
       // and a delta-only phase never logs a verification.
@@ -3079,6 +3698,16 @@ export function createEngine(deps: EngineDeps): Engine {
           detail: verdict.ok
             ? `${verifications.length} verification proposal${verifications.length === 1 ? "" : "s"}`
             : verdict.reason,
+        });
+      }
+      const changes = phase.knowledge.changeProposals ?? [];
+      if (changes.length > 0) {
+        void journal(out.instance.id, {
+          at: nowISO(),
+          kind: verdict.ok ? "change.accepted" : "change.rejected",
+          phaseId,
+          attempt: phase.attempt,
+          detail: verdict.ok ? changes.join(", ") : verdict.reason,
         });
       }
       if (phase.knowledge.deltas.length > 0) {
@@ -3100,9 +3729,11 @@ export function createEngine(deps: EngineDeps): Engine {
           def,
           next.instance,
           phaseId,
-          phase.knowledge.deltas.length === 0 && verifications.length > 0
-            ? "rule-verification"
-            : "knowledge-delta",
+          changes.length > 0
+            ? "change-proposal"
+            : phase.knowledge.deltas.length === 0 && verifications.length > 0
+              ? "rule-verification"
+              : "knowledge-delta",
           verdict.reason,
         );
       }
@@ -3125,9 +3756,9 @@ export function createEngine(deps: EngineDeps): Engine {
     };
   }
 
-  /** Move the named steps' staged deltas and verification proposals to
-   *  `superseded`, on disk and on the instance. An `applied` record is never
-   *  touched. */
+  /** Move the named steps' staged deltas, verification proposals and change
+   *  proposals to `superseded`, on disk and on the instance. An `applied` or
+   *  `accepted` record is never touched. */
   async function supersedeDeltas(
     inst: PipelineInstance,
     phase: PhaseProgress,
@@ -3160,12 +3791,24 @@ export function createEngine(deps: EngineDeps): Engine {
           detail: `${step.ruleVerification.id}: ${reason}`,
         });
       }
+      if (step.changeProposal?.status === "staged") {
+        await updateProposalStatus(step.runId, "superseded", { at: nowISO(), reason });
+        step.changeProposal = { ...step.changeProposal, status: "superseded" };
+        void journal(inst.id, {
+          at: nowISO(),
+          kind: "change.superseded",
+          phaseId: phase.id,
+          runId: step.runId,
+          attempt: phase.attempt,
+          detail: `${step.changeProposal.id}: ${reason}`,
+        });
+      }
     }
   }
 
   /**
-   * Every staged delta and verification proposal on an attempt that can no
-   * longer be accepted — a
+   * Every staged delta, verification proposal and change proposal on an
+   * attempt that can no longer be accepted — a
    * failed, aborted or skipped phase, or a step that failed, was aborted (a
    * losing candidate) or was skipped — is superseded. Run on every instance
    * write, because an attempt can end from a dozen places and a hook on each
@@ -3178,7 +3821,9 @@ export function createEngine(deps: EngineDeps): Engine {
         phase.status === "failed" || phase.status === "aborted" || phase.status === "skipped";
       const doomed = phase.steps.filter(
         (s) =>
-          (s.knowledgeDelta?.status === "staged" || s.ruleVerification?.status === "staged") &&
+          (s.knowledgeDelta?.status === "staged" ||
+            s.ruleVerification?.status === "staged" ||
+            s.changeProposal?.status === "staged") &&
           (phaseOver || s.status === "failed" || s.status === "aborted" || s.status === "skipped"),
       );
       if (doomed.length === 0) continue;
