@@ -227,6 +227,24 @@ revision, and how was it meant to be judged?" stays answerable. A request is
 not a rule, and a rule is not its implementation: the code already disagreeing
 with a rule is reported as a defect, never treated as what the business wants.
 
+The fourth dimension closes the loop. An accepted change proposal becomes a
+**change realization**: Argus derives, from provenance it already holds, where
+the change lives in the repository; runs an implementation agent against the
+canonical semantics, the accepted transition and that scope; and then answers
+one question deterministically — _was this change carried out?_ An agent
+reporting success is not an answer. A green test suite is not an answer. Every
+business rule holding is not an answer while an acceptance criterion is
+violated, and every criterion being satisfied is not an answer while a revised
+rule is violated. All four have to hold, at one repository state Argus can
+prove the verification actually examined — `gitHead` plus the content hash of
+any uncommitted work, so two dirty trees at one commit are two different
+implementations. Where the change is unmet, a _targeted_ remediation is told
+the exact failing rules and criteria and only the implementation and its
+verification re-run, under a bound the pipeline author wrote; where the domain
+moved on while the work ran, the realization is `stale` rather than complete.
+Both the failed attempt and the successful one are kept, so the history
+explains how the implementation converged.
+
 Inspect it all at `/api/knowledge`; the design and its worked example are in
 **[docs/KNOWLEDGE-LEDGER.md](docs/KNOWLEDGE-LEDGER.md)**.
 

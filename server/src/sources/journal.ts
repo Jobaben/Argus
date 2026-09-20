@@ -68,6 +68,30 @@ export type JournalKind =
   | "change.rejected"
   | "change.accepted"
   | "change.superseded"
+  | "acceptance.staged"
+  | "acceptance.rejected"
+  | "acceptance.applied"
+  | "acceptance.superseded"
+  /**
+   * Change realization (Phase 8). A closed vocabulary rather than free text,
+   * because "did this accepted change get implemented, and how did it
+   * converge?" is a question the journal is asked directly:
+   *
+   *   realization.started                 attempt 1 launched against CP-12
+   *   realization.implementation-completed the implementation attempt ended
+   *   realization.verification-completed   its verification was accepted
+   *   realization.remediation-started      a targeted attempt 2..n launched
+   *   realization.succeeded                every required dimension held
+   *   realization.failed                   terminal without success
+   *   realization.stale                    the semantic target moved under it
+   */
+  | "realization.started"
+  | "realization.implementation-completed"
+  | "realization.verification-completed"
+  | "realization.remediation-started"
+  | "realization.succeeded"
+  | "realization.failed"
+  | "realization.stale"
   | "instance.ended";
 
 export interface JournalEntry {

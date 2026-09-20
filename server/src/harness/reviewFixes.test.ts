@@ -903,6 +903,11 @@ test("a process that exits non-zero after its own completion signal is journalle
 
   d.resolve({ code: 3 });
   await waitFor(async () => (await runsSrc.readRun(runId))?.run.status === "failed");
+  // The journal append follows the run patch and is not awaited by the
+  // completion handler, so the patched run record does not imply the entry.
+  await waitFor(async () =>
+    (await journalSrc.readJournal(inst!.id)).some((e2: any) => e2.kind === "step.exit-mismatch"),
+  );
 
   const after = await instances.readInstance(inst!.id);
   assert.equal(after.phases[0].status, "succeeded");

@@ -7,6 +7,119 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Targeted implementation and closed-loop change realization (Knowledge
+  Ledger Phase 8).** A phase may now declare `implementation: { maxAttempts?,
+requireCurrentIntent?, includePreserved?, note? }` beside its
+  `changeContext`, and a later phase `acceptanceVerification: {
+implementationPhase, require?, note? }`. Together they form a **change
+  realization**: Argus takes an accepted `ChangeProposal`, derives the
+  implementation scope its own provenance can name, runs an implementation
+  agent against exact semantic intent, verifies the result on four independent
+  dimensions at one proven repository state, and — when the change is unmet —
+  launches a _targeted_ remediation with the exact failures as its input,
+  under a bound the pipeline author wrote.
+
+- **The completion invariant, stated once and enforced deterministically.** An
+  agent reporting `ARGUS_OUTCOME: succeeded` is never sufficient. Neither is a
+  green test suite. Neither is "every business rule holds". A change is
+  realized only when **all** of these hold, and each is decided from a record
+  Argus wrote rather than from a model's opinion:
+
+  ```
+  ChangeRealizationComplete ⟺
+        the implementation execution succeeded
+      ∧ every mandatory deterministic PhaseCheck passed
+      ∧ every targeted business-rule revision  `holds`     at the examined state
+      ∧ every required acceptance criterion    `satisfied` at that same state
+      ∧ the verification examined the state the implementation produced
+      ∧ the semantic target is still the domain's current intent
+  ```
+
+  The dimensions are never merged. `RULE-42:v2 holds` + `npm test` green +
+  `AC-1 satisfied` + `AC-2 satisfied` + **`AC-3 violated`** is not a completed
+  change, and the inverse (every criterion satisfied, a targeted rule violated)
+  is not one either. Neither result rewrites the other.
+
+- **Acceptance verification, a dimension of its own.** `AcceptanceVerification`
+  records `satisfied | violated | unverifiable` for one accepted criterion,
+  addressed by the pair `CP-12/AC-3` — `AC-1` is proposal-local by design, so
+  CP-11's AC-1 can never satisfy CP-12's. It is deliberately **not** mapped
+  onto `RuleVerification`: "non-Kobra behaviour is unchanged" is not a business
+  rule revision and has nothing to be verified against. Its own channel
+  (`ARGUS_ACCEPTANCE_VERIFICATION_FILE`), its own staging store, its own
+  completeness rule (every criterion exactly once, or the whole document is
+  refused), and its own failure class. `unverified` (nobody looked) is never
+  collapsed with `unverifiable` (somebody looked and could not tell).
+
+- **Repository-state identity: two dirty trees at one commit are two
+  implementations.** `RepositoryStateRef` is `gitHead` plus the sha256 of
+  Argus's own working-tree snapshot, so a conformance result bound to the
+  head alone can no longer claim the fixed implementation's verdict about the
+  broken one. And the binding is _proven_: the state the implementation
+  produced and the state the verification examined must be the same, or the
+  realization fails closed as `state-mismatch`. No new worktree subsystem —
+  the snapshots already existed.
+
+- **Deterministic implementation scope, with machine-readable reasons.**
+  Derived from provenance Argus already held — the `ImpactSet` of the
+  superseded revisions (consumer executions and the artifacts they produced),
+  the `source-code` evidence grounding the changed and preserved rules, the
+  locations accepted verifications cited, and the request's own paths — each
+  target carrying a closed `ScopeReasonCode`. `analyzeImpact` is _called_, not
+  duplicated. And it never pretends: a new business rule nothing has ever
+  implemented produces no targets, and the scope says `scope-incomplete` and
+  names the revisions it cannot place, rather than an empty list that would
+  read as "nothing to do".
+
+- **Targeted remediation, bounded and not a retry.** When verification finds
+  the change unmet, Argus writes a `RemediationContext` naming the exact
+  failing rules and criteria, the evidence the verifier cited, the files they
+  point at, and what already holds so a fix does not undo it — from Argus's own
+  accepted results, never from the previous agent's transcript. Only the
+  implementation phase and the phases that verify it re-run; discovery and
+  change intent are accepted history. The loop is bounded by the author's
+  `maxAttempts` (default 2, cap 8, validated when the pipeline is saved), and
+  four outcomes stop it even with attempts remaining: a `blocked`
+  implementation, an `unverifiable` required criterion, a superseded semantic
+  target and a state mismatch. A remediation leaves the phase's `retry` budget
+  untouched and is its own journal kind — a technical retry and a semantic
+  remediation are different facts.
+
+- **Stale intent is surfaced, never silently implemented or silently claimed.**
+  Before launching, a realization whose target revisions are no longer active
+  refuses the launch as a `configuration` failure — the domain has moved past
+  this intent, and a new decision is needed rather than an implementation of
+  the old one. Before declaring success, the same check runs again: the
+  attempt's verification of `RULE-42:v2` stays historically true, and the
+  realization closes `stale` rather than reporting current completion.
+
+- **`ChangeRealization`, the durable record (ledger version 7).** One
+  attempt-chain per implementation phase, answering from the ledger alone and
+  forever: was CP-12 implemented, which runs participated, at which repository
+  state, which rule and acceptance verifications proved it, and what every
+  remediation attempt failed on. `attempts` is append-only — a remediation can
+  never rewrite the attempt it is remediating — and the terminal `outcome` is
+  written once and refuses a second, different verdict. Status is derived, not
+  stored twice.
+
+- **ChangeContext integrity, closed.** Phase 7 materialized the ChangeContext
+  read-only but never checked it again. It, the ImplementationScope and the
+  RemediationContext are now hashed at launch and re-hashed at completion,
+  under the new `change-context-integrity` failure class. It asks one
+  question — _did the bytes supplied to this invocation change?_ — and never
+  _is this still the newest proposal?_: accepted intent is immutable, and
+  being overtaken is staleness, decided from the ledger at close-out.
+
+- **Read-only API and gate review for realizations.** `GET
+/api/knowledge/realizations[/:id[/runs|/results]]`,
+  `GET /api/knowledge/change-proposals/:id/criteria/:criterionId[?gitHead=]`,
+  and the acceptance record/preview routes. The gate drawer gains an
+  **Acceptance criteria** panel shown _beside_ the business-rule panel (never
+  merged with it) and a one-line realization header naming the accepted change
+  and which attempt this is. There is deliberately **no write API** for
+  completion state: only a pipeline phase crossing its acceptance boundary can
+  open, advance or close a realization.
+
 - **Change-intent orchestration (Knowledge Ledger Phase 7).** A phase may now
   declare `changeIntent: { request?, kinds?, acceptanceCriteria?, note? }`,
   which turns it into a **change-intent phase**: it is given an explicit
@@ -219,7 +332,42 @@ unverifiable`, each rule exactly once. A **missing** rule refuses the whole
 
 ### Changed
 
-- **`knowledge.json` is version 5**, adding `verifications[]`. A version 1–4
+- **The server suite reports through Node's `spec` reporter.** A CI log whose
+  _tail_ does not name the test that failed is a diagnosability defect in a
+  harness whose whole thesis is diagnosability: TAP interleaves failures where
+  they occur, so a truncated log of 2 000-plus tests can end with
+  `# fail 1` and nothing else. `spec` ends with a `failing tests:` section
+  carrying the file, the name and the assertion, so the failure is always in
+  the last screen of the log.
+- **A rule verification records its repository _state_ only on a realization's
+  verifier.** An ordinary Phase 6 verification phase takes no working-tree
+  snapshot, spawns no `git`, and writes exactly the record it always did;
+  nothing asks a state-scoped question of it.
+- **`knowledge.json` is version 7**, adding `acceptanceVerifications[]` and
+  `changeRealizations[]`. A version 1–6 document is read as version 7 with the
+  new arrays empty and rewritten in that shape by the next successful
+  transition. An upgraded ledger claims **no** acceptance result and **no**
+  realization for the changes it already holds: a criterion nobody answered
+  reads `unverified`, never `satisfied`, and no accepted change gains a
+  realization nobody ran.
+- **`PhaseFailureClass` gains `acceptance-verification` and
+  `change-context-integrity`** — a refused acceptance proposal (malformed, a
+  criterion the accepted proposal does not declare, a required criterion left
+  unanswered, an outcome with no evidence, a forged check label, a report
+  written against a different accepted change) and an Argus-owned read-only
+  input whose bytes changed during the run. Neither is retried by default.
+- **`RuleVerification` gains `repositoryState`**, beside the existing
+  `repository` and never instead of it: `ruleConformance(rule, gitHead)` is
+  unchanged and still answers the head-scoped question, and
+  `ruleConformanceAtState(rule, state)` answers the stricter one a realization
+  asks. A record written before Phase 8 answers only a _clean_ question at its
+  head — a question carrying uncommitted work is about content it never saw.
+- **A change-intent phase is no longer offered `ARGUS_KNOWLEDGE_DELTA_FILE`.**
+  Such a run's semantic half travels inside its ChangeProposal, and writing
+  both files was already refused — advertising a protocol whose use fails the
+  step is worse than not advertising it. Every other phase is offered the
+  delta channel exactly as before.
+- **`knowledge.json` was version 5** in Phase 6, adding `verifications[]`. A version 1–4
   document is read as version 5 with the new array empty and rewritten in that
   shape by the next successful transition. An upgraded ledger claims **no**
   conformance for the rules it already holds: an unverified rule reads

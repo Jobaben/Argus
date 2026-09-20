@@ -110,13 +110,13 @@ test("persist a graph, reload it: identities, revisions and edges are unchanged"
     assert.equal("lifecycle" in c, false);
     assert.equal("support" in c, false);
   }
-  assert.equal(after.version, 6);
+  assert.equal(after.version, 7);
 });
 
 test("a missing file reads as an empty ledger and the first write creates it", async () => {
   const s = await fresh();
   assert.deepEqual(await s.readLedger(), {
-    version: 6,
+    version: 7,
     claims: [],
     evidence: [],
     justifications: [],
@@ -126,12 +126,14 @@ test("a missing file reads as an empty ledger and the first write creates it", a
     supplied: [],
     verifications: [],
     changeProposals: [],
+    acceptanceVerifications: [],
+    changeRealizations: [],
   });
   await s.createClaim({ id: "A", kind: "fact", statement: "a" }, NOW);
   assert.equal(JSON.parse(readFileSync(file(), "utf8")).claims.length, 1);
 });
 
-test("a Phase 1 (version 1) document is read as version 6 and upgraded by the next write", async () => {
+test("a Phase 1 (version 1) document is read as version 7 and upgraded by the next write", async () => {
   const s = await fresh();
   const k = await kernel();
   mkdirSync(path.dirname(file()), { recursive: true });
@@ -146,7 +148,7 @@ test("a Phase 1 (version 1) document is read as version 6 and upgraded by the ne
   writeFileSync(file(), JSON.stringify(v1Doc));
 
   const read = await s.readLedger();
-  assert.equal(read.version, 6);
+  assert.equal(read.version, 7);
   assert.deepEqual(read.consumptions, []);
   assert.deepEqual(read.artifacts, []);
   assert.deepEqual(read.deltas, []);
@@ -159,6 +161,11 @@ test("a Phase 1 (version 1) document is read as version 6 and upgraded by the ne
   // And no change provenance: an upgraded ledger holds no record of any
   // requested change, which is the honest answer (Phase 7 §18).
   assert.deepEqual(read.changeProposals, []);
+  // And no acceptance results and no realization: an upgraded ledger says no
+  // accepted change was ever implemented, which is the honest answer rather
+  // than a completion nobody established (Phase 8).
+  assert.deepEqual(read.acceptanceVerifications, []);
+  assert.deepEqual(read.changeRealizations, []);
   assert.deepEqual(read.claims, v1Doc.claims);
   // Reading alone rewrites nothing.
   assert.equal(readFileSync(file(), "utf8"), JSON.stringify(v1Doc));
@@ -166,13 +173,15 @@ test("a Phase 1 (version 1) document is read as version 6 and upgraded by the ne
   // The first transition persists the upgraded shape, records intact.
   await s.registerConsumptions({ runId: "run-1" }, { claims: [{ id: "RULE-7" }] }, NOW);
   const disk = JSON.parse(readFileSync(file(), "utf8"));
-  assert.equal(disk.version, 6);
+  assert.equal(disk.version, 7);
   assert.deepEqual(disk.claims, v1Doc.claims);
   assert.equal(disk.consumptions.length, 1);
   assert.deepEqual(disk.deltas, []);
   assert.deepEqual(disk.supplied, []);
   assert.deepEqual(disk.verifications, []);
   assert.deepEqual(disk.changeProposals, []);
+  assert.deepEqual(disk.acceptanceVerifications, []);
+  assert.deepEqual(disk.changeRealizations, []);
   assert.equal(disk.consumptions[0].source, undefined);
   assert.deepEqual(k.consumersOf(disk, { id: "RULE-7", revision: 1 })[0].execution, {
     runId: "run-1",

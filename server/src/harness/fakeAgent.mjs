@@ -47,6 +47,27 @@
  *                                           an earlier phase's commit, so no prompt can name them)
  *   FAKE: read-change-context <name>        copy ARGUS_CHANGE_CONTEXT_FILE into ARGUS_ARTIFACT_DIR/<name>
  *                                           (proves the implementation run received the accepted intent)
+ *   FAKE: read-scope <name>                 copy ARGUS_IMPLEMENTATION_SCOPE_FILE into
+ *                                           ARGUS_ARTIFACT_DIR/<name> (proves the implementation run
+ *                                           received the deterministic scope)
+ *   FAKE: read-remediation <name>           copy ARGUS_REMEDIATION_CONTEXT_FILE into
+ *                                           ARGUS_ARTIFACT_DIR/<name> (proves a remediation run was
+ *                                           told exactly what was unmet)
+ *   FAKE: write-acceptance <json>           write ARGUS_ACCEPTANCE_VERIFICATION_FILE verbatim
+ *   FAKE: implement-kobra <limit> <mode>    write the Kobra comment validator into the working tree
+ *                                           at the limit named by the accepted ChangeContext.
+ *                                           mode `bounded` enforces the upper bound; mode
+ *                                           `unbounded` is the deliberate first-attempt defect
+ *                                           (limit+1 is accepted too)
+ *                                           An attempt that finds ARGUS_REMEDIATION_CONTEXT_FILE
+ *                                           reads it and writes the bounded form instead: the same
+ *                                           prompt, a corrected implementation, driven by what
+ *                                           Argus said was unmet
+ *   FAKE: verify-kobra                      read the implementation in the working tree and write
+ *                                           BOTH ARGUS_RULE_VERIFICATION_FILE (every supplied rule)
+ *                                           and ARGUS_ACCEPTANCE_VERIFICATION_FILE (every criterion
+ *                                           of the accepted ChangeContext), with outcomes derived
+ *                                           from what the code actually does
  *   FAKE: read-context <name>               copy ARGUS_KNOWLEDGE_CONTEXT_FILE into ARGUS_ARTIFACT_DIR/<name>
  *                                           (proves the agent could read the context it was supplied)
  *   FAKE: consume-context <relpath|->       write a KnowledgeDelta declaring every ref in
@@ -115,6 +136,65 @@ function recordSeen(prompt) {
       2,
     )}\n`,
   );
+}
+
+/** The Kobra comment validator the Phase 8 worked example implements. A real
+ *  module in the working tree, so the verification step decides conformance by
+ *  reading the code rather than by being told the answer. */
+const KOBRA_VALIDATOR = "src/Booking/kobraCommentValidator.mjs";
+const NON_KOBRA_VALIDATOR = "src/Booking/legacyCommentValidator.mjs";
+
+function kobraValidator(limit, mode) {
+  return mode === "unbounded"
+    ? [
+        `export const MaxLength = ${limit};`,
+        "// DEFECT: the upper bound is never enforced.",
+        "export function accepts(n) {",
+        "  return n >= 0;",
+        "}",
+        "",
+      ].join("\n")
+    : [
+        `export const MaxLength = ${limit};`,
+        "export function accepts(n) {",
+        "  return n >= 0 && n <= MaxLength;",
+        "}",
+        "",
+      ].join("\n");
+}
+
+/** Read the validator the implementation wrote, without `import()` (the file
+ *  changes between attempts and an ESM cache would serve the old one). */
+function readKobraValidator() {
+  const text = readFileSync(path.resolve(process.cwd(), KOBRA_VALIDATOR), "utf8");
+  const limit = firstNumber(text) ?? 0;
+  const bounded = /n <= MaxLength/.test(text);
+  return { MaxLength: limit, accepts: (n) => n >= 0 && (!bounded || n <= limit) };
+}
+
+/** The preserved, non-Kobra validator: unchanged iff it still caps at 180. */
+function nonKobraUnchanged() {
+  try {
+    const text = readFileSync(path.resolve(process.cwd(), NON_KOBRA_VALIDATOR), "utf8");
+    return /MaxLength = 180/.test(text) && /n <= MaxLength/.test(text);
+  } catch {
+    return false;
+  }
+}
+
+function firstNumber(text) {
+  const m = /(\d+)/.exec(String(text ?? ""));
+  return m ? Number(m[1]) : null;
+}
+
+/** The new limit, read out of the accepted change's own acceptance criteria —
+ *  the largest number any criterion names, which is the accepted maximum. */
+function limitFromCriteria(context) {
+  const numbers = (context.acceptanceCriteria ?? [])
+    .map((c) => firstNumber(c.statement))
+    .filter((n) => n !== null);
+  if (numbers.length === 0) throw new Error("no acceptance criterion names a limit");
+  return Math.min(...numbers);
 }
 
 /** `FAKE:` lines, in prompt order, with the prefix stripped. */
@@ -344,6 +424,160 @@ async function execute(prompt) {
         if (!file) throw new Error("read-change-context without ARGUS_CHANGE_CONTEXT_FILE");
         if (!dir) throw new Error("read-change-context without ARGUS_ARTIFACT_DIR");
         writeFileAt(path.join(dir, rest), readFileSync(file, "utf8"));
+        break;
+      }
+      case "read-scope": {
+        const file = process.env.ARGUS_IMPLEMENTATION_SCOPE_FILE;
+        const dir = process.env.ARGUS_ARTIFACT_DIR;
+        if (!file) throw new Error("read-scope without ARGUS_IMPLEMENTATION_SCOPE_FILE");
+        if (!dir) throw new Error("read-scope without ARGUS_ARTIFACT_DIR");
+        writeFileAt(path.join(dir, rest), readFileSync(file, "utf8"));
+        break;
+      }
+      case "read-remediation": {
+        const file = process.env.ARGUS_REMEDIATION_CONTEXT_FILE;
+        const dir = process.env.ARGUS_ARTIFACT_DIR;
+        if (!file) throw new Error("read-remediation without ARGUS_REMEDIATION_CONTEXT_FILE");
+        if (!dir) throw new Error("read-remediation without ARGUS_ARTIFACT_DIR");
+        writeFileAt(path.join(dir, rest), readFileSync(file, "utf8"));
+        break;
+      }
+      case "write-acceptance": {
+        const file = process.env.ARGUS_ACCEPTANCE_VERIFICATION_FILE;
+        if (!file) throw new Error("write-acceptance without ARGUS_ACCEPTANCE_VERIFICATION_FILE");
+        writeFileAt(file, rest);
+        break;
+      }
+      case "implement-kobra": {
+        // "The agent read the accepted change and realized it" — the limit
+        // comes from the ChangeContext's acceptance criteria, never from the
+        // prompt, because the canonical refs and the criteria were minted when
+        // the change-intent phase committed.
+        //
+        // The same directive serves both halves of the loop, because the same
+        // prompt does: a first attempt writes the mode the prompt asked for,
+        // and an attempt that finds a RemediationContext reads what was unmet
+        // and corrects it. That is the closed loop, from the agent's side.
+        const contextFile = process.env.ARGUS_CHANGE_CONTEXT_FILE;
+        const scopeFile = process.env.ARGUS_IMPLEMENTATION_SCOPE_FILE;
+        if (!contextFile) throw new Error("implement-kobra without ARGUS_CHANGE_CONTEXT_FILE");
+        if (!scopeFile) throw new Error("implement-kobra without ARGUS_IMPLEMENTATION_SCOPE_FILE");
+        const context = JSON.parse(readFileSync(contextFile, "utf8"));
+        const scope = JSON.parse(readFileSync(scopeFile, "utf8"));
+        const dir = process.env.ARGUS_ARTIFACT_DIR;
+        const remediationFile = process.env.ARGUS_REMEDIATION_CONTEXT_FILE;
+        let mode = rest.trim() === "unbounded" ? "unbounded" : "bounded";
+        if (remediationFile) {
+          const remediation = JSON.parse(readFileSync(remediationFile, "utf8"));
+          if (dir) {
+            writeFileAt(path.join(dir, "remediation-seen.json"), JSON.stringify(remediation));
+          }
+          // Fix exactly what Argus said was unmet.
+          mode = "bounded";
+        }
+        if (dir) writeFileAt(path.join(dir, "scope-seen.json"), JSON.stringify(scope));
+        writeFileAt(
+          path.resolve(process.cwd(), KOBRA_VALIDATOR),
+          kobraValidator(limitFromCriteria(context), mode),
+        );
+        // Ordinary Phase 2 provenance: what this run relied on, and what it
+        // produced — so the realization can later show CP → run → file.
+        const deltaFile = process.env.ARGUS_KNOWLEDGE_DELTA_FILE;
+        const knowledgeFile = process.env.ARGUS_KNOWLEDGE_CONTEXT_FILE;
+        if (deltaFile && knowledgeFile) {
+          const knowledge = JSON.parse(readFileSync(knowledgeFile, "utf8"));
+          writeFileAt(
+            deltaFile,
+            JSON.stringify({
+              schemaVersion: 1,
+              consumed: knowledge.claims.map((c) => c.ref),
+              artifacts: [{ location: "repository", path: KOBRA_VALIDATOR }],
+            }),
+          );
+        }
+        break;
+      }
+      case "verify-kobra": {
+        const contextFile = process.env.ARGUS_CHANGE_CONTEXT_FILE;
+        const knowledgeFile = process.env.ARGUS_KNOWLEDGE_CONTEXT_FILE;
+        const ruleTarget = process.env.ARGUS_RULE_VERIFICATION_FILE;
+        const acceptanceTarget = process.env.ARGUS_ACCEPTANCE_VERIFICATION_FILE;
+        if (!contextFile) throw new Error("verify-kobra without ARGUS_CHANGE_CONTEXT_FILE");
+        if (!knowledgeFile) throw new Error("verify-kobra without ARGUS_KNOWLEDGE_CONTEXT_FILE");
+        if (!ruleTarget) throw new Error("verify-kobra without ARGUS_RULE_VERIFICATION_FILE");
+        if (!acceptanceTarget) {
+          throw new Error("verify-kobra without ARGUS_ACCEPTANCE_VERIFICATION_FILE");
+        }
+        const context = JSON.parse(readFileSync(contextFile, "utf8"));
+        const knowledge = JSON.parse(readFileSync(knowledgeFile, "utf8"));
+        const limit = limitFromCriteria(context);
+        const impl = readKobraValidator();
+        const source = {
+          type: "source-code",
+          path: KOBRA_VALIDATOR,
+          symbol: "accepts",
+        };
+        // Only the regression criterion has a deterministic check of this
+        // phase; the boundary is judged by reading the code, which is exactly
+        // the division of labour Phase 6 and Phase 8 describe.
+        const regressionCheck = { type: "check", label: "non-kobra-unchanged" };
+        // Rule conformance: the rule says "max = N", so the code conforms iff
+        // it accepts N and rejects N+1. Decided by reading the code, which is
+        // the one thing Argus cannot do for itself.
+        const holds = impl.accepts(limit) && !impl.accepts(limit + 1);
+        writeFileAt(
+          ruleTarget,
+          JSON.stringify({
+            schemaVersion: 1,
+            verifications: knowledge.claims
+              .filter((c) => c.kind === "business-rule")
+              .map((c) => ({
+                rule: c.ref,
+                outcome: holds ? "holds" : "violated",
+                evidence: [source],
+                note: holds
+                  ? `accepts ${limit}, rejects ${limit + 1}`
+                  : `accepts ${limit + 1}, which the rule forbids`,
+              })),
+            metadata: { summary: `boundary at ${limit}` },
+          }),
+        );
+        // Acceptance satisfaction: a different question, answered separately.
+        const criteria = context.acceptanceCriteria.map((c) => {
+          const wanted = firstNumber(c.statement);
+          const rejects = /reject|not be accepted|must fail/i.test(c.statement);
+          const satisfied =
+            c.kind === "regression"
+              ? nonKobraUnchanged()
+              : wanted === null
+                ? null
+                : rejects
+                  ? !impl.accepts(wanted)
+                  : impl.accepts(wanted);
+          if (satisfied === null) {
+            return {
+              criterionId: c.id,
+              outcome: "unverifiable",
+              evidence: [],
+              reason: "no executable expression of this criterion exists in the repository",
+            };
+          }
+          return {
+            criterionId: c.id,
+            outcome: satisfied ? "satisfied" : "violated",
+            evidence: c.kind === "regression" ? [regressionCheck, source] : [source],
+            note: c.statement,
+          };
+        });
+        writeFileAt(
+          acceptanceTarget,
+          JSON.stringify({
+            schemaVersion: 1,
+            proposalId: context.proposalId,
+            criteria,
+            metadata: { summary: `${criteria.length} criteria answered against the working tree` },
+          }),
+        );
         break;
       }
       case "read-context": {

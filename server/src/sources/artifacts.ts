@@ -20,6 +20,7 @@ import path from "node:path";
 import type {
   ChangeProposalPreview,
   KnowledgeDeltaPreview,
+  AcceptanceVerificationPreview,
   RuleVerificationPreview,
 } from "@argus/contracts";
 import type {
@@ -34,6 +35,8 @@ import { readDeltaRecord } from "../knowledge/staging.js";
 import { readProposalRecord } from "../knowledge/changeStaging.js";
 import { previewChangeProposal } from "../knowledge/changeIntent.js";
 import { readVerificationRecord } from "../knowledge/verificationStaging.js";
+import { readAcceptanceRecord } from "../knowledge/acceptanceStaging.js";
+import { previewAcceptance } from "../knowledge/acceptance.js";
 import { previewRuleVerification } from "../knowledge/ruleVerification.js";
 import { readLedger } from "../knowledge/store.js";
 import { checkDiscoveryDelta, previewKnowledgeDelta } from "../knowledge/discovery.js";
@@ -218,6 +221,7 @@ export async function buildPhaseReview(
   const knowledge = await previewStagedKnowledge(phase, phaseDef);
   const ruleVerifications = await previewStagedVerifications(phase);
   const changeProposals = await previewStagedChangeProposals(phase, phaseDef);
+  const acceptanceVerifications = await previewStagedAcceptance(phase);
   const review: PhaseReview = {
     instanceId: inst.id,
     phaseId,
@@ -238,8 +242,40 @@ export async function buildPhaseReview(
     ...(phase.ruleVerification ? { ruleVerification: phase.ruleVerification } : {}),
     ...(changeProposals.length ? { changeProposals } : {}),
     ...(phase.changeIntent ? { changeIntent: phase.changeIntent } : {}),
+    ...(acceptanceVerifications.length ? { acceptanceVerifications } : {}),
+    ...(phase.acceptanceVerification
+      ? { acceptanceVerification: phase.acceptanceVerification }
+      : {}),
+    ...(phase.realization ? { realization: phase.realization } : {}),
   };
   return { ok: true, review };
+}
+
+/**
+ * The acceptance-criterion results this attempt staged, as the gate shows them
+ * (Phase 8 §review surface).
+ *
+ * Shown **beside** the conformance results, never merged with them. A reviewer
+ * who could see only one dimension would eventually approve a change where
+ * every business rule holds and the criterion that says "non-Kobra behaviour
+ * is unchanged" is violated — which is not a completed change, and is exactly
+ * the state Phase 8 exists to be able to name.
+ *
+ * The same three properties as every other preview: nothing here is durable,
+ * this attempt only, and it never fails the review.
+ */
+async function previewStagedAcceptance(
+  phase: PhaseProgress,
+): Promise<AcceptanceVerificationPreview[]> {
+  const steps = phase.steps.filter((s) => s.runId && s.acceptanceVerification);
+  if (steps.length === 0) return [];
+  const out: AcceptanceVerificationPreview[] = [];
+  for (const step of steps) {
+    const record = await readAcceptanceRecord(step.runId!);
+    if (!record?.report || record.attempt !== phase.attempt) continue;
+    out.push(previewAcceptance(record));
+  }
+  return out;
 }
 
 /**

@@ -26,6 +26,19 @@ import type {
   Justification,
   JustificationForce,
   JustificationStatus,
+  AcceptanceConformanceReport,
+  AcceptanceConformanceStatus,
+  AcceptanceCriterion,
+  AcceptanceOutcome,
+  AcceptanceVerification,
+  ChangeAttemptOutcome,
+  ChangeRealization,
+  ChangeRealizationAttempt,
+  ChangeRealizationOutcome,
+  ChangeRealizationStatus,
+  ChangeRealizationView,
+  ImplementationScope,
+  RepositoryStateRef,
   RuleConformanceReport,
   RuleVerification,
   RuleVerificationHoldsPolicy,
@@ -94,7 +107,7 @@ import type {
  * the kernel only ever sees version 6.
  */
 export interface KnowledgeLedger {
-  version: 6;
+  version: 7;
   /** Every claim revision, in the order it was added. */
   claims: Claim[];
   evidence: Evidence[];
@@ -128,9 +141,28 @@ export interface KnowledgeLedger {
    * intent, never an argument that a claim is true.
    */
   changeProposals: AcceptedChangeProposal[];
+  /**
+   * Acceptance-criterion results, in commit order (Phase 8).
+   *
+   * Its own array beside `verifications` and deliberately never merged with
+   * it: a rule verification says the code satisfies a domain rule, an
+   * acceptance verification says one accepted *change* was carried out. Both
+   * are read by the realization close-out and by their own queries, and by
+   * nothing that decides claim support.
+   */
+  acceptanceVerifications: AcceptanceVerification[];
+  /**
+   * Change realizations, in creation order (Phase 8).
+   *
+   * The one record in the ledger that is not write-once: `attempts` is
+   * appended to and `outcome` is written exactly once. Both transitions are
+   * guarded here — an attempt number that already exists is refused, and a
+   * second, different outcome is refused rather than rewriting a conclusion.
+   */
+  changeRealizations: ChangeRealization[];
 }
 
-export const LEDGER_VERSION = 6 as const;
+export const LEDGER_VERSION = 7 as const;
 
 export function emptyLedger(): KnowledgeLedger {
   return {
@@ -144,6 +176,8 @@ export function emptyLedger(): KnowledgeLedger {
     supplied: [],
     verifications: [],
     changeProposals: [],
+    acceptanceVerifications: [],
+    changeRealizations: [],
   };
 }
 
@@ -857,6 +891,10 @@ export interface RecordVerificationInput {
   evidence: VerificationEvidence[];
   attempt?: number;
   gitHead?: string;
+  /** The exact repository state examined (Phase 8). Recorded alongside
+   *  `gitHead`, never instead of it: the head answers a head-scoped question
+   *  and the state answers the stricter one a realization asks. */
+  repositoryState?: RepositoryStateRef;
   reason?: string;
   note?: string;
   policy?: RuleVerificationHoldsPolicy;
@@ -922,6 +960,7 @@ export function recordRuleVerification(
   if (input.gitHead !== undefined && !SHA_RE.test(input.gitHead)) {
     throw new KnowledgeValidationError("verification gitHead must be a hex commit sha");
   }
+  assertRepositoryState(input.repositoryState, "verification");
   if (input.attempt !== undefined && (!Number.isInteger(input.attempt) || input.attempt < 0)) {
     throw new KnowledgeValidationError("verification attempt must be a non-negative integer");
   }
@@ -946,6 +985,7 @@ export function recordRuleVerification(
     execution,
     attempt: input.attempt,
     ...(input.gitHead ? { repository: { gitHead: input.gitHead } } : {}),
+    repositoryState: input.repositoryState ? plainState(input.repositoryState) : undefined,
     evidence: input.evidence.map((e) => ({ ...e })),
     reason: input.reason,
     note: input.note,
@@ -1504,4 +1544,634 @@ export function acceptedChangeProposalOfPhase(
     (c) => c.execution.instanceId === instanceId && c.execution.phaseId === phaseId,
   );
   return matches.length > 0 ? matches[matches.length - 1] : null;
+}
+
+// ── Repository-state identity (Phase 8) ─────────────────────────────────────
+//
+// A conformance result is a statement about one implementation, and `gitHead`
+// alone does not name one when the agent left its work uncommitted: two
+// different dirty trees share a head, and binding to the head alone would
+// claim that what is true of one is true of the other. `RepositoryStateRef`
+// adds the identity of the uncommitted content, derived from Argus's own
+// working-tree snapshot (content hashes, never timestamps), so two dirty
+// implementations at one head are two different states.
+
+/** `abc123de` / `abc123de+wt:9f2c…` / `(no repository)`. For logs, journal
+ *  entries and reasons — never parsed back. */
+export function formatRepositoryState(state: RepositoryStateRef | undefined): string {
+  if (!state || (!state.gitHead && !state.workingTree)) return "(no repository)";
+  const head = state.gitHead ? state.gitHead.slice(0, 8) : "(no commit)";
+  if (!state.workingTree) return head;
+  return `${head}+wt:${state.workingTree.snapshotHash.slice(0, 8)}`;
+}
+
+/** Is this a state a verification result may be bound to at all? A tree whose
+ *  snapshot was truncated cannot identify itself, so nothing may claim to have
+ *  verified it. */
+export function repositoryStateIsIdentifiable(state: RepositoryStateRef | undefined): boolean {
+  if (!state) return false;
+  if (state.workingTree?.truncated) return false;
+  return Boolean(state.gitHead || state.workingTree);
+}
+
+/**
+ * Do two refs name the same repository state?
+ *
+ * Both halves must agree. Heads compare with {@link sameCommit} (an
+ * abbreviation matches a full sha); working trees compare by snapshot hash,
+ * and "clean" is a value like any other — a clean tree never matches a dirty
+ * one. A truncated snapshot matches nothing, itself included: Argus will not
+ * assert an identity it could not compute.
+ */
+export function sameRepositoryState(
+  a: RepositoryStateRef | undefined,
+  b: RepositoryStateRef | undefined,
+): boolean {
+  if (!a || !b) return false;
+  if (a.workingTree?.truncated || b.workingTree?.truncated) return false;
+  if (a.gitHead || b.gitHead) {
+    if (!a.gitHead || !b.gitHead || !sameCommit(a.gitHead, b.gitHead)) return false;
+  }
+  const aw = a.workingTree?.snapshotHash;
+  const bw = b.workingTree?.snapshotHash;
+  if (aw !== bw) return false;
+  // Neither a head nor a working tree on either side is "not a repository",
+  // which is not an identity and must not match itself.
+  return Boolean(a.gitHead || a.workingTree);
+}
+
+/**
+ * Is a record bound to `recorded` an answer about `asked`?
+ *
+ * The compatibility rule for records written before Phase 8 (and for runs
+ * whose tree Argus could not snapshot), which carry a `gitHead` and no state:
+ * they answer a **clean** question at that head and nothing else. A question
+ * that carries a working tree is about content such a record never saw, so it
+ * is `unverified` rather than silently matched.
+ */
+export function repositoryStateAnswers(
+  recorded: { state?: RepositoryStateRef; gitHead?: string },
+  asked: RepositoryStateRef,
+): boolean {
+  if (recorded.state) return sameRepositoryState(recorded.state, asked);
+  if (asked.workingTree) return false;
+  if (!recorded.gitHead || !asked.gitHead) return false;
+  return sameCommit(recorded.gitHead, asked.gitHead);
+}
+
+// ── Acceptance verification (Phase 8) ───────────────────────────────────────
+
+export const ACCEPTANCE_OUTCOMES: readonly AcceptanceOutcome[] = [
+  "satisfied",
+  "violated",
+  "unverifiable",
+];
+
+/** `CP-12/AC-1` — the only string form of a criterion's identity. A bare
+ *  `AC-1` is proposal-local and is never an identity outside its proposal. */
+export function formatCriterionRef(proposalId: string, criterionId: string): string {
+  return `${proposalId}/${criterionId}`;
+}
+
+export interface RecordAcceptanceInput {
+  id: string;
+  proposalId: string;
+  criterionId: string;
+  /** Deliberately absent: `statement` and `kind` are read from the accepted
+   *  proposal the criterion belongs to, never from the caller, so a durable
+   *  result is always about the sentence a person approved. */
+  outcome: AcceptanceOutcome;
+  execution: RunExecutionRef;
+  attempt?: number;
+  repository?: RepositoryStateRef;
+  evidence: VerificationEvidence[];
+  reason?: string;
+  note?: string;
+}
+
+/**
+ * Record one acceptance-criterion result.
+ *
+ * The same three invariants a {@link recordRuleVerification} has, for the same
+ * reasons:
+ *
+ * - **The criterion must exist on the accepted proposal it names.** A result
+ *   about `CP-12/AC-4` when CP-12 declares AC-1..AC-3 is unaccountable, and a
+ *   result about CP-11's AC-1 can never satisfy CP-12's.
+ * - **Nothing else in the ledger moves.** No evidence, no justification, no
+ *   claim, no rule verification: the returned ledger differs by exactly one
+ *   entry in `acceptanceVerifications`. A violated criterion therefore cannot
+ *   change any rule's support or any rule's conformance.
+ * - **Identity is `(runId, proposalId, criterionId)`.** Recording the
+ *   identical result again is a no-op; a *different* outcome for the same
+ *   triple is refused rather than overwriting a past conclusion.
+ */
+export function recordAcceptanceVerification(
+  ledger: KnowledgeLedger,
+  input: RecordAcceptanceInput,
+  now: string,
+): { ledger: KnowledgeLedger; verification: AcceptanceVerification; added: boolean } {
+  const execution = resolveExecution(ledger, input.execution);
+  requireRecordId(input.id, "acceptance verification");
+  requireRecordId(input.proposalId, "acceptance verification proposal");
+  requireRecordId(input.criterionId, "acceptance verification criterion");
+  const proposal = ledger.changeProposals.find((c) => c.id === input.proposalId);
+  if (!proposal) {
+    throw new KnowledgeValidationError(
+      `acceptance verification names unknown accepted change proposal ${input.proposalId}`,
+    );
+  }
+  const criterion = proposal.acceptanceCriteria.find((c) => c.id === input.criterionId);
+  if (!criterion) {
+    throw new KnowledgeValidationError(
+      `accepted change proposal ${input.proposalId} declares no acceptance criterion ${input.criterionId}`,
+    );
+  }
+  if (!ACCEPTANCE_OUTCOMES.includes(input.outcome)) {
+    throw new KnowledgeValidationError(
+      `acceptance outcome must be one of ${ACCEPTANCE_OUTCOMES.join(" | ")}`,
+    );
+  }
+  if (!Array.isArray(input.evidence)) {
+    throw new KnowledgeValidationError("acceptance evidence must be a list");
+  }
+  if (input.evidence.length > VERIFICATION_EVIDENCE_MAX) {
+    throw new KnowledgeValidationError(
+      `acceptance evidence exceeds ${VERIFICATION_EVIDENCE_MAX} entries`,
+    );
+  }
+  if (input.outcome !== "unverifiable" && input.evidence.length === 0) {
+    throw new KnowledgeValidationError(
+      `a ${input.outcome} result for ${formatCriterionRef(input.proposalId, input.criterionId)} must cite at least one evidence record`,
+    );
+  }
+  if (input.outcome === "unverifiable" && !input.reason?.trim()) {
+    throw new KnowledgeValidationError(
+      `an unverifiable result for ${formatCriterionRef(input.proposalId, input.criterionId)} must give a reason`,
+    );
+  }
+  if (input.attempt !== undefined && (!Number.isInteger(input.attempt) || input.attempt < 0)) {
+    throw new KnowledgeValidationError("acceptance attempt must be a non-negative integer");
+  }
+  assertRepositoryState(input.repository, "acceptance verification");
+  const existing = ledger.acceptanceVerifications.find(
+    (v) =>
+      v.execution.runId === execution.runId &&
+      v.proposalId === input.proposalId &&
+      v.criterionId === input.criterionId,
+  );
+  if (existing) {
+    if (existing.outcome !== input.outcome) {
+      throw new KnowledgeValidationError(
+        `run ${execution.runId} already reported ${formatCriterionRef(input.proposalId, input.criterionId)} as ${existing.outcome}; refusing to replace it with ${input.outcome}`,
+      );
+    }
+    return { ledger, verification: existing, added: false };
+  }
+  if (ledger.acceptanceVerifications.some((v) => v.id === input.id)) {
+    throw new KnowledgeValidationError(`acceptance verification id "${input.id}" already exists`);
+  }
+  const verification: AcceptanceVerification = compact({
+    id: input.id,
+    proposalId: input.proposalId,
+    criterionId: input.criterionId,
+    // Frozen from the accepted proposal rather than from the agent's document:
+    // the statement a result is about is the one a person approved.
+    statement: criterion.statement,
+    kind: criterion.kind,
+    outcome: input.outcome,
+    execution,
+    attempt: input.attempt,
+    repository: input.repository ? plainState(input.repository) : undefined,
+    evidence: input.evidence.map((e) => ({ ...e })),
+    reason: input.reason,
+    note: input.note,
+    createdAt: now,
+  });
+  return {
+    ledger: {
+      ...ledger,
+      acceptanceVerifications: [...ledger.acceptanceVerifications, verification],
+    },
+    verification,
+    added: true,
+  };
+}
+
+function assertRepositoryState(state: RepositoryStateRef | undefined, what: string): void {
+  if (state === undefined) return;
+  if (typeof state !== "object" || state === null) {
+    throw new KnowledgeValidationError(`${what} repository state must be an object`);
+  }
+  if (state.gitHead !== undefined && !SHA_RE.test(state.gitHead)) {
+    throw new KnowledgeValidationError(`${what} gitHead must be a hex commit sha`);
+  }
+  const wt = state.workingTree;
+  if (wt === undefined) return;
+  if (typeof wt !== "object" || wt === null || !/^[0-9a-f]{64}$/.test(wt.snapshotHash ?? "")) {
+    throw new KnowledgeValidationError(`${what} workingTree.snapshotHash must be a sha256`);
+  }
+  if (!Number.isInteger(wt.dirty) || wt.dirty < 0) {
+    throw new KnowledgeValidationError(`${what} workingTree.dirty must be a non-negative integer`);
+  }
+}
+
+const plainState = (s: RepositoryStateRef): RepositoryStateRef =>
+  compact({
+    gitHead: s.gitHead,
+    workingTree: s.workingTree
+      ? compact({
+          snapshotHash: s.workingTree.snapshotHash,
+          dirty: s.workingTree.dirty,
+          truncated: s.workingTree.truncated,
+        })
+      : undefined,
+  });
+
+/** Every result for one exact criterion, oldest first. */
+export function acceptanceVerificationsOfCriterion(
+  ledger: KnowledgeLedger,
+  proposalId: string,
+  criterionId: string,
+): AcceptanceVerification[] {
+  return ledger.acceptanceVerifications
+    .filter((v) => v.proposalId === proposalId && v.criterionId === criterionId)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+}
+
+/** Every result for one accepted proposal, in commit order. */
+export function acceptanceVerificationsOfProposal(
+  ledger: KnowledgeLedger,
+  proposalId: string,
+): AcceptanceVerification[] {
+  return ledger.acceptanceVerifications.filter((v) => v.proposalId === proposalId);
+}
+
+/** Every result one execution produced, in commit order. */
+export function acceptanceVerificationsOfRun(
+  ledger: KnowledgeLedger,
+  runId: string,
+): AcceptanceVerification[] {
+  return ledger.acceptanceVerifications.filter((v) => v.execution.runId === runId);
+}
+
+/**
+ * The deterministic acceptance read model.
+ *
+ * With a `repository`, only results that examined that exact state count, so a
+ * criterion satisfied against one implementation reads `unverified` against a
+ * different one at the same commit. Without one, the latest recorded outcome
+ * is returned and `latest.repository` says which state it was about — a
+ * statement about the past, which is the only kind the record supports.
+ *
+ * `unverified` (nobody looked) is never conflated with `unverifiable`
+ * (somebody looked and could not tell).
+ */
+export function acceptanceConformance(
+  ledger: KnowledgeLedger,
+  proposalId: string,
+  criterionId: string,
+  repository?: RepositoryStateRef,
+): AcceptanceConformanceReport {
+  const history = acceptanceVerificationsOfCriterion(ledger, proposalId, criterionId);
+  const eligible = repository
+    ? history.filter((v) =>
+        repositoryStateAnswers({ state: v.repository, gitHead: v.repository?.gitHead }, repository),
+      )
+    : history;
+  const latest = eligible.length > 0 ? eligible[eligible.length - 1] : undefined;
+  return compact({
+    criterion: { proposalId, criterionId },
+    repository,
+    status: (latest?.outcome ?? "unverified") as AcceptanceConformanceStatus,
+    latest,
+    history,
+  });
+}
+
+/**
+ * Rule conformance scoped to an exact {@link RepositoryStateRef} rather than to
+ * a bare commit (Phase 8).
+ *
+ * The Phase 6 `ruleConformance(ledger, ref, gitHead)` stays exactly as it was
+ * and stays the answer to a head-scoped question. This is the answer to the
+ * stricter one a realization close-out has to ask: *did anybody verify this
+ * rule against **this** implementation?* — which a record bound only to a head
+ * cannot answer about a dirty tree, and therefore does not.
+ */
+export function ruleConformanceAtState(
+  ledger: KnowledgeLedger,
+  ref: ClaimRef,
+  repository: RepositoryStateRef,
+): RuleConformanceReport {
+  const history = verificationsOfClaim(ledger, ref);
+  const eligible = history.filter((v) =>
+    repositoryStateAnswers(
+      { state: v.repositoryState, gitHead: v.repository?.gitHead },
+      repository,
+    ),
+  );
+  const latest = eligible.length > 0 ? eligible[eligible.length - 1] : undefined;
+  return compact({
+    rule: { id: ref.id, revision: ref.revision },
+    gitHead: repository.gitHead,
+    status: (latest?.outcome ?? "unverified") as RuleConformanceReport["status"],
+    latest,
+    history,
+  });
+}
+
+// ── Change realization (Phase 8) ────────────────────────────────────────────
+
+export const REALIZATION_MAX_ATTEMPTS = 8;
+export const REALIZATION_ATTEMPT_OUTCOMES: readonly ChangeAttemptOutcome[] = [
+  "succeeded",
+  "technical-failure",
+  "rule-violation",
+  "acceptance-violation",
+  "acceptance-unverifiable",
+  "blocked",
+  "stale-intent",
+  "state-mismatch",
+];
+const REALIZATION_TERMINALS: readonly ChangeRealizationStatus[] = [
+  "succeeded",
+  "needs-remediation",
+  "failed",
+  "stale",
+];
+
+export interface StartRealizationInput {
+  id: string;
+  proposalId: string;
+  target: ClaimRef[];
+  instanceId: string;
+  phaseId: string;
+  verificationPhaseId?: string;
+  maxAttempts: number;
+  scope: ImplementationScope;
+}
+
+/**
+ * Open a realization: one attempt-chain against one accepted proposal.
+ *
+ * Identity is `(instanceId, phaseId)` — one implementation phase of one
+ * instance drives one realization, however many attempts it takes. Opening the
+ * same one again is a no-op (`added: false`), which is what makes a restart
+ * between the ledger write and the instance write safe; opening it against a
+ * *different* proposal is refused rather than retargeting a running attempt at
+ * intent it never received.
+ */
+export function startChangeRealization(
+  ledger: KnowledgeLedger,
+  input: StartRealizationInput,
+  now: string,
+): { ledger: KnowledgeLedger; realization: ChangeRealization; added: boolean } {
+  requireRecordId(input.id, "change realization");
+  requireRecordId(input.proposalId, "change realization proposal");
+  if (!EXECUTION_ID_RE.test(input.instanceId)) {
+    throw new KnowledgeValidationError(
+      `change realization instanceId "${input.instanceId}" is invalid`,
+    );
+  }
+  if (!EXECUTION_ID_RE.test(input.phaseId)) {
+    throw new KnowledgeValidationError(`change realization phaseId "${input.phaseId}" is invalid`);
+  }
+  if (!ledger.changeProposals.some((c) => c.id === input.proposalId)) {
+    throw new KnowledgeValidationError(
+      `change realization names unknown accepted change proposal ${input.proposalId}`,
+    );
+  }
+  if (
+    !Number.isInteger(input.maxAttempts) ||
+    input.maxAttempts < 1 ||
+    input.maxAttempts > REALIZATION_MAX_ATTEMPTS
+  ) {
+    throw new KnowledgeValidationError(
+      `change realization maxAttempts must be between 1 and ${REALIZATION_MAX_ATTEMPTS}`,
+    );
+  }
+  const existing = ledger.changeRealizations.find(
+    (r) => r.instanceId === input.instanceId && r.phaseId === input.phaseId,
+  );
+  if (existing) {
+    if (existing.proposalId !== input.proposalId) {
+      throw new KnowledgeValidationError(
+        `realization ${existing.id} already targets ${existing.proposalId}; refusing to retarget it at ${input.proposalId}`,
+      );
+    }
+    return { ledger, realization: existing, added: false };
+  }
+  if (ledger.changeRealizations.some((r) => r.id === input.id)) {
+    throw new KnowledgeValidationError(`change realization id "${input.id}" already exists`);
+  }
+  const realization: ChangeRealization = compact({
+    id: input.id,
+    schemaVersion: 1 as const,
+    proposalId: input.proposalId,
+    target: input.target.map(plainRef),
+    instanceId: input.instanceId,
+    phaseId: input.phaseId,
+    verificationPhaseId: input.verificationPhaseId,
+    maxAttempts: input.maxAttempts,
+    scope: input.scope,
+    attempts: [],
+    createdAt: now,
+  });
+  return {
+    ledger: { ...ledger, changeRealizations: [...ledger.changeRealizations, realization] },
+    realization,
+    added: true,
+  };
+}
+
+/**
+ * Append one attempt's result to a realization.
+ *
+ * Append-only in the strict sense: an attempt number the realization already
+ * holds is a no-op when identical and a refusal when it differs, so a
+ * remediation can never rewrite the attempt it is remediating and a crash
+ * between the ledger write and the instance write heals by writing again. An
+ * attempt on a realization that already has an `outcome` is refused: the
+ * chain is closed.
+ */
+export function appendRealizationAttempt(
+  ledger: KnowledgeLedger,
+  realizationId: string,
+  attempt: ChangeRealizationAttempt,
+): { ledger: KnowledgeLedger; realization: ChangeRealization; added: boolean } {
+  const index = ledger.changeRealizations.findIndex((r) => r.id === realizationId);
+  if (index === -1) {
+    throw new KnowledgeValidationError(`unknown change realization ${realizationId}`);
+  }
+  const current = ledger.changeRealizations[index];
+  if (!REALIZATION_ATTEMPT_OUTCOMES.includes(attempt.outcome)) {
+    throw new KnowledgeValidationError(
+      `realization attempt outcome must be one of ${REALIZATION_ATTEMPT_OUTCOMES.join(" | ")}`,
+    );
+  }
+  if (!Number.isInteger(attempt.attempt) || attempt.attempt < 1) {
+    throw new KnowledgeValidationError("realization attempt must be a positive integer");
+  }
+  const existing = current.attempts.find((a) => a.attempt === attempt.attempt);
+  if (existing) {
+    if (existing.outcome !== attempt.outcome) {
+      throw new KnowledgeValidationError(
+        `realization ${realizationId} already recorded attempt ${attempt.attempt} as ${existing.outcome}; refusing to replace it with ${attempt.outcome}`,
+      );
+    }
+    return { ledger, realization: current, added: false };
+  }
+  if (current.outcome) {
+    throw new KnowledgeValidationError(
+      `realization ${realizationId} is already ${current.outcome.status}; refusing to append attempt ${attempt.attempt}`,
+    );
+  }
+  const next: ChangeRealization = {
+    ...current,
+    attempts: [...current.attempts, { ...attempt }].sort((a, b) => a.attempt - b.attempt),
+  };
+  const realizations = [...ledger.changeRealizations];
+  realizations[index] = next;
+  return {
+    ledger: { ...ledger, changeRealizations: realizations },
+    realization: next,
+    added: true,
+  };
+}
+
+/**
+ * Write a realization's terminal verdict. Exactly once: a realization that
+ * already has one keeps it (a no-op when the status is identical, a refusal
+ * when it differs), so nothing can later present a failed realization as a
+ * success, or a success as stale.
+ */
+export function closeChangeRealization(
+  ledger: KnowledgeLedger,
+  realizationId: string,
+  outcome: ChangeRealizationOutcome,
+): { ledger: KnowledgeLedger; realization: ChangeRealization; added: boolean } {
+  const index = ledger.changeRealizations.findIndex((r) => r.id === realizationId);
+  if (index === -1) {
+    throw new KnowledgeValidationError(`unknown change realization ${realizationId}`);
+  }
+  const current = ledger.changeRealizations[index];
+  if (!REALIZATION_TERMINALS.includes(outcome.status)) {
+    throw new KnowledgeValidationError(
+      `realization outcome must be one of ${REALIZATION_TERMINALS.join(" | ")}`,
+    );
+  }
+  assertRepositoryState(outcome.repository, "realization outcome");
+  if (outcome.status === "succeeded" && current.attempts.length === 0) {
+    throw new KnowledgeValidationError(
+      `realization ${realizationId} cannot succeed with no recorded attempt`,
+    );
+  }
+  if (current.outcome) {
+    if (current.outcome.status !== outcome.status) {
+      throw new KnowledgeValidationError(
+        `realization ${realizationId} already ended as ${current.outcome.status}; refusing to rewrite it as ${outcome.status}`,
+      );
+    }
+    return { ledger, realization: current, added: false };
+  }
+  const next: ChangeRealization = {
+    ...current,
+    outcome: compact({
+      ...outcome,
+      repository: outcome.repository ? plainState(outcome.repository) : undefined,
+    }),
+  };
+  const realizations = [...ledger.changeRealizations];
+  realizations[index] = next;
+  return {
+    ledger: { ...ledger, changeRealizations: realizations },
+    realization: next,
+    added: true,
+  };
+}
+
+/** The realization's status and attempt counters, derived rather than stored
+ *  twice. `needs-remediation` is a terminal *outcome* only when the engine
+ *  wrote one; a realization mid-loop simply reads `running`. */
+export function realizationView(realization: ChangeRealization): ChangeRealizationView {
+  const status: ChangeRealizationStatus = realization.outcome?.status ?? "running";
+  const currentAttempt = Math.max(1, realization.attempts.length);
+  return {
+    ...realization,
+    status,
+    currentAttempt,
+    attemptsRemaining: Math.max(0, realization.maxAttempts - realization.attempts.length),
+  };
+}
+
+/** Realizations, newest first. */
+export function changeRealizations(ledger: KnowledgeLedger): ChangeRealizationView[] {
+  return [...ledger.changeRealizations]
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))
+    .map(realizationView);
+}
+
+export function changeRealizationById(
+  ledger: KnowledgeLedger,
+  id: string,
+): ChangeRealization | null {
+  return ledger.changeRealizations.find((r) => r.id === id) ?? null;
+}
+
+/** Every realization attempted against one accepted proposal, oldest first —
+ *  including the ones that failed, which is how the history explains how the
+ *  implementation converged. */
+export function changeRealizationsForProposal(
+  ledger: KnowledgeLedger,
+  proposalId: string,
+): ChangeRealization[] {
+  return ledger.changeRealizations.filter((r) => r.proposalId === proposalId);
+}
+
+/** The realization one implementation phase of one instance drives, or null. */
+export function changeRealizationOfPhase(
+  ledger: KnowledgeLedger,
+  instanceId: string,
+  phaseId: string,
+): ChangeRealization | null {
+  return (
+    ledger.changeRealizations.find((r) => r.instanceId === instanceId && r.phaseId === phaseId) ??
+    null
+  );
+}
+
+/**
+ * Is the realization's semantic target still what the domain currently says?
+ *
+ * Every revision the accepted proposal introduced must still be the **active**
+ * revision of its id. A `RULE-42:v3` accepted while an implementation of v2 was
+ * running does not make the v2 work wrong — the verification of v2 stays
+ * historically true — but it does mean the realization may not be presented as
+ * *current* completion. Superseded refs are returned so the reason can name
+ * them.
+ */
+export function realizationIntentCurrency(
+  ledger: KnowledgeLedger,
+  target: ClaimRef[],
+): { current: boolean; superseded: Array<{ from: ClaimRef; to: ClaimRef }> } {
+  const superseded: Array<{ from: ClaimRef; to: ClaimRef }> = [];
+  for (const ref of target) {
+    const active = activeRevision(ledger, ref.id);
+    if (!active) continue;
+    if (active.revision !== ref.revision) {
+      superseded.push({ from: plainRef(ref), to: { id: active.id, revision: active.revision } });
+    }
+  }
+  return { current: superseded.length === 0, superseded };
+}
+
+/** Every acceptance criterion of one accepted proposal, or an empty list when
+ *  the proposal is unknown. The set a verification run must account for. */
+export function requiredCriteria(
+  ledger: KnowledgeLedger,
+  proposalId: string,
+): AcceptanceCriterion[] {
+  const proposal = ledger.changeProposals.find((c) => c.id === proposalId);
+  return (proposal?.acceptanceCriteria ?? []).map((c) => ({ ...c, relatesTo: [...c.relatesTo] }));
 }
