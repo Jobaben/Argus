@@ -1570,14 +1570,15 @@ flags, and a complete worked pipeline: [docs/HARNESS.md](HARNESS.md).
 
 ### `PipelineDefinition` / `PhaseDef` / `PhaseStep` fields
 
-| Field              | On                    | Type                       | Validation                                                                                                                                                                                                                                                                                   |
-| ------------------ | --------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`               | phase                 | string                     | `^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$` — one path segment, 1-80 chars, never `.`/`..`. It names the phase's artifact and changed-files-baseline directories on disk, not just a graph label.                                                                                                    |
-| `capabilities`     | pipeline, phase, step | `CapabilityProfile`        | See below. Merges by key, narrowest wins (step ▸ phase ▸ pipeline).                                                                                                                                                                                                                          |
-| `timeoutSeconds`   | phase, step           | integer                    | 1–86400. A step's own value overrides its phase's; absent on both = no limit.                                                                                                                                                                                                                |
-| `checks`           | phase                 | `PhaseCheck[]`             | Up to 50 entries. Run once every step of the phase has reported success; a failing check fails the phase under the `verification` class.                                                                                                                                                     |
-| `knowledgeDelta`   | phase                 | `"optional" \| "required"` | Default `"optional"`. `"required"` makes the KnowledgeDelta channel (`ARGUS_KNOWLEDGE_DELTA_FILE`) a launch precondition: a runtime that cannot make it writable is refused under strict enforcement. Emitting a delta stays optional either way. See HARNESS.md §3a.                        |
-| `knowledgeContext` | phase, step           | `{ claims: Selector[] }`   | 1–64 selectors, each `"ID"` (active revision), `"ID:vN"` (exact) or `{ id, revision: N \| "active" }`; normalized to the object form. Each claim id at most once. A step's spec replaces its phase's. Existence is checked at launch (`configuration` failure). See KNOWLEDGE-LEDGER.md §13. |
+| Field              | On                    | Type                                                                   | Validation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------------------ | --------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`               | phase                 | string                                                                 | `^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$` — one path segment, 1-80 chars, never `.`/`..`. It names the phase's artifact and changed-files-baseline directories on disk, not just a graph label.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `capabilities`     | pipeline, phase, step | `CapabilityProfile`                                                    | See below. Merges by key, narrowest wins (step ▸ phase ▸ pipeline).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `timeoutSeconds`   | phase, step           | integer                                                                | 1–86400. A step's own value overrides its phase's; absent on both = no limit.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `checks`           | phase                 | `PhaseCheck[]`                                                         | Up to 50 entries. Run once every step of the phase has reported success; a failing check fails the phase under the `verification` class.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `knowledgeDelta`   | phase                 | `"optional" \| "required"`                                             | Default `"optional"`. `"required"` makes the KnowledgeDelta channel (`ARGUS_KNOWLEDGE_DELTA_FILE`) a launch precondition: a runtime that cannot make it writable is refused under strict enforcement. Emitting a delta stays optional either way. See HARNESS.md §3a.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `knowledgeContext` | phase, step           | `{ claims?: Selector[]; fromPhases?: PhaseProducedSelector[] }`        | At least one of the two. `claims`: 1–64 selectors, each `"ID"` (active revision), `"ID:vN"` (exact) or `{ id, revision: N \| "active" }`; normalized to the object form, each claim id at most once. `fromPhases`: 1–8 entries, each `"phaseId"` or `{ phaseId, kinds?: ClaimKind[] }`, resolving to the claims that phase of _this instance_ committed through its accepted KnowledgeDelta; the phase must exist and be a transitive `needs` dependency (checked at save). `claims` is resolved first and wins on a claim-id collision; the total is capped at 64. A step's spec replaces its phase's. Resolution happens at launch, and an unknown claim, an unresolvable revision or a `fromPhases` phase that is not `succeeded`/`skipped` is a `configuration` failure. See KNOWLEDGE-LEDGER.md §13, §14.10. |
+| `discovery`        | phase                 | `{ scope: { paths, label?, note? }; evidence?: "required" \| "warn" }` | Turns the phase into a business-rule discovery phase: its steps get the discovery instructions, and the KnowledgeDelta they write is held to the discovery invariants. `scope.paths`: 1–32 repository-relative POSIX paths (no `..`, no leading `/`), or `"."` for the whole tree; deduplicated and normalized. `label` ≤120 chars, `note` ≤1000. `evidence` defaults to `"required"`. See KNOWLEDGE-LEDGER.md §14, HARNESS.md §14.                                                                                                                                                                                                                                                                                                                                                                               |
 
 `CapabilityProfile`:
 
@@ -1685,7 +1686,11 @@ it. This is what the Command Center's review drawer renders.
   "artifacts": [
     { "path": "report.md", "bytes": 1832, "modifiedAt": "…", "required": true, "text": true }
   ],
-  "truncated": false
+  "truncated": false,
+  "knowledge": [ KnowledgeDeltaPreview ],
+  "discovery": { "candidates": 2, "newRules": 1, "revisions": 0, "assumptions": 1,
+                 "facts": 0, "constraints": 0, "conclusions": 0,
+                 "evidence": 3, "warnings": 0, "requiresReview": true }
 }
 ```
 
@@ -1698,6 +1703,17 @@ read from the instance's snapshotted definition. `text` is UTF-8 with no NUL
 byte, judged from the first 8 KiB. `result` and `verification` appear only when
 the phase declared them. `404` for an unknown instance or phase; `409` when the
 phase is neither waiting nor failed. Open like every other read.
+
+`knowledge` is the **candidate knowledge** this attempt staged (Phase 5): one
+[`KnowledgeDeltaPreview`](#knowledge-ledger) per step that wrote a
+KnowledgeDelta on _this_ attempt — a superseded attempt's is never shown —
+with the proposed claims, what a revision would replace, the evidence under
+each candidate and the deterministic warnings. Nothing in it is canonical;
+approving is what makes it so. On a `discovery` phase the previews also carry
+the filesystem-dependent warnings (a source path that no longer exists), which
+the standalone `/deltas/:id/preview` route cannot compute. Absent when no step
+of the attempt proposed knowledge. `discovery` is the counts, present only on
+a phase that declared `discovery`.
 
 ### `GET /api/instances/:id/phases/:phaseId/artifact?path=<relative>`
 
@@ -2380,7 +2396,7 @@ session — it cannot execute anything.
 | `GET /api/overview`                                     | command-center rows: `{ definition, latest, cost }` per pipeline, attention-first                                                                                                                                                                                  |
 | `GET /api/instances/:id`                                | full pipeline instance                                                                                                                                                                                                                                             |
 | `POST /api/instances/:id/signal`                        | ingest a signal `{ phaseId, runId, type, token, payload?, result?, resultError? }`; `403` on bad token                                                                                                                                                             |
-| `GET /api/instances/:id/phases/:phaseId/review`         | what a paused phase left for a human: payload, result, checks, artifact listing; `409` unless waiting or failed                                                                                                                                                    |
+| `GET /api/instances/:id/phases/:phaseId/review`         | what a paused phase left for a human: payload, result, checks, artifact listing, and the attempt's candidate knowledge; `409` unless waiting or failed                                                                                                             |
 | `GET /api/instances/:id/phases/:phaseId/artifact?path=` | one artifact's text (clipped at 512 KiB) or metadata; `400` on a path that escapes the directory                                                                                                                                                                   |
 | `POST /api/instances/:id/approve`                       | advance past a gate (optional `{ answers, phaseId }`) — **admin**                                                                                                                                                                                                  |
 | `POST /api/instances/:id/revise`                        | re-run the paused phase with the human's note (optional `{ note, phaseId }`) — **admin**                                                                                                                                                                           |
@@ -2515,6 +2531,7 @@ keys are `404`.
 | `GET /api/knowledge/claims/:key/impact`              | `ImpactSet` — what rests on that revision being current and supported, and why (see below)                                                                                                                                                                                                                                                        |
 | `GET /api/knowledge/executions/:runId/provenance`    | `ExecutionProvenance` — what the run consumed (with currency now) and produced; `404` if nothing is known                                                                                                                                                                                                                                         |
 | `GET /api/knowledge/deltas/:id`                      | `KnowledgeDeltaRecord` — a staged/applied/rejected/superseded KnowledgeDelta with its provenance                                                                                                                                                                                                                                                  |
+| `GET /api/knowledge/deltas/:id/preview`              | `KnowledgeDeltaPreview` — the deterministic candidate read model: proposed claims (as `local:<id>`), revisions with what they would replace, evidence, justifications, consumed/supplied refs and structural warnings                                                                                                                             |
 | `GET /api/knowledge/deltas/:id/result`               | `KnowledgeDeltaApplyResult` — local id → canonical identity and every record created; `404` until applied                                                                                                                                                                                                                                         |
 | `GET /api/knowledge/executions/:runId/deltas`        | `{ runId, deltas: KnowledgeDeltaRecord[] }` — the run's deltas (at most one, by protocol)                                                                                                                                                                                                                                                         |
 | `GET /api/knowledge/executions/:runId/context`       | `ExecutionContextReport` — exactly which revisions Argus **supplied** to the run, the file's sha256, the run's consumptions, the supplied/consumed comparison and (when still on disk) the projection. Answered from the ledger's durable supplied record, so it survives run/invocation pruning; `404` only when the run was supplied no context |
@@ -2618,6 +2635,45 @@ commit boundary: [KNOWLEDGE-LEDGER.md §12](KNOWLEDGE-LEDGER.md#12-knowledgedelt
 A staged record also carries `supplied: ClaimRef[]` — the exact revisions the
 run's KnowledgeContext held, from the ledger's durable supplied record (or, for
 a run launched before Phase 4.1, its invocation record) at intake.
+
+`GET /api/knowledge/deltas/:id/preview` returns the **candidate preview** — a
+deterministic read model of what the delta would make canonical if its phase
+were approved (Phase 5). It mutates nothing, mints nothing, and does not
+pretend a proposed claim already has a canonical id:
+
+```jsonc
+{ "deltaId": "KD-…", "runId": "run_8f2a", "step": "investigate", "attempt": 0, "status": "staged",
+  "proposedClaims": [{ "ref": { "display": "local:comment-limit", "local": "comment-limit" },
+                       "kind": "business-rule", "statement": "Kobra bookings restrict customer comments to 180 characters.",
+                       "evidence": [{ "claim": { "display": "local:comment-limit", … }, "direction": "supports",
+                                      "source": { "type": "source-code", "path": "src/Booking/KobraAdapter.cs",
+                                                  "gitHead": "abc123…", "symbol": "KobraAdapter.MapComment",
+                                                  "startLine": 120, "endLine": 136 }, "note": "…" }],
+                       "justifications": [{ "conclusion": { "display": "local:comment-limit", … },
+                                            "premises": [{ "display": "local:kobra-origin", … }], "direction": "supports" }] }],
+  "proposedRevisions": [{ "claimId": "RULE-17", "expectedRevision": 1, "kind": "business-rule",
+                          "ref": { "display": "RULE-17:v2 (proposed)", "claim": { "id": "RULE-17", "revision": 2 }, "proposed": true },
+                          "statement": "Kobra comments max = 500", "revisionNote": "…",
+                          "current": { "claim": { "id": "RULE-17", "revision": 1 }, "statement": "Kobra comments max = 180",
+                                       "support": "supported", "lifecycle": "active" },
+                          "stale": true,                     // expectedRevision is no longer active
+                          "evidence": [ … ], "justifications": [ … ] }],
+  "evidence": [ … ], "justifications": [ … ],
+  "consumed": [{ "ref": "RULE-17:v1", "claim": { "id": "RULE-17", "revision": 1 }, "kind": "business-rule", "statement": "…" }],
+  "supplied": [ … ], "artifacts": [ … ], "summary": "…",
+  "warnings": [{ "code": "business-rule-without-evidence", "subject": "local:comment-limit", "message": "…" }] }
+```
+
+Warning codes: `business-rule-without-evidence`, `revision-without-evidence`,
+`assumption-without-evidence`, `claim-without-support`,
+`revision-target-unsupported`, `revision-stale`, `source-file-missing`,
+`source-outside-scope`, `source-path-unsafe`, `source-git-head-mismatch`,
+`source-range-invalid`, `new-rule-while-rules-supplied`. Every one is decided
+from exact structured information — the delta, the ledger, the filesystem —
+never from similarity or a model's opinion. This route carries no filesystem
+warnings (they need the run's working tree, which the engine has at intake and
+commit); the same preview embedded in a gate review does. See
+[KNOWLEDGE-LEDGER.md §14.6](KNOWLEDGE-LEDGER.md#146-the-candidate-preview-and-its-warnings).
 
 KnowledgeContexts (Phase 4) have **no write endpoint either**: a step (or its
 phase) declares `knowledgeContext`, Argus resolves the selectors against one

@@ -4,6 +4,7 @@ import type {
   EvidenceSource,
   ExecutionRef,
   RunExecutionRef,
+  SourceCodeEvidence,
 } from "@argus/contracts";
 import {
   ARTIFACT_PATH_MAX_CHARS,
@@ -169,6 +170,65 @@ export function claimKey(raw: unknown, ctx: string): ClaimKey {
   return { id: r.id, revision: r.revision };
 }
 
+/**
+ * A repository source location (Phase 5, `SourceCodeEvidence`).
+ *
+ * Structural only — everything that can be decided from the record itself,
+ * with no filesystem and no ledger:
+ *
+ * - `path` is a containable repository-relative POSIX path. The same rule the
+ *   artifact refs use ({@link validArtifactPath}), so `../../etc/passwd`,
+ *   `/etc/passwd` and `C:\x` are all refused *here*, before anything is
+ *   staged, rather than being caught later by a containment check that might
+ *   not run. A source location that could address a file outside the
+ *   repository is not evidence about the repository.
+ * - a line range is a pair of positive integers with `startLine <= endLine`.
+ * - `gitHead` is a hex sha. Whether it is *this run's* head is a question for
+ *   the discovery validator, which is the only place that knows.
+ *
+ * Whether the file exists is likewise not decided here: this function is pure
+ * and is used on the ledger's own write path, where the repository may be
+ * long gone. Existence is checked for discovery deltas at intake and again at
+ * commit (`knowledge/discovery.ts`).
+ */
+function sourceCodeEvidence(r: Record<string, unknown>, ctx: string): SourceCodeEvidence {
+  const path = text(r.path, `${ctx}.path`, ARTIFACT_PATH_MAX_CHARS);
+  if (!validArtifactPath(path)) {
+    fail(`${ctx}.path must be a repository-relative POSIX path inside the repository`);
+  }
+  const out: SourceCodeEvidence = { type: "source-code", path };
+  const repository = optionalText(r.repository, `${ctx}.repository`, 512);
+  if (repository) out.repository = repository;
+  if (r.gitHead !== undefined && r.gitHead !== null) {
+    if (typeof r.gitHead !== "string" || !SHA_RE.test(r.gitHead)) {
+      fail(`${ctx}.gitHead must be a hex commit sha`);
+    }
+    out.gitHead = r.gitHead;
+  }
+  const symbol = optionalText(r.symbol, `${ctx}.symbol`, 256);
+  if (symbol) out.symbol = symbol;
+  const lineNumber = (raw: unknown, field: string): number | undefined => {
+    if (raw === undefined || raw === null) return undefined;
+    if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 1) {
+      fail(`${ctx}.${field} must be a positive integer`);
+    }
+    return raw;
+  };
+  const startLine = lineNumber(r.startLine, "startLine");
+  const endLine = lineNumber(r.endLine, "endLine");
+  const line = lineNumber(r.line, "line");
+  if (startLine !== undefined && endLine !== undefined && endLine < startLine) {
+    fail(`${ctx}.endLine must not precede startLine`);
+  }
+  if (endLine !== undefined && startLine === undefined) {
+    fail(`${ctx}.endLine requires startLine`);
+  }
+  if (startLine !== undefined) out.startLine = startLine;
+  if (endLine !== undefined) out.endLine = endLine;
+  if (line !== undefined) out.line = line;
+  return out;
+}
+
 export function evidenceSource(raw: unknown): EvidenceSource {
   const r = record(raw, "source");
   const ctx = "source";
@@ -194,22 +254,8 @@ export function evidenceSource(raw: unknown): EvidenceSource {
         instanceId: identifier(r.instanceId, `${ctx}.instanceId`),
         phaseId: identifier(r.phaseId, `${ctx}.phaseId`),
       };
-    case "source-code": {
-      const out: EvidenceSource = { type: "source-code", path: text(r.path, `${ctx}.path`, 1024) };
-      if (r.line !== undefined && r.line !== null) {
-        if (typeof r.line !== "number" || !Number.isInteger(r.line) || r.line < 1) {
-          fail(`${ctx}.line must be a positive integer`);
-        }
-        out.line = r.line;
-      }
-      if (r.gitHead !== undefined && r.gitHead !== null) {
-        if (typeof r.gitHead !== "string" || !SHA_RE.test(r.gitHead)) {
-          fail(`${ctx}.gitHead must be a hex commit sha`);
-        }
-        out.gitHead = r.gitHead;
-      }
-      return out;
-    }
+    case "source-code":
+      return sourceCodeEvidence(r, ctx);
     case "git-commit": {
       if (typeof r.sha !== "string" || !SHA_RE.test(r.sha)) {
         fail(`${ctx}.sha must be a hex commit sha`);

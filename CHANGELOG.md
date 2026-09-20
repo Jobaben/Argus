@@ -7,6 +7,89 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Business-rule discovery orchestration (Knowledge Ledger Phase 5).** A
+  phase may now declare `discovery: { scope: { paths, label?, note? },
+evidence? }`, which turns it into a **business-rule discovery phase**: its
+  agents are told to read the bounded repository scope and propose the
+  business rules the code appears to enforce, and Argus holds what they write
+  to a set of deterministic invariants before it can be staged. No new
+  subsystem and no new commit path — a discovery agent writes the same
+  `ARGUS_KNOWLEDGE_DELTA_FILE` every step is offered, and its proposal becomes
+  canonical through exactly the Phase 3 boundary: staged → the phase's
+  acceptance ladder → applied. The whole point is the distinction it makes
+  explicit: **repository observation → candidate semantic knowledge → review →
+  canonical semantic knowledge**. Nothing an agent discovers is canonical
+  before a person approves the phase.
+- **A reusable discovery contract.** One instruction block, appended after the
+  author's prompt like the result and artifact instructions, that tells the
+  model what a business rule is ("Kobra bookings allow a maximum customer
+  comment length of 180") and what is only an implementation observation
+  ("`KobraBookingMapper.cs` uses `Substring(0, 180)`" — evidence _for_ a rule,
+  not a rule; a class named `FooValidator`; an architectural preference; a
+  test's internals). It asks the question that makes the difference — _what
+  business behaviour does this code appear to enforce?_ — and says that if the
+  answer is "none, this is plumbing", the right output is nothing. It also
+  requires evidence, tells the agent to put uncertainty in an explicit
+  `assumption` claim rather than in a rule's wording, and to **revise** a rule
+  it was supplied rather than create a second one about the same thing.
+- **First-class source-code evidence.** The `source-code` evidence source
+  gains `repository`, `symbol`, `startLine`/`endLine` beside the existing
+  `path`/`gitHead`/`line`, and is now validated: the path must be
+  repository-relative POSIX (no `..`, no leading `/`, no drive letter, no
+  backslash), a line range must be ordered, and `gitHead` must be a commit
+  sha. It records **provenance, not source** — where the code is, never a copy
+  of it — and its identity is historical: `src/Kobra.cs@abc123:120-136` means
+  that file at that commit, and a later commit never retargets it.
+- **Deterministic evidence validation, fail-closed and checked twice.** On a
+  discovery phase, before a delta is staged and again at the commit boundary,
+  Argus verifies that every `source-code` path is inside the declared scope,
+  resolves to a file that actually exists in the run's working tree, and (when
+  the agent named one) matches the commit Argus recorded for the run. A source
+  file removed while a person deliberated at the gate refuses the commit
+  rather than being recorded as provenance for something that is gone. None of
+  it asks a model anything.
+- **The business-rule evidence invariant.** In discovery mode a proposed
+  `business-rule` must carry supporting evidence in the same delta, and a
+  **revision** of an existing rule must carry _fresh_ evidence for its new
+  statement — an agent may not revise a business rule by rewording it. Scoped
+  to discovery-mode deltas on purpose: the admin API and non-discovery agent
+  phases keep their existing semantics exactly, because the invariant is about
+  agent-discovered knowledge, not about an operator recording what a domain
+  owner said. `evidence: "warn"` downgrades these two checks to review
+  warnings; it downgrades nothing about source paths.
+- **The candidate preview, and a review surface for knowledge.** `GET
+/api/instances/:id/phases/:phaseId/review` now carries `knowledge` — a
+  deterministic `KnowledgeDeltaPreview` per step that staged a delta on _this_
+  attempt — and `discovery`, a small `{ candidates, newRules, revisions,
+assumptions, facts, constraints, conclusions, evidence, warnings,
+requiresReview }` summary for routing, status and observability. The preview
+  shows proposed claims with their evidence and justifications gathered under
+  them, and a proposed revision beside the revision it would replace
+  (statement, support, lifecycle). It **never invents canonical identity**: a
+  proposed claim is `local:comment-limit`, because that is all it is until the
+  commit mints an id. `GET /api/knowledge/deltas/:id/preview` exposes the same
+  projection standalone. Twelve warning codes (a rule with no evidence, a
+  reworded revision, a missing or out-of-scope source path, a stale
+  precondition, an unsupported revision target, a bare assumption, …) are all
+  decided from exact structured information — the delta, the ledger, the
+  filesystem. There are **no embeddings, no vector search and no similarity
+  matching** anywhere in Phase 5; the "is this a duplicate?" warning counts two
+  exact sets (supplied business rules, revised claim ids) and asks a person to
+  look, never asserting that two rules are the same.
+- **Same-instance knowledge handoff.** `knowledgeContext` gains a second
+  selector family: `fromPhases: [{ phaseId, kinds? }]`, meaning "the claims
+  that phase of this instance committed". It resolves **exclusively from the
+  ledger's applied-delta provenance** (`AppliedKnowledgeDelta`), never by
+  scanning today's ledger and never from a staged record — so a discovery
+  phase parked at its gate supplies nothing downstream, structurally rather
+  than by a check somebody has to remember. `kinds` is how an author chooses
+  what flows forward: discovery may produce facts, assumptions and rules while
+  the implementation phase receives only the rules. Authoring is checked when
+  the pipeline is saved (the phase must exist, must not be itself, and must be
+  a transitive `needs` dependency), and a selector naming a phase that is not
+  `succeeded`/`skipped` refuses the launch as a `configuration` failure rather
+  than quietly resolving to an empty context. `claims` and `fromPhases`
+  compose; `claims` wins on a claim-id collision.
 - **Durable supplied provenance and context integrity (Knowledge Ledger
   Phase 4.1).** Phase 4 recorded what Argus supplied to a run on the run's
   invocation record — authoritative while that record exists, and pruned with
@@ -81,6 +164,20 @@ sha256 }`), the context is a new **read** channel in the unified channel
 
 ### Changed
 
+- `KnowledgeContextSpec.claims` is now optional, because a spec may name
+  `fromPhases` instead. Every existing definition, which names `claims`, is
+  unaffected; a spec with neither is still refused at save time.
+- A durable `SuppliedContext` record may now carry an **empty** `claims` list.
+  A `fromPhases` selector can legitimately resolve to nothing (an accepted
+  phase that committed no matching knowledge), and the run still receives — and
+  Argus still hashes — a context file. "Argus supplied this run a context
+  holding no revisions" is a different, and equally recordable, fact from "this
+  run was launched with no semantic context", which still has no record at all.
+- `source-code` evidence paths are now validated as repository-relative on
+  every write path, including the admin `POST /api/knowledge/evidence`. An
+  absolute path, a drive letter or a `..` segment is a `400` where it
+  previously stored. Existing records are untouched; only new writes are
+  checked.
 - `GET /api/knowledge/executions/:runId/context` and
   `GET /api/knowledge/claims/:key/supplied-to` now answer from the ledger's
   durable supplied records instead of scanning retained invocation

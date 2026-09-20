@@ -11,6 +11,8 @@ import { createUserStore } from "../userStore.js";
 import type {
   ClaimDetail,
   ClaimView,
+  ClaimsResponse,
+  KnowledgeDeltaPreview,
   ConsumersReport,
   DependentsReport,
   ExecutionContextReport,
@@ -681,11 +683,95 @@ test("the persisted document is the source of truth the API reads", async () => 
   assert.equal(r.body.support, "supported");
 });
 
+// ── Candidate preview (Phase 5): a read model, never a mutation ─────────────
+
+test("delta preview: proposed claims read as local ids, a revision shows what it would replace", async () => {
+  const staging = await import("./staging.js");
+  const app = makeApp();
+  // RULE-17:v1 exists and is supported; the delta proposes a rule and a
+  // revision of it.
+  const created = await post(app, "/api/knowledge/claims", {
+    id: "RULE-17",
+    kind: "business-rule",
+    statement: "Kobra comments max = 180",
+  });
+  assert.equal(created.status, 201);
+  await post(app, "/api/knowledge/evidence", {
+    claim: "RULE-17:v1",
+    source: { type: "document", uri: "spec://kobra" },
+  });
+  await staging.writeDeltaRecord({
+    id: "KD-P",
+    runId: "run-p",
+    instanceId: "inst-1",
+    phaseId: "discover",
+    attempt: 0,
+    step: "investigate",
+    status: "staged",
+    receivedAt: "2026-09-19T10:00:00.000Z",
+    updatedAt: "2026-09-19T10:00:00.000Z",
+    supplied: [{ id: "RULE-17", revision: 1 }],
+    delta: {
+      schemaVersion: 1,
+      claims: [{ localId: "limit", kind: "business-rule", statement: "Comments cap at 500" }],
+      revisions: [
+        {
+          claimId: "RULE-17",
+          expectedRevision: 1,
+          localId: "r2",
+          statement: "Kobra comments max = 500",
+        },
+      ],
+      evidence: [
+        {
+          claim: { local: "r2" },
+          direction: "supports",
+          source: { type: "source-code", path: "src/Booking/KobraAdapter.cs", startLine: 3 },
+        },
+      ],
+      consumed: [{ id: "RULE-17", revision: 1 }],
+      metadata: { summary: "one rule, one revision" },
+    },
+  });
+
+  const r = await get(app, "/api/knowledge/deltas/KD-P/preview");
+  assert.equal(r.status, 200);
+  const preview = r.body as KnowledgeDeltaPreview;
+  assert.equal(preview.deltaId, "KD-P");
+  assert.equal(preview.step, "investigate");
+  assert.equal(preview.summary, "one rule, one revision");
+  assert.deepEqual(preview.proposedClaims[0].ref, { display: "local:limit", local: "limit" });
+  const rev = preview.proposedRevisions[0];
+  assert.equal(rev.ref.display, "RULE-17:v2 (proposed)");
+  assert.equal(rev.current?.statement, "Kobra comments max = 180");
+  assert.equal(rev.current?.support, "supported");
+  assert.equal(rev.evidence[0].source.type, "source-code");
+  assert.deepEqual(preview.consumed[0], {
+    ref: "RULE-17:v1",
+    claim: { id: "RULE-17", revision: 1 },
+    kind: "business-rule",
+    statement: "Kobra comments max = 180",
+  });
+  assert.equal(preview.supplied?.[0].ref, "RULE-17:v1");
+  // The uncovered new rule is flagged. The supplied-rule prompt is *not*:
+  // the only supplied rule is the one this delta revises, which is exactly
+  // the behaviour the prompt exists to encourage.
+  assert.deepEqual(preview.warnings.map((w) => w.code).sort(), ["business-rule-without-evidence"]);
+
+  // Reading a preview mutates nothing: the ledger still holds one revision.
+  const claims = (await get(app, "/api/knowledge/claims")).body as ClaimsResponse;
+  assert.deepEqual(
+    claims.claims.map((c) => [c.id, c.revision]),
+    [["RULE-17", 1]],
+  );
+});
+
 // ── KnowledgeDeltas (Phase 3): inspection only ──────────────────────────────
 
 test("delta inspection: 404 for unknown ids and empty lists for runs that staged nothing", async () => {
   const app = makeApp();
   assert.equal((await get(app, "/api/knowledge/deltas/KD-nope")).status, 404);
+  assert.equal((await get(app, "/api/knowledge/deltas/KD-nope/preview")).status, 404);
   assert.equal((await get(app, "/api/knowledge/deltas/KD-nope/result")).status, 404);
   assert.equal((await get(app, "/api/knowledge/deltas/..%2Fx")).status, 404);
   const r = await get(app, "/api/knowledge/executions/run-none/deltas");

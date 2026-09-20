@@ -3,7 +3,17 @@ import { Drawer, Skeleton, StatusPill, isMarkdown } from "../ds";
 import { Markdown } from "../ds/Markdown";
 import { useArtifactContent, useGateReview } from "../useGateReview";
 import type { GateActionOptions } from "../useOverview";
-import type { PhaseArtifact, PhaseReview } from "../types";
+import type {
+  EvidenceSource,
+  KnowledgeDeltaPreview,
+  KnowledgeDeltaWarning,
+  PhaseArtifact,
+  PhaseReview,
+  PreviewClaim,
+  PreviewEvidence,
+  PreviewJustification,
+  PreviewRevision,
+} from "../types";
 
 /**
  * The one place a human decides on a gate.
@@ -170,6 +180,221 @@ function Verification({ report }: { report: NonNullable<PhaseReview["verificatio
         </li>
       )}
     </ul>
+  );
+}
+
+/**
+ * Candidate knowledge — the review surface for a staged KnowledgeDelta
+ * (Phase 5).
+ *
+ * A discovery phase's real output is not a file: it is a set of proposed
+ * business rules with the evidence behind them. Without this panel the only
+ * way to see what an agent proposed before approving it would be to read its
+ * transcript, which is exactly what the Knowledge Ledger exists to replace.
+ *
+ * Deliberately a structured table and nothing more. No graph, no editor, no
+ * ontology browser: the two decisions a reviewer makes here are Approve and
+ * Revise, and what they need in order to make them is the rule, its evidence,
+ * what a revision would replace, and what Argus already knows is questionable.
+ *
+ * A proposed claim is labelled `local:<id>` because that is honestly all it
+ * is until the commit mints an identity — showing a canonical-looking id for
+ * something that may never exist would be a lie the drawer tells once and the
+ * reviewer believes forever.
+ */
+function describeSource(source: EvidenceSource): string {
+  switch (source.type) {
+    case "source-code": {
+      const range =
+        source.startLine !== undefined
+          ? `:${source.startLine}${source.endLine !== undefined && source.endLine !== source.startLine ? `-${source.endLine}` : ""}`
+          : source.line !== undefined
+            ? `:${source.line}`
+            : "";
+      const at = source.gitHead ? `@${source.gitHead.slice(0, 8)}` : "";
+      const symbol = source.symbol ? ` · ${source.symbol}` : "";
+      return `${source.path}${range}${at}${symbol}`;
+    }
+    case "git-commit":
+      return `commit ${source.sha.slice(0, 8)}${source.repository ? ` (${source.repository})` : ""}`;
+    case "document":
+      return source.title ? `${source.title} — ${source.uri}` : source.uri;
+    case "human":
+      return source.who;
+    case "run":
+      return `run ${source.runId}`;
+    case "phase":
+      return `${source.instanceId} · ${source.phaseId}`;
+    case "verification":
+      return `verification of ${source.phaseId}`;
+    case "artifact":
+      return `${source.phaseId} · ${source.path}`;
+  }
+}
+
+function KindTag({ kind }: { kind: string }) {
+  const tone =
+    kind === "business-rule"
+      ? "border-ok/40 text-ok"
+      : kind === "assumption"
+        ? "border-await/40 text-await"
+        : "border-line text-ink-faint";
+  return (
+    <span
+      className={`rounded border px-1 font-mono text-[8.5px] uppercase tracking-[0.1em] ${tone}`}
+    >
+      {kind}
+    </span>
+  );
+}
+
+function EvidenceList({ evidence }: { evidence: PreviewEvidence[] }) {
+  if (evidence.length === 0) {
+    return (
+      <p className="mt-1 text-[11px] text-fail" data-testid="candidate-no-evidence">
+        No evidence attached.
+      </p>
+    );
+  }
+  return (
+    <ul className="mt-1 flex flex-col gap-0.5" aria-label="Evidence">
+      {evidence.map((e, i) => (
+        <li key={i} className="flex min-w-0 items-baseline gap-2 text-[11px]">
+          <span
+            aria-hidden="true"
+            className={e.direction === "opposes" ? "text-fail" : "text-ink-faint"}
+          >
+            {e.direction === "opposes" ? "✗" : "→"}
+          </span>
+          <span className="min-w-0 break-words font-mono text-ink-dim">
+            {describeSource(e.source)}
+          </span>
+          {e.note && <span className="min-w-0 break-words text-ink-faint">— {e.note}</span>}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function JustificationList({ justifications }: { justifications: PreviewJustification[] }) {
+  if (justifications.length === 0) return null;
+  return (
+    <ul className="mt-1 flex flex-col gap-0.5" aria-label="Justifications">
+      {justifications.map((j, i) => (
+        <li key={i} className="min-w-0 break-words font-mono text-[11px] text-ink-faint">
+          {j.direction === "opposes" ? "opposed by" : "from"}{" "}
+          {j.premises.map((p) => p.display).join(" + ")}
+          {j.note ? ` — ${j.note}` : ""}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function CandidateClaim({ claim }: { claim: PreviewClaim }) {
+  return (
+    <li className="rounded-lg border border-line bg-surface px-3 py-2">
+      <div className="flex flex-wrap items-baseline gap-2">
+        <KindTag kind={claim.kind} />
+        <span className="font-mono text-[10px] text-ink-faint">{claim.ref.display}</span>
+      </div>
+      <p className="mt-1 text-[12.5px] leading-relaxed text-ink">{claim.statement}</p>
+      <EvidenceList evidence={claim.evidence} />
+      <JustificationList justifications={claim.justifications} />
+    </li>
+  );
+}
+
+function CandidateRevision({ revision }: { revision: PreviewRevision }) {
+  return (
+    <li className="rounded-lg border border-line bg-surface px-3 py-2">
+      <div className="flex flex-wrap items-baseline gap-2">
+        {revision.kind && <KindTag kind={revision.kind} />}
+        <span className="font-mono text-[10px] text-ink-faint">
+          {revision.claimId} v{revision.expectedRevision} → v{revision.expectedRevision + 1}
+        </span>
+        {revision.stale && (
+          <span className="rounded border border-fail/40 px-1 font-mono text-[8.5px] uppercase tracking-[0.1em] text-fail">
+            stale
+          </span>
+        )}
+      </div>
+      {revision.current && (
+        <p className="mt-1 text-[12px] leading-relaxed text-ink-faint line-through">
+          {revision.current.statement}
+        </p>
+      )}
+      <p className="mt-0.5 text-[12.5px] leading-relaxed text-ink">{revision.statement}</p>
+      {revision.revisionNote && (
+        <p className="mt-0.5 text-[11px] text-ink-faint">{revision.revisionNote}</p>
+      )}
+      <EvidenceList evidence={revision.evidence} />
+      <JustificationList justifications={revision.justifications} />
+    </li>
+  );
+}
+
+function Warnings({ warnings }: { warnings: KnowledgeDeltaWarning[] }) {
+  if (warnings.length === 0) return null;
+  return (
+    <ul data-testid="candidate-warnings" className="mt-2 flex flex-col gap-1" aria-label="Warnings">
+      {warnings.map((w, i) => (
+        <li key={i} className="flex min-w-0 items-baseline gap-2 text-[11.5px] text-await">
+          <span aria-hidden="true">!</span>
+          <span className="min-w-0 break-words">{w.message}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function CandidateKnowledge({
+  previews,
+  discovery,
+  canApprove,
+}: {
+  previews: KnowledgeDeltaPreview[];
+  discovery: PhaseReview["discovery"];
+  /** Approve is offered: the candidates are still on their way to canonical.
+   *  On a failed phase they are diagnostic — the delta never commits. */
+  canApprove: boolean;
+}) {
+  const claims = previews.flatMap((p) => p.proposedClaims);
+  const revisions = previews.flatMap((p) => p.proposedRevisions);
+  const warnings = previews.flatMap((p) => p.warnings);
+  const consumed = previews.flatMap((p) => p.consumed);
+  return (
+    <div data-testid="gate-candidate-knowledge" className="flex flex-col gap-2">
+      <p className="text-[12px] text-ink-faint">
+        {discovery
+          ? `${discovery.candidates} candidate${discovery.candidates === 1 ? "" : "s"} · ${discovery.newRules} new rule${discovery.newRules === 1 ? "" : "s"} · ${discovery.revisions} revision${discovery.revisions === 1 ? "" : "s"} · ${discovery.assumptions} assumption${discovery.assumptions === 1 ? "" : "s"}`
+          : `${claims.length + revisions.length} proposed claim${claims.length + revisions.length === 1 ? "" : "s"}`}
+        .{" "}
+        {canApprove
+          ? "Nothing here is canonical yet; approving commits it to the Knowledge Ledger."
+          : "None of this became canonical: the phase did not reach its commit."}
+      </p>
+      <Warnings warnings={warnings} />
+      {revisions.length > 0 && (
+        <ul className="flex flex-col gap-1.5" aria-label="Proposed revisions">
+          {revisions.map((r, i) => (
+            <CandidateRevision key={`${r.claimId}-${i}`} revision={r} />
+          ))}
+        </ul>
+      )}
+      {claims.length > 0 && (
+        <ul className="flex flex-col gap-1.5" aria-label="Proposed claims">
+          {claims.map((c, i) => (
+            <CandidateClaim key={`${c.ref.display}-${i}`} claim={c} />
+          ))}
+        </ul>
+      )}
+      {consumed.length > 0 && (
+        <p className="font-mono text-[10.5px] text-ink-faint">
+          consumed: {consumed.map((c) => c.ref).join(", ")}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -501,6 +726,17 @@ function GatePanel({
             <section>
               <Heading>Checks</Heading>
               <Verification report={review.verification} />
+            </section>
+          )}
+
+          {review.knowledge && review.knowledge.length > 0 && (
+            <section>
+              <Heading>Candidate knowledge</Heading>
+              <CandidateKnowledge
+                previews={review.knowledge}
+                discovery={review.discovery}
+                canApprove={review.canApprove}
+              />
             </section>
           )}
 

@@ -17,13 +17,19 @@
 
 import { open, readdir, lstat } from "node:fs/promises";
 import path from "node:path";
+import type { KnowledgeDeltaPreview } from "@argus/contracts";
 import type {
   PhaseArtifact,
   PhaseArtifactContent,
+  PhaseProgress,
   PhaseReview,
   PipelineDefinition,
   PipelineInstance,
 } from "./pipelineTypes.js";
+import { readDeltaRecord } from "../knowledge/staging.js";
+import { readLedger } from "../knowledge/store.js";
+import { checkDiscoveryDelta, previewKnowledgeDelta } from "../knowledge/discovery.js";
+import { readInvocation } from "./runs.js";
 
 /** Most files one review lists; past this the listing is `truncated`. */
 export const ARTIFACT_LIST_CAP = 200;
@@ -201,6 +207,7 @@ export async function buildPhaseReview(
     .filter((c) => c.kind === "artifact")
     .map((c) => c.path);
   const { artifacts, truncated } = await listPhaseArtifacts(phase.artifactDir, requiredPaths);
+  const knowledge = await previewStagedKnowledge(phase, phaseDef);
   const review: PhaseReview = {
     instanceId: inst.id,
     phaseId,
@@ -215,6 +222,69 @@ export async function buildPhaseReview(
     artifactDir: phase.artifactDir ?? null,
     artifacts,
     ...(truncated ? { truncated } : {}),
+    ...(knowledge.length ? { knowledge } : {}),
+    ...(phase.discovery ? { discovery: phase.discovery } : {}),
   };
   return { ok: true, review };
+}
+
+/**
+ * The candidate knowledge this attempt staged, as the gate shows it
+ * (Phase 5 §review surface).
+ *
+ * A gated discovery phase's real output is a KnowledgeDelta, not a file. Left
+ * to the artifact listing, a reviewer's only way to see what rules an agent
+ * proposed would be to open the transcript — which is exactly the failure
+ * mode the Knowledge Ledger exists to remove. So the staged deltas of *this
+ * attempt* are projected into the review: the proposed rules, the evidence
+ * under each one, what a revision would replace, and every deterministic
+ * warning.
+ *
+ * Three properties, all deliberate:
+ *
+ * - **Nothing here is canonical.** The preview is a read model of a staged
+ *   proposal; approving is what makes it real, and a proposed claim is shown
+ *   as `local:<label>` precisely so nobody reads a canonical id into it.
+ * - **This attempt only.** A record staged for an earlier attempt (revised,
+ *   retried) is skipped: it can never become canonical, and showing it beside
+ *   the live candidates would invite approving the wrong thing.
+ * - **It never fails the review.** A ledger that cannot be read, a record
+ *   that has been pruned — the review still renders, with whatever it could
+ *   gather. A gate that 500s because a preview could not be built would be a
+ *   worse outcome than a gate with no preview.
+ */
+async function previewStagedKnowledge(
+  phase: PhaseProgress,
+  phaseDef: PipelineDefinition["phases"][number] | undefined,
+): Promise<KnowledgeDeltaPreview[]> {
+  const steps = phase.steps.filter((s) => s.runId && s.knowledgeDelta);
+  if (steps.length === 0) return [];
+  let ledger = null;
+  try {
+    ledger = await readLedger();
+  } catch {
+    ledger = null;
+  }
+  const out: KnowledgeDeltaPreview[] = [];
+  for (const step of steps) {
+    const record = await readDeltaRecord(step.runId!);
+    if (!record?.delta || record.attempt !== phase.attempt) continue;
+    let warnings;
+    if (phaseDef?.discovery) {
+      const invocation = await readInvocation(step.runId!);
+      const verdict = await checkDiscoveryDelta(
+        record.delta,
+        ledger,
+        {
+          policy: phaseDef.discovery,
+          repoRoot: invocation?.workspace?.path ?? invocation?.cwd ?? phaseDef.cwd ?? null,
+          gitHead: invocation?.gitHead ?? null,
+        },
+        record.supplied,
+      );
+      warnings = verdict.warnings;
+    }
+    out.push(previewKnowledgeDelta(record, ledger, warnings));
+  }
+  return out;
 }

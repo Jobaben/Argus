@@ -87,10 +87,53 @@ export type EvidenceSource =
   | { type: "phase"; instanceId: string; phaseId: string }
   | { type: "artifact"; instanceId: string; phaseId: string; path: string }
   | { type: "verification"; instanceId: string; phaseId: string }
-  | { type: "source-code"; path: string; line?: number; gitHead?: string }
+  | SourceCodeEvidence
   | { type: "git-commit"; sha: string; repository?: string }
   | { type: "document"; uri: string; title?: string }
   | { type: "human"; who: string };
+
+/**
+ * A location in a repository working tree — the evidence kind repository
+ * discovery produces (Phase 5).
+ *
+ * It records **provenance, not content**: enough to go and look at the code
+ * again, never a copy of it. The ledger holds no source snippets, so a rule
+ * supported by this evidence stays small however large the function it was
+ * read from.
+ *
+ * Every field but `path` is optional because a discovery agent may honestly
+ * know less than the full locator; what Argus *validates* is that what is
+ * there is structurally sound (see `knowledge/discovery.ts`):
+ *
+ * - `path` is repository-relative, POSIX-separated, with no `..` segment, no
+ *   leading slash and no drive letter — it can never address anything outside
+ *   the repository the run worked in;
+ * - `startLine <= endLine`, both positive integers;
+ * - `gitHead` is a hex commit sha, and on a discovery-mode delta it must match
+ *   the commit Argus itself recorded for the run.
+ *
+ * The identity is **historical**. `src/Kobra.cs@abc123:120-136` means that
+ * file at that commit; a later commit that moves the code does not retarget
+ * the record, exactly as a claim revision does not retarget a consumption.
+ */
+export interface SourceCodeEvidence {
+  type: "source-code";
+  /** Repository-relative POSIX path. Never absolute, never escaping the root. */
+  path: string;
+  /** Which repository, when a run works with more than one. Free-form label. */
+  repository?: string;
+  /** The commit the path was read at. */
+  gitHead?: string;
+  /** The symbol the evidence is about (`KobraBookingMapper.Map`), when known. */
+  symbol?: string;
+  /** First line of the relevant range (1-based). */
+  startLine?: number;
+  /** Last line of the relevant range (1-based, `>= startLine`). */
+  endLine?: number;
+  /** Pre-Phase-5 single-line form. Kept so records written before ranges
+   *  existed still parse; new evidence should use `startLine`/`endLine`. */
+  line?: number;
+}
 
 /** The direction an evidence record or a justification bears on its target. */
 export type SupportDirection = "supports" | "opposes";
@@ -638,10 +681,44 @@ export interface KnowledgeDeltasResponse {
  */
 export type KnowledgeContextSelector = { id: string; revision: number | "active" };
 
-/** What a step (or every step of a phase) receives. Each logical claim id
- *  may appear once: a context is a set of claims keyed by id. */
+/**
+ * Claims committed by an **accepted earlier phase of this same instance**
+ * (Phase 5). The bridge from "discovery just created RULE-42" to "the
+ * planning phase receives RULE-42:v1", without the author having to know the
+ * canonical id a future run will mint.
+ *
+ * Resolved exclusively from the *applied* KnowledgeDelta provenance the
+ * ledger holds for that phase ({@link AppliedKnowledgeDelta}) — never by
+ * scanning today's ledger for claims that look like the phase's, and never
+ * from a staged record. Two consequences, both deliberate:
+ *
+ * - **A staged proposal cannot leak.** Only an accepted phase's commit is in
+ *   `ledger.deltas`, so a candidate waiting at a gate resolves to nothing.
+ * - **It is historically stable.** The refs are the exact revisions that
+ *   phase created; a later revision of one of them does not change what this
+ *   selector resolved to.
+ */
+export interface PhaseProducedSelector {
+  /** A phase of the same pipeline, which must run before this one. */
+  phaseId: string;
+  /** Narrow to these claim kinds. Absent = every claim the phase committed. */
+  kinds?: ClaimKind[];
+}
+
+/**
+ * What a step (or every step of a phase) receives. Each logical claim id may
+ * appear once: a context is a set of claims keyed by id.
+ *
+ * Two selector families, both optional, at least one non-empty. `claims`
+ * names exact or active revisions the author already knows about;
+ * `fromPhases` names knowledge an earlier phase of this instance committed.
+ * They compose: `claims` is resolved first and wins on a collision, so an
+ * author who pinned a revision explicitly keeps it.
+ */
 export interface KnowledgeContextSpec {
-  claims: KnowledgeContextSelector[];
+  claims?: KnowledgeContextSelector[];
+  /** Claims committed by accepted earlier phases of this instance. */
+  fromPhases?: PhaseProducedSelector[];
 }
 
 /** One direct evidence record, as the agent-facing projection shows it: the
@@ -691,7 +768,15 @@ export interface KnowledgeContext {
   metadata?: {
     /** How each entry was selected, in `claims` order: the authored selector
      *  and the exact revision it resolved to. */
-    selection?: Array<{ selector: KnowledgeContextSelector; resolved: ClaimRef }>;
+    selection?: Array<{
+      selector: KnowledgeContextSelector;
+      resolved: ClaimRef;
+      /** The earlier phase whose accepted commit produced this claim, when it
+       *  was selected by a {@link PhaseProducedSelector} rather than named
+       *  directly. The stored `selector` is always the exact revision that
+       *  resolution settled on, so the record never floats. */
+      fromPhase?: string;
+    }>;
   };
 }
 
@@ -758,7 +843,16 @@ export interface SuppliedContext {
   attempt?: number;
   /** The {@link KnowledgeContext} wire version the run received. */
   schemaVersion: 1;
-  /** The exact revisions supplied, in context-file order. */
+  /**
+   * The exact revisions supplied, in context-file order.
+   *
+   * May be empty. Since Phase 5 a spec can select "whatever the accepted
+   * discovery phase committed", and a phase is allowed to have committed
+   * nothing; the run still received — and Argus still hashed — a context
+   * file, so the record still exists and says durably that the file held no
+   * revisions. A run launched with *no* semantic context at all has no record
+   * here, which is the different, and equally important, fact.
+   */
   claims: ClaimRef[];
   /** SHA-256 (hex) of the materialized context file's bytes. */
   sha256: string;
@@ -832,4 +926,266 @@ export interface SuppliedToReport {
     /** The phase attempt, when the record carries one. */
     attempt?: number;
   }>;
+}
+
+// ── Business-rule discovery orchestration (Phase 5) ──────────────────────────
+//
+// Phase 3 gave an agent a way to *propose* semantic knowledge and Argus a way
+// to commit it only once the phase was accepted. Phase 5 uses exactly that
+// machinery for one specific workflow — reading a bounded repository scope and
+// proposing the business rules its code appears to enforce — and adds the two
+// things a reviewer and a downstream phase need:
+//
+//   repository evidence → candidate KnowledgeDelta → review → canonical rule
+//
+//   1. a deterministic **preview** of the staged delta, so the gate shows the
+//      candidate rules, their evidence and their assumptions without anyone
+//      reading the agent's transcript;
+//   2. deterministic **warnings and invariants** over what the agent proposed,
+//      so "an agent said so" is never on its own enough to create a rule.
+//
+// What stays interpretation: whether the rule the agent read out of the code
+// is the rule the business actually has. Argus does not, and cannot, check
+// that — which is exactly why the human gate is mandatory for discovery.
+
+/**
+ * A bounded repository scope for one discovery invocation.
+ *
+ * Discovery is never "understand the repository". The author names the files
+ * or directories in scope, and Argus uses that list twice: it goes into the
+ * agent's instructions, and it is the containment rule every `source-code`
+ * evidence path is checked against. A rule whose evidence points outside the
+ * declared scope is refused — the agent went looking somewhere it was not
+ * asked to.
+ */
+export interface DiscoveryScope {
+  /** Repository-relative paths (files or directories), at least one. `"."`
+   *  means the whole working tree, which an author must say explicitly. */
+  paths: string[];
+  /** A short name for what is being investigated ("Kobra booking"). Appears
+   *  in the agent's instructions and in the review. */
+  label?: string;
+  /** One sentence narrowing what to look for. Author-written, not Argus's. */
+  note?: string;
+}
+
+/**
+ * Turns a phase into a **business-rule discovery phase**.
+ *
+ * The phase is otherwise an ordinary phase: the same steps, the same gate, the
+ * same KnowledgeDelta channel, the same commit boundary. What `discovery`
+ * changes is three things, all deterministic:
+ *
+ * - the steps get the discovery instructions appended to their prompt
+ *   (what counts as a business rule, what evidence is required, how to
+ *   propose an assumption, how to revise a rule it was supplied);
+ * - the delta the run writes is held to the **discovery invariants** below —
+ *   every business rule needs evidence, every source path must exist inside
+ *   the declared scope at the commit Argus recorded;
+ * - the phase carries a {@link DiscoverySummary} and its gate carries a
+ *   {@link KnowledgeDeltaPreview}.
+ *
+ * Nothing here weakens the Phase 3 boundary: a discovery agent still cannot
+ * write the ledger, still cannot mint a canonical id, and its proposal still
+ * becomes canonical only when the phase is accepted.
+ */
+export interface DiscoveryPolicy {
+  scope: DiscoveryScope;
+  /**
+   * Whether a business rule this delta creates or revises must carry
+   * supporting evidence in the same delta. Default `"required"`, which is the
+   * point of the feature; `"warn"` downgrades it to a review warning for an
+   * author who wants the candidate visible rather than refused.
+   */
+  evidence?: "required" | "warn";
+}
+
+/** The counts a discovery phase reports for routing, status and observability.
+ *  The canonical detail stays in the staged KnowledgeDelta; this is the
+ *  summary, never a second copy of the candidates. */
+export interface DiscoverySummary {
+  /** Proposed claims plus proposed revisions: everything awaiting a decision. */
+  candidates: number;
+  /** New `business-rule` claims. */
+  newRules: number;
+  /** Proposed revisions of existing claims, of any kind. */
+  revisions: number;
+  /** New `assumption` claims. */
+  assumptions: number;
+  /** New `fact` claims. */
+  facts: number;
+  /** New `constraint` claims. */
+  constraints: number;
+  /** New `conclusion` claims. */
+  conclusions: number;
+  /** Evidence records proposed across the attempt's deltas. */
+  evidence: number;
+  /** Deterministic review warnings raised over the attempt's deltas. */
+  warnings: number;
+  /** True while the candidates are staged and not yet accepted. */
+  requiresReview: boolean;
+}
+
+/**
+ * How one claim is named in a preview.
+ *
+ * A proposed claim has no canonical identity yet and the preview must not
+ * pretend otherwise: it shows `local:comment-limit`, which is honestly a
+ * delta-local label. An existing revision shows its real ref, `RULE-17:v2`.
+ * A proposed *revision* shows both — the id it targets and the revision it
+ * would become — because a reviewer's question is precisely "which rule is
+ * this changing, and to what?".
+ */
+export interface PreviewRef {
+  /** What to print: `local:comment-limit`, `RULE-17:v2`, or `RULE-17:v2 (proposed)`. */
+  display: string;
+  /** Set when the reference is delta-local. */
+  local?: string;
+  /** Set when the reference names an existing exact revision. */
+  claim?: ClaimRef;
+  /** True when `claim` is the revision this delta would *create*, not one the
+   *  ledger holds. */
+  proposed?: boolean;
+}
+
+export interface PreviewEvidence {
+  claim: PreviewRef;
+  direction: SupportDirection;
+  source: EvidenceSource;
+  note?: string;
+}
+
+export interface PreviewJustification {
+  conclusion: PreviewRef;
+  premises: PreviewRef[];
+  direction: SupportDirection;
+  note?: string;
+}
+
+/** A claim this delta would create, with everything in the delta that bears
+ *  on it gathered under it, so a reviewer reads one block per candidate. */
+export interface PreviewClaim {
+  ref: PreviewRef;
+  kind: ClaimKind;
+  statement: string;
+  structuredValue?: unknown;
+  /** Evidence in this delta attached to this claim. */
+  evidence: PreviewEvidence[];
+  /** Justifications in this delta concluding this claim. */
+  justifications: PreviewJustification[];
+}
+
+/** A revision this delta would create. `current` is what the ledger holds for
+ *  the targeted id right now — the reviewer's before-and-after. */
+export interface PreviewRevision {
+  claimId: string;
+  expectedRevision: number;
+  /** The revision this would become: `expectedRevision + 1`. */
+  ref: PreviewRef;
+  kind?: ClaimKind;
+  statement: string;
+  revisionNote?: string;
+  structuredValue?: unknown;
+  /** The active revision as the ledger stands, when the claim exists. */
+  current?: {
+    claim: ClaimRef;
+    statement: string;
+    support: ClaimSupport;
+    lifecycle: ClaimLifecycle;
+  };
+  /** True when `expectedRevision` is no longer the active revision: the
+   *  precondition will refuse this delta at commit. */
+  stale?: boolean;
+  evidence: PreviewEvidence[];
+  justifications: PreviewJustification[];
+}
+
+/**
+ * Why a reviewer should look twice. Every code is decided from **exact
+ * structured information** — the delta, the ledger, the filesystem — never
+ * from similarity, embeddings or a model's opinion.
+ *
+ * - `business-rule-without-evidence` — a proposed rule carries no supporting
+ *   evidence in the delta. Under `evidence: "required"` this is refused, not
+ *   warned.
+ * - `revision-without-evidence` — a business-rule revision changes the
+ *   sentence without adding evidence for the new statement.
+ * - `assumption-without-evidence` — an assumption with neither evidence nor a
+ *   justification. Always a warning, never a refusal: an assumption is
+ *   allowed to be a bare stipulation, but it should be visible as one.
+ * - `claim-without-support` — any other proposed claim with no evidence and
+ *   no justification.
+ * - `revision-target-unsupported` — the revision targets a claim the ledger
+ *   currently holds as `unsupported` or `contested`.
+ * - `revision-stale` — the `expectedRevision` is no longer active; the commit
+ *   will refuse the whole delta.
+ * - `source-file-missing` — `source-code` evidence names a path that is not in
+ *   the run's working tree.
+ * - `source-outside-scope` — the path is inside the repository but outside the
+ *   phase's declared discovery scope.
+ * - `source-path-unsafe` — the path is absolute, escapes the root, or is
+ *   otherwise not a containable repository-relative path.
+ * - `source-git-head-mismatch` — the evidence names a commit other than the one
+ *   Argus recorded for the run.
+ * - `source-range-invalid` — `endLine` precedes `startLine`.
+ * - `new-rule-while-rules-supplied` — the delta creates a new business rule
+ *   although the run was *supplied* existing business rules it does not
+ *   revise. Purely structural: it counts supplied refs and revised ids, and
+ *   says "check whether one of these is the same logical rule". It is not a
+ *   similarity judgement and never claims the rules are duplicates.
+ */
+export type KnowledgeDeltaWarningCode =
+  | "business-rule-without-evidence"
+  | "revision-without-evidence"
+  | "assumption-without-evidence"
+  | "claim-without-support"
+  | "revision-target-unsupported"
+  | "revision-stale"
+  | "source-file-missing"
+  | "source-outside-scope"
+  | "source-path-unsafe"
+  | "source-git-head-mismatch"
+  | "source-range-invalid"
+  | "new-rule-while-rules-supplied";
+
+export interface KnowledgeDeltaWarning {
+  code: KnowledgeDeltaWarningCode;
+  /** One sentence, naming the subject and what is wrong with it. */
+  message: string;
+  /** The display form of what the warning is about (`local:comment-limit`,
+   *  `RULE-17`, `src/KobraAdapter.cs`). */
+  subject?: string;
+}
+
+/**
+ * The deterministic read model of a staged KnowledgeDelta: what would become
+ * canonical if this phase were approved, as a reviewer needs to see it.
+ *
+ * Derived per read from the staged record and the ledger as it stands. It
+ * mutates nothing, mints no id, and does not pretend a proposed claim already
+ * has a canonical identity — a new claim is `local:<label>` here and gets its
+ * real id only at commit.
+ */
+export interface KnowledgeDeltaPreview {
+  deltaId: string;
+  runId: string;
+  /** The step whose run wrote it. */
+  step: string;
+  attempt: number;
+  status: KnowledgeDeltaStatus;
+  proposedClaims: PreviewClaim[];
+  proposedRevisions: PreviewRevision[];
+  /** Every evidence record in the delta, in delta order — including the ones
+   *  already shown under their claim, so a reviewer can scan evidence alone. */
+  evidence: PreviewEvidence[];
+  justifications: PreviewJustification[];
+  /** Exact revisions the run declared it relied on, with their statements
+   *  when the ledger still holds them. */
+  consumed: Array<{ ref: string; claim: ClaimRef; kind?: ClaimKind; statement?: string }>;
+  artifacts: ArtifactRef[];
+  /** The exact revisions Argus supplied to the run, when it recorded any. */
+  supplied?: Array<{ ref: string; claim: ClaimRef; kind?: ClaimKind; statement?: string }>;
+  /** The agent's own one-paragraph summary, when the delta carried one. */
+  summary?: string;
+  warnings: KnowledgeDeltaWarning[];
 }

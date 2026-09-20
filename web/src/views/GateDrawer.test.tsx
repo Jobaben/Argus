@@ -376,3 +376,191 @@ describe("GateDrawer — deciding", () => {
     expect(btn).not.toBeDisabled();
   });
 });
+
+// ── Candidate knowledge (Phase 5) ───────────────────────────────────────────
+
+import type { KnowledgeDeltaPreview } from "../types";
+
+function preview(over: Partial<KnowledgeDeltaPreview> = {}): KnowledgeDeltaPreview {
+  return {
+    deltaId: "KD-1",
+    runId: "run-7",
+    step: "investigate",
+    attempt: 0,
+    status: "staged",
+    proposedClaims: [
+      {
+        ref: { display: "local:comment-limit", local: "comment-limit" },
+        kind: "business-rule",
+        statement: "Kobra bookings restrict customer comments to 180 characters.",
+        evidence: [
+          {
+            claim: { display: "local:comment-limit", local: "comment-limit" },
+            direction: "supports",
+            source: {
+              type: "source-code",
+              path: "src/Booking/KobraAdapter.cs",
+              gitHead: "abc123def4567890",
+              symbol: "KobraAdapter.MapComment",
+              startLine: 120,
+              endLine: 136,
+            },
+            note: "truncates at 180",
+          },
+        ],
+        justifications: [
+          {
+            conclusion: { display: "local:comment-limit", local: "comment-limit" },
+            premises: [{ display: "local:kobra-origin", local: "kobra-origin" }],
+            direction: "supports",
+          },
+        ],
+      },
+      {
+        ref: { display: "local:kobra-origin", local: "kobra-origin" },
+        kind: "assumption",
+        statement: "The limit is a Kobra integration constraint.",
+        evidence: [],
+        justifications: [],
+      },
+    ],
+    proposedRevisions: [
+      {
+        claimId: "RULE-17",
+        expectedRevision: 1,
+        ref: {
+          display: "RULE-17:v2 (proposed)",
+          claim: { id: "RULE-17", revision: 2 },
+          proposed: true,
+        },
+        kind: "business-rule",
+        statement: "Kobra comments max = 500",
+        revisionNote: "the adapter truncates at 500",
+        current: {
+          claim: { id: "RULE-17", revision: 1 },
+          statement: "Kobra comments max = 180",
+          support: "supported",
+          lifecycle: "active",
+        },
+        evidence: [],
+        justifications: [],
+      },
+    ],
+    evidence: [],
+    justifications: [],
+    consumed: [{ ref: "RULE-17:v1", claim: { id: "RULE-17", revision: 1 } }],
+    artifacts: [],
+    warnings: [
+      {
+        code: "assumption-without-evidence",
+        subject: "local:kobra-origin",
+        message: "assumption carries neither evidence nor a justification",
+      },
+    ],
+    ...over,
+  };
+}
+
+describe("GateDrawer — candidate knowledge", () => {
+  it("shows the proposed rules, their evidence and the warnings, without a transcript", () => {
+    mockReview.review = review({
+      knowledge: [preview()],
+      discovery: {
+        candidates: 3,
+        newRules: 1,
+        revisions: 1,
+        assumptions: 1,
+        facts: 0,
+        constraints: 0,
+        conclusions: 0,
+        evidence: 1,
+        warnings: 1,
+        requiresReview: true,
+      },
+    });
+    open();
+    const panel = screen.getByTestId("gate-candidate-knowledge");
+    expect(panel).toHaveTextContent(/3 candidates · 1 new rule · 1 revision · 1 assumption/);
+    expect(panel).toHaveTextContent(/Nothing here is canonical yet/);
+
+    // The rule, with its kind and the source location behind it.
+    expect(panel).toHaveTextContent(/Kobra bookings restrict customer comments to 180/);
+    expect(panel).toHaveTextContent(/src\/Booking\/KobraAdapter\.cs:120-136@abc123de/);
+    expect(panel).toHaveTextContent(/KobraAdapter\.MapComment/);
+    expect(panel).toHaveTextContent(/from local:kobra-origin/);
+
+    // A proposed claim is named honestly: no canonical id is implied.
+    expect(panel).toHaveTextContent(/local:comment-limit/);
+    expect(within(panel).getAllByText("business-rule").length).toBeGreaterThan(0);
+    expect(within(panel).getByText("assumption")).toBeInTheDocument();
+
+    // The revision shows before and after.
+    expect(panel).toHaveTextContent(/RULE-17 v1 → v2/);
+    expect(panel).toHaveTextContent(/Kobra comments max = 180/);
+    expect(panel).toHaveTextContent(/Kobra comments max = 500/);
+
+    // The deterministic warning, and the un-evidenced assumption called out.
+    expect(screen.getByTestId("candidate-warnings")).toHaveTextContent(
+      /carries neither evidence nor a justification/,
+    );
+    expect(screen.getAllByTestId("candidate-no-evidence").length).toBeGreaterThan(0);
+
+    // …and the consumption the run declared.
+    expect(panel).toHaveTextContent(/consumed: RULE-17:v1/);
+  });
+
+  it("marks a stale revision so a reviewer knows the commit will refuse it", () => {
+    mockReview.review = review({
+      knowledge: [
+        preview({
+          proposedClaims: [],
+          proposedRevisions: [
+            {
+              claimId: "RULE-17",
+              expectedRevision: 1,
+              ref: {
+                display: "RULE-17:v2 (proposed)",
+                claim: { id: "RULE-17", revision: 2 },
+                proposed: true,
+              },
+              statement: "Kobra comments max = 500",
+              stale: true,
+              current: {
+                claim: { id: "RULE-17", revision: 2 },
+                statement: "Kobra comments max = 300",
+                support: "supported",
+                lifecycle: "active",
+              },
+              evidence: [],
+              justifications: [],
+            },
+          ],
+          warnings: [],
+        }),
+      ],
+    });
+    open();
+    expect(screen.getByTestId("gate-candidate-knowledge")).toHaveTextContent(/stale/);
+  });
+
+  it("is absent on an ordinary gate that proposed no knowledge", () => {
+    mockReview.review = review();
+    open();
+    expect(screen.queryByTestId("gate-candidate-knowledge")).toBeNull();
+  });
+});
+
+describe("GateDrawer — candidate knowledge on a failed phase", () => {
+  it("says the candidates never became canonical rather than offering to commit them", () => {
+    mockReview.review = review({
+      status: "failed",
+      canApprove: false,
+      payload: { reason: "the ledger moved while the gate waited" },
+      knowledge: [preview({ status: "rejected", warnings: [] })],
+    });
+    open();
+    const panel = screen.getByTestId("gate-candidate-knowledge");
+    expect(panel).toHaveTextContent(/None of this became canonical/);
+    expect(panel).not.toHaveTextContent(/approving commits it/);
+  });
+});

@@ -384,7 +384,11 @@ test("a supplied record is validated like every other ledger write", async () =>
   const bad = (input: Parameters<typeof recordSuppliedContext>[1]) =>
     assert.throws(() => recordSuppliedContext(base, input, "t"), KnowledgeValidationError);
   const sha = "ab".repeat(32);
-  bad({ execution: { runId: "run-1" }, claims: [], sha256: sha });
+  bad({
+    execution: { runId: "run-1" },
+    claims: "not a list" as unknown as [],
+    sha256: sha,
+  });
   bad({ execution: { runId: "run-1" }, claims: [{ id: "A", revision: 0 }], sha256: sha });
   bad({ execution: { runId: "run-1" }, claims: [{ id: "A", revision: 1 }], sha256: "short" });
   bad({
@@ -408,6 +412,20 @@ test("a supplied record is validated like every other ledger write", async () =>
     attempt: -1,
   });
   assert.deepEqual(base.supplied, []);
+
+  // An *empty* list is not malformed, it is a fact: since Phase 5 a spec can
+  // select "whatever the accepted discovery phase committed", and a phase is
+  // allowed to have committed nothing. The run still received a context file
+  // and Argus still hashed it, so the record exists and says the file held no
+  // revisions — which is not the same as a run launched with no context.
+  const empty = recordSuppliedContext(
+    base,
+    { execution: { runId: "run-empty" }, claims: [], sha256: sha },
+    "t",
+  );
+  assert.equal(empty.added, true);
+  assert.deepEqual(empty.supplied.claims, []);
+  assert.equal(empty.supplied.sha256, sha);
 
   // A run cannot belong to two instances: the locator conflict is refused the
   // same way it is for a consumption.

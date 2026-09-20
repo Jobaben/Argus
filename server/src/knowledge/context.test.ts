@@ -170,7 +170,8 @@ test("spec: strings and objects normalize to the object form; bare id means acti
 
 test("spec: malformed selectors are refused deterministically, naming the entry", () => {
   refuses(() => parseKnowledgeContextSpec(null), "spec", /must be an object/);
-  refuses(() => parseKnowledgeContextSpec({}), "spec", /claims must be a list/);
+  refuses(() => parseKnowledgeContextSpec({}), "spec", /must name claims or fromPhases/);
+  refuses(() => parseKnowledgeContextSpec({ claims: 3 }), "spec", /claims must be a list/);
   refuses(() => parseKnowledgeContextSpec({ claims: [] }), "spec", /at least one claim/);
   refuses(
     () => parseKnowledgeContextSpec({ claims: ["x"], tags: [] }),
@@ -509,6 +510,237 @@ test("applyKnowledgeDeltas classifies each consumed entry against the proposal's
     { now: T0, mint },
   );
   assert.equal(none.consumptions[0].source, "agent-discovered");
+});
+
+// ── fromPhases: the same-instance handoff (Phase 5) ─────────────────────────
+
+/** A deterministic minter, matching the delta suite's. */
+function mint2() {
+  let n = 0;
+  return (prefix: string) => `${prefix}-${++n}`;
+}
+
+const SCOPE = {
+  instanceId: "inst-1",
+  phaseStatus: (id: string) =>
+    ({ discover: "succeeded", plan: "running", skipped: "skipped", parked: "awaiting-approval" })[
+      id
+    ] ?? null,
+};
+
+/** A ledger in which phase `discover` of `inst-1` committed a rule, an
+ *  assumption and a fact through one accepted KnowledgeDelta. */
+function afterDiscovery(): KnowledgeLedger {
+  const { ledger: out } = applyKnowledgeDeltas(
+    emptyLedger(),
+    [
+      {
+        id: "KD-D",
+        delta: validateKnowledgeDelta({
+          schemaVersion: 1,
+          claims: [
+            { localId: "rule", kind: "business-rule", statement: "Kobra comments max = 180" },
+            { localId: "assume", kind: "assumption", statement: "The limit is a Kobra constraint" },
+            { localId: "fact", kind: "fact", statement: "KobraAdapter truncates at 180" },
+          ],
+          evidence: [
+            {
+              claim: { local: "rule" },
+              source: { type: "source-code", path: "src/Booking/KobraAdapter.cs" },
+            },
+          ],
+        }),
+        execution: { runId: "run-D", instanceId: "inst-1", phaseId: "discover" },
+        attempt: 0,
+      },
+    ],
+    { now: T0, mint: mint2() },
+  );
+  return out;
+}
+
+test("spec: fromPhases parses from a bare phase id or an object, and refuses malformed entries", () => {
+  assert.deepEqual(parseKnowledgeContextSpec({ fromPhases: ["discover"] }), {
+    fromPhases: [{ phaseId: "discover" }],
+  });
+  assert.deepEqual(
+    parseKnowledgeContextSpec({
+      claims: ["RULE-17:v2"],
+      fromPhases: [
+        { phaseId: "discover", kinds: ["business-rule", "constraint", "business-rule"] },
+      ],
+    }),
+    {
+      claims: [{ id: "RULE-17", revision: 2 }],
+      fromPhases: [{ phaseId: "discover", kinds: ["business-rule", "constraint"] }],
+    },
+  );
+  refuses(() => parseKnowledgeContextSpec({ fromPhases: [] }), "spec", /at least one phase/);
+  refuses(
+    () => parseKnowledgeContextSpec({ fromPhases: [{ phaseId: "discover", extra: 1 }] }),
+    "spec",
+    /unknown key "extra"/,
+  );
+  refuses(
+    () => parseKnowledgeContextSpec({ fromPhases: [{ phaseId: "d", kinds: ["nope"] }] }),
+    "spec",
+    /kinds\[0\] must be one of/,
+  );
+  refuses(
+    () => parseKnowledgeContextSpec({ fromPhases: ["discover", "discover"] }),
+    "spec",
+    /already selected by fromPhases\[0\]/,
+  );
+  refuses(() => parseKnowledgeContextSpec({ fromPhases: [{}] }), "spec", /must be a phase id/);
+});
+
+test("fromPhases resolves to the exact refs the accepted phase's applied delta minted", () => {
+  const l = afterDiscovery();
+  const { context, supplied } = resolveKnowledgeContext(
+    l,
+    parseKnowledgeContextSpec({ fromPhases: ["discover"] }),
+    T0,
+    SCOPE,
+  );
+  assert.deepEqual(supplied, [v("RULE-1", 1), v("ASSUME-2", 1), v("FACT-3", 1)]);
+  // The selection records the exact revision, never a floating "produced by",
+  // plus which phase it came from.
+  assert.deepEqual(context.metadata?.selection?.[0], {
+    selector: { id: "RULE-1", revision: 1 },
+    resolved: v("RULE-1", 1),
+    fromPhase: "discover",
+  });
+});
+
+test("fromPhases narrows by kind: only the business rule reaches the downstream step", () => {
+  const { supplied } = resolveKnowledgeContext(
+    afterDiscovery(),
+    parseKnowledgeContextSpec({ fromPhases: [{ phaseId: "discover", kinds: ["business-rule"] }] }),
+    T0,
+    SCOPE,
+  );
+  assert.deepEqual(supplied, [v("RULE-1", 1)]);
+});
+
+test("fromPhases reads applied deltas only: a staged proposal can never be supplied downstream", () => {
+  // Nothing has been committed for `discover`, which is exactly the state a
+  // phase is in while its candidates wait at a gate.
+  const { supplied } = resolveKnowledgeContext(
+    emptyLedger(),
+    parseKnowledgeContextSpec({ fromPhases: ["discover"] }),
+    T0,
+    SCOPE,
+  );
+  assert.deepEqual(supplied, []);
+  // …and a claim of the right kind committed by a *different* instance is not
+  // this instance's handoff.
+  const other = resolveKnowledgeContext(
+    afterDiscovery(),
+    parseKnowledgeContextSpec({ fromPhases: ["discover"] }),
+    T0,
+    { ...SCOPE, instanceId: "inst-2" },
+  );
+  assert.deepEqual(other.supplied, []);
+});
+
+test("fromPhases refuses a phase that has not been accepted, and one this pipeline lacks", () => {
+  const l = afterDiscovery();
+  refuses(
+    () =>
+      resolveKnowledgeContext(l, parseKnowledgeContextSpec({ fromPhases: ["parked"] }), T0, SCOPE),
+    "phase-not-accepted",
+    /is awaiting-approval; a fromPhases selector reads only what an accepted phase committed/,
+  );
+  refuses(
+    () =>
+      resolveKnowledgeContext(l, parseKnowledgeContextSpec({ fromPhases: ["plan"] }), T0, SCOPE),
+    "phase-not-accepted",
+    /is running/,
+  );
+  refuses(
+    () =>
+      resolveKnowledgeContext(l, parseKnowledgeContextSpec({ fromPhases: ["ghost"] }), T0, SCOPE),
+    "unknown-phase",
+    /has no phase "ghost"/,
+  );
+  // A routed-around phase committed nothing, which is an honest empty answer.
+  assert.deepEqual(
+    resolveKnowledgeContext(l, parseKnowledgeContextSpec({ fromPhases: ["skipped"] }), T0, SCOPE)
+      .supplied,
+    [],
+  );
+  // Outside an instance there is nothing to resolve against.
+  refuses(
+    () => resolveKnowledgeContext(l, parseKnowledgeContextSpec({ fromPhases: ["discover"] }), T0),
+    "spec",
+    /only be resolved inside a pipeline instance/,
+  );
+});
+
+test("an explicit claims selector wins over the same id arriving from a phase", () => {
+  let l = afterDiscovery();
+  // The rule moves on after discovery committed it.
+  l = reviseClaim(l, { id: "RULE-1", statement: "Kobra comments max = 500" }, T0).ledger;
+  const { supplied, context } = resolveKnowledgeContext(
+    l,
+    parseKnowledgeContextSpec({
+      claims: ["RULE-1"],
+      fromPhases: [{ phaseId: "discover", kinds: ["business-rule", "fact"] }],
+    }),
+    T0,
+    SCOPE,
+  );
+  // The pinned selector resolved to the active v2; the phase's v1 is not also
+  // supplied, because a context is a set keyed by claim id.
+  assert.deepEqual(supplied, [v("RULE-1", 2), v("FACT-3", 1)]);
+  assert.equal(context.claims[0].statement, "Kobra comments max = 500");
+});
+
+test("a phase handoff resolving past the context cap refuses the launch rather than truncating", () => {
+  // One delta is capped at 64 entries per section, so the phase gets two —
+  // which is also the honest shape: a multi-step discovery phase commits one
+  // delta per step, atomically, and the handoff is over all of them.
+  const half = Math.ceil((CONTEXT_MAX_CLAIMS + 1) / 2);
+  const batch = (n: number, offset: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      localId: `c${offset + i}`,
+      kind: "fact" as const,
+      statement: `fact ${offset + i}`,
+    }));
+  const minter = mint2();
+  let l = emptyLedger();
+  ({ ledger: l } = applyKnowledgeDeltas(
+    l,
+    [
+      {
+        id: "KD-BIG-1",
+        delta: validateKnowledgeDelta({ schemaVersion: 1, claims: batch(half, 0) }),
+        execution: { runId: "run-big-1", instanceId: "inst-1", phaseId: "discover" },
+        attempt: 0,
+      },
+      {
+        id: "KD-BIG-2",
+        delta: validateKnowledgeDelta({
+          schemaVersion: 1,
+          claims: batch(CONTEXT_MAX_CLAIMS + 1 - half, half),
+        }),
+        execution: { runId: "run-big-2", instanceId: "inst-1", phaseId: "discover" },
+        attempt: 0,
+      },
+    ],
+    { now: T0, mint: minter },
+  ));
+  refuses(
+    () =>
+      resolveKnowledgeContext(
+        l,
+        parseKnowledgeContextSpec({ fromPhases: ["discover"] }),
+        T0,
+        SCOPE,
+      ),
+    "too-many-claims",
+    /at most 64/,
+  );
 });
 
 // ── The file ────────────────────────────────────────────────────────────────
