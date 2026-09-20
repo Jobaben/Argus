@@ -110,13 +110,13 @@ test("persist a graph, reload it: identities, revisions and edges are unchanged"
     assert.equal("lifecycle" in c, false);
     assert.equal("support" in c, false);
   }
-  assert.equal(after.version, 7);
+  assert.equal(after.version, 8);
 });
 
 test("a missing file reads as an empty ledger and the first write creates it", async () => {
   const s = await fresh();
   assert.deepEqual(await s.readLedger(), {
-    version: 7,
+    version: 8,
     claims: [],
     evidence: [],
     justifications: [],
@@ -133,7 +133,7 @@ test("a missing file reads as an empty ledger and the first write creates it", a
   assert.equal(JSON.parse(readFileSync(file(), "utf8")).claims.length, 1);
 });
 
-test("a Phase 1 (version 1) document is read as version 7 and upgraded by the next write", async () => {
+test("a Phase 1 (version 1) document is read as the current version and upgraded by the next write", async () => {
   const s = await fresh();
   const k = await kernel();
   mkdirSync(path.dirname(file()), { recursive: true });
@@ -148,7 +148,7 @@ test("a Phase 1 (version 1) document is read as version 7 and upgraded by the ne
   writeFileSync(file(), JSON.stringify(v1Doc));
 
   const read = await s.readLedger();
-  assert.equal(read.version, 7);
+  assert.equal(read.version, 8);
   assert.deepEqual(read.consumptions, []);
   assert.deepEqual(read.artifacts, []);
   assert.deepEqual(read.deltas, []);
@@ -167,13 +167,17 @@ test("a Phase 1 (version 1) document is read as version 7 and upgraded by the ne
   assert.deepEqual(read.acceptanceVerifications, []);
   assert.deepEqual(read.changeRealizations, []);
   assert.deepEqual(read.claims, v1Doc.claims);
+  // And no knowledge scope: an upgraded claim belongs to no project, because
+  // the document Argus upgraded records none. `deepEqual` against the original
+  // is the assertion — a fabricated scope would fail it (§ ledger version 8).
+  assert.equal("scope" in read.claims[0], false);
   // Reading alone rewrites nothing.
   assert.equal(readFileSync(file(), "utf8"), JSON.stringify(v1Doc));
 
   // The first transition persists the upgraded shape, records intact.
   await s.registerConsumptions({ runId: "run-1" }, { claims: [{ id: "RULE-7" }] }, NOW);
   const disk = JSON.parse(readFileSync(file(), "utf8"));
-  assert.equal(disk.version, 7);
+  assert.equal(disk.version, 8);
   assert.deepEqual(disk.claims, v1Doc.claims);
   assert.equal(disk.consumptions.length, 1);
   assert.deepEqual(disk.deltas, []);

@@ -24,6 +24,7 @@ import {
   sameRef,
   type KnowledgeLedger,
 } from "./kernel.js";
+import { sliceOfScope } from "./scope.js";
 
 /**
  * Deterministic semantic impact analysis.
@@ -75,10 +76,38 @@ function sortReasons(reasons: Iterable<ImpactReason>): ImpactReason[] {
   return [...new Set(reasons)].sort((a, b) => REASON_ORDER.indexOf(a) - REASON_ORDER.indexOf(b));
 }
 
-export function analyzeImpact(ledger: KnowledgeLedger, root: ClaimRef): ImpactSet {
-  if (!getClaim(ledger, root)) {
+/** How far `analyzeImpact` may walk.
+ *
+ *  - `scope` (the default) — only the root's own {@link KnowledgeScope}. A
+ *    pipeline asking what rests on its rule gets its project's answer, and the
+ *    traversal never even reads another project's records.
+ *  - `ledger` — every record. The explicit, opt-in broader question, for an
+ *    operator asking it of the whole ledger. */
+export type ImpactTraversal = "scope" | "ledger";
+
+export interface ImpactOptions {
+  /** Default `scope`. */
+  traverse?: ImpactTraversal;
+}
+
+export function analyzeImpact(
+  ledger: KnowledgeLedger,
+  root: ClaimRef,
+  opts: ImpactOptions = {},
+): ImpactSet {
+  const rootClaim = getClaim(ledger, root);
+  if (!rootClaim) {
     throw new UnknownClaimError(`unknown claim revision ${formatClaimRef(root)}`);
   }
+  // Scope is the *first* dimension, not a filter over the result: the walk
+  // below iterates these lists, so an unrelated project's claims, derivations
+  // and consumptions are never visited at all. Taken from the snapshot's
+  // memoized scope index, so it costs one pass per ledger read rather than one
+  // per query. On an unscoped ledger the slice is the whole ledger, which is
+  // why every pre-scope ledger analyses exactly as it did before.
+  const slice = sliceOfScope(ledger, rootClaim.scope);
+  const claims = opts.traverse === "ledger" ? ledger.claims : slice.claims;
+  const justifications = opts.traverse === "ledger" ? ledger.justifications : slice.justifications;
   const rootKey = formatClaimRef(root);
   const actual = newEvaluation();
   const held = newEvaluation(root);
@@ -105,7 +134,7 @@ export function analyzeImpact(ledger: KnowledgeLedger, root: ClaimRef): ImpactSe
   const affectedJustifications: JustificationImpact[] = [];
   const affectedJ = new Set<string>();
   const actualForce = new Map<string, JustificationForce>();
-  for (const j of ledger.justifications) {
+  for (const j of justifications) {
     const a = forceOf(ledger, j, actual);
     const h = forceOf(ledger, j, held);
     actualForce.set(j.id, a);
@@ -120,7 +149,7 @@ export function analyzeImpact(ledger: KnowledgeLedger, root: ClaimRef): ImpactSe
 
   // ── Claims whose derived support differs (the root itself excluded) ───────
   const changed = new Map<string, { ifRootHeld: ClaimSupport; actual: ClaimSupport }>();
-  for (const c of ledger.claims) {
+  for (const c of claims) {
     if (sameRef(c, root)) continue;
     const a = evaluate(ledger, c, actual);
     const h = evaluate(ledger, c, held);
@@ -144,7 +173,7 @@ export function analyzeImpact(ledger: KnowledgeLedger, root: ClaimRef): ImpactSe
   while (queue.length > 0) {
     const p = queue.shift()!;
     const pKey = formatClaimRef(p);
-    for (const j of ledger.justifications) {
+    for (const j of justifications) {
       if (!affectedJ.has(j.id) || !j.premises.some((x) => sameRef(x, p))) continue;
       const cKey = formatClaimRef(j.conclusion);
       if (!changed.has(cKey) || hops.has(cKey)) continue;
@@ -159,7 +188,7 @@ export function analyzeImpact(ledger: KnowledgeLedger, root: ClaimRef): ImpactSe
   // Unreachable changed claims — only conceivable on a hand-edited, cyclic
   // ledger — are still reported (their support did change), in ledger order,
   // without an explanation path; nothing downstream borrows one either.
-  for (const c of ledger.claims) {
+  for (const c of claims) {
     const key = formatClaimRef(c);
     if (changed.has(key) && !hops.has(key)) order.push(ref(c));
   }
@@ -167,7 +196,7 @@ export function analyzeImpact(ledger: KnowledgeLedger, root: ClaimRef): ImpactSe
   const affectedClaims: ClaimImpact[] = order.map((c) => {
     const key = formatClaimRef(c);
     const reasons: ImpactReason[] = [];
-    for (const j of ledger.justifications) {
+    for (const j of justifications) {
       if (!affectedJ.has(j.id) || !sameRef(j.conclusion, c)) continue;
       const force = actualForce.get(j.id)!;
       if (force.inForce) continue;

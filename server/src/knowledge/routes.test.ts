@@ -1564,3 +1564,198 @@ test("there is no write API for completion state", async () => {
   // …and the realization is untouched by the attempt.
   assert.equal((await get(app, "/api/knowledge/realizations/CR-R1")).body.status, "succeeded");
 });
+
+// ── Knowledge scope over HTTP ───────────────────────────────────────────────
+//
+// The operator surface. Reads stay whole-ledger by default — nothing here is
+// what a pipeline sees — but every claim-keyed read can be asked *as* a
+// project, and then it answers only for that project.
+
+const SCOPE_A = { projectId: "motorit", repositoryId: "git:github.com/motorit/online" };
+const SCOPE_B = { projectId: "acme", repositoryId: "git:github.com/acme/kobra" };
+const asQuery = (s: typeof SCOPE_A) =>
+  `project=${encodeURIComponent(s.projectId)}&repository=${encodeURIComponent(s.repositoryId)}`;
+
+/** The same rule name, authored into two unrelated projects. */
+async function seedTwoProjects(app: App) {
+  const a = await post(app, "/api/knowledge/claims", {
+    id: "RULE-42",
+    scope: SCOPE_A,
+    kind: "business-rule",
+    statement: "motorit comments are at most 180",
+  });
+  const b = await post(app, "/api/knowledge/claims", {
+    id: "RULE-42",
+    scope: SCOPE_B,
+    kind: "business-rule",
+    statement: "kobra comments are at most 180",
+  });
+  assert.equal(a.status, 201, JSON.stringify(a.body));
+  assert.equal(b.status, 201, JSON.stringify(b.body));
+  return { a: a.body as ClaimView, b: b.body as ClaimView };
+}
+
+test("two projects may each author RULE-42, and each gets its own canonical id", async () => {
+  const app = makeApp();
+  const { a, b } = await seedTwoProjects(app);
+  assert.notEqual(a.id, b.id);
+  assert.match(a.id, /^RULE-42\.[0-9a-f]{8}$/);
+  assert.deepEqual(a.scope, SCOPE_A);
+  assert.deepEqual(b.scope, SCOPE_B);
+  // Authoring the same name into the same scope twice is still refused.
+  const again = await post(app, "/api/knowledge/claims", {
+    id: "RULE-42",
+    scope: SCOPE_A,
+    kind: "business-rule",
+    statement: "again",
+  });
+  assert.equal(again.status, 400);
+  assert.match(again.body.error, /already exists/);
+});
+
+test("GET /claims is whole-ledger by default and exactly one project when asked", async () => {
+  const app = makeApp();
+  const { a, b } = await seedTwoProjects(app);
+  await post(app, "/api/knowledge/claims", {
+    id: "RULE-LEGACY",
+    kind: "business-rule",
+    statement: "old",
+  });
+
+  const all = await get(app, "/api/knowledge/claims");
+  assert.deepEqual(
+    (all.body as ClaimsResponse).claims.map((c) => c.id).sort(),
+    [a.id, b.id, "RULE-LEGACY"].sort(),
+  );
+  const onlyA = await get(app, `/api/knowledge/claims?${asQuery(SCOPE_A)}`);
+  assert.deepEqual(
+    (onlyA.body as ClaimsResponse).claims.map((c) => c.id),
+    [a.id],
+  );
+  // A scoped listing never falls back to the unscoped records either.
+  assert.equal(
+    (onlyA.body as ClaimsResponse).claims.some((c) => c.id === "RULE-LEGACY"),
+    false,
+  );
+  // And it composes with the existing filters rather than replacing them.
+  const none = await get(app, `/api/knowledge/claims?${asQuery(SCOPE_A)}&kind=fact`);
+  assert.deepEqual((none.body as ClaimsResponse).claims, []);
+});
+
+test("a half-named scope is a 400, never a broader query", async () => {
+  const app = makeApp();
+  await seedTwoProjects(app);
+  for (const q of ["project=motorit", "repository=git:github.com/motorit/online"]) {
+    const r = await get(app, `/api/knowledge/claims?${q}`);
+    assert.equal(r.status, 400);
+    assert.match(r.body.error, /together/);
+  }
+  const bad = await get(app, "/api/knowledge/claims?project=has%20space&repository=x");
+  assert.equal(bad.status, 400);
+});
+
+test("a claim key read as project A never resolves to project B's rule", async () => {
+  const app = makeApp();
+  const { a, b } = await seedTwoProjects(app);
+  const asA = await get(app, `/api/knowledge/claims/RULE-42?${asQuery(SCOPE_A)}`);
+  assert.equal(asA.status, 200);
+  assert.equal((asA.body as ClaimDetail).claim.id, a.id);
+  const asB = await get(app, `/api/knowledge/claims/RULE-42?${asQuery(SCOPE_B)}`);
+  assert.equal((asB.body as ClaimDetail).claim.id, b.id);
+  // Project B's canonical id, asked for as project A, is 404 — not B's claim.
+  const crossed = await get(app, `/api/knowledge/claims/${b.id}?${asQuery(SCOPE_A)}`);
+  assert.equal(crossed.status, 404);
+  // Without a scope the bare name matches nothing, because no claim is called
+  // exactly "RULE-42" any more — the canonical ids carry their scope.
+  assert.equal((await get(app, "/api/knowledge/claims/RULE-42")).status, 404);
+});
+
+test("impact is bounded by the claim's scope unless traversal is asked for by name", async () => {
+  const app = makeApp();
+  const { a } = await seedTwoProjects(app);
+  const r = await get(app, `/api/knowledge/claims/RULE-42/impact?${asQuery(SCOPE_A)}`);
+  assert.equal(r.status, 200);
+  assert.deepEqual((r.body as ImpactSet).root.claim, { id: a.id, revision: 1 });
+  assert.equal(
+    (await get(app, `/api/knowledge/claims/${a.id}/impact?traverse=ledger`)).status,
+    200,
+  );
+  const bad = await get(app, `/api/knowledge/claims/${a.id}/impact?traverse=everything`);
+  assert.equal(bad.status, 400);
+  assert.match(bad.body.error, /scope \| ledger/);
+});
+
+test("support, verifications and conformance all read as one project", async () => {
+  const app = makeApp();
+  const { a, b } = await seedTwoProjects(app);
+  // Evidence is attached by canonical id, which is what the create returned.
+  for (const [id, who] of [
+    [a.id, "motorit PO"],
+    [b.id, "acme PO"],
+  ]) {
+    const r = await post(app, "/api/knowledge/evidence", {
+      claim: id,
+      direction: "supports",
+      source: { type: "human", who },
+    });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+  }
+  const support = await get(app, `/api/knowledge/claims/RULE-42/support?${asQuery(SCOPE_A)}`);
+  assert.equal((support.body as SupportReport).evidence.length, 1);
+  assert.equal(
+    ((support.body as SupportReport).evidence[0].source as { who: string }).who,
+    "motorit PO",
+  );
+  const verifications = await get(
+    app,
+    `/api/knowledge/claims/RULE-42/verifications?${asQuery(SCOPE_B)}`,
+  );
+  assert.deepEqual(verifications.body.claim, { id: b.id, revision: 1 });
+});
+
+test("a scope on a claim body is validated, and a path is never accepted as one", async () => {
+  const app = makeApp();
+  for (const scope of [
+    { projectId: "motorit" },
+    { projectId: "motorit", repositoryId: "/home/user/src/MotoritOnline" },
+    { projectId: "motorit", repositoryId: "C:\\src\\MotoritOnline" },
+    { projectId: "motorit", repositoryId: "git:github.com/m/o", extra: 1 },
+  ]) {
+    const r = await post(app, "/api/knowledge/claims", {
+      kind: "fact",
+      statement: "s",
+      scope,
+    });
+    assert.equal(r.status, 400, JSON.stringify(scope));
+  }
+});
+
+test("a revision keeps its claim's scope and its canonical id", async () => {
+  const app = makeApp();
+  const { a } = await seedTwoProjects(app);
+  const revised = await post(app, `/api/knowledge/claims/${a.id}/revise`, {
+    statement: "motorit comments are at most 500",
+  });
+  assert.equal(revised.status, 201, JSON.stringify(revised.body));
+  assert.equal((revised.body as ClaimView).id, a.id);
+  assert.equal((revised.body as ClaimView).revision, 2);
+  assert.deepEqual((revised.body as ClaimView).scope, SCOPE_A);
+  // And project B's RULE-42 is untouched at v1.
+  const b = await get(app, `/api/knowledge/claims/RULE-42?${asQuery(SCOPE_B)}`);
+  assert.equal((b.body as ClaimDetail).claim.revision, 1);
+});
+
+test("a claim key too long to carry a scope suffix is a 404, never a 500", async () => {
+  const app = makeApp();
+  await seedTwoProjects(app);
+  const long = "R".repeat(78);
+  const scoped = await get(app, `/api/knowledge/claims/${long}?${asQuery(SCOPE_A)}`);
+  assert.equal(scoped.status, 404);
+  // And unscoped, where no suffix is involved at all.
+  assert.equal((await get(app, `/api/knowledge/claims/${long}`)).status, 404);
+  // A key that is not a claim key at all is still a 404.
+  assert.equal(
+    (await get(app, `/api/knowledge/claims/not%20a%20key?${asQuery(SCOPE_A)}`)).status,
+    404,
+  );
+});

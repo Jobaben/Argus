@@ -26,6 +26,7 @@ import type {
   Justification,
   JustificationForce,
   JustificationStatus,
+  KnowledgeScope,
   AcceptanceConformanceReport,
   AcceptanceConformanceStatus,
   AcceptanceCriterion,
@@ -103,11 +104,20 @@ import type {
  * Version 6 (Phase 7) added `changeProposals` — the durable record of a
  * requested change a person approved, linking the request to the exact
  * revisions it caused and the acceptance criteria that judge them.
+ * Version 7 (Phase 8) added `acceptanceVerifications` and `changeRealizations`.
+ * Version 8 added {@link Claim.scope}: knowledge ownership. No array and no
+ * existing field changed — a version 7 document upgrades by carrying its
+ * records forward exactly as they are, and every claim in it stays *unscoped*.
+ * That is the whole migration, and it is deliberate: Argus has no way to prove
+ * which project a claim written before scopes existed belongs to, so it
+ * assigns none. An unscoped claim is never returned by a scoped query and
+ * never resolvable by a scoped pipeline — the record stays fully
+ * interpretable, and nobody inherits it by accident.
  * Older files are upgraded on read by `store.ts` (the new arrays start empty);
- * the kernel only ever sees version 6.
+ * the kernel only ever sees the current version.
  */
 export interface KnowledgeLedger {
-  version: 7;
+  version: 8;
   /** Every claim revision, in the order it was added. */
   claims: Claim[];
   evidence: Evidence[];
@@ -162,7 +172,7 @@ export interface KnowledgeLedger {
   changeRealizations: ChangeRealization[];
 }
 
-export const LEDGER_VERSION = 7 as const;
+export const LEDGER_VERSION = 8 as const;
 
 export function emptyLedger(): KnowledgeLedger {
   return {
@@ -181,22 +191,10 @@ export function emptyLedger(): KnowledgeLedger {
   };
 }
 
-/** An input or transition the ledger refuses: bad shape, an unknown reference,
- *  a duplicate id, a cycle. Maps to 400. */
-export class KnowledgeValidationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "KnowledgeValidationError";
-  }
-}
+import { KnowledgeValidationError, UnknownClaimError } from "./errors.js";
+import { describeScopeOfClaim, plainScope, sameScope } from "./scope.js";
 
-/** A lookup of a claim (or revision) that does not exist. Maps to 404. */
-export class UnknownClaimError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "UnknownClaimError";
-  }
-}
+export { KnowledgeValidationError, UnknownClaimError } from "./errors.js";
 
 export const CLAIM_KINDS: readonly ClaimKind[] = [
   "fact",
@@ -312,8 +310,12 @@ export function viewOf(ledger: KnowledgeLedger, claim: Claim): ClaimView {
 // ── Transitions ─────────────────────────────────────────────────────────────
 
 export interface AddClaimInput {
-  /** Caller-proposed or Argus-minted; either way validated and unique. */
+  /** Caller-proposed or Argus-minted; either way validated and unique. Already
+   *  scope-qualified by the caller (`store.ts` / `delta.ts`) when `scope` is
+   *  set — the kernel stores identity, it does not mint it. */
   id: string;
+  /** The project and repository that owns this claim. Absent = unscoped. */
+  scope?: KnowledgeScope;
   kind: ClaimKind;
   statement: string;
   structuredValue?: unknown;
@@ -375,6 +377,7 @@ export function addClaim(
   const claim: Claim = compact({
     id: input.id,
     revision: 1,
+    scope: input.scope ? plainScope(input.scope) : undefined,
     kind: input.kind,
     statement: input.statement,
     structuredValue: input.structuredValue,
@@ -402,8 +405,12 @@ export function reviseClaim(
   const current = activeRevision(ledger, input.id);
   if (!current) throw new UnknownClaimError(`unknown claim "${input.id}"`);
   const claim: Claim = compact({
+    // Ownership is a property of the *logical* claim, so a revision inherits
+    // it from the revision it supersedes and can never be moved to another
+    // scope: RULE-42:v2 belongs to whoever RULE-42:v1 belonged to.
     id: current.id,
     revision: current.revision + 1,
+    scope: current.scope ? plainScope(current.scope) : undefined,
     kind: current.kind,
     statement: input.statement,
     structuredValue: input.structuredValue,
@@ -474,6 +481,24 @@ export function addJustification(
     }
     if (sameRef(p, input.conclusion)) {
       throw new KnowledgeValidationError(`claim ${key} cannot justify itself`);
+    }
+  }
+  // A derivation may not cross a knowledge scope. This is what keeps the
+  // semantic graph partitioned by project: support evaluation and impact
+  // analysis follow justification edges, so one edge from Project B into
+  // Project A would make B's evidence bear on A's conclusions, and an
+  // `analyzeImpact` of A's rule would walk into B. Refused here, once, rather
+  // than filtered at every read — a cross-project derivation that is genuinely
+  // meant is expressed by an explicitly authorized scope and its own claims.
+  const conclusionScope = getClaim(ledger, input.conclusion)!.scope;
+  for (const p of input.premises) {
+    const premise = getClaim(ledger, p)!;
+    if (!sameScope(premise.scope, conclusionScope)) {
+      throw new KnowledgeValidationError(
+        `justification would cross a knowledge scope: premise ${formatClaimRef(p)} belongs to ` +
+          `${describeScopeOfClaim(premise.scope)} and conclusion ${formatClaimRef(input.conclusion)} to ` +
+          `${describeScopeOfClaim(conclusionScope)}`,
+      );
     }
   }
   // A new edge premise → conclusion closes a cycle exactly when the conclusion
@@ -1484,6 +1509,31 @@ export function recordChangeProposal(
 }
 
 const plainRef = (r: ClaimRef): ClaimRef => ({ id: r.id, revision: r.revision });
+
+/**
+ * The knowledge scope an accepted change belongs to: the scope of the first of
+ * its own revisions the ledger still holds.
+ *
+ * Every claim one proposal touches is in one scope — a change-intent run writes
+ * only into its own — so the first is the answer rather than a sample. A
+ * proposal with no surviving semantic change is `undefined`, which is the
+ * honest answer and never a guess: knowledge ownership follows the semantics a
+ * change actually touched, never the prose of the ticket that asked for it.
+ */
+export function scopeOfAcceptedChange(
+  ledger: KnowledgeLedger,
+  accepted: Pick<AcceptedChangeProposal, "semanticChanges" | "revised" | "preserved">,
+): KnowledgeScope | undefined {
+  for (const ref of [
+    ...accepted.semanticChanges,
+    ...accepted.revised.map((r) => r.from),
+    ...accepted.preserved,
+  ]) {
+    const claim = getClaim(ledger, ref);
+    if (claim?.scope) return claim.scope;
+  }
+  return undefined;
+}
 
 /** Accepted proposals, newest first. */
 export function changeProposals(ledger: KnowledgeLedger): AcceptedChangeProposal[] {

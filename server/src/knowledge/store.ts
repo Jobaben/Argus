@@ -55,6 +55,7 @@ import type {
 import { KIND_PREFIX, applyKnowledgeDeltas, type DeltaProposal } from "./delta.js";
 import type { RecordAcceptanceInput, RecordVerificationInput } from "./kernel.js";
 import { resolveChangeAcceptance, type ChangeProposalAcceptance } from "./changeIntent.js";
+import { qualifyClaimId } from "./scope.js";
 
 export type { ChangeProposalAcceptance };
 
@@ -93,14 +94,29 @@ function mint(prefix: string): string {
  * version 3 file (Phase 3) gains an empty `supplied`; a version 4 file
  * (Phase 4.1) gains an empty `verifications`; a version 5 file (Phase 6)
  * gains an empty `changeProposals`; a version 6 file (Phase 7) gains empty
- * `acceptanceVerifications` and `changeRealizations`. The upgrade is written
- * back only by the next successful transition, and it adds nothing but empty
- * arrays and a version number, so nothing an earlier phase recorded changes.
+ * `acceptanceVerifications` and `changeRealizations`; a version 7 file
+ * (knowledge scopes) gains nothing at all but the version number. The upgrade
+ * is written back only by the next successful transition, and it adds nothing
+ * but empty arrays and a version number, so nothing an earlier phase recorded
+ * changes.
  * In particular an upgraded document claims **no** supplied provenance, **no**
  * conformance, **no** acceptance result and **no** realization for the runs,
  * rules and changes it already holds: unknown stays unknown (`unverified`,
  * never `holds`, never `satisfied`), never retro-inferred, and no accepted
  * change gains a realization nobody ran.
+ *
+ * The same rule governs **knowledge scope** (version 8), and it is the one
+ * migration decision worth stating outright: an upgraded document's claims
+ * stay *unscoped*. Argus cannot prove which project a claim written before
+ * scopes existed belongs to — the ledger records no repository and no cwd
+ * against a claim — so it assigns none rather than adopting them all into
+ * whichever project declares a scope first. The consequence is explicit and
+ * fail-safe: a scoped pipeline cannot resolve a legacy claim at all (it gets
+ * `out-of-scope`, never the record), and an unscoped pipeline keeps resolving
+ * them exactly as before. An operator who *does* know the ownership states it
+ * by re-running discovery under a declared scope, which creates properly
+ * scoped claims; nothing here rewrites history to pretend it was always known.
+ *
  * Anything else is another shape: readable as empty, never overwritten.
  */
 export function upgradeLedger(v: unknown): KnowledgeLedger | null {
@@ -175,12 +191,14 @@ export function upgradeLedger(v: unknown): KnowledgeLedger | null {
   if (r.version === 6 && phase7) {
     return { ...r, version: LEDGER_VERSION, ...added } as unknown as KnowledgeLedger;
   }
-  if (
-    r.version === LEDGER_VERSION &&
-    phase7 &&
-    Array.isArray(r.acceptanceVerifications) &&
-    Array.isArray(r.changeRealizations)
-  ) {
+  const phase8 =
+    phase7 && Array.isArray(r.acceptanceVerifications) && Array.isArray(r.changeRealizations);
+  // Version 7 → 8 adds only the optional `Claim.scope`, so the upgrade is the
+  // version number and nothing else. Every claim it carries stays unscoped.
+  if (r.version === 7 && phase8) {
+    return { ...r, version: LEDGER_VERSION } as unknown as KnowledgeLedger;
+  }
+  if (r.version === LEDGER_VERSION && phase8) {
     return r as unknown as KnowledgeLedger;
   }
   return null;
@@ -239,12 +257,22 @@ function resolveOrThrow(ledger: KnowledgeLedger, key: ClaimKey, ctx: string) {
   return { id: claim.id, revision: claim.revision };
 }
 
-/** Add revision 1 of a claim, minting an id from its kind unless one was proposed. */
+/**
+ * Add revision 1 of a claim, minting an id from its kind unless one was
+ * proposed, and qualifying it with the claim's scope.
+ *
+ * `RULE-42` proposed in scope `project-a/git:…/kobra` becomes the canonical
+ * `RULE-42.4f3a9c17`, so a second project may propose its own `RULE-42`
+ * without either being able to name — or be mistaken for — the other's. An
+ * unscoped claim keeps its proposed name exactly.
+ */
 export async function createClaim(input: ProposedClaim, now: Date): Promise<Claim> {
   return mutateLedger((ledger) => {
-    let id = input.id;
-    if (!id) {
-      do id = mint(KIND_PREFIX[input.kind]);
+    let id: string;
+    if (input.id) {
+      id = qualifyClaimId(input.id, input.scope);
+    } else {
+      do id = qualifyClaimId(mint(KIND_PREFIX[input.kind]), input.scope);
       while (activeRevision(ledger, id));
     }
     const { ledger: next, claim } = addClaim(ledger, { ...input, id }, now.toISOString());

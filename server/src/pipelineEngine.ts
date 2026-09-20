@@ -49,6 +49,13 @@ import { isStalled, resolveStallSeconds } from "./harness/stall.js";
 import { KnowledgeDeltaError, isEmptyDelta, parseKnowledgeDelta } from "./knowledge/delta.js";
 import { validArtifactPath } from "./knowledge/kernel.js";
 import type { DeltaProposal } from "./knowledge/delta.js";
+import {
+  describeScopeOfClaim,
+  knowledgeScopePolicyFor,
+  readableScopes,
+  resolveKnowledgeScope,
+  sameScope,
+} from "./knowledge/scope.js";
 import type { VerificationProposal } from "./knowledge/store.js";
 import {
   commitPhaseSemantics,
@@ -135,6 +142,7 @@ import {
 } from "./knowledge/changeStaging.js";
 import {
   acceptedChangeProposalOfPhase,
+  scopeOfAcceptedChange,
   changeProposalById,
   changeRealizationById,
   changeRealizationOfPhase,
@@ -473,7 +481,10 @@ export const KNOWLEDGE_CONTEXT_CONTRACT =
   '"ref" (ID:vN) is an immutable historical identity: it names exactly that revision, whose ' +
   "lifecycle and support are stated in the entry. Never modify the file. Use only what is " +
   "relevant. If you write a KnowledgeDelta that declares an existing claim as consumed, name the " +
-  "exact revision you relied upon, as given by its ref.";
+  'exact revision you relied upon, as given by its ref. The file\'s "scope" says which project ' +
+  "and repository this knowledge belongs to; Argus has already filtered the file to it, so every " +
+  "entry is about the repository you are working in, and a claim you were not given is one you " +
+  "may not name.";
 
 /** Everything Argus itself tells a step's agent, in one constant. */
 export const STEP_CONTRACT = `${OUTCOME_CONTRACT}\n\n${KNOWLEDGE_DELTA_CONTRACT}\n\n${KNOWLEDGE_CONTEXT_CONTRACT}`;
@@ -1197,6 +1208,30 @@ export function createEngine(deps: EngineDeps): Engine {
     // The same snapshot answers Phase 7's two questions — which rules a change
     // agent is accountable for, and which accepted proposal an implementation
     // run receives — so a change phase reads the ledger exactly once too.
+    // The knowledge scope this attempt owns (§KnowledgeScope), resolved once
+    // and frozen on the phase record before a single run is planned.
+    //
+    // Frozen because ownership must not be able to move: editing the pipeline,
+    // or moving the checkout, while the instance runs would otherwise change
+    // who owns knowledge already written. Resolved here, rather than at commit,
+    // for the same reason the ledger snapshot is — every run of one attempt
+    // must agree about which project it is working in. A policy Argus cannot
+    // resolve is a definition it cannot honour, so it fails the phase as a
+    // `configuration` error instead of silently writing unscoped knowledge.
+    const scopePolicy = knowledgeScopePolicyFor(def, phaseDef);
+    if (scopePolicy && !progress.knowledgeScope) {
+      const resolvedScope = await resolveKnowledgeScope(scopePolicy, phaseDef.cwd);
+      if (!resolvedScope.ok) {
+        await failPhaseConfiguration(def, inst, phaseDef.id, resolvedScope.reason);
+        return;
+      }
+      progress.knowledgeScope = resolvedScope.resolved.scope;
+      if (resolvedScope.resolved.alsoRead.length > 0) {
+        progress.knowledgeAlsoRead = resolvedScope.resolved.alsoRead;
+      }
+    }
+    const knowledgeScope = progress.knowledgeScope;
+    const knowledgeAlsoRead = progress.knowledgeAlsoRead;
     const contextSpecs = phaseDef.steps.map((sd) => effectiveContextSpec(phaseDef, sd));
     const needsLedger =
       contextSpecs.some((spec) => spec !== null) ||
@@ -1240,6 +1275,24 @@ export function createEngine(deps: EngineDeps): Engine {
             `change context: the accepted proposal ${accepted.id} from phase ` +
             `"${spec.fromPhase}" is ${accepted.readiness}; it has unresolved questions or ` +
             "uncovered rule changes, so it may not drive an implementation",
+        };
+      } else if (
+        ledgerSnapshot &&
+        !readableScopes({ scope: knowledgeScope, alsoRead: knowledgeAlsoRead }).some((sc) =>
+          sameScope(scopeOfAcceptedChange(ledgerSnapshot, accepted), sc),
+        )
+      ) {
+        // A phase-level scope override can put two phases of one instance in
+        // two different projects. The accepted intent of the *other* one is
+        // another project's semantics — and the ImplementationScope derived
+        // from it would name another repository's file paths — so it is
+        // refused here rather than handed to an implementation agent.
+        phaseChangeContext = {
+          error:
+            `change context: the accepted proposal ${accepted.id} from phase ` +
+            `"${spec.fromPhase}" belongs to ` +
+            `${describeScopeOfClaim(scopeOfAcceptedChange(ledgerSnapshot, accepted))}, which this ` +
+            `phase is not authorized to read`,
         };
       } else {
         phaseChangeContext = { accepted, text: buildChangeContext(accepted, startedAt).text };
@@ -1337,6 +1390,8 @@ export function createEngine(deps: EngineDeps): Engine {
             resolved: resolveKnowledgeContext(ledgerSnapshot, contextSpec, startedAt, {
               instanceId: inst.id,
               phaseStatus: (id) => inst.phases.find((ph) => ph.id === id)?.status ?? null,
+              ...(knowledgeScope ? { knowledge: knowledgeScope } : {}),
+              ...(knowledgeAlsoRead ? { alsoRead: knowledgeAlsoRead } : {}),
             }),
           };
         } catch (e) {
@@ -3251,6 +3306,10 @@ export function createEngine(deps: EngineDeps): Engine {
       execution: { runId, instanceId: inst.id, phaseId },
       attempt: phase.attempt,
       ...(supplied !== undefined ? { supplied } : {}),
+      // The scope the attempt froze at planning, never one re-derived now: a
+      // delta is judged against the ownership its run was launched under.
+      ...(phase.knowledgeScope ? { scope: phase.knowledgeScope } : {}),
+      ...(phase.knowledgeAlsoRead ? { alsoRead: phase.knowledgeAlsoRead } : {}),
     };
     try {
       await preflightKnowledgeDeltas([proposal], deps.now());
@@ -3991,6 +4050,8 @@ export function createEngine(deps: EngineDeps): Engine {
         execution: { runId: step.runId, instanceId: inst.id, phaseId: phase.id },
         attempt: phase.attempt,
         ...(record.supplied !== undefined ? { supplied: record.supplied } : {}),
+        ...(phase.knowledgeScope ? { scope: phase.knowledgeScope } : {}),
+        ...(phase.knowledgeAlsoRead ? { alsoRead: phase.knowledgeAlsoRead } : {}),
       });
     }
     const at = nowISO();

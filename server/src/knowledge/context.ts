@@ -33,6 +33,7 @@ import { createHash } from "node:crypto";
 import { chmod, readFile } from "node:fs/promises";
 import path from "node:path";
 import type {
+  Claim,
   ClaimKind,
   ClaimRef,
   ContextIntegrityResult,
@@ -40,6 +41,7 @@ import type {
   KnowledgeContextClaim,
   KnowledgeContextSelector,
   KnowledgeContextSpec,
+  KnowledgeScope,
   PhaseProducedSelector,
   SuppliedConsumedComparison,
 } from "@argus/contracts";
@@ -62,6 +64,13 @@ import {
   evaluateSupport,
   type KnowledgeLedger,
 } from "./kernel.js";
+import {
+  describeScopeOfClaim,
+  plainScope,
+  qualifyClaimId,
+  readableScopes,
+  sameScope,
+} from "./scope.js";
 
 /** Why a spec or a resolution was refused. `spec` is an authoring error
  *  (refused when the pipeline is saved); the rest are ledger-dependent and
@@ -72,6 +81,7 @@ export type KnowledgeContextErrorCode =
   | "unknown-revision"
   | "unknown-phase"
   | "phase-not-accepted"
+  | "out-of-scope"
   | "too-many-claims";
 
 export class KnowledgeContextError extends KnowledgeValidationError {
@@ -307,6 +317,60 @@ export function resolveKnowledgeContext(
   /** Claim ids already selected. A context is a set keyed by id (§ spec). */
   const taken = new Set<string>();
 
+  const readable = readableScopes({
+    scope: scope?.knowledge,
+    alsoRead: scope?.alsoRead,
+  });
+
+  /**
+   * One selector's id → the claim the run may actually see, or a refusal.
+   *
+   * Resolution is scope-first, and the run's **own** scope is tried before any
+   * broader one, so an author writing `RULE-42` in a scoped pipeline always
+   * means their own rule and can never silently be handed somebody else's.
+   *
+   * Two steps, in order:
+   *   1. the canonical id the local name would have in each readable scope
+   *      (`RULE-42` → `RULE-42.4f3a9c17`) — and the claim found must really
+   *      belong to that scope, so a canonical-*looking* id can never be read
+   *      as a scope's own by spelling alone;
+   *   2. the id exactly as written, for an author naming a canonical id
+   *      outright, which is admitted only when that claim's scope is one of
+   *      the readable ones.
+   *
+   * There is deliberately no third step. A scoped pipeline whose ledger holds
+   * an *unscoped* `RULE-42` gets `out-of-scope`, never that claim; an unscoped
+   * pipeline naming a scoped claim's canonical id gets the same. Falling back
+   * to the global record — in either direction — is the leak this exists to
+   * stop.
+   */
+  const resolveId = (
+    id: string,
+    where: string,
+  ): { claim: Claim } | { code: KnowledgeContextErrorCode; message: string } => {
+    for (const sc of readable) {
+      let want: string;
+      try {
+        want = qualifyClaimId(id, sc);
+      } catch {
+        continue; // too long to carry this scope's suffix: it is not that id
+      }
+      const found = ledger.claims.find((c) => c.id === want && sameScope(c.scope, sc));
+      if (found) return { claim: found };
+    }
+    const exact = ledger.claims.find((c) => c.id === id);
+    if (!exact)
+      return { code: "unknown-claim", message: `claim ${id} does not exist in the ledger` };
+    if (readable.some((sc) => sameScope(exact.scope, sc))) return { claim: exact };
+    return {
+      code: "out-of-scope",
+      message:
+        `claim ${id} belongs to ${describeScopeOfClaim(exact.scope)}, which ${where} is not ` +
+        `authorized to read (it may read ${readable.map(describeScopeOfClaim).join(" or ")}). ` +
+        "Declare it in knowledgeScope.alsoRead to read another project's knowledge deliberately",
+    };
+  };
+
   const project = (ref: ClaimRef) => {
     const claim = getClaim(ledger, ref)!;
     const next = supersededBy(ledger, ref);
@@ -319,6 +383,7 @@ export function resolveKnowledgeContext(
       ref: formatClaimRef(ref),
       id: claim.id,
       revision: claim.revision,
+      ...(claim.scope ? { scope: plainScope(claim.scope) } : {}),
       kind: claim.kind,
       statement: claim.statement,
       ...(claim.structuredValue !== undefined ? { structuredValue: claim.structuredValue } : {}),
@@ -335,17 +400,20 @@ export function resolveKnowledgeContext(
 
   (spec.claims ?? []).forEach((sel, i) => {
     const where = `knowledgeContext.claims[${i}] (${formatSelector(sel)})`;
+    // The scope decides *which* claim the id names, before the revision
+    // decides which revision of it: a selector is resolved in the run's own
+    // scope first, and an id no readable scope holds is refused outright.
+    const found = resolveId(sel.id, "this phase");
+    if ("code" in found) fail(found.code, `${where}: ${found.message}`);
+    const id = found.claim.id;
     const claim =
       sel.revision === "active"
-        ? activeRevision(ledger, sel.id)
-        : getClaim(ledger, { id: sel.id, revision: sel.revision });
+        ? activeRevision(ledger, id)
+        : getClaim(ledger, { id, revision: sel.revision });
     if (!claim) {
-      if (!activeRevision(ledger, sel.id)) {
-        fail("unknown-claim", `${where}: claim ${sel.id} does not exist in the ledger`);
-      }
       fail(
         "unknown-revision",
-        `${where}: revision v${sel.revision} of ${sel.id} does not exist in the ledger`,
+        `${where}: revision v${sel.revision} of ${id} does not exist in the ledger`,
       );
     }
     const ref: ClaimRef = { id: claim.id, revision: claim.revision };
@@ -373,6 +441,12 @@ export function resolveKnowledgeContext(
     }
     for (const ref of producedRefs(ledger, scope.instanceId, sel)) {
       if (taken.has(ref.id)) continue;
+      // Defence in depth. A `fromPhases` selector already reads only what an
+      // accepted phase *of this instance* committed, and a phase commits into
+      // its own scope — but an instance whose phases declare different scopes
+      // would otherwise hand one phase's repository knowledge to another's.
+      const claim = getClaim(ledger, ref);
+      if (!claim || !readable.some((sc) => sameScope(claim.scope, sc))) continue;
       project(ref);
       selection.push({
         selector: { id: ref.id, revision: ref.revision },
@@ -392,6 +466,8 @@ export function resolveKnowledgeContext(
   const context: KnowledgeContext = {
     schemaVersion: 1,
     generatedAt: now,
+    ...(scope?.knowledge ? { scope: plainScope(scope.knowledge) } : {}),
+    ...(scope?.alsoRead?.length ? { alsoRead: scope.alsoRead.map(plainScope) } : {}),
     claims,
     metadata: { selection },
   };
@@ -439,6 +515,15 @@ export interface KnowledgeContextScope {
   /** The named phase's status on this instance, or null when the pipeline has
    *  no such phase. */
   phaseStatus: (phaseId: string) => string | null;
+  /**
+   * The {@link KnowledgeScope} the phase attempt resolved to. Every claim in
+   * the materialized context belongs to it (or to `alsoRead`), and a selector
+   * that would reach outside refuses the launch. Absent = an unscoped phase,
+   * which sees exactly the unscoped records it always did.
+   */
+  knowledge?: KnowledgeScope;
+  /** Scopes the pipeline explicitly authorized this phase to read as well. */
+  alsoRead?: KnowledgeScope[];
 }
 
 /**

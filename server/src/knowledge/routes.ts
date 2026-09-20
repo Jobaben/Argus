@@ -19,6 +19,7 @@ import type {
   ExecutionVerificationsResponse,
   KnowledgeDeltaPreview,
   KnowledgeDeltasResponse,
+  KnowledgeScope,
   RuleConformanceReport,
   RuleVerificationPreview,
   SuppliedToReport,
@@ -51,6 +52,7 @@ import {
   resolveKey,
   revisionsOf,
   ruleConformance,
+  scopeOfAcceptedChange,
   suppliedContextOf,
   suppliedToReport,
   supportReport,
@@ -60,6 +62,13 @@ import {
   type KnowledgeLedger,
 } from "./kernel.js";
 import { analyzeImpact } from "./impact.js";
+import {
+  PROJECT_ID_RE,
+  REPOSITORY_ID_RE,
+  claimsInScopes,
+  qualifyClaimId,
+  sameScope,
+} from "./scope.js";
 import { previewKnowledgeDelta } from "./discovery.js";
 import { readDeltaRecord, readDeltaRecordById } from "./staging.js";
 import { readVerificationRecord, readVerificationRecordById } from "./verificationStaging.js";
@@ -119,10 +128,53 @@ export function knowledgeRoutes(): Hono {
     throw e;
   }
 
-  /** Resolve a `:key` path segment to a claim, or null → 404. */
-  function claimFor(ledger: KnowledgeLedger, raw: string) {
+  /**
+   * Resolve a `:key` path segment to a claim, or null → 404.
+   *
+   * `?project=` and `?repository=` name the {@link KnowledgeScope} the key is
+   * read in, so `RULE-42` means *that project's* RULE-42 and the canonical
+   * `RULE-42.4f3a9c17` works too. Without them the key is read exactly as
+   * written, which is how every existing caller keeps working.
+   */
+  function claimFor(ledger: KnowledgeLedger, raw: string, scope?: KnowledgeScope) {
     const key = parseClaimKey(raw);
-    return key ? resolveKey(ledger, key) : null;
+    if (!key) return null;
+    // A key too long to carry the scope's suffix is simply not a name that
+    // scope could hold, so it is 404 like any other miss — never a 500.
+    let qualified: string | null = null;
+    try {
+      qualified = qualifyClaimId(key.id, scope);
+    } catch {
+      qualified = null;
+    }
+    const claim = qualified ? resolveKey(ledger, { ...key, id: qualified }) : null;
+    if (claim) return claim;
+    // A caller naming a canonical id together with its scope: accept it, but
+    // only when the two agree. A key from another scope is 404, never that
+    // scope's claim.
+    const exact = resolveKey(ledger, key);
+    if (!exact || !scope) return scope ? null : exact;
+    return sameScope(exact.scope, scope) ? exact : null;
+  }
+
+  /** `?project=` / `?repository=`, or an error response. Both or neither: a
+   *  half-named scope is a different scope, not a broader one. */
+  function scopeQuery(
+    c: Context,
+  ): { ok: true; scope?: KnowledgeScope } | { ok: false; res: Response } {
+    const projectId = c.req.query("project");
+    const repositoryId = c.req.query("repository");
+    if (projectId === undefined && repositoryId === undefined) return { ok: true };
+    if (projectId === undefined || repositoryId === undefined) {
+      return {
+        ok: false,
+        res: c.json({ error: "project and repository must be given together" }, 400),
+      };
+    }
+    if (!PROJECT_ID_RE.test(projectId) || !REPOSITORY_ID_RE.test(repositoryId)) {
+      return { ok: false, res: c.json({ error: "project or repository is not a valid id" }, 400) };
+    }
+    return { ok: true, scope: { projectId, repositoryId } };
   }
 
   // ── Reads ────────────────────────────────────────────────────────────────
@@ -138,8 +190,14 @@ export function knowledgeRoutes(): Hono {
     if (lifecycle !== undefined && lifecycle !== "active" && lifecycle !== "superseded") {
       return c.json({ error: "lifecycle must be active | superseded" }, 400);
     }
+    const scope = scopeQuery(c);
+    if (!scope.ok) return scope.res;
     const ledger = await readLedger();
-    const claims = ledger.claims
+    // Scoped when asked, whole-ledger otherwise. This is an operator surface,
+    // so "everything" stays available and is simply never what a pipeline
+    // sees — no agent reads this route.
+    const source = scope.scope ? claimsInScopes(ledger, [scope.scope]) : ledger.claims;
+    const claims = source
       .filter((cl) => !kind || cl.kind === kind)
       .map((cl) => viewOf(ledger, cl))
       .filter((v) => !lifecycle || v.lifecycle === lifecycle);
@@ -149,8 +207,10 @@ export function knowledgeRoutes(): Hono {
 
   /** One claim by `ID` (active revision) or `ID:vN`, with its full history. */
   routes.get("/claims/:key", async (c) => {
+    const scope = scopeQuery(c);
+    if (!scope.ok) return scope.res;
     const ledger = await readLedger();
-    const claim = claimFor(ledger, c.req.param("key"));
+    const claim = claimFor(ledger, c.req.param("key"), scope.scope);
     if (!claim) return c.json({ error: "not found" }, 404);
     const body: ClaimDetail = {
       claim: viewOf(ledger, claim),
@@ -161,24 +221,30 @@ export function knowledgeRoutes(): Hono {
 
   /** Why the claim is supported (or not): every signal with its force. */
   routes.get("/claims/:key/support", async (c) => {
+    const scope = scopeQuery(c);
+    if (!scope.ok) return scope.res;
     const ledger = await readLedger();
-    const claim = claimFor(ledger, c.req.param("key"));
+    const claim = claimFor(ledger, c.req.param("key"), scope.scope);
     if (!claim) return c.json({ error: "not found" }, 404);
     return c.json(supportReport(ledger, refOf(claim)));
   });
 
   /** What depends on the claim, directly and transitively. */
   routes.get("/claims/:key/dependents", async (c) => {
+    const scope = scopeQuery(c);
+    if (!scope.ok) return scope.res;
     const ledger = await readLedger();
-    const claim = claimFor(ledger, c.req.param("key"));
+    const claim = claimFor(ledger, c.req.param("key"), scope.scope);
     if (!claim) return c.json({ error: "not found" }, 404);
     return c.json(dependentsReport(ledger, refOf(claim)));
   });
 
   /** Which executions consumed this exact revision. */
   routes.get("/claims/:key/consumers", async (c) => {
+    const scope = scopeQuery(c);
+    if (!scope.ok) return scope.res;
     const ledger = await readLedger();
-    const claim = claimFor(ledger, c.req.param("key"));
+    const claim = claimFor(ledger, c.req.param("key"), scope.scope);
     if (!claim) return c.json({ error: "not found" }, 404);
     return c.json(consumersReport(ledger, refOf(claim)));
   });
@@ -186,10 +252,18 @@ export function knowledgeRoutes(): Hono {
   /** What rests on this revision being current and supported — claims,
    *  justifications, consuming executions, their artifacts — and why. */
   routes.get("/claims/:key/impact", async (c) => {
+    const scope = scopeQuery(c);
+    if (!scope.ok) return scope.res;
     const ledger = await readLedger();
-    const claim = claimFor(ledger, c.req.param("key"));
+    const claim = claimFor(ledger, c.req.param("key"), scope.scope);
     if (!claim) return c.json({ error: "not found" }, 404);
-    return c.json(analyzeImpact(ledger, refOf(claim)));
+    const traverse = c.req.query("traverse");
+    if (traverse !== undefined && traverse !== "scope" && traverse !== "ledger") {
+      return c.json({ error: "traverse must be scope | ledger" }, 400);
+    }
+    // Bounded to the claim's own scope unless the caller asks, explicitly and
+    // by name, for the whole ledger.
+    return c.json(analyzeImpact(ledger, refOf(claim), { traverse: traverse ?? "scope" }));
   });
 
   /** Everything the ledger knows about one run: what it consumed (with
@@ -260,8 +334,10 @@ export function knowledgeRoutes(): Hono {
    *  supplied provenance, oldest launch first, so a run whose invocation
    *  directory has been pruned is still listed. */
   routes.get("/claims/:key/supplied-to", async (c) => {
+    const scope = scopeQuery(c);
+    if (!scope.ok) return scope.res;
     const ledger = await readLedger();
-    const claim = claimFor(ledger, c.req.param("key"));
+    const claim = claimFor(ledger, c.req.param("key"), scope.scope);
     if (!claim) return c.json({ error: "not found" }, 404);
     const body: SuppliedToReport = suppliedToReport(ledger, refOf(claim));
     return c.json(body);
@@ -330,8 +406,10 @@ export function knowledgeRoutes(): Hono {
    *  the active revision; `RULE-42:v1` means exactly v1, and a verification of
    *  v1 is never listed under v2. */
   routes.get("/claims/:key/verifications", async (c) => {
+    const scope = scopeQuery(c);
+    if (!scope.ok) return scope.res;
     const ledger = await readLedger();
-    const claim = claimFor(ledger, c.req.param("key"));
+    const claim = claimFor(ledger, c.req.param("key"), scope.scope);
     if (!claim) return c.json({ error: "not found" }, 404);
     const body: ClaimVerificationsResponse = {
       claim: refOf(claim),
@@ -351,8 +429,10 @@ export function knowledgeRoutes(): Hono {
    * conformance is never timeless.
    */
   routes.get("/claims/:key/conformance", async (c) => {
+    const scope = scopeQuery(c);
+    if (!scope.ok) return scope.res;
     const ledger = await readLedger();
-    const claim = claimFor(ledger, c.req.param("key"));
+    const claim = claimFor(ledger, c.req.param("key"), scope.scope);
     if (!claim) return c.json({ error: "not found" }, 404);
     const gitHead = c.req.query("gitHead");
     if (gitHead !== undefined && !/^[0-9a-fA-F]{7,64}$/.test(gitHead)) {
@@ -434,9 +514,16 @@ export function knowledgeRoutes(): Hono {
     if (requestId !== undefined && !CLAIM_ID_RE.test(requestId)) {
       return c.json({ error: "request must be a change-request id" }, 400);
     }
-    const proposals = requestId
-      ? changeProposalsForRequest(ledger, requestId)
-      : changeProposals(ledger);
+    const scope = scopeQuery(c);
+    if (!scope.ok) return scope.res;
+    const all = requestId ? changeProposalsForRequest(ledger, requestId) : changeProposals(ledger);
+    // `?project=&repository=` narrows to the changes made to one project's
+    // semantics. Derived from what each proposal actually revised, never from
+    // the request's wording — a ticket that mentions another product does not
+    // make the change belong to it.
+    const proposals = scope.scope
+      ? all.filter((p) => sameScope(scopeOfAcceptedChange(ledger, p), scope.scope))
+      : all;
     const body: ChangeProposalsResponse = { proposals };
     return c.json(body);
   });
@@ -494,8 +581,10 @@ export function knowledgeRoutes(): Hono {
    * is the honest answer rather than an invented one.
    */
   routes.get("/claims/:key/change-proposal", async (c) => {
+    const scope = scopeQuery(c);
+    if (!scope.ok) return scope.res;
     const ledger = await readLedger();
-    const claim = claimFor(ledger, c.req.param("key"));
+    const claim = claimFor(ledger, c.req.param("key"), scope.scope);
     if (!claim) return c.json({ error: "not found" }, 404);
     const proposal = changeProposalOfClaim(ledger, refOf(claim));
     if (!proposal) return c.json({ error: "not found" }, 404);

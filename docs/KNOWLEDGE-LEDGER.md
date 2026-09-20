@@ -86,8 +86,9 @@ A **claim** is an addressable semantic assertion:
 
 ```ts
 interface Claim {
-  id: string; // logical identity: RULE-17
+  id: string; // logical identity: RULE-17, or RULE-17.4f3a9c17 when scoped (§3a)
   revision: number; // 1..n, no gaps
+  scope?: { projectId: string; repositoryId: string }; // who owns it (§3a)
   kind: "fact" | "assumption" | "business-rule" | "constraint" | "conclusion" | "decision";
   statement: string;
   structuredValue?: unknown; // opaque in Phase 1; see §10
@@ -126,6 +127,163 @@ possible) or minted by Argus from the kind (`RULE-3f9a1c2b`,
 `FACT-…`, `CONCLUSION-…`). Either way Argus validates the alphabet and
 enforces uniqueness. Evidence (`EV-…`) and justification (`J-…`) ids are always
 minted.
+
+## 3a. Knowledge scope — who owns a claim
+
+Argus keeps **one** ledger and runs pipelines against **many** unrelated
+projects. Those two facts are only compatible if retrieval is isolated by
+default, so a run working in one repository cannot traverse, materialize or be
+handed another's knowledge. A `KnowledgeScope` is that boundary:
+
+```ts
+interface KnowledgeScope {
+  projectId: string; // declared: only a person knows two repos are one product
+  repositoryId: string; // declared, else derived — never a filesystem path
+}
+```
+
+**It is not a path, and it is not a repository state.** `C:\src\Kobra`,
+`/home/u/src/Kobra` and a `/worktrees/poc` worktree are three checkouts of one
+logical repository and resolve to one `repositoryId`. A `RepositoryStateRef`
+(§17) says _which commit and working tree an observation examined_; a scope
+says _which repository the knowledge is about_. A rule outlives every commit of
+it. Nor is it pipeline topology: two pipelines against one repository share one
+scope, and the pipeline that happened to discover a claim never owns it.
+
+### Deriving repository identity
+
+`repositoryId` is declared when the author knows it, and otherwise derived from
+the phase's working tree, in this order and from nothing else:
+
+| source                         | identity                    | identical across        |
+| ------------------------------ | --------------------------- | ----------------------- |
+| normalized `origin` remote     | `git:github.com/acme/kobra` | clones, worktrees, OSes |
+| root commit (no usable remote) | `commit:<sha>`              | clones, worktrees       |
+| neither                        | **refused**                 | —                       |
+
+Every spelling of one remote collapses to one answer — `https://…/Acme/Kobra.git`,
+`git@github.com:Acme/Kobra.git` and `ssh://git@github.com:22/Acme/Kobra` are the
+same repository. A _path-shaped_ remote (`/srv/git/kobra.git`) is deliberately
+refused and falls through to the root commit, because a path is exactly what
+must not become identity. A tree that answers neither fails the phase as a
+`configuration` error naming the fix — Argus never scopes a project's knowledge
+to whatever the checkout happened to be called.
+
+### Scope-qualified claim ids
+
+Every edge in the ledger — `Evidence.claim`, `Justification.premises`,
+`ClaimConsumption.claim`, `RuleVerification.rule`,
+`AcceptedChangeProposal.semanticChanges` — names a bare `ClaimRef`. If ids were
+unique only _within_ a scope, every one of those refs would become ambiguous and
+the graph would have to carry a scope on each edge.
+
+So the scope is folded into the canonical id instead: `RULE-42` created in scope
+S becomes `RULE-42.<8 hex of S>`. Two unrelated repositories can each hold a
+`RULE-42`; ids stay globally unique; and **every existing ref-keyed lookup is
+already isolated** — `evidenceOf`, `verificationsOfClaim`, `consumersOf`,
+`supportReport`, `ruleConformance` and `changeProposalOfClaim` needed no
+change. The stored `scope` remains the authoritative, queryable ownership; the
+token is a naming device and never the thing a scope check reads.
+
+```
+Project A            Project B
+  RULE-42.4f3a9c17     RULE-42.623ce8f9      two claims, one name
+```
+
+A revision **inherits** its claim's scope from the revision it supersedes, so
+`RULE-42:v2` belongs to whoever `RULE-42:v1` belonged to and a claim can never
+be moved between projects.
+
+### The invariant
+
+> A pipeline execution observes knowledge within its resolved project and
+> repository scope, unless a broader scope was explicitly declared and
+> authorized.
+
+Enforced in four places, each fail-closed:
+
+| where                        | rule                                                                                                                                                |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `resolveKnowledgeContext`    | a selector resolves in the run's own scope first; an id owned by an unauthorized scope is `out-of-scope`, **never** a fallback to the global record |
+| `applyKnowledgeDeltas`       | a run may **write** only to its own scope, and **read** only its own plus `alsoRead`                                                                |
+| `addJustification`           | a derivation may not cross a scope — which is what keeps support evaluation and impact analysis partitioned                                         |
+| the engine's `changeContext` | a phase may not receive the accepted intent of a differently-scoped phase of the same instance                                                      |
+
+### Declaring it
+
+```json
+{
+  "knowledgeScope": {
+    "projectId": "motorit",
+    "repositoryId": "git:github.com/motorit/online",
+    "alsoRead": [{ "projectId": "acme", "repositoryId": "git:github.com/acme/kobra" }]
+  }
+}
+```
+
+On the pipeline, or on a phase that works in a different repository (a phase
+override _replaces_ the pipeline's, exactly as a workspace policy does). The
+resolved scope is **frozen on the phase attempt** (`PhaseProgress.knowledgeScope`)
+before a single run is planned, so editing the pipeline — or moving the
+checkout — while an instance runs can never retarget ownership of knowledge it
+already wrote.
+
+`alsoRead` is the only route by which one project's run may name another's
+knowledge. It grants **reading**, never writing: a run may declare it consumed
+an authorized foreign revision, and still may not revise it, attach evidence to
+it, or derive from it.
+
+### Absent means unknown
+
+A claim written before scopes existed, or by a pipeline that declares none, has
+**no** scope. Argus does not guess: the ledger records no repository against a
+claim, so there is nothing to infer from. The consequences are explicit:
+
+- an unscoped pipeline reads and writes unscoped records exactly as it always
+  did — nothing about its behaviour changes;
+- a scoped pipeline **cannot resolve an unscoped claim at all** (`out-of-scope`,
+  never the record), and an unscoped one cannot reach a scoped claim by naming
+  its canonical id either;
+- an operator who _does_ know the ownership states it by re-running discovery
+  under a declared scope, which creates properly scoped claims.
+
+Nothing rewrites history to pretend the ownership was always known.
+
+### Retrieval, not filtering
+
+Scope is the **first lookup dimension**, not a filter over a whole-ledger scan.
+`scope.ts` builds a scope index — claims, evidence and justifications keyed by
+scope — lazily and once per ledger snapshot, cached in a `WeakMap` against the
+snapshot object (ledger snapshots are immutable, so a cached index can never
+describe a document that has moved on). `analyzeImpact` takes its claim and
+justification lists from that index, so an unrelated project's records are
+never visited at all:
+
+```
+shared authoritative ledger
+      ↓ scope index (O(1) after one pass per snapshot)
+scope-aware retrieval
+      ↓ bounded traversal: analyzeImpact walks one scope by default
+small KnowledgeContext
+      ↓ filtered before materialization
+agent
+```
+
+The agent is never asked to ignore irrelevant knowledge; it never receives any.
+
+### Query surfaces
+
+| route                                           | default               | scoped by                                                                |
+| ----------------------------------------------- | --------------------- | ------------------------------------------------------------------------ |
+| `GET /claims`                                   | whole ledger          | `?project=&repository=`                                                  |
+| `GET /claims/:key` (and every claim-keyed read) | key as written        | `?project=&repository=`, which also lets `RULE-42` mean _that project's_ |
+| `GET /claims/:key/impact`                       | the claim's own scope | `?traverse=ledger` for the explicit broader question                     |
+| `GET /change-proposals`                         | whole ledger          | `?project=&repository=`                                                  |
+
+These are operator surfaces — no agent reads them — so "everything" stays
+available and is simply never what a pipeline sees. `project` and `repository`
+must be given **together**: a half-named scope is a different scope, not a
+broader one, so it is a 400.
 
 ## 4. Evidence
 
@@ -4009,13 +4167,17 @@ established.
   completion.** Every conjunct of the invariant is decided from a record.
 - **No automatic stakeholder approval, no production telemetry, no
   cross-repository orchestration, no ATMS worlds, no graph visualization.**
+- **No implicit cross-project reasoning.** Knowledge lives in one ledger and is
+  retrieved by scope (§3a). A run reads its own project's records; reading
+  another's takes a declared `alsoRead`, writing to another's is refused
+  outright, and a derivation may not cross a scope at all.
 
 ## 18. Persistence
 
 **Authoritative store:** `~/.claude/argus/knowledge.json`, one JSON document:
 
 ```json
-{ "version": 7, "claims": [...], "evidence": [...], "justifications": [...], "consumptions": [...], "artifacts": [...], "deltas": [...], "supplied": [...], "verifications": [...], "changeProposals": [...], "acceptanceVerifications": [...], "changeRealizations": [...] }
+{ "version": 8, "claims": [...], "evidence": [...], "justifications": [...], "consumptions": [...], "artifacts": [...], "deltas": [...], "supplied": [...], "verifications": [...], "changeProposals": [...], "acceptanceVerifications": [...], "changeRealizations": [...] }
 ```
 
 Written through the same discipline as `pipelines.json` and `schedules.json`:
@@ -4033,15 +4195,20 @@ put into each run's context (§13.10); **version 5** (Phase 6) added
 and an exact repository revision (§15.3); **version 6** (Phase 7) added
 `changeProposals`, the durable record of the requested change that caused a
 revision to exist (§16.11); **version 7** (Phase 8) added
-`acceptanceVerifications` and `changeRealizations` (§17.2, §17.6).
-A version 1–6 file is read as version 7 with the missing arrays empty
+`acceptanceVerifications` and `changeRealizations` (§17.2, §17.6);
+**version 8** added `Claim.scope` — knowledge ownership (§3a) — and **no array
+and no existing field at all**, so a version 7 document upgrades by carrying
+its records forward exactly as they are.
+A version 1–7 file is read as version 8 with the missing arrays empty
 and is rewritten in that shape by the next successful transition — nothing an
 earlier phase recorded changes, no supplied provenance is invented for the runs
 it already holds, no rule gains a conformance it never had (an upgraded rule is
 `unverified`, never `holds`), no revision gains a request that never asked for
 it, no criterion gains a result nobody established (`unverified`, never
-`satisfied`), no accepted change gains a realization nobody ran, and reading
-alone never writes. Any other version
+`satisfied`), no accepted change gains a realization nobody ran, **no claim
+gains a project it was never recorded against** (an upgraded claim stays
+unscoped, and a scoped pipeline is refused rather than inheriting it), and
+reading alone never writes. Any other version
 is treated as foreign: readable as empty, never overwritten.
 
 **Staging stores:** `~/.claude/argus/knowledge-deltas/<runId>/` — `delta.json`
@@ -4549,6 +4716,7 @@ human's.
 | Path                                          | Role                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `contracts/src/knowledge.ts`                  | wire types: Claim, ClaimRef, Evidence, Justification, ClaimConsumption, ArtifactProduction, ExecutionProvenance, ImpactSet, SuppliedContext, ContextIntegrityResult, RuleVerification, ChangeRequest, ChangeProposal, AcceptanceCriterion, AcceptedChangeProposal, ChangeContext, RepositoryStateRef, ImplementationScope, AcceptanceVerification, ChangeRealization, RemediationContext                                                                                                                                                                                                                                                                                                                               |
+| `server/src/knowledge/scope.ts`               | knowledge scope: repository identity derivation, scope-qualified claim ids, the per-snapshot scope index, policy validation (§3a)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `server/src/knowledge/kernel.ts`              | pure transitions and queries; the only definition of support; the provenance transitions and `executionProvenance`; the Phase 8 records (`recordAcceptanceVerification`, `startChangeRealization`, `appendRealizationAttempt`, `closeChangeRealization`) and the repository-state predicates (`sameRepositoryState`, `repositoryStateAnswers`)                                                                                                                                                                                                                                                                                                                                                                         |
 | `server/src/knowledge/impact.ts`              | `analyzeImpact` — the pure, deterministic impact algorithm                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `server/src/knowledge/validate.ts`            | untrusted body → typed proposal; the structural `source-code` evidence rules (repository-relative path, line range, commit sha)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |

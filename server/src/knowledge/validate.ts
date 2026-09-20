@@ -1,6 +1,7 @@
 import type {
   ArtifactRef,
   ClaimKind,
+  KnowledgeScope,
   EvidenceSource,
   ExecutionRef,
   RunExecutionRef,
@@ -16,6 +17,7 @@ import {
   validArtifactPath,
   type ClaimKey,
 } from "./kernel.js";
+import { PROJECT_ID_RE, REPOSITORY_ID_RE } from "./scope.js";
 
 /**
  * The boundary where an untrusted proposal becomes a typed ledger input.
@@ -48,7 +50,10 @@ const SHA_RE = /^[0-9a-f]{7,64}$/;
 
 /** The typed shapes the routes hand to the kernel (ids minted by the store). */
 export interface ProposedClaim {
+  /** The local name, before the scope suffix; Argus mints one when absent. */
   id?: string;
+  /** Which project and repository the claim belongs to. Absent = unscoped. */
+  scope?: KnowledgeScope;
   kind: ClaimKind;
   statement: string;
   structuredValue?: unknown;
@@ -280,6 +285,22 @@ export function evidenceSource(raw: unknown): EvidenceSource {
   }
 }
 
+/** A {@link KnowledgeScope} from an untrusted body. Both fields are required:
+ *  a half-declared scope would be a different scope. */
+export function claimScope(raw: unknown): KnowledgeScope {
+  const r = record(raw, "scope");
+  for (const k of Object.keys(r)) {
+    if (k !== "projectId" && k !== "repositoryId") fail(`scope has unknown key "${k}"`);
+  }
+  if (typeof r.projectId !== "string" || !PROJECT_ID_RE.test(r.projectId)) {
+    fail("scope.projectId must be a project id");
+  }
+  if (typeof r.repositoryId !== "string" || !REPOSITORY_ID_RE.test(r.repositoryId)) {
+    fail("scope.repositoryId must be a repository id, never a filesystem path");
+  }
+  return { projectId: r.projectId, repositoryId: r.repositoryId };
+}
+
 export function validateClaim(raw: unknown): ProposedClaim {
   const r = record(raw, "claim");
   if (typeof r.kind !== "string" || !CLAIM_KINDS.includes(r.kind as ClaimKind)) {
@@ -293,6 +314,9 @@ export function validateClaim(raw: unknown): ProposedClaim {
     if (typeof r.id !== "string" || !CLAIM_ID_RE.test(r.id)) fail("id is not a valid claim id");
     out.id = r.id;
   }
+  // The scope is authored in full, never abbreviated: knowledge ownership is
+  // exactly the thing that must not be guessed from a partial declaration.
+  if (r.scope !== undefined && r.scope !== null) out.scope = claimScope(r.scope);
   const sv = structuredValue(r.structuredValue);
   if (sv !== undefined) out.structuredValue = sv;
   const producedBy = executionRef(r.producedBy);
