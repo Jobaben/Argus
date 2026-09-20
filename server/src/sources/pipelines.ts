@@ -14,6 +14,7 @@ import type {
   MemoryPolicy,
   PhaseCheck,
   RetryableClass,
+  KnowledgeScopePolicy,
   WorkspacePolicy,
 } from "./pipelineTypes.js";
 import type { Trigger } from "./scheduleTypes.js";
@@ -45,6 +46,8 @@ import type {
   RuleVerificationPolicy,
 } from "@argus/contracts";
 import { KnowledgeContextError, parseKnowledgeContextSpec } from "../knowledge/context.js";
+import { KnowledgeValidationError } from "../knowledge/errors.js";
+import { parseKnowledgeScopePolicy } from "../knowledge/scope.js";
 import {
   DISCOVERY_LABEL_MAX_CHARS,
   DISCOVERY_NOTE_MAX_CHARS,
@@ -79,6 +82,7 @@ export interface PipelineInput {
   runtime?: AgentRuntimeId;
   capabilities?: CapabilityProfile;
   workspace?: WorkspacePolicy;
+  knowledgeScope?: KnowledgeScopePolicy;
   contextLimits?: ContextLimits;
   memory?: MemoryPolicy;
 }
@@ -913,6 +917,26 @@ function validateKnowledgeContext(raw: unknown, ctx: string): KnowledgeContextSp
 }
 
 /**
+ * The knowledge scope a pipeline (or one phase of it) writes into — §
+ * `docs/KNOWLEDGE-LEDGER.md` § KnowledgeScope. Shape only: the project id is
+ * an identifier, a declared repository id is an identifier and never a
+ * filesystem path, and `alsoRead` names fully-specified scopes. Whether the
+ * repository identity can be *derived* is a question for the working tree at
+ * launch, where a tree that answers neither a normalized remote nor a root
+ * commit refuses the phase as a `configuration` failure.
+ */
+function validateKnowledgeScope(raw: unknown, ctx: string): KnowledgeScopePolicy | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  try {
+    return parseKnowledgeScopePolicy(raw);
+  } catch (e) {
+    if (e instanceof KnowledgeValidationError)
+      throw new PipelineValidationError(`${ctx}: ${e.message}`);
+    throw e;
+  }
+}
+
+/**
  * Run a route/result check, re-badging its error as a pipeline validation error
  * so the route's existing 400 mapping covers it — the same wrapping the rubric
  * checks get, and for the same reason: an authoring mistake is a 400, not a 500.
@@ -1011,6 +1035,7 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
   const capabilities = validateCapabilities(p.capabilities, `phase ${i}`);
   const checks = validateChecks(p.checks, `phase ${i}`);
   const workspace = validateWorkspace(p.workspace, `phase ${i}`);
+  const knowledgeScope = validateKnowledgeScope(p.knowledgeScope, `phase ${i}`);
   const candidates = validateCandidates(p.candidates, `phase ${i}`);
   const knowledgeDelta = validateKnowledgeDelta(p.knowledgeDelta, `phase ${i}`);
   const knowledgeContext = validateKnowledgeContext(p.knowledgeContext, `phase ${i}`);
@@ -1043,6 +1068,7 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
     ...(capabilities ? { capabilities } : {}),
     ...(checks ? { checks } : {}),
     ...(workspace ? { workspace } : {}),
+    ...(knowledgeScope ? { knowledgeScope } : {}),
     ...(candidates ? { candidates } : {}),
     ...(knowledgeDelta ? { knowledgeDelta } : {}),
     ...(knowledgeContext ? { knowledgeContext } : {}),
@@ -1749,6 +1775,8 @@ export function validatePipelineInput(raw: unknown): PipelineInput {
   if (capabilities) input.capabilities = capabilities;
   const workspace = validateWorkspace(r.workspace, "pipeline");
   if (workspace) input.workspace = workspace;
+  const knowledgeScope = validateKnowledgeScope(r.knowledgeScope, "pipeline");
+  if (knowledgeScope) input.knowledgeScope = knowledgeScope;
   assertCandidatesRunnable(phases, workspace);
   const contextLimits = validateContextLimits(r.contextLimits, "pipeline");
   if (contextLimits) input.contextLimits = contextLimits;
@@ -1790,6 +1818,8 @@ export function validatePipelinePatch(raw: unknown): Partial<PipelineInput> {
   if ("runtime" in r) patch.runtime = validateRuntime(r.runtime, "pipeline");
   if ("capabilities" in r) patch.capabilities = validateCapabilities(r.capabilities, "pipeline");
   if ("workspace" in r) patch.workspace = validateWorkspace(r.workspace, "pipeline");
+  if ("knowledgeScope" in r)
+    patch.knowledgeScope = validateKnowledgeScope(r.knowledgeScope, "pipeline");
   if ("contextLimits" in r)
     patch.contextLimits = validateContextLimits(r.contextLimits, "pipeline");
   if ("memory" in r) patch.memory = validateMemory(r.memory, "pipeline");
@@ -1848,6 +1878,7 @@ export async function createPipeline(
     ...(input.runtime ? { runtime: input.runtime } : {}),
     ...(input.capabilities ? { capabilities: input.capabilities } : {}),
     ...(input.workspace ? { workspace: input.workspace } : {}),
+    ...(input.knowledgeScope ? { knowledgeScope: input.knowledgeScope } : {}),
     ...(input.contextLimits ? { contextLimits: input.contextLimits } : {}),
     ...(input.memory ? { memory: input.memory } : {}),
     // Minted on first save of a webhook trigger; rotated only via the
@@ -1904,6 +1935,13 @@ export async function updatePipeline(
     if ("workspace" in patch) {
       if (patch.workspace) merged.workspace = patch.workspace;
       else delete merged.workspace;
+    }
+    // And for `knowledgeScope`: clearing it makes the pipeline unscoped again.
+    // Knowledge it already wrote keeps the scope it was written under — a
+    // definition edit never retargets ownership of what is already canonical.
+    if ("knowledgeScope" in patch) {
+      if (patch.knowledgeScope) merged.knowledgeScope = patch.knowledgeScope;
+      else delete merged.knowledgeScope;
     }
     // Same null-clears-the-override story for contextLimits and memory.
     if ("contextLimits" in patch) {

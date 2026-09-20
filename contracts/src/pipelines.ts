@@ -17,6 +17,7 @@ import type {
   ImplementationPolicy,
   InvocationKnowledgeContext,
   KnowledgeContextSpec,
+  KnowledgeScope,
   KnowledgeDeltaPreview,
   KnowledgeDeltaStatus,
   RuleVerificationPolicy,
@@ -574,6 +575,10 @@ export interface PhaseDef {
    *  `cwd`. Overrides the pipeline's policy; absent = the pipeline's, else the
    *  phase's own `cwd` exactly as before workspaces existed. */
   workspace?: WorkspacePolicy;
+  /** Which project and repository *this phase's* knowledge belongs to, when it
+   *  works in a different repository from the rest of the pipeline. Overrides
+   *  the pipeline's policy entirely (no merging); absent = the pipeline's. */
+  knowledgeScope?: KnowledgeScopePolicy;
   /** Run this phase's single step as N competing candidates and let `checks`
    *  select one. Requires exactly one step and attempt-scoped isolation. */
   candidates?: CandidatePolicy;
@@ -735,6 +740,42 @@ export interface InvocationChannelRecord {
   reason?: string;
 }
 
+/**
+ * **Which project and repository this pipeline's knowledge belongs to.**
+ *
+ * Declared once, on the pipeline (a phase may override it when it works in a
+ * different repository), and resolved to a {@link KnowledgeScope} at each
+ * phase attempt — then *frozen* on the phase record, so editing the pipeline
+ * mid-instance can never retarget knowledge that has already been written.
+ *
+ * Absent = unscoped, and everything behaves exactly as it did before scopes
+ * existed: the pipeline reads and writes the ledger's unscoped records.
+ */
+export interface KnowledgeScopePolicy {
+  /**
+   * The durable project (or system/domain) identity. Author-declared, because
+   * only a person knows that two repositories belong to one product — Argus
+   * will not infer it.
+   */
+  projectId: string;
+  /**
+   * The durable repository identity. Absent = derived from the phase's working
+   * tree: the normalized remote identity (`git:github.com/acme/kobra`), else
+   * the root-commit identity (`commit:<sha>`). Both are identical across
+   * clones, machines and git worktrees, and neither is a filesystem path. A
+   * working tree that yields neither refuses the launch with a `configuration`
+   * failure rather than inventing an identity from the directory name.
+   */
+  repositoryId?: string;
+  /**
+   * Scopes this pipeline may additionally **read**. The explicit, authorized
+   * form of cross-project reasoning: without an entry here a run can neither
+   * be supplied, nor declare consumption of, knowledge outside its own scope.
+   * Writes are never affected — a run always writes into its own scope.
+   */
+  alsoRead?: KnowledgeScope[];
+}
+
 export interface PipelineDefinition {
   id: string;
   name: string;
@@ -756,6 +797,9 @@ export interface PipelineDefinition {
   /** Default isolation policy for every phase that does not declare one.
    *  Absent = no isolation: every phase runs in its own `cwd`. */
   workspace?: WorkspacePolicy;
+  /** Which project and repository this pipeline's knowledge belongs to.
+   *  Absent = unscoped, exactly as before knowledge scopes existed. */
+  knowledgeScope?: KnowledgeScopePolicy;
   /**
    * Caps on what an interpolated placeholder value may cost the prompt.
    * Absent = the 16 KiB default for every placeholder.
@@ -793,6 +837,7 @@ export interface PipelineInput {
   runtime?: AgentRuntimeId;
   capabilities?: CapabilityProfile;
   workspace?: WorkspacePolicy;
+  knowledgeScope?: KnowledgeScopePolicy;
   contextLimits?: ContextLimits;
   memory?: MemoryPolicy;
 }
@@ -1007,6 +1052,18 @@ export interface PhaseProgress {
   /** How every candidate ended, written once the phase settles — the losers'
    *  runs are the evidence for a selection, and they outlive their processes. */
   candidateOutcomes?: CandidateOutcome[];
+  /**
+   * The {@link KnowledgeScope} this attempt resolved to, frozen at planning.
+   *
+   * Every claim the attempt commits is owned by it, and every claim its runs
+   * were supplied came from it (or from an explicitly authorized `alsoRead`
+   * scope). Frozen rather than re-derived at commit time so that editing the
+   * pipeline, or moving the checkout, while the instance runs can never change
+   * who owns the knowledge it produced. Absent on an unscoped phase.
+   */
+  knowledgeScope?: KnowledgeScope;
+  /** The `alsoRead` scopes in force for this attempt, frozen with the scope. */
+  knowledgeAlsoRead?: KnowledgeScope[];
   /** The atomic commit of this attempt's staged KnowledgeDeltas, when it had
    *  any. Absent on a phase whose runs proposed no knowledge. */
   knowledge?: PhaseKnowledgeCommit;

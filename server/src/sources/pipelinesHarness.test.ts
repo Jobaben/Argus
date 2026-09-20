@@ -1329,3 +1329,89 @@ test("fromPhases: an unknown phase, its own phase, or one it does not depend on 
     /is not a dependency of this phase; add it to needs/,
   );
 });
+
+// ── knowledgeScope: which project's knowledge a pipeline owns ───────────────
+
+test("knowledgeScope: accepted on the pipeline and on a phase, absent by default", async () => {
+  const m = await fresh();
+  const phase = (over: Record<string, unknown>) => ({
+    id: "discover",
+    name: "Discover",
+    cwd: home,
+    gated: false,
+    steps: [{ name: "s", prompt: "p" }],
+    ...over,
+  });
+  const plain = m.validatePipelineInput(goodInput({ phases: [phase({})] }));
+  assert.equal("knowledgeScope" in plain, false);
+  assert.equal("knowledgeScope" in plain.phases[0], false);
+
+  // A project alone is enough: the repository identity is derived from the
+  // phase's working tree at launch, never from its path.
+  const onPipeline = m.validatePipelineInput(
+    goodInput({ phases: [phase({})], knowledgeScope: { projectId: "motorit" } }),
+  );
+  assert.deepEqual(onPipeline.knowledgeScope, { projectId: "motorit" });
+
+  const onPhase = m.validatePipelineInput(
+    goodInput({
+      phases: [
+        phase({
+          knowledgeScope: {
+            projectId: "acme",
+            repositoryId: "git:github.com/acme/kobra",
+            alsoRead: [{ projectId: "motorit", repositoryId: "git:github.com/motorit/online" }],
+          },
+        }),
+      ],
+    }),
+  );
+  assert.deepEqual(onPhase.phases[0].knowledgeScope, {
+    projectId: "acme",
+    repositoryId: "git:github.com/acme/kobra",
+    alsoRead: [{ projectId: "motorit", repositoryId: "git:github.com/motorit/online" }],
+  });
+});
+
+test("knowledgeScope: a filesystem path is never accepted as a repository identity", async () => {
+  const m = await fresh();
+  for (const scope of [
+    {},
+    { projectId: "" },
+    { projectId: "has space" },
+    { projectId: "motorit", repositoryId: "C:\\src\\MotoritOnline" },
+    { projectId: "motorit", repositoryId: "/home/user/src/MotoritOnline" },
+    { projectId: "motorit", nope: true },
+    { projectId: "motorit", alsoRead: [{ projectId: "acme" }] },
+  ]) {
+    assert.throws(
+      () => m.validatePipelineInput(goodInput({ knowledgeScope: scope })),
+      m.PipelineValidationError,
+      JSON.stringify(scope),
+    );
+  }
+});
+
+test("knowledgeScope: a patch can set it and clearing it makes the pipeline unscoped again", async () => {
+  const m = await fresh();
+  const created = await m.createPipeline(
+    m.validatePipelineInput(goodInput({ knowledgeScope: { projectId: "motorit" } })),
+    new Date(),
+    "p-scope",
+  );
+  assert.deepEqual(created.knowledgeScope, { projectId: "motorit" });
+
+  const changed = await m.updatePipeline(
+    "p-scope",
+    m.validatePipelinePatch({ knowledgeScope: { projectId: "acme" } }),
+    new Date(),
+  );
+  assert.deepEqual(changed.knowledgeScope, { projectId: "acme" });
+
+  const cleared = await m.updatePipeline(
+    "p-scope",
+    m.validatePipelinePatch({ knowledgeScope: null }),
+    new Date(),
+  );
+  assert.equal("knowledgeScope" in cleared, false);
+});

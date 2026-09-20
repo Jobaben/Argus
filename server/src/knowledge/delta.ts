@@ -1,4 +1,5 @@
 import type {
+  KnowledgeScope,
   AppliedKnowledgeDelta,
   ArtifactProduction,
   ArtifactRef,
@@ -44,6 +45,7 @@ import {
   structuredValue,
   text,
 } from "./validate.js";
+import { describeScopeOfClaim, qualifyClaimId, readableScopes, sameScope } from "./scope.js";
 
 /**
  * The KnowledgeDelta protocol's pure half: what an agent's proposal document
@@ -96,6 +98,7 @@ export type KnowledgeDeltaErrorCode =
   | "stale-revision"
   | "conflict"
   | "artifact"
+  | "scope"
   | "ledger";
 
 /** A refused delta. Maps to 400 over HTTP and to the `knowledge-delta`
@@ -412,6 +415,17 @@ export interface DeltaProposal {
    * merely supplied.
    */
   supplied?: ClaimRef[];
+  /**
+   * The {@link KnowledgeScope} the run's phase attempt resolved to, frozen at
+   * planning. Everything the delta *creates* is owned by it, and everything
+   * the delta *writes to* must already be in it. Absent = an unscoped phase,
+   * which reads and writes the ledger's unscoped records exactly as every
+   * pipeline did before scopes existed.
+   */
+  scope?: KnowledgeScope;
+  /** Scopes the pipeline explicitly authorized this run to *read*. A consumed
+   *  revision may come from one of these; nothing may be written into one. */
+  alsoRead?: KnowledgeScope[];
 }
 
 export interface ApplyDeltasOptions {
@@ -455,6 +469,7 @@ function preflight(snapshot: KnowledgeLedger, proposals: DeltaProposal[]): void 
     if (ids.has(p.id)) fail("conflict", `${who} is listed twice in one commit`);
     ids.add(p.id);
     const d = p.delta;
+    const readable = readableScopes(p);
     const mustExist = (r: ClaimRef, ctx: string) => {
       if (!getClaim(snapshot, r)) {
         fail(
@@ -463,21 +478,67 @@ function preflight(snapshot: KnowledgeLedger, proposals: DeltaProposal[]): void 
         );
       }
     };
+    /**
+     * A reference a run **writes to** — a revision it creates, a claim it
+     * attaches evidence to, a premise or conclusion it derives with — must be
+     * in the run's own scope. A run implements one repository's semantics; it
+     * may never revise another project's rule or bolt its own evidence onto
+     * one, whatever it was authorized to *read*.
+     */
+    const mustOwn = (r: ClaimRef, ctx: string) => {
+      const claim = getClaim(snapshot, r)!;
+      if (!sameScope(claim.scope, p.scope)) {
+        fail(
+          "scope",
+          `${who}: ${ctx} names ${formatClaimRef(r)}, which belongs to ` +
+            `${describeScopeOfClaim(claim.scope)}; this run may only write to ` +
+            `${describeScopeOfClaim(p.scope)}`,
+        );
+      }
+    };
+    /**
+     * A reference a run **reads** may additionally come from a scope the
+     * pipeline explicitly declared in `knowledgeScope.alsoRead`. That is the
+     * only route by which one project's execution provenance may name
+     * another's knowledge, and it is authored, not inferred.
+     */
+    const mustRead = (r: ClaimRef, ctx: string) => {
+      const claim = getClaim(snapshot, r)!;
+      if (!readable.some((sc) => sameScope(claim.scope, sc))) {
+        fail(
+          "scope",
+          `${who}: ${ctx} names ${formatClaimRef(r)}, which belongs to ` +
+            `${describeScopeOfClaim(claim.scope)}; this run may read only ` +
+            `${readable.map(describeScopeOfClaim).join(" or ")}`,
+        );
+      }
+    };
     d.evidence?.forEach((e, i) => {
-      if (!isLocal(e.claim)) mustExist(e.claim, `evidence[${i}].claim`);
+      if (isLocal(e.claim)) return;
+      mustExist(e.claim, `evidence[${i}].claim`);
+      mustOwn(e.claim, `evidence[${i}].claim`);
     });
     d.justifications?.forEach((j, i) => {
-      if (!isLocal(j.conclusion)) mustExist(j.conclusion, `justifications[${i}].conclusion`);
+      if (!isLocal(j.conclusion)) {
+        mustExist(j.conclusion, `justifications[${i}].conclusion`);
+        mustOwn(j.conclusion, `justifications[${i}].conclusion`);
+      }
       j.premises.forEach((pr, k) => {
-        if (!isLocal(pr)) mustExist(pr, `justifications[${i}].premises[${k}]`);
+        if (isLocal(pr)) return;
+        mustExist(pr, `justifications[${i}].premises[${k}]`);
+        mustOwn(pr, `justifications[${i}].premises[${k}]`);
       });
     });
-    d.consumed?.forEach((c, i) => mustExist(c, `consumed[${i}]`));
+    d.consumed?.forEach((c, i) => {
+      mustExist(c, `consumed[${i}]`);
+      mustRead(c, `consumed[${i}]`);
+    });
     d.revisions?.forEach((rev, i) => {
       const active = activeRevision(snapshot, rev.claimId);
       if (!active) {
         fail("unknown-reference", `${who}: revisions[${i}] names unknown claim "${rev.claimId}"`);
       }
+      mustOwn(refOf(active), `revisions[${i}]`);
       if (active.revision !== rev.expectedRevision) {
         fail(
           "stale-revision",
@@ -544,9 +605,13 @@ export function applyKnowledgeDeltas(
         throw e;
       }
     };
-    const fresh = (prefix: string, taken: (id: string) => boolean): string => {
+    const fresh = (
+      prefix: string,
+      taken: (id: string) => boolean,
+      scope?: KnowledgeScope,
+    ): string => {
       let id: string;
-      do id = opts.mint(prefix);
+      do id = qualifyClaimId(opts.mint(prefix), scope);
       while (taken(id));
       return id;
     };
@@ -586,12 +651,17 @@ export function applyKnowledgeDeltas(
     const d = p.delta;
     d.claims?.forEach((c, i) => {
       const working = next;
-      const id = fresh(KIND_PREFIX[c.kind], (cand) => activeRevision(working, cand) !== null);
+      const id = fresh(
+        KIND_PREFIX[c.kind],
+        (cand) => activeRevision(working, cand) !== null,
+        p.scope,
+      );
       const r = wrap(`claims[${i}]`, () =>
         addClaim(
           next,
           {
             id,
+            scope: p.scope,
             kind: c.kind,
             statement: c.statement,
             structuredValue: c.structuredValue,

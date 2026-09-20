@@ -90,6 +90,7 @@ export type {
   SignalType,
   StepProgress,
   StepStatus,
+  KnowledgeScopePolicy,
   WorkspacePolicy,
   WorkspaceRecord,
 } from "./pipelines.js";
@@ -393,6 +394,7 @@ export type {
   KnowledgeDeltaWarning,
   KnowledgeDeltaWarningCode,
   KnowledgeDeltasResponse,
+  KnowledgeScope,
   PhaseProducedSelector,
   PreviewClaim,
   PreviewEvidence,

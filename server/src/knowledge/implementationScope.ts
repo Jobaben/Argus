@@ -39,6 +39,7 @@ import type {
   ImplementationScopeCompleteness,
   ImplementationTarget,
   RunExecutionRef,
+  KnowledgeScope,
   ScopeReason,
   SourceCodeEvidence,
 } from "@argus/contracts";
@@ -47,10 +48,12 @@ import {
   formatClaimRef,
   getClaim,
   sameRef,
+  scopeOfAcceptedChange,
   verificationsOfClaim,
   type KnowledgeLedger,
 } from "./kernel.js";
 import { analyzeImpact } from "./impact.js";
+import { plainScope } from "./scope.js";
 
 /** How many targets one scope may carry. A change is a bounded piece of work;
  *  a scope that named a thousand files would not be guidance. */
@@ -119,6 +122,15 @@ export function deriveImplementationScope(
 ): ImplementationScope {
   const acc: Accum = { targets: new Map(), executions: [] };
   const includePreserved = opts.includePreserved ?? true;
+  // Every target below is a **repository-relative path**, which means nothing
+  // without the repository it came from. The whole derivation is therefore
+  // bounded by the knowledge scope that owns the change: `analyzeImpact` walks
+  // only that scope, and `evidenceOf` / `verificationsOfClaim` are keyed by
+  // scope-qualified refs, so no other project's file path can reach an
+  // implementation agent's ARGUS_IMPLEMENTATION_SCOPE_FILE. The scope is read
+  // off the change's own semantics rather than passed in, so it is whatever
+  // the accepted proposal actually revised.
+  const scope: KnowledgeScope | undefined = scopeOfAcceptedChange(ledger, accepted);
 
   // ── 1. Impact: what the superseded revisions' consumers produced ─────────
   // The root is the *predecessor*, never the new revision: a v2 nobody has
@@ -230,6 +242,7 @@ export function deriveImplementationScope(
     schemaVersion: 1,
     generatedAt: opts.now,
     proposalId: accepted.id,
+    ...(scope ? { scope: plainScope(scope) } : {}),
     semanticChanges: accepted.semanticChanges.map((r) => ({ id: r.id, revision: r.revision })),
     preserved: accepted.preserved.map((r) => ({ id: r.id, revision: r.revision })),
     targets,

@@ -28,6 +28,38 @@ export type ClaimKind =
   "fact" | "assumption" | "business-rule" | "constraint" | "conclusion" | "decision";
 
 /**
+ * **Which project and repository a piece of knowledge belongs to.**
+ *
+ * Argus's one ledger is shared; *retrieval* is not. A scope is the durable
+ * semantic owner of a claim, and it is the first dimension every scoped lookup
+ * is keyed by:
+ *
+ *   Project  →  Repository  →  Repository state  →  Claims / Evidence / …
+ *
+ * Two properties make it trustworthy, and both are deliberate:
+ *
+ * - **It is not a path.** `C:\src\MotoritOnline`, `/home/u/src/MotoritOnline`
+ *   and a `/worktrees/ruleset-poc` worktree are three checkouts of one logical
+ *   repository, and they resolve to one `repositoryId` (a normalized remote
+ *   identity, else the root-commit identity — never a local directory).
+ * - **It is not a repository *state*.** {@link RepositoryStateRef} says *which
+ *   commit and working tree* an observation examined; a scope says *which
+ *   repository the knowledge is about*. A rule outlives every commit of it.
+ *
+ * Nor is it pipeline topology: two different pipelines run against one
+ * repository share one scope, and a pipeline that happened to discover a claim
+ * never owns it — the scope it resolved to does.
+ */
+export interface KnowledgeScope {
+  /** The durable project (or system/domain) this knowledge belongs to.
+   *  Author-declared, stable across clones, checkouts and machines. */
+  projectId: string;
+  /** The durable repository identity within that project. Declared, or derived
+   *  from the working tree's remote / root commit — never from its path. */
+  repositoryId: string;
+}
+
+/**
  * The revision identity of a claim: one exact statement, at one point in its
  * history. `id` alone is the *logical* identity (RULE-17); the pair is the
  * revision identity (RULE-17:v2). Every edge in the graph — evidence,
@@ -60,6 +92,22 @@ export interface Claim {
   revision: number;
   kind: ClaimKind;
   statement: string;
+  /**
+   * The project and repository this claim belongs to (§{@link KnowledgeScope}).
+   *
+   * Absent means **unscoped**: a claim written before scopes existed, or by a
+   * pipeline that declares none. Unknown ownership is never guessed — an
+   * unscoped claim is not silently adopted by the first project that asks, and
+   * a scoped query never returns one.
+   *
+   * The scope is also folded into the canonical `id` when the claim is created
+   * (`RULE-42.4f3a9c17`), which is what lets two unrelated repositories each
+   * hold something called `RULE-42` without either being able to name the
+   * other's: every `ClaimRef` in the ledger stays globally unambiguous, so
+   * evidence, justifications, consumptions and verifications are isolated by
+   * the ref-keyed lookups they already use.
+   */
+  scope?: KnowledgeScope;
   /**
    * Structured form of the statement, when one exists. For a business rule this
    * is the extension point for a future `{ when, then, unless }` representation;
@@ -741,6 +789,9 @@ export interface KnowledgeContextClaim {
   ref: string;
   id: string;
   revision: number;
+  /** The project and repository this claim belongs to. Absent on an unscoped
+   *  claim. Shown so an agent can see the ownership rather than infer it. */
+  scope?: KnowledgeScope;
   kind: ClaimKind;
   statement: string;
   structuredValue?: unknown;
@@ -764,6 +815,17 @@ export interface KnowledgeContextClaim {
 export interface KnowledgeContext {
   schemaVersion: 1;
   generatedAt: string;
+  /**
+   * The scope this run was resolved to. Every entry in `claims` belongs to it,
+   * or to one of `alsoRead` — the context is filtered *before* it is
+   * materialized, so no agent is ever asked to ignore another project's
+   * knowledge. Absent when the pipeline declares no scope, which is how every
+   * pipeline authored before scopes existed keeps behaving exactly as it did.
+   */
+  scope?: KnowledgeScope;
+  /** Additional scopes this run was explicitly authorized to read from. Absent
+   *  or empty = its own scope only, which is the default. */
+  alsoRead?: KnowledgeScope[];
   claims: KnowledgeContextClaim[];
   metadata?: {
     /** How each entry was selected, in `claims` order: the authored selector
@@ -2372,6 +2434,11 @@ export interface ImplementationScope {
   schemaVersion: 1;
   generatedAt: string;
   proposalId: string;
+  /** The project and repository every target below is relative to. Absent when
+   *  the change's semantics are unscoped. A target is never derived from
+   *  provenance belonging to another scope: a repository-relative path only
+   *  means anything inside the repository it came from. */
+  scope?: KnowledgeScope;
   /** The exact revisions this change introduced. */
   semanticChanges: ClaimRef[];
   /** The exact revisions it deliberately preserved. */
