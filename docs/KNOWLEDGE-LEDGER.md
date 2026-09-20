@@ -3469,7 +3469,10 @@ working tree is about content such a record never saw, so the answer is
 `RuleVerification` gains `repositoryState` beside its existing `repository`;
 `ruleConformance(rule, gitHead)` is unchanged and still answers the head-scoped
 question, and `ruleConformanceAtState(rule, state)` answers the stricter one a
-realization has to ask.
+realization has to ask. It is recorded only by a realization's verifier — the
+phase that declares `acceptanceVerification`. An ordinary Phase 6 verification
+phase behaves exactly as it did, with no snapshot taken and no new field on its
+records, because nothing asks a state-scoped question of it.
 
 ### 17.4 The critical binding: verified state = implemented state
 

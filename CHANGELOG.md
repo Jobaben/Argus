@@ -332,6 +332,17 @@ unverifiable`, each rule exactly once. A **missing** rule refuses the whole
 
 ### Changed
 
+- **The server suite reports through Node's `spec` reporter.** A CI log whose
+  _tail_ does not name the test that failed is a diagnosability defect in a
+  harness whose whole thesis is diagnosability: TAP interleaves failures where
+  they occur, so a truncated log of 2 000-plus tests can end with
+  `# fail 1` and nothing else. `spec` ends with a `failing tests:` section
+  carrying the file, the name and the assertion, so the failure is always in
+  the last screen of the log.
+- **A rule verification records its repository _state_ only on a realization's
+  verifier.** An ordinary Phase 6 verification phase takes no working-tree
+  snapshot, spawns no `git`, and writes exactly the record it always did;
+  nothing asks a state-scoped question of it.
 - **`knowledge.json` is version 7**, adding `acceptanceVerifications[]` and
   `changeRealizations[]`. A version 1–6 document is read as version 7 with the
   new arrays empty and rewritten in that shape by the next successful

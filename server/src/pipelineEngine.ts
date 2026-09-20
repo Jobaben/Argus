@@ -3434,9 +3434,13 @@ export function createEngine(deps: EngineDeps): Engine {
     // (Phase 8). Recorded beside `gitHead` rather than instead of it: the head
     // still answers a head-scoped conformance question, and this answers the
     // stricter one a realization has to ask — *was it this implementation?*
-    const verifiedState = repositoryStateFrom(
-      await snapshotWorkingTree(await runCwd(def, phase, runId)),
-    );
+    //
+    // Only on a realization's verifier. An ordinary Phase 6 verification phase
+    // behaves exactly as it did — no snapshot, no `git` process, no new field
+    // on its records — because nothing asks a state-scoped question of it.
+    const verifiedState = phaseDef?.acceptanceVerification
+      ? repositoryStateFrom(await snapshotWorkingTree(await runCwd(def, phase, runId)))
+      : null;
     const base: Omit<RuleVerificationRecord, "status"> = {
       id: `RV-${deps.newId()}`,
       runId,
