@@ -139,13 +139,14 @@ deterministic checks run (if `checks`)         a failing CheckResult → "verifi
 gate opens (if `gated`) or auto-approves
         │
         ▼
-staged KnowledgeDeltas and rule              a refused commit → "knowledge-delta"
-verifications commit (if any)                or "rule-verification"
-        │                                     (stale revision precondition, conflicting
+staged KnowledgeDeltas, rule                 a refused commit → "knowledge-delta",
+verifications and change proposals            "rule-verification" or "change-proposal"
+commit (if any)                              (stale revision precondition, conflicting
         │                                      sibling deltas, a cited check the phase's
-        │                                      report does not contain; one ledger
-        │                                      transition for both — KNOWLEDGE-LEDGER.md
-        │                                      §12, §15.10)
+        │                                      report does not contain, a proposal's local
+        │                                      reference the commit did not create; ONE
+        │                                      ledger transition for all three —
+        │                                      KNOWLEDGE-LEDGER.md §12, §15.10, §16.10)
         ▼
 succeeded
 ```
@@ -180,6 +181,24 @@ phase, "no file" is not "nothing proposed". At the commit boundary each cited
 check is bound to the phase's own `VerificationReport`, so an agent can name a
 test but never claim one passed.
 
+On a phase that declares `changeIntent` (change-intent orchestration,
+KNOWLEDGE-LEDGER.md §16), the completion reads the run's
+`ARGUS_CHANGE_PROPOSAL_FILE` **before** its KnowledgeDelta, because on such a
+phase the proposal carries the delta: its `semanticDelta` is staged as that
+run's KnowledgeDelta and commits through exactly the Phase 3 boundary, and a
+separate delta file beside it refuses the step (one run, one account of what it
+proposes). The intake is deterministic: every business rule the run's own
+KnowledgeContext supplied must be classified `revised`, `preserved`,
+`not-relevant` or `unresolved`; that classification must agree with the
+semantic delta; no claim may be both preserved and revised; every acceptance
+criterion must reference a delta-local id the proposal declares or an exact
+revision the ledger holds; and — under the default
+`acceptanceCriteria: "required"` — every proposed business-rule change must
+carry a criterion. Writing no file at all fails the step: a run given an
+explicit requested change has an obligation to answer it. Everything that is a
+judgement for a person (an unresolved question, a pre-existing defect, a change
+that turns out to be a no-op) travels to the gate as a warning instead.
+
 Ahead of even that, a run Argus supplied a KnowledgeContext to has its context
 file re-hashed against the value recorded at launch. Changed or missing bytes
 fail the step under `"knowledge-context-integrity"` **before** the delta is
@@ -192,21 +211,22 @@ not tampering — the file is untouched and integrity passes (KNOWLEDGE-LEDGER.m
 
 `PhaseFailureClass` (in `@argus/contracts`) is the closed set:
 
-| Class                         | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Retried by default?                                     |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| `spawn`                       | The process never started — preparing the invocation threw, `deps.spawn` itself threw, or (found by `reconcile()` after a restart) a step recorded `running` had no process behind it at all. `run.termination = "spawn-failed"`.                                                                                                                                                                                                                                                                                                                                            | **Yes**                                                 |
-| `exit-code`                   | The process ended (any way) without Argus's own timeout and without the agent signalling failure.                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | **Yes**                                                 |
-| `signal`                      | The agent's _own_ completion signal declared `failed` or `blocked` — it considered the work and reported on it. (Named for the pipeline `signal` the agent posts, **not** an OS process signal.)                                                                                                                                                                                                                                                                                                                                                                             | No — opt in via `retry.retryOn`                         |
-| `timeout`                     | Argus killed the process at its `deadlineAt`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | No — opt in                                             |
-| `verification`                | Every step reported success, but a `checks` entry failed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | No — opt in                                             |
-| `knowledge-delta`             | The run wrote a KnowledgeDelta Argus refused — malformed, an unresolved or inexact reference, a stale `expectedRevision`, a cycle, a claimed artifact that does not exist, or (on a `discovery` phase) a business rule with no evidence or source evidence that is out of scope, at the wrong commit or missing — or the phase commit was refused (the ledger moved while a gate waited; two steps' deltas conflicted). The refusal is the reason, so a retry can propose from the current ledger.                                                                           | No — opt in                                             |
-| `knowledge-context-integrity` | The KnowledgeContext Argus materialized for the run no longer hashes to the value recorded at launch — the file was modified, or removed, while the agent ran. The completion is refused and nothing the run proposed becomes canonical. The reason names the run, the expected hash, the hash found and the path; never the contents.                                                                                                                                                                                                                                       | No — opt in                                             |
-| `rule-verification`           | The run emitted a rule-verification proposal Argus refused — malformed, a rule it was not supplied, a supplied rule left without an outcome (or no file written at all), an outcome with no evidence, an `unverifiable` with no reason, a `check` label the phase does not declare, source evidence that is not a real file inside the repository — or the phase commit was refused (a cited check absent from the report; a `holds` whose check did not pass under `holds: "deterministic-check"`). The refusal names exactly what was missing (KNOWLEDGE-LEDGER.md §15.7). | No — opt in                                             |
-| `configuration`               | The declared capability profile could not be enforced under strict enforcement — the step never launched with more capability than its author asked for.                                                                                                                                                                                                                                                                                                                                                                                                                     | **Never** — the definition is what's wrong, not the run |
+| Class                         | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Retried by default?                                     |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `spawn`                       | The process never started — preparing the invocation threw, `deps.spawn` itself threw, or (found by `reconcile()` after a restart) a step recorded `running` had no process behind it at all. `run.termination = "spawn-failed"`.                                                                                                                                                                                                                                                                                                                                                                                                           | **Yes**                                                 |
+| `exit-code`                   | The process ended (any way) without Argus's own timeout and without the agent signalling failure.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | **Yes**                                                 |
+| `signal`                      | The agent's _own_ completion signal declared `failed` or `blocked` — it considered the work and reported on it. (Named for the pipeline `signal` the agent posts, **not** an OS process signal.)                                                                                                                                                                                                                                                                                                                                                                                                                                            | No — opt in via `retry.retryOn`                         |
+| `timeout`                     | Argus killed the process at its `deadlineAt`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | No — opt in                                             |
+| `verification`                | Every step reported success, but a `checks` entry failed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | No — opt in                                             |
+| `knowledge-delta`             | The run wrote a KnowledgeDelta Argus refused — malformed, an unresolved or inexact reference, a stale `expectedRevision`, a cycle, a claimed artifact that does not exist, or (on a `discovery` phase) a business rule with no evidence or source evidence that is out of scope, at the wrong commit or missing — or the phase commit was refused (the ledger moved while a gate waited; two steps' deltas conflicted). The refusal is the reason, so a retry can propose from the current ledger.                                                                                                                                          | No — opt in                                             |
+| `knowledge-context-integrity` | The KnowledgeContext Argus materialized for the run no longer hashes to the value recorded at launch — the file was modified, or removed, while the agent ran. The completion is refused and nothing the run proposed becomes canonical. The reason names the run, the expected hash, the hash found and the path; never the contents.                                                                                                                                                                                                                                                                                                      | No — opt in                                             |
+| `rule-verification`           | The run emitted a rule-verification proposal Argus refused — malformed, a rule it was not supplied, a supplied rule left without an outcome (or no file written at all), an outcome with no evidence, an `unverifiable` with no reason, a `check` label the phase does not declare, source evidence that is not a real file inside the repository — or the phase commit was refused (a cited check absent from the report; a `holds` whose check did not pass under `holds: "deterministic-check"`). The refusal names exactly what was missing (KNOWLEDGE-LEDGER.md §15.7).                                                                | No — opt in                                             |
+| `change-proposal`             | The run emitted a ChangeProposal Argus refused — malformed, no file written at all, a supplied rule left unclassified, a classification that contradicts the semantic delta, a claim both preserved and revised, an acceptance criterion naming a local id the delta does not declare, a business-rule change with no acceptance criteria under a `required` policy, or a separate KnowledgeDelta file written beside it — or the phase commit was refused (a local reference the commit did not create; the ledger moved under the proposal's `expectedRevision`). The refusal names exactly what was missing (KNOWLEDGE-LEDGER.md §16.8). | No — opt in                                             |
+| `configuration`               | The declared capability profile could not be enforced under strict enforcement — the step never launched with more capability than its author asked for.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | **Never** — the definition is what's wrong, not the run |
 
 The class is written onto the phase's payload (`withFailureClass`) whenever a
 phase fails, whether or not that failure ends up scheduling a retry — a
-terminal failure with no attempts left still names which of the nine classes
+terminal failure with no attempts left still names which of the ten classes
 it was, never just "failed".
 
 **A completion signal is authoritative over the exit code that follows it.**
@@ -402,6 +422,9 @@ writes its report, its decision and its proposal there.
 | Memory directory    | `ARGUS_MEMORY_DIR`             | agent ↔ Argus | write           | `memory.enabled` is set (every step's prompt then asks the agent to append to `NOTES.md`)                                                                                                                                                                                                                 |
 | KnowledgeContext    | `ARGUS_KNOWLEDGE_CONTEXT_FILE` | Argus → agent | **read**        | the step (or its phase) declares a `knowledgeContext` — always required then: the step was authored to reason from it. `invocations/<runId>/knowledge-context.json`, per run, `0444`; the agent never writes it, and Argus re-hashes it before accepting the completion (KNOWLEDGE-LEDGER.md §13, §13.11) |
 | Rule verification   | `ARGUS_RULE_VERIFICATION_FILE` | agent → Argus | write           | the phase declares `ruleVerification` — always required then: the conformance report _is_ the phase's output, not an optional proposal. `rule-verifications/<runId>/verification.json`, a directory per run (KNOWLEDGE-LEDGER.md §15.6)                                                                   |
+| Change request      | `ARGUS_CHANGE_REQUEST_FILE`    | Argus → agent | **read**        | the phase declares `changeIntent` — always required then: it is the phase's input. The requested change verbatim plus, per accountable rule, its support and its current implementation conformance. `invocations/<runId>/change-request.json`, per run, `0444` (KNOWLEDGE-LEDGER.md §16.4)               |
+| Change proposal     | `ARGUS_CHANGE_PROPOSAL_FILE`   | agent → Argus | write           | the phase declares `changeIntent` — always required then: the proposal _is_ the phase's output. `change-proposals/<runId>/proposal.json`, a directory per run (KNOWLEDGE-LEDGER.md §16.5)                                                                                                                 |
+| Change context      | `ARGUS_CHANGE_CONTEXT_FILE`    | Argus → agent | **read**        | the phase declares `changeContext` — always required then: the step was authored to implement that accepted intent. The approved proposal as exact canonical refs, never restated statements. `invocations/<runId>/change-context.json`, per run, `0444` (KNOWLEDGE-LEDGER.md §16.11)                     |
 
 The model (`harness/channels.ts`, `InvocationChannel` in `runtimes/types.ts`):
 `prepareInvocation` builds **one** list of channels — kind, env var, path, the
@@ -1712,3 +1735,168 @@ together or none does.
 exact revision and to the commit Argus recorded for the run. Nothing about the
 rule's support changes, ever — that is the point of the phase existing
 separately (KNOWLEDGE-LEDGER.md §15).
+
+## 16. Change-intent phases
+
+A phase that declares `changeIntent` answers a third question again. Discovery
+asks _what rules does this code appear to encode?_; verification asks _does the
+code do what these rules say?_; change intent asks _we want the business to
+work differently — what does that mean?_ (KNOWLEDGE-LEDGER.md §16).
+
+```jsonc
+{
+  "id": "change-intent",
+  "gated": true, // REQUIRED — saving an ungated one is a 400
+  "knowledgeContext": {
+    "claims": [
+      { "id": "RULE-42", "revision": "active" },
+      { "id": "CONSTRAINT-8", "revision": "active" },
+    ],
+  },
+  "changeIntent": {
+    "request": {
+      "id": "CR-1",
+      "summary": "Kobra now supports 500-character customer comments.",
+      "details": "Confirmed with the integration team.",
+      "scope": { "label": "Kobra comments", "paths": ["src/Booking"] },
+    },
+    // "kinds": ["business-rule"],       // which supplied kinds must be classified
+    // "acceptanceCriteria": "required", // default; "warn" downgrades it
+    // "note": "Only the Kobra adapter is in scope."
+  },
+  "steps": [{ "name": "reason", "prompt": "Work out what this change means." }],
+}
+```
+
+**Where the request comes from.** The phase's `changeIntent.request`, or the
+instance's `triggerPayload.changeRequest` when a start supplied one — the
+run-specific request wins. Neither resolving is a `configuration` failure: the
+step never launches, because Argus does not invent a request. Nor does it fall
+back: a _malformed_ supplied request fails the phase rather than quietly
+answering the pipeline's default one, which would have the run answer a
+different question from the one somebody asked.
+
+**Which rules.** Exactly the business rules the phase's (or step's)
+`knowledgeContext` supplied, narrowed by `kinds`. No second selection
+mechanism, for the same reason a verification phase has none.
+
+**What the run is given.** Three channels (§3a), and they stay apart:
+
+- `ARGUS_KNOWLEDGE_CONTEXT_FILE` — what the domain currently **says**;
+- `ARGUS_CHANGE_REQUEST_FILE` — the requested change verbatim, plus each
+  accountable rule's support **and** its current implementation conformance,
+  scoped to the phase's repository revision;
+- `ARGUS_CHANGE_PROPOSAL_FILE` — where the answer goes.
+
+Current implementation state is context, never intent: a rule is revised
+because the request said the business changed, and a code path that already
+disagrees with a rule is reported as a defect rather than treated as a
+requirement.
+
+**What it writes.** One JSON document, and **not** a KnowledgeDelta file:
+
+```json
+{
+  "schemaVersion": 1,
+  "semanticDelta": {
+    "schemaVersion": 1,
+    "revisions": [
+      {
+        "claimId": "RULE-42",
+        "expectedRevision": 1,
+        "statement": "Kobra customer comments must not exceed 500 characters.",
+        "localId": "r42"
+      }
+    ],
+    "claims": [
+      {
+        "localId": "d1",
+        "kind": "decision",
+        "statement": "The 500-character limit applies only when BookingEngine == Kobra."
+      }
+    ],
+    "justifications": [
+      { "conclusion": { "local": "d1" }, "premises": [{ "local": "r42" }, "CONSTRAINT-8:v1"] }
+    ]
+  },
+  "preserved": ["CONSTRAINT-8:v1"],
+  "classification": [{ "rule": "RULE-42:v1", "disposition": "revised" }],
+  "acceptanceCriteria": [
+    {
+      "id": "AC-1",
+      "statement": "A Kobra comment of 500 characters is accepted.",
+      "kind": "behavior",
+      "relatesTo": [{ "local": "r42" }]
+    },
+    {
+      "id": "AC-2",
+      "statement": "A Kobra comment of 501 characters is rejected.",
+      "kind": "behavior",
+      "relatesTo": [{ "local": "r42" }]
+    }
+  ],
+  "unresolved": []
+}
+```
+
+`semanticDelta` is an ordinary KnowledgeDelta and is the **only** path to
+canonical: it is staged as that run's delta and commits through the Phase 3
+boundary. Everything beside it is change material — what stays, how success is
+judged, what is unknown — and is persisted as change provenance rather than as
+claims.
+
+**What Argus checks, deterministically.** At intake, and again at the commit
+boundary:
+
+| Check                                                                                      | On failure        |
+| ------------------------------------------------------------------------------------------ | ----------------- |
+| the run wrote a proposal at all                                                            | `change-proposal` |
+| no separate `ARGUS_KNOWLEDGE_DELTA_FILE` beside it                                         | `change-proposal` |
+| every supplied rule is classified revised / preserved / not-relevant / unresolved          | `change-proposal` |
+| the classification agrees with the semantic delta                                          | `change-proposal` |
+| no claim is both `preserved` and revised                                                   | `change-proposal` |
+| every acceptance criterion resolves (a declared local id, or a revision the ledger holds)  | `change-proposal` |
+| every proposed business-rule change carries a criterion (`acceptanceCriteria: "required"`) | `change-proposal` |
+| every local reference resolves to what the commit minted                                   | `change-proposal` |
+| the delta's own rules (§KNOWLEDGE-LEDGER §12): exact refs, `expectedRevision`, no cycle    | `knowledge-delta` |
+
+Everything that is a judgement for a person — an unresolved question, a
+pre-existing defect, a request that turns out to be a no-op — is a **warning**
+on the review instead.
+
+**Readiness.** Derived, never asserted by the agent: `ready` when every selected
+rule is accounted for, nothing is unresolved and every proposed business-rule
+change is covered by a criterion; `needs-input` otherwise. A `needs-input`
+proposal may still be approved — its semantic delta commits — but it cannot
+drive an implementation (below).
+
+**The gate.** Required. The review carries `changeProposals` — one preview per
+step, showing the request, the current rules with their support **and** their
+conformance, the proposed transition (through the same candidate-knowledge
+machinery a discovery phase uses), what is preserved, the decisions, the
+acceptance criteria, the unresolved questions and the warnings — and
+`changeIntent`, the counts. Nothing is canonical until the phase is accepted,
+and the commit is one ledger transition with the attempt's KnowledgeDeltas and
+rule verifications: all of it lands, or none does.
+
+**Downstream.** A later phase declares:
+
+```jsonc
+{
+  "id": "implement",
+  "needs": ["change-intent"],
+  "knowledgeContext": { "fromPhases": [{ "phaseId": "change-intent" }] },
+  "changeContext": { "fromPhase": "change-intent" }, // "requireReady": true by default
+}
+```
+
+and its steps receive `ARGUS_CHANGE_CONTEXT_FILE`: the accepted proposal as
+exact canonical refs — what this change introduced, what must keep behaving as
+it does, the decisions, and the acceptance criteria the work will be judged by
+— beside the KnowledgeContext that says what those refs mean. The selector
+resolves only from the ledger's **accepted** proposals, so a proposal waiting
+at a gate refuses the launch rather than leaking unapproved intent; the named
+phase must be a `changeIntent` phase and a transitive `needs` dependency,
+checked when the pipeline is saved.
+
+Phase 7 stops there. Nothing implements, re-runs or re-verifies anything.

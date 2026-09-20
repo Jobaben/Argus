@@ -692,10 +692,9 @@ test("an ambiguous request produces an unresolved question, not a guessed value"
   assert.equal(record?.proposal?.semanticDelta, undefined);
   assert.equal(phaseOf(parked, "change").changeIntent?.readiness, "needs-input");
 
-  // No business value was invented: the request's own words mention 500, the
-  // proposal does not, and no revision was proposed at all.
+  // No business value was invented: the request's own words mention 500, and
+  // the proposal — which proposes no semantic change at all — does not.
   assert.equal(JSON.stringify(record?.proposal).includes("500"), false);
-  assert.equal(record?.proposal?.semanticDelta?.revisions, undefined);
 
   const review = await buildPhaseReview(parked, "change", await definition());
   assert.ok(review.ok);
@@ -1063,4 +1062,22 @@ test("the proposal is staged per run, beside the delta and never inside the ledg
     readFileSync(path.join(home, "argus", "knowledge.json"), "utf8").includes("AC-1"),
     false,
   );
+});
+
+test("a malformed request supplied at start fails the phase rather than falling back", async () => {
+  await seedKnowledge();
+  await seed([changePhase()]);
+  const rec = recordingSpawn();
+  const e = engine(rec.spawn);
+  const inst = (await e.start("p1", "manual", {
+    triggerPayload: { changeRequest: { id: "CR-99" } },
+  }))!;
+  await e.drain();
+  const after = await instance(inst.id);
+  assert.equal(phaseOf(after, "change").status, "failed");
+  assert.equal(failure(after, "change").failureClass, "configuration");
+  assert.match(String(failure(after, "change").reason), /supplied with this instance is invalid/);
+  // Silently answering the pipeline's default request instead would have the
+  // run answer a different question from the one somebody asked.
+  assert.equal(rec.calls.length, 0);
 });

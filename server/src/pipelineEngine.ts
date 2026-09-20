@@ -1177,15 +1177,11 @@ export function createEngine(deps: EngineDeps): Engine {
       // work at.
       let changeIntent: PlannedChangeIntent | null = null;
       if (phaseDef.changeIntent) {
-        const request = resolveChangeRequest(phaseDef, inst, progress.attempt, startedAt);
-        if (!request) {
-          changeIntent = {
-            error:
-              `change intent: phase "${phaseDef.id}" declares changeIntent but no ChangeRequest ` +
-              "was supplied — author one on the phase, or start the instance with a " +
-              "triggerPayload carrying `changeRequest`",
-          };
+        const resolved = resolveChangeRequest(phaseDef, inst, progress.attempt, startedAt);
+        if ("error" in resolved) {
+          changeIntent = { error: resolved.error };
         } else {
+          const request = resolved.request;
           const supplied =
             knowledgeContext && "resolved" in knowledgeContext
               ? knowledgeContext.resolved.supplied
@@ -1611,10 +1607,11 @@ export function createEngine(deps: EngineDeps): Engine {
    *   than the pipeline's default, so it wins;
    * - the phase's authored `changeIntent.request`.
    *
-   * Null when neither resolves, or when what arrived is not a valid request —
-   * which fails the step as `configuration`. Argus never invents a request: a
-   * change-intent phase with nothing to reason about is a definition that
-   * cannot run, and running it would produce a proposal answering nothing.
+   * An error when neither resolves, or when a supplied one is malformed —
+   * which fails the step as `configuration` before any process starts. Argus
+   * never invents a request, and never silently falls back from a malformed
+   * supplied one to the pipeline's default: the run would then answer a
+   * different question from the one somebody asked.
    *
    * The request is given an identity here when its author gave it none, keyed
    * to the phase attempt so both runs of one attempt answer the same request.
@@ -1624,20 +1621,33 @@ export function createEngine(deps: EngineDeps): Engine {
     inst: PipelineInstance,
     attempt: number,
     now: string,
-  ): ChangeRequest | null {
+  ): { request: ChangeRequest } | { error: string } {
     const fromTrigger = (inst.triggerPayload as { changeRequest?: unknown } | undefined)
       ?.changeRequest;
     let request: ChangeRequest | null = null;
     if (fromTrigger !== undefined && fromTrigger !== null) {
       try {
         request = validateChangeRequest(fromTrigger, "triggerPayload.changeRequest");
-      } catch {
-        request = null;
+      } catch (e) {
+        return {
+          error: `change intent: the ChangeRequest supplied with this instance is invalid: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        };
       }
     }
     request ??= phaseDef.changeIntent?.request ?? null;
-    if (!request) return null;
-    return requestWithIdentity(request, `CR-${inst.id}-${phaseDef.id}-${attempt}`, now);
+    if (!request) {
+      return {
+        error:
+          `change intent: phase "${phaseDef.id}" declares changeIntent but no ChangeRequest ` +
+          "was supplied — author one on the phase, or start the instance with a " +
+          "triggerPayload carrying `changeRequest`",
+      };
+    }
+    return {
+      request: requestWithIdentity(request, `CR-${inst.id}-${phaseDef.id}-${attempt}`, now),
+    };
   }
 
   type Launched =
