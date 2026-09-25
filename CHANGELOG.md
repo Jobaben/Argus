@@ -330,6 +330,18 @@ unverifiable`, each rule exactly once. A **missing** rule refuses the whole
   only an accepted verification phase's commit may create one, and nothing
   edits or deletes one.
 
+### Fixed
+
+- **Agents can write their channels and worktrees again.** Claude Code
+  protects `~/.claude` and refuses a headless agent's writes under it, even with
+  `--add-dir` or `acceptEdits`, so every result file, KnowledgeDelta, rule
+  verification, change proposal, acceptance verification, file artifact,
+  memory note and worktree edit under `~/.claude/argus/` was refused. These
+  directories now live under a separate work root, `~/.claude-argus/` (a
+  sibling of the Claude home; override with `ARGUS_WORK_DIR`). Argus's own
+  state stays in `~/.claude/argus/`. Existing memory notes are not moved:
+  copy `~/.claude/argus/memory/` to `~/.claude-argus/memory/` to keep them.
+
 ### Changed
 
 - **The server suite reports through Node's `spec` reporter.** A CI log whose

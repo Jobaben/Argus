@@ -15,6 +15,7 @@ import {
   trimMemoryIfNeeded,
 } from "./memory.js";
 import type { PipelineInstance } from "../sources/pipelineTypes.js";
+import { argusWorkRoot } from "../claudeHome.js";
 
 let home: string;
 beforeEach(() => {
@@ -41,9 +42,9 @@ function baseInstance(over: Partial<PipelineInstance> = {}): PipelineInstance {
 
 // ── Paths ─────────────────────────────────────────────────────────────────
 
-test("memoryDirFor/memoryNotesPath are sandboxed under claudeHome's memory dir", () => {
+test("memoryDirFor/memoryNotesPath are sandboxed under the work root's memory dir", () => {
   const dir = memoryDirFor("my-pipeline");
-  assert.ok(dir.startsWith(path.join(home, "argus", "memory")));
+  assert.ok(dir.startsWith(path.join(argusWorkRoot(), "memory")));
   assert.equal(memoryNotesPath("my-pipeline"), path.join(dir, "NOTES.md"));
 });
 
@@ -52,7 +53,7 @@ test("memoryDirFor sanitizes a hostile pipeline id the same as safeSegment does 
   // separator into "_", so a "../../etc" id becomes one oddly-named segment —
   // never an actual escape: the result is always a *direct* child of the
   // memory root, whatever characters survive in the segment's own name.
-  const root = path.join(home, "argus", "memory");
+  const root = path.join(argusWorkRoot(), "memory");
   const dir = memoryDirFor("../../etc");
   assert.equal(path.dirname(dir), root);
 });

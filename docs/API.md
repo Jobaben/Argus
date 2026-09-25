@@ -1518,7 +1518,7 @@ that names no step, and a multi-step result phase with no `resultStep`. A
 definition with no `when` edges validates exactly as it did before.
 
 **Delivering the result.** A result-producing step is spawned with
-`ARGUS_RESULT_FILE` — a per-run path, `~/.claude/argus/results/<runId>/result.json`,
+`ARGUS_RESULT_FILE` — a per-run path, `~/.claude-argus/results/<runId>/result.json`,
 in a directory of its own so a sandbox can be granted this run's result without
 every other run's (HARNESS.md §3a) — and its prompt carries the schema. The
 stop hook parses that file and sends the value as `result` on the completion
@@ -1631,7 +1631,7 @@ plus the common `label`, ≤120 chars):
 ### `PhaseProgress` fields
 
 - `verification?: VerificationReport` — `{ status: "running"|"passed"|"failed", startedAt, endedAt?, checks: CheckResult[] }`. Present only once the phase's steps have all reported and it declares `checks`; absent for a check-less phase, same as before.
-- `artifactDir?: string | null` — where this attempt's steps were told to write file artifacts (`~/.claude/argus/artifacts/<instanceId>/<phaseId>/`), interpolated into prompts as `{{artifactDir}}` / `{{artifactDir.<phaseId>}}`.
+- `artifactDir?: string | null` — where this attempt's steps were told to write file artifacts (`~/.claude-argus/artifacts/<instanceId>/<phaseId>/`), interpolated into prompts as `{{artifactDir}}` / `{{artifactDir.<phaseId>}}`.
 
 ### `PhaseFailurePayload.failureClass`
 
@@ -1685,7 +1685,7 @@ it. This is what the Command Center's review drawer renders.
   "payload": { "summary": "…" },
   "result": { "…": "…" },
   "verification": { "status": "passed", "checks": [ … ] },
-  "artifactDir": "/home/me/.claude/argus/artifacts/<instanceId>/draft",
+  "artifactDir": "/home/me/.claude-argus/artifacts/<instanceId>/draft",
   "artifacts": [
     { "path": "report.md", "bytes": 1832, "modifiedAt": "…", "required": true, "text": true }
   ],
@@ -2997,5 +2997,6 @@ so the index cannot grow into a session list.
 | `ARGUS_PORT`        | `7777`      | server port (proxy target)                                                                        |
 | `ARGUS_CLAUDE_HOME` | `~/.claude` | directory to read/watch                                                                           |
 | `CLAUDE_CONFIG_DIR` | —           | fallback override if `ARGUS_CLAUDE_HOME` unset                                                    |
+| `ARGUS_WORK_DIR`    | `<claude home>-argus` (`~/.claude-argus`) | root of every directory an agent writes into: worktrees, artifacts, memory, result and ledger channels. Kept outside `~/.claude`, where Claude Code refuses headless agent writes |
 | `ARGUS_WEBHOOK_URL` | —           | POST target for `run.failed`, `pipeline.failed`, and `monitor.*` events (Slack/mail bridge, etc.) |
 | `ARGUS_VAULT`       | on          | `off` disables the Vault; every long view degrades to its JSON-only behaviour                     |

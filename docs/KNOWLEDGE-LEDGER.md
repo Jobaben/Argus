@@ -1036,7 +1036,7 @@ Argus follows its result-file convention. Every step run is launched with:
 
 | Env var                      | Value                                                 |
 | ---------------------------- | ----------------------------------------------------- |
-| `ARGUS_KNOWLEDGE_DELTA_FILE` | `~/.claude/argus/knowledge-deltas/<runId>/delta.json` |
+| `ARGUS_KNOWLEDGE_DELTA_FILE` | `~/.claude-argus/knowledge-deltas/<runId>/delta.json` |
 
 The directory exists before the process starts. The file is one of the
 **Argus-owned invocation channels** (HARNESS.md §3a) — the same model that
@@ -4211,13 +4211,13 @@ unscoped, and a scoped pipeline is refused rather than inheriting it), and
 reading alone never writes. Any other version
 is treated as foreign: readable as empty, never overwritten.
 
-**Staging stores:** `~/.claude/argus/knowledge-deltas/<runId>/` — `delta.json`
+**Staging stores:** `~/.claude-argus/knowledge-deltas/<runId>/` — `delta.json`
 (the agent's document) and `staged.json` (Argus's record, §12.13) — and
-`~/.claude/argus/rule-verifications/<runId>/` — `verification.json` (the
+`~/.claude-argus/rule-verifications/<runId>/` — `verification.json` (the
 agent's document) and `staged.json` (Argus's record, §15.10) — and
-`~/.claude/argus/change-proposals/<runId>/` — `proposal.json` (the agent's
+`~/.claude-argus/change-proposals/<runId>/` — `proposal.json` (the agent's
 document) and `staged.json` (Argus's record, §16.5) — and
-`~/.claude/argus/acceptance-verifications/<runId>/` — `acceptance.json` (the
+`~/.claude-argus/acceptance-verifications/<runId>/` — `acceptance.json` (the
 agent's document) and `staged.json` (Argus's record, §17.7). Per run, like
 the result file and the invocation directory — and pruned with the run, like
 them; the ledger's own `deltas`, `verifications`, `changeProposals`,

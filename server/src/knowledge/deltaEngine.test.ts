@@ -1161,10 +1161,12 @@ test("a supported runtime under a restrictive profile has every channel granted 
   assert.ok(denied.includes(`Edit(//${work}/**)`));
 });
 
-test("Claude Code read-only with the working directory containing Argus's home: the channels are honestly unavailable", async () => {
-  // `home` is both ARGUS_CLAUDE_HOME and the phase's cwd here, so every channel
-  // sits under the root the read-only rule denies. The required result channel
-  // refuses the launch; nothing pretends the result could have been written.
+test("Claude Code read-only with the working directory containing Argus's work root: the channels are honestly unavailable", async (t) => {
+  // `home` is the phase's cwd and the work root is placed inside it, so every
+  // channel sits under the root the read-only rule denies. The required result
+  // channel refuses the launch; nothing pretends the result could have been written.
+  process.env.ARGUS_WORK_DIR = path.join(home, "work");
+  t.after(() => delete process.env.ARGUS_WORK_DIR);
   await seed([
     {
       id: "judge",

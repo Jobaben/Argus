@@ -363,6 +363,7 @@ docker run --rm -p 7777:7777 \
 | Variable                    | Default                                | Purpose                                                                                           |
 | --------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | `ARGUS_CLAUDE_HOME`         | `~/.claude`                            | Claude Code directory Argus watches. Also holds Argus's own state.                                |
+| `ARGUS_WORK_DIR`            | `~/.claude-argus`                      | Worktrees, artifacts, memory and per-run result/ledger channels: everything an agent writes. Must stay outside `~/.claude`, which Claude Code refuses headless writes to. |
 | `ARGUS_CODEX_HOME`          | `~/.codex`                             | Codex directory Argus watches (honours `CODEX_HOME` too).                                         |
 | `ARGUS_OPENCODE_HOME`       | `~/.local/share/opencode`              | OpenCode data directory (honours `XDG_DATA_HOME` too).                                            |
 | `ARGUS_QWEN_HOME`           | `~/.qwen`                              | Qwen Code directory Argus reads, and installs its Stop hook into.                                 |

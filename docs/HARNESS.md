@@ -584,7 +584,7 @@ validation ever be bypassed, not a substitute for it.
 The directory itself:
 
 - `ARGUS_ARTIFACT_DIR` — set on every step's environment, pointing at
-  `~/.claude/argus/artifacts/<instanceId>/<phaseId>/`. Argus creates the
+  `~/.claude-argus/artifacts/<instanceId>/<phaseId>/`. Argus creates the
   directory, hands it to the runtime as an invocation channel (§3a — admitted
   to the sandbox no matter what `filesystem` says elsewhere, or reported
   unavailable when the runtime cannot; **required** exactly when the phase
@@ -600,7 +600,7 @@ The directory itself:
   revise) — a file left over from a previous attempt can never satisfy this
   attempt's `checks` or mislead the agent about what it has already done.
 - **Pruned with the instance.** `pruneInstances` removes
-  `~/.claude/argus/artifacts/<instanceId>/` (and the instance's working-tree
+  `~/.claude-argus/artifacts/<instanceId>/` (and the instance's working-tree
   baselines) together with the instance record once it falls outside the
   per-pipeline retention window (`INSTANCE_KEEP`). Invocation records, by
   contrast, are pruned per _run_ — with `pruneRuns`'s retention window,
@@ -839,9 +839,9 @@ or is unknown):
   },
   "limitations": [],
   "materializedFiles": ["/home/user/.claude/argus/invocations/run_8f2a/settings.json"],
-  "artifactDir": "/home/user/.claude/argus/artifacts/inst_71c0/implement",
+  "artifactDir": "/home/user/.claude-argus/artifacts/inst_71c0/implement",
   "resultFile": null,
-  "knowledgeDeltaFile": "/home/user/.claude/argus/knowledge-deltas/run_8f2a/delta.json",
+  "knowledgeDeltaFile": "/home/user/.claude-argus/knowledge-deltas/run_8f2a/delta.json",
   "knowledgeContextFile": "/home/user/.claude/argus/invocations/run_8f2a/knowledge-context.json",
   "knowledgeContext": {
     "schemaVersion": 1,
@@ -855,7 +855,7 @@ or is unknown):
     {
       "kind": "knowledge-delta",
       "envVar": "ARGUS_KNOWLEDGE_DELTA_FILE",
-      "path": "/home/user/.claude/argus/knowledge-deltas/run_8f2a/delta.json",
+      "path": "/home/user/.claude-argus/knowledge-deltas/run_8f2a/delta.json",
       "access": "write",
       "required": false,
       "status": "granted"
@@ -871,7 +871,7 @@ or is unknown):
     {
       "kind": "artifact-dir",
       "envVar": "ARGUS_ARTIFACT_DIR",
-      "path": "/home/user/.claude/argus/artifacts/inst_71c0/implement",
+      "path": "/home/user/.claude-argus/artifacts/inst_71c0/implement",
       "access": "write",
       "required": false,
       "status": "granted"
@@ -1192,7 +1192,7 @@ phase) declares a policy: a read-only research phase in an otherwise
 reason to pay for a worktree it will never write to.
 
 **Names.** The directory is
-`~/.claude/argus/worktrees/<instanceId>/shared` or
+`~/.claude-argus/worktrees/<instanceId>/shared` or
 `.../<instanceId>/<phaseId>-attempt<N>`; the branch is
 `argus/<instanceId>/shared` or `argus/<instanceId>/<phaseId>/<attempt>`. Both
 segments go through the same `safeSegment` sanitizing the artifact directories
@@ -1500,7 +1500,7 @@ Argus's version is `memory`, off by default:
 | `enabled`  | Required. `false` (or the field absent) is the same as before this existed.          |
 | `maxBytes` | Cap on `NOTES.md`'s size. Default 8 KiB (8192). Range 1 KiB (1024) – 64 KiB (65536). |
 
-The file lives at `~/.claude/argus/memory/<pipelineId>/NOTES.md`
+The file lives at `~/.claude-argus/memory/<pipelineId>/NOTES.md`
 (`harness/memory.ts`'s `memoryNotesPath`) — **never created until `enabled` is
 true, and never deleted by Argus**: deleting the pipeline leaves the file
 behind (the same conservative default as a losing candidate's branch, §12).

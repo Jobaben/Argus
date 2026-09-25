@@ -51,7 +51,7 @@ export function runResultPath(id: string): string {
 
 /** The directory a run's result channel grants — one per run. */
 export function runResultDir(id: string): string {
-  return path.join(paths.argus(), "results", id);
+  return path.join(paths.resultsDir(), id);
 }
 
 /** Where result files lived before they had a directory each: `results/<runId>.json`.
