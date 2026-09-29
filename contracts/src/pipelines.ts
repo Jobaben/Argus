@@ -1,4 +1,5 @@
 /** Pipeline definitions, running instances, and the board overview. */
+import type { PendingGateOperation } from "./gates.js";
 
 import type { AgentRuntimeId, ReasoningEffort } from "./runtimes.js";
 import type { Trigger } from "./schedules.js";
@@ -1183,6 +1184,8 @@ export interface PipelineInstance {
    * recorded: their provenance is unknown, not implied.
    */
   gateDecisionIds?: string[];
+  /** A gate decision whose effects are under way — see `PendingGateOperation`. */
+  pendingGateOperation?: PendingGateOperation;
 }
 
 export type SignalType = "completed" | "needs-input" | "failed";

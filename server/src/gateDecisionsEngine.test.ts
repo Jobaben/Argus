@@ -11,7 +11,12 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { GateDecision, PipelineInstance } from "@argus/contracts";
-import { createEngine, type AutomatedApproval, type Engine } from "./pipelineEngine.js";
+import {
+  createEngine,
+  type AutomatedApproval,
+  type Engine,
+  type GateEffectPoint,
+} from "./pipelineEngine.js";
 import { createPipeline, validatePipelineInput } from "./sources/pipelines.js";
 import { readInstance, writeInstance } from "./sources/instances.js";
 import { paths } from "./claudeHome.js";
@@ -111,21 +116,9 @@ async function load(id: string): Promise<PipelineInstance> {
 
 const phaseOf = (inst: PipelineInstance, id: string) => inst.phases.find((p) => p.id === id)!;
 
-function basis(runId: string, score = 9, over: Partial<AutomatedApproval["verdicts"][0]> = {}) {
-  return {
-    runId,
-    stepName: "s",
-    verdictId: "V-1",
-    at: NOW.toISOString(),
-    score,
-    bar: 7,
-    runtime: "claude",
-    requestedModel: "haiku",
-    reportedModel: null,
-    promptVersion: 1,
-    rubricDigest: rubricDigest(RUBRIC),
-    ...over,
-  };
+/** The request's basis entry: identity only (the engine reads the rest). */
+function basis(runId: string, verdictId: string | null = "V-1") {
+  return { runId, verdictId };
 }
 
 /** Store the verdict {@link basis} describes: the engine re-reads it. */
@@ -234,7 +227,7 @@ test("MANDATORY REGRESSION: a legacy knowledge gate with autoApprove refuses aut
   const ledgerBefore = JSON.stringify(await readLedger());
 
   const res = await e.approveAutomatically(
-    request(waiting, call.runId, { verdicts: [basis(call.runId, 10)] }),
+    request(waiting, call.runId, { verdicts: [basis(call.runId)] }),
   );
   assert.equal(res.ok, false);
   assert.equal(res.code, 409);
@@ -290,7 +283,7 @@ test("MANDATORY REGRESSION: an ordinary gate that staged an optional delta refus
   assert.equal((await readLedger()).claims.length, 0);
 });
 
-test("the engine re-checks the watcher's basis under the lock: attempt, runs, bar and rubric", async () => {
+test("the engine re-checks the request's shape under the lock: attempt, runs and basis entries", async () => {
   const { e, inst, runId } = await waitingAtAutoGate();
   const refusals: Array<[string, Partial<AutomatedApproval>, RegExp]> = [
     ["wrong attempt", { attempt: 1 }, /attempt 0, not attempt 1/],
@@ -305,18 +298,14 @@ test("the engine re-checks the watcher's basis under the lock: attempt, runs, ba
       /not exactly/,
     ],
     ["no verdict for the run", { verdicts: [] }, /no verdict/],
-    ["below the bar", { verdicts: [basis(runId, 6)] }, /below the bar/],
+    ["a duplicate basis entry", { verdicts: [basis(runId), basis(runId)] }, /more than once/],
+    ["an extraneous basis entry", { verdicts: [basis(runId), basis("run-x")] }, /not about/],
     [
-      "a bar that is not the definition's",
-      { verdicts: [basis(runId, 9, { bar: 5 })] },
-      /below the bar/,
+      "a verdict id that is not current",
+      { verdicts: [basis(runId, "V-9")] },
+      /not that run's current verdict/,
     ],
-    ["another rubric", { verdicts: [basis(runId, 9, { rubricDigest: "0".repeat(64) })] }, /rubric/],
-    [
-      "a legacy verdict with no digest",
-      { verdicts: [basis(runId, 9, { rubricDigest: null })] },
-      /rubric/,
-    ],
+    ["no verdict id", { verdicts: [basis(runId, null)] }, /not that run's current verdict/],
     ["another phase", { phaseId: "nope" }, /not awaiting approval/],
   ];
   for (const [label, over, message] of refusals) {
@@ -326,6 +315,89 @@ test("the engine re-checks the watcher's basis under the lock: attempt, runs, ba
   }
   assert.deepEqual(await readGateDecisions(inst.id), [], "no refused request left a record");
   assert.equal(phaseOf(await load(inst.id), "build").status, "awaiting-approval");
+});
+
+test("the stored verdict decides, not the request: score, status and rubric are read from the store", async () => {
+  const cases: Array<[string, Record<string, unknown>, RegExp]> = [
+    ["below the bar", { score: 6 }, /below the bar/],
+    ["another rubric", { rubricDigest: "0".repeat(64) }, /rubric/],
+    ["a legacy verdict with no digest", { rubricDigest: undefined }, /rubric/],
+    ["a failed judgment", { status: "failed", score: null }, /failed, not a score/],
+  ];
+  for (const [label, over, message] of cases) {
+    // A fresh home per case: each seeds its own pipeline.
+    home = mkdtempSync(path.join(tmpdir(), "argus-gates-"));
+    process.env.ARGUS_CLAUDE_HOME = home;
+    mkdirSync(path.join(home, "argus", "runs"), { recursive: true });
+    mkdirSync(path.join(home, "argus", "instances"), { recursive: true });
+    const { e, inst, runId } = await waitingAtAutoGate();
+    await storeVerdict(runId, 9, {
+      id: "V-2",
+      at: new Date(NOW.getTime() + 1000).toISOString(),
+      ...over,
+    });
+    const res = await e.approveAutomatically(
+      request(inst, runId, { verdicts: [basis(runId, "V-2")] }),
+    );
+    assert.equal(res.ok, false, label);
+    assert.match(res.error ?? "", message, label);
+  }
+});
+
+test("MANDATORY: persisted provenance comes from the stored verdict and the snapshot, never the request", async () => {
+  const { e, inst, runId } = await waitingAtAutoGate();
+  // A caller that sends the right identity with invented metadata — a model,
+  // a runtime, a prompt version, a score and a bar the store never said.
+  const forged = {
+    ...basis(runId),
+    score: 10,
+    bar: 1,
+    at: "1999-01-01T00:00:00.000Z",
+    runtime: "codex",
+    requestedModel: "gpt-9",
+    reportedModel: "gpt-9-final",
+    promptVersion: 42,
+    rubricDigest: "f".repeat(64),
+    stepName: "not-a-step",
+  } as unknown as AutomatedApproval["verdicts"][0];
+  const res = await e.approveAutomatically(request(inst, runId, { verdicts: [forged] }));
+  assert.equal(res.ok, true);
+  const [d] = await readGateDecisions(inst.id);
+  assert.deepEqual(d.verdicts, [
+    {
+      runId,
+      stepName: "s",
+      verdictId: "V-1",
+      at: NOW.toISOString(),
+      score: 9,
+      bar: 7,
+      runtime: "claude",
+      requestedModel: "haiku",
+      reportedModel: null,
+      promptVersion: 1,
+      rubricDigest: rubricDigest(RUBRIC),
+    },
+  ]);
+});
+
+test("a stored verdict with no provenance records it as unknown, never filled in", async () => {
+  const { e, inst, runId } = await waitingAtAutoGate();
+  await storeVerdict(runId, 9, {
+    id: "V-3",
+    at: new Date(NOW.getTime() + 1000).toISOString(),
+    provenance: undefined,
+  });
+  const res = await e.approveAutomatically(
+    request(inst, runId, {
+      verdicts: [{ ...basis(runId, "V-3"), runtime: "claude", promptVersion: 1 } as never],
+    }),
+  );
+  assert.equal(res.ok, true);
+  const [d] = await readGateDecisions(inst.id);
+  assert.equal(d.verdicts?.[0].runtime, null);
+  assert.equal(d.verdicts?.[0].requestedModel, null);
+  assert.equal(d.verdicts?.[0].reportedModel, null);
+  assert.equal(d.verdicts?.[0].promptVersion, null);
 });
 
 test("a gate without autoApprove cannot be opened automatically, however it scored", async () => {
@@ -405,7 +477,7 @@ test("regression: a needs-input pause is a question for a person; no score answe
   assert.equal(phaseOf(asked, "build").pause, "needs-input");
   await storeVerdict(rec.calls[0].runId, 10);
   const res = await e.approveAutomatically(
-    request(asked, rec.calls[0].runId, { verdicts: [basis(rec.calls[0].runId, 10)] }),
+    request(asked, rec.calls[0].runId, { verdicts: [basis(rec.calls[0].runId)] }),
   );
   assert.equal(res.code, 409);
   assert.match(res.error ?? "", /agent's question/);
@@ -436,6 +508,99 @@ test("regression: a re-judgment that lands after the watcher looked wins over th
   assert.equal(res.code, 409);
   assert.match(res.error ?? "", /not that run's current verdict/);
   assert.equal(phaseOf(await load(inst.id), "build").status, "awaiting-approval");
+});
+
+// ── The approval decision point (verdict writes racing an approval) ──────────
+
+/**
+ * Starts a verdict write from inside the approval's critical window (after
+ * validation, before the instance link) without awaiting it, and records
+ * whether it had landed by the time the approval was linked.
+ */
+function racingWrite(runId: string, over: Record<string, unknown>) {
+  let landed = false;
+  let pending: Promise<unknown> | null = null;
+  let landedAtLink: boolean | null = null;
+  return {
+    deps: {
+      gateEffectProbe: (point: GateEffectPoint) => {
+        if (point === "approve:validated" && !pending) {
+          pending = storeVerdict(runId, 9, over).then(() => {
+            landed = true;
+          });
+        }
+        if (point === "approve:linked") landedAtLink = landed;
+      },
+    },
+    done: () => pending,
+    landedAtLink: () => landedAtLink,
+  };
+}
+
+test("MANDATORY: a newer low-scoring verdict written during the approval lands after its commit point", async () => {
+  const { inst, runId } = await waitingAtAutoGate();
+  const race = racingWrite(runId, {
+    id: "V-2",
+    score: 2,
+    at: new Date(NOW.getTime() + 1000).toISOString(),
+  });
+  const e = engine(recordingSpawn().spawn, race.deps);
+  const res = await e.approveAutomatically(request(inst, runId));
+  await race.done();
+  assert.equal(res.ok, true, "the approval was valid at its commit point");
+  assert.equal(
+    race.landedAtLink(),
+    false,
+    "the write could not land before the approval was linked",
+  );
+  const [d] = await readGateDecisions(inst.id);
+  assert.equal(
+    d.verdicts?.[0].verdictId,
+    "V-1",
+    "the basis is the verdict current at the commit point",
+  );
+  assert.equal(phaseOf(await load(inst.id), "build").status, "succeeded");
+});
+
+test("MANDATORY: a newer failed judgment written during the approval is ordered after it, never silently before", async () => {
+  const { inst, runId } = await waitingAtAutoGate();
+  const race = racingWrite(runId, {
+    id: "V-2",
+    status: "failed",
+    score: null,
+    at: new Date(NOW.getTime() + 1000).toISOString(),
+  });
+  const e = engine(recordingSpawn().spawn, race.deps);
+  const res = await e.approveAutomatically(request(inst, runId));
+  await race.done();
+  assert.equal(res.ok, true);
+  assert.equal(race.landedAtLink(), false);
+});
+
+test("a verdict that lands before the commit point refuses the approval", async () => {
+  // The same newer judgment, written before the engine takes the verdict
+  // lock: it is what validation sees.
+  const { e, inst, runId } = await waitingAtAutoGate();
+  await storeVerdict(runId, 2, { id: "V-2", at: new Date(NOW.getTime() + 1000).toISOString() });
+  const res = await e.approveAutomatically(request(inst, runId));
+  assert.equal(res.ok, false);
+  assert.match(res.error ?? "", /not that run's current verdict/);
+});
+
+test("a judgment after the approval is committed does not revoke it", async () => {
+  const { e, inst, runId } = await waitingAtAutoGate();
+  assert.equal((await e.approveAutomatically(request(inst, runId))).ok, true);
+  await storeVerdict(runId, 0, {
+    id: "V-2",
+    status: "failed",
+    score: null,
+    at: new Date(NOW.getTime() + 1000).toISOString(),
+  });
+  const after = await load(inst.id);
+  assert.equal(phaseOf(after, "build").status, "succeeded");
+  const [d] = await readGateDecisions(inst.id);
+  assert.equal(d.verdicts?.[0].verdictId, "V-1", "the record keeps the basis it was decided on");
+  assert.equal(buildGateDecisionsResponse(inst.id, after, [d]).decisions[0].effect, "applied");
 });
 
 // ── Provenance ──────────────────────────────────────────────────────────────

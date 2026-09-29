@@ -106,6 +106,18 @@ export async function readCurrentVerdicts(): Promise<Verdict[]> {
   return currentVerdicts(await store.read());
 }
 
+/**
+ * Run `fn` with the current verdicts while holding the verdict store's lock —
+ * the same lock {@link writeVerdict} takes. Nothing can be written to the
+ * store until `fn` settles, so whatever `fn` makes durable is ordered against
+ * every verdict write: a write that lands first is in `current`; one that
+ * lands later happens after `fn`'s commit. `fn` must not write a verdict
+ * (the lock is not re-entrant) and should be short: it blocks judging.
+ */
+export async function withCurrentVerdicts<T>(fn: (current: Verdict[]) => Promise<T>): Promise<T> {
+  return store.withLock(async () => fn(currentVerdicts(await store.read())));
+}
+
 export async function readVerdict(runId: string): Promise<Verdict | null> {
   return currentVerdicts(await store.read()).find((v) => v.runId === runId) ?? null;
 }

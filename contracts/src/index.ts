@@ -224,6 +224,7 @@ export type {
   GateDecisionsResponse,
   GateDecisionVerdictBasis,
   GateDecisionView,
+  PendingGateOperation,
 } from "./gates.js";
 
 export type { AnalysisProvenance } from "./verdict.js";

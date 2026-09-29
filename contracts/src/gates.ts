@@ -99,15 +99,49 @@ export interface GateDecision {
 }
 
 /**
- * Whether a decision took effect. Derived, never trusted from the record:
+ * A gate decision whose effects are under way, persisted on the instance in
+ * the SAME save that links the decision (`gateDecisionIds`) and BEFORE any of
+ * its effects — superseding staged records, stopping processes, committing
+ * knowledge, settling realizations. Cleared in the save that completes it.
  *
- * - `applied` — the instance lists the decision among `gateDecisionIds`;
- * - `not-applied` — the instance exists and does not list it (the process
- *   stopped between writing the record and saving the transition, and the
- *   gate was later decided by a different record, or is still waiting);
+ * While present, nothing else may transition the instance: every engine path
+ * that mutates it first completes this operation (idempotently, from what is
+ * on disk), so an interrupted revise can never be followed by an approval of
+ * the attempt it was discarding, and an interrupted abort can never be
+ * followed by the work it was stopping.
+ */
+export interface PendingGateOperation {
+  decisionId: string;
+  decision: GateDecisionKind;
+  /** Approve / revise: the phase acted on. Null for abort. */
+  phaseId: string | null;
+  /** Approve / revise: the attempt the decision was about. */
+  attempt: number | null;
+  /** The runs this operation stops: the revised attempt's, or every run an abort ends. */
+  stopRunIds: string[];
+  /** Approve only: the answers to apply. */
+  answers?: unknown;
+  /** Revise only: the operator's note for the next attempt's prompt. */
+  note?: string;
+  startedAt: string;
+}
+
+/**
+ * Whether a decision took effect. Derived from the instance, never trusted
+ * from the record:
+ *
+ * - `applied` — the instance links the decision and its operation completed;
+ * - `incomplete` — the instance links the decision but its operation has not
+ *   completed: some, all or none of its effects may have happened. Argus
+ *   completes it before any other transition of the instance (reconcile, or
+ *   the next action on it); until then it is reported as exactly this, never
+ *   rounded to applied or not-applied;
+ * - `not-applied` — the instance exists and does not link it. Because the
+ *   link is saved before any effect starts, this means none did: the process
+ *   stopped (or the link save failed) between recording and linking;
  * - `unknown` — the instance is gone (pruned), so nothing can say.
  */
-export type GateDecisionEffect = "applied" | "not-applied" | "unknown";
+export type GateDecisionEffect = "applied" | "incomplete" | "not-applied" | "unknown";
 
 export interface GateDecisionView extends GateDecision {
   effect: GateDecisionEffect;

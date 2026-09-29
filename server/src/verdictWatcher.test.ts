@@ -137,6 +137,7 @@ const respond =
 
 function verdict(runId: string, score: number, over: Partial<Verdict> = {}): Verdict {
   return {
+    id: `V-${runId}`,
     runId,
     scheduleId: "pipeline:p1",
     scheduleName: "Release train",
@@ -278,10 +279,8 @@ test("a gate opens itself once its output scores at or above the bar", async () 
   assert.equal(requests[0].phaseId, "build");
   assert.equal(requests[0].attempt, 1);
   assert.deepEqual(requests[0].runIds, ["step-1"]);
-  assert.equal(requests[0].verdicts[0].verdictId, "V-1");
-  assert.equal(requests[0].verdicts[0].score, 8);
-  assert.equal(requests[0].verdicts[0].bar, 7);
-  assert.equal(requests[0].verdicts[0].rubricDigest, rubricDigest(RUBRIC));
+  // Identity only: the engine reads everything else from the store.
+  assert.deepEqual(requests[0].verdicts, [{ runId: "step-1", verdictId: "V-1" }]);
 });
 
 test("regression: a gate with no verdict yet waits — silence is not approval", async () => {
@@ -586,6 +585,13 @@ test("a pause of unknown cause (written before causes were recorded) waits for a
   const { pause: _drop, ...legacyPhase } = instance().phases[0];
   const legacy = instance({ phases: [legacyPhase] });
   const { w, approved } = watcher({ pipelines: [pipeline()], instances: [legacy] });
+  await w.check();
+  assert.equal(approved.length, 0);
+});
+
+test("a verdict with no id (written before ids existed) cannot be named as a basis, so the gate waits", async () => {
+  await writeVerdict(verdict("step-1", 10, { id: undefined }));
+  const { w, approved } = watcher({ pipelines: [pipeline()], instances: [instance()] });
   await w.check();
   assert.equal(approved.length, 0);
 });

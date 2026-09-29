@@ -72,9 +72,22 @@ export async function writeInstance(inst: PipelineInstance): Promise<void> {
   invalidate(scanKey());
 }
 
+/**
+ * One instance, as it is on disk — a private copy.
+ *
+ * The parse memo hands out the same object for as long as the file is
+ * unchanged. The engine reads an instance under its lock and then mutates it
+ * in place on the way to a save; if that save never happens (a failure part-way
+ * through a transition), a shared object would carry the unsaved mutation into
+ * every later read in this process — the engine would act on a state that
+ * exists nowhere on disk. A copy makes "what the next reader sees" exactly
+ * "what was last written". Scans (`readInstances`) stay shared: their callers
+ * only read.
+ */
 export async function readInstance(id: string): Promise<PipelineInstance | null> {
   if (!INSTANCE_ID_RE.test(id)) return null;
-  return readParsed(id);
+  const inst = await readParsed(id);
+  return inst ? structuredClone(inst) : null;
 }
 
 async function scanInstances(): Promise<PipelineInstance[]> {

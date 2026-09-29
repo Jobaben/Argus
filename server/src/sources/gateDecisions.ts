@@ -24,7 +24,11 @@ import type { PipelineInstance } from "./pipelineTypes.js";
  *   nothing saying who opened it;
  * - a record the instance does not name did not take effect. That is what a
  *   crash between the two writes leaves behind, and it is reported as
- *   `not-applied`, not repaired into something it was not.
+ *   `not-applied`, not repaired into something it was not. The link is
+ *   saved together with a `pendingGateOperation` marker BEFORE any effect
+ *   of the decision starts, so an unlinked record provably had none; a linked
+ *   one whose marker is still present is `incomplete` until the engine
+ *   finishes it.
  *
  * **Append-only, never pruned.** One line per decision submitted to the
  * engine, at human (or per-gate automated) cadence, so the file grows slowly;
@@ -113,7 +117,8 @@ export function decisionEffect(
   instance: PipelineInstance | null,
 ): GateDecisionEffect {
   if (!instance) return "unknown";
-  return instance.gateDecisionIds?.includes(decision.id) ? "applied" : "not-applied";
+  if (!instance.gateDecisionIds?.includes(decision.id)) return "not-applied";
+  return instance.pendingGateOperation?.decisionId === decision.id ? "incomplete" : "applied";
 }
 
 /**

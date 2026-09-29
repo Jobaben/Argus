@@ -1129,16 +1129,22 @@ It hardens what already existed.
   the authenticated session those routes already require. A request body
   that claims `actor`, `principal` or `mechanism` is ignored, and a test
   pins this.
-- **Automated decisions are bound to their basis.** The record copies the
+- **Automated decisions are bound to their basis.** The record holds the
   exact verdicts used: id, run, timestamp, score, bar, runtime, requested
-  and reported model, prompt version and rubric digest. Pruning the verdict
-  store later cannot erase the explanation of an approval.
-- **Write-ahead, and idempotent in effect.** The order is always:
-  1. validate;
-  2. append the record and `fsync` it;
-  3. apply the transition, naming the record in
-     `PipelineInstance.gateDecisionIds` in the **same save**, before any
-     knowledge commit is attempted.
+  and reported model, prompt version and rubric digest. They are rebuilt
+  from the stored verdicts and the instance snapshot, never taken from the
+  request (§M.8). Pruning the verdict store later cannot erase the
+  explanation of an approval.
+- **Intent, link, effects, completion.** This was corrected in the
+  follow-up (§M.8); the order is always:
+  1. validate — a refusal writes nothing;
+  2. append the record and `fsync` it — the **intent**;
+  3. **one** instance save that names the record in `gateDecisionIds`
+     **and** carries `pendingGateOperation`, before any effect;
+  4. the effects: supersede staged records, stop runs, commit knowledge,
+     settle realizations, transition the phase. Each is idempotent against
+     disk;
+  5. the save that clears `pendingGateOperation`.
 
   Consequences:
   - A record that cannot be written refuses the decision with a 500, and the
@@ -1146,16 +1152,21 @@ It hardens what already existed.
   - Concurrent duplicates serialise on the instance lock. One applies; the
     other fails validation and records nothing.
   - A crash between steps 2 and 3 leaves a record the instance does not
-    name. It reads `not-applied`, and nothing replays it; the operator's
-    retry is a new record, which applies.
-  - A crash after the pending-commit save leaves the decision named on the
-    instance whose commit reconcile re-applies.
+    name. No effect has started, it reads `not-applied`, and nothing replays
+    it.
+  - A crash anywhere in step 4 leaves the decision linked with its marker.
+    It reads `incomplete`, and the engine completes it, exactly once,
+    before any other transition of the instance.
   - A torn final line is skipped on read, and the next append starts on a
     fresh line (a defect the tests caught, fixed).
 
-- **Effect is derived, never trusted.** `applied` means the instance names
-  the record. `not-applied` means the instance exists and does not.
-  `unknown` means the instance has been pruned.
+- **Effect is derived, never trusted.**
+  - `applied`: linked, with no pending marker.
+  - `incomplete`: linked, with the marker still present. Some, all or none
+    of its effects may have happened, and it is never rounded to either
+    side.
+  - `not-applied`: not linked, so no effect started.
+  - `unknown`: the instance has been pruned.
 - **History stays unknown.** Gates decided before this change have no
   record. `GET /api/instances/:id/gate-decisions` lists them as
   `undocumented` and never attributes them.
@@ -1319,6 +1330,140 @@ remaining warnings are on files this change does not touch, or predate it.
   marker counts as success on the hook path and as failure on the fallback
   path. Tracked below. This must be assessed before any future enforcement
   or expanded automation.
+
+---
+
+### M.8 Phase 0 follow-up: recovery, the decision point, authoritative provenance
+
+This was a bounded verification pass. Every concern was reproduced with
+deterministic fault injection before anything was changed. The seam used is
+`EngineDeps.gateEffectProbe`: a probe called at each effect boundary, and
+throwing from it simulates the process failing at that point. A "restart"
+is a fresh engine over the same files. There are no sleeps and no timing.
+
+**What reproduced** (against `7e03616`, with only the seam added):
+
+- **Revise stopped nothing.** Its stop ran after `restartPhase` had replaced
+  the steps, so a still-running step of the revised attempt (for example an
+  agent waiting after `needs-input`) was never signalled.
+- **Revise interrupted after superseding staged records read
+  `not-applied`**, although its effects had happened. After a restart the
+  revise was never carried through, and a retry performed it then.
+- **Abort interrupted after stopping processes read `not-applied`**, and
+  the instance could continue. After a restart, an approval of the attempt
+  the abort was ending succeeded and **committed its staged delta**.
+- **Abort interrupted after closing a realization** left the ledger closed
+  and the instance running.
+- **The parse memo let unsaved state leak.** `readInstance` returned the
+  shared memoised object, so a failed operation's in-memory mutations were
+  visible to every later read in the same process, until the file was next
+  written. The engine could act on a state that existed nowhere on disk. On
+  the pre-fix code, this masked three of the abort and approve windows.
+- **A newer failed judgment could be ignored.** It was durably written
+  after validation and before the instance link, became the run's current
+  verdict, and the approval went ahead anyway.
+- **Invented provenance was persisted.** A request's own `runtime`,
+  `requestedModel`, `reportedModel` and `promptVersion` were recorded as the
+  verdict's provenance, and a duplicate basis entry was accepted and
+  persisted.
+
+**What was corrected, and the guarantees now established:**
+
+1. **Recovery and honest effects.**
+   - The order is intent → link and pending marker → idempotent effects →
+     completion (§M.2).
+   - `readInstance` returns a private copy, so what the next reader sees is
+     exactly what was last written.
+   - Every engine path that mutates an instance reads it through `readLive`,
+     which completes a leftover `pendingGateOperation` first:
+     - the signal handler;
+     - failure, retry and verification application;
+     - deferred launches;
+     - the reconcile heal;
+     - approve, automated approve, revise and abort.
+
+     Reconcile also completes every leftover marker at the start of each
+     pass, whatever the instance's status.
+
+   - Therefore:
+     - **an interrupted revise is carried through once.** A retry finds it
+       done (409). The attempt it discarded can no longer be approved, and
+       its superseded records never reach the ledger;
+     - **an interrupted abort ends the instance.** A signal arriving
+       afterwards does not advance it, and nothing launches;
+     - **an interrupted approval concludes once.** Its knowledge commit is
+       idempotent;
+     - **the ledger outcome of a realization closed by an interrupted abort
+       is written once and not revisited.**
+   - Revise now stops exactly the revised attempt's runs, captured when the
+     decision is linked. A running sibling branch is never signalled.
+   - When a leftover operation cannot be completed (for example, the
+     definition is gone), the instance is **held**. Nothing transitions it,
+     gate actions on it return 409, and the decision stays `incomplete`
+     until a later attempt succeeds. It needs a person.
+2. **The approval decision point is a commit point, not a snapshot.** The
+   verdict store's lock is the lock every verdict write takes. Under it, the
+   automated boundary:
+   - reads the current verdicts;
+   - validates them;
+   - appends the decision;
+   - saves the instance link.
+
+   That link save is the moment the approval becomes durable and its basis
+   is fixed. Any verdict write is therefore ordered against it:
+   - **before**: it is what validation sees. If it is now the current
+     verdict, the request names a verdict that is not current, and the
+     approval is refused. This holds for a newer lower-scoring or failed
+     re-judgment;
+   - **after**: the approval is already durable. It is not revoked, and the
+     gate decision keeps the basis it was decided on.
+
+   "Current" is the store's order: the newest `at` (the judgment's start
+   time), with ties going to the most recent write. A judgment that started
+   earlier but was written later is not "newer" by this order, and the
+   guarantee is stated only for the store's order. Lock order is instance,
+   then verdict store; nothing takes them the other way round. The verdict
+   lock is held only for reads, one decision append and one instance save,
+   never across a model call.
+
+3. **Authoritative provenance.**
+   - An automated approval request names only `{ runId, verdictId }` per
+     relevant run.
+   - A run named twice, or a run the gate is not about, is refused as
+     inconsistent. Every other field on a basis entry is ignored.
+   - The persisted basis is rebuilt from the stored verdict: id, `at`,
+     score, rubric digest, runtime, requested and reported model, prompt
+     version. The step name and bar come from the instance and its own
+     definition snapshot.
+   - Metadata a stored verdict does not carry is recorded as `null`, and a
+     verdict with no id cannot be named at all.
+
+**Tests.** `gateRecovery.test.ts` covers the revise, abort and approve
+windows:
+
+- before the link;
+- after superseding;
+- after stopping processes;
+- after the ledger commit;
+- restart and reconcile;
+- retry without a second revise;
+- the straggler stop with an untouched sibling.
+
+`realizationEngine.test.ts` adds the abort interrupted after closing a
+realization. `gateDecisionsEngine.test.ts` adds:
+
+- concurrent verdict writes during the approval window, low-scoring and
+  failed, ordered after the commit;
+- a verdict that lands first, which refuses;
+- a judgment after commit, which does not revoke;
+- forged metadata ignored;
+- duplicate and extraneous entries refused;
+- unknown provenance kept `null`.
+
+**Still out of scope, and unchanged:** credential inheritance,
+outcome-marker inconsistency, fan-out signals dropped while a sibling is
+paused, and the human `needs-input` bypass. They stay tracked in the
+appendix.
 
 ---
 

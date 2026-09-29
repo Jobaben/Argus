@@ -213,27 +213,22 @@ async function openQualifiedGates(
         continue;
       }
       const digest = rubricDigest(phaseDef.rubric);
+      // A pre-check only, over what this tick read: the engine decides again,
+      // from the verdict store under its lock, and records the basis from the
+      // stored verdicts — this request only names which ones.
       const basis: AutomatedApproval["verdicts"] = [];
+      const scores: number[] = [];
       for (const step of steps) {
         const v = byRun.get(step.runId as string);
-        if (!v || v.status !== "ready" || v.score === null || v.rubricDigest !== digest) break;
-        basis.push({
-          runId: v.runId,
-          stepName: step.name,
-          verdictId: v.id ?? null,
-          at: v.at,
-          score: v.score,
-          bar,
-          runtime: v.provenance?.runtime ?? null,
-          requestedModel: v.provenance?.requestedModel ?? null,
-          reportedModel: v.provenance?.reportedModel ?? null,
-          promptVersion: v.provenance?.promptVersion ?? null,
-          rubricDigest: v.rubricDigest ?? null,
-        });
+        if (!v || !v.id || v.status !== "ready" || v.score === null || v.rubricDigest !== digest) {
+          break;
+        }
+        basis.push({ runId: v.runId, verdictId: v.id });
+        scores.push(v.score);
       }
       if (basis.length !== steps.length) continue; // not completely judged yet
 
-      const lowest = Math.min(...basis.map((b) => b.score));
+      const lowest = Math.min(...scores);
       if (lowest < bar) continue;
 
       try {
