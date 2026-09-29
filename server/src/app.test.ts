@@ -34,6 +34,7 @@ const fakeEngine: Engine = {
   start: async () => null,
   onSignal: async () => ({ ok: true, code: 200 }),
   approve: async () => ({ ok: true, code: 200 }),
+  approveAutomatically: async () => ({ ok: true as const, code: 200 }),
   revise: async () => ({ ok: true, code: 200 }),
   abort: async () => ({ ok: true, code: 200 }),
   reconcile: async () => {},
@@ -1002,6 +1003,9 @@ function stubAnalysis(answerJson: string): AnalysisRunner {
             costUsd: 0.001,
             tokens: 100,
             durationMs: 5,
+            runtime: "claude" as const,
+            requestedModel: "haiku",
+            reportedModel: null,
             failure: "unparseable" as const,
             error: "wrong shape",
           }
@@ -1012,6 +1016,9 @@ function stubAnalysis(answerJson: string): AnalysisRunner {
             costUsd: 0.001,
             tokens: 100,
             durationMs: 5,
+            runtime: "claude" as const,
+            requestedModel: "haiku",
+            reportedModel: null,
             failure: null,
             error: null,
           };
@@ -2939,7 +2946,12 @@ test("approve and revise forward the named phase to the engine and stay admin-ga
     body: JSON.stringify({ answers: "yes", phaseId: "draft" }),
   });
   assert.equal(approve.status, 200);
-  assert.deepEqual(seen.approve, ["i1", "yes", { phaseId: "draft" }]);
+  // The route adds who asked, from the session — never from the body.
+  const source = {
+    channel: "http",
+    principal: { kind: "session", username: "test", role: "root" },
+  };
+  assert.deepEqual(seen.approve, ["i1", "yes", { phaseId: "draft", source }]);
 
   const revise = await app.request("/api/instances/i1/revise", {
     method: "POST",
@@ -2947,7 +2959,7 @@ test("approve and revise forward the named phase to the engine and stay admin-ga
     body: JSON.stringify({ note: "tighten", phaseId: "draft" }),
   });
   assert.equal(revise.status, 200);
-  assert.deepEqual(seen.revise, ["i1", "tighten", { phaseId: "draft" }]);
+  assert.deepEqual(seen.revise, ["i1", "tighten", { phaseId: "draft", source }]);
 
   // A bare POST is still a valid approval of the single paused phase.
   const bare = await app.request("/api/instances/i1/approve", {
@@ -2955,7 +2967,7 @@ test("approve and revise forward the named phase to the engine and stay admin-ga
     headers: sameOrigin,
   });
   assert.equal(bare.status, 200);
-  assert.deepEqual(seen.approve, ["i1", undefined, {}]);
+  assert.deepEqual(seen.approve, ["i1", undefined, { source }]);
 
   // Signed out, the same body is refused before the engine hears of it.
   const gated = wire(fakeEngine, signedOut);

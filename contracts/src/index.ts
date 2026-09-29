@@ -214,6 +214,21 @@ export type {
 } from "./verdict.js";
 
 export type {
+  GateDecision,
+  GateDecisionChannel,
+  GateDecisionEffect,
+  GateDecisionKind,
+  GateDecisionMechanism,
+  GateDecisionPhaseRef,
+  GateDecisionPrincipal,
+  GateDecisionsResponse,
+  GateDecisionVerdictBasis,
+  GateDecisionView,
+} from "./gates.js";
+
+export type { AnalysisProvenance } from "./verdict.js";
+
+export type {
   Autopsy,
   AutopsyResponse,
   AutopsySpan,

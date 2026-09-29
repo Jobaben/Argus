@@ -290,3 +290,62 @@ test("real engine: instance + overview reads reflect the started instance", asyn
   };
   assert.equal(overview.overview.length, 1);
 });
+
+// ── Gate decision provenance over HTTP (Phase 0) ────────────────────────────
+
+test("regression: an approval's principal comes from the session; a body claiming to be someone is ignored", async () => {
+  const { app } = appWith();
+  const def = await createTwoPhase(app, true);
+  const start = await app.request(`/api/pipelines/${def.id}/start`, {
+    method: "POST",
+    headers: same,
+  });
+  const started = (await start.json()) as { id: string };
+  const inst = await getInstance(app, started.id);
+  await app.request(`/api/instances/${started.id}/signal`, {
+    method: "POST",
+    headers: same,
+    body: JSON.stringify({
+      phaseId: "a",
+      runId: inst.phases[0].steps[0].runId,
+      type: "needs-input",
+      token: inst.signalToken,
+    }),
+  });
+
+  const approve = await app.request(`/api/instances/${started.id}/approve`, {
+    method: "POST",
+    headers: same,
+    body: JSON.stringify({
+      actor: "human",
+      mechanism: "operator",
+      principal: { kind: "session", username: "mallory", role: "root" },
+      source: { channel: "http", principal: { kind: "session", username: "mallory" } },
+    }),
+  });
+  assert.equal(approve.status, 200);
+
+  const read = await app.request(`/api/instances/${started.id}/gate-decisions`, {
+    headers: loopback,
+  });
+  assert.equal(read.status, 200);
+  const body = (await read.json()) as {
+    decisions: Array<{ mechanism: string; channel: string; principal: unknown; effect: string }>;
+    undocumented: unknown[];
+  };
+  assert.equal(body.decisions.length, 1);
+  assert.equal(body.decisions[0].mechanism, "operator");
+  assert.equal(body.decisions[0].channel, "http");
+  assert.deepEqual(body.decisions[0].principal, {
+    kind: "session",
+    username: "admin",
+    role: "root",
+  });
+  assert.equal(body.decisions[0].effect, "applied");
+});
+
+test("the gate-decision read is a 404 for an instance Argus has never heard of", async () => {
+  const { app } = appWith();
+  const res = await app.request(`/api/instances/nope/gate-decisions`, { headers: loopback });
+  assert.equal(res.status, 404);
+});

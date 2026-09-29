@@ -34,6 +34,7 @@ import {
   buildVerdictTrends,
   failingVerdicts,
   performVerdict,
+  readCurrentVerdicts,
   readVerdict,
   readVerdicts,
 } from "./sources/verdict.js";
@@ -146,7 +147,8 @@ import {
 import { newSecret, pairingId, seal } from "./federation/envelope.js";
 import { buildSummary } from "./federation/summary.js";
 import { buildFleet } from "./federation/fleet.js";
-import type { MachineSummary } from "@argus/contracts";
+import type { GateDecisionPrincipal, MachineSummary } from "@argus/contracts";
+import { buildGateDecisionsResponse, readGateDecisions } from "./sources/gateDecisions.js";
 import { buildOverview } from "./sources/overview.js";
 import { buildPalette } from "./sources/palette.js";
 import { buildSituation } from "./sources/insight.js";
@@ -600,7 +602,7 @@ export function createApp(deps: AppDeps): Hono {
     if (typeof raw.toModel !== "string" || !/^[A-Za-z0-9._ ()-]{1,80}$/.test(raw.toModel)) {
       return c.json({ error: "toModel is required" }, 400);
     }
-    const [runs, verdicts] = await Promise.all([readRuns(), readVerdicts()]);
+    const [runs, verdicts] = await Promise.all([readRuns(), readCurrentVerdicts()]);
     const windowFloor = Date.now() - 30 * 86_400_000;
     const window = runs.filter((r) => {
       const at = Date.parse(r.endedAt ?? r.startedAt ?? r.queuedAt);
@@ -1557,6 +1559,19 @@ export function createApp(deps: AppDeps): Hono {
     return inst ? c.json(inst) : c.json({ error: "not found" }, 404);
   });
 
+  /**
+   * Who or what decided each gate of an instance, with whether each decision
+   * took effect. Works after the instance is pruned (effects then read
+   * `unknown`); gates decided before decisions were recorded are listed as
+   * `undocumented`, never attributed.
+   */
+  app.get("/api/instances/:id/gate-decisions", async (c) => {
+    const id = c.req.param("id");
+    const [inst, records] = await Promise.all([readInstance(id), readGateDecisions(id)]);
+    if (!inst && records.length === 0) return c.json({ error: "not found" }, 404);
+    return c.json(buildGateDecisionsResponse(id, inst, records));
+  });
+
   // ── Gated artifact review ─────────────────────────────────────────────────
   // What a paused phase left for a human to look at, derived per read from the
   // instance and its artifact directory. Reads stay open like every other read;
@@ -1613,25 +1628,62 @@ export function createApp(deps: AppDeps): Hono {
 
   // `phaseId` names which paused phase is meant when a fan-out has several
   // waiting; absent, the single paused phase. See `ApproveRequest`/`ReviseRequest`.
+  // `attempt`, when given, binds the decision to the attempt the operator
+  // looked at: the engine refuses it if the phase has moved on since.
   const phaseTarget = (body: Awaited<ReturnType<typeof jsonBody>>) => {
     const phaseId = optionalField<unknown>(body, "phaseId");
-    return typeof phaseId === "string" && phaseId ? { phaseId } : {};
+    const attempt = optionalField<unknown>(body, "attempt");
+    return {
+      ...(typeof phaseId === "string" && phaseId ? { phaseId } : {}),
+      ...(typeof attempt === "number" && Number.isInteger(attempt) && attempt >= 0
+        ? { attempt }
+        : {}),
+    };
+  };
+
+  /**
+   * Who is deciding, as the server established it: the authenticated session
+   * these routes require. Nothing in the request body is consulted — a client
+   * that sends `actor`, `principal` or `mechanism` fields is ignored, because
+   * a claim of being a person is not evidence of being one.
+   */
+  const operatorPrincipal = (c: Context): GateDecisionPrincipal => {
+    const session = auth.verify(sessionToken(c));
+    return session
+      ? { kind: "session", username: session.username, role: session.role }
+      : { kind: "unknown" };
   };
 
   app.post("/api/instances/:id/approve", async (c) => {
     const body = await jsonBody(c);
     const answers = optionalField<unknown>(body, "answers");
-    return engineReply(c, await engine.approve(c.req.param("id"), answers, phaseTarget(body)));
+    const source = { channel: "http" as const, principal: operatorPrincipal(c) };
+    return engineReply(
+      c,
+      await engine.approve(c.req.param("id"), answers, { ...phaseTarget(body), source }),
+    );
   });
 
   app.post("/api/instances/:id/revise", async (c) => {
     const body = await jsonBody(c);
-    const note = optionalField<string>(body, "note");
-    return engineReply(c, await engine.revise(c.req.param("id"), note, phaseTarget(body)));
+    const note = optionalField<unknown>(body, "note");
+    const source = { channel: "http" as const, principal: operatorPrincipal(c) };
+    return engineReply(
+      c,
+      await engine.revise(c.req.param("id"), typeof note === "string" ? note : undefined, {
+        ...phaseTarget(body),
+        source,
+      }),
+    );
   });
 
   app.post("/api/instances/:id/abort", async (c) =>
-    engineReply(c, await engine.abort(c.req.param("id"))),
+    engineReply(
+      c,
+      await engine.abort(c.req.param("id"), {
+        source: { channel: "http", principal: operatorPrincipal(c) },
+      }),
+    ),
   );
 
   // ── Constellation ─────────────────────────────────────────────────────────
@@ -1813,7 +1865,9 @@ export function createApp(deps: AppDeps): Hono {
         await setTriage(fingerprint, state, issue.lastSeen, new Date());
       },
       abortInstance: async (id) => {
-        const reply = await engine.abort(id);
+        const reply = await engine.abort(id, {
+          source: { channel: "omnibar", principal: operatorPrincipal(c) },
+        });
         if (!reply.ok) throw new Error(reply.error ?? `could not abort ${id}`);
       },
       setBudget: async (patch) => {

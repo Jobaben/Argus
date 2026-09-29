@@ -50,6 +50,7 @@ const fakeEngine: Engine = {
   start: async () => null,
   onSignal: async () => ({ ok: true, code: 200 }),
   approve: async () => ({ ok: true, code: 200 }),
+  approveAutomatically: async () => ({ ok: true as const, code: 200 }),
   revise: async () => ({ ok: true, code: 200 }),
   abort: async () => ({ ok: true, code: 200 }),
   reconcile: async () => {},

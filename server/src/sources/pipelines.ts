@@ -56,6 +56,7 @@ import {
 import { CLAIM_KINDS, REALIZATION_MAX_ATTEMPTS, validArtifactPath } from "../knowledge/kernel.js";
 import { ChangeProposalError, validateChangeRequest } from "../knowledge/changeIntent.js";
 import { resolveNeeds } from "./dag.js";
+import { autoApproveRefusal, knowledgeCommitReasons } from "./gatePolicy.js";
 
 // The crash-safe, mutex-serialized single-file store (shared with schedules).
 const store = createJsonArrayStore<PipelineDefinition>({
@@ -1050,7 +1051,7 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
     changeContext,
   );
 
-  return {
+  const out: PhaseDef = {
     id,
     name: p.name.trim(),
     cwd: p.cwd,
@@ -1079,6 +1080,18 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
     ...(implementation ? { implementation } : {}),
     ...(acceptanceVerification ? { acceptanceVerification } : {}),
   };
+  // Decided from the phase's effective configuration, after every field is
+  // validated: a model-scored gate may never be the one that makes semantic
+  // knowledge canonical. The engine refuses the same thing at runtime, for
+  // definitions saved before this rule and for knowledge an ordinary phase
+  // stages through its optional delta.
+  if (out.autoApprove) {
+    const reasons = knowledgeCommitReasons(out);
+    if (reasons.length > 0) {
+      throw new PipelineValidationError(autoApproveRefusal(`phase ${i} ("${id}")`, reasons));
+    }
+  }
+  return out;
 }
 
 /**

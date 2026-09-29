@@ -49,6 +49,7 @@ const fakeEngine: Engine = {
   start: async () => null,
   onSignal: async () => ({ ok: true, code: 200 }),
   approve: async () => ({ ok: true, code: 200 }),
+  approveAutomatically: async () => ({ ok: true as const, code: 200 }),
   revise: async () => ({ ok: true, code: 200 }),
   abort: async () => ({ ok: true, code: 200 }),
   reconcile: async () => {},
@@ -86,6 +87,9 @@ function stubRunner() {
         costUsd: 0.001,
         tokens: 100,
         durationMs: 3,
+        runtime: "claude" as const,
+        requestedModel: "haiku",
+        reportedModel: null,
         failure: value === null ? "unparseable" : null,
         error: null,
       };

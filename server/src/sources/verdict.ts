@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import { paths } from "../claudeHome.js";
 import { createJsonArrayStore } from "./jsonArrayStore.js";
@@ -69,25 +70,73 @@ export class RubricValidationError extends Error {
   }
 }
 
+/**
+ * Version of {@link buildVerdictPrompt} + {@link parseVerdictResponse}. Bump on
+ * any change to either: a score is only comparable with scores produced by the
+ * same question, and the version is stamped on every verdict so a trend or an
+ * approval can tell them apart.
+ */
+export const VERDICT_PROMPT_VERSION = 1;
+
 const store = createJsonArrayStore<Verdict>({
   file: paths.verdictFile,
   label: "verdicts.json",
 });
 
+/** Every stored judgment, newest first — a run judged twice appears twice. */
 export const readVerdicts = store.read;
 
-export async function readVerdict(runId: string): Promise<Verdict | null> {
-  return (await store.read()).find((v) => v.runId === runId) ?? null;
+/**
+ * The current verdict per run: the newest judgment of each, whatever its
+ * status. Re-judging appends rather than replacing (an earlier judgment may be
+ * what explains an earlier approval), so every consumer that means "the
+ * verdict for this run" reads through here rather than assuming one per run.
+ */
+export function currentVerdicts(list: Verdict[]): Verdict[] {
+  const newestFirst = [...list].sort((a, b) => b.at.localeCompare(a.at));
+  const seen = new Set<string>();
+  return newestFirst.filter((v) => {
+    if (seen.has(v.runId)) return false;
+    seen.add(v.runId);
+    return true;
+  });
 }
 
+export async function readCurrentVerdicts(): Promise<Verdict[]> {
+  return currentVerdicts(await store.read());
+}
+
+export async function readVerdict(runId: string): Promise<Verdict | null> {
+  return currentVerdicts(await store.read()).find((v) => v.runId === runId) ?? null;
+}
+
+/**
+ * Append one judgment. Never replaces an earlier judgment of the same run.
+ * Newest first, stable on equal timestamps (the new record leads), capped at
+ * {@link VERDICT_KEEP} in total. An approval that rested on a verdict copies it
+ * into the gate decision record, so the cap cannot erase that explanation.
+ */
 export async function writeVerdict(verdict: Verdict): Promise<Verdict> {
   return store.withLock(async () => {
     const list = await store.read();
-    const next = [verdict, ...list.filter((v) => v.runId !== verdict.runId)];
+    const next = [verdict, ...list];
     next.sort((a, b) => b.at.localeCompare(a.at));
     await store.write(next.slice(0, VERDICT_KEEP));
     return verdict;
   });
+}
+
+/**
+ * sha256 over exactly what the judge is shown of the rubric: goal and the
+ * criteria (id, label, weight), in order. `minScore` is excluded — it is a
+ * policy threshold applied afterwards, not part of the question.
+ */
+export function rubricDigest(rubric: Rubric): string {
+  const canonical = JSON.stringify({
+    goal: rubric.goal,
+    criteria: rubric.criteria.map((c) => ({ id: c.id, label: c.label, weight: c.weight ?? 1 })),
+  });
+  return createHash("sha256").update(canonical).digest("hex");
 }
 
 // ── Rubric validation ───────────────────────────────────────────────────────
@@ -299,6 +348,8 @@ export function parseVerdictResponse(
 export interface VerdictDeps {
   runner: AnalysisRunner;
   now: () => Date;
+  /** Mints the verdict id. Defaults to a random `V-…`. */
+  newId?: () => string;
 }
 
 /** The unit of work a verdict belongs to. Shares Watchtower's key space so the
@@ -327,6 +378,7 @@ export async function performVerdict(
   deps: VerdictDeps,
 ): Promise<Verdict> {
   const base: Verdict = {
+    id: deps.newId?.() ?? `V-${randomBytes(8).toString("hex")}`,
     runId: run.id,
     scheduleId: run.scheduleId,
     scheduleName: run.scheduleName,
@@ -353,11 +405,18 @@ export async function performVerdict(
     (value) => parseVerdictResponse(value, rubric),
   );
 
-  const metered = {
+  const metered: Verdict = {
     ...base,
     costUsd: result.costUsd,
     tokens: result.tokens,
     durationMs: result.durationMs,
+    provenance: {
+      runtime: result.runtime,
+      requestedModel: result.requestedModel,
+      reportedModel: result.reportedModel,
+      promptVersion: VERDICT_PROMPT_VERSION,
+    },
+    rubricDigest: rubricDigest(rubric),
   };
 
   if (!result.ok || !result.value) {
@@ -395,7 +454,8 @@ export function buildVerdictTrends(
   now: Date,
 ): VerdictReport {
   const groups = new Map<string, { scope: "schedule" | "phase"; name: string; list: Verdict[] }>();
-  for (const v of verdicts) {
+  // One point per run: a re-judged run contributes its current verdict only.
+  for (const v of currentVerdicts(verdicts)) {
     if (v.status !== "ready" || v.score === null) continue;
     const key = v.phaseId ? `phase:${v.scheduleId}:${v.phaseId}` : `schedule:${v.scheduleId}`;
     const name = v.phaseId ? `${v.scheduleName} › ${v.phaseId}` : v.scheduleName;
@@ -458,7 +518,7 @@ export function buildVerdictTrends(
  */
 export function failingVerdicts(verdicts: Verdict[]): Map<string, string> {
   const out = new Map<string, string>();
-  for (const v of verdicts) {
+  for (const v of currentVerdicts(verdicts)) {
     if (v.status !== "ready" || !v.regression || v.score === null) continue;
     out.set(
       v.runId,

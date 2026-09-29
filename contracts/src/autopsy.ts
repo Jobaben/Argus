@@ -1,3 +1,5 @@
+import type { AnalysisProvenance } from "./verdict.js";
+
 /**
  * Autopsy: an automatic postmortem for every failed run.
  *
@@ -45,6 +47,11 @@ export interface AutopsySpan {
 }
 
 export interface Autopsy {
+  /**
+   * `A-…`, minted per pass. Absent on autopsies written before ids existed. A
+   * re-run appends; the newest is the run's current autopsy.
+   */
+  id?: string;
   runId: string;
   scheduleId: string;
   scheduleName: string;
@@ -68,6 +75,8 @@ export interface Autopsy {
   durationMs: number | null;
   /** Why there is no verdict, when `status` is not `ready`. */
   error: string | null;
+  /** Absent on autopsies written before provenance was recorded. */
+  provenance?: AnalysisProvenance;
 }
 
 export interface AutopsyResponse {

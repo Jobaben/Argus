@@ -483,6 +483,7 @@ export function advance(
   }
   if (signal.type === "needs-input") {
     phase.status = "awaiting-approval";
+    phase.pause = "needs-input";
     return settle(def, inst, nowISO);
   }
   // completed
@@ -531,6 +532,7 @@ function concludePhase(
 ): TransitionResult {
   if (phase.gated) {
     phase.status = "awaiting-approval";
+    phase.pause = "gate";
     return settle(def, inst, nowISO);
   }
   return succeedPhase(def, inst, phase, nowISO);
@@ -1110,7 +1112,7 @@ export function applyUnlaunchable(
 }
 
 /** The phase a human action targets: the named one, else the single paused one. */
-function pausedPhase(inst: PipelineInstance, phaseId?: string): PhaseProgress | undefined {
+export function pausedPhase(inst: PipelineInstance, phaseId?: string): PhaseProgress | undefined {
   if (phaseId) return inst.phases.find((p) => p.id === phaseId);
   return (
     inst.phases.find((p) => p.status === "awaiting-approval") ??
@@ -1175,6 +1177,7 @@ function restartPhase(phase: PhaseProgress): void {
   // evidence about a run that no longer exists.
   delete phase.selectedCandidate;
   delete phase.candidateOutcomes;
+  delete phase.pause;
 }
 
 /**

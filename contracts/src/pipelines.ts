@@ -1033,6 +1033,16 @@ export interface PhaseProgress {
   retries?: number;
   /** When the next automatic retry is due, while one is pending. */
   retryAt?: string | null;
+  /**
+   * Why the phase is (or last was) `awaiting-approval`: `gate` — every step
+   * finished, its result validated and its checks passed, and the phase is
+   * gated; `needs-input` — an agent asked a question, which pauses the phase
+   * before any of that ran. Set when the pause begins, cleared on a fresh
+   * attempt. Absent on pauses written before it was recorded: unknown. Only a
+   * `gate` pause may be opened by an automated rule — a question put to a
+   * person is not answered by a score.
+   */
+  pause?: "gate" | "needs-input";
   /** Free-form: a gated phase carries whatever its agent signalled, a failed
    *  phase carries a {@link PhaseFailurePayload}. Narrow before reading. */
   payload: unknown | null;
@@ -1164,6 +1174,15 @@ export interface PipelineInstance {
    * for one. An `attempt`-scoped phase records its own on `PhaseProgress`.
    */
   workspace?: WorkspaceRecord | null;
+  /**
+   * The gate decisions (`GD-…`) that took effect on this instance, in order.
+   * Written in the same instance save as the transition each one caused, after
+   * the decision record itself was made durable — so a transition on disk
+   * always names a record that exists, and a record this list does not name
+   * did not take effect. Absent on instances decided before decisions were
+   * recorded: their provenance is unknown, not implied.
+   */
+  gateDecisionIds?: string[];
 }
 
 export type SignalType = "completed" | "needs-input" | "failed";

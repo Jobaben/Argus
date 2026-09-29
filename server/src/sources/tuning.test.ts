@@ -315,7 +315,15 @@ function fakeRunner(answers: Answer[]) {
       await new Promise((r) => setTimeout(r, 1));
       inFlight--;
       const a = answers[calls.length - 1] ?? { ok: false, failure: "no-output", error: "none" };
-      const base = { raw: "", costUsd: null, tokens: null, durationMs: 5 };
+      const base = {
+        raw: "",
+        costUsd: null,
+        tokens: null,
+        durationMs: 5,
+        runtime: "claude" as const,
+        requestedModel: "haiku",
+        reportedModel: null,
+      };
       if (!a.ok) {
         return { ...base, ok: false, value: null, failure: a.failure, error: a.error };
       }

@@ -45,7 +45,8 @@ import { buildMonitors } from "./sources/monitors.js";
 import { buildIssues, readTriage } from "./sources/issues.js";
 import { buildWatchtower, readResets } from "./sources/watchtower.js";
 import { readFailureClasses } from "./sources/autopsy.js";
-import { failingVerdicts, readVerdicts } from "./sources/verdict.js";
+import { journal } from "./sources/journal.js";
+import { failingVerdicts, readCurrentVerdicts, readVerdicts } from "./sources/verdict.js";
 import { readPipelines } from "./sources/pipelines.js";
 import { readInstances } from "./sources/instances.js";
 import { createAnalysisRunner } from "./sources/analysis.js";
@@ -299,11 +300,25 @@ const verdictWatcher = createVerdictWatcher({
   readSchedules,
   readPipelines,
   readInstances,
-  approve: (instanceId) => engine.approve(instanceId),
+  // The automated boundary, never the operator approve: it re-checks the
+  // verdict basis under the instance lock and refuses any gate that commits
+  // knowledge, and the decision it records says a rule — not a person — opened
+  // the gate.
+  approveAutomatically: (request) => engine.approveAutomatically(request),
   onVerdict: () => broadcast({ type: "issues:changed" }),
-  onAutoApprove: (instanceId, score) => {
-    log.info("gate auto-approved on verdict", { instanceId, score });
+  onAutoApprove: (instanceId, phaseId, score) => {
+    log.info("gate auto-approved on verdict", { instanceId, phaseId, score });
     broadcast({ type: "pipelines:changed" });
+  },
+  onAutoApprovalWithheld: (instanceId, phaseId, attempt, reason) => {
+    log.warn("gate auto-approval withheld", { instanceId, phaseId, attempt, reason });
+    void journal(instanceId, {
+      at: new Date().toISOString(),
+      kind: "phase.auto-approval-withheld",
+      phaseId,
+      attempt,
+      detail: reason,
+    });
   },
 });
 /**
@@ -366,7 +381,9 @@ const vaultWatcher = createVaultWatcher({
   now: () => new Date(),
   readRuns,
   readIncidents,
-  readVerdicts,
+  // The Vault's `scores` table holds one row per run: feed it each run's
+  // current verdict, not every re-judgment.
+  readVerdicts: readCurrentVerdicts,
   readSpend: readSpendLedger,
   readAnomalies: async () => {
     const now = new Date();
