@@ -7,6 +7,26 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Decision Plane H2 shadow experiment (off by default).** With
+  `ARGUS_DECISIONS=on` and `ARGUS_DECISIONS_H2_COLLECT=on`, a watcher on the
+  scheduler tick samples finished runs deterministically, and asks the
+  `run.termination-probe` and `run.failure-cause.residual` questions through
+  the existing analysis runner.
+  - It makes at most one call per tick, and only on ticks where no other
+    analysis pass ran.
+  - It is capped per day in calls and dollars.
+  - It records every attempt, and the probe's observed-termination
+    reference, in its own append-only ledger.
+  - An interrupted call is recorded as an unknown outcome and is never
+    re-sent.
+
+  **More → Experiments** (`GET /api/decisions/h2`) is a read-only
+  deterministic replay. It shows separate probe and residual tables, with
+  sample sizes, coverage, Wilson intervals, a confusion matrix, κ and Brier.
+  Calibration is shown only at sufficient n, and residual accuracy is shown
+  as unmeasured. Nothing consumes an assessment. See USER-GUIDE §32 and RFC
+  2026-09-29 §P.
+
 - **Targeted implementation and closed-loop change realization (Knowledge
   Ledger Phase 8).** A phase may now declare `implementation: { maxAttempts?,
 requireCurrentIntent?, includePreserved?, note? }` beside its

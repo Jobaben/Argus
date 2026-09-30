@@ -1,12 +1,14 @@
 # RFC: A provider-neutral Decision Plane for Argus
 
 _Status: **amended 2026-09-29; Phase 0 implemented; Phase 1 (contracts and
-journal) implemented, isolated and unwired (§O); later phases not
-started.** The original text was an architecture investigation. §M records
-what Phase 0 changed in the code, §N lists the decisions and corrections the
-amendment applies, and §O is the Phase 1 design note and what it built.
-Nothing after Phase 1 (shadow watchers, evaluation UI, policies, Jev) is
-implemented or authorised by this document._
+journal) implemented (§O); the Phase 2 H2 shadow-experiment slice
+implemented, off by default (§P); H1 and later phases not started.** The
+original text was an architecture investigation. §M records what Phase 0
+changed in the code, §N lists the decisions and corrections the amendment
+applies, §O is the Phase 1 design note and what it built, and §P is the H2
+slice's design note and what it built. Nothing beyond the H2 slice (H1,
+gate-review projections, badges, policies, enforcement, Jev) is implemented
+or authorised by this document._
 
 _Scope: every place Argus decides something; the hypothesis that an explicit
 **inferred** layer belongs between Argus's evidence and its policy; how such a
@@ -1472,20 +1474,21 @@ appendix.
 
 ## N. Amendment log (2026-09-29)
 
-| #   | Decision or correction                                                                                                                                                                                                     | Where            |
-| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
-| D1  | Model-driven `autoApprove` on knowledge-committing gates is refused, with no opt-in bypass                                                                                                                                 | §M.1, §L         |
-| D2  | TypeSafe integration and new egress stay disabled                                                                                                                                                                          | §G.3, §G.4       |
-| D3  | Human labelling is optional; gate actions are behavioural records                                                                                                                                                          | §G.1, §H.3       |
-| D4  | Initial assessments cannot grant permission; `grant` removed                                                                                                                                                               | §F.2, §I.3, §J   |
-| D5  | Bounded active journal storage with explicit archival and retention, and no Vault dependency                                                                                                                               | §F.4             |
-| C1  | Ratings, predicted probabilities, provider confidence statistics and observed outcomes are separated; the Verdict baseline is compared without a probability interpretation                                                | §F.1, §H.3, §H.4 |
-| C2  | H1's target is operator behaviour, not the safety of skipping review; reference streams are separate; judgments are hidden during labelling                                                                                | §H.3             |
-| C3  | Observed termination is separate from inferred cause; the probe's answer space contains every reference label; probe and residual are versioned apart and never pooled                                                     | §H.2             |
-| C4  | H3 is kept as a semantic audit of verifier conclusions that can neither redefine support nor become evidence                                                                                                               | §H.1             |
-| C5  | Replay (stored assessments plus a versioned policy, no call) is separate from re-evaluation (a new call); snapshot bodies are retained                                                                                     | §F.3             |
-| C6  | The Jev mapping was re-examined: official docs were unreachable (`EGRESS_BLOCKED`), the supplied corrections are recorded as unverified, requested and reported model ids are separate, and there are no synthetic aliases | §G.3             |
-| P1  | Phase 1 resolutions: observations derived read-only; active storage bounded by admission; two run-failure projections; a restart-interrupted run is not `never-ran`; definitions carry digests; H1 not registered          | §O               |
+| #   | Decision or correction                                                                                                                                                                                                                                                                                                     | Where            |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| D1  | Model-driven `autoApprove` on knowledge-committing gates is refused, with no opt-in bypass                                                                                                                                                                                                                                 | §M.1, §L         |
+| D2  | TypeSafe integration and new egress stay disabled                                                                                                                                                                                                                                                                          | §G.3, §G.4       |
+| D3  | Human labelling is optional; gate actions are behavioural records                                                                                                                                                                                                                                                          | §G.1, §H.3       |
+| D4  | Initial assessments cannot grant permission; `grant` removed                                                                                                                                                                                                                                                               | §F.2, §I.3, §J   |
+| D5  | Bounded active journal storage with explicit archival and retention, and no Vault dependency                                                                                                                                                                                                                               | §F.4             |
+| C1  | Ratings, predicted probabilities, provider confidence statistics and observed outcomes are separated; the Verdict baseline is compared without a probability interpretation                                                                                                                                                | §F.1, §H.3, §H.4 |
+| C2  | H1's target is operator behaviour, not the safety of skipping review; reference streams are separate; judgments are hidden during labelling                                                                                                                                                                                | §H.3             |
+| C3  | Observed termination is separate from inferred cause; the probe's answer space contains every reference label; probe and residual are versioned apart and never pooled                                                                                                                                                     | §H.2             |
+| C4  | H3 is kept as a semantic audit of verifier conclusions that can neither redefine support nor become evidence                                                                                                                                                                                                               | §H.1             |
+| C5  | Replay (stored assessments plus a versioned policy, no call) is separate from re-evaluation (a new call); snapshot bodies are retained                                                                                                                                                                                     | §F.3             |
+| C6  | The Jev mapping was re-examined: official docs were unreachable (`EGRESS_BLOCKED`), the supplied corrections are recorded as unverified, requested and reported model ids are separate, and there are no synthetic aliases                                                                                                 | §G.3             |
+| P1  | Phase 1 resolutions: observations derived read-only; active storage bounded by admission; two run-failure projections; a restart-interrupted run is not `never-ran`; definitions carry digests; H1 not registered                                                                                                          | §O               |
+| P2  | H2 slice: opt-in, rate- and budget-bounded shadow collection on the tick, subordinate to existing analysis; a separate collection ledger retains references and deduplicates across archival and restarts; unknown call outcomes are never re-sent; `decision-h2-report` v1 replays it; residual accuracy stays unmeasured | §P               |
 
 ---
 
@@ -1854,6 +1857,396 @@ invalid-answer`, with a bounded excerpt of the raw output. The service
 - Redaction is pattern-based, best effort.
 - No paid call was made. The adapter's behaviour against a live CLI is
   unverified beyond the injected envelopes.
+
+---
+
+## P. Phase 2 (H2 slice) design note: shadow collection, references, replay
+
+_Written before the watcher code, as the Phase 2 brief required. It narrows
+§H.2, §H.4 and §H.5 for the H2 questions only, and does not reopen §O. H1,
+gate-review projections, badges and any enforcement stay out of scope._
+
+### P.1 Authority and enablement
+
+- Every assessment stays `mode: "shadow"`, and both H2 questions keep
+  `consumers: []`. Nothing reads an H2 assessment except the report.
+- **Collection is off by default.** It runs only when both
+  `ARGUS_DECISIONS=on` and `ARGUS_DECISIONS_H2_COLLECT=on` are set, and
+  analysis passes are not disabled (`ARGUS_ANALYSIS=off` wins). Any other
+  value of `ARGUS_DECISIONS` means off. When off, the watcher returns before
+  reading or writing anything, so the provider is never reached.
+- An invalid H2 setting disables collection and names the setting. It never
+  falls back to a guess.
+- **Reading the report never collects.** The report route reads the
+  collection ledger and the journal and calls nothing else: no provider, no
+  runner, no re-evaluation, and no write (not even a directory).
+
+### P.2 Eligibility
+
+A run is considered once it has finished, its `endedAt` is at or after the
+collection's recorded start, and it is between 10 minutes and 24 hours old.
+The 10 minutes let late writes (termination, cost backfill) settle. The
+start is written once, on the first enabled check, and it never moves, so
+enabling collection never drains history.
+
+- **Exclusion common to both questions:** `runtime` other than `claude`. The
+  run-failure projections read Claude session transcripts only, and a
+  missing timeline would look like evidence.
+- **Residual (`run.failure-cause.residual@1`):** the run is unsuccessful
+  (`status: "failed"`, or `outcome` `failed` or `blocked`, the Autopsy
+  definition without `interrupted`), **and** its observed termination
+  (§O.1) is `ended-normally` or `deadline`. A successful run is excluded, so
+  no one is asked why it failed. `never-ran` is excluded, because nothing
+  ran to explain. A run whose termination is not derivable (interrupted,
+  killed, cancelled, skipped) is excluded with the derivation's reason, and
+  never guessed. The cause taxonomy is untouched.
+- **Probe (`run.termination-probe@1`):** any considered run whose termination
+  is derivable. The reference label is `observeTermination`'s value. It is
+  validated against the probe's registered answer space. A label outside it
+  is a construction error, excluded and counted, and never scored.
+
+### P.3 Sampling
+
+- **Deterministic and label-blind.** A run is selected for a question when
+  `u < rate`, where `u` is the first 52 bits of
+  `sha256(seed "|" questionId "@" version "|" runId)` divided by 2^52. The
+  inputs are the seed, the question and the run id, and never the
+  termination or any answer. Probe and residual draw independently.
+- **Defaults:** residual rate 0.5, probe rate 0.1, seed `argus-h2`.
+- **Census.** Each considered run gets one `census` line per question
+  version, whatever the verdict: `selected`, `not-selected` or `excluded`
+  with a reason. It records the termination stratum too. A run first seen
+  past the 24-hour window is still censused, as `excluded: missed-window`,
+  so the population is accounted for. At most 500 census lines are written
+  per check.
+- The effective definition is recorded as a `config` line, with its digest.
+  That covers seed, rates, window, eligibility and exclusion rule ids,
+  limits, and the requested provider identity. A changed setting appends a
+  new `config` line. Each census and attempt line names the config it ran
+  under.
+
+### P.4 Scheduling
+
+- **Placement.** The watcher is the last step of the scheduler's `onTick`,
+  after Autopsy, Verdict, Sentinel, the Vault and the fleet poller. So it is
+  outside every instance lock.
+- **Awaited inside the tick.** A `busy` refusal makes Autopsy and Verdict
+  write a permanent `failed` record (`performAutopsy`). A fire-and-forget
+  H2 call could collide with the next tick's Autopsy, so the call is
+  awaited. Ticks never overlap, and the watcher has its own overlap guard
+  as well.
+- **At most one provider invocation per check.** This holds even when both
+  questions have work: pending items are taken oldest `endedAt` first,
+  then by question id and run id.
+- **Subordinate to existing analysis.** The runner is wrapped once, in
+  `index.ts`, by a pass counter. The wrapper only delegates, so the runner's
+  concurrency gate, timeout, output cap, metering and budget stop are the
+  same object's. The watcher makes no call on a check if:
+  - any non-`decide` pass started since its previous check (including the
+    first check after boot);
+  - a pass is in flight;
+  - the spend hard stop is in force (it then pauses 15 minutes).
+
+  So while Autopsy drains a backlog, one pass a tick, H2 waits.
+
+- **Limits, from the ledger** (so a restart cannot reset them):
+  - at most 20 provider invocations per rolling 24 hours;
+  - at least 15 minutes between invocations;
+  - at most US$1.00 of recorded H2 cost per rolling 24 hours.
+
+  An invocation is any attempt whose call happened or may have happened.
+  Cost is known only after a call, so the dollar cap can be passed by one
+  call.
+
+- **Backlog.** Only selected items inside the 24-hour window are pending.
+  One that leaves the window unattempted gets an `expired` line. The queue
+  is therefore at most one day of selections, and nothing old is drained.
+
+### P.5 Attempts, deduplication, retries and unknown outcomes
+
+The collection ledger is separate from the journal:
+`<argus>/decision-experiments/h2/collection.jsonl`. It is an append-only
+JSONL of the journal's own envelope (`encodeLine`), with the same torn-tail
+fence, `fsync` per append, and a `seq` number on every line, so a lost line
+is detectable. Its lines are capped at 8 KiB, and the file at 32 MiB. At
+the cap, collection stops and says so; nothing is deleted or rotated
+automatically.
+
+- **Write order for one invocation:**
+  1. an `attempt` line, `fsync`'d. It carries the attempt id, a
+     pre-assigned assessment id, the item, the requested identity, the
+     stratum and (probe only) the reference;
+  2. `service.assess(… id)`;
+  3. a `result` line.
+- **Item identity** is `(runId, question id, version, provider identity,
+sample 0)`. The ledger never passes through journal archival, so archival
+  and restarts do not re-open an item. Stricter still, a `(run, question,
+version)` that any identity has attempted is never taken up automatically
+  by another identity. Changing the model setting does not re-assess old
+  items.
+- **Result classes:**
+
+  | Class                                             | Provider called | Retried                     |
+  | ------------------------------------------------- | --------------- | --------------------------- |
+  | `answered`, `abstained`                           | yes             | never                       |
+  | `provider-failed`                                 | yes             | never                       |
+  | `refused`                                         | no              | bounded                     |
+  | `missing-input`                                   | no              | bounded                     |
+  | `construction-error`                              | no              | never                       |
+  | `unrecorded` (the call spent, the append refused) | yes             | never                       |
+  | `unknown-outcome`                                 | unknown         | never, and counted as spent |
+
+  `refused` covers:
+  - the service's pre-call refusals;
+  - the runner's `disabled`, `busy` and `budget-blocked`;
+  - the adapter's `aborted` and `unsafe-cwd`.
+
+  Those runner and adapter refusals still append a `failed` assessment (the
+  Phase 1 service always does). The H2 report classes them by code as calls
+  not made.
+
+- **Bounded retry.** A `refused` or `missing-input` item may be tried again
+  at most 3 times in all, at least 30 minutes apart. After such a result the
+  watcher pauses:
+  - 15 minutes for `budget-blocked` or `disabled`;
+  - 60 minutes when the journal refuses storage;
+  - 5 minutes otherwise.
+
+  Nothing that did or may have reached the provider is retried
+  automatically.
+
+- **Restart.** An `attempt` with no `result` belongs to an earlier process.
+  If the journal holds its pre-assigned assessment, the result is
+  reconciled from it (`reconciled: true`). Otherwise the result is
+  `unknown-outcome`: the process died after the attempt line, and a paid
+  call may or may not have happened. It is never re-sent silently, and it
+  counts against the limits. **Exactly-once external execution is not
+  claimed.**
+- **Damage stops collection.** Interior corruption, a `seq` gap or a
+  conflicting record means deduplication can no longer be trusted, so the
+  watcher refuses to invoke and reports why. A torn tail is fenced as in
+  §O.3 and is benign.
+
+### P.6 Durable references
+
+- The probe's reference is retained in the `attempt` line, a typed
+  experimental record. It is never in the snapshot: the probe's snapshot is
+  the blind projection, and the provider sees only that. The reference has:
+  - `stream: "observed-termination"`;
+  - the label;
+  - the answer space it was validated against (question id, version and
+    digest);
+  - the observation's source (`runs`, record id, sha256 of the run record
+    as read);
+  - `observedAt`;
+  - the derivation id;
+  - its own sha256.
+- The residual attempt records the termination stratum (the eligibility
+  observation), with the same provenance. Its `reference` is always `null`,
+  because the residual question has no reference stream.
+- Replay joins the ledger to the journal only. Run pruning (`RUN_KEEP`
+  runs per schedule) and transcript deletion do not change it.
+- A reference that is absent, fails its digest, is outside the answer
+  space, names another question, or sits on a residual attempt is reported
+  as an integrity finding and is not scored. A deleted ledger line shows as
+  a `seq` gap. Whether the live run record has since changed is not part of
+  replay (it would be a live dependency). The retained reference is what
+  was scored.
+
+### P.7 The report (`decision-h2-report` v1)
+
+The report is a pure function of:
+
+- the ledger;
+- the journal view;
+- snapshot availability;
+- the registry.
+
+It emits canonical bytes, like §O.4 replay. It has no wall clock: "pending"
+means pending as of the last ledger line. The Phase 1 `decision-journal-report`
+v1 is unchanged.
+
+- **Populations.** The population key is the question id, version and
+  digest, plus the full recorded provider identity:
+  - `provider`;
+  - `requestedModel`;
+  - `reportedModel`;
+  - `adapterVersion`;
+  - `elicitation`.
+
+  Probe and residual populations are separate lists and are never pooled.
+  Only attempts in the ledger count. Journal assessments no attempt names
+  are counted as outside the experiment.
+
+- **Counts per population:**
+  - attempts by class;
+  - assessed (answered, abstained or provider-failed);
+  - reference-bearing;
+  - coverage per stratum or reference class;
+  - the census (considered, excluded by reason, selected, not selected,
+    attempted, expired, abandoned, pending) per class.
+- **Cost:** p50 and p95 latency; USD and tokens (total, mean over known,
+  unknown count); snapshot bytes (p50, p95, max). The percentiles use the
+  nearest-rank method.
+- **Probe metrics**, against the named `observed-termination` stream:
+  - `top` is the unique argmax. An exact tie is `tie`, which never counts as
+    correct.
+  - **Answered-only accuracy** is correct / answered, reported with
+    **coverage** = answered / assessed-with-reference. **End-to-end
+    accuracy** is correct / assessed-with-reference, which counts
+    abstentions and provider failures as not correct. Refusals, missing
+    input, unrecorded and unknown outcomes are not assessments, and are
+    counted beside the table.
+  - The confusion matrix has reference rows × (options, `tie`, `abstained`,
+    `failed`) columns.
+  - Per-class recall (answered-only and end-to-end), macro recall, and the
+    majority-class share, so a skewed sample reads as skewed.
+  - Cohen's κ over answered items, with `tie` as a category.
+  - **Intervals:** Wilson score, 95 % (z = 1.959964). `n = 0` is null,
+    never zero.
+  - **Brier** is multiclass, in the original sum-over-classes form:
+    `mean_i Σ_k (p_ik − y_ik)²` over all K options, over answered items with
+    a validated distribution. Its range is [0, 2], and it is not divided by
+    K.
+  - **Reliability:** top-probability confidence, 10 equal-width bins
+    (1.0 in the last bin). A bin shows its accuracy and mean confidence only
+    at n ≥ 20; below that it is `unmeasured` with its n. **ECE** is the
+    n-weighted |accuracy − confidence| over bins, and only at N ≥ 200.
+  - Probability metrics are computed only for distributions that validate
+    against the registered question with the recorded digest. Ratings and
+    provider statistics are never read as probabilities.
+- **Residual:** every accuracy and probability cell is `unmeasured`, with the
+  reason (no reference labels exist). The top-answer counts are shown as a
+  description, labelled as not accuracy.
+- **Baselines.** The `deterministic` provider is `not-applicable`: it has no
+  H2 rules (§O.4). Autopsy is named as a separate 11-way taxonomy that is
+  not compared, because no mapping is published.
+- **Integrity:**
+  - ledger findings;
+  - journal notices and gaps;
+  - attempts whose assessment is missing or does not match;
+  - non-shadow records;
+  - reference findings;
+  - `history: complete | incomplete`.
+
+### P.8 Shutdown
+
+- Unset either switch and restart. The next check returns immediately.
+- An invocation in flight when the process stops becomes `unknown-outcome`
+  on the next enabled start. It is not retried.
+- The ledger and the journal stay readable, and the report still renders.
+- Nothing is deleted.
+
+### P.9 What the H2 slice built, and what its tests establish
+
+**Code.** `server/src/decision/h2/`:
+
+| File          | Holds                                                                       |
+| ------------- | --------------------------------------------------------------------------- |
+| `config.ts`   | enablement and settings                                                     |
+| `sampling.ts` | eligibility, the draw, references                                           |
+| `ledger.ts`   | the collection ledger                                                       |
+| `items.ts`    | the shared reading of it                                                    |
+| `watcher.ts`  | the watcher                                                                 |
+| `metrics.ts`  | the statistics                                                              |
+| `report.ts`   | `decision-h2-report` v1                                                     |
+| `activity.ts` | the pass counter                                                            |
+| `entry.ts`    | the only module imported from outside the plane, by `index.ts` and `app.ts` |
+
+Outside that directory:
+
+- `service.assess` accepts an optional pre-assigned assessment id;
+- `index.ts` wraps the runner and awaits the watcher last in `onTick`;
+- `app.ts` serves `GET /api/decisions/h2`;
+- the contracts gain the report types, which are types only;
+- the web gains a read-only **Experiments** page.
+
+No runner default, no Autopsy or Verdict code, and no Phase 1 report
+changed.
+
+**Tests** (`server/src/decision/h2/*.test.ts`). All are deterministic, and
+none makes a paid call. The Decision service, journal, ledger, Claude CLI
+adapter and `AnalysisRunner` are the real ones; only the spawn is injected.
+
+- **Off.** With either switch off, or `ARGUS_ANALYSIS=off`, or an invalid
+  setting:
+  - no spawn;
+  - no run read;
+  - no directory;
+  - the report route creates nothing and runs nothing, even with collection
+    switched on.
+- **Scheduling:**
+  - the first check defers;
+  - one invocation per check, oldest first;
+  - the minimum interval, the daily call cap and the dollar cap each hold;
+  - another pass since the last check, or one in flight, defers the call;
+  - the spend hard stop pauses without a call;
+  - overlapping checks make one call;
+  - beside the real Autopsy watcher, Autopsy never meets a busy runner, and
+    its records are identical with collection on and off.
+- **Population:**
+  - census verdicts for every termination class and exclusion;
+  - `missed-window`;
+  - history not drained;
+  - a deterministic, label-blind draw;
+  - expiry at 24 hours.
+- **Honesty of outcomes:**
+  - a runner refusal and missing input are retried at most 3 times, 30
+    minutes apart, and never spawn;
+  - journal storage refusal pauses an hour;
+  - a full ledger writes nothing;
+  - a crash after the intent line is an `unknown-outcome` and is never
+    re-sent;
+  - a crash after the call is reconciled from the journal;
+  - restarts, journal archival and a model change never reopen an item;
+  - a damaged ledger (a corrupt line or a lost line) halts collection;
+  - a torn tail is fenced.
+- **Blindness.** The probe prompt carries none of status, exit code, error,
+  termination or the reference label. The retained snapshot is
+  `run-failure.blind` and holds no label. The ledger holds the reference with
+  source digest.
+- **References:**
+  - a label outside the answer space is excluded and counted, at census and
+    at attempt time;
+  - replay is identical after runs and transcripts are pruned and the journal
+    archived;
+  - corrupt, missing, mismatched and non-shadow records are findings, not
+    scores.
+- **Metrics on hand-worked fixtures:**
+  - Wilson, nearest rank, ties, multiclass Brier, κ;
+  - the reliability threshold of 20 and the ECE threshold of 200;
+  - a 12-item probe population with ties, abstentions, a failure, refusals,
+    missing input, an invalid and a corrupt reference, and class imbalance;
+  - question versions and model identities kept apart;
+  - residual accuracy unmeasured;
+  - byte-deterministic replay.
+- **State isolation (§H.5).** The same routed, gated fixture pipeline runs
+  through the real HTTP routes and engine with collection on (making shadow
+  calls) and off. Every file outside the plane's directories is
+  byte-identical. That covers the instance, route decisions, gate state and
+  decisions, the knowledge ledger, runs and journals, apart from the pipeline
+  id, signal token and wall-clock definition stamps the server draws itself.
+  The static test allows only `index.ts` and `app.ts` to import the plane,
+  and only named entry points.
+
+**Limits.**
+
+- No live CLI or model call was made. Behaviour against a real model,
+  including the cost and latency a real call has, is unverified beyond the
+  injected envelopes.
+- `reportedModel` stays null, because no envelope parser extracts one.
+- Exactly-once provider execution is not claimed. The guarantee is "never
+  re-sent silently", and an interrupted call counts as spent.
+- The dollar cap is checked before a call, so one call can pass it.
+- One writing process is assumed, as in §O. Ledger integrity is corruption
+  detection, not tamper resistance.
+- An on-demand analysis request that arrives while a shadow call is running
+  gets `busy`, as it would beside any other pass.
+- The collection ledger and the journal grow until an operator acts. Nothing
+  archives or deletes automatically, and collection stops at either cap.
+- The probe population is skewed wherever runs mostly end normally. The
+  report shows prevalence and per-class recall; it cannot make the sample
+  representative.
 
 ---
 

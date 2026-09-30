@@ -299,3 +299,250 @@ export interface AssessmentCurrency {
   status: CurrencyStatus;
   checks: CurrencyCheck[];
 }
+
+// ── H2 shadow experiment: collection status and report (§P) ─────────────────
+
+/**
+ * The H2 questions' roles. Probe and residual are different questions over
+ * different populations, and nothing below ever pools them (§H.2, §P.7).
+ */
+export type H2QuestionRole = "residual" | "probe";
+
+/**
+ * What became of one collection attempt (§P.5). Only `answered`, `abstained`
+ * and `provider-failed` are assessments. `refused`, `missing-input` and
+ * `construction-error` made no provider call. `unrecorded` made a call whose
+ * outcome could not be stored. `unknown-outcome` may or may not have made a
+ * call. `unresolved` is an attempt the report found without a result, and
+ * without an assessment to reconcile it from.
+ */
+export type H2AttemptClass =
+  | "answered"
+  | "abstained"
+  | "provider-failed"
+  | "refused"
+  | "missing-input"
+  | "construction-error"
+  | "unrecorded"
+  | "unknown-outcome"
+  | "unresolved";
+
+export type H2Measured<T> =
+  { status: "measured"; value: T } | { status: "unmeasured"; reason: string };
+
+/** A proportion with its Wilson 95 % interval; `value` and `ci95` are null when n = 0. */
+export interface H2Proportion {
+  k: number;
+  n: number;
+  value: number | null;
+  ci95: [number, number] | null;
+}
+
+export interface H2Distribution {
+  n: number;
+  p50: number | null;
+  p95: number | null;
+  max: number | null;
+}
+
+export interface H2Usage {
+  latencyMs: H2Distribution;
+  costUsd: { total: number; meanKnown: number | null; known: number; unknown: number };
+  tokens: { total: number; meanKnown: number | null; known: number; unknown: number };
+  snapshotBytes: H2Distribution;
+}
+
+export interface H2Finding {
+  kind: string;
+  /** The ledger line, when the finding is about one. */
+  line: number | null;
+  attemptId: string | null;
+  detail: string;
+}
+
+export interface H2QuestionDefinitionRow {
+  role: H2QuestionRole;
+  id: string;
+  version: number;
+  digest: string | null;
+  definition: "registered" | "missing" | "digest-mismatch";
+  projection: { id: string; version: number; digest: string } | null;
+  options: string[];
+}
+
+export interface H2CensusStratum {
+  /** The observed termination class, or `not-derivable`. */
+  stratum: string;
+  eligible: number;
+  selected: number;
+  notSelected: number;
+  assessed: number;
+  /** Attempted, but no usable assessment: unrecorded, unknown or unresolved. */
+  lost: number;
+  constructionError: number;
+  expired: number;
+  /** Retries exhausted without a provider call. */
+  abandoned: number;
+  pending: number;
+}
+
+export interface H2CensusTable {
+  role: H2QuestionRole;
+  question: { id: string; version: number };
+  considered: number;
+  /** Exclusion reason → runs. */
+  excluded: Record<string, number>;
+  strata: H2CensusStratum[];
+}
+
+export interface H2PopulationBase {
+  question: {
+    id: string;
+    version: number;
+    digest: string;
+    definition: "registered" | "missing" | "digest-mismatch";
+  };
+  projection: { id: string; version: number; digest: string };
+  provider: ProviderIdentity;
+  attempts: Record<H2AttemptClass, number>;
+  assessed: number;
+  answered: number;
+  abstained: number;
+  failed: number;
+  /** Refusal code → attempts, for attempts that made no provider call. */
+  refusals: Record<string, number>;
+  usage: H2Usage;
+}
+
+export interface H2ProbeClassRow {
+  label: string;
+  /** Assessed items bearing this reference label. */
+  n: number;
+  answered: number;
+  abstained: number;
+  failed: number;
+  correct: number;
+  recallAnswered: H2Proportion;
+  recallEndToEnd: H2Proportion;
+}
+
+export interface H2ReliabilityBucket {
+  lower: number;
+  upper: number;
+  n: number;
+  status: "measured" | "unmeasured";
+  meanConfidence: number | null;
+  accuracy: number | null;
+}
+
+export interface H2ProbePopulation extends H2PopulationBase {
+  reference: {
+    stream: "observed-termination";
+    /** Assessed items with a valid retained reference. */
+    bearing: number;
+    /** Reason → assessed items excluded from scoring. */
+    excluded: Record<string, number>;
+  };
+  classes: H2ProbeClassRow[];
+  confusion: { rows: string[]; columns: string[]; counts: number[][] };
+  ties: number;
+  accuracyAnswered: H2Proportion;
+  coverage: H2Proportion;
+  accuracyEndToEnd: H2Proportion;
+  macroRecall: { answered: number | null; endToEnd: number | null };
+  majorityClassShare: number | null;
+  kappa: H2Measured<number>;
+  brier: H2Measured<{ value: number; n: number }>;
+  reliability: { minBucket: number; buckets: H2ReliabilityBucket[] };
+  ece: H2Measured<{ value: number; n: number }>;
+}
+
+export interface H2ResidualPopulation extends H2PopulationBase {
+  strata: Array<{
+    stratum: string;
+    assessed: number;
+    answered: number;
+    abstained: number;
+    failed: number;
+  }>;
+  accuracy: { status: "unmeasured"; reason: string };
+  probability: { status: "unmeasured"; reason: string };
+  /** Descriptive only: how often each option was the top answer. Not accuracy. */
+  topAnswers: Record<string, number>;
+}
+
+export interface H2ConfigSummary {
+  digest: string;
+  firstAt: string;
+  seed: string;
+  rates: Array<{ id: string; version: number; rate: number }>;
+  window: { minAgeMs: number; maxAgeMs: number };
+  limits: {
+    maxCallsPer24h: number;
+    minCallIntervalMs: number;
+    maxUsdPer24h: number;
+    maxTriesPerItem: number;
+    retryAfterMs: number;
+  };
+  provider: {
+    provider: DecisionProviderKind;
+    requestedModel: string | null;
+    adapterVersion: number;
+  };
+  census: number;
+  attempts: number;
+}
+
+export interface H2Report {
+  report: { id: "decision-h2-report"; version: 1 };
+  /** The last ledger line the report read; no wall clock is involved. */
+  asOf: { seq: number; at: string | null };
+  collection: { start: string | null; configs: H2ConfigSummary[] };
+  definitions: H2QuestionDefinitionRow[];
+  census: H2CensusTable[];
+  probe: H2ProbePopulation[];
+  residual: H2ResidualPopulation[];
+  baselines: Array<{
+    provider: "deterministic" | "autopsy";
+    status: "not-applicable" | "not-compared";
+    reason: string;
+  }>;
+  /** Journal assessments no collection attempt names. Not part of the experiment. */
+  outsideExperiment: number;
+  methods: Record<string, string>;
+  integrity: {
+    history: "complete" | "incomplete";
+    ledger: H2Finding[];
+    journal: {
+      gaps: number;
+      notices: Array<{ kind: string; segment: string | null; line: number | null; detail: string }>;
+    };
+    findings: H2Finding[];
+  };
+}
+
+/** Live, in-memory collection state. Reading it calls nothing. */
+export interface H2CollectionStatus {
+  enabled: boolean;
+  /** Why collection is off, or which setting is invalid. */
+  reasons: string[];
+  settings: {
+    residualRate: number;
+    probeRate: number;
+    maxCallsPer24h: number;
+    minCallIntervalMs: number;
+    maxUsdPer24h: number;
+    requestedModel: string | null;
+    seed: string;
+  } | null;
+  watcher: {
+    state: "inactive" | "waiting" | "paused" | "halted";
+    detail: string | null;
+    until: string | null;
+  };
+}
+
+export interface H2ReportResponse {
+  collection: H2CollectionStatus;
+  report: H2Report;
+}
