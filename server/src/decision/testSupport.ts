@@ -7,6 +7,7 @@ import { builtinRegistry, BUILTIN_BUILDERS } from "./definitions.js";
 import { DecisionJournal, type JournalLimits } from "./journal.js";
 import type { DecisionSources } from "./projection.js";
 import type { DecisionProvider } from "./providers/types.js";
+import type { WriteFn } from "./storage.js";
 import { createDecisionService } from "./service.js";
 
 /**
@@ -148,10 +149,17 @@ export function harness(opts: {
   fault?: (point: string) => void | Promise<void>;
   clock?: ReturnType<typeof clock>;
   newId?: () => string;
+  write?: WriteFn;
 }) {
   const root = opts.root ?? tempRoot();
   const c = opts.clock ?? clock();
-  const journal = new DecisionJournal({ root, limits: opts.limits, now: c.now, fault: opts.fault });
+  const journal = new DecisionJournal({
+    root,
+    limits: opts.limits,
+    now: c.now,
+    fault: opts.fault,
+    write: opts.write,
+  });
   const registry = builtinRegistry();
   const mem = memorySources({ runs: [failedRun()], transcripts: { "run-1": transcript() } });
   const sources = opts.sources ?? mem.sources;

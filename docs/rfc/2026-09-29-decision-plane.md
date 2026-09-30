@@ -1605,14 +1605,26 @@ manifest.jsonl                 seal · archive · tombstone
      a copy whose digest no longer matches. Only then does it write the
      line and `fsync`.
 
+  **Complete writes.** Every journal write goes through `writeAll`. That
+  covers record lines, snapshot and archive copies, segment headers and
+  manifest lines. `writeAll` loops over short writes and returns only once
+  every intended byte is written. Zero progress fails with
+  `ShortWriteError`, and a write error propagates. Either way the operation
+  fails before its `fsync` and before any acknowledgement, and whatever
+  prefix reached the file is left for torn-write recovery. A new segment's
+  header is published whole (temp file, rename), so no segment exists with
+  a torn header.
+
   So an acknowledged assessment's snapshot is on disk before the
   acknowledgement. A crash between the steps leaves an **orphan snapshot**:
   counted, reported by `verify()`, and moved by archival. It is never an
   acknowledged record without its input.
 
 - **Torn tails.** A final line with no newline is an unacknowledged write.
-  The next append starts a fresh line and first writes a `torn-marker`
-  record. A reader classifies a bad line as follows:
+  The next append first writes a fence, a NUL and then a newline, followed
+  by a `torn-marker` record. The NUL matters: a fragment that happens to be
+  a complete record minus its newline can never later parse as an
+  acknowledged record. A reader classifies a bad line as follows:
   - followed by a marker: a recovered torn write;
   - last in its file: a torn tail;
   - anywhere else, or with a failing record digest: **interior
@@ -1632,7 +1644,25 @@ manifest.jsonl                 seal · archive · tombstone
   The seal is a manifest line with record count, byte size, file sha256 and
   time range. A crash after a new segment was opened but before the old one
   was sealed is repaired on the next mutation, which seals every unsealed
-  segment below the newest.
+  segment below the newest. That seal line was the last manifest write, so
+  the segment's bytes are as they were. This happens only while the
+  manifest has no **interior** damage: a seal lost there could be of any
+  age, and nothing is resealed. A segment is sealed once; a second seal
+  line is reported as manifest damage and ignored.
+- **Seal integrity.** The per-line digests cannot show that a whole line
+  was lost, so every sealed segment is judged against its seal (sha256 and
+  byte size). One judgment is used everywhere:
+  - by readers;
+  - by replay;
+  - by reference scanning before deletion;
+  - by interrupted-deletion recovery;
+  - by archival, which will not move a segment it cannot show whole.
+
+  The judgments are `intact`, `open` (the newest active segment, not yet
+  sealed), `seal-mismatch` and `missing-seal`. A reader salvages every
+  intact record from a damaged segment, and reports the finding with the
+  sealed and found record counts. It never presents the segment as whole.
+
 - **Archival**, per sealed segment:
   1. copy it to `archive/` (temp file, `fsync`, rename, directory `fsync`);
   2. verify the copy against the seal sha256;
@@ -1656,10 +1686,13 @@ manifest.jsonl                 seal · archive · tombstone
      only if no surviving segment, active or archived, references it.
   3. The segment is unlinked.
 
-  Deletion refuses if a surviving segment has unreadable interior lines,
-  because an unreadable line might reference a snapshot. A crash midway is
-  completed by recovery, which recomputes references first. Replay reports
-  a tombstoned segment as a **gap**, never as an absence.
+  Deletion refuses if a surviving segment has unreadable interior lines, a
+  `seal-mismatch` or a `missing-seal`: a lost or unreadable line might
+  reference a snapshot. A crash midway is completed by recovery, which
+  recomputes references first. Under the same judgment, while any survivor
+  is damaged, recovery removes the tombstoned segment and keeps every
+  snapshot. Replay reports a tombstoned segment as a **gap**, never as an
+  absence.
 
 - **Path safety.** Every path is rebuilt from a validated id:
   `seg-\d{8}` for segments and 64 lowercase hex characters for snapshots. A
@@ -1667,7 +1700,8 @@ manifest.jsonl                 seal · archive · tombstone
   matches no pattern, or is a symlink, is ignored and reported.
 - **Honest limits.** Deterministic fault injection and fresh readers
   demonstrate **logical recovery**. That covers every interruption point in
-  append, rotation, archival and deletion. It is not a demonstration of
+  append, rotation, archival and deletion. An injected write seam adds
+  short writes, zero progress and write errors. It is not a demonstration of
   power-loss durability: the tests cannot cut power, and `fsync` semantics
   are the filesystem's. Nor does it protect against a same-OS-user process
   editing the files (§M.7). Two writing processes are not excluded.
@@ -1720,9 +1754,16 @@ invalid-answer`, with a bounded excerpt of the raw output. The service
   re-validates every provider's answer before appending, mocks included.
 
 - **Replay** writes canonical report bytes. The report excludes physical
-  location (active or archive) and every wall-clock read, so archival does
-  not change it. **Currency** is a separate, live reader, and is never
-  written.
+  placement (active or archive, open or sealed) and every wall-clock read,
+  so successful archival does not change it.
+  - **Integrity findings are not dropped with placement.** The report lists
+    every finding the reader makes, including seal mismatches, missing
+    seals, differing copies and manifest damage.
+  - **`totals.history`** is `complete` only when there is no gap and no
+    damage finding. Unacknowledged torn writes and identical duplicates do
+    not make a history incomplete.
+
+  **Currency** is a separate, live reader, and is never written.
 
 ### O.5 What Phase 1 built, and what its tests establish
 
@@ -1750,6 +1791,23 @@ invalid-answer`, with a bounded excerpt of the raw output. The service
   digest, damaged snapshots and records reported.
 - **Torn and damaged lines:** torn tails fenced by a marker, and interior
   corruption named by segment and line.
+- **Seal integrity** (`integrity.test.ts`):
+  - a whole line lost from a sole archived segment is reported as
+    `seal-mismatch`, in the reader and in replay, and the history is
+    `incomplete`;
+  - a lost seal under manifest damage is reported, and is not resealed;
+  - a second seal is ignored;
+  - archival skips a damaged segment;
+  - fresh deletion refuses, and interrupted-deletion recovery keeps
+    snapshots, while a surviving sealed segment is damaged.
+- **Short writes:**
+  - `writeAll` over split writes, zero progress, and errors after partial
+    progress;
+  - every journal write through a seam that splits writes;
+  - a record write failing after part (or all but the newline) of its line
+    is not acknowledged, and its retry lands exactly once;
+  - a stalled snapshot publication calls no provider;
+  - a failed header write leaves no segment.
 - **Retries and concurrency:** idempotent retries, including a lost
   acknowledgement. Concurrent appends from two journal objects across
   rotations.
@@ -1790,6 +1848,9 @@ invalid-answer`, with a bounded excerpt of the raw output. The service
 - There is no protection against a same-user process.
 - Only one writing process is assumed.
 - Duplicate detection at append covers active segments only.
+- Seal integrity is ordinary corruption detection against the recorded
+  seals, not tamper resistance: a same-user process can rewrite a segment
+  and its seal alike.
 - Redaction is pattern-based, best effort.
 - No paid call was made. The adapter's behaviour against a live CLI is
   unverified beyond the injected envelopes.

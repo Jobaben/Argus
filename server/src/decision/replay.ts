@@ -19,11 +19,17 @@ import type { DecisionRegistry } from "./registry.js";
  * state. Ordering is the journal's own (segment, then line), and every map is
  * emitted through canonical JSON, so keys are sorted.
  *
- * Physical storage is deliberately absent: which store a segment or snapshot
- * lives in, sealing, and the manifest's own bookkeeping. Archival therefore
- * leaves the report byte-identical. Gaps (tombstoned or missing segments),
- * unavailable or damaged snapshots and integrity findings in the records are
- * reported explicitly, never smoothed over.
+ * Physical placement is deliberately absent: which store a segment or
+ * snapshot lives in, and whether a healthy segment is open or sealed.
+ * Successful archival therefore leaves the report byte-identical.
+ *
+ * Integrity findings are not dropped along with placement. The report
+ * lists every finding the reader makes: record damage, seal mismatches and
+ * missing seals, differing copies, manifest damage, stray files and
+ * incomplete deletions. It also lists gaps and unavailable or damaged
+ * snapshots. `totals.history` is `complete` only when there is no gap and
+ * no damage finding. Benign findings (a torn or recovered unacknowledged
+ * write, an identical duplicate) do not make a history incomplete.
  */
 
 export interface ReportRef {
@@ -35,15 +41,11 @@ export const JOURNAL_REPORT_V1: ReportRef = { id: "decision-journal-report", ver
 
 const SUPPORTED = new Set([`${JOURNAL_REPORT_V1.id}@${JOURNAL_REPORT_V1.version}`]);
 
-/** Integrity findings that describe records, not where they are stored. */
-const RECORD_NOTICES: ReadonlySet<JournalNoticeKind> = new Set<JournalNoticeKind>([
+/** Findings about writes that were never acknowledged, or repeated identically: no record is lost. */
+const BENIGN: ReadonlySet<JournalNoticeKind> = new Set<JournalNoticeKind>([
   "torn-tail",
   "recovered-torn-write",
-  "corrupt-line",
-  "malformed-record",
-  "missing-header",
   "duplicate",
-  "conflict",
 ]);
 
 export type SnapshotAvailability = "retained" | "unavailable" | "corrupt";
@@ -172,15 +174,17 @@ export function renderReport(
     report: { id: report.id, version: report.version },
     segments: view.segments.map((s) => ({ segment: s.segment, records: s.records })),
     gaps: view.gaps,
-    integrity: view.notices
-      .filter((n) => RECORD_NOTICES.has(n.kind))
-      .map((n) => ({
-        kind: n.kind,
-        segment: n.segment ?? null,
-        line: n.line ?? null,
-        detail: n.detail,
-      })),
+    integrity: view.notices.map((n) => ({
+      kind: n.kind,
+      segment: n.segment ?? null,
+      line: n.line ?? null,
+      detail: n.detail,
+    })),
     totals: {
+      history:
+        view.gaps.length === 0 && view.notices.every((n) => BENIGN.has(n.kind))
+          ? "complete"
+          : "incomplete",
       assessments: assessments.length,
       unavailableSnapshots: assessments.filter((a) => a.snapshot.availability !== "retained")
         .length,

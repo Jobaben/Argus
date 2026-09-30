@@ -1,4 +1,13 @@
-import { mkdir, open, readdir, readFile, rename, rm, lstat } from "node:fs/promises";
+import {
+  mkdir,
+  open,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  lstat,
+  type FileHandle,
+} from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { canonicalJson, sha256Hex, SHA256_RE } from "./canonical.js";
@@ -158,6 +167,56 @@ export async function syncDir(dir: string): Promise<void> {
 export type FaultHook = (point: string) => void | Promise<void>;
 
 /**
+ * One positional-less write: the seam through which every journal byte
+ * reaches a file. `FileHandle.write` may write fewer bytes than asked (a
+ * short write) and reports how many; the default passes straight through.
+ */
+export type WriteFn = (
+  fh: FileHandle,
+  data: Buffer,
+  offset: number,
+  length: number,
+) => Promise<{ bytesWritten: number }>;
+
+export const defaultWrite: WriteFn = (fh, data, offset, length) =>
+  fh.write(data, offset, length, null);
+
+export class ShortWriteError extends Error {
+  constructor(
+    readonly written: number,
+    readonly intended: number,
+  ) {
+    super(`write made no progress after ${written} of ${intended} bytes`);
+    this.name = "ShortWriteError";
+  }
+}
+
+/**
+ * Write every byte of `data`, looping over short writes. It never returns
+ * until all intended bytes are written. Zero progress (or an impossible
+ * count) throws `ShortWriteError`, and a write error propagates as-is, with
+ * whatever prefix already reached the file left for torn-write recovery.
+ */
+export async function writeAll(
+  fh: FileHandle,
+  data: Buffer,
+  write: WriteFn = defaultWrite,
+): Promise<void> {
+  let done = 0;
+  while (done < data.length) {
+    const { bytesWritten } = await write(fh, data, done, data.length - done);
+    if (
+      !Number.isSafeInteger(bytesWritten) ||
+      bytesWritten <= 0 ||
+      bytesWritten > data.length - done
+    ) {
+      throw new ShortWriteError(done, data.length);
+    }
+    done += bytesWritten;
+  }
+}
+
+/**
  * Publish bytes at `file` atomically and durably: temp sibling, fsync,
  * rename, fsync the directory. `fault` runs between the steps so tests can
  * interrupt each one.
@@ -167,13 +226,14 @@ export async function publishFile(
   data: Buffer,
   fault: FaultHook,
   label: string,
+  write: WriteFn = defaultWrite,
 ): Promise<void> {
   const dir = path.dirname(file);
   await mkdir(dir, { recursive: true });
   const tmp = `${file}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   const fh = await open(tmp, "wx");
   try {
-    await fh.write(data);
+    await writeAll(fh, data, write);
     await fh.sync();
   } finally {
     await fh.close();
@@ -185,10 +245,17 @@ export async function publishFile(
 }
 
 /**
+ * Closes a torn fragment. A NUL cannot end valid JSON, so a fragment that
+ * happens to be a complete record minus its newline can never later parse
+ * as an acknowledged record.
+ */
+export const TORN_FENCE = "\u0000\n";
+
+/**
  * The prefix an append must write first when `file` ends in a torn write:
- * a newline, so the next record starts on a fresh line, and a torn marker,
- * so readers can tell that fragment from interior damage. Empty when the
- * file ends cleanly (or does not exist).
+ * the fence (which also starts the next record on a fresh line), and a
+ * torn marker, so readers can tell that fragment from interior damage.
+ * Empty when the file ends cleanly (or does not exist).
  */
 export async function tornPrefix(file: string, markerAt: string): Promise<string> {
   let fh;
@@ -208,19 +275,24 @@ export async function tornPrefix(file: string, markerAt: string): Promise<string
     const nl = buf.lastIndexOf(0x0a);
     // Bytes of the fragment back to the previous newline (a floor past 1 MiB).
     const fragmentBytes = nl === -1 ? window : window - nl - 1;
-    return `\n${encodeLine(TORN_MARKER, { fragmentBytes, at: markerAt }).text}`;
+    return `${TORN_FENCE}${encodeLine(TORN_MARKER, { fragmentBytes, at: markerAt }).text}`;
   } finally {
     await fh.close();
   }
 }
 
 /** Append `prefix` and lines in one write, then fsync. Returns bytes written. */
-export async function appendLines(file: string, prefix: string, lines: string[]): Promise<number> {
+export async function appendLines(
+  file: string,
+  prefix: string,
+  lines: string[],
+  write: WriteFn = defaultWrite,
+): Promise<number> {
   await mkdir(path.dirname(file), { recursive: true });
   const fh = await open(file, "a");
   try {
     const data = Buffer.from(prefix + lines.join(""), "utf8");
-    await fh.write(data);
+    await writeAll(fh, data, write);
     await fh.sync();
     return data.length;
   } finally {

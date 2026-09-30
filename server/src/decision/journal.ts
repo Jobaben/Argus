@@ -14,14 +14,14 @@ import {
   removeFile,
   segmentId,
   segmentSeq,
-  syncDir,
   TORN_MARKER,
   tornPrefix,
+  defaultWrite,
   type FaultHook,
+  type WriteFn,
   type Layout,
   type Store,
 } from "./storage.js";
-import { mkdir, open } from "node:fs/promises";
 
 /**
  * The Decision Journal: append-only, segmented, with retained
@@ -104,6 +104,8 @@ export type JournalNoticeKind =
   | "duplicate"
   | "conflict"
   | "copy-mismatch"
+  | "seal-mismatch"
+  | "missing-seal"
   | "deletion-incomplete"
   | "unexpected-file"
   | "manifest-damage";
@@ -130,7 +132,15 @@ export interface SegmentView {
   store: Store;
   sealed: boolean;
   records: number;
+  /**
+   * The copy read, judged against its manifest seal. `open` is the newest
+   * active segment, which has no seal yet. `seal-mismatch` and
+   * `missing-seal` mean records may be missing: what is listed was salvaged.
+   */
+  integrity: SegmentIntegrity;
 }
+
+export type SegmentIntegrity = "intact" | "open" | "seal-mismatch" | "missing-seal";
 
 export interface JournalView {
   segments: SegmentView[];
@@ -161,6 +171,8 @@ interface Tombstone {
   segment: string;
   sha256: string;
   records: number;
+  /** The deleted segment's bytes judged against its seal, at deletion. */
+  integrity: SegmentIntegrity;
   firstAt: string | null;
   lastAt: string | null;
   deletedSnapshots: string[];
@@ -175,6 +187,8 @@ interface Manifest {
   archived: Set<string>;
   tombstones: Map<string, Tombstone>;
   notices: JournalNotice[];
+  /** Damage before the final line: a lost seal there could be of any age. */
+  interiorDamage: number;
   bytes: number;
 }
 
@@ -184,6 +198,7 @@ async function readManifest(l: Layout): Promise<Manifest> {
     archived: new Set(),
     tombstones: new Map(),
     notices: [],
+    interiorDamage: 0,
     bytes: 0,
   };
   const text = await readText(l.manifestPath());
@@ -193,6 +208,7 @@ async function readManifest(l: Layout): Promise<Manifest> {
   for (const line of parsed.lines) {
     if (!line.ok) {
       if (!parsed.recoveredTorn.has(line.line)) {
+        m.interiorDamage++;
         m.notices.push({ kind: "manifest-damage", line: line.line, detail: line.problem });
       }
       continue;
@@ -201,13 +217,38 @@ async function readManifest(l: Layout): Promise<Manifest> {
     const b = line.body as Record<string, unknown>;
     const seg = typeof b?.segment === "string" && segmentSeq(b.segment) ? b.segment : null;
     if (!seg) {
+      m.interiorDamage++;
       m.notices.push({ kind: "manifest-damage", line: line.line, detail: "no segment id" });
       continue;
     }
-    if (line.kind === "seal") m.seals.set(seg, b as unknown as SealEntry);
-    else if (line.kind === "archive") m.archived.add(seg);
+    if (line.kind === "seal") {
+      const seal = b as unknown as SealEntry;
+      if (
+        typeof seal.sha256 !== "string" ||
+        typeof seal.bytes !== "number" ||
+        typeof seal.records !== "number"
+      ) {
+        m.interiorDamage++;
+        m.notices.push({
+          kind: "manifest-damage",
+          line: line.line,
+          detail: `malformed seal for ${seg}`,
+        });
+      } else if (m.seals.has(seg)) {
+        // A segment is sealed once; a second seal cannot re-bless its bytes.
+        m.interiorDamage++;
+        m.notices.push({
+          kind: "manifest-damage",
+          line: line.line,
+          detail: `second seal for ${seg} ignored`,
+        });
+      } else m.seals.set(seg, seal);
+    } else if (line.kind === "archive") m.archived.add(seg);
     else if (line.kind === "tombstone") m.tombstones.set(seg, b as unknown as Tombstone);
-    else m.notices.push({ kind: "manifest-damage", line: line.line, detail: `kind ${line.kind}` });
+    else {
+      m.interiorDamage++;
+      m.notices.push({ kind: "manifest-damage", line: line.line, detail: `kind ${line.kind}` });
+    }
   }
   if (parsed.tornTail > 0) {
     m.notices.push({
@@ -216,6 +257,54 @@ async function readManifest(l: Layout): Promise<Manifest> {
     });
   }
   return m;
+}
+
+// ── Seal integrity ──────────────────────────────────────────────────────────
+
+/**
+ * The one integrity judgment for a segment's bytes, used by readers, by
+ * reference scanning before deletion, and by recovery.
+ *
+ * A sealed segment must match its seal exactly (sha256 and size); per-line
+ * digests alone cannot show that a whole line is missing. A segment with
+ * no seal is acceptable only as the newest active segment, the one still
+ * open. Anything else lacks the metadata that could show it is complete.
+ */
+function judgeSegment(
+  id: string,
+  bytes: Buffer,
+  seal: SealEntry | undefined,
+  mayBeOpen: boolean,
+  records: number,
+): { integrity: SegmentIntegrity; notice?: JournalNotice } {
+  if (!seal) {
+    if (mayBeOpen) return { integrity: "open" };
+    return {
+      integrity: "missing-seal",
+      notice: {
+        kind: "missing-seal",
+        segment: id,
+        detail: `no seal in the manifest; ${records} readable records cannot be shown complete`,
+      },
+    };
+  }
+  if (bytes.length === seal.bytes && sha256Hex(bytes) === seal.sha256)
+    return { integrity: "intact" };
+  return {
+    integrity: "seal-mismatch",
+    notice: {
+      kind: "seal-mismatch",
+      segment: id,
+      detail: `sealed with ${seal.records} records in ${seal.bytes} bytes; found ${records} readable records in ${bytes.length} bytes`,
+    },
+  };
+}
+
+/** The newest segment id in the active store: the only one that may be unsealed. */
+function newestActive(ids: Iterable<string>): string | null {
+  let best: string | null = null;
+  for (const id of ids) if (!best || id > best) best = id;
+  return best;
 }
 
 // ── Segment parsing ─────────────────────────────────────────────────────────
@@ -377,6 +466,8 @@ export interface JournalOptions {
   now?: () => Date;
   /** Called at each step boundary; throwing simulates the process failing there. */
   fault?: FaultHook;
+  /** The write primitive, for injecting short writes and write errors in tests. */
+  write?: WriteFn;
 }
 
 export interface AppendResult {
@@ -409,6 +500,7 @@ export class DecisionJournal {
   readonly limits: JournalLimits;
   private readonly now: () => Date;
   private readonly fault: FaultHook;
+  private readonly write: WriteFn;
   private state: State | null = null;
 
   constructor(opts: JournalOptions) {
@@ -423,6 +515,7 @@ export class DecisionJournal {
     }
     this.now = opts.now ?? (() => new Date());
     this.fault = opts.fault ?? (() => {});
+    this.write = opts.write ?? defaultWrite;
   }
 
   private key(): string {
@@ -536,11 +629,16 @@ export class DecisionJournal {
       }
     }
     // Only the newest active segment may be open; seal any older one left
-    // unsealed by an interrupted rotation.
+    // unsealed by an interrupted rotation. Its seal line was the last
+    // manifest write, torn or never made, so its bytes are as they were
+    // then. With interior manifest damage a lost seal could be of any age, so
+    // nothing is resealed and readers keep reporting `missing-seal`.
     const newest = ordered.at(-1);
     for (const id of ordered) {
       const seg = state.active.get(id)!;
-      if (!seg.sealed && id !== newest) await this.seal(seg, "recovered");
+      if (!seg.sealed && id !== newest && manifest.interiorDamage === 0) {
+        await this.seal(seg, "recovered");
+      }
     }
     state.activeBytes = sumActive(state);
     return state;
@@ -582,20 +680,43 @@ export class DecisionJournal {
     const l = this.layout;
     const manifest = await readManifest(l);
     const refs = new Set<string>();
-    const corrupt: string[] = [];
-    for (const store of ["active", "archive"] as const) {
-      for (const [id] of (await list(l, store)).segments) {
+    const act = await list(l, "active");
+    const arc = await list(l, "archive");
+    const openId = newestActive(act.segments.keys());
+    // Per segment: whether some copy is whole (matches its seal, or is the
+    // open segment) and free of unreadable lines. References are the union of
+    // every copy's readable lines.
+    const whole = new Map<string, boolean>();
+    for (const [store, listing] of [
+      ["active", act],
+      ["archive", arc],
+    ] as const) {
+      for (const [id] of listing.segments) {
         if (excluded.has(id) || manifest.tombstones.has(id)) continue;
-        const text = (await readText(l.segmentPath(store, id))) ?? "";
-        const parsed = parseSegment(id, text);
-        if (parsed.corrupt > 0) corrupt.push(id);
+        const bytes = (await readBytes(l.segmentPath(store, id))) ?? Buffer.alloc(0);
+        const parsed = parseSegment(id, bytes.toString("utf8"));
+        const judged = judgeSegment(
+          id,
+          bytes,
+          manifest.seals.get(id),
+          store === "active" && id === openId,
+          parsed.entries.length,
+        );
+        const ok =
+          parsed.corrupt === 0 && (judged.integrity === "intact" || judged.integrity === "open");
+        whole.set(id, (whole.get(id) ?? false) || ok);
         for (const r of parsed.refs) refs.add(r);
       }
     }
+    // A segment with lost or unreadable lines may have referenced any snapshot.
+    const corrupt = [...whole]
+      .filter(([, ok]) => !ok)
+      .map(([id]) => id)
+      .sort();
     if (corrupt.length > 0 && !tolerateCorrupt) {
       throw new JournalError(
         "unreadable-references",
-        `segments ${corrupt.join(", ")} have unreadable lines that may reference snapshots; refusing to delete any`,
+        `segments ${corrupt.join(", ")} have unreadable or missing lines that may reference snapshots; refusing to delete any`,
       );
     }
     return { refs, corrupt };
@@ -609,7 +730,12 @@ export class DecisionJournal {
 
   private async appendManifest(kind: string, body: unknown): Promise<void> {
     const file = this.layout.manifestPath();
-    await appendLines(file, await tornPrefix(file, this.iso()), [encodeLine(kind, body).text]);
+    await appendLines(
+      file,
+      await tornPrefix(file, this.iso()),
+      [encodeLine(kind, body).text],
+      this.write,
+    );
   }
 
   private async seal(seg: ActiveSegment, reason: SealEntry["reason"]): Promise<void> {
@@ -648,16 +774,15 @@ export class DecisionJournal {
     header: { id: string; seq: number; openedAt: string; text: string },
   ): Promise<ActiveSegment> {
     const { id, seq } = header;
-    const file = this.layout.segmentPath("active", id);
-    await mkdir(path.dirname(file), { recursive: true });
-    const fh = await open(file, "wx");
-    try {
-      await fh.write(header.text);
-      await fh.sync();
-    } finally {
-      await fh.close();
-    }
-    await syncDir(path.dirname(file));
+    // Published whole (temp file, fsync, rename, directory fsync), so a
+    // segment never exists with a torn header.
+    await publishFile(
+      this.layout.segmentPath("active", id),
+      Buffer.from(header.text, "utf8"),
+      this.fault,
+      "segment-open",
+      this.write,
+    );
     const seg: ActiveSegment = {
       id,
       seq,
@@ -719,7 +844,13 @@ export class DecisionJournal {
   }
 
   private async publishInto(s: State, sha: string, buf: Buffer, replace: boolean): Promise<void> {
-    await publishFile(this.layout.snapshotPath("active", sha), buf, this.fault, "snapshot");
+    await publishFile(
+      this.layout.snapshotPath("active", sha),
+      buf,
+      this.fault,
+      "snapshot",
+      this.write,
+    );
     if (!replace) {
       s.activeSnapshots.set(sha, buf.length);
       s.activeBytes += buf.length;
@@ -810,7 +941,7 @@ export class DecisionJournal {
       if (!snap.present) await this.publishInto(s, snapshot.sha256, snapBuf, snap.replaceActive);
       await this.fault("append:before-line");
       const file = this.layout.segmentPath("active", seg!.id);
-      const written = await appendLines(file, prefix, [line.text]);
+      const written = await appendLines(file, prefix, [line.text], this.write);
       seg!.bytes += written;
       seg!.endsMidLine = false;
       seg!.refs.add(snapshot.sha256);
@@ -851,7 +982,13 @@ export class DecisionJournal {
           result.skipped.push({ segment: seg.id, reason: "segment bytes differ from its seal" });
           continue;
         }
-        await publishFile(l.segmentPath("archive", seg.id), bytes, this.fault, "archive-segment");
+        await publishFile(
+          l.segmentPath("archive", seg.id),
+          bytes,
+          this.fault,
+          "archive-segment",
+          this.write,
+        );
         const copy = await readBytes(l.segmentPath("archive", seg.id));
         if (!copy || sha256Hex(copy) !== seal.sha256) {
           result.skipped.push({ segment: seg.id, reason: "archive copy did not verify" });
@@ -883,7 +1020,13 @@ export class DecisionJournal {
           });
           continue;
         }
-        await publishFile(l.snapshotPath("archive", sha), bytes, this.fault, "archive-snapshot");
+        await publishFile(
+          l.snapshotPath("archive", sha),
+          bytes,
+          this.fault,
+          "archive-snapshot",
+          this.write,
+        );
         result.snapshots.push(sha);
       }
       if (result.snapshots.length > 0) {
@@ -940,6 +1083,13 @@ export class DecisionJournal {
         segment: req.segment,
         sha256: sha256Hex(bytes),
         records: parsed.entries.length,
+        integrity: judgeSegment(
+          req.segment,
+          bytes,
+          manifest.seals.get(req.segment),
+          false,
+          parsed.entries.length,
+        ).integrity,
         firstAt: parsed.firstAt,
         lastAt: parsed.lastAt,
         deletedSnapshots: deleted,
@@ -1039,6 +1189,7 @@ async function readView(l: Layout): Promise<JournalView> {
     ...manifest.tombstones.keys(),
   ]);
   const maxSeq = Math.max(0, ...[...ids].map((id) => segmentSeq(id) ?? 0));
+  const openId = newestActive(act.segments.keys());
   const seen = new Map<string, JournalEntry>();
   for (let seq = 1; seq <= maxSeq; seq++) {
     const id = segmentId(seq);
@@ -1073,26 +1224,46 @@ async function readView(l: Layout): Promise<JournalView> {
       continue;
     }
     const seal = manifest.seals.get(id);
-    let store: Store = inArchive ? "archive" : "active";
-    let bytes = await readBytes(l.segmentPath(store, id));
-    if (inActive && inArchive) {
-      const other = await readBytes(l.segmentPath("active", id));
-      const archiveOk = !!bytes && !!seal && sha256Hex(bytes) === seal.sha256;
-      if (!bytes || !other || !bytes.equals(other)) {
-        view.notices.push({
-          kind: "copy-mismatch",
-          segment: id,
-          detail: "active and archive copies differ",
-        });
-        if (!archiveOk) {
-          store = "active";
-          bytes = other;
-        }
-      }
+    // Judge every copy against the seal; read a whole one if any is whole,
+    // preferring the archive's. Otherwise salvage what is readable and say so.
+    const copies: Array<{
+      store: Store;
+      bytes: Buffer;
+      parsed: ParsedSegment;
+      judged: ReturnType<typeof judgeSegment>;
+    }> = [];
+    for (const store of ["archive", "active"] as const) {
+      if (store === "archive" ? !inArchive : !inActive) continue;
+      const bytes = (await readBytes(l.segmentPath(store, id))) ?? Buffer.alloc(0);
+      const parsed = parseSegment(id, bytes.toString("utf8"));
+      const mayBeOpen = store === "active" && id === openId;
+      copies.push({
+        store,
+        bytes,
+        parsed,
+        judged: judgeSegment(id, bytes, seal, mayBeOpen, parsed.entries.length),
+      });
     }
-    const parsed = parseSegment(id, (bytes ?? Buffer.alloc(0)).toString("utf8"));
+    if (copies.length === 2 && !copies[0].bytes.equals(copies[1].bytes)) {
+      view.notices.push({
+        kind: "copy-mismatch",
+        segment: id,
+        detail: "the two stored copies of this segment differ",
+      });
+    }
+    const chosen =
+      copies.find((c) => c.judged.integrity === "intact" || c.judged.integrity === "open") ??
+      copies[0];
+    const { parsed, judged } = chosen;
+    if (judged.notice) view.notices.push(judged.notice);
     view.notices.push(...parsed.notices);
-    view.segments.push({ segment: id, store, sealed: !!seal, records: parsed.entries.length });
+    view.segments.push({
+      segment: id,
+      store: chosen.store,
+      sealed: !!seal,
+      records: parsed.entries.length,
+      integrity: judged.integrity,
+    });
     for (const e of parsed.entries) {
       const prior = seen.get(e.assessment.id);
       if (prior) {
