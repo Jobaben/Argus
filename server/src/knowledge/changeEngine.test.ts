@@ -19,6 +19,7 @@ import { readInvocation } from "../sources/runs.js";
 import { buildPhaseReview } from "../sources/artifacts.js";
 import { readJournal } from "../sources/journal.js";
 import { readProposalRecord } from "./changeStaging.js";
+import { argusWorkRoot } from "../claudeHome.js";
 import { knowledgeDeltaFile, readDeltaRecord } from "./staging.js";
 import {
   commitPhaseSemantics,
@@ -1055,7 +1056,7 @@ test("the journal records the proposal being staged and accepted", async () => {
 
 test("the proposal is staged per run, beside the delta and never inside the ledger", async () => {
   const { runId } = await toGate();
-  const dir = path.join(home, "argus", "change-proposals", runId);
+  const dir = path.join(argusWorkRoot(), "change-proposals", runId);
   assert.ok(existsSync(path.join(dir, "proposal.json")), "the agent's document");
   assert.ok(existsSync(path.join(dir, "staged.json")), "Argus's record");
   const record = JSON.parse(

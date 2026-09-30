@@ -98,7 +98,11 @@ function version() {
 function run(args, label) {
   console.log(`[argus] ${label}…`);
   // Node refuses to spawn .cmd files without a shell (CVE-2024-27980 → EINVAL).
-  const res = spawnSync(npm, args, { cwd: root, stdio: "inherit", shell: process.platform === "win32" });
+  const res = spawnSync(npm, args, {
+    cwd: root,
+    stdio: "inherit",
+    shell: process.platform === "win32",
+  });
   if (res.status !== 0) fail(`${label} failed (exit ${res.status ?? "?"})`);
 }
 
