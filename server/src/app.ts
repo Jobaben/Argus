@@ -147,7 +147,12 @@ import {
 import { newSecret, pairingId, seal } from "./federation/envelope.js";
 import { buildSummary } from "./federation/summary.js";
 import { buildFleet } from "./federation/fleet.js";
-import type { GateDecisionPrincipal, H2CollectionStatus, MachineSummary } from "@argus/contracts";
+import type {
+  GateDecisionPrincipal,
+  H1CollectionStatus,
+  H2CollectionStatus,
+  MachineSummary,
+} from "@argus/contracts";
 import { buildGateDecisionsResponse, readGateDecisions } from "./sources/gateDecisions.js";
 import { buildOverview } from "./sources/overview.js";
 import { buildPalette } from "./sources/palette.js";
@@ -183,6 +188,7 @@ import {
 import { VERSION } from "./version.js";
 import { knowledgeRoutes } from "./knowledge/routes.js";
 import { mountWebApp } from "./static.js";
+import { readH1ReportResponse } from "./decision/h1/entry.js";
 import { readH2ReportResponse } from "./decision/h2/entry.js";
 import { buildRunFailurePayload, postWebhook } from "./notify.js";
 
@@ -226,6 +232,7 @@ export interface AppDeps {
    * calls nothing. Absent = derived from the environment alone.
    */
   decisionsH2Status?: () => H2CollectionStatus;
+  decisionsH1Status?: () => H1CollectionStatus;
 }
 
 /**
@@ -1571,6 +1578,14 @@ export function createApp(deps: AppDeps): Hono {
   // snapshot body or model rationale leaves the journal here.
   app.get("/api/decisions/h2", async (c) =>
     c.json(await readH2ReportResponse(deps.decisionsH2Status)),
+  );
+
+  // The H1 shadow experiment's report (RFC §Q.11). Read-only like H2's, and
+  // blinded: only gates whose attempt has been settled contribute; a pending
+  // gate appears only in aggregate counts, so nothing here can show an
+  // operator the prediction for a gate still waiting on them.
+  app.get("/api/decisions/h1", async (c) =>
+    c.json(await readH1ReportResponse(deps.decisionsH1Status)),
   );
 
   /**

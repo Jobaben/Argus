@@ -60,14 +60,26 @@ export interface WorkingTreeSnapshot {
   truncated?: boolean;
 }
 
+/**
+ * How git is read. `readOnly` passes `--no-optional-locks`, so a status or
+ * diff never refreshes the index as a side effect: what an observer (the
+ * Decision Plane's H1 collection) uses. The default is how Argus has always
+ * run git here.
+ */
+export interface GitReadOptions {
+  readOnly?: boolean;
+}
+
 function runGit(
   args: string[],
   cwd: string,
+  opts: GitReadOptions = {},
 ): Promise<{ code: number | null; stdout: Buffer; stderr: string }> {
+  const argv = opts.readOnly ? ["--no-optional-locks", ...args] : args;
   return new Promise((resolve) => {
     let child;
     try {
-      child = nodeSpawn("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+      child = nodeSpawn("git", argv, { cwd, stdio: ["ignore", "pipe", "pipe"] });
     } catch (e) {
       resolve({
         code: null,
@@ -97,14 +109,21 @@ function runGit(
  * presence) changes. Returns null when `cwd` is not inside a git work tree,
  * or git itself is unavailable — this never throws.
  */
-export async function snapshotWorkingTree(cwd: string): Promise<WorkingTreeSnapshot | null> {
-  const top = await runGit(["rev-parse", "--show-toplevel"], cwd);
+export async function snapshotWorkingTree(
+  cwd: string,
+  opts: GitReadOptions = {},
+): Promise<WorkingTreeSnapshot | null> {
+  const top = await runGit(["rev-parse", "--show-toplevel"], cwd, opts);
   if (top.code !== 0) return null;
 
-  const headRes = await runGit(["rev-parse", "HEAD"], cwd);
+  const headRes = await runGit(["rev-parse", "HEAD"], cwd, opts);
   const head = headRes.code === 0 ? headRes.stdout.toString("utf8").trim() : null;
 
-  const statusRes = await runGit(["status", "--porcelain=v1", "-z", "--untracked-files=all"], cwd);
+  const statusRes = await runGit(
+    ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    cwd,
+    opts,
+  );
   if (statusRes.code !== 0) return { head, dirty: {} };
 
   const dirty: Record<string, string> = {};
@@ -161,19 +180,61 @@ export async function committedSince(
   baseline: WorkingTreeSnapshot,
   current: WorkingTreeSnapshot,
   cwd: string,
+  opts: GitReadOptions = {},
 ): Promise<string[] | null> {
   if (baseline.head === current.head) return [];
   if (current.head === null) return null;
   const res =
     baseline.head === null
-      ? await runGit(["ls-tree", "-r", "--name-only", current.head], cwd)
-      : await runGit(["diff", "--name-only", baseline.head, current.head], cwd);
+      ? await runGit(["ls-tree", "-r", "--name-only", current.head], cwd, opts)
+      : await runGit(["diff", "--name-only", baseline.head, current.head], cwd, opts);
   if (res.code !== 0) return null;
   return res.stdout
     .toString("utf8")
     .split("\n")
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
+}
+
+/** Line counts of the tracked changes between `base` and the working tree. */
+export interface DiffNumstat {
+  /** Files git reported, text and binary. */
+  files: number;
+  insertions: number;
+  deletions: number;
+  /** Files git reported as binary, which have no line counts. */
+  binary: number;
+}
+
+/**
+ * `git diff --numstat` from `base` to the working tree: committed and
+ * uncommitted changes to tracked files, never their content. Untracked files
+ * are not included (git has no line counts for them). Null when the diff
+ * cannot be computed, never a guessed zero.
+ */
+export async function diffNumstat(
+  base: string,
+  cwd: string,
+  opts: GitReadOptions = {},
+): Promise<DiffNumstat | null> {
+  const res = await runGit(
+    ["diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", base],
+    cwd,
+    opts,
+  );
+  if (res.code !== 0) return null;
+  const out: DiffNumstat = { files: 0, insertions: 0, deletions: 0, binary: 0 };
+  for (const entry of res.stdout.toString("utf8").split("\0")) {
+    const m = /^(\d+|-)\t(\d+|-)\t/.exec(entry);
+    if (!m) continue;
+    out.files++;
+    if (m[1] === "-" || m[2] === "-") out.binary++;
+    else {
+      out.insertions += Number(m[1]);
+      out.deletions += Number(m[2]);
+    }
+  }
+  return out;
 }
 
 /**

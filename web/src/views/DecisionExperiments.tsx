@@ -13,6 +13,7 @@ import type {
   H2Usage,
 } from "@argus/contracts";
 import { useDecisionExperiments } from "../useDecisionExperiments";
+import { DecisionH1Section } from "./DecisionH1";
 import { AlertStrip, Card, EmptyState, Handoff, Page, Section, SkeletonRows } from "../ds";
 
 // ── Formatting ──────────────────────────────────────────────────────────────
@@ -620,6 +621,7 @@ export default function DecisionExperiments() {
       <Handoff busy={loading && !data} label="H2 report" skeleton={<SkeletonRows count={4} />}>
         {data ? <Report data={data} /> : !error && <EmptyState>No report available.</EmptyState>}
       </Handoff>
+      <DecisionH1Section />
     </Page>
   );
 }

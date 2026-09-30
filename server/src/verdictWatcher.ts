@@ -2,14 +2,9 @@ import {
   currentVerdicts,
   performVerdict,
   readVerdicts,
-  rubricDigest,
   type VerdictDeps,
 } from "./sources/verdict.js";
-import {
-  gateRelevantSteps,
-  knowledgeCommitReasons,
-  stagedKnowledgeReasons,
-} from "./sources/gatePolicy.js";
+import { autoApprovalQualification } from "./sources/gatePolicy.js";
 import type { AutomatedApproval } from "./pipelineEngine.js";
 import type { PipelineDefinition, PipelineInstance } from "./sources/pipelineTypes.js";
 import type { Run, Schedule } from "./sources/scheduleTypes.js";
@@ -186,14 +181,16 @@ async function openQualifiedGates(
     for (const phase of inst.phases) {
       // Only a gate pause: a `needs-input` pause is a question for a person,
       // and a pause of unknown cause (written before causes were recorded)
-      // is treated as one.
-      if (phase.status !== "awaiting-approval" || phase.pause !== "gate") continue;
-      const phaseDef = def?.phases.find((p) => p.id === phase.id);
-      const bar = phaseDef?.autoApprove?.verdict;
-      if (!phaseDef || bar === undefined || !phaseDef.rubric) continue;
-
-      const reasons = [...knowledgeCommitReasons(phaseDef), ...stagedKnowledgeReasons(phase)];
-      if (reasons.length > 0) {
+      // is treated as one. A pre-check only, over what this tick read: the
+      // engine decides again, from the verdict store under its lock, and
+      // records the basis from the stored verdicts — this request only names
+      // which ones.
+      const q = autoApprovalQualification(
+        phase,
+        def?.phases.find((p) => p.id === phase.id),
+        byRun,
+      );
+      if (q.status === "ineligible" && q.cause === "knowledge") {
         const key = `${inst.id}|${phase.id}|${phase.attempt}`;
         if (!withheld.has(key)) {
           withheld.add(key);
@@ -201,35 +198,19 @@ async function openQualifiedGates(
             inst.id,
             phase.id,
             phase.attempt,
-            `autoApprove is not applied: this gate commits knowledge (${reasons.join(", ")}) ` +
+            `autoApprove is not applied: this gate commits knowledge (${q.reasons.join(", ")}) ` +
               "and needs a person",
           );
         }
         continue;
       }
-
-      const steps = gateRelevantSteps(phase);
-      if (steps.length === 0 || steps.some((st) => !st.runId || st.status !== "succeeded")) {
-        continue;
-      }
-      const digest = rubricDigest(phaseDef.rubric);
-      // A pre-check only, over what this tick read: the engine decides again,
-      // from the verdict store under its lock, and records the basis from the
-      // stored verdicts — this request only names which ones.
-      const basis: AutomatedApproval["verdicts"] = [];
-      const scores: number[] = [];
-      for (const step of steps) {
-        const v = byRun.get(step.runId as string);
-        if (!v || !v.id || v.status !== "ready" || v.score === null || v.rubricDigest !== digest) {
-          break;
-        }
-        basis.push({ runId: v.runId, verdictId: v.id });
-        scores.push(v.score);
-      }
-      if (basis.length !== steps.length) continue; // not completely judged yet
-
-      const lowest = Math.min(...scores);
-      if (lowest < bar) continue;
+      // Not completely judged yet, not configured, or below the bar.
+      if (q.status !== "qualifies") continue;
+      const basis: AutomatedApproval["verdicts"] = q.basis.map((b) => ({
+        runId: b.runId,
+        verdictId: b.verdictId,
+      }));
+      const lowest = q.lowest;
 
       try {
         const res = await deps.approveAutomatically({

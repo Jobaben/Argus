@@ -50,7 +50,7 @@ import { failingVerdicts, readCurrentVerdicts, readVerdicts } from "./sources/ve
 import { readPipelines } from "./sources/pipelines.js";
 import { readInstances } from "./sources/instances.js";
 import { createAnalysisRunner } from "./sources/analysis.js";
-import { countAnalysisPasses, createH2Collection } from "./decision/h2/entry.js";
+import { countAnalysisPasses, createShadowExperiments } from "./decision/experiments.js";
 import { readSessionLines } from "./sources/sessions.js";
 import { readSchedules } from "./sources/schedules.js";
 import { createApp } from "./app.js";
@@ -117,9 +117,11 @@ const auth = createAuthService({ store: users });
 // runner's, and the H2 shadow collection below can see that another feature
 // ran a pass since its last check and stand aside (RFC §P.4).
 const analysis = countAnalysisPasses(createAnalysisRunner());
-// H2 shadow collection (RFC §P). Off unless ARGUS_DECISIONS=on and
-// ARGUS_DECISIONS_H2_COLLECT=on; building it touches no file.
-const h2 = createH2Collection({ runner: analysis });
+// The shadow experiments (RFC §P, §Q): H2 off unless ARGUS_DECISIONS=on and
+// ARGUS_DECISIONS_H2_COLLECT=on, H1 off unless ARGUS_DECISIONS=on and
+// ARGUS_DECISIONS_H1_COLLECT=on. They share one call allowance and at most one
+// provider invocation per tick; building them touches no file.
+const experiments = createShadowExperiments({ runner: analysis });
 /**
  * Constellation polls its peers on the same tick as everything else.
  *
@@ -143,7 +145,8 @@ const app = createApp({
   activity: () => tailer.latest(),
   activityLog: (runId) => tailer.events(runId),
   fleet: () => fleetPoller.state(),
-  decisionsH2Status: () => h2.status(),
+  decisionsH2Status: () => experiments.h2.status(),
+  decisionsH1Status: () => experiments.h1.status(),
 });
 
 const server = serve({ fetch: app.fetch, port: PORT, hostname: config.host }, (info) => {
@@ -417,8 +420,8 @@ const scheduler = startScheduler({
     await fleetPoller.check();
     // Last, and awaited: a shadow call must never be in flight when the next
     // tick's Autopsy or Verdict asks the runner, because a busy refusal is a
-    // permanent failed record for them.
-    await h2.watcher.check();
+    // permanent failed record for them. H1 then H2, one invocation at most.
+    await experiments.check();
   },
   onFailure: (run) =>
     void postWebhook(config.webhookUrl, buildRunFailurePayload(run, new Date().toISOString())),

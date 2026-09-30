@@ -7,6 +7,24 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Decision Plane H1 shadow experiment (off by default).** With
+  `ARGUS_DECISIONS=on` and `ARGUS_DECISIONS_H1_COLLECT=on`, Argus asks
+  `gate.operator-action` v1 at ordinary gates: will the operator send this
+  phase attempt back rather than approve it as it stands? It predicts
+  operator behaviour, not correctness.
+  - It captures a bounded, redacted `gate-review` snapshot, with a
+    deterministic rule result and the Verdict auto-approval qualification,
+    before anyone acts.
+  - It calls the Claude CLI on that snapshot, re-checking before and after
+    the call.
+  - It settles each gate from applied operator decisions on the exact
+    attempt, retained in its own ledger.
+  - H1 and H2 share one call allowance and at most one invocation per tick.
+
+  The Experiments page and `GET /api/decisions/h1` report settled gates
+  only, and show pending gates as counts. No gate, badge, ordering or
+  approval changes. See USER-GUIDE §33 and RFC 2026-09-29 §Q.
+
 - **Decision Plane H2 shadow experiment (off by default).** With
   `ARGUS_DECISIONS=on` and `ARGUS_DECISIONS_H2_COLLECT=on`, a watcher on the
   scheduler tick samples finished runs deterministically, and asks the
@@ -351,6 +369,11 @@ unverifiable`, each rule exactly once. A **missing** rule refuses the whole
   edits or deletes one.
 
 ### Fixed
+
+- **The H2 state-isolation test** compared instance-journal line
+  order, which the engine's fire-and-forget journal writes do not fix. Main
+  CI failed on it after #81. Entries written in the same instant are now
+  compared in a fixed order.
 
 - **Agents can write their channels and worktrees again.** Claude Code
   protects `~/.claude` and refuses a headless agent's writes under it, even with

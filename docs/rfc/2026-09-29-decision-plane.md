@@ -1489,6 +1489,7 @@ appendix.
 | C6  | The Jev mapping was re-examined: official docs were unreachable (`EGRESS_BLOCKED`), the supplied corrections are recorded as unverified, requested and reported model ids are separate, and there are no synthetic aliases                                                                                                 | §G.3             |
 | P1  | Phase 1 resolutions: observations derived read-only; active storage bounded by admission; two run-failure projections; a restart-interrupted run is not `never-ran`; definitions carry digests; H1 not registered                                                                                                          | §O               |
 | P2  | H2 slice: opt-in, rate- and budget-bounded shadow collection on the tick, subordinate to existing analysis; a separate collection ledger retains references and deduplicates across archival and restarts; unknown call outcomes are never re-sent; `decision-h2-report` v1 replays it; residual accuracy stays unmeasured | §P               |
+| P3  | H1 slice: `gate.operator-action` v1 predicts operator behaviour only; capture precedes any decision and is re-checked before and after the call; references are applied operator decisions retained in an experiment ledger; blinded, settled-only reporting; combined H1 + H2 limits keep one allowance                   | §Q               |
 
 ---
 
@@ -2248,6 +2249,533 @@ adapter and `AnalysisRunner` are the real ones; only the spawn is injected.
   report shows prevalence and per-class recall; it cannot make the sample
   representative.
 
+---
+
+## Q. Phase 2 (H1 slice) design note: gate operator-action shadow collection
+
+_Written before the H1 collection code, as the Phase 2 brief required. It
+narrows §H.3–§H.5 for `gate.operator-action` only. It does not reopen §O or
+§P: the H2 slice keeps its semantics, and the one H2 change (combined
+limits, §Q.8) is additive and inert while the H1 ledger holds no
+invocation. No permission effect, gate badge, approval change, Jev, new
+service, required manual label, seeded-defect corpus or drift schedule is
+part of it._
+
+### Q.1 Target and authority
+
+- **Question `gate.operator-action` v1 (binary):** "Will the operator send
+  this phase attempt back (revise or abort) rather than approve it as it
+  stands?" `p` is the probability of **yes = sent back**.
+- It predicts operator behaviour. It says nothing about correctness, and no
+  H1 figure can justify skipping review. The report prints that sentence.
+- `consumers: []`, `mode: "shadow"`. Nothing reads an H1 record except the
+  H1 report.
+- H1 is registered in its own registry (`h1Registry()`: the built-ins plus
+  H1), so `builtinRegistry()` and the definitions the Phase 1 and H2 reports
+  read are unchanged.
+- H1 assessments are written to the same Decision Journal. The H2 report's
+  `outsideExperiment` counts journal assessments no H2 attempt names, so it
+  now counts H1's too; its meaning is unchanged, and nothing else in the H2
+  report reads them. The Phase 1 report, which no route serves, would list
+  them with `definition: missing` under `builtinRegistry()`.
+- **Enablement.** Off by default. It runs only with `ARGUS_DECISIONS=on`
+  and `ARGUS_DECISIONS_H1_COLLECT=on`; `ARGUS_ANALYSIS=off` wins. When off,
+  the watcher returns before reading or writing anything. An invalid H1
+  setting disables H1 and is named; it never falls back to a guess.
+
+### Q.2 Eligibility: a confirmed ordinary gate pause
+
+An item is the phase attempt `(instanceId, phaseId, attempt)` with the
+question id and version. It is eligible when, on one fresh read of the
+instance (`readInstance`, a private copy):
+
+- the phase is `awaiting-approval` with `pause: "gate"`. A `needs-input`
+  pause is a question, not a review, and a pause with no recorded cause
+  (written before causes were recorded) is of unknown cause. Both are
+  excluded, and the exclusion is recorded;
+- the instance has no `pendingGateOperation`;
+- the relevant steps (`gateRelevantSteps`: the selected candidate's steps
+  on a best-of-N phase) all succeeded and name their runs. These run ids
+  are part of the capture;
+- `gate-decisions.jsonl` holds **no** record naming this phase attempt,
+  applied or not.
+
+The population is split, and never pooled, by whether the instance's own
+definition snapshot declares `autoApprove` on the phase:
+`manual` and `auto-approve-declared`. The second is a biased subset: people
+only see the gates auto-approval did not open.
+
+### Q.3 Timing, and what "as it stands" means
+
+Capture and prediction are separate steps, and the model call is never the
+thing that proves an item was eligible.
+
+1. **Capture**, every check, needing no model call and no budget. For a
+   newly eligible item the watcher builds the snapshot, computes both
+   baselines, then **re-reads** the instance and the gate log. Only if the
+   exact attempt is still eligible (same attempt, same relevant runs, no
+   decision record for it) is the capture line written. So a capture, and
+   the baselines in it, provably precede any decision on that attempt:
+   the decision record did not exist when the capture was confirmed.
+   Otherwise the gate is recorded as `capture-raced`, and nothing is scored.
+2. **Observation.** While an item is unsettled, each check (at most every
+   minute per item) re-projects the review and compares its **review-state
+   digest** with the capture's. The first difference is written once, as a
+   `drift` line. The time of the last observation that saw the item
+   eligible and unchanged is kept in memory.
+3. **Model call** (sampled items, when the budget allows). Immediately
+   before it, the same re-check runs: still eligible, same digest, no
+   decision record. Otherwise no call is made, and no call is spent. The
+   provider is sent the **captured** snapshot, never a rebuilt one.
+4. **Post-check.** After the result line is durable, the watcher re-checks
+   again and writes a `post-check` line. The prediction is prospective
+   only if that post-check saw the attempt still eligible, with the same
+   digest and no decision record. It is a read-after-write ordering, not a
+   timestamp comparison. If the operator acted during the call, the
+   post-check sees it, and the item is excluded from prospective model
+   scoring as `action-during-call`. It is kept and reported. A result
+   reconciled after a restart is post-checked at reconciliation.
+5. **Settlement**, once an observation finds the attempt no longer
+   eligible (§Q.5).
+
+**"As it stands"** is the captured review state. The review-state digest
+is sha256 over the canonical JSON of the snapshot body's **material
+fields**:
+
+- gate identity, attempt, retries and relevant runs;
+- step prompts and final messages;
+- the validated result;
+- the verification report;
+- changed files, diff statistics and the repository state;
+- staged-record identities, statuses, outcomes, evidence kinds and warning
+  codes;
+- the artifact listing.
+
+Two fields are capture-time context, excluded from the digest because they
+move without the attempt changing:
+
+- run cost, tokens, duration and model (late backfill);
+- Watchtower anomalies (relative to a baseline other runs move).
+
+Ledger-relative claim support is not in the v1 body at all.
+
+A difference in material fields means the operator acted on a different
+state than the one predicted about. That item is excluded as
+`state-changed`, and no comparison is made. An action whose bracket
+(last eligible observation → first ineligible one) is wider than 10
+minutes, for example because the server was down, is excluded as
+`state-unobserved`: the state before the action was not seen. Nothing
+blocks or delays the operator, and no instance lock is taken; the watcher
+only reads instance files.
+
+### Q.4 Projection `gate-review` v1
+
+Built from the existing review model (`buildPhaseReview`, the gate
+drawer's own read model) and Argus's records, redacted by
+`REDACTION_RULES_V1` and capped per field. The whole snapshot is at most
+96 KiB.
+
+| Field                                | Content                                                                                                                                                                                                                                    | Caps           |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------- |
+| `gate`                               | pipeline and phase names, attempt, retries, candidate count and the selected candidate                                                                                                                                                     | names 200      |
+| `steps[]` (relevant only)            | name, run id, status, the run's `prompt`, its final message (`resultSummary`), and, as context, duration, cost, tokens, model and runtime. A run record that cannot be read is `unavailable`, never empty                                  | 8 steps; 4000  |
+| `result`                             | `not-declared`, or the validated result's canonical JSON                                                                                                                                                                                   | 4000           |
+| `verification`                       | `not-declared`, `missing` (checks were declared and no report exists), or the report: status and each check's kind, label, status, exit code and one-line detail. Command output is never included                                         | 30 checks; 300 |
+| `changes.files` / `changes.diffStat` | `available` from the attempt's worktree against its recorded `baseHead`, or against the phase's recorded baseline; otherwise `unavailable` with the reason. Paths and line counts only, never file content. The diff stat needs a worktree | 100 paths; 300 |
+| `repository`                         | the existing `RepositoryStateRef` of that working tree (`repositoryStateFrom`)                                                                                                                                                             | —              |
+| `staged`                             | per kind (knowledge deltas, rule verifications, change proposals, acceptance), for relevant runs: counts by outcome, evidence kinds, warning codes and capped messages. A staged record a step names that cannot be read is `unavailable`  | 20 rows; 300   |
+| `anomalies`                          | Watchtower anomalies on relevant runs (metric, direction, severity, ratio), with each run's baseline readiness; `unavailable` if unreadable                                                                                                | 16             |
+| `artifacts`                          | the artifact listing: path and bytes                                                                                                                                                                                                       | 50; path 300   |
+
+- `subjectAuthored` names the final messages, the result, staged
+  summaries and notes, changed paths and artifact paths: text the assessed
+  agent wrote or chose.
+- `refs.runs` holds the relevant runs, and `refs.verifications` the staged
+  record ids. `scope` is the attempt's `knowledgeScope` when it has one.
+- **Excluded by construction:** every gate-decision record (earlier
+  attempts' included), `gateDecisionIds`, `pendingGateOperation`, anything
+  written after the capture, Verdict scores (they are a baseline, kept
+  apart) and full file content.
+- Git is read with `--no-optional-locks`, so observing never rewrites the
+  index. Only an Argus worktree, or a directory with a recorded phase
+  baseline, is read.
+
+### Q.5 References
+
+References are derived read-only from `gate-decisions.jsonl` and the
+instance, at settlement, and **retained in the H1 ledger**. Replay never
+reads either of them again. Candidate records are those naming this phase
+id and attempt with `status: "awaiting-approval"`. Their effect comes from
+`decisionEffect`, the Phase 0 definition.
+
+| Finding                                               | Settles as                                                          |
+| ----------------------------------------------------- | ------------------------------------------------------------------- |
+| exactly one `applied` record, `mechanism: "operator"` | **labeled**: approve → `not-sent-back`; revise, abort → `sent-back` |
+| an `applied` `verdict-auto-approve` record            | unlabeled `automated-approval` (never a reference)                  |
+| an `applied` `unspecified` record                     | unlabeled `unattributed`                                            |
+| more than one `applied` record                        | unlabeled `conflicting-records`                                     |
+| an `incomplete` record                                | waits, up to 60 minutes; then unlabeled `effect-incomplete`         |
+| only `not-applied` records, or none                   | unlabeled `no-applied-decision` / `no-decision-record`              |
+| instance gone (effect `unknown`)                      | unlabeled `instance-gone`                                           |
+| still eligible 7 days after capture                   | unlabeled `observation-window-closed`                               |
+
+- A `not-applied` record beside the one `applied` record is noted and does
+  not block the label. `operatorActionObservations` alone is never treated
+  as proof of application.
+- The retained reference holds:
+  - the decision value and label;
+  - the record id and the sha256 of the record as read;
+  - mechanism, channel and the principal, copied as recorded;
+  - `recordedAt`;
+  - `effect: "applied"`, the derivation id (`applied-operator-gate-decision@1`)
+    and its own digest.
+- **Principal honesty.** A `session` principal means an authenticated
+  account made the request, not that a person did (§M.7). The report
+  counts principals by kind and says so.
+- **Missing or uncertain actions stay unlabeled**, never negative. Review
+  findings and later outcomes remain separate streams. H1 derives neither,
+  links no later outcome, and synthesises no correctness label.
+
+### Q.6 Baselines, retained at capture
+
+**Deterministic (`gate-operator-action.rules` v1).** This is a pure
+function of the snapshot body, so replay recomputes it and flags any
+mismatch. It is reported as a **rule result**, `flag | no-flag |
+insufficient-data`, never as a probability. The rules:
+
+| Rule                     | Fires when                                                                           | Not evaluable when                                     |
+| ------------------------ | ------------------------------------------------------------------------------------ | ------------------------------------------------------ |
+| `later-attempt`          | `attempt > 0`                                                                        | never                                                  |
+| `automatic-retry`        | `retries > 0`                                                                        | never                                                  |
+| `unverifiable-result`    | a staged rule-verification or acceptance entry is `unverifiable`                     | a named staged record is `unavailable`                 |
+| `observation-only-holds` | a `holds` / `satisfied` entry whose evidence is non-empty and entirely `observation` | as above                                               |
+| `grounding-warning`      | a warning code in the list below                                                     | as above                                               |
+| `cost-anomaly`           | a relevant run has a Watchtower `cost` anomaly, direction `high`                     | anomalies `unavailable`, or a run's baseline not ready |
+| `duration-anomaly`       | the same, for `duration`                                                             | as above                                               |
+
+- The grounding-warning codes, all of which say the proposal's grounding or
+  references do not hold up:
+  - knowledge delta: `business-rule-without-evidence`,
+    `revision-without-evidence`, `claim-without-support`,
+    `revision-target-unsupported`, `revision-stale`, `source-file-missing`,
+    `source-outside-scope`, `source-path-unsafe`, `source-git-head-mismatch`,
+    `source-range-invalid`;
+  - change proposal: `selected-rule-unclassified`, `preserved-and-revised`,
+    `classification-mismatch`, `acceptance-criterion-unknown-ref`,
+    `acceptance-criteria-missing`, `implementation-already-violates`,
+    `request-claim-unknown`.
+
+  Advisory codes are not in the list.
+
+- Any rule that fires gives `flag` (predicts sent back). Otherwise, any
+  rule that cannot be evaluated gives `insufficient-data` (an abstention).
+  Otherwise the result is `no-flag` (predicts approve).
+
+**Verdict (`auto-approval-qualification` v1).** This asks whether the
+Phase 0 rules would have opened this captured gate. The watcher's pre-check
+is extracted, unchanged, into the pure `autoApprovalQualification` in
+`gatePolicy.ts`, which the Verdict watcher now calls. It keeps:
+
+- the configuration and staging exclusions;
+- rubric binding by digest;
+- complete, current, `ready` verdict coverage of every relevant step;
+- attempt and run binding;
+- candidate selection;
+- the minimum-over-steps rule against the bar.
+
+It is evaluated at capture over the current verdicts, and the basis is
+retained: verdict ids, scores, bar, rubric digest and provenance. A later
+re-judgment never rewrites it. The results are distinct:
+
+- `qualifies`, which would have opened, compared as "approve";
+- `below-threshold`, which would have waited, compared as "sent back";
+- `not-configured`, `ineligible` and `insufficient-data`, which are
+  coverage gaps shown as their own columns, never folded into either side.
+
+The rating is `min` over relevant steps, the aggregate the rule itself
+compares to the bar. It is used only for a confusion matrix at the bar,
+and for AUROC with positive class = sent back and the expectation that a
+lower rating means sent back. AUROC is the Mann–Whitney estimate with ties
+counted ½ and a Hanley–McNeil 95 % interval. No Brier score, calibration
+or score/10 is ever computed. No hypothetical bar is applied to
+unconfigured gates.
+
+### Q.7 Sampling and models
+
+- **Census.** Every eligible gate is captured, and baselines are computed
+  for all of them. A model call is drawn label-blind:
+  `u = first 52 bits of sha256(seed | question@version | instance | phase | attempt) / 2^52`,
+  called if `u < rate`. The default rate is 1, and the seed is `argus-h1`.
+- **Models.** `ARGUS_DECISIONS_H1_MODELS` is a comma list of at most three
+  distinct entries. Each entry is `haiku`, `sonnet`, `opus`, or an id
+  matching `claude-[a-z0-9.-]+`. Unset means one arm on the runner's
+  default. With several arms, each item is assigned **one** arm by a second
+  independent draw, so a Haiku/Sonnet comparison is between items and
+  never doubles calls.
+- **Identity.** `requestedModel` is what the runner reports it passed. An
+  alias is resolved by the CLI at call time, and the concrete model is
+  not observed, so `reportedModel` stays `null`. Populations are split by
+  the full identity.
+- A `(item, question, version)` attempted under any identity is never taken
+  up automatically by another.
+
+### Q.8 Scheduling and the combined H1 + H2 budget
+
+- **Placement.** H1 runs on the tick, immediately before H2, both last and
+  awaited, outside every instance lock.
+- **One provider invocation per tick across both experiments.** If H1
+  invoked (or may have invoked) the provider this tick, H2 records its
+  census and expiries but makes no call. H1 goes first because its items
+  disappear when the operator acts, while H2's wait up to a day.
+- **Subordinate to existing analysis**, the same rule as §P.4. H1 makes no
+  call on a check after any non-`decide` pass started since its previous
+  check (including the first check after boot), while a pass is in flight,
+  or under the spend hard stop.
+- **Combined limits.** Each experiment checks its own limits against the
+  invocations and recorded cost of **both** ledgers combined, over a rolling
+  24 hours:
+  - calls ≤ its `maxCallsPer24h` (H1 default 20, the same as H2);
+  - USD ≤ its `maxUsdPer24h` (default US$1.00);
+  - at least `minCallIntervalMs` (default 15 minutes) since the last
+    invocation of either.
+
+  With the defaults, both enabled together make at most 20 calls and spend
+  about US$1 a day, the same allowance as H2 alone, not double. The ceiling
+  is the larger of the two configured caps, plus at most one call past a
+  dollar cap, because cost is known only afterwards.
+
+- **Fairness.** H1's own invocations are also capped at
+  `maxOwnCallsPer24h` (default 10, half). So H2 keeps at least half the
+  allowance whenever it has work, and takes all of it when H1 has none.
+- **H2 is unchanged when the H1 ledger is empty.** H2's combined count reads
+  the H1 ledger whether or not H1 is enabled now, because the allowance is
+  about spend.
+- **Honest bias.** The shared 15-minute interval and the priority rule mean
+  only gates that stay pending long enough are called. The report shows
+  sampled-but-not-called counts by reason (acted before a call slot, state
+  changed, budget).
+
+### Q.9 Ledger, snapshots, retries and unknown outcomes
+
+- The ledger is `<argus>/decision-experiments/h1/collection.jsonl`. Its
+  mechanics are the H2 ledger's, reused from `storage.ts`:
+  - `encodeLine` envelopes;
+  - a `seq` on every line;
+  - the torn-tail fence;
+  - `writeAll` and an `fsync` per append;
+  - 16 KiB lines and a 32 MiB file.
+
+  At the cap it stops honestly, and nothing is deleted or rotated.
+
+- Captured snapshots are published before their capture line (temp file,
+  `fsync`, rename, directory `fsync`) to
+  `<argus>/decision-experiments/h1/snapshots/`. The store is capped at
+  64 MiB by admission, and is read back and verified against its sha256
+  before a call. Source pruning (instances at 50 per pipeline, runs,
+  transcripts, verdicts, the gate log) cannot touch replay, which reads only
+  this store, the ledger and the journal.
+- **Deduplication** is by the exact item identity. The ledger never passes
+  through journal archival, so neither archival nor a restart reopens an
+  item.
+- **Result classes and retries** are the H2 classes and rules (§P.5):
+  - `answered`, `abstained`, `provider-failed` and `unrecorded` are spent
+    and never retried;
+  - `refused` and `missing-input` (the retained snapshot is unreadable or
+    corrupt) are retried at most 3 times, 30 minutes apart;
+  - an attempt left open by an earlier process is reconciled from the
+    journal by its pre-assigned assessment id, or becomes `unknown-outcome`,
+    counted as spent and never re-sent.
+
+  A pre-call eligibility failure is not an attempt, and spends nothing.
+
+- **A damaged ledger** (interior corruption, a `seq` gap, a duplicate or
+  orphan) halts H1 calls and captures, and says why.
+
+### Q.10 Blinding
+
+- The gate drawer, the review route, instance files and every existing
+  route are unchanged. No H1 answer, rule result, score or ordering reaches
+  them.
+- `GET /api/decisions/h1` and the Experiments page report **only settled
+  items**: items whose attempt is no longer eligible, or that expired.
+  Items not yet settled, including those whose call has happened, appear
+  only as aggregate pending counts per population. They contribute to no
+  confusion cell, attempt-class count, rule result or usage figure.
+  `observation-window-closed` items contribute only a count.
+- The watcher's live status never names a result class. A check that made
+  a call says only that an attempt was recorded.
+- There is no labelling flow.
+
+### Q.11 The report (`decision-h1-report` v1)
+
+The report is a pure function of:
+
+- the H1 ledger;
+- the snapshot store;
+- the journal;
+- `h1Registry()`.
+
+It uses no wall clock, so "pending" means as of the last ledger line, and
+it writes canonical bytes. The Phase 1 and H2 reports are unchanged.
+
+- **Populations** are keyed by question id, version and digest, projection
+  digest, provider identity (for model rows), and `manual` versus
+  `auto-approve-declared`. They are never pooled.
+- **The census** shows:
+  - gates seen, and exclusions by reason (`needs-input`, `unknown-pause`,
+    `pending-operation`, `prior-decision-record`, `capture-raced`,
+    `snapshot-too-large`, `store-full`);
+  - captured, sampled and not sampled;
+  - pending, settled, and unlabeled by reason;
+  - temporal and state exclusions;
+  - principals by kind.
+- **Scoring set.** An item is scored if it is settled and labeled with
+  state held: no drift, and a bracket of 10 minutes or less. Model rows
+  also require an assessment and a prospective post-check. Every item
+  outside the set is counted in its own column, with its denominator
+  impact visible.
+- **The binary rule for models.** `p > 0.5` predicts sent back and
+  `p < 0.5` predicts approve. `p = 0.5` is `tie`, which is never
+  agreement and never a false close or escalation.
+- **Rows.** Each row shows reference × prediction confusion counts with
+  the prediction columns `sent-back`, `approve`, `tie`, `abstained` and
+  `failed` (or the rule-result or Verdict columns). It also shows:
+  - agreement with operator behaviour, answered-only and end-to-end, with
+    coverage;
+  - **false close** = predicted approve / sent back;
+  - **false escalation** = predicted sent back / approved;
+  - both over answered items, ties in the denominator.
+- **Intervals.** Every proportion carries a Wilson 95 % interval. `n = 0`
+  is null.
+- **Probability metrics, model rows only**, over validated binary
+  probabilities:
+  - Brier `mean (p − y)²`, y = 1 for sent back, range [0, 1];
+  - reliability in 10 equal-width bins of `p`, each showing mean `p`
+    against the observed sent-back rate, measured only at n ≥ 20;
+  - ECE only at N ≥ 200;
+  - κ over answered items.
+- **Usage:**
+  - p50 and p95 latency, nearest rank;
+  - USD and tokens;
+  - snapshot bytes;
+  - spend totals over all attempts, counts only.
+- **Integrity:**
+  - ledger notices;
+  - snapshot files missing or failing their digest;
+  - baseline recomputation mismatches;
+  - journal assessments missing or not matching their attempt;
+  - reference digests;
+  - `history: complete | incomplete`.
+
+### Q.12 Shutdown and limits
+
+- Unset either switch and restart: H1 stops at its next check. An in-flight
+  call becomes `unknown-outcome` on the next enabled start. The ledger,
+  snapshots and report remain, and nothing is deleted.
+- **Limits:**
+  - no paid call was made in development; injected spawns do not prove
+    live contention, cost or latency;
+  - operator-action agreement is not correctness;
+  - the called population is biased towards gates that stay pending;
+  - a session principal is not a person;
+  - one writing process is assumed, and integrity is corruption detection,
+    not tamper resistance;
+  - observations are periodic, so a state that changed and changed back
+    between two observations is not seen;
+  - the bracket bound assumes the scheduler tick is well under 10 minutes; a
+    slower tick makes every action `state-unobserved`, which is honest and
+    leaves nothing scored;
+  - a snapshot published just before a capture line that could not be
+    written (ledger full, crash) stays in the store unreferenced. It is
+    counted in the store's usage and never scored.
+
+### Q.13 What the H1 slice built, and what its tests establish
+
+**Code.** `server/src/decision/h1/`:
+
+| File             | Holds                                                 |
+| ---------------- | ----------------------------------------------------- |
+| `definitions.ts` | the question, the projection, `h1Registry()`          |
+| `projection.ts`  | `gate-review` v1 shaping and the review-state digest  |
+| `collect.ts`     | the readers, including read-only git                  |
+| `gate.ts`        | eligibility and reference settlement                  |
+| `baselines.ts`   | the deterministic rules and the Verdict qualification |
+| `ledger.ts`      | the H1 ledger                                         |
+| `snapshots.ts`   | the snapshot store                                    |
+| `config.ts`      | enablement and settings                               |
+| `watcher.ts`     | capture, observation, settlement, the call            |
+| `metrics.ts`     | the binary statistics                                 |
+| `report.ts`      | `decision-h1-report` v1                               |
+| `entry.ts`       | the collection and the report reader                  |
+
+Outside it:
+
+- `decision/experiments.ts` runs H1 and H2 together, and is what `index.ts`
+  imports;
+- `service.assessSnapshot` calls on a captured snapshot;
+- H2's watcher takes optional `otherSpend` and `slotTaken`, which are inert
+  while the H1 ledger holds no invocation;
+- `gatePolicy.autoApprovalQualification` is the Verdict watcher's pre-check,
+  extracted unchanged;
+- `harness/verification.ts` gains an opt-in `readOnly` git mode and
+  `diffNumstat`, with the defaults unchanged;
+- `app.ts` serves `GET /api/decisions/h1`;
+- the contracts gain the H1 types (types only);
+- the Experiments page gains a read-only H1 section.
+
+**Tests** (`server/src/decision/h1/*.test.ts`). All are deterministic and
+none makes a paid call. The ledger, snapshot store, journal, service, Claude
+CLI adapter and `AnalysisRunner` are real; the spawn is injected.
+
+- **Off:** either switch off, `ARGUS_ANALYSIS=off`, or an invalid setting
+  means no read, no write and no spawn. Reading the report creates nothing
+  and calls nothing.
+- **Eligibility:** exact attempt and relevant runs; the selected candidate
+  only; `needs-input` and unknown pauses excluded; an existing decision
+  record, a pending operation and a capture race all excluded.
+- **Timing:** action before capture, before any call slot, during the call
+  (post-check excludes it), after the prediction (scored), and a revision
+  captured as a new item.
+- **"As it stands":** a changed final message is drift, caught by
+  observation or by the pre-call re-check; cost backfill is not.
+- **References:** applied operator approve, revise and abort; `incomplete`
+  waited for, then unlabeled on timeout; an orphaned record beside an
+  applied one; automated, unattributed, conflicting and missing records are
+  never labels.
+- **Durability:**
+  - an interrupted call is an `unknown-outcome`, never re-sent;
+  - an interrupted result is reconciled and post-checked;
+  - restarts and archival never reopen an item;
+  - bounded retries;
+  - a corrupt retained snapshot is missing input;
+  - a damaged ledger halts, and a torn tail is fenced;
+  - both caps stop honestly.
+- **Scheduling:**
+  - existing analysis goes first;
+  - the spend stop pauses;
+  - H1's share and the combined calls, interval and dollars hold;
+  - with H1 and H2 together, at most one invocation per tick, H1 first;
+  - H2's trace is identical while the H1 ledger holds no invocation.
+- **Arms:** one arm per item and one call per item, with populations split
+  by requested model.
+- **Report:**
+  - hand-worked agreement, false close and escalation with ties,
+    abstentions and failures, κ, Brier, reliability at n = 20, ECE at
+    N = 200, and AUROC with ties and its interval;
+  - byte-identical replay after the instance, runs and gate log are pruned
+    and the journal archived;
+  - findings for a corrupt reference, a mismatched baseline, a missing
+    snapshot and a missing assessment.
+- **Blinding and isolation (§H.5):** through the real HTTP routes and
+  engine, every file outside the plane's directories is byte-identical with
+  collection on and off, and so is the gate drawer's review route. The
+  report for a pending gate shows a count and no prediction.
+- **Real sources:** the real review model and gate log end to end. A real
+  git worktree gives changed files, line counts and repository state
+  without reading content or rewriting the index.
+
+**Limits** are those of §Q.12. Simulated spawns and no-op spend fixtures do
+not show live contention, cost or latency.
 ---
 
 ## Appendix: defects found incidentally (not Decision Plane work)

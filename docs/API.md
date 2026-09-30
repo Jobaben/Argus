@@ -1587,6 +1587,34 @@ fresh home stays empty. It returns counts, identities and metrics only. No
 snapshot body, transcript text or model rationale is included. The Phase 1
 `decision-journal-report` v1 is unchanged.
 
+### Decision experiments (H1)
+
+`GET /api/decisions/h1` returns `{ collection, report }` (`H1ReportResponse`
+in `contracts/src/decision.ts`). It is authenticated like every other `/api`
+read.
+
+- **`collection`** is the live state: enabled or why not, the settings (rate,
+  seed, model arms, combined and own call limits, interval, dollars) and the
+  watcher's state. The state never names an attempt's result.
+- **`report`** is `decision-h1-report` v1 (RFC 2026-09-29 §Q.11). It is a
+  deterministic replay of the H1 ledger, the H1 snapshot store and the
+  Decision Journal, and it carries:
+  - the statement that agreement with operator behaviour is not correctness;
+  - the definitions and configs;
+  - gate exclusions;
+  - a census and pending counts per population (`manual`,
+    `auto-approve-declared`);
+  - deterministic and Verdict baseline rows;
+  - model populations with agreement, false close and escalation, κ, and,
+    for probabilities only, Brier, reliability and ECE;
+  - spend totals, methods and integrity.
+
+The route is read-only and **blinded**. Only gates whose attempt has settled
+contribute to any figure. A gate still waiting on its operator appears only
+in `pending` counts, so nothing here shows a prediction, rule result or
+Verdict classification for it. It never calls a provider or writes, not even
+a directory. The gate review route is unchanged by H1.
+
 ### Artifacts
 
 A step prompt may interpolate:

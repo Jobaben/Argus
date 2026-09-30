@@ -106,6 +106,14 @@ export interface H2WatcherDeps {
   /** Test seam: throwing here simulates the process stopping at that point. */
   fault?: (point: "attempt-written" | "assessed") => void | Promise<void>;
   maxCensusPerCheck?: number;
+  /**
+   * The other shadow experiment's spent invocations (RFC §Q.8). Each limit is
+   * then checked against both ledgers combined. Absent, or empty while the H1
+   * ledger holds no invocation, H2 behaves exactly as it did alone.
+   */
+  otherSpend?: () => Promise<Array<{ atMs: number; costUsd: number | null }>>;
+  /** Whether another shadow experiment invoked the provider earlier on this tick. */
+  slotTaken?: () => boolean;
 }
 
 export interface H2Watcher {
@@ -129,7 +137,7 @@ const bounded = (s: string, max = 500) => {
 };
 
 /** What a recorded assessment says about its call. */
-function fromAssessment(a: DecisionAssessment): Classified {
+export function fromAssessment(a: DecisionAssessment): Classified {
   const base = {
     assessmentId: a.id,
     costUsd: a.costUsd,
@@ -417,25 +425,37 @@ export function createH2Watcher(deps: H2WatcherDeps): H2Watcher {
       set("waiting", "an analysis pass is in flight");
       return { action: "deferred", detail: "an analysis pass is in flight" };
     }
+    if (deps.slotTaken?.()) {
+      const detail = "another shadow experiment used this tick's provider invocation";
+      set("waiting", detail);
+      return { action: "deferred", detail };
+    }
     const since = nowMs - DAY;
     const spent = idx.attempts.filter((e) => isSpent(e) && Date.parse(e.attempt.at) > since);
+    const other = deps.otherSpend ? (await deps.otherSpend()).filter((o) => o.atMs > since) : [];
+    const combined = other.length > 0 ? " (H1 and H2 combined)" : "";
     const limited = (detail: string): H2CheckOutcome => {
       set("waiting", detail);
       return { action: "limited", detail };
     };
-    if (spent.length >= settings.limits.maxCallsPer24h) {
+    if (spent.length + other.length >= settings.limits.maxCallsPer24h) {
       return limited(
-        `${spent.length} provider invocations in the last 24 hours (limit ${settings.limits.maxCallsPer24h})`,
+        `${spent.length + other.length} provider invocations in the last 24 hours${combined} (limit ${settings.limits.maxCallsPer24h})`,
       );
     }
-    const last = spent.reduce((m, e) => Math.max(m, Date.parse(e.attempt.at)), -Infinity);
+    const last = Math.max(
+      spent.reduce((m, e) => Math.max(m, Date.parse(e.attempt.at)), -Infinity),
+      other.reduce((m, o) => Math.max(m, o.atMs), -Infinity),
+    );
     if (nowMs - last < settings.limits.minCallIntervalMs) {
       return limited("the minimum interval since the last provider invocation has not passed");
     }
-    const usd = spent.reduce((s, e) => s + (e.result?.costUsd ?? 0), 0);
+    const usd =
+      spent.reduce((s, e) => s + (e.result?.costUsd ?? 0), 0) +
+      other.reduce((s, o) => s + (o.costUsd ?? 0), 0);
     if (usd >= settings.limits.maxUsdPer24h) {
       return limited(
-        `US$${usd.toFixed(4)} recorded in the last 24 hours (limit US$${settings.limits.maxUsdPer24h})`,
+        `US$${usd.toFixed(4)} recorded in the last 24 hours${combined} (limit US$${settings.limits.maxUsdPer24h})`,
       );
     }
 
