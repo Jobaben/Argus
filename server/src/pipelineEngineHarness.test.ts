@@ -303,8 +303,12 @@ test("a step past its deadline is killed, timed out, and failed", async () => {
   // Only records the kill; the process's own exit (the `done` resolution) is
   // simulated separately, below, once the deadline handler has certainly
   // finished — see the note there for why the two must not be simultaneous.
-  const kill = (pid: number) => {
-    killed.push(pid);
+  // The deadline's SIGKILL escalation, `killGraceMs` after the termination
+  // request, is left out: this process ignores the request until `resolveDone`
+  // below, so the escalation is correct, and whether it lands before the
+  // assertion is timing, not what this test pins.
+  const kill = (pid: number, signal?: NodeJS.Signals) => {
+    if (signal !== "SIGKILL") killed.push(pid);
     return true;
   };
   const e = engine.createEngine(baseDeps({ spawn, kill, killGraceMs: 50, now: () => new Date() }));

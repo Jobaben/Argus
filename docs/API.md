@@ -3184,11 +3184,11 @@ so the index cannot grow into a session list.
 
 ## Configuration
 
-| Env var             | Default     | Effect                                                                                            |
-| ------------------- | ----------- | ------------------------------------------------------------------------------------------------- |
-| `ARGUS_PORT`        | `7777`      | server port (proxy target)                                                                        |
-| `ARGUS_CLAUDE_HOME` | `~/.claude` | directory to read/watch                                                                           |
-| `CLAUDE_CONFIG_DIR` | —           | fallback override if `ARGUS_CLAUDE_HOME` unset                                                    |
+| Env var             | Default                                   | Effect                                                                                                                                                                            |
+| ------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ARGUS_PORT`        | `7777`                                    | server port (proxy target)                                                                                                                                                        |
+| `ARGUS_CLAUDE_HOME` | `~/.claude`                               | directory to read/watch                                                                                                                                                           |
+| `CLAUDE_CONFIG_DIR` | —                                         | fallback override if `ARGUS_CLAUDE_HOME` unset                                                                                                                                    |
 | `ARGUS_WORK_DIR`    | `<claude home>-argus` (`~/.claude-argus`) | root of every directory an agent writes into: worktrees, artifacts, memory, result and ledger channels. Kept outside `~/.claude`, where Claude Code refuses headless agent writes |
-| `ARGUS_WEBHOOK_URL` | —           | POST target for `run.failed`, `pipeline.failed`, and `monitor.*` events (Slack/mail bridge, etc.) |
-| `ARGUS_VAULT`       | on          | `off` disables the Vault; every long view degrades to its JSON-only behaviour                     |
+| `ARGUS_WEBHOOK_URL` | —                                         | POST target for `run.failed`, `pipeline.failed`, and `monitor.*` events (Slack/mail bridge, etc.)                                                                                 |
+| `ARGUS_VAULT`       | on                                        | `off` disables the Vault; every long view degrades to its JSON-only behaviour                                                                                                     |
