@@ -1436,11 +1436,39 @@ can start. `produces` must match `[A-Za-z0-9_-]{1,40}`.
   is still executing; the instance settles to `failed` when nothing is left that
   could progress. `succeeded` requires every phase to be terminal and each one
   to have either succeeded or been intentionally `skipped` by routing.
-- `POST /api/instances/:id/revise` re-runs only the revised phase and kills only
-  that phase's stragglers. `POST /api/instances/:id/abort` stops everything.
+- `POST /api/instances/:id/revise` re-runs only the revised phase and stops
+  exactly the revised attempt's still-running runs — captured when the decision
+  is linked to the instance; sibling branches are never stopped.
+  `POST /api/instances/:id/abort` stops everything.
 - Both `approve` and `revise` accept an optional `phaseId` naming which paused
   phase is meant. Absent, the single paused phase is meant — a bare `POST` is
   still a valid approval. Naming a phase that is not paused is a `409`.
+- Both also accept an optional integer `attempt` (0-based; the first attempt is
+  `0`). If the phase is now on a different attempt the request is a `409`
+  `phase <id> is on attempt N, not attempt M`, so a decision made against one
+  attempt's output cannot land on the next.
+- Who asked is taken from the authenticated session (username and role). Body
+  fields such as `actor`, `principal`, `mechanism` and `source` are ignored, and
+  `abort` records the session principal the same way. Every decision is
+  recorded — see [Gate decisions](#gate-decisions). One that cannot be durably
+  recorded is a `500` — "the gate decision could not be recorded, so it was not
+  applied; nothing changed".
+- Every approve, revise and abort runs in the same order: (1) validate — a
+  refused request (`409`) writes nothing; (2) the decision record is appended
+  and fsynced; (3) one instance save links the decision (`gateDecisionIds`) and
+  carries `pendingGateOperation`, before any effect; (4) the effects — supersede
+  staged records, stop runs, commit knowledge, settle realizations, transition
+  the phase — each idempotent; (5) the instance save that clears
+  `pendingGateOperation`.
+- If the link save (3) fails the request is a `500`, with one of two messages. If
+  the link did not land: "the gate decision was recorded but could not be linked
+  to the instance, so none of its effects started; nothing changed". If it did:
+  "the gate decision was linked but not completed; Argus completes it before
+  anything else happens to this instance".
+- If an earlier interrupted operation on the instance cannot be completed,
+  approve, revise and abort on it return `409` "an earlier gate decision on this
+  instance is incomplete and could not be completed; nothing else can happen to
+  it until it is".
 
 ### Instance fields
 
@@ -1453,6 +1481,20 @@ held per step because a phase's result lands with one step's signal while its
 siblings may still be running. `PipelineInstance` gains
 `artifacts: Record<string, unknown>` and `routeDecisions: RouteDecision[]`.
 
+Three optional fields record how a gate was passed.
+`PipelineInstance.gateDecisionIds?: string[]` lists the gate decisions the
+instance links, in order — a decision is linked before any of its effects start.
+`PhaseProgress.pause?: "gate" | "needs-input"` says why a phase is waiting; a
+pause recorded before pause causes existed has none.
+
+`PipelineInstance.pendingGateOperation?: { decisionId, decision, phaseId | null,
+attempt | null, stopRunIds, answers?, note?, startedAt }` is present from the
+moment a gate decision is linked until its effects are complete. While it is
+present no other transition of the instance happens: every engine path that
+mutates the instance first completes the operation, and reconcile completes
+leftover ones first on every tick, including after a restart. The journal
+records `gate.operation-completed` when it does.
+
 `PipelineInstance.definition` is the whole definition as it was when the
 instance started. Every launch after the first — the phase after a gate, a
 retry, a revise, a verification, a run healed after a restart, the rubric a
@@ -1460,6 +1502,64 @@ verdict scores against — reads this copy, never the live definition, so
 editing or deleting the pipeline cannot change what a running instance does;
 the live definition is read only to _start_ one. An instance written before the
 field existed has none and runs against the live definition, as it always did.
+
+### Gate decisions
+
+`GET /api/instances/:id/gate-decisions` returns the durable record of who, or
+what, approved, revised or aborted this instance's gates. Like the other
+instance reads it is **not** admin-gated.
+
+```jsonc
+{
+  "instanceId": "…",
+  "decisions": [
+    {
+      "id": "GD-…",
+      "instanceId": "…",
+      "pipelineId": "…",
+      "decision": "approve", // approve | revise | abort
+      "mechanism": "operator", // operator | verdict-auto-approve | unspecified
+      "channel": "http", // http | omnibar | verdict-watcher | in-process
+      "principal": { "kind": "session", "username": "ana", "role": "admin" },
+      "phases": [
+        { "phaseId": "plan", "attempt": 0, "status": "awaiting-approval", "runIds": ["…"] },
+      ],
+      "answersProvided": true, // optional
+      "note": "…", // optional: a revise note, clipped to 2000 chars
+      "recordedAt": "2026-09-29T09:00:00.000Z",
+      "effect": "applied", // applied | incomplete | not-applied | unknown
+    },
+  ],
+  "undocumented": [{ "phaseId": "build", "attempt": 0, "status": "succeeded" }],
+}
+```
+
+`principal` is `{ kind: "session", username, role }`,
+`{ kind: "system", component: "verdict-watcher" }` or `{ kind: "unknown" }`. An
+automated approval additionally carries `verdicts`: the exact basis it rested
+on, one entry per verdict — `runId`, `stepName`, `verdictId`, `at`, `score`,
+`bar`, `runtime`, `requestedModel`, `reportedModel`, `promptVersion` and
+`rubricDigest`.
+
+`effect` has four values:
+
+- `applied` — the instance links the decision and its operation completed.
+- `incomplete` — the instance links the decision but its operation has not
+  completed: some, all or none of its effects may have happened. Argus completes
+  it before any other transition of that instance, on the next reconcile tick or
+  the next action on it; until then it is reported as exactly `incomplete`.
+- `not-applied` — the instance exists and does not link the decision. The link
+  is saved before any effect starts, so none started.
+- `unknown` — the instance has since been pruned.
+
+`undocumented` lists gated phases that succeeded with no applied approval on
+record — they were decided before recording existed, and are never attributed to
+anyone. The route is a `404` when neither the instance nor any record exists.
+
+Records live in `~/.claude/argus/gate-decisions.jsonl`. It is append-only; each
+record is written and fsynced **before** the transition it describes, and it is
+never pruned. The order every decision follows is under
+[Execution semantics](#execution-semantics).
 
 ### Artifacts
 
@@ -2009,6 +2109,20 @@ A **gated** phase may additionally declare `"autoApprove": { "verdict": 8 }`.
 It requires a rubric on the same phase (there is nothing to clear otherwise) and
 is refused on an ungated phase — both are `400`.
 
+`autoApprove` is also refused on a phase that commits knowledge by
+configuration — one that declares `discovery`, `ruleVerification`,
+`changeIntent`, `acceptanceVerification`, `implementation`, or
+`knowledgeDelta: "required"`. Saving such a pipeline (`POST`, `PUT` or `PATCH`)
+is a `400`:
+
+```
+phase <i> ("<id>"): autoApprove cannot open a gate that commits knowledge (<reasons>). A person must approve this gate. Remove autoApprove from this phase; a rubric may stay, and scoring still runs, but approval is manual.
+```
+
+`<reasons>` are drawn from `discovery`, `rule-verification`, `change-intent`,
+`acceptance-verification`, `implementation` and `knowledge-delta-required`.
+There is no opt-in bypass.
+
 ### `GET /api/runs/:id/verdict`
 
 ```jsonc
@@ -2027,11 +2141,26 @@ is refused on an ungated phase — both are `400`.
     "tokens": 900,
     "durationMs": 3100,
     "error": null,
+    "id": "V-…", // optional: absent on older records
+    "provenance": {
+      "runtime": "claude",
+      "requestedModel": "haiku",
+      "reportedModel": null, // no runtime reports a model
+      "promptVersion": 1,
+    }, // optional
+    "rubricDigest": "…", // optional
   },
   "rubric": { "…": "the rubric in force, or null" },
   "unavailable": null,
 }
 ```
+
+Re-judging appends a new record rather than replacing the old one, and this
+route returns the **current** one — the run's newest. Trends, regressions and
+clustering likewise use the current record per run. `provenance` says which
+runtime, requested model and prompt version produced the judgment;
+`reportedModel` is `null` because no runtime reports a model. `rubricDigest`
+identifies the rubric the score was produced under.
 
 What the server does **not** trust from the judge:
 
@@ -2085,11 +2214,62 @@ engine's signal path — a 90-second model call under the instance lock, inside 
 request a child process is blocked on, is how a gate becomes a deadlock. The
 cost is up to one tick of latency. The rules:
 
-- No verdict yet → the gate **waits**. Silence is not approval.
-- Any judged step **below** the bar → the gate waits for a human, indefinitely.
-- Every judged step at or above the bar → approved, logged, and broadcast.
-  The phase's **worst** step decides; averaging would let one excellent step
-  carry a bad one through a gate set to catch exactly that.
+- Every relevant step of the waiting attempt must have succeeded (for a
+  best-of-N phase, the selected candidate's steps) and carry a **current**
+  verdict — the run's newest judgment — that is `ready`, scored, produced under
+  the rubric in the instance's own definition snapshot (compared by
+  `rubricDigest`), and at or above `autoApprove.verdict`. Every waiting phase is
+  considered, not only the current one.
+- No such verdict yet → the gate **waits**. Silence is not approval. A verdict
+  written before `rubricDigest` existed has none and cannot open a gate.
+- Any step **below** the bar → the gate waits for a human, indefinitely.
+- Every step at or above the bar → approved, recorded as a
+  [gate decision](#gate-decisions) and broadcast. The approval names the exact
+  phase, attempt, runs and verdicts, and is re-checked under the instance lock.
+  The phase's **worst** step decides — the lowest verdict must clear the bar;
+  averaging would let one excellent step carry a bad one through a gate set to
+  catch exactly that.
+
+The engine boundary the watcher uses takes only `{ runId, verdictId }` per
+relevant run:
+
+- A basis that names a run twice, or a run that is not one of the attempt's
+  relevant runs, is refused (`409`). Any other field on a basis entry is
+  ignored.
+- Every `verdicts[]` entry persisted in the gate decision — `stepName`,
+  `verdictId`, `at`, `score`, `bar`, `runtime`, `requestedModel`,
+  `reportedModel`, `promptVersion`, `rubricDigest` — is read from the stored
+  verdict and from the instance's own definition snapshot (the bar and the step
+  name). Metadata the stored verdict lacks is recorded as `null`, never filled
+  in.
+- A verdict without an `id` (written before ids existed) cannot be named, so
+  such a gate waits for a person.
+- The decision point: validating the current verdicts, writing the decision
+  record and linking it to the instance all happen while the verdict store's lock
+  is held — the same lock every verdict write takes. A verdict written before
+  that point is what validation sees: a newer current verdict that is not the one
+  named (a failed, unscored or lower-scoring re-judgment, for example) refuses
+  the approval with `409` "the verdict named for run … is not that run's current
+  verdict". A verdict written after that point cannot revoke the approval, which
+  is already durable; the gate decision keeps the basis it was decided on.
+  "Current" means the store's order: the newest `at` (the judgment's start time),
+  ties to the most recent write.
+
+Automated approval is **refused** — the gate waits for a person — when any of
+these holds:
+
+- the phase's definition in the instance snapshot commits knowledge, as listed
+  under [Declaring a rubric](#declaring-a-rubric);
+- the attempt actually staged knowledge: a KnowledgeDelta (including the
+  optional one any step may write), a rule verification, a change proposal, an
+  acceptance verification, a pending commit, or a realization link;
+- the pause is not a `gate` pause — a `needs-input` pause, or a pause recorded
+  before pause causes existed.
+
+A legacy definition keeps the `autoApprove` field on disk, but it is inert. When
+the watcher withholds approval from a gate that commits knowledge, it writes
+`phase.auto-approval-withheld` to the journal, once per phase attempt per server
+process; the engine's own refusals (409) record nothing and are logged.
 
 ## Tuning
 
@@ -2204,11 +2384,22 @@ alongside the pipeline routes.
     "tokens": 2200,
     "durationMs": 4200,
     "error": null, // set when status is not "ready"
+    "id": "A-…", // optional: absent on older records
+    "provenance": {
+      "runtime": "claude",
+      "requestedModel": "haiku",
+      "reportedModel": null,
+      "promptVersion": 1,
+    }, // optional
   },
   "eligible": true, // this run failed and could have one
   "unavailable": null, // why it can't, when it can't
 }
 ```
+
+Re-running the pass appends a new record rather than replacing the old one, and
+this route returns the **current** (newest) one. `provenance` has the same shape
+as on a verdict, and `reportedModel` is likewise `null`.
 
 `failureClass` is a **closed taxonomy**: `prompt-ambiguity`, `missing-context`,
 `tool-error`, `permission-denied`, `environment`, `timeout`, `rate-limit`,
@@ -2422,8 +2613,9 @@ session — it cannot execute anything.
 | `POST /api/instances/:id/signal`                        | ingest a signal `{ phaseId, runId, type, token, payload?, result?, resultError? }`; `403` on bad token                                                                                                                                                             |
 | `GET /api/instances/:id/phases/:phaseId/review`         | what a paused phase left for a human: payload, result, checks, artifact listing, and the attempt's candidate knowledge; `409` unless waiting or failed                                                                                                             |
 | `GET /api/instances/:id/phases/:phaseId/artifact?path=` | one artifact's text (clipped at 512 KiB) or metadata; `400` on a path that escapes the directory                                                                                                                                                                   |
-| `POST /api/instances/:id/approve`                       | advance past a gate (optional `{ answers, phaseId }`) — **admin**                                                                                                                                                                                                  |
-| `POST /api/instances/:id/revise`                        | re-run the paused phase with the human's note (optional `{ note, phaseId }`) — **admin**                                                                                                                                                                           |
+| `GET /api/instances/:id/gate-decisions`                 | the recorded gate decisions (approve / revise / abort) and how each was made, plus gated phases with no decision on record; `404` when neither the instance nor any record exists                                                                                  |
+| `POST /api/instances/:id/approve`                       | advance past a gate (optional `{ answers, phaseId, attempt }`) — **admin**                                                                                                                                                                                         |
+| `POST /api/instances/:id/revise`                        | re-run the paused phase with the human's note (optional `{ note, phaseId, attempt }`) — **admin**                                                                                                                                                                  |
 | `POST /api/instances/:id/abort`                         | abort the instance — **admin**                                                                                                                                                                                                                                     |
 | `GET /api/setup`                                        | prerequisite status `{ ok, prereqs[] }`                                                                                                                                                                                                                            |
 | `POST /api/setup/apply`                                 | install fixable prerequisites, then re-check → `{ ok, prereqs[] }`                                                                                                                                                                                                 |

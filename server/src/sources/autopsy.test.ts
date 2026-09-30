@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   AUTOPSY_KEEP,
+  AUTOPSY_PROMPT_VERSION,
   PROMPT_EVENT_CAP,
   PROMPT_MAX_CHARS,
   buildAutopsyPrompt,
@@ -236,12 +237,47 @@ test("with analysis disabled the record says skipped, not failed", async () => {
   assert.equal(autopsy.status, "skipped");
 });
 
-test("re-running replaces the previous autopsy rather than accumulating", async () => {
-  await performAutopsy(run(), deps(respond(envelope("no json"))));
-  await performAutopsy(run(), deps(respond(envelope(GOOD_ANSWER))));
+test("re-running keeps the earlier pass, and the newest is the run's current autopsy", async () => {
+  // Phase 0 of the Decision Plane RFC: what a model said earlier is part of the
+  // record of what it has said, so a re-run appends rather than replacing.
+  const first = await performAutopsy(run(), deps(respond(envelope("no json"))));
+  const second = await performAutopsy(run(), deps(respond(envelope(GOOD_ANSWER))));
   const all = await readAutopsies();
-  assert.equal(all.length, 1);
-  assert.equal(all[0].status, "ready");
+  assert.equal(all.length, 2);
+  assert.notEqual(first.id, second.id);
+  assert.deepEqual(new Set(all.map((a) => a.id)), new Set([first.id, second.id]));
+  assert.equal((await readAutopsy("run-1"))?.id, second.id);
+  assert.equal((await readAutopsy("run-1"))?.status, "ready");
+  assert.equal((await readFailureClasses()).get("run-1"), "missing-context");
+});
+
+test("a newer failed pass supersedes an older class for clustering — it is not resurrected", async () => {
+  await performAutopsy(run(), deps(respond(envelope(GOOD_ANSWER))));
+  await performAutopsy(run(), {
+    ...deps(respond(envelope("no json"))),
+    now: () => new Date(NOW.getTime() + 60_000),
+  });
+  assert.equal((await readAutopsy("run-1"))?.status, "failed");
+  assert.equal((await readFailureClasses()).has("run-1"), false);
+});
+
+test("an autopsy is stamped with the runtime, the model asked for, no invented reported model, and the prompt version", async () => {
+  const a = await performAutopsy(run(), deps(respond(envelope(GOOD_ANSWER))));
+  assert.match(a.id ?? "", /^A-[0-9a-f]{16}$/);
+  assert.deepEqual(a.provenance, {
+    runtime: "claude",
+    requestedModel: "haiku",
+    reportedModel: null,
+    promptVersion: AUTOPSY_PROMPT_VERSION,
+  });
+  // Even a refusal says which CLI and model it would have asked.
+  const skipped = await performAutopsy(run(), {
+    runner: createAnalysisRunner({ spawn: respond(""), now: () => NOW, enabled: () => false }),
+    now: () => NOW,
+    readLines: async () => [],
+  });
+  assert.equal(skipped.status, "skipped");
+  assert.equal(skipped.provenance?.runtime, "claude");
 });
 
 test("the store is capped so it cannot grow without bound", async () => {

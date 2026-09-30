@@ -220,6 +220,7 @@ import {
   applyCandidatesExhausted,
   applyRevise,
   applyRetry,
+  pausedPhase,
   applyUnlaunchable,
   applyVerification,
   candidateFailureClass,
@@ -241,6 +242,21 @@ import {
 } from "./sources/dag.js";
 import type { VerificationReport } from "./sources/pipelineTypes.js";
 import { journal } from "./sources/journal.js";
+import { appendGateDecision } from "./sources/gateDecisions.js";
+import {
+  gateRelevantSteps,
+  knowledgeCommitReasons,
+  stagedKnowledgeReasons,
+} from "./sources/gatePolicy.js";
+import { rubricDigest, withCurrentVerdicts } from "./sources/verdict.js";
+import type {
+  GateDecision,
+  GateDecisionChannel,
+  GateDecisionPhaseRef,
+  GateDecisionPrincipal,
+  GateDecisionVerdictBasis,
+  PendingGateOperation,
+} from "@argus/contracts";
 import { isAlive } from "./scheduler.js";
 import { claudeRuntime, parseEnvelopeFor, resolveRuntimeId, runtimeFor } from "./runtimes/index.js";
 import { graceMsFor, previousFireTime } from "./sources/nextFire.js";
@@ -643,6 +659,19 @@ export interface EngineDeps {
   preflight?: () => Promise<{ ok: boolean; reasons: string[] }>;
   /** Kills a run's process tree; injectable for tests. Defaults to killRunProcess. */
   kill?: (pid: number, signal?: NodeJS.Signals) => Promise<boolean> | boolean;
+  /**
+   * Makes a gate decision durable before the transition it causes is saved.
+   * Must throw when the record could not be written — the engine then refuses
+   * the decision rather than letting it take effect unrecorded. Injectable for
+   * tests; defaults to the append-only `gate-decisions.jsonl`.
+   */
+  recordGateDecision?: (decision: GateDecision) => Promise<void>;
+  /**
+   * Test seam for deterministic fault injection: called at each effect
+   * boundary of a gate decision. A probe that throws simulates the process
+   * failing at exactly that point. Never set in production.
+   */
+  gateEffectProbe?: (point: GateEffectPoint, instanceId: string) => Promise<void> | void;
   /** The environment step env policies are applied to. Defaults to process.env. */
   parentEnv?: NodeJS.ProcessEnv;
   /** Grace between the deadline's SIGTERM and a SIGKILL escalation. */
@@ -666,9 +695,67 @@ export interface ActionResult {
   error?: string;
 }
 
+/** The effect boundaries {@link EngineDeps.gateEffectProbe} is called at. */
+export type GateEffectPoint =
+  | "revise:recorded"
+  | "revise:linked"
+  | "revise:superseded"
+  | "revise:killed"
+  | "revise:saved"
+  | "abort:recorded"
+  | "abort:linked"
+  | "abort:killed"
+  | "abort:realizations-settled"
+  | "abort:saved"
+  | "approve:validated"
+  | "approve:recorded"
+  | "approve:linked"
+  | "approve:knowledge-settled"
+  | "approve:realizations-settled"
+  | "approve:saved";
+
 /** Which paused phase a gate action means, when more than one could be. */
 export interface GateTarget {
   phaseId?: string;
+  /**
+   * The attempt the caller decided on. When given, the action is refused if
+   * the phase has moved to another attempt since — the decision was about work
+   * that is no longer the work waiting at the gate.
+   */
+  attempt?: number;
+  /**
+   * Where the decision came from, established by the caller's own trusted
+   * code (the HTTP route reads the authenticated session) — never from a
+   * request body. Absent = an in-process caller that did not say, recorded as
+   * `unspecified` / `unknown` rather than guessed.
+   */
+  source?: OperatorSource;
+}
+
+/** A person-facing channel's account of who asked. Operators only: an
+ *  automated rule never approves through {@link Engine.approve}. */
+export interface OperatorSource {
+  channel: Exclude<GateDecisionChannel, "verdict-watcher">;
+  principal: GateDecisionPrincipal;
+}
+
+/**
+ * An automated approval request: the exact phase attempt, the exact runs of
+ * that attempt, and the exact verdicts it rests on. The engine re-checks every
+ * part of it under the instance lock, because the watcher read all of it
+ * outside that lock and a human may have revised the phase since.
+ */
+export interface AutomatedApproval {
+  instanceId: string;
+  phaseId: string;
+  attempt: number;
+  runIds: string[];
+  /**
+   * The proposed basis: which stored verdict the caller believes is each
+   * run's current one. Identity only — everything recorded about a verdict is
+   * read from the verdict store, and any other field here is ignored.
+   */
+  verdicts: Array<{ runId: string; verdictId: string | null }>;
 }
 
 interface RecoveredOutcome {
@@ -871,9 +958,15 @@ export interface Engine {
   /** Open a gate. `phaseId` names which paused phase when a fan-out has more
    *  than one waiting; absent, the single paused phase is meant. */
   approve(instanceId: string, answers?: unknown, options?: GateTarget): Promise<ActionResult>;
+  /**
+   * Open a gate because an automated rule (a Verdict score clearing the
+   * phase's `autoApprove` bar) says it may. Refused, whatever the score, when
+   * the gate would commit knowledge — see `sources/gatePolicy.ts`.
+   */
+  approveAutomatically(request: AutomatedApproval): Promise<ActionResult>;
   /** Send a paused phase back to its agent with the human's note. */
   revise(instanceId: string, note?: string, options?: GateTarget): Promise<ActionResult>;
-  abort(instanceId: string): Promise<ActionResult>;
+  abort(instanceId: string, options?: { source?: OperatorSource }): Promise<ActionResult>;
   reconcile(): Promise<void>;
   /** On boot: claim still-alive runs from running instances so they keep
    *  their concurrency slots and get finalized by reconcile when they end. */
@@ -2574,7 +2667,7 @@ export function createEngine(deps: EngineDeps): Engine {
     beforeTransition?: () => Promise<void>,
   ): Promise<void> {
     await locks.withLock(instanceId, async () => {
-      const inst = await readInstance(instanceId);
+      const inst = await readLive(instanceId);
       if (!inst || inst.status !== "running") return;
       const phase = inst.phases.find((p) => p.id === phaseId);
       const step = phase?.steps.find((s) => s.runId === runId);
@@ -2615,19 +2708,30 @@ export function createEngine(deps: EngineDeps): Engine {
     reason = "stopped by Argus",
   ): Promise<void> {
     const wanted = new Set(phaseIds);
-    const steps = inst.phases.filter((p) => wanted.has(p.id)).flatMap((p) => p.steps);
-    for (const s of steps) {
-      if (!s.runId) continue;
-      const got = await readRun(s.runId);
+    const runIds = inst.phases
+      .filter((p) => wanted.has(p.id))
+      .flatMap((p) => p.steps.map((s) => s.runId))
+      .filter((id): id is string => !!id);
+    await stopRuns(runIds, reason);
+  }
+
+  /**
+   * Stop exactly these runs. Idempotent: a run that is no longer running, or
+   * whose process is gone, is left alone — which is what lets an interrupted
+   * revise or abort be carried through again without signalling anything new.
+   */
+  async function stopRuns(runIds: string[], reason = "stopped by Argus"): Promise<void> {
+    for (const runId of runIds) {
+      const got = await readRun(runId);
       if (got && got.run.status === "running" && isAlive(got.run.pid)) {
         // Written before the kill so the close handler reads the reason Argus
         // gave rather than inventing one from the exit code.
         if (!got.run.termination) {
-          await patchRun(s.runId, { termination: "killed", error: reason });
+          await patchRun(runId, { termination: "killed", error: reason });
         }
         await stopRun(got.run.pid);
       }
-      deps.tailer?.untrack(s.runId);
+      deps.tailer?.untrack(runId);
     }
   }
 
@@ -2732,7 +2836,7 @@ export function createEngine(deps: EngineDeps): Engine {
       const def = await defFor(candidate);
       if (!def) continue;
       await locks.withLock(candidate.id, async () => {
-        const inst = await readInstance(candidate.id);
+        const inst = await readLive(candidate.id);
         if (!inst) return;
         const due = inst.phases.filter(
           (p) => p.status === "failed" && p.retryAt && Date.parse(p.retryAt) <= now.getTime(),
@@ -2822,20 +2926,21 @@ export function createEngine(deps: EngineDeps): Engine {
     def: PipelineDefinition,
     transitioned: PipelineInstance,
     ready: number[],
+    suffix = "",
   ): void {
     if (ready.length === 0) return;
     const wantIds = ready.map((i) => transitioned.phases[i].id);
     void track(
       locks
         .withLock(instanceId, async () => {
-          const fresh = await readInstance(instanceId);
+          const fresh = await readLive(instanceId);
           if (!fresh || fresh.status !== "running") return;
           // Re-resolve by phase id: an abort/revise landing in the transition
           // window may have changed which work is live.
           const stillWanted = wantIds
             .map((id) => fresh.phases.findIndex((p) => p.id === id))
             .filter((i) => i >= 0 && fresh.phases[i].status === "running");
-          await startPhases(def, fresh, stillWanted);
+          await startPhases(def, fresh, stillWanted, suffix);
         })
         .catch((e: unknown) => log.error("deferred phase start failed", { instanceId, err: e })),
     );
@@ -2900,7 +3005,7 @@ export function createEngine(deps: EngineDeps): Engine {
           env: buildChildEnv(parentEnv(), resolveCapabilities(def, phaseDef, {})?.env).env,
         });
         await locks.withLock(instanceId, async () => {
-          const fresh = await readInstance(instanceId);
+          const fresh = await readLive(instanceId);
           if (!fresh || fresh.status !== "running") return;
           const current = fresh.phases.find((p) => p.id === phaseId);
           if (!current || current.attempt !== attempt) return;
@@ -5329,7 +5434,7 @@ export function createEngine(deps: EngineDeps): Engine {
           env: buildChildEnv(parentEnv(), resolveCapabilities(def, phaseDef, {})?.env).env,
         });
         await locks.withLock(instanceId, async () => {
-          const fresh = await readInstance(instanceId);
+          const fresh = await readLive(instanceId);
           if (!fresh || fresh.status !== "running") return;
           const current = fresh.phases.find((p) => p.id === phaseId);
           if (!current || current.attempt !== attempt) return;
@@ -5380,7 +5485,7 @@ export function createEngine(deps: EngineDeps): Engine {
 
   async function onSignal(instanceId: string, signal: PipelineSignal): Promise<ActionResult> {
     return locks.withLock(instanceId, async () => {
-      const inst = await readInstance(instanceId);
+      const inst = await readLive(instanceId);
       if (!inst) return { ok: false, code: 404 };
       if (signal.token !== inst.signalToken) return { ok: false, code: 403 };
       if (inst.status !== "running") return { ok: true, code: 200 }; // paused/terminal → idempotent ignore
@@ -5511,39 +5616,500 @@ export function createEngine(deps: EngineDeps): Engine {
     });
   }
 
+  // ── Gate decisions ────────────────────────────────────────────────────────
+  //
+  // The order every approve, revise and abort follows, and why:
+  //
+  //   1. validate                         — a refusal (409) writes nothing
+  //   2. record the decision, fsynced     — intent (sources/gateDecisions.ts)
+  //   3. LINK: one instance save naming the decision in `gateDecisionIds`
+  //      and carrying `pendingGateOperation`   — before any effect
+  //   4. effects: supersede staged records, stop runs, commit knowledge,
+  //      settle realizations, transition the phase
+  //   5. COMPLETE: the instance save that clears `pendingGateOperation`
+  //
+  // So an unlinked record provably had no effect (`not-applied`), a linked one
+  // with its marker still present is `incomplete`, and a linked one without it
+  // is `applied`. Step 4 is idempotent against what is on disk, and every path
+  // that mutates an instance first completes a leftover marker (`readLive`),
+  // so an interrupted operation is carried through exactly once and nothing
+  // else — an approval of the attempt a revise discarded, the work an abort was
+  // stopping — can happen in between.
+
+  const recordGateDecision = deps.recordGateDecision ?? appendGateDecision;
+  const probe = async (point: GateEffectPoint, instanceId: string) =>
+    deps.gateEffectProbe?.(point, instanceId);
+
+  function phaseRef(phase: PhaseProgress): GateDecisionPhaseRef {
+    return {
+      phaseId: phase.id,
+      attempt: phase.attempt,
+      status: phase.status,
+      runIds: phase.steps.map((s) => s.runId).filter((id): id is string => !!id),
+    };
+  }
+
+  const UNSPECIFIED: OperatorSource = { channel: "in-process", principal: { kind: "unknown" } };
+
+  /** Step 2. The record, or the refusal to return when it cannot be written. */
+  async function writeDecision(
+    decision: Omit<GateDecision, "id" | "recordedAt">,
+  ): Promise<{ record: GateDecision } | { refusal: ActionResult }> {
+    const record: GateDecision = {
+      id: `GD-${deps.newId()}`,
+      ...decision,
+      recordedAt: nowISO(),
+    };
+    try {
+      await recordGateDecision(record);
+      return { record };
+    } catch (e) {
+      log.error("gate decision could not be recorded; refusing it", {
+        instanceId: decision.instanceId,
+        decision: decision.decision,
+        err: e,
+      });
+      return {
+        refusal: {
+          ok: false,
+          code: 500,
+          error: "the gate decision could not be recorded, so it was not applied; nothing changed",
+        },
+      };
+    }
+  }
+
+  /**
+   * Step 3. Link the decision and mark its operation pending, in one save,
+   * before any effect. Returns the refusal when the save fails — and says
+   * whether the link landed anyway, re-read from disk rather than assumed.
+   */
+  async function linkDecision(
+    inst: PipelineInstance,
+    record: GateDecision,
+    op: Omit<PendingGateOperation, "decisionId" | "decision" | "startedAt">,
+  ): Promise<ActionResult | null> {
+    inst.gateDecisionIds = [...(inst.gateDecisionIds ?? []), record.id];
+    inst.pendingGateOperation = {
+      decisionId: record.id,
+      decision: record.decision,
+      startedAt: nowISO(),
+      ...op,
+    };
+    try {
+      // The plain atomic write, not `saveInstance`: the link must not carry
+      // any effect with it — `saveInstance` also retires staged records and,
+      // for a terminal instance, starts workspace cleanup. This save changes
+      // no phase state, so there is nothing for those to act on anyway.
+      await writeInstance(inst);
+      await probe(`${record.decision}:linked` as GateEffectPoint, inst.id);
+      return null;
+    } catch (e) {
+      const onDisk = await readInstance(inst.id).catch(() => null);
+      const linked = !!onDisk?.gateDecisionIds?.includes(record.id);
+      log.error("gate decision could not be linked to its instance", {
+        instanceId: inst.id,
+        decisionId: record.id,
+        linked,
+        err: e,
+      });
+      return {
+        ok: false,
+        code: 500,
+        error: linked
+          ? "the gate decision was linked but not completed; Argus completes it before anything else happens to this instance"
+          : "the gate decision was recorded but could not be linked to the instance, so none of its effects started; nothing changed",
+      };
+    }
+  }
+
+  function stopTargets(phases: PhaseProgress[]): string[] {
+    return phases.flatMap((p) => p.steps.map((s) => s.runId).filter((id): id is string => !!id));
+  }
+
+  interface Continued {
+    instance: PipelineInstance;
+    startPhases: number[];
+    suffix?: string;
+    routing?: TransitionResult["routing"];
+  }
+
+  /**
+   * Step 4–5 for a revise. Idempotent against disk: records already
+   * superseded stay superseded, a run already stopped is not alive, and a phase
+   * already on the next attempt is not restarted again.
+   */
+  async function continueRevise(
+    inst: PipelineInstance,
+    op: PendingGateOperation,
+  ): Promise<Continued> {
+    let startIdx: number[] = [];
+    const phase = inst.phases.find((p) => p.id === op.phaseId);
+    if (
+      phase &&
+      phase.attempt === op.attempt &&
+      (phase.status === "awaiting-approval" || phase.status === "failed")
+    ) {
+      // The paused phase's staged records are the attempt being discarded:
+      // superseded while the steps that reference them still exist, so they
+      // can never be committed by the attempt that follows.
+      await supersedeDeltas(inst, phase, phase.steps, `attempt ${phase.attempt} revised`);
+      await probe("revise:superseded", inst.id);
+      // Exactly the revised attempt's runs, captured when the decision was
+      // linked — never a sibling branch, and never the new attempt's.
+      await stopRuns(op.stopRunIds, "superseded by a revise");
+      await probe("revise:killed", inst.id);
+      const res = applyRevise(inst, nowISO(), phase.id);
+      startIdx = res.startPhases;
+    }
+    delete inst.pendingGateOperation;
+    await saveInstance(inst);
+    await probe("revise:saved", inst.id);
+    return {
+      instance: inst,
+      startPhases: startIdx,
+      suffix: op.note ? `\n\nRevision note: ${op.note}` : "",
+    };
+  }
+
+  /** Step 4–5 for an abort. Idempotent: stopping a dead run is a no-op, an
+   *  aborted instance is not re-aborted, and a realization that already has an
+   *  outcome is left alone by `settleRealizations`. */
+  async function continueAbort(
+    inst: PipelineInstance,
+    op: PendingGateOperation,
+  ): Promise<Continued> {
+    await stopRuns(op.stopRunIds, "aborted");
+    await probe("abort:killed", inst.id);
+    let aborted = inst;
+    if (inst.status !== "succeeded" && inst.status !== "failed" && inst.status !== "aborted") {
+      aborted = applyAbort(inst, nowISO());
+    }
+    // An abort ends every realization this instance was driving: a
+    // completion question nothing will ever answer is not left `running`.
+    const def = await defFor(aborted);
+    const settled = def
+      ? await settleRealizations(def, { instance: aborted, startPhases: [] })
+      : { instance: aborted, startPhases: [] };
+    await probe("abort:realizations-settled", inst.id);
+    delete settled.instance.pendingGateOperation;
+    await saveInstance(settled.instance);
+    await probe("abort:saved", inst.id);
+    return { instance: settled.instance, startPhases: [] };
+  }
+
+  /** Step 4–5 for an approval. From the waiting phase, it applies the approval;
+   *  from a phase whose commit is already pending, it re-drives the commit,
+   *  which is idempotent on delta id. */
+  async function continueApproval(
+    def: PipelineDefinition,
+    inst: PipelineInstance,
+    op: PendingGateOperation,
+  ): Promise<Continued> {
+    const phase = inst.phases.find((p) => p.id === op.phaseId);
+    let res: TransitionResult = { instance: inst, startPhases: [] };
+    if (phase && phase.status === "awaiting-approval" && phase.attempt === op.attempt) {
+      res = applyApprove(def, inst, op.answers, nowISO(), phase.id);
+    } else if (phase && phase.status === "running" && phase.knowledge?.status === "pending") {
+      res = { instance: inst, startPhases: [], commitKnowledge: [phase.id] };
+    }
+    // The gate is the acceptance condition: a staged delta commits here,
+    // after the approval, never when the agent finished. `settleKnowledge`
+    // saves the pending-commit state (marker still present) before it
+    // touches the ledger.
+    res = await settleKnowledge(def, res);
+    await probe("approve:knowledge-settled", inst.id);
+    res = await settleRealizations(def, res);
+    await probe("approve:realizations-settled", inst.id);
+    delete res.instance.pendingGateOperation;
+    await saveInstance(res.instance);
+    await probe("approve:saved", inst.id);
+    if (res.instance.status === "succeeded" || res.instance.status === "failed") {
+      void journal(inst.id, {
+        at: nowISO(),
+        kind: "instance.ended",
+        detail: res.instance.status,
+      });
+    }
+    if (res.instance.status === "failed") deps.onFailure?.(res.instance);
+    if (noteRouting(def, res.instance, res.routing)) await saveInstance(res.instance);
+    return { instance: res.instance, startPhases: res.startPhases };
+  }
+
+  async function continueOperation(inst: PipelineInstance): Promise<Continued> {
+    const op = inst.pendingGateOperation;
+    if (!op) return { instance: inst, startPhases: [] };
+    if (op.decision === "abort") return continueAbort(inst, op);
+    if (op.decision === "revise") return continueRevise(inst, op);
+    const def = await defFor(inst);
+    if (!def)
+      throw new Error("the instance's definition is gone; the approval cannot be completed");
+    return continueApproval(def, inst, op);
+  }
+
+  /**
+   * The engine's read for any path that is about to mutate an instance, under
+   * its lock. When a gate operation was interrupted (the process died, or a
+   * save failed, part-way through step 4), it is completed here first — from
+   * disk, idempotently — and its phase launches are queued, so the caller
+   * works on the state the decision produced, never on the state it was
+   * interrupting. `null` when the instance is missing, or when the operation
+   * could not be completed; then nothing may transition the instance, and the
+   * decision stays `incomplete` until a later attempt succeeds.
+   */
+  async function readLive(instanceId: string): Promise<PipelineInstance | null> {
+    const inst = await readInstance(instanceId);
+    if (!inst?.pendingGateOperation) return inst;
+    const op = inst.pendingGateOperation;
+    try {
+      const done = await continueOperation(inst);
+      void journal(inst.id, {
+        at: nowISO(),
+        kind: "gate.operation-completed",
+        ...(op.phaseId ? { phaseId: op.phaseId } : {}),
+        ...(op.attempt !== null ? { attempt: op.attempt } : {}),
+        detail: `${op.decision} ${op.decisionId} completed after an interruption`,
+      });
+      const def = await defFor(done.instance);
+      if (def && done.startPhases.length > 0) {
+        queueReadyPhases(inst.id, def, done.instance, done.startPhases, done.suffix);
+      }
+      deps.onChange?.();
+      return readInstance(instanceId);
+    } catch (e) {
+      log.error("an interrupted gate operation could not be completed; the instance is held", {
+        instanceId,
+        decisionId: op.decisionId,
+        err: e,
+      });
+      return null;
+    }
+  }
+
+  /** `readLive` for the gate actions, which say why rather than 404. */
+  async function readForDecision(
+    instanceId: string,
+  ): Promise<{ inst: PipelineInstance } | { refusal: ActionResult }> {
+    const raw = await readInstance(instanceId);
+    if (!raw) return { refusal: { ok: false, code: 404, error: "instance not found" } };
+    const inst = await readLive(instanceId);
+    if (!inst) {
+      return {
+        refusal: {
+          ok: false,
+          code: 409,
+          error:
+            "an earlier gate decision on this instance is incomplete and could not be completed; " +
+            "nothing else can happen to it until it is",
+        },
+      };
+    }
+    return { inst };
+  }
+
+  function attemptMismatch(phase: PhaseProgress, attempt: number | undefined): ActionResult | null {
+    if (attempt === undefined || attempt === phase.attempt) return null;
+    return {
+      ok: false,
+      code: 409,
+      error: `phase ${phase.id} is on attempt ${phase.attempt}, not attempt ${attempt}`,
+    };
+  }
+
   async function approve(
     instanceId: string,
     answers?: unknown,
     options: GateTarget = {},
   ): Promise<ActionResult> {
     return locks.withLock(instanceId, async () => {
-      const inst = await readInstance(instanceId);
-      if (!inst) return { ok: false, code: 404, error: "instance not found" };
+      const read = await readForDecision(instanceId);
+      if ("refusal" in read) return read.refusal;
+      const inst = read.inst;
       const def = await defFor(inst);
       if (!def) return { ok: false, code: 404, error: "pipeline not found" };
-      let res: TransitionResult;
-      try {
-        res = applyApprove(def, inst, answers, nowISO(), options.phaseId);
-      } catch (e) {
-        return { ok: false, code: 409, error: e instanceof Error ? e.message : String(e) };
+      const phase = pausedPhase(inst, options.phaseId);
+      if (!phase || phase.status !== "awaiting-approval") {
+        return { ok: false, code: 409, error: "instance is not awaiting approval" };
       }
-      // The gate is the acceptance condition: a staged delta commits here,
-      // after the human's approval, never when the agent finished.
-      res = await settleKnowledge(def, res);
-      res = await settleRealizations(def, res);
-      await saveInstance(res.instance);
-      if (res.instance.status === "succeeded" || res.instance.status === "failed") {
-        void journal(inst.id, {
-          at: nowISO(),
-          kind: "instance.ended",
-          detail: res.instance.status,
-        });
-      }
-      if (res.instance.status === "failed") deps.onFailure?.(res.instance);
-      if (noteRouting(def, res.instance, res.routing)) await saveInstance(res.instance);
-      await startPhases(def, res.instance, res.startPhases);
+      const stale = attemptMismatch(phase, options.attempt);
+      if (stale) return stale;
+      const source = options.source ?? UNSPECIFIED;
+      const written = await writeDecision({
+        instanceId: inst.id,
+        pipelineId: inst.pipelineId,
+        decision: "approve",
+        mechanism: options.source ? "operator" : "unspecified",
+        channel: source.channel,
+        principal: source.principal,
+        phases: [phaseRef(phase)],
+        ...(answers !== undefined ? { answersProvided: true } : {}),
+      });
+      if ("refusal" in written) return written.refusal;
+      await probe("approve:recorded", inst.id);
+      const unlinked = await linkDecision(inst, written.record, {
+        phaseId: phase.id,
+        attempt: phase.attempt,
+        stopRunIds: [],
+        ...(answers !== undefined ? { answers } : {}),
+      });
+      if (unlinked) return unlinked;
+      const done = await continueApproval(def, inst, inst.pendingGateOperation!);
+      await startPhases(def, done.instance, done.startPhases);
       deps.onChange?.();
       return { ok: true, code: 200 };
+    });
+  }
+
+  /**
+   * The automated approval boundary.
+   *
+   * **What the request may say.** Only which verdict it proposes for each
+   * run: `{ runId, verdictId }`. Any other field a caller puts on a basis
+   * entry is ignored. A request that names a run twice, or names a run that is
+   * not one of the attempt's relevant runs, is refused as inconsistent. What
+   * is persisted about each verdict — score, timestamp, rubric digest,
+   * runtime, requested and reported model, prompt version — is read from the
+   * stored verdict; the bar and step identity from the instance and its own
+   * definition snapshot. Metadata a stored verdict does not carry stays
+   * `null`, never filled in.
+   *
+   * **The decision point.** Validation, the decision record and the instance
+   * link (step 3) all happen while the verdict store's lock is held
+   * (`withCurrentVerdicts`), the lock every verdict write takes. So every
+   * verdict write is ordered against the approval's commit: one that lands
+   * before it is part of what was validated (a newer failed, unscored or
+   * lower-scoring current verdict refuses the approval); one that lands after
+   * it cannot revoke an approval that is already durable. "Current" is the
+   * store's order — the newest `at`, ties to the most recent write.
+   */
+  async function approveAutomatically(request: AutomatedApproval): Promise<ActionResult> {
+    return locks.withLock(request.instanceId, async () => {
+      const refuse = (error: string, code = 409): ActionResult => ({ ok: false, code, error });
+      const read = await readForDecision(request.instanceId);
+      if ("refusal" in read) return read.refusal;
+      const inst = read.inst;
+      const def = await defFor(inst);
+      if (!def) return refuse("pipeline not found", 404);
+      const phase = inst.phases.find((p) => p.id === request.phaseId);
+      if (!phase || phase.status !== "awaiting-approval") {
+        return refuse(`phase ${request.phaseId} is not awaiting approval`);
+      }
+      const stale = attemptMismatch(phase, request.attempt);
+      if (stale) return stale;
+      // A question an agent put to a person (`needs-input`) paused the phase
+      // before its result, checks and staging ran — and a pause recorded
+      // before the cause was recorded cannot be told apart from one. Only a
+      // known gate pause is a rule's to open.
+      if (phase.pause !== "gate") {
+        return refuse(
+          phase.pause === "needs-input"
+            ? `phase ${phase.id} is waiting on an answer to an agent's question, which needs a person`
+            : `phase ${phase.id} paused before pause causes were recorded; it needs a person`,
+        );
+      }
+      const phaseDef = def.phases.find((p) => p.id === phase.id);
+      const bar = phaseDef?.autoApprove?.verdict;
+      if (!phaseDef || bar === undefined || !phaseDef.rubric) {
+        return refuse(`phase ${phase.id} does not declare autoApprove with a rubric`);
+      }
+      const reasons = [...knowledgeCommitReasons(phaseDef), ...stagedKnowledgeReasons(phase)];
+      if (reasons.length > 0) {
+        return refuse(
+          `phase ${phase.id} commits knowledge (${reasons.join(", ")}); ` +
+            "its gate needs a person, and automated approval is refused",
+        );
+      }
+      const relevant = gateRelevantSteps(phase);
+      const attemptRuns = relevant.map((s) => s.runId).filter((id): id is string => !!id);
+      const everyStepRan =
+        relevant.length > 0 && relevant.every((s) => !!s.runId && s.status === "succeeded");
+      const sameRuns =
+        attemptRuns.length === request.runIds.length &&
+        attemptRuns.every((id) => request.runIds.includes(id));
+      if (!everyStepRan || attemptRuns.length === 0 || !sameRuns) {
+        return refuse(
+          `the runs named are not exactly the succeeded runs of attempt ${phase.attempt}`,
+        );
+      }
+      // The proposed basis: exactly one entry per relevant run, nothing else.
+      const proposed = new Map<string, string | null>();
+      for (const entry of request.verdicts) {
+        if (!attemptRuns.includes(entry.runId)) {
+          return refuse(`the basis names run ${entry.runId}, which this gate is not about`);
+        }
+        if (proposed.has(entry.runId)) {
+          return refuse(`the basis names run ${entry.runId} more than once`);
+        }
+        proposed.set(entry.runId, entry.verdictId ?? null);
+      }
+      const digest = rubricDigest(phaseDef.rubric);
+
+      return withCurrentVerdicts(async (currentList) => {
+        const current = new Map(currentList.map((v) => [v.runId, v]));
+        const basis: GateDecisionVerdictBasis[] = [];
+        for (const step of relevant) {
+          const runId = step.runId as string;
+          if (!proposed.has(runId))
+            return refuse(`run ${runId} has no verdict in the approval request`);
+          const stored = current.get(runId);
+          if (!stored || stored.id == null || stored.id !== proposed.get(runId)) {
+            return refuse(`the verdict named for run ${runId} is not that run's current verdict`);
+          }
+          if (stored.status !== "ready" || stored.score === null) {
+            return refuse(`run ${runId}'s current verdict is ${stored.status}, not a score`);
+          }
+          if (stored.rubricDigest !== digest) {
+            return refuse(`run ${runId} was not judged under this phase's rubric`);
+          }
+          if (stored.score < bar) {
+            return refuse(`run ${runId} scored ${stored.score}, below the bar of ${bar}`);
+          }
+          // Built from the stored judgment and the instance's own policy —
+          // never from what the request said about it.
+          basis.push({
+            runId,
+            stepName: step.name,
+            verdictId: stored.id,
+            at: stored.at,
+            score: stored.score,
+            bar,
+            runtime: stored.provenance?.runtime ?? null,
+            requestedModel: stored.provenance?.requestedModel ?? null,
+            reportedModel: stored.provenance?.reportedModel ?? null,
+            promptVersion: stored.provenance?.promptVersion ?? null,
+            rubricDigest: stored.rubricDigest ?? null,
+          });
+        }
+        await probe("approve:validated", inst.id);
+        const written = await writeDecision({
+          instanceId: inst.id,
+          pipelineId: inst.pipelineId,
+          decision: "approve",
+          mechanism: "verdict-auto-approve",
+          channel: "verdict-watcher",
+          principal: { kind: "system", component: "verdict-watcher" },
+          phases: [phaseRef(phase)],
+          verdicts: basis,
+        });
+        if ("refusal" in written) return written.refusal;
+        await probe("approve:recorded", inst.id);
+        // The commit point: once this save lands, the approval is durable and
+        // its basis is fixed. Still inside the verdict store's lock.
+        const unlinked = await linkDecision(inst, written.record, {
+          phaseId: phase.id,
+          attempt: phase.attempt,
+          stopRunIds: [],
+        });
+        if (unlinked) return unlinked;
+        return null;
+      }).then(async (refused) => {
+        if (refused) return refused;
+        // Completing an approval that is already durable needs no verdict.
+        const done = await continueApproval(def, inst, inst.pendingGateOperation!);
+        await startPhases(def, done.instance, done.startPhases);
+        deps.onChange?.();
+        return { ok: true, code: 200 };
+      });
     });
   }
 
@@ -5553,69 +6119,84 @@ export function createEngine(deps: EngineDeps): Engine {
     options: GateTarget = {},
   ): Promise<ActionResult> {
     return locks.withLock(instanceId, async () => {
-      const inst = await readInstance(instanceId);
-      if (!inst) return { ok: false, code: 404, error: "instance not found" };
+      const read = await readForDecision(instanceId);
+      if ("refusal" in read) return read.refusal;
+      const inst = read.inst;
       const def = await defFor(inst);
       if (!def) return { ok: false, code: 404, error: "pipeline not found" };
-      // Validate the transition BEFORE any destructive side effect: killing the
-      // phase's straggler runs must not happen if the instance can't be revised
-      // (e.g. it isn't awaiting approval), or a rejected 409 would still have
-      // torn down live work.
-      // The paused phase's staged deltas are the attempt a human is about to
-      // discard: superseded now, while the steps that reference them still
-      // exist, so they can never be committed by the attempt that follows.
-      const target = options.phaseId
-        ? inst.phases.find((p) => p.id === options.phaseId)
-        : (inst.phases.find((p) => p.status === "awaiting-approval") ??
-          inst.phases.find((p) => p.status === "failed"));
-      if (target && (target.status === "awaiting-approval" || target.status === "failed")) {
-        await supersedeDeltas(inst, target, target.steps, `attempt ${target.attempt} revised`);
+      // Validate BEFORE anything is recorded or destroyed: a refused 409 must
+      // not have torn down live work.
+      const target = pausedPhase(inst, options.phaseId);
+      if (!target || (target.status !== "awaiting-approval" && target.status !== "failed")) {
+        return { ok: false, code: 409, error: "instance is not paused" };
       }
-      let res;
-      try {
-        res = applyRevise(inst, nowISO(), options.phaseId);
-      } catch (e) {
-        return { ok: false, code: 409, error: e instanceof Error ? e.message : String(e) };
-      }
-      // Only the revised phase: a sibling branch that is legitimately running
-      // is not part of this decision, and killing it would be a silent abort.
-      await killPhaseRuns(
-        inst,
-        res.startPhases.map((i) => res.instance.phases[i].id),
-        "superseded by a revise",
-      );
-      await saveInstance(res.instance);
-      const suffix = note ? `\n\nRevision note: ${note}` : "";
-      await startPhases(def, res.instance, res.startPhases, suffix);
+      const stale = attemptMismatch(target, options.attempt);
+      if (stale) return stale;
+      const source = options.source ?? UNSPECIFIED;
+      const clipped = typeof note === "string" && note ? note.slice(0, 2000) : undefined;
+      const written = await writeDecision({
+        instanceId: inst.id,
+        pipelineId: inst.pipelineId,
+        decision: "revise",
+        mechanism: options.source ? "operator" : "unspecified",
+        channel: source.channel,
+        principal: source.principal,
+        phases: [phaseRef(target)],
+        ...(clipped ? { note: clipped } : {}),
+      });
+      if ("refusal" in written) return written.refusal;
+      await probe("revise:recorded", inst.id);
+      const unlinked = await linkDecision(inst, written.record, {
+        phaseId: target.id,
+        attempt: target.attempt,
+        // Only the revised phase's runs: a sibling branch that is
+        // legitimately running is not part of this decision, and killing it
+        // would be a silent abort.
+        stopRunIds: stopTargets([target]),
+        ...(typeof note === "string" && note ? { note } : {}),
+      });
+      if (unlinked) return unlinked;
+      const done = await continueRevise(inst, inst.pendingGateOperation!);
+      await startPhases(def, done.instance, done.startPhases, done.suffix);
       deps.onChange?.();
       return { ok: true, code: 200 };
     });
   }
 
-  async function abort(instanceId: string): Promise<ActionResult> {
+  async function abort(
+    instanceId: string,
+    options: { source?: OperatorSource } = {},
+  ): Promise<ActionResult> {
     return locks.withLock(instanceId, async () => {
-      const inst = await readInstance(instanceId);
-      if (!inst) return { ok: false, code: 404, error: "instance not found" };
-      let aborted: PipelineInstance;
-      try {
-        aborted = applyAbort(inst, nowISO());
-      } catch (e) {
-        return { ok: false, code: 409, error: e instanceof Error ? e.message : String(e) };
+      const read = await readForDecision(instanceId);
+      if ("refusal" in read) return read.refusal;
+      const inst = read.inst;
+      if (inst.status === "succeeded" || inst.status === "failed" || inst.status === "aborted") {
+        return { ok: false, code: 409, error: "instance is already terminal" };
       }
-      // Everything: an abort stops the whole instance, including branches the
-      // applyAbort above has already marked terminal.
-      await killPhaseRuns(
-        inst,
-        inst.phases.map((p) => p.id),
-        "aborted",
-      );
-      // An abort ends every realization this instance was driving: a
-      // completion question nothing will ever answer is not left `running`.
-      const def = await defFor(aborted);
-      const settled = def
-        ? await settleRealizations(def, { instance: aborted, startPhases: [] })
-        : { instance: aborted };
-      await saveInstance(settled.instance);
+      const source = options.source ?? UNSPECIFIED;
+      const written = await writeDecision({
+        instanceId: inst.id,
+        pipelineId: inst.pipelineId,
+        decision: "abort",
+        mechanism: options.source ? "operator" : "unspecified",
+        channel: source.channel,
+        principal: source.principal,
+        // Every phase the abort stops: the ones still running or waiting.
+        phases: inst.phases
+          .filter((p) => p.status === "running" || p.status === "awaiting-approval")
+          .map(phaseRef),
+      });
+      if ("refusal" in written) return written.refusal;
+      await probe("abort:recorded", inst.id);
+      // Everything: an abort stops the whole instance.
+      const unlinked = await linkDecision(inst, written.record, {
+        phaseId: null,
+        attempt: null,
+        stopRunIds: stopTargets(inst.phases),
+      });
+      if (unlinked) return unlinked;
+      await continueAbort(inst, inst.pendingGateOperation!);
       deps.onChange?.();
       return { ok: true, code: 200 };
     });
@@ -5625,6 +6206,16 @@ export function createEngine(deps: EngineDeps): Engine {
     const defs = await readPipelines();
     const grace = graceMsFor(deps.tickMs ?? 30000);
     const now = deps.now();
+
+    // Before anything else: complete every gate operation that was
+    // interrupted (a restart after a crash mid-revise, mid-abort,
+    // mid-approval), whatever the instance's status — an aborting instance
+    // may still read `running`, a revising one `awaiting-approval`. Every
+    // later step of this pass then sees the state the decision produced.
+    for (const candidate of await readInstances()) {
+      if (!candidate.pendingGateOperation) continue;
+      await locks.withLock(candidate.id, () => readLive(candidate.id));
+    }
 
     // 0. Finalize adopted (reattached) runs whose detached process has ended.
     //    The in-memory done-handler was lost with the previous server process,
@@ -5773,7 +6364,7 @@ export function createEngine(deps: EngineDeps): Engine {
       const def = candidate.definition ?? defs.find((d) => d.id === candidate.pipelineId);
       if (!def) continue;
       await locks.withLock(candidate.id, async () => {
-        const inst = await readInstance(candidate.id);
+        const inst = await readLive(candidate.id);
         if (!inst || inst.status !== "running") return;
         let current = inst;
         // A phase whose knowledge commit was pending when Argus stopped is
@@ -6012,5 +6603,5 @@ export function createEngine(deps: EngineDeps): Engine {
     }
   }
 
-  return { start, onSignal, approve, revise, abort, reconcile, adopt, drain };
+  return { start, onSignal, approve, approveAutomatically, revise, abort, reconcile, adopt, drain };
 }

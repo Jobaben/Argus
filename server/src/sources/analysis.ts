@@ -76,6 +76,16 @@ export interface AnalysisResult<T> {
   durationMs: number;
   failure: AnalysisFailure | null;
   error: string | null;
+  /** The CLI this pass ran (or would have run) on. */
+  runtime: AgentRuntimeId;
+  /** The model argument handed to that CLI; null = none (the CLI's own default). */
+  requestedModel: string | null;
+  /**
+   * The model the CLI's result envelope reported. No runtime parser extracts
+   * one today, so this is null — "not reported" — and is never back-filled
+   * from `requestedModel`.
+   */
+  reportedModel: string | null;
 }
 
 export interface AnalysisSpawnHandle {
@@ -233,16 +243,22 @@ export interface AnalysisRunner {
   inFlight(): number;
 }
 
-function failed<T>(failure: AnalysisFailure, error: string, durationMs = 0): AnalysisResult<T> {
+function failed<T>(
+  failure: AnalysisFailure,
+  error: string,
+  who: Pick<AnalysisResult<T>, "runtime" | "requestedModel">,
+): AnalysisResult<T> {
   return {
     ok: false,
     value: null,
     raw: "",
     costUsd: null,
     tokens: null,
-    durationMs,
+    durationMs: 0,
     failure,
     error,
+    ...who,
+    reportedModel: null,
   };
 }
 
@@ -302,11 +318,16 @@ export function createAnalysisRunner(deps: AnalysisRunnerDeps = {}): AnalysisRun
     req: AnalysisRequest,
     parse: (value: unknown) => T | null,
   ): Promise<AnalysisResult<T>> {
+    // Resolved before anything can refuse, so even a refusal says which CLI and
+    // model it would have asked — a stored "skipped" is then still explicable.
+    const runtime = req.runtime ?? analysisRuntime();
+    const model = req.model ?? analysisModel(runtime);
+    const who = { runtime, requestedModel: model || null };
     if (!enabled()) {
-      return failed("disabled", "analysis passes are disabled (ARGUS_ANALYSIS=off)");
+      return failed("disabled", "analysis passes are disabled (ARGUS_ANALYSIS=off)", who);
     }
     if (running >= maxConcurrent) {
-      return failed("busy", "another analysis pass is already running");
+      return failed("busy", "another analysis pass is already running", who);
     }
     // Claimed here, synchronously, before the first `await`. Incrementing after
     // the budget read let two callers both observe `running === 0` and both
@@ -323,14 +344,13 @@ export function createAnalysisRunner(deps: AnalysisRunnerDeps = {}): AnalysisRun
       if (await blocked(startedAt)) {
         // After the concurrency gate and before the spawn, so a blocked budget
         // costs a ledger read rather than a process.
-        return failed<T>("budget-blocked", "the spend budget hard stop is in force");
+        return failed<T>("budget-blocked", "the spend budget hard stop is in force", who);
       }
 
-      const runtime = req.runtime ?? analysisRuntime();
       const handle = spawn({
         prompt: req.prompt,
         cwd: req.cwd,
-        model: req.model ?? analysisModel(runtime),
+        model,
         runtime,
         maxOutputBytes,
       });
@@ -359,6 +379,8 @@ export function createAnalysisRunner(deps: AnalysisRunnerDeps = {}): AnalysisRun
         costUsd: envelope.costUsd,
         tokens: envelope.tokens,
         durationMs,
+        ...who,
+        reportedModel: null,
       };
 
       if (timedOut) {

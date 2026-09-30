@@ -1,4 +1,16 @@
-import { performVerdict, readVerdicts, type VerdictDeps } from "./sources/verdict.js";
+import {
+  currentVerdicts,
+  performVerdict,
+  readVerdicts,
+  rubricDigest,
+  type VerdictDeps,
+} from "./sources/verdict.js";
+import {
+  gateRelevantSteps,
+  knowledgeCommitReasons,
+  stagedKnowledgeReasons,
+} from "./sources/gatePolicy.js";
+import type { AutomatedApproval } from "./pipelineEngine.js";
 import type { PipelineDefinition, PipelineInstance } from "./sources/pipelineTypes.js";
 import type { Run, Schedule } from "./sources/scheduleTypes.js";
 import type { Rubric } from "@argus/contracts";
@@ -28,10 +40,24 @@ export interface VerdictWatcherDeps extends VerdictDeps {
   readSchedules: () => Promise<Schedule[]>;
   readPipelines: () => Promise<PipelineDefinition[]>;
   readInstances: () => Promise<PipelineInstance[]>;
-  /** The engine's approve, called when a gate's verdict clears its bar. */
-  approve: (instanceId: string) => Promise<{ ok: boolean }>;
+  /**
+   * The engine's automated-approval boundary. Never the operator `approve`:
+   * that path carries no verdict basis and does not refuse knowledge gates.
+   */
+  approveAutomatically: (request: AutomatedApproval) => Promise<{ ok: boolean; error?: string }>;
   onVerdict?: (runId: string) => void;
-  onAutoApprove?: (instanceId: string, score: number) => void;
+  onAutoApprove?: (instanceId: string, phaseId: string, score: number) => void;
+  /**
+   * A gate declares `autoApprove` but commits knowledge, so it will wait for a
+   * person however well it scores. Reported once per phase attempt (per
+   * process), so an author with a legacy definition learns why.
+   */
+  onAutoApprovalWithheld?: (
+    instanceId: string,
+    phaseId: string,
+    attempt: number,
+    reason: string,
+  ) => void;
 }
 
 /** Runs older than this are not judged on discovery — the score would arrive
@@ -77,6 +103,7 @@ function isJudgeable(run: Run): boolean {
 }
 
 export function createVerdictWatcher(deps: VerdictWatcherDeps): { check: () => Promise<void> } {
+  const withheld = new Set<string>();
   return {
     async check(): Promise<void> {
       try {
@@ -107,7 +134,7 @@ export function createVerdictWatcher(deps: VerdictWatcherDeps): { check: () => P
           }
         }
 
-        await openQualifiedGates(deps, pipelines, instances);
+        await openQualifiedGates(deps, pipelines, instances, withheld);
       } catch (e) {
         log.error("verdict check failed", { err: e });
       }
@@ -117,48 +144,111 @@ export function createVerdictWatcher(deps: VerdictWatcherDeps): { check: () => P
 
 /**
  * Open every gate whose phase declares `autoApprove` and whose output has
- * already scored at or above the bar.
+ * already been judged, completely and currently, at or above the bar.
  *
- * Two properties this must have and does: a gate with **no verdict yet** waits
- * (silence is not approval), and a gate whose verdict came back *below* the bar
- * also waits, forever, until a human looks at it. Auto-approval can only ever
- * skip the wait for work that has already been judged good.
+ * What must hold, per waiting phase attempt — anything less and the gate waits
+ * for a person (silence is not approval):
+ *
+ * - the gate commits no knowledge, by configuration or by what the attempt
+ *   staged (`sources/gatePolicy.ts`). A model's rating of an agent's message
+ *   never makes semantic knowledge canonical, however high;
+ * - every relevant step (`gateRelevantSteps`) succeeded and has a run;
+ * - every one of those runs has a **current** verdict — its newest judgment —
+ *   that is `ready`, has a score, and was produced under the rubric this
+ *   instance's own definition carries (by digest). A step with no verdict, a
+ *   failed or skipped judgment, or a judgment under a different rubric holds
+ *   the gate; averaging over the steps that happen to be judged is exactly
+ *   the hole a gate exists to close;
+ * - the lowest of those scores clears the bar. A phase is only as good as its
+ *   worst step.
+ *
+ * Every waiting phase is considered, not only `currentPhaseIndex`: a fan-out
+ * can pause several at once. The approval names the exact phase, attempt,
+ * runs and verdicts, and the engine re-checks all of it under the instance
+ * lock before recording anything.
  */
 async function openQualifiedGates(
   deps: VerdictWatcherDeps,
   pipelines: PipelineDefinition[],
   instances: PipelineInstance[],
+  withheld: Set<string>,
 ): Promise<void> {
-  const waiting = instances.filter((i) => i.status === "awaiting-approval");
-  if (waiting.length === 0) return;
-  const verdicts = await readVerdicts();
-  const byRun = new Map(verdicts.map((v) => [v.runId, v]));
+  // `settle` keeps the instance status `awaiting-approval` exactly while some
+  // phase is waiting; the engine re-checks the phase itself under its lock.
+  const live = instances.filter((i) => i.status === "awaiting-approval");
+  if (live.length === 0) return;
+  const byRun = new Map(currentVerdicts(await readVerdicts()).map((v) => [v.runId, v]));
 
-  for (const inst of waiting) {
-    const phase = inst.phases[inst.currentPhaseIndex];
-    // The bar the gate was authored with, from the instance's own snapshot.
+  for (const inst of live) {
+    // The bar and rubric the gate was authored with, from the instance's own
+    // snapshot — a definition edited since cannot move them.
     const def = inst.definition ?? pipelines.find((p) => p.id === inst.pipelineId);
-    const bar = def?.phases.find((p) => p.id === phase?.id)?.autoApprove?.verdict;
-    if (bar === undefined || !phase) continue;
+    for (const phase of inst.phases) {
+      // Only a gate pause: a `needs-input` pause is a question for a person,
+      // and a pause of unknown cause (written before causes were recorded)
+      // is treated as one.
+      if (phase.status !== "awaiting-approval" || phase.pause !== "gate") continue;
+      const phaseDef = def?.phases.find((p) => p.id === phase.id);
+      const bar = phaseDef?.autoApprove?.verdict;
+      if (!phaseDef || bar === undefined || !phaseDef.rubric) continue;
 
-    // The phase's own runs, newest first: judge the latest attempt, not the one
-    // that was superseded by a revise.
-    const scores = phase.steps
-      .map((s) => (s.runId ? byRun.get(s.runId) : undefined))
-      .filter((v) => v?.status === "ready" && v.score !== null);
-    if (scores.length === 0) continue; // not judged yet — silence is not approval
+      const reasons = [...knowledgeCommitReasons(phaseDef), ...stagedKnowledgeReasons(phase)];
+      if (reasons.length > 0) {
+        const key = `${inst.id}|${phase.id}|${phase.attempt}`;
+        if (!withheld.has(key)) {
+          withheld.add(key);
+          deps.onAutoApprovalWithheld?.(
+            inst.id,
+            phase.id,
+            phase.attempt,
+            `autoApprove is not applied: this gate commits knowledge (${reasons.join(", ")}) ` +
+              "and needs a person",
+          );
+        }
+        continue;
+      }
 
-    // Every judged step must clear the bar. A pipeline phase is only as good as
-    // its worst step, and averaging would let one excellent step carry a bad one
-    // through a gate a human set precisely to catch it.
-    const lowest = Math.min(...scores.map((v) => v!.score as number));
-    if (lowest < bar) continue;
+      const steps = gateRelevantSteps(phase);
+      if (steps.length === 0 || steps.some((st) => !st.runId || st.status !== "succeeded")) {
+        continue;
+      }
+      const digest = rubricDigest(phaseDef.rubric);
+      // A pre-check only, over what this tick read: the engine decides again,
+      // from the verdict store under its lock, and records the basis from the
+      // stored verdicts — this request only names which ones.
+      const basis: AutomatedApproval["verdicts"] = [];
+      const scores: number[] = [];
+      for (const step of steps) {
+        const v = byRun.get(step.runId as string);
+        if (!v || !v.id || v.status !== "ready" || v.score === null || v.rubricDigest !== digest) {
+          break;
+        }
+        basis.push({ runId: v.runId, verdictId: v.id });
+        scores.push(v.score);
+      }
+      if (basis.length !== steps.length) continue; // not completely judged yet
 
-    try {
-      const res = await deps.approve(inst.id);
-      if (res.ok) deps.onAutoApprove?.(inst.id, lowest);
-    } catch (e) {
-      log.error("auto-approve failed", { instanceId: inst.id, err: e });
+      const lowest = Math.min(...scores);
+      if (lowest < bar) continue;
+
+      try {
+        const res = await deps.approveAutomatically({
+          instanceId: inst.id,
+          phaseId: phase.id,
+          attempt: phase.attempt,
+          runIds: basis.map((b) => b.runId),
+          verdicts: basis,
+        });
+        if (res.ok) deps.onAutoApprove?.(inst.id, phase.id, lowest);
+        else
+          log.warn("auto-approve refused", {
+            instanceId: inst.id,
+            phaseId: phase.id,
+            error: res.error,
+          });
+      } catch (e) {
+        log.error("auto-approve failed", { instanceId: inst.id, phaseId: phase.id, err: e });
+      }
     }
   }
 }

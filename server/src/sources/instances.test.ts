@@ -74,10 +74,20 @@ test("pruneInstances keeps only newest N of a pipeline", async () => {
 test("memo: repeat reads are stable and direct file edits are picked up", async () => {
   const m = await fresh();
   await m.writeInstance(makeInstance("i1", "p1", new Date(2026, 5, 30, 9, 0).toISOString()));
-  // Prime the memo, then read again — same object served from memory.
+  // Prime the memo, then read again — the same content, served from memory,
+  // but never the same object: a caller that mutates what it read (the engine
+  // does, on the way to a save that may fail) must not change what the next
+  // reader sees. Shared identity is how an unsaved transition used to leak.
   const first = await m.readInstance("i1");
   const second = await m.readInstance("i1");
-  assert.equal(second, first);
+  assert.deepEqual(second, first);
+  assert.notEqual(second, first);
+  first!.status = "aborted";
+  assert.equal(
+    (await m.readInstance("i1"))?.status,
+    "running",
+    "an unsaved mutation does not leak",
+  );
   // A direct on-disk edit (new mtime) must invalidate the memo entry.
   const file = path.join(home, "argus", "instances", "i1.json");
   const edited = {

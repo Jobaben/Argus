@@ -17,6 +17,7 @@ import { readInstance } from "../sources/instances.js";
 import { readInvocation } from "../sources/runs.js";
 import { buildPhaseReview } from "../sources/artifacts.js";
 import { readJournal } from "../sources/journal.js";
+import { buildGateDecisionsResponse, readGateDecisions } from "../sources/gateDecisions.js";
 import { readAcceptanceRecord } from "./acceptanceStaging.js";
 import { createClaim, createEvidence, createRevision, readLedger } from "./store.js";
 import {
@@ -101,7 +102,10 @@ function recordingSpawn() {
   return { spawn, calls };
 }
 
-function engine(spawn: ReturnType<typeof recordingSpawn>["spawn"]) {
+function engine(
+  spawn: ReturnType<typeof recordingSpawn>["spawn"],
+  over: Partial<Parameters<typeof createEngine>[0]> = {},
+) {
   return createEngine({
     now: () => new Date(),
     newId: () => `id-${++counter}`,
@@ -112,6 +116,7 @@ function engine(spawn: ReturnType<typeof recordingSpawn>["spawn"]) {
     maxConcurrent: 64,
     tickMs: 30000,
     parentEnv: { PATH: process.env.PATH ?? "/bin", HOME: home },
+    ...over,
   });
 }
 
@@ -1374,4 +1379,54 @@ test("a commit refused over an acceptance result fails under the acceptance clas
   const ledger = await readLedger();
   assert.deepEqual(ledger.verifications, []);
   assert.deepEqual(ledger.acceptanceVerifications, []);
+});
+
+// ── An abort interrupted after it closed the realization (Phase 0 follow-up) ──
+
+test("an abort interrupted after closing the realization completes on restart; the ledger outcome is written once", async (t) => {
+  if (!gitAvailable()) return t.skip("git is not available");
+  await seedKnowledge();
+  await seedPipeline(realizationPipeline());
+  const rec = recordingSpawn();
+  const e = engine(rec.spawn);
+  const { inst, implCall } = await toImplementation(rec, e);
+  assert.equal((await realizationOf(inst)).outcome, undefined, "open while implementing");
+
+  // The abort closes the realization in the ledger, then fails before the
+  // instance is saved.
+  const crashing = engine(rec.spawn, {
+    gateEffectProbe: (point) => {
+      if (point === "abort:realizations-settled") throw new Error("injected failure");
+    },
+  });
+  await assert.rejects(crashing.abort(inst.id));
+  const closed = await realizationOf(inst);
+  assert.ok(closed.outcome, "the realization was closed in the ledger");
+  const onDisk = await instance(inst.id);
+  assert.equal(
+    onDisk.pendingGateOperation?.decision,
+    "abort",
+    "the instance says the abort is under way",
+  );
+  const decisions = await readGateDecisions(inst.id);
+  const abortRecord = decisions.find((d) => d.decision === "abort")!;
+  assert.equal(
+    buildGateDecisionsResponse(inst.id, onDisk, decisions).decisions.find(
+      (d) => d.id === abortRecord.id,
+    )?.effect,
+    "incomplete",
+    "neither applied nor not-applied: some of its effects happened",
+  );
+
+  // Restart. The implementation's completion arrives: it must not advance the
+  // instance, and the realization must not be settled a second time.
+  const restarted = engine(rec.spawn);
+  await complete(restarted, onDisk, "implement", implCall.runId);
+  await restarted.reconcile();
+  await restarted.drain();
+  const after = await instance(inst.id);
+  assert.equal(after.status, "aborted");
+  assert.equal(after.pendingGateOperation, undefined);
+  assert.deepEqual(await realizationOf(inst), closed, "the outcome is written once, unchanged");
+  assert.equal(rec.calls.length, 2, "nothing was launched after the abort");
 });

@@ -43,7 +43,36 @@ export interface CriterionScore {
 
 export type VerdictStatus = "ready" | "failed" | "skipped";
 
+/**
+ * Where a model-backed judgment came from, as far as Argus knows it.
+ *
+ * `requestedModel` is what Argus asked the CLI for; `reportedModel` is what the
+ * CLI's own result envelope said it used. They are kept apart because they are
+ * different claims: an alias such as `haiku` is a request, and the CLI decides
+ * what it resolves to. No runtime envelope Argus parses today reports a model,
+ * so `reportedModel` is `null` — "not reported", never a copy of the request.
+ *
+ * Absent entirely on records written before provenance was stamped: unknown,
+ * not implied.
+ */
+export interface AnalysisProvenance {
+  /** The agent CLI that answered (`ARGUS_ANALYSIS_RUNTIME`, else the default). */
+  runtime: string;
+  /** The model argument Argus passed; null = none passed (the CLI's own default). */
+  requestedModel: string | null;
+  /** The model the CLI reported having used; null = not reported. */
+  reportedModel: string | null;
+  /** Version of the prompt builder and response parser that produced it. */
+  promptVersion: number;
+}
+
 export interface Verdict {
+  /**
+   * `V-…`, minted per judgment. Absent on verdicts written before ids existed.
+   * A run may be judged more than once; every judgment is kept, and the newest
+   * is the run's current verdict.
+   */
+  id?: string;
   runId: string;
   scheduleId: string;
   scheduleName: string;
@@ -62,6 +91,15 @@ export interface Verdict {
   tokens: number | null;
   durationMs: number | null;
   error: string | null;
+  /** Absent on verdicts written before provenance was recorded. */
+  provenance?: AnalysisProvenance;
+  /**
+   * sha256 of the rubric the judge was given (canonical JSON of goal, criteria
+   * and weights). An auto-approval requires it to match the rubric the
+   * instance's own definition carries, so a verdict produced under a different
+   * rubric cannot open a gate.
+   */
+  rubricDigest?: string;
 }
 
 export interface VerdictPoint {

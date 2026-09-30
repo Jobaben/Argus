@@ -48,6 +48,10 @@ export type JournalKind =
   | "phase.retrying"
   | "phase.revised"
   | "phase.approved"
+  /** A gate declares autoApprove but commits knowledge, so it waits for a person. */
+  | "phase.auto-approval-withheld"
+  /** An interrupted approve / revise / abort was carried through on recovery. */
+  | "gate.operation-completed"
   | "route.selection"
   | "route.skip"
   | "route.failure"
