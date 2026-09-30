@@ -1561,6 +1561,32 @@ record is written and fsynced **before** the transition it describes, and it is
 never pruned. The order every decision follows is under
 [Execution semantics](#execution-semantics).
 
+### Decision experiments (H2)
+
+`GET /api/decisions/h2` returns `{ collection, report }` (`H2ReportResponse`
+in `contracts/src/decision.ts`). It is authenticated like every other `/api`
+read.
+
+- **`collection`** is the live, in-memory state:
+  - whether collection is enabled, and if not, why (each unset switch or
+    invalid setting);
+  - the effective settings;
+  - the watcher's state (`inactive`, `waiting`, `paused` or `halted`), with a
+    detail and a pause end.
+- **`report`** is `decision-h2-report` v1. It is a deterministic replay of
+  the H2 collection ledger joined to the Decision Journal (RFC 2026-09-29
+  §P.7), and it carries:
+  - the definitions and collection configs;
+  - a census per question version;
+  - separate `probe` and `residual` population lists (never pooled);
+  - baselines, methods, and integrity findings.
+
+The route is read-only by construction. It never enables collection, calls a
+provider or runner, re-evaluates, or writes. That includes directories: a
+fresh home stays empty. It returns counts, identities and metrics only. No
+snapshot body, transcript text or model rationale is included. The Phase 1
+`decision-journal-report` v1 is unchanged.
+
 ### Artifacts
 
 A step prompt may interpolate:

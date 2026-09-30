@@ -50,6 +50,7 @@ import { failingVerdicts, readCurrentVerdicts, readVerdicts } from "./sources/ve
 import { readPipelines } from "./sources/pipelines.js";
 import { readInstances } from "./sources/instances.js";
 import { createAnalysisRunner } from "./sources/analysis.js";
+import { countAnalysisPasses, createH2Collection } from "./decision/h2/entry.js";
 import { readSessionLines } from "./sources/sessions.js";
 import { readSchedules } from "./sources/schedules.js";
 import { createApp } from "./app.js";
@@ -111,7 +112,14 @@ const auth = createAuthService({ store: users });
 // One runner for every bounded analysis pass in the process — the
 // on-demand routes and the background watcher share its concurrency and spend
 // gate, so "one pass at a time" means one, not one per caller.
-const analysis = createAnalysisRunner();
+//
+// Wrapped once in a pass counter: it only delegates, so the gate is still this
+// runner's, and the H2 shadow collection below can see that another feature
+// ran a pass since its last check and stand aside (RFC §P.4).
+const analysis = countAnalysisPasses(createAnalysisRunner());
+// H2 shadow collection (RFC §P). Off unless ARGUS_DECISIONS=on and
+// ARGUS_DECISIONS_H2_COLLECT=on; building it touches no file.
+const h2 = createH2Collection({ runner: analysis });
 /**
  * Constellation polls its peers on the same tick as everything else.
  *
@@ -135,6 +143,7 @@ const app = createApp({
   activity: () => tailer.latest(),
   activityLog: (runId) => tailer.events(runId),
   fleet: () => fleetPoller.state(),
+  decisionsH2Status: () => h2.status(),
 });
 
 const server = serve({ fetch: app.fetch, port: PORT, hostname: config.host }, (info) => {
@@ -406,6 +415,10 @@ const scheduler = startScheduler({
     await sentinelWatcher.check();
     await vaultWatcher.check();
     await fleetPoller.check();
+    // Last, and awaited: a shadow call must never be in flight when the next
+    // tick's Autopsy or Verdict asks the runner, because a busy refusal is a
+    // permanent failed record for them.
+    await h2.watcher.check();
   },
   onFailure: (run) =>
     void postWebhook(config.webhookUrl, buildRunFailurePayload(run, new Date().toISOString())),

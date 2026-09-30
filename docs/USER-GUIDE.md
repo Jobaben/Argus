@@ -2184,6 +2184,129 @@ tailer's retained events for a running step), and `WS /ws`.
 
 ---
 
+## 32. Decision experiments (H2 shadow collection)
+
+An **experiment**, off by default, that asks a model two questions about
+finished runs and measures the answers against what Argus itself recorded.
+Nothing reads the answers: they are `mode: "shadow"` with no consumers. No
+route, gate, retry, approval, ledger record, prompt, Autopsy or Verdict output
+changes because of them. The design is RFC 2026-09-29 §P.
+
+**The two questions are kept apart.**
+
+- **Probe:** `run.termination-probe` v1 asks "from this trace alone, how did
+  this run end?"
+  - It sees the _blind_ projection. Status, exit code, error and termination
+    are withheld.
+  - Its reference label is the termination Argus observed, so its accuracy
+    is measurable.
+- **Residual:** `run.failure-cause.residual` v1 asks why an unsuccessful run
+  did not accomplish its task.
+  - It is asked only of runs that ended on their own or hit a deadline.
+  - No reference labels exist for it, so **its accuracy is shown as
+    unmeasured**.
+
+Probe accuracy is never residual accuracy.
+
+### Turning it on
+
+Nothing collects until both switches are set, and `ARGUS_ANALYSIS=off` wins
+over them:
+
+```sh
+ARGUS_DECISIONS=on ARGUS_DECISIONS_H2_COLLECT=on argus
+```
+
+Every value below has a conservative default. An invalid value turns
+collection off and names itself on the Experiments page; it is never replaced
+by a guess.
+
+| Variable                                  | Default        | Meaning                                                   |
+| ----------------------------------------- | -------------- | --------------------------------------------------------- |
+| `ARGUS_DECISIONS_H2_MODEL`                | runner default | Explicit model for the Claude CLI adapter (one per item). |
+| `ARGUS_DECISIONS_H2_RESIDUAL_RATE`        | `0.5`          | Share of eligible runs sampled for the residual question. |
+| `ARGUS_DECISIONS_H2_PROBE_RATE`           | `0.1`          | Share of eligible runs sampled for the probe.             |
+| `ARGUS_DECISIONS_H2_MAX_CALLS_PER_DAY`    | `20` (0–96)    | Provider invocations per rolling 24 hours.                |
+| `ARGUS_DECISIONS_H2_MIN_INTERVAL_MINUTES` | `15`           | Minimum gap between invocations.                          |
+| `ARGUS_DECISIONS_H2_MAX_USD_PER_DAY`      | `1`            | Recorded H2 cost per rolling 24 hours.                    |
+| `ARGUS_DECISIONS_H2_SEED`                 | `argus-h2`     | Seed of the deterministic sampling draw.                  |
+
+The runner default model is `haiku` for Claude, or `ARGUS_ANALYSIS_MODEL`.
+The adapter always runs the `claude` CLI.
+
+### What it does, and what bounds it
+
+- **Where it runs.** It runs on the scheduler tick, after every other watcher,
+  and the tick waits for it. It never runs under an instance lock, and never
+  while another analysis pass is in flight.
+- **Existing work first.** It waits a whole tick after any Autopsy, Verdict,
+  Sentinel or on-demand pass, so it never makes those see a busy runner.
+- **Per tick:** at most one provider invocation. The spend hard stop pauses
+  it for 15 minutes.
+- **Which runs.** A run counts if it ended at or after collection was first
+  switched on, and is between 10 minutes and 24 hours old. History is never
+  drained.
+  - A selected item that is not reached within 24 hours **expires**.
+  - A run seen too late is counted as `missed-window`.
+- **Sampling** hashes the seed, the question and the run id, and nothing
+  about how the run ended. Every considered run, sampled or not, gets a
+  census line with its exclusion reason, if any. That is how the report
+  explains its population.
+- **Exclusions:**
+  - non-Claude runtimes;
+  - runs whose termination is not derivable (interrupted, killed, cancelled,
+    skipped);
+  - for the residual question, successful runs and runs that never ran.
+- **Retries.** A refusal that made no call (budget, busy, disabled, storage)
+  or missing input is retried at most 3 times, 30 minutes apart. Nothing
+  that did, or may have, reached the provider is ever retried automatically.
+- **Restarts.** An invocation interrupted by a restart is recorded as an
+  **unknown outcome**. It still counts against the limits, and it is not
+  re-sent. Exactly-once execution is not claimed.
+- **Records.**
+  - The collection ledger, `~/.claude/argus/decision-experiments/h2/collection.jsonl`,
+    is append-only and capped at 32 MiB. Collection stops at the cap.
+  - The assessments and their input snapshots are in the Decision Journal,
+    `~/.claude/argus/decisions/`.
+
+  Neither is ever pruned automatically.
+
+### Reading the report
+
+**More → Experiments** (`GET /api/decisions/h2`) is a replay of those
+records. Opening it never starts collection, calls a model or writes
+anything. It shows, for each question version and exact provider identity
+(requested model, reported model, adapter version):
+
+- the census by termination class;
+- attempts by outcome;
+- cost, latency, tokens and snapshot size;
+- integrity findings.
+
+For the probe it also shows:
+
+- answered-only accuracy _with coverage_, and end-to-end accuracy (where
+  abstentions and failures count as wrong);
+- per-class recall and the majority-class share, so a skewed sample reads as
+  skewed;
+- Cohen's κ, a confusion matrix, and a multiclass Brier score (0–2);
+- reliability buckets (only at n ≥ 20) and ECE (only at n ≥ 200).
+
+Every interval is a Wilson 95 % interval.
+
+**How to read it.** A probe score says how well a model recovers a fact Argus
+already knows. It does not show that the model knows why a run failed, and
+nothing on the page authorises an approval. The deterministic baseline reads
+**not applicable**, because no H2 rule exists. Autopsy is **not compared**:
+it uses a different taxonomy.
+
+### Turning it off
+
+Unset either switch and restart. Nothing is deleted, and the report still
+renders from what was retained. An invocation in flight at shutdown is
+reported as an unknown outcome on the next enabled start, and is not
+re-sent.
+
 ## Quick mental model
 
 | Tab                 | Answers the question                       | Source                                      |

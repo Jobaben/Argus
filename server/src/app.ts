@@ -147,7 +147,7 @@ import {
 import { newSecret, pairingId, seal } from "./federation/envelope.js";
 import { buildSummary } from "./federation/summary.js";
 import { buildFleet } from "./federation/fleet.js";
-import type { GateDecisionPrincipal, MachineSummary } from "@argus/contracts";
+import type { GateDecisionPrincipal, H2CollectionStatus, MachineSummary } from "@argus/contracts";
 import { buildGateDecisionsResponse, readGateDecisions } from "./sources/gateDecisions.js";
 import { buildOverview } from "./sources/overview.js";
 import { buildPalette } from "./sources/palette.js";
@@ -183,6 +183,7 @@ import {
 import { VERSION } from "./version.js";
 import { knowledgeRoutes } from "./knowledge/routes.js";
 import { mountWebApp } from "./static.js";
+import { readH2ReportResponse } from "./decision/h2/entry.js";
 import { buildRunFailurePayload, postWebhook } from "./notify.js";
 
 /** The window the pruned JSON run files can still answer on their own. */
@@ -220,6 +221,11 @@ export interface AppDeps {
   remoteAddr?: (c: Context) => string | null;
   /** Bounded analysis runner (Autopsy). Defaults to the real one. */
   analysis?: AnalysisRunner;
+  /**
+   * The H2 shadow collection's live, in-memory state (RFC §P). Reading it
+   * calls nothing. Absent = derived from the environment alone.
+   */
+  decisionsH2Status?: () => H2CollectionStatus;
 }
 
 /**
@@ -1558,6 +1564,14 @@ export function createApp(deps: AppDeps): Hono {
     const inst = await readInstance(c.req.param("id"));
     return inst ? c.json(inst) : c.json({ error: "not found" }, 404);
   });
+
+  // The H2 shadow experiment's report (RFC §P.7): a replay of retained
+  // records. Read-only by construction — it never enables collection, never
+  // calls a provider and never re-evaluates. Counts and identities only; no
+  // snapshot body or model rationale leaves the journal here.
+  app.get("/api/decisions/h2", async (c) =>
+    c.json(await readH2ReportResponse(deps.decisionsH2Status)),
+  );
 
   /**
    * Who or what decided each gate of an instance, with whether each decision

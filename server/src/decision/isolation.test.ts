@@ -237,14 +237,25 @@ function imports(file: string): Array<{ from: string; names: string[] }> {
   return out;
 }
 
-test("nothing outside the Decision Plane imports it: no startup registration, engine hook or route", () => {
+test("only the H2 entry is imported from outside the plane: the watcher wiring and the report route", () => {
   const decisionDir = path.join(SRC, "decision");
+  // Importer (relative to server/src) → the only names it may take, all from
+  // decision/h2/entry.js (RFC §P). No engine hook, no policy, no other route.
+  const allowed: Record<string, Set<string>> = {
+    "index.ts": new Set(["countAnalysisPasses", "createH2Collection"]),
+    "app.ts": new Set(["readH2ReportResponse"]),
+  };
   const offenders: string[] = [];
   for (const f of sourceFiles(SRC)) {
     if (f.startsWith(decisionDir + path.sep)) continue;
-    for (const { from } of imports(f)) {
+    const importer = path.relative(SRC, f).split(path.sep).join("/");
+    for (const { from, names } of imports(f)) {
       const target = from.startsWith(".") ? path.resolve(path.dirname(f), from) : from;
-      if (target.startsWith(decisionDir)) offenders.push(`${path.relative(SRC, f)} → ${from}`);
+      if (!target.startsWith(decisionDir)) continue;
+      const entry = path.relative(SRC, target).split(path.sep).join("/") === "decision/h2/entry.js";
+      for (const n of names) {
+        if (!entry || !allowed[importer]?.has(n)) offenders.push(`${importer} → ${from}: ${n}`);
+      }
     }
   }
   assert.deepEqual(offenders, []);
@@ -257,7 +268,9 @@ test("the Decision Plane imports only readers from the ledger, the gate log and 
     "knowledge/kernel.js": new Set(["activeRevision", "sameRepositoryState", "KnowledgeLedger"]),
     "knowledge/store.js": new Set(["readLedger"]),
     "sources/instances.js": new Set(["readInstance"]),
-    "sources/runs.js": new Set(["readRun"]),
+    "sources/runs.js": new Set(["readRun", "readRuns"]),
+    "sources/budget.js": new Set(["isSpendBlocked"]),
+    "log.js": new Set(["log"]),
     "sources/sessions.js": new Set(["readSessionLines"]),
     "sources/recorder.js": new Set(["buildRecording"]),
     "sources/analysis.js": new Set(["analysisModel", "AnalysisRunner"]),

@@ -8,7 +8,7 @@ import type {
   StoredSnapshot,
 } from "@argus/contracts";
 import { checkOutcome } from "./answers.js";
-import { DecisionJournal, JournalError, type AppendResult } from "./journal.js";
+import { ASSESSMENT_ID_RE, DecisionJournal, JournalError, type AppendResult } from "./journal.js";
 import { buildSnapshot, type DecisionSources, type ProjectionBuilder } from "./projection.js";
 import type { DecisionProvider, ProviderResponse } from "./providers/types.js";
 import type { DecisionRegistry } from "./registry.js";
@@ -36,6 +36,7 @@ export type ServiceRefusal =
   | "snapshot-unbuildable"
   | "snapshot-unavailable"
   | "unknown-assessment"
+  | "invalid-id"
   | "storage-refused";
 
 export type ServiceResult =
@@ -60,6 +61,12 @@ export interface DecisionService {
     provider: string;
     sample?: number;
     signal?: AbortSignal;
+    /**
+     * A pre-assigned assessment id. A caller that records its intent before
+     * the call (the H2 watcher, §P.5) names the id up front, so that after a
+     * crash it can tell whether the assessment reached the journal.
+     */
+    id?: string;
   }): Promise<ServiceResult>;
   /** A NEW provider call on the retained snapshot and original question version of `assessmentId`. */
   reEvaluate(req: {
@@ -173,10 +180,11 @@ export function createDecisionService(deps: DecisionServiceDeps): DecisionServic
     sample: number,
     signal: AbortSignal,
     reEvaluates?: string,
+    id?: string,
   ): Promise<ServiceResult> {
     const { response, latencyMs } = await call(provider, def, snapshot, signal);
     const assessment: DecisionAssessment = {
-      id: newId(),
+      id: id ?? newId(),
       question: q.ref,
       subject,
       snapshot: {
@@ -219,6 +227,9 @@ export function createDecisionService(deps: DecisionServiceDeps): DecisionServic
           ? deps.registry.latestQuestion(req.question)
           : deps.registry.question(req.question, req.version);
       if (!found) return refuse("unknown-question", `${req.question}@${req.version ?? "latest"}`);
+      if (req.id !== undefined && !ASSESSMENT_ID_RE.test(req.id)) {
+        return refuse("invalid-id", `"${req.id}" is not an assessment id`);
+      }
       const q = found.def;
       if (req.subject.kind !== q.subject) {
         return refuse(
@@ -261,6 +272,8 @@ export function createDecisionService(deps: DecisionServiceDeps): DecisionServic
         q,
         req.sample ?? 0,
         req.signal ?? new AbortController().signal,
+        undefined,
+        req.id,
       );
     },
 
