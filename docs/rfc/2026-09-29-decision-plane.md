@@ -1,10 +1,12 @@
 # RFC: A provider-neutral Decision Plane for Argus
 
-_Status: **amended 2026-09-29; Phase 0 implemented, later phases not
+_Status: **amended 2026-09-29; Phase 0 implemented; Phase 1 (contracts and
+journal) implemented, isolated and unwired (§O); later phases not
 started.** The original text was an architecture investigation. §M records
-what Phase 0 changed in the code; §N lists the decisions and corrections this
-amendment applies. Nothing after Phase 0 (Decision Journal, providers, shadow
-watchers, evaluation UI, Jev) is implemented or authorised by this document._
+what Phase 0 changed in the code, §N lists the decisions and corrections the
+amendment applies, and §O is the Phase 1 design note and what it built.
+Nothing after Phase 1 (shadow watchers, evaluation UI, policies, Jev) is
+implemented or authorised by this document._
 
 _Scope: every place Argus decides something; the hypothesis that an explicit
 **inferred** layer belongs between Argus's evidence and its policy; how such a
@@ -440,7 +442,9 @@ the snapshot is still the active revision`. Assessments of finished runs
 TypeScript, since that is the codebase. They would go in
 `contracts/src/decision.ts` (wire types) and `server/src/decision/`
 (journal, snapshots, providers, policy). Names are Argus's, not Jev's.
-**None of this is implemented; Phase 0 (§M) deliberately stops short of it.**
+**Phase 0 (§M) deliberately stopped short of this. Phase 1 implements it with
+the resolutions recorded in §O, which govern where they differ from these
+sketches.**
 
 ### F.1 Four kinds of number, never interchangeable
 
@@ -1061,12 +1065,11 @@ Resolved by the 2026-09-29 amendment:
    retention, with no dependency on the Vault (§F.4). Designed here and not
    implemented in Phase 0.
 
-Still open:
+Resolved for Phase 1 (§O):
 
-- Whether `DecisionObservation`s (operator actions, later outcomes) should be
-  written by the engine as events happen (Phase 1), or derived by the report
-  from the gate decision log and the ledger.
-- The concrete size and age limits for an active journal segment.
+- `DecisionObservation`s are **derived read-only** from existing durable
+  records, never written by the engine (§O.1).
+- Active storage limits and how their total stays bounded (§O.2).
 
 ---
 
@@ -1482,6 +1485,314 @@ appendix.
 | C4  | H3 is kept as a semantic audit of verifier conclusions that can neither redefine support nor become evidence                                                                                                               | §H.1             |
 | C5  | Replay (stored assessments plus a versioned policy, no call) is separate from re-evaluation (a new call); snapshot bodies are retained                                                                                     | §F.3             |
 | C6  | The Jev mapping was re-examined: official docs were unreachable (`EGRESS_BLOCKED`), the supplied corrections are recorded as unverified, requested and reported model ids are separate, and there are no synthetic aliases | §G.3             |
+| P1  | Phase 1 resolutions: observations derived read-only; active storage bounded by admission; two run-failure projections; a restart-interrupted run is not `never-ran`; definitions carry digests; H1 not registered          | §O               |
+
+---
+
+## O. Phase 1 design note: observations, storage limits, persistence
+
+_Written before the Phase 1 persistence code, as the two open choices in §L
+required. It narrows §F.4 and does not reopen the architecture. Where the
+§F sketches contradict what follows, this section governs for Phase 1._
+
+### O.1 Observations are derived, not written
+
+- **Read-only derivation.** No engine hook, event or new write path is
+  added. `server/src/decision/observations.ts` derives observations on read
+  from records that already hold the meaning:
+  - **`operator-action`**, from `gate-decisions.jsonl`. Only records with
+    `mechanism: "operator"` qualify. `verdict-auto-approve` and
+    `unspecified` records are excluded: an automated approval is not a
+    human action, and an unattributed one is not known to be. There is one
+    observation per phase reference. The value is the decision
+    (`approve | revise | abort`), and the principal is copied as recorded.
+  - **`observed-termination`**, from the run record. `timed-out` or
+    `stalled` becomes `deadline`. `spawn-failed` becomes `never-ran`. A run
+    that exited on its own becomes `ended-normally`.
+- **Correction to §H.2.** A run marked `interrupted` by a restart **did
+  run**, so it is not `never-ran`. It yields no termination observation;
+  the result is `not-derivable` with the reason given. The same holds for
+  `killed` (an Argus abort), and for `output-refused`, `rate-limited` and
+  `permission-denied`. The run record has no structured field for the last
+  three, and Phase 1 adds no plumbing to create one.
+- **Provenance.** Every observation names its source store, the source
+  record id, and the sha256 of that record's canonical JSON as read. A
+  source that later changes is therefore detectable.
+- **Streams stay apart.** `review-finding` and `later-outcome` exist in the
+  contract, but nothing derives them, because no durable source holds them
+  yet. They are never synthesised from operator actions, and a later
+  outcome never rewrites an operator action.
+- **Failure behaviour.** A source file that is missing reads as "no
+  observations". An unreadable source line is skipped and counted, the same
+  way `readGateDecisions` treats one. An observation is never invented to
+  fill a gap.
+
+### O.2 Storage limits, and why the total is bounded
+
+Defaults, all overridable per journal instance:
+
+| Limit                                                                       | Default |
+| --------------------------------------------------------------------------- | ------- |
+| segment size (`segmentMaxBytes`)                                            | 4 MiB   |
+| segment age (`segmentMaxAgeMs`)                                             | 7 days  |
+| one snapshot (`snapshotMaxBytes`)                                           | 256 KiB |
+| total active storage (`activeMaxBytes`): active segments + active snapshots | 64 MiB  |
+
+- **The per-segment cap does not bound the total.** The total is bounded by
+  **admission**. Every write that adds active bytes is admitted, under the
+  journal lock, only if `activeBytes + delta ≤ activeMaxBytes`. Those writes
+  are a segment header, an assessment line and a newly published snapshot.
+  Otherwise the append is refused with `active-storage-full`, and nothing
+  is written.
+- **Freeing space.** The only way to free active space is **archival**: an
+  explicit, logged step (`archive()`). It first seals the open segment if
+  that segment holds a record (`sealOpen`, the default). It then moves the
+  sealed segments, and the active snapshots no active segment still
+  references, into `archive/`, and it records each move in the manifest.
+  Sealing the open segment matters because snapshots can dominate the
+  quota: without it, a quota filled by the open segment's own snapshots
+  could never be freed.
+- **Record size.** An assessment line is at most 16 KiB. The service caps
+  every free-text field of an outcome (rationale, reason, failure detail,
+  raw excerpt) well below that. A snapshot published before its call is
+  admitted only with room left for its record.
+- **No silent deletion.** Nothing is deleted at any cap, and archival never
+  deletes data.
+- **The archive is outside the active bound.** It grows until an operator
+  explicitly deletes an archived segment (§O.3).
+- **The manifest is outside the active quota.** It holds one line per seal,
+  archive or tombstone, at most about 1 KiB per segment ever created,
+  or about 0.03 % of the data at the default segment size. It is reported
+  separately. Keeping it outside the quota means a full journal can always
+  be archived.
+- **Refused appends are visible to callers.** In Phase 1 nothing runs
+  automatically, so a refusal only affects an explicit caller. It never
+  affects a pipeline.
+
+### O.3 Persistence and recovery
+
+The layout, under `<argus>/decisions/`, is separate from
+`gate-decisions.jsonl`, from `knowledge.json` and from the Vault:
+
+```
+active/seg-00000001.jsonl      segments; seq never reused
+snapshots/ab/<sha256>.json     active snapshot bodies
+archive/segments/…  archive/snapshots/…
+manifest.jsonl                 seal · archive · tombstone
+```
+
+- **Snapshot bytes.** The stored snapshot file _is_ the canonical JSON of
+  the snapshot content: format, projection `{id, version, digest}`,
+  subject, scope and repository when present, refs, `subjectAuthored`,
+  redactions, truncations and body. `sha256` and `bytes` are computed over
+  exactly those UTF-8 bytes. They are never inside them, so there is no
+  self-reference. The canonical form sorts keys and accepts only plain
+  objects, dense arrays, strings, booleans, `null` and finite non-negative-zero
+  numbers. Anything else (`undefined`, `NaN`, `-0`, a `Date`, a class
+  instance, an accessor, a cycle) is **refused**, never silently coerced.
+- **Records.** Each record is one line:
+  `canonical({kind, body, sha256})`, where `sha256` is over
+  `canonical({kind, body})`. Each segment starts with a `segment-open`
+  header.
+- **Write order**, under one in-process lock per journal root. This is the
+  repository's `KeyedMutex`, the same discipline as `gate-decisions.jsonl`,
+  so the guarantee assumes one writing process, the Argus server:
+  1. The snapshot is published before the provider call ("hash before
+     send"): a temp file, `fsync`, rename, then a directory `fsync`.
+  2. The provider is called **outside** the lock.
+  3. Under the lock, the append re-ensures the snapshot. It re-publishes
+     from memory if an explicit deletion removed it meanwhile, and replaces
+     a copy whose digest no longer matches. Only then does it write the
+     line and `fsync`.
+
+  So an acknowledged assessment's snapshot is on disk before the
+  acknowledgement. A crash between the steps leaves an **orphan snapshot**:
+  counted, reported by `verify()`, and moved by archival. It is never an
+  acknowledged record without its input.
+
+- **Torn tails.** A final line with no newline is an unacknowledged write.
+  The next append starts a fresh line and first writes a `torn-marker`
+  record. A reader classifies a bad line as follows:
+  - followed by a marker: a recovered torn write;
+  - last in its file: a torn tail;
+  - anywhere else, or with a failing record digest: **interior
+    corruption**, reported with segment and line.
+
+  Nothing is truncated or rewritten.
+
+- **Duplicate retries.** An append names its assessment id. If the same id
+  is already in an active segment with the same record digest, the append
+  is a no-op and returns `duplicate`. With a different digest it is
+  refused as a conflict. Detection covers active segments only. The reader
+  also reports identical duplicates, and conflicting ones, wherever they
+  occur.
+- **Concurrent appends** serialise on the lock, in call order.
+- **Rotation.** A segment is sealed when the next line would pass
+  `segmentMaxBytes`, or when its header is older than `segmentMaxAgeMs`.
+  The seal is a manifest line with record count, byte size, file sha256 and
+  time range. A crash after a new segment was opened but before the old one
+  was sealed is repaired on the next mutation, which seals every unsealed
+  segment below the newest.
+- **Archival**, per sealed segment:
+  1. copy it to `archive/` (temp file, `fsync`, rename, directory `fsync`);
+  2. verify the copy against the seal sha256;
+  3. append the `archive` manifest line;
+  4. unlink the active copy.
+
+  Snapshots move the same way, and only once no active segment references
+  them. A snapshot's location never matters to a reader, which looks in
+  both stores. So a partial move is harmless, and recovery finishes it:
+  - an archive copy that verifies lets the active copy go;
+  - a copy that does not verify is reported, and both files are kept.
+
+  **Reachability therefore holds across segments.** A snapshot shared by
+  an archived and an active assessment stays readable throughout.
+
+- **Explicit deletion** of an archived segment requires an operator
+  principal and a reason. Under the lock:
+  1. The tombstone goes to the manifest **first**, naming the segment, its
+     sha256, record count, time range, and the snapshots to be deleted.
+  2. Those snapshots, and only those, are unlinked. A snapshot is deleted
+     only if no surviving segment, active or archived, references it.
+  3. The segment is unlinked.
+
+  Deletion refuses if a surviving segment has unreadable interior lines,
+  because an unreadable line might reference a snapshot. A crash midway is
+  completed by recovery, which recomputes references first. Replay reports
+  a tombstoned segment as a **gap**, never as an absence.
+
+- **Path safety.** Every path is rebuilt from a validated id:
+  `seg-\d{8}` for segments and 64 lowercase hex characters for snapshots. A
+  path string from the manifest is never joined. A directory entry that
+  matches no pattern, or is a symlink, is ignored and reported.
+- **Honest limits.** Deterministic fault injection and fresh readers
+  demonstrate **logical recovery**. That covers every interruption point in
+  append, rotation, archival and deletion. It is not a demonstration of
+  power-loss durability: the tests cannot cut power, and `fsync` semantics
+  are the filesystem's. Nor does it protect against a same-OS-user process
+  editing the files (§M.7). Two writing processes are not excluded.
+
+### O.4 Other resolutions of the §F sketches
+
+- **Two projections, not one.** The probe must not see the observed
+  termination, and the residual question may. "`run-failure v1` for both"
+  was impossible, so there are two projections: `run-failure` v1 and
+  `run-failure.blind` v1. The blind one withholds status, outcome, exit
+  code, error string and termination, and drops the recorder's terminal
+  event, which is derived from them.
+- **Definition digests.** An assessment records the sha256 of the question
+  and projection definitions it used, not only their versions. A
+  definition edited in code without a version bump therefore reads as a
+  mismatch. It is never read as current.
+- **Registered questions.** The registered questions are H2 residual and
+  H2 probe, each v1, each with its own id and answer space, and with
+  `consumers: []`. The registry refuses any consumer in Phase 1. H1 is
+  **not** registered: its `gate-review` projection needs the gate drawer's
+  review model, and building that belongs to Phase 2.
+- **The deterministic provider** is a pure rule evaluator
+  (`elicitation: "rule"`). Phase 1 ships it with **no** production rules:
+  - observed termination is an observation (§O.1), not an assessment;
+  - no rule can infer a residual cause;
+  - answering the probe from withheld fields would be circular.
+
+  It reports `supports() = false` for both H2 questions.
+
+- **The Claude CLI adapter** runs through the existing `AnalysisRunner`,
+  unchanged:
+  - `kind: "decide"` is added to the union, which only affects logs;
+  - the runtime is pinned to `claude`, so the identity cannot misname
+    another CLI;
+  - the model defaults to the runner's default;
+  - the adapter runs in an empty, dedicated working directory, so no
+    repository `CLAUDE.md` or file is in reach.
+
+  It is recorded as `elicitation: "verbalized"`. `requestedModel` is what
+  the runner reports it passed, and `reportedModel` stays `null`.
+
+- **Answer validation** checks:
+  - keys exactly equal to the option ids or scale points;
+  - finite values in [0, 1];
+  - a per-question `sumTolerance` (0.02 for the H2 questions).
+
+  A distribution inside the tolerance is renormalised, and the raw values
+  and raw sum are kept on the outcome. Anything else is `failed:
+invalid-answer`, with a bounded excerpt of the raw output. The service
+  re-validates every provider's answer before appending, mocks included.
+
+- **Replay** writes canonical report bytes. The report excludes physical
+  location (active or archive) and every wall-clock read, so archival does
+  not change it. **Currency** is a separate, live reader, and is never
+  written.
+
+### O.5 What Phase 1 built, and what its tests establish
+
+**Code.**
+
+- `contracts/src/decision.ts` holds the wire types. It is types only.
+- `server/src/decision/` holds the rest:
+  - canonical JSON;
+  - answer validation;
+  - the registry and the built-in definitions;
+  - redaction and the two run-failure projections;
+  - observations;
+  - the journal (`storage.ts`, `journal.ts`);
+  - currency and replay;
+  - the mock, deterministic and Claude CLI providers;
+  - the service.
+- Outside that directory the only code change is `"decide"` added to
+  `AnalysisKind`, which only affects logs.
+- **Nothing imports the module.** There is no startup registration, watcher,
+  route, engine hook or policy, and the runner's defaults are unchanged.
+
+**Tests** (`server/src/decision/*.test.ts`), all deterministic:
+
+- **Round trip and integrity:** round trip, snapshot bytes equal to their
+  digest, damaged snapshots and records reported.
+- **Torn and damaged lines:** torn tails fenced by a marker, and interior
+  corruption named by segment and line.
+- **Retries and concurrency:** idempotent retries, including a lost
+  acknowledgement. Concurrent appends from two journal objects across
+  rotations.
+- **Interruption at every step boundary:**
+  - snapshot publication;
+  - the append;
+  - rotation;
+  - archival, at six points;
+  - deletion, at two points;
+
+  each followed by fresh readers and a recovering writer.
+
+- **Storage:** the active bound is measured on disk after every append. A
+  refusal writes nothing and spends no call.
+- **Snapshots and deletion:** shared-snapshot reachability, explicit
+  deletion and its refusals, and path traversal.
+- **Replay** is byte-equal across fresh readers, clocks and archival, with
+  a mock that records calls and a runner whose spawn throws, and it reports
+  gaps and unavailable snapshots.
+- **Re-evaluation** after archival uses the original snapshot and question
+  version.
+- **Currency:** stale, unavailable and current, including a changed phase
+  attempt, claim revisions and repository state.
+- **The Claude adapter** is tested through the real `AnalysisRunner` with
+  an injected spawn: runtime pin, default model, identity, the busy gate,
+  budget and disabled refusals, and invalid output.
+- **The ledger-isolation regression** runs every operation over real
+  stores:
+  - every byte outside the journal is unchanged;
+  - `evaluateSupport` is unchanged;
+  - no module imports the plane;
+  - the plane imports only readers.
+
+**Limits.**
+
+- This is logical recovery under injected faults, not power-loss
+  durability.
+- There is no protection against a same-user process.
+- Only one writing process is assumed.
+- Duplicate detection at append covers active segments only.
+- Redaction is pattern-based, best effort.
+- No paid call was made. The adapter's behaviour against a live CLI is
+  unverified beyond the injected envelopes.
 
 ---
 
