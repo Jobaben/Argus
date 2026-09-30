@@ -2663,7 +2663,11 @@ export function createEngine(deps: EngineDeps): Engine {
     failureClass: PhaseFailureClass,
     reason: string,
     extra: Record<string, unknown> = {},
-    /** Runs under the lock once the failure is known to apply, before the transition. */
+    /**
+     * Runs under the lock once the failure is known to apply, before the
+     * transition. Both deadline handlers stop the failed run's process here,
+     * under their own termination, so the phase sweep below leaves it alone.
+     */
     beforeTransition?: () => Promise<void>,
   ): Promise<void> {
     await locks.withLock(instanceId, async () => {
@@ -2685,7 +2689,16 @@ export function createEngine(deps: EngineDeps): Engine {
         deps.onChange?.();
         return;
       }
-      await killPhaseRuns(res.instance, [phaseId], "stopped: phase failed");
+      // The sweep is for the failed run's siblings: the run itself was already
+      // asked to stop in `beforeTransition`, its SIGKILL escalation already
+      // pending. It is still `running` until its process exits, so without
+      // the exclusion a live process would be asked to stop a second time.
+      await killPhaseRuns(
+        res.instance,
+        [phaseId],
+        "stopped: phase failed",
+        beforeTransition ? [runId] : [],
+      );
       queueReadyPhases(instanceId, def, res.instance, res.startPhases);
       if (res.instance.status === "failed") deps.onFailure?.(res.instance);
       deps.onChange?.();
@@ -2706,23 +2719,30 @@ export function createEngine(deps: EngineDeps): Engine {
     inst: PipelineInstance,
     phaseIds: string[],
     reason = "stopped by Argus",
+    alreadyStopped: string[] = [],
   ): Promise<void> {
     const wanted = new Set(phaseIds);
     const runIds = inst.phases
       .filter((p) => wanted.has(p.id))
       .flatMap((p) => p.steps.map((s) => s.runId))
       .filter((id): id is string => !!id);
-    await stopRuns(runIds, reason);
+    await stopRuns(runIds, reason, alreadyStopped);
   }
 
   /**
    * Stop exactly these runs. Idempotent: a run that is no longer running, or
    * whose process is gone, is left alone — which is what lets an interrupted
    * revise or abort be carried through again without signalling anything new.
+   * `alreadyStopped` names runs the caller has itself just asked to stop: they
+   * are not signalled again, only untracked like the rest.
    */
-  async function stopRuns(runIds: string[], reason = "stopped by Argus"): Promise<void> {
+  async function stopRuns(
+    runIds: string[],
+    reason = "stopped by Argus",
+    alreadyStopped: string[] = [],
+  ): Promise<void> {
     for (const runId of runIds) {
-      const got = await readRun(runId);
+      const got = alreadyStopped.includes(runId) ? null : await readRun(runId);
       if (got && got.run.status === "running" && isAlive(got.run.pid)) {
         // Written before the kill so the close handler reads the reason Argus
         // gave rather than inventing one from the exit code.

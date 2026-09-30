@@ -1791,6 +1791,73 @@ test("a step stalled past stallSeconds is killed, classed as timeout, and journa
   assert.ok(!j.some((entry: any) => entry.kind === "step.timed-out"));
 });
 
+test("a stalled step whose process is still alive is asked to stop once, and its sibling once", async () => {
+  const { engine, pipelines, instances, runsSrc, journalSrc } = await load();
+  await seed(pipelines, [
+    {
+      id: "only",
+      name: "Only",
+      cwd: home,
+      gated: false,
+      stallSeconds: 30,
+      steps: [
+        { name: "a", prompt: "p" },
+        { name: "b", prompt: "p" },
+      ],
+    },
+  ]);
+  // Both PIDs are live (ours and our parent's), so isAlive is true whatever the host is
+  // running; the grace is long so only termination requests are counted, never the SIGKILL
+  // escalation. Each run must be asked to stop exactly once.
+  const pids = [process.pid, process.ppid];
+  const pidOfRun = new Map<string, number>();
+  let spawned = 0;
+  const spawn = (run: any) => {
+    const pid = pids[spawned++];
+    pidOfRun.set(run.id, pid);
+    return { pid, done: new Promise<never>(() => {}) };
+  };
+  const calls: [number, NodeJS.Signals | undefined][] = [];
+  const kill = (pid: number, signal?: NodeJS.Signals) => {
+    calls.push([pid, signal]);
+    return true;
+  };
+  let clock = new Date(2026, 5, 30, 12, 0, 0);
+  const e = engine.createEngine(baseDeps({ spawn, kill, killGraceMs: 60_000, now: () => clock }));
+  const inst = await e.start("p1", "manual");
+  const runIdA = inst!.phases[0].steps[0].runId;
+  const runIdB = inst!.phases[0].steps[1].runId;
+
+  // Well within the stall window: nothing is stopped.
+  await e.reconcile();
+  assert.deepEqual(calls, []);
+
+  // Past it: the stalled run is stopped by its handler, then the phase sweep stops the sibling.
+  clock = new Date(clock.getTime() + 31_000);
+  await e.reconcile();
+  await waitFor(async () => (await instances.readInstance(inst!.id)).phases[0].status === "failed");
+
+  const gotA = await runsSrc.readRun(runIdA);
+  assert.equal(gotA!.run.termination, "stalled");
+  assert.match(gotA!.run.error, /stalled: no output for 30s/);
+  const gotB = await runsSrc.readRun(runIdB);
+  assert.equal(gotB!.run.termination, "killed");
+  assert.equal(gotB!.run.error, "stopped: phase failed");
+
+  assert.deepEqual(calls, [
+    [pidOfRun.get(runIdA)!, undefined],
+    [pidOfRun.get(runIdB)!, undefined],
+  ]);
+
+  const after = await instances.readInstance(inst!.id);
+  assert.equal((after.phases[0].payload as any).failureClass, "timeout");
+  assert.equal((after.phases[0].payload as any).kind, "stalled");
+
+  const j = await journalSrc.readJournal(inst!.id);
+  assert.equal(j.filter((entry: any) => entry.kind === "step.stalled").length, 1);
+  assert.ok(!j.some((entry: any) => entry.kind === "step.timed-out"));
+});
+
 test("stall detection: the retry policy treats a stall as a timeout, and retries it", async () => {
   const { engine, pipelines, instances } = await load();
   await seed(pipelines, [
