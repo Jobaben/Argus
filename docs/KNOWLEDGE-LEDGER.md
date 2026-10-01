@@ -128,6 +128,23 @@ possible) or minted by Argus from the kind (`RULE-3f9a1c2b`,
 enforces uniqueness. Evidence (`EV-…`) and justification (`J-…`) ids are always
 minted.
 
+**Content uniqueness.** A fresh id does not make a claim new. Two claims are the
+same claim when they have the same scope (§3a), the same kind and the same
+statement, compared after trimming and collapsing whitespace. Case, wording and
+`structuredValue` are not normalized away, and nothing judges similarity. A
+write that would duplicate an existing claim is refused, and the error names
+the claim that already exists:
+
+- a new claim is refused if any revision (active or superseded) of any claim
+  in its scope already says the same thing;
+- a revision is refused if any revision of _another_ claim in its scope already
+  says the same thing. A claim's own history does not count, so returning to
+  an earlier statement is a revision and is allowed.
+
+The same statement in a different scope is a different claim, because another
+repository may well hold the same rule. Records written before this rule existed
+are left as they are, and the check only applies to new writes.
+
 ## 3a. Knowledge scope — who owns a claim
 
 Argus keeps **one** ledger and runs pipelines against **many** unrelated
@@ -1321,15 +1338,15 @@ an author may opt in with `retry.retryOn: ["knowledge-delta"]`; the retry note
 then carries the exact refusal (the revision that moved, the unresolved local
 id), which is what a second attempt needs.
 
-| Where                     | Trigger                                                                                                                                                                                                      | Effect                                                                                            |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
-| intake (step completion)  | invalid JSON · schema · duplicate/undeclared local id · bare id · missing artifact · unknown reference · stale precondition · cycle                                                                          | step `failed`, phase `failed` (`knowledge-delta`), run outcome `failed`, record `rejected`        |
-| commit (phase acceptance) | a declared artifact no longer exists (or no longer resolves inside its root) · stale precondition (the ledger moved while checks ran or a gate waited) · conflict between sibling deltas · unreadable ledger | phase `failed` (`knowledge-delta`), `phase.knowledge.status: "rejected"`, every record `rejected` |
-| attempt abandoned         | verification failed · agent failed · timeout · revise · abort · lost candidate                                                                                                                               | records `superseded`; nothing canonical                                                           |
+| Where                     | Trigger                                                                                                                                                                                                                         | Effect                                                                                            |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| intake (step completion)  | invalid JSON · schema · duplicate/undeclared local id · bare id · missing artifact · unknown reference · stale precondition · duplicate claim (§3) · cycle                                                                      | step `failed`, phase `failed` (`knowledge-delta`), run outcome `failed`, record `rejected`        |
+| commit (phase acceptance) | a declared artifact no longer exists (or no longer resolves inside its root) · stale precondition (the ledger moved while checks ran or a gate waited) · conflict or duplicate claim between sibling deltas · unreadable ledger | phase `failed` (`knowledge-delta`), `phase.knowledge.status: "rejected"`, every record `rejected` |
+| attempt abandoned         | verification failed · agent failed · timeout · revise · abort · lost candidate                                                                                                                                                  | records `superseded`; nothing canonical                                                           |
 
 Refusal codes (`KnowledgeDeltaError.code`): `invalid-json`, `schema`,
-`local-reference`, `unknown-reference`, `stale-revision`, `conflict`,
-`artifact`, `ledger`. The reason text on the phase payload carries the code.
+`local-reference`, `unknown-reference`, `stale-revision`, `duplicate-claim`,
+`conflict`, `artifact`, `ledger`. The reason text on the phase payload carries the code.
 A phase is never considered semantically successful while a delta it emitted
 was silently discarded: the only deltas that vanish are the ones a run never
 wrote.
@@ -2201,8 +2218,9 @@ second, it says:
 
 It never asserts the rules _are_ duplicates. There are no embeddings, no
 vector search, no similarity threshold and no LLM adjudication anywhere in
-Phase 5. Global semantic deduplication is a later problem; §14.8 is what Phase
-5 does instead.
+Phase 5. A rule that restates an existing one _exactly_ in the same scope is
+not a warning. It is refused at intake as `duplicate-claim` (§3). Global
+semantic deduplication is a later problem; §14.8 is what Phase 5 does instead.
 
 ### 14.7 The structured phase summary
 
@@ -2260,9 +2278,11 @@ v2 while the gate waited, the **whole** delta is refused at commit and nothing
 in it becomes canonical — including the unrelated claims it proposed.
 
 If the agent was _not_ supplied a semantically similar rule, it may still
-propose a new one, and it will not be merged automatically. Phase 5's answer
-to duplication is controlled context, exact identity and explicit review, in
-that order.
+propose a new one, and it will not be merged automatically. If the new rule
+says exactly what a rule in the same scope already says or once said, the
+delta is refused as `duplicate-claim`, and the refusal names that rule. Phase
+5's answer to duplication is controlled context, exact identity and explicit
+review, in that order.
 
 ### 14.9 Review and acceptance
 
@@ -2412,7 +2432,8 @@ Not one step of that provenance or impact chain is computed by a model.
 - **No automatic repository-wide discovery.** Every invocation is bounded by a
   declared scope.
 - **No embeddings, vector search or semantic similarity.** Rule identity is
-  exact, and deduplication is a review decision.
+  exact. An exact duplicate in the same scope is refused (§3), and deciding
+  whether two differently worded rules mean the same thing is left to review.
 - **No automatic acceptance.** A discovery phase exists to be reviewed.
 - **No automatic rule merging, ontology management or contradiction-resolution
   agents.** Conflict is modelled (opposing evidence, contested support); it is
@@ -4185,7 +4206,8 @@ a whole-document read-modify-write serialized by a keyed mutex, persisted via
 the atomic tmp+rename writer, and **refusing to overwrite** a file it cannot
 parse or that carries an unknown version. A refused transition writes nothing.
 Concurrent proposals see each other's records, so the second of two identical
-claim ids is refused rather than duplicated.
+claim ids, or of two claims with the same content (§3), is refused rather than
+duplicated.
 
 **Version 2** (Phase 2) added the two provenance arrays; **version 3** (Phase 3)
 added `deltas`, the ledger's own record of every KnowledgeDelta it applied;

@@ -286,6 +286,23 @@ test("a justification referencing an unknown revision, or forming a cycle, is re
   assert.match(cycle.body.error, /would form a cycle/);
 });
 
+test("posting a claim that already exists in content is refused and writes nothing", async () => {
+  const app = makeApp();
+  const first = await post(app, "/api/knowledge/claims", {
+    kind: "business-rule",
+    statement: "Kobra comments max = 500",
+  });
+  assert.equal(first.status, 201, JSON.stringify(first.body));
+  const again = await post(app, "/api/knowledge/claims", {
+    kind: "business-rule",
+    statement: "Kobra comments max = 500",
+  });
+  assert.equal(again.status, 400);
+  assert.match(again.body.error, new RegExp(`duplicates ${first.body.id}:v1`));
+  const list = await get(app, "/api/knowledge/claims");
+  assert.equal(list.body.claims.length, 1);
+});
+
 test("revise refuses a revision key and 404s an unknown id", async () => {
   const app = makeApp();
   await seedExample(app);

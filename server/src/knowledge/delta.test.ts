@@ -647,6 +647,104 @@ test("two deltas in one commit revising the same revision are refused determinis
   assert.equal(snapshot.claims.length, 1);
 });
 
+test("a new claim restating an existing one is refused as a duplicate, naming the existing revision", () => {
+  refuses(
+    () =>
+      applyKnowledgeDeltas(
+        withRule(),
+        [
+          proposal({
+            schemaVersion: 1,
+            claims: [{ localId: "r", kind: "business-rule", statement: " Comment max is  180" }],
+          }),
+        ],
+        { now: T1, mint: minter() },
+      ),
+    "duplicate-claim",
+    /claims\[0\] duplicates RULE-17:v1/,
+  );
+});
+
+test("a revision restating another claim is refused; restating its own history is not", () => {
+  const snapshot = addClaim(
+    withRule(),
+    { id: "RULE-18", kind: "business-rule", statement: "Comment min is 1" },
+    T0,
+  ).ledger;
+  refuses(
+    () =>
+      applyKnowledgeDeltas(
+        snapshot,
+        [
+          proposal({
+            schemaVersion: 1,
+            revisions: [{ claimId: "RULE-17", expectedRevision: 1, statement: "Comment min is 1" }],
+          }),
+        ],
+        { now: T1, mint: minter() },
+      ),
+    "duplicate-claim",
+    /revisions\[0\] duplicates RULE-18:v1/,
+  );
+  const { ledger } = applyKnowledgeDeltas(
+    snapshot,
+    [
+      proposal({
+        schemaVersion: 1,
+        revisions: [{ claimId: "RULE-17", expectedRevision: 1, statement: "Comment max is 180" }],
+      }),
+    ],
+    { now: T1, mint: minter() },
+  );
+  assert.equal(lifecycleOf(ledger, v("RULE-17", 2)), "active");
+});
+
+test("the same content twice in one delta is refused", () => {
+  refuses(
+    () =>
+      applyKnowledgeDeltas(
+        emptyLedger(),
+        [
+          proposal({
+            schemaVersion: 1,
+            claims: [
+              { localId: "a", kind: "fact", statement: "same" },
+              { localId: "b", kind: "fact", statement: "same" },
+            ],
+          }),
+        ],
+        { now: T1, mint: minter() },
+      ),
+    "duplicate-claim",
+    /claims\[1\] duplicates claims\[0\]/,
+  );
+});
+
+test("two deltas in one commit writing the same content are refused, whatever the order", () => {
+  const a = proposal(
+    { schemaVersion: 1, claims: [{ localId: "a", kind: "fact", statement: "same" }] },
+    { id: "KD-A", execution: { runId: "run-A", instanceId: "inst-1", phaseId: "plan" } },
+  );
+  const b = proposal(
+    {
+      schemaVersion: 1,
+      revisions: [{ claimId: "RULE-17", expectedRevision: 1, statement: "elsewhere" }],
+      claims: [{ localId: "b", kind: "fact", statement: "same" }],
+    },
+    { id: "KD-B", execution: { runId: "run-B", instanceId: "inst-1", phaseId: "plan" } },
+  );
+  for (const order of [
+    [a, b],
+    [b, a],
+  ]) {
+    refuses(
+      () => applyKnowledgeDeltas(withRule(), order, { now: T1, mint: minter() }),
+      "duplicate-claim",
+      /KD-[AB].*duplicates delta KD-[AB]/,
+    );
+  }
+});
+
 test("two non-conflicting deltas in one commit apply together, each attributed to its own run", () => {
   const { ledger, results } = applyKnowledgeDeltas(
     withRule(),

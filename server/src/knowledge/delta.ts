@@ -23,6 +23,8 @@ import {
   addClaim,
   addEvidence,
   addJustification,
+  claimContentKey,
+  findDuplicateClaim,
   formatClaimRef,
   getClaim,
   parseClaimKey,
@@ -96,6 +98,7 @@ export type KnowledgeDeltaErrorCode =
   | "local-reference"
   | "unknown-reference"
   | "stale-revision"
+  | "duplicate-claim"
   | "conflict"
   | "artifact"
   | "scope"
@@ -464,8 +467,40 @@ const ref = (r: ClaimRef): ClaimRef => ({ id: r.id, revision: r.revision });
 function preflight(snapshot: KnowledgeLedger, proposals: DeltaProposal[]): void {
   const ids = new Set<string>();
   const revisedBy = new Map<string, string>();
+  /** Content key → where in this commit it is first written. */
+  const writtenAt = new Map<string, { deltaId: string; who: string; ctx: string }>();
   for (const p of proposals) {
     const who = `delta ${p.id} (run ${p.execution.runId})`;
+    /**
+     * A claim this commit writes — a new one or a revision — must not say what
+     * another claim in its scope says or ever said, nor what another write in
+     * the same commit says. Identity is {@link claimContentKey}: exact, scoped.
+     */
+    const mustBeNew = (
+      content: { scope?: KnowledgeScope; kind: ClaimKind; statement: string },
+      ctx: string,
+      exceptId?: string,
+    ) => {
+      const existing = findDuplicateClaim(snapshot, content, exceptId);
+      if (existing) {
+        fail(
+          "duplicate-claim",
+          `${who}: ${ctx} duplicates ${formatClaimRef(existing)} in ` +
+            `${describeScopeOfClaim(existing.scope)}; revise or consume it instead of adding it again`,
+        );
+      }
+      const key = claimContentKey(content.scope, content.kind, content.statement);
+      const earlier = writtenAt.get(key);
+      if (earlier) {
+        fail(
+          "duplicate-claim",
+          earlier.deltaId === p.id
+            ? `${who}: ${ctx} duplicates ${earlier.ctx} of the same delta`
+            : `${who}: ${ctx} duplicates ${earlier.who}: ${earlier.ctx}`,
+        );
+      }
+      writtenAt.set(key, { deltaId: p.id, who, ctx });
+    };
     if (ids.has(p.id)) fail("conflict", `${who} is listed twice in one commit`);
     ids.add(p.id);
     const d = p.delta;
@@ -513,6 +548,9 @@ function preflight(snapshot: KnowledgeLedger, proposals: DeltaProposal[]): void 
         );
       }
     };
+    d.claims?.forEach((c, i) => {
+      mustBeNew({ scope: p.scope, kind: c.kind, statement: c.statement }, `claims[${i}]`);
+    });
     d.evidence?.forEach((e, i) => {
       if (isLocal(e.claim)) return;
       mustExist(e.claim, `evidence[${i}].claim`);
@@ -553,6 +591,11 @@ function preflight(snapshot: KnowledgeLedger, proposals: DeltaProposal[]): void 
         );
       }
       revisedBy.set(rev.claimId, p.id);
+      mustBeNew(
+        { scope: active.scope, kind: active.kind, statement: rev.statement },
+        `revisions[${i}]`,
+        active.id,
+      );
     });
   }
 }

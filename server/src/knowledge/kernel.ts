@@ -192,7 +192,7 @@ export function emptyLedger(): KnowledgeLedger {
 }
 
 import { KnowledgeValidationError, UnknownClaimError } from "./errors.js";
-import { describeScopeOfClaim, plainScope, sameScope } from "./scope.js";
+import { describeScopeOfClaim, plainScope, sameScope, scopeKeyOf } from "./scope.js";
 
 export { KnowledgeValidationError, UnknownClaimError } from "./errors.js";
 
@@ -357,6 +357,52 @@ function compact<T extends object>(rec: T): T {
   return Object.fromEntries(Object.entries(rec).filter(([, v]) => v !== undefined)) as T;
 }
 
+/**
+ * What makes two claims the same claim: owner, kind and statement, the
+ * statement compared after trimming and collapsing whitespace. Exact by
+ * design — case, wording and `structuredValue` are not normalized away, and
+ * nothing here judges similarity.
+ */
+export function claimContentKey(
+  scope: KnowledgeScope | undefined,
+  kind: ClaimKind,
+  statement: string,
+): string {
+  return JSON.stringify([scopeKeyOf(scope), kind, statement.trim().replace(/\s+/g, " ")]);
+}
+
+/**
+ * The first revision — active or superseded — of a claim other than
+ * `exceptId` that already says this in this scope. A claim's own history is
+ * excluded, so returning to an earlier statement is a revision, not a copy.
+ */
+export function findDuplicateClaim(
+  ledger: KnowledgeLedger,
+  content: { scope?: KnowledgeScope; kind: ClaimKind; statement: string },
+  exceptId?: string,
+): Claim | null {
+  const key = claimContentKey(content.scope, content.kind, content.statement);
+  return (
+    ledger.claims.find(
+      (c) => c.id !== exceptId && claimContentKey(c.scope, c.kind, c.statement) === key,
+    ) ?? null
+  );
+}
+
+function refuseDuplicate(
+  ledger: KnowledgeLedger,
+  content: { scope?: KnowledgeScope; kind: ClaimKind; statement: string },
+  exceptId?: string,
+): void {
+  const existing = findDuplicateClaim(ledger, content, exceptId);
+  if (existing) {
+    throw new KnowledgeValidationError(
+      `claim duplicates ${formatClaimRef(existing)} in ${describeScopeOfClaim(existing.scope)}; ` +
+        `revise or consume it instead of adding it again`,
+    );
+  }
+}
+
 /** Create revision 1 of a new claim id. */
 export function addClaim(
   ledger: KnowledgeLedger,
@@ -374,6 +420,7 @@ export function addClaim(
       `claim "${input.id}" already exists; revise it rather than adding it again`,
     );
   }
+  refuseDuplicate(ledger, input);
   const claim: Claim = compact({
     id: input.id,
     revision: 1,
@@ -404,6 +451,11 @@ export function reviseClaim(
 ): { ledger: KnowledgeLedger; claim: Claim } {
   const current = activeRevision(ledger, input.id);
   if (!current) throw new UnknownClaimError(`unknown claim "${input.id}"`);
+  refuseDuplicate(
+    ledger,
+    { scope: current.scope, kind: current.kind, statement: input.statement },
+    current.id,
+  );
   const claim: Claim = compact({
     // Ownership is a property of the *logical* claim, so a revision inherits
     // it from the revision it supersedes and can never be moved to another

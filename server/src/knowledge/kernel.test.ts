@@ -103,6 +103,53 @@ test("a claim id is unique; a repeated add is refused, not silently revised", ()
   );
 });
 
+test("a claim whose scope, kind and statement already exist is refused under a fresh id", () => {
+  const scope = { projectId: "p", repositoryId: "git:example.com/acme/kobra" };
+  const other = { projectId: "q", repositoryId: "git:example.com/acme/kobra" };
+  const rule = "Kobra comments max = 500";
+  const base = addClaim(
+    emptyLedger(),
+    { id: "RULE-A", scope, kind: "business-rule", statement: rule },
+    T0,
+  ).ledger;
+
+  assert.throws(
+    () =>
+      addClaim(
+        base,
+        { id: "RULE-B", scope, kind: "business-rule", statement: "  Kobra  comments\nmax = 500 " },
+        T0,
+      ),
+    /duplicates RULE-A:v1/,
+  );
+  // Another scope, another kind, or another spelling is a different claim.
+  addClaim(base, { id: "RULE-B", scope: other, kind: "business-rule", statement: rule }, T0);
+  addClaim(base, { id: "RULE-B", kind: "business-rule", statement: rule }, T0);
+  addClaim(base, { id: "FACT-B", scope, kind: "fact", statement: rule }, T0);
+  addClaim(base, { id: "RULE-B", scope, kind: "business-rule", statement: rule.toLowerCase() }, T0);
+});
+
+test("a superseded revision still counts: its statement cannot come back as a new claim", () => {
+  const b = new Build().claim("FACT-A", "fact", "the old text").revise("FACT-A", "the new text");
+  assert.throws(
+    () => addClaim(b.ledger, { id: "FACT-B", kind: "fact", statement: "the old text" }, T0),
+    /duplicates FACT-A:v1/,
+  );
+});
+
+test("a revision may not restate another claim, but may return to its own earlier text", () => {
+  const b = new Build()
+    .claim("FACT-A", "fact", "a")
+    .claim("FACT-B", "fact", "b")
+    .revise("FACT-A", "a2");
+  assert.throws(
+    () => reviseClaim(b.ledger, { id: "FACT-A", statement: "b" }, T1),
+    /duplicates FACT-B:v1/,
+  );
+  const back = reviseClaim(b.ledger, { id: "FACT-A", statement: "a" }, T1);
+  assert.equal(back.claim.revision, 3);
+});
+
 test("transitions never mutate their input ledger", () => {
   const start = emptyLedger();
   const { ledger: next } = addClaim(start, { id: "A", kind: "fact", statement: "a" }, T0);

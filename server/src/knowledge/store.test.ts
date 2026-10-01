@@ -394,11 +394,23 @@ test("concurrent proposals are serialized: no lost update, no duplicate id", asy
   assert.equal(ledger.claims.filter((c: Claim) => c.id === "SAME").length, 1);
 });
 
+test("concurrent proposals of the same content: exactly one is written", async () => {
+  const s = await fresh();
+  const results = await Promise.allSettled([
+    s.createClaim({ kind: "fact", statement: "same" }, NOW),
+    s.createClaim({ kind: "fact", statement: "same" }, NOW),
+  ]);
+  assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
+  const refused = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
+  assert.match(String(refused.reason), /duplicates FACT-[0-9a-f]{8}:v1/);
+  assert.equal((await s.readLedger()).claims.length, 1);
+});
+
 test("minted ids carry the kind prefix; a proposed id is honoured", async () => {
   const s = await fresh();
   const minted = await s.createClaim({ kind: "business-rule", statement: "r" }, NOW);
   assert.match(minted.id, /^RULE-[0-9a-f]{8}$/);
-  const named = await s.createClaim({ id: "RULE-17", kind: "business-rule", statement: "r" }, NOW);
+  const named = await s.createClaim({ id: "RULE-17", kind: "business-rule", statement: "r2" }, NOW);
   assert.equal(named.id, "RULE-17");
   const ev = await s.createEvidence(
     { claim: { id: "RULE-17" }, direction: "supports", source: { type: "human", who: "me" } },
