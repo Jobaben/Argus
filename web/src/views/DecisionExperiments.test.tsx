@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
-import type { H2ReportResponse } from "@argus/contracts";
+import type { H1ReportResponse, H2ReportResponse } from "@argus/contracts";
 import DecisionExperiments from "./DecisionExperiments";
 
 class FakeWS {
@@ -254,9 +254,43 @@ const fixture: H2ReportResponse = {
   },
 };
 
+/** The smallest valid H1 report: the page also renders it, and an unmocked path throws. */
+const h1Fixture: H1ReportResponse = {
+  collection: {
+    enabled: false,
+    reasons: [],
+    settings: null,
+    watcher: { state: "inactive", detail: null, until: null },
+  },
+  report: {
+    report: { id: "decision-h1-report", version: 1 },
+    asOf: { seq: 7, at: null },
+    statement: "Behavioural agreement cannot justify skipping review.",
+    collection: { start: null, configs: [] },
+    definitions: [],
+    gates: { excluded: {} },
+    census: [],
+    pending: { total: 0, byPopulation: { manual: 0, "auto-approve-declared": 0 } },
+    deterministic: [],
+    verdict: [],
+    models: [],
+    spend: { attempts: 0, spent: 0, usdTotal: 0, usdUnknown: 0 },
+    methods: {},
+    integrity: {
+      history: "complete",
+      ledger: [],
+      journal: { gaps: 0, notices: [] },
+      findings: [],
+    },
+  },
+};
+
 describe("DecisionExperiments view", () => {
   it("renders the shadow-only notice, identity, formatted metrics and unmeasured text", async () => {
-    mockFetch({ "/api/decisions/h2": () => okJson(fixture) });
+    mockFetch({
+      "/api/decisions/h2": () => okJson(fixture),
+      "/api/decisions/h1": () => okJson(h1Fixture),
+    });
     render(<DecisionExperiments />);
 
     expect(await screen.findByText(/Shadow measurement only\./)).toBeTruthy();
@@ -309,7 +343,10 @@ describe("DecisionExperiments view", () => {
   });
 
   it("only issues a GET for the report and offers no mutating controls", async () => {
-    const spy = mockFetch({ "/api/decisions/h2": () => okJson(fixture) });
+    const spy = mockFetch({
+      "/api/decisions/h2": () => okJson(fixture),
+      "/api/decisions/h1": () => okJson(h1Fixture),
+    });
     render(<DecisionExperiments />);
     await screen.findByText(/Shadow measurement only\./);
     await screen.findByText("Top-answer counts (descriptive — not accuracy)");
@@ -317,7 +354,7 @@ describe("DecisionExperiments view", () => {
     expect(spy).toHaveBeenCalled();
     for (const [input, init] of spy.mock.calls) {
       const url = typeof input === "string" ? input : (input as Request).url;
-      expect(url).toBe("/api/decisions/h2");
+      expect(["/api/decisions/h2", "/api/decisions/h1"]).toContain(url);
       expect(init === undefined || init.method === undefined || init.method === "GET").toBe(true);
     }
     const buttons = screen.queryAllByRole("button");
@@ -354,7 +391,10 @@ describe("DecisionExperiments view", () => {
         },
       },
     };
-    mockFetch({ "/api/decisions/h2": () => okJson(empty) });
+    mockFetch({
+      "/api/decisions/h2": () => okJson(empty),
+      "/api/decisions/h1": () => okJson(h1Fixture),
+    });
     render(<DecisionExperiments />);
 
     expect(await screen.findByText("No shadow assessments recorded.")).toBeTruthy();
@@ -380,7 +420,10 @@ describe("DecisionExperiments view", () => {
   });
 
   it("treats a malformed body as no report", async () => {
-    mockFetch({ "/api/decisions/h2": () => okJson({ nope: true }) });
+    mockFetch({
+      "/api/decisions/h2": () => okJson({ nope: true }),
+      "/api/decisions/h1": () => okJson(h1Fixture),
+    });
     render(<DecisionExperiments />);
     expect(await screen.findByText("No report available.")).toBeTruthy();
   });

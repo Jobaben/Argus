@@ -8,6 +8,7 @@ import type {
   StoredSnapshot,
 } from "@argus/contracts";
 import { checkOutcome } from "./answers.js";
+import { canonicalDigest } from "./canonical.js";
 import { ASSESSMENT_ID_RE, DecisionJournal, JournalError, type AppendResult } from "./journal.js";
 import { buildSnapshot, type DecisionSources, type ProjectionBuilder } from "./projection.js";
 import type { DecisionProvider, ProviderResponse } from "./providers/types.js";
@@ -66,6 +67,22 @@ export interface DecisionService {
      * the call (the H2 watcher, §P.5) names the id up front, so that after a
      * crash it can tell whether the assessment reached the journal.
      */
+    id?: string;
+  }): Promise<ServiceResult>;
+  /**
+   * A call on a snapshot the caller captured earlier with the question's own
+   * registered projection (the H1 watcher, §Q.3): the provider is sent what
+   * was captured, never a snapshot rebuilt at call time. The snapshot is
+   * re-sealed and must match its digest, the question's projection by digest
+   * and the subject; then it is published before the call, as always.
+   */
+  assessSnapshot(req: {
+    question: string;
+    version: number;
+    snapshot: StoredSnapshot;
+    provider: string;
+    sample?: number;
+    signal?: AbortSignal;
     id?: string;
   }): Promise<ServiceResult>;
   /** A NEW provider call on the retained snapshot and original question version of `assessmentId`. */
@@ -268,6 +285,66 @@ export function createDecisionService(deps: DecisionServiceDeps): DecisionServic
         found,
         req.subject,
         built.snapshot,
+        provider,
+        q,
+        req.sample ?? 0,
+        req.signal ?? new AbortController().signal,
+        undefined,
+        req.id,
+      );
+    },
+
+    async assessSnapshot(req) {
+      const found = deps.registry.question(req.question, req.version);
+      if (!found) return refuse("unknown-question", `${req.question}@${req.version}`);
+      if (req.id !== undefined && !ASSESSMENT_ID_RE.test(req.id)) {
+        return refuse("invalid-id", `"${req.id}" is not an assessment id`);
+      }
+      const q = found.def;
+      const snapshot = req.snapshot;
+      if (snapshot.content.subject.kind !== q.subject) {
+        return refuse(
+          "subject-mismatch",
+          `${q.id} is about a ${q.subject}, not a ${snapshot.content.subject.kind}`,
+        );
+      }
+      const provider = providerFor(req.provider, q);
+      if ("ok" in provider) return provider;
+      const projection = deps.registry.projection(q.projection.id, q.projection.version);
+      const stamped = snapshot.content.projection;
+      if (
+        !projection ||
+        stamped.id !== projection.ref.id ||
+        stamped.version !== projection.ref.version ||
+        stamped.digest !== projection.ref.digest
+      ) {
+        return refuse(
+          "definition-mismatch",
+          `the snapshot was not built by ${q.projection.id}@${q.projection.version} as registered`,
+        );
+      }
+      let sealed: { sha256: string; bytes: number };
+      try {
+        sealed = canonicalDigest(snapshot.content);
+      } catch (e) {
+        return refuse("snapshot-unbuildable", `not-canonical: ${(e as Error).message}`);
+      }
+      if (sealed.sha256 !== snapshot.sha256 || sealed.bytes !== snapshot.bytes) {
+        return refuse("snapshot-unbuildable", "the snapshot does not match its digest");
+      }
+      if (sealed.bytes > projection.def.maxBytes) {
+        return refuse("snapshot-unbuildable", `too-large: ${sealed.bytes} bytes`);
+      }
+      try {
+        await deps.journal.publishSnapshot(snapshot);
+      } catch (e) {
+        if (e instanceof JournalError) return refuse("storage-refused", `${e.code}: ${e.message}`);
+        throw e;
+      }
+      return record(
+        found,
+        snapshot.content.subject,
+        snapshot,
         provider,
         q,
         req.sample ?? 0,

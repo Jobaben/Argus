@@ -2241,8 +2241,11 @@ The adapter always runs the `claude` CLI.
   while another analysis pass is in flight.
 - **Existing work first.** It waits a whole tick after any Autopsy, Verdict,
   Sentinel or on-demand pass, so it never makes those see a busy runner.
-- **Per tick:** at most one provider invocation. The spend hard stop pauses
-  it for 15 minutes.
+- **Per tick:** at most one provider invocation, across H2 and H1 (§33)
+  together. The spend hard stop pauses it for 15 minutes.
+- **Shared allowance.** When H1 has made calls in the last 24 hours, H2's
+  daily call cap, dollar cap and minimum interval count both experiments'
+  calls, so enabling both never doubles the allowance.
 - **Which runs.** A run counts if it ended at or after collection was first
   switched on, and is between 10 minutes and 24 hours old. History is never
   drained.
@@ -2306,6 +2309,101 @@ Unset either switch and restart. Nothing is deleted, and the report still
 renders from what was retained. An invocation in flight at shutdown is
 reported as an unknown outcome on the next enabled start, and is not
 re-sent.
+
+## 33. Decision experiments (H1 gate operator action)
+
+A second experiment, off by default, that predicts **what the operator will
+do** at an ordinary pipeline gate: will they send this phase attempt back
+(revise or abort) rather than approve it as it stands? It predicts behaviour,
+not correctness. **An agreement figure can never justify skipping review**:
+an approved attempt may still be wrong, and a revised one may have been fine.
+The design is RFC 2026-09-29 §Q.
+
+Nothing reads the predictions. No gate badge, score, ordering or approval
+changes, and the gate drawer shows exactly what it showed before.
+
+### Turning it on
+
+```sh
+ARGUS_DECISIONS=on ARGUS_DECISIONS_H1_COLLECT=on argus
+```
+
+`ARGUS_ANALYSIS=off` wins. An invalid value turns H1 off and names itself.
+
+| Variable                                   | Default        | Meaning                                                                                 |
+| ------------------------------------------ | -------------- | --------------------------------------------------------------------------------------- |
+| `ARGUS_DECISIONS_H1_RATE`                  | `1`            | Share of captured gates sampled for a model call.                                       |
+| `ARGUS_DECISIONS_H1_MODELS`                | runner default | Up to three of `haiku`, `sonnet`, `opus` or a `claude-…` id; each gate is assigned one. |
+| `ARGUS_DECISIONS_H1_MAX_CALLS_PER_DAY`     | `20` (0–96)    | H1 and H2 calls combined, per rolling 24 hours.                                         |
+| `ARGUS_DECISIONS_H1_MAX_OWN_CALLS_PER_DAY` | `10`           | H1's own share of that.                                                                 |
+| `ARGUS_DECISIONS_H1_MIN_INTERVAL_MINUTES`  | `15`           | Minimum gap since the last call of either experiment.                                   |
+| `ARGUS_DECISIONS_H1_MAX_USD_PER_DAY`       | `1`            | Recorded H1 and H2 cost combined, per rolling 24 hours.                                 |
+| `ARGUS_DECISIONS_H1_SEED`                  | `argus-h1`     | Seed of the deterministic sampling draw.                                                |
+
+Several models compare **between** gates: each gate gets one model, never a
+second call. The requested model is recorded; the model the CLI actually
+used is not reported, and stays blank rather than guessed.
+
+### What it does
+
+- **Which gates.** Only a phase paused at an ordinary `gate`, on its exact
+  attempt, with no decision on record yet. Questions an agent asked
+  (`needs-input`) and pauses of unknown cause are excluded. A best-of-N
+  phase is judged on the selected candidate. Gates whose phase declares
+  `autoApprove` are reported as their own population.
+- **Capture first, no call needed.** Within a tick of the pause, Argus
+  captures a bounded, redacted snapshot of the review:
+  - step prompts and final messages;
+  - the result and the checks;
+  - changed files and line counts, never file content;
+  - staged-record outcomes and warnings;
+  - Watchtower anomalies and the attempt number.
+
+  It also records two baselines: a rule result, and whether auto-approval
+  would have opened the gate. It then re-reads the gate to prove nobody had
+  acted yet.
+
+- **Then, budget allowing, one call** on that captured snapshot. It is
+  re-checked just before the call and again just after. If you act while
+  the call is running, that prediction is kept but not scored.
+- **"As it stands."** If the review changes while the gate waits (a
+  different final message, result, check or file), the item is not compared
+  with your action.
+- **Your action.** Only an applied operator decision on that exact attempt
+  counts: approve means "not sent back", and revise or abort means "sent
+  back". Automated approvals, unattributed or unfinished decisions, and
+  pruned instances are never labels, and never negatives. A signed-in
+  session is an account, not proof that a person clicked.
+- **Records** live in `~/.claude/argus/decision-experiments/h1/`: an
+  append-only ledger (32 MiB cap) and the captured snapshots (64 MiB cap).
+  Collection stops at either cap, and nothing is pruned automatically.
+
+### Reading the report
+
+The Experiments page has an H1 section (`GET /api/decisions/h1`).
+
+- **Only settled gates** (the ones you have acted on) contribute to any
+  figure. A gate still waiting on you appears only in a count, so the page
+  cannot show you a prediction for a pending gate.
+- **For each population and model**, it shows:
+  - the confusion matrix, coverage, and agreement with your action;
+  - **false close** (predicted approve, you sent it back) and **false
+    escalation** (predicted sent back, you approved);
+  - κ;
+  - for model probabilities only: Brier, reliability buckets (n ≥ 20) and
+    ECE (n ≥ 200).
+
+  Every interval is a Wilson 95 % interval.
+
+- **The baselines** sit beside the models:
+  - The rule baseline is a rule result, not a probability.
+  - The Verdict baseline is compared at the decision level, and its score
+    is a rating: its only rank figure is an AUROC.
+
+### Turning it off
+
+Unset either switch and restart. Nothing is deleted, and the report still
+renders.
 
 ## Quick mental model
 

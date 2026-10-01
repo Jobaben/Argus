@@ -184,3 +184,39 @@ export const RESIDUAL_P = {
   "task-infeasible": 0.05,
   other: 0.05,
 };
+
+/**
+ * An instance journal (`argus/journals/<id>.jsonl`) with the entries that share
+ * one `at` put in a fixed order, for comparing two runs of the same scenario.
+ *
+ * The engine writes journal entries fire-and-forget (`void journal(…)`), and
+ * each append awaits its own directory and size checks before writing, so two
+ * entries queued in the same instant (a `route.selection` and the
+ * `route.skip`s it caused) can land in either order. That is pre-existing
+ * engine behaviour, and it varies from run to run with collection on or off.
+ * Every line is still compared, and so is the order across instants; only the
+ * order among same-instant entries is not.
+ */
+export function settleJournalOrder(relPath: string, text: string): string {
+  if (!/(^|\/)journals\/[^/]+\.jsonl$/.test(relPath)) return text;
+  const lines = text.split("\n");
+  const tail = lines.pop() ?? "";
+  const at = (l: string) => {
+    try {
+      return String((JSON.parse(l) as { at?: unknown }).at);
+    } catch {
+      return l;
+    }
+  };
+  const out: string[] = [];
+  let group: string[] = [];
+  for (const l of lines) {
+    if (group.length > 0 && at(group[0]) !== at(l)) {
+      out.push(...group.sort());
+      group = [];
+    }
+    group.push(l);
+  }
+  out.push(...group.sort());
+  return [...out, tail].join("\n");
+}

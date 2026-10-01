@@ -237,13 +237,18 @@ function imports(file: string): Array<{ from: string; names: string[] }> {
   return out;
 }
 
-test("only the H2 entry is imported from outside the plane: the watcher wiring and the report route", () => {
+test("only the experiment entries are imported from outside the plane: the watcher wiring and the report routes", () => {
   const decisionDir = path.join(SRC, "decision");
-  // Importer (relative to server/src) → the only names it may take, all from
-  // decision/h2/entry.js (RFC §P). No engine hook, no policy, no other route.
-  const allowed: Record<string, Set<string>> = {
-    "index.ts": new Set(["countAnalysisPasses", "createH2Collection"]),
-    "app.ts": new Set(["readH2ReportResponse"]),
+  // Importer (relative to server/src) → entry module → the only names it may
+  // take (RFC §P, §Q). No engine hook, no policy, no other route.
+  const allowed: Record<string, Record<string, Set<string>>> = {
+    "index.ts": {
+      "decision/experiments.js": new Set(["countAnalysisPasses", "createShadowExperiments"]),
+    },
+    "app.ts": {
+      "decision/h2/entry.js": new Set(["readH2ReportResponse"]),
+      "decision/h1/entry.js": new Set(["readH1ReportResponse"]),
+    },
   };
   const offenders: string[] = [];
   for (const f of sourceFiles(SRC)) {
@@ -252,9 +257,9 @@ test("only the H2 entry is imported from outside the plane: the watcher wiring a
     for (const { from, names } of imports(f)) {
       const target = from.startsWith(".") ? path.resolve(path.dirname(f), from) : from;
       if (!target.startsWith(decisionDir)) continue;
-      const entry = path.relative(SRC, target).split(path.sep).join("/") === "decision/h2/entry.js";
+      const entry = path.relative(SRC, target).split(path.sep).join("/");
       for (const n of names) {
-        if (!entry || !allowed[importer]?.has(n)) offenders.push(`${importer} → ${from}: ${n}`);
+        if (!allowed[importer]?.[entry]?.has(n)) offenders.push(`${importer} → ${from}: ${n}`);
       }
     }
   }
@@ -267,7 +272,7 @@ test("the Decision Plane imports only readers from the ledger, the gate log and 
   const allowed: Record<string, Set<string>> = {
     "knowledge/kernel.js": new Set(["activeRevision", "sameRepositoryState", "KnowledgeLedger"]),
     "knowledge/store.js": new Set(["readLedger"]),
-    "sources/instances.js": new Set(["readInstance"]),
+    "sources/instances.js": new Set(["readInstance", "readInstances"]),
     "sources/runs.js": new Set(["readRun", "readRuns"]),
     "sources/budget.js": new Set(["isSpendBlocked"]),
     "log.js": new Set(["log"]),
@@ -276,6 +281,25 @@ test("the Decision Plane imports only readers from the ledger, the gate log and 
     "sources/analysis.js": new Set(["analysisModel", "AnalysisRunner"]),
     "claudeHome.js": new Set(["paths"]),
     "mutex.js": new Set(["KeyedMutex"]),
+    // H1 (RFC §Q.4): the gate drawer's own review model and the records a
+    // gate is judged on — each a reader or a pure function. Git is read with
+    // --no-optional-locks; nothing here writes, locks an instance or approves.
+    "sources/artifacts.js": new Set(["buildPhaseReview", "ReviewResult"]),
+    "sources/gateDecisions.js": new Set(["readGateDecisions", "decisionEffect"]),
+    "sources/gatePolicy.js": new Set(["autoApprovalQualification", "QualificationBasisEntry"]),
+    "sources/pipelines.js": new Set(["readPipelines"]),
+    "sources/verdict.js": new Set(["readCurrentVerdicts"]),
+    "sources/watchtower.js": new Set(["baselineKey", "buildWatchtower", "readResets"]),
+    "harness/invocation.js": new Set(["phaseBaselinePath"]),
+    "harness/verification.js": new Set([
+      "changedSince",
+      "committedSince",
+      "diffNumstat",
+      "snapshotWorkingTree",
+      "DiffNumstat",
+      "WorkingTreeSnapshot",
+    ]),
+    "knowledge/realization.js": new Set(["repositoryStateFrom"]),
   };
   const violations: string[] = [];
   for (const f of sourceFiles(decisionDir)) {

@@ -15,7 +15,8 @@ import { createClaudeCliProvider } from "../providers/claudeCli.js";
 import { createDecisionService } from "../service.js";
 import type { CountingRunner } from "./activity.js";
 import { h2Enablement, type H2Enablement } from "./config.js";
-import { CollectionLedger } from "./ledger.js";
+import { indexLedger, isSpent } from "./items.js";
+import { CollectionLedger, type LedgerView } from "./ledger.js";
 import { replayH2 } from "./report.js";
 import { createH2Watcher, type H2Watcher } from "./watcher.js";
 
@@ -70,12 +71,26 @@ function statusOf(
 export interface H2Collection {
   watcher: H2Watcher;
   status(): H2CollectionStatus;
+  /** Spent invocations in the H2 ledger, for H1's combined limits (§Q.8). Reads only. */
+  spent(): Promise<Array<{ atMs: number; costUsd: number | null }>>;
+}
+
+/** Spent invocations in an H2 ledger view: the same "spent" the watcher counts. */
+export function h2SpentFrom(view: LedgerView): Array<{ atMs: number; costUsd: number | null }> {
+  return indexLedger(view)
+    .attempts.filter(isSpent)
+    .map((e) => ({ atMs: Date.parse(e.attempt.at), costUsd: e.result?.costUsd ?? null }));
 }
 
 export function createH2Collection(opts: {
   runner: CountingRunner;
   env?: Env;
   now?: () => Date;
+  /** The combined H1 + H2 limits and the one-invocation-per-tick slot (§Q.8). */
+  coordination?: {
+    otherSpend: () => Promise<Array<{ atMs: number; costUsd: number | null }>>;
+    slotTaken: () => boolean;
+  };
 }): H2Collection {
   const en = h2Enablement(opts.env ?? process.env);
   const now = opts.now ?? (() => new Date());
@@ -94,9 +109,10 @@ export function createH2Collection(opts: {
     providers: { "claude-cli": provider },
     now,
   });
+  const ledger = new CollectionLedger({ root: h2Root() });
   const watcher = createH2Watcher({
     enablement: () => en,
-    ledger: new CollectionLedger({ root: h2Root() }),
+    ledger,
     journal,
     service: {
       async assess(req) {
@@ -111,8 +127,13 @@ export function createH2Collection(opts: {
     runner: opts.runner,
     spendBlocked: isSpendBlocked,
     now,
+    ...(opts.coordination ?? {}),
   });
-  return { watcher, status: () => statusOf(en, watcher.status()) };
+  return {
+    watcher,
+    status: () => statusOf(en, watcher.status()),
+    spent: async () => h2SpentFrom(await ledger.read()),
+  };
 }
 
 /**

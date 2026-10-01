@@ -24,17 +24,19 @@ import { readInstance } from "../../sources/instances.js";
 import { writeRun } from "../../sources/runs.js";
 import { createUserStore } from "../../userStore.js";
 import { settleJournalOrder, transcript } from "../testSupport.js";
-import { countAnalysisPasses, createH2Collection, readH2ReportResponse } from "./entry.js";
-import { endedRun, MIN, PROBE_P } from "./testSupport.js";
+import { countAnalysisPasses, createShadowExperiments } from "../experiments.js";
+import { readH1ReportResponse } from "./entry.js";
+import { endedRun, MIN, PROBE_P } from "../h2/testSupport.js";
 import { RESIDUAL_P } from "../testSupport.js";
 
 /**
- * The §H.5 regression for H2 collection: the same fixture pipeline, driven
- * through the real HTTP routes and engine to a route decision and a gate, with
- * collection on (making real shadow calls through an injected spawn) and with
- * it off. Every byte Argus keeps outside the Decision Plane's own directories
- * is compared: instance, route decisions, gate state and decisions, the
- * knowledge ledger, run records, journals. They are identical.
+ * The §H.5 regression for H1 collection (RFC §Q.10): the same gated fixture
+ * pipeline, driven through the real HTTP routes and engine to a gate the
+ * operator approves, with H1 (and H2) collection on — capturing the gate,
+ * making a real shadow call through an injected spawn while it waits — and
+ * with both off. Every byte Argus keeps outside the Decision Plane's own
+ * directories is identical, and so is what the gate drawer's review route
+ * returns while the gate waits: no prediction reaches it.
  */
 
 const config: ArgusConfig = {
@@ -120,7 +122,7 @@ function tree(root: string): Map<string, string> {
 }
 
 async function scenario(collect: boolean, work: string) {
-  const home = mkdtempSync(path.join(tmpdir(), `argus-h2-state-${collect ? "on" : "off"}-`));
+  const home = mkdtempSync(path.join(tmpdir(), `argus-h1-state-${collect ? "on" : "off"}-`));
   process.env.ARGUS_CLAUDE_HOME = home;
   mkdirSync(paths.argus(), { recursive: true });
   const T = Date.parse("2026-08-13T10:00:00.000Z");
@@ -156,7 +158,11 @@ async function scenario(collect: boolean, work: string) {
   const shadowSpawns: string[] = [];
   const spawn: AnalysisSpawn = (o) => {
     shadowSpawns.push(o.prompt);
-    const p = o.prompt.includes("how did this run end") ? PROBE_P : RESIDUAL_P;
+    const p = o.prompt.includes("Will the operator send")
+      ? 0.2
+      : o.prompt.includes("how did this run end")
+        ? PROBE_P
+        : RESIDUAL_P;
     const stdout = JSON.stringify({ result: JSON.stringify({ p }), total_cost_usd: 0.001 });
     return { kill() {}, done: Promise.resolve({ code: 0, stdout, error: null }) };
   };
@@ -166,16 +172,17 @@ async function scenario(collect: boolean, work: string) {
   const env = collect
     ? {
         ARGUS_DECISIONS: "on",
+        ARGUS_DECISIONS_H1_COLLECT: "on",
         ARGUS_DECISIONS_H2_COLLECT: "on",
         ARGUS_DECISIONS_H2_RESIDUAL_RATE: "1",
         ARGUS_DECISIONS_H2_PROBE_RATE: "1",
       }
     : {};
-  const h2 = createH2Collection({ runner, env, now });
-  const tick = async (n: number) => {
+  const experiments = createShadowExperiments({ runner, env, now });
+  const tick = async (n: number, step = 16 * MIN) => {
     for (let i = 0; i < n; i++) {
-      await h2.watcher.check();
-      t += 16 * MIN;
+      await experiments.check();
+      t += step;
     }
   };
 
@@ -202,7 +209,8 @@ async function scenario(collect: boolean, work: string) {
     users: createUserStore(),
     remoteAddr: () => "127.0.0.1",
     auth: openAuth,
-    decisionsH2Status: () => h2.status(),
+    decisionsH2Status: () => experiments.h2.status(),
+    decisionsH1Status: () => experiments.h1.status(),
   });
 
   await tick(2);
@@ -251,8 +259,17 @@ async function scenario(collect: boolean, work: string) {
   assert.equal(atGate!.phases.find((p) => p.id === "publish")!.status, "awaiting-approval");
   assert.deepEqual(atGate!.routeDecisions![0].selected, ["publish"]);
   await tick(3);
-  // Reading the report in the middle of it all is a read, and nothing more.
+  // What the gate drawer shows while the gate waits, and the blinded report.
+  const review = await (
+    await app.request(`/api/instances/${instanceId}/phases/publish/review`, { headers: sameOrigin })
+  ).text();
+  const pendingReport = await app.request("/api/decisions/h1", { headers: sameOrigin });
+  assert.equal(pendingReport.status, 200);
+  const pendingBody = await pendingReport.text();
   assert.equal((await app.request("/api/decisions/h2", { headers: sameOrigin })).status, 200);
+  // An observation a minute before the operator acts, as the 30-second tick
+  // would make: the action is bracketed closely enough to vouch for the state.
+  await tick(1, MIN);
   const approved = await app.request(`/api/instances/${instanceId}/approve`, {
     method: "POST",
     headers: sameOrigin,
@@ -280,25 +297,42 @@ async function scenario(collect: boolean, work: string) {
     instance: finalInstance,
     overview,
     support: ledger.claims.map((c) => evaluateSupport(ledger, c)),
-    report: await readH2ReportResponse(() => h2.status(), env),
+    report: await readH1ReportResponse(() => experiments.h1.status(), env),
+    review,
+    pendingBody,
     decisionDirs: DECISION_DIRS.filter((d) => existsSync(path.join(paths.argus(), d))),
   };
 }
 
-test("instance, route, gate, ledger and run state are identical with H2 collection on and off", async () => {
+test("instance, route, gate, ledger, run state and the gate review are identical with H1 collection on and off", async () => {
   const saved = process.env.ARGUS_CLAUDE_HOME;
   try {
     // One working directory for both, so the phase's project slug is the same.
-    const work = mkdtempSync(path.join(tmpdir(), "argus-h2-state-work-"));
+    const work = mkdtempSync(path.join(tmpdir(), "argus-h1-state-work-"));
     const off = await scenario(false, work);
     const on = await scenario(true, work);
 
     // Collection really ran in one and not the other.
     assert.equal(off.shadowSpawns.length, 0);
     assert.deepEqual(off.decisionDirs, []);
-    assert.ok(on.shadowSpawns.length >= 3, `on made ${on.shadowSpawns.length} shadow calls`);
-    assert.ok(on.report.report.probe.length + on.report.report.residual.length > 0);
-    assert.equal(off.report.report.probe.length + off.report.report.residual.length, 0);
+    const gateCalls = on.shadowSpawns.filter((p) => p.includes("Will the operator send"));
+    assert.equal(gateCalls.length, 1, "H1 called once while the gate waited");
+    assert.equal(on.report.report.census[0].captured, 1);
+    assert.equal(on.report.report.census[0].labeled.approve, 1);
+    assert.equal(on.report.report.models[0].agreement.scored, 1);
+    assert.equal(off.report.report.census[0].captured, 0);
+    // Blinded while pending: counts only, no prediction.
+    const pending = JSON.parse(on.pendingBody) as {
+      report: { pending: { total: number }; models: unknown[] };
+    };
+    assert.equal(pending.report.pending.total, 1);
+    assert.deepEqual(pending.report.models, []);
+    assert.ok(!on.pendingBody.includes('"p":0.2'));
+    // The gate drawer's review is the same bytes with collection on and off.
+    assert.equal(
+      on.review.split(on.home).join("<HOME>"),
+      off.review.split(off.home).join("<HOME>"),
+    );
 
     assert.equal(on.instance.status, off.instance.status);
     assert.deepEqual(on.instance.routeDecisions, off.instance.routeDecisions);

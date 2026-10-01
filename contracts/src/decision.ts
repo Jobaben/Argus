@@ -546,3 +546,210 @@ export interface H2ReportResponse {
   collection: H2CollectionStatus;
   report: H2Report;
 }
+
+// ── H1 shadow experiment: gate operator action (§Q) ─────────────────────────
+
+/**
+ * Gates whose phase declares `autoApprove` are a biased subset (a person only
+ * sees the ones auto-approval did not open), so they are a population of their
+ * own and never pooled with ordinary manual gates (§Q.2).
+ */
+export type H1Population = "manual" | "auto-approve-declared";
+
+/** The operator-action reference: revise and abort are both "sent back". */
+export type H1ReferenceLabel = "sent-back" | "not-sent-back";
+
+/** Live, in-memory H1 collection state. Reading it calls nothing, and it never names a result. */
+export interface H1CollectionStatus {
+  enabled: boolean;
+  reasons: string[];
+  settings: {
+    rate: number;
+    seed: string;
+    /** One entry per model arm; null = the runner's default model. */
+    models: Array<string | null>;
+    maxCallsPer24h: number;
+    maxOwnCallsPer24h: number;
+    minCallIntervalMs: number;
+    maxUsdPer24h: number;
+  } | null;
+  watcher: {
+    state: "inactive" | "waiting" | "paused" | "halted";
+    detail: string | null;
+    until: string | null;
+  };
+}
+
+/**
+ * Agreement of one predictor with the operator-action reference, over one
+ * scoring set (§Q.11). Rows are the reference; columns are what the predictor
+ * said. Only `sentBackColumn` and `approveColumn` are predictions of the
+ * operator; `decidedColumns` also holds `tie` for a model, which is answered
+ * but agrees with nothing. Every other column is an abstention or a coverage
+ * gap and is shown, never dropped.
+ */
+export interface H1Agreement {
+  columns: string[];
+  sentBackColumn: string;
+  approveColumn: string;
+  decidedColumns: string[];
+  confusion: { rows: H1ReferenceLabel[]; columns: string[]; counts: number[][] };
+  scored: number;
+  answered: number;
+  /** answered / scored. */
+  coverage: H2Proportion;
+  /** Agreement with operator behaviour — not correctness — over answered items. */
+  agreementAnswered: H2Proportion;
+  /** The same over every scored item: abstentions and gaps count as not agreeing. */
+  agreementEndToEnd: H2Proportion;
+  /** P(predicts approve | operator sent back), over answered items. */
+  falseClose: H2Proportion;
+  /** P(predicts sent back | operator approved), over answered items. */
+  falseEscalation: H2Proportion;
+  kappa: H2Measured<number>;
+}
+
+export interface H1ReliabilityBucket {
+  lower: number;
+  upper: number;
+  n: number;
+  status: "measured" | "unmeasured";
+  /** Mean predicted probability of "sent back" in the bin. */
+  meanPredicted: number | null;
+  /** Share of the bin the operator sent back. */
+  observedRate: number | null;
+}
+
+export interface H1Census {
+  population: H1Population;
+  captured: number;
+  sampled: number;
+  notSampled: number;
+  /** Captured and not yet settled: counted, never shown. */
+  pending: number;
+  /** Settled because the attempt stopped being eligible. */
+  resolved: number;
+  /** Still eligible when observation stopped; counted only. */
+  windowClosed: number;
+  labeled: {
+    sentBack: number;
+    notSentBack: number;
+    approve: number;
+    revise: number;
+    abort: number;
+  };
+  /** Reason → resolved items with no operator-action reference. Never negatives. */
+  unlabeled: Record<string, number>;
+  /** Labeled items by whether the captured review state held until the action. */
+  state: { held: number; changed: number; unobserved: number };
+  /** Principal kind → labeled items. A session is an account, not proof of a person. */
+  principals: Record<string, number>;
+  /** Sampled, resolved and labeled items no call was made for, by reason. */
+  notCalled: Record<string, number>;
+}
+
+export interface H1BaselineRow {
+  population: H1Population;
+  definition: { id: string; version: number; digest: string };
+  /** Settled, labeled, state-held items: the scoring set. */
+  scored: number;
+  agreement: H1Agreement;
+}
+
+export interface H1VerdictRow extends H1BaselineRow {
+  /**
+   * AUROC over the minimum current Verdict rating of the relevant steps, with
+   * sent back as the positive class and a lower rating expected to mean sent
+   * back: P(rating of an approved gate > rating of a sent-back gate), ties ½.
+   * A rating, never a probability.
+   */
+  auroc: H2Measured<{
+    value: number;
+    ci95: [number, number];
+    sentBack: number;
+    notSentBack: number;
+  }>;
+}
+
+export interface H1ModelPopulation {
+  population: H1Population;
+  question: {
+    id: string;
+    version: number;
+    digest: string;
+    definition: "registered" | "missing" | "digest-mismatch";
+  };
+  projection: { id: string; version: number; digest: string };
+  provider: ProviderIdentity;
+  /** Attempts on resolved items only; unresolved items are pending and unshown. */
+  attempts: Record<H2AttemptClass, number>;
+  assessed: number;
+  answered: number;
+  abstained: number;
+  failed: number;
+  refusals: Record<string, number>;
+  /** Reason → assessed items left out of the scoring set (unlabeled, state, timing). */
+  excluded: Record<string, number>;
+  agreement: H1Agreement;
+  brier: H2Measured<{ value: number; n: number }>;
+  reliability: { minBucket: number; buckets: H1ReliabilityBucket[] };
+  ece: H2Measured<{ value: number; n: number }>;
+  /** The two baselines on exactly this row's scoring set. */
+  paired: { deterministic: H1Agreement; verdict: H1Agreement };
+  usage: H2Usage;
+}
+
+export interface H1ConfigSummary {
+  digest: string;
+  firstAt: string;
+  seed: string;
+  rate: number;
+  arms: Array<{ requestedModel: string | null; adapterVersion: number }>;
+  limits: {
+    maxCallsPer24h: number;
+    maxOwnCallsPer24h: number;
+    minCallIntervalMs: number;
+    maxUsdPer24h: number;
+    maxTriesPerItem: number;
+    retryAfterMs: number;
+  };
+}
+
+export interface H1Report {
+  report: { id: "decision-h1-report"; version: 1 };
+  asOf: { seq: number; at: string | null };
+  /** Printed with every report: behavioural agreement cannot justify skipping review. */
+  statement: string;
+  collection: { start: string | null; configs: H1ConfigSummary[] };
+  definitions: Array<{
+    kind: "question" | "projection" | "rules" | "qualification";
+    id: string;
+    version: number;
+    digest: string | null;
+    status: "registered" | "missing" | "digest-mismatch";
+  }>;
+  /** Gate pauses seen and not captured, by reason. */
+  gates: { excluded: Record<string, number> };
+  census: H1Census[];
+  pending: { total: number; byPopulation: Record<H1Population, number> };
+  deterministic: H1BaselineRow[];
+  verdict: H1VerdictRow[];
+  models: H1ModelPopulation[];
+  /** Every attempt, settled or not: counts and money only, never outcomes. */
+  spend: { attempts: number; spent: number; usdTotal: number; usdUnknown: number };
+  methods: Record<string, string>;
+  integrity: {
+    history: "complete" | "incomplete";
+    ledger: H2Finding[];
+    journal: {
+      gaps: number;
+      notices: Array<{ kind: string; segment: string | null; line: number | null; detail: string }>;
+    };
+    findings: H2Finding[];
+  };
+}
+
+export interface H1ReportResponse {
+  collection: H1CollectionStatus;
+  report: H1Report;
+}
