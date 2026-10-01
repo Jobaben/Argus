@@ -29,7 +29,7 @@
     "check": "npm run typecheck && npm run lint && npm run test"
   },
   "devDependencies": {
-    "concurrently": "^9.1.0",
+    "concurrently": "^10.0.5",
     "prettier": "^3.9.6"
   }
 }
