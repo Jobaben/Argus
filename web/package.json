@@ -15,7 +15,7 @@
   },
   "dependencies": {
     "@argus/contracts": "*",
-    "marked": "^15.0.12",
+    "marked": "^18.0.13",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
