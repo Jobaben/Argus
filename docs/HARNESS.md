@@ -2066,6 +2066,10 @@ was traced to it.
   Node creates a file link on Windows when the type is omitted. Do not link to
   POSIX-only paths such as `/etc/hostname`; create the target in the test's
   temp directory.
+- **Drain every engine a test creates** before the next test points
+  `ARGUS_CLAUDE_HOME` somewhere new: the engine's detached work resolves its
+  paths when it writes, so work still in flight would write into the next
+  test's home.
 - **Test repositories** set `core.autocrlf=false`, so a checkout gives back
   the committed bytes whatever the host's git config says (a Windows runner's
   system config sets it to `true`).
