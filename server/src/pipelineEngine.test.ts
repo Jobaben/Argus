@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildClaudeArgs, OUTCOME_CONTRACT, STEP_CONTRACT } from "./pipelineEngine.js";
+import { fakeKill } from "./testPlatform.js";
 
 let home: string;
 beforeEach(() => {
@@ -71,6 +72,7 @@ const baseDeps = (over: Record<string, unknown>) => ({
   signalUrlBase: "http://localhost:7777",
   maxConcurrent: 4,
   tickMs: 30000,
+  kill: fakeKill().kill,
   ...over,
 });
 

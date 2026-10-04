@@ -4,6 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createEngine } from "./pipelineEngine.js";
+import { fakeKill } from "./testPlatform.js";
 import {
   createPipeline,
   updatePipeline,
@@ -48,6 +49,7 @@ const baseDeps = (over: Partial<EngineDeps> & { spawn: EngineDeps["spawn"] }): E
   signalUrlBase: "http://localhost:7777",
   maxConcurrent: 4,
   tickMs: 30000,
+  kill: fakeKill().kill,
   ...over,
 });
 

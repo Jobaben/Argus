@@ -39,3 +39,51 @@ jobs:
         run: node scripts/check-bundle-size.mjs
       - name: Motion-property budget
         run: node scripts/check-motion-budget.mjs
+
+  # Typecheck and the server and web suites on Windows, where process trees,
+  # shells and symlinks behave differently. Lint, formatting, coverage, build
+  # and the budgets are platform-independent and stay on the Linux job above.
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+        timeout-minutes: 10
+      - name: Typecheck
+        run: npm run typecheck
+        timeout-minutes: 10
+      - name: Server tests
+        # A per-test cap, so a hung test fails by name instead of running
+        # into the job timeout. (Node rejects --test-timeout in NODE_OPTIONS.)
+        run: npm -w server run test:timeboxed
+        timeout-minutes: 20
+      - name: Web tests
+        run: npm -w web run test
+        timeout-minutes: 10
+      - name: No process-tree fixture left running
+        # Runs after earlier failures too (always()), as its own step: a
+        # failing test step stays red on its own, and this adds a separate
+        # failure only if one of the lifecycle tests' controlled trees
+        # survived. It matches only processes running this checkout's fixture
+        # script (the fixture's root, descendants and the cmd.exe wrapping
+        # them); any other node process on the runner is not counted.
+        if: always()
+        shell: pwsh
+        run: |
+          $fixture = Join-Path $env:GITHUB_WORKSPACE 'server\src\processTreeFixture.mjs'
+          $left = @(Get-CimInstance Win32_Process | Where-Object {
+            $_.ProcessId -ne $PID -and $_.CommandLine -and
+            $_.CommandLine.IndexOf($fixture, [StringComparison]::OrdinalIgnoreCase) -ge 0
+          })
+          if ($left.Count -gt 0) {
+            Write-Output "::error::$($left.Count) process-tree fixture process(es) still running after the tests"
+            $left | Format-Table ProcessId, ParentProcessId, CreationDate, CommandLine -AutoSize -Wrap |
+              Out-String -Width 400 | Write-Output
+            exit 1
+          }
+          Write-Output "No process-tree fixture processes left running."

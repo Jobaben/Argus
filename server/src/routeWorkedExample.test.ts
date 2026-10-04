@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createApp } from "./app.js";
 import { createEngine } from "./pipelineEngine.js";
+import { fakeKill } from "./testPlatform.js";
 import { createUserStore } from "./userStore.js";
 import { readInstance } from "./sources/instances.js";
 import { readJournal } from "./sources/journal.js";
@@ -140,6 +141,7 @@ async function runExample(decision: { accepted: boolean }): Promise<{
   const engine = createEngine({
     now: () => new Date(2026, 7, 13, 12, 0),
     newId: () => `id-${++counter}`,
+    kill: fakeKill().kill,
     signalUrlBase: "http://localhost:7777",
     maxConcurrent: 4,
     tickMs: 30000,

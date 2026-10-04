@@ -8,6 +8,8 @@ import { retryNote, failureClassOfRecord } from "./pipelineEngine.js";
 import { phaseArtifactDir } from "./harness/invocation.js";
 import { paths } from "./claudeHome.js";
 import { isAlive } from "./scheduler.js";
+import { killRunProcess } from "./sources/runs.js";
+import { fakeKill } from "./testPlatform.js";
 
 let home: string;
 beforeEach(() => {
@@ -58,8 +60,15 @@ const baseDeps = (over: Record<string, unknown> = {}) => ({
   maxConcurrent: 4,
   tickMs: 30000,
   // A controlled parent environment: an ordinary var, a home var, an Argus
-  // secret, and a var no baseline/allowlist recognizes.
+  // secret, and a var no baseline/allowlist recognizes. It is also what the
+  // real `command` checks below (`exit N`, a shell builtin) run under, and
+  // that is portable as it stands: Node starts the shell by absolute path
+  // (/bin/sh, or the parent's %ComSpec% on Windows) without consulting this
+  // PATH, and on Windows libuv copies SYSTEMROOT, WINDIR, TEMP and the like
+  // from the parent into any child environment that lacks them. Don't widen
+  // it to the host environment: the assertions below are about exactly these.
   parentEnv: { PATH: "/bin", HOME: "/h", ARGUS_TOKEN: "secret", MY_SECRET: "x" },
+  kill: fakeKill().kill,
   ...over,
 });
 
@@ -748,7 +757,14 @@ test("reconcile kills and finalizes an adopted run past its deadline, healing th
     artifacts: {},
   });
 
-  const e = engine.createEngine(baseDeps({ spawn: recordingSpawn().spawn, now: () => new Date() }));
+  const e = engine.createEngine(
+    baseDeps({
+      spawn: recordingSpawn().spawn,
+      now: () => new Date(),
+      // The real kill: it ends the process this test spawned itself.
+      kill: killRunProcess,
+    }),
+  );
   await e.adopt();
   await e.reconcile();
 

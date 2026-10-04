@@ -16,6 +16,7 @@ import { createClaim, createEvidence, createRevision, readLedger } from "./store
 import { readDeltaRecord, stagedDeltaPath } from "./staging.js";
 import { formatClaimRef, getClaim, revisionsOf } from "./kernel.js";
 import { analyzeImpact } from "./impact.js";
+import { fakeKill } from "../testPlatform.js";
 
 /**
  * The KnowledgeDelta protocol through the engine: a run writes the file Argus
@@ -71,6 +72,8 @@ function engine(
     maxConcurrent: 4,
     tickMs: 30000,
     parentEnv: { PATH: process.env.PATH ?? "/bin", HOME: home },
+    // Pids are invented, so the real killRunProcess must never be reachable.
+    kill: fakeKill().kill,
     ...over,
   });
 }
@@ -243,7 +246,11 @@ test("ungated with checks: nothing is canonical until the deterministic checks p
       name: "Plan",
       steps: [step()],
       checks: [
-        { kind: "command", run: `while [ ! -f "${marker}" ]; do sleep 0.02; done`, label: "wait" },
+        {
+          kind: "command",
+          run: `node -e "function t(){if(require('node:fs').existsSync(process.argv[1])){process.exit(0)}setTimeout(t,20)}t()" "${marker}"`,
+          label: "wait",
+        },
       ],
     },
   ]);
@@ -308,7 +315,13 @@ test("retry isolation: only the succeeding attempt's delta enters canonical know
       id: "plan",
       name: "Plan",
       steps: [step()],
-      checks: [{ kind: "command", run: `test -f "${marker}"`, label: "marker" }],
+      checks: [
+        {
+          kind: "command",
+          run: `node -e "process.exit(require('node:fs').existsSync(process.argv[1]) ? 0 : 1)" "${marker}"`,
+          label: "marker",
+        },
+      ],
       retry: { attempts: 2, backoffSeconds: 0, retryOn: ["verification"] },
     },
   ]);
@@ -1289,7 +1302,13 @@ test("retry under a read-only profile: every attempt gets its own channels, and 
       cwd: workDir(),
       capabilities: { filesystem: "read-only", tools: { allow: ["Read"] } },
       steps: [step()],
-      checks: [{ kind: "command", run: `test -f "${marker}"`, label: "marker" }],
+      checks: [
+        {
+          kind: "command",
+          run: `node -e "process.exit(require('node:fs').existsSync(process.argv[1]) ? 0 : 1)" "${marker}"`,
+          label: "marker",
+        },
+      ],
       retry: { attempts: 2, backoffSeconds: 0, retryOn: ["verification"] },
     },
   ]);

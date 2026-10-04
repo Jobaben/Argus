@@ -10,8 +10,9 @@
  * a step's own exit code or timeout.
  *
  * Mirrors the bounded-child-process discipline in `../sources/analysis.ts`:
- * detached process group on POSIX so a timeout kills the whole tree, and a
- * capped rolling output buffer so a runaway command cannot exhaust memory.
+ * detached process group on POSIX so a timeout kills the whole tree (Windows:
+ * `taskkill /T /F`, see `../processTree.ts`), and a capped rolling output
+ * buffer so a runaway command cannot exhaust memory.
  * Nothing in this module ever throws for an expected failure condition —
  * every check produces a `CheckResult`, because the report itself is the
  * evidence a failed phase leaves behind.
@@ -22,6 +23,7 @@ import { createHash } from "node:crypto";
 import { readFile, stat, lstat } from "node:fs/promises";
 import path from "node:path";
 import { buildChildEnv } from "./childEnv.js";
+import { childTreeStopper } from "../processTree.js";
 import type { CheckResult, PhaseCheck, VerificationReport } from "../sources/pipelineTypes.js";
 
 /** Combined stdout+stderr is capped in memory; only the tail is kept as evidence. */
@@ -352,10 +354,9 @@ async function runCommandCheck(
 
     let output = "";
     let timedOut = false;
-    let killedSignal: string | null = null;
+    let spawnError: string | null = null;
     let settled = false;
-    const graceMs = ctx.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
-    const timers: ReturnType<typeof setTimeout>[] = [];
+    let timer: ReturnType<typeof setTimeout> | null = null;
 
     function append(chunk: Buffer): void {
       output += chunk.toString("utf8");
@@ -366,61 +367,58 @@ async function runCommandCheck(
     child.stdout?.on("data", append);
     child.stderr?.on("data", append);
 
-    function killGroup(signal: NodeJS.Signals): void {
-      if (child.pid == null) return;
-      try {
-        if (process.platform === "win32") child.kill();
-        else process.kill(-child.pid, signal);
-      } catch {
-        try {
-          child.kill(signal);
-        } catch {
-          /* already gone */
-        }
-      }
-    }
-
-    // SIGTERM at the deadline; SIGKILL to the whole group if it is ignored;
-    // and a verdict regardless, so a command that traps signals or leaves a
-    // grandchild holding the pipe can never hang verification (and with it
-    // the phase, the instance, and drain()).
-    timers.push(
-      setTimeout(() => {
-        timedOut = true;
-        killGroup("SIGTERM");
-        timers.push(
-          setTimeout(() => {
-            killGroup("SIGKILL");
-            timers.push(
-              setTimeout(() => {
-                finish(
-                  result(
-                    check,
-                    "failed",
-                    `timed out after ${Math.round(timeoutMs / 1000)}s (process did not exit)`,
-                    Date.now() - started,
-                    { exitCode: null, output: tail(output) },
-                  ),
-                );
-              }, graceMs),
-            );
-          }, graceMs),
-        );
-      }, timeoutMs),
-    );
+    // SIGTERM to the tree at the deadline, SIGKILL if it is ignored (Windows:
+    // `taskkill /T /F` from the start), and a verdict regardless — with the
+    // pipes released — so a command that traps signals or leaves a descendant
+    // holding the pipe can never hang verification (and with it the phase,
+    // the instance, and drain()) or keep the server's event loop pinned.
+    const stopper = childTreeStopper(child, {
+      grouped: process.platform !== "win32",
+      graceMs: ctx.killGraceMs ?? DEFAULT_KILL_GRACE_MS,
+      onAbandon: () =>
+        finish(
+          result(
+            check,
+            "failed",
+            spawnError !== null
+              ? `${spawnError} (process did not exit)`
+              : `timed out after ${Math.round(timeoutMs / 1000)}s (process did not exit)`,
+            Date.now() - started,
+            { exitCode: null, output: tail(output) },
+          ),
+        ),
+    });
+    timer = setTimeout(() => {
+      timedOut = true;
+      stopper.stop();
+    }, timeoutMs);
 
     function finish(res: CheckResult): void {
       if (settled) return;
       settled = true;
-      for (const t of timers) clearTimeout(t);
+      if (timer) clearTimeout(timer);
+      stopper.dispose();
       resolve(res);
     }
 
     child.on("error", (err) => {
+      // An error from a process that is still running (rather than one that
+      // never started) must not orphan its tree: end it and settle on close.
+      if (child.pid != null && child.exitCode === null && child.signalCode === null) {
+        spawnError = err.message;
+        stopper.stop();
+        return;
+      }
       finish(result(check, "failed", err.message, Date.now() - started, { output: tail(output) }));
     });
     child.on("close", (code, signal) => {
       const durationMs = Date.now() - started;
+      if (spawnError !== null) {
+        finish(
+          result(check, "failed", spawnError, durationMs, { exitCode: code, output: tail(output) }),
+        );
+        return;
+      }
       if (timedOut) {
         finish(
           result(check, "failed", `timed out after ${Math.round(timeoutMs / 1000)}s`, durationMs, {
@@ -431,9 +429,8 @@ async function runCommandCheck(
         return;
       }
       if (signal) {
-        killedSignal = signal;
         finish(
-          result(check, "failed", `killed by ${killedSignal}`, durationMs, {
+          result(check, "failed", `killed by ${signal}`, durationMs, {
             exitCode: code,
             output: tail(output),
           }),
