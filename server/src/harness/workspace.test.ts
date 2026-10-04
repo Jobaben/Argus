@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, symlinkSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -24,6 +24,7 @@ import type {
   PipelineInstance,
   WorkspaceRecord,
 } from "../sources/pipelineTypes.js";
+import { symlinkSkip } from "../testPlatform.js";
 
 function gitAvailable(): boolean {
   try {
@@ -43,6 +44,10 @@ const git = (dir: string, args: string[]) =>
 async function makeRepo(): Promise<string> {
   const dir = await mkdtemp(path.join(tmpdir(), "argus-ws-repo-"));
   git(dir, ["init", "-q", "-b", "main"]);
+  // Checkouts must give back the bytes committed, whatever the host's git
+  // says: a Windows runner's system config sets core.autocrlf=true, which
+  // would turn "base\n" into "base\r\n" in every worktree cut from here.
+  git(dir, ["config", "core.autocrlf", "false"]);
   await writeFile(path.join(dir, "README.md"), "base\n", "utf8");
   git(dir, ["add", "."]);
   git(dir, ["commit", "-q", "-m", "init"]);
@@ -197,6 +202,66 @@ test("createWorktree: a directory that is already the worktree is reused", async
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test(
+  "createWorktree: a worktree is reused however its path is spelled",
+  { skip: symlinkSkip },
+  async (t) => {
+    if (!gitAvailable()) return t.skip("git not available");
+    // git reports a worktree by its resolved path, while Argus holds the one it
+    // was given: a root reached through a link here, an 8.3 short temp path
+    // (C:\Users\RUNNER~1) on Windows. Both name the same directory.
+    const repo = await makeRepo();
+    const real = await makeRoot();
+    const alias = path.join(await makeRoot(), "root");
+    symlinkSync(real, alias, "dir");
+    try {
+      const input = {
+        repoCwd: repo,
+        path: path.join(alias, "i1", "shared"),
+        branch: "argus/i1/shared",
+        root: alias,
+      };
+      const first = await createWorktree(input);
+      await writeFile(path.join(first.path, "work.txt"), "in progress\n", "utf8");
+      const again = await createWorktree(input);
+      assert.deepEqual(again, first);
+      assert.equal(await readFile(path.join(first.path, "work.txt"), "utf8"), "in progress\n");
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+      await rm(real, { recursive: true, force: true });
+      await rm(path.dirname(alias), { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "createWorktree: a link in place of the worktree directory is not reused, even to a real worktree",
+  { skip: symlinkSkip },
+  async (t) => {
+    if (!gitAvailable()) return t.skip("git not available");
+    const repo = await makeRepo();
+    const root = await makeRoot();
+    try {
+      const elsewhere = await createWorktree({
+        repoCwd: repo,
+        path: path.join(root, "i0", "shared"),
+        branch: "argus/i0/shared",
+        root,
+      });
+      const target = path.join(root, "i1", "shared");
+      await mkdir(path.dirname(target), { recursive: true });
+      symlinkSync(elsewhere.path, target, "dir");
+      await assert.rejects(
+        createWorktree({ repoCwd: repo, path: target, branch: "argus/i1/shared", root }),
+        WorkspaceError,
+      );
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
 test("createWorktree: an existing branch whose directory is gone is checked out again", async (t) => {
   if (!gitAvailable()) return t.skip("git not available");

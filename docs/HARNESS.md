@@ -2066,6 +2066,11 @@ was traced to it.
   Node creates a file link on Windows when the type is omitted. Do not link to
   POSIX-only paths such as `/etc/hostname`; create the target in the test's
   temp directory.
+- **Test repositories** set `core.autocrlf=false`, so a checkout gives back
+  the committed bytes whatever the host's git config says (a Windows runner's
+  system config sets it to `true`).
+- **Expected paths** are built with `path.join` wherever the code under test
+  builds them that way, not written with `/`.
 - **POSIX permission bits** are asserted only off Windows (`posixModeSkip`, or
   `process.platform !== "win32"`).
 - **Engine tests with invented pids must inject a fake `kill`** (`fakeKill()`

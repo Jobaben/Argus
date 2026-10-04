@@ -397,6 +397,18 @@ unverifiable`, each rule exactly once. A **missing** rule refuses the whole
   - `killRunProcess` delegates to the same helper, with an unchanged
     interface. See HARNESS §17.
 
+- **Two Windows defects the new Windows CI job found.**
+  - An existing worktree was never recognised for reuse when git spelled its
+    path differently from Argus (forward slashes, or the long form of an 8.3
+    short temp path such as `RUNNER~1`; on any platform, a root reached
+    through a link). An instance-scoped workspace then failed its second
+    phase. The check now compares real paths, and still refuses a link in
+    place of the worktree directory.
+  - An atomic write could fail with `EPERM` when another handle had the
+    target open, which on Windows refuses a rename over it; a run's
+    completion was then lost. The rename is now retried briefly on Windows
+    for those transient codes only.
+
 - **The H2 state-isolation test** compared instance-journal line
   order, which the engine's fire-and-forget journal writes do not fix. Main
   CI failed on it after #81. Entries written in the same instant are now
