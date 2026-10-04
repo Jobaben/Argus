@@ -344,9 +344,9 @@ format — after which "what is Argus doing?", `/argus-tail` (Claude Code) or
 `$argus-tail` (Codex) has the agent run the command and relay it, including
 from a phone, where a remote session is often the only window onto the box.
 `--install-skill=codex`, `=claude` or `=all` picks explicitly. The skill also
-lives in this repo, at `.claude/skills/argus-tail/` with `.agents/skills/`
-linking to it, so a session of either CLI opened inside the checkout has it
-already.
+lives in this repo, at `.claude/skills/argus-tail/` with an identical copy at
+`.agents/skills/argus-tail/` (a test keeps the two in step), so a session of
+either CLI opened inside the checkout has it already.
 
 Or with Docker (mount your `~/.claude`, publish the port, set a token):
 

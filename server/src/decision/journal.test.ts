@@ -11,6 +11,7 @@ import {
   mkdirSync,
 } from "node:fs";
 import path from "node:path";
+import { symlinkSkip } from "../testPlatform.js";
 import type { DecisionAssessment, StoredSnapshot } from "@argus/contracts";
 import { canonicalJson, sha256Hex } from "./canonical.js";
 import { DecisionJournal, JournalError } from "./journal.js";
@@ -755,34 +756,38 @@ test("recovery of an interrupted deletion keeps a snapshot that a newer assessme
 
 // ── Path safety ────────────────────────────────────────────────────────────
 
-test("paths are rebuilt from validated ids: stray files, symlinks and traversal attempts are ignored and reported", async () => {
-  const h = harness({ providers: { mock: answering() } });
-  await assessOnce(h);
-  const l = layout(h.root);
-  assert.throws(() => l.segmentPath("active", "../seg-00000001"));
-  assert.throws(() => l.snapshotPath("active", "../../etc/passwd"));
-  assert.equal((await fresh(h.root).loadSnapshot("../../../etc/passwd")).status, "unavailable");
+test(
+  "paths are rebuilt from validated ids: stray files, symlinks and traversal attempts are ignored and reported",
+  { skip: symlinkSkip },
+  async () => {
+    const h = harness({ providers: { mock: answering() } });
+    await assessOnce(h);
+    const l = layout(h.root);
+    assert.throws(() => l.segmentPath("active", "../seg-00000001"));
+    assert.throws(() => l.snapshotPath("active", "../../etc/passwd"));
+    assert.equal((await fresh(h.root).loadSnapshot("../../../etc/passwd")).status, "unavailable");
 
-  writeFileSync(path.join(h.root, "active", "seg-1.jsonl"), "x\n");
-  const outside = path.join(tempRoot(), "outside.jsonl");
-  writeFileSync(outside, readFileSync(l.segmentPath("active", "seg-00000001")));
-  symlinkSync(outside, path.join(h.root, "active", "seg-00000009.jsonl"));
-  mkdirSync(path.join(h.root, "snapshots", "zz"), { recursive: true });
-  // A manifest line naming a path outside the root is not a segment.
-  const evil = { segment: "../../outside", sha256: "0".repeat(64), at: "x" };
-  appendFileSync(path.join(h.root, "manifest.jsonl"), canonicalLine("archive", evil));
+    writeFileSync(path.join(h.root, "active", "seg-1.jsonl"), "x\n");
+    const outside = path.join(tempRoot(), "outside.jsonl");
+    writeFileSync(outside, readFileSync(l.segmentPath("active", "seg-00000001")));
+    symlinkSync(outside, path.join(h.root, "active", "seg-00000009.jsonl"));
+    mkdirSync(path.join(h.root, "snapshots", "zz"), { recursive: true });
+    // A manifest line naming a path outside the root is not a segment.
+    const evil = { segment: "../../outside", sha256: "0".repeat(64), at: "x" };
+    appendFileSync(path.join(h.root, "manifest.jsonl"), canonicalLine("archive", evil));
 
-  const view = await fresh(h.root).read();
-  assert.equal(view.entries.length, 1);
-  const kinds = view.notices.map((n) => n.kind).sort();
-  assert.deepEqual(kinds, [
-    "manifest-damage",
-    "unexpected-file",
-    "unexpected-file",
-    "unexpected-file",
-  ]);
-  assert.ok(view.segments.every((s) => s.segment === "seg-00000001"));
-});
+    const view = await fresh(h.root).read();
+    assert.equal(view.entries.length, 1);
+    const kinds = view.notices.map((n) => n.kind).sort();
+    assert.deepEqual(kinds, [
+      "manifest-damage",
+      "unexpected-file",
+      "unexpected-file",
+      "unexpected-file",
+    ]);
+    assert.ok(view.segments.every((s) => s.segment === "seg-00000001"));
+  },
+);
 
 function canonicalLine(kind: string, body: unknown): string {
   const digest = sha256Hex(canonicalJson({ body, kind }));

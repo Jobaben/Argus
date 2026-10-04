@@ -23,7 +23,8 @@ import { createAnalysisRunner, type AnalysisSpawn } from "../../sources/analysis
 import { readInstance } from "../../sources/instances.js";
 import { writeRun } from "../../sources/runs.js";
 import { createUserStore } from "../../userStore.js";
-import { settleJournalOrder, transcript } from "../testSupport.js";
+import { fakeKill } from "../../testPlatform.js";
+import { settleJournalOrder, transcript, withoutHome } from "../testSupport.js";
 import { countAnalysisPasses, createShadowExperiments } from "../experiments.js";
 import { readH1ReportResponse } from "./entry.js";
 import { endedRun, MIN, PROBE_P } from "../h2/testSupport.js";
@@ -114,7 +115,7 @@ function tree(root: string): Map<string, string> {
       const f = path.join(d, e.name);
       if (decisionRoots.has(f)) continue;
       if (e.isDirectory()) walk(f);
-      else out.set(path.relative(root, f), readFileSync(f, "utf8").split(root).join("<HOME>"));
+      else out.set(path.relative(root, f), withoutHome(readFileSync(f, "utf8"), root));
     }
   };
   walk(root);
@@ -194,6 +195,8 @@ async function scenario(collect: boolean, work: string) {
     signalUrlBase: "http://localhost:7777",
     maxConcurrent: 4,
     tickMs: 30000,
+    // Invented pids below: never let the real tree kill near them.
+    kill: fakeKill().kill,
     spawn: (run, _log, runEnv) => {
       spawned.push({ runId: run.id, phaseId: run.phaseId ?? "", env: runEnv });
       if (runEnv.ARGUS_RESULT_FILE)
@@ -329,10 +332,7 @@ test("instance, route, gate, ledger, run state and the gate review are identical
     assert.deepEqual(pending.report.models, []);
     assert.ok(!on.pendingBody.includes('"p":0.2'));
     // The gate drawer's review is the same bytes with collection on and off.
-    assert.equal(
-      on.review.split(on.home).join("<HOME>"),
-      off.review.split(off.home).join("<HOME>"),
-    );
+    assert.equal(withoutHome(on.review, on.home), withoutHome(off.review, off.home));
 
     assert.equal(on.instance.status, off.instance.status);
     assert.deepEqual(on.instance.routeDecisions, off.instance.routeDecisions);

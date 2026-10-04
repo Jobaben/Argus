@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { KnowledgeContext, PhaseFailurePayload, PipelineInstance } from "@argus/contracts";
 import { createEngine } from "../pipelineEngine.js";
+import { fakeKill } from "../testPlatform.js";
 import type { Engine } from "../pipelineEngine.js";
 import { createPipeline, validatePipelineInput } from "../sources/pipelines.js";
 import { readInstance } from "../sources/instances.js";
@@ -67,6 +68,7 @@ function engine(spawn: ReturnType<typeof recordingSpawn>["spawn"]) {
     now: () => new Date(),
     newId: () => `id-${++counter}`,
     spawn,
+    kill: fakeKill().kill,
     signalUrlBase: "http://localhost:7777",
     maxConcurrent: 4,
     tickMs: 30000,

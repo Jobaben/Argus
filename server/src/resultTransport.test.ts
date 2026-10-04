@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { readResultFile } from "../../hooks/argus-signal.mjs";
 import { resultStepName } from "./sources/dag.js";
 import { createEngine } from "./pipelineEngine.js";
+import { fakeKill } from "./testPlatform.js";
 import { createPipeline, validatePipelineInput } from "./sources/pipelines.js";
 import { readInstance } from "./sources/instances.js";
 import {
@@ -59,6 +60,7 @@ const baseDeps = (over: Partial<EngineDeps> & { spawn: EngineDeps["spawn"] }): E
   signalUrlBase: "http://localhost:7777",
   maxConcurrent: 4,
   tickMs: 30000,
+  kill: fakeKill().kill,
   ...over,
 });
 

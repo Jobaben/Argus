@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { symlinkSkip } from "../testPlatform.js";
 import type {
   ClaimRef,
   DiscoveryPolicy,
@@ -292,67 +293,79 @@ test("evidence naming a file that is not in the tree is refused — fail closed"
  * the bytes it names are not in the repository and not at the commit the
  * evidence claims. Containment is now decided on the resolved real path.
  */
-test("a repository-internal symlink escaping the tree is refused, not silently accepted", async () => {
-  const root = repo();
-  const outside = mkdtempSync(path.join(tmpdir(), "argus-outside-"));
-  writeFileSync(path.join(outside, "Secret.cs"), "// not in the repository\n");
-  // scope/link → outside-repo-file.
-  symlinkSync(path.join(outside, "Secret.cs"), path.join(root, "src", "Booking", "Linked.cs"));
+test(
+  "a repository-internal symlink escaping the tree is refused, not silently accepted",
+  { skip: symlinkSkip },
+  async () => {
+    const root = repo();
+    const outside = mkdtempSync(path.join(tmpdir(), "argus-outside-"));
+    writeFileSync(path.join(outside, "Secret.cs"), "// not in the repository\n");
+    // scope/link → outside-repo-file.
+    symlinkSync(path.join(outside, "Secret.cs"), path.join(root, "src", "Booking", "Linked.cs"));
 
-  const escaped = delta({
-    ...RULE_WITH_EVIDENCE,
-    evidence: [
-      {
-        claim: { local: "comment-limit" },
-        source: { type: "source-code", path: "src/Booking/Linked.cs", gitHead: HEAD },
-      },
-    ],
-  });
-  const ws = await checkSourceEvidenceFiles(escaped, root);
-  assert.deepEqual(codes(ws), ["source-path-unsafe"]);
-  assert.match(ws[0].message, /resolves outside the run's repository/);
-  // And it is fatal: the delta never reaches a reviewer as a candidate.
-  assert.equal(fatalDiscoveryWarnings(ws, policy()).length, 1);
-  const verdict = await checkDiscoveryDelta(escaped, emptyLedger(), ctx({ repoRoot: root }));
-  assert.match(verdict.refusal ?? "", /resolves outside the run's repository/);
-});
+    const escaped = delta({
+      ...RULE_WITH_EVIDENCE,
+      evidence: [
+        {
+          claim: { local: "comment-limit" },
+          source: { type: "source-code", path: "src/Booking/Linked.cs", gitHead: HEAD },
+        },
+      ],
+    });
+    const ws = await checkSourceEvidenceFiles(escaped, root);
+    assert.deepEqual(codes(ws), ["source-path-unsafe"]);
+    assert.match(ws[0].message, /resolves outside the run's repository/);
+    // And it is fatal: the delta never reaches a reviewer as a candidate.
+    assert.equal(fatalDiscoveryWarnings(ws, policy()).length, 1);
+    const verdict = await checkDiscoveryDelta(escaped, emptyLedger(), ctx({ repoRoot: root }));
+    assert.match(verdict.refusal ?? "", /resolves outside the run's repository/);
+  },
+);
 
-test("a symlinked directory inside the scope cannot smuggle a path out either", async () => {
-  const root = repo();
-  const outside = mkdtempSync(path.join(tmpdir(), "argus-outside-dir-"));
-  mkdirSync(path.join(outside, "nested"), { recursive: true });
-  writeFileSync(path.join(outside, "nested", "Other.cs"), "// elsewhere\n");
-  symlinkSync(path.join(outside, "nested"), path.join(root, "src", "Booking", "link"));
+test(
+  "a symlinked directory inside the scope cannot smuggle a path out either",
+  { skip: symlinkSkip },
+  async () => {
+    const root = repo();
+    const outside = mkdtempSync(path.join(tmpdir(), "argus-outside-dir-"));
+    mkdirSync(path.join(outside, "nested"), { recursive: true });
+    writeFileSync(path.join(outside, "nested", "Other.cs"), "// elsewhere\n");
+    symlinkSync(path.join(outside, "nested"), path.join(root, "src", "Booking", "link"), "dir");
 
-  const through = delta({
-    ...RULE_WITH_EVIDENCE,
-    evidence: [
-      {
-        claim: { local: "comment-limit" },
-        source: { type: "source-code", path: "src/Booking/link/Other.cs", gitHead: HEAD },
-      },
-    ],
-  });
-  assert.deepEqual(codes(await checkSourceEvidenceFiles(through, root)), ["source-path-unsafe"]);
-});
+    const through = delta({
+      ...RULE_WITH_EVIDENCE,
+      evidence: [
+        {
+          claim: { local: "comment-limit" },
+          source: { type: "source-code", path: "src/Booking/link/Other.cs", gitHead: HEAD },
+        },
+      ],
+    });
+    assert.deepEqual(codes(await checkSourceEvidenceFiles(through, root)), ["source-path-unsafe"]);
+  },
+);
 
-test("a symlink that stays inside the repository is ordinary evidence", async () => {
-  const root = repo();
-  symlinkSync(
-    path.join(root, "src", "Booking", "KobraAdapter.cs"),
-    path.join(root, "src", "Booking", "Alias.cs"),
-  );
-  const aliased = delta({
-    ...RULE_WITH_EVIDENCE,
-    evidence: [
-      {
-        claim: { local: "comment-limit" },
-        source: { type: "source-code", path: "src/Booking/Alias.cs", gitHead: HEAD },
-      },
-    ],
-  });
-  assert.deepEqual(await checkSourceEvidenceFiles(aliased, root), []);
-});
+test(
+  "a symlink that stays inside the repository is ordinary evidence",
+  { skip: symlinkSkip },
+  async () => {
+    const root = repo();
+    symlinkSync(
+      path.join(root, "src", "Booking", "KobraAdapter.cs"),
+      path.join(root, "src", "Booking", "Alias.cs"),
+    );
+    const aliased = delta({
+      ...RULE_WITH_EVIDENCE,
+      evidence: [
+        {
+          claim: { local: "comment-limit" },
+          source: { type: "source-code", path: "src/Booking/Alias.cs", gitHead: HEAD },
+        },
+      ],
+    });
+    assert.deepEqual(await checkSourceEvidenceFiles(aliased, root), []);
+  },
+);
 
 test("with no repository root there is nothing to check, and nothing is claimed", async () => {
   assert.deepEqual(await checkSourceEvidenceFiles(delta(RULE_WITH_EVIDENCE), null), []);

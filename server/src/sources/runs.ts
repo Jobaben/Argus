@@ -1,6 +1,6 @@
 import { readFile, readdir, rm, stat } from "node:fs/promises";
 import { open } from "node:fs/promises";
-import { spawnSync } from "node:child_process";
+import { signalProcessTree } from "../processTree.js";
 import path from "node:path";
 import { paths } from "../claudeHome.js";
 import { atomicWriteJson } from "./atomicWrite.js";
@@ -283,29 +283,18 @@ export async function readRun(id: string): Promise<{ run: Run; log: string } | n
 
 /** Kill a run's whole process tree if it's alive. An agent CLI spawns its own
  *  subprocesses (tools, shells); a plain kill on the recorded pid would orphan
- *  them, so use taskkill /T on win32. On POSIX, detached:true makes the child
- *  a group leader, so signal the group, falling back to the single pid.
+ *  them, so use taskkill /T on win32 (see processTree.ts). On POSIX,
+ *  detached:true makes the child a group leader, so signal the group, falling
+ *  back to the single pid.
  *  Returns whether a signal was sent. */
 export async function killRunProcess(
   pid: number | null,
   signal: NodeJS.Signals = "SIGTERM",
 ): Promise<boolean> {
   if (!pid) return false;
-  if (process.platform === "win32") {
-    const res = spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
-    return res.status === 0;
-  }
-  try {
-    process.kill(-pid, signal);
-    return true;
-  } catch {
-    try {
-      process.kill(pid, signal);
-      return true;
-    } catch {
-      return false;
-    }
-  }
+  // Runs are spawned detached on POSIX (their own process group); on Windows
+  // this is `taskkill /T /F`, which is forceful whatever `signal` says.
+  return signalProcessTree(pid, signal, { grouped: true });
 }
 
 /** Cancel a scheduler run: kill its live process and mark it cancelled.

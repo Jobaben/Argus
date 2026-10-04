@@ -8,7 +8,7 @@ import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { WebSocket, WebSocketServer } from "ws";
@@ -482,7 +482,10 @@ describe("--install-skill", () => {
     });
   });
 
-  it("the bundled skill is one file, readable from both the Claude and the Codex repo paths", () => {
+  it("the Codex copy of the bundled skill is byte-identical to the Claude one", () => {
+    // `.agents/skills/argus-tail/` is a plain copy, not a symlink, so a checkout
+    // without symlink support (Windows by default) still has it. This is what
+    // keeps the two in step: edit one, copy it over the other.
     const viaAgents = path.resolve(
       path.dirname(bundledSkillPath()),
       "..",
@@ -493,6 +496,7 @@ describe("--install-skill", () => {
       "argus-tail",
       "SKILL.md",
     );
+    assert.equal(lstatSync(viaAgents).isFile(), true, "a real file, not a link");
     assert.equal(readFileSync(viaAgents, "utf8"), bundled());
     assert.match(bundled(), /^---\nname: argus-tail\ndescription: .+\n---\n/);
   });

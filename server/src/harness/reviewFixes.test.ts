@@ -25,6 +25,7 @@ import {
   type CheckContext,
 } from "./verification.js";
 import type { CapabilityProfile } from "../sources/pipelineTypes.js";
+import { fakeKill, symlinkSkip } from "../testPlatform.js";
 
 // ── Shared engine-test helpers (mirrors ../pipelineEngineHarness.test.ts) ────
 
@@ -64,7 +65,11 @@ const baseDeps = (over: Record<string, unknown> = {}) => ({
   signalUrlBase: "http://localhost:7777",
   maxConcurrent: 4,
   tickMs: 30000,
+  // Portable as a check environment too; see the note on the same fixture in
+  // ../pipelineEngineHarness.test.ts.
   parentEnv: { PATH: "/bin", HOME: "/h", ARGUS_TOKEN: "secret", MY_SECRET: "x" },
+  // Pids are invented, so the real killRunProcess must never be reachable.
+  kill: fakeKill().kill,
   ...over,
 });
 
@@ -316,7 +321,9 @@ test("a command check runs under the phase's own env policy: a denied variable i
       cwd: home,
       gated: false,
       capabilities: { env: { inherit: "minimal", deny: ["LEAKY_*"] } },
-      checks: [{ kind: "command", run: 'test -z "$LEAKY_SECRET"' }],
+      checks: [
+        { kind: "command", run: 'node -e "process.exit(process.env.LEAKY_SECRET ? 1 : 0)"' },
+      ],
       steps: [{ name: "s", prompt: "p" }],
     },
   ]);
@@ -348,7 +355,9 @@ test("control: with no capabilities declared, the same check fails because the v
       name: "Checked",
       cwd: home,
       gated: false,
-      checks: [{ kind: "command", run: 'test -z "$LEAKY_SECRET"' }],
+      checks: [
+        { kind: "command", run: 'node -e "process.exit(process.env.LEAKY_SECRET ? 1 : 0)"' },
+      ],
       steps: [{ name: "s", prompt: "p" }],
     },
   ]);
@@ -721,33 +730,43 @@ test("staging an already-dirty file is not itself reported as a content change",
 // Previously `stat` (which follows symlinks) was used, so a symlink to some
 // file elsewhere on disk could satisfy an artifact/file check.
 
-test("artifact check rejects a symlink even when it resolves to a real file", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "argus-review-symlink-"));
-  await symlink("/etc/hostname", path.join(dir, "report.md"));
-  const ctx = baseCtx({ artifactDir: dir });
+test(
+  "artifact check rejects a symlink even when it resolves to a real file",
+  { skip: symlinkSkip },
+  async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "argus-review-symlink-"));
+    await writeFile(path.join(dir, "target.txt"), "a real file elsewhere");
+    await symlink(path.join(dir, "target.txt"), path.join(dir, "report.md"));
+    const ctx = baseCtx({ artifactDir: dir });
 
-  const res = await runCheck({ kind: "artifact", path: "report.md" }, ctx);
-  assert.equal(res.status, "failed");
-  assert.match(res.detail, /symbolic link/);
+    const res = await runCheck({ kind: "artifact", path: "report.md" }, ctx);
+    assert.equal(res.status, "failed");
+    assert.match(res.detail, /symbolic link/);
 
-  await writeFile(path.join(dir, "ok.md"), "a real file");
-  const control = await runCheck({ kind: "artifact", path: "ok.md" }, ctx);
-  assert.equal(control.status, "passed");
+    await writeFile(path.join(dir, "ok.md"), "a real file");
+    const control = await runCheck({ kind: "artifact", path: "ok.md" }, ctx);
+    assert.equal(control.status, "passed");
 
-  await rm(dir, { recursive: true, force: true });
-});
+    await rm(dir, { recursive: true, force: true });
+  },
+);
 
-test("file check also rejects a symlink even when it resolves to a real file", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "argus-review-symlink-file-"));
-  await symlink("/etc/hostname", path.join(dir, "linked.txt"));
-  const ctx = baseCtx({ cwd: dir });
+test(
+  "file check also rejects a symlink even when it resolves to a real file",
+  { skip: symlinkSkip },
+  async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "argus-review-symlink-file-"));
+    await writeFile(path.join(dir, "target.txt"), "a real file elsewhere");
+    await symlink(path.join(dir, "target.txt"), path.join(dir, "linked.txt"));
+    const ctx = baseCtx({ cwd: dir });
 
-  const res = await runCheck({ kind: "file", path: "linked.txt" }, ctx);
-  assert.equal(res.status, "failed");
-  assert.match(res.detail, /symbolic link/);
+    const res = await runCheck({ kind: "file", path: "linked.txt" }, ctx);
+    assert.equal(res.status, "failed");
+    assert.match(res.detail, /symbolic link/);
 
-  await rm(dir, { recursive: true, force: true });
-});
+    await rm(dir, { recursive: true, force: true });
+  },
+);
 
 // ── 10. A command check that ignores SIGTERM still settles ──────────────────
 // Previously the timeout sent a single SIGTERM and never escalated, so a

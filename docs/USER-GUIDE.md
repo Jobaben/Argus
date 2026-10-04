@@ -2174,9 +2174,10 @@ doing?", "has the release pipeline finished?", `/argus-tail` (Claude Code) or
 including a remote session on your phone, which is the case this exists for.
 The skill teaches the icon vocabulary, the bounded-window habit, and to quote
 failure reasons verbatim. Inside the Argus checkout both CLIs find it without
-installing: Claude Code at `.claude/skills/argus-tail/`, Codex through the
-`.agents/skills/argus-tail` link to the same file (a symlink, so a Windows
-checkout without symlink support falls back to the install).
+installing: Claude Code at `.claude/skills/argus-tail/`, Codex at
+`.agents/skills/argus-tail/` — a plain copy of the same file rather than a
+symlink, so a Windows checkout without symlink support has it too, and a test
+fails if the two copies ever differ.
 
 **Where the data comes from:** `GET /api/health`, `/api/runs`,
 `/api/overview`, `/api/agents`, `/api/insight`, `/api/runs/:id/activity` (the

@@ -17,6 +17,7 @@ import {
   type Engine,
   type GateEffectPoint,
 } from "./pipelineEngine.js";
+import { fakeKill } from "./testPlatform.js";
 import { createPipeline, validatePipelineInput } from "./sources/pipelines.js";
 import { readInstance, writeInstance } from "./sources/instances.js";
 import { paths } from "./claudeHome.js";
@@ -65,6 +66,7 @@ function engine(spawn: ReturnType<typeof recordingSpawn>["spawn"], over = {}): E
     now: () => new Date(),
     newId: () => `id-${++counter}`,
     spawn,
+    kill: fakeKill().kill,
     signalUrlBase: "http://localhost:7777",
     maxConcurrent: 4,
     tickMs: 30000,

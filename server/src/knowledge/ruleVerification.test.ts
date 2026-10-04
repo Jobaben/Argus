@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { symlinkSkip } from "../testPlatform.js";
 import type {
   ClaimRef,
   RuleVerificationPolicy,
@@ -648,48 +649,60 @@ test("source evidence at a commit other than the one Argus recorded is refused",
   assert.match(refusal!.message, /but the run was recorded at/);
 });
 
-test("a repository-internal symlink pointing outside the repository is not valid evidence", async () => {
-  const { repo, outside } = makeRepo();
-  // Every lexical rule is satisfied — the path is repository-relative, has no
-  // `..`, and stats happily — and the bytes are not in the repository at all.
-  symlinkSync(path.join(outside, "secrets.txt"), path.join(repo, "src", "Booking", "Escape.cs"));
-  const escaped = await resolveRepositoryFile(repo, "src/Booking/Escape.cs");
-  assert.deepEqual(escaped, { ok: false, reason: "unsafe" });
+test(
+  "a repository-internal symlink pointing outside the repository is not valid evidence",
+  { skip: symlinkSkip },
+  async () => {
+    const { repo, outside } = makeRepo();
+    // Every lexical rule is satisfied — the path is repository-relative, has no
+    // `..`, and stats happily — and the bytes are not in the repository at all.
+    symlinkSync(path.join(outside, "secrets.txt"), path.join(repo, "src", "Booking", "Escape.cs"));
+    const escaped = await resolveRepositoryFile(repo, "src/Booking/Escape.cs");
+    assert.deepEqual(escaped, { ok: false, reason: "unsafe" });
 
-  const r = report({
-    schemaVersion: 1,
-    verifications: [
-      {
-        rule: "RULE-42:v1",
-        outcome: "holds",
-        evidence: [sourceEvidence({ path: "src/Booking/Escape.cs" })],
-      },
-    ],
-  });
-  const refusal = await checkRuleVerification(r, null, ctx({ repoRoot: repo }));
-  assert.equal(refusal?.code, "source-evidence");
-  assert.match(refusal!.message, /resolves outside the run's repository/);
-});
+    const r = report({
+      schemaVersion: 1,
+      verifications: [
+        {
+          rule: "RULE-42:v1",
+          outcome: "holds",
+          evidence: [sourceEvidence({ path: "src/Booking/Escape.cs" })],
+        },
+      ],
+    });
+    const refusal = await checkRuleVerification(r, null, ctx({ repoRoot: repo }));
+    assert.equal(refusal?.code, "source-evidence");
+    assert.match(refusal!.message, /resolves outside the run's repository/);
+  },
+);
 
-test("a symlinked directory inside the scope cannot smuggle a path out either", async () => {
-  const { repo, outside } = makeRepo();
-  mkdirSync(path.join(outside, "nested"), { recursive: true });
-  writeFileSync(path.join(outside, "nested", "Other.cs"), "// outside\n");
-  symlinkSync(path.join(outside, "nested"), path.join(repo, "src", "Booking", "link"));
-  assert.deepEqual(await resolveRepositoryFile(repo, "src/Booking/link/Other.cs"), {
-    ok: false,
-    reason: "unsafe",
-  });
-});
+test(
+  "a symlinked directory inside the scope cannot smuggle a path out either",
+  { skip: symlinkSkip },
+  async () => {
+    const { repo, outside } = makeRepo();
+    mkdirSync(path.join(outside, "nested"), { recursive: true });
+    writeFileSync(path.join(outside, "nested", "Other.cs"), "// outside\n");
+    symlinkSync(path.join(outside, "nested"), path.join(repo, "src", "Booking", "link"), "dir");
+    assert.deepEqual(await resolveRepositoryFile(repo, "src/Booking/link/Other.cs"), {
+      ok: false,
+      reason: "unsafe",
+    });
+  },
+);
 
-test("a repository reached through a symlink is still its own root", async () => {
-  const { repo } = makeRepo();
-  const alias = path.join(mkdtempSync(path.join(tmpdir(), "argus-verify-alias-")), "repo");
-  symlinkSync(repo, alias);
-  // Every path inside it resolves to the real tree, which is the same tree.
-  const verdict = await resolveRepositoryFile(alias, "src/Booking/KobraAdapter.cs");
-  assert.equal(verdict.ok, true);
-});
+test(
+  "a repository reached through a symlink is still its own root",
+  { skip: symlinkSkip },
+  async () => {
+    const { repo } = makeRepo();
+    const alias = path.join(mkdtempSync(path.join(tmpdir(), "argus-verify-alias-")), "repo");
+    symlinkSync(repo, alias, "dir");
+    // Every path inside it resolves to the real tree, which is the same tree.
+    const verdict = await resolveRepositoryFile(alias, "src/Booking/KobraAdapter.cs");
+    assert.equal(verdict.ok, true);
+  },
+);
 
 test("a directory is not a file, and an escaping declared path never gets that far", async () => {
   const { repo } = makeRepo();

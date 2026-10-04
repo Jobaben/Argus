@@ -619,12 +619,12 @@ declared work actually happened — run once every step of the phase has
 reported success (or been recovered as successful — §2), never before, and
 never derived from the agent's own words.
 
-| Kind            | Fields                                                                                                                        | Limit / semantics                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `command`       | `run` (string, ≤4000 chars), `label?`, `cwd?` (resolved against the phase's `cwd`), `timeoutSeconds?` (1–86400; default 600s) | Runs through the shell in `cwd`; exit `0` passes. Combined stdout+stderr is capped at 16 KiB in memory, and only the last 4000 chars survive into the `CheckResult.output`. Runs under the phase's own resolved `EnvPolicy` (pipeline → phase capabilities — the same merge the phase's steps ran under), not Argus's full environment. At the deadline: SIGTERM to the whole process group (POSIX), SIGKILL after a grace period (`killGraceMs`, default 5s) if it's still alive, and a failed verdict ("process did not exit") after another such grace regardless — a command that traps signals or leaves a grandchild behind can never hang verification. |
-| `artifact`      | `path` (relative, no `..`, no absolute), `label?`, `minBytes?` (≥0, default 1)                                                | Resolved against the phase's `ARGUS_ARTIFACT_DIR`. Uses `lstat`, so it does not follow a symlink: fails if the phase has no artifact directory, the path escapes it, the file is missing, **is a symbolic link**, or it's smaller than `minBytes` — a symlink to some large file elsewhere is never mistaken for the artifact the phase was asked to produce.                                                                                                                                                                                                                                                                                                  |
-| `file`          | same fields as `artifact`                                                                                                     | Resolved against the phase's own `cwd` instead of the artifact directory — for a file the agent was supposed to leave in the working tree itself.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `changed-files` | `label?`, `allow?` (globs), `deny?` (globs), `requireChanges?` (boolean)                                                      | See below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Kind            | Fields                                                                                                                        | Limit / semantics                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `command`       | `run` (string, ≤4000 chars), `label?`, `cwd?` (resolved against the phase's `cwd`), `timeoutSeconds?` (1–86400; default 600s) | Runs through the shell in `cwd`; exit `0` passes. Combined stdout+stderr is capped at 16 KiB in memory, and only the last 4000 chars survive into the `CheckResult.output`. Runs under the phase's own resolved `EnvPolicy` (pipeline → phase capabilities — the same merge the phase's steps ran under), not Argus's full environment. At the deadline, POSIX: SIGTERM to the process group, then SIGKILL to the group after a grace period (`killGraceMs`, default 5s), sent even if the leader has already exited; Windows: `taskkill /T /F` on the command's tree (forceful — there is no graceful step), repeated after the grace only while the root shell is still alive. After a further grace, if a descendant still holds the output pipes, Argus releases its end of them and fails the check ("process did not exit") — a command that traps signals or leaves a grandchild behind can never hang verification. See §17. |
+| `artifact`      | `path` (relative, no `..`, no absolute), `label?`, `minBytes?` (≥0, default 1)                                                | Resolved against the phase's `ARGUS_ARTIFACT_DIR`. Uses `lstat`, so it does not follow a symlink: fails if the phase has no artifact directory, the path escapes it, the file is missing, **is a symbolic link**, or it's smaller than `minBytes` — a symlink to some large file elsewhere is never mistaken for the artifact the phase was asked to produce.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `file`          | same fields as `artifact`                                                                                                     | Resolved against the phase's own `cwd` instead of the artifact directory — for a file the agent was supposed to leave in the working tree itself.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `changed-files` | `label?`, `allow?` (globs), `deny?` (globs), `requireChanges?` (boolean)                                                      | See below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
 A phase may declare up to 50 checks (`MAX_CHECKS`); they all run, always —
 verification never stops at the first failure, because the full report is the
@@ -1151,6 +1151,9 @@ choices are legible:
   `outcome: "succeeded"` and the non-zero `exitCode`, and the journal gets a
   `step.exit-mismatch` entry naming the phase and run, for anyone reconciling
   the two by hand.
+- **The end-to-end suites are POSIX-only.** `harness/e2e.test.ts`,
+  `verificationE2e.test.ts`, `changeIntentE2e.test.ts` and
+  `realizationE2e.test.ts` are skipped on Windows; see §17.
 
 ## 11. Workspace isolation
 
@@ -1971,3 +1974,144 @@ repository-state mismatch.
 A remediation is **not** a retry: the phase's `retry` budget is untouched, and
 the journal says `realization.remediation-started` rather than
 `phase.retrying`. See KNOWLEDGE-LEDGER.md §17 for the full model.
+
+## 17. Process trees and portable tests
+
+### Ending a process tree
+
+An agent CLI or a check's shell spawns children, and those children inherit
+its stdout and stderr. Killing only the process Argus spawned leaves them
+running and still holding the pipes, so the owner's `close` event never fires
+and the open pipe handles keep the host process alive. That condition — a
+descendant still holding an inherited pipe after the kill — was reproduced on
+POSIX with a controlled fixture. On Windows Argus used to call `child.kill()`,
+which ends only `cmd.exe`, so any descendant that outlived the shell would
+hold the pipe in the same way; that is the diagnosis of the reported Windows
+hang, made from the code and the POSIX reproduction, and not yet executed on
+Windows. The platform difference now lives in one place,
+`server/src/processTree.ts`.
+
+`signalProcessTree` signals a process and its descendants:
+
+- **Windows.** `taskkill /PID <pid> /T /F`. It is forceful whatever signal was
+  asked for; there is no graceful step.
+- **POSIX.** The signal goes to `-pid` (the process group) only for a child
+  spawned `detached`, which leads its own group, falling back to the pid. A
+  child that shares Argus's own group is signalled by pid only.
+
+`childTreeStopper` is the ladder for a child Argus owns. It terminates the
+tree, and after a grace period escalates: SIGKILL to the group on POSIX, and
+on Windows `taskkill` again, but only while the root can still be walked from,
+because `taskkill /T` cannot find the descendants of a root that has exited.
+For the same reason, and because an exited root's pid may be reused, nothing
+is sent on Windows once the root has exited — not even the first `taskkill`.
+Unlike `signalProcessTree`, the ladder never falls back to the bare pid on
+POSIX: once the root has exited and been reaped its pid can belong to anyone,
+so the fallback is the root's own `ChildProcess` handle, and only while it is
+still running. After a further grace period it releases Argus's end of the
+pipes, unrefs the child, and lets the owner settle with a "did not exit"
+outcome. The uncertainty is kept next to the cause: a timed-out analysis pass
+reports it after the timeout, and an output-cap kill reports `output cap
+exceeded; the process did not exit after it was killed` (still classified as
+`output-cap`). Requesting
+termination is never reported as the process having stopped. Normal
+completion still waits for `close`, so successful output is fully drained. The
+ladder's timers stay referenced; they are bounded to 2 × the grace period and
+cleared on dispose.
+
+It is used by:
+
+- **Verification command checks** (§6).
+- **The AnalysisRunner's spawn** (`spawnAnalysisProcess` in
+  `sources/analysis.ts`). A timeout, the output cap (overflow), and an error
+  from a still-running process now all end the tree, and `done` always
+  settles. Previously `kill()` sent one SIGTERM (on Windows it killed only the
+  shell) and `done` waited for a `close` that any process still holding the
+  pipe could withhold forever, leaving the runner permanently "busy" —
+  reproduced on POSIX, inferred for Windows.
+- **`killRunProcess`** (scheduler cancel, shutdown, and the pipeline engine's
+  `stopRun`), which now delegates to the same helper with an unchanged
+  interface. On Windows the `taskkill` is now an asynchronous `execFile` with
+  `windowsHide` and a 10s bound, instead of `spawnSync`.
+
+One deliberate non-change: the pipeline engine's step-deadline timer
+(`trackStep`) was reviewed and left referenced. It is the only in-process
+deadline enforcement for runs this process launched; the reconcile pass
+enforces a persisted `deadlineAt` only for runs adopted after a restart. In
+the server the HTTP listener keeps the loop alive and shutdown calls
+`process.exit`, so `unref` would change nothing in production, and no hang
+was traced to it.
+
+### Writing tests that run on Windows too
+
+- **CI.** The server and web suites and the typecheck run on `windows-latest`
+  (job `windows` in `.github/workflows/ci.yml`). The server suite runs through
+  `npm -w server run test:timeboxed`, which caps each test at 120 seconds
+  (`--test-timeout=120000`; Node rejects it in `NODE_OPTIONS`, so it is a CLI
+  flag). Each step and the job carry a `timeout-minutes`, and a final step
+  fails if any `processTreeFixture.mjs` process is left running. Lint, format,
+  coverage gates, build and budgets stay on the Linux job only.
+- **Line endings.** `.gitattributes` pins `* text=auto eol=lf`. The index was
+  already LF, so nothing was renormalised.
+- **Commands fed to `command` checks** run through the platform shell
+  (`cmd.exe` on Windows). Write them as `node -e "<js>" "<arg>"`: the
+  JavaScript in double quotes with only single quotes inside it, paths passed
+  as separate quoted arguments and read from `process.argv[1]`, and none of
+  `%`, `^`, `&`, `|`, `<`, `>`, `$` or backticks. `exit N` works in both
+  shells.
+- **Symlinks.** Gate the test with `{ skip: symlinkSkip }` from
+  `server/src/testPlatform.ts`, which probes once whether file and directory
+  links can actually be created (Windows needs Developer Mode or
+  administrator rights). Pass `"dir"` as the type for a link to a directory —
+  Node creates a file link on Windows when the type is omitted. Do not link to
+  POSIX-only paths such as `/etc/hostname`; create the target in the test's
+  temp directory.
+- **Drain every engine a test creates** before the next test points
+  `ARGUS_CLAUDE_HOME` somewhere new: the engine's detached work resolves its
+  paths when it writes, so work still in flight would write into the next
+  test's home.
+- **Test repositories** set `core.autocrlf=false`, so a checkout gives back
+  the committed bytes whatever the host's git config says (a Windows runner's
+  system config sets it to `true`).
+- **Expected paths** are built with `path.join` wherever the code under test
+  builds them that way, not written with `/`.
+- **POSIX permission bits** are asserted only off Windows (`posixModeSkip`, or
+  `process.platform !== "win32"`).
+- **Engine tests with invented pids must inject a fake `kill`** (`fakeKill()`
+  from `testPlatform.ts`). An invented pid can be a real, unrelated process on
+  the host, and the default `killRunProcess` would terminate it. Only a test
+  that spawns its own real process and needs it killed keeps the real
+  `killRunProcess`, and says so.
+- **Process-lifecycle tests** use `server/src/processTreeFixture.mjs`, which
+  spawns its own root and descendant and records the descendant's pid. Tests
+  probe only that pid, and assert both that the owning promise settles and that
+  the descendant is gone. The descendant exits by itself once the test removes
+  its pid file.
+- **State compared across temp homes** is normalised with `withoutHome()`
+  (`server/src/decision/testSupport.ts`). It replaces only exact spellings of
+  the home (as given, its real path, with forward slashes, and with
+  JSON-escaped backslashes), never a pattern, so a difference anywhere below
+  the home still fails. `settleJournalOrder` accepts either path separator.
+- **The Argus tail skill.** `.agents/skills/argus-tail/SKILL.md` is now a
+  plain copy of `.claude/skills/argus-tail/SKILL.md` instead of a git symlink,
+  and `server/src/cli/tail.test.ts` fails if they differ. Edit one and copy it
+  over the other.
+
+### POSIX-only suites
+
+The end-to-end suites `server/src/harness/e2e.test.ts`,
+`verificationE2e.test.ts`, `changeIntentE2e.test.ts` and
+`realizationE2e.test.ts` remain skipped on Windows. Their skip reason is that
+they rely on process groups, `sh -c` hooks and signal-based kills; the fake
+agent `harness/fakeAgent.mjs` is executed directly through its shebang and
+exec bit, which Windows cannot do, and the engine uses its two-stage host
+there. On Windows the tree-termination helper itself is exercised by
+`processTree.test.ts` (real controlled trees through verification and the
+analysis spawn), and the engine's two-stage host by the win32-gated tests in
+`pipelineProcess.test.ts`; the engine-level deadline and abort paths those
+suites drive end to end are not exercised on Windows.
+
+A known residual: `probeCommand` in `server/src/setup/prereqs.ts` uses
+`spawnSync` with `shell: true` on Windows, whose timeout ends only `cmd.exe`,
+so a timed-out probe waits for its descendant to release the pipe. That is a
+bounded delay, and it is not changed here.

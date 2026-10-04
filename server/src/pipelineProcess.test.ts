@@ -639,7 +639,10 @@ test(
       if (agentPid && Number.isInteger(agentPid) && agentPid > 0) {
         await waitForExit(agentPid).catch(() => {});
       }
-      rmSync(home, { recursive: true, force: true });
+      // The agent's host runs in `home` and may still be exiting after the
+      // agent itself has: Windows refuses to remove a process's current
+      // directory (EBUSY) until it has gone, so let rm retry for a moment.
+      rmSync(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
     }
   },
 );

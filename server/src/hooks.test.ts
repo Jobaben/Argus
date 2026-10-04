@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { mkdtempSync, symlinkSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { symlinkSkip } from "./testPlatform.js";
 // The reference hook lives at <repo>/hooks/argus-signal.mjs; import its pure
 // type-resolution helper. The module guards its side effects behind an
 // is-main check, so importing it here is safe.
@@ -239,7 +240,7 @@ test("the hook process reports delivery failure and exits non-zero", async () =>
   assert.match(stderr, /\[argus-signal\] hook failed:/);
 });
 
-test("the hook runs when it is invoked through a symlink", async () => {
+test("the hook runs when it is invoked through a symlink", { skip: symlinkSkip }, async () => {
   const hook = fileURLToPath(new URL("../../hooks/argus-signal.mjs", import.meta.url));
   // A developer who symlinks the hook into ~/.claude/hooks instead of copying it
   // gets an argv[1] that Node never resolves, while `import.meta.url` is already

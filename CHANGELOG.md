@@ -370,6 +370,45 @@ unverifiable`, each rule exactly once. A **missing** rule refuses the whole
 
 ### Fixed
 
+- **Process trees are ended as trees, and their owners always settle.** An
+  agent CLI or a check's shell spawns children that inherit its stdout, so
+  ending only the spawned process could leave the owner waiting on a `close`
+  that never came.
+  - An AnalysisRunner timeout, output cap or kill could hang forever while
+    any process in the tree still held stdout, leaving the runner
+    permanently busy. On POSIX this was reproduced: a tree that ignored
+    SIGTERM was never escalated to SIGKILL, and a descendant outside the
+    process group was never reached. On Windows, where Argus killed only the
+    shell (`cmd.exe`), any descendant that outlived it held the pipe the same
+    way. That is a diagnosis from the code and from the POSIX reproduction;
+    it has not been executed on Windows.
+  - Verification command checks settled through their fallback timer, but a
+    surviving descendant kept running with the pipes open, which pinned the
+    host process (reproduced on POSIX; on Windows, by the same reading, any
+    descendant of the killed `cmd.exe`).
+  - When the tree still holds the pipes after the whole ladder, the result
+    says it was not confirmed to have exited. That includes an output-cap
+    kill, which reports both the cause and the uncertainty and is still
+    classified as `output-cap`.
+  - Both now use the shared `processTree.ts` ladder: SIGTERM then SIGKILL to
+    the process group on POSIX, `taskkill /T /F` on Windows. If a descendant
+    still holds the pipes afterwards, Argus releases them and reports a "did
+    not exit" outcome. Normal completion still drains output on `close`.
+  - `killRunProcess` delegates to the same helper, with an unchanged
+    interface. See HARNESS §17.
+
+- **Two Windows defects the new Windows CI job found.**
+  - An existing worktree was never recognised for reuse when git spelled its
+    path differently from Argus (forward slashes, or the long form of an 8.3
+    short temp path such as `RUNNER~1`; on any platform, a root reached
+    through a link). An instance-scoped workspace then failed its second
+    phase. The check now compares real paths, and still refuses a link in
+    place of the worktree directory.
+  - An atomic write could fail with `EPERM` when another handle had the
+    target open, which on Windows refuses a rename over it; a run's
+    completion was then lost. The rename is now retried briefly on Windows
+    for those transient codes only.
+
 - **The H2 state-isolation test** compared instance-journal line
   order, which the engine's fire-and-forget journal writes do not fix. Main
   CI failed on it after #81. Entries written in the same instant are now
@@ -386,6 +425,24 @@ unverifiable`, each rule exactly once. A **missing** rule refuses the whole
   copy `~/.claude/argus/memory/` to `~/.claude-argus/memory/` to keep them.
 
 ### Changed
+
+- **CI also runs on Windows.** A `windows` job runs `npm ci`, the typecheck,
+  the server tests with a per-test timeout, the web tests, and a check that
+  no process-tree fixture is left running. Every step and the job have
+  bounded timeouts. There is no coverage gate on Windows, and the Linux job
+  is unchanged. To make this runnable:
+  - LF line endings are pinned in `.gitattributes`.
+  - The `argus-tail` skill under `.agents/skills` is a copy rather than a
+    symlink, with a test that the two files are byte-equal.
+  - Commands in checks are portable `node -e` invocations.
+  - Symlink tests are gated on whether links can be created.
+  - Engine tests with invented pids inject a fake `kill`, so they cannot
+    signal an unrelated process.
+  - The H1 and H2 state-isolation tests normalise spellings of the home
+    path, with every assertion kept.
+
+  The end-to-end suites stay POSIX-only (HARNESS §17). Making the Windows job
+  a required check is a separate repository-settings action.
 
 - **The server suite reports through Node's `spec` reporter.** A CI log whose
   _tail_ does not name the test that failed is a diagnosability defect in a

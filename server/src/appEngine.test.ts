@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createApp } from "./app.js";
 import { createEngine } from "./pipelineEngine.js";
+import { fakeKill } from "./testPlatform.js";
 import type { ArgusConfig } from "./config.js";
 import type { AuthService } from "./auth.js";
 
@@ -47,6 +48,7 @@ function appWith(over: Partial<Parameters<typeof createEngine>[0]> = {}) {
     spawn: hangingSpawn,
     signalUrlBase: "http://127.0.0.1:7777",
     maxConcurrent: 4,
+    kill: fakeKill().kill,
     ...over,
   });
   const app = createApp({ config, engine, broadcast: () => {}, serveWeb: false, auth: openAuth });

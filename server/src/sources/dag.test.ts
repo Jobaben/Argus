@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import path from "node:path";
 import {
   DagValidationError,
   DEFAULT_PLACEHOLDER_BYTES,
@@ -346,7 +347,8 @@ test("interpolate caps {{previous.payload}} and {{artifacts.<name>}} by default 
   assert.ok(prompt.length < big.length + 200, "the rendered prompt is capped, not the raw value");
   assert.match(prompt, /Argus trimmed \d+ bytes of \{\{previous\.payload\}\}/);
   assert.equal(contextFiles.length, 1);
-  assert.equal(contextFiles[0].path, "/inv/context/previous.payload.txt");
+  // Built with path.join, as the engine builds it: native separators.
+  assert.equal(contextFiles[0].path, path.join("/inv", "context", "previous.payload.txt"));
   assert.equal(
     contextFiles[0].contents,
     big,
