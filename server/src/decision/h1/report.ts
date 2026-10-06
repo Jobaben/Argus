@@ -19,7 +19,12 @@ import { PRECALL_FAILURES } from "../h2/items.js";
 import { distribution, MIN_BUCKET, MIN_ECE_N, round6, totals } from "../h2/metrics.js";
 import type { DecisionJournal, JournalNoticeKind, JournalView } from "../journal.js";
 import type { DecisionRegistry } from "../registry.js";
-import { applyGateRules, GATE_RULES_V1_REF, QUALIFICATION_V1_REF } from "./baselines.js";
+import {
+  applyGateRules,
+  GATE_RULES_V1_REF,
+  QUALIFICATION_REFS,
+  QUALIFICATION_V2_REF,
+} from "./baselines.js";
 import { H1_DEFAULTS } from "./config.js";
 import { H1_QUESTION } from "./definitions.js";
 import { referenceDigest } from "./gate.js";
@@ -111,7 +116,7 @@ export const H1_METHODS: Record<string, string> = {
   deterministic:
     "gate-operator-action.rules@1, a rule result (flag / no-flag / insufficient-data) computed at capture from the captured body and recomputed here; never a probability",
   verdict:
-    "auto-approval-qualification@1 at capture: qualifies is compared as approve and below-threshold as sent back; not-configured, ineligible and insufficient-data are coverage gaps. The rating (minimum current score over relevant steps) is ordinal: no Brier, calibration or score/10",
+    "auto-approval-qualification at capture, each capture read under the version it recorded (@1, or @2 which adds the trajectory requirement) with one row per version: qualifies is compared as approve and below-threshold as sent back; not-configured, ineligible and insufficient-data are coverage gaps. The rating (minimum current output score over relevant steps) is ordinal: no Brier, calibration or score/10. Paired model agreement pools @1 and @2, which classify identically on phases whose rubric declares no trajectory",
   auroc:
     "Verdict rows: Mann–Whitney AUROC with sent back positive and a lower rating expected to mean sent back, ties ½, Hanley–McNeil 95 % interval",
   references:
@@ -386,13 +391,31 @@ export function buildH1Report({ ledger, snapshots, journal, registry }: H1Replay
       ),
     };
   });
-  const verdict: H1VerdictRow[] = POPULATIONS.map((population) => {
+  // One row per qualification version in use: a capture is scored under the
+  // definition it recorded, never re-read under another.
+  const qualificationsInUse = QUALIFICATION_REFS.filter(
+    (ref) =>
+      idx.configs.some((c) => c.config.qualification?.digest === ref.digest) ||
+      [...idx.items.values()].some((it) => it.capture.verdict.definition?.digest === ref.digest),
+  );
+  const qualifications =
+    qualificationsInUse.length > 0 ? qualificationsInUse : [QUALIFICATION_V2_REF];
+  const verdict: H1VerdictRow[] = qualifications.flatMap((ref) =>
+    POPULATIONS.map((population) => verdictRow(ref, population)),
+  );
+  function verdictRow(
+    ref: (typeof QUALIFICATION_REFS)[number],
+    population: (typeof POPULATIONS)[number],
+  ): H1VerdictRow {
     const set = [...idx.items.values()].filter(
-      (it) => it.capture.population === population && scorable(it),
+      (it) =>
+        it.capture.population === population &&
+        scorable(it) &&
+        it.capture.verdict.definition?.digest === ref.digest,
     );
     return {
       population,
-      definition: { ...QUALIFICATION_V1_REF },
+      definition: { ...ref },
       scored: set.length,
       agreement: agreementOf(
         set.map((it) => ({ label: labelOf(it)!, column: it.capture.verdict.classification })),
@@ -404,7 +427,7 @@ export function buildH1Report({ ledger, snapshots, journal, registry }: H1Replay
           .map((it) => ({ rating: it.capture.verdict.rating!, label: labelOf(it)! })),
       ),
     };
-  });
+  }
 
   // ── Models: resolved items only ───────────────────────────────────────────
   interface Joined {
@@ -744,14 +767,24 @@ export function buildH1Report({ ledger, snapshots, journal, registry }: H1Replay
       GATE_RULES_V1_REF.version,
       recorded((c) => c.rules),
     ),
-    defRow(
-      "qualification",
-      QUALIFICATION_V1_REF,
-      QUALIFICATION_V1_REF.id,
-      QUALIFICATION_V1_REF.version,
-      recorded((c) => c.qualification),
-    ),
+    qualificationRow(recorded((c) => c.qualification)),
   ];
+  /** Registered when every recorded qualification digest is a known version;
+   *  named after the version the latest configuration recorded. */
+  function qualificationRow(seen: string[]) {
+    const latest =
+      QUALIFICATION_REFS.find((r) => r.digest === seen[seen.length - 1]) ?? QUALIFICATION_V2_REF;
+    const known = new Set<string>(QUALIFICATION_REFS.map((r) => r.digest));
+    return {
+      kind: "qualification" as const,
+      id: latest.id,
+      version: latest.version,
+      digest: latest.digest,
+      status: seen.every((d) => known.has(d))
+        ? ("registered" as const)
+        : ("digest-mismatch" as const),
+    };
+  }
 
   const last = ledger.records[ledger.records.length - 1]?.record ?? null;
   const journalNotices = journal.notices.map((n) => ({

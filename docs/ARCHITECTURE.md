@@ -25,7 +25,11 @@ block in `~/.codex/config.toml`. That last one is an **append**, never a rewrite
 round-trip through a parser would lose the operator's comments and ordering, and
 an array-of-tables header is valid wherever it appears, so appending is a
 well-formed edit that leaves every existing byte intact. All Argus writes go through an atomic tmp+rename writer and
-are serialized per file/instance by a keyed mutex.
+are serialized per file/instance by a keyed mutex. Pipeline instances are
+published through its durable form (`atomicWriteFileDurable`): the temp file is
+fsynced before the rename and the directory after it, because an instance save
+is now the commit point of a transition (see §5, "Transitions are logged,
+instances are the authority").
 
 The one exception is the Vault's `argus/vault.sqlite`, which uses SQLite's own
 WAL journalling instead. That is not a gap in the rule but the reason for it:
@@ -52,7 +56,7 @@ hash in `~/.claude/argus/auth.json` (mode 0600), and sessions are random
 256-bit tokens in an `HttpOnly; SameSite=Strict` cookie, kept server-side as
 SHA-256 digests in memory (12 h TTL, restart = signed out, brute-force
 lockout on the login route). Reads stay open so the dashboard works without a
-login; the agent-facing signal endpoint keeps its own per-instance token
+login; the agent-facing signal endpoint keeps its own per-run token
 instead. See docs/API.md § Admin authentication.
 
 ```
@@ -131,7 +135,24 @@ src/
   watch.ts             — chokidar → debounced change callback
   app.ts               — the Hono app factory (testable, no side effects)
   index.ts             — composition root: wires sources to routes + ws
+  pipelineTransitions.ts — the pure pipeline transitions (see Weave, §5)
+  pipelineEngine.ts    — the engine's public surface; `createEngine` only wires
+  engine/              — the engine, one factory per responsibility (below)
 ```
+
+The engine used to be one closure of about 7,000 lines. It is now a set of
+factories over one shared context (`engine/context.ts`): `store` (saving an
+instance and its housekeeping), `persistence` (the transition commit),
+`launch`, `lifecycle` (a run's exit, deadlines, stalls and `terminateRun`),
+`failure` (failure classes and retries), `verification`, `knowledgeIntake`,
+`knowledgeCommit`, `realization`, `candidates`, `signals`, `gates` and
+`reconcile`, with pure leaves for `types`, `prompts`, `outcome`, `spawn` and
+`constants`. The split was mechanical — every function body moved byte for
+byte — and its rules are a test (`engine/boundaries.test.ts`): a module calls
+another's functions only through the late-bound, typed `core.fns`, never by
+importing it; nothing outside `engine/` but the façade imports an engine
+module; and the pure layers (transitions, harness, transition log, durable
+primitives) never import the engine at all.
 
 - **Single Responsibility** — each `sources/*.ts` owns exactly one domain and
   exports plain async functions returning normalized DTOs.
@@ -197,7 +218,7 @@ field-by-field reference: [docs/HARNESS.md](HARNESS.md).
 
 The split follows the same ownership rule as the rest of the server:
 
-- **The pipeline engine (`pipelineEngine.ts`) owns every side effect** —
+- **The pipeline engine (`pipelineEngine.ts` and `server/src/engine/`) owns every side effect** —
   when to launch a step, when to kill it (a deadline, an abort, a revise
   superseding it), when to run its checks, and when to write the result down.
   Nothing in `harness/` touches the filesystem or a child process itself
@@ -314,7 +335,7 @@ while an unrecognised frame _type_ is still forwarded for forward compatibility.
 | Watchtower        | runs + `argus/watchtower.json`                                         | envelopes derived per read; only reset markers persist                                                                                                                                                                                 |
 | Autopsy           | `argus/autopsies.json`                                                 | bounded `claude -p` verdicts, capped at 200, keyed by run id                                                                                                                                                                           |
 | Tuning            | `argus/tuning.json`                                                    | per-phase settings proposals, one report per Analyze press, capped at 50                                                                                                                                                               |
-| Verdict           | `argus/verdicts.json` + rubrics on defs                                | rubric scores keyed by run id, capped at 400; trends derived per read                                                                                                                                                                  |
+| Verdict           | `argus/verdicts.json` + rubrics on defs                                | rubric scores keyed by run id, capped at 400 (output and `kind: "trajectory"` judgments together); trends derived per read                                                                                                             |
 | Sentinel          | `argus/incidents.json`, `argus/sentinel.json`                          | persisted incidents (so a restart resumes mid-incident) + escalation policy                                                                                                                                                            |
 | Ledger            | runs + `argus/spend.json` + `argus/budget.json`                        | attribution, forecast and enforcement all derived per read; only the ladder persists                                                                                                                                                   |
 | The Vault         | `argus/vault.sqlite`                                                   | every run/event/score past JSON retention; a rebuildable cache, never the source                                                                                                                                                       |
@@ -430,6 +451,26 @@ and a hung analysis pass cannot wedge a pipeline.
 
 The same reasoning applies to Autopsy: the postmortem never runs in the run
 completion handler, only in a watcher afterwards.
+
+Trajectory judging follows the same rule and adds three modules beside
+`sources/verdict.ts`. `sources/trajectory.ts` holds the deterministic
+heuristics, pure functions over a Flight Recorder `Recording` (the same
+derive-on-read shape as above: nothing is stored but the result). It also holds
+the trajectory digest and the signals and prompt versions.
+`sources/trajectoryVerdict.ts` is the pass: it rebuilds the recording from the
+transcript, computes the signals and the optional `holdOn` hold, and, only when the rubric
+declares trajectory criteria, makes one call through the shared `AnalysisRunner`.
+`sources/timeline.ts` is the one formatter of a recording as prompt text, shared
+with Autopsy; its bytes are part of the Autopsy prompt, so a test pins them. The
+pass runs in the Verdict watcher, at most one per tick after the output
+judgment, and a busy or over-budget runner writes nothing so it retries. The
+result is a `trajectory` verdict in the same store under the same cap; the gate
+policy (`sources/gatePolicy.ts`) and the engine's automated-approval boundary
+read it as a separate basis. A `trajectory` PhaseCheck is a different consumer of
+the same heuristics: verification (`engine/verification.ts`) reads each relevant
+run's transcript itself, `sources/trajectory.ts` evaluates the thresholds as a
+pure function, and `harness/verification.ts` records the result as a `CheckResult`
+(which may be `not-evaluated`). See HARNESS §19.
 
 ### The one watcher whose state is on disk
 
@@ -606,6 +647,79 @@ Plans live in memory only. Surviving a restart sounds like robustness and is the
 opposite: a confirmation landing against state nobody has looked at since the
 process died. Losing pending plans costs a re-ask and removes a class of
 stale-approval bug.
+
+### Transitions are logged, instances are the authority
+
+A pipeline instance is a JSON file rewritten in place, so it can say where a
+phase stands but not how it got there, and a crash between "the state changed"
+and "the thing that state calls for was done" used to be invisible. Each
+instance therefore has a **transition log**, `argus/transitions/<instanceId>.jsonl`:
+one numbered, checksummed record per save, naming the pure transitions that ran
+(`events`), what they changed, and the side effects they now owe. It is
+evidence for replay and integrity diagnosis, never an authority. Effect recovery
+derives from committed instance, run and gate-operation state and never reads the
+log; the record's `effects` summary is diagnostic only. The saved instance is what
+Argus acts on; the log is separate from the size-capped observational journal,
+from `gate-decisions.jsonl`, from the Decision Journal and from the Knowledge
+Ledger, and none of them is read to decide anything on its behalf.
+
+**Commit order.** Every instance save (`engine/persistence.ts`) is: (1) append
+and fsync the transition record (a failed append degrades the log and does not
+block the save); (2) durably publish the instance carrying
+`transitionLog.seq` — the commit point; (3) only then execute the effects. A
+record whose instance never got published is a _proposal_: the next commit
+re-anchors the log with a baseline, and nothing the record owed is executed on
+its word. Gate decisions are unchanged: the decision record is fsynced first,
+then the link save (now a transition commit of its own, `gate-linked`), the
+effects, then `gate-completed`. The approval commit point is still the instance
+save; the log never grants approval.
+
+**Shared primitives, not a copy.** Records reuse the Decision Journal's proven
+byte-level machinery — the checksummed line envelope (SHA-256 over canonical
+JSON), write-every-byte with short-write detection, fsync, the torn-tail fence
+and marker. These moved to `server/src/durable/`, which writes only the path it
+is handed; the decision plane re-exports them unchanged so its digests come from
+the same code, and its isolation test's allow-list names exactly those modules.
+
+**Projection and replay.** The replay target is a _projection_ of the instance:
+the definition snapshot and trigger payload always by digest, payloads, results,
+answers and artifacts by digest once their canonical form passes 1 KiB, any
+string over 512 characters by digest, and `transitionLog` itself excluded. A pure
+fold reproduces the projection, not the instance, so a differing elided value
+still shows as a differing digest but the log cannot rebuild an agent's message.
+A record over 16 KiB keeps its sequence number and replaces its changes with an
+`oversize` marker, and replay stops there; a log at 4 MiB refuses further
+appends and is never pruned to make room. It is deleted only with its instance.
+
+**Attribution.** The engine snapshots an instance when it reads it for mutation;
+at commit, every pipeline status change (instance status, a phase's
+status/attempt/pause/retry time, a step's run id/status, the pending gate
+operation — not run records, verification reports or Verdicts) must be accounted
+for by an event about that phase. One that is not is recorded as `unattributed`
+and warned in production; the test preload (`ARGUS_STRICT_TRANSITIONS=1`) makes
+it throw, so a forgotten transition fails the suite. To make that achievable
+the engine no longer writes pipeline status fields itself: launch planning,
+retry scheduling, failure classification, gate link/complete and candidate tree
+cleanup are pure transitions in `pipelineTransitions.ts`, and a targeted static
+test bans direct writes of those fields in engine modules.
+
+**Degradation.** If the log cannot be written (an I/O error or the cap), the save
+still proceeds, `transitionLog.degradedFrom` (and `capped`) are set, and
+sequence numbers keep counting so the accounting stays honest. Nothing is
+permitted or destroyed because logging failed: gate decisions still need their
+own durable record (a failing gate log still refuses an approval), and knowledge
+commits still need the ledger.
+
+**Effect recovery.** `reconcile()` recovers from the _saved_ instance, never
+from a log record alone: a phase attempt that is `running` with no run planned
+is launched (a crash between the transition and the launch); every stop goes
+through one `terminateRun`, because `Run.termination` is a recorded _request_,
+not proof the process stopped, so after a restart a request whose process is
+still alive is delivered again; a still-alive run whose step was already decided
+is stopped; verification and knowledge commits are re-driven from saved state.
+These are at-least-once, and "exactly once" is not claimed. The tests simulate
+recovery (discard an engine, build a fresh one over the same files); they do not
+establish power-loss durability. Operator-facing detail is in HARNESS §18.
 
 ### A cache of truth: the Vault's failure model
 

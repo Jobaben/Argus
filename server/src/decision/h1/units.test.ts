@@ -15,7 +15,17 @@ import type {
 import { autoApprovalQualification } from "../../sources/gatePolicy.js";
 import { rubricDigest } from "../../sources/verdict.js";
 import { builtinRegistry } from "../definitions.js";
-import { applyGateRules, verdictBaseline } from "./baselines.js";
+import {
+  applyGateRules,
+  QUALIFICATION_V1_REF,
+  QUALIFICATION_V2_REF,
+  verdictBaseline,
+} from "./baselines.js";
+import {
+  TRAJECTORY_PROMPT_VERSION,
+  TRAJECTORY_SIGNALS_VERSION,
+  trajectoryRubricDigest,
+} from "../../sources/trajectory.js";
 import { h1Enablement, readH1Settings, H1_DEFAULTS } from "./config.js";
 import { GATE_REVIEW_V1, h1Registry } from "./definitions.js";
 import { gateEligibility, referenceDigest, settle, type GateItem } from "./gate.js";
@@ -630,6 +640,65 @@ test("verdict baseline: agrees with autoApprovalQualification on the same inputs
     verdictBaseline(inst.phases[0], inst.definition!.phases[0], cur).classification,
     q.status,
   );
+});
+
+test("verdict baseline v2: a trajectory rubric needs a usable trajectory judgment too", () => {
+  const traj: Rubric = { ...rubric, trajectory: { criteria: [{ id: "f", label: "f" }] } };
+  const inst = gateInstance({ phaseDef: { autoApprove: { verdict: 7 }, rubric: traj } as never });
+  const output = new Map([
+    ["run-a", verdictOf("run-a", { score: 9, rubricDigest: rubricDigest(traj) })],
+  ]);
+  const none = verdictBaseline(inst.phases[0], inst.definition!.phases[0], output);
+  assert.deepEqual(none.definition, QUALIFICATION_V2_REF);
+  assert.equal(none.classification, "insufficient-data");
+  assert.equal(none.reason, "no-trajectory-verdict:run-a");
+  const tv = (score: number): Verdict => ({
+    ...verdictOf("run-a", { id: "VT-a", kind: "trajectory", score }),
+    rubricDigest: trajectoryRubricDigest(traj),
+    provenance: {
+      runtime: "claude",
+      requestedModel: null,
+      reportedModel: null,
+      promptVersion: TRAJECTORY_PROMPT_VERSION,
+    },
+    trajectory: {
+      signals: {
+        version: TRAJECTORY_SIGNALS_VERSION,
+        transcript: "present",
+        events: 1,
+        truncated: false,
+        signals: [],
+      },
+      held: [],
+      judged: true,
+    },
+  });
+  const low = verdictBaseline(
+    inst.phases[0],
+    inst.definition!.phases[0],
+    output,
+    new Map([["run-a", tv(5)]]),
+  );
+  assert.equal(low.classification, "below-threshold");
+  assert.equal(low.rating, 9, "the rating stays the output minimum");
+  const ok = verdictBaseline(
+    inst.phases[0],
+    inst.definition!.phases[0],
+    output,
+    new Map([["run-a", tv(8)]]),
+  );
+  assert.equal(ok.classification, "qualifies");
+});
+
+test("verdict baseline v2 classifies a rubric without a trajectory exactly as v1 did", () => {
+  const inst = gateInstance({ phaseDef: { autoApprove: { verdict: 7 }, rubric } as never });
+  for (const score of [6, 8]) {
+    const cur = new Map([["run-a", verdictOf("run-a", { score })]]);
+    const r = verdictBaseline(inst.phases[0], inst.definition!.phases[0], cur);
+    assert.equal(r.classification, score < 7 ? "below-threshold" : "qualifies");
+    assert.equal("trajectory" in r, false, "nothing added to a plain capture");
+  }
+  assert.notEqual(QUALIFICATION_V1_REF.digest, QUALIFICATION_V2_REF.digest);
 });
 
 // ── Projection ──────────────────────────────────────────────────────────────

@@ -106,6 +106,30 @@ describe("GateDrawer — content", () => {
     expect(within(dialog).getByText(/paused here until you decide/i)).toBeInTheDocument();
   });
 
+  it("shows a trajectory check that was not evaluated as such, never as passed", () => {
+    mockReview.review = review({
+      verification: {
+        status: "passed",
+        startedAt: "2026-07-07T10:00:00.000Z",
+        endedAt: "2026-07-07T10:00:01.000Z",
+        checks: [
+          {
+            kind: "trajectory",
+            label: "trajectory: destructive-command",
+            status: "not-evaluated",
+            detail: "not evaluated — insufficient input: run-1: no readable recording",
+            durationMs: 1,
+          },
+        ],
+      },
+    });
+    open();
+    const list = within(screen.getByRole("dialog")).getByTestId("gate-verification");
+    expect(list).toHaveTextContent("(not evaluated)");
+    expect(list).toHaveTextContent("–");
+    expect(list).not.toHaveTextContent("✓");
+  });
+
   it("lifts the reason and the closing note out of a Stop-hook payload and folds the rest", () => {
     mockReview.review = review({
       status: "failed",

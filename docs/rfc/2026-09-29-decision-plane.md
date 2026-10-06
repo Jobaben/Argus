@@ -2500,6 +2500,30 @@ counted ½ and a Hanley–McNeil 95 % interval. No Brier score, calibration
 or score/10 is ever computed. No hypothetical bar is applied to
 unconfigured gates.
 
+**Update: `auto-approval-qualification` v2.** Hardening Item 5 (trajectory
+signals, HARNESS §19) added a requirement to the Phase 0 rule for a rubric that
+declares a trajectory: a usable trajectory judgment per relevant run, a check
+that held nothing and a score clearing the trajectory bar. That changes what the
+rule means, so the definition is versioned rather than edited. v2 is v1 plus
+that requirement, and new captures and the H1 config name it. On a phase whose
+rubric declares no trajectory the two classify identically. A v1 capture stays
+v1, is scored under v1 and is never re-read under v2; the report has one Verdict
+row set per version in use, the rating stays the minimum **output** score, and
+the paired model comparison pools v1 and v2 captures. The text above describes
+v1.
+
+v2 was **amended in place** before it was ever published. Review found that a
+truncated recording (the Recorder keeps only the last 2,000 events) could satisfy
+the trajectory requirement; v2 now requires signals from a complete, untruncated
+recording, and a truncated one is `insufficient-data`
+(`trajectory-signals-truncated`). Because v2 had not been released it was edited
+rather than versioned, which changed its digest from the never-released
+`13e14de3c3afbc046ae5f6a6a7d557fbac94a7b599de57415aac1d7df9be6d38` to
+`376097e99f957acd47876a64b85defc60975f984cb150b6be4938b2ab1299b34`. v1's digest,
+`b2041f398f64873dd7914452ed0f46a9ec3cc6d7a7dc863d0addb3a8c937ede1`, is unchanged.
+A capture or config naming the earlier v2 digest matches no registered definition
+and is never re-read under the current v2.
+
 ### Q.7 Sampling and models
 
 - **Census.** Every eligible gate is captured, and baselines are computed

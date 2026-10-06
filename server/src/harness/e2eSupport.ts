@@ -23,6 +23,7 @@ import { createApp } from "../app.js";
 import { createEngine, defaultPipelineSpawn } from "../pipelineEngine.js";
 import { paths } from "../claudeHome.js";
 import { phaseArtifactDir } from "./invocation.js";
+import { mintSignalToken } from "./signalToken.js";
 import { readInstance } from "../sources/instances.js";
 import { createPipeline, validatePipelineInput } from "../sources/pipelines.js";
 import type { Engine, EngineDeps } from "../pipelineEngine.js";
@@ -145,6 +146,9 @@ export interface Harness {
     over?: Record<string, unknown>,
   ): Promise<PipelineDefinition>;
   close(): Promise<void>;
+  /** The signal token the engine handed a run — real random bits, recorded
+   *  as they were minted, so a test can replay its hook's exact call. */
+  signalTokenOf(runId: string): string | undefined;
 }
 
 /**
@@ -169,9 +173,15 @@ export async function startHarness(opts: { git?: boolean } = {}): Promise<Harnes
 
   // `signalUrlBase` is read at launch time, so the placeholder is replaced with
   // the real port once the listener is up — before any step can be spawned.
+  const issued = new Map<string, string>();
   const deps: EngineDeps = {
     now: () => new Date(),
     newId: randomUUID,
+    newSignalToken: ({ runId }) => {
+      const token = mintSignalToken();
+      issued.set(runId, token);
+      return token;
+    },
     spawn: defaultPipelineSpawn,
     signalUrlBase: "http://127.0.0.1:0",
     maxConcurrent: 4,
@@ -183,8 +193,8 @@ export async function startHarness(opts: { git?: boolean } = {}): Promise<Harnes
   const config: ArgusConfig = {
     port: 0,
     host: "127.0.0.1",
-    // Deliberately null: the signal route authenticates with the per-instance
-    // token the engine injected, which is the credential the hook actually has.
+    // Deliberately null: the signal route authenticates with the per-run token
+    // the engine injected, which is the credential the hook actually has.
     token: null,
     allowedHosts: [],
     allowedOrigins: [],
@@ -225,6 +235,7 @@ export async function startHarness(opts: { git?: boolean } = {}): Promise<Harnes
         `p${++pipelineCount}`,
       );
     },
+    signalTokenOf: (runId) => issued.get(runId),
     async close() {
       await engine.drain().catch(() => {});
       await new Promise<void>((resolve) => server.close(() => resolve()));

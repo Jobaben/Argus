@@ -65,6 +65,26 @@ export interface GateDecisionVerdictBasis {
   rubricDigest: string | null;
 }
 
+/** One run's trajectory judgment, as an automated approval recorded it. */
+export interface GateDecisionTrajectoryBasis {
+  runId: string;
+  stepName: string;
+  verdictId: string;
+  at: string;
+  /** The weighted trajectory rating; null when the rubric declares only a check. */
+  score: number | null;
+  /** The trajectory bar; null when the rubric declares only a check. */
+  bar: number | null;
+  /** Signals the check held on (always empty in an approval). */
+  held: string[];
+  signalsVersion: number;
+  runtime: string | null;
+  requestedModel: string | null;
+  reportedModel: string | null;
+  promptVersion: number | null;
+  rubricDigest: string;
+}
+
 export interface GateDecisionPhaseRef {
   phaseId: string;
   attempt: number;
@@ -90,6 +110,12 @@ export interface GateDecision {
   phases: GateDecisionPhaseRef[];
   /** Automated approvals only. */
   verdicts?: GateDecisionVerdictBasis[];
+  /**
+   * Automated approvals of a phase whose rubric declares a trajectory: the
+   * trajectory judgment each relevant run was approved on, kept apart from
+   * the output basis. Absent when the rubric declares none.
+   */
+  trajectoryVerdicts?: GateDecisionTrajectoryBasis[];
   /** Whether the approval carried answers (stored on the phase, not here). */
   answersProvided?: boolean;
   /** A revise note, clipped. It is operator-authored and already reaches the next prompt. */

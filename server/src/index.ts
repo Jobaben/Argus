@@ -308,6 +308,9 @@ const autopsyWatcher = createAutopsyWatcher({
 const verdictWatcher = createVerdictWatcher({
   runner: analysis,
   now: () => new Date(),
+  // Trajectory analysis reads the same transcripts Autopsy does. It runs only
+  // for rubrics that declare a trajectory.
+  readLines: readSessionLines,
   readRuns,
   readSchedules,
   readPipelines,

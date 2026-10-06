@@ -56,6 +56,56 @@ describe("StepDrawer", () => {
     expect(screen.getByText("Release train · Draft release notes")).toBeInTheDocument();
   });
 
+  it("describes a completion as the agent's report, never as verification", async () => {
+    stubRun({ id: "run_0003", log: "" });
+    const base = { signal: "completed", source: "signal", at: "2026-07-07T10:01:00.000Z" } as const;
+    const { rerender } = render(
+      <StepDrawer
+        selection={selection({
+          step: step({
+            completion: { ...base, policy: "required", marker: "succeeded", verdict: "accepted" },
+          }),
+        })}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("agent reported succeeded — accepted")).toBeInTheDocument();
+    rerender(
+      <StepDrawer
+        selection={selection({
+          step: step({
+            completion: { ...base, policy: "lenient", marker: "missing", verdict: "accepted" },
+          }),
+        })}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByText("no outcome marker — accepted under the lenient policy"),
+    ).toBeInTheDocument();
+    rerender(
+      <StepDrawer
+        selection={selection({
+          step: step({
+            completion: {
+              ...base,
+              policy: "required",
+              marker: "missing",
+              verdict: "refused",
+              reason: "completion refused as unverified",
+              hook: { version: 2, marker: "succeeded", agrees: false },
+            },
+          }),
+        })}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByText("no outcome marker — completion refused; hook reported succeeded"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/verified/)).toBeNull();
+  });
+
   it("shows the run's cost, tokens, duration and model", async () => {
     stubRun({ id: "run_0003", log: "" });
     render(<StepDrawer selection={selection()} onClose={vi.fn()} />);

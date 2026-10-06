@@ -25,6 +25,7 @@ import path from "node:path";
 import { buildChildEnv } from "./childEnv.js";
 import { childTreeStopper } from "../processTree.js";
 import type { CheckResult, PhaseCheck, VerificationReport } from "../sources/pipelineTypes.js";
+import { evaluateTrajectoryCheck, type TrajectoryRunInput } from "../sources/trajectory.js";
 
 /** Combined stdout+stderr is capped in memory; only the tail is kept as evidence. */
 export const MAX_COMMAND_OUTPUT_BYTES = 16 * 1024;
@@ -274,6 +275,13 @@ export interface CheckContext {
   defaultCommandTimeoutMs?: number;
   /** Environment for command checks. Default: process.env with ARGUS_TOKEN and ARGUS_WEBHOOK_URL removed. */
   env?: Record<string, string>;
+  /**
+   * The relevant runs' trajectory signals, for `trajectory` checks: read by
+   * the engine from the Recorder (`sources/recorder.ts`) over each run's
+   * transcript. Absent = nothing to read, which a `trajectory` check treats
+   * as insufficient input, never as clean.
+   */
+  trajectoryRuns?: () => Promise<TrajectoryRunInput[]>;
 }
 
 /** Human label for a check: its own `label`, else a kind-appropriate default. */
@@ -293,12 +301,14 @@ export function checkLabel(check: PhaseCheck): string {
       return `file: ${check.path}`;
     case "changed-files":
       return "changed files";
+    case "trajectory":
+      return `trajectory: ${Object.keys(check.thresholds).join(", ")}`;
   }
 }
 
 function result(
   check: PhaseCheck,
-  status: "passed" | "failed",
+  status: CheckResult["status"],
   detail: string,
   durationMs: number,
   extra?: { exitCode?: number | null; output?: string },
@@ -610,6 +620,12 @@ export async function runCheck(check: PhaseCheck, ctx: CheckContext): Promise<Ch
         return await runFileLikeCheck(check, ctx.cwd);
       case "changed-files":
         return await runChangedFilesCheck(check, ctx);
+      case "trajectory": {
+        const started = Date.now();
+        const runs = ctx.trajectoryRuns ? await ctx.trajectoryRuns() : [];
+        const out = evaluateTrajectoryCheck(check, runs);
+        return result(check, out.status, out.detail, Date.now() - started);
+      }
     }
   } catch (e) {
     return result(check, "failed", e instanceof Error ? e.message : String(e), 0);
@@ -618,8 +634,10 @@ export async function runCheck(check: PhaseCheck, ctx: CheckContext): Promise<Ch
 
 /**
  * Run every check sequentially — never stopping early, because the report
- * itself is the evidence a failed phase leaves behind. Status is "passed" iff
- * every check passed.
+ * itself is the evidence a failed phase leaves behind. Status is "failed" iff
+ * any check failed. A `not-evaluated` check (only an optional `trajectory`
+ * check lacking its input produces one) does not fail the report, and is
+ * never counted as passed.
  */
 export async function runChecks(
   checks: PhaseCheck[],
@@ -632,6 +650,6 @@ export async function runChecks(
     results.push(await runCheck(check, ctx));
   }
   const endedAt = now().toISOString();
-  const status = results.every((r) => r.status === "passed") ? "passed" : "failed";
+  const status = results.some((r) => r.status === "failed") ? "failed" : "passed";
   return { status, startedAt, endedAt, checks: results };
 }

@@ -344,3 +344,65 @@ test("only ready autopsies contribute a failure class to clustering", async () =
   assert.equal(classes.get("ready"), "timeout");
   assert.equal(classes.has("broken"), false, "a pass with no diagnosis is not a diagnosis");
 });
+
+// ── Prompt bytes (Hardening Item 5) ─────────────────────────────────────────
+
+/** A transcript exercising every timeline shape: text, thinking, a tool that
+ *  errored, an edit, a long multi-line label, and an orphan error result. */
+function goldenLines(): unknown[] {
+  return [
+    {
+      type: "user",
+      timestamp: iso(500),
+      message: { role: "user", content: "Triage the overnight failures.\n  Be brief." },
+    },
+    assistant(1_000, [{ type: "thinking", thinking: "First,\n\tread the   lockfile." }]),
+    assistant(2_000, [
+      { type: "tool_use", id: "t1", name: "Bash", input: { command: "npm ci\n--no-audit" } },
+    ]),
+    {
+      type: "user",
+      timestamp: iso(4_500),
+      message: {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "t1", is_error: true, content: "ENOENT lockfile" },
+        ],
+      },
+    },
+    assistant(6_000, [
+      {
+        type: "tool_use",
+        id: "t2",
+        name: "Edit",
+        input: { file_path: "/repo/src/a.ts", old_string: "a\nb", new_string: "c" },
+      },
+    ]),
+    assistant(7_000, [{ type: "text", text: `long ${"word ".repeat(120)}end` }]),
+    {
+      type: "user",
+      timestamp: iso(8_000),
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "zz", is_error: true, content: "orphan" }],
+      },
+    },
+  ];
+}
+
+test("the Autopsy prompt bytes are unchanged by the shared timeline formatter", async () => {
+  const { createHash } = await import("node:crypto");
+  const sha = (s: string) => createHash("sha256").update(s).digest("hex");
+  const rec = buildRecording(run({ outcome: "failed" }), goldenLines(), NOW);
+  const prompt = buildAutopsyPrompt(run({ outcome: "failed" }), rec);
+  const truncated = buildAutopsyPrompt(run(), { ...rec, truncated: true });
+  const empty = buildAutopsyPrompt(run(), buildRecording(run(), [], NOW));
+  assert.deepEqual(
+    [sha(prompt), sha(truncated), sha(empty)],
+    [
+      "5110dda2db9975030989894ec3240fe7b93b8ca167c5c57078094ec6c42934ea",
+      "fcbc387e695ee3948796183128699b3a9e6d9ce51118222d49f398fcb66f4c4e",
+      "6b0bec2b827b7c917f1bf48308f9de5782c4c8b1a734b2aea0d4475908e10b4a",
+    ],
+  );
+});

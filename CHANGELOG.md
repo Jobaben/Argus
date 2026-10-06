@@ -7,6 +7,111 @@ All notable changes to Argus are documented here. The format follows
 
 ### Added
 
+- **Trajectory signals and optional judging (Hardening Item 5, off by default).**
+  A rubric may declare `trajectory` to assess _how_ an agent worked, apart from
+  what it produced. Without it nothing changes, and the output `rubricDigest` is
+  byte for byte what it was.
+  - Five deterministic heuristics run over the run's Recorder events:
+    `repetition` (an identical non-file tool label three or more times),
+    `errors` (observed at three), `edit-revert` (mirrored line counts on the
+    same path, `Edit`/`MultiEdit` only), `path` (file-tool paths outside the
+    working directory or in a sensitive location) and `destructive-command` (a
+    fixed regex list over Bash commands). They are heuristics, not findings:
+    each has documented blind spots, a zero means "not observed", and a run with
+    no readable transcript is `skipped` and a truncated recording is incomplete
+    input: neither establishes a clean trajectory.
+  - `trajectory.check.holdOn` is an **automation hold** only: it withholds an
+    automated (Verdict watcher) approval on any observed signal it names, with no
+    model. It does not fail verification, pause a phase or affect an operator's
+    approval, and it is not a verification check. `trajectory.criteria` adds one bounded judge
+    call through the existing analysis runner, over the first 20 and last 60
+    events within a 14,000-character timeline budget, with the heuristics quoted
+    as heuristics. `minScore` marks a trajectory regression; it opens no issue.
+  - A trajectory assessment is a `kind: "trajectory"` verdict in the same store
+    under the same 400-record cap (no retention increase; a pruned judgment is
+    absent and holds the gate), bound to a separate `trajectoryRubricDigest`
+    over the goal, trajectory criteria, sorted `holdOn` and the signals
+    version. The pass runs once per tick after the output judgment; a busy or
+    budget-blocked runner writes nothing and retries.
+  - `autoApprove.trajectory` sets the trajectory bar (default: the `verdict`
+    bar). A gate whose rubric declares a trajectory needs, for every relevant
+    run, a current `ready` trajectory judgment under the current digest,
+    signals version and prompt version, a held-nothing check and a clearing
+    score. The approval carries a separate `trajectoryVerdicts` basis,
+    validated under the verdict store lock with the output basis and
+    reconstructed from stored records, with `held` recomputed from the stored
+    signals.
+  - **A `trajectory` PhaseCheck.** A phase's `checks` may now include
+    `{ kind: "trajectory", thresholds, requireTranscript? }`, a deterministic
+    verification check (no model) over the relevant runs' own transcripts: the
+    selected candidate's runs when one is selected, otherwise every step of the
+    attempt, and a verified candidate's own run. `thresholds` names at least one
+    signal with a whole-number maximum count from 0 to 10,000; unknown keys and
+    signals are refused at save. A count above its threshold is an observed
+    violation and fails the check, even on a truncated recording. Incomplete input
+    (no run record, no session, no readable transcript, a truncated recording with
+    no violation in what was kept, or no runs at all) cannot show the thresholds
+    held: with `requireTranscript` the check fails as insufficient input, and
+    without it the result is the new `CheckResult.status` `not-evaluated`, never
+    `passed`. A report is `failed` only when some check `failed`, so a
+    `not-evaluated` check does not fail it; the journal adds "(n not evaluated)"
+    and the gate drawer shows it as `–`. The Knowledge Ledger is unchanged, but a
+    `not-evaluated` result is never bindable as evidence: citing it refuses the
+    commit like any unsubstantiated citation.
+  - **A truncated recording never clears an automated approval.** The Recorder
+    keeps the last 2,000 events. Signals from a truncated recording now give
+    insufficient data `trajectory-signals-truncated` (alongside
+    `trajectory-signals-unavailable` for missing ones): neither is an observed
+    violation, and both withhold automation at the watcher's pre-qualification
+    and at the engine's automated-approval boundary. The verdict panel says a
+    truncated recording cannot clear the run.
+  - `GET /api/runs/:id/verdict` gains `trajectory` and `GET /api/verdicts`
+    gains `trajectoryTrends`; the run's verdict panel shows a one-line
+    trajectory note. Assessments are not Knowledge Ledger evidence and do not
+    change `evaluateSupport`.
+  - The H1 Verdict baseline is now `auto-approval-qualification` v2. v1
+    captures stay v1 and are never re-read under v2; the report has one row set
+    per version in use; the rating stays the minimum output score; paired model
+    agreement pools v1 and v2, which classify identically without a trajectory.
+    v2 was amended in place before it was published, so that it requires signals
+    from a complete, untruncated recording; its digest changed from the
+    never-released `13e14de3…` to `376097e99f957acd47876a64b85defc60975f984cb150b6be4938b2ab1299b34`
+    (v1, `b2041f39…`, is unchanged). A capture under the old digest is never
+    re-read. Autopsy's prompt bytes are unchanged: its timeline formatter moved to the
+    shared `sources/timeline.ts`, pinned by a test. See HARNESS §19.
+
+- **Per-instance transition log and replay (Hardening Item 1).** Each
+  instance now has `~/.claude/argus/transitions/<instanceId>.jsonl`: a
+  numbered, checksummed record per save, naming the pure transitions that ran,
+  what they changed in a projection of the instance, and a diagnostic summary
+  of the side effects the saved state owes. A pure fold reproduces the projection, and
+  `GET /api/instances/:id/transitions/integrity` compares it with the saved
+  instance (`untracked`, `consistent`, `partial`, `missing`, `degraded`,
+  `ahead`, `behind`, `gap`, `disagreement`, `corrupt`, with findings and the
+  first divergent path).
+  - It is evidence for replay and integrity diagnosis, never an authority:
+    effect recovery derives from committed instance, run and gate-operation
+    state and never reads the log (its `effects` summary is not consumed), and
+    it is separate from the observational journal, gate decisions, the
+    Decision Journal and the Knowledge Ledger.
+  - Records reuse the Decision Journal's primitives (checksummed envelope,
+    write-every-byte, fsync, torn-tail fence), moved to `server/src/durable/`
+    rather than copied.
+  - The replay is of a projection: the definition, trigger payload and large
+    values appear by digest, so the log cannot rebuild an agent's message. A
+    record over 16 KiB keeps its sequence number and loses its changes; a log
+    at 4 MiB stops accepting appends and is never pruned. If it cannot be
+    written, the instance save proceeds and records `degradedFrom`.
+  - A pipeline status change no declared transition accounts for is recorded
+    as `unattributed`. The engine no longer writes those fields itself; launch
+    planning, retry scheduling, failure classification, gate link/complete and
+    candidate tree cleanup are pure transitions. Tests run strict.
+  - New journal kinds: `phase.launch-recovered`, `step.termination-redelivered`
+    and `step.orphan-stopped`. See HARNESS §18 and ARCHITECTURE §5.
+  - Recovery now continues committed launches and knowledge commits while
+    another phase waits at a gate; agent outcomes and check results wait for the
+    gate decision, and only phases that are themselves `running` are touched.
+
 - **Decision Plane H1 shadow experiment (off by default).** With
   `ARGUS_DECISIONS=on` and `ARGUS_DECISIONS_H1_COLLECT=on`, Argus asks
   `gate.operator-action` v1 at ordinary gates: will the operator send this
@@ -370,6 +475,42 @@ unverifiable`, each rule exactly once. A **missing** rule refuses the whole
 
 ### Fixed
 
+- **A crash between a transition and its launch no longer leaves a phase
+  running forever.** A phase attempt the saved instance says is `running` with
+  no run planned (after a retry, revise, remediation or settle) is launched by
+  `reconcile` (`phase.launch-recovered`).
+
+- **A crash between recording a stop request and delivering it no longer
+  leaves the process running.** `Run.termination` is a request, not proof. All
+  stops go through one `terminateRun`, and after a restart a recorded request
+  whose process is still alive is delivered again under its original reason
+  (`step.termination-redelivered`). An adopted run past its deadline likewise.
+
+- **A sibling the post-failure sweep never reached is stopped on recovery.** A
+  still-alive run whose step was already decided, that did not report its own
+  outcome and that this process did not stop, is stopped
+  (`step.orphan-stopped`).
+
+- **A second queued launch of the same phase attempt can no longer start a
+  second set of runs.** `startPhase` refuses to plan an attempt whose steps
+  already carry run ids, before any side effect.
+
+- **Duplicate and late signals no longer re-decide a step.** A step that is no
+  longer `running` now ignores signals (`ignored: "step-not-running"`): a
+  repeated `completed` could overwrite the payload and result a sibling had
+  already read, and a late `failed` could fail a phase whose step had
+  succeeded. An ignored signal also used to rewrite its run record's
+  `outcome`, so a run whose completion was refused could be flipped to
+  `succeeded` by a repeated hook delivery. A genuine ignored signal is now
+  journalled and changes nothing.
+
+- **`retry.retryOn` accepts every class the contract names.** The validator
+  kept its own list and refused three classes the contract documents as
+  retryable on opt-in: `change-proposal`, `change-context-integrity` and
+  `acceptance-verification`. It now checks against `RetryableClass` itself,
+  so a class added to the contract cannot be forgotten there, and `unverified`
+  is accepted.
+
 - **Process trees are ended as trees, and their owners always settle.** An
   agent CLI or a check's shell spawns children that inherit its stdout, so
   ending only the spawned process could leave the owner waiting on a `close`
@@ -425,6 +566,91 @@ unverifiable`, each rule exactly once. A **missing** rule refuses the whole
   copy `~/.claude/argus/memory/` to `~/.claude-argus/memory/` to keep them.
 
 ### Changed
+
+- **The pipeline engine is split into modules (no behaviour change).**
+  `createEngine` was one ~7,000-line closure; it is now a set of factories in
+  `server/src/engine/` over one shared context, one per responsibility
+  (store, persistence, launch, lifecycle, failure, verification, knowledge
+  intake and commit, realization, candidates, signals, gates, reconcile).
+  Every function body moved byte for byte; `pipelineEngine.ts` keeps every
+  symbol it exported. A boundary test enforces that modules call each other
+  only through the typed `core.fns`, that nothing outside the engine imports
+  its modules, and that the pure layers never import the engine.
+
+- **Instance saves are durable and are transition commits.** An instance is
+  now published with its temp file fsynced before the rename and the
+  directory fsynced after it, and every save is a commit in a fixed order:
+  append and fsync the transition record, publish the instance carrying
+  `transitionLog.seq` (the commit point), and only then execute effects.
+  A record whose instance was never published is a proposal and is
+  re-anchored, not acted on. Gate decisions keep their own write-ahead record;
+  the link save is now a transition commit of its own (`gate-linked`), and the
+  approval commit point is still the instance save. On Windows a directory
+  cannot be fsynced, so that step is a no-op there; no NTFS performance
+  measurement was made, and nothing is claimed about hardware that lies about
+  its write cache. Recovery tests simulate a restart; they do not establish
+  power-loss durability.
+
+- **Per-run signal tokens (Hardening Item 3).** Every run of an instance used
+  to share its `signalToken`, so any run could complete, fail or pause any
+  other step of that instance. Each run that can signal now gets its own
+  random 256-bit token in `ARGUS_SIGNAL_TOKEN` (name unchanged, so installed
+  hooks keep working).
+  - Argus persists only `SignalAuthRecord`
+    `{ scheme: "run-token-v1", sha256, phaseId, attempt }` on the step and the
+    run: a SHA-256 over the token, instance id, phase id, attempt and run id.
+    The token is never written to `invocation.json`, the run, the instance or
+    any config file.
+  - A signal is accepted only for the exact run its token was minted for; a
+    sibling's, another instance's or another attempt's token is `403`. New
+    instances carry `signalScheme: "run-token-v1"` and never accept the
+    instance-wide token.
+  - Runtimes without a signal hook (OpenCode) are given no token, record
+    `signalAuth: { scheme: "none" }` and refuse every HTTP signal; they
+    complete from the run record, which is unaffected.
+  - This limits what a leaked token can reach. It is not a boundary between an
+    agent and its own hook, which share an OS user and environment.
+
+  **Compatibility.** A step launched before the upgrade, on an instance
+  without `signalScheme`, still accepts the legacy token, so a run in flight
+  can finish. Steps launched afterwards, including the next phase of that
+  instance, refuse it.
+
+- **Strict completion by default (Hardening Item 3).** A `completed` signal
+  used to be accepted whether or not the run's final message carried an
+  `ARGUS_OUTCOME` marker. Argus now classifies that message itself
+  (`succeeded`, `failed`, `blocked`, `missing`, `conflicting`) under a new
+  `completion: { marker: "required" | "lenient" }` policy, on the pipeline or
+  a phase (the phase wins; default `required`).
+  - Under `required`, a missing marker is refused as the new failure class
+    `unverified`. A conflicting marker is refused as `unverified` under either
+    policy, and a `failed`/`blocked` marker inside a `completed` is refused as
+    `signal`. `lenient` accepts only a missing marker.
+  - A refusal comes before Argus reads anything the run proposed, so no
+    delta, rule verification, change proposal or acceptance verification is
+    staged and no checks run. It is a new first rung in HARNESS §2.
+  - A marker is the agent's own report, not verification: checks, the result
+    schema, the gate and the knowledge commit remain separate authorities.
+  - The policy is read from the instance's definition snapshot, so a running
+    instance is unaffected by edits, and an instance started before the
+    upgrade runs under `required`.
+  - Each run's completion is recorded on its step as
+    `StepProgress.completion`. The step drawer words it as the agent's
+    report, and the Reliability card labels the class "unverified
+    completion".
+  - Run-record recovery (Codex, OpenCode) uses the same classifier, and a
+    missing or conflicting marker is now `unverified` rather than `exit-code`
+    under either policy.
+  - `retry.retryOn` now defaults to `["spawn", "exit-code", "unverified"]`.
+
+  **Migration.** To keep accepting completions with no marker, set
+  `{ "completion": { "marker": "lenient" } }` on the pipeline or a phase. A
+  policy that lists `retryOn` explicitly must add `"unverified"` to retry a
+  missing marker; previously an explicit `"exit-code"` covered it on the
+  run-record path. The stop hook (`HOOK_VERSION = 2`) now sends an additive
+  `completion: { hookVersion, marker }` field. Older hooks and older servers
+  keep working, but under `required` a disagreement between the hook's reading
+  and Argus's refuses the completion.
 
 - **CI also runs on Windows.** A `windows` job runs `npm ci`, the typecheck,
   the server tests with a per-test timeout, the web tests, and a check that

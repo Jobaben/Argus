@@ -11,6 +11,7 @@ import { readRun } from "./sources/runs.js";
 import { buildGateDecisionsResponse, readGateDecisions } from "./sources/gateDecisions.js";
 import { readDeltaRecord } from "./knowledge/staging.js";
 import { readLedger } from "./knowledge/store.js";
+import { testRunToken } from "./testSignalToken.js";
 
 /**
  * Recovery of interrupted gate decisions (Phase 0 follow-up).
@@ -59,6 +60,7 @@ function harness(over: Record<string, unknown> = {}) {
       newId: () => `id-${++counter}`,
       spawn,
       signalUrlBase: "http://localhost:7777",
+      newSignalToken: testRunToken,
       maxConcurrent: 8,
       tickMs: 30000,
       parentEnv: { PATH: process.env.PATH ?? "/bin", HOME: home },
@@ -142,7 +144,7 @@ async function signal(
     phaseId,
     runId,
     type,
-    token: inst.signalToken,
+    token: testRunToken(runId),
     payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain();

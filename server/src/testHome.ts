@@ -35,3 +35,10 @@ for (const [variable, prefix] of [
     process.env[variable] = mkdtempSync(path.join(tmpdir(), prefix));
   }
 }
+
+// Every pipeline status change the engine saves must be attributed to a
+// recorded transition (engine/persistence.ts). Under test an unattributed one
+// throws instead of warning, so a transition someone forgets to record fails
+// the suite where it happens. A test that needs the production behaviour
+// passes its own `onUnattributedTransition`.
+if (!process.env.ARGUS_STRICT_TRANSITIONS) process.env.ARGUS_STRICT_TRANSITIONS = "1";

@@ -8,6 +8,7 @@ import { createEngine } from "./pipelineEngine.js";
 import { fakeKill } from "./testPlatform.js";
 import type { ArgusConfig } from "./config.js";
 import type { AuthService } from "./auth.js";
+import { testRunToken } from "./testSignalToken.js";
 
 let home: string;
 beforeEach(() => {
@@ -47,6 +48,7 @@ function appWith(over: Partial<Parameters<typeof createEngine>[0]> = {}) {
     newId: () => `id-${Math.random().toString(36).slice(2)}`,
     spawn: hangingSpawn,
     signalUrlBase: "http://127.0.0.1:7777",
+    newSignalToken: testRunToken,
     maxConcurrent: 4,
     kill: fakeKill().kill,
     ...over,
@@ -129,7 +131,13 @@ test("real engine: a valid completed signal advances a non-gated phase and spawn
   const sig = await app.request(`/api/instances/${started.id}/signal`, {
     method: "POST",
     headers: same,
-    body: JSON.stringify({ phaseId: "a", runId, type: "completed", token: inst.signalToken }),
+    body: JSON.stringify({
+      phaseId: "a",
+      runId,
+      type: "completed",
+      token: testRunToken(runId),
+      payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
+    }),
   });
   assert.equal(sig.status, 202);
 
@@ -161,7 +169,7 @@ test("real engine: gated phase → needs-input pauses, approve advances to the n
       phaseId: "a",
       runId: inst.phases[0].steps[0].runId,
       type: "needs-input",
-      token: inst.signalToken,
+      token: testRunToken(inst.phases[0].steps[0].runId),
       payload: "Q?",
     }),
   });
@@ -194,7 +202,7 @@ test("real engine: revise re-runs the paused phase (200, back to running)", asyn
       phaseId: "a",
       runId: inst.phases[0].steps[0].runId,
       type: "needs-input",
-      token: inst.signalToken,
+      token: testRunToken(inst.phases[0].steps[0].runId),
     }),
   });
   assert.equal((await getInstance(app, started.id)).status, "awaiting-approval");
@@ -311,7 +319,7 @@ test("regression: an approval's principal comes from the session; a body claimin
       phaseId: "a",
       runId: inst.phases[0].steps[0].runId,
       type: "needs-input",
-      token: inst.signalToken,
+      token: testRunToken(inst.phases[0].steps[0].runId),
     }),
   });
 

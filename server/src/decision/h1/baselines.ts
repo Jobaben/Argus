@@ -189,7 +189,7 @@ export function applyGateRules(body: GateReviewBody): DeterministicResult {
   };
 }
 
-// ── The Verdict baseline, `auto-approval-qualification` v1 ──────────────────
+// ── The Verdict baseline, `auto-approval-qualification` v1 and v2 ───────────
 
 export const QUALIFICATION_V1 = {
   id: "auto-approval-qualification",
@@ -211,6 +211,42 @@ export const QUALIFICATION_V1_REF = {
   digest: canonicalDigest(QUALIFICATION_V1).sha256,
 };
 
+/**
+ * `auto-approval-qualification` v2 (Hardening Item 5): v1, plus the
+ * trajectory requirement Phase 0 now applies to a rubric that declares one.
+ * On a phase whose rubric declares no trajectory the two give the same
+ * classification — but a capture names the definition it was taken under, so
+ * every capture since trajectories exist is v2, and a v1 capture is reported
+ * as v1 and never re-read under v2's rule.
+ *
+ * Amended before v2 was ever published, when review found a truncated
+ * recording could pass a trajectory requirement: it is now insufficient input.
+ * The amendment changed v2's digest. A capture or configuration recorded
+ * under the earlier, never-released v2 text carries a digest no registered
+ * definition has: it is scored in no Verdict row, and the report's
+ * qualification definition row reads `digest-mismatch`. It is never re-read
+ * under this definition.
+ */
+export const QUALIFICATION_V2 = {
+  id: "auto-approval-qualification",
+  version: 2,
+  rule: "sources/gatePolicy.autoApprovalQualification over the current output and trajectory verdicts at capture",
+  keeps: [
+    ...QUALIFICATION_V1.keeps,
+    "when the rubric declares a trajectory: a current, ready trajectory judgment under the trajectory digest, with signals from a complete (untruncated) recording, for every relevant run",
+    "when the rubric declares a trajectory: the trajectory check holds nothing and the minimum trajectory score clears the trajectory bar",
+    "the rating stays the minimum output score",
+  ],
+} as const;
+export const QUALIFICATION_V2_REF = {
+  id: QUALIFICATION_V2.id,
+  version: QUALIFICATION_V2.version,
+  digest: canonicalDigest(QUALIFICATION_V2).sha256,
+};
+
+/** Every qualification definition a capture may name, oldest first. */
+export const QUALIFICATION_REFS = [QUALIFICATION_V1_REF, QUALIFICATION_V2_REF] as const;
+
 export type VerdictClassification =
   "qualifies" | "below-threshold" | "not-configured" | "ineligible" | "insufficient-data";
 
@@ -231,9 +267,10 @@ export function verdictBaseline(
   phase: PhaseProgress,
   phaseDef: PhaseDef | undefined,
   currentByRun: ReadonlyMap<string, Verdict>,
+  trajectoryByRun: ReadonlyMap<string, Verdict> = new Map(),
 ): VerdictResult {
-  const q = autoApprovalQualification(phase, phaseDef, currentByRun);
-  const base = { definition: { ...QUALIFICATION_V1_REF } };
+  const q = autoApprovalQualification(phase, phaseDef, currentByRun, trajectoryByRun);
+  const base = { definition: { ...QUALIFICATION_V2_REF } };
   switch (q.status) {
     case "qualifies":
     case "below-threshold":

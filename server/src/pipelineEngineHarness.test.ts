@@ -25,6 +25,7 @@ import * as pipelinesMod from "./sources/pipelines.js";
 import * as instancesMod from "./sources/instances.js";
 import * as runsMod from "./sources/runs.js";
 import * as journalMod from "./sources/journal.js";
+import { testRunToken } from "./testSignalToken.js";
 
 async function load() {
   // Loosely typed, as the dynamic imports these replaced were: the tests read
@@ -57,6 +58,7 @@ const baseDeps = (over: Record<string, unknown> = {}) => ({
   now: () => new Date(2026, 5, 30, 12, 0),
   newId: () => `id-${++counter}`,
   signalUrlBase: "http://localhost:7777",
+  newSignalToken: testRunToken,
   maxConcurrent: 4,
   tickMs: 30000,
   // A controlled parent environment: an ordinary var, a home var, an Argus
@@ -111,7 +113,8 @@ test("start passes a prepared invocation to spawn, and it is readable back off d
   assert.equal(rawEnv.ARGUS_TOKEN, undefined);
   assert.equal(prepared.env.ARGUS_TOKEN, undefined);
   assert.equal(prepared.env.PATH, "/bin");
-  assert.equal(prepared.env.ARGUS_SIGNAL_TOKEN, inst!.signalToken);
+  assert.equal(prepared.env.ARGUS_SIGNAL_TOKEN, testRunToken(rec.calls[0].run.id));
+  assert.notEqual(prepared.env.ARGUS_SIGNAL_TOKEN, inst!.signalToken);
   assert.ok(prepared.env.ARGUS_ARTIFACT_DIR);
   assert.ok(prepared.record.envStripped.includes("ARGUS_TOKEN"));
 
@@ -376,7 +379,8 @@ test("a completion signal that beats the deadline wins, permanently", async () =
     phaseId: "only",
     runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   d.resolve({ code: 0 });
 
@@ -422,7 +426,8 @@ test("a passing verification concludes the phase and starts the next one", async
     phaseId: "checked",
     runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
 
@@ -468,7 +473,8 @@ test("a failing verification fails the phase and never starts the next one", asy
     phaseId: "checked",
     runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
 
@@ -505,7 +511,8 @@ test("a failing check never lets a gated phase reach awaiting-approval", async (
     phaseId: "gated",
     runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
 
@@ -543,7 +550,8 @@ test("a passing check still waits at the gate, and approve advances past it", as
     phaseId: "gated",
     runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
 
@@ -582,7 +590,8 @@ test("a verification-triggered retry carries a repair note naming the failed che
     phaseId: "checked",
     runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
 
@@ -632,7 +641,7 @@ test("artifact directories are per-phase, reset on revise, and interpolate acros
     phaseId: "one",
     runId: runId1,
     type: "failed",
-    token: inst!.signalToken,
+    token: testRunToken(runId1),
   });
   await e.revise(inst!.id);
 
@@ -647,7 +656,8 @@ test("artifact directories are per-phase, reset on revise, and interpolate acros
     phaseId: "one",
     runId: runId2,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(runId2),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain(); // phase "two" is launched off a detached continuation
 
@@ -1061,7 +1071,8 @@ test("an instance-scoped workspace is shared by every phase and removed when the
     phaseId: "one",
     runId: inst!.phases[0].steps[0].runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(inst!.phases[0].steps[0].runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
   // The second phase reuses the same tree rather than cutting its own.
@@ -1076,7 +1087,8 @@ test("an instance-scoped workspace is shared by every phase and removed when the
     phaseId: "two",
     runId: mid.phases[1].steps[0].runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(mid.phases[1].steps[0].runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
 
@@ -1116,7 +1128,7 @@ test("an attempt-scoped workspace is fresh per attempt, and the superseded one i
     phaseId: "gate",
     runId: inst!.phases[0].steps[0].runId,
     type: "needs-input",
-    token: inst!.signalToken,
+    token: testRunToken(inst!.phases[0].steps[0].runId),
   });
   await e.revise(inst!.id, "try again");
   await e.drain();
@@ -1199,7 +1211,8 @@ test("keep leaves the worktree directory behind, and the phase's checks run insi
     phaseId: "build",
     runId: inst!.phases[0].steps[0].runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(inst!.phases[0].steps[0].runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
 
@@ -1243,7 +1256,8 @@ const signalOf = (e: any, inst: any, runId: string, type = "completed") =>
     phaseId: "impl",
     runId,
     type,
-    token: inst.signalToken,
+    token: testRunToken(runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
 
 test("candidates launch N isolated drafts of one step, each with its own tree and artifacts", async (t) => {
@@ -1566,8 +1580,8 @@ test("only the winner's payload and result reach the next phase", async (t) => {
     phaseId: "impl",
     runId: steps[0].runId,
     type: "completed",
-    token: inst!.signalToken,
-    payload: { from: "the losing draft" },
+    token: testRunToken(steps[0].runId),
+    payload: { from: "the losing draft", last_assistant_message: "ARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
   await e.onSignal(inst!.id, {
@@ -1575,13 +1589,16 @@ test("only the winner's payload and result reach the next phase", async (t) => {
     phaseId: "impl",
     runId: steps[1].runId,
     type: "completed",
-    token: inst!.signalToken,
-    payload: { from: "the winning draft" },
+    token: testRunToken(steps[1].runId),
+    payload: { from: "the winning draft", last_assistant_message: "ARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
 
   const after = await instances.readInstance(inst!.id);
-  assert.deepEqual(after.phases[0].payload, { from: "the winning draft" });
+  assert.deepEqual(after.phases[0].payload, {
+    from: "the winning draft",
+    last_assistant_message: "ARGUS_OUTCOME: succeeded",
+  });
   const shipPrompt = rec.calls[rec.calls.length - 1].run.prompt;
   assert.match(shipPrompt, /the winning draft/);
   assert.doesNotMatch(shipPrompt, /the losing draft/);
@@ -1691,7 +1708,8 @@ test("a settled instance trims NOTES.md back to its cap, and journals memory.tri
     phaseId: "only",
     runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
   await waitFor(async () => (await instances.readInstance(inst!.id)).status === "succeeded");
@@ -1741,7 +1759,7 @@ test("{{previous.instance}} summarizes the last settled instance of the same pip
     phaseId: "only",
     runId: first!.phases[0].steps[0].runId,
     type: "failed",
-    token: first!.signalToken,
+    token: testRunToken(first!.phases[0].steps[0].runId),
     payload: { reason: "the build broke" },
   });
   await e.drain();

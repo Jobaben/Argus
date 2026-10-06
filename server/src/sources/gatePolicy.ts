@@ -1,6 +1,14 @@
-import type { Verdict } from "@argus/contracts";
+import type { Rubric, TrajectorySignalKind, Verdict } from "@argus/contracts";
 import type { PhaseDef, PhaseProgress, StepProgress } from "./pipelineTypes.js";
 import { rubricDigest } from "./verdict.js";
+import {
+  hasTrajectory,
+  heldSignals,
+  judgesTrajectory,
+  TRAJECTORY_PROMPT_VERSION,
+  TRAJECTORY_SIGNALS_VERSION,
+  trajectoryRubricDigest,
+} from "./trajectory.js";
 
 /**
  * Which gates an automated judgment may open.
@@ -119,6 +127,107 @@ export interface QualificationBasisEntry {
   promptVersion: number | null;
 }
 
+/** One relevant run's trajectory judgment, as a qualification saw it. */
+export interface TrajectoryBasisEntry {
+  runId: string;
+  stepName: string;
+  verdictId: string;
+  at: string;
+  /** The weighted trajectory rating; null for a check-only rubric. */
+  score: number | null;
+  /** Signals the check holds on that were observed, recomputed from the stored signals. */
+  held: TrajectorySignalKind[];
+  signalsVersion: number;
+  rubricDigest: string;
+  runtime: string | null;
+  requestedModel: string | null;
+  reportedModel: string | null;
+  promptVersion: number | null;
+}
+
+export type TrajectoryInsufficiency =
+  | "no-trajectory-verdict"
+  | "trajectory-without-id"
+  | "trajectory-not-ready"
+  | "trajectory-rubric-mismatch"
+  | "trajectory-signals-unavailable"
+  | "trajectory-signals-truncated"
+  | "trajectory-prompt-mismatch";
+
+/**
+ * Whether one run's current trajectory verdict can stand in an approval's
+ * basis — the one definition shared by the qualification below and the
+ * engine's automated-approval boundary. Everything is read from the stored
+ * record, and `held` is recomputed from its stored signals against the
+ * rubric's check rather than taken from the record.
+ *
+ * A missing, unready, mismatched or signal-less judgment, or one over a
+ * truncated recording, is insufficient: it holds the gate. Whether the score
+ * clears the bar, and whether anything was held, is the caller's comparison.
+ */
+export function trajectoryBasisEntry(
+  v: Verdict | undefined,
+  rubric: Rubric,
+  runId: string,
+  stepName: string,
+): { ok: true; entry: TrajectoryBasisEntry } | { ok: false; reason: TrajectoryInsufficiency } {
+  if (!v || v.kind !== "trajectory" || v.runId !== runId) {
+    return { ok: false, reason: "no-trajectory-verdict" };
+  }
+  if (!v.id) return { ok: false, reason: "trajectory-without-id" };
+  if (v.status !== "ready") return { ok: false, reason: "trajectory-not-ready" };
+  if (v.rubricDigest !== trajectoryRubricDigest(rubric)) {
+    return { ok: false, reason: "trajectory-rubric-mismatch" };
+  }
+  const signals = v.trajectory?.signals;
+  if (
+    !signals ||
+    signals.transcript !== "present" ||
+    signals.version !== TRAJECTORY_SIGNALS_VERSION ||
+    !Array.isArray(signals.signals)
+  ) {
+    return { ok: false, reason: "trajectory-signals-unavailable" };
+  }
+  // A truncated recording dropped its earliest events. What it kept cannot
+  // show that a held signal never occurred, nor give a judge the whole path:
+  // insufficient input — not an observed violation, and never clean.
+  if (signals.truncated !== false) {
+    return { ok: false, reason: "trajectory-signals-truncated" };
+  }
+  if (judgesTrajectory(rubric)) {
+    if (v.score === null || typeof v.score !== "number") {
+      return { ok: false, reason: "trajectory-not-ready" };
+    }
+    if (v.provenance?.promptVersion !== TRAJECTORY_PROMPT_VERSION) {
+      return { ok: false, reason: "trajectory-prompt-mismatch" };
+    }
+  }
+  return {
+    ok: true,
+    entry: {
+      runId,
+      stepName,
+      verdictId: v.id,
+      at: v.at,
+      score: judgesTrajectory(rubric) ? v.score : null,
+      held: heldSignals(signals, rubric.trajectory?.check?.holdOn ?? []),
+      signalsVersion: signals.version,
+      rubricDigest: v.rubricDigest,
+      runtime: v.provenance?.runtime ?? null,
+      requestedModel: v.provenance?.requestedModel ?? null,
+      reportedModel: v.provenance?.reportedModel ?? null,
+      promptVersion: v.provenance?.promptVersion ?? null,
+    },
+  };
+}
+
+/** The bar a trajectory score is compared against: `autoApprove.trajectory`,
+ *  else the output bar. Null when the rubric declares no trajectory criteria. */
+export function trajectoryBar(phaseDef: PhaseDef): number | null {
+  if (!judgesTrajectory(phaseDef.rubric)) return null;
+  return phaseDef.autoApprove?.trajectory ?? phaseDef.autoApprove?.verdict ?? null;
+}
+
 /**
  * Whether the Phase 0 auto-approval rules would open this gate, over the
  * verdicts given (RFC §M.3, §Q.6). Pure: it reads nothing and opens nothing.
@@ -133,11 +242,18 @@ export interface QualificationBasisEntry {
  *   what the attempt staged (`cause: "knowledge"`);
  * - `not-configured` — the phase declares no `autoApprove` bar, or no rubric;
  * - `insufficient-data` — a relevant step did not succeed, has no run, or has
- *   no current, `ready`, scored verdict with an id under this rubric;
- * - `below-threshold` — completely judged, and the lowest score is under the bar;
- * - `qualifies` — completely judged, and the lowest score clears the bar.
+ *   no current, `ready`, scored verdict with an id under this rubric; or, when
+ *   the rubric declares a trajectory, no usable current trajectory judgment
+ *   ({@link trajectoryBasisEntry});
+ * - `below-threshold` — completely judged, and the lowest score is under the
+ *   bar — or a trajectory score is under its bar, or the trajectory check held;
+ * - `qualifies` — completely judged, and everything clears.
  *
- * `currentByRun` must hold each run's **current** verdict (`currentVerdicts`).
+ * `currentByRun` must hold each run's **current** output verdict
+ * (`currentVerdicts`), and `trajectoryByRun` its current trajectory verdict
+ * (`currentVerdicts(list, "trajectory")`). A rubric without a trajectory
+ * never reads `trajectoryByRun`, and its result is exactly what it was before
+ * trajectories existed.
  */
 export type AutoApprovalQualification =
   | { status: "ineligible"; cause: "pause" | "knowledge"; reasons: string[] }
@@ -150,7 +266,8 @@ export type AutoApprovalQualification =
         | "no-verdict"
         | "verdict-without-id"
         | "verdict-not-ready"
-        | "rubric-mismatch";
+        | "rubric-mismatch"
+        | TrajectoryInsufficiency;
       runId: string | null;
       bar: number;
       rubricDigest: string;
@@ -161,12 +278,21 @@ export type AutoApprovalQualification =
       bar: number;
       rubricDigest: string;
       basis: QualificationBasisEntry[];
+      /** Present only when the rubric declares a trajectory. */
+      trajectory?: {
+        rubricDigest: string;
+        bar: number | null;
+        lowest: number | null;
+        held: TrajectorySignalKind[];
+        basis: TrajectoryBasisEntry[];
+      };
     };
 
 export function autoApprovalQualification(
   phase: PhaseProgress,
   phaseDef: PhaseDef | undefined,
   currentByRun: ReadonlyMap<string, Verdict>,
+  trajectoryByRun: ReadonlyMap<string, Verdict> = new Map(),
 ): AutoApprovalQualification {
   if (phase.status !== "awaiting-approval" || phase.pause !== "gate") {
     return {
@@ -224,11 +350,40 @@ export function autoApprovalQualification(
     });
   }
   const lowest = Math.min(...basis.map((b) => b.score));
+  if (!hasTrajectory(phaseDef.rubric)) {
+    return {
+      status: lowest < bar ? "below-threshold" : "qualifies",
+      lowest,
+      bar,
+      rubricDigest: digest,
+      basis,
+    };
+  }
+  const tBasis: TrajectoryBasisEntry[] = [];
+  for (const step of steps) {
+    const runId = step.runId as string;
+    const got = trajectoryBasisEntry(trajectoryByRun.get(runId), phaseDef.rubric, runId, step.name);
+    if (!got.ok) return insufficient(got.reason, runId);
+    tBasis.push(got.entry);
+  }
+  const tBar = trajectoryBar(phaseDef);
+  const scores = tBasis.map((b) => b.score).filter((n): n is number => n !== null);
+  const tLowest = scores.length > 0 ? Math.min(...scores) : null;
+  const held = [...new Set(tBasis.flatMap((b) => b.held))];
+  const below =
+    lowest < bar || held.length > 0 || (tBar !== null && tLowest !== null && tLowest < tBar);
   return {
-    status: lowest < bar ? "below-threshold" : "qualifies",
+    status: below ? "below-threshold" : "qualifies",
     lowest,
     bar,
     rubricDigest: digest,
     basis,
+    trajectory: {
+      rubricDigest: trajectoryRubricDigest(phaseDef.rubric),
+      bar: tBar,
+      lowest: tLowest,
+      held,
+      basis: tBasis,
+    },
   };
 }

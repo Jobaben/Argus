@@ -1,6 +1,7 @@
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
+import { defaultWrite, syncDir, writeAll, type FaultHook, type WriteFn } from "../durable/io.js";
 
 /**
  * Write a file atomically: write to a unique temp sibling, then rename over the
@@ -22,6 +23,58 @@ export async function atomicWriteFile(file: string, data: string): Promise<void>
     await rm(tmp, { force: true }).catch(() => {});
     throw e;
   }
+}
+
+/**
+ * {@link atomicWriteFile}, made durable: the temp file's bytes are written in
+ * full and fsynced before the rename, and the directory is fsynced after it,
+ * so once this returns the new contents survive a crash of this process or of
+ * the machine (subject to what `durable/io.ts` says about each platform).
+ *
+ * Everything else is unchanged: same temp naming, same file mode, the same
+ * bounded rename retries on Windows ({@link renameOver}), and the temp file
+ * removed on any failure. `fault` runs between the steps so tests can
+ * interrupt each one; `write` lets them inject short or failing writes.
+ */
+export async function atomicWriteFileDurable(
+  file: string,
+  data: string,
+  deps: {
+    fault?: FaultHook;
+    write?: WriteFn;
+    /** Passed to {@link renameOver}: the rename itself, the platform whose
+     *  retry rules apply, and the wait between retries. */
+    renameDeps?: Parameters<typeof renameOver>[2];
+  } = {},
+): Promise<void> {
+  const fault = deps.fault ?? (() => {});
+  await mkdir(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+  try {
+    const fh = await open(tmp, "wx");
+    try {
+      await writeAll(fh, Buffer.from(data, "utf8"), deps.write ?? defaultWrite);
+      await fh.sync();
+    } finally {
+      await fh.close();
+    }
+    await fault("temp-synced");
+    await renameOver(tmp, file, deps.renameDeps ?? {});
+  } catch (e) {
+    await rm(tmp, { force: true }).catch(() => {});
+    throw e;
+  }
+  await fault("renamed");
+  await syncDir(path.dirname(file));
+}
+
+/** Atomically and durably write a value as pretty-printed JSON. */
+export async function atomicWriteJsonDurable(
+  file: string,
+  value: unknown,
+  deps: Parameters<typeof atomicWriteFileDurable>[2] = {},
+): Promise<void> {
+  await atomicWriteFileDurable(file, JSON.stringify(value, null, 2), deps);
 }
 
 /** Atomically write a value as pretty-printed JSON. */

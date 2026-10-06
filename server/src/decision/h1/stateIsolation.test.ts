@@ -19,6 +19,7 @@ import type { ArgusConfig } from "../../config.js";
 import { evaluateSupport } from "../../knowledge/kernel.js";
 import { createClaim, readLedger } from "../../knowledge/store.js";
 import { createEngine } from "../../pipelineEngine.js";
+import { testRunToken } from "../../testSignalToken.js";
 import { createAnalysisRunner, type AnalysisSpawn } from "../../sources/analysis.js";
 import { readInstance } from "../../sources/instances.js";
 import { writeRun } from "../../sources/runs.js";
@@ -192,6 +193,9 @@ async function scenario(collect: boolean, work: string) {
   const engine = createEngine({
     now: () => new Date(2026, 7, 13, 12, 0),
     newId: () => `id-${++counter}`,
+    // Deterministic per-run signal tokens: the two runs being compared must
+    // write byte-identical instance records, digests included.
+    newSignalToken: testRunToken,
     signalUrlBase: "http://localhost:7777",
     maxConcurrent: 4,
     tickMs: 30000,
@@ -240,7 +244,9 @@ async function scenario(collect: boolean, work: string) {
         phaseId: step.phaseId,
         runId: step.runId,
         type: "completed",
-        token,
+        // The run's own token, from the environment it was spawned with —
+        // exactly what its stop hook would send.
+        token: step.env.ARGUS_SIGNAL_TOKEN,
         payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
         ...readResultFile(step.env.ARGUS_RESULT_FILE),
       }),

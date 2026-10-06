@@ -26,6 +26,7 @@ import {
 } from "./verification.js";
 import type { CapabilityProfile } from "../sources/pipelineTypes.js";
 import { fakeKill, symlinkSkip } from "../testPlatform.js";
+import { testRunToken } from "../testSignalToken.js";
 
 // ── Shared engine-test helpers (mirrors ../pipelineEngineHarness.test.ts) ────
 
@@ -63,6 +64,7 @@ const baseDeps = (over: Record<string, unknown> = {}) => ({
   now: () => new Date(2026, 5, 30, 12, 0),
   newId: () => `id-${++counter}`,
   signalUrlBase: "http://localhost:7777",
+  newSignalToken: testRunToken,
   maxConcurrent: 4,
   tickMs: 30000,
   // Portable as a check environment too; see the note on the same fixture in
@@ -339,7 +341,8 @@ test("a command check runs under the phase's own env policy: a denied variable i
     phaseId: "checked",
     runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
 
@@ -373,7 +376,8 @@ test("control: with no capabilities declared, the same check fails because the v
     phaseId: "checked",
     runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
 
@@ -411,7 +415,8 @@ test("a completion signal that beats the deadline leaves no timeout stamp on the
     phaseId: "only",
     runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
 
@@ -854,7 +859,7 @@ test("an agent-signalled failure with no retry policy still persists failureClas
     phaseId: "only",
     runId,
     type: "failed",
-    token: inst!.signalToken,
+    token: testRunToken(runId),
   });
   await e.drain();
 
@@ -886,7 +891,8 @@ test("a phase declaring a result whose completion carries none is also classed a
     phaseId: "checked",
     runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
 
@@ -916,7 +922,8 @@ test("a process that exits non-zero after its own completion signal is journalle
     phaseId: "only",
     runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
 

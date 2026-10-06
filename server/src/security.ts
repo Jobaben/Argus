@@ -106,8 +106,8 @@ const SELF_AUTHENTICATING = new Set(["/api/federation/summary"]);
 /**
  * The completion signal is the same exemption, for the same reason.
  *
- * A headless agent reports its step finished by POSTing the per-instance token
- * the engine injected as `ARGUS_SIGNAL_TOKEN` — in the body, because the hook
+ * A headless agent reports its step finished by POSTing the per-run token the
+ * engine injected as `ARGUS_SIGNAL_TOKEN` — in the body, because the hook
  * has no way to know the operator's `ARGUS_TOKEN`. So the shared-secret check
  * rejects the signal before `onSignal` can verify the token that route actually
  * authenticates with, and every step of every pipeline ends as "run ended
@@ -116,7 +116,8 @@ const SELF_AUTHENTICATING = new Set(["/api/federation/summary"]);
  * silently disable pipelines.
  *
  * Matched by shape rather than by name because the instance id is in the path;
- * `onSignal` still 404s an unknown instance and 403s a token mismatch, and the
+ * `onSignal` still 404s an unknown instance and 403s a token that is not the
+ * named run's own (harness/signalToken.ts), and the
  * anchors keep the exemption off the sibling routes (`approve`, `abort`) that
  * have no second credential of their own.
  */

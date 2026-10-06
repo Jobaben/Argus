@@ -14,6 +14,10 @@ const FAILURE_LABEL: Record<PhaseFailureClass, string> = {
   "change-proposal": "change proposal",
   "change-context-integrity": "change context integrity",
   "acceptance-verification": "acceptance verification",
+  // A completion with no (or contradictory) ARGUS_OUTCOME marker — the agent
+  // reported nothing Argus could accept. Not "failed verification": no check
+  // was involved.
+  unverified: "unverified completion",
   configuration: "configuration",
 };
 

@@ -16,6 +16,7 @@ import { readJournal } from "./sources/journal.js";
 import { readRun } from "./sources/runs.js";
 import type { EngineDeps } from "./pipelineEngine.js";
 import type { PipelineInstance } from "./sources/pipelineTypes.js";
+import { testRunToken } from "./testSignalToken.js";
 
 /**
  * Routing through the real engine: what gets persisted, what gets journalled,
@@ -63,6 +64,7 @@ const baseDeps = (over: Partial<EngineDeps> & { spawn: EngineDeps["spawn"] }): E
   now: () => new Date(2026, 7, 13, 12, 0),
   newId: () => `id-${++counter}`,
   signalUrlBase: "http://localhost:7777",
+  newSignalToken: testRunToken,
   maxConcurrent: 4,
   tickMs: 30000,
   kill: fakeKill().kill,
@@ -142,7 +144,10 @@ async function complete(
     phaseId,
     runId: rec.calls[rec.calls.length - 1].runId,
     type: "completed",
-    token: inst.signalToken,
+    token: testRunToken(rec.calls[rec.calls.length - 1].runId),
+    // What a real stop hook delivers: the final message, ending with the
+    // marker the default completion policy requires.
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
     ...extra,
   });
 }
