@@ -1336,6 +1336,57 @@ test("verdict: a quality regression opens an issue even though the run exited 0"
   assert.match(after.issues[0].title, /quality below the bar for Nightly triage/);
 });
 
+test("verdict: a run's trajectory judgment is reported apart from its output verdict", async () => {
+  const app = makeAutopsyApp(VERDICT_ANSWER);
+  const traj = {
+    ...RUBRIC,
+    trajectory: { criteria: [{ id: "focus", label: "Focus" }], minScore: 4 },
+  };
+  writeSchedule({ rubric: traj });
+  writeRunRecord("traced", {});
+  const at = new Date().toISOString();
+  const { writeVerdict } = await import("./sources/verdict.js");
+  await writeVerdict({
+    id: "VT-1",
+    kind: "trajectory",
+    runId: "traced",
+    scheduleId: "s1",
+    scheduleName: "Nightly triage",
+    phaseId: null,
+    status: "ready",
+    at,
+    score: 3,
+    criteria: [],
+    summary: null,
+    regression: true,
+    minScore: 4,
+    costUsd: null,
+    tokens: null,
+    durationMs: null,
+    error: null,
+  });
+  const read = (await (
+    await app.request("/api/runs/traced/verdict", { headers: loopback })
+  ).json()) as { verdict: unknown; trajectory: { id: string } | null };
+  assert.equal(read.verdict, null, "a trajectory judgment is not the output verdict");
+  assert.equal(read.trajectory?.id, "VT-1");
+
+  const body = (await (await app.request("/api/verdicts", { headers: loopback })).json()) as {
+    trends: unknown[];
+    summary: { scored: number };
+    trajectoryTrends?: { key: string; minScore: number | null; points: unknown[] }[];
+  };
+  assert.equal(body.trends.length, 0);
+  assert.equal(body.summary.scored, 0);
+  assert.equal(body.trajectoryTrends?.[0].key, "schedule:s1");
+  assert.equal(body.trajectoryTrends?.[0].minScore, 4);
+  // A trajectory regression is not an output quality issue.
+  const issues = (await (await app.request("/api/issues", { headers: loopback })).json()) as {
+    issues: unknown[];
+  };
+  assert.equal(issues.issues.length, 0);
+});
+
 test("schedules: an invalid rubric is a clean 400, not a 500", async () => {
   const app = makeApp();
   const res = await app.request("/api/schedules", {

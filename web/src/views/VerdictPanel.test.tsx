@@ -8,6 +8,7 @@ const score = vi.fn(async () => {});
 
 const state: {
   verdict: Verdict | null;
+  trajectory: Verdict | null;
   rubric: Rubric | null;
   unavailable: string | null;
   loading: boolean;
@@ -15,6 +16,7 @@ const state: {
   actionError: string | null;
 } = {
   verdict: null,
+  trajectory: null,
   rubric: null,
   unavailable: null,
   loading: false,
@@ -62,6 +64,7 @@ function verdict(over: Partial<Verdict> = {}): Verdict {
 
 beforeEach(() => {
   state.verdict = null;
+  state.trajectory = null;
   state.rubric = null;
   state.unavailable = null;
   state.loading = false;
@@ -132,6 +135,71 @@ describe("VerdictPanel", () => {
     state.verdict = verdict();
     render(<VerdictPanel runId="run-1" />);
     expect(screen.getByRole("img", { name: "8.0 out of 10" })).toBeInTheDocument();
+  });
+});
+
+describe("VerdictPanel trajectory", () => {
+  const TRAJ: Rubric = { ...RUBRIC, trajectory: { criteria: [{ id: "focus", label: "Focus" }] } };
+  const signals = (observed: string[]) => ({
+    version: 1,
+    transcript: "present" as const,
+    events: 4,
+    truncated: false,
+    signals: (["repetition", "errors", "destructive-command"] as const).map((kind) => ({
+      kind,
+      count: observed.includes(kind) ? 2 : 0,
+      observed: observed.includes(kind),
+      examples: [],
+    })),
+  });
+
+  it("says nothing about trajectories when the rubric declares none", () => {
+    state.rubric = RUBRIC;
+    state.verdict = verdict();
+    render(<VerdictPanel runId="run-1" />);
+    expect(screen.queryByTestId("trajectory-note")).toBeNull();
+  });
+
+  it("shows the trajectory score and observed heuristics apart from the output score", () => {
+    state.rubric = TRAJ;
+    state.verdict = verdict();
+    state.trajectory = verdict({
+      kind: "trajectory",
+      score: 4,
+      trajectory: { signals: signals(["errors"]), held: [], judged: true },
+    });
+    render(<VerdictPanel runId="run-1" />);
+    const note = screen.getByTestId("trajectory-note");
+    expect(note.textContent).toMatch(/4\.0\/10/);
+    expect(note.textContent).toMatch(/heuristics observed: errors/);
+  });
+
+  it("a truncated recording with nothing observed is never presented as clean", () => {
+    state.rubric = TRAJ;
+    state.verdict = verdict();
+    state.trajectory = verdict({
+      kind: "trajectory",
+      score: null,
+      trajectory: { signals: { ...signals([]), truncated: true }, held: [], judged: false },
+    });
+    render(<VerdictPanel runId="run-1" />);
+    const note = screen.getByTestId("trajectory-note").textContent ?? "";
+    expect(note).toMatch(/truncated/);
+    expect(note).not.toMatch(/no heuristic signal observed in the recorded events/);
+  });
+
+  it("a skipped trajectory says an automated approval waits for a person", () => {
+    state.rubric = TRAJ;
+    state.verdict = verdict();
+    state.trajectory = verdict({ kind: "trajectory", status: "skipped", error: "no transcript" });
+    render(<VerdictPanel runId="run-1" />);
+    expect(screen.getByTestId("trajectory-note").textContent).toMatch(/waits for a person/);
+  });
+
+  it("a declared trajectory with no judgment yet says so", () => {
+    state.rubric = TRAJ;
+    render(<VerdictPanel runId="run-1" />);
+    expect(screen.getByTestId("trajectory-note").textContent).toMatch(/Not analysed yet/);
   });
 });
 

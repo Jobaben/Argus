@@ -21,6 +21,7 @@ import * as instancesMod from "./sources/instances.js";
 import * as runsMod from "./sources/runs.js";
 import * as totalsMod from "./sources/totals.js";
 import { readJournal } from "./sources/journal.js";
+import { testRunToken } from "./testSignalToken.js";
 
 async function load() {
   // Loosely typed, as the dynamic imports these replaced were: the tests read
@@ -70,6 +71,7 @@ const baseDeps = (over: Record<string, unknown>) => ({
   now: () => new Date(2026, 5, 30, 12, 0),
   newId: () => `id-${++counter}`,
   signalUrlBase: "http://localhost:7777",
+  newSignalToken: testRunToken,
   maxConcurrent: 4,
   tickMs: 30000,
   kill: fakeKill().kill,
@@ -126,7 +128,9 @@ test("start spawns phase 0's step with signal env injected", async () => {
   assert.equal(rec.calls.length, 1);
   assert.equal(rec.calls[0].env.ARGUS_INSTANCE_ID, inst!.id);
   assert.equal(rec.calls[0].env.ARGUS_PHASE_ID, "brainstorm");
-  assert.equal(rec.calls[0].env.ARGUS_SIGNAL_TOKEN, inst!.signalToken);
+  // The run's own token, never the instance's shared one.
+  assert.equal(rec.calls[0].env.ARGUS_SIGNAL_TOKEN, testRunToken(rec.calls[0].runId));
+  assert.notEqual(rec.calls[0].env.ARGUS_SIGNAL_TOKEN, inst!.signalToken);
   assert.ok(rec.calls[0].env.ARGUS_SIGNAL_URL.includes(inst!.id));
 });
 
@@ -186,7 +190,7 @@ test("a needs-input signal pauses the instance for approval", async () => {
     phaseId: "brainstorm",
     runId,
     type: "needs-input",
-    token: inst!.signalToken,
+    token: testRunToken(runId),
     payload: "Q?",
   });
   assert.equal(res.code, 202);
@@ -206,7 +210,7 @@ test("approve advances to the next phase, forwarding answers into the prompt", a
     phaseId: "brainstorm",
     runId: rec.calls[0].runId,
     type: "needs-input",
-    token: inst!.signalToken,
+    token: testRunToken(rec.calls[0].runId),
     payload: "Q?",
   });
   await e.approve(inst!.id, "USE TYPESCRIPT");
@@ -227,6 +231,7 @@ test("onSignal rejects a bad token with 403", async () => {
     runId: rec.calls[0].runId,
     type: "completed",
     token: "WRONG",
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   assert.equal(res.code, 403);
 });
@@ -246,7 +251,8 @@ test("a duplicate signal is idempotent (no double spawn)", async () => {
     phaseId: "only",
     runId: rec.calls[0].runId,
     type: "completed" as const,
-    token: inst!.signalToken,
+    token: testRunToken(rec.calls[0].runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   };
   await e.onSignal(inst!.id, sig);
   await e.onSignal(inst!.id, sig);
@@ -357,7 +363,8 @@ test("abort returns 409 on an already-terminal instance", async () => {
     phaseId: "only",
     runId: rec.calls[0].runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(rec.calls[0].runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   const res = await e.abort(inst!.id);
   assert.equal(res.code, 409);
@@ -617,7 +624,8 @@ test("a delayed or duplicate hook signal cannot advance after Codex fallback", a
     phaseId: "one",
     runId: firstRunId,
     type: "completed" as const,
-    token: inst!.signalToken,
+    token: testRunToken(firstRunId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   };
   await e.onSignal(inst!.id, delayed);
   await e.onSignal(inst!.id, delayed);
@@ -870,7 +878,7 @@ test("onSignal records the run outcome, preserved when the process later exits 0
     phaseId: "brainstorm",
     runId,
     type: "failed",
-    token: inst!.signalToken,
+    token: testRunToken(runId),
     payload: { reason: "blocked: no Jira" },
   });
   // …then the process exits 0 and the completion handler writes exit status.
@@ -1171,7 +1179,7 @@ test("a revise after the definition gained a phase relaunches the instance's pha
     phaseId: "context",
     runId: rec.calls[0].runId,
     type: "failed",
-    token: inst!.signalToken,
+    token: testRunToken(rec.calls[0].runId),
     payload: { reason: "nope" },
   });
 
@@ -1212,7 +1220,8 @@ test("a revise after the definition gained a phase relaunches the instance's pha
     phaseId: rec.calls[1].env.ARGUS_PHASE_ID,
     runId: rec.calls[1].runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(rec.calls[1].runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
   const done = await instances.readInstance(inst!.id);
@@ -1245,7 +1254,8 @@ async function failedPlan(engine: any, pipelines: any) {
     phaseId: "brainstorm",
     runId: rec.calls[0].runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(rec.calls[0].runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
   await waitFor(() => rec.calls.length === 2);
@@ -1254,7 +1264,7 @@ async function failedPlan(engine: any, pipelines: any) {
     phaseId: "plan",
     runId: rec.calls[1].runId,
     type: "failed",
-    token: inst!.signalToken,
+    token: testRunToken(rec.calls[1].runId),
   });
   return { e, rec, inst: inst! };
 }
@@ -1361,7 +1371,7 @@ test("a prompt edited while a gate is waiting does not reach the phase the appro
     phaseId: "brainstorm",
     runId: rec.calls[0].runId,
     type: "needs-input",
-    token: inst!.signalToken,
+    token: testRunToken(rec.calls[0].runId),
     payload: { idea: "x" },
   });
   assert.equal((await instances.readInstance(inst!.id)).status, "awaiting-approval");
@@ -1417,7 +1427,7 @@ test("deleting the definition under a running instance leaves the instance able 
     phaseId: "brainstorm",
     runId: rec.calls[0].runId,
     type: "needs-input",
-    token: inst!.signalToken,
+    token: testRunToken(rec.calls[0].runId),
   });
   assert.equal(gate.ok, true);
   assert.equal((await instances.readInstance(inst!.id)).status, "awaiting-approval");
@@ -1435,7 +1445,8 @@ test("deleting the definition under a running instance leaves the instance able 
     phaseId: "plan",
     runId: rec.calls[1].runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(rec.calls[1].runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   assert.equal(done.ok, true);
   await e.drain();
@@ -1454,7 +1465,8 @@ test("a signal for a phase the instance does not have is journalled as ignored",
     phaseId: "sync",
     runId: rec.calls[0].runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(rec.calls[0].runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   assert.equal(res.ok, true);
   const after = await instances.readInstance(inst!.id);
@@ -1471,23 +1483,23 @@ test("a signal for a phase the instance does not have is journalled as ignored",
   assert.match(entry.detail, /ignored/);
   assert.match(entry.detail, /no phase "sync"/);
 
-  // A runId the phase does not track is ignored the same way.
-  await e.onSignal(inst!.id, {
+  // A runId Argus never launched has no credential that could authenticate
+  // it: refused outright, and — unlike an authentic late signal — not even
+  // journalled, so a forger cannot write into the instance's record.
+  const forged = await e.onSignal(inst!.id, {
     instanceId: inst!.id,
     phaseId: "brainstorm",
     runId: "not-a-run",
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken("not-a-run"),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
-  let stale: any;
-  await waitFor(async () => {
-    stale = (await readJournal(inst!.id)).find(
-      (x) => x.kind === "phase.signalled" && x.runId === "not-a-run",
-    );
-    return stale !== undefined;
-  });
-  assert.match(stale.detail, /ignored/);
-  assert.match(stale.detail, /not a tracked step/);
+  assert.equal(forged.code, 403);
+  await e.drain();
+  assert.equal(
+    (await readJournal(inst!.id)).some((x: any) => x.runId === "not-a-run"),
+    false,
+  );
   assert.equal((await instances.readInstance(inst!.id)).phases[0].status, "running");
 });
 
@@ -1502,7 +1514,7 @@ test("approve and revise act on the named phase, and refuse one that is not paus
     phaseId: "brainstorm",
     runId: rec.calls[0].runId,
     type: "needs-input",
-    token: inst!.signalToken,
+    token: testRunToken(rec.calls[0].runId),
   });
   assert.equal((await instances.readInstance(inst!.id)).status, "awaiting-approval");
 
@@ -1534,7 +1546,7 @@ test("approve and revise act on the named phase, and refuse one that is not paus
     phaseId: "brainstorm",
     runId: rec.calls[1].runId,
     type: "needs-input",
-    token: inst!.signalToken,
+    token: testRunToken(rec.calls[1].runId),
   });
   const approved = await e.approve(inst!.id, undefined, { phaseId: "brainstorm" });
   assert.equal(approved.ok, true);

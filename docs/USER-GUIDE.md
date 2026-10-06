@@ -747,8 +747,12 @@ you can tell "it ran out of time" from "it went quiet."
 
 **How steps complete:** the Stop-hook and gate-hook installed by Setup let
 each spawned agent signal "step finished" / "needs input" back to Argus
-(`POST /api/instances/:id/signal`, authenticated by a per-instance token —
-this is the one instance endpoint that doesn't need a login). The Stop hook is
+(`POST /api/instances/:id/signal`, authenticated by a token Argus hands each
+run for that run alone — this is the one instance endpoint that doesn't need a
+login). A completion counts only when the agent's final message ends with
+`ARGUS_OUTCOME: succeeded`; a pipeline (or phase) can declare
+`"completion": { "marker": "lenient" }` to accept one without the marker. The
+marker is the agent's own report, not a check that its work is right. The Stop hook is
 preferred; where a finished process did not signal — because its runtime's hook
 is best-effort (Codex) or because it has no command hook at all (OpenCode) —
 Argus can recover only from a successful run record whose final message contains
@@ -1420,6 +1424,105 @@ the wait for work that has already been judged good — and it is the phase's
 **worst** step that decides, not the average, because averaging lets one
 excellent step carry a bad one through the gate you set to catch it.
 
+**Judging how the agent worked (trajectory).** A rubric may add an optional
+`trajectory` block. It is **off unless you write it**, and it is declared in the
+definition's JSON through the API (the schedule form and the pipeline form have
+no fields for it):
+
+```json
+{
+  "rubric": {
+    "goal": "A triage summary that names every new failure.",
+    "criteria": [{ "id": "coverage", "label": "Names every new failure" }],
+    "trajectory": {
+      "criteria": [{ "id": "focus", "label": "Stayed on the task" }],
+      "minScore": 6,
+      "check": { "holdOn": ["destructive-command", "path"] }
+    }
+  },
+  "autoApprove": { "verdict": 8, "trajectory": 7 }
+}
+```
+
+- **`criteria`** (optional) — what a judge should score the _path_ on, written
+  like output criteria. One extra judge call per run, scored against a timeline
+  of the run's first 20 and last 60 events.
+- **`minScore`** (optional, needs criteria) — a trajectory score below it is
+  marked a regression on the run and in `trajectoryTrends` (API only for now; the
+  Quality trends card shows output scores). Unlike an output regression it opens
+  no issue.
+- **`check.holdOn`** (optional) — signals that, when observed, **hold an
+  automated approval** for a person. No model is involved. Choose from
+  `repetition`, `errors`, `edit-revert`, `path` and `destructive-command`. This
+  is an automation hold only: it does not fail verification, pause the phase or
+  change what you can approve yourself, and it is not a verification check (for
+  that, see _A verification check on the path_ below).
+- **`autoApprove.trajectory`** (optional, gated phases) — the bar for the
+  trajectory score. Leave it out and the `verdict` bar applies to it too. It
+  needs trajectory criteria.
+
+You must declare criteria, a check or both. With a trajectory declared, a gate
+only opens itself when every relevant run also has a usable trajectory judgment:
+one that is missing, skipped (no transcript to read), failed, older than the
+rubric, or based on a **truncated recording** (the Flight Recorder keeps only the
+last 2,000 events) holds the gate, as does an observed held signal or a score
+under the bar. A missing or truncated recording is not treated as a clean run: it
+simply cannot clear the gate, and you decide.
+
+**The signals are heuristics, not findings.** They are simple counts over what
+the Flight Recorder kept, and each has blind spots: shell tricks, aliases and
+scripts hide destructive commands, a shell write hides a path escape, a revert
+by `git checkout` is invisible, and quoted text such as `echo rm -rf` is a false
+positive. Polling counts as repetition. **A zero means "not observed", never
+"did not happen"**, and a positive is a prompt to look, not proof of a problem.
+The run page shows what was observed and what a check held on; HARNESS §19 has
+the exact rules. A trajectory assessment never counts as evidence in the
+Knowledge Ledger, and it cannot open a gate that commits knowledge.
+
+**A verification check on the path.** `holdOn` only ever holds an automated
+approval. To make a phase _fail verification_ when the agent behaved badly, add a
+`trajectory` check to the phase's `checks`, beside `command`, `artifact`, `file`
+and `changed-files`. It is declared in the pipeline's JSON through the API, needs
+no `rubric`, and uses no model:
+
+```json
+{
+  "id": "implement",
+  "checks": [
+    { "kind": "command", "run": "npm test" },
+    {
+      "kind": "trajectory",
+      "thresholds": { "destructive-command": 0, "path": 0, "errors": 5 },
+      "requireTranscript": true
+    }
+  ]
+}
+```
+
+- **`thresholds`** (required) — for each signal you name, the largest count you
+  will accept: a whole number from 0 to 10,000. Name at least one. A run whose
+  count goes above a threshold fails the check, even if the recording was
+  truncated, because what it kept is real. The counts are: `repetition`, the number
+  of distinct non-file tool calls repeated three or more times; `errors`, tool
+  calls that errored plus error results with no matching call; `edit-revert`,
+  edits that mirror an earlier edit; `path`, file-tool writes outside the working
+  directory or to sensitive paths; `destructive-command`, Bash commands matching
+  the destructive list.
+- **`requireTranscript`** (optional, default off) — what to do when Argus cannot
+  tell. If a run has no readable transcript, or the recording was truncated and
+  nothing over a threshold showed in what was kept, the thresholds cannot be shown
+  to hold. With `requireTranscript` on, the check **fails**. With it off, the check
+  is **not evaluated**: it shows as `–` "(not evaluated)" in the review drawer, is
+  never counted as passed, and does not fail the phase. A check with no runs to
+  look at is treated the same way.
+
+The check looks at the runs behind the phase: the selected candidate's when a
+best-of-N candidate was selected, otherwise every step of the attempt; a
+candidate being verified is checked on its own run. A not-evaluated check cannot
+be cited as evidence in the Knowledge Ledger (a knowledge commit that cites it is
+refused). Remember the signals are heuristics, so keep thresholds above what
+legitimate work produces: polling and a failing test run both count.
+
 **Bounds:** completed runs under a rubric are judged automatically, **one per
 scheduler tick**, newest first, skipping anything older than 24 hours. Every
 pass shares the same guardrails as [Autopsy](#23-autopsy) — one at a time,
@@ -1427,9 +1530,10 @@ pass shares the same guardrails as [Autopsy](#23-autopsy) — one at a time,
 stop, and switched off entirely by `ARGUS_ANALYSIS=off`.
 
 **Where the data comes from:** `GET /api/runs/:id/verdict`,
-`POST /api/runs/:id/verdict` (admin), `GET /api/verdicts`. Scores live in
-`~/.claude/argus/verdicts.json`; rubrics live on the schedule or pipeline
-definition.
+`POST /api/runs/:id/verdict` (admin), `GET /api/verdicts` (output `trends`
+and, separately, `trajectoryTrends`). Scores live in
+`~/.claude/argus/verdicts.json`, trajectory judgments among them under the
+same 400-record cap; rubrics live on the schedule or pipeline definition.
 
 ---
 

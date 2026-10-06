@@ -3,6 +3,7 @@
 import type { BudgetAction } from "./ledger.js";
 import type { AgentRuntimeId, ReasoningEffort } from "./runtimes.js";
 import type { Rubric } from "./verdict.js";
+import type { SignalAuthRecord } from "./pipelines.js";
 
 export type TriggerKind = "interval" | "daily" | "weekly" | "windowed" | "webhook" | "after";
 
@@ -177,6 +178,15 @@ export interface Run {
   budgetAction?: BudgetAction;
   /** Set when `budgetAction` was `downgrade`: the model it would have used. */
   modelDowngradedFrom?: string;
+  /**
+   * How a pipeline run's signals are authenticated: the digest of its own
+   * per-run token and what it is bound to, or `none` for a runtime without a
+   * signal hook. Kept on the run as well as on its step, so a signal from a
+   * run whose step a later attempt replaced can still be told apart from a
+   * forgery. Never the token itself. Absent on runs that predate per-run
+   * tokens, and on schedule runs.
+   */
+  signalAuth?: SignalAuthRecord;
 }
 
 /** One-off run fired from the Launch tab (POST /api/launch). */

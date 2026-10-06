@@ -42,6 +42,7 @@ import {
   emptyLedger,
   recordSuppliedContext,
 } from "./kernel.js";
+import { testRunToken } from "../testSignalToken.js";
 
 /**
  * Phase 4.1 — durable supplied provenance and context integrity.
@@ -108,6 +109,7 @@ function engine(spawn: ReturnType<typeof recordingSpawn>["spawn"]) {
     spawn,
     kill: fakeKill().kill,
     signalUrlBase: "http://localhost:7777",
+    newSignalToken: testRunToken,
     maxConcurrent: 4,
     tickMs: 30000,
     parentEnv: { PATH: process.env.PATH ?? "/bin", HOME: home },
@@ -158,7 +160,7 @@ async function complete(e: Engine, inst: PipelineInstance, phaseId: string, runI
     phaseId,
     runId,
     type: "completed",
-    token: inst.signalToken,
+    token: testRunToken(runId),
     payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
 }
@@ -270,7 +272,7 @@ test("retry: two attempts keep independent supplied provenance, each on the revi
     phaseId: "a",
     runId: first.runId,
     type: "failed",
-    token: inst.signalToken,
+    token: testRunToken(first.runId),
     payload: { reason: "nope" },
   });
   await e.drain();

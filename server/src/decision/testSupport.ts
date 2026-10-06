@@ -231,6 +231,13 @@ export function withoutHome(text: string, home: string): string {
  * order among same-instant entries is not.
  */
 export function settleJournalOrder(relPath: string, text: string): string {
+  // A pipeline transition log records the instance's definition (and every
+  // state) by SHA-256, and the definition carries wall-clock stamps and a
+  // temp-dir cwd the comparison replaces in plain text — but cannot replace
+  // inside a digest. Every other byte of the log is still compared.
+  if (/(^|[\\/])transitions[\\/][^\\/]+\.jsonl$/.test(relPath)) {
+    return text.replace(/[0-9a-f]{64}/g, "<DIGEST>");
+  }
   // Either separator: `relPath` comes from `path.relative`, native on Windows.
   if (!/(^|[\\/])journals[\\/][^\\/]+\.jsonl$/.test(relPath)) return text;
   const lines = text.split("\n");

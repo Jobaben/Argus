@@ -60,6 +60,9 @@ export const paths = {
   authFile: () => path.join(claudeHome(), "argus", "auth.json"),
   usersFile: () => path.join(claudeHome(), "argus", "users.json"),
   instancesDir: () => path.join(claudeHome(), "argus", "instances"),
+  /** Per-instance transition logs (`<instanceId>.jsonl`), owned by — and
+   *  pruned with — the instance record. */
+  transitionsDir: () => path.join(claudeHome(), "argus", "transitions"),
   /** Per-run invocation records and the config files materialized for them. */
   invocationsDir: () => path.join(claudeHome(), "argus", "invocations"),
   /** Per-run result channels: `<runId>/result.json` (`ARGUS_RESULT_FILE`). */

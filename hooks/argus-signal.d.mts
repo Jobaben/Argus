@@ -12,6 +12,10 @@ export interface StopHookPayload {
   [key: string]: unknown;
 }
 
+export const HOOK_VERSION: number;
+export function classifyMarker(
+  message: unknown,
+): "succeeded" | "failed" | "blocked" | "missing" | "conflicting";
 export function lastMessage(payload: unknown): string;
 export function hasPendingBackgroundWork(payload: unknown): boolean;
 export function resolveType(argType: string | undefined, payload: unknown): string;

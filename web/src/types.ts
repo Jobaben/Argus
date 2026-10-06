@@ -104,6 +104,7 @@ export type {
   OverviewCost,
   OverviewEntry,
   PhaseFailureClass,
+  StepCompletion,
   WorkspacePolicy,
   WorkspaceRecord,
   // Reliability

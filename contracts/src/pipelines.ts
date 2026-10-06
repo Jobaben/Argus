@@ -3,7 +3,8 @@ import type { PendingGateOperation } from "./gates.js";
 
 import type { AgentRuntimeId, ReasoningEffort } from "./runtimes.js";
 import type { Trigger } from "./schedules.js";
-import type { AutoApprove, Rubric } from "./verdict.js";
+import type { InstanceTransitionLogState } from "./transitions.js";
+import type { AutoApprove, Rubric, TrajectorySignalKind } from "./verdict.js";
 import type {
   AcceptanceVerificationPolicy,
   AcceptanceVerificationPreview,
@@ -124,7 +125,19 @@ export type RetryableClass =
    * reference naming no check of this phase, or a report written against a
    * different accepted change (Phase 8). Not retried by default.
    */
-  | "acceptance-verification";
+  | "acceptance-verification"
+  /**
+   * A completion Argus could not accept on the agent's own word: the run's
+   * final message carried no `ARGUS_OUTCOME` marker under a `required`
+   * completion policy, carried conflicting markers, or the stop hook's own
+   * reading of the marker disagreed with the message it delivered. Nothing
+   * the run proposed is staged. Retried by default, like `exit-code`: an
+   * absent or ambiguous report is a protocol failure, not a considered
+   * verdict, and the retry note says exactly which marker was expected. A
+   * marker that says `failed`/`blocked` is the agent's verdict and is classed
+   * `signal`, wherever it is read.
+   */
+  | "unverified";
 
 /**
  * Every way a phase can fail. The retryable classes are the subset an author
@@ -139,8 +152,109 @@ export interface RetryPolicy {
   attempts: number;
   /** Delay before the first retry. Doubles each subsequent attempt. */
   backoffSeconds: number;
-  /** Defaults to `["spawn", "exit-code"]` — the transient-looking ones. */
+  /** Defaults to `["spawn", "exit-code", "unverified"]` — the transient-looking
+   *  ones, and a completion that reported nothing Argus could accept. */
   retryOn?: RetryableClass[];
+}
+
+// ── Signal authentication ────────────────────────────────────────────────────
+
+/**
+ * How one run's signals are authenticated.
+ *
+ * `run-token-v1`: the run was handed its own random token (in its
+ * environment), and Argus keeps only a SHA-256 digest of it bound to this
+ * instance, phase, attempt and run. A signal is accepted only for exactly that
+ * run, so one run's token cannot complete, fail or pause a sibling, another
+ * attempt or another instance. The digest is not a secret; the token never
+ * reaches a persisted record.
+ *
+ * `none`: the run's runtime has no signal hook, so it was given no credential
+ * at all, and no signal for it is ever accepted — it completes from its run
+ * record instead.
+ *
+ * Absent on a step or run recorded before per-run tokens existed: its signals
+ * are authenticated by the instance's legacy `signalToken`, exactly as before.
+ *
+ * This limits what a leaked token can do; it is not a boundary between an
+ * agent and its own hook, which share an OS user and an environment.
+ */
+export type SignalAuthRecord =
+  { scheme: "run-token-v1"; sha256: string; phaseId: string; attempt: number } | { scheme: "none" };
+
+// ── Completion: the agent's own outcome marker ───────────────────────────────
+
+/**
+ * Whether a step's `completed` signal must carry an unambiguous
+ * `ARGUS_OUTCOME: succeeded` marker in the run's final message.
+ *
+ * - `required` (the effective default when nothing is declared): a completion
+ *   whose final message has no marker, conflicting markers, or a
+ *   `failed`/`blocked` marker is refused before anything the run proposed is
+ *   staged.
+ * - `lenient`: an explicit opt-out restoring the pre-policy behaviour for a
+ *   *missing* marker only — the completion is accepted and its provenance
+ *   says no marker was seen. Conflicting or `failed`/`blocked` markers are
+ *   refused under either policy: lenient never means "ignore what the agent
+ *   wrote".
+ *
+ * A marker is the agent's own report. It is never independent verification:
+ * checks, the result schema, the gate and the knowledge commit remain separate
+ * authorities, and a `succeeded` marker satisfies none of them.
+ */
+export type CompletionMarkerPolicy = "required" | "lenient";
+
+export interface CompletionPolicy {
+  marker: CompletionMarkerPolicy;
+}
+
+/**
+ * What Argus's own classifier read in a run's final message. `missing` = no
+ * marker line at all; `conflicting` = more than one distinct outcome.
+ */
+export type OutcomeMarkerKind = "succeeded" | "failed" | "blocked" | "missing" | "conflicting";
+
+/**
+ * Additive metadata a stop hook (version 2 and later) sends beside a signal:
+ * its own version and its own reading of the marker. Untrusted — Argus
+ * re-classifies the message itself and only compares. Older servers ignore it;
+ * older hooks do not send it.
+ */
+export interface SignalCompletionMeta {
+  hookVersion: number;
+  marker: OutcomeMarkerKind;
+}
+
+/**
+ * How one run's completion reached Argus and what Argus decided about it.
+ * Recorded per step, so a multi-step or candidates phase keeps every run's
+ * own account rather than one stamped from whichever signal arrived last.
+ */
+export interface StepCompletion {
+  /** What was reported: a completion, or the agent's own failure. */
+  signal: "completed" | "failed";
+  /** `signal` — a stop hook (or another caller) posted it; `run-record` —
+   *  Argus read the outcome off the finished run record (runtimes without a
+   *  reliable hook). */
+  source: "signal" | "run-record";
+  /** The policy in force for this phase when the completion arrived. */
+  policy: CompletionMarkerPolicy;
+  /** Argus's classification of the final message it actually received. */
+  marker: OutcomeMarkerKind;
+  /**
+   * The hook's own account, when it sent one. Absent = no metadata (a hook
+   * older than version 2, or the run-record path). `agrees` compares the
+   * hook's marker to Argus's; malformed metadata is recorded as
+   * `{ version: null, marker: null, agrees: false }`.
+   */
+  hook?: { version: number | null; marker: OutcomeMarkerKind | null; agrees: boolean };
+  /** `accepted` — the step completes on this report; `refused` — the
+   *  completion was turned into a failure; `reported-failure` — the agent
+   *  itself reported failure. */
+  verdict: "accepted" | "refused" | "reported-failure";
+  /** Why it was refused, when it was. */
+  reason?: string;
+  at: string;
 }
 
 // ── Harness: capabilities, verification ──────────────────────────────────────
@@ -357,12 +471,37 @@ export type PhaseCheck =
       allow?: string[];
       deny?: string[];
       requireChanges?: boolean;
+    }
+  | {
+      /**
+       * Deterministic trajectory signals over the attempt's recorded runs
+       * (the selected candidate's, when one is selected; the candidate's own
+       * when a candidate is verified). No model is involved.
+       *
+       * `thresholds` names each signal it checks and the largest count it
+       * allows; a run whose count exceeds one is an observed violation and
+       * fails the check — on a truncated recording too, since what was kept
+       * is real. A run with no readable recording, or a truncated one with no
+       * violation in what was kept, cannot show the thresholds were met: the
+       * check then fails as insufficient input when `requireTranscript` is
+       * set, and is reported `not-evaluated` (never `passed`) when it is not.
+       */
+      kind: "trajectory";
+      label?: string;
+      thresholds: Partial<Record<TrajectorySignalKind, number>>;
+      requireTranscript?: boolean;
     };
 
 export interface CheckResult {
   kind: PhaseCheck["kind"];
   label: string;
-  status: "passed" | "failed";
+  /**
+   * `not-evaluated`: the check could not be evaluated from the input it had
+   * and was not configured to require it (a `trajectory` check without
+   * `requireTranscript`). It neither passed nor failed, and it does not fail
+   * the report. No other kind produces it.
+   */
+  status: "passed" | "failed" | "not-evaluated";
   /** One line: why it passed or failed. */
   detail: string;
   exitCode?: number | null;
@@ -546,6 +685,9 @@ export interface PhaseDef {
   result?: PhaseResult;
   /** Retry policy for this phase's steps. Absent = one attempt. */
   retry?: RetryPolicy;
+  /** Overrides the pipeline's completion policy for this phase's steps.
+   *  Absent = the pipeline's, else `{ marker: "required" }`. */
+  completion?: CompletionPolicy;
   /**
    * Publish this phase's payload under a name later phases can interpolate as
    * `{{artifacts.<name>}}`. Absent = the payload is only visible to the
@@ -795,6 +937,13 @@ export interface PipelineDefinition {
   runtime?: AgentRuntimeId;
   /** Default capability profile for every phase that does not declare one. */
   capabilities?: CapabilityProfile;
+  /**
+   * Whether a completion must carry an `ARGUS_OUTCOME: succeeded` marker, for
+   * every phase that does not declare its own. Absent = `required` — an
+   * intentional change from the original permissive behaviour; declare
+   * `{ marker: "lenient" }` to accept a completion with no marker.
+   */
+  completion?: CompletionPolicy;
   /** Default isolation policy for every phase that does not declare one.
    *  Absent = no isolation: every phase runs in its own `cwd`. */
   workspace?: WorkspacePolicy;
@@ -837,6 +986,7 @@ export interface PipelineInput {
   reasoningEffort?: ReasoningEffort;
   runtime?: AgentRuntimeId;
   capabilities?: CapabilityProfile;
+  completion?: CompletionPolicy;
   workspace?: WorkspacePolicy;
   knowledgeScope?: KnowledgeScopePolicy;
   contextLimits?: ContextLimits;
@@ -956,6 +1106,15 @@ export interface StepProgress {
    * `CP-12/AC-1`. Absent when the run wrote no acceptance file.
    */
   acceptanceVerification?: StepAcceptanceVerification;
+  /** How this run's signals are authenticated — see {@link SignalAuthRecord}.
+   *  Absent on a step planned before per-run tokens existed. */
+  signalAuth?: SignalAuthRecord;
+  /**
+   * How this run's completion (or reported failure) reached Argus and what
+   * Argus decided, recorded when it arrived. Absent on a step that never
+   * reported, and on steps recorded before completion provenance existed.
+   */
+  completion?: StepCompletion;
 }
 
 /** A staged delta as the instance record sees it; the full record lives
@@ -1150,7 +1309,20 @@ export interface PipelineInstance {
   triggerPayload?: unknown;
   /** `trigger: "chained"` only: the source instance this one was fired from. */
   chainedFrom?: string;
+  /**
+   * The instance-wide signal credential every run of an instance used to
+   * share. Accepted only for a step recorded without its own
+   * {@link StepProgress.signalAuth} on an instance without
+   * {@link PipelineInstance.signalScheme} — runs launched before per-run tokens
+   * existed. Never handed to a run launched since.
+   */
   signalToken: string;
+  /**
+   * `run-token-v1` on every instance created since per-run signal tokens: its
+   * legacy {@link PipelineInstance.signalToken} is never accepted for any
+   * signal. Absent on older instances, whose pre-upgrade runs keep working.
+   */
+  signalScheme?: "run-token-v1";
   createdAt: string;
   updatedAt: string;
   endedAt: string | null;
@@ -1186,6 +1358,12 @@ export interface PipelineInstance {
   gateDecisionIds?: string[];
   /** A gate decision whose effects are under way — see `PendingGateOperation`. */
   pendingGateOperation?: PendingGateOperation;
+  /**
+   * Where this saved state stands in the instance's transition log
+   * (`contracts/src/transitions.ts`). Absent on an instance that has not been
+   * saved since the log existed.
+   */
+  transitionLog?: InstanceTransitionLogState;
 }
 
 export type SignalType = "completed" | "needs-input" | "failed";
@@ -1205,6 +1383,12 @@ export interface PipelineSignal {
   result?: unknown;
   /** Set instead of `result` when the result file existed but could not be read. */
   resultError?: string;
+  /**
+   * The stop hook's own version and reading of the outcome marker (hook v2+).
+   * Untrusted and additive: Argus classifies the final message itself and
+   * only compares the two; a server that predates it ignores it.
+   */
+  completion?: SignalCompletionMeta;
 }
 
 /** Aggregated spend for one instance. Null field = no run reported that metric. */

@@ -17,6 +17,7 @@ import { readDeltaRecord, stagedDeltaPath } from "./staging.js";
 import { formatClaimRef, getClaim, revisionsOf } from "./kernel.js";
 import { analyzeImpact } from "./impact.js";
 import { fakeKill } from "../testPlatform.js";
+import { testRunToken } from "../testSignalToken.js";
 
 /**
  * The KnowledgeDelta protocol through the engine: a run writes the file Argus
@@ -69,6 +70,7 @@ function engine(
     newId: () => `id-${++counter}`,
     spawn,
     signalUrlBase: "http://localhost:7777",
+    newSignalToken: testRunToken,
     maxConcurrent: 4,
     tickMs: 30000,
     parentEnv: { PATH: process.env.PATH ?? "/bin", HOME: home },
@@ -120,7 +122,7 @@ async function complete(e: Engine, inst: PipelineInstance, phaseId: string, runI
     phaseId,
     runId,
     type: "completed",
-    token: inst.signalToken,
+    token: testRunToken(runId),
     payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
 }

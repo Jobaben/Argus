@@ -8,6 +8,8 @@ import type {
   CandidatePolicy,
   CandidateVariant,
   CapabilityProfile,
+  CompletionMarkerPolicy,
+  CompletionPolicy,
   ContextLimits,
   EnvPolicy,
   McpServerSpec,
@@ -19,6 +21,8 @@ import type {
 } from "./pipelineTypes.js";
 import type { Trigger } from "./scheduleTypes.js";
 import { RubricValidationError, validateAutoApprove, validateRubric } from "./verdict.js";
+import { TRAJECTORY_SIGNAL_KINDS, TRAJECTORY_THRESHOLD_MAX } from "./trajectory.js";
+import type { TrajectorySignalKind } from "@argus/contracts";
 import { DagValidationError, validateDag } from "./dag.js";
 import {
   RouteAuthoringError,
@@ -82,6 +86,7 @@ export interface PipelineInput {
   reasoningEffort?: ReasoningEffort;
   runtime?: AgentRuntimeId;
   capabilities?: CapabilityProfile;
+  completion?: CompletionPolicy;
   workspace?: WorkspacePolicy;
   knowledgeScope?: KnowledgeScopePolicy;
   contextLimits?: ContextLimits;
@@ -313,6 +318,35 @@ export function assertCandidatesRunnable(
       );
     }
   });
+}
+
+// ── Completion policy ────────────────────────────────────────────────────────
+
+const COMPLETION_KEYS = new Set(["marker"]);
+const COMPLETION_MARKERS = new Set<CompletionMarkerPolicy>(["required", "lenient"]);
+
+/**
+ * `completion: { marker: "required" | "lenient" }` at pipeline or phase level.
+ * Absent (or null) = inherit; the effective default is `required`. Unknown
+ * keys are refused, because a typo here would silently mean "required".
+ */
+export function validateCompletion(raw: unknown, ctx: string): CompletionPolicy | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PipelineValidationError(`${ctx}: completion must be an object`);
+  }
+  const r = raw as Record<string, unknown>;
+  for (const key of Object.keys(r)) {
+    if (!COMPLETION_KEYS.has(key)) {
+      throw new PipelineValidationError(`${ctx}: completion has unknown key "${key}"`);
+    }
+  }
+  if (!COMPLETION_MARKERS.has(r.marker as CompletionMarkerPolicy)) {
+    throw new PipelineValidationError(
+      `${ctx}: completion.marker must be ${[...COMPLETION_MARKERS].join(" | ")}`,
+    );
+  }
+  return { marker: r.marker as CompletionMarkerPolicy };
 }
 
 // ── Context and memory ───────────────────────────────────────────────────────
@@ -719,13 +753,14 @@ export function validateCapabilities(raw: unknown, ctx: string): CapabilityProfi
 // ── Verification checks ──────────────────────────────────────────────────────
 
 const MAX_CHECKS = 50;
-const CHECK_KINDS = new Set(["command", "artifact", "file", "changed-files"]);
+const CHECK_KINDS = new Set(["command", "artifact", "file", "changed-files", "trajectory"]);
 const CHECK_BASE_KEYS = ["kind", "label"];
 const CHECK_KIND_KEYS: Record<string, string[]> = {
   command: ["run", "cwd", "timeoutSeconds"],
   artifact: ["path", "minBytes"],
   file: ["path", "minBytes"],
   "changed-files": ["allow", "deny", "requireChanges"],
+  trajectory: ["thresholds", "requireTranscript"],
 };
 
 function validateCheckLabel(raw: unknown, ctx: string, i: number): string | undefined {
@@ -834,6 +869,8 @@ function validateCheck(raw: unknown, ctx: string, i: number): PhaseCheck {
     };
   }
 
+  if (kind === "trajectory") return validateTrajectoryCheck(c, label, ctx, i);
+
   // "changed-files"
   const allow = validateGlobList(c.allow, ctx, i, "allow");
   const deny = validateGlobList(c.deny, ctx, i, "deny");
@@ -850,6 +887,63 @@ function validateCheck(raw: unknown, ctx: string, i: number): PhaseCheck {
     ...(allow !== undefined ? { allow } : {}),
     ...(deny !== undefined ? { deny } : {}),
     ...(requireChanges !== undefined ? { requireChanges } : {}),
+  };
+}
+
+/**
+ * A `trajectory` check: `thresholds` must name at least one known signal, each
+ * with a whole-number maximum count; `requireTranscript` is an optional
+ * boolean. Nothing is defaulted into the stored definition.
+ */
+function validateTrajectoryCheck(
+  c: Record<string, unknown>,
+  label: string | undefined,
+  ctx: string,
+  i: number,
+): PhaseCheck {
+  const raw = c.thresholds;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PipelineValidationError(
+      `${ctx}: checks[${i}].thresholds must map signal names to a maximum count`,
+    );
+  }
+  const known = new Set<string>(TRAJECTORY_SIGNAL_KINDS);
+  const thresholds: Partial<Record<TrajectorySignalKind, number>> = {};
+  for (const [kind, max] of Object.entries(raw as Record<string, unknown>)) {
+    if (!known.has(kind)) {
+      throw new PipelineValidationError(
+        `${ctx}: checks[${i}].thresholds: unknown signal "${kind}" (one of ${TRAJECTORY_SIGNAL_KINDS.join(", ")})`,
+      );
+    }
+    if (
+      typeof max !== "number" ||
+      !Number.isInteger(max) ||
+      max < 0 ||
+      max > TRAJECTORY_THRESHOLD_MAX
+    ) {
+      throw new PipelineValidationError(
+        `${ctx}: checks[${i}].thresholds.${kind} must be a whole number from 0 to ${TRAJECTORY_THRESHOLD_MAX}`,
+      );
+    }
+    thresholds[kind as TrajectorySignalKind] = max;
+  }
+  if (Object.keys(thresholds).length === 0) {
+    throw new PipelineValidationError(
+      `${ctx}: checks[${i}].thresholds must name at least one signal`,
+    );
+  }
+  let requireTranscript: boolean | undefined;
+  if (c.requireTranscript !== undefined && c.requireTranscript !== null) {
+    if (typeof c.requireTranscript !== "boolean") {
+      throw new PipelineValidationError(`${ctx}: checks[${i}].requireTranscript must be a boolean`);
+    }
+    requireTranscript = c.requireTranscript;
+  }
+  return {
+    kind: "trajectory",
+    thresholds,
+    ...(label !== undefined ? { label } : {}),
+    ...(requireTranscript !== undefined ? { requireTranscript } : {}),
   };
 }
 
@@ -985,7 +1079,11 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
   let rubric, autoApprove;
   try {
     rubric = validateRubric(p.rubric);
-    autoApprove = validateAutoApprove(p.autoApprove, rubric !== undefined);
+    autoApprove = validateAutoApprove(
+      p.autoApprove,
+      rubric !== undefined,
+      (rubric?.trajectory?.criteria?.length ?? 0) > 0,
+    );
   } catch (e) {
     throw new PipelineValidationError(
       `phase ${i}: ${e instanceof RubricValidationError ? e.message : String(e)}`,
@@ -1019,6 +1117,7 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
       : routeChecked(() => validatePhaseResult(p.result, id, steps));
 
   const retry = validateRetry(p.retry, i);
+  const completion = validateCompletion(p.completion, `phase ${i}`);
   const runtime = validateRuntime(p.runtime, `phase ${i}`);
 
   let produces: string | undefined;
@@ -1060,6 +1159,7 @@ function validatePhase(raw: unknown, i: number): PhaseDef {
     ...(needs === undefined ? {} : { needs }),
     ...(result ? { result } : {}),
     ...(retry ? { retry } : {}),
+    ...(completion ? { completion } : {}),
     ...(produces ? { produces } : {}),
     ...(rubric ? { rubric } : {}),
     ...(autoApprove ? { autoApprove } : {}),
@@ -1505,16 +1605,29 @@ function validateKnowledgeDelta(raw: unknown, ctx: string): PhaseDef["knowledgeD
   return raw as PhaseDef["knowledgeDelta"];
 }
 
-const RETRYABLE: readonly string[] = [
-  "spawn",
-  "exit-code",
-  "signal",
-  "timeout",
-  "verification",
-  "knowledge-delta",
-  "knowledge-context-integrity",
-  "rule-verification",
-];
+/**
+ * Every class an author may name in `retry.retryOn`. A record over the
+ * contract's union rather than a hand-kept list, so a class added to
+ * `RetryableClass` cannot be forgotten here (three were, until this was a
+ * record: `change-proposal`, `change-context-integrity` and
+ * `acceptance-verification` were documented as retryable on opt-in but
+ * refused by this validator).
+ */
+const RETRYABLE_CLASSES: Record<RetryableClass, true> = {
+  spawn: true,
+  "exit-code": true,
+  signal: true,
+  timeout: true,
+  verification: true,
+  "knowledge-delta": true,
+  "knowledge-context-integrity": true,
+  "rule-verification": true,
+  "change-proposal": true,
+  "change-context-integrity": true,
+  "acceptance-verification": true,
+  unverified: true,
+};
+const RETRYABLE: readonly string[] = Object.keys(RETRYABLE_CLASSES);
 
 function validateRetry(raw: unknown, i: number) {
   if (raw === undefined || raw === null) return undefined;
@@ -1786,6 +1899,8 @@ export function validatePipelineInput(raw: unknown): PipelineInput {
   if (runtime) input.runtime = runtime;
   const capabilities = validateCapabilities(r.capabilities, "pipeline");
   if (capabilities) input.capabilities = capabilities;
+  const completion = validateCompletion(r.completion, "pipeline");
+  if (completion) input.completion = completion;
   const workspace = validateWorkspace(r.workspace, "pipeline");
   if (workspace) input.workspace = workspace;
   const knowledgeScope = validateKnowledgeScope(r.knowledgeScope, "pipeline");
@@ -1830,6 +1945,7 @@ export function validatePipelinePatch(raw: unknown): Partial<PipelineInput> {
   }
   if ("runtime" in r) patch.runtime = validateRuntime(r.runtime, "pipeline");
   if ("capabilities" in r) patch.capabilities = validateCapabilities(r.capabilities, "pipeline");
+  if ("completion" in r) patch.completion = validateCompletion(r.completion, "pipeline");
   if ("workspace" in r) patch.workspace = validateWorkspace(r.workspace, "pipeline");
   if ("knowledgeScope" in r)
     patch.knowledgeScope = validateKnowledgeScope(r.knowledgeScope, "pipeline");
@@ -1890,6 +2006,7 @@ export async function createPipeline(
     ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
     ...(input.runtime ? { runtime: input.runtime } : {}),
     ...(input.capabilities ? { capabilities: input.capabilities } : {}),
+    ...(input.completion ? { completion: input.completion } : {}),
     ...(input.workspace ? { workspace: input.workspace } : {}),
     ...(input.knowledgeScope ? { knowledgeScope: input.knowledgeScope } : {}),
     ...(input.contextLimits ? { contextLimits: input.contextLimits } : {}),
@@ -1942,6 +2059,12 @@ export async function updatePipeline(
     if ("capabilities" in patch) {
       if (patch.capabilities) merged.capabilities = patch.capabilities;
       else delete merged.capabilities;
+    }
+    // And for `completion`: null/undefined clears the override back to the
+    // effective default, `required`.
+    if ("completion" in patch) {
+      if (patch.completion) merged.completion = patch.completion;
+      else delete merged.completion;
     }
     // And for `workspace`: null/undefined clears the pipeline-wide isolation
     // policy rather than leaving a present-and-null key behind.

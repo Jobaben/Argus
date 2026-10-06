@@ -21,6 +21,7 @@ import { readVerificationRecord, stagedVerificationPath } from "./verificationSt
 import { createClaim, createEvidence, createRevision, readLedger } from "./store.js";
 import { evaluateSupport, formatClaimRef, ruleConformance } from "./kernel.js";
 import { analyzeImpact } from "./impact.js";
+import { testRunToken } from "../testSignalToken.js";
 
 /**
  * Business-rule verification through the engine (Phase 6).
@@ -134,6 +135,7 @@ function engine(spawn: ReturnType<typeof recordingSpawn>["spawn"]) {
     spawn,
     kill: fakeKill().kill,
     signalUrlBase: "http://localhost:7778",
+    newSignalToken: testRunToken,
     maxConcurrent: 4,
     tickMs: 30000,
     parentEnv: { PATH: process.env.PATH ?? "/bin", HOME: home },
@@ -220,7 +222,7 @@ async function complete(e: Engine, inst: PipelineInstance, phaseId: string, runI
     phaseId,
     runId,
     type: "completed",
-    token: inst.signalToken,
+    token: testRunToken(runId),
     payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
 }
@@ -769,6 +771,54 @@ test("a cited check the phase's report does not contain refuses the commit as ru
   assert.equal((await readVerificationRecord(rec.calls[0].runId))?.status, "rejected");
 });
 
+test("a cited check Argus could not evaluate substantiates nothing: the commit is refused", async () => {
+  // A trajectory check with no transcript to read is `not-evaluated`. It does
+  // not fail the report, and it must not become knowledge evidence either: the
+  // ledger records only checks Argus actually decided (passed or failed).
+  const rule = await seedRule();
+  await seed([
+    verifyPhase({
+      gated: true,
+      checks: [
+        { kind: "command", run: 'node -e "process.exit(0)"', label: "tests" },
+        {
+          kind: "trajectory",
+          label: "no-destruction",
+          thresholds: { "destructive-command": 0 },
+        },
+      ],
+    }),
+  ]);
+  const rec = recordingSpawn();
+  const e = engine(rec.spawn);
+  const inst = (await e.start("p1", "manual"))!;
+  writeVerification(rec.calls[0], {
+    schemaVersion: 1,
+    verifications: [
+      {
+        rule: formatClaimRef(rule),
+        outcome: "holds",
+        evidence: [{ type: "check", label: "no-destruction" }],
+      },
+    ],
+  });
+  await complete(e, inst, "verify", rec.calls[0].runId);
+  await e.drain();
+  const parked = await instance(inst.id);
+  assert.equal(parked.status, "awaiting-approval");
+  const report = phaseOf(parked, "verify").verification;
+  assert.equal(report?.status, "passed", "an optional check without input does not fail the phase");
+  assert.equal(report?.checks.find((c) => c.label === "no-destruction")?.status, "not-evaluated");
+
+  await e.approve(inst.id);
+  await e.drain();
+  const after = await instance(inst.id);
+  assert.equal(phaseOf(after, "verify").status, "failed");
+  assert.equal(failure(after, "verify").failureClass, "rule-verification");
+  assert.match(failure(after, "verify").reason ?? "", /verification report does not contain/);
+  assert.deepEqual((await readLedger()).verifications, [], "nothing unevaluated became durable");
+});
+
 // ── Gate lifecycle ──────────────────────────────────────────────────────────
 
 test("revise: the revised attempt's proposal is superseded and can never become durable", async () => {
@@ -1080,7 +1130,7 @@ test("a verification file written by a run whose phase never succeeds stays nonc
     phaseId: "verify",
     runId: rec.calls[0].runId,
     type: "failed",
-    token: inst.signalToken,
+    token: testRunToken(rec.calls[0].runId),
     payload: { reason: "the agent gave up" },
   });
   await e.drain();

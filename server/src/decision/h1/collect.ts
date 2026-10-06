@@ -51,6 +51,9 @@ export interface H1Sources {
   readRun(id: string): Promise<Run | null>;
   watchtower(now: Date): Promise<{ anomalies: Anomaly[]; baselines: Baseline[] } | null>;
   currentVerdicts(): Promise<Verdict[]>;
+  /** Current trajectory judgments. Absent = none known: a phase whose rubric
+   *  declares a trajectory is then insufficient-data, never qualifying. */
+  currentTrajectoryVerdicts?(): Promise<Verdict[]>;
   workingTree(cwd: string): Promise<WorkingTreeSnapshot | null>;
   committedSince(
     base: WorkingTreeSnapshot,
@@ -88,6 +91,7 @@ export function defaultH1Sources(): H1Sources {
       }
     },
     currentVerdicts: () => readCurrentVerdicts(),
+    currentTrajectoryVerdicts: () => readCurrentVerdicts("trajectory"),
     workingTree: (cwd) => snapshotWorkingTree(cwd, readOnly),
     committedSince: (base, current, cwd) => committedSince(base, current, cwd, readOnly),
     numstat: (base, cwd) => diffNumstat(base, cwd, readOnly),

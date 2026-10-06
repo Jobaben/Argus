@@ -15,6 +15,7 @@ import type {
   OverviewCost,
   OverviewEntry,
   PipelineInstance,
+  StepCompletion,
 } from "../types";
 
 export interface StepPill {
@@ -60,6 +61,12 @@ export interface StepPill {
    * succeeded is a board that teaches people to ignore red.
    */
   superseded: boolean;
+  /**
+   * How the run's own completion report reached Argus and what Argus decided
+   * about it. The agent's word only — never a statement that its work was
+   * checked. Absent when the run has not reported (or predates the record).
+   */
+  completion?: StepCompletion;
 }
 
 /** What a phase's candidates came to, for the one line a phase pill can spare. */
@@ -234,6 +241,7 @@ function stepPills(
         s.status === "aborted" &&
         phase.selectedCandidate != null &&
         phase.selectedCandidate !== s.candidate,
+      ...(s.completion ? { completion: s.completion } : {}),
       // Only when there is one: a step of a phase that ran in its own cwd has
       // no workspace to speak of, and an always-present null would say it did.
       // A candidate carries its own tree; everyone else shares the phase's.

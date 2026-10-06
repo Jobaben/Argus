@@ -28,6 +28,7 @@ import {
   ruleConformance,
 } from "./kernel.js";
 import { fakeKill } from "../testPlatform.js";
+import { testRunToken } from "../testSignalToken.js";
 
 /**
  * Closed-loop change realization through the engine (Phase 8).
@@ -112,6 +113,7 @@ function engine(
     newId: () => `id-${++counter}`,
     spawn,
     signalUrlBase: "http://localhost:7779",
+    newSignalToken: testRunToken,
     // Generous: the spawn double's processes never "finish", so every run of
     // the suite holds its concurrency slot for the whole test.
     maxConcurrent: 64,
@@ -259,7 +261,7 @@ async function complete(e: Engine, inst: PipelineInstance, phaseId: string, runI
     phaseId,
     runId,
     type: "completed",
-    token: inst.signalToken,
+    token: testRunToken(runId),
     payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
 }
@@ -276,7 +278,7 @@ async function failRun(
     phaseId,
     runId,
     type: "failed",
-    token: inst.signalToken,
+    token: testRunToken(runId),
     payload: { reason },
   });
 }

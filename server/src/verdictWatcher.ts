@@ -2,8 +2,11 @@ import {
   currentVerdicts,
   performVerdict,
   readVerdicts,
+  verdictKind,
   type VerdictDeps,
 } from "./sources/verdict.js";
+import { hasTrajectory } from "./sources/trajectory.js";
+import { performTrajectoryVerdict } from "./sources/trajectoryVerdict.js";
 import { autoApprovalQualification } from "./sources/gatePolicy.js";
 import type { AutomatedApproval } from "./pipelineEngine.js";
 import type { PipelineDefinition, PipelineInstance } from "./sources/pipelineTypes.js";
@@ -27,7 +30,11 @@ import { log } from "./log.js";
  * one scheduler tick of latency and cannot wedge the engine.
  *
  * **One judgement per tick**, matching Autopsy: a rubric on a busy schedule
- * must not turn a backlog into a spend spike.
+ * must not turn a backlog into a spend spike. A rubric that declares a
+ * trajectory adds at most one trajectory pass per tick, after the output
+ * judgment and — because the tick is sequential — before the shadow
+ * experiments ask the runner for anything. A trajectory pass the runner
+ * refuses as busy or over budget writes nothing and is tried again later.
  */
 
 export interface VerdictWatcherDeps extends VerdictDeps {
@@ -40,6 +47,12 @@ export interface VerdictWatcherDeps extends VerdictDeps {
    * that path carries no verdict basis and does not refuse knowledge gates.
    */
   approveAutomatically: (request: AutomatedApproval) => Promise<{ ok: boolean; error?: string }>;
+  /**
+   * Transcript lines for a run, for trajectory analysis. Absent = no
+   * trajectory analysis: a gate whose rubric declares one then never
+   * qualifies (it waits for a person), it does not open without it.
+   */
+  readLines?: (project: string, sessionId: string) => Promise<unknown[]>;
   onVerdict?: (runId: string) => void;
   onAutoApprove?: (instanceId: string, phaseId: string, score: number) => void;
   /**
@@ -109,7 +122,12 @@ export function createVerdictWatcher(deps: VerdictWatcherDeps): { check: () => P
           deps.readInstances(),
           readVerdicts(),
         ]);
-        const scored = new Set(existing.map((v) => v.runId));
+        const scored = new Set(
+          existing.filter((v) => verdictKind(v) === "output").map((v) => v.runId),
+        );
+        const traced = new Set(
+          existing.filter((v) => verdictKind(v) === "trajectory").map((v) => v.runId),
+        );
         const floor = deps.now().getTime() - VERDICT_MAX_AGE_MS;
 
         const next = runs
@@ -126,6 +144,24 @@ export function createVerdictWatcher(deps: VerdictWatcherDeps): { check: () => P
           if (rubric) {
             await performVerdict(next, rubric, deps);
             deps.onVerdict?.(next.id);
+          }
+        }
+
+        const readLines = deps.readLines;
+        if (readLines) {
+          const trace = runs
+            .filter((r) => r.status === "succeeded" && !traced.has(r.id))
+            .filter((r) => {
+              const at = Date.parse(runMoment(r));
+              return Number.isFinite(at) && at >= floor;
+            })
+            .filter((r) => hasTrajectory(rubricFor(r, schedules, pipelines, instances)))
+            .sort((a, b) => runMoment(b).localeCompare(runMoment(a)))[0];
+          if (trace) {
+            const rubric = rubricFor(trace, schedules, pipelines, instances);
+            if (rubric && (await performTrajectoryVerdict(trace, rubric, { ...deps, readLines }))) {
+              deps.onVerdict?.(trace.id);
+            }
           }
         }
 
@@ -155,7 +191,12 @@ export function createVerdictWatcher(deps: VerdictWatcherDeps): { check: () => P
  *   the gate; averaging over the steps that happen to be judged is exactly
  *   the hole a gate exists to close;
  * - the lowest of those scores clears the bar. A phase is only as good as its
- *   worst step.
+ *   worst step;
+ * - when the rubric declares a trajectory, every one of those runs also has a
+ *   current, usable trajectory judgment under the rubric's trajectory digest:
+ *   its check held nothing and its score (if judged) clears the trajectory
+ *   bar. A skipped, failed, missing or pruned trajectory judgment holds the
+ *   gate. That basis is sent separately from the output basis.
  *
  * Every waiting phase is considered, not only `currentPhaseIndex`: a fan-out
  * can pause several at once. The approval names the exact phase, attempt,
@@ -172,7 +213,9 @@ async function openQualifiedGates(
   // phase is waiting; the engine re-checks the phase itself under its lock.
   const live = instances.filter((i) => i.status === "awaiting-approval");
   if (live.length === 0) return;
-  const byRun = new Map(currentVerdicts(await readVerdicts()).map((v) => [v.runId, v]));
+  const all = await readVerdicts();
+  const byRun = new Map(currentVerdicts(all).map((v) => [v.runId, v]));
+  const trajectoryByRun = new Map(currentVerdicts(all, "trajectory").map((v) => [v.runId, v]));
 
   for (const inst of live) {
     // The bar and rubric the gate was authored with, from the instance's own
@@ -189,6 +232,7 @@ async function openQualifiedGates(
         phase,
         def?.phases.find((p) => p.id === phase.id),
         byRun,
+        trajectoryByRun,
       );
       if (q.status === "ineligible" && q.cause === "knowledge") {
         const key = `${inst.id}|${phase.id}|${phase.attempt}`;
@@ -219,6 +263,14 @@ async function openQualifiedGates(
           attempt: phase.attempt,
           runIds: basis.map((b) => b.runId),
           verdicts: basis,
+          ...(q.trajectory
+            ? {
+                trajectoryVerdicts: q.trajectory.basis.map((b) => ({
+                  runId: b.runId,
+                  verdictId: b.verdictId,
+                })),
+              }
+            : {}),
         });
         if (res.ok) deps.onAutoApprove?.(inst.id, phase.id, lowest);
         else

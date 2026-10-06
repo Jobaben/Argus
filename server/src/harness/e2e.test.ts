@@ -574,7 +574,9 @@ test(
         phaseId: "slow",
         runId,
         type: "completed",
-        token: inst.signalToken,
+        // The run's own token — what its hook would have sent. Authentic, and
+        // still too late: a terminal instance takes nothing.
+        token: h.signalTokenOf(runId),
         payload: { last_assistant_message: "ARGUS_OUTCOME: succeeded" },
       }),
     });

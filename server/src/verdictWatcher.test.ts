@@ -13,6 +13,11 @@ import {
 } from "./sources/verdict.js";
 import type { AutomatedApproval } from "./pipelineEngine.js";
 import { createAnalysisRunner, type AnalysisSpawn } from "./sources/analysis.js";
+import {
+  TRAJECTORY_PROMPT_VERSION,
+  TRAJECTORY_SIGNALS_VERSION,
+  trajectoryRubricDigest,
+} from "./sources/trajectory.js";
 import type { PipelineDefinition, PipelineInstance } from "./sources/pipelineTypes.js";
 import type { Run, Schedule } from "./sources/scheduleTypes.js";
 
@@ -164,6 +169,7 @@ function watcher(opts: {
   pipelines?: PipelineDefinition[];
   instances?: PipelineInstance[];
   spawn?: AnalysisSpawn;
+  readLines?: (project: string, sessionId: string) => Promise<unknown[]>;
 }) {
   const approved: string[] = [];
   const requests: AutomatedApproval[] = [];
@@ -181,6 +187,7 @@ function watcher(opts: {
     readSchedules: async () => opts.schedules ?? [],
     readPipelines: async () => opts.pipelines ?? [],
     readInstances: async () => opts.instances ?? [],
+    ...(opts.readLines ? { readLines: opts.readLines } : {}),
     approveAutomatically: async (request) => {
       approved.push(request.instanceId);
       requests.push(request);
@@ -594,4 +601,232 @@ test("a verdict with no id (written before ids existed) cannot be named as a bas
   const { w, approved } = watcher({ pipelines: [pipeline()], instances: [instance()] });
   await w.check();
   assert.equal(approved.length, 0);
+});
+
+// ── Trajectories (Hardening Item 5) ─────────────────────────────────────────
+
+const TRAJ: Rubric = {
+  ...RUBRIC,
+  trajectory: { criteria: [{ id: "focus", label: "Stayed on task" }] },
+};
+const trajPipeline = () =>
+  pipeline({ phases: pipeline().phases.map((p) => ({ ...p, rubric: TRAJ })) });
+const transcript = async () => [
+  {
+    type: "assistant",
+    timestamp: NOW.toISOString(),
+    message: {
+      role: "assistant",
+      content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } }],
+    },
+  },
+];
+const focus = (score: number) =>
+  JSON.stringify({
+    result: JSON.stringify({ criteria: [{ id: "focus", score, note: "n" }] }),
+  });
+/** Answers the output judge and the trajectory judge by what each asked. */
+const both =
+  (output: number, trajectory: number, prompts: string[] = []): AnalysisSpawn =>
+  ({ prompt }) => {
+    prompts.push(prompt);
+    const stdout = prompt.includes("TRAJECTORY CRITERIA") ? focus(trajectory) : answer(output);
+    return { kill: () => {}, done: Promise.resolve({ code: 0, stdout, error: null }) };
+  };
+
+function trajectoryVerdict(runId: string, over: Partial<Verdict> = {}): Verdict {
+  return verdict(runId, 8, {
+    id: `VT-${runId}`,
+    kind: "trajectory",
+    rubricDigest: trajectoryRubricDigest(TRAJ),
+    provenance: {
+      runtime: "claude",
+      requestedModel: "haiku",
+      reportedModel: null,
+      promptVersion: TRAJECTORY_PROMPT_VERSION,
+    },
+    trajectory: {
+      signals: {
+        version: TRAJECTORY_SIGNALS_VERSION,
+        transcript: "present",
+        events: 3,
+        truncated: false,
+        signals: [],
+      },
+      held: [],
+      judged: true,
+    },
+    ...over,
+  });
+}
+
+const stepRun = (id: string, over: Partial<Run> = {}) =>
+  run(id, {
+    scheduleId: "pipeline:p1",
+    phaseId: "build",
+    instanceId: "i1",
+    sessionId: "sess",
+    project: "-repo",
+    ...over,
+  });
+
+test("no trajectory judging by default: a plain rubric never asks for one", async () => {
+  const prompts: string[] = [];
+  const { w } = watcher({
+    runs: [stepRun("step-1")],
+    pipelines: [pipeline()],
+    spawn: both(8, 8, prompts),
+    readLines: transcript,
+  });
+  await w.check();
+  await w.check();
+  assert.equal(prompts.length, 1, "one output judgment, nothing else");
+  assert.equal(
+    prompts.some((p) => p.includes("TRAJECTORY CRITERIA")),
+    false,
+  );
+  assert.equal(
+    (await readVerdicts()).some((v) => v.kind === "trajectory"),
+    false,
+  );
+});
+
+test("a trajectory rubric gets one output and one trajectory pass, each once, never confused", async () => {
+  const prompts: string[] = [];
+  const { w, judged } = watcher({
+    runs: [stepRun("step-1")],
+    pipelines: [trajPipeline()],
+    spawn: both(8, 6, prompts),
+    readLines: transcript,
+  });
+  await w.check();
+  await w.check();
+  assert.equal(prompts.length, 2);
+  const stored = await readVerdicts();
+  assert.equal(stored.filter((v) => v.kind === "trajectory").length, 1);
+  assert.equal(
+    stored.filter((v) => v.kind !== "trajectory").length,
+    1,
+    "the output judge ran once",
+  );
+  assert.deepEqual(judged, ["step-1", "step-1"]);
+});
+
+test("a trajectory judgment does not count as the run's output verdict", async () => {
+  await writeVerdict(trajectoryVerdict("step-1"));
+  const prompts: string[] = [];
+  const { w } = watcher({
+    runs: [stepRun("step-1")],
+    pipelines: [trajPipeline()],
+    spawn: both(8, 8, prompts),
+    readLines: transcript,
+  });
+  await w.check();
+  assert.equal(prompts.filter((p) => !p.includes("TRAJECTORY CRITERIA")).length, 1);
+});
+
+test("without a transcript reader there is no trajectory pass, and the gate waits", async () => {
+  await writeVerdict(verdict("step-1", 9));
+  const { w, approved } = watcher({
+    runs: [stepRun("step-1")],
+    pipelines: [trajPipeline()],
+    instances: [instance({ definition: trajPipeline() })],
+  });
+  await w.check();
+  assert.equal(
+    (await readVerdicts()).some((v) => v.kind === "trajectory"),
+    false,
+  );
+  assert.equal(approved.length, 0);
+});
+
+test("the approval request carries the trajectory basis separately", async () => {
+  await writeVerdict(verdict("step-1", 9));
+  await writeVerdict(trajectoryVerdict("step-1"));
+  const { w, requests } = watcher({
+    pipelines: [trajPipeline()],
+    instances: [instance({ definition: trajPipeline() })],
+  });
+  await w.check();
+  assert.deepEqual(requests[0]?.verdicts, [{ runId: "step-1", verdictId: "V-step-1" }]);
+  assert.deepEqual(requests[0]?.trajectoryVerdicts, [{ runId: "step-1", verdictId: "VT-step-1" }]);
+});
+
+test("a plain gate's request carries no trajectory basis", async () => {
+  await writeVerdict(verdict("step-1", 9));
+  const { w, requests } = watcher({ pipelines: [pipeline()], instances: [instance()] });
+  await w.check();
+  assert.equal(requests.length, 1);
+  assert.equal("trajectoryVerdicts" in requests[0], false);
+});
+
+for (const [name, over] of [
+  ["skipped", { status: "skipped", score: null }],
+  ["failed", { status: "failed", score: null }],
+  ["below the bar", { score: 5 }],
+  ["under another rubric", { rubricDigest: "0".repeat(64) }],
+  [
+    "over a truncated recording",
+    {
+      trajectory: {
+        signals: {
+          version: TRAJECTORY_SIGNALS_VERSION,
+          transcript: "present",
+          events: 2000,
+          truncated: true,
+          signals: [],
+        },
+        held: [],
+        judged: true,
+      },
+    },
+  ],
+] as const) {
+  test(`a trajectory judgment that is ${name} withholds automation`, async () => {
+    await writeVerdict(verdict("step-1", 9));
+    await writeVerdict(trajectoryVerdict("step-1", over as Partial<Verdict>));
+    const { w, approved } = watcher({
+      pipelines: [trajPipeline()],
+      instances: [instance({ definition: trajPipeline() })],
+    });
+    await w.check();
+    assert.equal(approved.length, 0);
+  });
+}
+
+test("a missing trajectory judgment withholds automation however well the output scored", async () => {
+  await writeVerdict(verdict("step-1", 10));
+  const { w, approved } = watcher({
+    pipelines: [trajPipeline()],
+    instances: [instance({ definition: trajPipeline() })],
+  });
+  await w.check();
+  assert.equal(approved.length, 0);
+});
+
+test("a best-of-N trajectory gate needs judgments for the selected candidate only", async () => {
+  await writeVerdict(verdict("cand-2", 8));
+  await writeVerdict(trajectoryVerdict("cand-2"));
+  const inst = instance({
+    definition: trajPipeline(),
+    phases: [
+      {
+        id: "build",
+        name: "Build",
+        gated: true,
+        status: "awaiting-approval",
+        pause: "gate",
+        steps: [
+          { name: "s", runId: "cand-1", status: "aborted", candidate: 0 },
+          { name: "s", runId: "cand-2", status: "succeeded", candidate: 1 },
+        ],
+        selectedCandidate: 1,
+        attempt: 1,
+        payload: null,
+      },
+    ],
+  } as Partial<PipelineInstance>);
+  const { w, requests } = watcher({ pipelines: [trajPipeline()], instances: [inst] });
+  await w.check();
+  assert.deepEqual(requests[0]?.trajectoryVerdicts, [{ runId: "cand-2", verdictId: "VT-cand-2" }]);
 });

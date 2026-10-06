@@ -21,6 +21,7 @@ import {
 } from "./sources/runs.js";
 import type { EngineDeps } from "./pipelineEngine.js";
 import type { PhaseDef } from "./sources/pipelineTypes.js";
+import { testRunToken } from "./testSignalToken.js";
 
 /**
  * Result transport: how a structured decision gets from the agent to the engine.
@@ -58,6 +59,7 @@ const baseDeps = (over: Partial<EngineDeps> & { spawn: EngineDeps["spawn"] }): E
   now: () => new Date(2026, 5, 30, 12, 0),
   newId: () => `id-${++counter}`,
   signalUrlBase: "http://localhost:7777",
+  newSignalToken: testRunToken,
   maxConcurrent: 4,
   tickMs: 30000,
   kill: fakeKill().kill,
@@ -239,9 +241,10 @@ test("the stop hook reports a malformed result file instead of guessing", async 
   assert.match(String(body.resultError), /could not be parsed/);
 });
 
-test("a run with no result file posts the same body it always did", async () => {
+test("a run with no result file posts no result fields — only the hook's additive completion metadata is new", async () => {
   const body = await hookPost({}, { last_assistant_message: "done" });
   assert.deepEqual(Object.keys(body).sort(), [
+    "completion",
     "instanceId",
     "payload",
     "phaseId",
@@ -249,6 +252,25 @@ test("a run with no result file posts the same body it always did", async () => 
     "token",
     "type",
   ]);
+  // Hook v2's own reading of the marker: here, none was written. Argus
+  // re-reads the message itself; this is only compared against it.
+  assert.deepEqual(body.completion, { hookVersion: 2, marker: "missing" });
+});
+
+test("hook v2 sends its own marker reading with every signal; Argus only compares it", async () => {
+  const cases: Array<[string, string, string]> = [
+    ["done\nARGUS_OUTCOME: succeeded", "completed", "succeeded"],
+    ["ARGUS_OUTCOME: failed — red", "failed", "failed"],
+    ["ARGUS_OUTCOME: blocked", "failed", "blocked"],
+    // A failure marker anywhere still makes the hook report failure, as it
+    // always did; the metadata says the message was contradictory.
+    ["ARGUS_OUTCOME: succeeded\nARGUS_OUTCOME: failed — no", "failed", "conflicting"],
+  ];
+  for (const [message, type, marker] of cases) {
+    const body = await hookPost({}, { last_assistant_message: message });
+    assert.equal(body.type, type, message);
+    assert.deepEqual(body.completion, { hookVersion: 2, marker }, message);
+  }
 });
 
 test("the stop hook never reads a decision out of the assistant's prose", async () => {
@@ -280,7 +302,8 @@ test("a completion signal's result is recorded against the step that sent it", a
     phaseId: "evaluate",
     runId: rec.calls[0].runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(rec.calls[0].runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
     result: { accepted: true },
   });
   const after = await readInstance(inst!.id);

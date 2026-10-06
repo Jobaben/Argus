@@ -28,6 +28,7 @@ import {
 } from "./sources/gateDecisions.js";
 import { rubricDigest, writeVerdict } from "./sources/verdict.js";
 import { readLedger } from "./knowledge/store.js";
+import { testRunToken } from "./testSignalToken.js";
 
 /**
  * Phase 0 of the Decision Plane RFC, through the real engine: who may open a
@@ -68,6 +69,7 @@ function engine(spawn: ReturnType<typeof recordingSpawn>["spawn"], over = {}): E
     spawn,
     kill: fakeKill().kill,
     signalUrlBase: "http://localhost:7777",
+    newSignalToken: testRunToken,
     maxConcurrent: 4,
     tickMs: 30000,
     parentEnv: { PATH: process.env.PATH ?? "/bin", HOME: home },
@@ -103,7 +105,7 @@ async function complete(e: Engine, inst: PipelineInstance, phaseId: string, runI
     phaseId,
     runId,
     type: "completed",
-    token: inst.signalToken,
+    token: testRunToken(runId),
     payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
@@ -472,7 +474,7 @@ test("regression: a needs-input pause is a question for a person; no score answe
     phaseId: "build",
     runId: rec.calls[0].runId,
     type: "needs-input",
-    token: inst.signalToken,
+    token: testRunToken(rec.calls[0].runId),
     payload: "Which database?",
   });
   const asked = await load(inst.id);

@@ -21,6 +21,7 @@ import {
 } from "./context.js";
 import { analyzeImpact } from "./impact.js";
 import { executionProvenance } from "./kernel.js";
+import { testRunToken } from "../testSignalToken.js";
 
 /**
  * Controlled semantic context delivery through the engine (Phase 4): a step
@@ -78,6 +79,7 @@ function engine(spawn: ReturnType<typeof recordingSpawn>["spawn"]) {
     spawn,
     kill: fakeKill().kill,
     signalUrlBase: "http://localhost:7777",
+    newSignalToken: testRunToken,
     maxConcurrent: 4,
     tickMs: 30000,
     parentEnv: { PATH: process.env.PATH ?? "/bin", HOME: home },
@@ -130,7 +132,7 @@ async function complete(e: Engine, inst: PipelineInstance, phaseId: string, runI
     phaseId,
     runId,
     type: "completed",
-    token: inst.signalToken,
+    token: testRunToken(runId),
     payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
 }

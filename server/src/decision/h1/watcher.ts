@@ -21,7 +21,7 @@ import type { DecisionService } from "../service.js";
 import {
   applyGateRules,
   GATE_RULES_V1_REF,
-  QUALIFICATION_V1_REF,
+  QUALIFICATION_V2_REF,
   verdictBaseline,
 } from "./baselines.js";
 import { gatherGateReview, type GatherCache, type H1Sources } from "./collect.js";
@@ -258,7 +258,7 @@ export function buildH1Config(
     projection,
     reviewStateRule: REVIEW_STATE_RULE,
     rules: { ...GATE_RULES_V1_REF },
-    qualification: { ...QUALIFICATION_V1_REF },
+    qualification: { ...QUALIFICATION_V2_REF },
     sampling: {
       method: SAMPLING_METHOD,
       seed: settings.seed,
@@ -460,7 +460,10 @@ export function createH1Watcher(deps: H1WatcherDeps): H1Watcher {
     digest: string,
     idx: H1Index,
     cache: GatherCache,
-    verdicts: () => Promise<Map<string, Verdict>>,
+    verdicts: () => Promise<{
+      output: Map<string, Verdict>;
+      trajectory: Map<string, Verdict>;
+    }>,
   ): Promise<number> {
     const instances = await deps.sources.listInstances();
     const gateLines: NewH1Record[] = [];
@@ -506,7 +509,8 @@ export function createH1Watcher(deps: H1WatcherDeps): H1Watcher {
           const phase = inst!.phases.find((p) => p.id === item.phaseId)!;
           const phaseDef = def?.phases.find((p) => p.id === item.phaseId);
           const deterministic = applyGateRules(snapshot.content.body as GateReviewBody);
-          const verdict = verdictBaseline(phase, phaseDef, await verdicts());
+          const current = await verdicts();
+          const verdict = verdictBaseline(phase, phaseDef, current.output, current.trajectory);
           try {
             await deps.snapshots.publish(snapshot);
           } catch (err) {
@@ -898,12 +902,21 @@ export function createH1Watcher(deps: H1WatcherDeps): H1Watcher {
         await deps.ledger.append(pre);
         await reconcile(q, indexH1(await deps.ledger.load()), at, cache);
         idx = indexH1(await deps.ledger.load());
-        let verdictMap: Promise<Map<string, Verdict>> | null = null;
-        const verdicts = () =>
-          (verdictMap ??= deps.sources
-            .currentVerdicts()
+        const byRun = (read: (() => Promise<Verdict[]>) | undefined) =>
+          (read ? read() : Promise.resolve([]))
             .then((vs) => new Map(vs.map((v) => [v.runId, v])))
-            .catch(() => new Map<string, Verdict>()));
+            .catch(() => new Map<string, Verdict>());
+        let verdictMap: Promise<{
+          output: Map<string, Verdict>;
+          trajectory: Map<string, Verdict>;
+        }> | null = null;
+        // An unreadable store reads as no verdicts: insufficient data, never a
+        // qualification.
+        const verdicts = () =>
+          (verdictMap ??= Promise.all([
+            byRun(() => deps.sources.currentVerdicts()),
+            byRun(deps.sources.currentTrajectoryVerdicts?.bind(deps.sources)),
+          ]).then(([output, trajectory]) => ({ output, trajectory })));
         const captured = await capture(q, settings, digest, idx, cache, verdicts);
         const settled = await observe(q, settings, idx, cache);
         const outcome = await call(q, settings, digest, idx, cache);

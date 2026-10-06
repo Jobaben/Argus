@@ -24,10 +24,17 @@ import type {
   RetryableClass,
   RetryPolicy,
   RouteDecision,
+  StepCompletion,
   StepProgress,
   StepStatus,
   VerificationReport,
 } from "./sources/pipelineTypes.js";
+import type {
+  GateDecision,
+  PendingGateOperation,
+  TransitionEvent,
+  TransitionEventKind,
+} from "@argus/contracts";
 
 /**
  * The pure state transitions of a pipeline instance.
@@ -102,7 +109,34 @@ export interface TransitionResult {
   knowledgeApplied?: boolean;
   /** Set by {@link advance} when the signal matched nothing it may drive and
    *  the instance was returned untouched. */
-  ignored?: "unknown-phase" | "phase-not-running" | "unknown-run";
+  ignored?: "unknown-phase" | "phase-not-running" | "unknown-run" | "step-not-running";
+  /**
+   * What this transition did, in order — nested transitions (a signal that
+   * settles the graph, a selection that concludes the phase) contribute their
+   * own entries. The engine records them with the instance save that commits
+   * the result, so every pipeline status change on disk is attributed to a
+   * transition. Absent on a transition that changed nothing.
+   */
+  events?: TransitionEvent[];
+}
+
+/** One event, with only the fields that are set. */
+export function transitionEvent(
+  kind: TransitionEventKind,
+  fields: { phaseId?: string; attempt?: number; runId?: string; detail?: string } = {},
+): TransitionEvent {
+  return {
+    kind,
+    ...(fields.phaseId !== undefined ? { phaseId: fields.phaseId } : {}),
+    ...(fields.attempt !== undefined ? { attempt: fields.attempt } : {}),
+    ...(fields.runId !== undefined ? { runId: fields.runId } : {}),
+    ...(fields.detail !== undefined ? { detail: fields.detail } : {}),
+  };
+}
+
+/** `res` with `events` put ahead of whatever it already carried. */
+function withEvents(res: TransitionResult, events: TransitionEvent[]): TransitionResult {
+  return { ...res, events: [...events, ...(res.events ?? [])] };
 }
 
 /** Kept for definitions and tests that predate `{{artifacts.<name>}}`. */
@@ -348,6 +382,7 @@ export function settle(
   nowISO: string,
   priorFailures: RouteFailure[] = [],
 ): TransitionResult {
+  const statusBefore = inst.status;
   const routing: RouteOutcome = { decisions: [], skipped: [], failures: [...priorFailures] };
   recordRouteDecisions(def, inst, routing);
   propagateSkips(def, inst, routing);
@@ -360,6 +395,23 @@ export function settle(
     // fetching the definition (which may since have been edited).
     inst.phases[i].needs = needs.get(inst.phases[i].id) ?? [];
   }
+  const events: TransitionEvent[] = [
+    ...routing.decisions.map((d) =>
+      transitionEvent("route-decided", { phaseId: d.sourcePhase, detail: d.reason }),
+    ),
+    ...routing.failures
+      .slice(priorFailures.length)
+      .map((f) =>
+        transitionEvent("route-decided", { phaseId: f.phaseId, detail: `failed: ${f.reason}` }),
+      ),
+    ...routing.skipped.map((id) => transitionEvent("phase-skipped", { phaseId: id })),
+    ...startPhases.map((i) =>
+      transitionEvent("phase-started", {
+        phaseId: inst.phases[i].id,
+        attempt: inst.phases[i].attempt,
+      }),
+    ),
+  ];
 
   const outcome = instanceOutcome(def, inst);
   if (outcome === "succeeded") {
@@ -377,7 +429,10 @@ export function settle(
 
   inst.currentPhaseIndex = currentIndex(inst);
   touch(inst, nowISO);
-  return { instance: inst, startPhases, routing };
+  if (inst.status !== statusBefore) {
+    events.push(transitionEvent("instance-status", { detail: `${statusBefore} → ${inst.status}` }));
+  }
+  return { instance: inst, startPhases, routing, events };
 }
 
 export function initInstance(
@@ -413,6 +468,9 @@ export function initInstance(
     ...(firing?.triggerPayload !== undefined ? { triggerPayload: firing.triggerPayload } : {}),
     ...(firing?.chainedFrom !== undefined ? { chainedFrom: firing.chainedFrom } : {}),
     signalToken: ids.token,
+    // Every run of this instance gets its own token; the instance-wide one
+    // above is kept only so the record keeps its shape, and is never accepted.
+    signalScheme: "run-token-v1",
     createdAt: nowISO,
     updatedAt: nowISO,
     endedAt: null,
@@ -422,10 +480,53 @@ export function initInstance(
     // author saves afterwards can reach it.
     definition: def,
   };
-  return settle(def, instance, nowISO);
+  return withEvents(settle(def, instance, nowISO), [transitionEvent("init")]);
 }
 
 export function advance(
+  def: PipelineDefinition,
+  inst: PipelineInstance,
+  signal: PipelineSignal,
+  nowISO: string,
+  failureClass?: PhaseFailureClass,
+  completion?: StepCompletion,
+): TransitionResult {
+  const res = advanceSignal(def, inst, signal, nowISO, failureClass, completion);
+  if (res.ignored) return res;
+  const phase = inst.phases.find((p) => p.id === signal.phaseId);
+  const events = [
+    transitionEvent("signal", {
+      phaseId: signal.phaseId,
+      runId: signal.runId,
+      ...(phase ? { attempt: phase.attempt } : {}),
+      detail: failureClass ? `${signal.type} (${failureClass})` : signal.type,
+    }),
+  ];
+  if (completion) {
+    events.push(
+      transitionEvent("completion-recorded", {
+        phaseId: signal.phaseId,
+        runId: signal.runId,
+        detail: `${completion.verdict}: marker ${completion.marker} (${completion.policy})`,
+      }),
+    );
+  }
+  if (res.verify?.length) {
+    for (const id of res.verify)
+      events.push(transitionEvent("verification-started", { phaseId: id }));
+  }
+  if (res.verifyCandidate) {
+    events.push(
+      transitionEvent("verification-started", {
+        phaseId: res.verifyCandidate.phaseId,
+        detail: `c${res.verifyCandidate.candidate}`,
+      }),
+    );
+  }
+  return withEvents(res, events);
+}
+
+function advanceSignal(
   def: PipelineDefinition,
   inst: PipelineInstance,
   signal: PipelineSignal,
@@ -440,6 +541,13 @@ export function advance(
    * it always was.
    */
   failureClass?: PhaseFailureClass,
+  /**
+   * What Argus decided about the run's completion report, recorded on the
+   * step the signal drives. Decided by the caller (it reads the run's final
+   * message and the phase's policy); recorded here, so the step's own
+   * account and its status change land in the same transition.
+   */
+  completion?: StepCompletion,
 ): TransitionResult {
   // Located by id, not by a cursor: with a fan-out, several phases are live at
   // once and the signalling one is whichever sent it.
@@ -455,6 +563,17 @@ export function advance(
   // can't terminalize or advance the instance behind the tracked run's back.
   const step = phase.steps.find((s) => s.runId === signal.runId);
   if (!step) return { instance: inst, startPhases: [], ignored: "unknown-run" };
+  // A step that has already reported — or was failed, aborted or superseded
+  // by Argus — has been decided. A duplicate or late signal for it must not
+  // re-decide it: a second `completed` would overwrite the payload and result
+  // a sibling may already have read, and a late `failed` would fail a phase
+  // whose step had succeeded. (A `needs-input` pause moves the phase to
+  // `awaiting-approval`, so the same run's later Stop never reaches here;
+  // the gate's approve or revise is what resumes it.)
+  if (step.status !== "running") {
+    return { instance: inst, startPhases: [], ignored: "step-not-running" };
+  }
+  if (completion) step.completion = completion;
 
   // A candidate is not a step of a phase in the ordinary sense: its failure
   // does not fail the phase, and its success does not conclude it. Everything
@@ -533,7 +652,13 @@ function concludePhase(
   if (phase.gated) {
     phase.status = "awaiting-approval";
     phase.pause = "gate";
-    return settle(def, inst, nowISO);
+    return withEvents(settle(def, inst, nowISO), [
+      transitionEvent("phase-paused", {
+        phaseId: phase.id,
+        attempt: phase.attempt,
+        detail: "gate",
+      }),
+    ]);
   }
   return succeedPhase(def, inst, phase, nowISO);
 }
@@ -624,11 +749,15 @@ function succeedPhase(
       ...(acceptanceVerifications.length > 0 ? { acceptanceVerifications } : {}),
       startedAt: nowISO,
     };
-    return { ...settle(def, inst, nowISO), commitKnowledge: [phase.id] };
+    return withEvents({ ...settle(def, inst, nowISO), commitKnowledge: [phase.id] }, [
+      transitionEvent("knowledge-pending", { phaseId: phase.id, attempt: phase.attempt }),
+    ]);
   }
   phase.status = "succeeded";
   publishArtifact(def, inst, phase.id);
-  return settle(def, inst, nowISO);
+  return withEvents(settle(def, inst, nowISO), [
+    transitionEvent("phase-succeeded", { phaseId: phase.id, attempt: phase.attempt }),
+  ]);
 }
 
 /** What the engine learned from committing a phase's staged deltas. */
@@ -695,7 +824,13 @@ export function applyKnowledgeCommit(
     mark("applied");
     phase.status = "succeeded";
     publishArtifact(def, inst, phase.id);
-    return { ...settle(def, inst, nowISO), knowledgeApplied: true };
+    return withEvents({ ...settle(def, inst, nowISO), knowledgeApplied: true }, [
+      transitionEvent("knowledge-committed", {
+        phaseId: phase.id,
+        attempt: phase.attempt,
+        detail: "applied",
+      }),
+    ]);
   }
   phase.knowledge = { ...held, status: "rejected", endedAt: nowISO, reason: verdict.reason };
   mark("rejected");
@@ -705,7 +840,13 @@ export function applyKnowledgeCommit(
     verdict.failureClass ?? commitFailureClass(held),
   );
   failLeftoverSteps(phase);
-  return { ...settle(def, inst, nowISO), knowledgeApplied: true };
+  return withEvents({ ...settle(def, inst, nowISO), knowledgeApplied: true }, [
+    transitionEvent("knowledge-committed", {
+      phaseId: phase.id,
+      attempt: phase.attempt,
+      detail: `refused: ${verdict.reason}`,
+    }),
+  ]);
 }
 
 /**
@@ -755,8 +896,15 @@ export function applyVerification(
     return { instance: inst, startPhases: [] };
   }
   phase.verification = report;
+  const applied = transitionEvent("verification-applied", {
+    phaseId,
+    attempt: phase.attempt,
+    detail: report.status,
+  });
   if (report.status === "passed") {
-    return { ...concludePhase(def, inst, phase, nowISO), verificationApplied: true };
+    return withEvents({ ...concludePhase(def, inst, phase, nowISO), verificationApplied: true }, [
+      applied,
+    ]);
   }
 
   phase.status = "failed";
@@ -765,7 +913,7 @@ export function applyVerification(
     "verification",
   );
   failLeftoverSteps(phase);
-  return { ...settle(def, inst, nowISO), verificationApplied: true };
+  return withEvents({ ...settle(def, inst, nowISO), verificationApplied: true }, [applied]);
 }
 
 // ── Candidates: best-of-N with verifier-gated selection ──────────────────────
@@ -1012,6 +1160,13 @@ export function applyCandidateVerification(
     startPhases: [],
     verificationApplied: true,
     candidatesMoved: phaseId,
+    events: [
+      transitionEvent("candidate-verification-applied", {
+        phaseId,
+        attempt: phase.attempt,
+        detail: `c${candidate} ${report.status}`,
+      }),
+    ],
   };
 }
 
@@ -1053,15 +1208,23 @@ export function applyCandidateSelection(
   phase.payload = winner.payload ?? null;
   phase.verification = winner.verification;
   phase.workspace = winner.workspace ?? null;
+  const selected = transitionEvent("candidate-selected", {
+    phaseId,
+    attempt: phase.attempt,
+    detail: `c${candidate}`,
+  });
 
   const resolved = resolvePhaseResult(def, phase, [winner]);
   if (!resolved.ok) {
     phase.status = "failed";
     phase.payload = withReason(phase.payload, resolved.reason);
-    return settle(def, inst, nowISO, [{ phaseId, reason: resolved.reason }]);
+    return withEvents(settle(def, inst, nowISO, [{ phaseId, reason: resolved.reason }]), [
+      selected,
+      transitionEvent("phase-failed", { phaseId, attempt: phase.attempt, detail: resolved.reason }),
+    ]);
   }
   if (resolved.value !== undefined) phase.result = resolved.value;
-  return concludePhase(def, inst, phase, nowISO);
+  return withEvents(concludePhase(def, inst, phase, nowISO), [selected]);
 }
 
 /**
@@ -1085,7 +1248,13 @@ export function applyCandidatesExhausted(
   phase.status = "failed";
   phase.payload = withFailureClass(withReason(phase.payload, reason), failureClass);
   failLeftoverSteps(phase);
-  return settle(def, inst, nowISO);
+  return withEvents(settle(def, inst, nowISO), [
+    transitionEvent("candidates-exhausted", {
+      phaseId,
+      attempt: phase.attempt,
+      detail: failureClass,
+    }),
+  ]);
 }
 
 /**
@@ -1108,7 +1277,9 @@ export function applyUnlaunchable(
   phase.status = "failed";
   phase.payload = withFailureClass(withReason(phase.payload, reason), "configuration");
   failLeftoverSteps(phase);
-  return settle(def, inst, nowISO);
+  return withEvents(settle(def, inst, nowISO), [
+    transitionEvent("unlaunchable", { phaseId, attempt: phase.attempt, detail: reason }),
+  ]);
 }
 
 /** The phase a human action targets: the named one, else the single paused one. */
@@ -1134,7 +1305,9 @@ export function applyApprove(
   if (answers !== undefined) phase.payload = answers;
   // Approval is the gate's acceptance condition; the staged knowledge commits
   // only now, never when the agent finished or the checks passed.
-  return succeedPhase(def, inst, phase, nowISO);
+  return withEvents(succeedPhase(def, inst, phase, nowISO), [
+    transitionEvent("approve", { phaseId: phase.id, attempt: phase.attempt }),
+  ]);
 }
 
 export function applyRevise(
@@ -1156,7 +1329,11 @@ export function applyRevise(
   inst.endedAt = null;
   inst.currentPhaseIndex = inst.phases.indexOf(phase);
   touch(inst, nowISO);
-  return { instance: inst, startPhases: [inst.phases.indexOf(phase)] };
+  return {
+    instance: inst,
+    startPhases: [inst.phases.indexOf(phase)],
+    events: [transitionEvent("revise", { phaseId: phase.id, attempt: phase.attempt })],
+  };
 }
 
 function restartPhase(phase: PhaseProgress): void {
@@ -1241,7 +1418,17 @@ export function applyRemediation(
   inst.endedAt = null;
   inst.currentPhaseIndex = inst.phases.indexOf(phase);
   touch(inst, nowISO);
-  return { instance: inst, startPhases: [inst.phases.indexOf(phase)] };
+  return {
+    instance: inst,
+    startPhases: [inst.phases.indexOf(phase)],
+    events: [
+      transitionEvent("remediation", {
+        phaseId: implementationPhaseId,
+        attempt: phase.attempt,
+        detail: downstreamPhaseIds.join(", "),
+      }),
+    ],
+  };
 }
 
 export function applyAbort(inst: PipelineInstance, nowISO: string): PipelineInstance {
@@ -1266,7 +1453,7 @@ export function applyAbort(inst: PipelineInstance, nowISO: string): PipelineInst
 
 // ── Retry ───────────────────────────────────────────────────────────────────
 
-const DEFAULT_RETRYABLE: RetryableClass[] = ["spawn", "exit-code"];
+const DEFAULT_RETRYABLE: RetryableClass[] = ["spawn", "exit-code", "unverified"];
 
 /**
  * Whether a failed phase gets another automatic attempt.
@@ -1275,7 +1462,12 @@ const DEFAULT_RETRYABLE: RetryableClass[] = ["spawn", "exit-code"];
  * failure has *considered* the work and reported on it, and re-running the same
  * prompt is unlikely to change its mind — it just costs the same money twice.
  * A process that never started, or died on a non-zero exit, plausibly hit
- * something transient.
+ * something transient. An `unverified` completion — no marker, or markers that
+ * contradict each other — is the same kind of thing: the agent reported
+ * nothing Argus could accept, not a verdict, and the retry note tells the next
+ * attempt exactly which marker is required. (Before the class existed the
+ * run-record path classed this case `exit-code`, so the default is unchanged
+ * for it; a policy that lists classes explicitly must name `unverified`.)
  */
 export function shouldRetry(
   policy: RetryPolicy | undefined,
@@ -1315,5 +1507,195 @@ export function applyRetry(
   inst.endedAt = null;
   inst.currentPhaseIndex = inst.phases.indexOf(phase);
   touch(inst, nowISO);
-  return { instance: inst, startPhases: [inst.phases.indexOf(phase)] };
+  return {
+    instance: inst,
+    startPhases: [inst.phases.indexOf(phase)],
+    events: [transitionEvent("retry-started", { phaseId, attempt: phase.attempt })],
+  };
+}
+
+// ── Engine-requested transitions ─────────────────────────────────────────────
+//
+// State the engine decides on from I/O it alone can do — which runs it planned,
+// when a retry is due, which gate decision it made durable — but which is
+// pipeline state all the same, and so is written here, as a transition with
+// its own event, rather than by the engine in place.
+
+/** What the engine planned for one phase attempt, before any process starts. */
+export interface LaunchPlan {
+  steps: StepProgress[];
+  artifactDir: string;
+}
+
+/**
+ * Record a phase attempt's planned runs: one step per run, every one
+ * `running`, and the attempt's per-attempt summaries cleared — a previous
+ * attempt's counts describe work nobody can accept any more. Refused (no
+ * change) for a phase that is not `running`, or whose steps already carry run
+ * ids for this attempt: a phase attempt is planned once.
+ */
+export function applyLaunchPlan(
+  inst: PipelineInstance,
+  phaseId: string,
+  plan: LaunchPlan,
+  nowISO: string,
+): TransitionResult {
+  const phase = inst.phases.find((p) => p.id === phaseId);
+  if (!phase || phase.status !== "running" || phase.steps.some((s) => s.runId)) {
+    return { instance: inst, startPhases: [] };
+  }
+  phase.steps = plan.steps;
+  phase.status = "running";
+  phase.artifactDir = plan.artifactDir;
+  delete phase.discovery;
+  delete phase.ruleVerification;
+  delete phase.changeIntent;
+  delete phase.acceptanceVerification;
+  touch(inst, nowISO);
+  return {
+    instance: inst,
+    startPhases: [],
+    events: [
+      transitionEvent("launch-planned", {
+        phaseId,
+        attempt: phase.attempt,
+        detail: `${plan.steps.length} run${plan.steps.length === 1 ? "" : "s"}`,
+      }),
+    ],
+  };
+}
+
+/** Write how a failed phase's failure was classed, beside its reason. */
+export function classifyFailure(
+  inst: PipelineInstance,
+  phaseId: string,
+  failureClass: PhaseFailureClass,
+): TransitionResult {
+  const phase = inst.phases.find((p) => p.id === phaseId);
+  if (!phase || phase.status !== "failed") return { instance: inst, startPhases: [] };
+  phase.payload = withFailureClass(phase.payload, failureClass);
+  return {
+    instance: inst,
+    startPhases: [],
+    events: [
+      transitionEvent("failure-classified", {
+        phaseId,
+        attempt: phase.attempt,
+        detail: failureClass,
+      }),
+    ],
+  };
+}
+
+/**
+ * Schedule a failed phase's next automatic attempt: the time is the engine's
+ * (it applies the policy's backoff to its clock), the meaning is this — the
+ * instance is no longer terminal, because something is still going to happen.
+ */
+export function scheduleRetry(
+  inst: PipelineInstance,
+  phaseId: string,
+  retryAt: string,
+): TransitionResult {
+  const phase = inst.phases.find((p) => p.id === phaseId);
+  if (!phase || phase.status !== "failed") return { instance: inst, startPhases: [] };
+  const statusBefore = inst.status;
+  phase.retryAt = retryAt;
+  inst.status = "running";
+  inst.endedAt = null;
+  const events = [
+    transitionEvent("retry-scheduled", { phaseId, attempt: phase.attempt, detail: retryAt }),
+  ];
+  if (statusBefore !== inst.status) {
+    events.push(transitionEvent("instance-status", { detail: `${statusBefore} → running` }));
+  }
+  return { instance: inst, startPhases: [], events };
+}
+
+/**
+ * Link a durable gate decision to the instance and mark its operation
+ * pending — the commit point of every approve, revise and abort. Nothing else
+ * changes: the effects come after, and the link must not carry any of them.
+ */
+export function applyGateLink(
+  inst: PipelineInstance,
+  decision: Pick<GateDecision, "id" | "decision">,
+  op: Omit<PendingGateOperation, "decisionId" | "decision" | "startedAt">,
+  nowISO: string,
+): TransitionResult {
+  inst.gateDecisionIds = [...(inst.gateDecisionIds ?? []), decision.id];
+  inst.pendingGateOperation = {
+    decisionId: decision.id,
+    decision: decision.decision,
+    startedAt: nowISO,
+    ...op,
+  };
+  return {
+    instance: inst,
+    startPhases: [],
+    events: [
+      transitionEvent("gate-linked", {
+        ...(op.phaseId ? { phaseId: op.phaseId } : {}),
+        ...(op.attempt !== null ? { attempt: op.attempt } : {}),
+        detail: `${decision.decision} ${decision.id}`,
+      }),
+    ],
+  };
+}
+
+/** The gate operation's effects are done: clear its pending marker. */
+export function applyGateComplete(inst: PipelineInstance): TransitionResult {
+  const op = inst.pendingGateOperation;
+  if (!op) return { instance: inst, startPhases: [] };
+  delete inst.pendingGateOperation;
+  return {
+    instance: inst,
+    startPhases: [],
+    events: [
+      transitionEvent("gate-completed", {
+        ...(op.phaseId ? { phaseId: op.phaseId } : {}),
+        detail: `${op.decision} ${op.decisionId}`,
+      }),
+    ],
+  };
+}
+
+/** Forget the worktrees of losing candidates whose directories are gone. */
+export function applyCandidateTreesRemoved(
+  inst: PipelineInstance,
+  phaseId: string,
+  candidates: number[],
+): TransitionResult {
+  const phase = inst.phases.find((p) => p.id === phaseId);
+  if (!phase || candidates.length === 0) return { instance: inst, startPhases: [] };
+  for (const step of phase.steps) {
+    if (step.candidate !== undefined && candidates.includes(step.candidate)) step.workspace = null;
+  }
+  return {
+    instance: inst,
+    startPhases: [],
+    events: [
+      transitionEvent("candidate-tree-removed", {
+        phaseId,
+        attempt: phase.attempt,
+        detail: candidates.map((c) => `c${c}`).join(", "),
+      }),
+    ],
+  };
+}
+
+/** {@link applyAbort} as a transition result, with its events. */
+export function abortTransition(inst: PipelineInstance, nowISO: string): TransitionResult {
+  const aborted = inst.phases
+    .filter((p) => p.status === "running" || p.status === "awaiting-approval")
+    .map((p) => p.id);
+  applyAbort(inst, nowISO);
+  return {
+    instance: inst,
+    startPhases: [],
+    events: [
+      transitionEvent("abort", { detail: aborted.join(", ") }),
+      ...aborted.map((id) => transitionEvent("phase-failed", { phaseId: id, detail: "aborted" })),
+    ],
+  };
 }

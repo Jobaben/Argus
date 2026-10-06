@@ -19,7 +19,12 @@
 //     `ARGUS_OUTCOME: failed` or `ARGUS_OUTCOME: blocked` emits "failed";
 //     anything else emits "completed". This lets a run that stops cleanly but
 //     concluded it failed/was blocked report that, instead of being rubber-
-//     stamped as a success.
+//     stamped as a success. A "completed" is not the hook's verdict either:
+//     Argus re-reads the final message it is sent and, under the default
+//     `required` completion policy, refuses a completion with no
+//     `ARGUS_OUTCOME: succeeded` marker. Since version 2 the hook also sends
+//     its own version and marker reading (`completion`), which Argus only
+//     compares against its own.
 //   * A run that stops while background tasks/subagents are still in flight is
 //     reported "deferred": the process is NOT torn down — Claude keeps it alive
 //     and fires Stop again once the deferred work finishes, and that later Stop
@@ -44,6 +49,36 @@ import { pathToFileURL } from "node:url";
 /** A final message reporting a failed/blocked outcome via the sentinel line,
  *  capturing any trailing reason text on that same line. */
 const OUTCOME_RE = /ARGUS_OUTCOME:\s*(failed|blocked)\b[^\S\r\n]*(.*)/i;
+
+/**
+ * This hook's protocol version, sent with every signal beside its own reading
+ * of the outcome marker. Version 1 (unversioned) sent neither; a server that
+ * predates version 2 ignores both fields.
+ */
+export const HOOK_VERSION = 2;
+
+/** Every outcome marker in a message. Must stay byte-for-byte the same pattern
+ *  as `classifyOutcomeMarker` in server/src/harness/completion.ts — a test
+ *  runs both over one corpus. */
+const MARKER_RE = /\bARGUS_OUTCOME:\s*(succeeded|failed|blocked)\b/gi;
+
+/**
+ * This hook's reading of the outcome marker in the agent's final message:
+ * "missing", "conflicting", or the one conclusion found. Sent to Argus as
+ * metadata only — Argus classifies the delivered message itself and compares,
+ * and never takes this reading over its own.
+ */
+export function classifyMarker(message) {
+  const text = typeof message === "string" ? message : "";
+  const found = [];
+  for (const m of text.matchAll(MARKER_RE)) {
+    const kind = m[1].toLowerCase();
+    if (!found.includes(kind)) found.push(kind);
+  }
+  if (found.length === 0) return "missing";
+  if (found.length > 1) return "conflicting";
+  return found[0];
+}
 
 /** Background-task statuses that mean the work is still in flight at Stop time.
  *  Anything not matching (done/completed/failed/cancelled/…) is treated as
@@ -254,6 +289,9 @@ function main() {
         token: process.env.ARGUS_SIGNAL_TOKEN,
         payload,
         ...result,
+        // Additive (hook v2): this hook's version and its own reading of the
+        // marker. Argus re-reads the message itself; this is only compared.
+        completion: { hookVersion: HOOK_VERSION, marker: classifyMarker(lastMessage(payload)) },
       });
     } catch (error) {
       reportFailure(error);
