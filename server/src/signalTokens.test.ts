@@ -25,6 +25,15 @@ import {
   safeEqual,
 } from "./harness/signalToken.js";
 
+/** Poll the journal until an entry matches (it is written fire-and-forget). */
+async function journalHas(id: string, match: (j: any) => boolean): Promise<boolean> {
+  for (let i = 0; i < 200; i++) {
+    if ((await readJournal(id)).some(match)) return true;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  return false;
+}
+
 let home: string;
 beforeEach(() => {
   home = mkdtempSync(path.join(tmpdir(), "argus-signal-tokens-"));
@@ -179,8 +188,11 @@ test("a superseded attempt's run is heard but never acted on; a forger for it is
     "its run record is not rewritten",
   );
   await e.drain();
+  // The journal is appended fire-and-forget: wait for the entry to land
+  // rather than read once (a slower file system loses that race).
   assert.ok(
-    (await readJournal(inst.id)).some(
+    await journalHas(
+      inst.id,
       (j: any) => j.kind === "phase.signalled" && j.runId === first && /ignored/.test(j.detail),
     ),
   );
