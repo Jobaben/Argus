@@ -16,6 +16,9 @@ export {
   SkeletonTile,
 } from "./Skeleton";
 export { Drawer } from "./Drawer";
+export { InfoTip } from "./InfoTip";
+export { Legend } from "./Legend";
+export type { LegendItem } from "./Legend";
 // `Markdown` is deliberately not re-exported here: it carries the `marked`
 // lexer, and the barrel is imported by the eager shell. Import it from
 // "./Markdown" inside a lazily-loaded view instead.

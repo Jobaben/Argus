@@ -86,6 +86,7 @@ can do, and where the data comes from.
 | 29  | [Omnibar](#29-omnibar)                 | `⌘K`                   | say it, see the exact changes, confirm     |
 | 30  | [Constellation](#30-constellation)     | `#/fleet`              | N machines, one lens                       |
 | 31  | [`argus tail`](#31-argus-tail)         | terminal               | what is it doing, when I can't see the UI? |
+| 34  | [Knowledge](#34-knowledge)             | `#/knowledge`          | what does Argus believe, and why?          |
 
 ---
 
@@ -2548,6 +2549,28 @@ The Experiments page has an H1 section (`GET /api/decisions/h1`).
 
 Unset either switch and restart. Nothing is deleted, and the report still
 renders.
+
+## 34. Knowledge
+
+A read-only view of the [Knowledge Ledger](KNOWLEDGE-LEDGER.md): the business
+rules, facts and other claims Argus has accepted, the evidence behind each one,
+and who relied on it. Reach it from **More → Knowledge**, `g k`, or the palette.
+
+- **The overview** is one sentence about the whole ledger (how many claims,
+  whether all are supported, how many rules anyone has verified), a bar
+  showing the mix of kinds, and one card per module. **Group by** switches the
+  cards to source files. Pick a scope to see one project's knowledge.
+- **A card, a kind or a search** opens the matching claims, grouped by kind.
+  **Only what needs a look** narrows to flagged claims.
+- **A claim** opens a drawer: what it says, why Argus believes it (its
+  evidence and justifications), whether anyone checked the code obeys it, and
+  which runs used it or were given it.
+- **Normal says nothing.** An active, supported claim carries no badge. A
+  badge appears only for _contested_, _violated_, _stale_, _superseded_ or
+  _unsupported_. Every underlined word and every **?** explains itself, and
+  **How to read this page** lists every mark and term.
+
+Data: `GET /api/knowledge/atlas` (optionally `?project=&repository=`).
 
 ## Quick mental model
 
