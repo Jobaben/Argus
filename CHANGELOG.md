@@ -567,6 +567,22 @@ unverifiable`, each rule exactly once. A **missing** rule refuses the whole
 
 ### Changed
 
+- **The phase graph renders any pipeline shape.** A wide fan-out used to
+  draw one row of fixed-width nodes wider than the card: it spilled over the
+  activity rail and squeezed the focus panel to one letter per line. The
+  graph is now a layered layout (`web/src/views/sugiyamaLayout.ts`, behind
+  the `DagLayoutEngine` interface) that tolerates skipped stages, cycles,
+  missing dependencies and duplicate ids. It turns left to right when only
+  that fits, and sizes nodes from their names. The board gives the focus
+  panel a 360 px floor and stacks when it cannot, and a card can no longer
+  paint outside its column.
+  - The earlier rule that the graph never scrolls sideways is deliberately
+    reversed. The graph is scaled to fit its width down to 60% and scrolls in both
+    directions past that, with a Fit / 1:1 toggle and faded edges.
+  - The graph follows the run: the running phase stays centred, including
+    the first and last phase, until the user scrolls or clicks a node.
+    **Follow** resumes it.
+
 - **The pipeline engine is split into modules (no behaviour change).**
   `createEngine` was one ~7,000-line closure; it is now a set of factories in
   `server/src/engine/` over one shared context, one per responsibility

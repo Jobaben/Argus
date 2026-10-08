@@ -209,16 +209,26 @@ second monitor.
   revise, and one mini-dot per step (a `done/total` count once dots stop being
   countable). **Stages** — phases that can run at the same time — are rows,
   read top to bottom; the chain that continues stays in the left lane and
-  branches that end the run hang to its right. Every dependency is a drawn
+  branches that end the run hang to its right. When the stages are too wide
+  for the card (a fan-out of many parallel phases), the graph turns sideways:
+  stages become columns read left to right, and the parallel phases stack as
+  one column. An edge that skips a stage runs down a lane of its own, so it
+  never crosses a node. Every dependency is a drawn
   edge, so a fan-out reads as a fan-out and a join as a join: the path that
   ran is the green thread, a branch that was decided against is dashed, and a
   phase nothing depends on ends with a small terminator. A **route
   condition** sits as a label on the edge it governs, carrying the value
   alone (`verdict = "approved"`) — the phase that decides it is the line the
   label sits on. A skipped phase shows a hollow dot and a struck name.
-  Hovering a node names what the phase waits for and the conditions on it.
-  A very long pipeline scrolls inside the graph tile, opened at the phase
-  that needs you.
+  Hovering a node shows its full name, what the phase waits for and the
+  conditions on it.
+  The graph is scaled to fit the width of its tile (down to 60%) and scrolls in both
+  directions beyond that. It **follows the run**: the running phase (or the
+  middle of several running together) is kept centred, and the view glides
+  to the next phase as the run moves on — the first and last phase centre
+  too. Scrolling the graph yourself, or clicking a node, stops following;
+  **Follow** (top-right of the tile) resumes it. **1:1** shows the graph at
+  full size and **Fit** goes back. Edges with more graph beyond them fade out.
 - Beside the graph (below it on a narrow card), the **focus panel**: one
   phase's **step tiles** — step name, `job <runId>`, a status pill, the
   failure reason if it failed, a live activity line and animated sweep bar

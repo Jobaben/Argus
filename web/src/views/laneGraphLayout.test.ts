@@ -1,16 +1,16 @@
 import { describe, it, expect } from "vitest";
 import {
+  chooseOrientation,
   edgeState,
   LANE_GEOMETRY,
   laneLayout,
-  laneWidthFor,
   labelWidth,
-  tileChromeFor,
-  MAX_TILE_HEIGHT_PX,
-  TILE_BORDER_PX,
-  SCROLLBAR_PX,
+  nodeWidthFor,
+  NODE_MAX_W,
+  NODE_MIN_W,
   type LanePhase,
 } from "./laneGraphLayout";
+import type { DagLayoutEngine } from "./dagLayout";
 import type { RouteEdgeView } from "../ds";
 
 function phase(
@@ -56,7 +56,7 @@ describe("laneLayout", () => {
     expect(l.edges.map((e) => `${e.from}>${e.to}`)).toEqual(["a>b", "b>c"]);
     // Plain hand-offs use the tight gap.
     expect(byId(l, "b").y - (byId(l, "a").y + G.nodeH)).toBe(G.gapPlain);
-    expect(l.width).toBe(G.pad * 2 + G.laneW);
+    expect(l.width).toBe(G.pad * 2 + l.nodeW);
   });
 
   it("puts a fan-out side by side and hangs the leaf to the right of the chain", () => {
@@ -72,7 +72,7 @@ describe("laneLayout", () => {
     expect(byId(l, "pushback")).toMatchObject({ stage: 1, lane: 1, leaf: true });
     expect(byId(l, "verify")).toMatchObject({ stage: 2, lane: 0, leaf: true });
     expect(l.lanes).toBe(2);
-    expect(l.width).toBe(G.pad * 2 + 2 * G.laneW + G.laneGap);
+    expect(l.width).toBe(G.pad * 2 + 2 * l.nodeW + G.laneGap);
   });
 
   it("follows the parents' lanes so a parallel hand-off stays straight", () => {
@@ -116,7 +116,7 @@ describe("laneLayout", () => {
     expect(byId(l, "plan").y - (byId(l, "read").y + G.nodeH)).toBe(G.gapLabelled);
     expect(byId(l, "verify").y - (byId(l, "plan").y + G.nodeH)).toBe(G.gapPlain);
     // The label sits centred on the straight line, halfway across the gap.
-    expect(toPlan.label?.x).toBe(G.pad + G.laneW / 2);
+    expect(toPlan.label?.x).toBe(G.pad + l.nodeW / 2);
     expect(toPlan.label?.y).toBe(byId(l, "plan").y - G.gapLabelled / 2);
   });
 
@@ -131,7 +131,7 @@ describe("laneLayout", () => {
     ]);
     const straight = l.edges.find((e) => e.to === "impl")!;
     const branch = l.edges.find((e) => e.to === "rejected")!;
-    const centre = G.pad + G.laneW / 2;
+    const centre = G.pad + l.nodeW / 2;
     expect(straight.label?.x).toBe(centre);
     const gap =
       branch.label!.x -
@@ -157,25 +157,86 @@ describe("laneLayout", () => {
   });
 });
 
-describe("laneWidthFor", () => {
-  it("narrows nodes once three lanes sit side by side", () => {
-    expect(laneWidthFor(1)).toBe(G.laneW);
-    expect(laneWidthFor(2)).toBe(G.laneW);
-    expect(laneWidthFor(3)).toBe(150);
+describe("laneLayout: orientation and engine", () => {
+  const fanOut = [
+    phase("pin", "working"),
+    ...Array.from({ length: 8 }, (_, i) => phase(`discover-${i}`, "queued", ["pin"])),
+  ];
+
+  it("lays a fan-out left to right as a column of parallel phases", () => {
+    const l = laneLayout(fanOut, { orientation: "LR" });
+    expect(l.orientation).toBe("LR");
+    const xs = new Set(l.nodes.filter((n) => n.id !== "pin").map((n) => n.x));
+    expect(xs.size).toBe(1);
+    expect(l.width).toBeLessThan(laneLayout(fanOut).width);
+    // A leaf terminator needs room past the last column.
+    expect(l.width).toBe(G.pad * 2 + 2 * l.nodeW + G.gapPlain + G.tail);
   });
 
-  it("fits the container when that is the tighter limit, never below a readable floor", () => {
-    expect(laneWidthFor(2, 1000)).toBe(G.laneW);
-    expect(laneWidthFor(2, 358)).toBe(Math.floor((358 - G.pad * 2 - G.laneGap) / 2));
-    expect(laneWidthFor(4, 200)).toBe(110);
-    // Unmeasured means unknown: use the ideal, not the floor.
-    expect(laneWidthFor(2, 0)).toBe(G.laneW);
+  it("widens a side-by-side gap to fit the label it carries", () => {
+    const text = 'verdict = "a fairly long condition"';
+    const l = laneLayout(
+      [phase("read", "done"), phase("plan", "idle", ["read"], { edges: [cond("read", text)] })],
+      { orientation: "LR" },
+    );
+    const gap = byId(l, "plan").x - (byId(l, "read").x + l.nodeW);
+    expect(gap).toBeGreaterThanOrEqual(labelWidth(text));
+  });
+
+  it("draws whatever the injected engine returns", () => {
+    const engine: DagLayoutEngine = (input, options) => ({
+      orientation: options.orientation,
+      width: 999,
+      height: 99,
+      nodes: input.nodes.map((n, i) => ({
+        id: n.id,
+        rank: 0,
+        order: i,
+        x: i * 10,
+        y: 0,
+        w: n.w,
+        h: n.h,
+        leaf: true,
+      })),
+      edges: [],
+      dropped: { danglingDeps: [], cycleEdges: [] },
+    });
+    const l = laneLayout([phase("a"), phase("b", "idle", ["a"])], {}, engine);
+    expect(l.width).toBe(999);
+    expect(l.nodes.map((n) => n.x)).toEqual([0, 10]);
+    expect(l.edges).toEqual([]);
   });
 });
 
-describe("tileChromeFor", () => {
-  it("charges the graph for the tile's border, and for the scrollbar once it scrolls", () => {
-    expect(tileChromeFor(MAX_TILE_HEIGHT_PX - 1)).toBe(TILE_BORDER_PX * 2);
-    expect(tileChromeFor(MAX_TILE_HEIGHT_PX + 1)).toBe(TILE_BORDER_PX * 2 + SCROLLBAR_PX);
+describe("nodeWidthFor", () => {
+  it("sizes nodes for the longest name, within readable bounds", () => {
+    expect(nodeWidthFor([])).toBe(NODE_MIN_W);
+    expect(nodeWidthFor(["plan"])).toBe(NODE_MIN_W);
+    expect(nodeWidthFor(["Discover rules: Bookings"])).toBe(Math.round(24 * 6.4 + 64));
+    expect(nodeWidthFor(["x".repeat(200)])).toBe(NODE_MAX_W);
+  });
+});
+
+describe("chooseOrientation", () => {
+  const tb = { width: 2000, height: 120 };
+  const lr = { width: 520, height: 400 };
+
+  it("keeps top-down whenever it fits", () => {
+    expect(chooseOrientation({ width: 600, height: 400 }, lr, 700)).toBe("TB");
+  });
+
+  it("turns a wide fan-out sideways when only that fits", () => {
+    expect(chooseOrientation(tb, lr, 700)).toBe("LR");
+  });
+
+  it("picks whichever overflows less when neither fits", () => {
+    expect(chooseOrientation(tb, lr, 300)).toBe("LR");
+    expect(chooseOrientation({ width: 400, height: 100 }, { width: 900, height: 900 }, 300)).toBe(
+      "TB",
+    );
+  });
+
+  it("treats an unmeasured width as unknown, and stays top-down", () => {
+    expect(chooseOrientation(tb, lr, 0)).toBe("TB");
   });
 });

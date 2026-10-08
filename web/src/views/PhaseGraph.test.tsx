@@ -1,10 +1,10 @@
-import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent, renderHook } from "@testing-library/react";
+import { afterEach, describe, it, expect, vi } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
 import type { PhasePill, StepPill } from "../ds";
 import { PhaseGraph } from "./PhaseGraph";
-import { useLaneLayout } from "./useLaneLayout";
+import { BOARD_GAP_PX, boardArrangement, FOCUS_MIN_PX } from "./useLaneLayout";
 import { attentionPhase } from "./phaseAttention";
-import { LANE_GEOMETRY, MAX_TILE_HEIGHT_PX, SCROLLBAR_PX, TILE_BORDER_PX } from "./laneGraphLayout";
+import { MIN_SCALE } from "./laneGraphLayout";
 
 function step(status: StepPill["status"]): StepPill {
   return {
@@ -53,19 +53,43 @@ function Graph({
   onSelect?: (id: string) => void;
   width?: number;
 }) {
-  const { layout, laneW, tileWidth, stacked } = useLaneLayout(phases, width);
-  return (
-    <PhaseGraph
-      phases={phases}
-      layout={layout}
-      laneW={laneW}
-      tileWidth={tileWidth}
-      stacked={stacked}
-      selectedId={selectedId}
-      onSelect={onSelect}
-    />
-  );
+  const { layout } = boardArrangement(phases, width);
+  return <PhaseGraph phases={phases} layout={layout} selectedId={selectedId} onSelect={onSelect} />;
 }
+
+const chain = (statuses: PhasePill["status"][]) =>
+  statuses.map((st, i) => pill(`p${i}`, st, i === 0 ? {} : { needs: [`p${i - 1}`] }));
+
+const fanOut = (n: number, status: PhasePill["status"] = "working") => [
+  pill("pin", "done", { name: "Pin revision and check dependency closure" }),
+  ...Array.from({ length: n }, (_, i) =>
+    pill(`d${i}`, status, { name: `Discover rules: Bookings area ${i}`, needs: ["pin"] }),
+  ),
+];
+
+/**
+ * jsdom has no layout or scrolling: give every element a measured viewport,
+ * taller content when it should overflow, and record what the tile is asked to
+ * do.
+ */
+function mockScrollTo({ overflow = true } = {}) {
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(300);
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(200);
+  vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockReturnValue(300);
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(overflow ? 1000 : 200);
+  const scrollTo = vi.fn();
+  Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+    value: scrollTo,
+    configurable: true,
+    writable: true,
+  });
+  return scrollTo;
+}
+
+afterEach(() => {
+  delete (HTMLElement.prototype as { scrollTo?: unknown }).scrollTo;
+  vi.restoreAllMocks();
+});
 
 describe("attentionPhase", () => {
   it("prefers a gate over a failure over live work", () => {
@@ -98,28 +122,6 @@ describe("PhaseGraph", () => {
     expect(screen.getByRole("button", { name: /build/ })).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(screen.getByRole("button", { name: /ship/ }));
     expect(onSelect).toHaveBeenCalledWith("ship");
-  });
-
-  it("keeps the selected node in view by scrolling its own tile, never the page", () => {
-    // `scrollIntoView` scrolls every scrollable ancestor, the window included,
-    // so a status change on a card below the fold used to yank the page to it.
-    const intoView = vi.spyOn(Element.prototype, "scrollIntoView");
-    const tall = Array.from({ length: 16 }, (_, i) =>
-      pill(`p${i}`, "done", i === 0 ? {} : { needs: [`p${i - 1}`] }),
-    );
-    const { rerender } = render(<Graph phases={tall} selectedId="p0" />);
-    const tile = screen.getByTestId("phase-graph");
-    // jsdom has no layout: give the tile a viewport and the far node a position.
-    Object.defineProperty(tile, "clientHeight", { value: 200, configurable: true });
-    const far = screen.getByRole("button", { name: /p15/ });
-    Object.defineProperty(far, "offsetTop", { value: 900, configurable: true });
-    Object.defineProperty(far, "offsetHeight", { value: 30, configurable: true });
-
-    rerender(<Graph phases={tall} selectedId="p15" />);
-
-    expect(intoView).not.toHaveBeenCalled();
-    expect(tile.scrollTop).toBe(930 - 200);
-    intoView.mockRestore();
   });
 
   it("puts phases that can run together on one row, in separate lanes", () => {
@@ -225,53 +227,146 @@ describe("PhaseGraph", () => {
     expect(screen.getByRole("button", { name: /Plan/ }).title).toContain("starts immediately");
   });
 
-  it("stacks above the focus panel on a narrow card and fits its lanes to it", () => {
-    const phases = [
-      pill("plan", "done"),
-      pill("a", "working", { needs: ["plan"] }),
-      pill("b", "working", { needs: ["plan"] }),
-    ];
-    const wide = renderHook(() => useLaneLayout(phases, 1200)).result.current;
-    expect(wide.stacked).toBe(false);
-    expect(wide.laneW).toBe(LANE_GEOMETRY.laneW);
-    const narrow = renderHook(() => useLaneLayout(phases, 358)).result.current;
-    expect(narrow.stacked).toBe(true);
-    expect(narrow.layout.width).toBeLessThanOrEqual(358);
-    // Unmeasured means unknown, not narrow.
-    expect(renderHook(() => useLaneLayout(phases, 0)).result.current.stacked).toBe(false);
-  });
-
-  it("sizes the tile for the graph plus its own chrome, so it never scrolls sideways", () => {
-    const phases = [
-      pill("plan", "done"),
-      pill("a", "working", { needs: ["plan"] }),
-      pill("b", "working", { needs: ["plan"] }),
-    ];
-    // The tile is a border-box: a tile exactly the graph's width is two pixels
-    // too narrow for the graph inside it.
-    const wide = renderHook(() => useLaneLayout(phases, 1200)).result.current;
-    expect(wide.tileWidth).toBe(wide.layout.width + TILE_BORDER_PX * 2);
-    const narrow = renderHook(() => useLaneLayout(phases, 358)).result.current;
-    expect(narrow.tileWidth).toBeLessThanOrEqual(358);
-    expect(narrow.layout.width).toBeLessThanOrEqual(358 - TILE_BORDER_PX * 2);
-  });
-
-  it("clips sideways rather than scrolling, whatever the lane arithmetic leaves over", () => {
-    render(<Graph phases={[pill("plan", "done"), pill("a", "working", { needs: ["plan"] })]} />);
-    const tile = screen.getByTestId("phase-graph");
-    expect(tile.className).toContain("overflow-x-clip");
-    expect(tile.className).not.toMatch(/\boverflow-(auto|x-auto)\b/);
-    // Tall enough to scroll vertically is still tall enough to scroll vertically.
-    expect(tile.className).toContain("overflow-y-auto");
-  });
-
-  it("also pays for the scrollbar of a graph long enough to scroll", () => {
-    const tall = Array.from({ length: 16 }, (_, i) =>
-      pill(`p${i}`, "done", i === 0 ? {} : { needs: [`p${i - 1}`] }),
+  it("shows the full name on hover and keeps it for tests", () => {
+    render(<Graph phases={fanOut(2)} />);
+    const node = screen.getByRole("button", { name: /Bookings area 1/ });
+    expect(node.title.startsWith("3. Discover rules: Bookings area 1")).toBe(true);
+    expect(node.querySelector("[data-full-name]")?.getAttribute("data-full-name")).toBe(
+      "Discover rules: Bookings area 1",
     );
-    const { layout, tileWidth } = renderHook(() => useLaneLayout(tall, 1200)).result.current;
-    expect(layout.height).toBeGreaterThan(MAX_TILE_HEIGHT_PX);
-    expect(tileWidth).toBe(layout.width + TILE_BORDER_PX * 2 + SCROLLBAR_PX);
+  });
+
+  it("scrolls inside a bounded tile instead of sizing it", () => {
+    render(<Graph phases={fanOut(8)} width={1100} />);
+    const tile = screen.getByTestId("phase-graph");
+    expect(tile.className).toContain("overflow-auto");
+    expect(tile.style.width).toBe("");
+  });
+
+  it("ends each leaf along the direction the graph reads", () => {
+    render(<Graph phases={fanOut(8)} width={1100} />);
+    expect(screen.getAllByTestId("graph-terminator")).toHaveLength(8);
+    const tile = screen.getByTestId("phase-graph");
+    expect(tile.closest("[data-orientation]")?.getAttribute("data-orientation")).toBe("LR");
+  });
+});
+
+describe("boardArrangement", () => {
+  it("never lets the graph take the focus panel's room", () => {
+    const b = boardArrangement(fanOut(8), 1100);
+    expect(b.stacked).toBe(false);
+    expect(b.graphTrackPx + BOARD_GAP_PX + FOCUS_MIN_PX).toBeLessThanOrEqual(1100);
+  });
+
+  it("turns a wide fan-out sideways on a narrow card, small enough to read", () => {
+    const b = boardArrangement(fanOut(50), 358);
+    expect(b.stacked).toBe(true);
+    expect(b.layout.orientation).toBe("LR");
+    expect(b.layout.width * MIN_SCALE).toBeLessThanOrEqual(358);
+  });
+
+  it("keeps a plain fork top-down beside the panel", () => {
+    const b = boardArrangement(fanOut(2), 1200);
+    expect(b.stacked).toBe(false);
+    expect(b.layout.orientation).toBe("TB");
+    expect(b.graphTrackPx).toBe(b.layout.width + 2);
+  });
+
+  it("treats an unmeasured card as unknown, not narrow", () => {
+    expect(boardArrangement(fanOut(2), 0).stacked).toBe(false);
+  });
+});
+
+describe("PhaseGraph: following the run", () => {
+  it("centres the running phase by scrolling its own tile, never the page", () => {
+    const scrollTo = mockScrollTo();
+    const intoView = vi.spyOn(Element.prototype, "scrollIntoView");
+    render(<Graph phases={chain(["done", "working", "idle"])} />);
+    expect(intoView).not.toHaveBeenCalled();
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    // The first placement jumps rather than animating in.
+    expect(scrollTo.mock.calls[0][0]).toMatchObject({ behavior: "auto" });
+  });
+
+  it("moves on to the next phase as the run does", () => {
+    const scrollTo = mockScrollTo();
+    const { rerender } = render(<Graph phases={chain(["done", "working", "idle"])} />);
+    const first = scrollTo.mock.calls[0][0];
+    rerender(<Graph phases={chain(["done", "done", "working"])} />);
+    expect(scrollTo).toHaveBeenCalledTimes(2);
+    const next = scrollTo.mock.calls[1][0];
+    expect(next.top).toBeGreaterThan(first.top);
+    expect(next.behavior).toBe("smooth");
+  });
+
+  it("jumps instead of gliding under reduced motion", () => {
+    const scrollTo = mockScrollTo();
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      writable: true,
+      value: (query: string) => ({ matches: query.includes("reduce") }) as MediaQueryList,
+    });
+    const { rerender } = render(<Graph phases={chain(["done", "working", "idle"])} />);
+    rerender(<Graph phases={chain(["done", "done", "working"])} />);
+    expect(scrollTo.mock.calls[1][0]).toMatchObject({ behavior: "auto" });
+    delete (window as { matchMedia?: unknown }).matchMedia;
+  });
+
+  it("stops following once the user scrolls, until asked to follow again", () => {
+    const scrollTo = mockScrollTo();
+    const { rerender } = render(<Graph phases={chain(["done", "working", "idle"])} />);
+    const tile = screen.getByTestId("phase-graph");
+    expect(screen.queryByTestId("graph-follow")).toBeNull();
+
+    fireEvent.wheel(tile);
+    expect(tile.dataset.following).toBe("false");
+    rerender(<Graph phases={chain(["done", "done", "working"])} />);
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByTestId("graph-follow"));
+    expect(tile.dataset.following).toBe("true");
+    expect(scrollTo).toHaveBeenCalledTimes(2);
+    expect(screen.queryByTestId("graph-follow")).toBeNull();
+  });
+
+  it("leaves following on when the graph fits and there is nothing to scroll", () => {
+    mockScrollTo({ overflow: false });
+    render(<Graph phases={chain(["done", "working", "idle"])} />);
+    const tile = screen.getByTestId("phase-graph");
+    fireEvent.wheel(tile);
+    expect(tile.dataset.following).toBe("true");
+    expect(screen.queryByTestId("graph-follow")).toBeNull();
+  });
+
+  it("centres a phase the board selects itself, such as a gate opening", () => {
+    const scrollTo = mockScrollTo();
+    const phases = chain(["working", "idle", "idle", "idle"]);
+    const { rerender } = render(<Graph phases={phases} selectedId="p0" />);
+    const first = scrollTo.mock.calls[scrollTo.mock.calls.length - 1][0];
+    const gated = phases.map((p) => (p.id === "p3" ? { ...p, status: "await" as const } : p));
+    rerender(<Graph phases={gated} selectedId="p3" />);
+    const last = scrollTo.mock.calls[scrollTo.mock.calls.length - 1][0];
+    expect(last.top).toBeGreaterThan(first.top);
+  });
+
+  it("centres a clicked phase and leaves the view with the user", () => {
+    const scrollTo = mockScrollTo();
+    const onSelect = vi.fn();
+    render(<Graph phases={chain(["done", "working", "idle"])} onSelect={onSelect} />);
+    fireEvent.click(screen.getByRole("button", { name: /p2/ }));
+    expect(onSelect).toHaveBeenCalledWith("p2");
+    expect(scrollTo).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId("phase-graph").dataset.following).toBe("false");
+  });
+
+  it("fits a wide graph to its tile and offers full size", () => {
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(300);
+    render(<Graph phases={fanOut(3)} />);
+    const canvas = screen.getByTestId("graph-canvas");
+    expect(canvas.style.transform).toMatch(/^scale\(/);
+    fireEvent.click(screen.getByTestId("graph-zoom"));
+    expect(canvas.style.transform).toBe("");
+    expect(screen.getByTestId("graph-zoom").textContent).toBe("Fit");
   });
 });
 
