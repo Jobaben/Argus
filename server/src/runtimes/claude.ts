@@ -10,6 +10,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { claudeHome } from "../claudeHome.js";
 import {
   EMPTY_ENVELOPE,
@@ -34,9 +35,9 @@ import type {
 import type { ActivityEvent } from "@argus/contracts";
 
 /** Every `CapabilityProfile` key Claude Code can map onto its own invocation —
- *  which is all of them; the one gap (Bash left unrestricted under
- *  `read-only`) is reported as a specific limitation rather than the generic
- *  "cannot enforce" one, so it never appears in this list. */
+ *  which is all of them; the one gap (a shell tool, Bash or PowerShell, left
+ *  unrestricted under `read-only`) is reported as a specific limitation rather
+ *  than the generic "cannot enforce" one, so it never appears in this list. */
 const CLAUDE_SUPPORTED_CAPABILITIES = [
   "filesystem",
   "tools",
@@ -47,10 +48,14 @@ const CLAUDE_SUPPORTED_CAPABILITIES = [
   "maxTurns",
 ] as const;
 
-/** A bare, unscoped `Bash` allow rule — one that leaves the shell unrestricted
- *  regardless of `filesystem: "read-only"`. */
-function isBareBashRule(rule: string): boolean {
-  return rule === "Bash" || rule === "Bash(*)" || rule === "Bash(*:*)";
+/** The shell tools a read-only profile must close: either one can write
+ *  anywhere its command line reaches, whatever the `Edit` rules say. */
+const SHELL_TOOLS = ["Bash", "PowerShell"] as const;
+
+/** A bare, unscoped allow rule for `tool` — one that leaves the shell
+ *  unrestricted regardless of `filesystem: "read-only"`. */
+function isBareShellRule(rule: string, tool: string): boolean {
+  return rule === tool || rule === `${tool}(*)` || rule === `${tool}(*:*)`;
 }
 
 interface ClaudeCapabilityResult {
@@ -60,14 +65,42 @@ interface ClaudeCapabilityResult {
   channels: ChannelOutcome[];
 }
 
-/** Is `dir` the root itself or somewhere beneath it? Lexical, on the paths as
- *  given — the same view the `Edit(//root/**)` deny rule takes. */
+/**
+ * `p` as Claude Code's permission rules spell an absolute path, without the
+ * leading `/` that marks a rule path absolute: `/work/repo` on POSIX, and
+ * `/c/work/repo` for `C:\work\repo` on Windows — the only Windows form a rule
+ * matches (docs/HARNESS.md §3). The rule is then `Edit(/${rulePath}/**)`.
+ *
+ * The path's own shape says which it is — a drive letter is Windows, a
+ * leading `/` is POSIX — so the result never depends on the host Argus runs
+ * on. Null for a path no rule can name: a comma or newline (the rules travel
+ * comma-joined in one flag, so the rule would split and silently match
+ * nothing), a UNC share, or anything that is neither shape.
+ */
+export function toClaudeRulePath(p: string): string | null {
+  if (/[,\r\n]/.test(p)) return null;
+  const drive = /^([A-Za-z]):[\\/]/.exec(p);
+  if (drive) {
+    const rest = path.win32.normalize(p.slice(2)).replace(/\\/g, "/").replace(/\/+$/, "");
+    return `/${drive[1].toLowerCase()}${rest}`;
+  }
+  if (!p.startsWith("/") || p.startsWith("//")) return null;
+  return path.posix.normalize(p).replace(/\/+$/, "");
+}
+
+/** Is `dir` the root itself or somewhere beneath it? Lexical, on the rule
+ *  paths — the same view the `Edit(//root/**)` deny rule takes, which for a
+ *  Windows path matches regardless of case. */
 function isWithin(dir: string, root: string): boolean {
-  const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "");
-  const d = norm(dir);
-  const r = norm(root);
+  const fold = (p: string) =>
+    /^[A-Za-z]:/.test(p) ? toClaudeRulePath(p)?.toLowerCase() : toClaudeRulePath(p);
+  const d = fold(dir);
+  const r = fold(root);
+  if (d == null || r == null) return false;
   return d === r || d.startsWith(`${r}/`);
 }
+
+const UNNAMEABLE = "contains a comma or newline, or is a UNC share";
 
 /**
  * Claude Code's answer for every Argus-owned channel: `--add-dir` on the
@@ -83,27 +116,32 @@ function isWithin(dir: string, root: string): boolean {
  * A **read** channel (the KnowledgeContext file) is admitted the same way and
  * then denied for edits: `--add-dir` alone would make its directory editable
  * under `workspace-write`, and Argus → agent data is not the agent's to
- * change. The deny rule is appended to `deny` by the caller, which is why the
- * list is threaded through; a path the rule grammar cannot express (a comma)
- * is a limitation, since the channel stays readable but its integrity would
- * rest on the agent's good behaviour alone.
+ * change. A **write** channel is admitted and then allowed for edits:
+ * `--add-dir` alone still leaves each edit to a permission prompt, which a
+ * headless run under the default mode refuses. Both rules are appended to the
+ * caller's lists, which is why they are threaded through; a path the rule
+ * grammar cannot express is a limitation, since the channel stays reachable
+ * but its integrity — or, for a write channel, its writability under the
+ * default mode — no longer follows from a rule.
  */
 function claudeChannels(
   channels: InvocationChannel[],
   deniedRoots: string[],
   args: string[],
+  allow: string[],
   deny: string[],
   limitations: string[],
 ): ChannelOutcome[] {
   return channels.map((channel) => {
     args.push("--add-dir", channel.dir);
+    const rulePath = toClaudeRulePath(channel.dir);
     if (channel.access === "read") {
-      if (/[,\r\n]/.test(channel.dir)) {
+      if (rulePath === null) {
         limitations.push(
-          `Claude Code cannot deny edits to the ${channel.label} (${channel.envVar}): its path contains a comma`,
+          `Claude Code cannot deny edits to the ${channel.label} (${channel.envVar}): its path ${UNNAMEABLE}`,
         );
       } else if (!deniedRoots.some((root) => isWithin(channel.dir, root))) {
-        deny.push(`Edit(//${channel.dir}/**)`);
+        deny.push(`Edit(/${rulePath}/**)`);
       }
       return channelGranted(channel);
     }
@@ -115,6 +153,13 @@ function claudeChannels(
           "Claude Code",
           `read-only denies edits under ${under}, which contains`,
         );
+      }
+      if (rulePath === null) {
+        limitations.push(
+          `Claude Code cannot allow edits to the ${channel.label} (${channel.envVar}) by rule: its path ${UNNAMEABLE}`,
+        );
+      } else if (!allow.includes(`Edit(/${rulePath}/**)`)) {
+        allow.push(`Edit(/${rulePath}/**)`);
       }
     }
     return channelGranted(channel);
@@ -148,26 +193,31 @@ function buildClaudeCapabilities(cap: CapabilityRequest | undefined): ClaudeCapa
     // outside them on purpose: a read-only researcher still writes its report
     // and its proposal there.
     for (const root of [cwd, ...(profile.additionalDirectories ?? [])]) {
-      if (/[,\r\n]/.test(root)) {
-        // The rules travel comma-joined in one flag; a comma in the path would
-        // split the rule and silently leave the root writable.
-        limitations.push(`read-only cannot be expressed for a path containing a comma: ${root}`);
+      const rulePath = toClaudeRulePath(root);
+      if (rulePath === null) {
+        // A rule that cannot name the root would silently match nothing and
+        // leave it writable.
+        limitations.push(`read-only cannot be expressed for a path that ${UNNAMEABLE}: ${root}`);
         continue;
       }
-      deny.push(`Edit(//${root}/**)`);
+      deny.push(`Edit(/${rulePath}/**)`);
       deniedRoots.push(root);
     }
 
-    const bashAllowRules = allow.filter((r) => r === "Bash" || r.startsWith("Bash("));
-    const hasBareBash = bashAllowRules.some(isBareBashRule);
-    const hasScopedBash = bashAllowRules.some((r) => !isBareBashRule(r));
-    if (hasBareBash) {
-      limitations.push("read-only cannot prevent shell writes while Bash is allowed unrestricted");
-    } else if (!hasScopedBash) {
-      deny.push("Bash");
+    // The same three outcomes for each shell: a bare allow is a limitation,
+    // a scoped allow keeps the tool to the commands it names, and no allow at
+    // all denies it. PowerShell's own path checks refuse many writes, but they
+    // are heuristics over the command text, not rules (docs/HARNESS.md §3).
+    for (const tool of SHELL_TOOLS) {
+      const rules = allow.filter((r) => r === tool || r.startsWith(`${tool}(`));
+      if (rules.some((r) => isBareShellRule(r, tool))) {
+        limitations.push(
+          `read-only cannot prevent shell writes while ${tool} is allowed unrestricted`,
+        );
+      } else if (!rules.some((r) => !isBareShellRule(r, tool))) {
+        deny.push(tool);
+      }
     }
-    // hasScopedBash && !hasBareBash: Bash stays allowed, but only through the
-    // scoped rules the profile named — nothing further to deny.
   }
   // "workspace-write" needs no extra rules: Claude Code's default already
   // scopes edits to cwd + additional dirs. "unrestricted" needs none either.
@@ -187,10 +237,11 @@ function buildClaudeCapabilities(cap: CapabilityRequest | undefined): ClaudeCapa
   // the same way, no matter what the profile said about the rest of the
   // filesystem: the protocol between the agent and Argus is not the agent's
   // to be restricted from.
-  const channelOutcomes = claudeChannels(channels, deniedRoots, args, deny, limitations);
+  const channelOutcomes = claudeChannels(channels, deniedRoots, args, allow, deny, limitations);
 
   // The tool rules go on argv after the channels have had their say: a read
-  // channel adds its own Edit deny, and the rules travel in one flag each.
+  // channel adds its own Edit deny, a write channel its Edit allow, and the
+  // rules travel in one flag each.
   if (allow.length) args.push("--allowedTools", allow.join(","));
   if (deny.length) args.push("--disallowedTools", deny.join(","));
 

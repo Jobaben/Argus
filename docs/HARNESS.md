@@ -540,24 +540,27 @@ pipeline can set an `env` policy once and one review phase can add
 ### How Claude Code maps a profile (`buildClaudeCapabilities` in `runtimes/claude.ts`)
 
 - `filesystem: "read-only"` → `--disallowedTools` gets `Edit(//<cwd>/**)` and
-  `Edit(//<dir>/**)` for every `additionalDirectories` entry, **plus** `Bash`
-  itself — unless `tools.allow` already names specific `Bash(...)` rules, in
-  which case only those survive and the bare rule is left alone. An
-  `Edit(path)` deny rule is what actually does the work here: Claude Code
-  consults it for every built-in file-editing tool — `Edit`, `Write`,
-  `MultiEdit`, `NotebookEdit` — not only its own `Edit`; a `Write(path)` rule
-  is accepted but never consulted, so `Edit(...)` is the one shape that denies
-  writes under these roots. If `tools.allow` contains a **bare** `Bash` (or
-  `Bash(*)` / `Bash(*:*)`) rule, Claude Code cannot be made read-only for shell
-  commands at all — that is reported as its own limitation string rather than
-  the generic one:
-  `"read-only cannot prevent shell writes while Bash is allowed unrestricted"`.
-  A root (`cwd` or an `additionalDirectories` entry) containing a comma or
-  newline can't be expressed in the comma-joined `--disallowedTools` flag at
-  all — that, too, is reported as its own limitation
-  (`"read-only cannot be expressed for a path containing a comma: ..."`),
-  which under strict enforcement (the default) refuses the launch rather than
-  silently leaving that root writable.
+  `Edit(//<dir>/**)` for every `additionalDirectories` entry, each path spelled
+  the way Claude Code's rules match it (see _Rule paths_ below), **plus**
+  `Bash` and `PowerShell` themselves — unless `tools.allow` already names
+  specific `Bash(...)` or `PowerShell(...)` rules, in which case only those
+  survive and that shell's bare rule is left alone. An `Edit(path)` deny rule
+  is what actually does the work here: Claude Code consults it for every
+  built-in file-editing tool — `Edit`, `Write`, `MultiEdit`, `NotebookEdit` —
+  not only its own `Edit`; a `Write(path)` rule is accepted but never
+  consulted, so `Edit(...)` is the one shape that denies writes under these
+  roots. If `tools.allow` contains a **bare** `Bash` or `PowerShell` (or
+  `Bash(*)` / `Bash(*:*)`, and the same for `PowerShell`) rule, Claude Code
+  cannot be made read-only for shell commands at all — that is reported as its
+  own limitation string rather than the generic one:
+  `"read-only cannot prevent shell writes while Bash is allowed unrestricted"`
+  (or `… while PowerShell …`). A root (`cwd` or an `additionalDirectories`
+  entry) no rule can name — a comma or newline, which would split the
+  comma-joined `--disallowedTools` flag, or a UNC share — is reported as its
+  own limitation (`"read-only cannot be expressed for a path that contains a
+comma or newline, or is a UNC share: ..."`), which under strict enforcement
+  (the default) refuses the launch rather than silently leaving that root
+  writable.
 - `tools.allow` / `tools.deny` → `--allowedTools` / `--disallowedTools`
   (comma-joined; a rule may not itself contain a comma).
 - `mcpServers` (present, even `{}`) → written to
@@ -568,7 +571,10 @@ pipeline can set an `env` policy once and one review phase can add
   KnowledgeDelta file's directory, the artifact directory, the memory
   directory) gets an `--add-dir` too, regardless of `filesystem`, so a
   read-only step can still leave its result, its proposal and its declared
-  artifacts. The one case Claude Code cannot honour is a channel that sits
+  artifacts. Each write channel also gets an `Edit(//<dir>/**)` rule in
+  `--allowedTools`: `--add-dir` alone admits the directory but still leaves
+  each edit to a permission prompt, which a headless run under the default
+  permission mode refuses. The one case Claude Code cannot honour is a channel that sits
   _under_ a root the read-only `Edit(//root/**)` rule denies (a working
   directory that is the operator's home, say): that is decided from the
   paths alone and reported per channel (`"Claude Code read-only denies edits
@@ -603,6 +609,49 @@ under <root>, which contains the result file (ARGUS_RESULT_FILE)"`).
   This points at the hook shipped with _this_ Argus, not the copy Setup
   installs under `~/.claude/hooks/` — a capability-carrying invocation's
   signalling never depends on that install step having run.
+
+#### Rule paths, as probed
+
+A rule path is absolute when it starts with `//`, and Claude Code matches it
+against one spelling only. `toClaudeRulePath` produces that spelling from the
+path's own shape, never from the host: `/work/repo` stays as it is, and
+`C:\work\repo` becomes `/c/work/repo`. The rule is then `Edit(//c/work/repo/**)`.
+Earlier releases wrote the path as given — `Edit(//C:\work\repo/**)` on
+Windows, `Edit(///work/repo/**)` on POSIX — and the Windows form matched
+nothing, so a read-only phase on Windows could write its repository.
+
+Probed with Claude Code 2.1.295 on Windows 11, a Haiku session asked to write
+one file in a working directory `wt` or a channel directory `chan`:
+
+| Flags                                                                     | Write    | Notes                                                       |
+| ------------------------------------------------------------------------- | -------- | ----------------------------------------------------------- |
+| `acceptEdits`, deny `Edit(//C:\…\wt/**)`                                  | **made** | The raw Windows path never matches: the old gap.            |
+| `acceptEdits`, deny `Edit(//c/…/wt/**)`                                   | refused  |                                                             |
+| `acceptEdits`, deny `Edit(//C/…/wt/**)`                                   | refused  | The drive letter's case does not matter.                    |
+| `acceptEdits`, deny `Edit(//c/users/OPERATOR/…/WT/**)`                    | refused  | Nor does any other segment's: Windows rules match any case. |
+| `acceptEdits`, deny `Edit(//c/Users/OPERAT~1/…/wt/**)`                    | **made** | An 8.3 short name never matches the long one.               |
+| `default`, `--add-dir chan`, allow `Edit(//c/…/chan/**)`                  | made     |                                                             |
+| `default`, `--add-dir chan`, no allow                                     | refused  | Why every write channel now carries its own allow.          |
+| no `--permission-mode` (operator's `defaultMode: auto`), `--add-dir chan` | made     | The auto classifier approved it.                            |
+| no `--permission-mode` (`auto`), deny `Edit(//c/…/wt/**)`                 | refused  | A deny rule holds under the classifier.                     |
+| `acceptEdits`, deny `Bash`, PowerShell `Set-Content` into `wt`            | refused  | PowerShell's path check applied the `Edit` deny.            |
+| `acceptEdits`, deny `Bash`, PowerShell `[IO.File]::WriteAllText` in `wt`  | refused  | Refused as "invokes .NET methods", a parser heuristic.      |
+| `auto`, deny `Bash`, PowerShell `[IO.File]::WriteAllText` in `wt`         | refused  | The classifier refused it.                                  |
+| `acceptEdits`, deny `Bash,PowerShell`                                     | refused  | The tool is not offered at all.                             |
+
+PowerShell did not write in any probed mode, but each refusal depended on how
+the tool parsed the command text, or on the classifier — a command it cannot
+parse names no path for a rule to match — and `bypassPermissions` was not
+probed. That is the same footing Bash is on with
+an `Edit` deny, which is why read-only denies both shells outright.
+
+Two consequences. Argus never writes an 8.3 short name itself — its own
+directories come from the home directory, which Windows reports in the long
+form — but an author who writes `cwd` as `C:\Users\OPERAT~1\…` gets a deny
+rule that matches nothing; write the long form. And parallel probes showed
+that concurrent `claude` sessions can read `~/.claude.json` mid-write and
+report it corrupted; the file itself was intact, but a fan-out runs exactly
+that way.
 
 ### How Codex maps a profile (`buildCodexCapabilities` in `runtimes/codex.ts`)
 
@@ -720,18 +769,26 @@ defaults decide, and the record lists the channels offered with status
 no KnowledgeDelta and no file artifacts, with or without a profile, launches
 exactly as it always did.
 
+For a run with a capability profile, every channel's path also travels in the
+run's own prompt, after Argus's other instructions and before any retry or
+revision note (`channelInstruction` in `engine/prompts.ts`, appended by
+`launchStep` once the paths are known). A read-only profile denies the shell,
+and with it the only way an agent could read its environment. A run without a
+profile keeps its shell and its prompt exactly as before, and the system prompt
+stays the same for every run.
+
 **Runtime matrix** (pinned by `runtimes/channels.test.ts`):
 
-| Runtime         | Effective filesystem mode                                          | Result file · KnowledgeDelta · artifact dir · memory dir (write)                   | Read channels                                                                                                                    |
-| --------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| **Claude Code** | any                                                                | ✅ `--add-dir` on each channel's directory                                         | ✅ `--add-dir` + `Edit(//<dir>/**)` denied: readable, not editable (a path with a comma cannot carry the deny rule → limitation) |
-| **Claude Code** | `read-only`, channel _under_ `cwd`/`additionalDirectories`         | ❌ the `Edit(//root/**)` deny rule covers it; reported from the paths              | ✅ readable; the root's own deny rule already covers it                                                                          |
-| **Codex**       | `workspace-write` (declared, or the `ARGUS_CODEX_SANDBOX` default) | ✅ named in `sandbox_workspace_write.writable_roots`                               | ✅ reads are unrestricted; never listed in `writable_roots`, so the sandbox refuses writes                                       |
-| **Codex**       | `unrestricted` / `danger-full-access`                              | ✅ nothing to add                                                                  | ✅ (no sandbox: writes cannot be prevented)                                                                                      |
-| **Codex**       | `read-only` (declared, or via `ARGUS_CODEX_SANDBOX`)               | ❌ no way to admit a write; one limitation per channel                             | ✅ readable; the sandbox refuses every write                                                                                     |
-| **OpenCode**    | any (the profile's `filesystem` is itself unenforceable)           | ✅ `opencode run --auto` runs unsandboxed; nothing stands in the way               | ✅ readable (writes cannot be prevented — the profile is unenforceable regardless)                                               |
-| **Qwen Code**   | any, no `--sandbox` in `ARGUS_QWEN_ARGS`                           | ✅ `--approval-mode yolo` runs unsandboxed                                         | ✅ readable (writes cannot be prevented — as above)                                                                              |
-| **Qwen Code**   | `--sandbox` / `-s` in `ARGUS_QWEN_ARGS`                            | ❌ the container mounts the project and the CLI's home, not Argus's data directory | ❌ unavailable; the channel is required, so a strict launch is refused                                                           |
+| Runtime         | Effective filesystem mode                                          | Result file · KnowledgeDelta · artifact dir · memory dir (write)                                               | Read channels                                                                                             |
+| --------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| **Claude Code** | any                                                                | ✅ `--add-dir` + `Edit(//<dir>/**)` allowed on each channel's directory (a path no rule can name → limitation) | ✅ `--add-dir` + `Edit(//<dir>/**)` denied: readable, not editable (a path no rule can name → limitation) |
+| **Claude Code** | `read-only`, channel _under_ `cwd`/`additionalDirectories`         | ❌ the `Edit(//root/**)` deny rule covers it; reported from the paths                                          | ✅ readable; the root's own deny rule already covers it                                                   |
+| **Codex**       | `workspace-write` (declared, or the `ARGUS_CODEX_SANDBOX` default) | ✅ named in `sandbox_workspace_write.writable_roots`                                                           | ✅ reads are unrestricted; never listed in `writable_roots`, so the sandbox refuses writes                |
+| **Codex**       | `unrestricted` / `danger-full-access`                              | ✅ nothing to add                                                                                              | ✅ (no sandbox: writes cannot be prevented)                                                               |
+| **Codex**       | `read-only` (declared, or via `ARGUS_CODEX_SANDBOX`)               | ❌ no way to admit a write; one limitation per channel                                                         | ✅ readable; the sandbox refuses every write                                                              |
+| **OpenCode**    | any (the profile's `filesystem` is itself unenforceable)           | ✅ `opencode run --auto` runs unsandboxed; nothing stands in the way                                           | ✅ readable (writes cannot be prevented — the profile is unenforceable regardless)                        |
+| **Qwen Code**   | any, no `--sandbox` in `ARGUS_QWEN_ARGS`                           | ✅ `--approval-mode yolo` runs unsandboxed                                                                     | ✅ readable (writes cannot be prevented — as above)                                                       |
+| **Qwen Code**   | `--sandbox` / `-s` in `ARGUS_QWEN_ARGS`                            | ❌ the container mounts the project and the CLI's home, not Argus's data directory                             | ❌ unavailable; the channel is required, so a strict launch is refused                                    |
 
 Where a runtime cannot prevent a write to the context file, the file's `0444`
 mode guards against an accidental overwrite and the invocation record's
@@ -1374,10 +1431,14 @@ choices are legible:
   agent can talk its way around (e.g. a command that itself writes files) is
   not caught by anything here. Codex's sandbox is the one runtime with a real
   OS-level boundary.
-- **Bash under read-only, generally.** Even where Argus denies bare `Bash`,
-  any `tools.allow` entry scoping specific commands necessarily trusts that
-  those commands don't write — Argus does not parse or sandbox the command
-  line itself.
+- **Shells under read-only, generally.** Even where Argus denies bare `Bash`
+  and `PowerShell`, any `tools.allow` entry scoping specific commands
+  necessarily trusts that those commands don't write — Argus does not parse or
+  sandbox the command line itself.
+- **8.3 short names in rule paths.** A deny rule built from a Windows short
+  name (`C:\Users\OPERAT~1\…`) never matches the long path the agent writes
+  to (§3, _Rule paths_). Argus's own directories are always long; a `cwd` or
+  `additionalDirectories` entry must be authored in the long form too.
 - **Codex's Stop hook still comes from `~/.codex/config.toml`, appended once
   by Setup — not per invocation.** Unlike Claude Code and Qwen Code, Codex has
   no per-invocation hook mechanism this feature can use; its completion

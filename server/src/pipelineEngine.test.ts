@@ -966,6 +966,67 @@ test("adopt claims alive running steps and occupies concurrency slots", async ()
   assert.equal(rec2.calls.length, 1);
 });
 
+test("adopt claims a live run of an instance paused at a gate", async () => {
+  const { engine, pipelines, instances } = await load();
+  await seedPipeline(pipelines, {
+    phases: [
+      {
+        id: "gate",
+        name: "Gate",
+        cwd: home,
+        gated: true,
+        needs: [],
+        steps: [{ name: "g", prompt: "g" }],
+      },
+      {
+        id: "work",
+        name: "Work",
+        cwd: home,
+        gated: false,
+        needs: [],
+        steps: [{ name: "w", prompt: "w" }],
+      },
+    ],
+  });
+  const rec = recordingSpawn();
+  const aliveSpawn = (run: { id: string }, _log: string, env: Record<string, string>) => {
+    rec.spawn(run, _log, env);
+    return { pid: process.pid, done: deferred().promise };
+  };
+  const e1 = engine.createEngine(baseDeps({ spawn: aliveSpawn }));
+  const inst = await e1.start("p1", "manual");
+  const gateRun = rec.calls[0].runId;
+  await e1.onSignal(inst!.id, {
+    instanceId: inst!.id,
+    phaseId: "gate",
+    runId: gateRun,
+    type: "completed",
+    token: testRunToken(gateRun),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
+  });
+  assert.equal((await instances.readInstance(inst!.id)).status, "awaiting-approval");
+
+  // "Restart" with one slot: the paused instance's live `work` run must take
+  // it, and be tailed again.
+  const tracked: string[] = [];
+  const tailer = { track: (runId: string) => tracked.push(runId), untrack: () => {} };
+  const rec2 = recordingSpawn();
+  const e2 = engine.createEngine(baseDeps({ spawn: rec2.spawn, maxConcurrent: 1, tailer }));
+  await e2.adopt();
+  assert.deepEqual(tracked, [rec.calls[1].runId]);
+  await seedSecondPipeline(pipelines);
+  // start() queues a run past the cap rather than waiting for it.
+  await e2.start("p2", "manual");
+  assert.equal(rec2.calls.length, 0, "the adopted run holds the only slot");
+
+  // The adopted run ends, and reconcile hands its slot to the queued one.
+  const runs = await import("./sources/runs.js");
+  await runs.patchRun(rec.calls[1].runId, { status: "cancelled" });
+  await e2.reconcile();
+  await waitFor(() => rec2.calls.length === 1);
+  await e2.drain();
+});
+
 test("adopt ignores dead-pid runs and leaves the slot free", async () => {
   const { engine, pipelines } = await load();
   await seedPipeline(pipelines, {

@@ -18,6 +18,7 @@ import { formatClaimRef, getClaim, revisionsOf } from "./kernel.js";
 import { analyzeImpact } from "./impact.js";
 import { fakeKill } from "../testPlatform.js";
 import { testRunToken } from "../testSignalToken.js";
+import { toClaudeRulePath } from "../runtimes/claude.js";
 
 /**
  * The KnowledgeDelta protocol through the engine: a run writes the file Argus
@@ -1173,7 +1174,7 @@ test("a supported runtime under a restrictive profile has every channel granted 
   ]);
   // The repository itself is still denied under the profile.
   const denied = record.args[record.args.indexOf("--disallowedTools") + 1];
-  assert.ok(denied.includes(`Edit(//${work}/**)`));
+  assert.ok(denied.includes(`Edit(/${toClaudeRulePath(work)}/**)`));
 });
 
 test("Claude Code read-only with the working directory containing Argus's work root: the channels are honestly unavailable", async (t) => {

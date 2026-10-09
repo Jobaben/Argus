@@ -352,6 +352,76 @@ test("a queued step refused at launch still fails its phase while a sibling wait
   assert.equal(after.status, "awaiting-approval", "the gate still waits for its decision");
 });
 
+test("the prompt names the channel paths and ends with the revision note, on a queued run too", async () => {
+  const { engine, pipelines, instances } = await load();
+  await seed(pipelines, [
+    {
+      id: "draft",
+      name: "Draft",
+      cwd: home,
+      gated: true,
+      capabilities: { filesystem: "read-only" },
+      steps: [
+        { name: "a", prompt: "write A" },
+        { name: "b", prompt: "write B" },
+      ],
+    },
+  ]);
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn, maxConcurrent: 1 }));
+  const inst = await e.start("p1", "manual");
+
+  // Each step completes and exits, so the run queued behind it gets the slot.
+  const finish = async (i: number) => {
+    const runId = rec.calls[i].run.id;
+    await e.onSignal(inst!.id, {
+      instanceId: inst!.id,
+      phaseId: "draft",
+      runId,
+      type: "completed",
+      token: testRunToken(runId),
+      payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
+    });
+    rec.dones[i].resolve({ code: 0 });
+  };
+  await finish(0);
+  await waitFor(() => rec.calls.length === 2);
+  await finish(1);
+  await waitFor(
+    async () => (await instances.readInstance(inst!.id)).status === "awaiting-approval",
+  );
+
+  const first = rec.calls[0];
+  const paths = [
+    `- ARGUS_KNOWLEDGE_DELTA_FILE: ${first.env.ARGUS_KNOWLEDGE_DELTA_FILE}`,
+    `- ARGUS_ARTIFACT_DIR: ${first.env.ARGUS_ARTIFACT_DIR}`,
+  ].join("\n");
+  assert.ok(first.run.prompt.startsWith("write A"));
+  assert.ok(first.run.prompt.endsWith(paths), first.run.prompt);
+
+  const revised = await e.revise(inst!.id, "tighten the intro", { phaseId: "draft" });
+  assert.equal(revised.ok, true);
+  await waitFor(() => rec.calls.length === 3);
+  assert.equal(rec.calls.length, 3, "the revision's second run waits for the slot");
+  rec.dones[2].resolve({ code: 0 });
+  await waitFor(() => rec.calls.length === 4);
+
+  for (const call of rec.calls.slice(2)) {
+    const prompt: string = call.run.prompt;
+    assert.ok(
+      prompt.endsWith(`${call.env.ARGUS_ARTIFACT_DIR}\n\nRevision note: tighten the intro`),
+      prompt,
+    );
+    assert.ok(
+      prompt.includes(`- ARGUS_KNOWLEDGE_DELTA_FILE: ${call.env.ARGUS_KNOWLEDGE_DELTA_FILE}`),
+    );
+    // What the agent is handed, not only what the record says.
+    assert.equal(call.prepared.plan.stdin, prompt);
+  }
+  await e.abort(inst!.id);
+  await e.drain();
+});
+
 // ── 6. deadline enforcement ──────────────────────────────────────────────────
 
 test("a step past its deadline is killed, timed out, and failed", async () => {
@@ -407,6 +477,67 @@ test("a step past its deadline is killed, timed out, and failed", async () => {
   // a signal is not instant teardown): the run's own status catches up.
   resolveDone({ code: null });
   await waitFor(async () => (await runsSrc.readRun(runId))?.run.status === "failed");
+});
+
+test("a step past its deadline is timed out while a sibling waits at its gate", async () => {
+  const { engine, pipelines, instances, runsSrc } = await load();
+  await seed(pipelines, [
+    {
+      id: "gate",
+      name: "Gate",
+      cwd: home,
+      gated: true,
+      needs: [],
+      steps: [{ name: "g", prompt: "g" }],
+    },
+    {
+      id: "slow",
+      name: "Slow",
+      cwd: home,
+      gated: false,
+      needs: [],
+      timeoutSeconds: 1,
+      steps: [{ name: "s", prompt: "s" }],
+    },
+  ]);
+  const rec = recordingSpawn();
+  const killed: number[] = [];
+  const kill = (pid: number, signal?: NodeJS.Signals) => {
+    if (signal !== "SIGKILL") killed.push(pid);
+    return true;
+  };
+  const e = engine.createEngine(
+    baseDeps({ spawn: rec.spawn, kill, killGraceMs: 50, now: () => new Date() }),
+  );
+  const inst = await e.start("p1", "manual");
+  const gateRun = rec.calls[0].run.id;
+  await e.onSignal(inst!.id, {
+    instanceId: inst!.id,
+    phaseId: "gate",
+    runId: gateRun,
+    type: "completed",
+    token: testRunToken(gateRun),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
+  });
+  assert.equal((await instances.readInstance(inst!.id)).status, "awaiting-approval");
+
+  const slowCall = rec.calls[1];
+  assert.equal(slowCall.env.ARGUS_PHASE_ID, "slow");
+  await waitFor(
+    async () =>
+      (await instances.readInstance(inst!.id)).phases.find((p: any) => p.id === "slow").status ===
+      "failed",
+  );
+  assert.deepEqual(killed, [1002], "only the timed-out run is stopped");
+  const after = await instances.readInstance(inst!.id);
+  const slow = after.phases.find((p: any) => p.id === "slow");
+  assert.equal((slow.payload as any).failureClass, "timeout");
+  assert.equal((await runsSrc.readRun(slowCall.run.id))!.run.termination, "timed-out");
+  assert.equal(after.phases.find((p: any) => p.id === "gate").status, "awaiting-approval");
+
+  for (const d of rec.dones) d.resolve({ code: null });
+  await e.abort(inst!.id);
+  await e.drain();
 });
 
 test("a completion signal that beats the deadline wins, permanently", async () => {

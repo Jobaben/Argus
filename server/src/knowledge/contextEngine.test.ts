@@ -22,6 +22,7 @@ import {
 import { analyzeImpact } from "./impact.js";
 import { executionProvenance } from "./kernel.js";
 import { testRunToken } from "../testSignalToken.js";
+import { toClaudeRulePath } from "../runtimes/claude.js";
 
 /**
  * Controlled semantic context delivery through the engine (Phase 4): a step
@@ -237,7 +238,7 @@ test("exact + active selectors: the run receives exactly the resolved revisions,
   // Claude Code was told to admit the directory and deny edits under it.
   assert.ok(invocation.args.includes("--add-dir") && invocation.args.includes(path.dirname(file)));
   const denied = invocation.args[invocation.args.indexOf("--disallowedTools") + 1];
-  assert.ok(denied.includes(`Edit(//${path.dirname(file)}/**)`));
+  assert.ok(denied.includes(`Edit(/${toClaudeRulePath(path.dirname(file))}/**)`));
 
   // The prompt names what the file holds; the system prompt carries the contract.
   assert.match(

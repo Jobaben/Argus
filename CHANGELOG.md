@@ -497,6 +497,16 @@ unverifiable`, each rule exactly once. A **missing** rule refuses the whole
   failed". The phase now fails under `configuration`, as it does when the
   instance reads `running`.
 
+- **A step's deadline holds while a sibling waits at a gate.** A step past its
+  `timeoutSeconds` was left running once the instance read
+  `awaiting-approval`. It is now stopped and its phase fails under `timeout`,
+  as a failure the step reports itself already did.
+
+- **A restart re-adopts the runs of an instance paused at a gate.** Its
+  still-live runs in other phases were left untracked: no concurrency slot,
+  no deadline, no live tail. They are now adopted like those of a running
+  instance.
+
 - **A crash between a transition and its launch no longer leaves a phase
   running forever.** A phase attempt the saved instance says is `running` with
   no run planned (after a retry, revise, remediation or settle) is launched by
@@ -767,6 +777,22 @@ unverifiable`, each rule exactly once. A **missing** rule refuses the whole
   missing.
 
 ### Security
+
+- **Read-only is enforced on Claude Code, on Windows too.** A read-only
+  phase's deny rule embedded the path as given: `Edit(//C:\repo/**)` on
+  Windows, which Claude Code never matches, so the phase could write its
+  repository. On POSIX it was `Edit(///repo/**)`, one slash too many. Rule
+  paths are now spelled the one way Claude Code matches them
+  (`Edit(//c/repo/**)`, `Edit(//repo/**)`), and a path no rule can name (a
+  comma, a newline, a UNC share) is a limitation that refuses a strict launch.
+  Read-only now denies `PowerShell` as well as `Bash`, with the same scoped
+  allow rules. Each Argus write channel gets its own `Edit` allow, because
+  `--add-dir` alone left the write to a prompt a headless run refuses under the
+  default permission mode. A run with a capability profile also has every
+  channel's path named in its prompt, since a read-only agent has no shell to
+  read its environment with.
+  A read-only agent that used to write into its repository now fails. The
+  probes behind this are in HARNESS.md §3, _Rule paths, as probed_.
 
 - **Source-evidence containment is decided on the resolved real path.** Phase 5
   checked repository containment lexically — relative path, no `..`,

@@ -1,3 +1,4 @@
+import { CHANNEL_ENV_VARS } from "../harness/channels.js";
 import { DEFAULT_MEMORY_BYTES } from "../harness/memory.js";
 import { formatClaimRef } from "../knowledge/kernel.js";
 import { claudeRuntime, runtimeFor } from "../runtimes/index.js";
@@ -113,6 +114,23 @@ export function artifactInstruction(checks: PhaseDef["checks"], artifactDir: str
     `file${required.length === 1 ? "" : "s"} in its artifact directory ${artifactDir} ` +
     `(also given as the ARGUS_ARTIFACT_DIR environment variable): ${required.join(", ")}. ` +
     "The pipeline checks that each exists and is non-empty; the phase fails otherwise."
+  );
+}
+
+/**
+ * The paths of a run's Argus-owned channels, named in its prompt as well as
+ * its environment. A read-only profile denies the shell, and with it the only
+ * way an agent can read its environment. Per-run data, so it rides in the
+ * prompt like {@link artifactInstruction}; {@link STEP_CONTRACT} stays
+ * constant and the cache prefix holds.
+ */
+export function channelInstruction(env: Record<string, string>): string {
+  const lines = CHANNEL_ENV_VARS.flatMap((name) => (env[name] ? [`- ${name}: ${env[name]}`] : []));
+  if (lines.length === 0) return "";
+  return (
+    "\n\nArgus paths for this run. Each is also in the environment variable it is listed " +
+    "under; use the path as given here, since you may have no shell to read the " +
+    `environment with.\n${lines.join("\n")}`
   );
 }
 

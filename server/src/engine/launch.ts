@@ -17,6 +17,7 @@ import {
   phaseBaselinePath,
   prepareInvocation,
   readGitHead,
+  resolveCapabilities,
   resolveTimeoutSeconds,
 } from "../harness/invocation.js";
 import type { PreparedInvocation } from "../harness/invocation.js";
@@ -114,6 +115,7 @@ import { PreflightError } from "./spawn.js";
 import {
   STEP_CONTRACT,
   artifactInstruction,
+  channelInstruction,
   knowledgeContextInstruction,
   memoryInstruction,
   resultInstruction,
@@ -577,9 +579,10 @@ export function createLaunch(core: EngineCore) {
       const timeoutSeconds = resolveTimeoutSeconds(phaseDef, stepDef);
       const stallSeconds = resolveStallSeconds(phaseDef, stepDef);
       // Argus-injected blocks ride after the agent's own prompt, in a fixed
-      // order, with the retry note last: the note is what matters most on a
-      // retry, and recency in the prompt is what the model weighs most (see
-      // docs/HARNESS-RESEARCH.md §2 #5, "lost in the middle").
+      // order. The channel paths and the retry note follow at launch, the
+      // note last: it is what matters most on a retry, and recency in the
+      // prompt is what the model weighs most (see docs/HARNESS-RESEARCH.md
+      // §2 #5, "lost in the middle").
       const rendered = interpolate(
         stepDef.prompt,
         prevPayload,
@@ -650,8 +653,7 @@ export function createLaunch(core: EngineCore) {
           memoryInstruction(memoryPolicy) +
           (knowledgeContext && "resolved" in knowledgeContext
             ? knowledgeContextInstruction(knowledgeContext.resolved.supplied)
-            : "") +
-          noteSuffix,
+            : ""),
         cwd,
         status: "running",
         trigger: "scheduled",
@@ -806,6 +808,7 @@ export function createLaunch(core: EngineCore) {
           realization: unit.realization,
           acceptance: unit.acceptance,
           signalToken: unit.signalToken,
+          noteSuffix,
         },
       });
     }
@@ -1160,6 +1163,12 @@ export function createLaunch(core: EngineCore) {
     if (remediationFile) env.ARGUS_REMEDIATION_CONTEXT_FILE = remediationFile;
     const acceptanceFile = ctx.acceptance ? acceptanceVerificationFile(run.id) : null;
     if (acceptanceFile) env.ARGUS_ACCEPTANCE_VERIFICATION_FILE = acceptanceFile;
+    // The channel paths, now that every one is known, then the retry note —
+    // still last, after everything Argus says about this run. Only a run with
+    // a capability profile is told the paths: a profile is what can deny the
+    // shell, and a run without one launches exactly as it always did.
+    const profiled = resolveCapabilities(ctx.def, ctx.phaseDef, ctx.stepDef) !== undefined;
+    run.prompt += (profiled ? channelInstruction(env) : "") + ctx.noteSuffix;
     let prepared: PreparedInvocation;
     const suppliedInputs: { kind: InvocationChannelKind; path: string; sha256: string }[] = [];
     try {

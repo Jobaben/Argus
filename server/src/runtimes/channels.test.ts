@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { RUNTIMES, RUNTIME_IDS } from "./index.js";
-import { invocationChannels } from "../harness/channels.js";
+import { CHANNEL_ENV_VARS, invocationChannels } from "../harness/channels.js";
 import type { CapabilityRequest, ChannelOutcome, InvocationChannel } from "./types.js";
 import type { AgentRuntimeId, CapabilityProfile, InvocationChannelKind } from "@argus/contracts";
 
@@ -89,6 +89,28 @@ test("every runtime answers for every channel it is handed, in order", () => {
       }
     }
   }
+});
+
+test("CHANNEL_ENV_VARS names every channel's variable, in the list's own order", () => {
+  const all = invocationChannels({
+    resultFile: "/r/result.json",
+    knowledgeDeltaFile: "/d/delta.json",
+    knowledgeContextFile: "/c/context.json",
+    ruleVerificationFile: "/v/verification.json",
+    changeRequestFile: "/q/request.json",
+    changeProposalFile: "/p/proposal.json",
+    changeContextFile: "/x/context.json",
+    implementationScopeFile: "/s/scope.json",
+    remediationContextFile: "/m/remediation.json",
+    acceptanceVerificationFile: "/a/acceptance.json",
+    artifactDir: "/art",
+    memoryDir: "/mem",
+    phaseDef: {},
+  });
+  assert.deepEqual(
+    all.map((c) => c.envVar),
+    [...CHANNEL_ENV_VARS],
+  );
 });
 
 test("Claude Code: --add-dir admits every channel under every filesystem mode", () => {
@@ -307,7 +329,7 @@ test("Claude Code: the context directory is admitted with --add-dir and denied f
     const di = p.args.indexOf("--disallowedTools");
     const denied = di > -1 ? p.args[di + 1].split(",") : [];
     assert.ok(
-      denied.includes("Edit(///home/op/.claude/argus/invocations/run-1/**)"),
+      denied.includes("Edit(//home/op/.claude/argus/invocations/run-1/**)"),
       `${filesystem}: the context directory is denied for edits (${denied.join(",")})`,
     );
     // The delta directory stays writable: only the read channel is denied.
@@ -326,7 +348,7 @@ test("Claude Code: a read channel already under a read-only-denied root needs no
   assert.equal(s["knowledge-context"], "granted");
   assert.equal(s["knowledge-delta"], "unavailable");
   const denied = p.args[p.args.indexOf("--disallowedTools") + 1].split(",");
-  assert.deepEqual(denied, ["Edit(///home/op/**)", "Bash"]);
+  assert.deepEqual(denied, ["Edit(//home/op/**)", "Bash", "PowerShell"]);
 });
 
 test("Claude Code: a context path the rule grammar cannot express is readable but reported as a limitation", () => {
@@ -350,7 +372,7 @@ test("Claude Code: a context path the rule grammar cannot express is readable bu
   });
   assert.equal(p.channels?.[0].status, "granted");
   assert.deepEqual(p.limitations, [
-    "Claude Code cannot deny edits to the KnowledgeContext file (ARGUS_KNOWLEDGE_CONTEXT_FILE): its path contains a comma",
+    "Claude Code cannot deny edits to the KnowledgeContext file (ARGUS_KNOWLEDGE_CONTEXT_FILE): its path contains a comma or newline, or is a UNC share",
   ]);
 });
 

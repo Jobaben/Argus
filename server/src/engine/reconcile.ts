@@ -14,10 +14,8 @@ import type { Run } from "../sources/scheduleTypes.js";
 import type { RetryableClass, StepCompletion } from "../sources/pipelineTypes.js";
 import { log } from "../log.js";
 import { failureClassOfRecord, recoverRunOutcome } from "./outcome.js";
+import { resumable } from "./constants.js";
 import type { EngineCore, EngineFns } from "./context.js";
-
-/** Instance statuses whose running phases reconcile may still act on. */
-const resumable = (status: string) => status === "running" || status === "awaiting-approval";
 
 /** The reconcile tick: gate recovery, adopted runs, due retries, stalls, healing, owed launches and the decided-run sweep. Moved verbatim from `createEngine`. */
 export function createReconcile(core: EngineCore) {

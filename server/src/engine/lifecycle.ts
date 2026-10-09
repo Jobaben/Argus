@@ -9,6 +9,7 @@ import { parseEnvelopeFor } from "../runtimes/index.js";
 import type { Run } from "../sources/scheduleTypes.js";
 import type { PhaseFailureClass, PipelineInstance } from "../sources/pipelineTypes.js";
 import { log } from "../log.js";
+import { resumable } from "./constants.js";
 import type { EngineCore, EngineFns } from "./context.js";
 
 /** Process lifecycle: awaiting a run's exit, deadlines and stalls, and the one way Argus ends a run (`terminateRun`). Moved verbatim from `createEngine`. */
@@ -278,7 +279,9 @@ export function createLifecycle(core: EngineCore) {
   ): Promise<void> {
     await locks.withLock(instanceId, async () => {
       const inst = await readLive(instanceId, "deadline");
-      if (!inst || inst.status !== "running") return;
+      // A sibling paused at a gate leaves this step's phase running, and its
+      // deadline still counts — the same as a failure it reports itself.
+      if (!inst || !resumable(inst.status)) return;
       const phase = inst.phases.find((p) => p.id === phaseId);
       const step = phase?.steps.find((s) => s.runId === runId);
       if (!phase || phase.status !== "running" || step?.status !== "running") return;
@@ -357,7 +360,9 @@ export function createLifecycle(core: EngineCore) {
 
   async function adopt(): Promise<void> {
     for (const inst of await readInstances()) {
-      if (inst.status !== "running") continue;
+      // A paused instance too: its other phases keep running while a gate
+      // waits, and their processes need a slot, a deadline and a tailer.
+      if (!resumable(inst.status)) continue;
       // Every live phase, not just one: a fan-out has several in flight, and an
       // unadopted run is a process nobody is tracking.
       for (const s of livePhases(inst).flatMap((i) => inst.phases[i].steps)) {

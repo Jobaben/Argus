@@ -344,6 +344,9 @@ export interface LaunchContext {
   acceptance: PlannedAcceptance | null;
   /** The run's own signal token, or null when its runtime has no hook. */
   signalToken: string | null;
+  /** A retry or revision note, appended at launch after the channel paths so
+   *  it stays the last thing the prompt says. Empty on a first attempt. */
+  noteSuffix: string;
 }
 
 /**
