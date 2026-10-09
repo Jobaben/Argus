@@ -1096,7 +1096,9 @@ transcript has gone quiet that long, even while its process is alive:
   reconcile tick (`server/src/harness/stall.ts`'s `isStalled`, a pure
   function; the engine's `reconcile()` calls it), not a new
   per-step `setTimeout`. Practically this means a stall is noticed within one
-  tick of crossing `stallSeconds`, not at the exact instant.
+  tick of crossing `stallSeconds`, not at the exact instant. An instance
+  paused at a gate is watched too: a sibling waiting for a decision leaves
+  this step's phase running.
 - **The reference clock is the run's own `lastActivityAt`**, refreshed from
   the run tailer's latest observed activity each tick and **persisted** on the
   `Run` record — so a restart does not misjudge a stall from a stale

@@ -194,9 +194,10 @@ export function createReconcile(core: EngineCore) {
     //     this process's own runs and adopted ones — the run tailer's
     //     `latest()` only knows about runs *this* process is tailing, so
     //     `Run.lastActivityAt` (refreshed here, persisted) is what a restart
-    //     falls back to until the tailer catches up.
+    //     falls back to until the tailer catches up. A sibling paused at a
+    //     gate leaves this step's phase running, so it is watched there too.
     for (const candidate of await readInstances()) {
-      if (candidate.status !== "running") continue;
+      if (!resumable(candidate.status)) continue;
       const def = candidate.definition ?? defs.find((d) => d.id === candidate.pipelineId);
       if (!def) continue;
       for (const i of livePhases(candidate)) {

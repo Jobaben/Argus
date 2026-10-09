@@ -2081,6 +2081,83 @@ test("a stalled step whose process is still alive is asked to stop once, and its
   assert.ok(!j.some((entry: any) => entry.kind === "step.timed-out"));
 });
 
+test("a stalled step is killed while a sibling waits at its gate", async () => {
+  const { engine, pipelines, instances, runsSrc } = await load();
+  await seed(pipelines, [
+    {
+      id: "gate",
+      name: "Gate",
+      cwd: home,
+      gated: true,
+      needs: [],
+      steps: [{ name: "g", prompt: "g" }],
+    },
+    {
+      id: "slow",
+      name: "Slow",
+      cwd: home,
+      gated: false,
+      needs: [],
+      stallSeconds: 30,
+      steps: [{ name: "s", prompt: "s" }],
+    },
+  ]);
+  const rec = recordingSpawn();
+  const killed: number[] = [];
+  const kill = (pid: number, signal?: NodeJS.Signals) => {
+    if (signal !== "SIGKILL") killed.push(pid);
+    return true;
+  };
+  let clock = new Date(2026, 5, 30, 12, 0, 0);
+  const e = engine.createEngine(
+    baseDeps({ spawn: rec.spawn, kill, killGraceMs: 50, now: () => clock }),
+  );
+  const inst = await e.start("p1", "manual");
+  const gateRun = rec.calls[0].run.id;
+  await e.onSignal(inst!.id, {
+    instanceId: inst!.id,
+    phaseId: "gate",
+    runId: gateRun,
+    type: "completed",
+    token: testRunToken(gateRun),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
+  });
+  assert.equal(
+    (await instances.readInstance(inst!.id)).status,
+    "awaiting-approval",
+    "the gate pauses the instance",
+  );
+
+  const slowCall = rec.calls[1];
+  assert.equal(slowCall.env.ARGUS_PHASE_ID, "slow", "the second spawn is the slow phase");
+  clock = new Date(clock.getTime() + 31_000);
+  await e.reconcile();
+  await waitFor(
+    async () =>
+      (await instances.readInstance(inst!.id)).phases.find((p: any) => p.id === "slow").status ===
+      "failed",
+  );
+  assert.deepEqual(killed, [1002], "only the stalled run is stopped");
+  assert.equal(
+    (await runsSrc.readRun(slowCall.run.id))!.run.termination,
+    "stalled",
+    "the run is recorded as stalled",
+  );
+  const after = await instances.readInstance(inst!.id);
+  const slow = after.phases.find((p: any) => p.id === "slow");
+  assert.equal((slow.payload as any).failureClass, "timeout", "a stall fails as a timeout");
+  assert.equal(after.status, "awaiting-approval", "the instance still waits at its gate");
+  assert.equal(
+    after.phases.find((p: any) => p.id === "gate").status,
+    "awaiting-approval",
+    "the gate still waits for its decision",
+  );
+
+  for (const d of rec.dones) d.resolve({ code: null });
+  await e.abort(inst!.id);
+  await e.drain();
+});
+
 test("stall detection: the retry policy treats a stall as a timeout, and retries it", async () => {
   const { engine, pipelines, instances } = await load();
   await seed(pipelines, [

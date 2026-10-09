@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildClaudeArgs, OUTCOME_CONTRACT, STEP_CONTRACT } from "./pipelineEngine.js";
 import { fakeKill } from "./testPlatform.js";
+import { KeyedMutex } from "./mutex.js";
 
 let home: string;
 beforeEach(() => {
@@ -1777,7 +1778,7 @@ test("a run waiting for a slot does not block reconcile and is not stubbed as ne
   await e.drain();
 });
 
-test("a signal received while reconcile waits for the lock wins over healing", async () => {
+test("a signal received while reconcile waits for the lock wins over healing", async (t) => {
   const { engine, pipelines, instances } = await load();
   const phase = (id: string) => ({
     id,
@@ -1810,8 +1811,23 @@ test("a signal received while reconcile waits for the lock wins over healing", a
     resultSummary: "Done.\nARGUS_OUTCOME: succeeded",
     endedAt: new Date().toISOString(),
   });
+  // Reconcile's heal pass is its first lock on this instance here (no retry,
+  // gate operation or stall is due), so its queueing marks the order.
+  const queued = deferredValue<void>();
+  const withLock = KeyedMutex.prototype.withLock;
+  t.mock.method(KeyedMutex.prototype, "withLock", function <
+    T,
+  >(this: KeyedMutex, key: string, fn: () => Promise<T>) {
+    const result = withLock.call(this, key, fn);
+    if (key === inst.id) queued.resolve();
+    return result;
+  });
   const reconciling = e.reconcile();
-  await new Promise((r) => setTimeout(r, 50)); // reconcile reaches the lock first
+  assert.notEqual(
+    await within(queued.promise, 2000),
+    TIMED_OUT,
+    "reconcile queued on the instance lock",
+  );
   const signalling = e.onSignal(inst.id, completedSignal(inst.id, "left", leftRunId));
   const rightDone = deferred();
   hold.resolve({ pid: 4242, done: rightDone.promise });

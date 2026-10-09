@@ -502,6 +502,11 @@ unverifiable`, each rule exactly once. A **missing** rule refuses the whole
   `awaiting-approval`. It is now stopped and its phase fails under `timeout`,
   as a failure the step reports itself already did.
 
+- **A stall is detected while a sibling waits at a gate.** A step quiet for
+  longer than its `stallSeconds` was left running once the instance read
+  `awaiting-approval`. It is now stopped as `stalled` and its phase fails
+  under `timeout`, as it does when the instance reads `running`.
+
 - **A restart re-adopts the runs of an instance paused at a gate.** Its
   still-live runs in other phases were left untracked: no concurrency slot,
   no deadline, no live tail. They are now adopted like those of a running
