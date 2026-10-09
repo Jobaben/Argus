@@ -294,6 +294,64 @@ test("best-effort enforcement launches anyway and records the limitation", async
   assert.ok(record.limitations.length > 0);
 });
 
+test("a queued step refused at launch still fails its phase while a sibling waits at its gate", async () => {
+  const { engine, pipelines, instances, runsSrc } = await load();
+  await seed(pipelines, [
+    {
+      id: "gate",
+      name: "Gate",
+      cwd: home,
+      gated: true,
+      needs: [],
+      steps: [{ name: "g", prompt: "g" }],
+    },
+    {
+      id: "work",
+      name: "Work",
+      cwd: home,
+      gated: false,
+      needs: [],
+      runtime: "opencode",
+      capabilities: { tools: { allow: ["Read"] } },
+      steps: [{ name: "w", prompt: "w" }],
+    },
+  ]);
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn, maxConcurrent: 1 }));
+  const inst = await e.start("p1", "manual");
+  const gateRun = rec.calls[0].run.id;
+  await e.onSignal(inst!.id, {
+    instanceId: inst!.id,
+    phaseId: "gate",
+    runId: gateRun,
+    type: "completed",
+    token: testRunToken(gateRun),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
+  });
+
+  // `work` is still queued behind the gate's slot, so its refusal is decided
+  // only once the instance already reads `awaiting-approval`.
+  assert.deepEqual(
+    rec.calls.map((c) => c.env.ARGUS_PHASE_ID),
+    ["gate"],
+  );
+  const paused = await instances.readInstance(inst!.id);
+  assert.equal(paused.status, "awaiting-approval");
+  assert.equal(paused.phases.find((p: any) => p.id === "work").status, "running");
+
+  rec.dones[0].resolve({ code: 0 });
+  await e.drain();
+
+  assert.equal(rec.calls.length, 1, "the refused step never spawns");
+  const after = await instances.readInstance(inst!.id);
+  const work = after.phases.find((p: any) => p.id === "work");
+  assert.equal(work.status, "failed");
+  assert.equal((work.payload as any).failureClass, "configuration");
+  const run = await runsSrc.readRun(work.steps[0].runId);
+  assert.equal(run!.run.termination, "spawn-failed");
+  assert.equal(after.status, "awaiting-approval", "the gate still waits for its decision");
+});
+
 // ── 6. deadline enforcement ──────────────────────────────────────────────────
 
 test("a step past its deadline is killed, timed out, and failed", async () => {

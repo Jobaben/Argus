@@ -490,6 +490,13 @@ unverifiable`, each rule exactly once. A **missing** rule refuses the whole
   failure. Those signals are now accepted; only a terminal or aborted instance
   ignores them.
 
+- **A queued run refused at launch fails its phase while a sibling waits at a
+  gate.** A run queued for a slot whose capability profile could not be
+  enforced was refused once the instance read `awaiting-approval`, but its
+  step was left `running` while its siblings were still stopped as "phase
+  failed". The phase now fails under `configuration`, as it does when the
+  instance reads `running`.
+
 - **A crash between a transition and its launch no longer leaves a phase
   running forever.** A phase attempt the saved instance says is `running` with
   no run planned (after a retry, revise, remediation or settle) is launched by
@@ -587,6 +594,11 @@ unverifiable`, each rule exactly once. A **missing** rule refuses the whole
   queued run that is decided while it waits (an abort, a revise, a failed
   sibling) is not spawned, and after a restart it fails as `spawn` and is
   retried under the default policy.
+
+- **The hook retries delivery.** The stop hook no longer gives up after one
+  10 s attempt. It retries a transport error or a 5xx within a 45 s budget,
+  backing off 0.5, 1, 2, 4 and then 8 s, and sends the identical body each
+  time. A 4xx is never retried. `HOOK_VERSION` is unchanged.
 
 - **The phase graph renders any pipeline shape.** A wide fan-out used to
   draw one row of fixed-width nodes wider than the card: it spilled over the

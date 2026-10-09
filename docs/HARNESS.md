@@ -308,7 +308,30 @@ instance ignores a signal outright; a signal for a phase that is itself paused
 is ignored by the transition, as `phase-not-running`, and journalled. The
 accepted phase's checks still wait for the gate decision: check results are
 not applied to a paused instance, and recovery re-runs them once it is
-running again.
+running again. The same holds for a run that was queued for a slot and is then
+refused at launch, for example because its capability profile cannot be
+enforced: its phase fails under `configuration` even while a sibling waits at
+its gate.
+
+### The hook retries delivery
+
+The stop hook (`hooks/argus-signal.mjs`) does not give up on the first failed
+POST. It retries within a **45 s budget**, which keeps it inside Qwen's 60 s hook
+limit (Claude Code and Codex allow 600 s). Between attempts it waits 0.5, 1, 2,
+4 and then 8 s, and keeps waiting 8 s until the budget is spent. The budget,
+not an attempt count, ends the retries. Each attempt may wait for whatever is
+left of it, and the last error is reported.
+
+- **Retried:** a transport error (refused, reset, timed out) or a 5xx, because
+  Argus may be busy or restarting.
+- **Never retried:** a 4xx. A bad token or an unknown instance is Argus's
+  answer, and the same request cannot change it.
+- **Sent unchanged:** every attempt carries the identical body. A duplicate of
+  a signal Argus already applied is ignored as `step-not-running`, so a retry
+  after a lost response is harmless.
+
+The payload is unchanged, so `HOOK_VERSION` stays where it was. Installed
+copies are compared by byte hash and re-copied by setup and `preflight()`.
 
 ### Completion policy: the agent's report, not verification
 

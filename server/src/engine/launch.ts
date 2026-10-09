@@ -982,7 +982,9 @@ export function createLaunch(core: EngineCore) {
     if (unlaunchable.length === 0) return;
     const readyAfterFailure: number[] = [];
     for (const { run, reason } of unlaunchable) {
-      if (inst.status !== "running") break;
+      // A queued run can be refused after a sibling paused at its gate, which
+      // leaves the instance `awaiting-approval` while this phase still runs.
+      if (inst.status !== "running" && inst.status !== "awaiting-approval") break;
       readyAfterFailure.push(
         ...failStepInPlace(def, inst, phaseDef.id, run.id, "configuration", reason).startPhases,
       );

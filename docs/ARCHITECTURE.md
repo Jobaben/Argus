@@ -165,8 +165,10 @@ discarded (HARNESS.md §1, §2):
   the signal decides.
 
 Both are lost on a restart, deliberately: a queued run then fails as `spawn`
-and is retried, and an unapplied signal is lost: its run is healed from its
-run record as before.
+and is retried. A signal that was received but not applied is dropped with the
+process. The stop hook keeps retrying within its 45 s budget (HARNESS.md §2),
+so a server back within that budget still gets the signal. Past it, the run is
+healed from its run record as before.
 
 - **Single Responsibility** — each `sources/*.ts` owns exactly one domain and
   exports plain async functions returning normalized DTOs.
