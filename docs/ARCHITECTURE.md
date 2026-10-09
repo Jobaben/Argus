@@ -154,6 +154,20 @@ importing it; nothing outside `engine/` but the façade imports an engine
 module; and the pure layers (transitions, harness, transition log, durable
 primitives) never import the engine at all.
 
+The shared context also holds the in-memory sets that keep one process from
+repeating its own work. Two of them exist so that completed work is never
+discarded (HARNESS.md §1, §2):
+
+- `awaitingSlot` names the planned runs waiting, off the instance lock, for a
+  concurrency slot. Reconcile does not fail them as never started.
+- `signalsInFlight` counts, per run, the signals the server has received but
+  not yet applied. Reconcile does not heal those runs from their run records:
+  the signal decides.
+
+Both are lost on a restart, deliberately: a queued run then fails as `spawn`
+and is retried, and an unapplied signal is lost: its run is healed from its
+run record as before.
+
 - **Single Responsibility** — each `sources/*.ts` owns exactly one domain and
   exports plain async functions returning normalized DTOs.
 - **Dependency Inversion** — sources depend on `paths`/`claudeHome`, not on

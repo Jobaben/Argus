@@ -278,7 +278,7 @@ test("needs-input pauses the phase; the same run's later Stop is ignored; approv
   assert.equal(after.phases[0].pause, "needs-input");
   // The agent's process stops, and its Stop hook reports completion.
   const stop = await e.onSignal(inst.id, sig(inst, "only", r, testRunToken(r)));
-  assert.equal(stop.code, 200, "the instance is paused, so the signal is a no-op");
+  assert.equal(stop.code, 202, "the phase is paused, so the signal is ignored");
   after = (await readInstance(inst.id))!;
   assert.equal(after.phases[0].status, "awaiting-approval");
   assert.equal(rec.calls.length, 1, "nothing downstream started");

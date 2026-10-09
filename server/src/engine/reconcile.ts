@@ -21,7 +21,19 @@ const resumable = (status: string) => status === "running" || status === "awaiti
 
 /** The reconcile tick: gate recovery, adopted runs, due retries, stalls, healing, owed launches and the decided-run sweep. Moved verbatim from `createEngine`. */
 export function createReconcile(core: EngineCore) {
-  const { deps, sem, locks, adopted, nowISO, verifying, queuedLaunches, live, T } = core.ctx;
+  const {
+    deps,
+    sem,
+    locks,
+    adopted,
+    nowISO,
+    verifying,
+    queuedLaunches,
+    live,
+    awaitingSlot,
+    signalsInFlight,
+    T,
+  } = core.ctx;
   const acceptCompletion: EngineFns["acceptCompletion"] = (...args) =>
     core.fns.acceptCompletion(...args);
   const delivered = core.fns.delivered;
@@ -227,10 +239,11 @@ export function createReconcile(core: EngineCore) {
     //    visited too, with the authority the live paths give it: work a
     //    committed decision ordered still happens — an owed launch, and a
     //    knowledge commit an approval or a phase already decided — while
-    //    results wait for the gate decision: agent outcomes (the signal path
-    //    drops signals on a paused instance), check results (not applied to a
-    //    paused instance) and candidate selection. The paused phase itself is
-    //    never touched: every block below acts only on `running` phases.
+    //    results wait for the gate decision: healing a run that never
+    //    signalled, check results (not applied to a paused instance) and
+    //    candidate selection. A run that does signal is accepted meanwhile by
+    //    the signal path. The paused phase itself is never touched: every
+    //    block below acts only on `running` phases.
     for (const candidate of await readInstances()) {
       if (!resumable(candidate.status)) continue;
       const def = candidate.definition ?? defs.find((d) => d.id === candidate.pipelineId);
@@ -320,8 +333,8 @@ export function createReconcile(core: EngineCore) {
         }
         queueReadyPhases(current.id, def, current, owedLaunch);
         await sweepDecidedRuns(current);
-        // Agent outcomes and candidate selection wait for the gate decision,
-        // as the signal path does.
+        // Healing from run records and candidate selection wait for the gate
+        // decision; a run that signals is accepted by the signal path anyway.
         if (paused) return;
         // Every live phase: with a fan-out, a died-without-signalling run can
         // be in any of them, and healing only one would leave the others
@@ -333,12 +346,13 @@ export function createReconcile(core: EngineCore) {
           if (s.status !== "running" || !s.runId) continue;
           let got = await readRun(s.runId);
           // A step recorded as running with no process behind it — no run
-          // record at all, or one that never got a pid — and not being
-          // launched by this process: Argus stopped between recording the
+          // record at all, or one that never got a pid — and neither being
+          // launched nor waiting for a slot in this process: Argus stopped between recording the
           // step and starting it. Nothing will ever signal for it, so it is
           // failed here as a spawn failure (retryable by default).
           if (
             !live.has(s.runId) &&
+            !awaitingSlot.has(s.runId) &&
             (!got || (got.run.status === "running" && got.run.pid == null))
           ) {
             const stepDef = def.phases.find((p) => p.id === phaseId);
@@ -384,6 +398,9 @@ export function createReconcile(core: EngineCore) {
               got.run.status === "interrupted" ||
               got.run.status === "cancelled");
           if (!ended) continue;
+          // The run's own report reached the server and is waiting for this
+          // lock: it decides the step, not a reading of the run record.
+          if (signalsInFlight.has(s.runId)) continue;
           const restarted = got?.run.status === "interrupted";
           const recovered =
             !restarted && got && runtimeFor(got.run.runtime).outcomeFromRecord

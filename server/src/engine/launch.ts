@@ -2,6 +2,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   encodeProject,
+  readRun,
   runInvocationDir,
   runLogPath,
   runResultPath,
@@ -107,6 +108,7 @@ import type {
   PlannedChangeIntent,
   PlannedKnowledgeContext,
   PlannedRun,
+  SpawnUnit,
 } from "./types.js";
 import { PreflightError } from "./spawn.js";
 import {
@@ -120,7 +122,8 @@ import type { EngineCore, EngineFns } from "./context.js";
 
 /** Planning a phase attempt and launching its runs: worktrees, semantic and change inputs, the invocation, the spawn. Moved verbatim from `createEngine`. */
 export function createLaunch(core: EngineCore) {
-  const { deps, sem, locks, nowISO, parentEnv, queuedLaunches, track, persist, T } = core.ctx;
+  const { deps, sem, locks, nowISO, parentEnv, queuedLaunches, awaitingSlot, track, persist, T } =
+    core.ctx;
   const failPhaseConfiguration: EngineFns["failPhaseConfiguration"] = (...args) =>
     core.fns.failPhaseConfiguration(...args);
   const failStepInPlace: EngineFns["failStepInPlace"] = (...args) =>
@@ -756,20 +759,15 @@ export function createLaunch(core: EngineCore) {
       if (unit.artifactDir !== artifactDir) await mkdir(unit.artifactDir, { recursive: true });
     }
 
-    // Launch each run: acquire a slot, spawn, and persist the pid. Callers on
-    // the HTTP request path (start/approve/revise) await these launches so the
-    // spawn is observable when they return. The concurrency cap still applies —
-    // a launch past the cap waits for a slot, which is fine here because these
-    // callers hold no slot of their own. Candidates are ordinary runs in that
-    // respect: `count` of them take `count` slots, and queue when the cap is
-    // smaller than the count.
-    const unlaunchable: { run: Run; reason: string }[] = [];
+    // A working-tree baseline for `changed-files` checks, kept out of the
+    // agent's reach (beside the invocation records, not in the artifact dir).
+    // Per candidate, because each candidate has a tree of its own and is
+    // judged on what *it* changed. Taken for every run before any of them
+    // starts: steps sharing one tree are judged against the tree as it was
+    // before the first of them ran, however long a later one waits for a slot.
+    const launches: SpawnUnit[] = [];
     for (const unit of planned) {
       const { stepDef, run, publishes, timeoutSeconds, candidate } = unit;
-      // A working-tree baseline for `changed-files` checks, kept out of the
-      // agent's reach (beside the invocation records, not in the artifact dir).
-      // Per candidate, because each candidate has a tree of its own and is
-      // judged on what *it* changed.
       let baseline: WorkingTreeSnapshot | null = null;
       if (phaseDef.checks?.some((c) => c.kind === "changed-files")) {
         baseline = await snapshotWorkingTree(run.cwd);
@@ -784,46 +782,204 @@ export function createLaunch(core: EngineCore) {
         else await rm(file, { force: true });
       }
       const gitHead = baseline?.head ?? (await readGitHead(run.cwd));
-      const launched = await launchStep(run, {
+      launches.push({
         def,
         phaseDef,
-        stepDef,
-        inst,
-        publishes,
-        artifactDir: unit.artifactDir,
-        timeoutSeconds,
-        gitHead,
-        workspace: unit.workspace,
-        memoryDir,
-        contextFiles: unit.contextFiles,
-        knowledgeContext: unit.knowledgeContext,
-        changeIntent: unit.changeIntent,
-        changeContext: unit.changeContext,
-        realization: unit.realization,
-        acceptance: unit.acceptance,
-        signalToken: unit.signalToken,
+        run,
+        candidate,
+        attempt: progress.attempt,
+        startedAt,
+        ctx: {
+          def,
+          phaseDef,
+          stepDef,
+          publishes,
+          artifactDir: unit.artifactDir,
+          timeoutSeconds,
+          gitHead,
+          workspace: unit.workspace,
+          memoryDir,
+          contextFiles: unit.contextFiles,
+          knowledgeContext: unit.knowledgeContext,
+          changeIntent: unit.changeIntent,
+          changeContext: unit.changeContext,
+          realization: unit.realization,
+          acceptance: unit.acceptance,
+          signalToken: unit.signalToken,
+        },
       });
-      void journal(inst.id, {
-        at: nowISO(),
-        kind: "step.spawned",
-        phaseId: phaseDef.id,
-        runId: run.id,
-        detail:
-          ("handle" in launched
-            ? `pid ${run.pid ?? "unknown"}`
-            : launched.failure === "configuration"
-              ? `not launched: ${launched.reason}`
-              : "spawn failed") + (candidate === undefined ? "" : ` (c${candidate})`),
-      });
-      if ("handle" in launched) trackStep(run, launched.handle, startedAt, inst.id, phaseDef.id);
-      else if (launched.failure === "configuration")
-        unlaunchable.push({ run, reason: launched.reason });
     }
 
-    // A step Argus refused to launch as declared fails its phase now, under the
-    // `configuration` class — never retried, because the definition is what is
-    // wrong. (A spawn *error* keeps its existing path: the run record says
-    // failed and the reconcile pass classes it as `spawn`.)
+    // Launch each run that may start: in a free slot now, or — past the cap —
+    // queued for one. A queued run waits *off* the instance lock, so a signal,
+    // a reconcile tick or a gate decision is never held behind it; it takes
+    // the lock again and re-checks that it is still wanted before spawning.
+    // Callers on the HTTP request path (start/approve/revise) therefore see
+    // every run that fit under the cap spawned when they return, and the rest
+    // queued. Candidates are ordinary runs in that respect: `count` of them
+    // take `count` slots, and queue when the cap is smaller than the count.
+    const unlaunchable: { run: Run; reason: string }[] = [];
+    for (const launch of launches) {
+      const refusal = plannedRefusal(launch.ctx);
+      if (refusal) {
+        await refuseLaunch(inst.id, launch, refusal);
+        unlaunchable.push({ run: launch.run, reason: refusal });
+      } else if (sem.tryAcquire()) {
+        const failed = await spawnUnit(launch, inst);
+        if (failed) unlaunchable.push(failed);
+      } else {
+        queueSpawn(launch, inst.id);
+      }
+    }
+    await concludeUnlaunchable(def, inst, phaseDef, unlaunchable);
+    deps.onChange?.();
+  }
+
+  /**
+   * Why a planned run may not start at all, decided at planning and needing
+   * no slot. A semantic context the planning snapshot could not resolve
+   * refuses the step as a `configuration` failure: the definition names
+   * knowledge the ledger does not hold, and running again cannot change that.
+   * The two change-intent inputs (Phase 7) refuse it the same way and for the
+   * same reason: a change phase with no request, or an implementation phase
+   * whose intent is unapproved or unfinished, must not launch an agent at all.
+   */
+  function plannedRefusal(ctx: Omit<LaunchContext, "inst">): string | null {
+    return (
+      (ctx.knowledgeContext && "error" in ctx.knowledgeContext
+        ? ctx.knowledgeContext.error
+        : null) ??
+      (ctx.changeIntent && "error" in ctx.changeIntent ? ctx.changeIntent.error : null) ??
+      (ctx.changeContext && "error" in ctx.changeContext ? ctx.changeContext.error : null) ??
+      // Phase 8's two preconditions: the accepted intent this realization
+      // targets must still be the domain's current intent, and the attempt
+      // budget must not be spent. Both refuse the launch as `configuration`
+      // rather than starting an agent against work that cannot count.
+      (ctx.realization && "error" in ctx.realization ? ctx.realization.error : null)
+    );
+  }
+
+  async function refuseLaunch(instanceId: string, launch: SpawnUnit, reason: string) {
+    await writeRun({
+      ...launch.run,
+      status: "failed",
+      termination: "spawn-failed",
+      error: reason,
+      endedAt: nowISO(),
+    });
+    void journal(instanceId, {
+      at: nowISO(),
+      kind: "step.spawned",
+      phaseId: launch.phaseDef.id,
+      runId: launch.run.id,
+      detail: `not launched: ${reason}${candidateSuffix(launch.candidate)}`,
+    });
+  }
+
+  const candidateSuffix = (candidate: number | undefined) =>
+    candidate === undefined ? "" : ` (c${candidate})`;
+
+  /**
+   * Spawn one run in the slot the caller already holds. The slot passes to
+   * the run's exit tracking on a spawn; on every other outcome it is released
+   * here. A step Argus refused to launch as declared is returned, for the
+   * caller to fail under `configuration`.
+   */
+  async function spawnUnit(
+    launch: SpawnUnit,
+    inst: PipelineInstance,
+  ): Promise<{ run: Run; reason: string } | null> {
+    const { run, phaseDef, candidate } = launch;
+    let launched: Launched;
+    try {
+      launched = await launchStep(run, { ...launch.ctx, inst });
+    } catch (e) {
+      sem.release();
+      throw e;
+    }
+    void journal(inst.id, {
+      at: nowISO(),
+      kind: "step.spawned",
+      phaseId: phaseDef.id,
+      runId: run.id,
+      detail:
+        ("handle" in launched
+          ? `pid ${run.pid ?? "unknown"}`
+          : launched.failure === "configuration"
+            ? `not launched: ${launched.reason}`
+            : "spawn failed") + candidateSuffix(candidate),
+    });
+    if ("handle" in launched) {
+      trackStep(run, launched.handle, launch.startedAt, inst.id, phaseDef.id);
+      return null;
+    }
+    sem.release();
+    return launched.failure === "configuration" ? { run, reason: launched.reason } : null;
+  }
+
+  /**
+   * Wait for a slot off the instance lock, then spawn — only if the run is
+   * still wanted. While it waits, an abort, a revise, a failed sibling or a
+   * restart may have decided its step; spawning it then would start an agent
+   * nobody is waiting for.
+   */
+  function queueSpawn(launch: SpawnUnit, instanceId: string): void {
+    const { run, phaseDef } = launch;
+    awaitingSlot.add(run.id);
+    void track(
+      (async () => {
+        let held = false;
+        try {
+          await sem.acquire();
+          held = true;
+          await locks.withLock(instanceId, async () => {
+            const fresh = await readLive(instanceId, "launch");
+            const phase = fresh?.phases.find((p) => p.id === phaseDef.id);
+            const wanted =
+              !!fresh &&
+              (fresh.status === "running" || fresh.status === "awaiting-approval") &&
+              phase?.status === "running" &&
+              phase.attempt === launch.attempt &&
+              phase.steps.some((s) => s.runId === run.id && s.status === "running") &&
+              !(await readRun(run.id));
+            if (!fresh || !wanted) {
+              void journal(instanceId, {
+                at: nowISO(),
+                kind: "step.spawned",
+                phaseId: phaseDef.id,
+                runId: run.id,
+                detail: `not launched: decided while waiting for a slot${candidateSuffix(launch.candidate)}`,
+              });
+              return;
+            }
+            held = false;
+            const failed = await spawnUnit(launch, fresh);
+            if (failed) await concludeUnlaunchable(launch.def, fresh, phaseDef, [failed]);
+            deps.onChange?.();
+          });
+        } catch (e) {
+          log.error("queued step launch failed", { instanceId, runId: run.id, err: e });
+        } finally {
+          if (held) sem.release();
+          awaitingSlot.delete(run.id);
+        }
+      })(),
+    );
+  }
+
+  /**
+   * A step Argus refused to launch as declared fails its phase now, under the
+   * `configuration` class — never retried, because the definition is what is
+   * wrong. (A spawn *error* keeps its existing path: the run record says
+   * failed and the reconcile pass classes it as `spawn`.)
+   */
+  async function concludeUnlaunchable(
+    def: PipelineDefinition,
+    inst: PipelineInstance,
+    phaseDef: PhaseDef,
+    unlaunchable: { run: Run; reason: string }[],
+  ): Promise<void> {
+    if (unlaunchable.length === 0) return;
     const readyAfterFailure: number[] = [];
     for (const { run, reason } of unlaunchable) {
       if (inst.status !== "running") break;
@@ -831,21 +987,18 @@ export function createLaunch(core: EngineCore) {
         ...failStepInPlace(def, inst, phaseDef.id, run.id, "configuration", reason).startPhases,
       );
     }
-    if (unlaunchable.length > 0) {
-      await saveInstance(inst);
-      if (candidates) {
-        // A candidate Argus would not launch as declared is one candidate lost,
-        // not a phase lost: the others may still win, and the phase only fails
-        // when none of them can.
-        await settleCandidates(def, inst, phaseDef.id);
-      } else {
-        // Siblings that did launch belong to a phase that has already failed.
-        await killPhaseRuns(inst, [phaseDef.id], "stopped: phase failed");
-        queueReadyPhases(inst.id, def, inst, readyAfterFailure);
-        if (inst.status === "failed") deps.onFailure?.(inst);
-      }
+    await saveInstance(inst);
+    if (phaseDef.candidates) {
+      // A candidate Argus would not launch as declared is one candidate lost,
+      // not a phase lost: the others may still win, and the phase only fails
+      // when none of them can.
+      await settleCandidates(def, inst, phaseDef.id);
+    } else {
+      // Siblings that did launch belong to a phase that has already failed.
+      await killPhaseRuns(inst, [phaseDef.id], "stopped: phase failed");
+      queueReadyPhases(inst.id, def, inst, readyAfterFailure);
+      if (inst.status === "failed") deps.onFailure?.(inst);
     }
-    deps.onChange?.();
   }
 
   /**
@@ -913,7 +1066,6 @@ export function createLaunch(core: EngineCore) {
    * its author declared.
    */
   async function launchStep(run: Run, ctx: LaunchContext): Promise<Launched> {
-    await sem.acquire();
     const env: Record<string, string> = {
       ARGUS_SIGNAL_URL: `${deps.signalUrlBase}/api/instances/${ctx.inst.id}/signal`,
       ARGUS_INSTANCE_ID: ctx.inst.id,
@@ -960,35 +1112,6 @@ export function createLaunch(core: EngineCore) {
     const deltaFile = offersDelta ? knowledgeDeltaFile(run.id) : null;
     if (deltaFile) env.ARGUS_KNOWLEDGE_DELTA_FILE = deltaFile;
     const invocationDir = runInvocationDir(run.id);
-    // A semantic context the planning snapshot could not resolve refuses the
-    // step here, as a `configuration` failure: the definition names knowledge
-    // the ledger does not hold, and running again cannot change that. The two
-    // change-intent inputs (Phase 7) refuse it the same way and for the same
-    // reason: a change phase with no request, or an implementation phase whose
-    // intent is unapproved or unfinished, must not launch an agent at all.
-    const plannedError =
-      (ctx.knowledgeContext && "error" in ctx.knowledgeContext
-        ? ctx.knowledgeContext.error
-        : null) ??
-      (ctx.changeIntent && "error" in ctx.changeIntent ? ctx.changeIntent.error : null) ??
-      (ctx.changeContext && "error" in ctx.changeContext ? ctx.changeContext.error : null) ??
-      // Phase 8's two preconditions: the accepted intent this realization
-      // targets must still be the domain's current intent, and the attempt
-      // budget must not be spent. Both refuse the launch as `configuration`
-      // rather than starting an agent against work that cannot count.
-      (ctx.realization && "error" in ctx.realization ? ctx.realization.error : null);
-    if (plannedError) {
-      sem.release();
-      const reason = plannedError;
-      await writeRun({
-        ...run,
-        status: "failed",
-        termination: "spawn-failed",
-        error: reason,
-        endedAt: nowISO(),
-      });
-      return { failure: "configuration", reason };
-    }
     // The read-only KnowledgeContext (docs/KNOWLEDGE-LEDGER.md § KnowledgeContext
     // protocol): materialized in the run's own invocation directory before the
     // process exists, named to the agent by the variable, and recorded on the
@@ -1154,7 +1277,6 @@ export function createLaunch(core: EngineCore) {
         await writeFile(file.path, file.contents, "utf8");
       }
     } catch (e) {
-      sem.release();
       await writeRun({
         ...run,
         status: "failed",
@@ -1165,7 +1287,6 @@ export function createLaunch(core: EngineCore) {
       return { failure: "spawn", reason: String(e) };
     }
     if (prepared.blocking.length > 0) {
-      sem.release();
       const reason = `capability profile cannot be enforced by ${resolveRuntimeId(run.runtime)}: ${prepared.blocking.join("; ")}`;
       await writeRun({
         ...run,
@@ -1182,7 +1303,6 @@ export function createLaunch(core: EngineCore) {
       await mkdir(path.dirname(logPath), { recursive: true });
       handle = await Promise.resolve(deps.spawn(run, logPath, env, prepared));
     } catch (e) {
-      sem.release();
       await writeRun({
         ...run,
         status: "failed",
@@ -1233,7 +1353,8 @@ export function createLaunch(core: EngineCore) {
     });
     // Under the lock like every other launch, so a reconcile tick that sees
     // the new instance cannot mistake a step still being prepared for one
-    // whose launch was lost.
+    // whose launch was lost. Runs past the concurrency cap are left queued
+    // for a slot, off the lock; this returns without waiting for them.
     await locks.withLock(instance.id, () => startPhases(def, instance, ready));
     await pruneInstances(def.id, INSTANCE_KEEP);
     deps.onChange?.();
@@ -1242,9 +1363,10 @@ export function createLaunch(core: EngineCore) {
 
   /**
    * Launch phases exposed by a transition after the caller releases the
-   * instance lock. Signal handlers must answer the child before waiting for a
-   * concurrency slot, and reconciliation uses the same path so fallback and a
-   * delayed hook have one idempotency boundary.
+   * instance lock. Signal handlers must answer the child before planning a
+   * phase, and reconciliation uses the same path so fallback and a delayed
+   * hook have one idempotency boundary. Neither waits for a concurrency slot
+   * under the lock: a run past the cap is queued for one by `startPhase`.
    */
   function queueReadyPhases(
     instanceId: string,

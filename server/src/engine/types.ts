@@ -346,6 +346,24 @@ export interface LaunchContext {
   signalToken: string | null;
 }
 
+/**
+ * One planned run, ready to launch against whichever copy of its instance is
+ * current when it gets a slot: the planning-time copy when a slot is free,
+ * a fresh read when the run had to wait for one.
+ */
+export interface SpawnUnit {
+  def: PipelineDefinition;
+  phaseDef: PhaseDef;
+  run: Run;
+  candidate: number | undefined;
+  /** The phase attempt it was planned for; a queued run of a superseded
+   *  attempt is not launched. */
+  attempt: number;
+  /** When its phase attempt started. */
+  startedAt: string;
+  ctx: Omit<LaunchContext, "inst">;
+}
+
 export type Launched =
   { handle: PipelineProcessHandle } | { failure: "spawn" | "configuration"; reason: string };
 

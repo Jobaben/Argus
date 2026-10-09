@@ -15,7 +15,7 @@ import type { EngineCore, EngineFns } from "./context.js";
 
 /** Authenticating and applying an agent's signal. Moved verbatim from `createEngine`. */
 export function createSignals(core: EngineCore) {
-  const { deps, locks, nowISO, T } = core.ctx;
+  const { deps, locks, nowISO, signalsInFlight, T } = core.ctx;
   const acceptCompletion: EngineFns["acceptCompletion"] = (...args) =>
     core.fns.acceptCompletion(...args);
   const defFor: EngineFns["defFor"] = (...args) => core.fns.defFor(...args);
@@ -76,12 +76,34 @@ export function createSignals(core: EngineCore) {
     return legacyOk();
   }
 
+  /**
+   * Counted as in flight from the moment it arrives, before it waits for the
+   * lock: a reconcile pass holding the lock leaves this run alone rather than
+   * healing it from its run record, so a received completion is never
+   * discarded for one that was merely late.
+   */
   async function onSignal(instanceId: string, signal: PipelineSignal): Promise<ActionResult> {
+    signalsInFlight.set(signal.runId, (signalsInFlight.get(signal.runId) ?? 0) + 1);
+    try {
+      return await applySignal(instanceId, signal);
+    } finally {
+      const left = (signalsInFlight.get(signal.runId) ?? 1) - 1;
+      if (left > 0) signalsInFlight.set(signal.runId, left);
+      else signalsInFlight.delete(signal.runId);
+    }
+  }
+
+  async function applySignal(instanceId: string, signal: PipelineSignal): Promise<ActionResult> {
     return locks.withLock(instanceId, async () => {
       const inst = await readLive(instanceId, "signal");
       if (!inst) return { ok: false, code: 404 };
       if (!(await authenticateSignal(inst, signal))) return { ok: false, code: 403 };
-      if (inst.status !== "running") return { ok: true, code: 200 }; // paused/terminal → idempotent ignore
+      // A sibling paused at a gate leaves the instance `awaiting-approval`;
+      // this run's own phase is still running and its report still counts.
+      // Only a terminal or aborted instance ignores it.
+      if (inst.status !== "running" && inst.status !== "awaiting-approval") {
+        return { ok: true, code: 200 };
+      }
       const def = await defFor(inst);
       if (!def) return { ok: false, code: 404 };
       const live = liveStep(inst, signal.phaseId, signal.runId);
@@ -258,13 +280,14 @@ export function createSignals(core: EngineCore) {
         });
       }
       // Start the next phase detached: this handler runs on the child's signal
-      // POST, and that child may still hold its concurrency slot until its
-      // process exits after we respond. Awaiting startPhase here (which acquires
-      // a slot) would deadlock when all slots are held by children waiting on
-      // their own signal responses. The detached continuation RE-ACQUIRES the
-      // instance lock and re-verifies liveness before launching, so an abort/
-      // revise landing in the transition window can't be clobbered and won't be
-      // raced into spawning orphan children (it queues behind, then kills them).
+      // POST, and the hook that sent it is waiting for the answer. Planning a
+      // phase (worktrees, inputs) is not this request's business. A run past
+      // the concurrency cap then waits for its slot off the instance lock
+      // (launch.ts), so no launch ever holds the lock a signal needs. The
+      // detached continuation RE-ACQUIRES the instance lock and re-verifies
+      // liveness before launching, so an abort/revise landing in the
+      // transition window can't be clobbered and won't be raced into spawning
+      // orphan children (it queues behind, then kills them).
       queueReadyPhases(instanceId, def, instance, ready);
       if (instance.status === "failed") deps.onFailure?.(instance);
       deps.onChange?.();

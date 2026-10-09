@@ -11,19 +11,29 @@ export class PreflightError extends Error {
   }
 }
 
-/** Caps the number of concurrently spawned child processes. */
+/**
+ * Caps the number of concurrently spawned child processes. Strictly FIFO: a
+ * released slot passes straight to the longest waiter, so a newcomer can
+ * never take it in the gap before that waiter resumes.
+ */
 export class Semaphore {
   private active = 0;
   private queue: (() => void)[] = [];
   constructor(private readonly max: number) {}
   async acquire(): Promise<void> {
-    if (this.active >= this.max) await new Promise<void>((r) => this.queue.push(r));
+    if (this.tryAcquire()) return;
+    await new Promise<void>((r) => this.queue.push(r));
+  }
+  /** Takes a slot only when one is free and nobody is queued for it. */
+  tryAcquire(): boolean {
+    if (this.active >= this.max || this.queue.length > 0) return false;
     this.active++;
+    return true;
   }
   release(): void {
-    this.active--;
     const next = this.queue.shift();
     if (next) next();
+    else this.active--;
   }
 }
 

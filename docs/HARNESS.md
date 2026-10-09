@@ -107,6 +107,20 @@ code phase by phase:
   (and `run.startedAt`) are computed once the slot is held and the invocation
   is fully prepared — immediately before `deps.spawn` is called — so a step's
   timeout budget is never eaten by however long it waited for a slot.
+- **A run past the concurrency cap waits off the instance lock.** A wave is
+  planned and recorded under the instance lock; each run that fits under
+  `maxConcurrent` spawns there and then, and the rest are queued for a slot
+  _without_ the lock. The semaphore is strictly FIFO: a released slot passes
+  straight to the longest waiter, so two runs never share one. When a queued
+  run gets its slot it takes the lock again and spawns only if its instance is
+  still running (or paused at another phase's gate), its phase is running at
+  the same attempt, its step is still running and it has no run record yet;
+  otherwise the journal says `not launched: decided while waiting for a slot`.
+  A run Argus refuses at planning (an unresolvable knowledge context, a
+  missing change request, an unusable accepted intent) is failed then, and
+  never takes a slot. So `start`, `approve` and `revise` return once every run
+  that fits has spawned and the rest are queued, and a completion signal or a
+  reconcile tick is never held behind a launch waiting for a slot.
 - **Shutdown waits, briefly, for detached continuations.** Every
   `launchStep`/`queueVerification` continuation that runs off the request path
   is tracked in a set the engine can await; `Engine.drain()` resolves once
@@ -277,6 +291,24 @@ enough. `retryOn` accepts every class the contract's `RetryableClass` names
 A retried attempt is told why the previous one failed: `retryNote()` appends a
 bounded, class-specific note to the prompt for **every** retryable class, not
 only `"verification"`/`"signal"` — see §13.
+
+### A received signal comes first
+
+A completion signal is counted as in flight from the moment it reaches the
+server, before it waits for the instance lock. While it is, a reconcile pass
+leaves that run alone instead of healing it from its run record: the agent's
+own report decides the step, never a reading of the record that happened to
+get the lock first. Duplicate deliveries are counted, so the run stays
+protected until the last one has been applied.
+
+A signal is also accepted while a _sibling_ phase waits at its gate. The
+instance then reads `awaiting-approval` as a whole, but the signalling run's
+own phase is still `running` and its report counts. Only a terminal or aborted
+instance ignores a signal outright; a signal for a phase that is itself paused
+is ignored by the transition, as `phase-not-running`, and journalled. The
+accepted phase's checks still wait for the gate decision: check results are
+not applied to a paused instance, and recovery re-runs them once it is
+running again.
 
 ### Completion policy: the agent's report, not verification
 
@@ -2421,6 +2453,10 @@ and it is at-least-once. "Exactly once" is not claimed for effects in general.
   a second queued launch of the same attempt cannot start a second set of runs;
   a sibling phase is a different attempt and is never held back. A planned run
   whose process never started is still failed as `spawn`, never re-spawned.
+  That includes a run that was queued for a concurrency slot when Argus
+  stopped: the queue lives in memory, so after a restart every such run fails
+  as `spawn` and its phase is retried under the default retry policy. While
+  this process holds it in the queue, reconcile leaves it alone.
 - **A stop request that was never delivered.** Every stop goes through one
   `terminateRun`. `Run.termination` is a recorded _request_, not proof the
   process stopped, so liveness is asked (`isAlive`) and delivery is tracked per
@@ -2445,10 +2481,10 @@ and it is at-least-once. "Exactly once" is not claimed for effects in general.
     - an owed launch, including one completed by gate recovery (the approval
       path itself starts successors while other gates wait);
     - a pending knowledge commit.
-  - Results wait for the gate decision: agent outcomes (the signal path
-    acknowledges and drops signals on a paused instance), check results (not
-    applied to a paused instance, so interrupted checks are not re-run until
-    then) and candidate selection.
+  - Results wait for the gate decision: healing a run that ended without
+    signalling, check results (not applied to a paused instance, so
+    interrupted checks are not re-run until then) and candidate selection. A
+    run that does signal is accepted by the signal path meanwhile (§2).
   - Every recovered effect acts only on phases that are themselves `running`.
     Recovery never touches, approves or resumes the paused phase.
 

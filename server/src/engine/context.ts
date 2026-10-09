@@ -44,6 +44,11 @@ export function createEngineContext(deps: EngineDeps) {
   const queuedLaunches = new Set<string>();
   /** Runs this process spawned and is still awaiting the exit of. */
   const live = new Set<string>();
+  /** Planned runs waiting, off the instance lock, for a concurrency slot. */
+  const awaitingSlot = new Set<string>();
+  /** Signals received but not yet applied, per run. A count, because a
+   *  duplicate delivery can overlap the first. */
+  const signalsInFlight = new Map<string, number>();
   /** Detached continuations in flight, so `drain` can wait for them. */
   const detached = new Set<Promise<unknown>>();
   function track<T>(p: Promise<T>): Promise<T> {
@@ -100,6 +105,8 @@ export function createEngineContext(deps: EngineDeps) {
     verifying,
     queuedLaunches,
     live,
+    awaitingSlot,
+    signalsInFlight,
     detached,
     track,
     drain,

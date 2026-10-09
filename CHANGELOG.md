@@ -475,6 +475,21 @@ unverifiable`, each rule exactly once. A **missing** rule refuses the whole
 
 ### Fixed
 
+- **Completed runs are no longer discarded when the concurrency cap is full.**
+  A launch waited for a slot while holding the instance lock, so a finished
+  run's Stop signal queued behind it, its hook gave up, and reconcile failed
+  the run from its record. A run past the cap now waits for its slot off the
+  lock and re-checks that it is still wanted before spawning. A signal the
+  server has received also wins over reconcile: the run is not healed while
+  its signal waits to be applied. The semaphore is strictly FIFO, so a
+  released slot can no longer be taken by a newcomer and shared by two runs.
+
+- **Sibling completions are no longer dropped while a gate waits.** With one
+  phase of a fan-out paused at a gate, the instance reads `awaiting-approval`
+  and every other phase's completion signal was dropped, then healed as a
+  failure. Those signals are now accepted; only a terminal or aborted instance
+  ignores them.
+
 - **A crash between a transition and its launch no longer leaves a phase
   running forever.** A phase attempt the saved instance says is `running` with
   no run planned (after a retry, revise, remediation or settle) is launched by
@@ -566,6 +581,12 @@ unverifiable`, each rule exactly once. A **missing** rule refuses the whole
   copy `~/.claude/argus/memory/` to `~/.claude-argus/memory/` to keep them.
 
 ### Changed
+
+- **`start`, `approve` and `revise` can return before every run has
+  spawned.** Runs past the concurrency cap are left queued for a slot. A
+  queued run that is decided while it waits (an abort, a revise, a failed
+  sibling) is not spawned, and after a restart it fails as `spawn` and is
+  retried under the default policy.
 
 - **The phase graph renders any pipeline shape.** A wide fan-out used to
   draw one row of fixed-width nodes wider than the card: it spilled over the
