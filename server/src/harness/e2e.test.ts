@@ -52,6 +52,7 @@ import type { Engine } from "../pipelineEngine.js";
 import type { PhaseFailurePayload, PhaseProgress } from "../sources/pipelineTypes.js";
 import type { Run } from "../sources/scheduleTypes.js";
 import { toClaudeRulePath } from "../runtimes/claude.js";
+import { knowledgeDeltaDir } from "../knowledge/staging.js";
 
 /** Commit everything in a harness working tree, so a run has a real head. */
 function commitAll(dir: string, message: string): void {
@@ -259,12 +260,19 @@ test(
       disallowed.split(",").includes(`Edit(/${toClaudeRulePath(h.cwd)}/**)`),
       `writes to the working directory denied: ${disallowed}`,
     );
-    assert.equal(argAfter(seen.argv, "--allowedTools"), "Read,Grep");
+    const investigateDir = artifactDirFor(inst.id, "investigate");
+    const deltaDir = knowledgeDeltaDir(runIdOf(phaseOf(inst, "investigate")));
+    assert.deepEqual(argAfter(seen.argv, "--allowedTools")?.split(","), [
+      "Read",
+      "Grep",
+      `Edit(/${toClaudeRulePath(deltaDir)}/**)`,
+      `Edit(/${toClaudeRulePath(investigateDir)}/**)`,
+    ]);
     assert.ok(argAfter(seen.argv, "--mcp-config"), "an MCP config should be materialized");
     assert.ok(seen.argv.includes("--strict-mcp-config"));
     assert.equal(argAfter(seen.argv, "--setting-sources"), "project");
     assert.ok(argAfter(seen.argv, "--settings"), "the invocation should register its own hook");
-    const investigateDir = artifactDirFor(inst.id, "investigate");
+
     assert.ok(
       seen.argv.some((a, i) => a === "--add-dir" && seen.argv[i + 1] === investigateDir),
       "the artifact directory stays reachable under read-only",
