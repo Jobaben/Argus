@@ -1,5 +1,12 @@
 # Argus — HTTP & WebSocket API
 
+[Documentation](README.md) · [Reference](reference/README.md) · [Agent reading guide](AGENT-GUIDE.md)
+
+Use the [feature guides](guides/README.md) for task walkthroughs and this page
+for exact payloads and error semantics. Before a request, distinguish the
+[network credential from an account session](reference/operations.md#authentication-and-browser-access)
+and the endpoint's own webhook/signal/peer credential where applicable.
+
 Base URL (dev): `http://localhost:7777`. The web client reaches these through the
 Vite proxy at `:5757` (same paths). All responses are JSON. All reads are
 best-effort: a missing/unreadable source yields an empty collection, not a 500.

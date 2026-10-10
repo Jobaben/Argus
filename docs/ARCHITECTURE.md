@@ -1,5 +1,12 @@
 # Argus — Architecture
 
+[Documentation](README.md) · [Reference](reference/README.md) · [Feature guides](guides/README.md)
+
+For setup and first use, start with [Getting started](getting-started/README.md).
+This is the implementation reference. Exact environment defaults and operational
+authentication are collected in [Configuration](reference/configuration.md) and
+[Operations](reference/operations.md).
+
 > The all-seeing monitor for coding agents. A dashboard **and control plane**
 > over `~/.claude` (and `~/.codex`, `~/.qwen`, `~/.local/share/opencode`): it
 > reads the state the agent CLIs own and manages its own scheduler/pipeline
@@ -43,21 +50,26 @@ surface is a privileged single-user control plane: loopback-bound by default,
 with a Host allowlist (anti DNS-rebind), an Origin check on mutations (anti
 CSRF), and an optional bearer token — all applied to the WebSocket upgrade too.
 
-One route is exempt from the bearer token and authenticates itself instead:
-`/api/federation/summary`, which requires the caller to name a pairing this
+Paired federation authenticates itself instead of using the shared bearer token:
+`/api/federation/summary` requires the caller to name a pairing this
 machine already holds and seals its answer with that pairing's secret. See §5,
 "Federation without a server", for why that is stronger than the check it
 replaces rather than a hole in it.
 
 On top of those transport-level layers, **editing or running pipelines requires
-an admin login** (`server/src/auth.ts`). The admin account is created on first
-run from the Pipelines tab; the password is persisted only as a salted scrypt
-hash in `~/.claude/argus/auth.json` (mode 0600), and sessions are random
-256-bit tokens in an `HttpOnly; SameSite=Strict` cookie, kept server-side as
-SHA-256 digests in memory (12 h TTL, restart = signed out, brute-force
-lockout on the login route). Reads stay open so the dashboard works without a
-login; the agent-facing signal endpoint keeps its own per-run token
-instead. See docs/API.md § Admin authentication.
+a root or approved-member account session** (`server/src/auth.ts`). The first
+account is bootstrapped locally from the Pipelines tab. Current accounts and
+salted scrypt password hashes live in `~/.claude/argus/users.json`; legacy
+`auth.json` can be migrated by `userStore.ts`. Sessions use random 256-bit tokens
+in an `HttpOnly; SameSite=Strict` cookie and server-side SHA-256 digests in memory
+(12 h TTL, restart = signed out, brute-force lockout on login).
+
+With no shared token configured, ordinary reads can be used without login. When
+`ARGUS_TOKEN` is set, protected reads and WebSocket upgrades require the network
+credential or an authenticated account session; pipeline permissions still
+require an approved account. Bootstrap, webhook, signal and paired-federation
+routes have their own documented authentication rules. See [Operations](reference/operations.md#authentication-and-browser-access)
+and [API security](API.md#security).
 
 ```
 ┌────────────────────┐   read-only (chokidar watch)  ┌─────────────────────┐
@@ -892,7 +904,13 @@ in CI.
 
 ## 9. Deployment shape
 
-Single user, localhost. `npm run build` produces a static `web/dist` the server
-can serve directly (future: mount static + collapse to one port). OS-agnostic by
-construction — only `os.homedir()` and Node are assumed. A future Tauri shell
-could wrap it for tray + native "agent finished" notifications.
+The production default is a local control plane. `npm run build` produces
+`web/dist` and the compiled server; `npm start` or the checkout launcher serves
+the UI and API together on one port. Development uses Vite on 5757 with the API
+on 7777. Source and tests support Windows and Linux with documented exceptions
+for selected process harness tests; do not infer portability from path handling
+alone. See [portable tests](HARNESS.md#17-process-trees-and-portable-tests).
+
+Network exposure requires explicit authenticated configuration. A future Tauri
+shell remains roadmap context, distinct from the browser's existing native
+notification integration. See [Operations](reference/operations.md).

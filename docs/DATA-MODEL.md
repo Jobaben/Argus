@@ -1,5 +1,12 @@
 # Argus — Data Model Reference
 
+[Documentation](README.md) · [Reference](reference/README.md) · [Storage ownership](reference/configuration.md#data-sources-and-ownership)
+
+This page documents formats and source identities. For installation use
+[Getting started](getting-started/README.md); for current configurable homes
+and backup boundaries use [Configuration](reference/configuration.md) and
+[Operations](reference/operations.md#backup-and-restore).
+
 Empirically observed shapes of the files Argus reads — `~/.claude` for Claude
 Code, `~/.codex` for Codex, `~/.qwen` for Qwen Code and the XDG data dir for
 OpenCode. Verified against a live home directory on 2026-06-16, and against
@@ -356,8 +363,7 @@ session-scoped via `CronList` only — see ARCHITECTURE §6.
 
 ## Runtimes available in the build sandbox
 
-Linux sandbox ships **only Python 3.12** by default. Node must be installed
-manually — and `apt` yields Node 18 (too old for Vite 8) while NodeSource's
-script trips on a debconf kernel prompt. Install the **official tarball** to
-`/usr/local` instead. (The user's real machine is Windows; this Linux box is the
-build/dev environment, and its `~/.claude` is a valid live dataset.)
+Earlier development notes described a particular Linux sandbox. That environment
+inventory is not an installation prerequisite or a statement about the current
+host. Argus requires Node.js 22 or newer; inspect the target environment with
+`node --version` and follow [Getting started](getting-started/README.md).

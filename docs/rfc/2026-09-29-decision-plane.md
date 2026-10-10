@@ -1,14 +1,6 @@
 # RFC: A provider-neutral Decision Plane for Argus
 
-_Status: **amended 2026-09-29; Phase 0 implemented; Phase 1 (contracts and
-journal) implemented (§O); the Phase 2 H2 shadow-experiment slice
-implemented, off by default (§P); H1 and later phases not started.** The
-original text was an architecture investigation. §M records what Phase 0
-changed in the code, §N lists the decisions and corrections the amendment
-applies, §O is the Phase 1 design note and what it built, and §P is the H2
-slice's design note and what it built. Nothing beyond the H2 slice (H1,
-gate-review projections, badges, policies, enforcement, Jev) is implemented
-or authorised by this document._
+_Reading status updated 2026-10-10: **Phase 0 and Phase 1 contracts/journal are documented as implemented (§M, §O). Phase 2 includes H2 (§P) and H1 (§Q) shadow slices, both off by default.** The original investigation and earlier phase notes retain their historical scope. Later amendments describe later implementation; policies, enforcing consumers and Jev integration are not released by this RFC. See the [development status guide](../development/README.md) and [latest offline Decision Ledger report](../argus/decision-ledger-development/report.md) for subsequent work and production prerequisites._
 
 _Scope: every place Argus decides something; the hypothesis that an explicit
 **inferred** layer belongs between Argus's evidence and its policy; how such a
@@ -1077,7 +1069,7 @@ Resolved for Phase 1 (§O):
 
 ## M. Phase 0 as implemented
 
-Phase 0 is the only phase implemented. It adds no Decision Journal, no new
+At the Phase 0 checkpoint documented in this section, Phase 0 was the only implemented phase. Later implementation is recorded in §O–§Q. Phase 0 added no Decision Journal, no new
 provider, no shadow watcher, no evaluation UI and no external integration.
 It hardens what already existed.
 

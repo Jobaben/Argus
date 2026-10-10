@@ -1,5 +1,12 @@
 # Argus — Roadmap
 
+> **Historical roadmap:** this file records planning waves and milestones with
+> their original labels. It is not a current active-track count or feature
+> availability checklist; early "in progress" and "future" labels may predate
+> later delivery. Use [development status](development/README.md), the
+> [changelog](../CHANGELOG.md) and the actual source/running build for current
+> claims. The [feature map](guides/README.md#feature-map) is the current usage map.
+
 ## v0.1 — Live agents slice ✅ (2026-06-16)
 
 - Server: jobs + daemon sources, file-watch, `/api/agents`, `/api/agents/:short/timeline`, `/api/daemon`, `/ws`.

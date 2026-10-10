@@ -1,5 +1,13 @@
 # Argus as a harness
 
+[Documentation](README.md) · [Pipeline guide](guides/pipelines.md) · [Advanced recipe map](guides/pipelines.md#advanced-feature-recipes)
+
+This reference defines execution protocols, optional controls and worked
+pipeline examples. New users should complete [their first run](getting-started/first-run.md)
+and the [pipeline walkthrough](guides/pipelines.md#try-it) before authoring
+advanced API settings. Knowledge workflows are mapped separately in the
+[Knowledge guide](guides/knowledge.md#authoring-knowledge-workflows).
+
 Weave gave a pipeline a shape — a DAG of phases with dependencies, retries and
 routing. This is about what happens _inside_ one phase's run: what Argus
 launches, what it lets that process do, how it decides the process actually

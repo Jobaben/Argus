@@ -1,473 +1,97 @@
-# 👁️ Argus
+# Argus
 
-Schedule and monitor your coding agents — their jobs, history and results.
+Run and monitor coding agents from one local dashboard. Argus launches one-off tasks, repeats work on schedules, coordinates pipelines with human review, and keeps the history needed to explain their results. It supports Claude Code, Codex, OpenCode and Qwen Code, including local models through compatible runtimes.
 
-Argus reads Claude Code's local state under `~/.claude` (and Codex's under
-`~/.codex`) and surfaces it as a live web dashboard — what's running now, what
-finished, what failed, and the progress trail behind each one.
-
-It drives **four agent runtimes**: Claude Code (`claude -p`), OpenAI Codex
-(`codex exec`), OpenCode (`opencode run`) and Qwen Code (`qwen`). Pick one per
-schedule, per one-off launch, per pipeline — or per _phase or step_ inside a
-pipeline, so one pipeline can draft on one agent and review on another. The last
-two speak OpenAI-compatible endpoints, so a model served locally by
-`llama-server`, Ollama or vLLM is a first-class runtime rather than a
-workaround. See [Agent runtimes](#agent-runtimes).
-
-📖 **[User Guide](docs/USER-GUIDE.md)** — every feature, with screenshots:
-Command Center, Briefing, Chronicle, Scheduler (with one-off runs), Pipelines,
-Health (monitors and learned envelopes), Issues, Budget, and the reference pages
-behind the ⋯ menu.
-
-## Stack
-
-- **contracts** — every DTO that crosses the HTTP/WebSocket boundary, declared
-  once and imported by both sides, so a field added on the server cannot drift
-  from the client that reads it. Types only: nothing is emitted, and CI enforces
-  that.
-- **server** — Node 22 + TypeScript, [Hono](https://hono.dev) HTTP API,
-  `chokidar` file-watcher, `ws` WebSocket for live push. It treats the state the
-  agent CLIs own (jobs, transcripts, history) as strictly read-only, and
-  writes only its **own** state under `~/.claude/argus/` (schedules, pipelines,
-  run records) plus, on request, signal hooks under `~/.claude/hooks/` and
-  `~/.codex/hooks/`. Everything CLI-specific — argv, output parsing, activity
-  vocabulary, hook registration — lives behind one runtime seam in
-  `server/src/runtimes/`, so neither agent's quirks leak into the engine.
-- **web** — Vite 8 + React 19 + Tailwind CSS v4. One shared socket, one
-  live-resource primitive with conditional (`ETag`) reads, one clock, and a lazy
-  chunk per route under a CI-enforced size budget. Motion is a system rather than
-  a set of flourishes — paired entrances and exits, directional navigation, and
-  live lists that show change as change, all transform/opacity only and enforced
-  as such in CI. See **[the motion system](docs/MOTION-SYSTEM.md)**.
-
-Session discovery uses `os.homedir()` and encoded project-directory names,
-including transcripts originating on another OS. CI runs the typecheck and
-server and web suites on Linux and Windows; selected end-to-end harness suites
-remain POSIX-only. See [portable tests](docs/HARNESS.md#17-process-trees-and-portable-tests).
-
-## Agent runtimes
-
-| Argus needs              | Claude Code                    | Codex                                 | OpenCode                        | Qwen Code                          |
-| ------------------------ | ------------------------------ | ------------------------------------- | ------------------------------- | ---------------------------------- |
-| headless run             | `claude -p`                    | `codex exec`                          | `opencode run`                  | `qwen`                             |
-| prompt kept off argv     | stdin                          | stdin, via the `-` prompt placeholder | stdin                           | stdin                              |
-| one parseable result     | `--output-format json`         | `--json` (a JSONL event stream)       | `--format json` (NDJSON events) | `-o json`                          |
-| live transcript to tail  | `--output-format stream-json`  | the same `--json` stream              | the same `--format json` stream | `-o stream-json`                   |
-| model override           | `--model`                      | `--model`                             | `--model <provider>/<model>`    | `--model`                          |
-| reasoning override       | CLI/model default              | `-c model_reasoning_effort=…`         | `--variant`                     | model's own                        |
-| unattended tool approval | CLI default                    | `--sandbox`                           | `--auto`                        | `--approval-mode yolo`             |
-| pipeline outcome signal  | `Stop` hook in `settings.json` | `[[hooks.stop]]` in `config.toml`     | _none — read off the run_       | `Stop` hook in `settings.json`     |
-| Argus-owned instructions | `--append-system-prompt`       | prepended to the prompt               | prepended to the prompt         | prepended to the prompt            |
-| transcripts on disk      | `projects/<proj>/<id>.jsonl`   | `sessions/YYYY/MM/DD/rollout-*.jsonl` | a private SQLite database       | `projects/<proj>/chats/<id>.jsonl` |
-| readable in Sessions     | yes                            | yes (translated)                      | no — see below                  | yes (translated)                   |
-
-Four differences survive the mapping, and Argus reports them rather than
-papering over them:
-
-- **Only Claude Code takes a session id from Argus.** The other three mint their
-  own, so Argus reads it back out of the stream (`thread.started`, `sessionID`,
-  `session_id`) and patches the run record — the transcript link appears once
-  the run has started rather than before it.
-- **Codex reports tokens, not dollars.** Argus uses the input, cached-input and
-  output breakdown to estimate supported OpenAI models at public API list
-  prices. The UI marks per-run Codex dollars with `~`; custom models without a
-  known price keep `costUsd: null` rather than receiving a fabricated value.
-  Qwen Code reports no cost at all, and Argus leaves it null rather than
-  inventing one — the honest answer for a model you are serving yourself.
-- **OpenCode has no command hook.** Its extension surface is JavaScript plugins,
-  so there is nothing for Argus to register. A pipeline phase on OpenCode
-  instead completes from the `ARGUS_OUTCOME` marker on the finished run record —
-  the same protocol the hook reads, taken from the run's final message — which
-  means the phase advances on the next reconcile tick (`ARGUS_SCHED_TICK_MS`)
-  rather than the instant the process exits.
-- **OpenCode keeps transcripts in SQLite.** Its sessions live in a private
-  schema rather than per-session JSONL, so the Sessions view has nothing to read
-  back and says so. Live activity during the run is unaffected — that comes off
-  the event stream. (Qwen Code writes ordinary per-session JSONL, one directory
-  deeper than Claude Code and in Gemini CLI's dialect; Argus translates it.)
-
-Everything else is at parity: live activity in the Command Center, the Flight
-Recorder, gated phases, retries, the Chronicle, monitors and issues. The
-Sessions transcript view covers three of the four — Codex rollouts and Qwen
-Code's Gemini-dialect chats are both translated into Claude Code's line shape on
-read, so one list, one detail view, one search and one exporter serve them all.
-
-**Local models.** OpenCode and Qwen Code are the two runtimes that talk to an
-OpenAI-compatible endpoint, which is what makes a GPU in the next room usable
-from a schedule:
-
-```bash
-# llama-server -m qwen3-27b-q5.gguf --port 8080   ← already running
-export OPENAI_BASE_URL=http://127.0.0.1:8080/v1  # Qwen Code reads these three
-export OPENAI_API_KEY=sk-local
-export OPENAI_MODEL=qwen3-27b
-argus --agent qwen --open
-```
-
-Qwen Code needs no further setup — `OPENAI_MODEL` leads its model picker. For
-OpenCode, declare the endpoint as a provider in `~/.config/opencode/opencode.json`
-and address the model as `<provider>/<model>`:
-
-```json
-{
-  "provider": {
-    "llama": {
-      "npm": "@ai-sdk/openai-compatible",
-      "options": { "baseURL": "http://127.0.0.1:8080/v1", "apiKey": "sk-local" },
-      "models": { "qwen3-27b": { "name": "Qwen3 27B Q5" } }
-    }
-  }
-}
-```
-
-then set `ARGUS_OPENCODE_MODELS=llama/qwen3-27b` to put it in the picker.
-
-**Choosing a runtime.** Narrowest wins — step, then phase, then pipeline (or the
-schedule / launch form), then `ARGUS_AGENT`, then Claude Code. Nothing is
-rewritten on upgrade: a schedule or pipeline that names no runtime keeps running
-on Claude Code exactly as before, and every run records which CLI produced it.
-
-**Setup.** The Setup panel installs each runtime's signal hook and reports a
-missing CLI — but only for runtimes something on the machine actually uses. A
-Codex-only install is never held to "Claude CLI on PATH", and the same goes for
-each of the others. For Codex, Argus **appends** a `[[hooks.stop]]` block to
-`~/.codex/config.toml` and never rewrites the file; if `[hooks]` already declares
-a scalar `stop` key (which would make the block invalid TOML) it reports that
-instead of touching anything. Qwen Code's hooks are Claude Code's — same
-`settings.json` schema, same payload — so the same `argus-signal.mjs` is
-registered under `~/.qwen`, leaving every other key in that file alone.
-
-### Security model
-
-Argus can spawn agents with your credentials, so the HTTP surface is a
-privileged single-user control plane:
-
-- Binds to **loopback (`127.0.0.1`) only** by default — never the LAN.
-- **Host-header allowlist** blocks DNS-rebinding; **Origin checks** on all
-  mutating requests block drive-by CSRF; both apply to the WebSocket upgrade.
-- Set **`ARGUS_TOKEN`** to require a bearer token. This is **enforced**, not
-  advised: with `ARGUS_HOST` pointed at a non-loopback interface and no token,
-  the server refuses to start rather than opening an unauthenticated port that
-  can execute agents with your credentials.
-- **Webhook-triggered schedules and pipelines** (`trigger.kind: "webhook"`)
-  are fired by `POST /api/hooks/{pipelines,schedules}/:id`, authenticated by
-  that definition's own `hookToken` — not by `ARGUS_TOKEN`, which never
-  substitutes for it. These two routes skip the Origin/CSRF check (a webhook
-  sender is a server, not a browser) but **not** the Host allowlist. Reaching
-  one from another machine needs the same non-default setup as any other
-  remote access: a routable `ARGUS_HOST`, `ARGUS_TOKEN` set (still required
-  for the bind itself, and still gating every other route), and the sender's
-  host in `ARGUS_ALLOWED_HOSTS` if it isn't the bind address. Rotate a hook's
-  token (`POST /api/{pipelines,schedules}/:id/hook-token/rotate`) if it ever
-  leaks; the old one stops working immediately.
-
-## The harness
-
-Inside one phase's run, Argus decides what the agent may do, checks its work
-deterministically, and writes down enough to explain the run afterwards. The
-completion rules and optional capabilities are documented in
-**[docs/HARNESS.md](docs/HARNESS.md)**:
-
-- **Capability profiles** and an **environment policy** mapped onto each CLI's
-  own flags, with unenforceable keys reported rather than assumed.
-- **Strict completion by default**: one unambiguous `ARGUS_OUTCOME: succeeded`
-  marker is required. Each new run gets a signal token scoped to that run;
-  only its digest is stored. A marker is the agent's report, not independent
-  verification.
-- **Verification checks** (`command`, `file`, `artifact`, `changed-files`,
-  `trajectory`) can decide phase success. Trajectory checks apply deterministic
-  signal-count limits; incomplete optional input is shown as `not-evaluated`,
-  never as passed.
-- **Trajectory rubrics** can judge how the agent worked separately from its
-  output. Their `holdOn` rules withhold automated approval; they do not replace
-  verification checks or authorize Knowledge Ledger commits.
-- **Workspace isolation**: a git worktree per instance or per attempt, so
-  parallel and repeated work never shares a working tree. No container, no
-  new dependency; the branch is the deliverable.
-- **Candidates**: N drafts of a step at once, each in its own worktree, on the
-  same or different runtimes and models, with the first (or cheapest) one that
-  passes the checks selected and the rest killed.
-- **Retries that carry the evidence back** — failed checks with their output,
-  exit codes with the error tail, stalls — and a **stall timeout** beside the
-  wall-clock one.
-- **Bounded context**: every `{{…}}` placeholder is capped with the full value
-  written to disk, and an opt-in **pipeline memory** file survives across
-  instances.
-- **Webhook** and **after-pipeline** triggers, and a **reliability** view per
-  pipeline: first-attempt pass rate, lucky passes, failure classes over time.
-
-Instance transitions also leave a checksummed diagnostic log. The saved
-instance remains the recovery authority; the log is not replayed to execute
-effects or grant permission.
-
-The research behind the harness traces to externally graded results —
-leaderboard entries, peer-reviewed ablations and independent evaluations — in
-**[docs/HARNESS-RESEARCH.md](docs/HARNESS-RESEARCH.md)**, which also records
-what the evidence argued _against_ building.
-
-## The Knowledge Ledger
-
-Execution provenance says which run produced an output. The Knowledge Ledger
-says _why it is believed_: an append-only graph of claims (facts, assumptions,
-business rules, constraints, conclusions, decisions), the evidence that grounds
-them and the justifications that derive one from others. A claim changes by
-revision — the old revision stays addressable and nothing that referenced it is
-retargeted — and support (`supported | unsupported | contested`) is derived by
-one deterministic function, never stored. It also records which run
-**consumed** which exact revision and which artifacts that run produced, so
-when a business rule is superseded Argus can compute — deterministically, with
-an explanation path — which conclusions lost support, which runs built on
-them, and which files now need semantic reevaluation, without ever rewriting a
-run's own status.
-
-A second, orthogonal dimension answers whether the _code_ does what the rules
-say. A verification phase is handed exact canonical rules, decides `holds`,
-`violated` or `unverifiable` for each, and Argus records the answer against
-that exact rule revision **and** that exact commit — so "held at `abc123`"
-never gets reported as "holds now", and a new rule revision starts
-`unverified` rather than inheriting anything. The two are kept rigorously
-apart: a rule whose implementation is in breach stays exactly as supported as
-it was, because a bug is not a doubt about the domain.
-
-A third dimension starts from the other end: someone wants the business to work
-differently. A change-intent phase is given the requested change verbatim, the
-rules it affects and what the implementation currently does about them, and
-answers with a reviewable **change proposal** — which exact rule revisions it
-would create, which existing ones it deliberately preserves, the decisions that
-follow, the observable acceptance criteria that would demonstrate success, and
-anything the request leaves genuinely unresolved (rather than a value the model
-chose). Nothing becomes canonical until a person approves the gate, and the
-accepted proposal is kept forever, so "what requested change caused this rule
-revision, and how was it meant to be judged?" stays answerable. A request is
-not a rule, and a rule is not its implementation: the code already disagreeing
-with a rule is reported as a defect, never treated as what the business wants.
-
-The fourth dimension closes the loop. An accepted change proposal becomes a
-**change realization**: Argus derives, from provenance it already holds, where
-the change lives in the repository; runs an implementation agent against the
-canonical semantics, the accepted transition and that scope; and then answers
-one question deterministically — _was this change carried out?_ An agent
-reporting success is not an answer. A green test suite is not an answer. Every
-business rule holding is not an answer while an acceptance criterion is
-violated, and every criterion being satisfied is not an answer while a revised
-rule is violated. All four have to hold, at one repository state Argus can
-prove the verification actually examined — `gitHead` plus the content hash of
-any uncommitted work, so two dirty trees at one commit are two different
-implementations. Where the change is unmet, a _targeted_ remediation is told
-the exact failing rules and criteria and only the implementation and its
-verification re-run, under a bound the pipeline author wrote; where the domain
-moved on while the work ran, the realization is `stale` rather than complete.
-Both the failed attempt and the successful one are kept, so the history
-explains how the implementation converged.
-
-Inspect it all at `/api/knowledge`; the design and its worked example are in
-**[docs/KNOWLEDGE-LEDGER.md](docs/KNOWLEDGE-LEDGER.md)**.
-
-## The Decision Journal and shadow experiments
-
-The Decision Journal retains bounded review snapshots and structured model
-assessments of them. It records what a model judged from the evidence available
-at that moment. Reading retained assessments makes no model call; requesting a
-new assessment does. These assessments remain separate from the Knowledge
-Ledger and cannot substantiate its claims.
-
-The **Experiments** page reports two optional shadow measurements: H1 predicts
-operator actions at pending gates and reports settled ones; H2 compares
-run-outcome predictions with known outcomes. Both are off by default and share
-a call and spend allowance.
-Predictions do not change gates, approval decisions or knowledge support.
-See [USER-GUIDE §32–33](docs/USER-GUIDE.md#32-decision-experiments-h2-shadow).
-
-## Getting around
-
-`⌘K` (`Ctrl K`) opens the command palette: fuzzy search over every destination,
-pipeline, schedule, failing monitor, open issue, agent, project and recent
-transcript — plus the actions worth doing from a keyboard, like approving a
-pipeline waiting at a gate or firing a schedule now. Three characters and Enter
-usually gets there.
-
-`?` lists every keyboard shortcut. `g` then a letter jumps to a destination
-(`g c` Command Center, `g b` Briefing, `g h` Chronicle, `g s` Scheduler, `g p`
-Pipelines, `g m` Health, `g i` Issues, `g u` Budget, `g n` Sentinel, `g a`
-Agents); `/` goes to transcript search.
+**[Start with the documentation](docs/README.md)** — installation, a first-run tutorial, every feature, exact references and development status.
 
 ## Quick start
 
-```bash
-npm install
-npm run dev      # server on :7777, web on :5757 (proxied to the API)
+You need **Node.js 22 or newer**, npm, and one installed agent CLI with working provider authentication or a configured local model. From this checkout's root:
+
+```sh
+npm ci
+node bin/argus.mjs --agent codex --open
 ```
 
-Open http://localhost:5757.
+Replace `codex` with `claude`, `opencode` or `qwen` for your installed runtime. Run one server. The launcher builds missing artifacts and serves the dashboard and API at **http://127.0.0.1:7777**. Keep the terminal open. When updating an existing checkout, add `--rebuild` to avoid reusing an older production build.
 
-Override the watched directory or port:
+Startup attempts automatic setup fixes, including applicable hook registration in the runtime's user configuration. Agent-owned jobs/transcripts are read-only; Argus writes its own state and setup integration. See [installation and setup](docs/getting-started/README.md) for shell-specific configuration, health checks, accounts and shutdown.
 
-```bash
-ARGUS_CLAUDE_HOME=/path/to/.claude ARGUS_PORT=7777 npm run dev
-```
+Then follow **[Your first run](docs/getting-started/first-run.md)** to launch a small README-summary task and inspect its retained output.
 
 ### The `argus` command (single port)
 
-```bash
-npm i -g .        # or `npm link` — puts `argus` on your PATH
-argus --open      # build check, UI + API on :7777, opens your browser
-argus --agent codex --open  # Codex-only machine; Claude is not required
-```
-
-`argus` makes sure a production build exists (building one on first run),
-then serves the UI and API together on one port. Flags: `--open`,
-`--agent <claude|codex|opencode|qwen>`, `--port <n>`, `--rebuild`, `--version`,
-`--help`; every `ARGUS_*` variable
-below is honoured. To install on another machine:
-
-```bash
-git clone https://github.com/Jobaben/Argus.git && cd Argus
-npm ci && npm i -g .
-```
-
-Without a global install, the same thing is `npm run build && npm start`
-(or `node bin/argus.mjs`).
+No global installation is required: `node bin/argus.mjs` is the checkout launcher. An optional `npm link` provides the `argus` shorthand on PATH. Use `node bin/argus.mjs --help` for flags. [Operations](docs/reference/operations.md) explains production versus development startup and rebuilding.
 
 ### Watching without a browser: `argus tail`
 
-The dashboard is not the only frontend. When the machine running Argus is one
-you reach through a terminal — an SSH session, or a Claude Code session driven
-from your phone via Remote Control — `argus tail` prints the same picture as
-text, one line per fact, and returns on its own:
+Against an already running server:
 
-```bash
-argus tail                        # snapshot, then the live feed for 60s
-argus tail --for 0                # snapshot only: running / waiting / recent
-argus tail --for 5m --until-idle  # follow until nothing is running
-argus tail --json                 # one JSON object per line
+```sh
+node bin/argus.mjs tail --for 0
+node bin/argus.mjs tail --for 60s --json
 ```
 
-```
-10:42:03 ▣ Argus 0.4.0 at http://127.0.0.1:7777 — 2 running · 1 waiting for approval · $0.84 today
-10:42:03 ▶ Release train › build · running 4m 12s · ⚙ Bash: npm test
-10:41:20   ⚙ Edit: package.json
-10:41:58   ⚙ Bash: npm test
-10:42:03 ▶ Nightly triage · running 1m 03s
-10:42:03 ⏸ Docs sweep · waiting for approval at "review" for 12m 00s — three files changed
-10:38:11 · ✗ Deps audit failed in 5s: npm audit found 3 vulnerabilities
-10:42:03 ⏲ next: schedule "Hourly sync" in 17m 57s (11:00)
-10:42:03 👁 following live for 1m 00s
-10:42:15 ⚙ Release train › build · Bash: git diff --stat
-10:42:31 ■ ✓ Release train › build succeeded in 4m 40s · $0.31
-10:42:31 → Release train › review started
-10:43:03 ── followed for 1m 00s · 3 events · 2 still running · run `argus tail` again to keep following
-```
+The [terminal guide](docs/guides/terminal.md) also covers bounded live following and authenticated gate approval/revision. Tail does not start a server.
 
-It is a client of the running server — same port, same `ARGUS_TOKEN` — that
-reads the API the dashboard reads and follows the same WebSocket, turning the
-payload-free `*:changed` pings into concrete lines by diffing consecutive reads.
-Per-tool activity (⚙ 💬) streams for pipeline steps, which run with a live
-transcript; schedule and one-off runs show start and finish lines. When stdout
-is not a terminal the window defaults to 60 seconds so a tool call with a
-timeout always gets a complete answer; `--for` sets it, `0` means snapshot
-only. `argus tail --help` lists every option.
+## Getting around
 
-**For an agent on that machine**, `argus tail --install-skill` installs the
-bundled `argus-tail` skill for every agent CLI found on PATH — Claude Code
-(`~/.claude/skills/`) and Codex (`~/.codex/skills/`) read the same `SKILL.md`
-format — after which "what is Argus doing?", `/argus-tail` (Claude Code) or
-`$argus-tail` (Codex) has the agent run the command and relay it, including
-from a phone, where a remote session is often the only window onto the box.
-`--install-skill=codex`, `=claude` or `=all` picks explicitly. The skill also
-lives in this repo, at `.claude/skills/argus-tail/` with an identical copy at
-`.agents/skills/argus-tail/` (a test keeps the two in step), so a session of
-either CLI opened inside the checkout has it already.
+Use **Ctrl K / ⌘K** for the palette and **?** for shortcuts. Start with Briefing to catch up, Scheduler to launch work, and Command Center to inspect pipelines. The [feature map](docs/guides/README.md#feature-map) lists every destination and panel, including features under More.
 
-Or with Docker (mount your `~/.claude`, publish the port, set a token):
+| Task                                 | Guide                                                           |
+| ------------------------------------ | --------------------------------------------------------------- |
+| Run once or on a trigger             | [Scheduling](docs/guides/scheduling.md)                         |
+| Coordinate steps and review gates    | [Pipelines](docs/guides/pipelines.md)                           |
+| Inspect progress and history         | [Monitoring](docs/guides/monitoring.md)                         |
+| Diagnose failures and assess quality | [Health and quality](docs/guides/health-and-quality.md)         |
+| Manage cost and retained usage       | [Budget and history](docs/guides/budget-and-history.md)         |
+| Search conversations and resources   | [Sessions and inventory](docs/guides/sessions-and-inventory.md) |
+| Manage accounts or pair machines     | [Administration](docs/guides/administration.md)                 |
 
-```bash
-docker build -t argus .
-docker run --rm -p 7777:7777 \
-  -e ARGUS_TOKEN=$(openssl rand -hex 16) \
-  -v "$HOME/.claude:/data/.claude" \
-  argus
-```
+## Agent runtimes
+
+Select a runtime explicitly for your first run. More specific step/phase/pipeline or schedule choices override the process default. Adding a model to a picker does not prove your account can use it.
+
+The [runtime reference](docs/reference/runtimes.md) covers CLI behavior, model selection, transcript support, cost estimates and local OpenAI-compatible endpoints. OpenCode has no readable Sessions integration; Qwen dollar costs and unpriced custom models remain unknown.
 
 ### Configuration
 
-| Variable                     | Default                                | Purpose                                                                                                                                                                   |
-| ---------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ARGUS_CLAUDE_HOME`          | `~/.claude`                            | Claude Code directory Argus watches. Also holds Argus's own state.                                                                                                        |
-| `ARGUS_WORK_DIR`             | `~/.claude-argus`                      | Worktrees, artifacts, memory and per-run result/ledger channels: everything an agent writes. Must stay outside `~/.claude`, which Claude Code refuses headless writes to. |
-| `ARGUS_CODEX_HOME`           | `~/.codex`                             | Codex directory Argus watches (honours `CODEX_HOME` too).                                                                                                                 |
-| `ARGUS_OPENCODE_HOME`        | `~/.local/share/opencode`              | OpenCode data directory (honours `XDG_DATA_HOME` too).                                                                                                                    |
-| `ARGUS_QWEN_HOME`            | `~/.qwen`                              | Qwen Code directory Argus reads, and installs its Stop hook into.                                                                                                         |
-| `ARGUS_AGENT`                | `claude`                               | Default runtime (`claude` \| `codex` \| `opencode` \| `qwen`) for anything that doesn't name one.                                                                         |
-| `ARGUS_CLAUDE_BIN`           | `claude`                               | Claude Code executable.                                                                                                                                                   |
-| `ARGUS_CODEX_BIN`            | `codex`                                | Codex executable.                                                                                                                                                         |
-| `ARGUS_OPENCODE_BIN`         | `opencode`                             | OpenCode executable.                                                                                                                                                      |
-| `ARGUS_QWEN_BIN`             | `qwen`                                 | Qwen Code executable.                                                                                                                                                     |
-| `ARGUS_CODEX_SANDBOX`        | `workspace-write`                      | Codex sandbox mode (`read-only` \| `workspace-write` \| `danger-full-access`).                                                                                            |
-| `ARGUS_CLAUDE_ARGS`          | _(none)_                               | Extra argv appended to every `claude -p` (simple quoting honoured).                                                                                                       |
-| `ARGUS_CODEX_ARGS`           | _(none)_                               | Extra argv appended to every `codex exec`.                                                                                                                                |
-| `ARGUS_OPENCODE_ARGS`        | _(none)_                               | Extra argv appended to every `opencode run`.                                                                                                                              |
-| `ARGUS_QWEN_ARGS`            | _(none)_                               | Extra argv appended to every `qwen` run — `--sandbox` belongs here.                                                                                                       |
-| `ARGUS_CODEX_MODELS`         | _(none)_                               | Extra comma-separated model aliases to add to the built-in Codex model picker.                                                                                            |
-| `ARGUS_OPENCODE_MODELS`      | _(none)_                               | Comma-separated `<provider>/<model>` ids for the OpenCode picker (free text otherwise).                                                                                   |
-| `ARGUS_QWEN_MODELS`          | _(none)_                               | Extra comma-separated model aliases for the Qwen Code picker (`OPENAI_MODEL` leads it).                                                                                   |
-| `ARGUS_ANALYSIS_RUNTIME`     | `$ARGUS_AGENT`                         | Which CLI answers the bounded analysis passes (autopsy, verdict, diagnose, plan).                                                                                         |
-| `ARGUS_ANALYSIS_MODEL`       | `haiku` (Claude) / CLI default (Codex) | Model for those passes.                                                                                                                                                   |
-| `ARGUS_DECISIONS`            | _(off)_                                | `on` allows the Decision Plane's background work. Off by default; see USER-GUIDE §32.                                                                                     |
-| `ARGUS_DECISIONS_H2_COLLECT` | _(off)_                                | `on` (with `ARGUS_DECISIONS=on`) starts the bounded H2 shadow experiment. Rates, limits and model: USER-GUIDE §32.                                                        |
-| `ARGUS_DECISIONS_H1_COLLECT` | _(off)_                                | `on` (with `ARGUS_DECISIONS=on`) starts the bounded H1 gate operator-action shadow experiment, sharing H2's call allowance. USER-GUIDE §33.                               |
-| `ARGUS_PORT`                 | `7777`                                 | HTTP/WS port.                                                                                                                                                             |
-| `ARGUS_HOST`                 | `127.0.0.1`                            | Bind interface. A non-loopback bind **requires** `ARGUS_TOKEN` — Argus exits otherwise.                                                                                   |
-| `ARGUS_TOKEN`                | _(unset)_                              | Bearer token required on every request when set.                                                                                                                          |
-| `ARGUS_ALLOWED_HOSTS`        | _(none)_                               | Extra Host values to accept (behind a proxy).                                                                                                                             |
-| `ARGUS_ALLOWED_ORIGINS`      | _(none)_                               | Extra Origins to accept for cross-origin browser requests.                                                                                                                |
-| `ARGUS_MAX_CONCURRENT_RUNS`  | `4`                                    | Cap on concurrently spawned pipeline steps.                                                                                                                               |
-| `ARGUS_SCHED_TICK_MS`        | `30000`                                | Scheduler / reconcile tick interval.                                                                                                                                      |
-| `ARGUS_WEBHOOK_URL`          | _(unset)_                              | POST target for failure + monitor alerts (Slack, mail, …).                                                                                                                |
+[Configuration reference](docs/reference/configuration.md): all original runtime, home, model, security, scheduling and decision-experiment environment variables, their defaults and storage ownership.
+
+### Security model
+
+The production server binds to loopback by default. A non-loopback bind requires `ARGUS_TOKEN`; Host and Origin allowlists also apply. Pipeline mutations require an approved account independently of the network token. Read [operations and authentication](docs/reference/operations.md) before remote or Docker deployment.
+
+## The harness
+
+Pipelines support verification, capabilities, dependency graphs, artifacts, isolated worktrees, candidates, bounded context, memory, retries and optional trajectory checks. Agent completion, deterministic verification and human approval remain separate facts. Start with [pipeline recipes](docs/guides/pipelines.md#advanced-feature-recipes), then use the exact [harness protocols](docs/HARNESS.md).
+
+## The Knowledge Ledger
+
+The Knowledge Ledger records exact claim revisions, evidence, justifications and semantic provenance. Its workflows cover business-rule discovery, implementation conformance, change intent and targeted realization. The [Knowledge guide](docs/guides/knowledge.md) explains how to inspect and author these workflows; the [protocol reference](docs/KNOWLEDGE-LEDGER.md) defines their schemas and invariants.
+
+## The Decision Journal and shadow experiments
+
+The Decision Journal retains model assessments separately from knowledge and human decisions. Existing H1/H2 shadow experiments are opt-in: H1 predicts operator actions; H2 compares run predictions with defined references. Neither changes gate authority or knowledge support. See [Experiments](docs/guides/experiments.md).
+
+New Decision Ledger advisory/invocation foundations have [offline development evidence and remaining production prerequisites](docs/development/README.md). Historical study pipelines are archived; retained reports do not prove live activation or calibration.
+
+## Stack
+
+- **contracts:** shared types for the HTTP/WebSocket boundary.
+- **server:** Node.js and TypeScript, Hono HTTP API, filesystem readers/watchers, WebSocket updates and scheduler/pipeline engines.
+- **web:** React, Vite and Tailwind; shared live resources and a defined motion system.
+
+See [Architecture](docs/ARCHITECTURE.md), [web workspace](web/README.md) and the [contributor workflow](docs/development/README.md#working-on-argus).
 
 ## Data sources
 
-Under `~/.claude` unless noted:
-
-| Source            | Path                                            | Feeds                                 |
-| ----------------- | ----------------------------------------------- | ------------------------------------- |
-| Background agents | `jobs/<short>/state.json`, `timeline.jsonl`     | status, tempo, progress, results      |
-| Live workers      | `daemon/roster.json`, `daemon.status.json`      | which agents are alive right now      |
-| Transcripts       | `projects/<proj>/<session>.jsonl`               | Sessions list + full transcript view  |
-| Codex transcripts | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`  | the same list, view and search        |
-| Qwen transcripts  | `~/.qwen/projects/<proj>/chats/<session>.jsonl` | the same list, view and search        |
-| Prompt history    | `history.jsonl`                                 | `GET /api/activity` (API only)        |
-| Tasks             | `tasks/<id>/`                                   | `GET /api/tasks` (API only)           |
-| Argus schedules   | `argus/schedules.json`                          | Scheduler triggers + run history      |
-| Argus pipelines   | `argus/pipelines.json`, `argus/instances/`      | multi-phase pipeline defs + instances |
-
-**Argus's Scheduler** fires its own headless runs (`claude -p`, `codex exec`,
-`opencode run` or `qwen`)
-on interval / daily / weekly triggers (see the Scheduler tab — create, run-now,
-history).
-This is distinct from Claude Code's **native cron routines**, which are
-session-scoped (harness-managed, visible only via `CronList` inside a live
-Claude session) and are **not** stored on disk; Argus, a disk reader, cannot
-surface those — `GET /api/cron` says so and why.
+Argus reads CLI-owned history under the configured runtime homes and keeps its own state under `<claudeHome>/argus/`. Agent-writable worktrees/artifacts use a separate work directory. The [ownership table](docs/reference/configuration.md#data-sources-and-ownership) and [data model](docs/DATA-MODEL.md) provide exact paths and formats.
 
 ## API
 
-Full request/response detail lives in [docs/API.md](docs/API.md). The surface
-in brief:
-
-| Group             | Endpoints                                                                                                                                                                                                                                     |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Health / setup    | `GET /api/health`, `GET /api/runtimes`, `GET /api/setup`, `POST /api/setup/apply`                                                                                                                                                             |
-| Monitoring (read) | `GET /api/agents`, `/agents/:short/timeline`, `/daemon`, `/sessions`, `/sessions/:project/:id`, `/activity`, `/projects`, `/stats`, `/inventory`, `/tasks`, `/search`, `/cron`, `/chronicle`                                                  |
-| Scheduler         | `GET/POST /api/schedules`, `PUT/DELETE /api/schedules/:id`, `POST /api/schedules/:id/run`, `POST /api/runs/:id/cancel`, `GET /api/runs`, `/runs/:id`                                                                                          |
-| Pipelines         | `GET/POST /api/pipelines`, `PUT/PATCH/DELETE /api/pipelines/:id`, `POST /api/pipelines/:id/start`, `GET /api/pipelines/:id/instances`, `GET /api/overview`, `GET /api/instances/:id`, `POST /api/instances/:id/{signal,approve,revise,abort}` |
-| Live push         | `WS /ws` — `{type:"agents:changed"｜"schedules:changed"｜"pipelines:changed"｜"inventory:changed"}`; `GET /api/runs/:id/activity` for the retained tail of a running step                                                                     |
+[API reference](docs/API.md) documents HTTP requests, WebSocket frames, authentication and errors. [Agent reading guide](docs/AGENT-GUIDE.md) maps AI tasks to their narrowest authoritative sources.
 
 ## Status
 
-Monitoring, scheduling, human-gated pipelines, the Chronicle, the Knowledge
-Ledger, Decision Journal shadow experiments and optional trajectory checks
-ship. Completion and signal handling are hardened, and instance transitions
-have diagnostic integrity checks. The server is loopback-hardened,
-single-port packageable (`npm run build && npm start`) and can be hosted with
-Docker. Agent container containment is not implemented.
-See [docs/SCORECARD.md](docs/SCORECARD.md) for the quality rubric.
+Use the [development status guide](docs/development/README.md), [changelog](CHANGELOG.md) and the actual running build when assessing availability. The [document catalog](docs/development/catalog.md) includes product docs, research, designs and dated validation evidence.

@@ -1,5 +1,12 @@
 # The Knowledge Ledger — semantic provenance for Argus
 
+[Documentation](README.md) · [Knowledge guide](guides/knowledge.md) · [API](API.md#knowledge-ledger)
+
+This is the detailed semantic/protocol reference. To inspect claims or choose
+a workflow, read the [Knowledge guide](guides/knowledge.md) first. This ledger is
+separate from the [spend Ledger](guides/budget-and-history.md#ledger) and
+[Decision Journal shadow experiments](guides/experiments.md).
+
 _Phase 1: the semantic kernel and its persistence model. Phase 2: the
 execution provenance bridge and deterministic impact analysis. Phase 3: the
 KnowledgeDelta protocol — how agent executions propose knowledge and how Argus
