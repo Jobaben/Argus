@@ -10,8 +10,9 @@
  * a step's own exit code or timeout.
  *
  * Mirrors the bounded-child-process discipline in `../sources/analysis.ts`:
- * detached process group on POSIX so a timeout kills the whole tree, and a
- * capped rolling output buffer so a runaway command cannot exhaust memory.
+ * detached process group on POSIX so a timeout kills the whole tree (Windows:
+ * `taskkill /T /F`, see `../processTree.ts`), and a capped rolling output
+ * buffer so a runaway command cannot exhaust memory.
  * Nothing in this module ever throws for an expected failure condition —
  * every check produces a `CheckResult`, because the report itself is the
  * evidence a failed phase leaves behind.
@@ -22,7 +23,9 @@ import { createHash } from "node:crypto";
 import { readFile, stat, lstat } from "node:fs/promises";
 import path from "node:path";
 import { buildChildEnv } from "./childEnv.js";
+import { childTreeStopper } from "../processTree.js";
 import type { CheckResult, PhaseCheck, VerificationReport } from "../sources/pipelineTypes.js";
+import { evaluateTrajectoryCheck, type TrajectoryRunInput } from "../sources/trajectory.js";
 
 /** Combined stdout+stderr is capped in memory; only the tail is kept as evidence. */
 export const MAX_COMMAND_OUTPUT_BYTES = 16 * 1024;
@@ -272,6 +275,13 @@ export interface CheckContext {
   defaultCommandTimeoutMs?: number;
   /** Environment for command checks. Default: process.env with ARGUS_TOKEN and ARGUS_WEBHOOK_URL removed. */
   env?: Record<string, string>;
+  /**
+   * The relevant runs' trajectory signals, for `trajectory` checks: read by
+   * the engine from the Recorder (`sources/recorder.ts`) over each run's
+   * transcript. Absent = nothing to read, which a `trajectory` check treats
+   * as insufficient input, never as clean.
+   */
+  trajectoryRuns?: () => Promise<TrajectoryRunInput[]>;
 }
 
 /** Human label for a check: its own `label`, else a kind-appropriate default. */
@@ -291,12 +301,14 @@ export function checkLabel(check: PhaseCheck): string {
       return `file: ${check.path}`;
     case "changed-files":
       return "changed files";
+    case "trajectory":
+      return `trajectory: ${Object.keys(check.thresholds).join(", ")}`;
   }
 }
 
 function result(
   check: PhaseCheck,
-  status: "passed" | "failed",
+  status: CheckResult["status"],
   detail: string,
   durationMs: number,
   extra?: { exitCode?: number | null; output?: string },
@@ -352,10 +364,9 @@ async function runCommandCheck(
 
     let output = "";
     let timedOut = false;
-    let killedSignal: string | null = null;
+    let spawnError: string | null = null;
     let settled = false;
-    const graceMs = ctx.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
-    const timers: ReturnType<typeof setTimeout>[] = [];
+    let timer: ReturnType<typeof setTimeout> | null = null;
 
     function append(chunk: Buffer): void {
       output += chunk.toString("utf8");
@@ -366,61 +377,58 @@ async function runCommandCheck(
     child.stdout?.on("data", append);
     child.stderr?.on("data", append);
 
-    function killGroup(signal: NodeJS.Signals): void {
-      if (child.pid == null) return;
-      try {
-        if (process.platform === "win32") child.kill();
-        else process.kill(-child.pid, signal);
-      } catch {
-        try {
-          child.kill(signal);
-        } catch {
-          /* already gone */
-        }
-      }
-    }
-
-    // SIGTERM at the deadline; SIGKILL to the whole group if it is ignored;
-    // and a verdict regardless, so a command that traps signals or leaves a
-    // grandchild holding the pipe can never hang verification (and with it
-    // the phase, the instance, and drain()).
-    timers.push(
-      setTimeout(() => {
-        timedOut = true;
-        killGroup("SIGTERM");
-        timers.push(
-          setTimeout(() => {
-            killGroup("SIGKILL");
-            timers.push(
-              setTimeout(() => {
-                finish(
-                  result(
-                    check,
-                    "failed",
-                    `timed out after ${Math.round(timeoutMs / 1000)}s (process did not exit)`,
-                    Date.now() - started,
-                    { exitCode: null, output: tail(output) },
-                  ),
-                );
-              }, graceMs),
-            );
-          }, graceMs),
-        );
-      }, timeoutMs),
-    );
+    // SIGTERM to the tree at the deadline, SIGKILL if it is ignored (Windows:
+    // `taskkill /T /F` from the start), and a verdict regardless — with the
+    // pipes released — so a command that traps signals or leaves a descendant
+    // holding the pipe can never hang verification (and with it the phase,
+    // the instance, and drain()) or keep the server's event loop pinned.
+    const stopper = childTreeStopper(child, {
+      grouped: process.platform !== "win32",
+      graceMs: ctx.killGraceMs ?? DEFAULT_KILL_GRACE_MS,
+      onAbandon: () =>
+        finish(
+          result(
+            check,
+            "failed",
+            spawnError !== null
+              ? `${spawnError} (process did not exit)`
+              : `timed out after ${Math.round(timeoutMs / 1000)}s (process did not exit)`,
+            Date.now() - started,
+            { exitCode: null, output: tail(output) },
+          ),
+        ),
+    });
+    timer = setTimeout(() => {
+      timedOut = true;
+      stopper.stop();
+    }, timeoutMs);
 
     function finish(res: CheckResult): void {
       if (settled) return;
       settled = true;
-      for (const t of timers) clearTimeout(t);
+      if (timer) clearTimeout(timer);
+      stopper.dispose();
       resolve(res);
     }
 
     child.on("error", (err) => {
+      // An error from a process that is still running (rather than one that
+      // never started) must not orphan its tree: end it and settle on close.
+      if (child.pid != null && child.exitCode === null && child.signalCode === null) {
+        spawnError = err.message;
+        stopper.stop();
+        return;
+      }
       finish(result(check, "failed", err.message, Date.now() - started, { output: tail(output) }));
     });
     child.on("close", (code, signal) => {
       const durationMs = Date.now() - started;
+      if (spawnError !== null) {
+        finish(
+          result(check, "failed", spawnError, durationMs, { exitCode: code, output: tail(output) }),
+        );
+        return;
+      }
       if (timedOut) {
         finish(
           result(check, "failed", `timed out after ${Math.round(timeoutMs / 1000)}s`, durationMs, {
@@ -431,9 +439,8 @@ async function runCommandCheck(
         return;
       }
       if (signal) {
-        killedSignal = signal;
         finish(
-          result(check, "failed", `killed by ${killedSignal}`, durationMs, {
+          result(check, "failed", `killed by ${signal}`, durationMs, {
             exitCode: code,
             output: tail(output),
           }),
@@ -613,6 +620,12 @@ export async function runCheck(check: PhaseCheck, ctx: CheckContext): Promise<Ch
         return await runFileLikeCheck(check, ctx.cwd);
       case "changed-files":
         return await runChangedFilesCheck(check, ctx);
+      case "trajectory": {
+        const started = Date.now();
+        const runs = ctx.trajectoryRuns ? await ctx.trajectoryRuns() : [];
+        const out = evaluateTrajectoryCheck(check, runs);
+        return result(check, out.status, out.detail, Date.now() - started);
+      }
     }
   } catch (e) {
     return result(check, "failed", e instanceof Error ? e.message : String(e), 0);
@@ -621,8 +634,10 @@ export async function runCheck(check: PhaseCheck, ctx: CheckContext): Promise<Ch
 
 /**
  * Run every check sequentially — never stopping early, because the report
- * itself is the evidence a failed phase leaves behind. Status is "passed" iff
- * every check passed.
+ * itself is the evidence a failed phase leaves behind. Status is "failed" iff
+ * any check failed. A `not-evaluated` check (only an optional `trajectory`
+ * check lacking its input produces one) does not fail the report, and is
+ * never counted as passed.
  */
 export async function runChecks(
   checks: PhaseCheck[],
@@ -635,6 +650,6 @@ export async function runChecks(
     results.push(await runCheck(check, ctx));
   }
   const endedAt = now().toISOString();
-  const status = results.every((r) => r.status === "passed") ? "passed" : "failed";
+  const status = results.some((r) => r.status === "failed") ? "failed" : "passed";
   return { status, startedAt, endedAt, checks: results };
 }

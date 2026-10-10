@@ -4,6 +4,8 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildClaudeArgs, OUTCOME_CONTRACT, STEP_CONTRACT } from "./pipelineEngine.js";
+import { fakeKill } from "./testPlatform.js";
+import { KeyedMutex } from "./mutex.js";
 
 let home: string;
 beforeEach(() => {
@@ -20,6 +22,7 @@ import * as instancesMod from "./sources/instances.js";
 import * as runsMod from "./sources/runs.js";
 import * as totalsMod from "./sources/totals.js";
 import { readJournal } from "./sources/journal.js";
+import { testRunToken } from "./testSignalToken.js";
 
 async function load() {
   // Loosely typed, as the dynamic imports these replaced were: the tests read
@@ -69,8 +72,10 @@ const baseDeps = (over: Record<string, unknown>) => ({
   now: () => new Date(2026, 5, 30, 12, 0),
   newId: () => `id-${++counter}`,
   signalUrlBase: "http://localhost:7777",
+  newSignalToken: testRunToken,
   maxConcurrent: 4,
   tickMs: 30000,
+  kill: fakeKill().kill,
   ...over,
 });
 
@@ -124,7 +129,9 @@ test("start spawns phase 0's step with signal env injected", async () => {
   assert.equal(rec.calls.length, 1);
   assert.equal(rec.calls[0].env.ARGUS_INSTANCE_ID, inst!.id);
   assert.equal(rec.calls[0].env.ARGUS_PHASE_ID, "brainstorm");
-  assert.equal(rec.calls[0].env.ARGUS_SIGNAL_TOKEN, inst!.signalToken);
+  // The run's own token, never the instance's shared one.
+  assert.equal(rec.calls[0].env.ARGUS_SIGNAL_TOKEN, testRunToken(rec.calls[0].runId));
+  assert.notEqual(rec.calls[0].env.ARGUS_SIGNAL_TOKEN, inst!.signalToken);
   assert.ok(rec.calls[0].env.ARGUS_SIGNAL_URL.includes(inst!.id));
 });
 
@@ -184,7 +191,7 @@ test("a needs-input signal pauses the instance for approval", async () => {
     phaseId: "brainstorm",
     runId,
     type: "needs-input",
-    token: inst!.signalToken,
+    token: testRunToken(runId),
     payload: "Q?",
   });
   assert.equal(res.code, 202);
@@ -204,7 +211,7 @@ test("approve advances to the next phase, forwarding answers into the prompt", a
     phaseId: "brainstorm",
     runId: rec.calls[0].runId,
     type: "needs-input",
-    token: inst!.signalToken,
+    token: testRunToken(rec.calls[0].runId),
     payload: "Q?",
   });
   await e.approve(inst!.id, "USE TYPESCRIPT");
@@ -225,6 +232,7 @@ test("onSignal rejects a bad token with 403", async () => {
     runId: rec.calls[0].runId,
     type: "completed",
     token: "WRONG",
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   assert.equal(res.code, 403);
 });
@@ -244,7 +252,8 @@ test("a duplicate signal is idempotent (no double spawn)", async () => {
     phaseId: "only",
     runId: rec.calls[0].runId,
     type: "completed" as const,
-    token: inst!.signalToken,
+    token: testRunToken(rec.calls[0].runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   };
   await e.onSignal(inst!.id, sig);
   await e.onSignal(inst!.id, sig);
@@ -355,7 +364,8 @@ test("abort returns 409 on an already-terminal instance", async () => {
     phaseId: "only",
     runId: rec.calls[0].runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(rec.calls[0].runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   const res = await e.abort(inst!.id);
   assert.equal(res.code, 409);
@@ -615,7 +625,8 @@ test("a delayed or duplicate hook signal cannot advance after Codex fallback", a
     phaseId: "one",
     runId: firstRunId,
     type: "completed" as const,
-    token: inst!.signalToken,
+    token: testRunToken(firstRunId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   };
   await e.onSignal(inst!.id, delayed);
   await e.onSignal(inst!.id, delayed);
@@ -868,7 +879,7 @@ test("onSignal records the run outcome, preserved when the process later exits 0
     phaseId: "brainstorm",
     runId,
     type: "failed",
-    token: inst!.signalToken,
+    token: testRunToken(runId),
     payload: { reason: "blocked: no Jira" },
   });
   // …then the process exits 0 and the completion handler writes exit status.
@@ -952,7 +963,69 @@ test("adopt claims alive running steps and occupies concurrency slots", async ()
   await runs.patchRun(rec.calls[0].runId, { status: "cancelled" });
   await e2.reconcile();
   await started;
+  await e2.drain();
   assert.equal(rec2.calls.length, 1);
+});
+
+test("adopt claims a live run of an instance paused at a gate", async () => {
+  const { engine, pipelines, instances } = await load();
+  await seedPipeline(pipelines, {
+    phases: [
+      {
+        id: "gate",
+        name: "Gate",
+        cwd: home,
+        gated: true,
+        needs: [],
+        steps: [{ name: "g", prompt: "g" }],
+      },
+      {
+        id: "work",
+        name: "Work",
+        cwd: home,
+        gated: false,
+        needs: [],
+        steps: [{ name: "w", prompt: "w" }],
+      },
+    ],
+  });
+  const rec = recordingSpawn();
+  const aliveSpawn = (run: { id: string }, _log: string, env: Record<string, string>) => {
+    rec.spawn(run, _log, env);
+    return { pid: process.pid, done: deferred().promise };
+  };
+  const e1 = engine.createEngine(baseDeps({ spawn: aliveSpawn }));
+  const inst = await e1.start("p1", "manual");
+  const gateRun = rec.calls[0].runId;
+  await e1.onSignal(inst!.id, {
+    instanceId: inst!.id,
+    phaseId: "gate",
+    runId: gateRun,
+    type: "completed",
+    token: testRunToken(gateRun),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
+  });
+  assert.equal((await instances.readInstance(inst!.id)).status, "awaiting-approval");
+
+  // "Restart" with one slot: the paused instance's live `work` run must take
+  // it, and be tailed again.
+  const tracked: string[] = [];
+  const tailer = { track: (runId: string) => tracked.push(runId), untrack: () => {} };
+  const rec2 = recordingSpawn();
+  const e2 = engine.createEngine(baseDeps({ spawn: rec2.spawn, maxConcurrent: 1, tailer }));
+  await e2.adopt();
+  assert.deepEqual(tracked, [rec.calls[1].runId]);
+  await seedSecondPipeline(pipelines);
+  // start() queues a run past the cap rather than waiting for it.
+  await e2.start("p2", "manual");
+  assert.equal(rec2.calls.length, 0, "the adopted run holds the only slot");
+
+  // The adopted run ends, and reconcile hands its slot to the queued one.
+  const runs = await import("./sources/runs.js");
+  await runs.patchRun(rec.calls[1].runId, { status: "cancelled" });
+  await e2.reconcile();
+  await waitFor(() => rec2.calls.length === 1);
+  await e2.drain();
 });
 
 test("adopt ignores dead-pid runs and leaves the slot free", async () => {
@@ -1169,7 +1242,7 @@ test("a revise after the definition gained a phase relaunches the instance's pha
     phaseId: "context",
     runId: rec.calls[0].runId,
     type: "failed",
-    token: inst!.signalToken,
+    token: testRunToken(rec.calls[0].runId),
     payload: { reason: "nope" },
   });
 
@@ -1210,7 +1283,8 @@ test("a revise after the definition gained a phase relaunches the instance's pha
     phaseId: rec.calls[1].env.ARGUS_PHASE_ID,
     runId: rec.calls[1].runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(rec.calls[1].runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
   const done = await instances.readInstance(inst!.id);
@@ -1243,7 +1317,8 @@ async function failedPlan(engine: any, pipelines: any) {
     phaseId: "brainstorm",
     runId: rec.calls[0].runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(rec.calls[0].runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
   await waitFor(() => rec.calls.length === 2);
@@ -1252,7 +1327,7 @@ async function failedPlan(engine: any, pipelines: any) {
     phaseId: "plan",
     runId: rec.calls[1].runId,
     type: "failed",
-    token: inst!.signalToken,
+    token: testRunToken(rec.calls[1].runId),
   });
   return { e, rec, inst: inst! };
 }
@@ -1359,7 +1434,7 @@ test("a prompt edited while a gate is waiting does not reach the phase the appro
     phaseId: "brainstorm",
     runId: rec.calls[0].runId,
     type: "needs-input",
-    token: inst!.signalToken,
+    token: testRunToken(rec.calls[0].runId),
     payload: { idea: "x" },
   });
   assert.equal((await instances.readInstance(inst!.id)).status, "awaiting-approval");
@@ -1415,7 +1490,7 @@ test("deleting the definition under a running instance leaves the instance able 
     phaseId: "brainstorm",
     runId: rec.calls[0].runId,
     type: "needs-input",
-    token: inst!.signalToken,
+    token: testRunToken(rec.calls[0].runId),
   });
   assert.equal(gate.ok, true);
   assert.equal((await instances.readInstance(inst!.id)).status, "awaiting-approval");
@@ -1433,7 +1508,8 @@ test("deleting the definition under a running instance leaves the instance able 
     phaseId: "plan",
     runId: rec.calls[1].runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(rec.calls[1].runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   assert.equal(done.ok, true);
   await e.drain();
@@ -1452,7 +1528,8 @@ test("a signal for a phase the instance does not have is journalled as ignored",
     phaseId: "sync",
     runId: rec.calls[0].runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(rec.calls[0].runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   assert.equal(res.ok, true);
   const after = await instances.readInstance(inst!.id);
@@ -1469,23 +1546,23 @@ test("a signal for a phase the instance does not have is journalled as ignored",
   assert.match(entry.detail, /ignored/);
   assert.match(entry.detail, /no phase "sync"/);
 
-  // A runId the phase does not track is ignored the same way.
-  await e.onSignal(inst!.id, {
+  // A runId Argus never launched has no credential that could authenticate
+  // it: refused outright, and — unlike an authentic late signal — not even
+  // journalled, so a forger cannot write into the instance's record.
+  const forged = await e.onSignal(inst!.id, {
     instanceId: inst!.id,
     phaseId: "brainstorm",
     runId: "not-a-run",
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken("not-a-run"),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
-  let stale: any;
-  await waitFor(async () => {
-    stale = (await readJournal(inst!.id)).find(
-      (x) => x.kind === "phase.signalled" && x.runId === "not-a-run",
-    );
-    return stale !== undefined;
-  });
-  assert.match(stale.detail, /ignored/);
-  assert.match(stale.detail, /not a tracked step/);
+  assert.equal(forged.code, 403);
+  await e.drain();
+  assert.equal(
+    (await readJournal(inst!.id)).some((x: any) => x.runId === "not-a-run"),
+    false,
+  );
   assert.equal((await instances.readInstance(inst!.id)).phases[0].status, "running");
 });
 
@@ -1500,7 +1577,7 @@ test("approve and revise act on the named phase, and refuse one that is not paus
     phaseId: "brainstorm",
     runId: rec.calls[0].runId,
     type: "needs-input",
-    token: inst!.signalToken,
+    token: testRunToken(rec.calls[0].runId),
   });
   assert.equal((await instances.readInstance(inst!.id)).status, "awaiting-approval");
 
@@ -1532,7 +1609,7 @@ test("approve and revise act on the named phase, and refuse one that is not paus
     phaseId: "brainstorm",
     runId: rec.calls[1].runId,
     type: "needs-input",
-    token: inst!.signalToken,
+    token: testRunToken(rec.calls[1].runId),
   });
   const approved = await e.approve(inst!.id, undefined, { phaseId: "brainstorm" });
   assert.equal(approved.ok, true);
@@ -1541,4 +1618,260 @@ test("approve and revise act on the named phase, and refuse one that is not paus
   assert.equal(cur.phases[0].status, "succeeded");
   assert.equal(cur.phases[1].status, "running");
   assert.equal(rec.calls[2].env.ARGUS_PHASE_ID, "plan");
+});
+
+// Completion delivery (docs/HARNESS.md §1, §2): a run waiting for a
+// concurrency slot never holds the instance lock, a signal the server has
+// received wins over reconcile, and a sibling's gate does not drop a signal.
+
+const TIMED_OUT = Symbol("timed out");
+function within<T>(p: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
+  return Promise.race([
+    p,
+    new Promise<typeof TIMED_OUT>((r) => setTimeout(() => r(TIMED_OUT), ms)),
+  ]);
+}
+
+function completedSignal(instanceId: string, phaseId: string, runId: string) {
+  return {
+    instanceId,
+    phaseId,
+    runId,
+    type: "completed" as const,
+    token: testRunToken(runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
+  };
+}
+
+test("a completion signal is answered while a later wave waits for a slot", async () => {
+  const { engine, pipelines, instances } = await load();
+  const slice = (id: string) => ({
+    id,
+    name: id,
+    cwd: home,
+    gated: false,
+    needs: ["pre"],
+    steps: [{ name: id, prompt: id }],
+  });
+  await seedPipeline(pipelines, {
+    phases: [
+      { id: "pre", name: "Pre", cwd: home, gated: false, steps: [{ name: "pre", prompt: "p" }] },
+      slice("s1"),
+      slice("s2"),
+      slice("s3"),
+    ],
+  });
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn, maxConcurrent: 2 }));
+  const inst = await e.start("p1", "manual");
+  await e.onSignal(inst!.id, completedSignal(inst!.id, "pre", rec.calls[0].runId));
+  rec.dones[0].resolve({ code: 0 });
+  await waitFor(() => rec.calls.length >= 3);
+
+  // s1 and s2 hold both slots and s3 waits for one. s1's Stop hook must be
+  // answered now: its process holds its slot until the answer arrives.
+  const answered = await within(
+    e.onSignal(inst!.id, completedSignal(inst!.id, "s1", rec.calls[1].runId)),
+    1000,
+  );
+  rec.dones[1].resolve({ code: 0 });
+  await waitFor(() => rec.calls.length >= 4);
+  await e.onSignal(inst!.id, completedSignal(inst!.id, "s2", rec.calls[2].runId));
+  await e.onSignal(inst!.id, completedSignal(inst!.id, "s3", rec.calls[3].runId));
+  rec.dones[2].resolve({ code: 0 });
+  rec.dones[3].resolve({ code: 0 });
+  await e.drain();
+
+  assert.notEqual(answered, TIMED_OUT, "the signal waited behind the slot");
+  assert.equal((answered as { code: number }).code, 202);
+  assert.deepEqual(
+    rec.calls.map((c) => c.env.ARGUS_PHASE_ID),
+    ["pre", "s1", "s2", "s3"],
+  );
+  const after = await instances.readInstance(inst!.id);
+  assert.equal(after.status, "succeeded");
+  const journal = await readJournal(inst!.id);
+  assert.equal(
+    journal.some((x: any) => x.kind === "phase.signalled" && /ignored/.test(x.detail ?? "")),
+    false,
+  );
+});
+
+test("a run queued for a slot is not spawned once its instance is aborted, and its slot passes on", async () => {
+  const { engine, pipelines, instances } = await load();
+  await seedPipeline(pipelines, {
+    phases: [
+      {
+        id: "wide",
+        name: "Wide",
+        cwd: home,
+        gated: false,
+        steps: [
+          { name: "a", prompt: "p" },
+          { name: "b", prompt: "p" },
+        ],
+      },
+    ],
+  });
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn, maxConcurrent: 1 }));
+  const starting = e.start("p1", "manual");
+  // Until its spawn is journalled, `a` exiting would free the slot before
+  // `b` ever had to wait for it.
+  await waitFor(async () => {
+    const [inst] = await instances.readInstances({ pipelineId: "p1" });
+    return !!inst && (await readJournal(inst.id)).some((x: any) => x.kind === "step.spawned");
+  });
+  const [only] = await instances.readInstances({ pipelineId: "p1" });
+  const queuedRunId = only.phases[0].steps.find((s: any) => s.name === "b").runId;
+  const aborting = e.abort(only.id);
+  rec.dones[0].resolve({ code: 0 });
+  await starting;
+  await aborting;
+  await e.drain();
+
+  assert.equal(rec.calls.length, 1, "the aborted instance's queued run was spawned");
+  assert.equal(await runsMod.readRun(queuedRunId), null);
+
+  await seedSecondPipeline(pipelines);
+  await e.start("p2", "manual");
+  await e.drain();
+  assert.equal(rec.calls.length, 2, "the queued run kept its slot");
+  assert.equal(rec.calls[1].env.ARGUS_PHASE_ID, "o2");
+  rec.dones[1].resolve({ code: 0 });
+  await e.drain();
+});
+
+test("a run waiting for a slot does not block reconcile and is not stubbed as never started", async () => {
+  const { engine, pipelines, instances } = await load();
+  await seedPipeline(pipelines, {
+    phases: [
+      { id: "only", name: "Only", cwd: home, gated: false, steps: [{ name: "s", prompt: "p" }] },
+    ],
+  });
+  await seedSecondPipeline(pipelines);
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn, maxConcurrent: 1 }));
+  await e.start("p2", "manual");
+  const starting = e.start("p1", "manual");
+  await waitFor(async () => {
+    const [waiting] = await instances.readInstances({ pipelineId: "p1" });
+    return Boolean(waiting?.phases[0].steps[0]?.runId);
+  });
+  const [waiting] = await instances.readInstances({ pipelineId: "p1" });
+
+  const ticked = await within(e.reconcile(), 1000);
+  const mid = await instances.readInstance(waiting.id);
+  const queuedRunId = mid.phases[0].steps[0].runId;
+  const recordMid = await runsMod.readRun(queuedRunId);
+  rec.dones[0].resolve({ code: 0 });
+  await starting;
+  await e.drain();
+
+  assert.notEqual(ticked, TIMED_OUT, "reconcile waited behind the slot");
+  assert.equal(mid.phases[0].status, "running");
+  assert.equal(mid.phases[0].steps[0].status, "running");
+  assert.equal(recordMid, null, "the queued run was stubbed as spawn-failed");
+  assert.equal(rec.calls.length, 2);
+  assert.equal(rec.calls[1].runId, queuedRunId);
+  rec.dones[1].resolve({ code: 0 });
+  await e.drain();
+});
+
+test("a signal received while reconcile waits for the lock wins over healing", async (t) => {
+  const { engine, pipelines, instances } = await load();
+  const phase = (id: string) => ({
+    id,
+    name: id,
+    cwd: home,
+    gated: false,
+    needs: [],
+    steps: [{ name: id, prompt: id }],
+  });
+  await seedPipeline(pipelines, { phases: [phase("left"), phase("right")] });
+  // The right phase's spawn hangs, so its launch holds the instance lock.
+  const rec = recordingSpawn();
+  const hold = deferredValue<{ pid: number; done: Promise<{ code: number | null }> }>();
+  const spawn = (run: { id: string }, logPath: string, env: Record<string, string>) => {
+    if (env.ARGUS_PHASE_ID !== "right") return rec.spawn(run, logPath, env);
+    rec.calls.push({ runId: run.id, env });
+    return hold.promise;
+  };
+  const e = engine.createEngine(baseDeps({ spawn }));
+  const starting = e.start("p1", "manual");
+  await waitFor(() => rec.calls.length >= 2);
+  const [inst] = await instances.readInstances({ pipelineId: "p1" });
+  const leftRunId = rec.calls.find((c) => c.env.ARGUS_PHASE_ID === "left")!.runId;
+  // The left run finished: its process exited 0 while its Stop POST is queued.
+  const got = await runsMod.readRun(leftRunId);
+  await runsMod.writeRun({
+    ...got!.run,
+    status: "succeeded",
+    exitCode: 0,
+    resultSummary: "Done.\nARGUS_OUTCOME: succeeded",
+    endedAt: new Date().toISOString(),
+  });
+  // Reconcile's heal pass is its first lock on this instance here (no retry,
+  // gate operation or stall is due), so its queueing marks the order.
+  const queued = deferredValue<void>();
+  const withLock = KeyedMutex.prototype.withLock;
+  t.mock.method(KeyedMutex.prototype, "withLock", function <
+    T,
+  >(this: KeyedMutex, key: string, fn: () => Promise<T>) {
+    const result = withLock.call(this, key, fn);
+    if (key === inst.id) queued.resolve();
+    return result;
+  });
+  const reconciling = e.reconcile();
+  assert.notEqual(
+    await within(queued.promise, 2000),
+    TIMED_OUT,
+    "reconcile queued on the instance lock",
+  );
+  const signalling = e.onSignal(inst.id, completedSignal(inst.id, "left", leftRunId));
+  const rightDone = deferred();
+  hold.resolve({ pid: 4242, done: rightDone.promise });
+  await starting;
+  await reconciling;
+  const res = await signalling;
+  rightDone.resolve({ code: 0 });
+  await e.drain();
+
+  assert.equal(res.code, 202);
+  const after = await instances.readInstance(inst.id);
+  assert.equal(after.phases.find((p: any) => p.id === "left").status, "succeeded");
+  const journal = await readJournal(inst.id);
+  assert.equal(
+    journal.some((x: any) => x.kind === "phase.signalled" && /ignored/.test(x.detail ?? "")),
+    false,
+  );
+});
+
+test("a completion is accepted while a sibling phase waits at its gate", async () => {
+  const { engine, pipelines, instances } = await load();
+  const phase = (id: string, gated: boolean) => ({
+    id,
+    name: id,
+    cwd: home,
+    gated,
+    needs: [],
+    steps: [{ name: id, prompt: id }],
+  });
+  await seedPipeline(pipelines, { phases: [phase("gate", true), phase("work", false)] });
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const inst = await e.start("p1", "manual");
+  const runOf = (phaseId: string) => rec.calls.find((c) => c.env.ARGUS_PHASE_ID === phaseId)!.runId;
+  await e.onSignal(inst!.id, completedSignal(inst!.id, "gate", runOf("gate")));
+  assert.equal((await instances.readInstance(inst!.id)).status, "awaiting-approval");
+
+  const res = await e.onSignal(inst!.id, completedSignal(inst!.id, "work", runOf("work")));
+  assert.equal(res.code, 202);
+  const paused = await instances.readInstance(inst!.id);
+  assert.equal(paused.phases.find((p: any) => p.id === "work").status, "succeeded");
+  assert.equal(paused.status, "awaiting-approval");
+
+  await e.approve(inst!.id, undefined, { phaseId: "gate" });
+  await e.drain();
+  assert.equal((await instances.readInstance(inst!.id)).status, "succeeded");
 });

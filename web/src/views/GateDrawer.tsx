@@ -178,9 +178,18 @@ function Verification({ report }: { report: NonNullable<PhaseReview["verificatio
                   : "text-ink-faint"
             }
           >
-            {c.status === "passed" ? "✓" : c.status === "failed" ? "✗" : "…"}
+            {c.status === "passed"
+              ? "✓"
+              : c.status === "failed"
+                ? "✗"
+                : c.status === "not-evaluated"
+                  ? "–"
+                  : "…"}
           </span>
-          <span className="text-ink-dim">{c.label}</span>
+          <span className="text-ink-dim">
+            {c.label}
+            {c.status === "not-evaluated" && " (not evaluated)"}
+          </span>
           {c.detail && <span className="min-w-0 break-words text-ink-faint">— {c.detail}</span>}
         </li>
       ))}

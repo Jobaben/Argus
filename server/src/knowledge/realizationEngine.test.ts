@@ -27,6 +27,8 @@ import {
   realizationView,
   ruleConformance,
 } from "./kernel.js";
+import { fakeKill } from "../testPlatform.js";
+import { testRunToken } from "../testSignalToken.js";
 
 /**
  * Closed-loop change realization through the engine (Phase 8).
@@ -111,11 +113,14 @@ function engine(
     newId: () => `id-${++counter}`,
     spawn,
     signalUrlBase: "http://localhost:7779",
+    newSignalToken: testRunToken,
     // Generous: the spawn double's processes never "finish", so every run of
     // the suite holds its concurrency slot for the whole test.
     maxConcurrent: 64,
     tickMs: 30000,
     parentEnv: { PATH: process.env.PATH ?? "/bin", HOME: home },
+    // Pids are invented, so the real killRunProcess must never be reachable.
+    kill: fakeKill().kill,
     ...over,
   });
 }
@@ -256,7 +261,7 @@ async function complete(e: Engine, inst: PipelineInstance, phaseId: string, runI
     phaseId,
     runId,
     type: "completed",
-    token: inst.signalToken,
+    token: testRunToken(runId),
     payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
 }
@@ -273,7 +278,7 @@ async function failRun(
     phaseId,
     runId,
     type: "failed",
-    token: inst.signalToken,
+    token: testRunToken(runId),
     payload: { reason },
   });
 }
@@ -927,7 +932,10 @@ test("a ChangeContext modified during the run fails the completion deterministic
   // Argus publishes the file read-only, so tampering with it takes the same
   // step an outside hand would have to take. Writing straight over it only
   // works when the suite happens to run as root.
-  assert.equal(statSync(file).mode & 0o777, 0o444);
+  // Windows has no POSIX permission bits, so the mode is only checked elsewhere.
+  if (process.platform !== "win32") {
+    assert.equal(statSync(file).mode & 0o777, 0o444);
+  }
   chmodSync(file, 0o644);
   writeFileSync(file, `${readFileSync(file, "utf8")}\n`);
   await complete(e, inst, "implement", implCall.runId);

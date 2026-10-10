@@ -51,6 +51,7 @@ import type { Harness } from "./e2eSupport.js";
 import type { Engine } from "../pipelineEngine.js";
 import type { PhaseFailurePayload, PhaseProgress } from "../sources/pipelineTypes.js";
 import type { Run } from "../sources/scheduleTypes.js";
+import { toClaudeRulePath } from "../runtimes/claude.js";
 
 /** Commit everything in a harness working tree, so a run has a real head. */
 function commitAll(dir: string, message: string): void {
@@ -255,7 +256,7 @@ test(
     assert.ok(disallowed, "read-only should produce --disallowedTools");
     assert.ok(disallowed.split(",").includes("Bash"), `Bash denied: ${disallowed}`);
     assert.ok(
-      disallowed.split(",").includes(`Edit(//${h.cwd}/**)`),
+      disallowed.split(",").includes(`Edit(/${toClaudeRulePath(h.cwd)}/**)`),
       `writes to the working directory denied: ${disallowed}`,
     );
     assert.equal(argAfter(seen.argv, "--allowedTools"), "Read,Grep");
@@ -574,7 +575,9 @@ test(
         phaseId: "slow",
         runId,
         type: "completed",
-        token: inst.signalToken,
+        // The run's own token — what its hook would have sent. Authentic, and
+        // still too late: a terminal instance takes nothing.
+        token: h.signalTokenOf(runId),
         payload: { last_assistant_message: "ARGUS_OUTCOME: succeeded" },
       }),
     });
@@ -1180,7 +1183,9 @@ test(
     );
     const denied = argAfter(seen.argv, "--disallowedTools") ?? "";
     assert.ok(
-      denied.includes(`Edit(//${path.dirname(invocation.knowledgeContextFile!)}/**)`),
+      denied.includes(
+        `Edit(/${toClaudeRulePath(path.dirname(invocation.knowledgeContextFile!))}/**)`,
+      ),
       denied,
     );
     assert.match(

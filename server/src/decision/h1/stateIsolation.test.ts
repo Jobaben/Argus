@@ -19,11 +19,13 @@ import type { ArgusConfig } from "../../config.js";
 import { evaluateSupport } from "../../knowledge/kernel.js";
 import { createClaim, readLedger } from "../../knowledge/store.js";
 import { createEngine } from "../../pipelineEngine.js";
+import { testRunToken } from "../../testSignalToken.js";
 import { createAnalysisRunner, type AnalysisSpawn } from "../../sources/analysis.js";
 import { readInstance } from "../../sources/instances.js";
 import { writeRun } from "../../sources/runs.js";
 import { createUserStore } from "../../userStore.js";
-import { settleJournalOrder, transcript } from "../testSupport.js";
+import { fakeKill } from "../../testPlatform.js";
+import { settleJournalOrder, transcript, withoutHome } from "../testSupport.js";
 import { countAnalysisPasses, createShadowExperiments } from "../experiments.js";
 import { readH1ReportResponse } from "./entry.js";
 import { endedRun, MIN, PROBE_P } from "../h2/testSupport.js";
@@ -114,7 +116,7 @@ function tree(root: string): Map<string, string> {
       const f = path.join(d, e.name);
       if (decisionRoots.has(f)) continue;
       if (e.isDirectory()) walk(f);
-      else out.set(path.relative(root, f), readFileSync(f, "utf8").split(root).join("<HOME>"));
+      else out.set(path.relative(root, f), withoutHome(readFileSync(f, "utf8"), root));
     }
   };
   walk(root);
@@ -191,9 +193,14 @@ async function scenario(collect: boolean, work: string) {
   const engine = createEngine({
     now: () => new Date(2026, 7, 13, 12, 0),
     newId: () => `id-${++counter}`,
+    // Deterministic per-run signal tokens: the two runs being compared must
+    // write byte-identical instance records, digests included.
+    newSignalToken: testRunToken,
     signalUrlBase: "http://localhost:7777",
     maxConcurrent: 4,
     tickMs: 30000,
+    // Invented pids below: never let the real tree kill near them.
+    kill: fakeKill().kill,
     spawn: (run, _log, runEnv) => {
       spawned.push({ runId: run.id, phaseId: run.phaseId ?? "", env: runEnv });
       if (runEnv.ARGUS_RESULT_FILE)
@@ -237,7 +244,9 @@ async function scenario(collect: boolean, work: string) {
         phaseId: step.phaseId,
         runId: step.runId,
         type: "completed",
-        token,
+        // The run's own token, from the environment it was spawned with —
+        // exactly what its stop hook would send.
+        token: step.env.ARGUS_SIGNAL_TOKEN,
         payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
         ...readResultFile(step.env.ARGUS_RESULT_FILE),
       }),
@@ -329,10 +338,7 @@ test("instance, route, gate, ledger, run state and the gate review are identical
     assert.deepEqual(pending.report.models, []);
     assert.ok(!on.pendingBody.includes('"p":0.2'));
     // The gate drawer's review is the same bytes with collection on and off.
-    assert.equal(
-      on.review.split(on.home).join("<HOME>"),
-      off.review.split(off.home).join("<HOME>"),
-    );
+    assert.equal(withoutHome(on.review, on.home), withoutHome(off.review, off.home));
 
     assert.equal(on.instance.status, off.instance.status);
     assert.deepEqual(on.instance.routeDecisions, off.instance.routeDecisions);

@@ -358,6 +358,39 @@ test("the Decision Plane imports only readers from the ledger, the gate log and 
       "WorkingTreeSnapshot",
     ]),
     "knowledge/realization.js": new Set(["repositoryStateFrom"]),
+    // Byte-level primitives shared with the pipeline transition log: canonical
+    // JSON, the checksummed line envelope with its torn-write fence, and
+    // write-every-byte/fsync. Each writes only the path it is handed and
+    // knows nothing of the ledger, the gate log or pipeline state. They were
+    // the plane's own until the transition log needed the same guarantees,
+    // and moved out rather than being copied.
+    "durable/canonical.js": new Set([
+      "CanonicalJsonError",
+      "canonicalJson",
+      "sha256Hex",
+      "canonicalDigest",
+      "parseCanonical",
+      "SHA256_RE",
+    ]),
+    "durable/envelope.js": new Set([
+      "appendLines",
+      "encodeLine",
+      "parseLines",
+      "readText",
+      "TORN_FENCE",
+      "TORN_MARKER",
+      "tornPrefix",
+      "ParsedFile",
+      "ParsedLine",
+    ]),
+    "durable/io.js": new Set([
+      "defaultWrite",
+      "ShortWriteError",
+      "syncDir",
+      "writeAll",
+      "FaultHook",
+      "WriteFn",
+    ]),
   };
   const violations: string[] = [];
   for (const f of sourceFiles(decisionDir)) {

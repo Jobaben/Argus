@@ -2,6 +2,7 @@ import { spawn as nodeSpawn } from "node:child_process";
 import { defaultRuntimeId, isRuntimeId, runtimeFor } from "../runtimes/index.js";
 import { isSpendBlocked, recordRunSpend } from "./budget.js";
 import { log } from "../log.js";
+import { childTreeStopper } from "../processTree.js";
 import type { AgentRuntimeId } from "@argus/contracts";
 
 /**
@@ -13,8 +14,10 @@ import type { AgentRuntimeId } from "@argus/contracts";
  * act on. Rather than four spawn sites with four sets of near-correct guards,
  * everything goes through here and inherits the same ones:
  *
- * **Bounded time.** A hard timeout kills the process group, not just the pid —
- * an agent CLI spawns children, and killing only the parent leaves them running.
+ * **Bounded time.** A hard timeout kills the process tree, not just the pid —
+ * an agent CLI spawns children, and killing only the parent leaves them running
+ * and holding its stdout. A tree that ignores the request is escalated, and
+ * the pass settles even if a descendant never lets go (`../processTree.ts`).
  *
  * **Bounded output.** stdout is capped; past the cap the process is killed
  * rather than allowed to fill memory with a runaway response.
@@ -40,7 +43,8 @@ export const DEFAULT_TIMEOUT_MS = 90_000;
 export const DEFAULT_MAX_OUTPUT_BYTES = 256 * 1024;
 
 /** What a pass is for. Appears in logs; keeps the ledger explicable. */
-export type AnalysisKind = "autopsy" | "verdict" | "diagnose" | "plan" | "tune" | "decide";
+export type AnalysisKind =
+  "autopsy" | "verdict" | "trajectory" | "diagnose" | "plan" | "tune" | "decide";
 
 export interface AnalysisRequest {
   kind: AnalysisKind;
@@ -94,7 +98,7 @@ export interface AnalysisResult<T> {
 }
 
 export interface AnalysisSpawnHandle {
-  /** Kills the pass, including any children. */
+  /** Kills the pass, including any children. `done` must still settle afterwards. */
   kill: () => void;
   done: Promise<{ code: number | null; stdout: string; error: string | null }>;
 }
@@ -145,22 +149,35 @@ export function analysisEnabled(): boolean {
   return (process.env.ARGUS_ANALYSIS ?? "").trim().toLowerCase() !== "off";
 }
 
+/** `done`'s error when stdout passed `maxOutputBytes` and the pass was killed. */
+export const OUTPUT_CAP_ERROR = "output cap exceeded";
+/** Appended when the killed tree still held its pipes after the whole ladder:
+ *  released, but not confirmed to have exited. */
+export const NOT_EXITED_ERROR = "the process did not exit after it was killed";
+
+/** What {@link spawnAnalysisProcess} runs: a runtime's analysis plan, minus the parts it does not use. */
+export interface AnalysisProcessPlan {
+  bin: string;
+  args: string[];
+  stdin: string;
+  env: Record<string, string>;
+}
+
 /**
- * The real spawn. Mirrors `defaultSpawn` in the scheduler — same runtime seam,
- * same stdin discipline, same detached process group so the whole tree can be
- * signalled — but captures stdout in memory under a cap instead of streaming it
- * to a log file, because an analysis pass's output *is* the result.
+ * Spawn one bounded analysis process: stdin written and closed, stdout
+ * captured under `maxOutputBytes`, stderr drained. `kill()` ends the whole
+ * tree (see `../processTree.ts`) and `done` always settles after it — on
+ * `close` once the tree has let go of the pipes, or, if a descendant out of
+ * reach still holds them after the escalation ladder, with the pipes released
+ * and an error saying the process did not exit. Normal completion still waits
+ * for `close`, so every byte the process wrote is read.
  */
-export const defaultAnalysisSpawn: AnalysisSpawn = ({
-  prompt,
-  cwd,
-  model,
-  runtime,
-  maxOutputBytes,
-}) => {
-  const plan = runtimeFor(runtime).analysisPlan({ prompt, model });
+export function spawnAnalysisProcess(
+  plan: AnalysisProcessPlan,
+  opts: { cwd: string; maxOutputBytes: number; killGraceMs?: number },
+): AnalysisSpawnHandle {
   const child = nodeSpawn(plan.bin, plan.args, {
-    cwd,
+    cwd: opts.cwd,
     env: { ...process.env, ...plan.env },
     shell: process.platform === "win32",
     detached: process.platform !== "win32",
@@ -178,7 +195,7 @@ export const defaultAnalysisSpawn: AnalysisSpawn = ({
   child.stdout?.on("data", (d: Buffer) => {
     if (overflowed) return;
     stdout += d.toString("utf8");
-    if (stdout.length > maxOutputBytes) {
+    if (stdout.length > opts.maxOutputBytes) {
       overflowed = true;
       kill();
     }
@@ -187,41 +204,76 @@ export const defaultAnalysisSpawn: AnalysisSpawn = ({
   // mixing it into stdout would defeat envelope extraction.
   child.stderr?.resume();
 
+  let settle: (res: {
+    code: number | null;
+    stdout: string;
+    error: string | null;
+  }) => void = () => {};
+  const stopper = childTreeStopper(child, {
+    grouped: process.platform !== "win32",
+    graceMs: opts.killGraceMs,
+    onAbandon: () =>
+      settle({
+        code: null,
+        stdout,
+        // The cause stays first (it classifies the failure); the uncertainty
+        // about whether the tree exited is never dropped.
+        error: overflowed ? `${OUTPUT_CAP_ERROR}; ${NOT_EXITED_ERROR}` : NOT_EXITED_ERROR,
+      }),
+  });
+
   function kill(): void {
-    if (child.pid == null) return;
-    try {
-      if (process.platform === "win32") child.kill();
-      else process.kill(-child.pid);
-    } catch {
-      try {
-        child.kill();
-      } catch {
-        /* already gone */
-      }
-    }
+    stopper.stop();
   }
 
   const done = new Promise<{ code: number | null; stdout: string; error: string | null }>(
     (resolve) => {
       let settled = false;
-      child.on("error", (err) => {
+      let runningError: string | null = null;
+      settle = (res) => {
         if (settled) return;
         settled = true;
-        resolve({ code: null, stdout, error: err.message });
+        stopper.dispose();
+        resolve(res);
+      };
+      child.on("error", (err) => {
+        // A process that is running when the error arrives still has a tree
+        // to end; one that never started resolves now.
+        if (child.pid != null && child.exitCode === null && child.signalCode === null) {
+          runningError = err.message;
+          kill();
+          return;
+        }
+        settle({ code: null, stdout, error: err.message });
       });
       child.on("close", (code) => {
-        if (settled) return;
-        settled = true;
-        resolve({
+        settle({
           code,
           stdout,
-          error: overflowed ? "output cap exceeded" : null,
+          error: overflowed ? OUTPUT_CAP_ERROR : runningError,
         });
       });
     },
   );
 
   return { kill, done };
+}
+
+/**
+ * The real spawn. Mirrors `defaultSpawn` in the scheduler — same runtime seam,
+ * same stdin discipline, same detached process group so the whole tree can be
+ * signalled — but captures stdout in memory under a cap instead of streaming it
+ * to a log file, because an analysis pass's output *is* the result.
+ */
+export const defaultAnalysisSpawn: AnalysisSpawn = ({
+  prompt,
+  cwd,
+  model,
+  runtime,
+  maxOutputBytes,
+}) => {
+  const plan = runtimeFor(runtime).analysisPlan({ prompt, model });
+  return spawnAnalysisProcess(plan, { cwd, maxOutputBytes });
 };
 
 export interface AnalysisRunnerDeps {
@@ -434,12 +486,17 @@ export function createAnalysisRunner(deps: AnalysisRunnerDeps = {}): AnalysisRun
           ok: false,
           value: null,
           failure: "timeout",
-          error: `timed out after ${timeoutMs}ms`,
+          // A kill that could not be confirmed (the tree still held its pipes
+          // after the escalation) is said so, not folded into a clean timeout.
+          error: res.error
+            ? `timed out after ${timeoutMs}ms; ${res.error}`
+            : `timed out after ${timeoutMs}ms`,
         };
       }
       if (res.error) {
-        const failure: AnalysisFailure =
-          res.error === "output cap exceeded" ? "output-cap" : "spawn-failed";
+        const failure: AnalysisFailure = res.error.startsWith(OUTPUT_CAP_ERROR)
+          ? "output-cap"
+          : "spawn-failed";
         return { ...base, ok: false, value: null, failure, error: res.error };
       }
       if (res.code !== 0 || envelope.isError === true) {

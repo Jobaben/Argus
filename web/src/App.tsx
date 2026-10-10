@@ -60,6 +60,7 @@ const Stats = lazy(() => import("./views/Stats"));
 const Inventory = lazy(() => import("./views/Inventory"));
 const Users = lazy(() => import("./views/Users"));
 const DecisionExperiments = lazy(() => import("./views/DecisionExperiments"));
+const KnowledgeView = lazy(() => import("./views/knowledge/KnowledgeView"));
 const Sessions = lazy(() => import("./views/Sessions"));
 const AgentDetail = lazy(() => import("./views/AgentDetail"));
 const FlightRecorder = lazy(() => import("./views/FlightRecorder"));
@@ -178,6 +179,7 @@ const TAB_META: { id: string; label: string; role: RouteRole }[] = [
   { id: "fleet", label: "Fleet", role: "overflow" },
   { id: "users", label: "Users", role: "overflow" },
   { id: "experiments", label: "Experiments", role: "overflow" },
+  { id: "knowledge", label: "Knowledge", role: "overflow" },
   { id: "search", label: "Search", role: "utility" },
   { id: "agents", label: "Agents", role: "drilldown" },
   { id: "agent", label: "Detail", role: "drilldown" },
@@ -428,6 +430,8 @@ function Dashboard() {
         return <Users />;
       case "experiments":
         return <DecisionExperiments />;
+      case "knowledge":
+        return <KnowledgeView />;
       case "agents":
         return (
           <AgentsView

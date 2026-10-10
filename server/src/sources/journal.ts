@@ -38,6 +38,15 @@ export type JournalKind =
   | "step.timed-out"
   | "step.stalled"
   | "step.exit-mismatch"
+  /** A recorded request to end a run found its process still alive with no
+   *  delivery by this process (a crash between the two), and was delivered. */
+  | "step.termination-redelivered"
+  /** A run whose step was already decided was found still alive with no
+   *  request to end it (a crash before the sweep that would have), and ended. */
+  | "step.orphan-stopped"
+  /** A phase attempt the saved instance says is running, with no run planned
+   *  (a crash between the transition and the launch), was launched. */
+  | "phase.launch-recovered"
   | "phase.verifying"
   | "phase.verified"
   | "phase.candidate-selected"

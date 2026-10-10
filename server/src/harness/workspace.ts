@@ -18,7 +18,8 @@
  */
 
 import { spawn as nodeSpawn } from "node:child_process";
-import { mkdir, rm, stat } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { lstat, mkdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { paths } from "../claudeHome.js";
 import { safeSegment } from "./invocation.js";
@@ -216,6 +217,25 @@ async function worktreeHead(dir: string): Promise<{ top: string; branch: string 
   return { top: top.stdout.trim(), branch: branch.code === 0 ? branch.stdout.trim() : "" };
 }
 
+/**
+ * Whether `dir` is the work tree git reports as `top`. git prints a resolved
+ * path (forward slashes, and on Windows the long form of an 8.3 short name
+ * such as `RUNNER~1`), while Argus holds the spelling it was given, so the two
+ * are compared as real paths. `dir` itself must be a directory, not a link: a
+ * link in place of a worktree resolves to whatever tree it points at, and
+ * that tree is not this attempt's.
+ */
+async function isWorktreeAt(dir: string, top: string): Promise<boolean> {
+  try {
+    if (!(await lstat(dir)).isDirectory()) return false;
+    const a = realpathSync.native(dir);
+    const b = realpathSync.native(top);
+    return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+  } catch {
+    return false;
+  }
+}
+
 async function exists(p: string): Promise<boolean> {
   try {
     await stat(p);
@@ -269,7 +289,7 @@ export async function createWorktree(input: CreateWorktreeInput): Promise<Worksp
 
   if (await exists(input.path)) {
     const head = await worktreeHead(input.path);
-    if (head && path.resolve(head.top) === path.resolve(input.path)) return record;
+    if (head && (await isWorktreeAt(input.path, head.top))) return record;
     throw new WorkspaceError(
       `workspace: ${input.path} already exists and is not a git worktree Argus can reuse`,
     );

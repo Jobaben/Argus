@@ -4,11 +4,18 @@ import type { Rubric, Verdict, VerdictReport } from "./types";
 
 interface VerdictResponse {
   verdict: Verdict | null;
+  /** The run's current trajectory judgment, kept apart from its output verdict. */
+  trajectory: Verdict | null;
   rubric: Rubric | null;
   unavailable: string | null;
 }
 
-const EMPTY_ONE: VerdictResponse = { verdict: null, rubric: null, unavailable: null };
+const EMPTY_ONE: VerdictResponse = {
+  verdict: null,
+  trajectory: null,
+  rubric: null,
+  unavailable: null,
+};
 
 const EMPTY_REPORT: VerdictReport = {
   generatedAt: "",

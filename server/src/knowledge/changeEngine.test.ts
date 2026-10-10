@@ -12,6 +12,7 @@ import type {
   PipelineInstance,
 } from "@argus/contracts";
 import { createEngine } from "../pipelineEngine.js";
+import { fakeKill } from "../testPlatform.js";
 import type { Engine } from "../pipelineEngine.js";
 import { createPipeline, readPipelines, validatePipelineInput } from "../sources/pipelines.js";
 import { readInstance } from "../sources/instances.js";
@@ -36,6 +37,7 @@ import {
   getClaim,
   ruleConformance,
 } from "./kernel.js";
+import { testRunToken } from "../testSignalToken.js";
 
 /**
  * Change-intent orchestration through the engine (Phase 7).
@@ -125,7 +127,9 @@ function engine(spawn: ReturnType<typeof recordingSpawn>["spawn"]) {
     now: () => new Date(),
     newId: () => `id-${++counter}`,
     spawn,
+    kill: fakeKill().kill,
     signalUrlBase: "http://localhost:7778",
+    newSignalToken: testRunToken,
     maxConcurrent: 4,
     tickMs: 30000,
     parentEnv: { PATH: process.env.PATH ?? "/bin", HOME: home },
@@ -277,7 +281,7 @@ async function complete(e: Engine, inst: PipelineInstance, phaseId: string, runI
     phaseId,
     runId,
     type: "completed",
-    token: inst.signalToken,
+    token: testRunToken(runId),
     payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
 }

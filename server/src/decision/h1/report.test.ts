@@ -8,6 +8,8 @@ import { H1Ledger, type H1Record, type NewH1Record } from "./ledger.js";
 import { buildH1Report, renderH1Report, replayH1 } from "./report.js";
 import { H1SnapshotStore } from "./snapshots.js";
 import { gateInstance, h1Harness } from "./testSupport.js";
+import { QUALIFICATION_V1_REF, QUALIFICATION_V2_REF } from "./baselines.js";
+import { canonicalDigest } from "../canonical.js";
 
 /**
  * Integrity findings in `decision-h1-report` v1 (RFC §Q.11): what was retained
@@ -139,4 +141,57 @@ test("legacy journal failures cannot prove no-call and explicit historical refus
     }
     assert.equal(buildH1Report({ ledger: explicit, snapshots, journal: legacyJournal, registry: h1Registry() }).models[0].attempts.refused, 1);
   }
+});
+
+// ── Qualification versions (Hardening Item 5) ───────────────────────────────
+
+test("new captures name qualification v2, and the report scores them under v2", async () => {
+  const { h } = await settledRecords();
+  const records = await h.records();
+  const capture = records.find((r) => r.kind === "capture");
+  assert.ok(capture && capture.kind === "capture");
+  assert.deepEqual(capture.verdict.definition, QUALIFICATION_V2_REF);
+  const r = await replayH1(h.ledger, h.snapshots, h.journal, h1Registry());
+  assert.deepEqual(
+    [...new Set(r.verdict.map((row) => row.definition.version))],
+    [2],
+    "one row per population, all v2",
+  );
+  const q = r.definitions.find((d) => d.kind === "qualification");
+  assert.equal(q?.version, 2);
+  assert.equal(q?.status, "registered");
+});
+
+test("an old ledger that recorded qualification v1 is reported under v1, never re-read as v2", async () => {
+  const { h, records } = await settledRecords();
+  const r = await rewrite(h, records, (rec) => {
+    if (rec.kind === "capture") rec.verdict.definition = { ...QUALIFICATION_V1_REF };
+    if (rec.kind === "config") {
+      rec.config.qualification = { ...QUALIFICATION_V1_REF };
+      rec.digest = canonicalDigest(rec.config).sha256;
+    }
+    return rec;
+  });
+  assert.deepEqual([...new Set(r.verdict.map((row) => row.definition.version))], [1]);
+  const scored = r.verdict.reduce((n, row) => n + row.scored, 0);
+  assert.equal(scored, 1, "the v1 capture is scored, under v1");
+  const q = r.definitions.find((d) => d.kind === "qualification");
+  assert.deepEqual(
+    { version: q?.version, digest: q?.digest, status: q?.status },
+    { version: 1, digest: QUALIFICATION_V1_REF.digest, status: "registered" },
+  );
+});
+
+test("a ledger spanning both versions keeps one row set per version, each scoring its own captures", async () => {
+  const { h, records } = await settledRecords();
+  // The same history with the config re-recorded under v1 first: an upgrade
+  // in the middle of a ledger.
+  const r = await rewrite(h, records, (rec) => {
+    if (rec.kind === "capture") rec.verdict.definition = { ...QUALIFICATION_V1_REF };
+    return rec;
+  });
+  const byVersion = (v: number) =>
+    r.verdict.filter((row) => row.definition.version === v).reduce((n, row) => n + row.scored, 0);
+  assert.equal(byVersion(1), 1, "the v1 capture counts under v1");
+  assert.equal(byVersion(2), 0, "and is not re-read under v2");
 });

@@ -1,0 +1,5 @@
+# LF in every working tree, whatever core.autocrlf says. The index is already
+# LF throughout, so this pins checkout behaviour without renormalising
+# anything: Windows checkouts stop growing CRLF that byte-level tests (the
+# bundled skill's frontmatter, prettier's format check) would trip over.
+* text=auto eol=lf

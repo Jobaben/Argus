@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { KnowledgeContext, PhaseFailurePayload, PipelineInstance } from "@argus/contracts";
 import { createEngine } from "../pipelineEngine.js";
+import { fakeKill } from "../testPlatform.js";
 import type { Engine } from "../pipelineEngine.js";
 import { createPipeline, validatePipelineInput } from "../sources/pipelines.js";
 import { readInstance } from "../sources/instances.js";
@@ -20,6 +21,8 @@ import {
 } from "./context.js";
 import { analyzeImpact } from "./impact.js";
 import { executionProvenance } from "./kernel.js";
+import { testRunToken } from "../testSignalToken.js";
+import { toClaudeRulePath } from "../runtimes/claude.js";
 
 /**
  * Controlled semantic context delivery through the engine (Phase 4): a step
@@ -75,7 +78,9 @@ function engine(spawn: ReturnType<typeof recordingSpawn>["spawn"]) {
     now: () => new Date(),
     newId: () => `id-${++counter}`,
     spawn,
+    kill: fakeKill().kill,
     signalUrlBase: "http://localhost:7777",
+    newSignalToken: testRunToken,
     maxConcurrent: 4,
     tickMs: 30000,
     parentEnv: { PATH: process.env.PATH ?? "/bin", HOME: home },
@@ -128,7 +133,7 @@ async function complete(e: Engine, inst: PipelineInstance, phaseId: string, runI
     phaseId,
     runId,
     type: "completed",
-    token: inst.signalToken,
+    token: testRunToken(runId),
     payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
 }
@@ -233,7 +238,7 @@ test("exact + active selectors: the run receives exactly the resolved revisions,
   // Claude Code was told to admit the directory and deny edits under it.
   assert.ok(invocation.args.includes("--add-dir") && invocation.args.includes(path.dirname(file)));
   const denied = invocation.args[invocation.args.indexOf("--disallowedTools") + 1];
-  assert.ok(denied.includes(`Edit(//${path.dirname(file)}/**)`));
+  assert.ok(denied.includes(`Edit(/${toClaudeRulePath(path.dirname(file))}/**)`));
 
   // The prompt names what the file holds; the system prompt carries the contract.
   assert.match(

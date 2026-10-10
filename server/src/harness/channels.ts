@@ -22,6 +22,27 @@ import path from "node:path";
 import type { InvocationChannel } from "../runtimes/types.js";
 import type { PhaseDef } from "../sources/pipelineTypes.js";
 
+/**
+ * The variable of every channel {@link invocationChannels} can offer, in its
+ * fixed order. The per-run prompt names the same paths (engine/prompts.ts
+ * `channelInstruction`), because an agent whose shell a read-only profile
+ * denied has no way to read its own environment.
+ */
+export const CHANNEL_ENV_VARS = [
+  "ARGUS_RESULT_FILE",
+  "ARGUS_KNOWLEDGE_DELTA_FILE",
+  "ARGUS_KNOWLEDGE_CONTEXT_FILE",
+  "ARGUS_RULE_VERIFICATION_FILE",
+  "ARGUS_CHANGE_REQUEST_FILE",
+  "ARGUS_CHANGE_PROPOSAL_FILE",
+  "ARGUS_CHANGE_CONTEXT_FILE",
+  "ARGUS_IMPLEMENTATION_SCOPE_FILE",
+  "ARGUS_REMEDIATION_CONTEXT_FILE",
+  "ARGUS_ACCEPTANCE_VERIFICATION_FILE",
+  "ARGUS_ARTIFACT_DIR",
+  "ARGUS_MEMORY_DIR",
+] as const;
+
 export interface ChannelInputs {
   /** `ARGUS_RESULT_FILE`, when this step publishes the phase's structured result. */
   resultFile: string | null;

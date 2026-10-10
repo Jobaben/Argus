@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState } from "react";
 import { runtimeLabel } from "../useRuntimes";
-import type { Run } from "../types";
+import type { Run, StepCompletion } from "../types";
 import type { StepPill } from "../ds";
 import {
   Drawer,
@@ -34,6 +34,28 @@ export interface StepSelection {
    * that invented one would be lying about where you were.
    */
   originY?: number;
+}
+
+/**
+ * One line for how the run's own completion report was received. Worded as the
+ * agent's report on purpose: a marker is never independent verification, so
+ * nothing here says "verified".
+ */
+function completionLabel(c: StepCompletion): string {
+  const marker =
+    c.marker === "missing"
+      ? "no outcome marker"
+      : c.marker === "conflicting"
+        ? "conflicting outcome markers"
+        : `agent reported ${c.marker}`;
+  const via = c.source === "run-record" ? " (read from the run record)" : "";
+  const hook =
+    c.hook && !c.hook.agrees ? `; hook reported ${c.hook.marker ?? "malformed metadata"}` : "";
+  if (c.verdict === "accepted") {
+    return `${marker}${via} — accepted${c.marker === "missing" ? " under the lenient policy" : ""}${hook}`;
+  }
+  if (c.verdict === "refused") return `${marker}${via} — completion refused${hook}`;
+  return `${marker}${via}${hook}`;
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -213,6 +235,13 @@ export function StepDrawer({
                   : step.verified === false
                     ? " · checks failed"
                     : ""}
+          </Field>
+        )}
+        {step.completion && (
+          <Field label="completion">
+            <span title={step.completion.reason ?? undefined}>
+              {completionLabel(step.completion)}
+            </span>
           </Field>
         )}
         {step.model && <Field label="model">{step.model}</Field>}

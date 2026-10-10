@@ -33,6 +33,7 @@ export const NAV_CHORDS: Record<string, string> = {
   pipelines: "p",
   budget: "u",
   agents: "a",
+  knowledge: "k",
 };
 
 export function useShellBindings(destinations: Destination[], actions: ShellActions): Binding[] {

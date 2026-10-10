@@ -86,6 +86,7 @@ can do, and where the data comes from.
 | 29  | [Omnibar](#29-omnibar)                 | `⌘K`                   | say it, see the exact changes, confirm     |
 | 30  | [Constellation](#30-constellation)     | `#/fleet`              | N machines, one lens                       |
 | 31  | [`argus tail`](#31-argus-tail)         | terminal               | what is it doing, when I can't see the UI? |
+| 34  | [Knowledge](#34-knowledge)             | `#/knowledge`          | what does Argus believe, and why?          |
 
 ---
 
@@ -209,16 +210,26 @@ second monitor.
   revise, and one mini-dot per step (a `done/total` count once dots stop being
   countable). **Stages** — phases that can run at the same time — are rows,
   read top to bottom; the chain that continues stays in the left lane and
-  branches that end the run hang to its right. Every dependency is a drawn
+  branches that end the run hang to its right. When the stages are too wide
+  for the card (a fan-out of many parallel phases), the graph turns sideways:
+  stages become columns read left to right, and the parallel phases stack as
+  one column. An edge that skips a stage runs down a lane of its own, so it
+  never crosses a node. Every dependency is a drawn
   edge, so a fan-out reads as a fan-out and a join as a join: the path that
   ran is the green thread, a branch that was decided against is dashed, and a
   phase nothing depends on ends with a small terminator. A **route
   condition** sits as a label on the edge it governs, carrying the value
   alone (`verdict = "approved"`) — the phase that decides it is the line the
   label sits on. A skipped phase shows a hollow dot and a struck name.
-  Hovering a node names what the phase waits for and the conditions on it.
-  A very long pipeline scrolls inside the graph tile, opened at the phase
-  that needs you.
+  Hovering a node shows its full name, what the phase waits for and the
+  conditions on it.
+  The graph is scaled to fit the width of its tile (down to 60%) and scrolls in both
+  directions beyond that. It **follows the run**: the running phase (or the
+  middle of several running together) is kept centred, and the view glides
+  to the next phase as the run moves on — the first and last phase centre
+  too. Scrolling the graph yourself, or clicking a node, stops following;
+  **Follow** (top-right of the tile) resumes it. **1:1** shows the graph at
+  full size and **Fit** goes back. Edges with more graph beyond them fade out.
 - Beside the graph (below it on a narrow card), the **focus panel**: one
   phase's **step tiles** — step name, `job <runId>`, a status pill, the
   failure reason if it failed, a live activity line and animated sweep bar
@@ -747,15 +758,26 @@ you can tell "it ran out of time" from "it went quiet."
 
 **How steps complete:** the Stop-hook and gate-hook installed by Setup let
 each spawned agent signal "step finished" / "needs input" back to Argus
-(`POST /api/instances/:id/signal`, authenticated by a per-instance token —
-this is the one instance endpoint that doesn't need a login). The Stop hook is
-preferred; where a finished process did not signal — because its runtime's hook
-is best-effort (Codex) or because it has no command hook at all (OpenCode) —
-Argus can recover only from a successful run record whose final message contains
-one unambiguous `ARGUS_OUTCOME: succeeded`, which is why an OpenCode phase
-advances on the next reconcile tick rather than instantly. Failed, blocked, missing, and conflicting outcomes
-fail safely. Hook delivery errors and non-2xx responses are written into the
-run log for diagnosis.
+(`POST /api/instances/:id/signal`, authenticated by a token Argus hands each
+run for that run alone — this is the one instance endpoint that doesn't need a
+login). By default, a completion requires one unambiguous
+`ARGUS_OUTCOME: succeeded` marker in the final message. Missing or conflicting
+outcomes are classified as `unverified`. A pipeline (or phase) can declare
+`"completion": { "marker": "lenient" }` to accept a markerless completion
+**signal**, but failed, blocked and conflicting markers still refuse completion.
+Leniency does not apply to run-record recovery.
+
+The marker is the agent's own report, not a check that its work is right. The
+Stop hook is preferred; where a finished process did not signal — because its
+runtime's hook is best-effort (Codex) or because it has no command hook at all
+(OpenCode) — Argus can recover only from a successful run record whose final
+message contains one unambiguous `ARGUS_OUTCOME: succeeded`. An OpenCode phase
+therefore advances on the next reconcile tick rather than instantly. New run
+tokens are bound to the instance, phase, attempt and run, with only their digests
+persisted. Legacy instance tokens apply only to launches made before the
+upgrade. Reapply Setup's hooks when upgrading to the version 2 hook protocol.
+Hook delivery errors and non-2xx responses are written into the run log for
+diagnosis.
 
 **Where the data comes from:** `~/.claude/argus/pipelines.json` and instance
 records under `~/.claude/argus/instances/` via `GET/POST /api/pipelines`,
@@ -1412,24 +1434,128 @@ drawn red.
 - A response that scores none of your criteria is a **failure, not a zero**.
 
 **Gates that open themselves.** A gated phase with a rubric may declare
-**auto-approve at N**. When every judged step of the phase scores at least N,
-the gate passes unattended. Two properties matter and hold: a gate with **no
-verdict yet waits** (silence is not approval), and a gate whose verdict came
-back _below_ the bar waits for a human, forever. Auto-approval only ever skips
-the wait for work that has already been judged good — and it is the phase's
-**worst** step that decides, not the average, because averaging lets one
-excellent step carry a bad one through the gate you set to catch it.
+**auto-approve at N**. Every relevant run must have a current, ready verdict
+matching the rubric and scoring at least N; a best-of-N phase uses its selected
+candidate. Missing, failed, stale or below-threshold judgments withhold approval.
+The phase's **worst** relevant score decides, not the average.
 
-**Bounds:** completed runs under a rubric are judged automatically, **one per
-scheduler tick**, newest first, skipping anything older than 24 hours. Every
+This applies only to ordinary gates with a confirmed pause cause, never an
+agent's `needs-input` question or a pause of unknown cause. A phase configured
+to commit knowledge, or carrying staged knowledge, still needs operator review.
+A judge score is a rubric rating, not a calibrated probability of correctness.
+
+**Judging how the agent worked (trajectory).** A rubric may add an optional
+`trajectory` block. It is **off unless you write it**, and it is declared in the
+definition's JSON through the API (the schedule form and the pipeline form have
+no fields for it):
+
+```json
+{
+  "rubric": {
+    "goal": "A triage summary that names every new failure.",
+    "criteria": [{ "id": "coverage", "label": "Names every new failure" }],
+    "trajectory": {
+      "criteria": [{ "id": "focus", "label": "Stayed on the task" }],
+      "minScore": 6,
+      "check": { "holdOn": ["destructive-command", "path"] }
+    }
+  },
+  "autoApprove": { "verdict": 8, "trajectory": 7 }
+}
+```
+
+- **`criteria`** (optional) — what a judge should score the _path_ on, written
+  like output criteria. One extra judge call per run, scored against a timeline
+  of the run's first 20 and last 60 events.
+- **`minScore`** (optional, needs criteria) — a trajectory score below it is
+  marked a regression on the run and in `trajectoryTrends` (API only for now; the
+  Quality trends card shows output scores). Unlike an output regression it opens
+  no issue.
+- **`check.holdOn`** (optional) — signals that, when observed, **hold an
+  automated approval** for a person. No model is involved. Choose from
+  `repetition`, `errors`, `edit-revert`, `path` and `destructive-command`. This
+  is an automation hold only: it does not fail verification, pause the phase or
+  change what you can approve yourself, and it is not a verification check (for
+  that, see _A verification check on the path_ below).
+- **`autoApprove.trajectory`** (optional, gated phases) — the bar for the
+  trajectory score. Leave it out and the `verdict` bar applies to it too. It
+  needs trajectory criteria.
+
+You must declare criteria, a check or both. With a trajectory declared, a gate
+only opens itself when every relevant run also has a usable trajectory judgment:
+one that is missing, skipped (no transcript to read), failed, older than the
+rubric, or based on a **truncated recording** (the Flight Recorder keeps only the
+last 2,000 events) holds the gate, as does an observed held signal or a score
+under the bar. A missing or truncated recording is not treated as a clean run: it
+simply cannot clear the gate, and you decide.
+
+**The signals are heuristics, not findings.** They are simple counts over what
+the Flight Recorder kept, and each has blind spots: shell tricks, aliases and
+scripts hide destructive commands, a shell write hides a path escape, a revert
+by `git checkout` is invisible, and quoted text such as `echo rm -rf` is a false
+positive. Polling counts as repetition. **A zero means "not observed", never
+"did not happen"**, and a positive is a prompt to look, not proof of a problem.
+The run page shows what was observed and what a check held on; HARNESS §19 has
+the exact rules. A trajectory assessment never counts as evidence in the
+Knowledge Ledger, and it cannot open a gate that commits knowledge.
+
+**A verification check on the path.** `holdOn` only ever holds an automated
+approval. To make a phase _fail verification_ when recorded signal counts exceed
+your limits, add a `trajectory` check to the phase's `checks`, beside
+`command`, `artifact`, `file`
+and `changed-files`. It is declared in the pipeline's JSON through the API, needs
+no `rubric`, and uses no model:
+
+```json
+{
+  "id": "implement",
+  "checks": [
+    { "kind": "command", "run": "npm test" },
+    {
+      "kind": "trajectory",
+      "thresholds": { "destructive-command": 0, "path": 0, "errors": 5 },
+      "requireTranscript": true
+    }
+  ]
+}
+```
+
+- **`thresholds`** (required) — for each signal you name, the largest count you
+  will accept: a whole number from 0 to 10,000. Name at least one. A run whose
+  count goes above a threshold fails the check, even if the recording was
+  truncated, because what it kept is real. The counts are: `repetition`, the number
+  of distinct non-file tool calls repeated three or more times; `errors`, tool
+  calls that errored plus error results with no matching call; `edit-revert`,
+  edits that mirror an earlier edit; `path`, file-tool writes outside the working
+  directory or to sensitive paths; `destructive-command`, Bash commands matching
+  the destructive list.
+- **`requireTranscript`** (optional, default off) — what to do when Argus cannot
+  tell. If a run has no readable transcript, or the recording was truncated and
+  nothing over a threshold showed in what was kept, the thresholds cannot be shown
+  to hold. With `requireTranscript` on, the check **fails**. With it off, the check
+  is **not evaluated**: it shows as `–` "(not evaluated)" in the review drawer, is
+  never counted as passed, and does not fail the phase. A check with no runs to
+  look at is treated the same way.
+
+The check looks at the runs behind the phase: the selected candidate's when a
+best-of-N candidate was selected, otherwise every step of the attempt; a
+candidate being verified is checked on its own run. A not-evaluated check cannot
+be cited as evidence in the Knowledge Ledger (a knowledge commit that cites it is
+refused). Remember the signals are heuristics, so keep thresholds above what
+legitimate work produces: polling and a failing test run both count.
+
+**Bounds:** completed runs under a rubric are judged automatically, with at most
+one output judgment and one optional trajectory judgment per scheduler tick,
+newest first, skipping anything older than 24 hours. Every
 pass shares the same guardrails as [Autopsy](#23-autopsy) — one at a time,
 90-second timeout, metered into the spend ledger, refused under the budget hard
 stop, and switched off entirely by `ARGUS_ANALYSIS=off`.
 
 **Where the data comes from:** `GET /api/runs/:id/verdict`,
-`POST /api/runs/:id/verdict` (admin), `GET /api/verdicts`. Scores live in
-`~/.claude/argus/verdicts.json`; rubrics live on the schedule or pipeline
-definition.
+`POST /api/runs/:id/verdict` (admin), `GET /api/verdicts` (output `trends`
+and, separately, `trajectoryTrends`). Scores live in
+`~/.claude/argus/verdicts.json`, trajectory judgments among them under the
+same 400-record cap; rubrics live on the schedule or pipeline definition.
 
 ---
 
@@ -1542,8 +1668,12 @@ mean _unknown_, not _parallel_.
 
 - Both branches of a fan-out start together; a fan-in waits for **every**
   dependency, not the first one to finish.
-- A gate in one branch does **not** stop the other. The board points at the
-  gate, because that is what needs a human.
+- A gate pauses the instance's handling of agent outcomes, verification
+  results and candidate selection. A sibling process may keep running, but
+  incoming completion signals are acknowledged and ignored while the instance
+  awaits approval. Already-committed launches and knowledge commits can still
+  be recovered for running sibling phases; recovery never opens the waiting
+  gate. The board points at the gate that needs a human.
 - A failed branch does not terminalize the instance while a sibling is still
   running — that would render a stopped pipeline with a live process still
   writing into it. The failure is recorded on the phase; the instance settles to
@@ -1556,10 +1686,14 @@ each time (capped at an hour), and which failures are worth retrying:
 
 - `spawn` — the process never started,
 - `exit-code` — it exited non-zero,
-- `signal` — the agent _reported_ failure.
+- `signal` — the agent _reported_ failure,
+- `unverified` — completion had no valid, unambiguous outcome marker.
 
-The default is `["spawn", "exit-code"]`, and the omission is deliberate: an
-agent that signalled failure has considered the work and reported on it, so
+When a retry policy is declared, its default failure list is
+`["spawn", "exit-code", "unverified"]`. An explicit `retryOn` list replaces
+that default, so add `unverified` if marker failures should retry.
+The omission of `signal` is deliberate: an agent that signalled failure has
+considered the work and reported on it, so
 re-running the same prompt mostly just spends the money twice. Retries are
 _scheduled_ (a timestamp on the phase) rather than held in a timer, so a backoff
 survives a restart. A **revise** resets the retry budget — otherwise a phase
@@ -2174,9 +2308,10 @@ doing?", "has the release pipeline finished?", `/argus-tail` (Claude Code) or
 including a remote session on your phone, which is the case this exists for.
 The skill teaches the icon vocabulary, the bounded-window habit, and to quote
 failure reasons verbatim. Inside the Argus checkout both CLIs find it without
-installing: Claude Code at `.claude/skills/argus-tail/`, Codex through the
-`.agents/skills/argus-tail` link to the same file (a symlink, so a Windows
-checkout without symlink support falls back to the install).
+installing: Claude Code at `.claude/skills/argus-tail/`, Codex at
+`.agents/skills/argus-tail/` — a plain copy of the same file rather than a
+symlink, so a Windows checkout without symlink support has it too, and a test
+fails if the two copies ever differ.
 
 **Where the data comes from:** `GET /api/health`, `/api/runs`,
 `/api/overview`, `/api/agents`, `/api/insight`, `/api/runs/:id/activity` (the
@@ -2228,7 +2363,7 @@ by a guess.
 | `ARGUS_DECISIONS_H2_PROBE_RATE`           | `0.1`          | Share of eligible runs sampled for the probe.             |
 | `ARGUS_DECISIONS_H2_MAX_CALLS_PER_DAY`    | `20` (0–96)    | Provider invocations per rolling 24 hours.                |
 | `ARGUS_DECISIONS_H2_MIN_INTERVAL_MINUTES` | `15`           | Minimum gap between invocations.                          |
-| `ARGUS_DECISIONS_H2_MAX_USD_PER_DAY`      | `1`            | Recorded H2 cost per rolling 24 hours.                    |
+| `ARGUS_DECISIONS_H2_MAX_USD_PER_DAY`      | `1`            | Recorded cost per rolling 24 hours, including H1 calls.   |
 | `ARGUS_DECISIONS_H2_SEED`                 | `argus-h2`     | Seed of the deterministic sampling draw.                  |
 
 The runner default model is `haiku` for Claude, or `ARGUS_ANALYSIS_MODEL`.
@@ -2273,6 +2408,11 @@ The adapter always runs the `claude` CLI.
     `~/.claude/argus/decisions/`.
 
   Neither is ever pruned automatically.
+
+H1 assessments share the Decision Journal. The H2 report's
+`outsideExperiment` count therefore includes them; it is not a count of H2
+assessments alone. Spend limits use recorded costs from completed calls; they
+do not guarantee that an in-flight call cannot take spending over the cap.
 
 ### Reading the report
 
@@ -2382,9 +2522,10 @@ used is not reported, and stays blank rather than guessed.
 
 The Experiments page has an H1 section (`GET /api/decisions/h1`).
 
-- **Only settled gates** (the ones you have acted on) contribute to any
-  figure. A gate still waiting on you appears only in a count, so the page
-  cannot show you a prediction for a pending gate.
+- **Only settled gates** contribute to report results; only valid applied
+  operator decisions supply comparison labels. A gate still waiting on you
+  appears only in a count, so the page cannot show you a prediction for a
+  pending gate.
 - **For each population and model**, it shows:
   - the confusion matrix, coverage, and agreement with your action;
   - **false close** (predicted approve, you sent it back) and **false
@@ -2393,17 +2534,43 @@ The Experiments page has an H1 section (`GET /api/decisions/h1`).
   - for model probabilities only: Brier, reliability buckets (n ≥ 20) and
     ECE (n ≥ 200).
 
-  Every interval is a Wilson 95 % interval.
+  Proportion intervals use Wilson 95 % intervals. AUROC uses a
+  Hanley–McNeil 95 % interval.
 
 - **The baselines** sit beside the models:
   - The rule baseline is a rule result, not a probability.
   - The Verdict baseline is compared at the decision level, and its score
     is a rating: its only rank figure is an AUROC.
+  - Auto-approval qualification is versioned. Historical v1 captures keep
+    their original rules; v2 adds trajectory requirements. The report separates
+    qualification versions rather than pooling different rules.
 
 ### Turning it off
 
 Unset either switch and restart. Nothing is deleted, and the report still
 renders.
+
+## 34. Knowledge
+
+A read-only view of the [Knowledge Ledger](KNOWLEDGE-LEDGER.md): the business
+rules, facts and other claims Argus has accepted, the evidence behind each one,
+and who relied on it. Reach it from **More → Knowledge**, `g k`, or the palette.
+
+- **The overview** is one sentence about the whole ledger (how many claims,
+  whether all are supported, how many rules anyone has verified), a bar
+  showing the mix of kinds, and one card per module. **Group by** switches the
+  cards to source files. Pick a scope to see one project's knowledge.
+- **A card, a kind or a search** opens the matching claims, grouped by kind.
+  **Only what needs a look** narrows to flagged claims.
+- **A claim** opens a drawer: what it says, why Argus believes it (its
+  evidence and justifications), whether anyone checked the code obeys it, and
+  which runs used it or were given it.
+- **Normal says nothing.** An active, supported claim carries no badge. A
+  badge appears only for _contested_, _violated_, _stale_, _superseded_ or
+  _unsupported_. Every underlined word and every **?** explains itself, and
+  **How to read this page** lists every mark and term.
+
+Data: `GET /api/knowledge/atlas` (optionally `?project=&repository=`).
 
 ## Quick mental model
 

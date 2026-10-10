@@ -284,6 +284,38 @@ export interface ClaimsResponse {
   claims: ClaimView[];
 }
 
+/** One evidence record as the atlas carries it: its claim is the row it sits on. */
+export interface AtlasEvidence {
+  id: string;
+  direction: SupportDirection;
+  source: EvidenceSource;
+}
+
+/** A claim revision with everything a browsing view needs about it, so a
+ *  reader can group, count and flag without one request per claim. */
+export interface AtlasClaim extends ClaimView {
+  evidence: AtlasEvidence[];
+  /** The rule's conformance status. `null` for any kind other than
+   *  `business-rule`, which is the only kind verification examines. */
+  conformance: RuleConformanceStatus | null;
+  /** How many executions recorded consuming this exact revision. */
+  consumers: number;
+  /** Some execution consumed this revision and it is no longer active and
+   *  supported, so that execution's currency is `stale`. */
+  stale: boolean;
+}
+
+/** `GET /api/knowledge/atlas` — the whole ledger (or one scope) in one read. */
+export interface KnowledgeAtlas {
+  /** The scope asked for, or `null` for the whole ledger. */
+  scope: KnowledgeScope | null;
+  /** Every scope the ledger holds claims in, `null` for unscoped, largest first. */
+  scopes: Array<{ scope: KnowledgeScope | null; claims: number }>;
+  claims: AtlasClaim[];
+  /** Justifications whose conclusion is one of `claims`. */
+  justifications: Justification[];
+}
+
 // ── Execution provenance bridge (Phase 2) ───────────────────────────────────
 //
 // Two graphs, three explicit bridges:

@@ -8,6 +8,8 @@ import { retryNote, failureClassOfRecord } from "./pipelineEngine.js";
 import { phaseArtifactDir } from "./harness/invocation.js";
 import { paths } from "./claudeHome.js";
 import { isAlive } from "./scheduler.js";
+import { killRunProcess } from "./sources/runs.js";
+import { fakeKill } from "./testPlatform.js";
 
 let home: string;
 beforeEach(() => {
@@ -23,6 +25,7 @@ import * as pipelinesMod from "./sources/pipelines.js";
 import * as instancesMod from "./sources/instances.js";
 import * as runsMod from "./sources/runs.js";
 import * as journalMod from "./sources/journal.js";
+import { testRunToken } from "./testSignalToken.js";
 
 async function load() {
   // Loosely typed, as the dynamic imports these replaced were: the tests read
@@ -55,11 +58,19 @@ const baseDeps = (over: Record<string, unknown> = {}) => ({
   now: () => new Date(2026, 5, 30, 12, 0),
   newId: () => `id-${++counter}`,
   signalUrlBase: "http://localhost:7777",
+  newSignalToken: testRunToken,
   maxConcurrent: 4,
   tickMs: 30000,
   // A controlled parent environment: an ordinary var, a home var, an Argus
-  // secret, and a var no baseline/allowlist recognizes.
+  // secret, and a var no baseline/allowlist recognizes. It is also what the
+  // real `command` checks below (`exit N`, a shell builtin) run under, and
+  // that is portable as it stands: Node starts the shell by absolute path
+  // (/bin/sh, or the parent's %ComSpec% on Windows) without consulting this
+  // PATH, and on Windows libuv copies SYSTEMROOT, WINDIR, TEMP and the like
+  // from the parent into any child environment that lacks them. Don't widen
+  // it to the host environment: the assertions below are about exactly these.
   parentEnv: { PATH: "/bin", HOME: "/h", ARGUS_TOKEN: "secret", MY_SECRET: "x" },
+  kill: fakeKill().kill,
   ...over,
 });
 
@@ -102,7 +113,8 @@ test("start passes a prepared invocation to spawn, and it is readable back off d
   assert.equal(rawEnv.ARGUS_TOKEN, undefined);
   assert.equal(prepared.env.ARGUS_TOKEN, undefined);
   assert.equal(prepared.env.PATH, "/bin");
-  assert.equal(prepared.env.ARGUS_SIGNAL_TOKEN, inst!.signalToken);
+  assert.equal(prepared.env.ARGUS_SIGNAL_TOKEN, testRunToken(rec.calls[0].run.id));
+  assert.notEqual(prepared.env.ARGUS_SIGNAL_TOKEN, inst!.signalToken);
   assert.ok(prepared.env.ARGUS_ARTIFACT_DIR);
   assert.ok(prepared.record.envStripped.includes("ARGUS_TOKEN"));
 
@@ -282,6 +294,134 @@ test("best-effort enforcement launches anyway and records the limitation", async
   assert.ok(record.limitations.length > 0);
 });
 
+test("a queued step refused at launch still fails its phase while a sibling waits at its gate", async () => {
+  const { engine, pipelines, instances, runsSrc } = await load();
+  await seed(pipelines, [
+    {
+      id: "gate",
+      name: "Gate",
+      cwd: home,
+      gated: true,
+      needs: [],
+      steps: [{ name: "g", prompt: "g" }],
+    },
+    {
+      id: "work",
+      name: "Work",
+      cwd: home,
+      gated: false,
+      needs: [],
+      runtime: "opencode",
+      capabilities: { tools: { allow: ["Read"] } },
+      steps: [{ name: "w", prompt: "w" }],
+    },
+  ]);
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn, maxConcurrent: 1 }));
+  const inst = await e.start("p1", "manual");
+  const gateRun = rec.calls[0].run.id;
+  await e.onSignal(inst!.id, {
+    instanceId: inst!.id,
+    phaseId: "gate",
+    runId: gateRun,
+    type: "completed",
+    token: testRunToken(gateRun),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
+  });
+
+  // `work` is still queued behind the gate's slot, so its refusal is decided
+  // only once the instance already reads `awaiting-approval`.
+  assert.deepEqual(
+    rec.calls.map((c) => c.env.ARGUS_PHASE_ID),
+    ["gate"],
+  );
+  const paused = await instances.readInstance(inst!.id);
+  assert.equal(paused.status, "awaiting-approval");
+  assert.equal(paused.phases.find((p: any) => p.id === "work").status, "running");
+
+  rec.dones[0].resolve({ code: 0 });
+  await e.drain();
+
+  assert.equal(rec.calls.length, 1, "the refused step never spawns");
+  const after = await instances.readInstance(inst!.id);
+  const work = after.phases.find((p: any) => p.id === "work");
+  assert.equal(work.status, "failed");
+  assert.equal((work.payload as any).failureClass, "configuration");
+  const run = await runsSrc.readRun(work.steps[0].runId);
+  assert.equal(run!.run.termination, "spawn-failed");
+  assert.equal(after.status, "awaiting-approval", "the gate still waits for its decision");
+});
+
+test("the prompt names the channel paths and ends with the revision note, on a queued run too", async () => {
+  const { engine, pipelines, instances } = await load();
+  await seed(pipelines, [
+    {
+      id: "draft",
+      name: "Draft",
+      cwd: home,
+      gated: true,
+      capabilities: { filesystem: "read-only" },
+      steps: [
+        { name: "a", prompt: "write A" },
+        { name: "b", prompt: "write B" },
+      ],
+    },
+  ]);
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn, maxConcurrent: 1 }));
+  const inst = await e.start("p1", "manual");
+
+  // Each step completes and exits, so the run queued behind it gets the slot.
+  const finish = async (i: number) => {
+    const runId = rec.calls[i].run.id;
+    await e.onSignal(inst!.id, {
+      instanceId: inst!.id,
+      phaseId: "draft",
+      runId,
+      type: "completed",
+      token: testRunToken(runId),
+      payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
+    });
+    rec.dones[i].resolve({ code: 0 });
+  };
+  await finish(0);
+  await waitFor(() => rec.calls.length === 2);
+  await finish(1);
+  await waitFor(
+    async () => (await instances.readInstance(inst!.id)).status === "awaiting-approval",
+  );
+
+  const first = rec.calls[0];
+  const paths = [
+    `- ARGUS_KNOWLEDGE_DELTA_FILE: ${first.env.ARGUS_KNOWLEDGE_DELTA_FILE}`,
+    `- ARGUS_ARTIFACT_DIR: ${first.env.ARGUS_ARTIFACT_DIR}`,
+  ].join("\n");
+  assert.ok(first.run.prompt.startsWith("write A"));
+  assert.ok(first.run.prompt.endsWith(paths), first.run.prompt);
+
+  const revised = await e.revise(inst!.id, "tighten the intro", { phaseId: "draft" });
+  assert.equal(revised.ok, true);
+  await waitFor(() => rec.calls.length === 3);
+  assert.equal(rec.calls.length, 3, "the revision's second run waits for the slot");
+  rec.dones[2].resolve({ code: 0 });
+  await waitFor(() => rec.calls.length === 4);
+
+  for (const call of rec.calls.slice(2)) {
+    const prompt: string = call.run.prompt;
+    assert.ok(
+      prompt.endsWith(`${call.env.ARGUS_ARTIFACT_DIR}\n\nRevision note: tighten the intro`),
+      prompt,
+    );
+    assert.ok(
+      prompt.includes(`- ARGUS_KNOWLEDGE_DELTA_FILE: ${call.env.ARGUS_KNOWLEDGE_DELTA_FILE}`),
+    );
+    // What the agent is handed, not only what the record says.
+    assert.equal(call.prepared.plan.stdin, prompt);
+  }
+  await e.abort(inst!.id);
+  await e.drain();
+});
+
 // ── 6. deadline enforcement ──────────────────────────────────────────────────
 
 test("a step past its deadline is killed, timed out, and failed", async () => {
@@ -339,6 +479,67 @@ test("a step past its deadline is killed, timed out, and failed", async () => {
   await waitFor(async () => (await runsSrc.readRun(runId))?.run.status === "failed");
 });
 
+test("a step past its deadline is timed out while a sibling waits at its gate", async () => {
+  const { engine, pipelines, instances, runsSrc } = await load();
+  await seed(pipelines, [
+    {
+      id: "gate",
+      name: "Gate",
+      cwd: home,
+      gated: true,
+      needs: [],
+      steps: [{ name: "g", prompt: "g" }],
+    },
+    {
+      id: "slow",
+      name: "Slow",
+      cwd: home,
+      gated: false,
+      needs: [],
+      timeoutSeconds: 1,
+      steps: [{ name: "s", prompt: "s" }],
+    },
+  ]);
+  const rec = recordingSpawn();
+  const killed: number[] = [];
+  const kill = (pid: number, signal?: NodeJS.Signals) => {
+    if (signal !== "SIGKILL") killed.push(pid);
+    return true;
+  };
+  const e = engine.createEngine(
+    baseDeps({ spawn: rec.spawn, kill, killGraceMs: 50, now: () => new Date() }),
+  );
+  const inst = await e.start("p1", "manual");
+  const gateRun = rec.calls[0].run.id;
+  await e.onSignal(inst!.id, {
+    instanceId: inst!.id,
+    phaseId: "gate",
+    runId: gateRun,
+    type: "completed",
+    token: testRunToken(gateRun),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
+  });
+  assert.equal((await instances.readInstance(inst!.id)).status, "awaiting-approval");
+
+  const slowCall = rec.calls[1];
+  assert.equal(slowCall.env.ARGUS_PHASE_ID, "slow");
+  await waitFor(
+    async () =>
+      (await instances.readInstance(inst!.id)).phases.find((p: any) => p.id === "slow").status ===
+      "failed",
+  );
+  assert.deepEqual(killed, [1002], "only the timed-out run is stopped");
+  const after = await instances.readInstance(inst!.id);
+  const slow = after.phases.find((p: any) => p.id === "slow");
+  assert.equal((slow.payload as any).failureClass, "timeout");
+  assert.equal((await runsSrc.readRun(slowCall.run.id))!.run.termination, "timed-out");
+  assert.equal(after.phases.find((p: any) => p.id === "gate").status, "awaiting-approval");
+
+  for (const d of rec.dones) d.resolve({ code: null });
+  await e.abort(inst!.id);
+  await e.drain();
+});
+
 test("a completion signal that beats the deadline wins, permanently", async () => {
   const { engine, pipelines, instances, runsSrc } = await load();
   await seed(pipelines, [
@@ -367,7 +568,8 @@ test("a completion signal that beats the deadline wins, permanently", async () =
     phaseId: "only",
     runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   d.resolve({ code: 0 });
 
@@ -413,7 +615,8 @@ test("a passing verification concludes the phase and starts the next one", async
     phaseId: "checked",
     runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
 
@@ -459,7 +662,8 @@ test("a failing verification fails the phase and never starts the next one", asy
     phaseId: "checked",
     runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
 
@@ -496,7 +700,8 @@ test("a failing check never lets a gated phase reach awaiting-approval", async (
     phaseId: "gated",
     runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
 
@@ -534,7 +739,8 @@ test("a passing check still waits at the gate, and approve advances past it", as
     phaseId: "gated",
     runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
 
@@ -573,7 +779,8 @@ test("a verification-triggered retry carries a repair note naming the failed che
     phaseId: "checked",
     runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
 
@@ -623,7 +830,7 @@ test("artifact directories are per-phase, reset on revise, and interpolate acros
     phaseId: "one",
     runId: runId1,
     type: "failed",
-    token: inst!.signalToken,
+    token: testRunToken(runId1),
   });
   await e.revise(inst!.id);
 
@@ -638,7 +845,8 @@ test("artifact directories are per-phase, reset on revise, and interpolate acros
     phaseId: "one",
     runId: runId2,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(runId2),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain(); // phase "two" is launched off a detached continuation
 
@@ -748,7 +956,14 @@ test("reconcile kills and finalizes an adopted run past its deadline, healing th
     artifacts: {},
   });
 
-  const e = engine.createEngine(baseDeps({ spawn: recordingSpawn().spawn, now: () => new Date() }));
+  const e = engine.createEngine(
+    baseDeps({
+      spawn: recordingSpawn().spawn,
+      now: () => new Date(),
+      // The real kill: it ends the process this test spawned itself.
+      kill: killRunProcess,
+    }),
+  );
   await e.adopt();
   await e.reconcile();
 
@@ -1045,7 +1260,8 @@ test("an instance-scoped workspace is shared by every phase and removed when the
     phaseId: "one",
     runId: inst!.phases[0].steps[0].runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(inst!.phases[0].steps[0].runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
   // The second phase reuses the same tree rather than cutting its own.
@@ -1060,7 +1276,8 @@ test("an instance-scoped workspace is shared by every phase and removed when the
     phaseId: "two",
     runId: mid.phases[1].steps[0].runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(mid.phases[1].steps[0].runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
 
@@ -1100,7 +1317,7 @@ test("an attempt-scoped workspace is fresh per attempt, and the superseded one i
     phaseId: "gate",
     runId: inst!.phases[0].steps[0].runId,
     type: "needs-input",
-    token: inst!.signalToken,
+    token: testRunToken(inst!.phases[0].steps[0].runId),
   });
   await e.revise(inst!.id, "try again");
   await e.drain();
@@ -1183,7 +1400,8 @@ test("keep leaves the worktree directory behind, and the phase's checks run insi
     phaseId: "build",
     runId: inst!.phases[0].steps[0].runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(inst!.phases[0].steps[0].runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
 
@@ -1227,7 +1445,8 @@ const signalOf = (e: any, inst: any, runId: string, type = "completed") =>
     phaseId: "impl",
     runId,
     type,
-    token: inst.signalToken,
+    token: testRunToken(runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
 
 test("candidates launch N isolated drafts of one step, each with its own tree and artifacts", async (t) => {
@@ -1550,8 +1769,8 @@ test("only the winner's payload and result reach the next phase", async (t) => {
     phaseId: "impl",
     runId: steps[0].runId,
     type: "completed",
-    token: inst!.signalToken,
-    payload: { from: "the losing draft" },
+    token: testRunToken(steps[0].runId),
+    payload: { from: "the losing draft", last_assistant_message: "ARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
   await e.onSignal(inst!.id, {
@@ -1559,13 +1778,16 @@ test("only the winner's payload and result reach the next phase", async (t) => {
     phaseId: "impl",
     runId: steps[1].runId,
     type: "completed",
-    token: inst!.signalToken,
-    payload: { from: "the winning draft" },
+    token: testRunToken(steps[1].runId),
+    payload: { from: "the winning draft", last_assistant_message: "ARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
 
   const after = await instances.readInstance(inst!.id);
-  assert.deepEqual(after.phases[0].payload, { from: "the winning draft" });
+  assert.deepEqual(after.phases[0].payload, {
+    from: "the winning draft",
+    last_assistant_message: "ARGUS_OUTCOME: succeeded",
+  });
   const shipPrompt = rec.calls[rec.calls.length - 1].run.prompt;
   assert.match(shipPrompt, /the winning draft/);
   assert.doesNotMatch(shipPrompt, /the losing draft/);
@@ -1675,7 +1897,8 @@ test("a settled instance trims NOTES.md back to its cap, and journals memory.tri
     phaseId: "only",
     runId,
     type: "completed",
-    token: inst!.signalToken,
+    token: testRunToken(runId),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
   await e.drain();
   await waitFor(async () => (await instances.readInstance(inst!.id)).status === "succeeded");
@@ -1725,7 +1948,7 @@ test("{{previous.instance}} summarizes the last settled instance of the same pip
     phaseId: "only",
     runId: first!.phases[0].steps[0].runId,
     type: "failed",
-    token: first!.signalToken,
+    token: testRunToken(first!.phases[0].steps[0].runId),
     payload: { reason: "the build broke" },
   });
   await e.drain();
@@ -1856,6 +2079,83 @@ test("a stalled step whose process is still alive is asked to stop once, and its
   const j = await journalSrc.readJournal(inst!.id);
   assert.equal(j.filter((entry: any) => entry.kind === "step.stalled").length, 1);
   assert.ok(!j.some((entry: any) => entry.kind === "step.timed-out"));
+});
+
+test("a stalled step is killed while a sibling waits at its gate", async () => {
+  const { engine, pipelines, instances, runsSrc } = await load();
+  await seed(pipelines, [
+    {
+      id: "gate",
+      name: "Gate",
+      cwd: home,
+      gated: true,
+      needs: [],
+      steps: [{ name: "g", prompt: "g" }],
+    },
+    {
+      id: "slow",
+      name: "Slow",
+      cwd: home,
+      gated: false,
+      needs: [],
+      stallSeconds: 30,
+      steps: [{ name: "s", prompt: "s" }],
+    },
+  ]);
+  const rec = recordingSpawn();
+  const killed: number[] = [];
+  const kill = (pid: number, signal?: NodeJS.Signals) => {
+    if (signal !== "SIGKILL") killed.push(pid);
+    return true;
+  };
+  let clock = new Date(2026, 5, 30, 12, 0, 0);
+  const e = engine.createEngine(
+    baseDeps({ spawn: rec.spawn, kill, killGraceMs: 50, now: () => clock }),
+  );
+  const inst = await e.start("p1", "manual");
+  const gateRun = rec.calls[0].run.id;
+  await e.onSignal(inst!.id, {
+    instanceId: inst!.id,
+    phaseId: "gate",
+    runId: gateRun,
+    type: "completed",
+    token: testRunToken(gateRun),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
+  });
+  assert.equal(
+    (await instances.readInstance(inst!.id)).status,
+    "awaiting-approval",
+    "the gate pauses the instance",
+  );
+
+  const slowCall = rec.calls[1];
+  assert.equal(slowCall.env.ARGUS_PHASE_ID, "slow", "the second spawn is the slow phase");
+  clock = new Date(clock.getTime() + 31_000);
+  await e.reconcile();
+  await waitFor(
+    async () =>
+      (await instances.readInstance(inst!.id)).phases.find((p: any) => p.id === "slow").status ===
+      "failed",
+  );
+  assert.deepEqual(killed, [1002], "only the stalled run is stopped");
+  assert.equal(
+    (await runsSrc.readRun(slowCall.run.id))!.run.termination,
+    "stalled",
+    "the run is recorded as stalled",
+  );
+  const after = await instances.readInstance(inst!.id);
+  const slow = after.phases.find((p: any) => p.id === "slow");
+  assert.equal((slow.payload as any).failureClass, "timeout", "a stall fails as a timeout");
+  assert.equal(after.status, "awaiting-approval", "the instance still waits at its gate");
+  assert.equal(
+    after.phases.find((p: any) => p.id === "gate").status,
+    "awaiting-approval",
+    "the gate still waits for its decision",
+  );
+
+  for (const d of rec.dones) d.resolve({ code: null });
+  await e.abort(inst!.id);
+  await e.drain();
 });
 
 test("stall detection: the retry policy treats a stall as a timeout, and retries it", async () => {

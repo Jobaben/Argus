@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { PipelineInstance, Run } from "@argus/contracts";
@@ -186,6 +186,39 @@ export const RESIDUAL_P = {
 };
 
 /**
+ * Every spelling under which the directory `home` can appear in persisted
+ * state or a response body, longest first: as given, through its real path
+ * (Windows can hand out an 8.3 short temp path such as `RUNNER~1` whose long
+ * form is what a resolved path shows), with forward slashes, and with the
+ * backslashes JSON escapes. On POSIX these collapse to the one string `home`.
+ */
+export function homeSpellings(home: string): string[] {
+  const roots = new Set([home]);
+  try {
+    roots.add(realpathSync.native(home));
+  } catch {
+    /* gone already: its given spelling is the only one */
+  }
+  const out = new Set<string>();
+  for (const root of roots) {
+    out.add(root);
+    out.add(root.split("\\").join("/"));
+    out.add(JSON.stringify(root).slice(1, -1));
+  }
+  return [...out].sort((a, b) => b.length - a.length);
+}
+
+/**
+ * `text` with each spelling of the scenario's own `home` directory replaced by
+ * `<HOME>`, so two runs in two temp homes compare equal on everything else.
+ * Only the exact home strings are replaced — never a pattern — so a path that
+ * differs anywhere below the home still differs.
+ */
+export function withoutHome(text: string, home: string): string {
+  return homeSpellings(home).reduce((acc, spelling) => acc.split(spelling).join("<HOME>"), text);
+}
+
+/**
  * An instance journal (`argus/journals/<id>.jsonl`) with the entries that share
  * one `at` put in a fixed order, for comparing two runs of the same scenario.
  *
@@ -198,7 +231,15 @@ export const RESIDUAL_P = {
  * order among same-instant entries is not.
  */
 export function settleJournalOrder(relPath: string, text: string): string {
-  if (!/(^|\/)journals\/[^/]+\.jsonl$/.test(relPath)) return text;
+  // A pipeline transition log records the instance's definition (and every
+  // state) by SHA-256, and the definition carries wall-clock stamps and a
+  // temp-dir cwd the comparison replaces in plain text — but cannot replace
+  // inside a digest. Every other byte of the log is still compared.
+  if (/(^|[\\/])transitions[\\/][^\\/]+\.jsonl$/.test(relPath)) {
+    return text.replace(/[0-9a-f]{64}/g, "<DIGEST>");
+  }
+  // Either separator: `relPath` comes from `path.relative`, native on Windows.
+  if (!/(^|[\\/])journals[\\/][^\\/]+\.jsonl$/.test(relPath)) return text;
   const lines = text.split("\n");
   const tail = lines.pop() ?? "";
   const at = (l: string) => {

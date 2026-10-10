@@ -8,6 +8,8 @@ import {
   extractJsonObject,
   type AnalysisSpawn,
   type AnalysisSpawnHandle,
+  NOT_EXITED_ERROR,
+  OUTPUT_CAP_ERROR,
 } from "./analysis.js";
 
 beforeEach(() => {
@@ -176,6 +178,62 @@ test("a pass that overruns its timeout is killed and reported", async () => {
   assert.equal(res.failure, "timeout");
   assert.equal(res.executionDisposition, "possibly-called");
   assert.equal(killed(), 1, "the process was killed, not merely abandoned");
+});
+
+test("a timed-out pass whose tree could not be confirmed dead says so, and frees the runner", async () => {
+  // What spawnAnalysisProcess reports when the tree still held its pipes after
+  // the whole kill ladder: released, not confirmed exited.
+  const spawn: AnalysisSpawn = () => {
+    let resolve!: (v: { code: number | null; stdout: string; error: string | null }) => void;
+    const done = new Promise<{ code: number | null; stdout: string; error: string | null }>(
+      (r) => (resolve = r),
+    );
+    return {
+      kill: () => resolve({ code: null, stdout: "", error: NOT_EXITED_ERROR }),
+      done,
+    };
+  };
+  const runner = createAnalysisRunner({ spawn, now: () => NOW, meter: async () => {} });
+  const res = await runner.run({ ...base, timeoutMs: 1000 }, parseOk);
+  assert.equal(res.failure, "timeout");
+  assert.equal(res.error, `timed out after 1000ms; ${NOT_EXITED_ERROR}`);
+  assert.equal(runner.inFlight(), 0);
+
+  const clean = createAnalysisRunner({
+    spawn: hangingSpawn().spawn,
+    now: () => NOW,
+    meter: async () => {},
+  });
+  const ok = await clean.run({ ...base, timeoutMs: 1000 }, parseOk);
+  assert.equal(ok.error, "timed out after 1000ms", "a confirmed kill reads as before");
+});
+
+test("an output-cap failure keeps its class, and says so when the killed tree was not confirmed to exit", async () => {
+  // What spawnAnalysisProcess reports for each case: a cap whose tree then
+  // exited, and a cap whose tree still held its pipes after the kill ladder.
+  const capped =
+    (error: string): AnalysisSpawn =>
+    () => ({ kill: () => {}, done: Promise.resolve({ code: null, stdout: "", error }) });
+
+  const exited = await createAnalysisRunner({
+    spawn: capped(OUTPUT_CAP_ERROR),
+    now: () => NOW,
+    meter: async () => {},
+  }).run(base, parseOk);
+  assert.equal(exited.ok, false);
+  assert.equal(exited.failure, "output-cap");
+  assert.equal(exited.error, OUTPUT_CAP_ERROR);
+
+  const runner = createAnalysisRunner({
+    spawn: capped(`${OUTPUT_CAP_ERROR}; ${NOT_EXITED_ERROR}`),
+    now: () => NOW,
+    meter: async () => {},
+  });
+  const unconfirmed = await runner.run(base, parseOk);
+  assert.equal(unconfirmed.ok, false);
+  assert.equal(unconfirmed.failure, "output-cap", "still classified by its cause");
+  assert.equal(unconfirmed.error, `${OUTPUT_CAP_ERROR}; ${NOT_EXITED_ERROR}`);
+  assert.equal(runner.inFlight(), 0);
 });
 
 test("regression: a pass that cost money is metered even when it failed", async () => {

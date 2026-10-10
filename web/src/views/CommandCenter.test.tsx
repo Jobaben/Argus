@@ -180,7 +180,7 @@ describe("CommandCenter", () => {
     expect(screen.getAllByText("step-x")).toHaveLength(2);
   });
 
-  it("wraps an arbitrarily long pipeline instead of creating horizontal scroll", () => {
+  it("wraps an arbitrarily long pipeline, scrolling only inside its graph tile", () => {
     mockOverview.overview = [entry("release-train", "running", Array(24).fill("pending"))];
     const { container } = render(<CommandCenter />);
 
@@ -191,7 +191,21 @@ describe("CommandCenter", () => {
     // The last phase stays reachable as a graph node even though only one
     // phase's steps are in focus.
     expect(screen.getByRole("button", { name: /Phase23/ })).toBeInTheDocument();
-    expect(container.querySelector(".overflow-x-auto")).toBeNull();
+    const scrollers = [...container.querySelectorAll(".overflow-auto, .overflow-x-auto")];
+    expect(scrollers).toEqual([screen.getByTestId("phase-graph")]);
+  });
+
+  it("keeps the focus panel's floor beside the graph and the card inside its column", () => {
+    mockOverview.overview = [
+      entry("release-train", "running", ["succeeded", "running", "pending"]),
+    ];
+    render(<CommandCenter />);
+
+    const board = screen.getByTestId("instance-board");
+    expect(board.style.gridTemplateColumns).toMatch(
+      /^minmax\(0, \d+(\.\d+)?px\) minmax\(360px, 1fr\)$/,
+    );
+    expect(board.closest("article")?.className).toContain("overflow-x-clip");
   });
 
   it("focuses the phase that needs attention and swaps focus on a chip click", () => {

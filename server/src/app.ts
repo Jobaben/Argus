@@ -155,6 +155,8 @@ import type {
   MachineSummary,
 } from "@argus/contracts";
 import { buildGateDecisionsResponse, readGateDecisions } from "./sources/gateDecisions.js";
+import { readTransitionLog } from "./transitionLog/store.js";
+import { compareIntegrity } from "./transitionLog/fold.js";
 import { buildOverview } from "./sources/overview.js";
 import { buildPalette } from "./sources/palette.js";
 import { buildSituation } from "./sources/insight.js";
@@ -1011,15 +1013,20 @@ export function createApp(deps: AppDeps): Hono {
     // Thresholds live on the definitions, not on the stored verdicts: an author
     // who tightens the bar should see the new line on the old history.
     const minScores = new Map<string, number | null>();
+    // Trajectory scores have their own bar and their own trend lines.
+    const trajectoryMinScores = new Map<string, number | null>();
     for (const s of schedules) {
       minScores.set(`schedule:${s.id}`, s.rubric?.minScore ?? null);
+      trajectoryMinScores.set(`schedule:${s.id}`, s.rubric?.trajectory?.minScore ?? null);
     }
     for (const p of pipelines) {
       for (const phase of p.phases) {
-        minScores.set(`phase:pipeline:${p.id}:${phase.id}`, phase.rubric?.minScore ?? null);
+        const key = `phase:pipeline:${p.id}:${phase.id}`;
+        minScores.set(key, phase.rubric?.minScore ?? null);
+        trajectoryMinScores.set(key, phase.rubric?.trajectory?.minScore ?? null);
       }
     }
-    return c.json(buildVerdictTrends(verdicts, minScores, new Date()));
+    return c.json(buildVerdictTrends(verdicts, minScores, new Date(), trajectoryMinScores));
   });
 
   app.get("/api/runs/:id/verdict", async (c) => {
@@ -1029,6 +1036,9 @@ export function createApp(deps: AppDeps): Hono {
     const rubric = rubricFor(got.run, schedules, pipelines);
     return c.json({
       verdict: await readVerdict(got.run.id),
+      // The run's current trajectory judgment, kept apart from its output
+      // verdict; null when none was made (or it has been pruned).
+      trajectory: await readVerdict(got.run.id, "trajectory"),
       rubric,
       unavailable: rubric
         ? analysisEnabled()
@@ -1630,6 +1640,17 @@ export function createApp(deps: AppDeps): Hono {
     return c.json(buildGateDecisionsResponse(id, inst, records));
   });
 
+  // The instance's transition log, compared with the saved instance
+  // (contracts/src/transitions.ts). Diagnostic only: it never repairs either,
+  // and nothing reads it to decide what the engine does next.
+  app.get("/api/instances/:id/transitions/integrity", async (c) => {
+    const id = c.req.param("id");
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(id)) return c.json({ error: "not found" }, 404);
+    const [inst, log] = await Promise.all([readInstance(id), readTransitionLog(id)]);
+    if (!inst && !log.present) return c.json({ error: "not found" }, 404);
+    return c.json(compareIntegrity(id, inst, log));
+  });
+
   // ── Gated artifact review ─────────────────────────────────────────────────
   // What a paused phase left for a human to look at, derived per read from the
   // instance and its artifact directory. Reads stay open like every other read;
@@ -1673,6 +1694,10 @@ export function createApp(deps: AppDeps): Hono {
       // against the phase's schema, so no shape is assumed here.
       ...(body.result === undefined ? {} : { result: body.result }),
       ...(typeof body.resultError === "string" ? { resultError: body.resultError } : {}),
+      // The hook's own version and marker reading (hook v2+), verbatim and
+      // untrusted: the engine validates it and only compares it against its
+      // own reading of the final message.
+      ...(body.completion === undefined ? {} : { completion: body.completion }),
     };
     const res = await engine.onSignal(id, signal);
     return c.json({ ok: res.ok }, res.code as 200 | 202 | 403 | 404);

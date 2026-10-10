@@ -249,7 +249,7 @@ test("channels: a result-publishing step under Claude read-only can still write 
   assert.ok(added.includes("/art"));
   // The repository itself stays denied: the channel does not widen the profile.
   const denied = prepared.plan.args[prepared.plan.args.indexOf("--disallowedTools") + 1];
-  assert.ok(denied.includes("Edit(///repo/**)"));
+  assert.ok(denied.includes("Edit(//repo/**)"));
   assert.deepEqual(channelStatus(prepared, "result"), {
     kind: "result",
     envVar: "ARGUS_RESULT_FILE",
@@ -589,7 +589,7 @@ test("knowledge context: the invocation record carries the file, the exact refs 
     ["knowledge-delta", "knowledge-context", "artifact-dir"],
   );
   const denied = prepared.plan.args[prepared.plan.args.indexOf("--disallowedTools") + 1];
-  assert.ok(denied.includes("Edit(///home/op/.claude/argus/invocations/run-1/**)"));
+  assert.ok(denied.includes("Edit(//home/op/.claude/argus/invocations/run-1/**)"));
 });
 
 test("knowledge context: absent means no file, no record entry and no channel — the legacy record shape", () => {

@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { KnowledgeContext, PhaseFailurePayload, PipelineInstance } from "@argus/contracts";
 import { createEngine } from "../pipelineEngine.js";
+import { fakeKill } from "../testPlatform.js";
 import type { Engine } from "../pipelineEngine.js";
 import { createPipeline, readPipelines, validatePipelineInput } from "../sources/pipelines.js";
 import { readInstance } from "../sources/instances.js";
@@ -15,6 +16,7 @@ import { readDeltaRecord } from "./staging.js";
 import { createClaim, createEvidence, createRevision, readLedger } from "./store.js";
 import { claimsProducedByPhase, formatClaimRef, getClaim } from "./kernel.js";
 import { analyzeImpact } from "./impact.js";
+import { testRunToken } from "../testSignalToken.js";
 
 /**
  * Business-rule discovery through the engine (Phase 5).
@@ -121,7 +123,9 @@ function engine(spawn: ReturnType<typeof recordingSpawn>["spawn"]) {
     now: () => new Date(),
     newId: () => `id-${++counter}`,
     spawn,
+    kill: fakeKill().kill,
     signalUrlBase: "http://localhost:7777",
+    newSignalToken: testRunToken,
     maxConcurrent: 4,
     tickMs: 30000,
     parentEnv: { PATH: process.env.PATH ?? "/bin", HOME: home },
@@ -165,7 +169,7 @@ async function complete(e: Engine, inst: PipelineInstance, phaseId: string, runI
     phaseId,
     runId,
     type: "completed",
-    token: inst.signalToken,
+    token: testRunToken(runId),
     payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
 }

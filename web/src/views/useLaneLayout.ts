@@ -1,9 +1,18 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PhasePill } from "../ds";
-import { LANE_GEOMETRY, laneLayout, laneWidthFor, tileChromeFor } from "./laneGraphLayout";
+import { chooseOrientation, laneLayout, MIN_SCALE, type LaneLayout } from "./laneGraphLayout";
 
 /** Below this card width the graph stacks above the focus panel. */
 export const STACK_BELOW_PX = 900;
+
+/** The narrowest the focus panel may get beside the graph before the board stacks. */
+export const FOCUS_MIN_PX = 360;
+
+/** The board grid's `gap-4`. */
+export const BOARD_GAP_PX = 16;
+
+/** The graph tile's border, both sides. */
+const TILE_CHROME_PX = 2;
 
 /**
  * The width of the element the ref lands on, tracked as it resizes.
@@ -30,28 +39,54 @@ export function useElementWidth<T extends HTMLElement>() {
   return [ref, width] as const;
 }
 
+export interface BoardArrangement {
+  layout: LaneLayout;
+  /** The graph sits above the focus panel rather than beside it. */
+  stacked: boolean;
+  /** The graph's grid track beside the focus panel; never more than the room left. */
+  graphTrackPx: number;
+}
+
+/** Top-down unless only left-to-right fits the room, or overflows it less. */
+function layoutFor(phases: PhasePill[], availW: number): LaneLayout {
+  const tb = laneLayout(phases, { orientation: "TB" });
+  if (availW <= 0 || tb.width <= availW) return tb;
+  const lr = laneLayout(phases, { orientation: "LR" });
+  return chooseOrientation(tb, lr, availW) === "LR" ? lr : tb;
+}
+
 /**
- * The layout for an instance at a given card width.
+ * How an instance's graph and focus panel share a card of a given width.
  *
- * Two passes: lane count and height first, then geometry sized for that count.
- * When the graph stacks above the focus panel it fits the card; beside it, lanes
- * take their ideal width and the panel takes the rest. An unmeasured width
- * (first paint, jsdom) means "unknown" and gets the ideal geometry, not the
- * floor.
+ * Beside, the focus panel is guaranteed {@link FOCUS_MIN_PX}: the graph gets
+ * what is left, and only if it is still readable there at {@link MIN_SCALE}.
+ * Otherwise the graph stacks above the panel and takes the card's full width.
+ * Either way the graph is bounded by its track and scrolls inside it — no
+ * shape can push the panel to zero or the card past its column.
  *
- * Both passes are sized for the room *inside* the tile: the border, and the
- * scrollbar of a graph tall enough to scroll, come off the width first. Paying
- * for them here is what keeps the graph off its horizontal scrollbar — the tile
- * is a border-box, so a tile exactly `layout.width` wide is two pixels too
- * narrow for the graph it holds, and one more on a tall pipeline.
+ * An unmeasured width (first paint, jsdom) means "unknown" and gets the
+ * natural geometry beside the panel, not the narrow fallback.
  */
-export function useLaneLayout(phases: PhasePill[], cardWidth: number) {
-  return useMemo(() => {
-    const probe = laneLayout(phases);
-    const stacked = cardWidth > 0 && cardWidth < STACK_BELOW_PX;
-    const chrome = tileChromeFor(probe.height);
-    const laneW = laneWidthFor(probe.lanes, stacked ? cardWidth - chrome : undefined);
-    const layout = laneLayout(phases, { ...LANE_GEOMETRY, laneW });
-    return { layout, laneW, stacked, tileWidth: layout.width + chrome };
-  }, [phases, cardWidth]);
+export function boardArrangement(phases: PhasePill[], cardWidth: number): BoardArrangement {
+  if (cardWidth <= 0) {
+    const layout = layoutFor(phases, 0);
+    return { layout, stacked: false, graphTrackPx: layout.width + TILE_CHROME_PX };
+  }
+  if (cardWidth >= STACK_BELOW_PX) {
+    const room = cardWidth - FOCUS_MIN_PX - BOARD_GAP_PX;
+    const layout = layoutFor(phases, room - TILE_CHROME_PX);
+    if (layout.width * MIN_SCALE <= room - TILE_CHROME_PX) {
+      return {
+        layout,
+        stacked: false,
+        graphTrackPx: Math.min(layout.width + TILE_CHROME_PX, room),
+      };
+    }
+  }
+  const layout = layoutFor(phases, cardWidth - TILE_CHROME_PX);
+  return { layout, stacked: true, graphTrackPx: cardWidth };
+}
+
+export function useBoardArrangement(phases: PhasePill[], cardWidth: number): BoardArrangement {
+  return useMemo(() => boardArrangement(phases, cardWidth), [phases, cardWidth]);
 }

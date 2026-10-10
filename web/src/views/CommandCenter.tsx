@@ -8,7 +8,7 @@ import { useRuns } from "../useRuns";
 import { SituationStrip } from "./SituationStrip";
 import { ActivityRail } from "./ActivityRail";
 import { PhaseGraph } from "./PhaseGraph";
-import { useElementWidth, useLaneLayout } from "./useLaneLayout";
+import { FOCUS_MIN_PX, useBoardArrangement, useElementWidth } from "./useLaneLayout";
 import { edgeState } from "./laneGraphLayout";
 import { decisionFields, isLongValue } from "./decisionValue";
 import { attentionPhase } from "./phaseAttention";
@@ -556,20 +556,25 @@ function InstanceBoard({
   // breakpoint: the card's width depends on whether the activity rail is
   // beside the board, which a media query cannot see.
   const [boardRef, width] = useElementWidth<HTMLDivElement>();
-  const { layout, laneW, tileWidth, stacked } = useLaneLayout(row.phases, width);
+  const { layout, stacked, graphTrackPx } = useBoardArrangement(row.phases, width);
   return (
     <div
       ref={boardRef}
       data-testid="instance-board"
       className={`min-w-0 ${stacked ? "flex flex-col gap-3" : "grid items-start gap-4"}`}
-      style={stacked ? undefined : { gridTemplateColumns: `${tileWidth}px minmax(0, 1fr)` }}
+      // Neither track can take the other's room: the graph's is capped and
+      // may shrink, the panel's has a floor.
+      style={
+        stacked
+          ? undefined
+          : {
+              gridTemplateColumns: `minmax(0, ${graphTrackPx}px) minmax(${FOCUS_MIN_PX}px, 1fr)`,
+            }
+      }
     >
       <PhaseGraph
         phases={row.phases}
         layout={layout}
-        laneW={laneW}
-        tileWidth={tileWidth}
-        stacked={stacked}
         selectedId={selectedId}
         onSelect={(id) => setPinned((prev) => (prev === id ? null : id))}
       />
@@ -639,7 +644,7 @@ function Row({
       // flashing in all at once; capped in `staggerDelay` so a long board still
       // finishes fast.
       style={{ animationDelay: staggerDelay(index) }}
-      className="rounded-tile border border-line bg-gradient-to-b from-surface-2 to-surface px-4 py-3.5 motion-safe:animate-[slide-up_var(--duration-base)_var(--ease-out-expo)_both]"
+      className="min-w-0 overflow-x-clip rounded-tile border border-line bg-gradient-to-b from-surface-2 to-surface px-4 py-3.5 motion-safe:animate-[slide-up_var(--duration-base)_var(--ease-out-expo)_both]"
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         {/* `break-words` here used to hyphenate the pipeline name one letter per

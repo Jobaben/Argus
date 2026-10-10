@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createApp } from "./app.js";
 import { createEngine } from "./pipelineEngine.js";
+import { fakeKill } from "./testPlatform.js";
 import { createUserStore } from "./userStore.js";
 import { readInstance } from "./sources/instances.js";
 import { readJournal } from "./sources/journal.js";
@@ -140,6 +141,7 @@ async function runExample(decision: { accepted: boolean }): Promise<{
   const engine = createEngine({
     now: () => new Date(2026, 7, 13, 12, 0),
     newId: () => `id-${++counter}`,
+    kill: fakeKill().kill,
     signalUrlBase: "http://localhost:7777",
     maxConcurrent: 4,
     tickMs: 30000,
@@ -177,7 +179,6 @@ async function runExample(decision: { accepted: boolean }): Promise<{
   });
   assert.equal(started.status, 202);
   const instanceId = ((await started.json()) as { id: string }).id;
-  const token = (await readInstance(instanceId))!.signalToken;
 
   // Complete each spawned step as its stop hook would, waiting for the engine's
   // detached launch of whatever the decision authorized. The instance's own
@@ -198,7 +199,9 @@ async function runExample(decision: { accepted: boolean }): Promise<{
         phaseId: step.phaseId,
         runId: step.runId,
         type: "completed",
-        token,
+        // The run's own token, from the environment it was spawned with —
+        // exactly what its stop hook would send.
+        token: step.env.ARGUS_SIGNAL_TOKEN,
         payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
         ...result,
       }),

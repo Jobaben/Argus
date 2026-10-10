@@ -18,6 +18,7 @@ import type {
   ExecutionContextReport,
   ExecutionVerificationsResponse,
   KnowledgeDeltaPreview,
+  KnowledgeAtlas,
   KnowledgeDeltasResponse,
   KnowledgeScope,
   RuleConformanceReport,
@@ -25,6 +26,7 @@ import type {
   SuppliedToReport,
 } from "@argus/contracts";
 import { readInvocation } from "../sources/runs.js";
+import { buildAtlas } from "./atlas.js";
 import { compareSuppliedConsumed, readKnowledgeContext } from "./context.js";
 import {
   CLAIM_ID_RE,
@@ -202,6 +204,15 @@ export function knowledgeRoutes(): Hono {
       .map((cl) => viewOf(ledger, cl))
       .filter((v) => !lifecycle || v.lifecycle === lifecycle);
     const body: ClaimsResponse = { claims };
+    return c.json(body);
+  });
+
+  /** The browsing read model: every claim revision in the scope (or the whole
+   *  ledger) with its evidence, conformance and consumption facts joined. */
+  routes.get("/atlas", async (c) => {
+    const scope = scopeQuery(c);
+    if (!scope.ok) return scope.res;
+    const body: KnowledgeAtlas = buildAtlas(await readLedger(), scope.scope);
     return c.json(body);
   });
 

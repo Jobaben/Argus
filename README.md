@@ -40,8 +40,10 @@ behind the ⋯ menu.
   live lists that show change as change, all transform/opacity only and enforced
   as such in CI. See **[the motion system](docs/MOTION-SYSTEM.md)**.
 
-OS-agnostic: it keys off `os.homedir()` and the encoded project-dir names, never
-the absolute paths embedded in the data files (those can be from another OS).
+Session discovery uses `os.homedir()` and encoded project-directory names,
+including transcripts originating on another OS. CI runs the typecheck and
+server and web suites on Linux and Windows; selected end-to-end harness suites
+remain POSIX-only. See [portable tests](docs/HARNESS.md#17-process-trees-and-portable-tests).
 
 ## Agent runtimes
 
@@ -163,13 +165,22 @@ privileged single-user control plane:
 
 Inside one phase's run, Argus decides what the agent may do, checks its work
 deterministically, and writes down enough to explain the run afterwards. The
-primitives, all opt-in and all documented in
+completion rules and optional capabilities are documented in
 **[docs/HARNESS.md](docs/HARNESS.md)**:
 
 - **Capability profiles** and an **environment policy** mapped onto each CLI's
   own flags, with unenforceable keys reported rather than assumed.
-- **Verification checks** (`command`, `file`, `artifact`, `changed-files`) that
-  decide phase success — the agent's own "done" never does.
+- **Strict completion by default**: one unambiguous `ARGUS_OUTCOME: succeeded`
+  marker is required. Each new run gets a signal token scoped to that run;
+  only its digest is stored. A marker is the agent's report, not independent
+  verification.
+- **Verification checks** (`command`, `file`, `artifact`, `changed-files`,
+  `trajectory`) can decide phase success. Trajectory checks apply deterministic
+  signal-count limits; incomplete optional input is shown as `not-evaluated`,
+  never as passed.
+- **Trajectory rubrics** can judge how the agent worked separately from its
+  output. Their `holdOn` rules withhold automated approval; they do not replace
+  verification checks or authorize Knowledge Ledger commits.
 - **Workspace isolation**: a git worktree per instance or per attempt, so
   parallel and repeated work never shares a working tree. No container, no
   new dependency; the branch is the deliverable.
@@ -185,8 +196,12 @@ primitives, all opt-in and all documented in
 - **Webhook** and **after-pipeline** triggers, and a **reliability** view per
   pipeline: first-attempt pass rate, lucky passes, failure classes over time.
 
-Each of these traces to an externally graded result — a leaderboard entry, a
-peer-reviewed ablation, or an independent evaluation — in
+Instance transitions also leave a checksummed diagnostic log. The saved
+instance remains the recovery authority; the log is not replayed to execute
+effects or grant permission.
+
+The research behind the harness traces to externally graded results —
+leaderboard entries, peer-reviewed ablations and independent evaluations — in
 **[docs/HARNESS-RESEARCH.md](docs/HARNESS-RESEARCH.md)**, which also records
 what the evidence argued _against_ building.
 
@@ -247,6 +262,21 @@ explains how the implementation converged.
 
 Inspect it all at `/api/knowledge`; the design and its worked example are in
 **[docs/KNOWLEDGE-LEDGER.md](docs/KNOWLEDGE-LEDGER.md)**.
+
+## The Decision Journal and shadow experiments
+
+The Decision Journal retains bounded review snapshots and structured model
+assessments of them. It records what a model judged from the evidence available
+at that moment. Reading retained assessments makes no model call; requesting a
+new assessment does. These assessments remain separate from the Knowledge
+Ledger and cannot substantiate its claims.
+
+The **Experiments** page reports two optional shadow measurements: H1 predicts
+operator actions at pending gates and reports settled ones; H2 compares
+run-outcome predictions with known outcomes. Both are off by default and share
+a call and spend allowance.
+Predictions do not change gates, approval decisions or knowledge support.
+See [USER-GUIDE §32–33](docs/USER-GUIDE.md#32-decision-experiments-h2-shadow).
 
 ## Getting around
 
@@ -344,9 +374,9 @@ format — after which "what is Argus doing?", `/argus-tail` (Claude Code) or
 `$argus-tail` (Codex) has the agent run the command and relay it, including
 from a phone, where a remote session is often the only window onto the box.
 `--install-skill=codex`, `=claude` or `=all` picks explicitly. The skill also
-lives in this repo, at `.claude/skills/argus-tail/` with `.agents/skills/`
-linking to it, so a session of either CLI opened inside the checkout has it
-already.
+lives in this repo, at `.claude/skills/argus-tail/` with an identical copy at
+`.agents/skills/argus-tail/` (a test keeps the two in step), so a session of
+either CLI opened inside the checkout has it already.
 
 Or with Docker (mount your `~/.claude`, publish the port, set a token):
 
@@ -434,10 +464,10 @@ in brief:
 
 ## Status
 
-**v0.2** — monitoring (agents, sessions, activity, projects, stats, search,
-inventory), the Scheduler (create / run-now / cancel / history), multi-phase
-Pipelines (human-gated approve / revise / abort), and the **Chronicle** — a
-cross-source swimlane timeline of every run, agent, and session
-(`GET /api/chronicle`, Chronicle tab) — all ship. The server is
-loopback-hardened, single-port packageable (`npm run build && npm start`), and
-Docker-ready. See [docs/SCORECARD.md](docs/SCORECARD.md) for the quality rubric.
+Monitoring, scheduling, human-gated pipelines, the Chronicle, the Knowledge
+Ledger, Decision Journal shadow experiments and optional trajectory checks
+ship. Completion and signal handling are hardened, and instance transitions
+have diagnostic integrity checks. The server is loopback-hardened,
+single-port packageable (`npm run build && npm start`) and can be hosted with
+Docker. Agent container containment is not implemented.
+See [docs/SCORECARD.md](docs/SCORECARD.md) for the quality rubric.

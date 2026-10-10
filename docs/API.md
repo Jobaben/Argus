@@ -302,7 +302,8 @@ credential of their own beyond the token/session layer above, same as every
 other schedule route. Unauthenticated calls get `401`
 with `code: "auth_required"` (or `"auth_setup_required"` before first-run
 setup). `POST /api/instances/:id/signal` is **not** admin-gated — it is called
-by headless agent hooks and authenticates with its own per-instance token. To
+by headless agent hooks and authenticates with a per-run token (see `ARGUS_SIGNAL_TOKEN` under
+"Emitting signals from a run"). To
 reset a forgotten password, delete `~/.claude/argus/auth.json` (local file
 access is the trust root) and run first-time setup again.
 
@@ -1390,8 +1391,9 @@ pipeline that behaves exactly as it did before Weave.
   "retry": {
     "attempts": 3, // 1-10, including the first
     "backoffSeconds": 30, // 0-3600, doubles each retry, capped at 1h
-    "retryOn": ["spawn", "exit-code"], // default; "signal" is opt-in
+    "retryOn": ["spawn", "exit-code", "unverified"], // default; "signal" is opt-in
   },
+  "completion": { "marker": "lenient" }, // overrides the pipeline's; default is "required"
   "produces": "release", // publish the payload as an artifact
 }
 ```
@@ -1481,6 +1483,48 @@ held per step because a phase's result lands with one step's signal while its
 siblings may still be running. `PipelineInstance` gains
 `artifacts: Record<string, unknown>` and `routeDecisions: RouteDecision[]`.
 
+`PipelineInstance.transitionLog?: { seq, degradedFrom?, capped? }` says where
+the saved state stands in the instance's transition log: `seq` is the last
+transition the saved state embodies, `degradedFrom` the first sequence number
+whose record could not be written (the log is incomplete from there on and the
+instance went on regardless), and `capped` is set once the log reached its 4 MiB
+limit — it is never pruned to make room. Absent on an instance not saved since
+the log existed. It is bookkeeping about the log, not state the engine decides
+on. See [docs/HARNESS.md § 18](HARNESS.md#18-transitions-and-recovery).
+
+`StepProgress.signalAuth?: SignalAuthRecord` and `Run.signalAuth?:
+SignalAuthRecord` say how that run's signals are authenticated:
+`{ scheme: "run-token-v1", sha256, phaseId, attempt }` — a SHA-256 over the
+run's own token and its instance id, phase id, attempt and run id — or
+`{ scheme: "none" }` for a runtime with no signal hook. The token itself is
+never stored. The run keeps its own copy so a signal from a run whose step a
+later attempt replaced can still be told apart from a forgery. Both are absent
+on runs recorded before per-run tokens (and on schedule runs).
+`PipelineInstance.signalScheme?: "run-token-v1"` is set on every instance
+created since: on it the instance-wide `signalToken` is never accepted for any
+signal. It is absent on older instances, whose steps launched before the
+upgrade keep accepting the legacy token. See
+[docs/HARNESS.md § 2](HARNESS.md#per-run-signal-tokens).
+
+`StepProgress.completion?: StepCompletion` records how that run's completion
+(or reported failure) reached Argus and what Argus decided:
+`{ signal: "completed" | "failed", source: "signal" | "run-record", policy:
+"required" | "lenient", marker: "succeeded" | "failed" | "blocked" | "missing" |
+"conflicting", hook?: { version, marker, agrees }, verdict: "accepted" |
+"refused" | "reported-failure", reason?, at }`. `marker` is Argus's own reading
+of the final message it received; `hook` is the stop hook's reading, when it
+sent one (`{ version: null, marker: null, agrees: false }` for malformed
+metadata), and is absent for a hook older than version 2 and for the
+run-record path. A multi-step or candidates phase keeps one per run; nothing is
+stamped at phase level. The field is the agent's report and how Argus handled
+it — it is not evidence the work was verified. Absent on a step that never
+reported and on steps recorded before the field existed. See
+[docs/HARNESS.md § 2](HARNESS.md#completion-policy-the-agents-report-not-verification).
+
+`PhaseDef.completion?` and `PipelineDefinition.completion?` take
+`{ marker: "required" | "lenient" }`; the phase's value overrides the
+pipeline's, and absent means `required`. Unknown keys are a `400`.
+
 Three optional fields record how a gate was passed.
 `PipelineInstance.gateDecisionIds?: string[]` lists the gate decisions the
 instance links, in order — a decision is linked before any of its effects start.
@@ -1540,6 +1584,15 @@ automated approval additionally carries `verdicts`: the exact basis it rested
 on, one entry per verdict — `runId`, `stepName`, `verdictId`, `at`, `score`,
 `bar`, `runtime`, `requestedModel`, `reportedModel`, `promptVersion` and
 `rubricDigest`.
+
+When the phase's rubric declares a trajectory, the automated approval also
+carries `trajectoryVerdicts`: the trajectory judgment each relevant run was
+approved on, one entry per run, apart from `verdicts` — `runId`, `stepName`,
+`verdictId`, `at`, `score`, `bar` (both `null` when the rubric declares only a
+check), `held` (always empty: an approval is never recorded over a held signal),
+`signalsVersion`, `runtime`, `requestedModel`, `reportedModel`, `promptVersion`
+and `rubricDigest` (the trajectory digest). The field is absent when the rubric
+declares no trajectory. See [Auto-approving gates](#auto-approving-gates).
 
 `effect` has four values:
 
@@ -1604,7 +1657,11 @@ read.
   - gate exclusions;
   - a census and pending counts per population (`manual`,
     `auto-approve-declared`);
-  - deterministic and Verdict baseline rows;
+  - deterministic and Verdict baseline rows — the Verdict baseline is
+    `auto-approval-qualification`, with one row set per version recorded
+    (v1, or v2 which adds the trajectory requirement, with signals from a complete
+    recording; v2 was amended in place before release, so a capture under its
+    earlier digest is never re-read; HARNESS §19);
   - model populations with agreement, false close and escalation, κ, and,
     for probabilities only, Brier, reliability and ECE;
   - spend totals, methods and integrity.
@@ -1768,6 +1825,44 @@ plus the common `label`, ≤120 chars):
 | `artifact`      | `path`, `minBytes?`                  | `path` relative, no `..` segment, no absolute path; `minBytes` a non-negative integer    |
 | `file`          | `path`, `minBytes?`                  | same as `artifact`, resolved against the phase's `cwd` instead of its artifact directory |
 | `changed-files` | `allow?`, `deny?`, `requireChanges?` | `allow`/`deny` lists of non-empty globs; `requireChanges` a boolean                      |
+| `trajectory`    | `thresholds`, `requireTranscript?`   | see below                                                                                |
+
+A `trajectory` check is deterministic (no model) and compares the signal counts
+of the attempt's relevant runs (HARNESS §19) to `thresholds`:
+
+```jsonc
+{
+  "kind": "trajectory",
+  "thresholds": { "destructive-command": 0, "errors": 5 },
+  "requireTranscript": true,
+}
+```
+
+`thresholds` is required: an object naming at least one of `repetition`,
+`errors`, `edit-revert`, `path` and `destructive-command`, each with a whole
+number maximum count from 0 to 10,000. `requireTranscript`, when present, is a
+boolean. Anything else is a `400` (`checks[i]` is the index in the phase's
+list):
+
+- `checks[i].thresholds must map signal names to a maximum count` (missing, not an
+  object, or an array);
+- `checks[i].thresholds: unknown signal "<name>" (one of …)`;
+- `checks[i].thresholds.<signal> must be a whole number from 0 to 10000`;
+- `checks[i].thresholds must name at least one signal`;
+- `checks[i].requireTranscript must be a boolean`;
+- `checks[i] has unknown key "<key>"`, like every kind.
+
+The check fails when a relevant run's count for a named signal is above its
+threshold, including on a truncated recording. When a run's input is incomplete
+(no run record, no session, no readable transcript, a truncated recording with no
+violation in what was kept, or no runs at all) it cannot show the thresholds held:
+with `requireTranscript` the check is `failed` as insufficient input, and without
+it the result is `not-evaluated`, never `passed`.
+
+`CheckResult.status` is `"passed"`, `"failed"` or `"not-evaluated"`; only a
+`trajectory` check produces the last. A `not-evaluated` check does not fail the
+report, is not counted as passed, and cannot be bound as knowledge evidence
+(citing it refuses the knowledge commit as an unsubstantiated citation).
 
 ```jsonc
 {
@@ -1784,16 +1879,23 @@ plus the common `label`, ≤120 chars):
 
 ### `PhaseProgress` fields
 
-- `verification?: VerificationReport` — `{ status: "running"|"passed"|"failed", startedAt, endedAt?, checks: CheckResult[] }`. Present only once the phase's steps have all reported and it declares `checks`; absent for a check-less phase, same as before.
+- `verification?: VerificationReport` — `{ status: "running"|"passed"|"failed", startedAt, endedAt?, checks: CheckResult[] }`, where each `CheckResult` is `{ kind, label, status: "passed"|"failed"|"not-evaluated", detail, exitCode?, durationMs, output? }` and the report is `failed` if and only if some check `failed`. Present only once the phase's steps have all reported and it declares `checks`; absent for a check-less phase, same as before.
 - `artifactDir?: string | null` — where this attempt's steps were told to write file artifacts (`~/.claude-argus/artifacts/<instanceId>/<phaseId>/`), interpolated into prompts as `{{artifactDir}}` / `{{artifactDir.<phaseId>}}`.
 
 ### `PhaseFailurePayload.failureClass`
 
-A failed phase's `payload` (free-form otherwise) carries
-`failureClass: "spawn" | "exit-code" | "signal" | "timeout" | "verification" | "configuration"` —
-how the failure was classed for the retry policy. `"configuration"` is never
-retried; the other five are retried only when named in the phase's
-`retry.retryOn` (default `["spawn", "exit-code"]`). See
+A failed phase's `payload` (free-form otherwise) carries a `failureClass` —
+how the failure was classed for the retry policy. It is one of `"spawn"`,
+`"exit-code"`, `"signal"`, `"timeout"`, `"verification"`, `"knowledge-delta"`,
+`"knowledge-context-integrity"`, `"rule-verification"`, `"change-proposal"`,
+`"change-context-integrity"`, `"acceptance-verification"`, `"unverified"` or
+`"configuration"`. `"configuration"` is never retried; every other class is
+retried only when named in the phase's `retry.retryOn`, whose default is
+`["spawn", "exit-code", "unverified"]`. `"unverified"` is a completion Argus
+could not accept on the agent's own word (no `ARGUS_OUTCOME` marker under a
+`required` completion policy, conflicting markers, or a stop-hook reading that
+disagrees with the delivered message); a policy that lists `retryOn`
+explicitly must name it to retry it. See
 [docs/HARNESS.md § 2](HARNESS.md#2-agent-completion--phase-success) for what
 each class means and exactly which rung of the completion ladder it comes
 from.
@@ -1904,6 +2006,40 @@ unknown instance, phase or file, or a phase with no artifact directory. The
 viewer is read-only — there is no write route; the human's revision travels as
 the `note` on `POST /api/instances/:id/revise`.
 
+### `GET /api/instances/:id/transitions/integrity`
+
+Compares the instance's transition log (`argus/transitions/<id>.jsonl`) with the
+saved instance and reports whether they agree. Diagnostic only: it repairs
+neither, and nothing reads it to decide what the engine does next. The log is
+evidence, never an authority — the saved instance is.
+
+```json
+{
+  "instanceId": "…",
+  "status": "ahead",
+  "coverage": "full",
+  "instanceSeq": 41,
+  "logSeq": 42,
+  "replayedTo": 41,
+  "findings": [
+    "the log holds 1 record past the saved instance (seq 42); it was proposed and never committed"
+  ],
+  "firstDivergence": "/phases/2/status"
+}
+```
+
+`status` is one of `untracked`, `consistent`, `partial`, `missing`, `degraded`,
+`ahead`, `behind`, `gap`, `disagreement` or `corrupt`; HARNESS §18 says what
+each means. `coverage` is `full` (replayed from the instance's first
+transition), `from-baseline` (from a baseline written after the instance
+existed) or `none`. `instanceSeq` / `logSeq` are the last sequence number the
+saved instance and the log hold (null when there is none), and `replayedTo` is
+where the fold got to. `findings` lists every problem in plain words, and more
+than one may apply. `firstDivergence`, when present, is the JSON-pointer path of
+the first place the fold and the instance differ. Readers tolerate malformed
+state — torn tails, bad lines, foreign records — and report it rather than
+fail. `404` when the id is invalid or neither the instance nor a log exists.
+
 ### `GET /api/instances/:id/journal`
 
 ```json
@@ -1991,7 +2127,12 @@ one record. An unknown or path-escaping id returns an empty list.
 reconcile after a restart); `step.exit-mismatch` marks a step whose completion
 signal was accepted as `completed` but whose process then exited non-zero —
 the phase is not unwound over it, but the run carries both
-`outcome: "succeeded"` and the non-zero `exitCode`; `phase.verifying` /
+`outcome: "succeeded"` and the non-zero `exitCode`; `phase.launch-recovered` marks a phase attempt that was `running` with no run
+planned (Argus stopped between the transition and the launch) which `reconcile`
+then launched; `step.termination-redelivered` marks a recorded stop request
+whose process was still alive after a restart and was delivered again;
+`step.orphan-stopped` marks a still-alive run whose step was already decided,
+stopped on recovery (HARNESS §18); `phase.verifying` /
 `phase.verified` bracket Argus's own checks running over a phase's work, once
 every step is in.
 
@@ -2159,9 +2300,33 @@ Validation is strict and the errors are `400`, not `500`: `goal` required,
 1–10 criteria, ids matching `[a-z0-9][a-z0-9_-]{0,40}` and unique, weights > 0,
 `minScore` in 0–10. On a schedule, `"rubric": null` removes an existing one.
 
+A rubric may also declare an optional `trajectory`, which judges how the agent
+worked rather than what it produced (HARNESS §19). Absent, no trajectory
+analysis of any kind happens:
+
+```jsonc
+"trajectory": {
+  "criteria": [{ "id": "focus", "label": "Stayed on the task" }], // optional, same rules as above
+  "minScore": 6, // optional, 0–10; needs criteria
+  "check": { "holdOn": ["repetition", "errors", "edit-revert", "path", "destructive-command"] }, // optional
+}
+```
+
+It must declare criteria, a check or both, else `400`. `check.holdOn` is a
+non-empty list of distinct signal names from the five above. It is an
+**automation hold** only: an observed named signal withholds an automated
+(Verdict watcher) approval. It does not fail verification, pause a phase or affect
+an operator's approval, and it is not a `PhaseCheck`; for a verification check use
+the `trajectory` kind of a phase's `checks` (see `PhaseCheck`).
+
 A **gated** phase may additionally declare `"autoApprove": { "verdict": 8 }`.
 It requires a rubric on the same phase (there is nothing to clear otherwise) and
 is refused on an ungated phase — both are `400`.
+
+`autoApprove` may also carry `"trajectory": 6` (0–10): the bar for the trajectory
+score. It is accepted only when the phase's rubric declares trajectory
+`criteria` (`400` otherwise), and when absent the `verdict` bar applies to the
+trajectory score too.
 
 `autoApprove` is also refused on a phase that commits knowledge by
 configuration — one that declares `discovery`, `ruleVerification`,
@@ -2204,10 +2369,62 @@ There is no opt-in bypass.
     }, // optional
     "rubricDigest": "…", // optional
   },
+  "trajectory": null, // the run's current trajectory judgment, or null — see below
   "rubric": { "…": "the rubric in force, or null" },
   "unavailable": null,
 }
 ```
+
+`trajectory` is the run's current `kind: "trajectory"` verdict, kept apart from
+`verdict` (the output judgment, which is what this route always returned). It is
+`null` when none was made, when the rubric declares no trajectory, or when it
+has been pruned. Its shape is a verdict plus the assessment:
+
+```jsonc
+{
+  "id": "VT-…",
+  "kind": "trajectory",
+  "runId": "…",
+  "status": "ready", // ready | failed | skipped (skipped: no transcript, or analysis off)
+  "score": 7.5, // null for a check-only rubric
+  "criteria": [{ "id": "focus", "label": "…", "score": 8, "note": "…" }], // empty without trajectory criteria
+  "regression": false, // score below rubric.trajectory.minScore
+  "minScore": 6,
+  "rubricDigest": "…", // the trajectory digest, not the output one
+  "provenance": {
+    "runtime": "claude",
+    "requestedModel": "haiku",
+    "reportedModel": null,
+    "promptVersion": 1,
+  }, // only when a judge was asked
+  "trajectory": {
+    "judged": true, // a judge was asked (the rubric declares trajectory criteria)
+    "held": ["path"], // observed signals the rubric's check holds on; empty = passed
+    "signals": {
+      "version": 1,
+      "transcript": "present", // present | missing (missing: nothing was computed)
+      "events": 212, // Recorder events read
+      "truncated": false, // the recording dropped events; counts may undercount
+      "signals": [
+        {
+          "kind": "path",
+          "count": 1,
+          "observed": true,
+          "examples": ["Write: /etc/hosts (outside the working directory)"],
+        },
+      ],
+    },
+  },
+  // …and the other shared verdict fields (at, summary, costUsd, tokens, durationMs, error, …)
+}
+```
+
+The signals are heuristics, not findings: `observed` says a count reached the
+heuristic's threshold, a count of zero means "not observed in the recorded
+events", and `examples` are clipped timeline labels or commands, never file
+contents (HARNESS §19 lists each rule and its blind spots). There is no route to
+request a trajectory judgment: the Verdict watcher makes them on the scheduler
+tick. `POST /api/runs/:id/verdict` re-scores the output only.
 
 Re-judging appends a new record rather than replacing the old one, and this
 route returns the **current** one — the run's newest. Trends, regressions and
@@ -2246,8 +2463,17 @@ What the server does **not** trust from the judge:
     },
   ],
   "summary": { "scored": 12, "regressions": 1, "average": 7.1 },
+  "trajectoryTrends": [], // same shape as trends; absent or empty when no rubric declares trajectory criteria
 }
 ```
+
+`trajectoryTrends` holds the **trajectory** score history, in the same shape and
+key space as `trends` but kept apart from it: trajectory scores are a different
+measurement and are never averaged into `summary`, which covers output scores
+only. Each line's `minScore` is the live `rubric.trajectory.minScore` of the
+schedule or phase (`null` when none). Only trajectory verdicts with a score
+contribute, so a check-only rubric has no line. The field is omitted when there
+are none.
 
 `delta` compares against the prior median rather than the previous run, so one
 noisy judgement is not a collapse and one good run is not a recovery. Thresholds
@@ -2284,6 +2510,22 @@ cost is up to one tick of latency. The rules:
   averaging would let one excellent step carry a bad one through a gate set to
   catch exactly that.
 
+When the phase's rubric declares a `trajectory`, the gate also needs a current,
+usable trajectory judgment for every relevant run: `ready`, under the rubric's
+trajectory digest, with its signals present at the current signals version and
+from a complete (untruncated) recording, a score at or above
+`autoApprove.trajectory` (else `autoApprove.verdict`) when trajectory criteria are
+declared, and nothing held by `check.holdOn`. A missing, pruned, failed, skipped,
+truncated or mismatched trajectory judgment waits for a person, as does an
+observed held signal or a score below the bar (HARNESS §19). The
+insufficient-data reasons are `no-trajectory-verdict`, `trajectory-without-id`,
+`trajectory-not-ready`, `trajectory-rubric-mismatch`,
+`trajectory-signals-unavailable` (no transcript or an older signals version),
+`trajectory-signals-truncated` (the Recorder kept only the last 2,000 events) and
+`trajectory-prompt-mismatch`. Missing or truncated signals are insufficient data,
+not an observed violation, and they hold automation the same way at the watcher
+and at the engine's boundary; an operator's approval is unaffected.
+
 The engine boundary the watcher uses takes only `{ runId, verdictId }` per
 relevant run:
 
@@ -2298,6 +2540,13 @@ relevant run:
   in.
 - A verdict without an `id` (written before ids existed) cannot be named, so
   such a gate waits for a person.
+- A phase whose rubric declares a trajectory takes a second basis,
+  `trajectoryVerdicts: [{ runId, verdictId }]`, held to the same rules (one
+  entry per relevant run, no duplicates, no unrelated run, the run's current
+  trajectory judgment). A phase whose rubric declares none refuses a request that
+  carries one. Its recorded `trajectoryVerdicts[]` entries are reconstructed from
+  the stored judgments, with `held` recomputed from the stored signals, and it is
+  validated under the same verdict store lock as the output basis.
 - The decision point: validating the current verdicts, writing the decision
   record and linking it to the instance all happen while the verdict store's lock
   is held — the same lock every verdict write takes. A verdict written before
@@ -2664,9 +2913,10 @@ session — it cannot execute anything.
 | `POST /api/pipelines/:id/tune`                          | start one tuning pass per phase → `202` with a `running` report; `409` while one runs — **admin**                                                                                                                                                                  |
 | `GET /api/overview`                                     | command-center rows: `{ definition, latest, cost }` per pipeline, attention-first                                                                                                                                                                                  |
 | `GET /api/instances/:id`                                | full pipeline instance                                                                                                                                                                                                                                             |
-| `POST /api/instances/:id/signal`                        | ingest a signal `{ phaseId, runId, type, token, payload?, result?, resultError? }`; `403` on bad token                                                                                                                                                             |
+| `POST /api/instances/:id/signal`                        | ingest a signal `{ phaseId, runId, type, token, payload?, result?, resultError?, completion? }`; `403` when the token is not the named run's own; `202` when the signal is genuine but ignored (see below)                                                         |
 | `GET /api/instances/:id/phases/:phaseId/review`         | what a paused phase left for a human: payload, result, checks, artifact listing, and the attempt's candidate knowledge; `409` unless waiting or failed                                                                                                             |
 | `GET /api/instances/:id/phases/:phaseId/artifact?path=` | one artifact's text (clipped at 512 KiB) or metadata; `400` on a path that escapes the directory                                                                                                                                                                   |
+| `GET /api/instances/:id/transitions/integrity`          | compare the instance's transition log with the saved instance → `TransitionIntegrityReport`; `404` for an unknown or invalid id; diagnostic only                                                                                                                   |
 | `GET /api/instances/:id/gate-decisions`                 | the recorded gate decisions (approve / revise / abort) and how each was made, plus gated phases with no decision on record; `404` when neither the instance nor any record exists                                                                                  |
 | `POST /api/instances/:id/approve`                       | advance past a gate (optional `{ answers, phaseId, attempt }`) — **admin**                                                                                                                                                                                         |
 | `POST /api/instances/:id/revise`                        | re-run the paused phase with the human's note (optional `{ note, phaseId, attempt }`) — **admin**                                                                                                                                                                  |
@@ -2729,6 +2979,38 @@ hook file serves every runtime that has hooks at all:
   plugins rather than command hooks, so phases on OpenCode complete through the
   run-record fallback described below rather than through a signal.
 
+`ARGUS_SIGNAL_TOKEN` is **per run**: each run that can signal gets its own random
+256-bit token, valid only for that exact instance, phase, attempt and run. The
+variable name is unchanged, so installed hooks keep working. Argus persists
+only a digest of it (`SignalAuthRecord`, below), never the value. A run on a
+runtime with no signal hook (`capabilities.signalHook: false`, i.e. OpenCode)
+is given no `ARGUS_SIGNAL_TOKEN` at all and every HTTP signal for it is `403`;
+it completes through the run-record path, which never goes through HTTP
+authentication. The token limits what a leak can reach; it is not a boundary
+between an agent and its own hook, which share an OS user and an environment
+(see [HARNESS.md § 2](HARNESS.md#per-run-signal-tokens)).
+
+**Which signals are acted on.** A signal is authenticated first, then decided:
+
+- A token that is not the named run's own — a sibling's, another instance's, a
+  different attempt's — is `403`, and nothing is written or journalled. On an
+  instance created before per-run tokens (no `signalScheme`), a step launched
+  before the upgrade still accepts the instance's legacy `signalToken`; any step
+  launched since refuses it.
+- A genuine signal for a run that is no longer a current step (a revised or
+  retried attempt's run, a superseded candidate) is journalled as ignored and
+  answered `202`. It changes nothing — not the instance, and not the run
+  record, so a run whose completion was refused cannot be flipped to
+  `succeeded` by a repeated delivery.
+- A step that is no longer `running` ignores signals the same way
+  (`step-not-running`): a duplicate `completed` cannot overwrite the payload or
+  result, and a late `failed` cannot fail a phase whose step already
+  succeeded.
+- On a paused (or finished) instance every authenticated signal is a `200` no-op. A `needs-input` signal
+  pauses the phase (`awaiting-approval`, `pause: "needs-input"`); the same
+  run's later Stop signal changes nothing, and approving (with answers) or
+  revising is what resumes it.
+
 `POST /api/setup/apply` installs whichever of these the machine needs — and
 only those. Each runtime's CLI and hook prerequisites are checked only while
 something on the machine uses that runtime, so a Codex-only install is never
@@ -2740,6 +3022,28 @@ the signal type from the agent's final message: a line matching
 `ARGUS_OUTCOME: failed` (or `blocked`) emits `failed`; anything else emits
 `completed`. A run that stops cleanly but concluded it failed can therefore fail
 its phase instead of being rubber-stamped.
+
+A `completed` is not the hook's verdict either. Argus classifies the final
+message it is handed (payload keys `last_assistant_message`,
+`last_agent_message`, then `last_message`) with its own classifier —
+`succeeded`, `failed`, `blocked`, `missing` or `conflicting`, a marker being
+recognised anywhere in the message, case-insensitively — and applies the
+phase's `completion` policy. Under the default `required`, a `completed` whose
+message has no marker, or two different conclusions, is refused as failure
+class `unverified`; a `failed`/`blocked` marker inside a `completed` is refused
+as `signal`. `lenient` accepts a missing marker (and says so in the step's
+completion record) but still refuses the other two. The refusal comes before
+Argus reads anything the run proposed, so nothing is staged and no checks run.
+This is the agent's report, not verification: see
+[HARNESS.md § 2](HARNESS.md#completion-policy-the-agents-report-not-verification).
+
+Since hook version 2 (`HOOK_VERSION = 2`) the POST body also carries an
+additive top-level `completion: { hookVersion: 2, marker }` — the hook's own
+reading of the marker. It is untrusted: Argus re-classifies the delivered
+message and only compares. Under `required`, a disagreement (or malformed
+metadata) refuses the completion as `unverified`; under `lenient` it is
+recorded and the message alone decides. An older hook sends no metadata and its
+completions are judged on the message; an older server ignores the field.
 
 The engine supplies this reporting contract automatically: every step run is
 spawned with a constant instruction to end the final message with
@@ -2754,11 +3058,14 @@ the agent judges success against them. An explicit CLI arg (`needs-input` /
 > **Important:** the Stop-hook signal is the preferred completion path. If a
 > completed run on a runtime that declares the fallback (Codex, which has a
 > best-effort hook, and OpenCode, which has none) has not signalled,
-> reconciliation falls back to its run record and final message: a successful
-> run with one unambiguous
+> reconciliation falls back to its run record and final message, read by the
+> same classifier as a signal: a successful run with one unambiguous
 > `ARGUS_OUTCOME: succeeded` advances; `failed` / `blocked` fails with the
-> reported reason; a failed run uses its recorded error; and a missing or
-> conflicting marker fails safely. Unsignalled Claude Code and Qwen Code runs —
+> reported reason (class `signal`); a failed run uses its recorded error; and a
+> missing or conflicting marker fails as `unverified` — under either
+> completion policy, since on this path an exit code alone has never been taken
+> as a completion (it was classed `exit-code` before `unverified` existed). The
+> completion is recorded on the step with `source: "run-record"`. Unsignalled Claude Code and Qwen Code runs —
 > the two whose hooks Argus installs and can rely on — retain the existing
 > fail-safe behavior. The instance lock makes fallback and a delayed hook signal
 > idempotent.

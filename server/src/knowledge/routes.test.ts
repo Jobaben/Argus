@@ -18,6 +18,7 @@ import type {
   ExecutionContextReport,
   ExecutionProvenance,
   ImpactSet,
+  KnowledgeAtlas,
   SuppliedToReport,
   SupportReport,
 } from "@argus/contracts";
@@ -1669,6 +1670,49 @@ test("a half-named scope is a 400, never a broader query", async () => {
     assert.match(r.body.error, /together/);
   }
   const bad = await get(app, "/api/knowledge/claims?project=has%20space&repository=x");
+  assert.equal(bad.status, 400);
+});
+
+test("GET /atlas joins evidence and conformance, scoped exactly like /claims", async () => {
+  const app = makeApp();
+  const { a, b } = await seedTwoProjects(app);
+  await post(app, "/api/knowledge/claims", { id: "FACT-LEGACY", kind: "fact", statement: "old" });
+  const ev = await post(app, "/api/knowledge/evidence", {
+    claim: a.id,
+    direction: "supports",
+    source: { type: "source-code", path: "src/Comment.cs", startLine: 4, endLine: 9 },
+  });
+  assert.equal(ev.status, 201, JSON.stringify(ev.body));
+
+  const all = (await get(app, "/api/knowledge/atlas")).body as KnowledgeAtlas;
+  assert.equal(all.scope, null);
+  assert.deepEqual(all.claims.map((c) => c.id).sort(), [a.id, b.id, "FACT-LEGACY"].sort());
+  assert.equal(all.scopes.length, 3);
+  assert.ok(all.scopes.some((s) => s.scope === null));
+
+  const onlyA = await get(app, `/api/knowledge/atlas?${asQuery(SCOPE_A)}`);
+  assert.equal(onlyA.status, 200);
+  const atlas = onlyA.body as KnowledgeAtlas;
+  assert.deepEqual(atlas.scope, SCOPE_A);
+  assert.deepEqual(
+    atlas.claims.map((c) => c.id),
+    [a.id],
+  );
+  const [rule] = atlas.claims;
+  assert.equal(rule.support, "supported");
+  assert.equal(rule.conformance, "unverified");
+  assert.deepEqual(
+    rule.evidence.map((e) => e.source),
+    [{ type: "source-code", path: "src/Comment.cs", startLine: 4, endLine: 9 }],
+  );
+});
+
+test("GET /atlas refuses a half-named or invalid scope", async () => {
+  const app = makeApp();
+  const half = await get(app, "/api/knowledge/atlas?project=motorit");
+  assert.equal(half.status, 400);
+  assert.match(half.body.error, /together/);
+  const bad = await get(app, "/api/knowledge/atlas?project=has%20space&repository=x");
   assert.equal(bad.status, 400);
 });
 

@@ -142,6 +142,16 @@
   color-scheme: dark;
 }
 
+/* Native pickers style their popup from the <select>'s own background, and
+   most of ours are `bg-transparent`, so Chromium on Windows falls back to a
+   light popup while the options inherit light ink — unreadable. Give the
+   options an explicit surface so every picker's list stays legible. */
+select option,
+select optgroup {
+  background-color: var(--color-surface);
+  color: var(--color-ink);
+}
+
 html,
 body,
 #root {

@@ -1,7 +1,7 @@
 import { readFile, readdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { paths } from "../claudeHome.js";
-import { atomicWriteJson } from "./atomicWrite.js";
+import { atomicWriteJsonDurable } from "./atomicWrite.js";
 import { cached, invalidate, patchCached } from "./cache.js";
 import { createFileMemo } from "./fileMemo.js";
 import { log } from "../log.js";
@@ -51,8 +51,15 @@ function upsert(all: PipelineInstance[], inst: PipelineInstance): PipelineInstan
   return next;
 }
 
+/**
+ * Publish an instance: atomically (a reader sees the old record or the new
+ * one, never a mix) and durably (fsynced file, then fsynced directory — see
+ * `durable/io.ts` for what that means per platform). The instance save is the
+ * commit point of every transition, including a gate decision's link, so it
+ * must not be the write that a crash can quietly undo.
+ */
 export async function writeInstance(inst: PipelineInstance): Promise<void> {
-  await atomicWriteJson(instancePath(inst.id), inst);
+  await atomicWriteJsonDurable(instancePath(inst.id), inst);
   // Drop any memo entry so the next read re-stats — atomic rename gives the
   // file a fresh mtime, but eager eviction makes staleness impossible even on
   // filesystems with coarse mtime resolution.
@@ -168,6 +175,9 @@ export async function pruneInstances(pipelineId: string, keep: number): Promise<
       // knows they exist. A tree whose policy asked to be kept is left alone.
       await pruneWorktrees(i);
       await rm(instancePath(i.id), { force: true });
+      // Its transition log is part of the instance: it explains a record that
+      // no longer exists, and nothing else ever deletes it.
+      await rm(path.join(paths.transitionsDir(), `${i.id}.jsonl`), { force: true });
       // The instance's file artifacts and working-tree baselines go with it.
       await rm(path.join(paths.artifactsDir(), i.id), { recursive: true, force: true });
       await rm(path.join(paths.invocationsDir(), i.id), { recursive: true, force: true });

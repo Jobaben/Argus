@@ -3,6 +3,7 @@ import path from "node:path";
 import { paths } from "../claudeHome.js";
 import { createJsonArrayStore } from "./jsonArrayStore.js";
 import { buildRecording } from "./recorder.js";
+import { clipLine, formatTimeline } from "./timeline.js";
 import type { AnalysisRunner } from "./analysis.js";
 import type { Autopsy, AutopsySpan, FailureClass } from "@argus/contracts";
 import type { Run } from "./scheduleTypes.js";
@@ -35,9 +36,6 @@ export const AUTOPSY_KEEP = 200;
 /** Recorder events quoted into the prompt. Enough to see the shape of the run;
  *  bounded so a 20,000-event transcript can't write a 20,000-line prompt. */
 export const PROMPT_EVENT_CAP = 60;
-
-/** Per-event label budget inside the prompt. */
-const EVENT_LABEL_MAX = 200;
 
 /** Hard ceiling on the whole prompt. A pass that would exceed it is trimmed,
  *  never sent oversized. */
@@ -136,10 +134,7 @@ export function isAutopsyEligible(run: Run): boolean {
 
 // ── Prompt ──────────────────────────────────────────────────────────────────
 
-function clip(text: string, max: number): string {
-  const one = text.replace(/\s+/g, " ").trim();
-  return one.length > max ? `${one.slice(0, max - 1)}…` : one;
-}
+const clip = clipLine;
 
 /**
  * The postmortem prompt.
@@ -151,15 +146,7 @@ function clip(text: string, max: number): string {
  * range: asking for line numbers would mean trusting the model to count.
  */
 export function buildAutopsyPrompt(run: Run, recording: Recording): string {
-  const tail = recording.events.slice(-PROMPT_EVENT_CAP);
-  const timeline = tail
-    .map((e) => {
-      const secs = (e.atMs / 1000).toFixed(1);
-      const mark = e.errored || e.kind === "error" ? " [ERROR]" : "";
-      const detail = e.detail ? ` — ${clip(e.detail, EVENT_LABEL_MAX)}` : "";
-      return `${secs}s ${e.kind}${mark}: ${clip(e.label, EVENT_LABEL_MAX)}${detail}`;
-    })
-    .join("\n");
+  const timeline = formatTimeline(recording.events.slice(-PROMPT_EVENT_CAP));
 
   const body = `You are analysing why one automated agent run failed. Answer only with JSON.
 

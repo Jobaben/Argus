@@ -16,6 +16,9 @@ import { createClaim, createEvidence, createRevision, readLedger } from "./store
 import { readDeltaRecord, stagedDeltaPath } from "./staging.js";
 import { formatClaimRef, getClaim, revisionsOf } from "./kernel.js";
 import { analyzeImpact } from "./impact.js";
+import { fakeKill } from "../testPlatform.js";
+import { testRunToken } from "../testSignalToken.js";
+import { toClaudeRulePath } from "../runtimes/claude.js";
 
 /**
  * The KnowledgeDelta protocol through the engine: a run writes the file Argus
@@ -68,9 +71,12 @@ function engine(
     newId: () => `id-${++counter}`,
     spawn,
     signalUrlBase: "http://localhost:7777",
+    newSignalToken: testRunToken,
     maxConcurrent: 4,
     tickMs: 30000,
     parentEnv: { PATH: process.env.PATH ?? "/bin", HOME: home },
+    // Pids are invented, so the real killRunProcess must never be reachable.
+    kill: fakeKill().kill,
     ...over,
   });
 }
@@ -117,7 +123,7 @@ async function complete(e: Engine, inst: PipelineInstance, phaseId: string, runI
     phaseId,
     runId,
     type: "completed",
-    token: inst.signalToken,
+    token: testRunToken(runId),
     payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   });
 }
@@ -243,7 +249,11 @@ test("ungated with checks: nothing is canonical until the deterministic checks p
       name: "Plan",
       steps: [step()],
       checks: [
-        { kind: "command", run: `while [ ! -f "${marker}" ]; do sleep 0.02; done`, label: "wait" },
+        {
+          kind: "command",
+          run: `node -e "function t(){if(require('node:fs').existsSync(process.argv[1])){process.exit(0)}setTimeout(t,20)}t()" "${marker}"`,
+          label: "wait",
+        },
       ],
     },
   ]);
@@ -308,7 +318,13 @@ test("retry isolation: only the succeeding attempt's delta enters canonical know
       id: "plan",
       name: "Plan",
       steps: [step()],
-      checks: [{ kind: "command", run: `test -f "${marker}"`, label: "marker" }],
+      checks: [
+        {
+          kind: "command",
+          run: `node -e "process.exit(require('node:fs').existsSync(process.argv[1]) ? 0 : 1)" "${marker}"`,
+          label: "marker",
+        },
+      ],
       retry: { attempts: 2, backoffSeconds: 0, retryOn: ["verification"] },
     },
   ]);
@@ -1158,7 +1174,7 @@ test("a supported runtime under a restrictive profile has every channel granted 
   ]);
   // The repository itself is still denied under the profile.
   const denied = record.args[record.args.indexOf("--disallowedTools") + 1];
-  assert.ok(denied.includes(`Edit(//${work}/**)`));
+  assert.ok(denied.includes(`Edit(/${toClaudeRulePath(work)}/**)`));
 });
 
 test("Claude Code read-only with the working directory containing Argus's work root: the channels are honestly unavailable", async (t) => {
@@ -1289,7 +1305,13 @@ test("retry under a read-only profile: every attempt gets its own channels, and 
       cwd: workDir(),
       capabilities: { filesystem: "read-only", tools: { allow: ["Read"] } },
       steps: [step()],
-      checks: [{ kind: "command", run: `test -f "${marker}"`, label: "marker" }],
+      checks: [
+        {
+          kind: "command",
+          run: `node -e "process.exit(require('node:fs').existsSync(process.argv[1]) ? 0 : 1)" "${marker}"`,
+          label: "marker",
+        },
+      ],
       retry: { attempts: 2, backoffSeconds: 0, retryOn: ["verification"] },
     },
   ]);

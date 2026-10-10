@@ -1,10 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import { mkdtempSync, symlinkSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { symlinkSkip } from "./testPlatform.js";
 // The reference hook lives at <repo>/hooks/argus-signal.mjs; import its pure
 // type-resolution helper. The module guards its side effects behind an
 // is-main check, so importing it here is safe.
@@ -14,6 +16,7 @@ import {
   buildReason,
   lastMessage,
   deliverSignal,
+  deliverWithRetry,
 } from "../../hooks/argus-signal.mjs";
 
 test("explicit CLI arg always wins over the message", () => {
@@ -210,13 +213,138 @@ test("signal delivery does not swallow transport failures", async () => {
   );
 });
 
+/** A clock that only moves when the retry loop sleeps, and the sleeps it saw. */
+function fakeTime() {
+  let t = 0;
+  const sleeps: number[] = [];
+  return {
+    sleeps,
+    now: () => t,
+    sleep: async (ms: number) => {
+      sleeps.push(ms);
+      t += ms;
+    },
+  };
+}
+
+/** A fetch that plays `steps` in order: a status to answer, or an error to throw. */
+function scriptedFetch(steps: (number | Error)[]) {
+  const bodies: string[] = [];
+  const fetchImpl = async (_url: string | URL | Request, init?: RequestInit) => {
+    bodies.push(String(init?.body));
+    const step = steps[Math.min(bodies.length - 1, steps.length - 1)];
+    if (step instanceof Error) throw step;
+    return new Response(`answer ${bodies.length}`, { status: step });
+  };
+  return { bodies, fetchImpl };
+}
+
+test("delivery retries after a transport error and after a 5xx", async () => {
+  const time = fakeTime();
+  const { bodies, fetchImpl } = scriptedFetch([new Error("connection reset"), 503, 202]);
+  await deliverWithRetry("http://argus.test/signal", { runId: "r1" }, { fetchImpl, ...time });
+  assert.equal(bodies.length, 3);
+  assert.deepEqual(time.sleeps, [500, 1000]);
+});
+
+test("delivery never retries a 4xx: Argus has answered", async () => {
+  const time = fakeTime();
+  const { bodies, fetchImpl } = scriptedFetch([403, 202]);
+  await assert.rejects(
+    deliverWithRetry("http://argus.test/signal", {}, { fetchImpl, ...time }),
+    /HTTP 403/,
+  );
+  assert.equal(bodies.length, 1);
+  assert.deepEqual(time.sleeps, []);
+});
+
+test("delivery gives up when the budget is spent and rethrows the last error", async () => {
+  const time = fakeTime();
+  const { bodies, fetchImpl } = scriptedFetch([503]);
+  await assert.rejects(
+    deliverWithRetry("http://argus.test/signal", {}, { fetchImpl, ...time }),
+    (error: Error) => error.message.includes(`answer ${bodies.length}`),
+  );
+  // 0.5, 1, 2, 4, then 8 s repeated: attempts at 0 … 39.5 s, and no pause
+  // that would end past the 45 s budget.
+  assert.deepEqual(time.sleeps, [500, 1000, 2000, 4000, 8000, 8000, 8000, 8000]);
+  assert.equal(bodies.length, 9);
+});
+
+test("every delivery attempt sends the identical body", async () => {
+  const time = fakeTime();
+  const err = new Error("socket hang up");
+  const { bodies, fetchImpl } = scriptedFetch([err, err, err, 202]);
+  const body = { runId: "r1", type: "completed", payload: { last_assistant_message: "done" } };
+  await deliverWithRetry("http://argus.test/signal", body, { fetchImpl, ...time });
+  assert.equal(bodies.length, 4);
+  assert.ok(bodies.every((b) => b === JSON.stringify(body)));
+});
+
+/**
+ * A local signal endpoint answering each POST with the next of `statuses`
+ * (the last repeats), recording every body it received.
+ */
+async function signalServer(statuses: number[]) {
+  const bodies: string[] = [];
+  const server = createServer((req, res) => {
+    let raw = "";
+    req.on("data", (c) => (raw += c));
+    req.on("end", () => {
+      bodies.push(raw);
+      res.writeHead(statuses[Math.min(bodies.length - 1, statuses.length - 1)]).end();
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const { port } = server.address() as { port: number };
+  return {
+    bodies,
+    url: `http://127.0.0.1:${port}/api/signal`,
+    close: () => new Promise<void>((r) => server.close(() => r())),
+  };
+}
+
+test("the hook process retries a 503 and exits 0 once Argus accepts", async () => {
+  const hook = fileURLToPath(new URL("../../hooks/argus-signal.mjs", import.meta.url));
+  const server = await signalServer([503, 202]);
+  try {
+    const child = spawn(process.execPath, [hook], {
+      env: {
+        ...process.env,
+        ARGUS_RUNTIME: "claude",
+        ARGUS_SIGNAL_URL: server.url,
+        ARGUS_INSTANCE_ID: "i1",
+        ARGUS_PHASE_ID: "p1",
+        ARGUS_RUN_ID: "r1",
+        ARGUS_SIGNAL_TOKEN: "t1",
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
+    child.stdin.end(JSON.stringify({ last_assistant_message: "ARGUS_OUTCOME: succeeded" }));
+    const code = await new Promise<number | null>((resolve, reject) => {
+      child.on("error", reject);
+      child.on("close", resolve);
+    });
+
+    assert.equal(code, 0, stderr);
+    assert.equal(server.bodies.length, 2);
+    assert.equal(server.bodies[0], server.bodies[1]);
+  } finally {
+    await server.close();
+  }
+});
+
 test("the hook process reports delivery failure and exits non-zero", async () => {
   const hook = fileURLToPath(new URL("../../hooks/argus-signal.mjs", import.meta.url));
+  // A 403 is final, so the hook fails at once instead of retrying out its budget.
+  const server = await signalServer([403]);
   const child = spawn(process.execPath, [hook], {
     env: {
       ...process.env,
       ARGUS_RUNTIME: "codex",
-      ARGUS_SIGNAL_URL: "http://127.0.0.1:1/api/signal",
+      ARGUS_SIGNAL_URL: server.url,
       ARGUS_INSTANCE_ID: "i1",
       ARGUS_PHASE_ID: "p1",
       ARGUS_RUN_ID: "r1",
@@ -233,13 +361,15 @@ test("the hook process reports delivery failure and exits non-zero", async () =>
     child.on("error", reject);
     child.on("close", resolve);
   });
+  await server.close();
 
   assert.equal(code, 1);
+  assert.equal(server.bodies.length, 1, "a 403 is never retried");
   assert.equal(stdout, '{"continue":true}', "Codex still receives its hook response");
   assert.match(stderr, /\[argus-signal\] hook failed:/);
 });
 
-test("the hook runs when it is invoked through a symlink", async () => {
+test("the hook runs when it is invoked through a symlink", { skip: symlinkSkip }, async () => {
   const hook = fileURLToPath(new URL("../../hooks/argus-signal.mjs", import.meta.url));
   // A developer who symlinks the hook into ~/.claude/hooks instead of copying it
   // gets an argv[1] that Node never resolves, while `import.meta.url` is already
@@ -249,12 +379,13 @@ test("the hook runs when it is invoked through a symlink", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "argus-hook-symlink-"));
   const link = path.join(dir, "argus-signal.mjs");
   symlinkSync(hook, link);
+  const server = await signalServer([403]);
 
   const child = spawn(process.execPath, [link], {
     env: {
       ...process.env,
       ARGUS_RUNTIME: "claude",
-      ARGUS_SIGNAL_URL: "http://127.0.0.1:1/api/signal",
+      ARGUS_SIGNAL_URL: server.url,
       ARGUS_INSTANCE_ID: "i1",
       ARGUS_PHASE_ID: "p1",
       ARGUS_RUN_ID: "r1",
@@ -271,6 +402,8 @@ test("the hook runs when it is invoked through a symlink", async () => {
   });
 
   rmSync(dir, { recursive: true, force: true });
+  await server.close();
   assert.equal(code, 1, "main() must run through a symlink, so delivery is attempted");
+  assert.equal(server.bodies.length, 1);
   assert.match(stderr, /\[argus-signal\] hook failed:/);
 });
