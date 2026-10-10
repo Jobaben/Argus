@@ -1,4 +1,5 @@
 import { Hono, type Context } from "hono";
+import type { DecisionReader } from "./decision/reader.js";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { hostname } from "node:os";
@@ -233,6 +234,7 @@ export interface AppDeps {
    */
   decisionsH2Status?: () => H2CollectionStatus;
   decisionsH1Status?: () => H1CollectionStatus;
+  decisionsReader?: DecisionReader;
 }
 
 /**
@@ -1572,6 +1574,33 @@ export function createApp(deps: AppDeps): Hono {
     return inst ? c.json(inst) : c.json({ error: "not found" }, 404);
   });
 
+  app.get("/api/decisions/assessments/:id", async (c) => {
+    if (!deps.decisionsReader) return c.json({ ok: false, reason: "reader-unavailable" }, 503);
+    const consumers = c.req.queries("consumer");
+    const runs = c.req.queries("runId");
+    if (consumers?.length !== 1 || runs?.length !== 1 || !consumers[0].trim() || !runs[0].trim()) {
+      return c.json({ ok: false, reason: "invalid-query" }, 400);
+    }
+    const result = await deps.decisionsReader.read({
+      assessmentId: c.req.param("id"),
+      consumerId: consumers[0],
+      subject: { kind: "run", runId: runs[0] },
+    });
+    if (result.ok) return c.json(result);
+    const status =
+      result.reason === "invalid-id"
+        ? 400
+        : result.reason === "unknown-assessment"
+          ? 404
+          : result.reason === "subject-mismatch"
+            ? 409
+            : result.reason === "journal-unavailable"
+              ? 503
+              : result.reason === "malformed-assessment"
+                ? 422
+                : 403;
+    return c.json(result, status);
+  });
   // The H2 shadow experiment's report (RFC §P.7): a replay of retained
   // records. Read-only by construction — it never enables collection, never
   // calls a provider and never re-evaluates. Counts and identities only; no

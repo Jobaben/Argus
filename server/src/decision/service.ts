@@ -5,13 +5,14 @@ import type {
   DecisionQuestion,
   DecisionSubject,
   DefinitionRef,
+  ProviderIdentity,
   StoredSnapshot,
 } from "@argus/contracts";
 import { checkOutcome } from "./answers.js";
 import { canonicalDigest } from "./canonical.js";
 import { ASSESSMENT_ID_RE, DecisionJournal, JournalError, type AppendResult } from "./journal.js";
 import { buildSnapshot, type DecisionSources, type ProjectionBuilder } from "./projection.js";
-import type { DecisionProvider, ProviderResponse } from "./providers/types.js";
+import type { DecisionProvider, DispatchAdmission, ProviderResponse } from "./providers/types.js";
 import type { DecisionRegistry } from "./registry.js";
 
 /**
@@ -38,11 +39,36 @@ export type ServiceRefusal =
   | "snapshot-unavailable"
   | "unknown-assessment"
   | "invalid-id"
+  | "invalid-sample"
+  | "preparation-mismatch"
+  | "dispatch-refused"
+  | "disabled"
+  | "busy"
+  | "budget-blocked"
+  | "aborted"
+  | "unsafe-cwd"
   | "storage-refused";
 
 export type ServiceResult =
   | { ok: true; assessment: DecisionAssessment; append: AppendResult; providerCalled: true }
   | { ok: false; reason: ServiceRefusal; detail: string; providerCalled: boolean };
+
+export interface ReEvaluationPreparation {
+  format: "argus.retained-evaluation-preparation";
+  formatVersion: 1;
+  assessmentId: string;
+  parent: { digest: string; segment: string; line: number };
+  question: DefinitionRef;
+  projection: DefinitionRef;
+  snapshot: { sha256: string; bytes: number; subject: DecisionSubject };
+  providerKey: string;
+  provider: Omit<ProviderIdentity, "reportedModel">;
+  sample: number;
+  digest: string;
+}
+
+export type ReEvaluationPreparationResult =
+  { ok: true; preparation: ReEvaluationPreparation } | Extract<ServiceResult, { ok: false }>;
 
 export interface DecisionServiceDeps {
   journal: DecisionJournal;
@@ -85,12 +111,20 @@ export interface DecisionService {
     signal?: AbortSignal;
     id?: string;
   }): Promise<ServiceResult>;
+  prepareReEvaluation(req: {
+    assessmentId: string;
+    provider: string;
+    sample?: number;
+  }): Promise<ReEvaluationPreparationResult>;
   /** A NEW provider call on the retained snapshot and original question version of `assessmentId`. */
   reEvaluate(req: {
     assessmentId: string;
     provider: string;
     sample?: number;
     signal?: AbortSignal;
+    id?: string;
+    expectedPreparationDigest?: string;
+    beforeProviderCall?: DispatchAdmission;
   }): Promise<ServiceResult>;
 }
 
@@ -115,12 +149,73 @@ function boundText(o: DecisionOutcome): DecisionOutcome {
   }
 }
 
-const refuse = (reason: ServiceRefusal, detail: string, providerCalled = false): ServiceResult => ({
+const refuse = (
+  reason: ServiceRefusal,
+  detail: string,
+  providerCalled = false,
+): Extract<ServiceResult, { ok: false }> => ({
   ok: false,
   reason,
   detail,
   providerCalled,
 });
+
+const NO_CALL_GUARDS: ReadonlySet<string> = new Set([
+  "disabled",
+  "busy",
+  "budget-blocked",
+  "aborted",
+  "unsafe-cwd",
+  "dispatch-refused",
+]);
+
+function provenNoCall(response: ProviderResponse, provider: DecisionProvider): boolean {
+  if (response.executionDisposition !== "not-called") return false;
+  const identity = response.identity;
+  const registered = provider.identity();
+  const zeroOrUnknown = (value: unknown) => value === null || value === 0;
+  return (
+    response.executionDisposition === "not-called" &&
+    identity?.provider === provider.kind &&
+    identity.provider === registered.provider &&
+    (identity.requestedModel === null || typeof identity.requestedModel === "string") &&
+    identity.requestedModel === registered.requestedModel &&
+    identity.reportedModel === null &&
+    Number.isSafeInteger(identity.adapterVersion) &&
+    identity.adapterVersion > 0 &&
+    identity.adapterVersion === registered.adapterVersion &&
+    ["native", "verbalized", "sampled", "rule", "label"].includes(identity.elicitation) &&
+    identity.elicitation === registered.elicitation &&
+    response.outcome?.status === "failed" &&
+    NO_CALL_GUARDS.has(response.outcome.failure) &&
+    typeof response.outcome.detail === "string" &&
+    response.outcome.rawExcerpt === undefined &&
+    zeroOrUnknown(response.costUsd) &&
+    zeroOrUnknown(response.tokens)
+  );
+}
+
+function completeSubject(value: unknown): value is DecisionSubject {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const subject = value as Record<string, unknown>;
+  const identity = (id: unknown) => typeof id === "string" && id.trim().length > 0;
+  switch (subject.kind) {
+    case "run":
+      return identity(subject.runId);
+    case "phase-attempt":
+      return (
+        identity(subject.instanceId) &&
+        identity(subject.phaseId) &&
+        Number.isSafeInteger(subject.attempt) &&
+        (subject.attempt as number) >= 0
+      );
+    case "rule-verification":
+    case "acceptance-verification":
+      return identity(subject.verificationId);
+    default:
+      return false;
+  }
+}
 
 export function createDecisionService(deps: DecisionServiceDeps): DecisionService {
   const now = deps.now ?? (() => new Date());
@@ -132,11 +227,18 @@ export function createDecisionService(deps: DecisionServiceDeps): DecisionServic
     q: DecisionQuestion,
     snapshot: StoredSnapshot,
     signal: AbortSignal,
-  ): Promise<{ response: ProviderResponse; latencyMs: number }> {
+    admission?: DispatchAdmission,
+  ): Promise<
+    { response: ProviderResponse; latencyMs: number } | Extract<ServiceResult, { ok: false }>
+  > {
+    if (admission && typeof provider.assessWithAdmission !== "function")
+      return refuse("dispatch-refused", "provider does not support guarded dispatch");
     const started = now().getTime();
     let response: ProviderResponse;
     try {
-      response = await provider.assess(q, snapshot, signal);
+      response = admission
+        ? await provider.assessWithAdmission!(q, snapshot, signal, admission)
+        : await provider.assess(q, snapshot, signal);
     } catch (e) {
       response = {
         identity: provider.identity(),
@@ -150,15 +252,32 @@ export function createDecisionService(deps: DecisionServiceDeps): DecisionServic
       };
     }
     const latencyMs = Math.max(0, now().getTime() - started);
+    if (provenNoCall(response, provider)) {
+      const outcome = boundText(response.outcome);
+      if (outcome.status === "failed")
+        return refuse(outcome.failure as ServiceRefusal, outcome.detail);
+    }
+    const invalidDisposition =
+      response.executionDisposition !== undefined &&
+      response.executionDisposition !== "possibly-called";
     let outcome: DecisionOutcome = response.outcome;
+    if (invalidDisposition) {
+      outcome = {
+        status: "failed",
+        failure: "invalid-execution-disposition",
+        detail: "the provider response does not prove that execution was refused before a call",
+      };
+      response = { ...response, identity: provider.identity() };
+    }
     // An identity that is not the provider's own kind cannot be recorded as
     // that provider's answer.
     if (response.identity?.provider !== provider.kind) {
-      outcome = {
-        status: "failed",
-        failure: "identity-mismatch",
-        detail: `a ${provider.kind} provider reported identity ${String(response.identity?.provider)}`,
-      };
+      if (!invalidDisposition)
+        outcome = {
+          status: "failed",
+          failure: "identity-mismatch",
+          detail: `a ${provider.kind} provider reported identity ${String(response.identity?.provider)}`,
+        };
       response = { ...response, identity: { ...response.identity, provider: provider.kind } };
     }
     // Re-validate whatever the provider claims, mocks included.
@@ -176,7 +295,8 @@ export function createDecisionService(deps: DecisionServiceDeps): DecisionServic
       };
     }
     outcome = boundText(outcome);
-    const finite = (n: number | null) => (typeof n === "number" && Number.isFinite(n) ? n : null);
+    const finite = (n: number | null) =>
+      typeof n === "number" && Number.isFinite(n) && n >= 0 ? n : null;
     return {
       response: {
         ...response,
@@ -198,8 +318,11 @@ export function createDecisionService(deps: DecisionServiceDeps): DecisionServic
     signal: AbortSignal,
     reEvaluates?: string,
     id?: string,
+    admission?: DispatchAdmission,
   ): Promise<ServiceResult> {
-    const { response, latencyMs } = await call(provider, def, snapshot, signal);
+    const called = await call(provider, def, snapshot, signal, admission);
+    if ("ok" in called) return called;
+    const { response, latencyMs } = called;
     const assessment: DecisionAssessment = {
       id: id ?? newId(),
       question: q.ref,
@@ -229,12 +352,131 @@ export function createDecisionService(deps: DecisionServiceDeps): DecisionServic
     }
   }
 
-  function providerFor(key: string, q: DecisionQuestion): DecisionProvider | ServiceResult {
+  function providerFor(
+    key: string,
+    q: DecisionQuestion,
+  ): DecisionProvider | Extract<ServiceResult, { ok: false }> {
     const provider = deps.providers[key];
     if (!provider) return refuse("unknown-provider", `no provider "${key}"`);
     if (!provider.supports(q))
       return refuse("unsupported", `${key} does not answer ${q.id}@${q.version}`);
     return provider;
+  }
+
+  async function prepare(req: { assessmentId: string; provider: string; sample?: number }) {
+    if (!ASSESSMENT_ID_RE.test(req.assessmentId))
+      return refuse("invalid-id", "the parent is not an assessment id");
+    const sample = req.sample ?? 0;
+    if (!Number.isSafeInteger(sample) || sample < 0)
+      return refuse("invalid-sample", "sample must be a nonnegative safe integer");
+    const view = await deps.journal.read();
+    const entry = view.entries.find((e) => e.assessment.id === req.assessmentId);
+    const original = entry?.assessment;
+    if (!original)
+      return refuse("unknown-assessment", `no assessment ${req.assessmentId} in the journal`);
+    const found = deps.registry.question(original.question.id, original.question.version);
+    if (!found) {
+      return refuse(
+        "unknown-question",
+        `${original.question.id}@${original.question.version} is not registered`,
+      );
+    }
+    if (found.ref.digest !== original.question.digest) {
+      return refuse(
+        "definition-mismatch",
+        `${original.question.id}@${original.question.version} differs from the definition the original used`,
+      );
+    }
+    const provider = providerFor(req.provider, found.def);
+    if ("ok" in provider) return provider;
+    const lookup = await deps.journal.loadSnapshot(original.snapshot.sha256);
+    if (lookup.status !== "retained") {
+      return refuse(
+        "snapshot-unavailable",
+        `snapshot ${original.snapshot.sha256} is ${lookup.status}; the original cannot be re-evaluated`,
+      );
+    }
+    const snapshot = lookup.snapshot;
+    const projection = deps.registry.projection(
+      found.def.projection.id,
+      found.def.projection.version,
+    );
+    if (!projection)
+      return refuse("definition-mismatch", "the original projection is not registered");
+    try {
+      const expectedProjection = canonicalDigest(projection.ref).text;
+      if (
+        canonicalDigest(original.snapshot.projection).text !== expectedProjection ||
+        canonicalDigest(snapshot.content.projection).text !== expectedProjection
+      ) {
+        return refuse(
+          "definition-mismatch",
+          "the parent and retained snapshot must name the original registered projection",
+        );
+      }
+      if (
+        snapshot.content.format !== "argus.decision-snapshot" ||
+        snapshot.content.formatVersion !== 1
+      ) {
+        return refuse("snapshot-unbuildable", "the retained snapshot format is unsupported");
+      }
+      if (
+        !completeSubject(original.subject) ||
+        !completeSubject(snapshot.content.subject) ||
+        original.subject.kind !== found.def.subject ||
+        snapshot.content.subject.kind !== found.def.subject ||
+        canonicalDigest(original.subject).text !== canonicalDigest(snapshot.content.subject).text
+      ) {
+        return refuse(
+          "subject-mismatch",
+          "the parent and retained snapshot must name the same question subject",
+        );
+      }
+      const sealed = canonicalDigest(snapshot.content);
+      if (
+        sealed.sha256 !== snapshot.sha256 ||
+        sealed.bytes !== snapshot.bytes ||
+        snapshot.sha256 !== original.snapshot.sha256 ||
+        snapshot.bytes !== original.snapshot.bytes
+      ) {
+        return refuse(
+          "snapshot-unbuildable",
+          "the retained snapshot does not match the parent's hash and bytes",
+        );
+      }
+      if (sealed.bytes > projection.def.maxBytes) {
+        return refuse("snapshot-unbuildable", `too-large: ${sealed.bytes} bytes`);
+      }
+    } catch (e) {
+      return refuse("snapshot-unbuildable", `invalid retained snapshot: ${(e as Error).message}`);
+    }
+    const identity = provider.identity();
+    const binding: Omit<ReEvaluationPreparation, "digest"> = structuredClone({
+      format: "argus.retained-evaluation-preparation",
+      formatVersion: 1,
+      assessmentId: original.id,
+      parent: { digest: entry!.digest, segment: entry!.segment, line: entry!.line },
+      question: found.ref,
+      projection: projection.ref,
+      snapshot: { sha256: snapshot.sha256, bytes: snapshot.bytes, subject: original.subject },
+      providerKey: req.provider,
+      provider: {
+        provider: identity.provider,
+        requestedModel: identity.requestedModel,
+        adapterVersion: identity.adapterVersion,
+        elicitation: identity.elicitation,
+      },
+      sample,
+    });
+    return {
+      ok: true as const,
+      preparation: { ...binding, digest: canonicalDigest(binding).sha256 },
+      found,
+      original,
+      snapshot,
+      provider,
+      view,
+    };
   }
 
   return {
@@ -354,46 +596,46 @@ export function createDecisionService(deps: DecisionServiceDeps): DecisionServic
       );
     },
 
+    async prepareReEvaluation(req) {
+      const prepared = await prepare(req);
+      return prepared.ok ? { ok: true, preparation: prepared.preparation } : prepared;
+    },
+
     async reEvaluate(req) {
-      const view = await deps.journal.read();
-      const original = view.entries.find((e) => e.assessment.id === req.assessmentId)?.assessment;
-      if (!original)
-        return refuse("unknown-assessment", `no assessment ${req.assessmentId} in the journal`);
-      const found = deps.registry.question(original.question.id, original.question.version);
-      if (!found) {
+      if (req.id !== undefined && !ASSESSMENT_ID_RE.test(req.id))
+        return refuse("invalid-id", "the result is not an assessment id");
+      if (
+        req.expectedPreparationDigest !== undefined &&
+        !/^[a-f0-9]{64}$/.test(req.expectedPreparationDigest)
+      )
+        return refuse("preparation-mismatch", "the expected preparation digest is invalid");
+      const prepared = await prepare(req);
+      if (!prepared.ok) return prepared;
+      if (
+        req.expectedPreparationDigest !== undefined &&
+        req.expectedPreparationDigest !== prepared.preparation.digest
+      )
         return refuse(
-          "unknown-question",
-          `${original.question.id}@${original.question.version} is not registered`,
+          "preparation-mismatch",
+          "the retained evaluation binding changed since preparation",
         );
-      }
-      if (found.ref.digest !== original.question.digest) {
-        return refuse(
-          "definition-mismatch",
-          `${original.question.id}@${original.question.version} differs from the definition the original used`,
-        );
-      }
-      const provider = providerFor(req.provider, found.def);
-      if ("ok" in provider) return provider;
-      const lookup = await deps.journal.loadSnapshot(original.snapshot.sha256);
-      if (lookup.status !== "retained") {
-        return refuse(
-          "snapshot-unavailable",
-          `snapshot ${original.snapshot.sha256} is ${lookup.status}; the original cannot be re-evaluated`,
-        );
-      }
-      const snapshot = lookup.snapshot;
-      if (snapshot.content.projection.digest !== original.snapshot.projection.digest) {
-        return refuse("definition-mismatch", "the retained snapshot names a different projection");
-      }
+      const id = req.id ?? newId();
+      if (!ASSESSMENT_ID_RE.test(id))
+        return refuse("invalid-id", "the result is not an assessment id");
+      if (prepared.view.entries.some((e) => e.assessment.id === id))
+        return refuse("storage-refused", "the result assessment id already exists");
+      const { found, original, snapshot, provider } = prepared;
       return record(
         found,
         original.subject,
         snapshot,
         provider,
         found.def,
-        req.sample ?? 0,
+        prepared.preparation.sample,
         req.signal ?? new AbortController().signal,
         original.id,
+        id,
+        req.beforeProviderCall,
       );
     },
   };

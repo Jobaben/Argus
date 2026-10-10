@@ -49,6 +49,7 @@ import { qwenHome } from "../qwenHome.js";
 import { deriveStreamJsonActivity, topLevelObjectSpans } from "./claude.js";
 import {
   EMPTY_ENVELOPE,
+  reportedCostUsd,
   basename,
   channelGranted,
   channelUnavailable,
@@ -203,10 +204,10 @@ export function parseQwenEnvelope(stdout: string): RunEnvelope {
     const sum = inTok + outTok;
     // Qwen Code reports no cost of its own. A locally served model has none to
     // report, and a hosted one would need a price list Argus does not have.
-    const cost = Number(obj.total_cost_usd);
+    const cost = reportedCostUsd(obj.total_cost_usd);
     return {
       result: typeof obj.result === "string" ? obj.result : null,
-      costUsd: Number.isFinite(cost) ? cost : null,
+      costUsd: cost,
       tokens: Number.isFinite(sum) && sum > 0 ? sum : null,
       isError: typeof obj.is_error === "boolean" ? obj.is_error : null,
       sessionId: typeof obj.session_id === "string" ? obj.session_id : null,

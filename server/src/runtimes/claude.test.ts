@@ -362,3 +362,44 @@ test("read-only with a comma in cwd reports a limitation instead of emitting a s
   // Bash is still denied: the comma only defeats the filesystem deny rule.
   assert.ok(denied.includes("Bash"));
 });
+
+test("explicit null monetary cost is unknown and explicit numeric zero is known", () => {
+  for (const costs of [{ cost_usd: null }, { total_cost_usd: null }, {}]) {
+    assert.equal(
+      claudeRuntime.parseEnvelope(JSON.stringify({ result: "{}", ...costs })).costUsd,
+      null,
+    );
+  }
+  for (const costs of [{ cost_usd: 0 }, { total_cost_usd: 0 }]) {
+    assert.equal(
+      claudeRuntime.parseEnvelope(JSON.stringify({ result: "{}", ...costs })).costUsd,
+      0,
+    );
+  }
+});
+
+test("only finite nonnegative numeric monetary scalars are known", () => {
+  for (const cost of [-0.2, "", " ", false, true, [], [0], {}, "0", "0.2", null]) {
+    for (const field of ["total_cost_usd", "cost_usd"]) {
+      assert.equal(
+        claudeRuntime.parseEnvelope(JSON.stringify({ result: "{}", [field]: cost })).costUsd,
+        null,
+      );
+    }
+  }
+  assert.equal(
+    claudeRuntime.parseEnvelope(JSON.stringify({ result: "{}", total_cost_usd: 0.2 })).costUsd,
+    0.2,
+  );
+});
+
+test("empty and boolean monetary payloads do not become free calls", () => {
+  assert.equal(
+    claudeRuntime.parseEnvelope(JSON.stringify({ result: "{}", cost_usd: "" })).costUsd,
+    null,
+  );
+  assert.equal(
+    claudeRuntime.parseEnvelope(JSON.stringify({ result: "{}", cost_usd: false })).costUsd,
+    null,
+  );
+});

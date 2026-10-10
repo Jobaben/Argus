@@ -65,6 +65,39 @@ export const RUN_FAILURE_BLIND_V1: DecisionProjection = {
   withheld: ["status", "outcome", "exitCode", "error", "termination", "terminal-event"],
 };
 
+export const RUN_FAILURE_BLIND_V2: DecisionProjection = {
+  id: "run-failure.blind",
+  version: 2,
+  subject: "run",
+  description:
+    "A bounded transcript-only evaluation input. Source metadata, prompt, summary and observed ending are withheld. Transcript-authored hints still require frozen-input audit.",
+  maxBytes: 256 * 1024,
+  redactionRules: RULES.map((r) => r.id),
+  truncation: {
+    rule: TRUNCATION_RULE,
+    caps: {
+      eventLabel: RUN_FAILURE_CAPS.eventLabel,
+      eventDetail: RUN_FAILURE_CAPS.eventDetail,
+      events: RUN_FAILURE_CAPS.events,
+    },
+  },
+  withheld: [
+    "status",
+    "outcome",
+    "exitCode",
+    "error",
+    "termination",
+    "terminal-event",
+    "scheduleName",
+    "trigger",
+    "runtime",
+    "model",
+    "durationMs",
+    "prompt",
+    "resultSummary",
+  ],
+};
+
 const KEPT_KINDS = new Set(["thinking", "text", "tool", "file", "error"]);
 
 interface TimelineEvent {
@@ -118,8 +151,8 @@ function timeline(run: Run, lines: unknown[], shaper: BodyShaper) {
   };
 }
 
-function builder(blind: boolean): ProjectionBuilder {
-  const def = blind ? RUN_FAILURE_BLIND_V1 : RUN_FAILURE_V1;
+function builder(blind: boolean, evaluation = false): ProjectionBuilder {
+  const def = evaluation ? RUN_FAILURE_BLIND_V2 : blind ? RUN_FAILURE_BLIND_V1 : RUN_FAILURE_V1;
   return {
     id: def.id,
     version: def.version,
@@ -151,17 +184,19 @@ function builder(blind: boolean): ProjectionBuilder {
         };
       }
       const shaper = new BodyShaper(RULES);
-      const meta: Record<string, unknown> = {
-        scheduleName: shaper.text(
-          "/run/scheduleName",
-          run.scheduleName,
-          RUN_FAILURE_CAPS.scheduleName,
-        ),
-        trigger: run.trigger ?? null,
-        runtime: run.runtime ?? "claude",
-        model: run.model ?? null,
-        durationMs: run.durationMs ?? null,
-      };
+      const meta: Record<string, unknown> = evaluation
+        ? {}
+        : {
+            scheduleName: shaper.text(
+              "/run/scheduleName",
+              run.scheduleName,
+              RUN_FAILURE_CAPS.scheduleName,
+            ),
+            trigger: run.trigger ?? null,
+            runtime: run.runtime ?? "claude",
+            model: run.model ?? null,
+            durationMs: run.durationMs ?? null,
+          };
       if (!blind) {
         const observed = observeTermination(run);
         const termination: { class: ObservedTerminationClass | null; notDerivable?: string } =
@@ -173,22 +208,26 @@ function builder(blind: boolean): ProjectionBuilder {
           run.error == null ? null : shaper.text("/run/error", run.error, RUN_FAILURE_CAPS.error);
         meta.observedTermination = termination;
       }
-      const body = {
-        run: meta,
-        prompt: shaper.text("/prompt", run.prompt ?? "", RUN_FAILURE_CAPS.prompt),
-        resultSummary:
-          run.resultSummary == null
-            ? null
-            : shaper.text("/resultSummary", run.resultSummary, RUN_FAILURE_CAPS.resultSummary),
-        timeline: timeline(run, lines, shaper),
-      };
+      const body = evaluation
+        ? { timeline: timeline(run, lines, shaper) }
+        : {
+            run: meta,
+            prompt: shaper.text("/prompt", run.prompt ?? "", RUN_FAILURE_CAPS.prompt),
+            resultSummary:
+              run.resultSummary == null
+                ? null
+                : shaper.text("/resultSummary", run.resultSummary, RUN_FAILURE_CAPS.resultSummary),
+            timeline: timeline(run, lines, shaper),
+          };
       return {
         ok: true,
         content: {
           subject: { kind: "run", runId: run.id },
           refs: { runs: [run.id], claims: [], verifications: [], artifacts: [] },
           // The agent wrote its final message and everything in its transcript.
-          subjectAuthored: ["/resultSummary", "/timeline/events"],
+          subjectAuthored: evaluation
+            ? ["/timeline/events"]
+            : ["/resultSummary", "/timeline/events"],
           redactions: shaper.redactions(),
           truncations: shaper.truncations(),
           body,
@@ -200,3 +239,5 @@ function builder(blind: boolean): ProjectionBuilder {
 
 export const runFailureBuilder = builder(false);
 export const runFailureBlindBuilder = builder(true);
+
+export const runFailureBlindV2Builder = builder(true, true);

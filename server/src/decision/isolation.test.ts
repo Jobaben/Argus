@@ -1,3 +1,4 @@
+import * as ts from "typescript";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -237,10 +238,10 @@ function imports(file: string): Array<{ from: string; names: string[] }> {
   return out;
 }
 
-test("only the experiment entries are imported from outside the plane: the watcher wiring and the report routes", () => {
+test("outside imports admit experiment entries and only the advisory reader interface", () => {
   const decisionDir = path.join(SRC, "decision");
   // Importer (relative to server/src) → entry module → the only names it may
-  // take (RFC §P, §Q). No engine hook, no policy, no other route.
+  // take (RFC §P, §Q), plus the erased advisory API interface. No engine hook or policy.
   const allowed: Record<string, Record<string, Set<string>>> = {
     "index.ts": {
       "decision/experiments.js": new Set(["countAnalysisPasses", "createShadowExperiments"]),
@@ -248,6 +249,7 @@ test("only the experiment entries are imported from outside the plane: the watch
     "app.ts": {
       "decision/h2/entry.js": new Set(["readH2ReportResponse"]),
       "decision/h1/entry.js": new Set(["readH1ReportResponse"]),
+      "decision/reader.js": new Set(["DecisionReader"]),
     },
   };
   const offenders: string[] = [];
@@ -266,6 +268,56 @@ test("only the experiment entries are imported from outside the plane: the watch
   assert.deepEqual(offenders, []);
 });
 
+test("the advisory API imports only the erased DecisionReader interface", () => {
+  const app = readFileSync(path.join(SRC, "app.ts"), "utf8");
+  const parsed = ts.createSourceFile("app.ts", app, ts.ScriptTarget.Latest, true);
+  const readerImports = parsed.statements
+    .filter(ts.isImportDeclaration)
+    .filter(
+      (s) =>
+        ts.isStringLiteral(s.moduleSpecifier) && s.moduleSpecifier.text === "./decision/reader.js",
+    );
+  assert.equal(readerImports.length, 1);
+  const clause = readerImports[0].importClause;
+  assert.ok(clause?.isTypeOnly, "the reader dependency must be an erased type-only import");
+  assert.ok(clause.namedBindings && ts.isNamedImports(clause.namedBindings));
+  assert.deepEqual(
+    clause.namedBindings.elements.map((e) => (e.propertyName ?? e.name).text),
+    ["DecisionReader"],
+  );
+  const emitted = ts.transpileModule(app, {
+    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  assert.ok(
+    !emitted.includes('from "./decision/reader.js"'),
+    "the app must not load the reader factory or journal at runtime",
+  );
+});
+test("dispatch admission interfaces remain erased type-only dependencies", () => {
+  const violations: string[] = [];
+  for (const file of sourceFiles(path.join(SRC, "decision"))) {
+    const parsed = ts.createSourceFile(
+      file,
+      readFileSync(file, "utf8"),
+      ts.ScriptTarget.Latest,
+      true,
+    );
+    for (const statement of parsed.statements.filter(ts.isImportDeclaration)) {
+      const clause = statement.importClause;
+      if (!clause?.namedBindings || !ts.isNamedImports(clause.namedBindings)) continue;
+      for (const element of clause.namedBindings.elements) {
+        if (
+          (element.propertyName ?? element.name).text === "AnalysisDispatchAdmission" &&
+          !clause.isTypeOnly &&
+          !element.isTypeOnly
+        ) {
+          violations.push(path.relative(SRC, file));
+        }
+      }
+    }
+  }
+  assert.deepEqual(violations, []);
+});
 test("the Decision Plane imports only readers from the ledger, the gate log and pipeline state", () => {
   const decisionDir = path.join(SRC, "decision");
   // Module (relative to server/src) → the only names the Decision Plane may import from it.
@@ -278,7 +330,13 @@ test("the Decision Plane imports only readers from the ledger, the gate log and 
     "log.js": new Set(["log"]),
     "sources/sessions.js": new Set(["readSessionLines"]),
     "sources/recorder.js": new Set(["buildRecording"]),
-    "sources/analysis.js": new Set(["analysisModel", "AnalysisRunner"]),
+    "sources/analysis.js": new Set([
+      "analysisModel",
+      "AnalysisRunner",
+      "AnalysisDispatchAdmission",
+      "dispatchValidationDetail",
+      "prepareDispatchAdmission",
+    ]),
     "claudeHome.js": new Set(["paths"]),
     "mutex.js": new Set(["KeyedMutex"]),
     // H1 (RFC §Q.4): the gate drawer's own review model and the records a

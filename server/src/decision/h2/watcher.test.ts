@@ -7,6 +7,7 @@ import { DEFAULT_ANALYSIS_MODEL } from "../../sources/analysis.js";
 import { builtinRegistry, TERMINATION_PROBE_V1 } from "../definitions.js";
 import type { AttemptRecord, CensusRecord, LedgerRecord, ResultRecord } from "./ledger.js";
 import { endedRun, h2Harness, MIN, ON, START } from "./testSupport.js";
+import { classifyServiceResult, fromAssessment } from "./watcher.js";
 
 /**
  * The H2 collection watcher (RFC §P.1–§P.5), exercised over real stores with
@@ -166,6 +167,7 @@ test("a refusal inside the runner is not a call: retried at most three times, 30
   const rs = await h.records();
   const results = of(rs, "result");
   assert.equal(results.length, 3);
+  assert.equal((await h.journal.read()).entries.length, 0, "proven refusals append no assessment");
   for (const res of results) {
     assert.equal(res.class, "refused");
     assert.equal(res.providerCalled, "no");
@@ -178,6 +180,23 @@ test("a refusal inside the runner is not a call: retried at most three times, 30
   );
   for (let i = 1; i < tries.length; i++) assert.ok(tries[i] - tries[i - 1] >= 30 * MIN);
   assert.equal(seen.filter((s) => s.startsWith("attempted")).length, 3);
+});
+
+test("a started call's guard failure name cannot release spend, while typed service refusal can", async () => {
+  const h = h2Harness();
+  const result = await h.service.assess({ question: "run.failure-cause.residual", subject: { kind: "run", runId: "run-1" }, provider: "claude-cli" });
+  assert.ok(result.ok);
+  assert.equal(h.spawns.length, 1);
+  for (const failure of ["disabled", "busy", "budget-blocked", "aborted", "unsafe-cwd"]) {
+    const assessment = { ...result.assessment, costUsd: null, outcome: { status: "failed" as const, failure, detail: "started call" } };
+    const classified = fromAssessment(assessment);
+    assert.equal(classified.class, "provider-failed", failure);
+    assert.equal(classified.providerCalled, "yes", failure);
+    assert.equal(classified.costUsd, null);
+    const refusal = classifyServiceResult({ ok: false, reason: failure as "disabled", detail: "guard", providerCalled: false });
+    assert.equal(refusal.class, "refused", failure);
+    assert.equal(refusal.providerCalled, "no", failure);
+  }
 });
 
 test("missing input is not a call, and is retried within the same bound", async () => {
@@ -699,4 +718,55 @@ test("a reference that changed after the census is a construction error at attem
   assert.equal(res.providerCalled, "no");
   assert.equal(res.code, "reference-not-derivable");
   assert.equal(h.spawns.length, 0);
+});
+
+test("unknown shared cost contains later calls only within the rolling window", async () => {
+  const h = h2Harness({ env: env(), otherSpend: async () => [{ atMs: START, costUsd: null }] });
+  await warm(h);
+  h.clock.advance(31 * MIN);
+  const blocked = await h.watcher.check();
+  assert.equal(blocked.action, "limited");
+  assert.match(blocked.action === "limited" ? blocked.detail : "", /unknown cost/);
+  assert.equal(h.spawns.length, 0);
+  h.clock.advance(24 * 60 * MIN);
+  h.mem.runs.set("fresh", endedRun("fresh", 24 * 60 * MIN));
+  h.mem.transcripts.set("fresh", h.mem.transcripts.get("run-1")!);
+  await h.watcher.check();
+  assert.equal(h.spawns.length, 1);
+});
+
+test("unknown own cost stops another pending item while pre-call refusal does not", async () => {
+  for (const preCall of [false, true]) {
+    const h = h2Harness({
+      env: env(),
+      runs: [endedRun("a", MIN), endedRun("b", MIN)],
+      costUsd: null,
+    });
+    await warm(h);
+    h.state.enabled = !preCall;
+    await h.watcher.check();
+    h.state.enabled = true;
+    for (let i = 0; i < 4; i++) {
+      h.clock.advance(31 * MIN);
+      await h.watcher.check();
+    }
+    assert.equal(h.spawns.length, 1);
+    if (!preCall) {
+      h.clock.advance(31 * MIN);
+      const result = await h.watcher.check();
+      assert.equal(result.action, "limited");
+    }
+  }
+});
+
+test("invalid historical shared costs cannot reduce the rolling spend bound", async () => {
+  for (const costUsd of [-1, NaN, Infinity, -Infinity]) {
+    const h = h2Harness({ env: env(), otherSpend: async () => [{ atMs: START, costUsd }] });
+    await warm(h);
+    h.clock.advance(31 * MIN);
+    const result = await h.watcher.check();
+    assert.equal(result.action, "limited");
+    assert.match(result.action === "limited" ? result.detail : "", /unknown cost/);
+    assert.equal(h.spawns.length, 0);
+  }
 });

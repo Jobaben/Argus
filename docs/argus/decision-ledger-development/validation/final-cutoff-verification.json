@@ -1,0 +1,139 @@
+{
+  "format": "argus.ledger-development-final-cutoff",
+  "version": 1,
+  "at": "2026-10-10T06:30:49.7825435Z",
+  "cutoff": "2026-10-10T06:30:00Z",
+  "baseCommit": "02668069d8eb1f716757f0acb26a5d1021ad3013",
+  "sourceReviewed": 46,
+  "uniqueIndependentlyReviewed": 46,
+  "unreviewedSource": 0,
+  "sourceHashMismatches": 0,
+  "originalCloseoutArtifacts": 9,
+  "changedOriginalArtifacts": 0,
+  "rootIndexSha256": "151b9a1e5d831a53138f45cfd382de02b391a473f7f81b809a7b67e7de201440",
+  "rootIndexMatchesSavedCheckpoint": true,
+  "rootIndexProofIntervalStart": "2026-10-10T05:01:20.7881474Z",
+  "jsonFilesParsed": 15,
+  "finalSourceReview": "Independent frozen source reviews remain applicable; no source delta",
+  "providerCalls": "No live calls; mock fixtures only",
+  "staged": true,
+  "heartbeatStatus": "PAUSED",
+  "validation": "Existing exact evidence reused; no new unresolved concern requiring test repetition",
+  "fullServer": {
+    "tests": 2934,
+    "pass": 2869,
+    "fail": 41,
+    "cancelled": 1,
+    "skipped": 23,
+    "duration_ms": 75163.2489,
+    "additionalFailingOrCancelledNames": [],
+    "samePristineNames": true
+  },
+  "productionReady": false,
+  "enforcementEnabled": false,
+  "committed": false,
+  "stagingWhitespace": {
+    "firstCheck": "failed: ten extra blank lines at EOF in owned docs/repro evidence",
+    "freshDiagnosis": "actual staged diff check plus exact trailing byte count/hash; zero application source scope",
+    "repairs": [
+      {
+        "path": "docs/argus/decision-ledger-development/acceptance-input-prerequisites.md",
+        "originalSha256": "d12de75248fec7b0a4938e33e2656895208d0f7e854374756cc606384a637c85",
+        "originalArchive": "docs/argus/decision-ledger-development/validation/closeout-whitespace-originals/acceptance-input-prerequisites.md.original.log",
+        "finalSha256": "d19747e850ef392c74aec655a0e10c4404401044f90ba2569578bae7bf0a2e56",
+        "change": "Trailing newline bytes only; original complete bytes retained in ignored local archive"
+      },
+      {
+        "path": "docs/argus/decision-ledger-development/bounded-acceptance-protocol.md",
+        "originalSha256": "211d7f1b56317a37ae6b5e0a6b76f04ea693007b0bff87eb599bc7c2e078416e",
+        "originalArchive": "docs/argus/decision-ledger-development/validation/closeout-whitespace-originals/bounded-acceptance-protocol.md.original.log",
+        "finalSha256": "085b540b0c5fa78b7f4599cc19f3b2bcd13cbb695ff3299b311753f97e8ef728",
+        "change": "Trailing newline bytes only; original complete bytes retained in ignored local archive"
+      },
+      {
+        "path": "docs/argus/decision-ledger-development/implementation-status-matrix.md",
+        "originalSha256": "a29ecc14df590f595b319eda5592590d3992c2765769319e18d54ef423ee2aba",
+        "originalArchive": "docs/argus/decision-ledger-development/validation/closeout-whitespace-originals/implementation-status-matrix.md.original.log",
+        "finalSha256": "2f21d52d43dd51dd86be574a1bd5ad16383834f47e7d44e9b2ad9c1ca3efd109",
+        "change": "Trailing newline bytes only; original complete bytes retained in ignored local archive"
+      },
+      {
+        "path": "docs/argus/decision-ledger-development/report.md",
+        "originalSha256": "c88c6096777e25fb2e68b5119e09117b264f1c0c552c11a032cff1adf33da1b1",
+        "originalArchive": "docs/argus/decision-ledger-development/validation/closeout-whitespace-originals/report.md.original.log",
+        "finalSha256": "70754daaabcb97edfcdae222bc55636e1d799b16d2f94e0a40e3b90e3a90141b",
+        "change": "Trailing newline bytes only; original complete bytes retained in ignored local archive"
+      },
+      {
+        "path": "docs/argus/decision-ledger-development/retained-evaluation-plan.md",
+        "originalSha256": "30cae6fcde2471198fe6065d0e3825b1da1ea25e5080fbc9fe9abc23c2019656",
+        "originalArchive": "docs/argus/decision-ledger-development/validation/closeout-whitespace-originals/retained-evaluation-plan.md.original.log",
+        "finalSha256": "fd4c5bfbc89ff0997100d961cc57f3059f9a716d5f5ef64ed137cbabdaaafb78",
+        "change": "Trailing newline bytes only; original complete bytes retained in ignored local archive"
+      },
+      {
+        "path": "docs/argus/decision-ledger-development/validation/evaluation-input-review-repro.ts",
+        "originalSha256": "e76f84358e90ce7c103f6286c35d24ec07f2f886d016888893ed7a2204af507d",
+        "originalArchive": "docs/argus/decision-ledger-development/validation/closeout-whitespace-originals/evaluation-input-review-repro.ts.original.log",
+        "finalSha256": "6745f438e909c16d75bb00c8d3738b0810f6c234653067f0e7d5a1a4606d7e71",
+        "change": "Trailing newline bytes only; original complete bytes retained in ignored local archive"
+      },
+      {
+        "path": "docs/argus/decision-ledger-development/validation/integrated-dispatch-fence-gap.mts",
+        "originalSha256": "2856c124abd5232d21b4d3f1cbee7f037303d572595dc89f1ee6fd2dbecccc42",
+        "originalArchive": "docs/argus/decision-ledger-development/validation/closeout-whitespace-originals/integrated-dispatch-fence-gap.mts.original.log",
+        "finalSha256": "24035fbb09c951e0785b2ba155092a3adbc29da24d1acb8a7af2300371d7985b",
+        "change": "Trailing newline bytes only; original complete bytes retained in ignored local archive"
+      },
+      {
+        "path": "docs/argus/decision-ledger-development/validation/integrated-dispatch-gap.mts",
+        "originalSha256": "b60a774e3bdc951dcc3c939ab6efc5c57e7293fae45d9ae2e35527ff6a369989",
+        "originalArchive": "docs/argus/decision-ledger-development/validation/closeout-whitespace-originals/integrated-dispatch-gap.mts.original.log",
+        "finalSha256": "5da10acb1563223bee0f0b64ddb097b2988037cc2c004d4c5c0ac8e040954db2",
+        "change": "Trailing newline bytes only; original complete bytes retained in ignored local archive"
+      },
+      {
+        "path": "docs/argus/decision-ledger-development/validation/precall-coordinator-probe.mts",
+        "originalSha256": "943d3f09f43cc750899c2475db662564f29354ec9a4d8dbf62894722b010ed96",
+        "originalArchive": "docs/argus/decision-ledger-development/validation/closeout-whitespace-originals/precall-coordinator-probe.mts.original.log",
+        "finalSha256": "dbdc3874c613a3ee43d981933f6dceb26f1e6c68b2d80220733ac7249df4b2e3",
+        "change": "Trailing newline bytes only; original complete bytes retained in ignored local archive"
+      },
+      {
+        "path": "docs/argus/decision-ledger-development/validation/precall-independent-missing-response-probe.mts",
+        "originalSha256": "29a159ad1de2b23c36d17c7dda14944511a33150f1a7d9241f279469f2b40cd9",
+        "originalArchive": "docs/argus/decision-ledger-development/validation/closeout-whitespace-originals/precall-independent-missing-response-probe.mts.original.log",
+        "finalSha256": "cdd1f05fcab8e31f80c2a58fbfd5675037d9883192d33eb61ea0bb6860ef2867",
+        "change": "Trailing newline bytes only; original complete bytes retained in ignored local archive"
+      }
+    ],
+    "finalCheck": "passed",
+    "applicationSourceChanged": false
+  },
+  "stagedOwnedFiles": 93,
+  "closedAt": "2026-10-10T06:34:48.6863802Z",
+  "heartbeatPreservedFields": [
+    "id",
+    "kind",
+    "name",
+    "prompt",
+    "rrule",
+    "targetThreadId"
+  ],
+  "independentCutoffReview": "Confirmed by final_advisory_retained_review at cutoff:21scope hashes still match; no source delta or new finding. Earlier complementary29scope completes46unique coverage.",
+  "finalDeliveryVerification": {
+    "at": "2026-10-10T06:36:14.7654689Z",
+    "stagedFiles": 93,
+    "sourceFiles": 46,
+    "sourceHashMismatches": 0,
+    "stagedAllowlistExact": true,
+    "unstagedFiles": 0,
+    "untrackedFiles": 0,
+    "allOwnedJsonParsed": 16,
+    "rootIndexMatchesCheckpoint": true,
+    "stagedWhitespace": "passed",
+    "independentFinalCloseout": "confirmed: report/matrix/status consistent after staging/pause;21reviewed hashes unchanged; no finding",
+    "heartbeat": "PAUSED",
+    "committed": false
+  }
+}

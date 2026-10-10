@@ -33,7 +33,7 @@ export interface CurrencyDeps {
   registry: DecisionRegistry;
   builders: readonly ProjectionBuilder[];
   sources: DecisionSources;
-  journal: DecisionJournal;
+  journal: Pick<DecisionJournal, "loadSnapshot">;
 }
 
 function check(c: CurrencyCheck["check"], status: CurrencyStatus, detail: string): CurrencyCheck {

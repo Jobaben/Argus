@@ -57,16 +57,21 @@ export interface AnalysisRequest {
 }
 
 export type AnalysisFailure =
+  | "dispatch-refused"
   | "disabled"
   | "budget-blocked"
   | "busy"
   | "timeout"
   | "output-cap"
   | "spawn-failed"
+  | "nonzero-exit"
+  | "exit-code-unavailable"
+  | "runtime-failed"
   | "no-output"
   | "unparseable";
 
 export interface AnalysisResult<T> {
+  executionDisposition?: "not-called" | "possibly-called";
   ok: boolean;
   value: T | null;
   /** The model's raw text result, for display when parsing failed. */
@@ -239,8 +244,35 @@ export interface AnalysisRunner {
    * confidently in the wrong schema is a clean `unparseable`, not a crash.
    */
   run<T>(req: AnalysisRequest, parse: (value: unknown) => T | null): Promise<AnalysisResult<T>>;
+  runWithAdmission?<T>(req: AnalysisRequest, parse: (value: unknown) => T | null, admission: AnalysisDispatchAdmission): Promise<AnalysisResult<T>>;
   /** How many passes are executing right now. */
   inFlight(): number;
+}
+
+export type DispatchValidation = { ok: true } | { ok: false; detail: string };
+export type AnalysisDispatchAdmission = () => Promise<
+  { ok: false; detail: string } | { ok: true; validateNow: () => DispatchValidation }
+>;
+
+export function dispatchValidationDetail(value: unknown): string | null {
+  if (value instanceof Promise) {
+    void value.catch(() => {});
+    return "asynchronous final dispatch validation is unsupported";
+  }
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const check = value as Record<string, unknown>;
+    if (!("then" in check) && check.ok === true) return null;
+    if (check.ok === false && typeof check.detail === "string" && check.detail.trim()) return check.detail;
+  }
+  return "malformed dispatch validation";
+}
+
+export async function prepareDispatchAdmission(admission: AnalysisDispatchAdmission): Promise<() => DispatchValidation> {
+  const check = await admission();
+  if (!check || typeof check !== "object" || Array.isArray(check) || check.ok !== true || typeof check.validateNow !== "function") {
+    throw new Error(dispatchValidationDetail(check) ?? "missing final dispatch validation");
+  }
+  return check.validateNow;
 }
 
 function failed<T>(
@@ -249,6 +281,7 @@ function failed<T>(
   who: Pick<AnalysisResult<T>, "runtime" | "requestedModel">,
 ): AnalysisResult<T> {
   return {
+    executionDisposition: "not-called",
     ok: false,
     value: null,
     raw: "",
@@ -317,6 +350,7 @@ export function createAnalysisRunner(deps: AnalysisRunnerDeps = {}): AnalysisRun
   async function run<T>(
     req: AnalysisRequest,
     parse: (value: unknown) => T | null,
+    admission?: AnalysisDispatchAdmission,
   ): Promise<AnalysisResult<T>> {
     // Resolved before anything can refuse, so even a refusal says which CLI and
     // model it would have asked — a stored "skipped" is then still explicable.
@@ -347,13 +381,23 @@ export function createAnalysisRunner(deps: AnalysisRunnerDeps = {}): AnalysisRun
         return failed<T>("budget-blocked", "the spend budget hard stop is in force", who);
       }
 
-      const handle = spawn({
+      const spawnOptions = {
         prompt: req.prompt,
         cwd: req.cwd,
         model,
         runtime,
         maxOutputBytes,
-      });
+      };
+      if (admission !== undefined) {
+        try {
+          const validateNow = await prepareDispatchAdmission(admission);
+          const refusal = dispatchValidationDetail(validateNow());
+          if (refusal !== null) return failed<T>("dispatch-refused", refusal, who);
+        } catch (error) {
+          return failed<T>("dispatch-refused", error instanceof Error ? error.message : "dispatch admission failed", who);
+        }
+      }
+      const handle = spawn(spawnOptions);
       timer = setTimeout(() => {
         timedOut = true;
         handle.kill();
@@ -375,6 +419,7 @@ export function createAnalysisRunner(deps: AnalysisRunnerDeps = {}): AnalysisRun
       }
 
       const base = {
+        executionDisposition: "possibly-called" as const,
         raw: envelope.result ?? "",
         costUsd: envelope.costUsd,
         tokens: envelope.tokens,
@@ -396,6 +441,25 @@ export function createAnalysisRunner(deps: AnalysisRunnerDeps = {}): AnalysisRun
         const failure: AnalysisFailure =
           res.error === "output cap exceeded" ? "output-cap" : "spawn-failed";
         return { ...base, ok: false, value: null, failure, error: res.error };
+      }
+      if (res.code !== 0 || envelope.isError === true) {
+        return {
+          ...base,
+          ok: false,
+          value: null,
+          failure:
+            res.code === null
+              ? "exit-code-unavailable"
+              : res.code !== 0
+                ? "nonzero-exit"
+                : "runtime-failed",
+          error:
+            res.code !== 0
+              ? res.code === null
+                ? "the process ended without an exit code"
+                : `the process exited with code ${res.code}`
+              : "the runtime reported a failed inference",
+        };
       }
       if (!envelope.result?.trim()) {
         return {
@@ -434,5 +498,5 @@ export function createAnalysisRunner(deps: AnalysisRunnerDeps = {}): AnalysisRun
     }
   }
 
-  return { run, inFlight: () => running };
+  return { run: (req, parse) => run(req, parse), runWithAdmission: (req, parse, admission) => run(req, parse, async () => admission()), inFlight: () => running };
 }

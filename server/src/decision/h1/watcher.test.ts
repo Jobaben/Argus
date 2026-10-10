@@ -377,3 +377,56 @@ test("a change between the observation and the call is caught by the pre-call re
   );
   assert.equal(of(recs, "drift").length, 1);
 });
+
+test("unknown shared cost contains later calls only within the rolling window", async () => {
+  const unknownAt = Date.parse("2026-09-01T12:00:00.000Z");
+  const h = h1Harness({ otherSpend: async () => [{ atMs: unknownAt, costUsd: null }] });
+  h.world.put(gateInstance());
+  await h.tick();
+  const blocked = await h.tick(31 * MIN);
+  assert.equal(blocked.action === "done" && blocked.call.kind, "limited");
+  assert.match(
+    blocked.action === "done" && blocked.call.kind === "limited" ? blocked.call.detail : "",
+    /unknown cost/,
+  );
+  assert.equal(h.spawns.length, 0);
+  await h.tick(24 * 60 * MIN);
+  h.world.put(gateInstance({ id: "fresh" }));
+  await h.tick();
+  assert.equal(h.spawns.length, 1);
+});
+
+test("unknown own cost stops another pending item while pre-call refusal does not", async () => {
+  for (const preCall of [false, true]) {
+    const h = h1Harness({ costUsd: null });
+    h.world.put(gateInstance());
+    await h.tick();
+    h.state.blocked = preCall;
+    await h.tick();
+    h.state.blocked = false;
+    h.world.put(gateInstance({ id: "next" }));
+    for (let i = 0; i < 4; i++) await h.tick(31 * MIN);
+    assert.equal(h.spawns.length, 1);
+    if (!preCall) {
+      const result = await h.tick(31 * MIN);
+      assert.equal(result.action === "done" && result.call.kind, "limited");
+    }
+  }
+});
+
+test("invalid historical shared costs cannot reduce the rolling spend bound", async () => {
+  for (const costUsd of [-1, NaN, Infinity, -Infinity]) {
+    const h = h1Harness({
+      otherSpend: async () => [{ atMs: Date.parse("2026-09-01T12:00:00.000Z"), costUsd }],
+    });
+    h.world.put(gateInstance());
+    await h.tick();
+    const result = await h.tick(31 * MIN);
+    assert.equal(result.action === "done" && result.call.kind, "limited");
+    assert.match(
+      result.action === "done" && result.call.kind === "limited" ? result.call.detail : "",
+      /unknown cost/,
+    );
+    assert.equal(h.spawns.length, 0);
+  }
+});

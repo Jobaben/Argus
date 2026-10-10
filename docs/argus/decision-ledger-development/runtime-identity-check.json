@@ -1,0 +1,18 @@
+{
+  "format": "argus.decision-ledger.runtime-identity-check",
+  "version": 1,
+  "at": "2026-10-09T23:56:17.4499914Z",
+  "method": "Read-only Windows process inventory filtered to Node processes mentioning Argus/server entry, plus port7777 listener query",
+  "argusMatchingNodeProcesses": [
+    {
+      "pid": 18804,
+      "entry": "C:/GIT/Argus/experiments/decision-ledger-closeout-20261009/reports/lan-site/server.cjs",
+      "classification": "historical report LAN site, not Argus application server",
+      "taskWorktree": false
+    }
+  ],
+  "port7777ListenerObserved": false,
+  "productionApplicationBuildIdentified": false,
+  "limitations": "No matching application server found by this narrow query; other ports, relative script paths, launch mechanisms or container processes are not ruled out. Do not claim no production instance exists or claim task build deployed.",
+  "mutations": "none; no process restarted or stopped"
+}

@@ -1,0 +1,23 @@
+# Actual dispatch-boundary admission repair
+
+2026-10-10 02:34 UTC. Architecture approved after actual saved expiry/fence reproductions. Prior service-only check did not protect the adapter's asynchronous directory check or the runner's budget await. Both fixtures spawned once when zero was required. This new callee-layer diagnosis precedes implementation; original failing logs are preserved.
+
+Required change: explicit optional guarded provider assessWithAdmission and runner runWithAdmission methods, each reusing ordinary internal execution. Guarded service must refuse unsupported providers; guarded Claude must refuse unsupported runners. No fourth argument silently ignored by ordinary methods; legacy unguarded behavior remains compatible.
+
+Transient structural admission contract: async decision returns refusal {ok:false,detail} or success {ok:true,validateNow}. validateNow is mandatory and synchronous, returning {ok:true} or refusal. Runner waits for its budget and admission work, then executes validateNow immediately adjacent to spawn, with no await or user callback in between. Denial/throw/malformed/async final check returns dispatch-refused/not-called with null usage and no spawn. After attempted spawn remains possibly-called.
+
+Claude finishes directory/prompt preparation first, carries admission into guarded runner and checks abort in final synchronous validation. Mock carries the same boundary immediately before call accounting/script execution. Service propagates the hook into guarded provider rather than executing only a service-level callback; dispatch-refused joins existing strict raw no-call consistency validation and returns before assessment append.
+
+Coordinator retains asynchronous owner/reservation/gate checks, then supplies validateNow that calls required synchronous ownership.assertCurrent(binding,expectedOwner), checks fresh clock and pinned owner/authorization/preflight expiry, and returns success. Missing or asynchronous assertCurrent is unsupported, never default-success. Fresh fence/binding/expiry proof is an injected local contract; fixtures are not production cross-process fencing proof.
+
+Ownership: runtime carrier worker owns sources/analysis.ts/test, decision/providers/types.ts/mock.ts/claudeCli.ts and decision/claudeCli.test.ts. Service/coordinator worker owns service.ts/test, evaluationCoordinator.ts/test and new dispatchAdmission.integration.test.ts. Preserve all others' edits, original renderer/provider identity versions, persisted schemas, prompt definitions and history. Independent reviewer has no edits.
+
+Acceptance: both real service->Claude->real runner mock-spawn gap fixtures nowzero; directory/abort and budget mutation windows; microtask clock/fence drift between async admission and runner continuation; missing provider/runner/ownership capabilities; malformed/throw/refused/async final checks; validone-spawn; duplicates/restart neverresend; no assessment after proven refusal; lost settlement staysunknown. Focused affected+isolation tests, type/build/lint, rerun actual reproductions with explicit fake ownership current capability and independent review.
+
+Disposition: implement local default-unwired guarded path only. Frozen reviewed-byte dispatch, account capabilities, shared gate coverage, true exclusive ownership and operational release gates remain blocked. No production activation, policy authority or acceptance labels.
+
+Rollback: stop guarded admission/withdraw wiring; preserve journal, intents, settlements, reservations and deduplication. Do not erase possible spend or retry uncertain invocations. Missing guarded capability continues to refuse. No migration.
+
+Required carrier-continuity amendment: countAnalysisPasses in h2/activity.ts wraps the configured runner and currently forwards only ordinary run. Runtime carrier owner also owns that wrapper and new focused activity.test.ts, forwarding guarded capability only when the wrapped runner actually has it; unsupported remains absent and never falls back to ordinary run. Preserve receiver binding and counting semantics. This is necessary continuity of the explicit guarded seam, not collector activation or adjacent cleanup.
+
+Independent first validation found exactly one failure: explicit isolation import allowlist rejects the new type and local admission validators. Fresh source diagnosis confirms no store/budget/transition writer imported. Root owns the narrow isolation.test.ts allowance for AnalysisDispatchAdmission, dispatchValidationDetail and prepareDispatchAdmission, retaining every other symbol ban. Require admission type-only imports to remain erased; independent focused rerun before final verification claim.

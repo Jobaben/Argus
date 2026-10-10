@@ -52,7 +52,7 @@ export function endedRun(id: string, offsetMs: number, over: Partial<Run> = {}):
 
 export type Spawned = Parameters<AnalysisSpawn>[0];
 
-const envelope = (result: string, cost: number) =>
+const envelope = (result: string, cost: number | null) =>
   JSON.stringify({ result, total_cost_usd: cost, usage: { input_tokens: 900, output_tokens: 60 } });
 
 export function defaultAnswer(prompt: string): string {
@@ -65,13 +65,14 @@ export interface H2HarnessOptions {
   env?: Readonly<Record<string, string | undefined>>;
   /** The model's text for a call; defaults to a valid answer for either question. */
   answer?: (prompt: string, call: number) => string;
-  costUsd?: number;
+  costUsd?: number | null;
   root?: string;
   journalLimits?: Partial<JournalLimits>;
   maxLedgerBytes?: number;
   fault?: H2WatcherDeps["fault"];
   model?: string;
   questions?: H2WatcherDeps["questions"];
+  otherSpend?: H2WatcherDeps["otherSpend"];
   registry?: ReturnType<typeof builtinRegistry>;
   /** Hold every spawn until `release()` is called. */
   hold?: boolean;
@@ -101,7 +102,10 @@ export function h2Harness(opts: H2HarnessOptions = {}) {
   const spawn: AnalysisSpawn = (o) => {
     spawns.push(o);
     const n = spawns.length - 1;
-    const stdout = envelope((opts.answer ?? defaultAnswer)(o.prompt, n), opts.costUsd ?? 0.002);
+    const stdout = envelope(
+      (opts.answer ?? defaultAnswer)(o.prompt, n),
+      opts.costUsd === undefined ? 0.002 : opts.costUsd,
+    );
     const done = opts.hold
       ? new Promise<{ code: number; stdout: string; error: null }>((resolve) =>
           releases.push(() => resolve({ code: 0, stdout, error: null })),
@@ -160,6 +164,7 @@ export function h2Harness(opts: H2HarnessOptions = {}) {
       service,
       registry,
       questions: opts.questions,
+      otherSpend: opts.otherSpend,
       providerKey: "claude-cli",
       providerIdentity: () => provider.identity(),
       readRuns: async () => {

@@ -30,15 +30,6 @@ export const TERMINAL: ReadonlySet<ResultClass> = new Set<ResultClass>([
   "construction-error",
 ]);
 
-/** Refusal codes from the runner or the adapter: a failed assessment was appended, but no call was made. */
-export const PRECALL_FAILURES: ReadonlySet<string> = new Set([
-  "disabled",
-  "busy",
-  "budget-blocked",
-  "aborted",
-  "unsafe-cwd",
-]);
-
 export const itemKey = (runId: string, q: { id: string; version: number }) =>
   `${runId}|${q.id}@${q.version}`;
 

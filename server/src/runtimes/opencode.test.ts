@@ -196,3 +196,29 @@ test("an empty profile reports no limitations", () => {
   });
   assert.deepEqual(plan.limitations, []);
 });
+
+test("unknown step cost makes aggregate cost unknown instead of a partial favorable total", () => {
+  const step = (cost: number | null) =>
+    JSON.stringify({ type: "step_finish", part: { type: "step-finish", cost } });
+  assert.equal(parseOpencodeEnvelope(step(null)).costUsd, null);
+  assert.equal(parseOpencodeEnvelope(step(0)).costUsd, 0);
+  assert.equal(parseOpencodeEnvelope([step(0.2), step(null)].join("\n")).costUsd, null);
+  assert.equal(parseOpencodeEnvelope([step(null), step(0.2)].join("\n")).costUsd, null);
+});
+
+test("invalid component cost cannot cancel spend or become numeric zero", () => {
+  const step = (cost: unknown) =>
+    JSON.stringify({ type: "step_finish", part: { type: "step-finish", cost } });
+  assert.equal(parseOpencodeEnvelope([step(-0.2), step(0.2)].join("\n")).costUsd, null);
+  for (const cost of [-0.2, "", " ", false, true, [], [0], {}, "0", "0.2", null]) {
+    assert.equal(parseOpencodeEnvelope(step(cost)).costUsd, null);
+    assert.equal(parseOpencodeEnvelope([step(cost), step(0.2)].join("\n")).costUsd, null);
+    assert.equal(parseOpencodeEnvelope([step(0.2), step(cost)].join("\n")).costUsd, null);
+  }
+  assert.equal(parseOpencodeEnvelope([step(0.1), step(0.2)].join("\n")).costUsd, 0.3);
+});
+
+test("monetary aggregation overflow remains unknown", () => {
+  const text = JSON.stringify({ type: "step_finish", part: { type: "step-finish", cost: 1e308 } });
+  assert.equal(parseOpencodeEnvelope(text).costUsd, null);
+});

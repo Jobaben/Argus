@@ -317,7 +317,7 @@ export function gateWorld() {
 
 export type Spawned = Parameters<AnalysisSpawn>[0];
 
-const envelope = (result: string, cost: number) =>
+const envelope = (result: string, cost: number | null) =>
   JSON.stringify({ result, total_cost_usd: cost, usage: { input_tokens: 900, output_tokens: 60 } });
 
 export interface H1HarnessOptions {
@@ -325,7 +325,7 @@ export interface H1HarnessOptions {
   root?: string;
   /** The model's text for a call. */
   answer?: (prompt: string, call: number) => string;
-  costUsd?: number;
+  costUsd?: number | null;
   maxLedgerBytes?: number;
   maxSnapshotBytes?: number;
   fault?: H1WatcherDeps["fault"];
@@ -360,7 +360,7 @@ export function h1Harness(opts: H1HarnessOptions = {}) {
       kill() {},
       done: Promise.resolve({
         code: 0,
-        stdout: envelope(text, opts.costUsd ?? 0.003),
+        stdout: envelope(text, opts.costUsd === undefined ? 0.003 : opts.costUsd),
         error: null,
       }),
     };

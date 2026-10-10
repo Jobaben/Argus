@@ -1,0 +1,281 @@
+{
+  "format": "argus.decision-ledger-final-review-inventory",
+  "version": 1,
+  "at": "2026-10-10T04:31:16.8798551Z",
+  "baseCommit": "02668069d8eb1f716757f0acb26a5d1021ad3013",
+  "sourceCount": 46,
+  "source": [
+    {
+      "path": "server/src/app.ts",
+      "bytes": 78741,
+      "sha256": "8e6bd9896319af2304dd882341851c02a552008f446cb7fbe4523629c06a6a71"
+    },
+    {
+      "path": "server/src/decision/advisoryRoute.test.ts",
+      "bytes": 9904,
+      "sha256": "34bd29bb88b771b063428f82844905730dbf89ebc944a71b814ec470f62d8c53"
+    },
+    {
+      "path": "server/src/decision/claudeCli.test.ts",
+      "bytes": 17207,
+      "sha256": "2955f405b6a1fc1ab732f255e74a3b328a2a139eaa17e5f1fc1def432a3ceae8"
+    },
+    {
+      "path": "server/src/decision/currency.ts",
+      "bytes": 8229,
+      "sha256": "22499d6bfec98e7bf3b4db662e34005ec25921d1ed035916eed6ba5cca154c2c"
+    },
+    {
+      "path": "server/src/decision/definitions.ts",
+      "bytes": 5040,
+      "sha256": "7d9d8bfa24786bb3dffe3bc3ffa1d71e12713b3913690b4c37a1c92dbc62b372"
+    },
+    {
+      "path": "server/src/decision/dispatchAdmission.integration.test.ts",
+      "bytes": 11276,
+      "sha256": "819a6f4323770737ffc2b195b0e0eaac86a522e65d4c0e7d983586ff7a9e8ed1"
+    },
+    {
+      "path": "server/src/decision/evaluationCoordinator.test.ts",
+      "bytes": 26974,
+      "sha256": "ab30a9fd6e70c68c99c518712cba9091845e874e43e2bd54bc6992283b5c5138"
+    },
+    {
+      "path": "server/src/decision/evaluationCoordinator.ts",
+      "bytes": 22675,
+      "sha256": "108bea7f8cfff5683ed17b3c26c587a1c7652b2a7bc8d3d003dfa3bac1c9aa3b"
+    },
+    {
+      "path": "server/src/decision/evaluationInput.test.ts",
+      "bytes": 12872,
+      "sha256": "88c904205afe038b182d6fbf2479a059bfa104e094bbe638d8b3b77bf9ccb71b"
+    },
+    {
+      "path": "server/src/decision/evaluationInput.ts",
+      "bytes": 12800,
+      "sha256": "df350ed37cb77fb46180349f623dcbb2fe19b7ec7c3d06b309f0d06750738e4d"
+    },
+    {
+      "path": "server/src/decision/evaluationV2.test.ts",
+      "bytes": 5131,
+      "sha256": "59cf8349b20def64446f38e055353e72db90467b42f1210458f2888e7f9539b8"
+    },
+    {
+      "path": "server/src/decision/h1/report.test.ts",
+      "bytes": 6253,
+      "sha256": "b6e311458ca5c1ba3694c0a9f60240f3faaaa144594e441bfd6a763f5d9b5f0b"
+    },
+    {
+      "path": "server/src/decision/h1/report.ts",
+      "bytes": 31352,
+      "sha256": "3cd32c273d25294f10e337a53865f5bde2c78280e0e8c05905f2bc072f359093"
+    },
+    {
+      "path": "server/src/decision/h1/testSupport.ts",
+      "bytes": 13436,
+      "sha256": "0ee18d5dad6133e389f45d23f950cb4470dd088db9e89e3564e4d733fcd71afb"
+    },
+    {
+      "path": "server/src/decision/h1/units.test.ts",
+      "bytes": 31096,
+      "sha256": "c43cc06d07daf947f583b81401e2424e5e45328026bea20b89cb8d764430c9c6"
+    },
+    {
+      "path": "server/src/decision/h1/watcher.test.ts",
+      "bytes": 17079,
+      "sha256": "f19197057be412370c40fe13c5b7639facd0c03599d264f9ea91111031ec3fe2"
+    },
+    {
+      "path": "server/src/decision/h1/watcher.ts",
+      "bytes": 34350,
+      "sha256": "2771502b94781bb823a6283463150d238ca49947478fff7c1092e66d281315d6"
+    },
+    {
+      "path": "server/src/decision/h2/activity.test.ts",
+      "bytes": 1819,
+      "sha256": "d7c5116827d9f2136ba13c9beb0eb57c09c6656b208a8f1d0292a99c206de8f2"
+    },
+    {
+      "path": "server/src/decision/h2/activity.ts",
+      "bytes": 1270,
+      "sha256": "df35b8994ff8be5edff9694a8cd3d3cb78e25aa9d0f05384e13261535372d291"
+    },
+    {
+      "path": "server/src/decision/h2/items.ts",
+      "bytes": 4257,
+      "sha256": "4d33efccdefe44bc7f8cc73a056979dc94d22ca7c9a379195a2ebdb3214927d9"
+    },
+    {
+      "path": "server/src/decision/h2/report.test.ts",
+      "bytes": 21873,
+      "sha256": "a85b78f69208186494181cec809c7e006e4f29ef6353459bfbd1a141e0f4fa13"
+    },
+    {
+      "path": "server/src/decision/h2/report.ts",
+      "bytes": 28025,
+      "sha256": "ff4679294ea6e2bdb3d1103f19faabc1edb703161267ed3265497ca7d9a95ffd"
+    },
+    {
+      "path": "server/src/decision/h2/testSupport.ts",
+      "bytes": 7196,
+      "sha256": "d6b9fb557778d0f7f6c3868e3644a73b9af9154b1d3833ef3d16a99518d80b95"
+    },
+    {
+      "path": "server/src/decision/h2/watcher.test.ts",
+      "bytes": 29072,
+      "sha256": "444a2ba6bc5142f44d3ddffc0d9bb5c0efe3419d37d771f0958568a9191899d2"
+    },
+    {
+      "path": "server/src/decision/h2/watcher.ts",
+      "bytes": 21452,
+      "sha256": "fda5a3b1e0ea4d4320680461a19d51ff5852b8ed8f215253590347f4151b5551"
+    },
+    {
+      "path": "server/src/decision/invocationLedger.test.ts",
+      "bytes": 6755,
+      "sha256": "cca564699d4447c86033f95b909408400a7581216b9e0c3e4c96b47293f4fed2"
+    },
+    {
+      "path": "server/src/decision/invocationLedger.ts",
+      "bytes": 16568,
+      "sha256": "8a05a96aebce51bbb23dd82d6cbf583c37df00f24a919631da0d3c5404f384e7"
+    },
+    {
+      "path": "server/src/decision/isolation.test.ts",
+      "bytes": 15725,
+      "sha256": "73edbe4888bd16cb8a2dbecd6fac9ad4058bae649eb7a13e05100bbcc35b4754"
+    },
+    {
+      "path": "server/src/decision/projections/runFailure.ts",
+      "bytes": 8447,
+      "sha256": "f034e16280527455e187f5c201af3aca8bbfbab3f38e118be6153e7d18f75e3f"
+    },
+    {
+      "path": "server/src/decision/providers/claudeCli.ts",
+      "bytes": 11452,
+      "sha256": "8d6af9477c2da926ff17abee3a4de2d45dcfb31a3672b7b6a2bedb9528aa16b4"
+    },
+    {
+      "path": "server/src/decision/providers/mock.ts",
+      "bytes": 4117,
+      "sha256": "8f0b0f900576f6f796d822e09282d7ae8b8a9de06f9cd92767986397601a5e6e"
+    },
+    {
+      "path": "server/src/decision/providers/types.ts",
+      "bytes": 1474,
+      "sha256": "6ec5b11b8a353e6516f8cbeb70f6afcd65b4bf1a6676da7426457063e7574bec"
+    },
+    {
+      "path": "server/src/decision/reader.test.ts",
+      "bytes": 14706,
+      "sha256": "7092c4a7587f402839f1b3aa577f8bf3450a276908fec758af13b5a1adc29afa"
+    },
+    {
+      "path": "server/src/decision/reader.ts",
+      "bytes": 10826,
+      "sha256": "067fd68d7a6d3209563a1fd9c0661616947db3b1183d035edb4064715acfb148"
+    },
+    {
+      "path": "server/src/decision/registry.test.ts",
+      "bytes": 24779,
+      "sha256": "374e944598a2627a3afaa1ef62dcd81768afa3b42ed45c1e02986138d7ee202d"
+    },
+    {
+      "path": "server/src/decision/service.test.ts",
+      "bytes": 37492,
+      "sha256": "37df0bfcd3328aaacfa7aad3968bc3faf7b977781a2c1732b7551aeb360c3193"
+    },
+    {
+      "path": "server/src/decision/service.ts",
+      "bytes": 22972,
+      "sha256": "9fadc13890d258f479ab77ca5a58b408abf4cabeebc2e22fcff3fd51bf4200ab"
+    },
+    {
+      "path": "server/src/runtimes/claude.test.ts",
+      "bytes": 13614,
+      "sha256": "fccad6ba5186b1684d43ac586147eb37b3c1660766a538ad55a40ced40467606"
+    },
+    {
+      "path": "server/src/runtimes/claude.ts",
+      "bytes": 18863,
+      "sha256": "b344ac8a763530b2c9caa50aa3135cdb5a7fdb2b5aab296bfd330f17c8b55aa1"
+    },
+    {
+      "path": "server/src/runtimes/opencode.test.ts",
+      "bytes": 9983,
+      "sha256": "442053971e40bade58d8a9e74b0ff2c6285ed11bcb41f8251b5038ac50758428"
+    },
+    {
+      "path": "server/src/runtimes/opencode.ts",
+      "bytes": 15112,
+      "sha256": "e10bdeae62456e79bd328fc9d396047fdf4460c0d36f8f6e95236fdfb8671349"
+    },
+    {
+      "path": "server/src/runtimes/qwen.test.ts",
+      "bytes": 10658,
+      "sha256": "bfb43b80b085a75db882bfc3338f6d12a1e9dee85a3d3e974bb422cdcc802879"
+    },
+    {
+      "path": "server/src/runtimes/qwen.ts",
+      "bytes": 13919,
+      "sha256": "98d024fc9fb9098be2290cebcfd66dfc2d79dce9a5449bc306ea0ec24bbadb56"
+    },
+    {
+      "path": "server/src/runtimes/types.ts",
+      "bytes": 12213,
+      "sha256": "5ef0809038d01e27cae327b55737b1d1d6ba3cfaed042b7aa9e1c1873760d94f"
+    },
+    {
+      "path": "server/src/sources/analysis.test.ts",
+      "bytes": 12717,
+      "sha256": "619cd9749559734f7fc63d008217dc2bfb69f08ebf93418760deb1c65b7a4990"
+    },
+    {
+      "path": "server/src/sources/analysis.ts",
+      "bytes": 17514,
+      "sha256": "0dd092595a3cd462d895c09587d3c4c4461ab6e0e227b9de3d1a6aa3978ae206"
+    }
+  ],
+  "documents": [
+    "docs/argus/decision-ledger-development/acceptance-input-prerequisites.md",
+    "docs/argus/decision-ledger-development/adr.md",
+    "docs/argus/decision-ledger-development/audit-retained-inputs.mjs",
+    "docs/argus/decision-ledger-development/audit-retained-traces.mjs",
+    "docs/argus/decision-ledger-development/bounded-acceptance-protocol.md",
+    "docs/argus/decision-ledger-development/dispatch-boundary-plan.md",
+    "docs/argus/decision-ledger-development/evaluation-input-plan.md",
+    "docs/argus/decision-ledger-development/evidence-manifest.json",
+    "docs/argus/decision-ledger-development/freeze-evidence.mjs",
+    "docs/argus/decision-ledger-development/historical-input-audit.json",
+    "docs/argus/decision-ledger-development/implementation-plan.md",
+    "docs/argus/decision-ledger-development/implementation-status.json",
+    "docs/argus/decision-ledger-development/next-slice-feasibility.md",
+    "docs/argus/decision-ledger-development/precall-accounting-diagnosis.md",
+    "docs/argus/decision-ledger-development/precall-accounting-plan.md",
+    "docs/argus/decision-ledger-development/progress-history.md",
+    "docs/argus/decision-ledger-development/report.md",
+    "docs/argus/decision-ledger-development/reservation-dispatch-prerequisite.md",
+    "docs/argus/decision-ledger-development/retained-evaluation-plan.md",
+    "docs/argus/decision-ledger-development/retained-trace-audit.json",
+    "docs/argus/decision-ledger-development/runbook.md",
+    "docs/argus/decision-ledger-development/runtime-identity-check.json",
+    "docs/argus/decision-ledger-development/validation/baseline-test-comparison.json",
+    "docs/argus/decision-ledger-development/validation/dispatch-boundary-independent-review.md",
+    "docs/argus/decision-ledger-development/validation/dispatch-boundary-validation.json",
+    "docs/argus/decision-ledger-development/validation/evaluation-input-review-repro.ts",
+    "docs/argus/decision-ledger-development/validation/evaluation-input-validation.json",
+    "docs/argus/decision-ledger-development/validation/execution-provenance-validation.json",
+    "docs/argus/decision-ledger-development/validation/integrated-dispatch-fence-gap-boundary-review.mts",
+    "docs/argus/decision-ledger-development/validation/integrated-dispatch-fence-gap.mts",
+    "docs/argus/decision-ledger-development/validation/integrated-dispatch-gap-boundary-review.mts",
+    "docs/argus/decision-ledger-development/validation/integrated-dispatch-gap.mts",
+    "docs/argus/decision-ledger-development/validation/integrated-invocation-review.md",
+    "docs/argus/decision-ledger-development/validation/precall-accounting-probe.mts",
+    "docs/argus/decision-ledger-development/validation/precall-coordinator-probe.mts",
+    "docs/argus/decision-ledger-development/validation/precall-independent-missing-response-probe.mts",
+    "docs/argus/decision-ledger-development/validation/retained-coordinator-validation.json"
+  ],
+  "stageStatus": "unstaged",
+  "sourceFreeze": "Review baseline; any later source change requires explicit delta review",
+  "excluded": "Ignored dependency/build caches, temporary baseline fixtures and raw logs are not staging candidates. Root checkout index is not used."
+}

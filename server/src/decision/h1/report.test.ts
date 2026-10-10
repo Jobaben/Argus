@@ -5,7 +5,7 @@ import path from "node:path";
 import { tempRoot } from "../testSupport.js";
 import { h1Registry } from "./definitions.js";
 import { H1Ledger, type H1Record, type NewH1Record } from "./ledger.js";
-import { renderH1Report, replayH1 } from "./report.js";
+import { buildH1Report, renderH1Report, replayH1 } from "./report.js";
 import { H1SnapshotStore } from "./snapshots.js";
 import { gateInstance, h1Harness } from "./testSupport.js";
 
@@ -113,4 +113,30 @@ test("an assessment missing from the journal is a finding, and the item is not s
   assert.ok(r.integrity.findings.some((f) => f.kind === "assessment-missing"));
   assert.equal(r.models[0].assessed, 0);
   assert.equal(r.deterministic[0].scored, 1, "the baselines are retained in the ledger");
+});
+
+test("legacy journal failures cannot prove no-call and explicit historical refusal lines retain priority", async () => {
+  const { h } = await settledRecords();
+  const ledger = await h.ledger.read();
+  const snapshots = new Map(await Promise.all((await h.records())
+    .filter((r): r is Extract<H1Record, { kind: "capture" }> => r.kind === "capture")
+    .map(async (c) => [c.snapshot.sha256, await h.snapshots.load(c.snapshot.sha256)] as const)));
+  const journal = await h.journal.read();
+  for (const failure of ["disabled", "busy", "budget-blocked", "aborted", "unsafe-cwd"]) {
+    const legacyJournal = structuredClone(journal);
+    for (const entry of legacyJournal.entries) entry.assessment.outcome = { status: "failed", failure, detail: "legacy" };
+    const legacyLedger = { ...ledger, records: ledger.records.filter(({ record }) => record.kind !== "result") };
+    const report = buildH1Report({ ledger: legacyLedger, snapshots, journal: legacyJournal, registry: h1Registry() });
+    assert.equal(report.models[0].attempts["provider-failed"], 1, failure);
+    assert.equal(report.models[0].attempts.refused, 0, failure);
+    const explicit = structuredClone(ledger);
+    for (const entry of explicit.records) {
+      if (entry.record.kind === "result") {
+        entry.record.class = "refused";
+        entry.record.providerCalled = "no";
+        entry.record.code = failure;
+      }
+    }
+    assert.equal(buildH1Report({ ledger: explicit, snapshots, journal: legacyJournal, registry: h1Registry() }).models[0].attempts.refused, 1);
+  }
 });

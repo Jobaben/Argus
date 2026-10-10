@@ -223,3 +223,30 @@ test("an empty profile reports no limitations", () => {
   });
   assert.deepEqual(plan.limitations, []);
 });
+
+test("explicit null monetary cost is unknown and explicit numeric zero is known", () => {
+  assert.equal(
+    parseQwenEnvelope(JSON.stringify({ type: "result", result: "{}", total_cost_usd: null }))
+      .costUsd,
+    null,
+  );
+  assert.equal(
+    parseQwenEnvelope(JSON.stringify({ type: "result", result: "{}", total_cost_usd: 0 })).costUsd,
+    0,
+  );
+});
+
+test("only finite nonnegative numeric monetary scalars are known", () => {
+  for (const cost of [-0.2, "", " ", false, true, [], [0], {}, "0", "0.2", null]) {
+    assert.equal(
+      parseQwenEnvelope(JSON.stringify({ type: "result", result: "{}", total_cost_usd: cost }))
+        .costUsd,
+      null,
+    );
+  }
+  assert.equal(
+    parseQwenEnvelope(JSON.stringify({ type: "result", result: "{}", total_cost_usd: 0.2 }))
+      .costUsd,
+    0.2,
+  );
+});

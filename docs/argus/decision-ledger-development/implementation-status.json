@@ -1,0 +1,589 @@
+{
+  "format": "argus.decision-ledger-implementation-status",
+  "version": 1,
+  "at": "2026-10-10T06:34:48.6863802Z",
+  "taskStatus": "closed-timebox; offline slice implemented and verified; live-release prerequisites blocked",
+  "cutoff": "2026-10-10T06:30:00Z",
+  "timezone": "Europe/Stockholm",
+  "automationId": "argus-ledger-development-until-08-30",
+  "worktree": "C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus",
+  "baseCommit": "02668069d8eb1f716757f0acb26a5d1021ad3013",
+  "staged": true,
+  "committed": false,
+  "deployed": false,
+  "enforcementEnabled": false,
+  "productionReaderConfigured": false,
+  "calibrationProven": false,
+  "inferenceAccuracyProven": false,
+  "rows": [
+    {
+      "id": "DL-01",
+      "disposition": "implemented-and-verified",
+      "implemented": "Additive ADR, dependency plan and hashed evidence manifest; 32 historical question dispositions reconciled; original artifacts unchanged",
+      "verified": "9 artifact hashes, 660 preserved source hashes match; direct retained input audit 16/16 hashes verified",
+      "blocked": "Running production build identity unavailable",
+      "rollback": "Supersede additive ADR/report; preserve original evidence"
+    },
+    {
+      "id": "DL-02",
+      "disposition": "implemented-and-verified-for-run-reader",
+      "implemented": "Narrow read-only journal reader, exact admitted question/projection/provider/subject identities, provenance and retained integrity separate from live currency",
+      "verified": "34/34 reader/currency/replay tests; malformed actual-journal records typed unavailable/refused; independent review clean",
+      "blocked": "Artifact/criterion-sensitive and H1 applicability require content hashes/builders; no configured production reader",
+      "rollback": "Remove reader wiring; retain journal"
+    },
+    {
+      "id": "DL-03",
+      "disposition": "offline-foundation-implemented-and-verified; production-integration-blocked",
+      "implemented": "Exact retained identities, read-only pinned preparation, preassigned result identity, strict durable invocation ledger/coordinator; mandatory injected authority/account preflight/fenced ownership/shared gate. Default unwired.",
+      "verified": "Retained preparation/intent/recovery verified; final guarded dispatch136/136 independently passed. Both original expiry/fence fixtures now zero spawns/no assessment append; expired-owner settlement remains unknown. Typecheck/build/full server lint passed; full2934 matches pristine failing/cancelled names.",
+      "blocked": "Real application-owned exclusive fenced writer and synchronous current assertion; durable common atomic gate covering all calling paths; fresh authoritative account/model support; explicit reservation permit lifetime/revocation semantics; operational recovery/disable drills. Future V2 acceptance dispatch must consume exact frozen reviewed bytes; offline artifacts grant no call authority.",
+      "rollback": "Withdraw new evaluation entry points; reverting narrow guard restores known mismatch defect, so leave calls disabled; preserve history"
+    },
+    {
+      "id": "DL-04",
+      "disposition": "blocked",
+      "implemented": "Reference/taxonomy release prerequisites documented; no labels fabricated",
+      "verified": "Historical independent residual human references remain zero",
+      "blocked": "Blinded independent genuine reference provenance and agreed taxonomy; scenario intent/agent reviews are not ground truth",
+      "rollback": "No reference collection enabled"
+    },
+    {
+      "id": "DL-05",
+      "disposition": "partial-implemented-and-verified",
+      "implemented": "Advisory JSON presentation via configured run-only GET; current/stale/historical/unavailable, cost/outcome and inference-only authority",
+      "verified": "13/13 HTTP tests; 41/41 combined API/reader/H2 routes; independent review clean",
+      "blocked": "Default startup reader absent503; no UI or production activation; no H1 active gate exposure",
+      "rollback": "Omit configured reader; default503 and existing review behavior"
+    },
+    {
+      "id": "DL-06",
+      "disposition": "blocked-protocol-documented",
+      "implemented": "Documented evaluation/prepared-intent/durable-applied-settlement distinctions without enabling policy",
+      "verified": "No policy evaluator/transition writer introduced",
+      "blocked": "Approved exact-identity escalation rules, durable idempotent settlement/state recheck/fallback/crash tests",
+      "rollback": "No policy enabled"
+    },
+    {
+      "id": "DL-07",
+      "disposition": "blocked",
+      "implemented": "Existing human/knowledge boundaries preserved; no engine adapter added",
+      "verified": "No engine/gate/knowledge application source changed; broad baseline governance failures retained honestly",
+      "blocked": "DL-06 and DL-09 plus prospective genuine operator/reference evidence and approved class-specific thresholds/error costs",
+      "rollback": "Existing hardened engine remains"
+    },
+    {
+      "id": "DL-08",
+      "disposition": "blocked",
+      "implemented": "Artifact advisory integration prerequisite identified: H1 path+byte length lacks content identity",
+      "verified": "Source inspected, no artifact links or verification semantics changed",
+      "blocked": "Versioned artifact content hashes, exact criterion/verification/run/candidate binding and current applicability builder plus DL-05 UI",
+      "rollback": "No artifact links enabled"
+    },
+    {
+      "id": "DL-09",
+      "disposition": "partial-documentation",
+      "implemented": "Scoped drift/disable/reproduce/rollback runbook",
+      "verified": "Defaultdisabled API and deterministic replay/read isolation tested offline",
+      "blocked": "Production consumer canary, cross-process/cross-store recovery, disable and rollback drills remain unproven; completed local fixture recovery does not establish operational readiness",
+      "rollback": "Withdraw advisory wiring/threshold; retain history"
+    }
+  ],
+  "priorities": [
+    {
+      "id": "P1",
+      "status": "authority-already-satisfied; taxonomy-fixed",
+      "evidence": "Observed termination independentof tool/task failure;V2threeprocessclasses,V1digests preserved. Newanalysisclassification distinguishesnonzero-exit,exit-code-unavailable,runtime-failed;142affectedchecks verified; noobservations rewritten."
+    },
+    {
+      "id": "P2",
+      "status": "V2-metadata-omission-and-exact-offline-input-binding-verified; semantic-blinding-blocked",
+      "evidence": "Immutable V2 omits known metadata; authored hints remain audit candidates. New read-only exactUTF8 prompt artifact binds full preparation, renderer/adapter and original definitions/snapshot; closed unauthenticated receipt binder alwaysdispatchablefalse.105integrated+5independentchecks pass. No neutral/accuracy claim."
+    },
+    {
+      "id": "P3",
+      "status": "verified-read-foundations; production-admission-blocked",
+      "evidence": "Exact identity allowlist; deterministic read-only replay; failed/stale/corrupt unavailable; run-only endpoint explicitly configured"
+    },
+    {
+      "id": "P4",
+      "status": "implemented-and-offline-verified; actual-productionsharedgate-blocked",
+      "evidence": "Explicittransientexecutiondisposition atownrunner/adapterguards; typedvalidatednocallrefusalbeforeassessmentappend; unknown/malformed/contradictory/throw possiblyspent. Failurestringsnevernocallproof. Unknowncostnull, historicalexplicitledgerrecordsunchanged.192independentfocusedpass; full2910matchesbaseline."
+    },
+    {
+      "id": "P5",
+      "status": "blocked-on-authoritative-account-capabilities",
+      "evidence": "Inherited Codex model path diagnosed; historical unsupported-account error preserved; catalog/cache is not account support; no global changes/retries"
+    },
+    {
+      "id": "P6",
+      "status": "offline-retained-coordinator-and-actualspawn-guard-verified; production-blocked",
+      "evidence": "Explicitguardedprovider/runner capabilities, requiredsyncvalidateNow+currentownership afterallawaits; unsupported/async/malformedrefuse. Immutableintent/results, duplicate/restartnoretry, unknowncostconserved.136independenttests+actualgap0spawns; noendpoint/startupwiring."
+    },
+    {
+      "id": "P7",
+      "status": "authority-boundary-preserved; integration-blocked",
+      "evidence": "Policy settlement protocol documented; applied requires durable transition/settlement; enforcement and permission widening absent"
+    }
+  ],
+  "validation": {
+    "stableTypecheck": "passed contracts/server/web",
+    "stableBuild": "passed web/server",
+    "stableLint": "passed contracts/server/web",
+    "web": {
+      "files": 117,
+      "tests": 1128,
+      "pass": 1128
+    },
+    "focused": {
+      "v2Compatibility": 103,
+      "v2Integration": 53,
+      "readerCurrencyReplay": 34,
+      "advisoryRoute": 13,
+      "advisoryReaderH2": 41,
+      "monetaryRuntimeAnalysisServiceWatchers": 198,
+      "note": "Overlapping suites; do not sum as independent populations",
+      "readerIsolationApi": 41,
+      "retainedIdentityService": 38,
+      "retainedIdentityExpanded": 98,
+      "independentRetainedServiceReplay": 42,
+      "preparationService": 52,
+      "analysisRuntimeProvenance": 142
+    },
+    "pristineFullServer": {
+      "tests": 2760,
+      "pass": 2695,
+      "fail": 41,
+      "cancelled": 1,
+      "skipped": 23
+    },
+    "stableFullServer": {
+      "tests": 2818,
+      "pass": 2753,
+      "fail": 41,
+      "cancelled": 1,
+      "skipped": 23,
+      "duration_ms": 73175.8327,
+      "additionalFailingNames": [],
+      "comparison": "All 41 pristine failing names recur; same cancellation. This run precedes the next retained identity guard."
+    },
+    "independentWholeDiff": "Whole foundations, erased-interface delta and final retained-identity delta clean. Initial incomplete-subject review defect fixed after actual fresh diagnosis/repro; independent42/42 service/replay passed.",
+    "latestRetainedIdentityChecks": "Server typecheck/build/scopedlint passed after final subject completeness guard; broad2818run preceded retained guard and reproduced only baseline failing names",
+    "preparationChecks": "Final55/55 service; independent81/81 service+ledger+coordinator; final service-boundary expiry regression and reject/throw no-call/no-write checks pass.",
+    "retainedTraceAudit": {
+      "probes": 16,
+      "verified": 16,
+      "caseIdentifierOrAnswerHintRecords": 3,
+      "processVocabularyRecords": 1,
+      "file": "retained-trace-audit.json",
+      "proof": "review candidates only, not blinding or labels",
+      "independentReview": "Script/report review clean within stated readonly pattern-candidate scope; no independent provider/label evidence"
+    },
+    "retainedCoordinator": {
+      "cancelled": 0,
+      "tests": 81,
+      "serverBuild": "passed",
+      "serverTypecheck": "passed",
+      "evidence": "validation/retained-coordinator-validation.json",
+      "pass": 81,
+      "fullServer": {
+        "fail": 41,
+        "pass": 2825,
+        "skipped": 23,
+        "tests": 2890,
+        "duration_ms": 77587.6134,
+        "additionalFailingOrCancelledNames": [],
+        "cancelled": 1,
+        "samePristineNames": true
+      },
+      "fail": 0,
+      "fullServerLint": "passed",
+      "independentReview": "clean after actual reproductions and repairs"
+    },
+    "evaluationInput": {
+      "format": "argus.evaluation-input-validation",
+      "version": 1,
+      "at": "2026-10-10T01:02:20.9031521Z",
+      "focused": {
+        "log": "evaluation-input-independent-review.log",
+        "pass": 105,
+        "tests": 105,
+        "fail": 0,
+        "cancelled": 0
+      },
+      "independentAdversarial": {
+        "pass": 5,
+        "log": "evaluation-input-review-repro.log",
+        "checks": 5
+      },
+      "inputTests": 11,
+      "serverTypecheck": "passed",
+      "serverBuild": "passed",
+      "scopedLint": "passed",
+      "dispatchable": false,
+      "review": "clean",
+      "proof": "exact offline rendering and unauthenticated audit receipt binding; not semantic neutrality, human labels or frozen-byte dispatch",
+      "sourceHashes": {
+        "server/src/decision/evaluationInput.test.ts": "88c904205afe038b182d6fbf2479a059bfa104e094bbe638d8b3b77bf9ccb71b",
+        "server/src/decision/evaluationInput.ts": "df350ed37cb77fb46180349f623dcbb2fe19b7ec7c3d06b309f0d06750738e4d",
+        "server/src/decision/providers/claudeCli.ts": "c1a7ec56cf841b531954aee48ceefa69df32f3b148922c72eb9eac26a7416726"
+      },
+      "finalFormatting": {
+        "focusedTests": 11,
+        "duration_ms": 580.5577,
+        "scope": "only two new input TS files",
+        "fail": 0,
+        "behaviorChanges": false,
+        "pass": 11
+      }
+    },
+    "executionProvenance": {
+      "format": "argus.execution-provenance-validation",
+      "version": 1,
+      "at": "2026-10-10T02:02:04.9228963Z",
+      "independentFocused": {
+        "log": "precall-independent-tests.log",
+        "cancelled": 0,
+        "fail": 0,
+        "pass": 192,
+        "tests": 192
+      },
+      "affectedBroader": {
+        "cancelled": 0,
+        "log": "precall-accounting-final-tests.log",
+        "pass": 241,
+        "fail": 2,
+        "baselineFailures": true,
+        "tests": 243
+      },
+      "fullServer": {
+        "tests": 2910.0,
+        "pass": 2845.0,
+        "fail": 41.0,
+        "cancelled": 1.0,
+        "skipped": 23.0,
+        "duration_ms": 75896.1762
+      },
+      "failingOrCancelledNames": [
+        "vault: reports what it holds, and how much of it the JSON files have dropped",
+        "vault: search finds an ingested run and says what it searched",
+        "vault: an empty query is answered, not rejected",
+        "vault: quarters aggregate the ingested history",
+        "vault: the OTLP export is a valid document with derived, stable ids",
+        "the bundled skill is one file, readable from both the Claude and the Codex repo paths",
+        "--install-skill",
+        "instance, route, gate, ledger, run state and the gate review are identical with H1 collection on and off",
+        "instance, route, gate, ledger and run state are identical with H2 collection on and off",
+        "paths are rebuilt from validated ids: stray files, symlinks and traversal attempts are ignored and reported",
+        "a command check runs under the phase's own env policy: a denied variable is unset",
+        "artifact check rejects a symlink even when it resolves to a real file",
+        "file check also rejects a symlink even when it resolves to a real file",
+        "src\\\\harness\\\\reviewFixes.test.ts",
+        "command check: times out and kills the process group",
+        "createWorktree: a real worktree on a new branch, cut from HEAD",
+        "createWorktree: an existing branch whose directory is gone is checked out again",
+        "the hook runs when it is invoked through a symlink",
+        "ungated with checks: nothing is canonical until the deterministic checks pass",
+        "retry isolation: only the succeeding attempt's delta enters canonical knowledge",
+        "retry under a read-only profile: every attempt gets its own channels, and only the succeeding attempt's delta commits",
+        "a repository-internal symlink escaping the tree is refused, not silently accepted",
+        "a symlinked directory inside the scope cannot smuggle a path out either",
+        "a symlink that stays inside the repository is ordinary evidence",
+        "a repository-internal symlink pointing outside the repository is not valid evidence",
+        "a symlinked directory inside the scope cannot smuggle a path out either",
+        "a repository reached through a symlink is still its own root",
+        "interpolate caps {{previous.payload}} and {{artifacts.<name>}} by default at 16 KiB",
+        "a pass reports what it ingested",
+        "regression: a source that throws skips the pass instead of writing a partial history",
+        "a fresh Vault opens, ingests and reports what it holds",
+        "ingest is idempotent: the same run twice is one row, updated in place",
+        "regression: a re-ingested run replaces its document rather than adding one",
+        "the Vault keeps runs the JSON files have pruned, and says how many",
+        "incidents and anomalies become searchable events",
+        "regression: a capped incident timeline does not re-ingest on every prune",
+        "quarters aggregate runs, with medians that are absent rather than zero",
+        "verdict scores land in the quarter view, and unfinished ones do not",
+        "search is prefix-matching and cannot be made to inject FTS operators",
+        "related terms come from the corpus and are labelled as related, never as direct",
+        "runsBetween windows the history for the long Chronicle",
+        "a monitor or budget transition is archived as it happens",
+        "regression: the same transition twice is one row"
+      ],
+      "additionalNames": [],
+      "missingPristineNames": [],
+      "fullLog": "precall-full-server-bounded.log",
+      "serverTypecheck": "passed",
+      "serverBuild": "passed",
+      "fullServerLint": "passed",
+      "independentReview": "Scoped and subsequent integrated reviews complete; later guarded dispatch repair separately verified",
+      "persistedSchemaChanges": false,
+      "proof": "mock/offline trusted configured boundary; not production, account or human reference evidence"
+    },
+    "integratedAdvisoryReview": {
+      "scope": "actualdiff reader/currency/advisoryGET/V1V2/renderer/preparation/evaluationInput",
+      "testsRerun": false,
+      "status": "clean",
+      "proof": "static integrated review plus recorded focused evidence; no humanlabels/liveauthority"
+    },
+    "dispatchBoundary": {
+      "format": "argus.dispatch-boundary-validation",
+      "version": 1,
+      "at": "2026-10-10T03:04:19.8750396Z",
+      "independentFocused": {
+        "cancelled": 0,
+        "fail": 0,
+        "tests": 136,
+        "pass": 136,
+        "log": "dispatch-boundary-independent-final.log"
+      },
+      "actualGapProbes": {
+        "fenceSpawns": 0,
+        "assessmentAppend": 0,
+        "expirySpawns": 0,
+        "expirySettlement": "unknown-outcome; expired authority cannot settle",
+        "originalRedLogsPreserved": true,
+        "fenceSettlement": "refused-before-call; no call"
+      },
+      "fullServer": {
+        "tests": 2934.0,
+        "pass": 2869.0,
+        "fail": 41.0,
+        "cancelled": 1.0,
+        "skipped": 23.0,
+        "duration_ms": 75163.2489
+      },
+      "failingOrCancelledNames": [
+        "vault: reports what it holds, and how much of it the JSON files have dropped",
+        "vault: search finds an ingested run and says what it searched",
+        "vault: an empty query is answered, not rejected",
+        "vault: quarters aggregate the ingested history",
+        "vault: the OTLP export is a valid document with derived, stable ids",
+        "the bundled skill is one file, readable from both the Claude and the Codex repo paths",
+        "--install-skill",
+        "instance, route, gate, ledger, run state and the gate review are identical with H1 collection on and off",
+        "instance, route, gate, ledger and run state are identical with H2 collection on and off",
+        "paths are rebuilt from validated ids: stray files, symlinks and traversal attempts are ignored and reported",
+        "a command check runs under the phase's own env policy: a denied variable is unset",
+        "artifact check rejects a symlink even when it resolves to a real file",
+        "file check also rejects a symlink even when it resolves to a real file",
+        "src\\\\harness\\\\reviewFixes.test.ts",
+        "command check: times out and kills the process group",
+        "createWorktree: a real worktree on a new branch, cut from HEAD",
+        "createWorktree: an existing branch whose directory is gone is checked out again",
+        "the hook runs when it is invoked through a symlink",
+        "ungated with checks: nothing is canonical until the deterministic checks pass",
+        "retry isolation: only the succeeding attempt's delta enters canonical knowledge",
+        "retry under a read-only profile: every attempt gets its own channels, and only the succeeding attempt's delta commits",
+        "a repository-internal symlink escaping the tree is refused, not silently accepted",
+        "a symlinked directory inside the scope cannot smuggle a path out either",
+        "a symlink that stays inside the repository is ordinary evidence",
+        "a repository-internal symlink pointing outside the repository is not valid evidence",
+        "a symlinked directory inside the scope cannot smuggle a path out either",
+        "a repository reached through a symlink is still its own root",
+        "interpolate caps {{previous.payload}} and {{artifacts.<name>}} by default at 16 KiB",
+        "a pass reports what it ingested",
+        "regression: a source that throws skips the pass instead of writing a partial history",
+        "a fresh Vault opens, ingests and reports what it holds",
+        "ingest is idempotent: the same run twice is one row, updated in place",
+        "regression: a re-ingested run replaces its document rather than adding one",
+        "the Vault keeps runs the JSON files have pruned, and says how many",
+        "incidents and anomalies become searchable events",
+        "regression: a capped incident timeline does not re-ingest on every prune",
+        "quarters aggregate runs, with medians that are absent rather than zero",
+        "verdict scores land in the quarter view, and unfinished ones do not",
+        "search is prefix-matching and cannot be made to inject FTS operators",
+        "related terms come from the corpus and are labelled as related, never as direct",
+        "runsBetween windows the history for the long Chronicle",
+        "a monitor or budget transition is archived as it happens",
+        "regression: the same transition twice is one row"
+      ],
+      "additionalNames": [],
+      "missingPristineNames": [],
+      "typecheck": "passed",
+      "build": "passed",
+      "fullServerLint": "passed",
+      "whitespace": "passed",
+      "persistedSchemaChanges": false,
+      "productionWiring": false,
+      "review": "clean after exact isolationallowlist repair and erasedtypeproof",
+      "proof": "localmock actualspawn boundary; not live fencing/account/sharedgate or frozenreviewed-byte dispatch"
+    },
+    "finalWholeSliceReview": "Two independent final scoped reviews clean; all46 unique owned source/test files covered with exact hashes; no source delta. Cutoff final hash comparison remains required."
+  },
+  "nextSteps": [
+    "Review staged source/tests and docs in this isolated worktree; no commit/push/merge/deployment was made.",
+    "Live activation remains blocked on identified build/configuration, exact input/source admission, actual account support, fenced owner/common gate/permit semantics and operational drills.",
+    "Genuine references, approved losses/thresholds, artifact identity versioning and durable policy application remain separate prerequisites; enforcement stays disabled.",
+    "Use bounded-acceptance-protocol.md before any separately authorized validation; unknown execution/spend must never be resent or erased."
+  ],
+  "activeSlice": {
+    "plan": "dispatch-boundary-plan.md",
+    "architecture": "approved afteractualtwo-spawn-gapreproductions",
+    "carrierOwner": "/root/dispatch_carrier_impl",
+    "serviceCoordinatorOwner": "/root/dispatch_service_impl",
+    "independentReviewer": "/root/dispatch_boundary_review",
+    "status": "Frozen136/136 independentfocused; actualexpiry/fence0spawn/noappend proofs; type/build/fullserverlint/whitespace pass; full2934 hasexactpristinefailure names",
+    "productionWiring": false,
+    "providers": "injectedmockspawns only",
+    "persistedSchemaChanges": false
+  },
+  "retainedSlice": {
+    "plan": "retained-evaluation-plan.md",
+    "architecture": "approved with recorded amendments",
+    "serviceOwner": "/root/retained_preparation_impl",
+    "ledgerCoordinatorOwner": "/root/retained_coordination_impl",
+    "independentReviewer": "/root/retained_foundation_review",
+    "status": "Frozen:55/55 service,26/26 ledger/coordinator, independent81/81 integrated; final review clean. Server type/build/full lint pass; bounded full suite reproduces exactly pristine failing/cancelled names.",
+    "productionWiring": false,
+    "providers": "mock only",
+    "scopedFiles": [
+      "server/src/decision/service.ts",
+      "server/src/decision/service.test.ts",
+      "server/src/decision/invocationLedger.ts",
+      "server/src/decision/invocationLedger.test.ts",
+      "server/src/decision/evaluationCoordinator.ts",
+      "server/src/decision/evaluationCoordinator.test.ts"
+    ],
+    "analysisOwner": "/root/analysis_provenance_refinement",
+    "analysisStatus": "Frozen verified:142/142analysis+runtimechecks, server type/build/scopedlint and independentreview clean. Accidental concurrent defaultbroad suite stopped; interrupteddiagnostic only."
+  },
+  "activeInvestigations": [
+    {
+      "owner": "/root/integrated_advisory_review",
+      "scope": "fresh crossslice reader/currency/GET/V2/offlineinput review",
+      "status": "Completed:actualtracked/untrackedsourcediffreviewclean; recordedfocusedproof, no redundanttest rerun",
+      "liveCalls": false
+    },
+    {
+      "owner": "/root/integrated_invocation_review",
+      "scope": "freshcrossslice retainedservice/coordinator/ledger/execution/accountingreview",
+      "status": "Completedactualgaprepair; final136/136independentreviewclean; physicalproductioncontractsremainblocked",
+      "liveCalls": false,
+      "evidence": "validation/integrated-invocation-review.md"
+    },
+    {
+      "owner": "/root/reservation_boundary_probe",
+      "scope": "boundedreadonly check sharedreservation/accounting state during finaladmissionawaits; first establishcontract semantics",
+      "status": "Completed: no defect established; reservation permit lifetime/revocation contract is an explicit production release prerequisite",
+      "liveCalls": false
+    }
+  ],
+  "inputSlice": {
+    "plan": "evaluation-input-plan.md",
+    "architecture": "approved offline-only",
+    "implementationOwner": "/root/evaluation_input_impl",
+    "independentReviewer": "/root/evaluation_input_review",
+    "rootOwnership": "renderer version export and docs",
+    "status": "Frozen11inputtests/105integrated plus5 independent adversarial checks allpass; server type/build/scopedlint pass; independent review clean. Alwaysnon-dispatchable.",
+    "productionWiring": false,
+    "dispatchable": false,
+    "providers": "none; fixture mocks only",
+    "scopedFiles": [
+      "server/src/decision/evaluationInput.ts",
+      "server/src/decision/evaluationInput.test.ts",
+      "server/src/decision/providers/claudeCli.ts"
+    ]
+  },
+  "executionProvenanceSlice": {
+    "plan": "precall-accounting-plan.md",
+    "architecture": "approved offline P4 repair",
+    "boundaryOwner": "/root/execution_boundary_impl",
+    "accountingOwner": "/root/service_accounting_impl",
+    "independentReviewer": "/root/execution_accounting_review",
+    "status": "Frozen: 192/192 independent focused; prior full2910 matched baseline. Subsequent integrated advisory and dispatch reviews complete; latest dispatch136/136 and full2934 baseline-only results recorded.",
+    "productionWiring": false,
+    "providers": "mocks only",
+    "persistedSchemaChanges": false
+  },
+  "reservationDispatchContract": {
+    "status": "blocked-contract-clarification",
+    "evidence": "reservation-dispatch-prerequisite.md",
+    "defectEstablished": false,
+    "productionGateImplemented": false,
+    "testsRepeated": false
+  },
+  "acceptanceEvidenceReview": {
+    "status": "Corrections independently accepted; rewritten current report has no material overclaim within reviewed scope",
+    "reviewer": "/root/acceptance_evidence_review",
+    "sourceChanges": false,
+    "testsRepeated": false,
+    "finalCutoffReviewPending": true
+  },
+  "boundedAcceptanceProtocol": {
+    "document": "bounded-acceptance-protocol.md",
+    "status": "Independently accepted with exact stop-rule wording correction applied",
+    "launched": false,
+    "liveProviderCallAllowance": 0,
+    "approvedNumericalThresholds": false,
+    "productionReady": false,
+    "reviewer": "/root/bounded_acceptance_protocol"
+  },
+  "finalReviewPreparation": {
+    "at": "2026-10-10T04:31:44.1224191Z",
+    "inventory": "validation/final-review-inventory.json",
+    "ownedSourceFiles": 46,
+    "sourceChangedThisCheckpoint": false,
+    "testsRepeated": false,
+    "staged": true,
+    "reviews": [
+      {
+        "owner": "/root/final_advisory_retained_review",
+        "scope": "advisory/V1V2/input/service/ledger/coordinator",
+        "status": "scoped-clean; 21 reviewed hashes match inventory"
+      },
+      {
+        "owner": "/root/final_process_accounting_review",
+        "scope": "analysis/runtimes/providers/H1H2/isolation",
+        "status": "scoped-clean; 29 reviewed hashes match inventory"
+      }
+    ],
+    "finalCutoffHashComparisonRequired": false,
+    "coverage": {
+      "ownedFiles": 46,
+      "uniqueReviewed": 46,
+      "unreviewed": [],
+      "hashMismatches": 0,
+      "advisoryEvidence": "validation/final-advisory-retained-review.json",
+      "accountingEvidence": "validation/final-process-accounting-review.json",
+      "checkedAt": "2026-10-10T06:34:48.6863802Z"
+    }
+  },
+  "preservationCheckpoint": {
+    "evidence": "validation/preservation-checkpoint.json",
+    "originalEvidenceVerified": 9,
+    "rootIndexFinalComparisonPending": false,
+    "taskIndexEmpty": false
+  },
+  "readableMatrix": "implementation-status-matrix.md",
+  "matrixReview": {
+    "reviewer": "/root/bounded_acceptance_protocol",
+    "status": "accepted with exact execution/cost wording correction applied",
+    "testsRepeated": false,
+    "sourceChanged": false
+  },
+  "cutoffPreparation": {
+    "checklist": "cutoff-checklist.md",
+    "allowlist": "validation/staging-allowlist.json",
+    "ownedEligibleFiles": 93,
+    "staged": true,
+    "heartbeatPausePending": false
+  },
+  "closeout": {
+    "cutoff": "2026-10-10T06:30:00Z",
+    "closedAt": "2026-10-10T06:34:48.6863802Z",
+    "ownedStagedFiles": 93,
+    "ownedSourceFiles": 46,
+    "uncommitted": true,
+    "worktreeRetained": true,
+    "heartbeatStatus": "PAUSED",
+    "heartbeatFieldsPreserved": true,
+    "finalEvidence": "validation/final-cutoff-verification.json",
+    "sourceHashMismatches": 0,
+    "changedOriginalArtifacts": 0,
+    "rootIndexMatchesSavedCheckpoint": true,
+    "readyForLiveVerification": false,
+    "productionActivation": false,
+    "independentFinalCloseoutConfirmed": true,
+    "stagedAllowlistExact": true
+  }
+}
