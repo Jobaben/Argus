@@ -723,7 +723,13 @@ export function createH1Watcher(deps: H1WatcherDeps): H1Watcher {
         detail: "the minimum interval since the last shadow invocation has not passed",
       };
     }
-    const usd = all.reduce((s, e) => s + (e.costUsd ?? 0), 0);
+    if (all.some((e) => e.costUsd === null || !Number.isFinite(e.costUsd) || e.costUsd < 0)) {
+      return {
+        kind: "limited",
+        detail: "a potentially spent invocation has unknown cost in the last 24 hours",
+      };
+    }
+    const usd = all.reduce((s, e) => s + e.costUsd!, 0);
     if (usd >= L.maxUsdPer24h) {
       return {
         kind: "limited",

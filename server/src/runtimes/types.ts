@@ -299,3 +299,7 @@ export function unsupportedCapabilities(
   }
   return out;
 }
+
+export function reportedCostUsd(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}

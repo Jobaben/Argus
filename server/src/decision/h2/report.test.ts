@@ -275,6 +275,31 @@ function probeFixture() {
   return f;
 }
 
+test("legacy journal guard names remain potentially spent while explicit ledger refusals retain priority", () => {
+  const f = fixture();
+  for (const failure of ["disabled", "busy", "budget-blocked", "aborted", "unsafe-cwd"]) {
+    f.item({
+      role: "probe",
+      label: "deadline",
+      cls: "provider-failed",
+      noResult: true,
+      outcome: { status: "failed", failure, detail: "legacy" },
+      costUsd: null,
+    });
+  }
+  f.item({
+    role: "probe",
+    label: "deadline",
+    cls: "refused",
+    code: "disabled",
+    outcome: { status: "failed", failure: "disabled", detail: "historical explicit refusal" },
+    costUsd: null,
+  });
+  const report = buildH2Report({ ledger: f.ledger(), journal: f.journal(), registry: f.registry });
+  assert.equal(report.probe[0].attempts["provider-failed"], 5);
+  assert.equal(report.probe[0].attempts.refused, 1);
+});
+
 test("probe metrics on a hand-worked fixture: ties, abstentions, failures, invalid labels and imbalance", () => {
   const f = probeFixture();
   const report = buildH2Report({ ledger: f.ledger(), journal: f.journal(), registry: f.registry });
@@ -441,8 +466,8 @@ test("residual accuracy is unmeasured; its top answers are descriptive only", ()
 test("distinct question versions and model identities are separate populations, never pooled", () => {
   const registry = builtinRegistry();
   const probe = registry.question("run.termination-probe", 1)!.def;
-  const v2: DecisionQuestion = { ...probe, version: 2, text: `${probe.text} (v2)` };
-  registry.registerQuestion(v2);
+  const v3: DecisionQuestion = { ...probe, version: 3, text: `${probe.text} (v3)` };
+  registry.registerQuestion(v3);
   const f = fixture(registry);
   const SONNET = { ...HAIKU, requestedModel: "sonnet" };
   const EN = { "ended-normally": 1 };
@@ -459,7 +484,7 @@ test("distinct question versions and model identities are separate populations, 
     label: "ended-normally",
     cls: "answered",
     outcome: answered(EN),
-    question: f.q("run.termination-probe", 2),
+    question: f.q("run.termination-probe", 3),
   });
   const report = buildH2Report({ ledger: f.ledger(), journal: f.journal(), registry });
   assert.deepEqual(
@@ -467,7 +492,7 @@ test("distinct question versions and model identities are separate populations, 
     [
       [1, "haiku", 1],
       [1, "sonnet", 1],
-      [2, "haiku", 1],
+      [3, "haiku", 1],
     ],
   );
 });

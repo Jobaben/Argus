@@ -15,7 +15,6 @@ import type {
 } from "@argus/contracts";
 import { checkOutcome } from "../answers.js";
 import { canonicalJson } from "../canonical.js";
-import { PRECALL_FAILURES } from "../h2/items.js";
 import { distribution, MIN_BUCKET, MIN_ECE_N, round6, totals } from "../h2/metrics.js";
 import type { DecisionJournal, JournalNoticeKind, JournalView } from "../journal.js";
 import type { DecisionRegistry } from "../registry.js";
@@ -215,7 +214,7 @@ const refEq = (a: DefinitionRef, b: DefinitionRef) =>
 function classOf(a: DecisionAssessment): { cls: H2AttemptClass; code: string | null } {
   const o = a.outcome;
   if (o.status === "answered" || o.status === "abstained") return { cls: o.status, code: null };
-  return { cls: PRECALL_FAILURES.has(o.failure) ? "refused" : "provider-failed", code: o.failure };
+  return { cls: "provider-failed", code: o.failure };
 }
 
 // ── The report ──────────────────────────────────────────────────────────────

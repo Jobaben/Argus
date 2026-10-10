@@ -1,0 +1,40 @@
+{
+  "format": "argus.ci-posix-harness-assertion",
+  "version": 1,
+  "at": "2026-10-10T07:59:45.4415728Z",
+  "observedRun": "https://github.com/Jobaben/Argus/actions/runs/38035990347",
+  "reportedHead": "1aedc1b7ffcdfc9519741486c19b513275ceeb90",
+  "windowsJob": {
+    "serverTests": "passed",
+    "conclusion": "success",
+    "fixtureProcesses": "none remaining",
+    "id": 114166397085,
+    "webTests": "passed"
+  },
+  "linuxFailure": {
+    "actual": "Read,Grep plus current run knowledge-delta and investigate artifact directory Edit grants",
+    "jobId": 114166397187,
+    "expected": "Read,Grep",
+    "assertion": "src/harness/e2e.test.ts:262",
+    "test": "feature pipeline: three phases spawn real agents, verify, and succeed"
+  },
+  "diagnosis": "Upstream runtime channel hardening adds output-directory grants. The unchanged POSIX harness assertion omitted them and was skipped in local Windows suites",
+  "change": "Test-only exact array: Read, Grep, Edit of current run delta directory, Edit of exact investigate artifact directory. Additional grants fail. Existing Bash/workspace denies, admin-token stripping and all remaining assertions are retained",
+  "productChanges": "None",
+  "localValidation": {
+    "tests": 65,
+    "format": "passed",
+    "scope": "Portable runtime/channel cases pass; POSIX end-to-end cases are skipped on Windows",
+    "skipped": 19,
+    "typecheck": "passed",
+    "passed": 46,
+    "failed": 0,
+    "log": "ci-harness-assertion-local.log",
+    "sha256": "27f51e1196efb951e1a4365cf0e246262e010c3cb6e99fe0de130b8d2ee007be",
+    "lint": "passed"
+  },
+  "review": "Exact grants and all denial/token assertions preserved",
+  "posixVerification": "Requires next Linux CI run; not claimed locally",
+  "remainingPayloadGate": "125.7kB versus122kB reproduced on unchanged main; adjacent frontend authorization pending",
+  "sourceSha256": "b2fa070855589fe86a7450a0e03878ec075a034909e216ed2edb1c5cd7c15ae9"
+}

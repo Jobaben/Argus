@@ -1,0 +1,13 @@
+# Final cutoff checklist
+
+Cutoff: 2026-10-10 06:30 UTC / 08:30 Europe/Stockholm. This checklist launches no work, retry or provider call. Source is frozen; all 46 owned source/test files have independent final review. Documentation wording correction keeps execution uncertainty distinct from cost uncertainty.
+
+1. Check actual UTC time and agent status. At/after cutoff do not start development. Finish only any current bounded validation and closeout.
+2. Compare every frozen source SHA256 in validation/final-review-inventory.json with current raw bytes. Confirm both final independent source reviews cover all 46 unique files. Any unexpected delta needs explanation and independent delta review before claiming coverage.
+3. Verify all nine original closeout artifact hashes against evidence-manifest.json. Compare root checkout index against validation/preservation-checkpoint.json; this checkpoint covers only the saved time interval, not the initial task-start index. Do not write or stage that checkout.
+4. Parse owned JSON evidence/report files and check final claims against compact results. Tests are not repeated absent a new unresolved concern. Latest full server suite retains 41 failures and 1 cancellation matching pristine.
+5. Update only closeout report/status/matrix with actual cutoff, verified versus blocked statuses and rollback. Final evidence records source drift, original-evidence/index preservation, review coverage and exact staging results. No live verification/calibration/enforcing safety claim.
+6. Stage the exact source paths from the reviewed inventory plus only owned additive development documents/evidence. The staging allowlist is validation/staging-allowlist.json. No force-add of ignored logs, node_modules/build caches or baseline fixtures; no commits/pushes/merges.
+7. Confirm staged paths exactly equal the owned allowlist, no unstaged owned delta, staged diff whitespace check and final source hashes match reviewed bytes. Normal Git line-ending normalization is expected under repository settings; do not change configuration. Record hashes before and after staging if Git changes raw bytes.
+8. Read the one heartbeat's current fields and pause argus-ledger-development-until-08-30 using the native automation tool, preserving name, prompt, schedule, target thread and any other preferences. Do not change the already paused experiment automation or create another job.
+9. Persist the confirmed paused/staged closeout state, stage that last owned documentation update, and deliver report/matrix/test results/blockers/rollback. Keep the managed worktree for IDE review and leave everything uncommitted.

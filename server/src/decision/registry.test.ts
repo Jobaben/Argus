@@ -80,10 +80,10 @@ test("builtinRegistry registers the residual question and the termination probe"
   assert.ok(probe);
   assert.deepEqual(
     r.questions().map((q) => `${q.id}@${q.version}`),
-    ["run.failure-cause.residual@1", "run.termination-probe@1"],
+    ["run.failure-cause.residual@1", "run.termination-probe@1", "run.termination-probe@2"],
   );
   assert.equal(r.latestQuestion("run.failure-cause.residual")?.ref.version, 1);
-  assert.equal(r.latestQuestion("run.termination-probe")?.ref.version, 1);
+  assert.equal(r.latestQuestion("run.termination-probe")?.ref.version, 2);
 });
 
 test("the built-in questions differ in answer space and projection", () => {
@@ -155,8 +155,8 @@ test("each builtinRegistry call returns an independent registry", () => {
       projection: { id: RUN_FAILURE_V1.id, version: RUN_FAILURE_V1.version },
     }),
   );
-  assert.equal(a.questions().length, 3);
-  assert.equal(b.questions().length, 2);
+  assert.equal(a.questions().length, 4);
+  assert.equal(b.questions().length, 3);
 });
 
 // ── consumers ────────────────────────────────────────────────────────────────

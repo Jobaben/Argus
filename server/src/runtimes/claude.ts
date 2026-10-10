@@ -14,6 +14,7 @@ import path from "node:path";
 import { claudeHome } from "../claudeHome.js";
 import {
   EMPTY_ENVELOPE,
+  reportedCostUsd,
   basename,
   channelGranted,
   channelUnavailable,
@@ -303,10 +304,11 @@ export function parseClaudeEnvelope(stdout: string): RunEnvelope {
     const inTok = Number(usage.input_tokens ?? 0);
     const outTok = Number(usage.output_tokens ?? 0);
     const tokens = Number.isFinite(inTok + outTok) && inTok + outTok > 0 ? inTok + outTok : null;
-    const cost = Number(obj.total_cost_usd ?? obj.cost_usd);
+    const rawCost = obj.total_cost_usd ?? obj.cost_usd;
+    const cost = reportedCostUsd(rawCost);
     return {
       result: typeof obj.result === "string" ? obj.result : null,
-      costUsd: Number.isFinite(cost) ? cost : null,
+      costUsd: cost,
       tokens,
       isError: typeof obj.is_error === "boolean" ? obj.is_error : null,
       // Claude Code takes the session id Argus hands it, so there is never

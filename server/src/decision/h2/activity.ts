@@ -21,6 +21,14 @@ export function countAnalysisPasses(inner: AnalysisRunner): CountingRunner {
       if (req.kind !== "decide") started++;
       return inner.run(req, parse);
     },
+    ...(typeof inner.runWithAdmission === "function"
+      ? {
+          runWithAdmission: ((req, parse, admission) => {
+            if (req.kind !== "decide") started++;
+            return inner.runWithAdmission!(req, parse, admission);
+          }) as NonNullable<AnalysisRunner["runWithAdmission"]>,
+        }
+      : {}),
     inFlight: () => inner.inFlight(),
     passesStarted: () => started,
   };

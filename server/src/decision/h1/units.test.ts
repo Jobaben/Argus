@@ -875,11 +875,11 @@ test("registry: gate.operator-action@1 is a consumer-less binary question on gat
   assert.equal(p.def.subject, "phase-attempt");
 });
 
-test("registry: the built-in registry still lists exactly the two H2 questions", () => {
+test("registry: the built-in registry lists H2 questions and their historical versions", () => {
   assert.deepEqual(
     builtinRegistry()
       .questions()
       .map((q) => `${q.id}@${q.version}`),
-    ["run.failure-cause.residual@1", "run.termination-probe@1"],
+    ["run.failure-cause.residual@1", "run.termination-probe@1", "run.termination-probe@2"],
   );
 });

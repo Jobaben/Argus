@@ -1,0 +1,88 @@
+import assert from "node:assert/strict";
+import {
+  prepareEvaluationInput,
+  bindEvaluationInputAudit,
+} from "file:///C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus/server/src/decision/evaluationInput.ts";
+import {
+  canonicalDigest,
+  sha256Hex,
+} from "file:///C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus/server/src/decision/canonical.ts";
+import { harness } from "file:///C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus/server/src/decision/testSupport.ts";
+import { createMockProvider } from "file:///C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus/server/src/decision/providers/mock.ts";
+async function main() {
+  const mock = createMockProvider({ script: [{ abstain: "fixture" }] });
+  mock.identity = () => ({
+    provider: "claude-cli",
+    requestedModel: "offline",
+    reportedModel: null,
+    adapterVersion: 1,
+    elicitation: "verbalized",
+  });
+  const h = harness({ providers: { claude: mock } });
+  const parent = await h.service.assess({
+    question: "run.termination-probe",
+    version: 2,
+    subject: { kind: "run", runId: "run-1" },
+    provider: "claude",
+  });
+  assert.ok(parent.ok);
+  const req = { assessmentId: parent.assessment.id, provider: "claude" };
+  const input = await prepareEvaluationInput(h, req);
+  assert.ok(input.ok);
+  const receipt = (a) => {
+    const body = {
+      format: "argus.evaluation-input-audit-receipt",
+      formatVersion: 1,
+      artifactDigest: a.digest,
+      protocol: { id: "review", version: 1, digest: "a".repeat(64) },
+      reviewer: { provenance: "unauthenticated-reference", reference: "review/1" },
+      at: "2026-10-10T00:00:00.000Z",
+      disposition: "reviewed-for-offline-use",
+    };
+    return { ...body, digest: canonicalDigest(body).sha256 };
+  };
+  const changed = structuredClone(input.artifact);
+  changed.prompt.text += " ";
+  changed.prompt.sha256 = sha256Hex(changed.prompt.text);
+  changed.prompt.bytes = Buffer.byteLength(changed.prompt.text, "utf8");
+  const { digest, ...body } = changed;
+  changed.digest = canonicalDigest(body).sha256;
+  const badPrompt = bindEvaluationInputAudit(changed, receipt(changed));
+  assert.equal(badPrompt.ok, false);
+  const badReceipt = receipt(input.artifact);
+  badReceipt.protocol.digest = "b".repeat(64);
+  assert.equal(bindEvaluationInputAudit(input.artifact, badReceipt).ok, false);
+  const malformed = receipt(input.artifact);
+  malformed.at = "2026-02-30T00:00:00.000Z";
+  const { digest: rd, ...rb } = malformed;
+  malformed.digest = canonicalDigest(rb).sha256;
+  assert.equal(bindEvaluationInputAudit(input.artifact, malformed).ok, false);
+  const missing = await prepareEvaluationInput(
+    {
+      ...h,
+      journal: {
+        read: h.journal.read.bind(h.journal),
+        loadSnapshot: async () => ({ status: "missing" }),
+      },
+    },
+    req,
+  );
+  assert.equal(missing.ok, false);
+  const bound = bindEvaluationInputAudit(input.artifact, receipt(input.artifact));
+  assert.ok(bound.ok);
+  assert.ok(Object.isFrozen(bound.receipt.protocol));
+  assert.ok(Object.isFrozen(bound.artifact.prompt));
+  assert.equal(bound.dispatchable, false);
+  assert.equal(mock.calls.length, 1);
+  console.log(
+    JSON.stringify({
+      checks: 5,
+      pass: 5,
+      badPrompt,
+      missing,
+      providerCalls: mock.calls.length,
+      productionCalls: 0,
+    }),
+  );
+}
+main();

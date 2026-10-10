@@ -13,15 +13,7 @@ import type { DecisionJournal } from "../journal.js";
 import type { DecisionRegistry } from "../registry.js";
 import type { DecisionService, ServiceResult } from "../service.js";
 import type { H2Enablement, H2Settings } from "./config.js";
-import {
-  indexLedger,
-  isSpent,
-  itemKey,
-  itemStatus,
-  latestConfig,
-  PRECALL_FAILURES,
-  type Item,
-} from "./items.js";
+import { indexLedger, isSpent, itemKey, itemStatus, latestConfig, type Item } from "./items.js";
 import {
   CONFIG_FORMAT,
   isDamaged,
@@ -154,11 +146,10 @@ export function fromAssessment(a: DecisionAssessment): Classified {
       detail: "",
     };
   }
-  const precall = PRECALL_FAILURES.has(o.failure);
   return {
     ...base,
-    class: precall ? "refused" : "provider-failed",
-    providerCalled: precall ? "no" : "yes",
+    class: "provider-failed",
+    providerCalled: "yes",
     outcome: { status: "failed", failure: o.failure },
     code: o.failure,
     detail: bounded(o.detail),
@@ -450,9 +441,16 @@ export function createH2Watcher(deps: H2WatcherDeps): H2Watcher {
     if (nowMs - last < settings.limits.minCallIntervalMs) {
       return limited("the minimum interval since the last provider invocation has not passed");
     }
+    const unknownCost = (cost: number | null | undefined) =>
+      cost == null || !Number.isFinite(cost) || cost < 0;
+    if (
+      spent.some((e) => unknownCost(e.result?.costUsd)) ||
+      other.some((o) => unknownCost(o.costUsd))
+    ) {
+      return limited("a potentially spent invocation has unknown cost in the last 24 hours");
+    }
     const usd =
-      spent.reduce((s, e) => s + (e.result?.costUsd ?? 0), 0) +
-      other.reduce((s, o) => s + (o.costUsd ?? 0), 0);
+      spent.reduce((s, e) => s + e.result!.costUsd!, 0) + other.reduce((s, o) => s + o.costUsd!, 0);
     if (usd >= settings.limits.maxUsdPer24h) {
       return limited(
         `US$${usd.toFixed(4)} recorded in the last 24 hours${combined} (limit US$${settings.limits.maxUsdPer24h})`,

@@ -24,7 +24,6 @@ import {
   indexLedger,
   configByDigest,
   latestConfig,
-  PRECALL_FAILURES,
   type AttemptEntry,
   type LedgerIndex,
 } from "./items.js";
@@ -122,7 +121,7 @@ function refEq(a: DefinitionRef, b: DefinitionRef): boolean {
 function classOf(a: DecisionAssessment): { cls: H2AttemptClass; code: string | null } {
   const o = a.outcome;
   if (o.status === "answered" || o.status === "abstained") return { cls: o.status, code: null };
-  return { cls: PRECALL_FAILURES.has(o.failure) ? "refused" : "provider-failed", code: o.failure };
+  return { cls: "provider-failed", code: o.failure };
 }
 
 function join(

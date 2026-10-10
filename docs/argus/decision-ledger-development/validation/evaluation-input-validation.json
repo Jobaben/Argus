@@ -1,0 +1,37 @@
+{
+  "format": "argus.evaluation-input-validation",
+  "version": 1,
+  "at": "2026-10-10T01:02:20.9031521Z",
+  "focused": {
+    "log": "evaluation-input-independent-review.log",
+    "pass": 105,
+    "tests": 105,
+    "fail": 0,
+    "cancelled": 0
+  },
+  "independentAdversarial": {
+    "pass": 5,
+    "log": "evaluation-input-review-repro.log",
+    "checks": 5
+  },
+  "inputTests": 11,
+  "serverTypecheck": "passed",
+  "serverBuild": "passed",
+  "scopedLint": "passed",
+  "dispatchable": false,
+  "review": "clean",
+  "proof": "exact offline rendering and unauthenticated audit receipt binding; not semantic neutrality, human labels or frozen-byte dispatch",
+  "sourceHashes": {
+    "server/src/decision/evaluationInput.test.ts": "88c904205afe038b182d6fbf2479a059bfa104e094bbe638d8b3b77bf9ccb71b",
+    "server/src/decision/evaluationInput.ts": "df350ed37cb77fb46180349f623dcbb2fe19b7ec7c3d06b309f0d06750738e4d",
+    "server/src/decision/providers/claudeCli.ts": "c1a7ec56cf841b531954aee48ceefa69df32f3b148922c72eb9eac26a7416726"
+  },
+  "finalFormatting": {
+    "focusedTests": 11,
+    "duration_ms": 580.5577,
+    "scope": "only two new input TS files",
+    "fail": 0,
+    "behaviorChanges": false,
+    "pass": 11
+  }
+}

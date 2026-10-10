@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { StoredSnapshot } from "@argus/contracts";
-import { createAnalysisRunner, type AnalysisSpawn } from "../sources/analysis.js";
+import {
+  createAnalysisRunner,
+  type AnalysisResult,
+  type AnalysisRunner,
+  type AnalysisSpawn,
+} from "../sources/analysis.js";
 import { RESIDUAL_CAUSE_V1 } from "./definitions.js";
 import {
   createClaudeCliProvider,
@@ -11,6 +16,7 @@ import {
   renderDecisionPrompt,
 } from "./providers/claudeCli.js";
 import { harness, RESIDUAL_P, tempRoot } from "./testSupport.js";
+import { createMockProvider } from "./providers/mock.js";
 
 /**
  * The Claude CLI adapter, verified with injected runner responses only: no
@@ -80,6 +86,94 @@ const assessResidual = (h: ReturnType<typeof harness>) =>
     subject: { kind: "run", runId: "run-1" },
     provider: "claude",
   });
+
+test("guarded Claude refuses an unsupported runner without calling ordinary run", async () => {
+  let calls = 0;
+  const runner: AnalysisRunner = {
+    run: async () => {
+      calls++;
+      throw new Error("unchecked run");
+    },
+    inFlight: () => 0,
+  };
+  const provider = createClaudeCliProvider({ runner, cwd: emptyDir() });
+  const result = await provider.assessWithAdmission!(
+    RESIDUAL_CAUSE_V1,
+    fakeSnapshot(),
+    new AbortController().signal,
+    async () => ({ ok: true, validateNow: () => ({ ok: true }) }),
+  );
+  assert.equal(calls, 0);
+  assert.equal(result.executionDisposition, "not-called");
+  assert.equal(result.outcome.status === "failed" && result.outcome.failure, "dispatch-refused");
+});
+
+test("guarded Claude observes abort in budget and final validation windows", async () => {
+  for (const window of ["budget", "final"]) {
+    const controller = new AbortController();
+    const { provider, rec } = setup(envelope(JSON.stringify({ p: RESIDUAL_P })), {
+      runnerDeps: {
+        blocked: async () => {
+          if (window === "budget") controller.abort();
+          return false;
+        },
+      },
+    });
+    const result = await provider.assessWithAdmission!(
+      RESIDUAL_CAUSE_V1,
+      fakeSnapshot(),
+      controller.signal,
+      async () => ({
+        ok: true,
+        validateNow: () => {
+          if (window === "final") controller.abort();
+          return { ok: true };
+        },
+      }),
+    );
+    assert.equal(rec.seen.length, 0);
+    assert.equal(result.executionDisposition, "not-called");
+    assert.equal(result.outcome.status === "failed" && result.outcome.failure, "dispatch-refused");
+    assert.equal(result.costUsd, null);
+    assert.equal(result.tokens, null);
+  }
+});
+
+test("guarded mock validates after admission microtasks before consuming a script", async () => {
+  let current = true;
+  let scripts = 0;
+  const provider = createMockProvider({
+    script: () => {
+      scripts++;
+      return { abstain: "test" };
+    },
+  });
+  const result = await provider.assessWithAdmission!(
+    RESIDUAL_CAUSE_V1,
+    fakeSnapshot(),
+    new AbortController().signal,
+    async () => {
+      queueMicrotask(() => {
+        current = false;
+      });
+      return {
+        ok: true,
+        validateNow: () => (current ? { ok: true } : { ok: false, detail: "stale" }),
+      };
+    },
+  );
+  assert.equal(provider.calls.length, 0);
+  assert.equal(scripts, 0);
+  assert.equal(result.executionDisposition, "not-called");
+  await provider.assessWithAdmission!(
+    RESIDUAL_CAUSE_V1,
+    fakeSnapshot(),
+    new AbortController().signal,
+    async () => ({ ok: true, validateNow: () => ({ ok: true }) }),
+  );
+  assert.equal(provider.calls.length, 1);
+  assert.equal(scripts, 1);
+});
 
 test("the adapter runs through AnalysisRunner on the claude runtime with the runner's default model, in an empty directory", async () => {
   process.env.ARGUS_ANALYSIS_RUNTIME = "codex"; // must not move this provider off Claude
@@ -190,26 +284,28 @@ test("an abstention is recorded as one", async () => {
 
 test("runner refusals and failures become failed outcomes with the runner's own code and resolved identity", async () => {
   const disabled = setup(envelope("{}"), { runnerDeps: { enabled: () => false } });
-  const r1 = await assessResidual(disabled.h);
-  assert.ok(r1.ok);
+  const r1 = await disabled.provider.assess(
+    RESIDUAL_CAUSE_V1,
+    fakeSnapshot(),
+    new AbortController().signal,
+  );
   assert.deepEqual(
-    [
-      r1.assessment.outcome.status,
-      r1.assessment.outcome.status === "failed" && r1.assessment.outcome.failure,
-    ],
+    [r1.outcome.status, r1.outcome.status === "failed" && r1.outcome.failure],
     ["failed", "disabled"],
   );
-  assert.equal(r1.assessment.provider.requestedModel, "haiku");
+  assert.equal(r1.identity.requestedModel, "haiku");
+  assert.equal(r1.executionDisposition, "not-called");
   assert.equal(disabled.rec.seen.length, 0);
 
   const blocked = setup(envelope("{}"), { runnerDeps: { blocked: async () => true } });
-  const r2 = await assessResidual(blocked.h);
-  assert.ok(r2.ok);
-  assert.equal(
-    r2.assessment.outcome.status === "failed" && r2.assessment.outcome.failure,
-    "budget-blocked",
+  const r2 = await blocked.provider.assess(
+    RESIDUAL_CAUSE_V1,
+    fakeSnapshot(),
+    new AbortController().signal,
   );
+  assert.equal(r2.outcome.status === "failed" && r2.outcome.failure, "budget-blocked");
   assert.equal(blocked.rec.seen.length, 0);
+  assert.equal(r2.executionDisposition, "not-called");
 
   const prose = setup(envelope("I think it was missing context."));
   const r3 = await assessResidual(prose.h);
@@ -230,18 +326,17 @@ test("the runner's one-at-a-time gate still holds for decision passes", async ()
   });
   const runner = createAnalysisRunner({ spawn, meter: async () => {}, blocked: async () => false });
   const provider = createClaudeCliProvider({ runner, cwd: emptyDir() });
-  const h = harness({ providers: { claude: provider } });
-  const first = assessResidual(h);
+  const assess = () =>
+    provider.assess(RESIDUAL_CAUSE_V1, fakeSnapshot(), new AbortController().signal);
+  const first = assess();
   while (runner.inFlight() === 0) await new Promise((r) => setImmediate(r));
-  const second = await assessResidual(h);
-  assert.ok(second.ok);
-  assert.equal(
-    second.assessment.outcome.status === "failed" && second.assessment.outcome.failure,
-    "busy",
-  );
+  const second = await assess();
+  assert.equal(second.outcome.status === "failed" && second.outcome.failure, "busy");
+  assert.equal(second.executionDisposition, "not-called");
   release();
   const r = await first;
-  assert.ok(r.ok && r.assessment.outcome.status === "answered");
+  assert.equal(r.outcome.status, "answered");
+  assert.equal(r.executionDisposition, "possibly-called");
 });
 
 test("the adapter refuses a working directory that is missing or not empty, and an aborted signal, without spawning", async () => {
@@ -252,13 +347,92 @@ test("the adapter refuses a working directory that is missing or not empty, and 
     const p = createClaudeCliProvider({ runner, cwd });
     const res = await p.assess(RESIDUAL_CAUSE_V1, fakeSnapshot(), new AbortController().signal);
     assert.equal(res.outcome.status === "failed" && res.outcome.failure, "unsafe-cwd");
+    assert.equal(res.executionDisposition, "not-called");
   }
   const ac = new AbortController();
   ac.abort();
   const p = createClaudeCliProvider({ runner, cwd: emptyDir() });
   const res = await p.assess(RESIDUAL_CAUSE_V1, fakeSnapshot(), ac.signal);
   assert.equal(res.outcome.status === "failed" && res.outcome.failure, "aborted");
+  assert.equal(res.executionDisposition, "not-called");
   assert.equal(rec.seen.length, 0);
+});
+
+test("cancellation during the asynchronous directory check prevents runner dispatch", async () => {
+  const { provider, rec } = setup(envelope("{}"));
+  const ac = new AbortController();
+  const pending = provider.assess(RESIDUAL_CAUSE_V1, fakeSnapshot(), ac.signal);
+  ac.abort();
+  const result = await pending;
+  assert.equal(result.executionDisposition, "not-called");
+  assert.equal(result.outcome.status === "failed" && result.outcome.failure, "aborted");
+  assert.equal(rec.seen.length, 0);
+});
+
+test("runner execution claims require consistent guard evidence and preserve possible spend", async () => {
+  const refusal: AnalysisResult<unknown> = {
+    ok: false,
+    value: null,
+    raw: "",
+    costUsd: null,
+    tokens: null,
+    durationMs: 0,
+    failure: "disabled",
+    error: "disabled",
+    runtime: "claude",
+    requestedModel: "haiku",
+    reportedModel: null,
+    executionDisposition: "not-called",
+  };
+  const cases: Array<[Record<string, unknown>, string, string]> = [
+    [{}, "not-called", "disabled"],
+    [{ costUsd: 0, tokens: 0 }, "not-called", "disabled"],
+    [{ executionDisposition: undefined }, "possibly-called", "disabled"],
+    [{ executionDisposition: "invalid" }, "possibly-called", "invalid-execution-disposition"],
+    [{ ok: true, value: { p: RESIDUAL_P } }, "possibly-called", "invalid-execution-disposition"],
+    [{ raw: "output" }, "possibly-called", "invalid-execution-disposition"],
+    [{ failure: "spawn-failed" }, "possibly-called", "invalid-execution-disposition"],
+    [{ reportedModel: "reported" }, "possibly-called", "invalid-execution-disposition"],
+    [{ costUsd: 0.2, tokens: 99 }, "possibly-called", "invalid-execution-disposition"],
+    [{ costUsd: Number.NaN }, "possibly-called", "invalid-execution-disposition"],
+    [{ tokens: "0" }, "possibly-called", "invalid-execution-disposition"],
+  ];
+  for (const [overrides, disposition, failure] of cases) {
+    const supplied = { ...refusal, ...overrides } as AnalysisResult<unknown>;
+    let calls = 0;
+    const runner: AnalysisRunner = {
+      inFlight: () => 0,
+      async run<T>() {
+        calls++;
+        return supplied as AnalysisResult<T>;
+      },
+    };
+    const provider = createClaudeCliProvider({ runner, cwd: emptyDir() });
+    const result = await provider.assess(
+      RESIDUAL_CAUSE_V1,
+      fakeSnapshot(),
+      new AbortController().signal,
+    );
+    assert.equal(calls, 1);
+    assert.equal(result.executionDisposition, disposition, JSON.stringify(overrides));
+    assert.equal(result.outcome.status === "failed" && result.outcome.failure, failure);
+    assert.equal(
+      result.costUsd,
+      typeof supplied.costUsd === "number" &&
+        Number.isFinite(supplied.costUsd) &&
+        supplied.costUsd >= 0
+        ? supplied.costUsd
+        : null,
+    );
+    assert.equal(
+      result.tokens,
+      typeof supplied.tokens === "number" &&
+        Number.isFinite(supplied.tokens) &&
+        supplied.tokens >= 0
+        ? supplied.tokens
+        : null,
+    );
+  }
 });
 
 function fakeSnapshot(): StoredSnapshot {

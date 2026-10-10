@@ -1,0 +1,199 @@
+{
+  "format": "argus.decision-ledger-final-process-accounting-review",
+  "version": 1,
+  "at": "2026-10-10T04:32:19.9271594Z",
+  "baseCommit": "02668069d8eb1f716757f0acb26a5d1021ad3013",
+  "status": "scoped-clean",
+  "method": "Independent actual tracked diff and new fixture source review; no repeated tests or provider calls",
+  "scopeCount": 29,
+  "scope": [
+    {
+      "path": "server/src/decision/claudeCli.test.ts",
+      "bytes": 17207,
+      "sha256": "2955f405b6a1fc1ab732f255e74a3b328a2a139eaa17e5f1fc1def432a3ceae8",
+      "matchesFinalInventory": true
+    },
+    {
+      "path": "server/src/decision/dispatchAdmission.integration.test.ts",
+      "bytes": 11276,
+      "sha256": "819a6f4323770737ffc2b195b0e0eaac86a522e65d4c0e7d983586ff7a9e8ed1",
+      "matchesFinalInventory": true
+    },
+    {
+      "path": "server/src/decision/h1/report.test.ts",
+      "bytes": 6253,
+      "sha256": "b6e311458ca5c1ba3694c0a9f60240f3faaaa144594e441bfd6a763f5d9b5f0b",
+      "matchesFinalInventory": true
+    },
+    {
+      "path": "server/src/decision/h1/report.ts",
+      "bytes": 31352,
+      "sha256": "3cd32c273d25294f10e337a53865f5bde2c78280e0e8c05905f2bc072f359093",
+      "matchesFinalInventory": true
+    },
+    {
+      "path": "server/src/decision/h1/testSupport.ts",
+      "bytes": 13436,
+      "sha256": "0ee18d5dad6133e389f45d23f950cb4470dd088db9e89e3564e4d733fcd71afb",
+      "matchesFinalInventory": true
+    },
+    {
+      "path": "server/src/decision/h1/units.test.ts",
+      "bytes": 31096,
+      "sha256": "c43cc06d07daf947f583b81401e2424e5e45328026bea20b89cb8d764430c9c6",
+      "matchesFinalInventory": true
+    },
+    {
+      "path": "server/src/decision/h1/watcher.test.ts",
+      "bytes": 17079,
+      "sha256": "f19197057be412370c40fe13c5b7639facd0c03599d264f9ea91111031ec3fe2",
+      "matchesFinalInventory": true
+    },
+    {
+      "path": "server/src/decision/h1/watcher.ts",
+      "bytes": 34350,
+      "sha256": "2771502b94781bb823a6283463150d238ca49947478fff7c1092e66d281315d6",
+      "matchesFinalInventory": true
+    },
+    {
+      "path": "server/src/decision/h2/activity.test.ts",
+      "bytes": 1819,
+      "sha256": "d7c5116827d9f2136ba13c9beb0eb57c09c6656b208a8f1d0292a99c206de8f2",
+      "matchesFinalInventory": true
+    },
+    {
+      "path": "server/src/decision/h2/activity.ts",
+      "bytes": 1270,
+      "sha256": "df35b8994ff8be5edff9694a8cd3d3cb78e25aa9d0f05384e13261535372d291",
+      "matchesFinalInventory": true
+    },
+    {
+      "path": "server/src/decision/h2/items.ts",
+      "bytes": 4257,
+      "sha256": "4d33efccdefe44bc7f8cc73a056979dc94d22ca7c9a379195a2ebdb3214927d9",
+      "matchesFinalInventory": true
+    },
+    {
+      "path": "server/src/decision/h2/report.test.ts",
+      "bytes": 21873,
+      "sha256": "a85b78f69208186494181cec809c7e006e4f29ef6353459bfbd1a141e0f4fa13",
+      "matchesFinalInventory": true
+    },
+    {
+      "path": "server/src/decision/h2/report.ts",
+      "bytes": 28025,
+      "sha256": "ff4679294ea6e2bdb3d1103f19faabc1edb703161267ed3265497ca7d9a95ffd",
+      "matchesFinalInventory": true
+    },
+    {
+      "path": "server/src/decision/h2/testSupport.ts",
+      "bytes": 7196,
+      "sha256": "d6b9fb557778d0f7f6c3868e3644a73b9af9154b1d3833ef3d16a99518d80b95",
+      "matchesFinalInventory": true
+    },
+    {
+      "path": "server/src/decision/h2/watcher.test.ts",
+      "bytes": 29072,
+      "sha256": "444a2ba6bc5142f44d3ddffc0d9bb5c0efe3419d37d771f0958568a9191899d2",
+      "matchesFinalInventory": true
+    },
+    {
+      "path": "server/src/decision/h2/watcher.ts",
+      "bytes": 21452,
+      "sha256": "fda5a3b1e0ea4d4320680461a19d51ff5852b8ed8f215253590347f4151b5551",
+      "matchesFinalInventory": true
+    },
+    {
+      "path": "server/src/decision/isolation.test.ts",
+      "bytes": 15725,
+      "sha256": "73edbe4888bd16cb8a2dbecd6fac9ad4058bae649eb7a13e05100bbcc35b4754",
+      "matchesFinalInventory": true
+    },
+    {
+      "path": "server/src/decision/providers/claudeCli.ts",
+      "bytes": 11452,
+      "sha256": "8d6af9477c2da926ff17abee3a4de2d45dcfb31a3672b7b6a2bedb9528aa16b4",
+      "matchesFinalInventory": true
+    },
+    {
+      "path": "server/src/decision/providers/mock.ts",
+      "bytes": 4117,
+      "sha256": "8f0b0f900576f6f796d822e09282d7ae8b8a9de06f9cd92767986397601a5e6e",
+      "matchesFinalInventory": true
+    },
+    {
+      "path": "server/src/decision/providers/types.ts",
+      "bytes": 1474,
+      "sha256": "6ec5b11b8a353e6516f8cbeb70f6afcd65b4bf1a6676da7426457063e7574bec",
+      "matchesFinalInventory": true
+    },
+    {
+      "path": "server/src/runtimes/claude.test.ts",
+      "bytes": 13614,
+      "sha256": "fccad6ba5186b1684d43ac586147eb37b3c1660766a538ad55a40ced40467606",
+      "matchesFinalInventory": true
+    },
+    {
+      "path": "server/src/runtimes/claude.ts",
+      "bytes": 18863,
+      "sha256": "b344ac8a763530b2c9caa50aa3135cdb5a7fdb2b5aab296bfd330f17c8b55aa1",
+      "matchesFinalInventory": true
+    },
+    {
+      "path": "server/src/runtimes/opencode.test.ts",
+      "bytes": 9983,
+      "sha256": "442053971e40bade58d8a9e74b0ff2c6285ed11bcb41f8251b5038ac50758428",
+      "matchesFinalInventory": true
+    },
+    {
+      "path": "server/src/runtimes/opencode.ts",
+      "bytes": 15112,
+      "sha256": "e10bdeae62456e79bd328fc9d396047fdf4460c0d36f8f6e95236fdfb8671349",
+      "matchesFinalInventory": true
+    },
+    {
+      "path": "server/src/runtimes/qwen.test.ts",
+      "bytes": 10658,
+      "sha256": "bfb43b80b085a75db882bfc3338f6d12a1e9dee85a3d3e974bb422cdcc802879",
+      "matchesFinalInventory": true
+    },
+    {
+      "path": "server/src/runtimes/qwen.ts",
+      "bytes": 13919,
+      "sha256": "98d024fc9fb9098be2290cebcfd66dfc2d79dce9a5449bc306ea0ec24bbadb56",
+      "matchesFinalInventory": true
+    },
+    {
+      "path": "server/src/runtimes/types.ts",
+      "bytes": 12213,
+      "sha256": "5ef0809038d01e27cae327b55737b1d1d6ba3cfaed042b7aa9e1c1873760d94f",
+      "matchesFinalInventory": true
+    },
+    {
+      "path": "server/src/sources/analysis.test.ts",
+      "bytes": 12717,
+      "sha256": "619cd9749559734f7fc63d008217dc2bfb69f08ebf93418760deb1c65b7a4990",
+      "matchesFinalInventory": true
+    },
+    {
+      "path": "server/src/sources/analysis.ts",
+      "bytes": 17514,
+      "sha256": "0dd092595a3cd462d895c09587d3c4c4461ab6e0e227b9de3d1a6aa3978ae206",
+      "matchesFinalInventory": true
+    }
+  ],
+  "findings": [],
+  "recordedValidation": {
+    "file": "dispatch-boundary-validation.json",
+    "focused": "136/136 passed",
+    "fullServer": "2934 tests;2869 pass;41 fail;1 cancelled;23 skipped;exact pristine failing/cancelled names",
+    "typecheck": "passed",
+    "build": "passed",
+    "fullLint": "passed"
+  },
+  "limits": [
+    "Injected contract and mock spawn proof only",
+    "No live fencing, shared accounting implementation or account model support proof",
+    "No human reference labels, calibration, inference accuracy or enforcing safety proof"
+  ]
+}

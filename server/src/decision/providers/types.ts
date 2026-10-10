@@ -5,6 +5,9 @@ import type {
   ProviderIdentity,
   StoredSnapshot,
 } from "@argus/contracts";
+import type { AnalysisDispatchAdmission } from "../../sources/analysis.js";
+
+export type DispatchAdmission = AnalysisDispatchAdmission;
 
 /**
  * The provider seam (RFC §G.1). A provider evaluates one registered question
@@ -17,6 +20,7 @@ import type {
  * and the reported model is only known from the response.
  */
 export interface ProviderResponse {
+  executionDisposition?: "not-called" | "possibly-called";
   identity: ProviderIdentity;
   outcome: DecisionOutcome;
   costUsd: number | null;
@@ -32,5 +36,11 @@ export interface DecisionProvider {
     q: DecisionQuestion,
     snapshot: StoredSnapshot,
     signal: AbortSignal,
+  ): Promise<ProviderResponse>;
+  assessWithAdmission?(
+    q: DecisionQuestion,
+    snapshot: StoredSnapshot,
+    signal: AbortSignal,
+    admission: DispatchAdmission,
   ): Promise<ProviderResponse>;
 }

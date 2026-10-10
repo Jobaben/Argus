@@ -1,0 +1,54 @@
+{
+  "recordedAtUtc": "2026-10-10T08:41:52.7924265Z",
+  "priorHead": "baa155a97ba16b948cca4c1c9f1d1d2e2a95cf49",
+  "priorHostedCi": "https://github.com/Jobaben/Argus/actions/runs/38036338270",
+  "failure": "Initial payload125.7kB exceeds unchanged122kB budget; reproduced on unchanged main.",
+  "diagnosis": [
+    "Sign-in lazy split alone124.7kB; shared chunk includes required dashboard code.",
+    "Step drawer lazy split alone124.2kB.",
+    "Removing drawer shell from eager design-system barrel reduces payload to122.5kB.",
+    "Combined lazy sign-in with local error boundary and lazy drawer with direct shell imports:121.5kB."
+  ],
+  "changes": [
+    "Lazy StepDrawer once first selected; preserve mounted closed subtree for exit and reopen.",
+    "Import identical Drawer module directly in five consumers; remove eager barrel export.",
+    "Lazy AdminAuthPanel with local Suspense and existing ErrorBoundary; auth predicates and callbacks unchanged."
+  ],
+  "validation": {
+    "focusedTests": {
+      "files": 8,
+      "passed": 79,
+      "failed": 0
+    },
+    "webCoverage": {
+      "failed": 0,
+      "functions": 87.36,
+      "lines": 90.39,
+      "statements": 90.39,
+      "files": 125,
+      "branches": 86.82,
+      "passed": 1225
+    },
+    "workspaceTypecheck": "passed",
+    "workspaceLint": "passed",
+    "webProductionBuild": "passed",
+    "payload": {
+      "gzipKb": 121.5,
+      "budgetKb": 122,
+      "exitCode": 0
+    },
+    "motionBudget": "passed",
+    "contractsTypesOnly": "passed",
+    "independentReview": "No blocking finding",
+    "hostedCi": "Pending verification after publication",
+    "format": "Passed whole-repository Prettier check from staged LF snapshot; unrelated CRLF files not rewritten."
+  },
+  "regressions": [
+    "Sign-in wall and no dashboard reads while panel suspends.",
+    "Actual rejected auth module import retains wall and avoids data reads.",
+    "Board step drawer opens, closes and reopens. Existing drawer suite validates modal lifecycle."
+  ],
+  "limitation": "A rejected React.lazy import may require browser reload; existing generic ErrorBoundary retry does not refetch a cached rejected chunk.",
+  "rollback": "Revert this focused payload commit; no store/schema/config changes. Original budget failure will return.",
+  "rootUserIndexSha256": "151b9a1e5d831a53138f45cfd382de02b391a473f7f81b809a7b67e7de201440"
+}

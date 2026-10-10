@@ -1,5 +1,6 @@
+import { Drawer } from "../ds/Drawer";
 import { Fragment, useState } from "react";
-import { Drawer, Skeleton, StatusPill, isMarkdown } from "../ds";
+import { Skeleton, StatusPill, isMarkdown } from "../ds";
 import { Markdown } from "../ds/Markdown";
 import { useArtifactContent, useGateReview } from "../useGateReview";
 import type { GateActionOptions } from "../useOverview";

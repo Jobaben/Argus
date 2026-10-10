@@ -43,6 +43,7 @@
 import { opencodeHome } from "../opencodeHome.js";
 import {
   EMPTY_ENVELOPE,
+  reportedCostUsd,
   basename,
   channelGranted,
   clip,
@@ -171,6 +172,7 @@ export function parseOpencodeEnvelope(stdout: string): RunEnvelope {
   let sessionId: string | null = null;
   let tokens: number | null = null;
   let costUsd: number | null = null;
+  let unknownCost = false;
   let isError: boolean | null = null;
   let errorMessage: string | null = null;
 
@@ -200,8 +202,9 @@ export function parseOpencodeEnvelope(stdout: string): RunEnvelope {
         const outTok = Number(part.tokens?.output ?? 0);
         const sum = inTok + outTok;
         if (Number.isFinite(sum) && sum > 0) tokens = (tokens ?? 0) + sum;
-        const cost = Number(part.cost);
-        if (Number.isFinite(cost)) costUsd = round6((costUsd ?? 0) + cost);
+        const cost = reportedCostUsd(part.cost);
+        if (cost === null) unknownCost = true;
+        else costUsd = round6((costUsd ?? 0) + cost);
         // A step that finished on `stop` is a clean end of turn unless an error
         // event said otherwise.
         if (part.reason === "stop" && isError === null) isError = false;
@@ -226,7 +229,7 @@ export function parseOpencodeEnvelope(stdout: string): RunEnvelope {
     // With no assistant text to report, the failure text is the closest thing
     // to a result — and it is what the run card would otherwise leave blank.
     result: result ?? errorMessage,
-    costUsd,
+    costUsd: unknownCost ? null : reportedCostUsd(costUsd),
     tokens,
     isError,
     sessionId,
