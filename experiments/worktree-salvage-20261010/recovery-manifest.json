@@ -1,0 +1,42 @@
+[
+  {
+    "bytes": 12557824,
+    "file": "argus-local-source-copy.tar",
+    "sha256": "971d305cdbb257a670b661125935a47ac64a89e78cd32e390f8d300a9c29916a"
+  },
+  {
+    "bytes": 9815040,
+    "file": "decision-ledger-foundations-local-artifacts.tar",
+    "sha256": "ea9f5a5e7f761f397204203ee5b21e519cf14fcec685afac386def768275904f"
+  },
+  {
+    "bytes": 399966,
+    "file": "h2-codex-all-staged.patch",
+    "sha256": "79f77b4c741569b35ee51f46b43aaea2aad37fe0499207d3f3fc5c27e597af5c"
+  },
+  {
+    "bytes": 50260,
+    "file": "h2-codex-application.patch",
+    "sha256": "a03d8a330cdda250a30fb2f4a3e551fb1f17d607312b2c04d2e985f0a62a5858"
+  },
+  {
+    "bytes": 115200,
+    "file": "h2-codex-local-artifacts.tar",
+    "sha256": "4216c2d1c591479147b4474c15b16c70f9c305157f132eb9f52b287d0e453f19"
+  },
+  {
+    "bytes": 17408,
+    "file": "outcome-routing-local-artifacts.tar",
+    "sha256": "baf5f2b9b459db20ea7ae448ba36b8faedca2e4c408fb086424f0bf8d4c243c1"
+  },
+  {
+    "bytes": 153600,
+    "file": "retired-feeder-history.tar",
+    "sha256": "85536fe68a59da90c4bab4e3f4be3d13a3278d37d885654dba4fa19fdab0eae1"
+  },
+  {
+    "bytes": 3094108,
+    "file": "root-before-integration.patch",
+    "sha256": "1a3b841df5f7089c0fbca151fb54a8de3de3a40b20c494986f0555e3e5a7b3a9"
+  }
+]

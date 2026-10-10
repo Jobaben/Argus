@@ -1,4 +1,5 @@
 import { existsSync, statSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { paths } from "../claudeHome.js";
 import { nextFireAfter, parseHHMM } from "./nextFire.js";
 import { createJsonArrayStore } from "./jsonArrayStore.js";
@@ -6,6 +7,12 @@ import { RubricValidationError, validateRubric } from "./verdict.js";
 import { isRuntimeId, runtimeIdList } from "../runtimes/index.js";
 import type { Schedule, Trigger } from "./scheduleTypes.js";
 import type { AgentRuntimeId, ReasoningEffort, Rubric } from "@argus/contracts";
+
+/** Same shape as a session token (auth.ts): 256 bits, URL-safe. Shared with
+ *  pipelines.ts so both hook tokens are minted the same way. */
+export function mintHookToken(): string {
+  return randomBytes(32).toString("base64url");
+}
 
 // The crash-safe, mutex-serialized single-file store lives in one shared place.
 const store = createJsonArrayStore<Schedule>({
@@ -135,7 +142,34 @@ export function validateTrigger(t: unknown, opts?: { allowWindowed?: boolean }):
       ...(weekdays && weekdays.length ? { weekdays } : {}),
     };
   }
-  throw new ScheduleValidationError("trigger.kind must be interval|daily|weekly|windowed");
+  if (trig.kind === "webhook") {
+    // No cadence fields at all: firing is a POST to the hook route, not the
+    // scheduler tick. Reject a stray cadence field rather than silently
+    // dropping it, so an author who half-edited a trigger finds out at save
+    // time instead of wondering why "every 60 min" was ignored.
+    const stray = (
+      ["everyMinutes", "time", "weekday", "startTime", "endTime", "weekdays"] as const
+    ).find((k) => trig[k] !== undefined);
+    if (stray) {
+      throw new ScheduleValidationError(`webhook trigger does not take ${stray}`);
+    }
+    return { kind: "webhook" };
+  }
+  if (trig.kind === "after") {
+    if (typeof trig.pipelineId !== "string" || !trig.pipelineId.trim()) {
+      throw new ScheduleValidationError("after trigger needs pipelineId");
+    }
+    if (trig.on !== "succeeded" && trig.on !== "failed" && trig.on !== "any") {
+      throw new ScheduleValidationError('after trigger needs on: "succeeded" | "failed" | "any"');
+    }
+    // Existence, self-chain and direct-cycle checks are done by the caller
+    // (createPipeline/updatePipeline, createSchedule/updateSchedule), which
+    // already holds the other definitions this pure validator has no IO to read.
+    return { kind: "after", pipelineId: trig.pipelineId.trim(), on: trig.on };
+  }
+  throw new ScheduleValidationError(
+    "trigger.kind must be interval|daily|weekly|windowed|webhook|after",
+  );
 }
 
 export function validateInput(raw: unknown): ScheduleInput {
@@ -214,6 +248,25 @@ export function validatePatch(raw: unknown): Partial<ScheduleInput> {
 export const readSchedules = store.read;
 const writeSchedules = store.write;
 
+/**
+ * `after.pipelineId` must name a pipeline that exists. Only pipelines may be a
+ * chain's source (schedules cannot chain off other schedules), so this is the
+ * one existence check both a pipeline and a schedule saving an `after`
+ * trigger need. A dynamic import, not a static one: `pipelines.ts` imports
+ * `validateTrigger` from this module, and a static import back would make the
+ * two modules circularly dependent at load time.
+ */
+async function assertAfterSourceExists(trigger: Trigger): Promise<void> {
+  if (trigger.kind !== "after") return;
+  const { readPipelines } = await import("./pipelines.js");
+  const exists = (await readPipelines()).some((p) => p.id === trigger.pipelineId);
+  if (!exists) {
+    throw new ScheduleValidationError(
+      `after trigger names an unknown pipeline: ${trigger.pipelineId}`,
+    );
+  }
+}
+
 export async function readSchedulesWithNext(
   now: Date,
 ): Promise<(Schedule & { nextRun: string | null })[]> {
@@ -230,6 +283,7 @@ export async function createSchedule(
   now: Date,
   id: string,
 ): Promise<Schedule> {
+  await assertAfterSourceExists(input.trigger);
   const iso = now.toISOString();
   const schedule: Schedule = {
     id,
@@ -244,6 +298,9 @@ export async function createSchedule(
     ...(input.runtime ? { runtime: input.runtime } : {}),
     ...(input.model ? { model: input.model } : {}),
     ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
+    // Minted on first save of a webhook trigger; rotated only via the
+    // dedicated endpoint, never by an ordinary edit.
+    ...(input.trigger.kind === "webhook" ? { hookToken: mintHookToken() } : {}),
     createdAt: iso,
     updatedAt: iso,
     lastRunAt: null,
@@ -262,6 +319,7 @@ export async function updateSchedule(
   patch: Partial<ScheduleInput>,
   now: Date,
 ): Promise<Schedule | null> {
+  if (patch.trigger) await assertAfterSourceExists(patch.trigger);
   return withStoreLock(async () => {
     const list = await readSchedules();
     const idx = list.findIndex((s) => s.id === id);
@@ -277,6 +335,12 @@ export async function updateSchedule(
       ...("catchUp" in patch ? { catchUp: patch.catchUp! } : {}),
       updatedAt: now.toISOString(),
     };
+    // Mint a hook token the first time this schedule's trigger becomes
+    // "webhook"; keep whatever token it already had otherwise (edits must not
+    // silently break a URL someone has already wired up elsewhere).
+    if (merged.trigger.kind === "webhook" && !merged.hookToken) {
+      merged.hookToken = mintHookToken();
+    }
     // `rubric: null` is the documented way to remove one, and spreading a null
     // would leave the key present-and-null on disk rather than gone.
     if ("rubric" in patch) {
@@ -320,5 +384,29 @@ export async function markScheduleRan(id: string, runId: string, atISO: string):
     if (idx === -1) return;
     list[idx] = { ...list[idx], lastRunAt: atISO, lastRunId: runId };
     await writeSchedules(list);
+  });
+}
+
+/**
+ * Mints a fresh `hookToken`, invalidating whatever URL/token combination was
+ * handed out before. Only reachable via `POST /api/schedules/:id/hook-token/rotate`
+ * — an ordinary save never regenerates a working hook.
+ */
+export async function rotateScheduleHookToken(id: string, now: Date): Promise<Schedule | null> {
+  return withStoreLock(async () => {
+    const list = await readSchedules();
+    const idx = list.findIndex((s) => s.id === id);
+    if (idx === -1) return null;
+    if (list[idx].trigger.kind !== "webhook") {
+      throw new ScheduleValidationError("schedule does not have a webhook trigger");
+    }
+    const merged: Schedule = {
+      ...list[idx],
+      hookToken: mintHookToken(),
+      updatedAt: now.toISOString(),
+    };
+    list[idx] = merged;
+    await writeSchedules(list);
+    return merged;
   });
 }

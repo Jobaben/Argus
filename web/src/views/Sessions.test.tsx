@@ -14,7 +14,8 @@ vi.mock("../useSessions", () => ({
   useSessions: () => ({ ...mockState, refresh: vi.fn() }),
 }));
 
-vi.mock("../useHashRoute", () => ({ useHashRoute: () => ["sessions"] }));
+const route: { segments: string[] } = { segments: ["sessions"] };
+vi.mock("../useHashRoute", () => ({ useHashRoute: () => route.segments }));
 
 /**
  * Anchored to midday rather than offset from `Date.now()`.
@@ -48,6 +49,31 @@ describe("Sessions", () => {
     mockState.sessions = [];
     mockState.loading = false;
     mockState.error = null;
+    route.segments = ["sessions"];
+  });
+
+  it("narrows to one project from #/sessions/:project, with a way back out", () => {
+    mockState.sessions = [
+      session(),
+      session({ id: "s2", project: "-home-me-web", projectLabel: "/home/me/web", title: "Web" }),
+    ];
+    route.segments = ["sessions", "-home-me-web"];
+    render(<Sessions />);
+    expect(screen.getByText("Web")).toBeInTheDocument();
+    expect(screen.queryByText("Fix the migration")).toBeNull();
+    expect(screen.getByText(/1 transcript in this project/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /every project/i })).toHaveAttribute(
+      "href",
+      "#/sessions",
+    );
+  });
+
+  it("says when a project filter matches nothing rather than claiming no transcripts", () => {
+    mockState.sessions = [session()];
+    route.segments = ["sessions", "-nowhere"];
+    render(<Sessions />);
+    expect(screen.getByText(/No transcripts in this project/)).toBeInTheDocument();
+    expect(screen.queryByText(/No transcripts yet/)).toBeNull();
   });
 
   it("teaches where transcripts come from when there are none", () => {

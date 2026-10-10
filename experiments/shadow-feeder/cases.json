@@ -1,0 +1,9 @@
+{
+  "cases": [
+    {"id":"capacity", "task":"Can we confirm 18 attendees? Return capacity and decision.","facts":{"capacity":24,"confirmed":9,"requested":18}},
+    {"id":"waitlist", "task":"Select the next eligible attendee using FIFO and accessibility eligibility.","facts":{"waiting":[{"id":"A","joined":1,"eligible":false},{"id":"B","joined":2,"eligible":true},{"id":"C","joined":3,"eligible":true}]}},
+    {"id":"revenue", "task":"Calculate revenue for 12 full-price and 4 discounted tickets.","facts":{"fullPriceSek":300,"discountedPriceSek":150,"fullPriceCount":12,"discountedCount":4}},
+    {"id":"missing-price", "task":"Calculate an exact revenue total and return a numeric SEK answer.","facts":{"ticketCount":16,"ticketPriceSek":null}},
+    {"id":"contradictory-rules", "task":"Give a booking allocation satisfying every supplied rule.","facts":{"capacity":10,"requested":12,"rules":["All 12 requested attendees must be confirmed","Confirmed attendees must never exceed capacity"]}}
+  ]
+}

@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import { paths } from "../claudeHome.js";
 import { createJsonArrayStore } from "./jsonArrayStore.js";
@@ -13,6 +14,8 @@ import type {
   VerdictTrend,
 } from "@argus/contracts";
 import type { Run } from "./scheduleTypes.js";
+import type { RubricTrajectory, TrajectorySignalKind, VerdictKind } from "@argus/contracts";
+import { TRAJECTORY_SIGNAL_KINDS } from "./trajectory.js";
 
 /**
  * Verdict: the judge pass, its rubric validation, and the trend derivation.
@@ -46,6 +49,7 @@ export type {
   Verdict,
   VerdictPoint,
   VerdictReport,
+  VerdictKind,
   VerdictStatus,
   VerdictTrend,
 } from "@argus/contracts";
@@ -69,25 +73,111 @@ export class RubricValidationError extends Error {
   }
 }
 
+/**
+ * Version of {@link buildVerdictPrompt} + {@link parseVerdictResponse}. Bump on
+ * any change to either: a score is only comparable with scores produced by the
+ * same question, and the version is stamped on every verdict so a trend or an
+ * approval can tell them apart.
+ */
+export const VERDICT_PROMPT_VERSION = 1;
+
 const store = createJsonArrayStore<Verdict>({
   file: paths.verdictFile,
   label: "verdicts.json",
 });
 
+/**
+ * Every stored judgment of either kind, newest first — a run judged twice
+ * appears twice. Consumers that mean one kind filter with {@link verdictKind}
+ * or read through {@link currentVerdicts}.
+ */
 export const readVerdicts = store.read;
 
-export async function readVerdict(runId: string): Promise<Verdict | null> {
-  return (await store.read()).find((v) => v.runId === runId) ?? null;
+/** Which record a stored judgment is. Absent = `output`: every verdict written
+ *  before trajectories existed is an output verdict. */
+export function verdictKind(v: Pick<Verdict, "kind">): VerdictKind {
+  return v.kind === "trajectory" ? "trajectory" : "output";
 }
 
+/**
+ * The current verdict of one kind per run: the newest judgment of each,
+ * whatever its status. Re-judging appends rather than replacing (an earlier
+ * judgment may be what explains an earlier approval), so every consumer that
+ * means "the verdict for this run" reads through here rather than assuming one
+ * per run. `kind` defaults to `output`, so a trajectory judgment is never any
+ * existing consumer's "verdict for this run".
+ */
+export function currentVerdicts(list: Verdict[], kind: VerdictKind = "output"): Verdict[] {
+  const newestFirst = list
+    .filter((v) => verdictKind(v) === kind)
+    .sort((a, b) => b.at.localeCompare(a.at));
+  const seen = new Set<string>();
+  return newestFirst.filter((v) => {
+    if (seen.has(v.runId)) return false;
+    seen.add(v.runId);
+    return true;
+  });
+}
+
+/** The current output verdicts (the default), or the current trajectory ones. */
+export async function readCurrentVerdicts(kind: VerdictKind = "output"): Promise<Verdict[]> {
+  return currentVerdicts(await store.read(), kind);
+}
+
+/**
+ * Run `fn` with the current verdicts while holding the verdict store's lock —
+ * the same lock {@link writeVerdict} takes. Nothing can be written to the
+ * store until `fn` settles, so whatever `fn` makes durable is ordered against
+ * every verdict write: a write that lands first is in `current`; one that
+ * lands later happens after `fn`'s commit. `fn` must not write a verdict
+ * (the lock is not re-entrant) and should be short: it blocks judging.
+ */
+export async function withCurrentVerdicts<T>(
+  fn: (current: Verdict[], trajectory: Verdict[]) => Promise<T>,
+): Promise<T> {
+  return store.withLock(async () => {
+    const list = await store.read();
+    return fn(currentVerdicts(list), currentVerdicts(list, "trajectory"));
+  });
+}
+
+export async function readVerdict(
+  runId: string,
+  kind: VerdictKind = "output",
+): Promise<Verdict | null> {
+  return currentVerdicts(await store.read(), kind).find((v) => v.runId === runId) ?? null;
+}
+
+/**
+ * Append one judgment. Never replaces an earlier judgment of the same run.
+ * Newest first, stable on equal timestamps (the new record leads), capped at
+ * {@link VERDICT_KEEP} in total — output and trajectory judgments together, so
+ * declaring a trajectory does not raise how much is retained. An approval that
+ * rested on a verdict copies it into the gate decision record, so the cap
+ * cannot erase that explanation; a pruned judgment is simply absent, which
+ * holds a gate rather than opening one.
+ */
 export async function writeVerdict(verdict: Verdict): Promise<Verdict> {
   return store.withLock(async () => {
     const list = await store.read();
-    const next = [verdict, ...list.filter((v) => v.runId !== verdict.runId)];
+    const next = [verdict, ...list];
     next.sort((a, b) => b.at.localeCompare(a.at));
     await store.write(next.slice(0, VERDICT_KEEP));
     return verdict;
   });
+}
+
+/**
+ * sha256 over exactly what the judge is shown of the rubric: goal and the
+ * criteria (id, label, weight), in order. `minScore` is excluded — it is a
+ * policy threshold applied afterwards, not part of the question.
+ */
+export function rubricDigest(rubric: Rubric): string {
+  const canonical = JSON.stringify({
+    goal: rubric.goal,
+    criteria: rubric.criteria.map((c) => ({ id: c.id, label: c.label, weight: c.weight ?? 1 })),
+  });
+  return createHash("sha256").update(canonical).digest("hex");
 }
 
 // ── Rubric validation ───────────────────────────────────────────────────────
@@ -106,34 +196,111 @@ export function validateRubric(raw: unknown): Rubric | undefined {
   if (typeof r.goal !== "string" || !r.goal.trim()) {
     throw new RubricValidationError("rubric.goal is required — say what good means here");
   }
-  if (!Array.isArray(r.criteria) || r.criteria.length === 0) {
-    throw new RubricValidationError("rubric.criteria must list at least one criterion");
-  }
-  if (r.criteria.length > MAX_CRITERIA) {
-    throw new RubricValidationError(`rubric.criteria is capped at ${MAX_CRITERIA}`);
-  }
+  const criteria = validateCriteria(r.criteria, "rubric.criteria", "criterion");
+  const minScore = validateMinScore(r.minScore, "rubric.minScore");
+  const trajectory = validateTrajectory(r.trajectory);
 
+  return {
+    goal: r.goal.trim().slice(0, 2000),
+    criteria,
+    ...(minScore === undefined ? {} : { minScore }),
+    ...(trajectory === undefined ? {} : { trajectory }),
+  };
+}
+
+function validateMinScore(raw: unknown, field: string): number | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0 || n > 10) {
+    throw new RubricValidationError(`${field} must be between 0 and 10`);
+  }
+  return n;
+}
+
+/**
+ * `rubric.trajectory`. Absent = no trajectory analysis of any kind. When
+ * present it must ask for something: criteria for a judge, a check over the
+ * deterministic signals, or both.
+ */
+function validateTrajectory(raw: unknown): RubricTrajectory | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new RubricValidationError("rubric.trajectory must be an object");
+  }
+  const t = raw as Record<string, unknown>;
+  const criteria =
+    t.criteria === undefined || t.criteria === null
+      ? undefined
+      : validateCriteria(t.criteria, "rubric.trajectory.criteria", "trajectory criterion");
+  const minScore = validateMinScore(t.minScore, "rubric.trajectory.minScore");
+  if (minScore !== undefined && !criteria) {
+    throw new RubricValidationError(
+      "rubric.trajectory.minScore needs trajectory criteria to score",
+    );
+  }
+  let holdOn: TrajectorySignalKind[] | undefined;
+  if (t.check !== undefined && t.check !== null) {
+    const c = t.check as Record<string, unknown>;
+    if (typeof c !== "object" || !Array.isArray(c.holdOn) || c.holdOn.length === 0) {
+      throw new RubricValidationError(
+        "rubric.trajectory.check.holdOn must list at least one signal",
+      );
+    }
+    const known = new Set<string>(TRAJECTORY_SIGNAL_KINDS);
+    const seen = new Set<string>();
+    for (const k of c.holdOn) {
+      if (typeof k !== "string" || !known.has(k)) {
+        throw new RubricValidationError(
+          `rubric.trajectory.check.holdOn: unknown signal ${JSON.stringify(k)} ` +
+            `(one of ${TRAJECTORY_SIGNAL_KINDS.join(", ")})`,
+        );
+      }
+      if (seen.has(k))
+        throw new RubricValidationError(`rubric.trajectory.check.holdOn: duplicate "${k}"`);
+      seen.add(k);
+    }
+    holdOn = [...seen] as TrajectorySignalKind[];
+  }
+  if (!criteria && !holdOn) {
+    throw new RubricValidationError(
+      "rubric.trajectory must declare criteria, a check, or both — or be left out",
+    );
+  }
+  return {
+    ...(criteria ? { criteria } : {}),
+    ...(minScore === undefined ? {} : { minScore }),
+    ...(holdOn ? { check: { holdOn } } : {}),
+  };
+}
+
+function validateCriteria(raw: unknown, field: string, noun: string): RubricCriterion[] {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new RubricValidationError(`${field} must list at least one criterion`);
+  }
+  if (raw.length > MAX_CRITERIA) {
+    throw new RubricValidationError(`${field} is capped at ${MAX_CRITERIA}`);
+  }
   const seen = new Set<string>();
-  const criteria: RubricCriterion[] = r.criteria.map((c, i) => {
+  return raw.map((c, i) => {
     if (!c || typeof c !== "object") {
-      throw new RubricValidationError(`criterion ${i + 1} must be an object`);
+      throw new RubricValidationError(`${noun} ${i + 1} must be an object`);
     }
     const item = c as Record<string, unknown>;
     if (typeof item.id !== "string" || !ID_RE.test(item.id)) {
       throw new RubricValidationError(
-        `criterion ${i + 1} needs a lowercase slug id (letters, digits, - and _)`,
+        `${noun} ${i + 1} needs a lowercase slug id (letters, digits, - and _)`,
       );
     }
     if (seen.has(item.id)) {
-      throw new RubricValidationError(`duplicate criterion id "${item.id}"`);
+      throw new RubricValidationError(`duplicate ${noun} id "${item.id}"`);
     }
     seen.add(item.id);
     if (typeof item.label !== "string" || !item.label.trim()) {
-      throw new RubricValidationError(`criterion "${item.id}" needs a label`);
+      throw new RubricValidationError(`${noun} "${item.id}" needs a label`);
     }
     const weight = item.weight === undefined ? undefined : Number(item.weight);
     if (weight !== undefined && (!Number.isFinite(weight) || weight <= 0)) {
-      throw new RubricValidationError(`criterion "${item.id}" weight must be > 0`);
+      throw new RubricValidationError(`${noun} "${item.id}" weight must be > 0`);
     }
     return {
       id: item.id,
@@ -141,28 +308,14 @@ export function validateRubric(raw: unknown): Rubric | undefined {
       ...(weight === undefined ? {} : { weight }),
     };
   });
-
-  let minScore: number | undefined;
-  if (r.minScore !== undefined && r.minScore !== null) {
-    const n = Number(r.minScore);
-    if (!Number.isFinite(n) || n < 0 || n > 10) {
-      throw new RubricValidationError("rubric.minScore must be between 0 and 10");
-    }
-    minScore = n;
-  }
-
-  return {
-    goal: r.goal.trim().slice(0, 2000),
-    criteria,
-    ...(minScore === undefined ? {} : { minScore }),
-  };
 }
 
 /** `autoApprove` on a gated phase. Requires a rubric to clear. */
-export function validateAutoApprove(raw: unknown, hasRubric: boolean) {
+export function validateAutoApprove(raw: unknown, hasRubric: boolean, judgesTrajectory = false) {
   if (raw === undefined || raw === null) return undefined;
   if (typeof raw !== "object") throw new RubricValidationError("autoApprove must be an object");
-  const n = Number((raw as Record<string, unknown>).verdict);
+  const r = raw as Record<string, unknown>;
+  const n = Number(r.verdict);
   if (!Number.isFinite(n) || n < 0 || n > 10) {
     throw new RubricValidationError("autoApprove.verdict must be between 0 and 10");
   }
@@ -171,7 +324,19 @@ export function validateAutoApprove(raw: unknown, hasRubric: boolean) {
       "autoApprove needs a rubric on the same phase to score against",
     );
   }
-  return { verdict: n };
+  let trajectory: number | undefined;
+  if (r.trajectory !== undefined && r.trajectory !== null) {
+    trajectory = Number(r.trajectory);
+    if (!Number.isFinite(trajectory) || trajectory < 0 || trajectory > 10) {
+      throw new RubricValidationError("autoApprove.trajectory must be between 0 and 10");
+    }
+    if (!judgesTrajectory) {
+      throw new RubricValidationError(
+        "autoApprove.trajectory needs trajectory criteria on the phase's rubric",
+      );
+    }
+  }
+  return trajectory === undefined ? { verdict: n } : { verdict: n, trajectory };
 }
 
 // ── The judge prompt ────────────────────────────────────────────────────────
@@ -299,6 +464,8 @@ export function parseVerdictResponse(
 export interface VerdictDeps {
   runner: AnalysisRunner;
   now: () => Date;
+  /** Mints the verdict id. Defaults to a random `V-…`. */
+  newId?: () => string;
 }
 
 /** The unit of work a verdict belongs to. Shares Watchtower's key space so the
@@ -327,6 +494,7 @@ export async function performVerdict(
   deps: VerdictDeps,
 ): Promise<Verdict> {
   const base: Verdict = {
+    id: deps.newId?.() ?? `V-${randomBytes(8).toString("hex")}`,
     runId: run.id,
     scheduleId: run.scheduleId,
     scheduleName: run.scheduleName,
@@ -353,11 +521,18 @@ export async function performVerdict(
     (value) => parseVerdictResponse(value, rubric),
   );
 
-  const metered = {
+  const metered: Verdict = {
     ...base,
     costUsd: result.costUsd,
     tokens: result.tokens,
     durationMs: result.durationMs,
+    provenance: {
+      runtime: result.runtime,
+      requestedModel: result.requestedModel,
+      reportedModel: result.reportedModel,
+      promptVersion: VERDICT_PROMPT_VERSION,
+    },
+    rubricDigest: rubricDigest(rubric),
   };
 
   if (!result.ok || !result.value) {
@@ -393,9 +568,32 @@ export function buildVerdictTrends(
   verdicts: Verdict[],
   minScores: Map<string, number | null>,
   now: Date,
+  trajectoryMinScores: Map<string, number | null> = new Map(),
 ): VerdictReport {
+  const trends = trendsOf(currentVerdicts(verdicts), minScores);
+  // Trajectory scores are a different measurement: their own lines, never
+  // averaged into the output summary.
+  const trajectoryTrends = trendsOf(currentVerdicts(verdicts, "trajectory"), trajectoryMinScores);
+  const latests = trends.map((t) => t.latest).filter((s): s is number => s !== null);
+  return {
+    generatedAt: now.toISOString(),
+    trends,
+    summary: {
+      scored: trends.reduce((n, t) => n + t.points.length, 0),
+      regressions: trends.reduce((n, t) => n + t.regressions, 0),
+      average:
+        latests.length > 0
+          ? Math.round((latests.reduce((a, b) => a + b, 0) / latests.length) * 10) / 10
+          : null,
+    },
+    ...(trajectoryTrends.length > 0 ? { trajectoryTrends } : {}),
+  };
+}
+
+function trendsOf(current: Verdict[], minScores: Map<string, number | null>): VerdictTrend[] {
   const groups = new Map<string, { scope: "schedule" | "phase"; name: string; list: Verdict[] }>();
-  for (const v of verdicts) {
+  // One point per run: a re-judged run contributes its current verdict only.
+  for (const v of current) {
     if (v.status !== "ready" || v.score === null) continue;
     const key = v.phaseId ? `phase:${v.scheduleId}:${v.phaseId}` : `schedule:${v.scheduleId}`;
     const name = v.phaseId ? `${v.scheduleName} › ${v.phaseId}` : v.scheduleName;
@@ -433,19 +631,7 @@ export function buildVerdictTrends(
   }
 
   trends.sort((a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
-  const latests = trends.map((t) => t.latest).filter((s): s is number => s !== null);
-  return {
-    generatedAt: now.toISOString(),
-    trends,
-    summary: {
-      scored: trends.reduce((n, t) => n + t.points.length, 0),
-      regressions: trends.reduce((n, t) => n + t.regressions, 0),
-      average:
-        latests.length > 0
-          ? Math.round((latests.reduce((a, b) => a + b, 0) / latests.length) * 10) / 10
-          : null,
-    },
-  };
+  return trends;
 }
 
 /**
@@ -458,7 +644,7 @@ export function buildVerdictTrends(
  */
 export function failingVerdicts(verdicts: Verdict[]): Map<string, string> {
   const out = new Map<string, string>();
-  for (const v of verdicts) {
+  for (const v of currentVerdicts(verdicts)) {
     if (v.status !== "ready" || !v.regression || v.score === null) continue;
     out.set(
       v.runId,

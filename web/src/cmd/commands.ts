@@ -65,7 +65,6 @@ export interface CommandContext {
   /** Whether privileged actions (approve, start) are available. */
   canAdmin: boolean;
   actions: {
-    approveGate: (instanceId: string) => Promise<unknown>;
     runSchedule: (scheduleId: string) => Promise<unknown>;
     markCaughtUp: () => Promise<unknown>;
     showShortcuts: () => void;
@@ -96,22 +95,21 @@ export function buildCommands(ctx: CommandContext): Command[] {
   }
 
   // Gates first among the actions: a pipeline paused on a human is the most
-  // time-sensitive thing Argus can tell you about.
-  if (ctx.canAdmin) {
-    for (const entry of ctx.entries) {
-      if (!entry.gateInstanceId) continue;
-      const instanceId = entry.gateInstanceId;
-      commands.push({
-        id: `approve:${instanceId}`,
-        title: `Approve — ${entry.title}`,
-        subtitle: "resume the pipeline waiting at its gate",
-        group: "Actions",
-        icon: "✓",
-        severity: "warn",
-        keywords: ["approve", "gate", "resume", "unblock", entry.id],
-        run: () => ctx.actions.approveGate(instanceId),
-      });
-    }
+  // time-sensitive thing Argus can tell you about. The palette *takes you to*
+  // the review drawer — it never approves blind, because what is being
+  // approved is what the drawer shows. Offered to everyone: looking is open.
+  for (const entry of ctx.entries) {
+    if (!entry.gateInstanceId) continue;
+    commands.push({
+      id: `review:${entry.gateInstanceId}`,
+      title: `Review gate — ${entry.title}`,
+      subtitle: "see what the paused phase produced, then approve or revise",
+      group: "Actions",
+      icon: "⏸",
+      severity: "warn",
+      keywords: ["approve", "revise", "review", "gate", "resume", "unblock", entry.id],
+      href: `#/command/${encodeURIComponent(entry.gateInstanceId)}`,
+    });
   }
 
   for (const entry of ctx.entries) {

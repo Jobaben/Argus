@@ -4,8 +4,20 @@ import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { VERDICT_MAX_AGE_MS, createVerdictWatcher, rubricFor } from "./verdictWatcher.js";
-import { readVerdicts, writeVerdict, type Rubric, type Verdict } from "./sources/verdict.js";
+import {
+  readVerdicts,
+  rubricDigest,
+  writeVerdict,
+  type Rubric,
+  type Verdict,
+} from "./sources/verdict.js";
+import type { AutomatedApproval } from "./pipelineEngine.js";
 import { createAnalysisRunner, type AnalysisSpawn } from "./sources/analysis.js";
+import {
+  TRAJECTORY_PROMPT_VERSION,
+  TRAJECTORY_SIGNALS_VERSION,
+  trajectoryRubricDigest,
+} from "./sources/trajectory.js";
 import type { PipelineDefinition, PipelineInstance } from "./sources/pipelineTypes.js";
 import type { Run, Schedule } from "./sources/scheduleTypes.js";
 
@@ -103,6 +115,7 @@ function instance(over: Partial<PipelineInstance> = {}): PipelineInstance {
         name: "Build",
         gated: true,
         status: "awaiting-approval",
+        pause: "gate",
         steps: [{ name: "s", runId: "step-1", status: "succeeded" }],
         attempt: 1,
         payload: null,
@@ -129,6 +142,7 @@ const respond =
 
 function verdict(runId: string, score: number, over: Partial<Verdict> = {}): Verdict {
   return {
+    id: `V-${runId}`,
     runId,
     scheduleId: "pipeline:p1",
     scheduleName: "Release train",
@@ -144,6 +158,7 @@ function verdict(runId: string, score: number, over: Partial<Verdict> = {}): Ver
     tokens: null,
     durationMs: null,
     error: null,
+    rubricDigest: rubricDigest(RUBRIC),
     ...over,
   };
 }
@@ -154,8 +169,12 @@ function watcher(opts: {
   pipelines?: PipelineDefinition[];
   instances?: PipelineInstance[];
   spawn?: AnalysisSpawn;
+  readLines?: (project: string, sessionId: string) => Promise<unknown[]>;
 }) {
   const approved: string[] = [];
+  const requests: AutomatedApproval[] = [];
+  const withheld: Array<{ instanceId: string; phaseId: string; attempt: number; reason: string }> =
+    [];
   const judged: string[] = [];
   const w = createVerdictWatcher({
     runner: createAnalysisRunner({
@@ -168,13 +187,17 @@ function watcher(opts: {
     readSchedules: async () => opts.schedules ?? [],
     readPipelines: async () => opts.pipelines ?? [],
     readInstances: async () => opts.instances ?? [],
-    approve: async (id) => {
-      approved.push(id);
+    ...(opts.readLines ? { readLines: opts.readLines } : {}),
+    approveAutomatically: async (request) => {
+      approved.push(request.instanceId);
+      requests.push(request);
       return { ok: true };
     },
     onVerdict: (id) => judged.push(id),
+    onAutoApprovalWithheld: (instanceId, phaseId, attempt, reason) =>
+      withheld.push({ instanceId, phaseId, attempt, reason }),
   });
-  return { w, approved, judged };
+  return { w, approved, requests, withheld, judged };
 }
 
 // ── Which rubric governs a run ──────────────────────────────────────────────
@@ -189,6 +212,19 @@ test("rubricFor resolves a schedule's rubric and a phase's rubric", () => {
   assert.equal(rubricFor(step, [], []), null, "a deleted pipeline is not a crash");
   const renamedPhase = run("c", { scheduleId: "pipeline:p1", phaseId: "gone" });
   assert.equal(rubricFor(renamedPhase, [], [pipeline()]), null);
+
+  // A step run is judged by the rubric its instance started with: a rubric
+  // edited (or removed) on the live definition does not move the bar under a
+  // run that is already in flight.
+  const pinned = run("d", { scheduleId: "pipeline:p1", phaseId: "build", instanceId: "i1" });
+  const stricter = pipeline({
+    phases: pipeline().phases.map((p) => ({ ...p, rubric: { ...RUBRIC, goal: "Be perfect." } })),
+  });
+  const snapshot = instance({ definition: pipeline() });
+  assert.equal(rubricFor(pinned, [], [stricter], [snapshot])?.goal, "Be good.");
+  assert.equal(rubricFor(pinned, [], [], [snapshot])?.goal, "Be good.", "deleted, still judged");
+  const legacy = instance();
+  assert.equal(rubricFor(pinned, [], [stricter], [legacy])?.goal, "Be perfect.", "no snapshot");
 });
 
 // ── Scoring ─────────────────────────────────────────────────────────────────
@@ -241,10 +277,17 @@ test("stale runs are not judged — the score would arrive after anyone cared", 
 // ── Auto-approving gates ────────────────────────────────────────────────────
 
 test("a gate opens itself once its output scores at or above the bar", async () => {
-  await writeVerdict(verdict("step-1", 8));
-  const { w, approved } = watcher({ pipelines: [pipeline()], instances: [instance()] });
+  await writeVerdict(verdict("step-1", 8, { id: "V-1" }));
+  const { w, approved, requests } = watcher({ pipelines: [pipeline()], instances: [instance()] });
   await w.check();
   assert.deepEqual(approved, ["i1"]);
+  // Bound to the exact phase, attempt, run and verdict — never "whatever is
+  // paused on this instance".
+  assert.equal(requests[0].phaseId, "build");
+  assert.equal(requests[0].attempt, 1);
+  assert.deepEqual(requests[0].runIds, ["step-1"]);
+  // Identity only: the engine reads everything else from the store.
+  assert.deepEqual(requests[0].verdicts, [{ runId: "step-1", verdictId: "V-1" }]);
 });
 
 test("regression: a gate with no verdict yet waits — silence is not approval", async () => {
@@ -272,6 +315,7 @@ test("regression: every judged step must clear the bar, not the average", async 
         name: "Build",
         gated: true,
         status: "awaiting-approval",
+        pause: "gate",
         steps: [
           { name: "a", runId: "step-1", status: "succeeded" },
           { name: "b", runId: "step-2", status: "succeeded" },
@@ -327,7 +371,462 @@ test("a read failure is swallowed rather than wedging the scheduler tick", async
     readSchedules: async () => [],
     readPipelines: async () => [],
     readInstances: async () => [],
-    approve: async () => ({ ok: true }),
+    approveAutomatically: async () => ({ ok: true }),
   });
   await w.check();
+});
+
+// ── Completeness, currency and binding (Phase 0) ────────────────────────────
+
+const twoSteps = (over: Partial<PipelineInstance["phases"][number]> = {}) =>
+  instance({
+    phases: [
+      {
+        id: "build",
+        name: "Build",
+        gated: true,
+        status: "awaiting-approval",
+        pause: "gate",
+        steps: [
+          { name: "a", runId: "step-1", status: "succeeded" },
+          { name: "b", runId: "step-2", status: "succeeded" },
+        ],
+        attempt: 1,
+        payload: null,
+        ...over,
+      },
+    ],
+  });
+
+test("regression: a gate with only SOME steps judged waits — partial judging is not approval", async () => {
+  // Before Phase 0 the watcher took the minimum over the steps that happened
+  // to have a verdict, so one judged 10/10 step opened a two-step gate whose
+  // other step had never been looked at.
+  await writeVerdict(verdict("step-1", 10));
+  const { w, approved } = watcher({ pipelines: [pipeline()], instances: [twoSteps()] });
+  await w.check();
+  assert.equal(approved.length, 0);
+});
+
+test("every relevant step judged at or above the bar opens the gate, naming every run", async () => {
+  await writeVerdict(verdict("step-1", 9));
+  await writeVerdict(verdict("step-2", 7));
+  const { w, requests } = watcher({ pipelines: [pipeline()], instances: [twoSteps()] });
+  await w.check();
+  assert.equal(requests.length, 1);
+  assert.deepEqual([...requests[0].runIds].sort(), ["step-1", "step-2"]);
+  assert.equal(requests[0].verdicts.length, 2);
+});
+
+test("regression: a failed or skipped current verdict holds the gate, even over an older good one", async () => {
+  await writeVerdict(verdict("step-1", 9, { at: "2026-07-20T11:00:00.000Z" }));
+  await writeVerdict(
+    verdict("step-1", 0, {
+      status: "failed",
+      score: null,
+      at: "2026-07-20T11:30:00.000Z",
+      error: "timed out",
+    }),
+  );
+  const { w, approved } = watcher({ pipelines: [pipeline()], instances: [instance()] });
+  await w.check();
+  assert.equal(approved.length, 0, "the run's current judgment is a failure");
+  assert.equal((await readVerdicts()).length, 2, "both judgments are kept");
+});
+
+test("regression: a verdict produced under a different rubric cannot open the gate", async () => {
+  const other: Rubric = { ...RUBRIC, goal: "Be fast." };
+  await writeVerdict(verdict("step-1", 10, { rubricDigest: rubricDigest(other) }));
+  const { w, approved } = watcher({ pipelines: [pipeline()], instances: [instance()] });
+  await w.check();
+  assert.equal(approved.length, 0);
+});
+
+test("a legacy verdict without a rubric digest cannot open the gate — it waits for a person", async () => {
+  await writeVerdict(verdict("step-1", 10, { rubricDigest: undefined }));
+  const { w, approved } = watcher({ pipelines: [pipeline()], instances: [instance()] });
+  await w.check();
+  assert.equal(approved.length, 0);
+});
+
+test("regression: a verdict on a previous attempt's run does not open the revised attempt", async () => {
+  // Attempt 1 ran as step-1 and was judged; a person revised it, and attempt 2
+  // runs as step-9, which nobody has judged yet.
+  await writeVerdict(verdict("step-1", 10));
+  const revised = instance({
+    phases: [
+      {
+        id: "build",
+        name: "Build",
+        gated: true,
+        status: "awaiting-approval",
+        pause: "gate",
+        steps: [{ name: "s", runId: "step-9", status: "succeeded" }],
+        attempt: 2,
+        payload: null,
+      },
+    ],
+  });
+  const { w, approved } = watcher({ pipelines: [pipeline()], instances: [revised] });
+  await w.check();
+  assert.equal(approved.length, 0);
+});
+
+test("regression: the approval names the auto-approvable phase, not whichever sibling is paused first", async () => {
+  // A fan-out with two gates waiting. Only `build` declares autoApprove, and
+  // `currentPhaseIndex` points at `review`. The old watcher looked at the
+  // current index only, and approved the instance without naming a phase —
+  // which the engine resolved to the first paused phase.
+  await writeVerdict(verdict("step-1", 9));
+  const def = pipeline({
+    phases: [
+      {
+        id: "review",
+        name: "Review",
+        cwd: "/tmp",
+        steps: [{ name: "r", prompt: "p" }],
+        gated: true,
+      },
+      pipeline().phases[0],
+    ],
+  });
+  const inst = instance({
+    currentPhaseIndex: 0,
+    phases: [
+      {
+        id: "review",
+        name: "Review",
+        gated: true,
+        status: "awaiting-approval",
+        pause: "gate",
+        steps: [{ name: "r", runId: "rev-1", status: "succeeded" }],
+        attempt: 1,
+        payload: null,
+      },
+      instance().phases[0],
+    ],
+  });
+  const { w, requests } = watcher({ pipelines: [def], instances: [inst] });
+  await w.check();
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].phaseId, "build");
+});
+
+test("regression: a legacy knowledge gate with autoApprove is withheld, reported once per attempt", async () => {
+  // Saved before validation refused it: a rule-verification phase that also
+  // declares autoApprove. It scores 10/10 and still waits for a person.
+  await writeVerdict(verdict("step-1", 10));
+  const legacy = pipeline({
+    phases: [{ ...pipeline().phases[0], ruleVerification: { kinds: ["business-rule"] } }],
+  } as Partial<PipelineDefinition>);
+  const { w, approved, withheld } = watcher({ pipelines: [legacy], instances: [instance()] });
+  await w.check();
+  await w.check();
+  assert.equal(approved.length, 0);
+  assert.equal(withheld.length, 1, "reported once, not every tick");
+  assert.match(withheld[0].reason, /rule-verification/);
+});
+
+test("regression: an ordinary phase that staged an optional KnowledgeDelta is withheld too", async () => {
+  // Its configuration says nothing about knowledge; the step staged a delta
+  // anyway (every step is offered one). Approving would commit it.
+  await writeVerdict(verdict("step-1", 10));
+  const staged = instance({
+    phases: [
+      {
+        ...instance().phases[0],
+        steps: [
+          {
+            name: "s",
+            runId: "step-1",
+            status: "succeeded",
+            knowledgeDelta: { id: "KD-1", status: "staged" },
+          },
+        ],
+      },
+    ],
+  } as Partial<PipelineInstance>);
+  const { w, approved, withheld } = watcher({ pipelines: [pipeline()], instances: [staged] });
+  await w.check();
+  assert.equal(approved.length, 0);
+  assert.match(withheld[0].reason, /staged-knowledge-delta/);
+});
+
+test("a best-of-N gate is judged on the selected candidate only", async () => {
+  await writeVerdict(verdict("cand-2", 8));
+  const inst = instance({
+    phases: [
+      {
+        id: "build",
+        name: "Build",
+        gated: true,
+        status: "awaiting-approval",
+        pause: "gate",
+        steps: [
+          { name: "s", runId: "cand-1", status: "aborted", candidate: 0 },
+          { name: "s", runId: "cand-2", status: "succeeded", candidate: 1 },
+        ],
+        selectedCandidate: 1,
+        attempt: 1,
+        payload: null,
+      },
+    ],
+  } as Partial<PipelineInstance>);
+  const { w, requests } = watcher({ pipelines: [pipeline()], instances: [inst] });
+  await w.check();
+  assert.deepEqual(requests[0]?.runIds, ["cand-2"]);
+});
+
+test("regression: a needs-input pause is never answered by a score", async () => {
+  await writeVerdict(verdict("step-1", 10));
+  const asked = instance({
+    phases: [{ ...instance().phases[0], pause: "needs-input" }],
+  });
+  const { w, approved } = watcher({ pipelines: [pipeline()], instances: [asked] });
+  await w.check();
+  assert.equal(approved.length, 0);
+});
+
+test("a pause of unknown cause (written before causes were recorded) waits for a person", async () => {
+  await writeVerdict(verdict("step-1", 10));
+  const { pause: _drop, ...legacyPhase } = instance().phases[0];
+  const legacy = instance({ phases: [legacyPhase] });
+  const { w, approved } = watcher({ pipelines: [pipeline()], instances: [legacy] });
+  await w.check();
+  assert.equal(approved.length, 0);
+});
+
+test("a verdict with no id (written before ids existed) cannot be named as a basis, so the gate waits", async () => {
+  await writeVerdict(verdict("step-1", 10, { id: undefined }));
+  const { w, approved } = watcher({ pipelines: [pipeline()], instances: [instance()] });
+  await w.check();
+  assert.equal(approved.length, 0);
+});
+
+// ── Trajectories (Hardening Item 5) ─────────────────────────────────────────
+
+const TRAJ: Rubric = {
+  ...RUBRIC,
+  trajectory: { criteria: [{ id: "focus", label: "Stayed on task" }] },
+};
+const trajPipeline = () =>
+  pipeline({ phases: pipeline().phases.map((p) => ({ ...p, rubric: TRAJ })) });
+const transcript = async () => [
+  {
+    type: "assistant",
+    timestamp: NOW.toISOString(),
+    message: {
+      role: "assistant",
+      content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } }],
+    },
+  },
+];
+const focus = (score: number) =>
+  JSON.stringify({
+    result: JSON.stringify({ criteria: [{ id: "focus", score, note: "n" }] }),
+  });
+/** Answers the output judge and the trajectory judge by what each asked. */
+const both =
+  (output: number, trajectory: number, prompts: string[] = []): AnalysisSpawn =>
+  ({ prompt }) => {
+    prompts.push(prompt);
+    const stdout = prompt.includes("TRAJECTORY CRITERIA") ? focus(trajectory) : answer(output);
+    return { kill: () => {}, done: Promise.resolve({ code: 0, stdout, error: null }) };
+  };
+
+function trajectoryVerdict(runId: string, over: Partial<Verdict> = {}): Verdict {
+  return verdict(runId, 8, {
+    id: `VT-${runId}`,
+    kind: "trajectory",
+    rubricDigest: trajectoryRubricDigest(TRAJ),
+    provenance: {
+      runtime: "claude",
+      requestedModel: "haiku",
+      reportedModel: null,
+      promptVersion: TRAJECTORY_PROMPT_VERSION,
+    },
+    trajectory: {
+      signals: {
+        version: TRAJECTORY_SIGNALS_VERSION,
+        transcript: "present",
+        events: 3,
+        truncated: false,
+        signals: [],
+      },
+      held: [],
+      judged: true,
+    },
+    ...over,
+  });
+}
+
+const stepRun = (id: string, over: Partial<Run> = {}) =>
+  run(id, {
+    scheduleId: "pipeline:p1",
+    phaseId: "build",
+    instanceId: "i1",
+    sessionId: "sess",
+    project: "-repo",
+    ...over,
+  });
+
+test("no trajectory judging by default: a plain rubric never asks for one", async () => {
+  const prompts: string[] = [];
+  const { w } = watcher({
+    runs: [stepRun("step-1")],
+    pipelines: [pipeline()],
+    spawn: both(8, 8, prompts),
+    readLines: transcript,
+  });
+  await w.check();
+  await w.check();
+  assert.equal(prompts.length, 1, "one output judgment, nothing else");
+  assert.equal(
+    prompts.some((p) => p.includes("TRAJECTORY CRITERIA")),
+    false,
+  );
+  assert.equal(
+    (await readVerdicts()).some((v) => v.kind === "trajectory"),
+    false,
+  );
+});
+
+test("a trajectory rubric gets one output and one trajectory pass, each once, never confused", async () => {
+  const prompts: string[] = [];
+  const { w, judged } = watcher({
+    runs: [stepRun("step-1")],
+    pipelines: [trajPipeline()],
+    spawn: both(8, 6, prompts),
+    readLines: transcript,
+  });
+  await w.check();
+  await w.check();
+  assert.equal(prompts.length, 2);
+  const stored = await readVerdicts();
+  assert.equal(stored.filter((v) => v.kind === "trajectory").length, 1);
+  assert.equal(
+    stored.filter((v) => v.kind !== "trajectory").length,
+    1,
+    "the output judge ran once",
+  );
+  assert.deepEqual(judged, ["step-1", "step-1"]);
+});
+
+test("a trajectory judgment does not count as the run's output verdict", async () => {
+  await writeVerdict(trajectoryVerdict("step-1"));
+  const prompts: string[] = [];
+  const { w } = watcher({
+    runs: [stepRun("step-1")],
+    pipelines: [trajPipeline()],
+    spawn: both(8, 8, prompts),
+    readLines: transcript,
+  });
+  await w.check();
+  assert.equal(prompts.filter((p) => !p.includes("TRAJECTORY CRITERIA")).length, 1);
+});
+
+test("without a transcript reader there is no trajectory pass, and the gate waits", async () => {
+  await writeVerdict(verdict("step-1", 9));
+  const { w, approved } = watcher({
+    runs: [stepRun("step-1")],
+    pipelines: [trajPipeline()],
+    instances: [instance({ definition: trajPipeline() })],
+  });
+  await w.check();
+  assert.equal(
+    (await readVerdicts()).some((v) => v.kind === "trajectory"),
+    false,
+  );
+  assert.equal(approved.length, 0);
+});
+
+test("the approval request carries the trajectory basis separately", async () => {
+  await writeVerdict(verdict("step-1", 9));
+  await writeVerdict(trajectoryVerdict("step-1"));
+  const { w, requests } = watcher({
+    pipelines: [trajPipeline()],
+    instances: [instance({ definition: trajPipeline() })],
+  });
+  await w.check();
+  assert.deepEqual(requests[0]?.verdicts, [{ runId: "step-1", verdictId: "V-step-1" }]);
+  assert.deepEqual(requests[0]?.trajectoryVerdicts, [{ runId: "step-1", verdictId: "VT-step-1" }]);
+});
+
+test("a plain gate's request carries no trajectory basis", async () => {
+  await writeVerdict(verdict("step-1", 9));
+  const { w, requests } = watcher({ pipelines: [pipeline()], instances: [instance()] });
+  await w.check();
+  assert.equal(requests.length, 1);
+  assert.equal("trajectoryVerdicts" in requests[0], false);
+});
+
+for (const [name, over] of [
+  ["skipped", { status: "skipped", score: null }],
+  ["failed", { status: "failed", score: null }],
+  ["below the bar", { score: 5 }],
+  ["under another rubric", { rubricDigest: "0".repeat(64) }],
+  [
+    "over a truncated recording",
+    {
+      trajectory: {
+        signals: {
+          version: TRAJECTORY_SIGNALS_VERSION,
+          transcript: "present",
+          events: 2000,
+          truncated: true,
+          signals: [],
+        },
+        held: [],
+        judged: true,
+      },
+    },
+  ],
+] as const) {
+  test(`a trajectory judgment that is ${name} withholds automation`, async () => {
+    await writeVerdict(verdict("step-1", 9));
+    await writeVerdict(trajectoryVerdict("step-1", over as Partial<Verdict>));
+    const { w, approved } = watcher({
+      pipelines: [trajPipeline()],
+      instances: [instance({ definition: trajPipeline() })],
+    });
+    await w.check();
+    assert.equal(approved.length, 0);
+  });
+}
+
+test("a missing trajectory judgment withholds automation however well the output scored", async () => {
+  await writeVerdict(verdict("step-1", 10));
+  const { w, approved } = watcher({
+    pipelines: [trajPipeline()],
+    instances: [instance({ definition: trajPipeline() })],
+  });
+  await w.check();
+  assert.equal(approved.length, 0);
+});
+
+test("a best-of-N trajectory gate needs judgments for the selected candidate only", async () => {
+  await writeVerdict(verdict("cand-2", 8));
+  await writeVerdict(trajectoryVerdict("cand-2"));
+  const inst = instance({
+    definition: trajPipeline(),
+    phases: [
+      {
+        id: "build",
+        name: "Build",
+        gated: true,
+        status: "awaiting-approval",
+        pause: "gate",
+        steps: [
+          { name: "s", runId: "cand-1", status: "aborted", candidate: 0 },
+          { name: "s", runId: "cand-2", status: "succeeded", candidate: 1 },
+        ],
+        selectedCandidate: 1,
+        attempt: 1,
+        payload: null,
+      },
+    ],
+  } as Partial<PipelineInstance>);
+  const { w, requests } = watcher({ pipelines: [trajPipeline()], instances: [inst] });
+  await w.check();
+  assert.deepEqual(requests[0]?.trajectoryVerdicts, [{ runId: "cand-2", verdictId: "VT-cand-2" }]);
 });

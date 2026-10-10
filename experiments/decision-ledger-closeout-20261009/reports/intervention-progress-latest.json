@@ -1,0 +1,742 @@
+{
+  "at": "2026-10-09T02:13:31.989Z",
+  "sourceCollectionOutcomes": {
+    "not-selected": 6,
+    "assessed": 8,
+    "pending": 14,
+    "excluded": 4
+  },
+  "sourceRows": [
+    {
+      "case": "workload-D1.json",
+      "runs": [
+        {
+          "runId": "a0a71822-d824-4b5b-879e-0fda9e31d120",
+          "status": "failed",
+          "outcome": "failed",
+          "termination": "timed-out",
+          "costUsd": null,
+          "endedAt": "2026-10-08T22:17:25.829Z",
+          "matureAt": "2026-10-08T22:27:25.829Z"
+        }
+      ],
+      "questions": [
+        {
+          "runId": "a0a71822-d824-4b5b-879e-0fda9e31d120",
+          "question": "run.failure-cause.residual",
+          "verdict": "not-selected",
+          "reason": null,
+          "stratum": "deadline",
+          "assessmentId": null,
+          "collectionOutcome": "not-selected"
+        },
+        {
+          "runId": "a0a71822-d824-4b5b-879e-0fda9e31d120",
+          "question": "run.termination-probe",
+          "verdict": "selected",
+          "reason": null,
+          "stratum": "deadline",
+          "assessmentId": "DA-uaffv7M-3hUV3f5m",
+          "collectionOutcome": "assessed"
+        }
+      ]
+    },
+    {
+      "case": "workload-D2.json",
+      "runs": [
+        {
+          "runId": "f040025f-acb7-4661-976c-101063a65955",
+          "status": "failed",
+          "outcome": "failed",
+          "termination": "timed-out",
+          "costUsd": null,
+          "endedAt": "2026-10-08T22:19:28.884Z",
+          "matureAt": "2026-10-08T22:29:28.884Z"
+        }
+      ],
+      "questions": [
+        {
+          "runId": "f040025f-acb7-4661-976c-101063a65955",
+          "question": "run.failure-cause.residual",
+          "verdict": "not-selected",
+          "reason": null,
+          "stratum": "deadline",
+          "assessmentId": null,
+          "collectionOutcome": "not-selected"
+        },
+        {
+          "runId": "f040025f-acb7-4661-976c-101063a65955",
+          "question": "run.termination-probe",
+          "verdict": "selected",
+          "reason": null,
+          "stratum": "deadline",
+          "assessmentId": "DA-yyHxzh_GNAq9rcQO",
+          "collectionOutcome": "assessed"
+        }
+      ]
+    },
+    {
+      "case": "workload-D3.json",
+      "runs": [
+        {
+          "runId": "2b2ef548-824d-4468-ac0d-e363289c6ffa",
+          "status": "succeeded",
+          "outcome": "failed",
+          "termination": null,
+          "costUsd": 0.018402,
+          "endedAt": "2026-10-08T22:21:33.809Z",
+          "matureAt": "2026-10-08T22:31:33.809Z"
+        }
+      ],
+      "questions": [
+        {
+          "runId": "2b2ef548-824d-4468-ac0d-e363289c6ffa",
+          "question": "run.failure-cause.residual",
+          "verdict": "selected",
+          "reason": null,
+          "stratum": "ended-normally",
+          "assessmentId": "DA-hJlqDkT4FnFMjpSI",
+          "collectionOutcome": "assessed"
+        },
+        {
+          "runId": "2b2ef548-824d-4468-ac0d-e363289c6ffa",
+          "question": "run.termination-probe",
+          "verdict": "selected",
+          "reason": null,
+          "stratum": "ended-normally",
+          "assessmentId": "DA-shE6zk8eQpsASMdW",
+          "collectionOutcome": "assessed"
+        }
+      ]
+    },
+    {
+      "case": "workload-D4.json",
+      "runs": [
+        {
+          "runId": "9e3874d4-4289-427c-a916-38c8d11bcb33",
+          "status": "succeeded",
+          "outcome": "failed",
+          "termination": null,
+          "costUsd": 0.017731,
+          "endedAt": "2026-10-08T22:23:32.474Z",
+          "matureAt": "2026-10-08T22:33:32.474Z"
+        }
+      ],
+      "questions": [
+        {
+          "runId": "9e3874d4-4289-427c-a916-38c8d11bcb33",
+          "question": "run.failure-cause.residual",
+          "verdict": "not-selected",
+          "reason": null,
+          "stratum": "ended-normally",
+          "assessmentId": null,
+          "collectionOutcome": "not-selected"
+        },
+        {
+          "runId": "9e3874d4-4289-427c-a916-38c8d11bcb33",
+          "question": "run.termination-probe",
+          "verdict": "selected",
+          "reason": null,
+          "stratum": "ended-normally",
+          "assessmentId": "DA-Th3pzjPTS6PX8DUc",
+          "collectionOutcome": "assessed"
+        }
+      ]
+    },
+    {
+      "case": "workload-E1.json",
+      "runs": [
+        {
+          "runId": "52479fa8-e3cf-4048-9400-0c09c3bba243",
+          "status": "succeeded",
+          "outcome": "failed",
+          "termination": null,
+          "costUsd": 0.017386,
+          "endedAt": "2026-10-08T22:37:32.404Z",
+          "matureAt": "2026-10-08T22:47:32.404Z"
+        }
+      ],
+      "questions": [
+        {
+          "runId": "52479fa8-e3cf-4048-9400-0c09c3bba243",
+          "question": "run.failure-cause.residual",
+          "verdict": "selected",
+          "reason": null,
+          "stratum": "ended-normally",
+          "assessmentId": null,
+          "collectionOutcome": "pending"
+        },
+        {
+          "runId": "52479fa8-e3cf-4048-9400-0c09c3bba243",
+          "question": "run.termination-probe",
+          "verdict": "selected",
+          "reason": null,
+          "stratum": "ended-normally",
+          "assessmentId": null,
+          "collectionOutcome": "pending"
+        }
+      ]
+    },
+    {
+      "case": "workload-E2.json",
+      "runs": [
+        {
+          "runId": "5e088810-1972-4365-98cc-6f59df883171",
+          "status": "succeeded",
+          "outcome": "failed",
+          "termination": null,
+          "costUsd": 0.017502999999999998,
+          "endedAt": "2026-10-08T22:39:32.482Z",
+          "matureAt": "2026-10-08T22:49:32.482Z"
+        }
+      ],
+      "questions": [
+        {
+          "runId": "5e088810-1972-4365-98cc-6f59df883171",
+          "question": "run.failure-cause.residual",
+          "verdict": "not-selected",
+          "reason": null,
+          "stratum": "ended-normally",
+          "assessmentId": null,
+          "collectionOutcome": "not-selected"
+        },
+        {
+          "runId": "5e088810-1972-4365-98cc-6f59df883171",
+          "question": "run.termination-probe",
+          "verdict": "selected",
+          "reason": null,
+          "stratum": "ended-normally",
+          "assessmentId": null,
+          "collectionOutcome": "pending"
+        }
+      ]
+    },
+    {
+      "case": "workload-I1.json",
+      "runs": [
+        {
+          "runId": "56e0ca4d-528c-4b6b-9828-507aea1d4e51",
+          "status": "succeeded",
+          "outcome": "succeeded",
+          "termination": null,
+          "costUsd": 0.017066,
+          "endedAt": "2026-10-08T22:45:36.336Z",
+          "matureAt": "2026-10-08T22:55:36.336Z"
+        }
+      ],
+      "questions": [
+        {
+          "runId": "56e0ca4d-528c-4b6b-9828-507aea1d4e51",
+          "question": "run.failure-cause.residual",
+          "verdict": "excluded",
+          "reason": "successful",
+          "stratum": "ended-normally",
+          "assessmentId": null,
+          "collectionOutcome": "excluded"
+        },
+        {
+          "runId": "56e0ca4d-528c-4b6b-9828-507aea1d4e51",
+          "question": "run.termination-probe",
+          "verdict": "selected",
+          "reason": null,
+          "stratum": "ended-normally",
+          "assessmentId": null,
+          "collectionOutcome": "pending"
+        }
+      ]
+    },
+    {
+      "case": "workload-I2.json",
+      "runs": [
+        {
+          "runId": "dbd6ea19-6faa-4ef4-97f3-3fd1e44c382e",
+          "status": "succeeded",
+          "outcome": "succeeded",
+          "termination": null,
+          "costUsd": 0.019056000000000003,
+          "endedAt": "2026-10-08T22:47:36.105Z",
+          "matureAt": "2026-10-08T22:57:36.105Z"
+        }
+      ],
+      "questions": [
+        {
+          "runId": "dbd6ea19-6faa-4ef4-97f3-3fd1e44c382e",
+          "question": "run.failure-cause.residual",
+          "verdict": "excluded",
+          "reason": "successful",
+          "stratum": "ended-normally",
+          "assessmentId": null,
+          "collectionOutcome": "excluded"
+        },
+        {
+          "runId": "dbd6ea19-6faa-4ef4-97f3-3fd1e44c382e",
+          "question": "run.termination-probe",
+          "verdict": "selected",
+          "reason": null,
+          "stratum": "ended-normally",
+          "assessmentId": null,
+          "collectionOutcome": "pending"
+        }
+      ]
+    },
+    {
+      "case": "workload-M1.json",
+      "runs": [
+        {
+          "runId": "b366bcb1-fe47-489d-a1c5-6b8d15a1afaf",
+          "status": "succeeded",
+          "outcome": "failed",
+          "termination": null,
+          "costUsd": 0.016673,
+          "endedAt": "2026-10-08T22:29:30.507Z",
+          "matureAt": "2026-10-08T22:39:30.507Z"
+        }
+      ],
+      "questions": [
+        {
+          "runId": "b366bcb1-fe47-489d-a1c5-6b8d15a1afaf",
+          "question": "run.failure-cause.residual",
+          "verdict": "not-selected",
+          "reason": null,
+          "stratum": "ended-normally",
+          "assessmentId": null,
+          "collectionOutcome": "not-selected"
+        },
+        {
+          "runId": "b366bcb1-fe47-489d-a1c5-6b8d15a1afaf",
+          "question": "run.termination-probe",
+          "verdict": "selected",
+          "reason": null,
+          "stratum": "ended-normally",
+          "assessmentId": "DA-56e8slKEmDIzIYTT",
+          "collectionOutcome": "assessed"
+        }
+      ]
+    },
+    {
+      "case": "workload-M2.json",
+      "runs": [
+        {
+          "runId": "3f515a8d-e6b2-481e-bb5e-be817ab53478",
+          "status": "succeeded",
+          "outcome": "failed",
+          "termination": null,
+          "costUsd": 0.01748,
+          "endedAt": "2026-10-08T22:31:37.077Z",
+          "matureAt": "2026-10-08T22:41:37.077Z"
+        }
+      ],
+      "questions": [
+        {
+          "runId": "3f515a8d-e6b2-481e-bb5e-be817ab53478",
+          "question": "run.failure-cause.residual",
+          "verdict": "not-selected",
+          "reason": null,
+          "stratum": "ended-normally",
+          "assessmentId": null,
+          "collectionOutcome": "not-selected"
+        },
+        {
+          "runId": "3f515a8d-e6b2-481e-bb5e-be817ab53478",
+          "question": "run.termination-probe",
+          "verdict": "selected",
+          "reason": null,
+          "stratum": "ended-normally",
+          "assessmentId": null,
+          "collectionOutcome": "pending"
+        }
+      ]
+    },
+    {
+      "case": "workload-N1.json",
+      "runs": [
+        {
+          "runId": "e79a5a80-8a38-4e9f-b8af-3c70b3cdd1b9",
+          "status": "succeeded",
+          "outcome": "succeeded",
+          "termination": null,
+          "costUsd": 0.016034,
+          "endedAt": "2026-10-08T22:25:29.345Z",
+          "matureAt": "2026-10-08T22:35:29.345Z"
+        }
+      ],
+      "questions": [
+        {
+          "runId": "e79a5a80-8a38-4e9f-b8af-3c70b3cdd1b9",
+          "question": "run.failure-cause.residual",
+          "verdict": "excluded",
+          "reason": "successful",
+          "stratum": "ended-normally",
+          "assessmentId": null,
+          "collectionOutcome": "excluded"
+        },
+        {
+          "runId": "e79a5a80-8a38-4e9f-b8af-3c70b3cdd1b9",
+          "question": "run.termination-probe",
+          "verdict": "selected",
+          "reason": null,
+          "stratum": "ended-normally",
+          "assessmentId": "DA-aUX6ptCPI_qmBohh",
+          "collectionOutcome": "assessed"
+        }
+      ]
+    },
+    {
+      "case": "workload-N2.json",
+      "runs": [
+        {
+          "runId": "40091fb6-da25-46f3-8ff6-af7978151863",
+          "status": "succeeded",
+          "outcome": "succeeded",
+          "termination": null,
+          "costUsd": 0.016215,
+          "endedAt": "2026-10-08T22:27:29.578Z",
+          "matureAt": "2026-10-08T22:37:29.578Z"
+        }
+      ],
+      "questions": [
+        {
+          "runId": "40091fb6-da25-46f3-8ff6-af7978151863",
+          "question": "run.failure-cause.residual",
+          "verdict": "excluded",
+          "reason": "successful",
+          "stratum": "ended-normally",
+          "assessmentId": null,
+          "collectionOutcome": "excluded"
+        },
+        {
+          "runId": "40091fb6-da25-46f3-8ff6-af7978151863",
+          "question": "run.termination-probe",
+          "verdict": "selected",
+          "reason": null,
+          "stratum": "ended-normally",
+          "assessmentId": "DA-Q1mM4AfRZlstoGhe",
+          "collectionOutcome": "assessed"
+        }
+      ]
+    },
+    {
+      "case": "workload-P1.json",
+      "runs": [
+        {
+          "runId": "5f272024-1fbc-4433-9d00-50eec876a197",
+          "status": "succeeded",
+          "outcome": "failed",
+          "termination": null,
+          "costUsd": 0.021097900000000003,
+          "endedAt": "2026-10-08T22:41:34.138Z",
+          "matureAt": "2026-10-08T22:51:34.138Z"
+        }
+      ],
+      "questions": [
+        {
+          "runId": "5f272024-1fbc-4433-9d00-50eec876a197",
+          "question": "run.failure-cause.residual",
+          "verdict": "selected",
+          "reason": null,
+          "stratum": "ended-normally",
+          "assessmentId": null,
+          "collectionOutcome": "pending"
+        },
+        {
+          "runId": "5f272024-1fbc-4433-9d00-50eec876a197",
+          "question": "run.termination-probe",
+          "verdict": "selected",
+          "reason": null,
+          "stratum": "ended-normally",
+          "assessmentId": null,
+          "collectionOutcome": "pending"
+        }
+      ]
+    },
+    {
+      "case": "workload-P2.json",
+      "runs": [
+        {
+          "runId": "4a1ead56-3774-4ab1-a238-2a527d94f63e",
+          "status": "succeeded",
+          "outcome": "failed",
+          "termination": null,
+          "costUsd": 0.016390000000000002,
+          "endedAt": "2026-10-08T22:43:30.421Z",
+          "matureAt": "2026-10-08T22:53:30.421Z"
+        }
+      ],
+      "questions": [
+        {
+          "runId": "4a1ead56-3774-4ab1-a238-2a527d94f63e",
+          "question": "run.failure-cause.residual",
+          "verdict": "selected",
+          "reason": null,
+          "stratum": "ended-normally",
+          "assessmentId": null,
+          "collectionOutcome": "pending"
+        },
+        {
+          "runId": "4a1ead56-3774-4ab1-a238-2a527d94f63e",
+          "question": "run.termination-probe",
+          "verdict": "selected",
+          "reason": null,
+          "stratum": "ended-normally",
+          "assessmentId": null,
+          "collectionOutcome": "pending"
+        }
+      ]
+    },
+    {
+      "case": "workload-T1.json",
+      "runs": [
+        {
+          "runId": "15b370ed-5aca-47f6-8009-4f516e18750e",
+          "status": "succeeded",
+          "outcome": "failed",
+          "termination": null,
+          "costUsd": 0.01649,
+          "endedAt": "2026-10-08T22:33:30.295Z",
+          "matureAt": "2026-10-08T22:43:30.295Z"
+        }
+      ],
+      "questions": [
+        {
+          "runId": "15b370ed-5aca-47f6-8009-4f516e18750e",
+          "question": "run.failure-cause.residual",
+          "verdict": "selected",
+          "reason": null,
+          "stratum": "ended-normally",
+          "assessmentId": null,
+          "collectionOutcome": "pending"
+        },
+        {
+          "runId": "15b370ed-5aca-47f6-8009-4f516e18750e",
+          "question": "run.termination-probe",
+          "verdict": "selected",
+          "reason": null,
+          "stratum": "ended-normally",
+          "assessmentId": null,
+          "collectionOutcome": "pending"
+        }
+      ]
+    },
+    {
+      "case": "workload-T2.json",
+      "runs": [
+        {
+          "runId": "d6b83314-a20e-4def-a4b4-1f46b6e94368",
+          "status": "succeeded",
+          "outcome": "failed",
+          "termination": null,
+          "costUsd": 0.016088,
+          "endedAt": "2026-10-08T22:35:29.495Z",
+          "matureAt": "2026-10-08T22:45:29.495Z"
+        }
+      ],
+      "questions": [
+        {
+          "runId": "d6b83314-a20e-4def-a4b4-1f46b6e94368",
+          "question": "run.failure-cause.residual",
+          "verdict": "selected",
+          "reason": null,
+          "stratum": "ended-normally",
+          "assessmentId": null,
+          "collectionOutcome": "pending"
+        },
+        {
+          "runId": "d6b83314-a20e-4def-a4b4-1f46b6e94368",
+          "question": "run.termination-probe",
+          "verdict": "selected",
+          "reason": null,
+          "stratum": "ended-normally",
+          "assessmentId": null,
+          "collectionOutcome": "pending"
+        }
+      ]
+    }
+  ],
+  "interventionAssessments": [
+    {
+      "id": "DA-uaffv7M-3hUV3f5m",
+      "runId": "a0a71822-d824-4b5b-879e-0fda9e31d120",
+      "question": "run.termination-probe",
+      "answer": {
+        "kind": "probability",
+        "p": {
+          "deadline": 0.85,
+          "ended-normally": 0.05,
+          "never-ran": 0.02,
+          "output-refused": 0.05,
+          "permission-denied": 0.01,
+          "rate-limited": 0.02
+        },
+        "shape": "choice"
+      },
+      "status": "answered",
+      "costUsd": 0.034115400000000004,
+      "snapshotSha256": "3f801b836ae77b6a02ff1cc0913f9544994af2d6ca3c7145ef66837635d963b4"
+    },
+    {
+      "id": "DA-yyHxzh_GNAq9rcQO",
+      "runId": "f040025f-acb7-4661-976c-101063a65955",
+      "question": "run.termination-probe",
+      "answer": {
+        "kind": "probability",
+        "p": {
+          "deadline": 0.7999999999999998,
+          "ended-normally": 0.09999999999999998,
+          "never-ran": 0.029999999999999992,
+          "output-refused": 0.04999999999999999,
+          "permission-denied": 0.009999999999999998,
+          "rate-limited": 0.009999999999999998
+        },
+        "shape": "choice"
+      },
+      "status": "answered",
+      "costUsd": 0.0336554,
+      "snapshotSha256": "6ddd34157ebc6887a5ff87f8f9562f08abf48df9adbc24cb7038767316186a2c"
+    },
+    {
+      "id": "DA-hJlqDkT4FnFMjpSI",
+      "runId": "2b2ef548-824d-4468-ac0d-e363289c6ffa",
+      "question": "run.failure-cause.residual",
+      "answer": {
+        "kind": "probability",
+        "p": {
+          "environment": 0.08,
+          "missing-context": 0,
+          "model-refusal": 0,
+          "other": 0,
+          "prompt-ambiguity": 0,
+          "task-infeasible": 0.92,
+          "tool-misuse": 0
+        },
+        "shape": "choice"
+      },
+      "status": "answered",
+      "costUsd": 0.0342634,
+      "snapshotSha256": "40610491306dfaee0e6c991ff761c88151688096f8d8aaee6f3d72455a30ff43"
+    },
+    {
+      "id": "DA-shE6zk8eQpsASMdW",
+      "runId": "2b2ef548-824d-4468-ac0d-e363289c6ffa",
+      "question": "run.termination-probe",
+      "answer": {
+        "kind": "probability",
+        "p": {
+          "deadline": 0.1,
+          "ended-normally": 0.7,
+          "never-ran": 0.01,
+          "output-refused": 0.15,
+          "permission-denied": 0.02,
+          "rate-limited": 0.02
+        },
+        "shape": "choice"
+      },
+      "status": "answered",
+      "costUsd": 0.041414400000000004,
+      "snapshotSha256": "ec851a6e0be4c641c498fe3c83d2c752972db98c1f18478d3f353f47552adde4"
+    },
+    {
+      "id": "DA-Th3pzjPTS6PX8DUc",
+      "runId": "9e3874d4-4289-427c-a916-38c8d11bcb33",
+      "question": "run.termination-probe",
+      "answer": {
+        "kind": "probability",
+        "p": {
+          "deadline": 0.05,
+          "ended-normally": 0.85,
+          "never-ran": 0,
+          "output-refused": 0.05,
+          "permission-denied": 0.05,
+          "rate-limited": 0
+        },
+        "shape": "choice"
+      },
+      "status": "answered",
+      "costUsd": 0.0357794,
+      "snapshotSha256": "1bedeee3a345814914f6f9dc14c8b17afbce84adc4bc6dc75ee6f81d4d020a1c"
+    },
+    {
+      "id": "DA-aUX6ptCPI_qmBohh",
+      "runId": "e79a5a80-8a38-4e9f-b8af-3c70b3cdd1b9",
+      "question": "run.termination-probe",
+      "answer": {
+        "kind": "probability",
+        "p": {
+          "deadline": 0.01,
+          "ended-normally": 0.99,
+          "never-ran": 0,
+          "output-refused": 0,
+          "permission-denied": 0,
+          "rate-limited": 0
+        },
+        "shape": "choice"
+      },
+      "status": "answered",
+      "costUsd": 0.0320774,
+      "snapshotSha256": "4f0026de1484af5e7ae4cf1da5f404cf55aba07ca492673a98b4764716bca073"
+    },
+    {
+      "id": "DA-Q1mM4AfRZlstoGhe",
+      "runId": "40091fb6-da25-46f3-8ff6-af7978151863",
+      "question": "run.termination-probe",
+      "answer": {
+        "kind": "probability",
+        "p": {
+          "deadline": 0.0009990009990009992,
+          "ended-normally": 0.9890109890109892,
+          "never-ran": 0.002497502497502498,
+          "output-refused": 0.002497502497502498,
+          "permission-denied": 0.002497502497502498,
+          "rate-limited": 0.002497502497502498
+        },
+        "shape": "choice"
+      },
+      "status": "answered",
+      "costUsd": 0.0344064,
+      "snapshotSha256": "a97de5834dd0164bab652f15bf2cb2372295d7c7e4a9c66971b5f61c8da1c558"
+    },
+    {
+      "id": "DA-56e8slKEmDIzIYTT",
+      "runId": "b366bcb1-fe47-489d-a1c5-6b8d15a1afaf",
+      "question": "run.termination-probe",
+      "answer": {
+        "kind": "probability",
+        "p": {
+          "deadline": 0,
+          "ended-normally": 1,
+          "never-ran": 0,
+          "output-refused": 0,
+          "permission-denied": 0,
+          "rate-limited": 0
+        },
+        "shape": "choice"
+      },
+      "status": "answered",
+      "costUsd": 0.030396399999999997,
+      "snapshotSha256": "3230c23e370fcf42d412a8d25764a133d28a17f84c5e60b7f16088943a217328"
+    }
+  ],
+  "globalProbeAnswered": 70,
+  "globalResidualAnswered": 10,
+  "globalSelectedPending": 14,
+  "globalExpired": 0,
+  "globalKnownAssessmentCostUsd": 2.713526,
+  "globalUnknownAssessmentCost": 0,
+  "sourceKnownCostUsd": 0.2436119,
+  "sourceUnknownCost": 2,
+  "deadlineValidityReview": "reports/deadline-probe-validity-review.json",
+  "interpretation": "N2 favors ended-normally; M1 favors ended-normally despite an honestly blocked task. These are consistent with actual process records and retain the intended-class metadata caveat. Subject-authored ARGUS_OUTCOME prose remains evidence content, not an authoritative termination reference. Residual model answers remain uncalibrated without human reference labels.",
+  "estimatedQueueDrainHoursAtMinimumInterval": 2.8,
+  "estimateCaveat": "Minimum interval, not a completion guarantee; deferrals and failures may extend drain.",
+  "extraSourceRunsJustified": false,
+  "verification": {
+    "envelopesChecked": 401,
+    "envelopeFailures": 0,
+    "journalEnvelopesChecked": 81,
+    "collectionEnvelopesChecked": 320,
+    "snapshotsChecked": 80,
+    "snapshotFailures": [],
+    "applicationFilesChecked": 660,
+    "applicationChanges": [],
+    "unrelatedWorkshopDefinitionUnchanged": true
+  }
+}

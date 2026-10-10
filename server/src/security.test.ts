@@ -4,7 +4,9 @@ import {
   isHostAllowed,
   isOriginAllowed,
   isSelfAuthenticating,
+  isSessionBootstrap,
   isUpgradeAllowed,
+  securityMiddleware,
 } from "./security.js";
 import type { ArgusConfig } from "./config.js";
 
@@ -110,4 +112,105 @@ test("self-authenticating matching does not spread to neighbouring routes", () =
   ]) {
     assert.equal(isSelfAuthenticating(p), false, p);
   }
+});
+
+// ── Account session as an alternative credential ───────────────────────────
+// A browser cannot present ARGUS_TOKEN: it is a server-side env var the page
+// never learns. Before this, setting the token locked the bundled UI out of
+// every /api route, so an exposed bind (which the token is mandatory for) had
+// a working API and a dead dashboard.
+
+test("session bootstrap routes are reachable without the shared token", () => {
+  for (const p of [
+    "/api/auth/status",
+    "/api/auth/login",
+    "/api/auth/register",
+    "/api/auth/setup",
+    "/api/auth/logout",
+  ]) {
+    assert.equal(isSessionBootstrap(p), true, p);
+  }
+});
+
+test("the bootstrap exemption does not spread to other routes", () => {
+  for (const p of [
+    "/api/auth",
+    "/api/auth/status/extra",
+    "/api/users",
+    "/api/overview",
+    "/api/pipelines",
+    "/api/auth/login/../../pipelines",
+  ]) {
+    assert.equal(isSessionBootstrap(p), false, p);
+  }
+});
+
+test("upgrade guard accepts a valid session in place of the token", () => {
+  const cfg = { ...base, token: "secret" };
+  const loopback = { host: "localhost:7777", origin: "http://localhost:7777" };
+  // A session stands in for the shared secret.
+  assert.equal(isUpgradeAllowed(loopback, cfg, true), true);
+  // No session and no token is still refused.
+  assert.equal(isUpgradeAllowed(loopback, cfg, false), false);
+  // A session does not excuse a bad Host (rebinding) or Origin (CSRF).
+  assert.equal(isUpgradeAllowed({ ...loopback, host: "evil.com" }, cfg, true), false);
+  assert.equal(
+    isUpgradeAllowed({ ...loopback, origin: "https://evil.example.com" }, cfg, true),
+    false,
+  );
+});
+
+test("upgrade guard needs no session when no token is configured", () => {
+  assert.equal(
+    isUpgradeAllowed({ host: "localhost:7777", origin: "http://localhost:7777" }, base, false),
+    true,
+  );
+});
+
+test("middleware accepts a session cookie in place of the shared token", async () => {
+  const { Hono } = await import("hono");
+  const cfg = { ...base, token: "secret" };
+  const app = new Hono();
+  // Stand-in for the real verifier: one known-good session cookie value.
+  app.use(
+    "/api/*",
+    securityMiddleware(cfg, (c) => c.req.header("cookie") === "argus_session=good"),
+  );
+  app.get("/api/overview", (c) => c.json({ ok: true }));
+  app.post("/api/pipelines", (c) => c.json({ ok: true }));
+
+  const get = (headers: Record<string, string>) =>
+    app.request("http://localhost:7777/api/overview", { headers });
+
+  assert.equal((await get({ host: "localhost:7777" })).status, 401);
+  assert.equal((await get({ host: "localhost:7777", cookie: "argus_session=good" })).status, 200);
+  assert.equal((await get({ host: "localhost:7777", cookie: "argus_session=stale" })).status, 401);
+  assert.equal(
+    (await get({ host: "localhost:7777", authorization: "Bearer secret" })).status,
+    200,
+    "the shared token still works for CLI and proxy clients",
+  );
+
+  // A session is not a licence to skip the CSRF origin check on mutations.
+  const post = await app.request("http://localhost:7777/api/pipelines", {
+    method: "POST",
+    headers: {
+      host: "localhost:7777",
+      cookie: "argus_session=good",
+      origin: "https://evil.example.com",
+    },
+  });
+  assert.equal(post.status, 403);
+});
+
+test("a token-gated 401 tells the UI a login would fix it", async () => {
+  const { Hono } = await import("hono");
+  const app = new Hono();
+  app.use("/api/*", securityMiddleware({ ...base, token: "secret" }));
+  app.get("/api/overview", (c) => c.json({ ok: true }));
+  const res = await app.request("http://localhost:7777/api/overview", {
+    headers: { host: "localhost:7777" },
+  });
+  assert.equal(res.status, 401);
+  assert.equal(((await res.json()) as { code?: string }).code, "auth_required");
 });

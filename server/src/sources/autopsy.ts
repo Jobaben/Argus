@@ -1,7 +1,9 @@
+import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { paths } from "../claudeHome.js";
 import { createJsonArrayStore } from "./jsonArrayStore.js";
 import { buildRecording } from "./recorder.js";
+import { clipLine, formatTimeline } from "./timeline.js";
 import type { AnalysisRunner } from "./analysis.js";
 import type { Autopsy, AutopsySpan, FailureClass } from "@argus/contracts";
 import type { Run } from "./scheduleTypes.js";
@@ -35,9 +37,6 @@ export const AUTOPSY_KEEP = 200;
  *  bounded so a 20,000-event transcript can't write a 20,000-line prompt. */
 export const PROMPT_EVENT_CAP = 60;
 
-/** Per-event label budget inside the prompt. */
-const EVENT_LABEL_MAX = 200;
-
 /** Hard ceiling on the whole prompt. A pass that would exceed it is trimmed,
  *  never sent oversized. */
 export const PROMPT_MAX_CHARS = 24_000;
@@ -67,31 +66,55 @@ const store = createJsonArrayStore<Autopsy>({
   label: "autopsies.json",
 });
 
+/**
+ * Version of {@link buildAutopsyPrompt} + {@link parseAutopsyResponse}. Bump on
+ * any change to either (the taxonomy included): classes produced under
+ * different prompts are not the same measurement.
+ */
+export const AUTOPSY_PROMPT_VERSION = 1;
+
+/** Every stored pass, newest first — a run re-analysed appears more than once. */
 export const readAutopsies = store.read;
+
+/** The current autopsy per run: the newest pass of each, whatever its status. */
+export function currentAutopsies(list: Autopsy[]): Autopsy[] {
+  const newestFirst = [...list].sort((a, b) => b.at.localeCompare(a.at));
+  const seen = new Set<string>();
+  return newestFirst.filter((a) => {
+    if (seen.has(a.runId)) return false;
+    seen.add(a.runId);
+    return true;
+  });
+}
 
 /**
  * Failure class per run id, for Issues' similarity clustering.
  *
- * Only `ready` autopsies contribute: a pass that timed out has no diagnosis,
- * and treating its absent class as a signal would merge unrelated errors.
+ * Only a `ready` *current* autopsy contributes: a pass that timed out has no
+ * diagnosis, and treating its absent class as a signal would merge unrelated
+ * errors — nor does an older class outlive a newer pass that superseded it.
  */
 export async function readFailureClasses(): Promise<Map<string, FailureClass>> {
   const out = new Map<string, FailureClass>();
-  for (const a of await store.read()) {
+  for (const a of currentAutopsies(await store.read())) {
     if (a.status === "ready" && a.failureClass) out.set(a.runId, a.failureClass);
   }
   return out;
 }
 
 export async function readAutopsy(runId: string): Promise<Autopsy | null> {
-  return (await store.read()).find((a) => a.runId === runId) ?? null;
+  return currentAutopsies(await store.read()).find((a) => a.runId === runId) ?? null;
 }
 
-/** Upsert, newest-first, pruned to {@link AUTOPSY_KEEP}. */
+/**
+ * Append, newest-first, pruned to {@link AUTOPSY_KEEP} in total. A re-run
+ * never replaces the earlier pass: what the model said before is part of the
+ * record of what it has said.
+ */
 export async function writeAutopsy(autopsy: Autopsy): Promise<Autopsy> {
   return store.withLock(async () => {
     const list = await store.read();
-    const next = [autopsy, ...list.filter((a) => a.runId !== autopsy.runId)];
+    const next = [autopsy, ...list];
     next.sort((a, b) => b.at.localeCompare(a.at));
     await store.write(next.slice(0, AUTOPSY_KEEP));
     return autopsy;
@@ -111,10 +134,7 @@ export function isAutopsyEligible(run: Run): boolean {
 
 // ── Prompt ──────────────────────────────────────────────────────────────────
 
-function clip(text: string, max: number): string {
-  const one = text.replace(/\s+/g, " ").trim();
-  return one.length > max ? `${one.slice(0, max - 1)}…` : one;
-}
+const clip = clipLine;
 
 /**
  * The postmortem prompt.
@@ -126,15 +146,7 @@ function clip(text: string, max: number): string {
  * range: asking for line numbers would mean trusting the model to count.
  */
 export function buildAutopsyPrompt(run: Run, recording: Recording): string {
-  const tail = recording.events.slice(-PROMPT_EVENT_CAP);
-  const timeline = tail
-    .map((e) => {
-      const secs = (e.atMs / 1000).toFixed(1);
-      const mark = e.errored || e.kind === "error" ? " [ERROR]" : "";
-      const detail = e.detail ? ` — ${clip(e.detail, EVENT_LABEL_MAX)}` : "";
-      return `${secs}s ${e.kind}${mark}: ${clip(e.label, EVENT_LABEL_MAX)}${detail}`;
-    })
-    .join("\n");
+  const timeline = formatTimeline(recording.events.slice(-PROMPT_EVENT_CAP));
 
   const body = `You are analysing why one automated agent run failed. Answer only with JSON.
 
@@ -237,6 +249,8 @@ export function parseAutopsyResponse(
 export interface AutopsyDeps {
   runner: AnalysisRunner;
   now: () => Date;
+  /** Mints the autopsy id. Defaults to a random `A-…`. */
+  newId?: () => string;
   /** Transcript lines for the run, so the recorder can be built. */
   readLines: (project: string, sessionId: string) => Promise<unknown[]>;
 }
@@ -256,6 +270,7 @@ export async function performAutopsy(run: Run, deps: AutopsyDeps): Promise<Autop
   const recording = buildRecording(run, lines, deps.now());
 
   const base: Autopsy = {
+    id: deps.newId?.() ?? `A-${randomBytes(8).toString("hex")}`,
     runId: run.id,
     scheduleId: run.scheduleId,
     scheduleName: run.scheduleName,
@@ -289,6 +304,12 @@ export async function performAutopsy(run: Run, deps: AutopsyDeps): Promise<Autop
     costUsd: result.costUsd,
     tokens: result.tokens,
     durationMs: result.durationMs,
+    provenance: {
+      runtime: result.runtime,
+      requestedModel: result.requestedModel,
+      reportedModel: result.reportedModel,
+      promptVersion: AUTOPSY_PROMPT_VERSION,
+    },
   };
 
   if (!result.ok || !result.value) {

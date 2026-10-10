@@ -1,0 +1,365 @@
+{
+  "format": "argus.frozen-evaluation-input-audit",
+  "version": 1,
+  "method": "Direct read of exact retained snapshot bytes and production V1 prompt rendering; no provider calls, store writes or labels",
+  "limitations": [
+    "Metadata hint detection identifies audit candidates, not inference accuracy",
+    "V1 meaning is preserved; no historical answer rewritten",
+    "Transcript hints and fixture intent are not independent references",
+    "V2 tests prove omission only; every future retained rendered prompt requires pre-elicitation audit"
+  ],
+  "rows": [
+    {
+      "assessmentId": "DA-uaffv7M-3hUV3f5m",
+      "runId": "a0a71822-d824-4b5b-879e-0fda9e31d120",
+      "snapshotSha256": "3f801b836ae77b6a02ff1cc0913f9544994af2d6ca3c7145ef66837635d963b4",
+      "snapshotBytes": 1264,
+      "status": "retained-verified",
+      "question": {
+        "digest": "4e22c0439828b768eca5543c17527c26981bc4993774b2b7906c20bca7f5f5f9",
+        "id": "run.termination-probe",
+        "version": 1
+      },
+      "projection": {
+        "digest": "cd6292c099f7162632dc43cc2d2caee31b117f3750369172cffb0e9109eaab80",
+        "id": "run-failure.blind",
+        "version": 1
+      },
+      "renderedPromptSha256": "003733e04a227a1c76a536626ec458badb01955333987147ae784096a6fcd45d",
+      "renderedPromptBytes": 1948,
+      "metadataHintPointers": ["/body/run/scheduleName", "/body/prompt"],
+      "subjectAuthored": ["/resultSummary", "/timeline/events"],
+      "disposition": "class-bearing-metadata-or-case-identifiers-present"
+    },
+    {
+      "assessmentId": "DA-yyHxzh_GNAq9rcQO",
+      "runId": "f040025f-acb7-4661-976c-101063a65955",
+      "snapshotSha256": "6ddd34157ebc6887a5ff87f8f9562f08abf48df9adbc24cb7038767316186a2c",
+      "snapshotBytes": 1266,
+      "status": "retained-verified",
+      "question": {
+        "digest": "4e22c0439828b768eca5543c17527c26981bc4993774b2b7906c20bca7f5f5f9",
+        "id": "run.termination-probe",
+        "version": 1
+      },
+      "projection": {
+        "digest": "cd6292c099f7162632dc43cc2d2caee31b117f3750369172cffb0e9109eaab80",
+        "id": "run-failure.blind",
+        "version": 1
+      },
+      "renderedPromptSha256": "273561db7ee943369b284b295980481547e9f9e318b09aa6a9a9a902909b7823",
+      "renderedPromptBytes": 1950,
+      "metadataHintPointers": ["/body/run/scheduleName", "/body/prompt"],
+      "subjectAuthored": ["/resultSummary", "/timeline/events"],
+      "disposition": "class-bearing-metadata-or-case-identifiers-present"
+    },
+    {
+      "assessmentId": "DA-shE6zk8eQpsASMdW",
+      "runId": "2b2ef548-824d-4468-ac0d-e363289c6ffa",
+      "snapshotSha256": "ec851a6e0be4c641c498fe3c83d2c752972db98c1f18478d3f353f47552adde4",
+      "snapshotBytes": 3323,
+      "status": "retained-verified",
+      "question": {
+        "digest": "4e22c0439828b768eca5543c17527c26981bc4993774b2b7906c20bca7f5f5f9",
+        "id": "run.termination-probe",
+        "version": 1
+      },
+      "projection": {
+        "digest": "cd6292c099f7162632dc43cc2d2caee31b117f3750369172cffb0e9109eaab80",
+        "id": "run-failure.blind",
+        "version": 1
+      },
+      "renderedPromptSha256": "e76338cfa7af3376f3e67cdcff848fc39c8d8219311e8c02deb8f9350a89544a",
+      "renderedPromptBytes": 3912,
+      "metadataHintPointers": ["/body/run/scheduleName", "/body/prompt"],
+      "subjectAuthored": ["/resultSummary", "/timeline/events"],
+      "disposition": "class-bearing-metadata-or-case-identifiers-present"
+    },
+    {
+      "assessmentId": "DA-Th3pzjPTS6PX8DUc",
+      "runId": "9e3874d4-4289-427c-a916-38c8d11bcb33",
+      "snapshotSha256": "1bedeee3a345814914f6f9dc14c8b17afbce84adc4bc6dc75ee6f81d4d020a1c",
+      "snapshotBytes": 3132,
+      "status": "retained-verified",
+      "question": {
+        "digest": "4e22c0439828b768eca5543c17527c26981bc4993774b2b7906c20bca7f5f5f9",
+        "id": "run.termination-probe",
+        "version": 1
+      },
+      "projection": {
+        "digest": "cd6292c099f7162632dc43cc2d2caee31b117f3750369172cffb0e9109eaab80",
+        "id": "run-failure.blind",
+        "version": 1
+      },
+      "renderedPromptSha256": "95edf49d8487932ea4476e9e7e2a816c77deb68b6cd1a680fe3bd90e971fd90d",
+      "renderedPromptBytes": 3751,
+      "metadataHintPointers": ["/body/run/scheduleName", "/body/prompt"],
+      "subjectAuthored": ["/resultSummary", "/timeline/events"],
+      "disposition": "class-bearing-metadata-or-case-identifiers-present"
+    },
+    {
+      "assessmentId": "DA-aUX6ptCPI_qmBohh",
+      "runId": "e79a5a80-8a38-4e9f-b8af-3c70b3cdd1b9",
+      "snapshotSha256": "4f0026de1484af5e7ae4cf1da5f404cf55aba07ca492673a98b4764716bca073",
+      "snapshotBytes": 2455,
+      "status": "retained-verified",
+      "question": {
+        "digest": "4e22c0439828b768eca5543c17527c26981bc4993774b2b7906c20bca7f5f5f9",
+        "id": "run.termination-probe",
+        "version": 1
+      },
+      "projection": {
+        "digest": "cd6292c099f7162632dc43cc2d2caee31b117f3750369172cffb0e9109eaab80",
+        "id": "run-failure.blind",
+        "version": 1
+      },
+      "renderedPromptSha256": "f2518eabdc5ad07f62096ed6040a7fe4e2d4f53ef42f4aeaa05366ea566bd9f8",
+      "renderedPromptBytes": 3074,
+      "metadataHintPointers": ["/body/run/scheduleName", "/body/prompt", "/body/resultSummary"],
+      "subjectAuthored": ["/resultSummary", "/timeline/events"],
+      "disposition": "class-bearing-metadata-or-case-identifiers-present"
+    },
+    {
+      "assessmentId": "DA-Q1mM4AfRZlstoGhe",
+      "runId": "40091fb6-da25-46f3-8ff6-af7978151863",
+      "snapshotSha256": "a97de5834dd0164bab652f15bf2cb2372295d7c7e4a9c66971b5f61c8da1c558",
+      "snapshotBytes": 2509,
+      "status": "retained-verified",
+      "question": {
+        "digest": "4e22c0439828b768eca5543c17527c26981bc4993774b2b7906c20bca7f5f5f9",
+        "id": "run.termination-probe",
+        "version": 1
+      },
+      "projection": {
+        "digest": "cd6292c099f7162632dc43cc2d2caee31b117f3750369172cffb0e9109eaab80",
+        "id": "run-failure.blind",
+        "version": 1
+      },
+      "renderedPromptSha256": "f994522eaf7b843520558bcc63f01b1d1d960e5a9c5dc435ad8c018e65c07f5a",
+      "renderedPromptBytes": 3128,
+      "metadataHintPointers": ["/body/run/scheduleName", "/body/prompt"],
+      "subjectAuthored": ["/resultSummary", "/timeline/events"],
+      "disposition": "class-bearing-metadata-or-case-identifiers-present"
+    },
+    {
+      "assessmentId": "DA-56e8slKEmDIzIYTT",
+      "runId": "b366bcb1-fe47-489d-a1c5-6b8d15a1afaf",
+      "snapshotSha256": "3230c23e370fcf42d412a8d25764a133d28a17f84c5e60b7f16088943a217328",
+      "snapshotBytes": 2877,
+      "status": "retained-verified",
+      "question": {
+        "digest": "4e22c0439828b768eca5543c17527c26981bc4993774b2b7906c20bca7f5f5f9",
+        "id": "run.termination-probe",
+        "version": 1
+      },
+      "projection": {
+        "digest": "cd6292c099f7162632dc43cc2d2caee31b117f3750369172cffb0e9109eaab80",
+        "id": "run-failure.blind",
+        "version": 1
+      },
+      "renderedPromptSha256": "0e1fcf84d1d0343c0361b4d52a510d898f42145741377c0e7f8fceaf3b2e4c89",
+      "renderedPromptBytes": 3496,
+      "metadataHintPointers": ["/body/run/scheduleName", "/body/prompt"],
+      "subjectAuthored": ["/resultSummary", "/timeline/events"],
+      "disposition": "class-bearing-metadata-or-case-identifiers-present"
+    },
+    {
+      "assessmentId": "DA-O7oXI_hP-rC-V0LQ",
+      "runId": "3f515a8d-e6b2-481e-bb5e-be817ab53478",
+      "snapshotSha256": "cb8f9e86967e83431a16c883a264428701e139b740340df9e2a0326f02085674",
+      "snapshotBytes": 3427,
+      "status": "retained-verified",
+      "question": {
+        "digest": "4e22c0439828b768eca5543c17527c26981bc4993774b2b7906c20bca7f5f5f9",
+        "id": "run.termination-probe",
+        "version": 1
+      },
+      "projection": {
+        "digest": "cd6292c099f7162632dc43cc2d2caee31b117f3750369172cffb0e9109eaab80",
+        "id": "run-failure.blind",
+        "version": 1
+      },
+      "renderedPromptSha256": "21d65644c757a6363c794412299954990cc7c7d35190cb62836efe699c4b953b",
+      "renderedPromptBytes": 4016,
+      "metadataHintPointers": ["/body/run/scheduleName", "/body/prompt", "/body/resultSummary"],
+      "subjectAuthored": ["/resultSummary", "/timeline/events"],
+      "disposition": "class-bearing-metadata-or-case-identifiers-present"
+    },
+    {
+      "assessmentId": "DA-UANXMngCZBR12Yh1",
+      "runId": "15b370ed-5aca-47f6-8009-4f516e18750e",
+      "snapshotSha256": "dff5b421afaeed9f2ccc7170e91e07e4269babd349f119d6b43c755b0682b8a6",
+      "snapshotBytes": 3050,
+      "status": "retained-verified",
+      "question": {
+        "digest": "4e22c0439828b768eca5543c17527c26981bc4993774b2b7906c20bca7f5f5f9",
+        "id": "run.termination-probe",
+        "version": 1
+      },
+      "projection": {
+        "digest": "cd6292c099f7162632dc43cc2d2caee31b117f3750369172cffb0e9109eaab80",
+        "id": "run-failure.blind",
+        "version": 1
+      },
+      "renderedPromptSha256": "a52721717f6f9f4e2db860f712268d598238b3d17c941af98a62d73db3b7f458",
+      "renderedPromptBytes": 3669,
+      "metadataHintPointers": ["/body/run/scheduleName", "/body/prompt"],
+      "subjectAuthored": ["/resultSummary", "/timeline/events"],
+      "disposition": "class-bearing-metadata-or-case-identifiers-present"
+    },
+    {
+      "assessmentId": "DA-BS9ISvpudLQrlnz9",
+      "runId": "d6b83314-a20e-4def-a4b4-1f46b6e94368",
+      "snapshotSha256": "72bda9080f8da53b739b176d3323da6dea7669a22ebb6dedb3621a8bd89b547e",
+      "snapshotBytes": 2848,
+      "status": "retained-verified",
+      "question": {
+        "digest": "4e22c0439828b768eca5543c17527c26981bc4993774b2b7906c20bca7f5f5f9",
+        "id": "run.termination-probe",
+        "version": 1
+      },
+      "projection": {
+        "digest": "cd6292c099f7162632dc43cc2d2caee31b117f3750369172cffb0e9109eaab80",
+        "id": "run-failure.blind",
+        "version": 1
+      },
+      "renderedPromptSha256": "a4703bfb1d6088b6bf98e9abf06dc24c4577833f14da86d9b3603aa7138d5e6c",
+      "renderedPromptBytes": 3467,
+      "metadataHintPointers": ["/body/run/scheduleName", "/body/prompt"],
+      "subjectAuthored": ["/resultSummary", "/timeline/events"],
+      "disposition": "class-bearing-metadata-or-case-identifiers-present"
+    },
+    {
+      "assessmentId": "DA-ok6z7X4YAb-DV8hp",
+      "runId": "52479fa8-e3cf-4048-9400-0c09c3bba243",
+      "snapshotSha256": "e4858dacd3a0042de27a8004308bb1e66b1422ee0dd3e8bc4b8d786b28bae444",
+      "snapshotBytes": 3351,
+      "status": "retained-verified",
+      "question": {
+        "digest": "4e22c0439828b768eca5543c17527c26981bc4993774b2b7906c20bca7f5f5f9",
+        "id": "run.termination-probe",
+        "version": 1
+      },
+      "projection": {
+        "digest": "cd6292c099f7162632dc43cc2d2caee31b117f3750369172cffb0e9109eaab80",
+        "id": "run-failure.blind",
+        "version": 1
+      },
+      "renderedPromptSha256": "34b7634fb8e978863a5ccce4f636e479256ad9d1f9866d4fe0f2d0c3c2291500",
+      "renderedPromptBytes": 3970,
+      "metadataHintPointers": ["/body/run/scheduleName", "/body/prompt", "/body/resultSummary"],
+      "subjectAuthored": ["/resultSummary", "/timeline/events"],
+      "disposition": "class-bearing-metadata-or-case-identifiers-present"
+    },
+    {
+      "assessmentId": "DA-WNR1ydo9EpE_QAGA",
+      "runId": "5e088810-1972-4365-98cc-6f59df883171",
+      "snapshotSha256": "3822221e3c220674b4bf3bd162671e37cea7e8ce7dff295bb234768d911f1623",
+      "snapshotBytes": 3301,
+      "status": "retained-verified",
+      "question": {
+        "digest": "4e22c0439828b768eca5543c17527c26981bc4993774b2b7906c20bca7f5f5f9",
+        "id": "run.termination-probe",
+        "version": 1
+      },
+      "projection": {
+        "digest": "cd6292c099f7162632dc43cc2d2caee31b117f3750369172cffb0e9109eaab80",
+        "id": "run-failure.blind",
+        "version": 1
+      },
+      "renderedPromptSha256": "edc487aa6a8cdfaf43f4eb68dd869c71dd20444aaa07affea5ff0a33e9c3e74f",
+      "renderedPromptBytes": 3920,
+      "metadataHintPointers": ["/body/run/scheduleName", "/body/prompt", "/body/resultSummary"],
+      "subjectAuthored": ["/resultSummary", "/timeline/events"],
+      "disposition": "class-bearing-metadata-or-case-identifiers-present"
+    },
+    {
+      "assessmentId": "DA-LTBtryz1tHbJf4iX",
+      "runId": "5f272024-1fbc-4433-9d00-50eec876a197",
+      "snapshotSha256": "ea42ee0f5b13d5c7b72b45f192b5ce87e56b416463a988f694a28bda93046040",
+      "snapshotBytes": 3608,
+      "status": "retained-verified",
+      "question": {
+        "digest": "4e22c0439828b768eca5543c17527c26981bc4993774b2b7906c20bca7f5f5f9",
+        "id": "run.termination-probe",
+        "version": 1
+      },
+      "projection": {
+        "digest": "cd6292c099f7162632dc43cc2d2caee31b117f3750369172cffb0e9109eaab80",
+        "id": "run-failure.blind",
+        "version": 1
+      },
+      "renderedPromptSha256": "02f3fd3e6ce5bb1b2bbff41e783e00837ebe6e7b75931c38eb1e61e3c4e1ae79",
+      "renderedPromptBytes": 4197,
+      "metadataHintPointers": ["/body/run/scheduleName", "/body/prompt"],
+      "subjectAuthored": ["/resultSummary", "/timeline/events"],
+      "disposition": "class-bearing-metadata-or-case-identifiers-present"
+    },
+    {
+      "assessmentId": "DA-kCRzAWw4UXrYB3oI",
+      "runId": "4a1ead56-3774-4ab1-a238-2a527d94f63e",
+      "snapshotSha256": "027bd04d32c1d9d6484ad5aa14dc20a2e50fb08602c341c8e10dd6feba39f575",
+      "snapshotBytes": 2535,
+      "status": "retained-verified",
+      "question": {
+        "digest": "4e22c0439828b768eca5543c17527c26981bc4993774b2b7906c20bca7f5f5f9",
+        "id": "run.termination-probe",
+        "version": 1
+      },
+      "projection": {
+        "digest": "cd6292c099f7162632dc43cc2d2caee31b117f3750369172cffb0e9109eaab80",
+        "id": "run-failure.blind",
+        "version": 1
+      },
+      "renderedPromptSha256": "ba12b1059f069480bdbc7d51d1a4c74bca659f094171d478106f307f497a7b8b",
+      "renderedPromptBytes": 3184,
+      "metadataHintPointers": ["/body/run/scheduleName", "/body/prompt"],
+      "subjectAuthored": ["/resultSummary", "/timeline/events"],
+      "disposition": "class-bearing-metadata-or-case-identifiers-present"
+    },
+    {
+      "assessmentId": "DA-rxwRbwU0FaX3moaA",
+      "runId": "56e0ca4d-528c-4b6b-9828-507aea1d4e51",
+      "snapshotSha256": "0890db783c7fbac57b0e049994825ae60af589325ef8d5cdc552524ef0f50a67",
+      "snapshotBytes": 3473,
+      "status": "retained-verified",
+      "question": {
+        "digest": "4e22c0439828b768eca5543c17527c26981bc4993774b2b7906c20bca7f5f5f9",
+        "id": "run.termination-probe",
+        "version": 1
+      },
+      "projection": {
+        "digest": "cd6292c099f7162632dc43cc2d2caee31b117f3750369172cffb0e9109eaab80",
+        "id": "run-failure.blind",
+        "version": 1
+      },
+      "renderedPromptSha256": "f347c5354f87c26895b4a1541ce42de62dfe6dc9a7d86a673d420fe56770f47f",
+      "renderedPromptBytes": 4062,
+      "metadataHintPointers": ["/body/run/scheduleName", "/body/prompt", "/body/resultSummary"],
+      "subjectAuthored": ["/resultSummary", "/timeline/events"],
+      "disposition": "class-bearing-metadata-or-case-identifiers-present"
+    },
+    {
+      "assessmentId": "DA-r52O-nAKb0f0DEmX",
+      "runId": "dbd6ea19-6faa-4ef4-97f3-3fd1e44c382e",
+      "snapshotSha256": "9a5232faff59cdb94dce11a00bd89613952748c4408672b8d77824680a89e08c",
+      "snapshotBytes": 3496,
+      "status": "retained-verified",
+      "question": {
+        "digest": "4e22c0439828b768eca5543c17527c26981bc4993774b2b7906c20bca7f5f5f9",
+        "id": "run.termination-probe",
+        "version": 1
+      },
+      "projection": {
+        "digest": "cd6292c099f7162632dc43cc2d2caee31b117f3750369172cffb0e9109eaab80",
+        "id": "run-failure.blind",
+        "version": 1
+      },
+      "renderedPromptSha256": "38f1b29b9c7d87fb2db53baaeb61c6d02f254d125fe9b6e749f689034860f2d1",
+      "renderedPromptBytes": 4085,
+      "metadataHintPointers": ["/body/run/scheduleName", "/body/prompt", "/body/resultSummary"],
+      "subjectAuthored": ["/resultSummary", "/timeline/events"],
+      "disposition": "class-bearing-metadata-or-case-identifiers-present"
+    }
+  ]
+}

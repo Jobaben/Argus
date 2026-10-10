@@ -258,6 +258,13 @@ The client reconnects with exponential backoff (1s doubling to a 30s ceiling,
 jittered) and immediately when the tab becomes visible or the browser reports it
 is back online.
 
+The browser is not the only client. `argus tail` (see the README) opens the
+same socket with `Authorization: Bearer $ARGUS_TOKEN`, prints the payload
+frames as they arrive, and resolves each change ping into concrete lines by
+re-reading `/api/runs`, `/api/overview` and `/api/agents` conditionally and
+diffing against its previous read — the same "ping means re-fetch" contract,
+applied by a process that has to narrate rather than redraw.
+
 ## Security
 
 All `/api/*` routes and the `/ws` upgrade are gated:
@@ -287,11 +294,16 @@ may send the session token as `X-Argus-Session` instead of the cookie.
 | `POST /api/auth/logout` | invalidate the current session                                                                      |
 
 Admin-gated routes (all others are unaffected): `POST/PUT/PATCH/DELETE
-/api/pipelines*`, `POST /api/pipelines/:id/start`, and `POST
-/api/instances/:id/{approve,revise,abort}`. Unauthenticated calls get `401`
+/api/pipelines*`, `POST /api/pipelines/:id/start`, `POST
+/api/pipelines/:id/hook-token/rotate`, and `POST
+/api/instances/:id/{approve,revise,abort}`. Schedules (including `POST
+/api/schedules/:id/hook-token/rotate`) are not admin-gated — they carry no
+credential of their own beyond the token/session layer above, same as every
+other schedule route. Unauthenticated calls get `401`
 with `code: "auth_required"` (or `"auth_setup_required"` before first-run
 setup). `POST /api/instances/:id/signal` is **not** admin-gated — it is called
-by headless agent hooks and authenticates with its own per-instance token. To
+by headless agent hooks and authenticates with a per-run token (see `ARGUS_SIGNAL_TOKEN` under
+"Emitting signals from a run"). To
 reset a forgotten password, delete `~/.claude/argus/auth.json` (local file
 access is the trust root) and run first-time setup again.
 
@@ -379,17 +391,20 @@ first. `endedAt: null` means still in flight — render through `windowEnd`.
 
 ## Scheduler
 
-| Method + path                      | Effect                                                             |
-| ---------------------------------- | ------------------------------------------------------------------ |
-| `GET /api/schedules`               | list schedules, each with a computed `nextRun`                     |
-| `POST /api/schedules`              | create a schedule (validated) → `201`                              |
-| `PUT /api/schedules/:id`           | patch a schedule → `200`, `404` if unknown                         |
-| `DELETE /api/schedules/:id`        | delete a schedule                                                  |
-| `POST /api/schedules/:id/run`      | fire now → `202`, or `409` when `overlap=skip` and a run is live   |
-| `GET /api/runs?scheduleId=&limit=` | run history (newest first)                                         |
-| `GET /api/runs/:id`                | one run plus the tail of its log                                   |
-| `GET /api/runs/:id/recording`      | the run as a Flight Recorder timeline (see below)                  |
-| `POST /api/runs/:id/cancel`        | kill a running run → `200`, `409` if not running, `404` if unknown |
+| Method + path                               | Effect                                                                                               |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `GET /api/schedules`                        | list schedules, each with a computed `nextRun`                                                       |
+| `POST /api/schedules`                       | create a schedule (validated) → `201`                                                                |
+| `PUT /api/schedules/:id`                    | patch a schedule → `200`, `404` if unknown                                                           |
+| `DELETE /api/schedules/:id`                 | delete a schedule                                                                                    |
+| `POST /api/schedules/:id/run`               | fire now → `202`, or `409` when `overlap=skip` and a run is live                                     |
+| `POST /api/schedules/:id/hook-token/rotate` | regenerate a `kind: "webhook"` schedule's `hookToken` → `200`, `400` if the trigger is not `webhook` |
+| `GET /api/runs?scheduleId=&limit=`          | run history (newest first)                                                                           |
+| `GET /api/runs/:id`                         | one run plus the tail of its log                                                                     |
+| `GET /api/runs/:id/activity`                | the live activity retained for a running step (see below)                                            |
+| `GET /api/runs/:id/recording`               | the run as a Flight Recorder timeline (see below)                                                    |
+| `GET /api/runs/:id/invocation`              | what Argus launched for this run (see § Harness) → `404` if none                                     |
+| `POST /api/runs/:id/cancel`                 | kill a running run → `200`, `409` if not running, `404` if unknown                                   |
 
 Create/patch body fields: `name`, `prompt`, `cwd` (must exist), `trigger`,
 `enabled` (default `true`), `overlapPolicy` (`skip`|`allow`, default `skip`),
@@ -398,6 +413,87 @@ and `catchUp` (boolean, default `false`) — when `true`, a slot missed beyond
 the firing grace (machine asleep, Argus down) fires **once** on the next
 scheduler tick instead of being skipped; only the most recent missed slot is
 run.
+
+## Webhook and chained triggers (v0.4)
+
+Two more trigger kinds, available to both schedules (`trigger`) and pipelines
+(`trigger`, which may also be `null` for manual-only): `{ "kind": "webhook" }`
+and `{ "kind": "after", "pipelineId": "<id>", "on": "succeeded" | "failed" | "any" }`.
+Neither has a cadence — the scheduler's tick never fires them
+(`shouldFire`/`nextFireAfter` always report "not due" for these two kinds);
+each fires from its own path below.
+
+**`webhook`.** Saving a definition with `trigger.kind: "webhook"` mints a
+`hookToken` (32 random bytes, base64url) on the definition and returns it in
+every `GET`/`POST`/`PUT`/`PATCH` response from then on — this is a single-user
+control plane behind `ARGUS_TOKEN`, so the token is returned in the clear the
+same way `ARGUS_TOKEN` itself is a plaintext shared secret. The token is
+**stable across edits**; it changes only via:
+
+| Method + path                               | Effect                                                           |
+| ------------------------------------------- | ---------------------------------------------------------------- |
+| `POST /api/pipelines/:id/hook-token/rotate` | mint a fresh `hookToken` → `200`, `400` if not a webhook trigger |
+| `POST /api/schedules/:id/hook-token/rotate` | same, for a schedule                                             |
+
+Fire the hook itself with:
+
+| Method + path                   | Effect                                   |
+| ------------------------------- | ---------------------------------------- |
+| `POST /api/hooks/pipelines/:id` | start an instance → `202 { instanceId }` |
+| `POST /api/hooks/schedules/:id` | fire a scheduled run → `202 { runId }`   |
+
+Both routes authenticate with `Authorization: Bearer <hookToken>` — the
+definition's own token, checked in constant time against exactly the one
+definition named in the path. **`ARGUS_TOKEN` is never accepted here**: a
+caller presenting a correct `ARGUS_TOKEN` but no (or the wrong) `hookToken`
+still gets `401`. A target whose trigger isn't `kind: "webhook"`, or whose id
+doesn't exist, is `404` either way — the route never reveals which pipelines
+or schedules exist to an unauthenticated prober. A disabled definition is
+`409`. `overlapPolicy: "skip"` is honoured exactly like the scheduler's own
+overlap check: a pipeline hook returns `409 { instanceId }` naming the
+instance already in flight; a schedule hook returns `409 { runId }`.
+
+The request body, if any, must be JSON and no larger than 64 KiB (`413`
+otherwise, before it is parsed). For a pipeline, it becomes the new instance's
+`triggerPayload` and the instance's `trigger` reads `"webhook"`. A schedule has
+nowhere to carry a payload — its hook just fires the schedule's own prompt,
+exactly like `POST /api/schedules/:id/run`, with `trigger: "webhook"` on the
+resulting run.
+
+Unlike every other mutating route, the two hook routes are **exempt from the
+Origin/CSRF check** (a webhook sender is a server, not a browser a CSRF page
+could drive) — but **not** from the Host allowlist, which still applies. Argus
+binds loopback by default, so reaching a hook from another machine needs the
+same non-default setup any remote access does: bind a routable `ARGUS_HOST`,
+set `ARGUS_TOKEN` (mandatory once the bind is non-loopback — see
+[Security](#security)), and add the sender's host to `ARGUS_ALLOWED_HOSTS` if
+it addresses Argus by a name other than the bind address. `ARGUS_TOKEN` still
+gates every _other_ route in that setup; it simply isn't the hook's own
+credential.
+
+**`after`.** Chains a pipeline or schedule to fire once a **pipeline**
+instance ends (only pipelines may be a chain's source; both pipelines and
+schedules may be a chain's target). `on: "succeeded"` fires only on a
+succeeded source instance, `"failed"` fires on a failed or aborted one, `"any"`
+fires on either. `pipelineId` must name an existing pipeline; a pipeline
+cannot name itself, and a direct two-pipeline cycle (A after B, B after A) is
+refused at save time with `400` — a longer cycle through several pipelines is
+not detected, but the scheduler fires at most once per source instance, so it
+runs down rather than spinning.
+
+Chaining is evaluated on the same scheduler tick as everything else, right
+after ordinary cadence firing, and is idempotent across restarts: a small
+ledger (`~/.claude/argus/chains.json`, capped to the most recent 500 source
+instances) records which targets have already fired for which source
+instance, so a tick that runs twice — or a restart mid-tick — cannot double-fire
+a chain. Only instances that ended **after** the target's own `updatedAt` are
+considered, so saving a new `after` trigger never reaches into history and
+fires off something that finished before the trigger existed.
+
+A chained pipeline instance carries `trigger: "chained"`, `chainedFrom:
+"<source instance id>"`, and `triggerPayload: { sourceInstanceId,
+sourcePipelineId, status }`. A chained schedule run carries `trigger:
+"chained"` and fires its ordinary prompt, exactly like a normal scheduled run.
 
 ### `POST /api/launch`
 
@@ -414,6 +510,27 @@ schedule gets), read/cancel them through the standard run endpoints, and they
 appear as a single "One-off runs" lane in `GET /api/chronicle`. A failed
 launch fingerprints into Issues and posts the `run.failed` webhook like any
 other run; reported cost feeds the totals and the budget ledger.
+
+### `GET /api/runs/:id/activity`
+
+The activity the run tailer has retained for one **running pipeline step** —
+the same `ActivityEvent`s the `run:activity` WebSocket frame streams, oldest
+first, capped at the tailer's ring (200). This is what a client arriving
+mid-run reads to say what the step _has been_ doing before the next frame
+lands; the `argus tail` terminal frontend uses it for its opening snapshot.
+
+```jsonc
+{
+  "events": [
+    { "at": "2026-07-01T10:00:00.000Z", "kind": "init", "label": "session started" },
+    { "at": "2026-07-01T10:00:04.000Z", "kind": "tool", "label": "Bash: npm test" },
+  ],
+}
+```
+
+Always `200`. `events` is empty — not `404` — for a run the tailer is not
+following: a finished step, or a schedule / one-off run (those run in batch
+mode and have no live tail; read their log through `GET /api/runs/:id`).
 
 ### `GET /api/runs/:id/recording`
 
@@ -1274,8 +1391,9 @@ pipeline that behaves exactly as it did before Weave.
   "retry": {
     "attempts": 3, // 1-10, including the first
     "backoffSeconds": 30, // 0-3600, doubles each retry, capped at 1h
-    "retryOn": ["spawn", "exit-code"], // default; "signal" is opt-in
+    "retryOn": ["spawn", "exit-code", "unverified"], // default; "signal" is opt-in
   },
+  "completion": { "marker": "lenient" }, // overrides the pipeline's; default is "required"
   "produces": "release", // publish the payload as an artifact
 }
 ```
@@ -1320,8 +1438,39 @@ can start. `produces` must match `[A-Za-z0-9_-]{1,40}`.
   is still executing; the instance settles to `failed` when nothing is left that
   could progress. `succeeded` requires every phase to be terminal and each one
   to have either succeeded or been intentionally `skipped` by routing.
-- `POST /api/instances/:id/revise` re-runs only the revised phase and kills only
-  that phase's stragglers. `POST /api/instances/:id/abort` stops everything.
+- `POST /api/instances/:id/revise` re-runs only the revised phase and stops
+  exactly the revised attempt's still-running runs — captured when the decision
+  is linked to the instance; sibling branches are never stopped.
+  `POST /api/instances/:id/abort` stops everything.
+- Both `approve` and `revise` accept an optional `phaseId` naming which paused
+  phase is meant. Absent, the single paused phase is meant — a bare `POST` is
+  still a valid approval. Naming a phase that is not paused is a `409`.
+- Both also accept an optional integer `attempt` (0-based; the first attempt is
+  `0`). If the phase is now on a different attempt the request is a `409`
+  `phase <id> is on attempt N, not attempt M`, so a decision made against one
+  attempt's output cannot land on the next.
+- Who asked is taken from the authenticated session (username and role). Body
+  fields such as `actor`, `principal`, `mechanism` and `source` are ignored, and
+  `abort` records the session principal the same way. Every decision is
+  recorded — see [Gate decisions](#gate-decisions). One that cannot be durably
+  recorded is a `500` — "the gate decision could not be recorded, so it was not
+  applied; nothing changed".
+- Every approve, revise and abort runs in the same order: (1) validate — a
+  refused request (`409`) writes nothing; (2) the decision record is appended
+  and fsynced; (3) one instance save links the decision (`gateDecisionIds`) and
+  carries `pendingGateOperation`, before any effect; (4) the effects — supersede
+  staged records, stop runs, commit knowledge, settle realizations, transition
+  the phase — each idempotent; (5) the instance save that clears
+  `pendingGateOperation`.
+- If the link save (3) fails the request is a `500`, with one of two messages. If
+  the link did not land: "the gate decision was recorded but could not be linked
+  to the instance, so none of its effects started; nothing changed". If it did:
+  "the gate decision was linked but not completed; Argus completes it before
+  anything else happens to this instance".
+- If an earlier interrupted operation on the instance cannot be completed,
+  approve, revise and abort on it return `409` "an earlier gate decision on this
+  instance is incomplete and could not be completed; nothing else can happen to
+  it until it is".
 
 ### Instance fields
 
@@ -1333,6 +1482,195 @@ the definition — which may since have been edited), `retries`, `retryAt`, and
 held per step because a phase's result lands with one step's signal while its
 siblings may still be running. `PipelineInstance` gains
 `artifacts: Record<string, unknown>` and `routeDecisions: RouteDecision[]`.
+
+`PipelineInstance.transitionLog?: { seq, degradedFrom?, capped? }` says where
+the saved state stands in the instance's transition log: `seq` is the last
+transition the saved state embodies, `degradedFrom` the first sequence number
+whose record could not be written (the log is incomplete from there on and the
+instance went on regardless), and `capped` is set once the log reached its 4 MiB
+limit — it is never pruned to make room. Absent on an instance not saved since
+the log existed. It is bookkeeping about the log, not state the engine decides
+on. See [docs/HARNESS.md § 18](HARNESS.md#18-transitions-and-recovery).
+
+`StepProgress.signalAuth?: SignalAuthRecord` and `Run.signalAuth?:
+SignalAuthRecord` say how that run's signals are authenticated:
+`{ scheme: "run-token-v1", sha256, phaseId, attempt }` — a SHA-256 over the
+run's own token and its instance id, phase id, attempt and run id — or
+`{ scheme: "none" }` for a runtime with no signal hook. The token itself is
+never stored. The run keeps its own copy so a signal from a run whose step a
+later attempt replaced can still be told apart from a forgery. Both are absent
+on runs recorded before per-run tokens (and on schedule runs).
+`PipelineInstance.signalScheme?: "run-token-v1"` is set on every instance
+created since: on it the instance-wide `signalToken` is never accepted for any
+signal. It is absent on older instances, whose steps launched before the
+upgrade keep accepting the legacy token. See
+[docs/HARNESS.md § 2](HARNESS.md#per-run-signal-tokens).
+
+`StepProgress.completion?: StepCompletion` records how that run's completion
+(or reported failure) reached Argus and what Argus decided:
+`{ signal: "completed" | "failed", source: "signal" | "run-record", policy:
+"required" | "lenient", marker: "succeeded" | "failed" | "blocked" | "missing" |
+"conflicting", hook?: { version, marker, agrees }, verdict: "accepted" |
+"refused" | "reported-failure", reason?, at }`. `marker` is Argus's own reading
+of the final message it received; `hook` is the stop hook's reading, when it
+sent one (`{ version: null, marker: null, agrees: false }` for malformed
+metadata), and is absent for a hook older than version 2 and for the
+run-record path. A multi-step or candidates phase keeps one per run; nothing is
+stamped at phase level. The field is the agent's report and how Argus handled
+it — it is not evidence the work was verified. Absent on a step that never
+reported and on steps recorded before the field existed. See
+[docs/HARNESS.md § 2](HARNESS.md#completion-policy-the-agents-report-not-verification).
+
+`PhaseDef.completion?` and `PipelineDefinition.completion?` take
+`{ marker: "required" | "lenient" }`; the phase's value overrides the
+pipeline's, and absent means `required`. Unknown keys are a `400`.
+
+Three optional fields record how a gate was passed.
+`PipelineInstance.gateDecisionIds?: string[]` lists the gate decisions the
+instance links, in order — a decision is linked before any of its effects start.
+`PhaseProgress.pause?: "gate" | "needs-input"` says why a phase is waiting; a
+pause recorded before pause causes existed has none.
+
+`PipelineInstance.pendingGateOperation?: { decisionId, decision, phaseId | null,
+attempt | null, stopRunIds, answers?, note?, startedAt }` is present from the
+moment a gate decision is linked until its effects are complete. While it is
+present no other transition of the instance happens: every engine path that
+mutates the instance first completes the operation, and reconcile completes
+leftover ones first on every tick, including after a restart. The journal
+records `gate.operation-completed` when it does.
+
+`PipelineInstance.definition` is the whole definition as it was when the
+instance started. Every launch after the first — the phase after a gate, a
+retry, a revise, a verification, a run healed after a restart, the rubric a
+verdict scores against — reads this copy, never the live definition, so
+editing or deleting the pipeline cannot change what a running instance does;
+the live definition is read only to _start_ one. An instance written before the
+field existed has none and runs against the live definition, as it always did.
+
+### Gate decisions
+
+`GET /api/instances/:id/gate-decisions` returns the durable record of who, or
+what, approved, revised or aborted this instance's gates. Like the other
+instance reads it is **not** admin-gated.
+
+```jsonc
+{
+  "instanceId": "…",
+  "decisions": [
+    {
+      "id": "GD-…",
+      "instanceId": "…",
+      "pipelineId": "…",
+      "decision": "approve", // approve | revise | abort
+      "mechanism": "operator", // operator | verdict-auto-approve | unspecified
+      "channel": "http", // http | omnibar | verdict-watcher | in-process
+      "principal": { "kind": "session", "username": "ana", "role": "admin" },
+      "phases": [
+        { "phaseId": "plan", "attempt": 0, "status": "awaiting-approval", "runIds": ["…"] },
+      ],
+      "answersProvided": true, // optional
+      "note": "…", // optional: a revise note, clipped to 2000 chars
+      "recordedAt": "2026-09-29T09:00:00.000Z",
+      "effect": "applied", // applied | incomplete | not-applied | unknown
+    },
+  ],
+  "undocumented": [{ "phaseId": "build", "attempt": 0, "status": "succeeded" }],
+}
+```
+
+`principal` is `{ kind: "session", username, role }`,
+`{ kind: "system", component: "verdict-watcher" }` or `{ kind: "unknown" }`. An
+automated approval additionally carries `verdicts`: the exact basis it rested
+on, one entry per verdict — `runId`, `stepName`, `verdictId`, `at`, `score`,
+`bar`, `runtime`, `requestedModel`, `reportedModel`, `promptVersion` and
+`rubricDigest`.
+
+When the phase's rubric declares a trajectory, the automated approval also
+carries `trajectoryVerdicts`: the trajectory judgment each relevant run was
+approved on, one entry per run, apart from `verdicts` — `runId`, `stepName`,
+`verdictId`, `at`, `score`, `bar` (both `null` when the rubric declares only a
+check), `held` (always empty: an approval is never recorded over a held signal),
+`signalsVersion`, `runtime`, `requestedModel`, `reportedModel`, `promptVersion`
+and `rubricDigest` (the trajectory digest). The field is absent when the rubric
+declares no trajectory. See [Auto-approving gates](#auto-approving-gates).
+
+`effect` has four values:
+
+- `applied` — the instance links the decision and its operation completed.
+- `incomplete` — the instance links the decision but its operation has not
+  completed: some, all or none of its effects may have happened. Argus completes
+  it before any other transition of that instance, on the next reconcile tick or
+  the next action on it; until then it is reported as exactly `incomplete`.
+- `not-applied` — the instance exists and does not link the decision. The link
+  is saved before any effect starts, so none started.
+- `unknown` — the instance has since been pruned.
+
+`undocumented` lists gated phases that succeeded with no applied approval on
+record — they were decided before recording existed, and are never attributed to
+anyone. The route is a `404` when neither the instance nor any record exists.
+
+Records live in `~/.claude/argus/gate-decisions.jsonl`. It is append-only; each
+record is written and fsynced **before** the transition it describes, and it is
+never pruned. The order every decision follows is under
+[Execution semantics](#execution-semantics).
+
+### Decision experiments (H2)
+
+`GET /api/decisions/h2` returns `{ collection, report }` (`H2ReportResponse`
+in `contracts/src/decision.ts`). It is authenticated like every other `/api`
+read.
+
+- **`collection`** is the live, in-memory state:
+  - whether collection is enabled, and if not, why (each unset switch or
+    invalid setting);
+  - the effective settings;
+  - the watcher's state (`inactive`, `waiting`, `paused` or `halted`), with a
+    detail and a pause end.
+- **`report`** is `decision-h2-report` v1. It is a deterministic replay of
+  the H2 collection ledger joined to the Decision Journal (RFC 2026-09-29
+  §P.7), and it carries:
+  - the definitions and collection configs;
+  - a census per question version;
+  - separate `probe` and `residual` population lists (never pooled);
+  - baselines, methods, and integrity findings.
+
+The route is read-only by construction. It never enables collection, calls a
+provider or runner, re-evaluates, or writes. That includes directories: a
+fresh home stays empty. It returns counts, identities and metrics only. No
+snapshot body, transcript text or model rationale is included. The Phase 1
+`decision-journal-report` v1 is unchanged.
+
+### Decision experiments (H1)
+
+`GET /api/decisions/h1` returns `{ collection, report }` (`H1ReportResponse`
+in `contracts/src/decision.ts`). It is authenticated like every other `/api`
+read.
+
+- **`collection`** is the live state: enabled or why not, the settings (rate,
+  seed, model arms, combined and own call limits, interval, dollars) and the
+  watcher's state. The state never names an attempt's result.
+- **`report`** is `decision-h1-report` v1 (RFC 2026-09-29 §Q.11). It is a
+  deterministic replay of the H1 ledger, the H1 snapshot store and the
+  Decision Journal, and it carries:
+  - the statement that agreement with operator behaviour is not correctness;
+  - the definitions and configs;
+  - gate exclusions;
+  - a census and pending counts per population (`manual`,
+    `auto-approve-declared`);
+  - deterministic and Verdict baseline rows — the Verdict baseline is
+    `auto-approval-qualification`, with one row set per version recorded
+    (v1, or v2 which adds the trajectory requirement, with signals from a complete
+    recording; v2 was amended in place before release, so a capture under its
+    earlier digest is never re-read; HARNESS §19);
+  - model populations with agreement, false close and escalation, κ, and,
+    for probabilities only, Brier, reliability and ECE;
+  - spend totals, methods and integrity.
+
+The route is read-only and **blinded**. Only gates whose attempt has settled
+contribute to any figure. A gate still waiting on its operator appears only
+in `pending` counts, so nothing here shows a prediction, rule result or
+Verdict classification for it. It never calls a provider or writes, not even
+a directory. The gate review route is unchanged by H1.
 
 ### Artifacts
 
@@ -1391,7 +1729,9 @@ that names no step, and a multi-step result phase with no `resultStep`. A
 definition with no `when` edges validates exactly as it did before.
 
 **Delivering the result.** A result-producing step is spawned with
-`ARGUS_RESULT_FILE` — a per-run path — and its prompt carries the schema. The
+`ARGUS_RESULT_FILE` — a per-run path, `~/.claude-argus/results/<runId>/result.json`,
+in a directory of its own so a sandbox can be granted this run's result without
+every other run's (HARNESS.md §3a) — and its prompt carries the schema. The
 stop hook parses that file and sends the value as `result` on the completion
 signal; a file that exists but does not parse arrives as `resultError` instead.
 Runtimes with no command hook have the same file read on the reconcile tick.
@@ -1431,6 +1771,275 @@ statuses it implies:
   the same branch, an edited definition cannot reroute a running instance, and a
   downstream revise cannot re-decide what already happened.
 
+## Harness — capabilities, verification, timeouts
+
+A phase (or one of its steps) may additionally declare `capabilities`, `checks`
+and `timeoutSeconds`. All three are optional at every level (pipeline, phase,
+step); a definition using none of them runs exactly as it did before this
+existed. Full field-by-field reference, mapping onto each runtime's actual
+flags, and a complete worked pipeline: [docs/HARNESS.md](HARNESS.md).
+
+### `PipelineDefinition` / `PhaseDef` / `PhaseStep` fields
+
+| Field              | On                    | Type                                                                                                         | Validation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------------------ | --------------------- | ------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`               | phase                 | string                                                                                                       | `^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$` — one path segment, 1-80 chars, never `.`/`..`. It names the phase's artifact and changed-files-baseline directories on disk, not just a graph label.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `capabilities`     | pipeline, phase, step | `CapabilityProfile`                                                                                          | See below. Merges by key, narrowest wins (step ▸ phase ▸ pipeline).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `timeoutSeconds`   | phase, step           | integer                                                                                                      | 1–86400. A step's own value overrides its phase's; absent on both = no limit.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `checks`           | phase                 | `PhaseCheck[]`                                                                                               | Up to 50 entries. Run once every step of the phase has reported success; a failing check fails the phase under the `verification` class.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `ruleVerification` | phase                 | `{ kinds?: ClaimKind[]; holds?: "agent-evidence" \| "deterministic-check"; note?: string }`                  | Turns the phase into a **business-rule verification phase** (KNOWLEDGE-LEDGER.md §15). The rules it answers for are exactly the ones its `knowledgeContext` supplied — there is no second selection mechanism. `kinds` defaults to `["business-rule"]`; `holds` defaults to `"agent-evidence"` and `"deterministic-check"` additionally requires a `holds` outcome to cite a check of this phase that passed. Its steps get the verification instructions and a required `ARGUS_RULE_VERIFICATION_FILE` channel; every supplied rule must receive exactly one outcome or the step fails under `rule-verification`.                                                                                                                                                                                                |
+| `knowledgeDelta`   | phase                 | `"optional" \| "required"`                                                                                   | Default `"optional"`. `"required"` makes the KnowledgeDelta channel (`ARGUS_KNOWLEDGE_DELTA_FILE`) a launch precondition: a runtime that cannot make it writable is refused under strict enforcement. Emitting a delta stays optional either way. See HARNESS.md §3a.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `knowledgeContext` | phase, step           | `{ claims?: Selector[]; fromPhases?: PhaseProducedSelector[] }`                                              | At least one of the two. `claims`: 1–64 selectors, each `"ID"` (active revision), `"ID:vN"` (exact) or `{ id, revision: N \| "active" }`; normalized to the object form, each claim id at most once. `fromPhases`: 1–8 entries, each `"phaseId"` or `{ phaseId, kinds?: ClaimKind[] }`, resolving to the claims that phase of _this instance_ committed through its accepted KnowledgeDelta; the phase must exist and be a transitive `needs` dependency (checked at save). `claims` is resolved first and wins on a claim-id collision; the total is capped at 64. A step's spec replaces its phase's. Resolution happens at launch, and an unknown claim, an unresolvable revision or a `fromPhases` phase that is not `succeeded`/`skipped` is a `configuration` failure. See KNOWLEDGE-LEDGER.md §13, §14.10. |
+| `changeIntent`     | phase                 | `{ request?: ChangeRequest; kinds?: ClaimKind[]; acceptanceCriteria?: "required" \| "warn"; note?: string }` | Turns the phase into a **change-intent phase** (KNOWLEDGE-LEDGER.md §16). **Must be `gated`** — an ungated one is a 400. `request` is the default requested change; an instance whose `triggerPayload` carries `changeRequest` overrides it, and neither resolving fails the step under `configuration`. The rules it must classify are the ones its `knowledgeContext` supplied, narrowed by `kinds` (default `["business-rule"]`). `acceptanceCriteria` defaults to `"required"`: a proposed business-rule change with no criterion referencing it fails the step under `change-proposal`. Its steps get the change-intent instructions, a required read-only `ARGUS_CHANGE_REQUEST_FILE` and a required `ARGUS_CHANGE_PROPOSAL_FILE`.                                                                          |
+| `changeContext`    | phase                 | `{ fromPhase: string; requireReady?: boolean }`                                                              | Gives every step of this phase the **accepted** `ChangeProposal` of an earlier `changeIntent` phase of the same instance, as a read-only `ARGUS_CHANGE_CONTEXT_FILE` (KNOWLEDGE-LEDGER.md §16.11). `fromPhase` must name a `changeIntent` phase that is a transitive `needs` dependency — both checked when the pipeline is saved. Resolves only from the ledger's accepted proposals, so a proposal still staged at its gate refuses the launch. `requireReady` defaults to `true`: a `needs-input` proposal may not drive an implementation.                                                                                                                                                                                                                                                                    |
+| `discovery`        | phase                 | `{ scope: { paths, label?, note? }; evidence?: "required" \| "warn" }`                                       | Turns the phase into a business-rule discovery phase: its steps get the discovery instructions, and the KnowledgeDelta they write is held to the discovery invariants. `scope.paths`: 1–32 repository-relative POSIX paths (no `..`, no leading `/`), or `"."` for the whole tree; deduplicated and normalized. `label` ≤120 chars, `note` ≤1000. `evidence` defaults to `"required"`. See KNOWLEDGE-LEDGER.md §14, HARNESS.md §14.                                                                                                                                                                                                                                                                                                                                                                               |
+
+`CapabilityProfile`:
+
+| Key                     | Type                                                               | Validation                                                                                                                                                                         |
+| ----------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `filesystem`            | `"read-only" \| "workspace-write" \| "unrestricted"`               | one of the three                                                                                                                                                                   |
+| `tools`                 | `{ allow?, deny? }`                                                | each a list of ≤200 non-empty strings, none containing a comma or newline                                                                                                          |
+| `mcpServers`            | `Record<name, McpServerSpec>`                                      | name matches `[A-Za-z0-9_-]{1,64}`; each spec needs `command` (stdio) or `url` (http/sse); `type` ∈ `stdio\|http\|sse`; each `env`/`headers` key matches `[A-Za-z_][A-Za-z0-9_-]*` |
+| `additionalDirectories` | `string[]`                                                         | each an absolute path that already exists on disk                                                                                                                                  |
+| `settingSources`        | `("user"\|"project"\|"local")[]`                                   | Claude Code only                                                                                                                                                                   |
+| `permissionMode`        | `"default"\|"acceptEdits"\|"plan"\|"bypassPermissions"\|"dontAsk"` | Claude Code only                                                                                                                                                                   |
+| `maxTurns`              | integer                                                            | 1–1000                                                                                                                                                                             |
+| `env`                   | `EnvPolicy`                                                        | see below                                                                                                                                                                          |
+| `enforcement`           | `"strict"\|"best-effort"`                                          | default `"strict"`: a limitation the runtime reports blocks the launch (`configuration` failure class, never retried)                                                              |
+
+`EnvPolicy`:
+
+| Key              | Type                     | Validation                                                                                                                                                                                                                                                                                                     |
+| ---------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inherit`        | `"all"\|"minimal"`       | default `"all"`                                                                                                                                                                                                                                                                                                |
+| `allow` / `deny` | `string[]`               | each an env-var name, optionally with one trailing `*`                                                                                                                                                                                                                                                         |
+| `set`            | `Record<string, string>` | keys must be valid env-var names and may not name a reserved Argus control variable (`ARGUS_TOKEN`, `ARGUS_WEBHOOK_URL`, `ARGUS_SIGNAL_*`, `ARGUS_RUN_ID`, `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`, `ARGUS_RESULT_FILE`, `ARGUS_KNOWLEDGE_DELTA_FILE`, `ARGUS_ARTIFACT_DIR`, `ARGUS_STEP_NAME`, `ARGUS_RUNTIME`) |
+
+`PhaseCheck` (discriminated on `kind`; each kind accepts only its own fields
+plus the common `label`, ≤120 chars):
+
+| Kind            | Fields                               | Validation                                                                               |
+| --------------- | ------------------------------------ | ---------------------------------------------------------------------------------------- |
+| `command`       | `run`, `cwd?`, `timeoutSeconds?`     | `run` ≤4000 chars; `timeoutSeconds` 1–86400                                              |
+| `artifact`      | `path`, `minBytes?`                  | `path` relative, no `..` segment, no absolute path; `minBytes` a non-negative integer    |
+| `file`          | `path`, `minBytes?`                  | same as `artifact`, resolved against the phase's `cwd` instead of its artifact directory |
+| `changed-files` | `allow?`, `deny?`, `requireChanges?` | `allow`/`deny` lists of non-empty globs; `requireChanges` a boolean                      |
+| `trajectory`    | `thresholds`, `requireTranscript?`   | see below                                                                                |
+
+A `trajectory` check is deterministic (no model) and compares the signal counts
+of the attempt's relevant runs (HARNESS §19) to `thresholds`:
+
+```jsonc
+{
+  "kind": "trajectory",
+  "thresholds": { "destructive-command": 0, "errors": 5 },
+  "requireTranscript": true,
+}
+```
+
+`thresholds` is required: an object naming at least one of `repetition`,
+`errors`, `edit-revert`, `path` and `destructive-command`, each with a whole
+number maximum count from 0 to 10,000. `requireTranscript`, when present, is a
+boolean. Anything else is a `400` (`checks[i]` is the index in the phase's
+list):
+
+- `checks[i].thresholds must map signal names to a maximum count` (missing, not an
+  object, or an array);
+- `checks[i].thresholds: unknown signal "<name>" (one of …)`;
+- `checks[i].thresholds.<signal> must be a whole number from 0 to 10000`;
+- `checks[i].thresholds must name at least one signal`;
+- `checks[i].requireTranscript must be a boolean`;
+- `checks[i] has unknown key "<key>"`, like every kind.
+
+The check fails when a relevant run's count for a named signal is above its
+threshold, including on a truncated recording. When a run's input is incomplete
+(no run record, no session, no readable transcript, a truncated recording with no
+violation in what was kept, or no runs at all) it cannot show the thresholds held:
+with `requireTranscript` the check is `failed` as insufficient input, and without
+it the result is `not-evaluated`, never `passed`.
+
+`CheckResult.status` is `"passed"`, `"failed"` or `"not-evaluated"`; only a
+`trajectory` check produces the last. A `not-evaluated` check does not fail the
+report, is not counted as passed, and cannot be bound as knowledge evidence
+(citing it refuses the knowledge commit as an unsubstantiated citation).
+
+```jsonc
+{
+  "id": "implement",
+  "cwd": "/path/to/repo",
+  "timeoutSeconds": 3600,
+  "capabilities": { "filesystem": "workspace-write", "env": { "inherit": "minimal" } },
+  "checks": [
+    { "kind": "command", "run": "npm test", "timeoutSeconds": 300 },
+    { "kind": "changed-files", "allow": ["src/**"], "requireChanges": true },
+  ],
+}
+```
+
+### `PhaseProgress` fields
+
+- `verification?: VerificationReport` — `{ status: "running"|"passed"|"failed", startedAt, endedAt?, checks: CheckResult[] }`, where each `CheckResult` is `{ kind, label, status: "passed"|"failed"|"not-evaluated", detail, exitCode?, durationMs, output? }` and the report is `failed` if and only if some check `failed`. Present only once the phase's steps have all reported and it declares `checks`; absent for a check-less phase, same as before.
+- `artifactDir?: string | null` — where this attempt's steps were told to write file artifacts (`~/.claude-argus/artifacts/<instanceId>/<phaseId>/`), interpolated into prompts as `{{artifactDir}}` / `{{artifactDir.<phaseId>}}`.
+
+### `PhaseFailurePayload.failureClass`
+
+A failed phase's `payload` (free-form otherwise) carries a `failureClass` —
+how the failure was classed for the retry policy. It is one of `"spawn"`,
+`"exit-code"`, `"signal"`, `"timeout"`, `"verification"`, `"knowledge-delta"`,
+`"knowledge-context-integrity"`, `"rule-verification"`, `"change-proposal"`,
+`"change-context-integrity"`, `"acceptance-verification"`, `"unverified"` or
+`"configuration"`. `"configuration"` is never retried; every other class is
+retried only when named in the phase's `retry.retryOn`, whose default is
+`["spawn", "exit-code", "unverified"]`. `"unverified"` is a completion Argus
+could not accept on the agent's own word (no `ARGUS_OUTCOME` marker under a
+`required` completion policy, conflicting markers, or a stop-hook reading that
+disagrees with the delivered message); a policy that lists `retryOn`
+explicitly must name it to retry it. See
+[docs/HARNESS.md § 2](HARNESS.md#2-agent-completion--phase-success) for what
+each class means and exactly which rung of the completion ladder it comes
+from.
+
+### `Run.deadlineAt` / `Run.termination`
+
+`deadlineAt` (nullable) is set at launch from the resolved `timeoutSeconds`
+and is what a step's process is killed against — persisted, so the deadline
+is enforced even across an Argus restart (via `reconcile()`), not only by the
+in-process timer that first set it. `termination` records how a run ended
+when Argus knows more than the exit code: `"exited"` | `"timed-out"` |
+`"killed"` | `"spawn-failed"` — absent means the process simply exited on its
+own.
+
+### `GET /api/runs/:id/invocation`
+
+What Argus actually launched for a run: the exact executable and argv, the
+environment **by name** (never by value), the resolved capability profile —
+with `env.set` and every MCP server's `env`/`headers` values replaced by
+`"<redacted>"` (keys kept; the materialized `mcp.json` still carries the real
+values) — and what the runtime couldn't enforce of it, the config files
+materialized for the invocation, the artifact directory, every Argus-owned
+invocation channel it was offered (`channels[]`: env var, path, access,
+whether the launch depended on it, and `granted` / `unavailable` /
+`unmanaged` — HARNESS.md §3a), the deadline, and
+the repository state (`git rev-parse HEAD`) it started against. Returns the
+`AgentInvocationRecord`, or `404` when the run predates invocation records or
+is unknown. See [docs/HARNESS.md § 8](HARNESS.md#8-observability--reproducibility)
+for the full shape and an example.
+
+### `GET /api/instances/:id/phases/:phaseId/review`
+
+Everything a human needs to decide on one paused phase, derived per read from
+the instance record and the phase's artifact directory — nothing is stored for
+it. This is what the Command Center's review drawer renders.
+
+```json
+{
+  "instanceId": "…", "phaseId": "draft", "phaseName": "Draft", "pipelineName": "Reports",
+  "status": "awaiting-approval",
+  "attempt": 0,
+  "canApprove": true,
+  "payload": { "summary": "…" },
+  "result": { "…": "…" },
+  "verification": { "status": "passed", "checks": [ … ] },
+  "artifactDir": "/home/me/.claude-argus/artifacts/<instanceId>/draft",
+  "artifacts": [
+    { "path": "report.md", "bytes": 1832, "modifiedAt": "…", "required": true, "text": true }
+  ],
+  "truncated": false,
+  "knowledge": [ KnowledgeDeltaPreview ],
+  "ruleVerifications": [ RuleVerificationPreview ],
+  "ruleVerification": { "selected": 3, "holds": 1, "violated": 1, "unverifiable": 1, "requiresReview": true },
+  "discovery": { "candidates": 2, "newRules": 1, "revisions": 0, "assumptions": 1,
+                 "facts": 0, "constraints": 0, "conclusions": 0,
+                 "evidence": 3, "warnings": 0, "requiresReview": true }
+}
+```
+
+`status` is `awaiting-approval` (Approve and Revise both apply) or `failed`
+(Revise only; `canApprove` is `false`). `artifacts` lists every regular file
+under the attempt's artifact directory, sorted, to a cap of 200 entries and 5
+levels deep (`truncated: true` when more exist); symlinks are skipped.
+`required` marks a path named by one of the phase's `kind: "artifact"` checks,
+read from the instance's snapshotted definition. `text` is UTF-8 with no NUL
+byte, judged from the first 8 KiB. `result` and `verification` appear only when
+the phase declared them. `404` for an unknown instance or phase; `409` when the
+phase is neither waiting nor failed. Open like every other read.
+
+`ruleVerifications` is the **conformance results** this attempt staged
+(Phase 6): one `RuleVerificationPreview` per step that wrote a report, grouped
+into `holds` / `violated` / `unverifiable`, each row carrying the exact
+`ClaimRef`, the rule's statement, the rule's **own support**, the outcome and
+the concise evidence — plus `missing`, any selected rule left without an
+outcome. `ruleVerification` is the counts. Both are absent on a phase without
+`ruleVerification`. Nothing here is durable; approving is what records it.
+
+`changeProposals` is the **change intent** this attempt staged (Phase 7): one
+`ChangeProposalPreview` per step that wrote a proposal, carrying the requested
+change verbatim, `current` (each accountable rule with its own support **and**
+the implementation's conformance at the commit under analysis), `semantic` (the
+proposed transition, as an ordinary `KnowledgeDeltaPreview`), `preserved`, the
+acceptance criteria, the unresolved questions, the classification and the
+deterministic warnings, plus `readiness` — `ready` or `needs-input`.
+`changeIntent` is the counts. Both are absent on a phase without
+`changeIntent`. Nothing here is canonical; approving is what commits the
+semantic change and records the request that caused it.
+
+`knowledge` is the **candidate knowledge** this attempt staged (Phase 5): one
+[`KnowledgeDeltaPreview`](#knowledge-ledger) per step that wrote a
+KnowledgeDelta on _this_ attempt — a superseded attempt's is never shown —
+with the proposed claims, what a revision would replace, the evidence under
+each candidate and the deterministic warnings. Nothing in it is canonical;
+approving is what makes it so. On a `discovery` phase the previews also carry
+the filesystem-dependent warnings (a source path that no longer exists), which
+the standalone `/deltas/:id/preview` route cannot compute. Absent when no step
+of the attempt proposed knowledge. `discovery` is the counts, present only on
+a phase that declared `discovery`.
+
+### `GET /api/instances/:id/phases/:phaseId/artifact?path=<relative>`
+
+One artifact's bytes for the viewer, `path` relative to the artifact directory
+(`sub/report.md`). Returns
+`{ path, bytes, modifiedAt, text, content?, truncated }`: `content` is present
+only for text and is clipped at 512 KiB, in which case `truncated` is `true`.
+`400` when `path` is missing, absolute, or escapes the directory; `404` for an
+unknown instance, phase or file, or a phase with no artifact directory. The
+viewer is read-only — there is no write route; the human's revision travels as
+the `note` on `POST /api/instances/:id/revise`.
+
+### `GET /api/instances/:id/transitions/integrity`
+
+Compares the instance's transition log (`argus/transitions/<id>.jsonl`) with the
+saved instance and reports whether they agree. Diagnostic only: it repairs
+neither, and nothing reads it to decide what the engine does next. The log is
+evidence, never an authority — the saved instance is.
+
+```json
+{
+  "instanceId": "…",
+  "status": "ahead",
+  "coverage": "full",
+  "instanceSeq": 41,
+  "logSeq": 42,
+  "replayedTo": 41,
+  "findings": [
+    "the log holds 1 record past the saved instance (seq 42); it was proposed and never committed"
+  ],
+  "firstDivergence": "/phases/2/status"
+}
+```
+
+`status` is one of `untracked`, `consistent`, `partial`, `missing`, `degraded`,
+`ahead`, `behind`, `gap`, `disagreement` or `corrupt`; HARNESS §18 says what
+each means. `coverage` is `full` (replayed from the instance's first
+transition), `from-baseline` (from a baseline written after the instance
+existed) or `none`. `instanceSeq` / `logSeq` are the last sequence number the
+saved instance and the log hold (null when there is none), and `replayedTo` is
+where the fold got to. `findings` lists every problem in plain words, and more
+than one may apply. `firstDivergence`, when present, is the JSON-pointer path of
+the first place the fold and the instance differ. Readers tolerate malformed
+state — torn tails, bad lines, foreign records — and report it rather than
+fail. `404` when the id is invalid or neither the instance nor a log exists.
+
 ### `GET /api/instances/:id/journal`
 
 ```json
@@ -1439,6 +2048,34 @@ statuses it implies:
     { "at": "…", "kind": "instance.started", "detail": "Release train (manual)" },
     { "at": "…", "kind": "phase.started", "phaseId": "build", "attempt": 0, "detail": "2 steps" },
     { "at": "…", "kind": "step.spawned", "phaseId": "build", "runId": "…", "detail": "pid 4212" },
+    {
+      "at": "…",
+      "kind": "phase.signalled",
+      "phaseId": "build",
+      "runId": "…",
+      "detail": "completed"
+    },
+    {
+      "at": "…",
+      "kind": "phase.signalled",
+      "phaseId": "sync",
+      "runId": "…",
+      "detail": "completed (ignored: no phase \"sync\" on this instance)"
+    },
+    {
+      "at": "…",
+      "kind": "step.timed-out",
+      "phaseId": "build",
+      "runId": "…",
+      "detail": "timed out after 900s"
+    },
+    {
+      "at": "…",
+      "kind": "step.exit-mismatch",
+      "phaseId": "build",
+      "runId": "…",
+      "detail": "signalled completed, then exited 1"
+    },
     { "at": "…", "kind": "phase.failed", "phaseId": "build", "detail": "exit-code: exit code 1" },
     {
       "at": "…",
@@ -1447,6 +2084,20 @@ statuses it implies:
       "detail": "attempt 2 of 3 at …"
     },
     { "at": "…", "kind": "phase.retrying", "phaseId": "build", "attempt": 1 },
+    {
+      "at": "…",
+      "kind": "phase.verifying",
+      "phaseId": "build",
+      "attempt": 1,
+      "detail": "2 checks"
+    },
+    {
+      "at": "…",
+      "kind": "phase.verified",
+      "phaseId": "build",
+      "attempt": 1,
+      "detail": "passed: 2 checks"
+    },
     {
       "at": "…",
       "kind": "route.selection",
@@ -1471,6 +2122,19 @@ again and was revised. **Nothing reads the journal to decide what to do next** �
 it is evidence, and a missing or corrupt one costs the history, never the
 pipeline. A torn final line (the only failure mode of an append) costs exactly
 one record. An unknown or path-escaping id returns an empty list.
+
+`step.timed-out` marks a step killed at its deadline (live, or discovered on
+reconcile after a restart); `step.exit-mismatch` marks a step whose completion
+signal was accepted as `completed` but whose process then exited non-zero —
+the phase is not unwound over it, but the run carries both
+`outcome: "succeeded"` and the non-zero `exitCode`; `phase.launch-recovered` marks a phase attempt that was `running` with no run
+planned (Argus stopped between the transition and the launch) which `reconcile`
+then launched; `step.termination-redelivered` marks a recorded stop request
+whose process was still alive after a restart and was delivered again;
+`step.orphan-stopped` marks a still-alive run whose step was already decided,
+stopped on recovery (HARNESS §18); `phase.verifying` /
+`phase.verified` bracket Argus's own checks running over a phase's work, once
+every step is in.
 
 ## Sentinel
 
@@ -1636,9 +2300,47 @@ Validation is strict and the errors are `400`, not `500`: `goal` required,
 1–10 criteria, ids matching `[a-z0-9][a-z0-9_-]{0,40}` and unique, weights > 0,
 `minScore` in 0–10. On a schedule, `"rubric": null` removes an existing one.
 
+A rubric may also declare an optional `trajectory`, which judges how the agent
+worked rather than what it produced (HARNESS §19). Absent, no trajectory
+analysis of any kind happens:
+
+```jsonc
+"trajectory": {
+  "criteria": [{ "id": "focus", "label": "Stayed on the task" }], // optional, same rules as above
+  "minScore": 6, // optional, 0–10; needs criteria
+  "check": { "holdOn": ["repetition", "errors", "edit-revert", "path", "destructive-command"] }, // optional
+}
+```
+
+It must declare criteria, a check or both, else `400`. `check.holdOn` is a
+non-empty list of distinct signal names from the five above. It is an
+**automation hold** only: an observed named signal withholds an automated
+(Verdict watcher) approval. It does not fail verification, pause a phase or affect
+an operator's approval, and it is not a `PhaseCheck`; for a verification check use
+the `trajectory` kind of a phase's `checks` (see `PhaseCheck`).
+
 A **gated** phase may additionally declare `"autoApprove": { "verdict": 8 }`.
 It requires a rubric on the same phase (there is nothing to clear otherwise) and
 is refused on an ungated phase — both are `400`.
+
+`autoApprove` may also carry `"trajectory": 6` (0–10): the bar for the trajectory
+score. It is accepted only when the phase's rubric declares trajectory
+`criteria` (`400` otherwise), and when absent the `verdict` bar applies to the
+trajectory score too.
+
+`autoApprove` is also refused on a phase that commits knowledge by
+configuration — one that declares `discovery`, `ruleVerification`,
+`changeIntent`, `acceptanceVerification`, `implementation`, or
+`knowledgeDelta: "required"`. Saving such a pipeline (`POST`, `PUT` or `PATCH`)
+is a `400`:
+
+```
+phase <i> ("<id>"): autoApprove cannot open a gate that commits knowledge (<reasons>). A person must approve this gate. Remove autoApprove from this phase; a rubric may stay, and scoring still runs, but approval is manual.
+```
+
+`<reasons>` are drawn from `discovery`, `rule-verification`, `change-intent`,
+`acceptance-verification`, `implementation` and `knowledge-delta-required`.
+There is no opt-in bypass.
 
 ### `GET /api/runs/:id/verdict`
 
@@ -1658,11 +2360,78 @@ is refused on an ungated phase — both are `400`.
     "tokens": 900,
     "durationMs": 3100,
     "error": null,
+    "id": "V-…", // optional: absent on older records
+    "provenance": {
+      "runtime": "claude",
+      "requestedModel": "haiku",
+      "reportedModel": null, // no runtime reports a model
+      "promptVersion": 1,
+    }, // optional
+    "rubricDigest": "…", // optional
   },
+  "trajectory": null, // the run's current trajectory judgment, or null — see below
   "rubric": { "…": "the rubric in force, or null" },
   "unavailable": null,
 }
 ```
+
+`trajectory` is the run's current `kind: "trajectory"` verdict, kept apart from
+`verdict` (the output judgment, which is what this route always returned). It is
+`null` when none was made, when the rubric declares no trajectory, or when it
+has been pruned. Its shape is a verdict plus the assessment:
+
+```jsonc
+{
+  "id": "VT-…",
+  "kind": "trajectory",
+  "runId": "…",
+  "status": "ready", // ready | failed | skipped (skipped: no transcript, or analysis off)
+  "score": 7.5, // null for a check-only rubric
+  "criteria": [{ "id": "focus", "label": "…", "score": 8, "note": "…" }], // empty without trajectory criteria
+  "regression": false, // score below rubric.trajectory.minScore
+  "minScore": 6,
+  "rubricDigest": "…", // the trajectory digest, not the output one
+  "provenance": {
+    "runtime": "claude",
+    "requestedModel": "haiku",
+    "reportedModel": null,
+    "promptVersion": 1,
+  }, // only when a judge was asked
+  "trajectory": {
+    "judged": true, // a judge was asked (the rubric declares trajectory criteria)
+    "held": ["path"], // observed signals the rubric's check holds on; empty = passed
+    "signals": {
+      "version": 1,
+      "transcript": "present", // present | missing (missing: nothing was computed)
+      "events": 212, // Recorder events read
+      "truncated": false, // the recording dropped events; counts may undercount
+      "signals": [
+        {
+          "kind": "path",
+          "count": 1,
+          "observed": true,
+          "examples": ["Write: /etc/hosts (outside the working directory)"],
+        },
+      ],
+    },
+  },
+  // …and the other shared verdict fields (at, summary, costUsd, tokens, durationMs, error, …)
+}
+```
+
+The signals are heuristics, not findings: `observed` says a count reached the
+heuristic's threshold, a count of zero means "not observed in the recorded
+events", and `examples` are clipped timeline labels or commands, never file
+contents (HARNESS §19 lists each rule and its blind spots). There is no route to
+request a trajectory judgment: the Verdict watcher makes them on the scheduler
+tick. `POST /api/runs/:id/verdict` re-scores the output only.
+
+Re-judging appends a new record rather than replacing the old one, and this
+route returns the **current** one — the run's newest. Trends, regressions and
+clustering likewise use the current record per run. `provenance` says which
+runtime, requested model and prompt version produced the judgment;
+`reportedModel` is `null` because no runtime reports a model. `rubricDigest`
+identifies the rubric the score was produced under.
 
 What the server does **not** trust from the judge:
 
@@ -1694,8 +2463,17 @@ What the server does **not** trust from the judge:
     },
   ],
   "summary": { "scored": 12, "regressions": 1, "average": 7.1 },
+  "trajectoryTrends": [], // same shape as trends; absent or empty when no rubric declares trajectory criteria
 }
 ```
+
+`trajectoryTrends` holds the **trajectory** score history, in the same shape and
+key space as `trends` but kept apart from it: trajectory scores are a different
+measurement and are never averaged into `summary`, which covers output scores
+only. Each line's `minScore` is the live `rubric.trajectory.minScore` of the
+schedule or phase (`null` when none). Only trajectory verdicts with a score
+contribute, so a check-only rubric has no line. The field is omitted when there
+are none.
 
 `delta` compares against the prior median rather than the previous run, so one
 noisy judgement is not a collapse and one good run is not a recovery. Thresholds
@@ -1716,11 +2494,168 @@ engine's signal path — a 90-second model call under the instance lock, inside 
 request a child process is blocked on, is how a gate becomes a deadlock. The
 cost is up to one tick of latency. The rules:
 
-- No verdict yet → the gate **waits**. Silence is not approval.
-- Any judged step **below** the bar → the gate waits for a human, indefinitely.
-- Every judged step at or above the bar → approved, logged, and broadcast.
-  The phase's **worst** step decides; averaging would let one excellent step
-  carry a bad one through a gate set to catch exactly that.
+- Every relevant step of the waiting attempt must have succeeded (for a
+  best-of-N phase, the selected candidate's steps) and carry a **current**
+  verdict — the run's newest judgment — that is `ready`, scored, produced under
+  the rubric in the instance's own definition snapshot (compared by
+  `rubricDigest`), and at or above `autoApprove.verdict`. Every waiting phase is
+  considered, not only the current one.
+- No such verdict yet → the gate **waits**. Silence is not approval. A verdict
+  written before `rubricDigest` existed has none and cannot open a gate.
+- Any step **below** the bar → the gate waits for a human, indefinitely.
+- Every step at or above the bar → approved, recorded as a
+  [gate decision](#gate-decisions) and broadcast. The approval names the exact
+  phase, attempt, runs and verdicts, and is re-checked under the instance lock.
+  The phase's **worst** step decides — the lowest verdict must clear the bar;
+  averaging would let one excellent step carry a bad one through a gate set to
+  catch exactly that.
+
+When the phase's rubric declares a `trajectory`, the gate also needs a current,
+usable trajectory judgment for every relevant run: `ready`, under the rubric's
+trajectory digest, with its signals present at the current signals version and
+from a complete (untruncated) recording, a score at or above
+`autoApprove.trajectory` (else `autoApprove.verdict`) when trajectory criteria are
+declared, and nothing held by `check.holdOn`. A missing, pruned, failed, skipped,
+truncated or mismatched trajectory judgment waits for a person, as does an
+observed held signal or a score below the bar (HARNESS §19). The
+insufficient-data reasons are `no-trajectory-verdict`, `trajectory-without-id`,
+`trajectory-not-ready`, `trajectory-rubric-mismatch`,
+`trajectory-signals-unavailable` (no transcript or an older signals version),
+`trajectory-signals-truncated` (the Recorder kept only the last 2,000 events) and
+`trajectory-prompt-mismatch`. Missing or truncated signals are insufficient data,
+not an observed violation, and they hold automation the same way at the watcher
+and at the engine's boundary; an operator's approval is unaffected.
+
+The engine boundary the watcher uses takes only `{ runId, verdictId }` per
+relevant run:
+
+- A basis that names a run twice, or a run that is not one of the attempt's
+  relevant runs, is refused (`409`). Any other field on a basis entry is
+  ignored.
+- Every `verdicts[]` entry persisted in the gate decision — `stepName`,
+  `verdictId`, `at`, `score`, `bar`, `runtime`, `requestedModel`,
+  `reportedModel`, `promptVersion`, `rubricDigest` — is read from the stored
+  verdict and from the instance's own definition snapshot (the bar and the step
+  name). Metadata the stored verdict lacks is recorded as `null`, never filled
+  in.
+- A verdict without an `id` (written before ids existed) cannot be named, so
+  such a gate waits for a person.
+- A phase whose rubric declares a trajectory takes a second basis,
+  `trajectoryVerdicts: [{ runId, verdictId }]`, held to the same rules (one
+  entry per relevant run, no duplicates, no unrelated run, the run's current
+  trajectory judgment). A phase whose rubric declares none refuses a request that
+  carries one. Its recorded `trajectoryVerdicts[]` entries are reconstructed from
+  the stored judgments, with `held` recomputed from the stored signals, and it is
+  validated under the same verdict store lock as the output basis.
+- The decision point: validating the current verdicts, writing the decision
+  record and linking it to the instance all happen while the verdict store's lock
+  is held — the same lock every verdict write takes. A verdict written before
+  that point is what validation sees: a newer current verdict that is not the one
+  named (a failed, unscored or lower-scoring re-judgment, for example) refuses
+  the approval with `409` "the verdict named for run … is not that run's current
+  verdict". A verdict written after that point cannot revoke the approval, which
+  is already durable; the gate decision keeps the basis it was decided on.
+  "Current" means the store's order: the newest `at` (the judgment's start time),
+  ties to the most recent write.
+
+Automated approval is **refused** — the gate waits for a person — when any of
+these holds:
+
+- the phase's definition in the instance snapshot commits knowledge, as listed
+  under [Declaring a rubric](#declaring-a-rubric);
+- the attempt actually staged knowledge: a KnowledgeDelta (including the
+  optional one any step may write), a rule verification, a change proposal, an
+  acceptance verification, a pending commit, or a realization link;
+- the pause is not a `gate` pause — a `needs-input` pause, or a pause recorded
+  before pause causes existed.
+
+A legacy definition keeps the `autoApprove` field on disk, but it is inert. When
+the watcher withholds approval from a gate that commits knowledge, it writes
+`phase.auto-approval-withheld` to the journal, once per phase attempt per server
+process; the engine's own refusals (409) record nothing and are logged.
+
+## Tuning
+
+**Analyze** on a pipeline card asks one bounded pass per phase whether that
+phase's settings fit the work its steps describe. Reading a report is open;
+producing one spawns agents, so the `POST` is **admin-gated** beside the
+pipeline routes. Nothing here writes to the definition: a proposal is applied
+by the client through `PUT /api/pipelines/:id`, with its validators and its
+running-instances refusal.
+
+| Method + path                  | Effect                                                                     |
+| ------------------------------ | -------------------------------------------------------------------------- |
+| `GET /api/pipelines/:id/tune`  | the newest report for the pipeline, or `report: null`                      |
+| `POST /api/pipelines/:id/tune` | start a pass (admin) → `202` with the `running` seed; `409` while one runs |
+
+### `GET /api/pipelines/:id/tune`
+
+```jsonc
+{
+  "report": {
+    "id": "…",
+    "pipelineId": "…",
+    "status": "ready", // running | ready | failed | skipped
+    "startedAt": "2026-09-17T10:00:00.000Z",
+    "endedAt": "2026-09-17T10:02:10.000Z",
+    "phasesDone": 2,
+    "phasesTotal": 2,
+    "phases": [
+      {
+        "phaseId": "plan",
+        "phaseName": "Plan",
+        "status": "ready", // pending | running | ready | failed | skipped
+        "summary": "A short plan does not need the flagship model.",
+        "proposals": [
+          {
+            "scope": "step", // step | phase
+            "stepName": "draft",
+            "stepIndex": 0,
+            "field": "model", // model | reasoningEffort | timeoutSeconds | maxTurns
+            "current": "opus",
+            "proposed": "haiku",
+            "inheritedFrom": "step", // step | phase | pipeline | cli
+            "before": "opus",
+            "after": "haiku",
+            "reason": "'Write a plan' is a short read; the flagship model is overkill.",
+          },
+        ],
+        "unchanged": [], // steps the pass left alone
+        "warnings": [], // proposals dropped in validation, one line each
+        "costUsd": 0.004,
+        "tokens": 1900,
+        "durationMs": 6100,
+        "error": null,
+      },
+    ],
+    "costUsd": 0.008,
+    "tokens": 3800,
+    "error": null,
+  },
+  "unavailable": null, // why a pass cannot start, when it can't
+}
+```
+
+Two things are absent on purpose. There is **no field that can carry prompt
+text**: a step's prompt is input to the pass and never output, the parser drops
+any `field` outside the closed set (a `"field": "prompt"` becomes a warning,
+not a proposal), and the client rebuilds each step by whitelisted assignment.
+And **"no change" is not a proposal**: a phase whose settings already fit
+comes back `ready` with `proposals: []`, and a value equal to the current one
+is dropped — pressing Analyze cannot by itself manufacture a diff.
+
+Every other value is re-derived rather than trusted: step names must match
+exactly, a model must be on the resolved runtime's roster (`GET /api/runtimes`),
+an effort must exist for that runtime (Claude Code lists none), and integers
+must sit inside the same bounds the authoring validator enforces.
+
+Phases are analysed **one at a time** through the shared analysis runner —
+each gets its own dedicated pass and prompt; only the scheduling is serial —
+and the report is persisted after every phase, so the drawer follows progress
+on `tuning:changed`. A `disabled` or `budget-blocked` runner skips every
+remaining phase; any other failure marks that phase `failed` and carries on.
+A `running` report older than 15 minutes is treated as abandoned by a restart
+and a new `POST` replaces it.
 
 ## Autopsy
 
@@ -1752,11 +2687,22 @@ alongside the pipeline routes.
     "tokens": 2200,
     "durationMs": 4200,
     "error": null, // set when status is not "ready"
+    "id": "A-…", // optional: absent on older records
+    "provenance": {
+      "runtime": "claude",
+      "requestedModel": "haiku",
+      "reportedModel": null,
+      "promptVersion": 1,
+    }, // optional
   },
   "eligible": true, // this run failed and could have one
   "unavailable": null, // why it can't, when it can't
 }
 ```
+
+Re-running the pass appends a new record rather than replacing the old one, and
+this route returns the **current** (newest) one. `provenance` has the same shape
+as on a verdict, and `reportedModel` is likewise `null`.
 
 `failureClass` is a **closed taxonomy**: `prompt-ambiguity`, `missing-context`,
 `tool-error`, `permission-denied`, `environment`, `timeout`, `rate-limit`,
@@ -1953,22 +2899,30 @@ session — it cannot execute anything.
 
 ## Pipelines (v0.3)
 
-| Method + path                      | Effect                                                                                                 |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `GET /api/pipelines`               | list pipeline definitions                                                                              |
-| `POST /api/pipelines`              | create a definition (validated) — **admin**                                                            |
-| `PUT /api/pipelines/:id`           | replace a definition — **admin**                                                                       |
-| `DELETE /api/pipelines/:id`        | delete a definition — **admin**                                                                        |
-| `POST /api/pipelines/:id/start`    | start an instance manually → `202`, or `409` on overlap — **admin**                                    |
-| `GET /api/pipelines/:id/instances` | instances for a pipeline (newest first)                                                                |
-| `GET /api/overview`                | command-center rows: `{ definition, latest, cost }` per pipeline, attention-first                      |
-| `GET /api/instances/:id`           | full pipeline instance                                                                                 |
-| `POST /api/instances/:id/signal`   | ingest a signal `{ phaseId, runId, type, token, payload?, result?, resultError? }`; `403` on bad token |
-| `POST /api/instances/:id/approve`  | advance past a gate (optional `{ answers }`) — **admin**                                               |
-| `POST /api/instances/:id/revise`   | re-run the current phase (optional `{ note }`) — **admin**                                             |
-| `POST /api/instances/:id/abort`    | abort the instance — **admin**                                                                         |
-| `GET /api/setup`                   | prerequisite status `{ ok, prereqs[] }`                                                                |
-| `POST /api/setup/apply`            | install fixable prerequisites, then re-check → `{ ok, prereqs[] }`                                     |
+| Method + path                                           | Effect                                                                                                                                                                                                                                                             |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET /api/pipelines`                                    | list pipeline definitions                                                                                                                                                                                                                                          |
+| `POST /api/pipelines`                                   | create a definition (validated) — **admin**                                                                                                                                                                                                                        |
+| `PUT /api/pipelines/:id`                                | replace a definition — **admin**; `409 { code: "instances-running", instances }` when the edit changes what runs (`phases`, `model`, `reasoningEffort`, `runtime`, `capabilities`) while an instance is running or awaiting approval — `?force=1` saves regardless |
+| `PATCH /api/pipelines/:id`                              | update some fields (`enabled`, `trigger`, …) — **admin**; the same `409` rule applies to the execution fields                                                                                                                                                      |
+| `DELETE /api/pipelines/:id`                             | delete a definition — **admin**                                                                                                                                                                                                                                    |
+| `POST /api/pipelines/:id/start`                         | start an instance manually → `202`, or `409` on overlap — **admin**                                                                                                                                                                                                |
+| `GET /api/pipelines/:id/instances`                      | instances for a pipeline (newest first)                                                                                                                                                                                                                            |
+| `GET /api/pipelines/:id/reliability?days=30`            | first-attempt pass rate, lucky passes, stalls and cost/duration per phase over a trailing window (`days` clamped to 1–365); `404` for an unknown pipeline                                                                                                          |
+| `GET /api/pipelines/:id/tune`                           | newest settings-tuning report for a pipeline, or why none can run                                                                                                                                                                                                  |
+| `POST /api/pipelines/:id/tune`                          | start one tuning pass per phase → `202` with a `running` report; `409` while one runs — **admin**                                                                                                                                                                  |
+| `GET /api/overview`                                     | command-center rows: `{ definition, latest, cost }` per pipeline, attention-first                                                                                                                                                                                  |
+| `GET /api/instances/:id`                                | full pipeline instance                                                                                                                                                                                                                                             |
+| `POST /api/instances/:id/signal`                        | ingest a signal `{ phaseId, runId, type, token, payload?, result?, resultError?, completion? }`; `403` when the token is not the named run's own; `202` when the signal is genuine but ignored (see below)                                                         |
+| `GET /api/instances/:id/phases/:phaseId/review`         | what a paused phase left for a human: payload, result, checks, artifact listing, and the attempt's candidate knowledge; `409` unless waiting or failed                                                                                                             |
+| `GET /api/instances/:id/phases/:phaseId/artifact?path=` | one artifact's text (clipped at 512 KiB) or metadata; `400` on a path that escapes the directory                                                                                                                                                                   |
+| `GET /api/instances/:id/transitions/integrity`          | compare the instance's transition log with the saved instance → `TransitionIntegrityReport`; `404` for an unknown or invalid id; diagnostic only                                                                                                                   |
+| `GET /api/instances/:id/gate-decisions`                 | the recorded gate decisions (approve / revise / abort) and how each was made, plus gated phases with no decision on record; `404` when neither the instance nor any record exists                                                                                  |
+| `POST /api/instances/:id/approve`                       | advance past a gate (optional `{ answers, phaseId, attempt }`) — **admin**                                                                                                                                                                                         |
+| `POST /api/instances/:id/revise`                        | re-run the paused phase with the human's note (optional `{ note, phaseId, attempt }`) — **admin**                                                                                                                                                                  |
+| `POST /api/instances/:id/abort`                         | abort the instance — **admin**                                                                                                                                                                                                                                     |
+| `GET /api/setup`                                        | prerequisite status `{ ok, prereqs[] }`                                                                                                                                                                                                                            |
+| `POST /api/setup/apply`                                 | install fixable prerequisites, then re-check → `{ ok, prereqs[] }`                                                                                                                                                                                                 |
 
 WS frame `{ "type": "pipelines:changed" }` is pushed on any pipeline mutation.
 
@@ -1985,12 +2939,30 @@ A definition, a phase (`phases[]`) and a step (`phases[].steps[]`) may each
 carry `runtime`; see [Naming a runtime](#naming-a-runtime) for the resolution
 order. One pipeline can therefore mix runtimes phase by phase.
 
+### Reliability
+
+`GET /api/pipelines/:id/reliability?days=30` answers a question binary
+pass/fail hides: how often a pipeline's phases pass on the first try, and
+where they lose attempts when they don't. It reads only the settled
+(`succeeded`/`failed`/`aborted`) instances that ended within the window and
+returns a `PipelineReliability`: overall `firstAttemptSuccessRate` and
+`luckyPassRate` (a "lucky pass" succeeded only after a retry or a human
+revise — `PhaseProgress.attempt > 1`), a per-day `trend` of
+succeeded-vs-failed, and one `PhaseReliability` per phase with its pass/fail
+split, `failureClasses` tally, `stalls` (timeout failures) and mean
+duration/cost. Every rate is `null` — never `NaN` or `0` — when its
+denominator is empty, so an unproven pipeline reads as "no evidence" rather
+than "perfect" or "broken". See `server/src/sources/reliability.ts` for the
+exact derivation and the "first attempt" rule it applies.
+
 ### Emitting signals from a run
 
 The engine spawns each phase's run with `ARGUS_SIGNAL_URL`,
 `ARGUS_INSTANCE_ID`, `ARGUS_PHASE_ID`, `ARGUS_RUN_ID`, `ARGUS_SIGNAL_TOKEN` and
 `ARGUS_RUNTIME` — plus `ARGUS_RESULT_FILE` on the one step that publishes a
-declared result. `hooks/argus-signal.mjs` reads these and POSTs a signal. One
+declared result, and `ARGUS_KNOWLEDGE_DELTA_FILE` on every step (where the run
+may leave a KnowledgeDelta; Argus reads it itself at completion, the hook does
+not). `hooks/argus-signal.mjs` reads the signal variables and POSTs a signal. One
 hook file serves every runtime that has hooks at all:
 
 - **Claude Code** — a `Stop` hook in `settings.json` (no arg) to report the
@@ -2007,6 +2979,38 @@ hook file serves every runtime that has hooks at all:
   plugins rather than command hooks, so phases on OpenCode complete through the
   run-record fallback described below rather than through a signal.
 
+`ARGUS_SIGNAL_TOKEN` is **per run**: each run that can signal gets its own random
+256-bit token, valid only for that exact instance, phase, attempt and run. The
+variable name is unchanged, so installed hooks keep working. Argus persists
+only a digest of it (`SignalAuthRecord`, below), never the value. A run on a
+runtime with no signal hook (`capabilities.signalHook: false`, i.e. OpenCode)
+is given no `ARGUS_SIGNAL_TOKEN` at all and every HTTP signal for it is `403`;
+it completes through the run-record path, which never goes through HTTP
+authentication. The token limits what a leak can reach; it is not a boundary
+between an agent and its own hook, which share an OS user and an environment
+(see [HARNESS.md § 2](HARNESS.md#per-run-signal-tokens)).
+
+**Which signals are acted on.** A signal is authenticated first, then decided:
+
+- A token that is not the named run's own — a sibling's, another instance's, a
+  different attempt's — is `403`, and nothing is written or journalled. On an
+  instance created before per-run tokens (no `signalScheme`), a step launched
+  before the upgrade still accepts the instance's legacy `signalToken`; any step
+  launched since refuses it.
+- A genuine signal for a run that is no longer a current step (a revised or
+  retried attempt's run, a superseded candidate) is journalled as ignored and
+  answered `202`. It changes nothing — not the instance, and not the run
+  record, so a run whose completion was refused cannot be flipped to
+  `succeeded` by a repeated delivery.
+- A step that is no longer `running` ignores signals the same way
+  (`step-not-running`): a duplicate `completed` cannot overwrite the payload or
+  result, and a late `failed` cannot fail a phase whose step already
+  succeeded.
+- On a paused (or finished) instance every authenticated signal is a `200` no-op. A `needs-input` signal
+  pauses the phase (`awaiting-approval`, `pause: "needs-input"`); the same
+  run's later Stop signal changes nothing, and approving (with answers) or
+  revising is what resumes it.
+
 `POST /api/setup/apply` installs whichever of these the machine needs — and
 only those. Each runtime's CLI and hook prerequisites are checked only while
 something on the machine uses that runtime, so a Codex-only install is never
@@ -2018,6 +3022,28 @@ the signal type from the agent's final message: a line matching
 `ARGUS_OUTCOME: failed` (or `blocked`) emits `failed`; anything else emits
 `completed`. A run that stops cleanly but concluded it failed can therefore fail
 its phase instead of being rubber-stamped.
+
+A `completed` is not the hook's verdict either. Argus classifies the final
+message it is handed (payload keys `last_assistant_message`,
+`last_agent_message`, then `last_message`) with its own classifier —
+`succeeded`, `failed`, `blocked`, `missing` or `conflicting`, a marker being
+recognised anywhere in the message, case-insensitively — and applies the
+phase's `completion` policy. Under the default `required`, a `completed` whose
+message has no marker, or two different conclusions, is refused as failure
+class `unverified`; a `failed`/`blocked` marker inside a `completed` is refused
+as `signal`. `lenient` accepts a missing marker (and says so in the step's
+completion record) but still refuses the other two. The refusal comes before
+Argus reads anything the run proposed, so nothing is staged and no checks run.
+This is the agent's report, not verification: see
+[HARNESS.md § 2](HARNESS.md#completion-policy-the-agents-report-not-verification).
+
+Since hook version 2 (`HOOK_VERSION = 2`) the POST body also carries an
+additive top-level `completion: { hookVersion: 2, marker }` — the hook's own
+reading of the marker. It is untrusted: Argus re-classifies the delivered
+message and only compares. Under `required`, a disagreement (or malformed
+metadata) refuses the completion as `unverified`; under `lenient` it is
+recorded and the message alone decides. An older hook sends no metadata and its
+completions are judged on the message; an older server ignores the field.
 
 The engine supplies this reporting contract automatically: every step run is
 spawned with a constant instruction to end the final message with
@@ -2032,11 +3058,14 @@ the agent judges success against them. An explicit CLI arg (`needs-input` /
 > **Important:** the Stop-hook signal is the preferred completion path. If a
 > completed run on a runtime that declares the fallback (Codex, which has a
 > best-effort hook, and OpenCode, which has none) has not signalled,
-> reconciliation falls back to its run record and final message: a successful
-> run with one unambiguous
+> reconciliation falls back to its run record and final message, read by the
+> same classifier as a signal: a successful run with one unambiguous
 > `ARGUS_OUTCOME: succeeded` advances; `failed` / `blocked` fails with the
-> reported reason; a failed run uses its recorded error; and a missing or
-> conflicting marker fails safely. Unsignalled Claude Code and Qwen Code runs —
+> reported reason (class `signal`); a failed run uses its recorded error; and a
+> missing or conflicting marker fails as `unverified` — under either
+> completion policy, since on this path an exit code alone has never been taken
+> as a completion (it was classed `exit-code` before `unverified` existed). The
+> completion is recorded on the step with `source: "run-record"`. Unsignalled Claude Code and Qwen Code runs —
 > the two whose hooks Argus installs and can rely on — retain the existing
 > fail-safe behavior. The instance lock makes fallback and a delayed hook signal
 > idempotent.
@@ -2048,11 +3077,391 @@ log retains the delivery failure instead of silently hiding it.
 Argus surfaces missing prerequisites (including this hook) via `GET /api/setup`;
 the web UI's setup banner installs the fixable ones with `POST /api/setup/apply`.
 
-| Env var                     | Meaning                                                        |
-| --------------------------- | -------------------------------------------------------------- |
-| `ARGUS_STEP_NAME`           | label of the running step, injected into the run's environment |
-| `ARGUS_RESULT_FILE`         | where a result-producing step writes its decision JSON         |
-| `ARGUS_MAX_CONCURRENT_RUNS` | cap on concurrent `claude -p` processes (default 4)            |
+| Env var                        | Meaning                                                                                                                                          |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ARGUS_STEP_NAME`              | label of the running step, injected into the run's environment                                                                                   |
+| `ARGUS_RESULT_FILE`            | where a result-producing step writes its decision JSON                                                                                           |
+| `ARGUS_KNOWLEDGE_DELTA_FILE`   | where a step may write a KnowledgeDelta (see KNOWLEDGE-LEDGER.md §12)                                                                            |
+| `ARGUS_RULE_VERIFICATION_FILE` | where a `ruleVerification` phase's step writes its conformance report (KNOWLEDGE-LEDGER.md §15)                                                  |
+| `ARGUS_CHANGE_REQUEST_FILE`    | the requested change and the current conformance of the rules a `changeIntent` phase's step must classify; read-only (KNOWLEDGE-LEDGER.md §16.4) |
+| `ARGUS_CHANGE_PROPOSAL_FILE`   | where a `changeIntent` phase's step writes its ChangeProposal (KNOWLEDGE-LEDGER.md §16.5)                                                        |
+| `ARGUS_CHANGE_CONTEXT_FILE`    | the accepted ChangeProposal a `changeContext` phase's step implements, as exact canonical refs; read-only (KNOWLEDGE-LEDGER.md §16.11)           |
+| `ARGUS_MAX_CONCURRENT_RUNS`    | cap on concurrent `claude -p` processes (default 4)                                                                                              |
+
+## Knowledge Ledger
+
+The semantic provenance graph: claims, the evidence that grounds them, the
+justifications that derive one from others, and — since Phase 2 — the
+executions that consumed exact claim revisions and the artifacts those
+executions produced. Support, currency, impact and conformance are **derived**
+on every read by deterministic functions — no record stores a verdict. Reads
+are open; every proposal and registration is admin-gated. Design, invariants
+and the worked example: [KNOWLEDGE-LEDGER.md](KNOWLEDGE-LEDGER.md).
+
+There is deliberately **no write API** for a rule verification, an accepted
+change proposal, an acceptance-criterion result or a change realization's
+completion state. Those records are created only when a pipeline phase crosses
+its acceptance boundary; a route that could mark a change `succeeded` would be
+a way to declare it implemented without any of the dimensions Argus checks
+having been established.
+
+A `:key` is a bare claim id (`RULE-7`, meaning its **active** revision) or a
+revision (`RULE-7:v1`). A `:runId` is an Argus run id. Unknown or malformed
+keys are `404`.
+
+| Method + path                                                   | Effect                                                                                                                                                                                                                                                                                                                                            |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/knowledge/claims`                                     | `{ claims: ClaimView[] }` — every revision with derived `lifecycle` and `support`; `?kind=` `?lifecycle=`                                                                                                                                                                                                                                         |
+| `GET /api/knowledge/claims/:key`                                | `ClaimDetail` — the resolved revision plus every revision of its id, oldest first                                                                                                                                                                                                                                                                 |
+| `GET /api/knowledge/claims/:key/support`                        | `SupportReport` — why: each evidence record and each justification with its force                                                                                                                                                                                                                                                                 |
+| `GET /api/knowledge/claims/:key/dependents`                     | `DependentsReport` — `direct` and `transitive` dependents of that exact revision                                                                                                                                                                                                                                                                  |
+| `GET /api/knowledge/claims/:key/consumers`                      | `ConsumersReport` — the consumption records naming that exact revision, in recording order                                                                                                                                                                                                                                                        |
+| `GET /api/knowledge/claims/:key/impact`                         | `ImpactSet` — what rests on that revision being current and supported, and why (see below)                                                                                                                                                                                                                                                        |
+| `GET /api/knowledge/executions/:runId/provenance`               | `ExecutionProvenance` — what the run consumed (with currency now) and produced; `404` if nothing is known                                                                                                                                                                                                                                         |
+| `GET /api/knowledge/deltas/:id`                                 | `KnowledgeDeltaRecord` — a staged/applied/rejected/superseded KnowledgeDelta with its provenance                                                                                                                                                                                                                                                  |
+| `GET /api/knowledge/deltas/:id/preview`                         | `KnowledgeDeltaPreview` — the deterministic candidate read model: proposed claims (as `local:<id>`), revisions with what they would replace, evidence, justifications, consumed/supplied refs and structural warnings                                                                                                                             |
+| `GET /api/knowledge/deltas/:id/result`                          | `KnowledgeDeltaApplyResult` — local id → canonical identity and every record created; `404` until applied                                                                                                                                                                                                                                         |
+| `GET /api/knowledge/executions/:runId/deltas`                   | `{ runId, deltas: KnowledgeDeltaRecord[] }` — the run's deltas (at most one, by protocol)                                                                                                                                                                                                                                                         |
+| `GET /api/knowledge/executions/:runId/context`                  | `ExecutionContextReport` — exactly which revisions Argus **supplied** to the run, the file's sha256, the run's consumptions, the supplied/consumed comparison and (when still on disk) the projection. Answered from the ledger's durable supplied record, so it survives run/invocation pruning; `404` only when the run was supplied no context |
+| `GET /api/knowledge/claims/:key/supplied-to`                    | `SuppliedToReport` — the runs the ledger records as supplied that exact revision, oldest launch first; pruned runs included                                                                                                                                                                                                                       |
+| `GET /api/knowledge/claims/:key/verifications`                  | `{ claim, verifications: RuleVerification[] }` — every implementation-conformance result for that **exact** revision, oldest first. A verification of `RULE-42:v1` is never listed under `v2`                                                                                                                                                     |
+| `GET /api/knowledge/claims/:key/conformance`                    | `RuleConformanceReport` — `holds \| violated \| unverifiable \| unverified` for that revision, optionally scoped with `?gitHead=` (hex, 7–64). Derived per read; never timeless (see below)                                                                                                                                                       |
+| `GET /api/knowledge/executions/:runId/verifications`            | `{ runId, verifications: RuleVerification[] }` — the conformance results that execution produced                                                                                                                                                                                                                                                  |
+| `GET /api/knowledge/verifications/:id`                          | `RuleVerificationRecord` — a staged/applied/rejected/superseded proposal, with the exact rules its run was accountable for                                                                                                                                                                                                                        |
+| `GET /api/knowledge/verifications/:id/preview`                  | `RuleVerificationPreview` — the deterministic review read model: outcomes grouped, each row carrying the rule's statement and its **own support**                                                                                                                                                                                                 |
+| `GET /api/knowledge/executions/:runId/verification-proposal`    | the record that run staged, if any; `404` otherwise                                                                                                                                                                                                                                                                                               |
+| `GET /api/knowledge/change-proposals`                           | `{ proposals: AcceptedChangeProposal[] }` — accepted change intent, newest first. `?request=<id>` narrows to the proposals answering one `ChangeRequest`                                                                                                                                                                                          |
+| `GET /api/knowledge/change-proposals/:id`                       | the durable `AcceptedChangeProposal` when one exists, else the staged `ChangeProposalRecord` beside its run. The two are distinguishable: an accepted one carries `acceptedAt`, a staged one a `status`                                                                                                                                           |
+| `GET /api/knowledge/change-proposals/:id/preview`               | `ChangeProposalPreview` — the deterministic review read model: the request, the current rules with their support **and** their conformance, the proposed transition, what is preserved, the acceptance criteria, the unresolved questions and the warnings                                                                                        |
+| `GET /api/knowledge/claims/:key/change-proposal`                | the `AcceptedChangeProposal` that introduced that **exact** revision; `404` when no requested change caused it. `RULE-42:v2` has one, `RULE-42:v1` does not                                                                                                                                                                                       |
+| `GET /api/knowledge/executions/:runId/change-proposal`          | the proposal that run staged, if any; `404` otherwise                                                                                                                                                                                                                                                                                             |
+| `GET /api/knowledge/realizations`                               | `{ realizations: ChangeRealizationView[] }` — every change realization, newest first, each with its derived `status` and `attemptsRemaining`. `?proposal=<id>` narrows to the attempts made against one accepted change, failed ones included                                                                                                     |
+| `GET /api/knowledge/realizations/:id`                           | one `ChangeRealizationView` — the accepted change it targets, the frozen `ImplementationScope`, every attempt with what it failed on, and the terminal `outcome` (with the repository state a success is bound to)                                                                                                                                |
+| `GET /api/knowledge/realizations/:id/runs`                      | `{ realizationId, implementation: RunExecutionRef[], verification: RunExecutionRef[] }` — which runs participated, across every attempt                                                                                                                                                                                                           |
+| `GET /api/knowledge/realizations/:id/results`                   | `{ realizationId, proposalId, rules: RuleVerification[], acceptance: AcceptanceVerification[] }` — the durable records the attempts produced, in commit order and unfiltered: nothing is overwritten, so a criterion answered twice has two entries                                                                                               |
+| `GET /api/knowledge/change-proposals/:id/criteria/:criterionId` | `AcceptanceConformanceReport` — `satisfied \| violated \| unverifiable \| unverified` for `CP-12/AC-1`, optionally scoped with `?gitHead=`. A result recorded against a _dirty_ tree never answers a question about the bare commit, because it cannot                                                                                            |
+| `GET /api/knowledge/change-proposals/:id/acceptance`            | `{ proposalId, acceptance: AcceptanceVerification[] }` — every acceptance result for one accepted change, in commit order                                                                                                                                                                                                                         |
+| `GET /api/knowledge/executions/:runId/acceptance`               | `{ runId, acceptance: AcceptanceVerification[] }` — the acceptance results that execution produced                                                                                                                                                                                                                                                |
+| `GET /api/knowledge/executions/:runId/acceptance-proposal`      | the acceptance record that run staged, if any; `404` otherwise                                                                                                                                                                                                                                                                                    |
+| `GET /api/knowledge/acceptance/:id`                             | `AcceptanceVerificationRecord` — a staged/applied/rejected/superseded proposal, with every criterion its run was accountable for                                                                                                                                                                                                                  |
+| `GET /api/knowledge/acceptance/:id/preview`                     | `AcceptanceVerificationPreview` — outcomes grouped, each row carrying the criterion's own statement and the exact revisions it is evidence for                                                                                                                                                                                                    |
+| `POST /api/knowledge/claims`                                    | (admin) propose revision 1 of a claim → `201 ClaimView`                                                                                                                                                                                                                                                                                           |
+| `POST /api/knowledge/claims/:id/revise`                         | (admin) supersede the active revision → `201 ClaimView`; takes an id, never a `:vN` key                                                                                                                                                                                                                                                           |
+| `POST /api/knowledge/evidence`                                  | (admin) attach evidence to a revision → `201 Evidence`                                                                                                                                                                                                                                                                                            |
+| `POST /api/knowledge/justifications`                            | (admin) record a derivation → `201 Justification`; `400` on unknown refs or a cycle                                                                                                                                                                                                                                                               |
+| `POST /api/knowledge/executions/:runId/consumptions`            | (admin) "this run consumed these exact revisions" → `201`, or `200` when every edge already existed                                                                                                                                                                                                                                               |
+| `POST /api/knowledge/executions/:runId/artifacts`               | (admin) "this run produced these artifacts" → `201`, or `200` when every record already existed                                                                                                                                                                                                                                                   |
+
+Proposal bodies:
+
+```jsonc
+// POST /api/knowledge/claims
+{ "id": "RULE-7",                 // optional; minted from the kind when absent (RULE-3f9a1c2b)
+  "kind": "business-rule",        // fact | assumption | business-rule | constraint | conclusion | decision
+  "statement": "Kobra comment maximum is 180",
+  "structuredValue": { "when": [], "then": [] },   // optional, opaque, ≤ 64 KiB
+  "producedBy": { "instanceId": "…", "phaseId": "…", "runId": "…" } }   // optional
+
+// POST /api/knowledge/claims/RULE-7/revise
+{ "statement": "Kobra comment maximum is 500", "revisionNote": "Kobra 4.2 raised the limit" }
+
+// POST /api/knowledge/evidence
+{ "claim": "RULE-7",              // "ID" (active revision) | "ID:vN" | { "id", "revision"? }
+  "direction": "supports",        // default; or "opposes"
+  "source": { "type": "document", "uri": "https://…" } }
+// source.type ∈ run | phase | artifact | verification | source-code | git-commit | document | human
+
+// POST /api/knowledge/justifications
+{ "conclusion": "CONCLUSION-19",
+  "premises": ["FACT-12", "RULE-7:v1"],   // ≥ 1, ≤ 64, conjunctive, stored as exact revisions
+  "direction": "supports",
+  "producedBy": { "instanceId": "inst-1", "phaseId": "plan", "runId": "run-9" } }
+```
+
+A bare id in a body is resolved to the active revision **at write time** and
+stored as that revision; the persisted edge never floats. `400` carries
+`{ error }` naming the field or the refused invariant (`unknown claim X`,
+`would form a cycle: …`, `already exists`).
+
+`SupportReport.justifications[].force` is `{ "inForce": true }` or
+`{ "inForce": false, "failing": [{ "premise": { "id", "revision" }, "reason": "superseded" | "unsupported" | "contested" | "missing" }] }`.
+
+Execution provenance registrations:
+
+```jsonc
+// POST /api/knowledge/executions/run_456/consumptions
+{ "instanceId": "inst-1", "phaseId": "implement",   // optional locators; must agree with earlier records of the run
+  "claims": ["DECISION-3", "CONCLUSION-8:v1"] }     // ≥ 1, ≤ 64; bare ids resolve to the active revision at write time
+// → { "execution": { "runId", "instanceId"?, "phaseId"? }, "consumptions": ClaimConsumption[] }
+
+// POST /api/knowledge/executions/run_456/artifacts
+{ "artifacts": [{ "location": "repository",          // artifact-dir | repository
+                  "path": "src/CustomerCommentValidator.cs",   // relative POSIX path inside its root
+                  "gitHead": "9f3c2a1" }] }           // repository only, optional
+// → { "execution": …, "artifacts": ArtifactProduction[] }
+```
+
+Both are idempotent on their identity — `(runId, claim)` and
+`(runId, location, path)` — and answer `200` with the original records when
+nothing was new. Run **existence** is not checked (run files are pruned into
+the Vault); run, instance and phase ids are validated for shape, artifact paths
+for containment, and a differing `gitHead` for an already-recorded path is
+`400`. Consumption is never inferred from prompts or transcripts: it is what
+this endpoint was told.
+
+`ExecutionProvenance` is `{ execution, consumed: [{ claim, lifecycle, support, current, source? }], produced: { claims: ClaimView[], justifications, artifacts: ArtifactRef[] }, currency: "current" | "stale" }`.
+`source` (Phase 4) is `"supplied-context"` when Argus can prove the revision
+was in the run's KnowledgeContext, `"agent-discovered"` when it was not, and
+absent on consumptions registered through this API or before Phase 4.
+`produced` is joined from Phase 1's `producedBy` on `runId`; `currency` is
+`stale` when any consumed revision is superseded, unsupported or contested. It
+is derived per read and says nothing about — and changes nothing in — the
+run's own status.
+
+KnowledgeDeltas (Phase 3) have **no write endpoint**: an agent run writes one
+JSON document to the path in `ARGUS_KNOWLEDGE_DELTA_FILE`, Argus stages it when
+the run completes and commits it — atomically, with every sibling step's delta
+of the same attempt — only when the phase is accepted (checks passed, gate
+approved). A refused delta fails the phase under the `knowledge-delta` class.
+The record the reads return:
+
+```jsonc
+{ "id": "KD-…", "runId": "run_8f2a", "instanceId": "inst_71c0", "phaseId": "plan", "attempt": 0, "step": "think",
+  "status": "staged" | "applied" | "rejected" | "superseded",
+  "receivedAt": "…", "updatedAt": "…",
+  "delta": { "schemaVersion": 1, "claims": [{ "localId": "c", "kind": "conclusion", "statement": "…" }], "justifications": […], "consumed": ["RULE-17:v2"], … },
+  "reason": "…",                       // rejected / superseded
+  "result": {                          // applied
+    "status": "applied", "deltaId": "KD-…", "appliedAt": "…",
+    "createdClaims": [{ "localId": "c", "claim": { "id": "CONCLUSION-7c1e02ab", "revision": 1 } }],
+    "createdRevisions": [{ "localId"?: "…", "claim": { "id": "RULE-17", "revision": 3 }, "supersedes": { "id": "RULE-17", "revision": 2 } }],
+    "evidenceIds": ["EV-…"], "justificationIds": ["J-…"],
+    "consumptions": ClaimConsumption[], "artifacts": ArtifactProduction[] } }
+```
+
+The wire contract, local references, revision preconditions, staging and the
+commit boundary: [KNOWLEDGE-LEDGER.md §12](KNOWLEDGE-LEDGER.md#12-knowledgedelta-protocol-phase-3).
+A staged record also carries `supplied: ClaimRef[]` — the exact revisions the
+run's KnowledgeContext held, from the ledger's durable supplied record (or, for
+a run launched before Phase 4.1, its invocation record) at intake.
+
+`GET /api/knowledge/deltas/:id/preview` returns the **candidate preview** — a
+deterministic read model of what the delta would make canonical if its phase
+were approved (Phase 5). It mutates nothing, mints nothing, and does not
+pretend a proposed claim already has a canonical id:
+
+```jsonc
+{ "deltaId": "KD-…", "runId": "run_8f2a", "step": "investigate", "attempt": 0, "status": "staged",
+  "proposedClaims": [{ "ref": { "display": "local:comment-limit", "local": "comment-limit" },
+                       "kind": "business-rule", "statement": "Kobra bookings restrict customer comments to 180 characters.",
+                       "evidence": [{ "claim": { "display": "local:comment-limit", … }, "direction": "supports",
+                                      "source": { "type": "source-code", "path": "src/Booking/KobraAdapter.cs",
+                                                  "gitHead": "abc123…", "symbol": "KobraAdapter.MapComment",
+                                                  "startLine": 120, "endLine": 136 }, "note": "…" }],
+                       "justifications": [{ "conclusion": { "display": "local:comment-limit", … },
+                                            "premises": [{ "display": "local:kobra-origin", … }], "direction": "supports" }] }],
+  "proposedRevisions": [{ "claimId": "RULE-17", "expectedRevision": 1, "kind": "business-rule",
+                          "ref": { "display": "RULE-17:v2 (proposed)", "claim": { "id": "RULE-17", "revision": 2 }, "proposed": true },
+                          "statement": "Kobra comments max = 500", "revisionNote": "…",
+                          "current": { "claim": { "id": "RULE-17", "revision": 1 }, "statement": "Kobra comments max = 180",
+                                       "support": "supported", "lifecycle": "active" },
+                          "stale": true,                     // expectedRevision is no longer active
+                          "evidence": [ … ], "justifications": [ … ] }],
+  "evidence": [ … ], "justifications": [ … ],
+  "consumed": [{ "ref": "RULE-17:v1", "claim": { "id": "RULE-17", "revision": 1 }, "kind": "business-rule", "statement": "…" }],
+  "supplied": [ … ], "artifacts": [ … ], "summary": "…",
+  "warnings": [{ "code": "business-rule-without-evidence", "subject": "local:comment-limit", "message": "…" }] }
+```
+
+Warning codes: `business-rule-without-evidence`, `revision-without-evidence`,
+`assumption-without-evidence`, `claim-without-support`,
+`revision-target-unsupported`, `revision-stale`, `source-file-missing`,
+`source-outside-scope`, `source-path-unsafe`, `source-git-head-mismatch`,
+`source-range-invalid`, `new-rule-while-rules-supplied`. Every one is decided
+from exact structured information — the delta, the ledger, the filesystem —
+never from similarity or a model's opinion. This route carries no filesystem
+warnings (they need the run's working tree, which the engine has at intake and
+commit); the same preview embedded in a gate review does. See
+[KNOWLEDGE-LEDGER.md §14.6](KNOWLEDGE-LEDGER.md#146-the-candidate-preview-and-its-warnings).
+
+KnowledgeContexts (Phase 4) have **no write endpoint either**: a step (or its
+phase) declares `knowledgeContext`, Argus resolves the selectors against one
+ledger snapshot when the phase attempt is planned, writes the read-only file
+the agent finds at `ARGUS_KNOWLEDGE_CONTEXT_FILE`, and records what it
+supplied — durably, in `knowledge.json`, before the process starts. There is
+no mutation endpoint for supplied provenance and none is planned: only Argus's
+invocation lifecycle may assert it. The inspection reads:
+
+```jsonc
+// GET /api/knowledge/executions/run_456/context
+{ "execution": { "runId": "run_456", "instanceId": "inst-1", "phaseId": "implement" },
+  "context": { "schemaVersion": 1, "claims": [{ "id": "RULE-17", "revision": 2 }, { "id": "CONSTRAINT-4", "revision": 1 }],
+               "sha256": "3b7c…", "suppliedAt": "2026-09-19T10:00:00.000Z",
+               "file": "/home/user/.claude/argus/invocations/run_456/knowledge-context.json",
+               "projectionAvailable": true },
+  "supplied": [{ "id": "RULE-17", "revision": 2 }, { "id": "CONSTRAINT-4", "revision": 1 }],
+  "consumed": [{ "id": "RULE-17", "revision": 2 }],                 // from the ledger
+  "comparison": { "suppliedAndConsumed": [{ "id": "RULE-17", "revision": 2 }],
+                  "suppliedNotConsumed": [{ "id": "CONSTRAINT-4", "revision": 1 }],
+                  "consumedNotSupplied": [] },
+  "projection": { "schemaVersion": 1, "generatedAt": "…", "claims": [{ "ref": "RULE-17:v2", … }], "metadata": { "selection": […] } } }
+
+// the same run after its invocation directory has been pruned
+{ "execution": { "runId": "run_456", "instanceId": "inst-1", "phaseId": "implement" },
+  "context": { "schemaVersion": 1, "claims": [{ "id": "RULE-17", "revision": 2 }, { "id": "CONSTRAINT-4", "revision": 1 }],
+               "sha256": "3b7c…", "suppliedAt": "2026-09-19T10:00:00.000Z",
+               "file": null, "projectionAvailable": false },
+  "supplied": [ … ], "consumed": [ … ], "comparison": { … },
+  "projection": null }              // never rebuilt from today's ledger
+
+// GET /api/knowledge/claims/RULE-17:v2/supplied-to
+{ "claim": { "id": "RULE-17", "revision": 2 },
+  "executions": [{ "execution": { "runId": "run_456", "instanceId": "inst-1", "phaseId": "implement" },
+                   "suppliedAt": "2026-09-19T10:00:00.000Z", "sha256": "3b7c…", "attempt": 0 }] }
+```
+
+Both read the ledger's durable `supplied` records, so the exact refs, hash and
+timestamp outlive run and invocation pruning. The materialized **projection**
+is an operational artifact and does not: when it is gone, `file` is `null`,
+`projectionAvailable` is `false` and `projection` is `null` — the API never
+reconstructs the document from the current ledger and presents it as what the
+run received. The protocol, selectors, the resolution snapshot, the durable
+record and the supplied/consumed rules:
+[KNOWLEDGE-LEDGER.md §13](KNOWLEDGE-LEDGER.md#13-knowledgecontext-protocol-phase-4-hardened-in-phase-41).
+
+Rule verifications (Phase 6) have **no write endpoint**, by design: only an
+accepted verification phase's commit creates one, and there is no edit and no
+delete. A run of a `ruleVerification` phase writes one JSON document to
+`ARGUS_RULE_VERIFICATION_FILE`, Argus validates it against the exact rules it
+supplied that run, stages it, and makes it durable only when the phase is
+accepted — in the same ledger transition as the attempt's KnowledgeDeltas.
+
+**Rule support and implementation conformance are different questions with
+different answers.** `/support` asks whether the rule itself is well founded;
+`/conformance` asks whether the code does what it says. A violated
+implementation never moves the first one — no opposing evidence is created, and
+verifications never enter `ImpactSet`:
+
+```jsonc
+// GET /api/knowledge/claims/RULE-42:v1/support
+{ "claim": { "id": "RULE-42", "revision": 1 }, "lifecycle": "active",
+  "support": "supported",                        // the business really does say 180
+  "evidence": [ … ], "justifications": [ … ] }
+
+// GET /api/knowledge/claims/RULE-42:v1/conformance?gitHead=def456…
+{ "rule": { "id": "RULE-42", "revision": 1 }, "gitHead": "def456…",
+  "status": "violated",                          // the code is in breach
+  "latest": { "id": "RV-…", "rule": { "id": "RULE-42", "revision": 1 }, "outcome": "violated",
+              "execution": { "runId": "run_8f2a", "instanceId": "inst_71c0", "phaseId": "verify-rules" },
+              "attempt": 0, "repository": { "gitHead": "def456…" },
+              "evidence": [{ "type": "check", "label": "comment-length-tests", "status": "passed", "exitCode": 0, "detail": "exit 0" },
+                           { "type": "source-code", "path": "src/Booking/KobraCommentValidator.cs", "startLine": 3, "endLine": 6 }],
+              "note": "MaxLength is 500", "policy": "agent-evidence", "createdAt": "…" },
+  "history": [ /* every verification of v1, oldest first, unfiltered */ ] }
+```
+
+`status` is one of four, and two of them are not the same fact:
+
+| Status         | Means                                                                    |
+| -------------- | ------------------------------------------------------------------------ |
+| `holds`        | Sufficient evidence that the examined implementation satisfies the rule. |
+| `violated`     | Sufficient evidence that it contradicts the rule.                        |
+| `unverifiable` | Somebody looked and could not establish either. Carries a `reason`.      |
+| `unverified`   | **Nobody looked** — no accepted verification for the scope asked about.  |
+
+**Conformance is never timeless.** With `?gitHead=`, only verifications that
+examined that commit are eligible (an abbreviated sha matches a full one), so a
+rule verified `holds` at `abc123` answers `unverified` at `def456` until
+somebody verifies it there. Without `?gitHead=`, `status` is the latest
+recorded outcome and `latest.repository.gitHead` says which commit it was
+about — a statement about the past. `history` is always the full, unfiltered
+history of the revision.
+
+**Nothing is retargeted, and nothing is marked stale.** A verification of
+`RULE-42:v1` says nothing about `RULE-42:v2`: the new revision starts
+`unverified` and the old record stays bound to v1 forever. Several repository
+revisions and several rule revisions coexist:
+
+```
+RULE-42:v1 @abc123 holds      RULE-42:v1 @def456 violated      RULE-42:v2 @def456 holds
+```
+
+An **agent may cite a deterministic check; it may not claim one passed.** A
+`{ "type": "check", "label": "…" }` evidence record must name a check the phase
+declares, and Argus binds `status`, `exitCode` and `detail` from its own
+`VerificationReport` at the commit boundary. Under
+`ruleVerification.holds: "deterministic-check"` a `holds` outcome whose check
+did not pass refuses the commit. The full protocol, the completeness rule and
+the staging lifecycle:
+[KNOWLEDGE-LEDGER.md §15](KNOWLEDGE-LEDGER.md#15-business-rule-verification-and-implementation-conformance-phase-6).
+
+Change proposals (Phase 7) likewise have **no write endpoint**: a proposal
+becomes canonical exactly one way — an agent writes it to
+`ARGUS_CHANGE_PROPOSAL_FILE`, Argus validates and stages it, a person approves
+the gate, and the phase's commit writes the accepted record in the same ledger
+transition as the semantic delta it carried. An endpoint that could record one
+would be a path around the review the phase exists to guarantee.
+
+**Change provenance is not justification.** `/support` answers _why is this
+claim supported?_; `/change-proposal` answers _which requested change made us
+introduce or revise it?_ They are different questions with different records,
+and neither appears in the other:
+
+```jsonc
+// GET /api/knowledge/claims/RULE-42:v2/change-proposal
+{ "id": "CP-12", "schemaVersion": 1,
+  "request": { "id": "CR-1", "summary": "Kobra now supports 500-character customer comments.",
+               "requestedBy": "product", "receivedAt": "…" },
+  "execution": { "runId": "run_3d10", "instanceId": "inst_71c0", "phaseId": "change-intent" },
+  "readiness": "ready",                              // or "needs-input"
+  "semanticChanges": [{ "id": "DECISION-7", "revision": 1 }, { "id": "RULE-42", "revision": 2 }],
+  "revised": [{ "from": { "id": "RULE-42", "revision": 1 }, "to": { "id": "RULE-42", "revision": 2 } }],
+  "decisions": [{ "id": "DECISION-7", "revision": 1 }],
+  "preserved": [{ "id": "CONSTRAINT-8", "revision": 1 }],   // untouched, deliberately
+  "acceptanceCriteria": [                                    // NOT claims
+    { "id": "AC-1", "statement": "A Kobra comment of 500 characters is accepted.",
+      "kind": "behavior", "relatesTo": [{ "id": "RULE-42", "revision": 2 }] },
+    { "id": "AC-2", "statement": "A Kobra comment of 501 characters is rejected.",
+      "kind": "behavior", "relatesTo": [{ "id": "RULE-42", "revision": 2 }] }],
+  "unresolved": [], "classification": [ … ], "acceptedAt": "…" }
+```
+
+Three properties worth stating:
+
+- **Exact, and never retargeted.** `RULE-42:v2` was introduced by CP-12;
+  `RULE-42:v3` was not, and a later revision never rewrites what CP-12 says it
+  did.
+- **No local reference survives.** `relatesTo` holds canonical refs only: the
+  commit resolved every delta-local id, and one it could not resolve refuses
+  the whole transition.
+- **An acceptance criterion is not a business rule.** It is evidence that one
+  change was carried out, lives here, and is never stored as a claim.
+
+The workflow, readiness, the warnings and the downstream `ChangeContext`:
+[KNOWLEDGE-LEDGER.md §16](KNOWLEDGE-LEDGER.md#16-change-intent-orchestration-phase-7).
+
+`ImpactSet` is the answer to "what rests on this revision, and why?":
+
+```jsonc
+{ "root": { "claim", "lifecycle", "support", "conditions": ["superseded" | "unsupported" | "contested"] },
+  "semantic": {
+    "affectedClaims": [{ "claim", "reasons": ImpactReason[], "support": { "ifRootHeld", "actual" }, "producedBy"? }],
+    "affectedJustifications": [{ "id", "conclusion", "inForce": { "ifRootHeld", "actual" } }] },
+  "executions": [{ "execution", "reasons": ["consumed-affected-claim"], "consumed": ClaimRef[] }],
+  "artifacts":  [{ "execution", "artifact", "reasons": ["produced-by-affected-execution"] }],
+  "paths": [{ "target": ImpactNode, "hops": [{ "via": "premise-of" | "consumed-by" | "produced", "justification"?, "to": ImpactNode }] }] }
+// ImpactReason ∈ premise-superseded | premise-unsupported | premise-contested | support-changed
+//              | consumed-affected-claim | produced-by-affected-execution
+```
+
+A node is affected only when its derived state differs between the ledger as
+it stands and the same ledger with the root held active and supported — so a
+conclusion with an independent justification still in force is not affected,
+and nothing downstream of it is. `executions` lists **consumers** only; the
+run that produced an affected claim appears as its `producedBy`. Every list
+is deduplicated and stably ordered, and `paths` carries one shortest
+explanation per node. An active, supported root has `conditions: []` and
+empty lists.
 
 ## Derived views
 
@@ -2136,10 +3545,11 @@ so the index cannot grow into a session list.
 
 ## Configuration
 
-| Env var             | Default     | Effect                                                                                            |
-| ------------------- | ----------- | ------------------------------------------------------------------------------------------------- |
-| `ARGUS_PORT`        | `7777`      | server port (proxy target)                                                                        |
-| `ARGUS_CLAUDE_HOME` | `~/.claude` | directory to read/watch                                                                           |
-| `CLAUDE_CONFIG_DIR` | —           | fallback override if `ARGUS_CLAUDE_HOME` unset                                                    |
-| `ARGUS_WEBHOOK_URL` | —           | POST target for `run.failed`, `pipeline.failed`, and `monitor.*` events (Slack/mail bridge, etc.) |
-| `ARGUS_VAULT`       | on          | `off` disables the Vault; every long view degrades to its JSON-only behaviour                     |
+| Env var             | Default                                   | Effect                                                                                                                                                                            |
+| ------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ARGUS_PORT`        | `7777`                                    | server port (proxy target)                                                                                                                                                        |
+| `ARGUS_CLAUDE_HOME` | `~/.claude`                               | directory to read/watch                                                                                                                                                           |
+| `CLAUDE_CONFIG_DIR` | —                                         | fallback override if `ARGUS_CLAUDE_HOME` unset                                                                                                                                    |
+| `ARGUS_WORK_DIR`    | `<claude home>-argus` (`~/.claude-argus`) | root of every directory an agent writes into: worktrees, artifacts, memory, result and ledger channels. Kept outside `~/.claude`, where Claude Code refuses headless agent writes |
+| `ARGUS_WEBHOOK_URL` | —                                         | POST target for `run.failed`, `pipeline.failed`, and `monitor.*` events (Slack/mail bridge, etc.)                                                                                 |
+| `ARGUS_VAULT`       | on                                        | `off` disables the Vault; every long view degrades to its JSON-only behaviour                                                                                                     |

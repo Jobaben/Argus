@@ -91,10 +91,7 @@ function SessionTranscript({ project, id }: { project: string; id: string }) {
   return (
     <Page
       title={header?.title ?? "Transcript"}
-      crumbs={[
-        { label: "Command Center", href: "#/command" },
-        { label: "Sessions", href: "#/sessions" },
-      ]}
+      crumbs={[{ label: "Sessions", href: "#/sessions" }]}
       actions={
         <div className="flex items-center gap-2">
           <button
@@ -195,16 +192,26 @@ function SessionGrid({ sessions }: { sessions: SessionSummary[] }) {
  * scrolling and guessing.
  */
 function SessionList({
-  sessions,
+  sessions: all,
   loading,
   error,
+  project,
 }: {
   sessions: SessionSummary[];
   loading: boolean;
   error: string | null;
+  /** Encoded project id from `#/sessions/:project` — narrows the list to one
+   *  working directory. This is what the Projects page used to be: the same
+   *  roll-up, one click closer to the transcripts it counted. */
+  project?: string;
 }) {
   const [query, setQuery] = useState("");
   const searching = query.trim().length > 0;
+  const sessions = useMemo(
+    () => (project ? all.filter((s) => s.project === project) : all),
+    [all, project],
+  );
+  const projectLabel = project ? (sessions[0]?.projectLabel ?? project) : null;
   const matches = useMemo(() => filterSessions(sessions, query), [sessions, query]);
   // Grouping is for browsing. Once you are searching, rank order is the answer
   // and day headings would fight it.
@@ -215,19 +222,35 @@ function SessionList({
   const projects = useMemo(() => new Set(sessions.map((s) => s.project)).size, [sessions]);
 
   return (
-    <Page title="Sessions" crumbs={[{ label: "Command Center", href: "#/command" }]}>
+    <Page title="Sessions">
       <div className="mb-6 flex flex-wrap items-center gap-x-4 gap-y-3">
         <p className="text-sm text-ink-faint">
-          {loading && sessions.length === 0
+          {loading && all.length === 0
             ? "Recent agent transcripts across all projects"
             : searching
               ? `${matches.length} of ${sessions.length} ${
                   sessions.length === 1 ? "transcript" : "transcripts"
                 }`
-              : `${sessions.length} ${
-                  sessions.length === 1 ? "transcript" : "transcripts"
-                } across ${projects} ${projects === 1 ? "project" : "projects"}`}
+              : project
+                ? `${sessions.length} ${sessions.length === 1 ? "transcript" : "transcripts"} in this project`
+                : `${sessions.length} ${
+                    sessions.length === 1 ? "transcript" : "transcripts"
+                  } across ${projects} ${projects === 1 ? "project" : "projects"}`}
         </p>
+        {projectLabel && (
+          <span className="inline-flex items-center gap-2 rounded-full border border-line bg-surface px-3 py-1 font-mono text-xs text-ink-dim">
+            <span className="truncate" title={projectLabel}>
+              {projectLabel}
+            </span>
+            <a
+              href="#/sessions"
+              aria-label="Show every project"
+              className="text-ink-faint hover:text-ink"
+            >
+              ×
+            </a>
+          </span>
+        )}
         {sessions.length > 0 && (
           <label className="ml-auto flex min-w-[16rem] items-center gap-2 rounded-lg border border-line bg-surface px-3 py-1.5">
             <span aria-hidden="true" className="text-xs text-ink-faint">
@@ -256,7 +279,16 @@ function SessionList({
         label="sessions"
         skeleton={<SkeletonGrid count={4} columns={2} lines={3} />}
       >
-        {sessions.length === 0 ? (
+        {sessions.length === 0 && project && all.length > 0 ? (
+          <EmptyState>
+            <p className="text-sm text-ink-dim">No transcripts in this project.</p>
+            <p className="mt-2 text-xs">
+              <a href="#/sessions" className="text-queue underline hover:text-ink">
+                Show every project
+              </a>
+            </p>
+          </EmptyState>
+        ) : sessions.length === 0 ? (
           <EmptyState>
             <p className="text-sm text-ink-dim">No transcripts yet.</p>
             <p className="mx-auto mt-2 max-w-md text-xs">
@@ -301,9 +333,18 @@ export default function Sessions() {
   const segments = useHashRoute();
 
   // Deep-linkable transcript: #/sessions/:project/:id renders the transcript
-  // directly, so a reload or a shared link lands on the same view.
+  // directly, so a reload or a shared link lands on the same view. One segment
+  // short of that, #/sessions/:project, is the list narrowed to a project —
+  // the palette's project entries and the Chronicle's session lanes land here.
   if (segments[0] === "sessions" && segments[1] && segments[2]) {
     return <SessionTranscript project={segments[1]} id={segments[2]} />;
   }
-  return <SessionList sessions={sessions} loading={loading} error={error} />;
+  return (
+    <SessionList
+      sessions={sessions}
+      loading={loading}
+      error={error}
+      {...(segments[0] === "sessions" && segments[1] ? { project: segments[1] } : {})}
+    />
+  );
 }

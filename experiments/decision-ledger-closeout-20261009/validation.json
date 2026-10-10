@@ -1,0 +1,168 @@
+{
+  "at": "2026-10-08T22:19:57.746Z",
+  "method": "current native Argus definition validator; no application or store mutation",
+  "results": [
+    {
+      "file": "analysis-pipeline.json",
+      "valid": true,
+      "phases": 5,
+      "trigger": {
+        "kind": "daily",
+        "time": "05:30"
+      }
+    },
+    {
+      "file": "final-pipeline.json",
+      "valid": true,
+      "phases": 1,
+      "trigger": {
+        "kind": "daily",
+        "time": "08:00"
+      }
+    },
+    {
+      "file": "workload-D1.json",
+      "valid": true,
+      "phases": 1,
+      "trigger": {
+        "kind": "daily",
+        "time": "00:17"
+      }
+    },
+    {
+      "file": "workload-D2.json",
+      "valid": true,
+      "phases": 1,
+      "trigger": {
+        "kind": "daily",
+        "time": "00:19"
+      }
+    },
+    {
+      "file": "workload-D3.json",
+      "valid": true,
+      "phases": 1,
+      "trigger": {
+        "kind": "daily",
+        "time": "00:21"
+      }
+    },
+    {
+      "file": "workload-D4.json",
+      "valid": true,
+      "phases": 1,
+      "trigger": {
+        "kind": "daily",
+        "time": "00:23"
+      }
+    },
+    {
+      "file": "workload-E1.json",
+      "valid": true,
+      "phases": 1,
+      "trigger": {
+        "kind": "daily",
+        "time": "00:37"
+      }
+    },
+    {
+      "file": "workload-E2.json",
+      "valid": true,
+      "phases": 1,
+      "trigger": {
+        "kind": "daily",
+        "time": "00:39"
+      }
+    },
+    {
+      "file": "workload-I1.json",
+      "valid": true,
+      "phases": 1,
+      "trigger": {
+        "kind": "daily",
+        "time": "00:45"
+      }
+    },
+    {
+      "file": "workload-I2.json",
+      "valid": true,
+      "phases": 1,
+      "trigger": {
+        "kind": "daily",
+        "time": "00:47"
+      }
+    },
+    {
+      "file": "workload-M1.json",
+      "valid": true,
+      "phases": 1,
+      "trigger": {
+        "kind": "daily",
+        "time": "00:29"
+      }
+    },
+    {
+      "file": "workload-M2.json",
+      "valid": true,
+      "phases": 1,
+      "trigger": {
+        "kind": "daily",
+        "time": "00:31"
+      }
+    },
+    {
+      "file": "workload-N1.json",
+      "valid": true,
+      "phases": 1,
+      "trigger": {
+        "kind": "daily",
+        "time": "00:25"
+      }
+    },
+    {
+      "file": "workload-N2.json",
+      "valid": true,
+      "phases": 1,
+      "trigger": {
+        "kind": "daily",
+        "time": "00:27"
+      }
+    },
+    {
+      "file": "workload-P1.json",
+      "valid": true,
+      "phases": 1,
+      "trigger": {
+        "kind": "daily",
+        "time": "00:41"
+      }
+    },
+    {
+      "file": "workload-P2.json",
+      "valid": true,
+      "phases": 1,
+      "trigger": {
+        "kind": "daily",
+        "time": "00:43"
+      }
+    },
+    {
+      "file": "workload-T1.json",
+      "valid": true,
+      "phases": 1,
+      "trigger": {
+        "kind": "daily",
+        "time": "00:33"
+      }
+    },
+    {
+      "file": "workload-T2.json",
+      "valid": true,
+      "phases": 1,
+      "trigger": {
+        "kind": "daily",
+        "time": "00:35"
+      }
+    }
+  ]
+}

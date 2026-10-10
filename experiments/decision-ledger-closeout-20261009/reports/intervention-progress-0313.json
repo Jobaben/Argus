@@ -1,0 +1,46 @@
+{
+  "at": "2026-10-09T01:13:26.902Z",
+  "unrelatedWorkshopDefinitionUnchanged": true,
+  "oldFeederPaused": true,
+  "sourceCollectionOutcomes": {
+    "not-selected": 6,
+    "assessed": 4,
+    "pending": 18,
+    "excluded": 4
+  },
+  "globalSelectedPending": 18,
+  "interventionAssessments": 4,
+  "interventionKnownAssessmentCostUsd": 0.1434486,
+  "interventionUnknownAssessmentCost": 0,
+  "globalKnownAssessmentCostUsd": 2.5808660000000003,
+  "globalUnknownAssessmentCost": 0,
+  "sourceKnownCostUsd": 0.2436119,
+  "sourceUnknownCost": 2,
+  "deadlineAssessmentIds": [
+    "DA-uaffv7M-3hUV3f5m",
+    "DA-yyHxzh_GNAq9rcQO"
+  ],
+  "deadlineValidity": "Both genuine timeout answers explicitly cite the schedule name containing deadline. They prove native path execution, not independent discrimination or calibration.",
+  "D3Observation": {
+    "runId": "2b2ef548-824d-4468-ac0d-e363289c6ffa",
+    "probeAssessmentId": "DA-shE6zk8eQpsASMdW",
+    "predicted": "ended-normally",
+    "probability": 0.7,
+    "recordedProcessStatus": "succeeded",
+    "recordedOutcome": "failed",
+    "recordedTermination": null,
+    "meaning": "The process ended normally with an honest infeasibility explanation. Native probe distinguished process completion from failed task delivery despite deadline in the name. One contaminated-input observation is not a generalization proof."
+  },
+  "residual": "D3 native cause favors task-infeasible, but lacks independent human reference labels; no residual correctness or calibration claim.",
+  "queueEstimate": "18 selected questions remain, all from the owned cohort. At the unchanged 12-minute minimum interval this needs about 3.6 hours without deferrals. No extra workload is justified.",
+  "verification": {
+    "envelopesChecked": 389,
+    "envelopeFailures": 0,
+    "journalEnvelopesChecked": 77,
+    "collectionEnvelopesChecked": 312,
+    "snapshotsChecked": 76,
+    "snapshotFailures": [],
+    "applicationFilesChecked": 660,
+    "applicationChanges": []
+  }
+}

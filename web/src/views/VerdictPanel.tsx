@@ -1,6 +1,6 @@
 import { Card, formatMs, formatUsd } from "../ds";
 import { useVerdict } from "../useVerdict";
-import type { CriterionScore, VerdictPoint } from "../types";
+import type { CriterionScore, Rubric, Verdict, VerdictPoint } from "../types";
 
 /**
  * One run's score against its rubric.
@@ -64,8 +64,55 @@ function CriterionRow({ c, minScore }: { c: CriterionScore; minScore: number | n
   );
 }
 
+/**
+ * The run's trajectory judgment, when its rubric declares one: how the agent
+ * worked, kept apart from the output score. The signals are heuristics over
+ * the recorded events, and are labelled as such.
+ */
+export function TrajectoryNote({
+  rubric,
+  trajectory,
+}: {
+  rubric: Rubric | null;
+  trajectory: Verdict | null;
+}) {
+  if (!rubric?.trajectory && !trajectory) return null;
+  let text: string;
+  if (!trajectory) {
+    text = "Not analysed yet.";
+  } else if (trajectory.status !== "ready") {
+    text =
+      trajectory.status === "skipped"
+        ? `Skipped: ${trajectory.error ?? "unavailable"}. An automated approval waits for a person.`
+        : `The trajectory pass failed: ${trajectory.error ?? "unknown reason"}.`;
+  } else {
+    const signals = trajectory.trajectory?.signals;
+    const observed = signals?.signals.filter((s) => s.observed).map((s) => s.kind) ?? [];
+    const held = trajectory.trajectory?.held ?? [];
+    text = [
+      trajectory.score != null ? `${trajectory.score.toFixed(1)}/10` : null,
+      observed.length > 0
+        ? `heuristics observed: ${observed.join(", ")}`
+        : signals?.truncated
+          ? "no heuristic signal in the events kept — the recording was truncated, so this cannot clear the run"
+          : "no heuristic signal observed in the recorded events",
+      held.length > 0 ? `check held on ${held.join(", ")}` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  }
+  return (
+    <p className="mt-2 max-w-prose text-[11px] text-ink-dim" data-testid="trajectory-note">
+      <span className="font-bold text-ink-faint">Trajectory </span>
+      {text}
+    </p>
+  );
+}
+
 export function VerdictPanel({ runId }: { runId: string }) {
-  const { verdict, rubric, unavailable, loading, busy, actionError, score } = useVerdict(runId);
+  const { verdict, trajectory, rubric, unavailable, loading, busy, actionError, score } =
+    useVerdict(runId);
+  const trajectoryNote = <TrajectoryNote rubric={rubric} trajectory={trajectory} />;
 
   // No rubric means this unit of work opted out; say nothing rather than
   // advertising a feature on every run that will never use it.
@@ -148,6 +195,7 @@ export function VerdictPanel({ runId }: { runId: string }) {
         {rubric && (
           <p className="mt-2 max-w-prose text-[11px] text-ink-faint">Rubric: {rubric.goal}</p>
         )}
+        {trajectoryNote}
         {rescore}
       </Card>
     );
@@ -162,6 +210,7 @@ export function VerdictPanel({ runId }: { runId: string }) {
           <CriterionRow key={c.id} c={c} minScore={verdict.minScore} />
         ))}
       </ul>
+      {trajectoryNote}
       {rescore}
     </Card>
   );

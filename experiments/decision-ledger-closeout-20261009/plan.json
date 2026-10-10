@@ -1,0 +1,71 @@
+{
+  "populationAccounting": "Native H2 stays separate from auxiliary scenario review and future acceptance-test specifications",
+  "proposedConsumerOutcomes": {
+    "termination": "Keep deterministic observation; probe remains evaluation only",
+    "gateAdvice": "Defer until genuine prospective operator evidence",
+    "causeSummary": "Advisory inference with evidence and uncertainty; replacing Autopsy deferred pending references",
+    "knowledgeSupport": "No assessment changes evaluateSupport or canonical acceptance",
+    "autoApproval": "Not authorized by these assessments",
+    "enforcingEscalation": "Develop only after consumer-specific validation and rollout controls"
+  },
+  "limits": {
+    "maxExtraRepeatRuns": 4,
+    "unknownCost": "Report unknown cost; bound invocation count and runtime; do not present estimate as enforced budget",
+    "provider": "existing Claude Haiku collector",
+    "globalLimitsUnchanged": true,
+    "maxAnalysisInvocations": 6,
+    "maxNewWorkloadRuns": 16,
+    "stopIfKnownAdditionalCostUsdExceeds": 15,
+    "maxConcurrentSourceRuns": 1
+  },
+  "purpose": "Decide how to develop and use the Decision Ledger without indefinite exploratory shadow collection",
+  "scope": {
+    "applicationCodeChanges": false,
+    "serviceRestart": false,
+    "automatedHumanDecisions": false,
+    "allowedChanges": [
+      "experiment input and report artifacts",
+      "owned pipeline definitions and instances through authenticated running app"
+    ],
+    "newCanonicalLabels": false
+  },
+  "designRules": [
+    "Observations, assessments, accepted knowledge and policy decisions are distinct records",
+    "Termination remains an authoritative deterministic observation",
+    "Subject-authored prose cannot grant permissions or make knowledge canonical",
+    "Consumers bind question/projection/provider/policy versions and exact scope/state/attempt",
+    "Missing/stale/failed assessments never widen permissions",
+    "Replay reads stored results; reevaluation creates a separate recorded call",
+    "H1 requires genuine blinded operator actions; automated actions are not human references",
+    "Current 200-answer calibration display threshold is not proof of policy safety"
+  ],
+  "closure": {
+    "claims": "Residual correctness, human gate safety and exact-snapshot stability stay unproven without appropriate references/capabilities",
+    "coverage": "Include genuinely recorded deadlines if existing live capability permits; never infer class from scenario intention",
+    "integrity": "Zero unexplained journal/ledger gaps or snapshot hash mismatches in relied-on evidence",
+    "accounting": "Each source run and selected question explicitly assessed, not-selected, excluded, pending, expired or abandoned",
+    "deliverables": [
+      "evidence-audit.json",
+      "experiment-results.json",
+      "development-plan.md",
+      "consumer-matrix.json",
+      "implementation-backlog.json",
+      "closure-decision.json",
+      "report.html"
+    ]
+  },
+  "version": 1,
+  "timebox": {
+    "end": "2026-10-09T08:30:00+02:00",
+    "start": "2026-10-09T00:00:00+02:00",
+    "zone": "Europe/Stockholm"
+  },
+  "stages": [
+    "Freeze live baseline and pre-register closure criteria",
+    "Pause repetitive owned feeder after capturing its definition; add 16 varied isolated source runs with genuine deadline cases first",
+    "Allow maturity and FIFO collector drain; account for every run and selected question",
+    "Independent review of exact retained inputs and assessments",
+    "Design ledger and pipeline consumers with sequenced backlog and acceptance tests",
+    "Final evidence reconciliation; stop exploratory feeder and write accept/defer/reject decision"
+  ]
+}

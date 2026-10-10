@@ -1,0 +1,150 @@
+{
+  "at": "2026-10-10T11:06:11.8552613Z",
+  "scope": "Local worktree and source audit; no merge, commit, push, application change, or service startup",
+  "remoteFreshness": "origin/main is the locally cached tracking reference; no network fetch performed",
+  "sourceControlConflict": "User instructions specify Azure DevOps; origin currently points to github.com/Jobaben/Argus. No remote operations performed. Referenced empirical-standoff skill file was not found in the checked skill locations.",
+  "baseline": {
+    "cachedRemoteMain": "fa470edc96737e0a5f6f1c38cfd1b2085121faf8",
+    "localMainOnlyCommits": [
+      "17e6cc7 docs added"
+    ],
+    "localMain": "17e6cc71c6c71e63649ba105688066b967659c91",
+    "cachedRemoteMainOnlyCommitCount": 56,
+    "recommendation": "Use cached remote-main history as integration baseline, after verifying the intended remote; preserve local documentation commit 17e6cc7."
+  },
+  "checkouts": [
+    {
+      "status": "Contains existing staged closeout evidence, cleanup archive and intentional Workshop Studio deletions",
+      "branch": "completed-workshop-shadow-feeder",
+      "path": "C:/GIT/Argus",
+      "disposition": "Preserve evidence and cleanup; keep retired experimental application out of product integration"
+    },
+    {
+      "patchId": "70010088936f4cf690956c1dadb8428f5ca6d5a8",
+      "status": "Clean",
+      "branch": "fix/windows-pipeline-popups",
+      "path": "C:/GIT/Argus/.worktrees/fix-windows-pipeline-popups",
+      "disposition": "No code salvage: full 10-commit range has exactly the same stable patch ID as integrated commit 5969fee"
+    },
+    {
+      "status": "54 staged files, including 21 application files; no unstaged diff",
+      "branch": "feature/h2-codex-support",
+      "path": "C:/GIT/Argus/.worktrees/h2-codex-support",
+      "disposition": "Preserve staged work; port Codex provider and runtime support onto the newer decision-ledger branch rather than applying old shared runner code wholesale"
+    },
+    {
+      "status": "Clean",
+      "branch": "feature/outcome-routing-foundation",
+      "path": "C:/GIT/Argus/worktrees/outcome-routing",
+      "disposition": "Core routing already integrated; routing.ts and routing.test.ts match cached origin/main exactly; route authoring on main supersedes old branch"
+    },
+    {
+      "status": "Clean at a60d3f9",
+      "branch": "agent/decision-ledger-foundations",
+      "path": "C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus",
+      "disposition": "Primary application salvage: five commits beyond cached origin/main, which is already integrated into this branch"
+    },
+    {
+      "status": "Clean, detached at 9d6f42c",
+      "branch": null,
+      "path": "C:/Users/ushab/.codex/worktrees/decision-ledger-foundations/Argus",
+      "disposition": "Same commit as primary checkout; no unique committed or uncommitted work"
+    }
+  ],
+  "sourceCopy": {
+    "matchesCommit": "02668069d8eb1f716757f0acb26a5d1021ad3013",
+    "path": "C:/GIT/Argus/.worktrees/argus-local",
+    "comparison": "All application, contract, web, CLI, documentation, hook, script and workflow files compared with CRLF normalized to LF; zero differences from H2 base",
+    "registeredWorktree": false,
+    "extraRootHelpers": [
+      "author-workshop-pipeline.mjs",
+      "prepare-workshop-pipeline.mjs",
+      "remove-workshop-seed.mjs"
+    ],
+    "extraRootDisposition": "Machine-specific retired experiment helpers; preserve with historical experiment, do not treat as unique core implementation"
+  },
+  "primarySalvage": {
+    "validation": "Existing branch artifacts record build/typecheck/lint and focused validation; prior full server run had 20 baseline Vault failures also present on main. No build or test suite was rerun in this audit.",
+    "features": [
+      "Admitted read-only assessment reader and authenticated run advisory JSON route",
+      "Bounded retained-input evaluation and durable invocation accounting",
+      "Final dispatch admission and truthful no-call/possibly-called provenance",
+      "Versioned process taxonomy and frozen-input identity binding",
+      "Runtime hardening, tests, documentation and frontend payload repairs"
+    ],
+    "branch": "agent/decision-ledger-foundations",
+    "readiness": "Implementation exists, production admission/configuration and live operational proof remain incomplete. No enforcing policy or automatic knowledge acceptance is enabled.",
+    "commits": [
+      "a60d3f9 Defer sign-in and drawer code to meet the payload budget",
+      "baa155a Match exact output grants in the POSIX harness test",
+      "1aedc1b Fix CI formatting and Windows fixture cleanup",
+      "a7a7703 Integrate main and record Decision Ledger PR checks",
+      "30b55ab Build bounded decision ledger advisory foundations"
+    ]
+  },
+  "codexSalvage": {
+    "applicationFiles": [
+      "contracts/src/decision.ts",
+      "server/src/decision/codexCli.test.ts",
+      "server/src/decision/definitions.ts",
+      "server/src/decision/h2/config.ts",
+      "server/src/decision/h2/entry.ts",
+      "server/src/decision/h2/ledger.ts",
+      "server/src/decision/h2/report.test.ts",
+      "server/src/decision/h2/route.test.ts",
+      "server/src/decision/h2/sampling.ts",
+      "server/src/decision/h2/testSupport.ts",
+      "server/src/decision/h2/units.test.ts",
+      "server/src/decision/h2/watcher.test.ts",
+      "server/src/decision/h2/watcher.ts",
+      "server/src/decision/projection.test.ts",
+      "server/src/decision/providers/claudeCli.ts",
+      "server/src/decision/providers/cli.ts",
+      "server/src/decision/providers/codexCli.ts",
+      "server/src/runtimes/codex.test.ts",
+      "server/src/runtimes/codex.ts",
+      "server/src/runtimes/types.ts",
+      "server/src/sources/analysis.ts"
+    ],
+    "patchCheck": "Read-only git apply --check against newer decision-ledger checkout failed in four files",
+    "overlapWithPrimary": [
+      "server/src/decision/definitions.ts",
+      "server/src/decision/h2/report.test.ts",
+      "server/src/decision/h2/testSupport.ts",
+      "server/src/decision/h2/watcher.test.ts",
+      "server/src/decision/h2/watcher.ts",
+      "server/src/decision/providers/claudeCli.ts",
+      "server/src/runtimes/types.ts",
+      "server/src/sources/analysis.ts"
+    ],
+    "criticalIntegrationRule": "Preserve newer dispatch admission and execution-disposition checks while adding Codex support; the old generic CLI refactor lacks these safeguards.",
+    "conflictingFiles": [
+      "server/src/decision/h2/testSupport.ts",
+      "server/src/decision/h2/watcher.test.ts",
+      "server/src/decision/providers/claudeCli.ts",
+      "server/src/sources/analysis.ts"
+    ],
+    "historicalValidation": "H2 handoff records 173 focused tests, contracts/server typechecks and server build; real scheduled Codex activation remains unverified."
+  },
+  "backups": [
+    {
+      "bytes": 399966,
+      "sha256": "79f77b4c741569b35ee51f46b43aaea2aad37fe0499207d3f3fc5c27e597af5c",
+      "file": "h2-codex-all-staged.patch"
+    },
+    {
+      "bytes": 50260,
+      "sha256": "a03d8a330cdda250a30fb2f4a3e551fb1f17d607312b2c04d2e985f0a62a5858",
+      "file": "h2-codex-application.patch"
+    }
+  ],
+  "integrationOrder": [
+    "Confirm intended source-control remote and refresh chosen main baseline",
+    "Preserve local feedback document 17e6cc7 and current evidence/cleanup changes",
+    "Integrate committed decision-ledger foundations, including its CI repair commits",
+    "Port staged H2 Codex work against new shared provider/runner safeguards",
+    "Run build, typecheck, focused ledger/Codex tests and compare full-suite failures with baseline",
+    "Stage reviewable integration; leave uncommitted for user"
+  ],
+  "existingOlderBranches": "Codex setup, completion fallback, model effort/cost, hidden Windows consoles and pipeline wrapping already have corresponding integrated main commits; no extra worktrees found for them."
+}

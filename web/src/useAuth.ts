@@ -32,6 +32,7 @@ export function useAuth() {
         authenticated: body.authenticated === true,
         username: body.username ?? null,
         role: body.role ?? null,
+        sessionRequired: body.sessionRequired === true,
       };
     },
     initial: null,

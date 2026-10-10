@@ -1,0 +1,49 @@
+{
+  "name": "Decision Ledger - Final overnight evidence and stopping decision",
+  "capabilities": {
+    "enforcement": "strict",
+    "filesystem": "workspace-write"
+  },
+  "enabled": true,
+  "phases": [
+    {
+      "name": "Reconcile overnight experiment and close the development plan",
+      "id": "final-evidence",
+      "gated": false,
+      "cwd": "C:/GIT/Argus/experiments/decision-ledger-closeout-20261009",
+      "checks": [
+        {
+          "kind": "file",
+          "path": "reports/final-evidence.json",
+          "minBytes": 100
+        },
+        {
+          "kind": "file",
+          "path": "reports/final-decision.json",
+          "minBytes": 100
+        },
+        {
+          "kind": "file",
+          "path": "reports/final-report.html",
+          "minBytes": 100
+        }
+      ],
+      "steps": [
+        {
+          "reasoningEffort": "high",
+          "prompt": "This is the final overnight evidence refresh for the Decision Ledger experiment. No Argus application code changes, store writes, service restarts, credentials, external calls, implementation, commits or pushes. Work only in the experiment cwd; read current Argus evidence and source read-only. Read plan.json, registration-receipt.json and all reports. Reconcile every scheduled source instance/run and native H2 question using raw retained records. Verify relied-on snapshot hashes and observed termination labels. Write reports/final-evidence.json, reports/final-decision.json and reports/final-report.html, and update the evidence appendix of reports/development-plan.md without rewriting valid design history. Include exact pipeline/instance/run/assessment IDs, per-class denominators, pending/unassessed items, unsupported cause rationales, cost and all uncertainty. Distinguish experimental probe performance from residual correctness, model review from human labels, implemented contracts from future backlog. Decide accept/defer/reject for each consumer; never claim calibration, human gate safety or residual accuracy without required references. Explicitly state whether exploratory workload generation can stop and why. If upstream reports do not exist, still write a factual final status including what prevented completion and a bounded next step; do not fabricate any design review. Only write reports and supplied result/artifact channels.",
+          "name": "Final evidence-bound stopping decision"
+        }
+      ],
+      "timeoutSeconds": 1800,
+      "stallSeconds": 300
+    }
+  ],
+  "trigger": {
+    "time": "08:00",
+    "kind": "daily"
+  },
+  "overlapPolicy": "skip",
+  "runtime": "codex",
+  "reasoningEffort": "high"
+}

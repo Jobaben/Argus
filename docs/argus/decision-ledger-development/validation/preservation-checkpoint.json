@@ -1,0 +1,56 @@
+{
+  "format": "argus.ledger-preservation-checkpoint",
+  "version": 1,
+  "at": "2026-10-10T05:01:20.7881474Z",
+  "originalEvidence": [
+    {
+      "path": "experiments/decision-ledger-closeout-20261009/reports/final-report.md",
+      "sha256": "aea3541c287a9131dd8058596511c886b23cf2a98d3ac048a1d77faedccf7d5b",
+      "matchesFrozenCloseout": true
+    },
+    {
+      "path": "experiments/decision-ledger-closeout-20261009/reports/development-plan.md",
+      "sha256": "1a5aa75b1e39049a4d67166869a1f780836dc2a71a3e594f12e2030104eed5b7",
+      "matchesFrozenCloseout": true
+    },
+    {
+      "path": "experiments/decision-ledger-closeout-20261009/reports/implementation-backlog.json",
+      "sha256": "b9e9cf0f9a74324f00f40756b614573801c95f34e29b0c93fa955616616cd070",
+      "matchesFrozenCloseout": true
+    },
+    {
+      "path": "experiments/decision-ledger-closeout-20261009/reports/consumer-matrix.json",
+      "sha256": "ccddcc39e6f525630b237b7f9e72b53acad277189e48661edadea72054c78ed4",
+      "matchesFrozenCloseout": true
+    },
+    {
+      "path": "experiments/decision-ledger-closeout-20261009/reports/experiment-results.json",
+      "sha256": "3aa0f19f83177e2b16b154d072779e99400a7e7782c709d40021383806abb648",
+      "matchesFrozenCloseout": true
+    },
+    {
+      "path": "experiments/decision-ledger-closeout-20261009/reports/evidence-audit.json",
+      "sha256": "321826d7918b9de81d2b17936ef37b24d2ca9fbd89458d2940332d011c866a16",
+      "matchesFrozenCloseout": true
+    },
+    {
+      "path": "experiments/decision-ledger-closeout-20261009/reports/independent-closeout-plan-review.json",
+      "sha256": "bf35163e19525c90dc77516711e21360c04c5c18560de7a6936f2b06325f9669",
+      "matchesFrozenCloseout": true
+    },
+    {
+      "path": "experiments/decision-ledger-closeout-20261009/reports/material-failure-diagnosis.json",
+      "sha256": "38f7acdc28a7c73ee0e78e8cd91dca11c753a71e3c95046cce6ec1100afea0c6",
+      "matchesFrozenCloseout": true
+    },
+    {
+      "path": "experiments/decision-ledger-closeout-20261009/reports/final-cutoff-verification.json",
+      "sha256": "6fd37cb44b4cef53b74008529e2c6577816827a776d6dd93641d2e33ba770cf5",
+      "matchesFrozenCloseout": true
+    }
+  ],
+  "rootIndexSha256": "151b9a1e5d831a53138f45cfd382de02b391a473f7f81b809a7b67e7de201440",
+  "rootIndexProof": "Read-only checkpoint at this time; compare again at cutoff. This hash is not evidence of the initial task-start index.",
+  "rootIndexTouched": false,
+  "liveStoresAccessed": false
+}

@@ -1,16 +1,9 @@
+import { Drawer } from "../ds/Drawer";
 import { Fragment, useEffect, useState } from "react";
 import { runtimeLabel } from "../useRuntimes";
-import type { Run } from "../types";
+import type { Run, StepCompletion } from "../types";
 import type { StepPill } from "../ds";
-import {
-  Drawer,
-  Skeleton,
-  StatusPill,
-  formatMs,
-  formatTokens,
-  formatUsd,
-  parseRunLog,
-} from "../ds";
+import { Skeleton, StatusPill, formatMs, formatTokens, formatUsd, parseRunLog } from "../ds";
 
 /**
  * Everything Argus knows about one step of a pipeline, without leaving the board.
@@ -34,6 +27,28 @@ export interface StepSelection {
    * that invented one would be lying about where you were.
    */
   originY?: number;
+}
+
+/**
+ * One line for how the run's own completion report was received. Worded as the
+ * agent's report on purpose: a marker is never independent verification, so
+ * nothing here says "verified".
+ */
+function completionLabel(c: StepCompletion): string {
+  const marker =
+    c.marker === "missing"
+      ? "no outcome marker"
+      : c.marker === "conflicting"
+        ? "conflicting outcome markers"
+        : `agent reported ${c.marker}`;
+  const via = c.source === "run-record" ? " (read from the run record)" : "";
+  const hook =
+    c.hook && !c.hook.agrees ? `; hook reported ${c.hook.marker ?? "malformed metadata"}` : "";
+  if (c.verdict === "accepted") {
+    return `${marker}${via} — accepted${c.marker === "missing" ? " under the lenient policy" : ""}${hook}`;
+  }
+  if (c.verdict === "refused") return `${marker}${via} — completion refused${hook}`;
+  return `${marker}${via}${hook}`;
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -196,14 +211,58 @@ export function StepDrawer({
         <Field label="job">
           <span className="font-mono">{runId ?? "—"}</span>
         </Field>
+        {step.candidate && (
+          // Best-of-N: which draft this is, and what became of it. Stated in
+          // words rather than as a status token, because "aborted" is exactly
+          // the wrong word for a draft that simply was not the one chosen.
+          <Field label="candidate">
+            <span className="font-mono">
+              c{step.candidate.index + 1} of {step.candidate.total}
+            </span>
+            {step.selected
+              ? " · selected"
+              : step.superseded
+                ? " · superseded by the winner"
+                : step.verified === true
+                  ? " · checks passed"
+                  : step.verified === false
+                    ? " · checks failed"
+                    : ""}
+          </Field>
+        )}
+        {step.completion && (
+          <Field label="completion">
+            <span title={step.completion.reason ?? undefined}>
+              {completionLabel(step.completion)}
+            </span>
+          </Field>
+        )}
         {step.model && <Field label="model">{step.model}</Field>}
         {step.runtime && (
           <Field label="runtime">{runtimeLabel(step.runtime) || step.runtime}</Field>
+        )}
+        {step.workspace && (
+          // The branch is the deliverable of an isolated phase; the directory it
+          // ran in is disposable, so it rides along as the title rather than
+          // taking a line of its own.
+          <Field label="workspace">
+            <span className="font-mono" title={step.workspace.path}>
+              {step.workspace.branch}
+            </span>
+          </Field>
         )}
         {step.startedAt && (
           <Field label="started">{new Date(step.startedAt).toLocaleString()}</Field>
         )}
         {step.durationMs != null && <Field label="duration">{formatMs(step.durationMs)}</Field>}
+        {run?.deadlineAt && run.startedAt && (
+          <Field label="timeout">
+            {formatMs(Math.max(0, Date.parse(run.deadlineAt) - Date.parse(run.startedAt)))}
+          </Field>
+        )}
+        {run?.stallSeconds != null && (
+          <Field label="stall">no output for {run.stallSeconds}s</Field>
+        )}
         {step.tokens != null && <Field label="tokens">{formatTokens(step.tokens)}</Field>}
         {step.costUsd != null && <Field label="cost">{formatUsd(step.costUsd)}</Field>}
         {step.currentActivity && <Field label="activity">{step.currentActivity}</Field>}

@@ -1,9 +1,11 @@
 import { readFile, readdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { paths } from "../claudeHome.js";
-import { atomicWriteJson } from "./atomicWrite.js";
+import { atomicWriteJsonDurable } from "./atomicWrite.js";
 import { cached, invalidate, patchCached } from "./cache.js";
 import { createFileMemo } from "./fileMemo.js";
+import { log } from "../log.js";
+import { instanceWorktreesDir, plannedRemovals, removeWorktree } from "../harness/workspace.js";
 import type { PipelineInstance } from "./pipelineTypes.js";
 
 export const INSTANCE_KEEP = 50;
@@ -49,8 +51,15 @@ function upsert(all: PipelineInstance[], inst: PipelineInstance): PipelineInstan
   return next;
 }
 
+/**
+ * Publish an instance: atomically (a reader sees the old record or the new
+ * one, never a mix) and durably (fsynced file, then fsynced directory — see
+ * `durable/io.ts` for what that means per platform). The instance save is the
+ * commit point of every transition, including a gate decision's link, so it
+ * must not be the write that a crash can quietly undo.
+ */
 export async function writeInstance(inst: PipelineInstance): Promise<void> {
-  await atomicWriteJson(instancePath(inst.id), inst);
+  await atomicWriteJsonDurable(instancePath(inst.id), inst);
   // Drop any memo entry so the next read re-stats — atomic rename gives the
   // file a fresh mtime, but eager eviction makes staleness impossible even on
   // filesystems with coarse mtime resolution.
@@ -70,9 +79,22 @@ export async function writeInstance(inst: PipelineInstance): Promise<void> {
   invalidate(scanKey());
 }
 
+/**
+ * One instance, as it is on disk — a private copy.
+ *
+ * The parse memo hands out the same object for as long as the file is
+ * unchanged. The engine reads an instance under its lock and then mutates it
+ * in place on the way to a save; if that save never happens (a failure part-way
+ * through a transition), a shared object would carry the unsaved mutation into
+ * every later read in this process — the engine would act on a state that
+ * exists nowhere on disk. A copy makes "what the next reader sees" exactly
+ * "what was last written". Scans (`readInstances`) stay shared: their callers
+ * only read.
+ */
 export async function readInstance(id: string): Promise<PipelineInstance | null> {
   if (!INSTANCE_ID_RE.test(id)) return null;
-  return readParsed(id);
+  const inst = await readParsed(id);
+  return inst ? structuredClone(inst) : null;
 }
 
 async function scanInstances(): Promise<PipelineInstance[]> {
@@ -103,12 +125,62 @@ export async function readInstances(
   return out;
 }
 
+/**
+ * The isolated worktrees of an instance falling out of retention.
+ *
+ * Normally they are already gone: the engine removes them as the instance
+ * settles. This catches the ones no settlement ever removed — an Argus that
+ * stopped mid-run, a removal git refused at the time — because once the
+ * instance record is deleted, nothing remembers the directories exist. Never
+ * throws: retention must not depend on git.
+ */
+async function pruneWorktrees(inst: PipelineInstance): Promise<void> {
+  const def = inst.definition;
+  if (!def) return;
+  if (!inst.workspace && !inst.phases.some((p) => p.workspace)) return;
+  const recorded = new Set(
+    [...inst.phases.map((p) => p.workspace), inst.workspace].flatMap((w) => (w ? [w.path] : [])),
+  );
+  const plan = plannedRemovals(def, inst);
+  let removed = 0;
+  for (const removal of plan) {
+    try {
+      await removeWorktree({ repoCwd: removal.repoCwd, path: removal.path });
+      removed++;
+    } catch (e) {
+      log.warn("pruned instance's worktree could not be removed", {
+        instanceId: inst.id,
+        path: removal.path,
+        err: e,
+      });
+    }
+  }
+  // The per-instance directory itself goes only once every tree it held was
+  // removed — a `keep` policy (or a removal git refused) keeps the directory.
+  if (removed === recorded.size) {
+    await rm(instanceWorktreesDir(paths.worktreesDir(), inst.id), {
+      recursive: true,
+      force: true,
+    }).catch(() => {});
+  }
+}
+
 export async function pruneInstances(pipelineId: string, keep: number): Promise<void> {
   const mine = await readInstances({ pipelineId });
   const drop = mine.slice(keep);
   await Promise.all(
     drop.map(async (i) => {
+      // Before the record: the worktrees are found *through* it, and an
+      // instance deleted first would leave them on disk with nothing left that
+      // knows they exist. A tree whose policy asked to be kept is left alone.
+      await pruneWorktrees(i);
       await rm(instancePath(i.id), { force: true });
+      // Its transition log is part of the instance: it explains a record that
+      // no longer exists, and nothing else ever deletes it.
+      await rm(path.join(paths.transitionsDir(), `${i.id}.jsonl`), { force: true });
+      // The instance's file artifacts and working-tree baselines go with it.
+      await rm(path.join(paths.artifactsDir(), i.id), { recursive: true, force: true });
+      await rm(path.join(paths.invocationsDir(), i.id), { recursive: true, force: true });
       parseMemo.forget(i.id);
     }),
   );

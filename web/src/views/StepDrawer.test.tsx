@@ -56,6 +56,56 @@ describe("StepDrawer", () => {
     expect(screen.getByText("Release train · Draft release notes")).toBeInTheDocument();
   });
 
+  it("describes a completion as the agent's report, never as verification", async () => {
+    stubRun({ id: "run_0003", log: "" });
+    const base = { signal: "completed", source: "signal", at: "2026-07-07T10:01:00.000Z" } as const;
+    const { rerender } = render(
+      <StepDrawer
+        selection={selection({
+          step: step({
+            completion: { ...base, policy: "required", marker: "succeeded", verdict: "accepted" },
+          }),
+        })}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("agent reported succeeded — accepted")).toBeInTheDocument();
+    rerender(
+      <StepDrawer
+        selection={selection({
+          step: step({
+            completion: { ...base, policy: "lenient", marker: "missing", verdict: "accepted" },
+          }),
+        })}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByText("no outcome marker — accepted under the lenient policy"),
+    ).toBeInTheDocument();
+    rerender(
+      <StepDrawer
+        selection={selection({
+          step: step({
+            completion: {
+              ...base,
+              policy: "required",
+              marker: "missing",
+              verdict: "refused",
+              reason: "completion refused as unverified",
+              hook: { version: 2, marker: "succeeded", agrees: false },
+            },
+          }),
+        })}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByText("no outcome marker — completion refused; hook reported succeeded"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/verified/)).toBeNull();
+  });
+
   it("shows the run's cost, tokens, duration and model", async () => {
     stubRun({ id: "run_0003", log: "" });
     render(<StepDrawer selection={selection()} onClose={vi.fn()} />);
@@ -180,5 +230,73 @@ describe("StepDrawer", () => {
     await user.tab();
     await user.tab();
     expect(document.activeElement).not.toBe(document.body);
+  });
+  it("names the workspace branch, with the disposable directory as its title", async () => {
+    stubRun({ id: "run_0003", log: "" });
+    render(
+      <StepDrawer
+        selection={selection({
+          step: step({
+            workspace: {
+              path: "/home/u/.claude/argus/worktrees/i1/shared",
+              branch: "argus/i1/shared",
+              base: "HEAD",
+              baseHead: "abc123",
+            },
+          }),
+        })}
+        onClose={vi.fn()}
+      />,
+    );
+    const branch = await screen.findByText("argus/i1/shared");
+    expect(branch.getAttribute("title")).toBe("/home/u/.claude/argus/worktrees/i1/shared");
+    expect(screen.getByText("workspace")).toBeTruthy();
+  });
+
+  it("says nothing about a workspace for a step that ran without one", async () => {
+    stubRun({ id: "run_0003", log: "" });
+    render(<StepDrawer selection={selection()} onClose={vi.fn()} />);
+    // Let the run detail settle first, so this asserts on the loaded drawer.
+    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+    expect(screen.queryByText("workspace")).toBeNull();
+  });
+
+  it("names which candidate a best-of-N run was, and that it won", async () => {
+    stubRun({ id: "run_0003", log: "" });
+    render(
+      <StepDrawer
+        selection={selection({
+          step: step({ candidate: { index: 1, total: 3 }, verified: true, selected: true }),
+        })}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("candidate")).toBeTruthy();
+    expect(screen.getByText("c2 of 3")).toBeTruthy();
+    expect(screen.getByText(/· selected/)).toBeTruthy();
+  });
+
+  it("calls a killed loser superseded rather than failed", async () => {
+    stubRun({ id: "run_0003", log: "" });
+    render(
+      <StepDrawer
+        selection={selection({
+          step: step({
+            status: "stopped",
+            candidate: { index: 2, total: 3 },
+            superseded: true,
+          }),
+        })}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/superseded by the winner/)).toBeTruthy();
+  });
+
+  it("says nothing about candidates for an ordinary step", async () => {
+    stubRun({ id: "run_0003", log: "" });
+    render(<StepDrawer selection={selection()} onClose={vi.fn()} />);
+    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+    expect(screen.queryByText("candidate")).toBeNull();
   });
 });

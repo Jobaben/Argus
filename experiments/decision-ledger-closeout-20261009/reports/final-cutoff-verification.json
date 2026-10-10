@@ -1,0 +1,29 @@
+{
+  "at": "2026-10-09T06:37:35.062Z",
+  "envelopesChecked": 445,
+  "envelopeFailures": 0,
+  "snapshotsChecked": 94,
+  "snapshotFailures": [],
+  "applicationFilesChecked": 660,
+  "applicationChanges": [],
+  "offlineNativeReplayByteIdentical": true,
+  "nativeReportUnchangedSinceEvidenceAudit": true,
+  "nativeReportIntegrity": {
+    "history": "complete",
+    "ledger": [],
+    "journal": {
+      "gaps": 0,
+      "notices": []
+    },
+    "findings": []
+  },
+  "allOwnedDisabledPersisted": true,
+  "oldFeederPaused": true,
+  "unrelatedWorkshopDefinitionUnchanged": true,
+  "ownedInstances": 18,
+  "ownedInstancesActive": 0,
+  "exactlyOneInstancePerOwnedDefinition": true,
+  "liveApiAvailable": false,
+  "liveReloadVerified": false,
+  "limitation": "Final read-only API check refused connection; persisted cleanup verified, live reload unavailable"
+}

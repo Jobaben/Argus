@@ -8,6 +8,8 @@ import type { ArgusConfig } from "./config.js";
 import type { Engine } from "./pipelineEngine.js";
 import { createAuthService, type AuthService } from "./auth.js";
 import { createUserStore } from "./userStore.js";
+import { writeInstance } from "./sources/instances.js";
+import type { PipelineDefinition, PipelineInstance } from "./sources/pipelineTypes.js";
 import type { AnalysisRunner } from "./sources/analysis.js";
 
 let home: string;
@@ -32,10 +34,12 @@ const fakeEngine: Engine = {
   start: async () => null,
   onSignal: async () => ({ ok: true, code: 200 }),
   approve: async () => ({ ok: true, code: 200 }),
+  approveAutomatically: async () => ({ ok: true as const, code: 200 }),
   revise: async () => ({ ok: true, code: 200 }),
   abort: async () => ({ ok: true, code: 200 }),
   reconcile: async () => {},
   adopt: async () => {},
+  drain: async () => {},
 };
 
 // Always-authenticated root stub for tests that target other routes' behavior.
@@ -46,6 +50,23 @@ const openAuth: AuthService = {
   verify: () => ({ username: "test", role: "root" }),
   logout: () => {},
   revokeSessions: () => {},
+};
+
+// Signed out: no session, so the shared token is the only credential left.
+// Tests that assert the ARGUS_TOKEN gate rejects a caller need this rather than
+// `openAuth` — an authenticated session is itself an accepted credential now,
+// so an always-authenticated stub would satisfy the gate it is trying to prove.
+const signedOut: AuthService = {
+  ...openAuth,
+  status: async () => ({ configured: true, username: null, role: null }),
+  verify: () => null,
+};
+
+/** Honours the token it is given, like the real service: only SESSION is valid. */
+const SESSION = "session-cookie-value";
+const sessionAware: AuthService = {
+  ...openAuth,
+  verify: (t) => (t === SESSION ? { username: "test", role: "root" } : null),
 };
 
 function makeApp(over: Partial<ArgusConfig> = {}, auth: AuthService = openAuth) {
@@ -158,7 +179,7 @@ test("cross-origin mutation is rejected with 403", async () => {
 });
 
 test("token gate: missing token is 401, correct token passes", async () => {
-  const app = makeApp({ token: "s3cret" });
+  const app = makeApp({ token: "s3cret" }, signedOut);
   const denied = await app.request("/api/health", { headers: loopback });
   assert.equal(denied.status, 401);
   const ok = await app.request("/api/health", {
@@ -171,6 +192,38 @@ test("GET /api/agents returns an empty list on a fresh home", async () => {
   const res = await makeApp().request("/api/agents", { headers: loopback });
   assert.equal(res.status, 200);
   assert.deepEqual(await res.json(), { agents: [] });
+});
+
+test("GET /api/runs/:id/activity serves the tailer's retained events, empty when untracked", async () => {
+  const users = createUserStore();
+  const app = createApp({
+    config,
+    engine: fakeEngine,
+    broadcast: () => {},
+    serveWeb: false,
+    users,
+    remoteAddr: () => "127.0.0.1",
+    auth: openAuth,
+    activityLog: (runId) =>
+      runId === "live-1"
+        ? [
+            { at: "2026-07-07T10:00:00.000Z", kind: "init", label: "session started" },
+            { at: "2026-07-07T10:00:03.000Z", kind: "tool", label: "Bash: npm test" },
+          ]
+        : [],
+  });
+  const live = await app.request("/api/runs/live-1/activity", { headers: loopback });
+  assert.equal(live.status, 200);
+  assert.deepEqual(
+    ((await live.json()) as { events: { label: string }[] }).events.map((e) => e.label),
+    ["session started", "Bash: npm test"],
+  );
+  const idle = await app.request("/api/runs/finished-9/activity", { headers: loopback });
+  assert.equal(idle.status, 200);
+  assert.deepEqual(await idle.json(), { events: [] });
+  // No tailer wired at all (tests, or a stripped deployment) reads as idle too.
+  const bare = await makeApp().request("/api/runs/live-1/activity", { headers: loopback });
+  assert.deepEqual(await bare.json(), { events: [] });
 });
 
 test("path traversal on the timeline route yields an empty timeline", async () => {
@@ -294,6 +347,7 @@ test("pipeline mutations are 401 before an admin account exists", async () => {
     ["/api/pipelines/p1", "PATCH"],
     ["/api/pipelines/p1", "DELETE"],
     ["/api/pipelines/p1/start", "POST"],
+    ["/api/pipelines/p1/hook-token/rotate", "POST"],
     ["/api/instances/i1/approve", "POST"],
     ["/api/instances/i1/revise", "POST"],
     ["/api/instances/i1/abort", "POST"],
@@ -335,6 +389,8 @@ test("setup → authenticated mutation → logout → 401 again", async () => {
     authenticated: true,
     username: "usha",
     role: "root",
+    // No ARGUS_TOKEN on this app, so the UI needs no login to read.
+    sessionRequired: false,
   });
 
   const logout = await app.request("/api/auth/logout", {
@@ -556,6 +612,7 @@ test("weak setup password is rejected with 400 and no account is created", async
     authenticated: false,
     username: null,
     role: null,
+    sessionRequired: false,
   });
 });
 
@@ -863,7 +920,12 @@ test("watchtower: reset forgets prior history, restore brings it back, both broa
     broadcast: (m) => messages.push(m),
     serveWeb: false,
   });
-  for (let i = 0; i < 12; i++) writeRunRecord(`w${i}`, {});
+  // A run is forgotten when it ended strictly before the marker, so the samples
+  // have to be dated: written with `new Date()` they can land in the same
+  // millisecond as the reset the next statement performs, and survive it.
+  const earlier = new Date(Date.now() - 60_000).toISOString();
+  for (let i = 0; i < 12; i++)
+    writeRunRecord(`w${i}`, { queuedAt: earlier, startedAt: earlier, endedAt: earlier });
 
   const reset = await app.request("/api/watchtower/schedule%3As1/reset", {
     method: "POST",
@@ -941,6 +1003,9 @@ function stubAnalysis(answerJson: string): AnalysisRunner {
             costUsd: 0.001,
             tokens: 100,
             durationMs: 5,
+            runtime: "claude" as const,
+            requestedModel: "haiku",
+            reportedModel: null,
             failure: "unparseable" as const,
             error: "wrong shape",
           }
@@ -951,6 +1016,9 @@ function stubAnalysis(answerJson: string): AnalysisRunner {
             costUsd: 0.001,
             tokens: 100,
             durationMs: 5,
+            runtime: "claude" as const,
+            requestedModel: "haiku",
+            reportedModel: null,
             failure: null,
             error: null,
           };
@@ -1268,6 +1336,57 @@ test("verdict: a quality regression opens an issue even though the run exited 0"
   assert.match(after.issues[0].title, /quality below the bar for Nightly triage/);
 });
 
+test("verdict: a run's trajectory judgment is reported apart from its output verdict", async () => {
+  const app = makeAutopsyApp(VERDICT_ANSWER);
+  const traj = {
+    ...RUBRIC,
+    trajectory: { criteria: [{ id: "focus", label: "Focus" }], minScore: 4 },
+  };
+  writeSchedule({ rubric: traj });
+  writeRunRecord("traced", {});
+  const at = new Date().toISOString();
+  const { writeVerdict } = await import("./sources/verdict.js");
+  await writeVerdict({
+    id: "VT-1",
+    kind: "trajectory",
+    runId: "traced",
+    scheduleId: "s1",
+    scheduleName: "Nightly triage",
+    phaseId: null,
+    status: "ready",
+    at,
+    score: 3,
+    criteria: [],
+    summary: null,
+    regression: true,
+    minScore: 4,
+    costUsd: null,
+    tokens: null,
+    durationMs: null,
+    error: null,
+  });
+  const read = (await (
+    await app.request("/api/runs/traced/verdict", { headers: loopback })
+  ).json()) as { verdict: unknown; trajectory: { id: string } | null };
+  assert.equal(read.verdict, null, "a trajectory judgment is not the output verdict");
+  assert.equal(read.trajectory?.id, "VT-1");
+
+  const body = (await (await app.request("/api/verdicts", { headers: loopback })).json()) as {
+    trends: unknown[];
+    summary: { scored: number };
+    trajectoryTrends?: { key: string; minScore: number | null; points: unknown[] }[];
+  };
+  assert.equal(body.trends.length, 0);
+  assert.equal(body.summary.scored, 0);
+  assert.equal(body.trajectoryTrends?.[0].key, "schedule:s1");
+  assert.equal(body.trajectoryTrends?.[0].minScore, 4);
+  // A trajectory regression is not an output quality issue.
+  const issues = (await (await app.request("/api/issues", { headers: loopback })).json()) as {
+    issues: unknown[];
+  };
+  assert.equal(issues.issues.length, 0);
+});
+
 test("schedules: an invalid rubric is a clean 400, not a 500", async () => {
   const app = makeApp();
   const res = await app.request("/api/schedules", {
@@ -1522,6 +1641,233 @@ async function postPipeline(app: ReturnType<typeof makeApp>, phases: unknown[]) 
     body: JSON.stringify({ name: "P", trigger: null, phases }),
   });
 }
+
+// ── Editing a definition that has live instances ────────────────────────────
+
+function liveInstance(def: PipelineDefinition, id: string, status: PipelineInstance["status"]) {
+  const at = "2026-06-30T12:00:00.000Z";
+  return {
+    id,
+    pipelineId: def.id,
+    pipelineName: def.name,
+    status,
+    currentPhaseIndex: 0,
+    phases: [],
+    trigger: "manual",
+    signalToken: "tok",
+    createdAt: at,
+    updatedAt: at,
+    endedAt: status === "running" || status === "awaiting-approval" ? null : at,
+    definition: def,
+  } satisfies PipelineInstance;
+}
+
+test("editing what a pipeline executes is refused while instances are live, unless forced", async () => {
+  const app = makeApp();
+  const created = await postPipeline(app, [dagPhase("plan")]);
+  assert.equal(created.status, 201);
+  const def = (await created.json()) as PipelineDefinition;
+  await writeInstance(liveInstance(def, "i-live", "running"));
+  await writeInstance(liveInstance(def, "i-gate", "awaiting-approval"));
+  await writeInstance(liveInstance(def, "i-done", "succeeded"));
+  const put = (body: unknown, qs = "") =>
+    app.request(`/api/pipelines/${def.id}${qs}`, {
+      method: "PUT",
+      headers: sameOrigin,
+      body: JSON.stringify(body),
+    });
+  const edited = {
+    name: def.name,
+    trigger: null,
+    phases: [dagPhase("plan", { steps: [{ name: "s", prompt: "a better prompt" }] })],
+  };
+
+  // A changed prompt is refused, naming the instances it will not reach.
+  const refused = await put(edited);
+  assert.equal(refused.status, 409);
+  const body = (await refused.json()) as {
+    error: string;
+    code: string;
+    instances: { id: string; status: string }[];
+  };
+  assert.equal(body.code, "instances-running");
+  assert.deepEqual(
+    body.instances.map((i) => i.id).sort(),
+    ["i-gate", "i-live"],
+    "a finished instance is not live",
+  );
+  assert.match(body.error, /2 instances are running/);
+  assert.match(body.error, /force=1/);
+  const unchanged = (await (await app.request("/api/pipelines", { headers: loopback })).json()) as {
+    pipelines: PipelineDefinition[];
+  };
+  assert.equal(unchanged.pipelines[0].phases[0].steps[0].prompt, "p", "nothing was saved");
+
+  // Saving the definition back as it is, is not an edit.
+  const same = await put({
+    name: def.name,
+    trigger: def.trigger,
+    phases: def.phases,
+    enabled: def.enabled,
+    overlapPolicy: def.overlapPolicy,
+  });
+  assert.equal(same.status, 200);
+
+  // Name, trigger, overlap and enabled change nothing about work in flight.
+  const renamed = await put({ ...edited, phases: def.phases, name: "Renamed" });
+  assert.equal(renamed.status, 200);
+  const paused = await app.request(`/api/pipelines/${def.id}`, {
+    method: "PATCH",
+    headers: sameOrigin,
+    body: JSON.stringify({ enabled: false }),
+  });
+  assert.equal(paused.status, 200);
+  const retimed = await app.request(`/api/pipelines/${def.id}`, {
+    method: "PATCH",
+    headers: sameOrigin,
+    body: JSON.stringify({
+      trigger: { kind: "interval", everyMinutes: 30 },
+      overlapPolicy: "allow",
+    }),
+  });
+  assert.equal(retimed.status, 200);
+
+  // A phase edit through PATCH is held to the same rule as PUT.
+  const patched = await app.request(`/api/pipelines/${def.id}`, {
+    method: "PATCH",
+    headers: sameOrigin,
+    body: JSON.stringify({ phases: edited.phases }),
+  });
+  assert.equal(patched.status, 409);
+
+  // Forced, the edit lands — and applies to the next start only.
+  const forced = await put(edited, "?force=1");
+  assert.equal(forced.status, 200);
+  const after = (await forced.json()) as PipelineDefinition;
+  assert.equal(after.phases[0].steps[0].prompt, "a better prompt");
+
+  // A bad body is still a 400, live instances or not.
+  const invalid = await put({ name: "", phases: [] });
+  assert.equal(invalid.status, 400);
+});
+
+test("editing what a pipeline executes saves freely once nothing is live", async () => {
+  const app = makeApp();
+  const created = await postPipeline(app, [dagPhase("plan")]);
+  const def = (await created.json()) as PipelineDefinition;
+  await writeInstance(liveInstance(def, "i-done", "succeeded"));
+  await writeInstance(liveInstance(def, "i-failed", "failed"));
+  const res = await app.request(`/api/pipelines/${def.id}`, {
+    method: "PUT",
+    headers: sameOrigin,
+    body: JSON.stringify({
+      name: def.name,
+      trigger: null,
+      phases: [dagPhase("plan", { steps: [{ name: "s", prompt: "a better prompt" }] })],
+    }),
+  });
+  assert.equal(res.status, 200);
+});
+
+// ── Reliability ──────────────────────────────────────────────────────────────
+
+function settledInstance(
+  def: PipelineDefinition,
+  id: string,
+  status: "succeeded" | "failed",
+  over: Partial<PipelineInstance> = {},
+): PipelineInstance {
+  const at = "2026-09-18T12:00:00.000Z";
+  return {
+    id,
+    pipelineId: def.id,
+    pipelineName: def.name,
+    status,
+    currentPhaseIndex: 0,
+    phases: [
+      {
+        id: "plan",
+        name: "plan",
+        gated: false,
+        status,
+        steps: [{ name: "s", runId: null, status }],
+        attempt: 1,
+        payload: status === "failed" ? { reason: "nope", failureClass: "exit-code" } : null,
+      },
+    ],
+    trigger: "manual",
+    signalToken: "tok",
+    createdAt: at,
+    updatedAt: at,
+    endedAt: at,
+    ...over,
+  };
+}
+
+test("GET /api/pipelines/:id/reliability 404s for an unknown pipeline", async () => {
+  const res = await makeApp().request("/api/pipelines/nope/reliability", { headers: loopback });
+  assert.equal(res.status, 404);
+});
+
+test("GET /api/pipelines/:id/reliability derives from this pipeline's settled instances", async () => {
+  const app = makeApp();
+  const created = await postPipeline(app, [dagPhase("plan")]);
+  const def = (await created.json()) as PipelineDefinition;
+  await writeInstance(settledInstance(def, "i-ok", "succeeded"));
+  await writeInstance(settledInstance(def, "i-bad", "failed"));
+
+  const res = await app.request(`/api/pipelines/${def.id}/reliability`, { headers: loopback });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as {
+    pipelineId: string;
+    windowDays: number;
+    instances: number;
+    succeeded: number;
+    failed: number;
+    phases: { phaseId: string; failed: number }[];
+  };
+  assert.equal(body.pipelineId, def.id);
+  assert.equal(body.windowDays, 30);
+  assert.equal(body.instances, 2);
+  assert.equal(body.succeeded, 1);
+  assert.equal(body.failed, 1);
+  assert.equal(body.phases[0].phaseId, "plan");
+  assert.equal(body.phases[0].failed, 1);
+});
+
+test("GET /api/pipelines/:id/reliability clamps ?days into [1, 365]", async () => {
+  const app = makeApp();
+  const created = await postPipeline(app, [dagPhase("plan")]);
+  const def = (await created.json()) as PipelineDefinition;
+
+  const tooBig = await app.request(`/api/pipelines/${def.id}/reliability?days=9999`, {
+    headers: loopback,
+  });
+  assert.equal(((await tooBig.json()) as { windowDays: number }).windowDays, 365);
+
+  const tooSmall = await app.request(`/api/pipelines/${def.id}/reliability?days=0`, {
+    headers: loopback,
+  });
+  assert.equal(((await tooSmall.json()) as { windowDays: number }).windowDays, 1);
+
+  const junk = await app.request(`/api/pipelines/${def.id}/reliability?days=nope`, {
+    headers: loopback,
+  });
+  assert.equal(((await junk.json()) as { windowDays: number }).windowDays, 30);
+});
+
+test("GET /api/pipelines/:id/reliability carries an ETag like every other GET", async () => {
+  // The report embeds `computedAt`, so (unlike a static resource) it need not
+  // 304 on an immediate re-request — that generic conditional-GET behaviour
+  // is covered once, for every route, in httpCache.test.ts. This only checks
+  // the route does not opt out of it (e.g. by streaming or a non-JSON type).
+  const app = makeApp();
+  const created = await postPipeline(app, [dagPhase("plan")]);
+  const def = (await created.json()) as PipelineDefinition;
+  const res = await app.request(`/api/pipelines/${def.id}/reliability`, { headers: loopback });
+  assert.ok(res.headers.get("etag"));
+  assert.equal(res.headers.get("cache-control"), "no-cache");
+});
 
 test("weave: a valid diamond is accepted and its edges round-trip", async () => {
   const app = makeApp();
@@ -2224,12 +2570,18 @@ test("federation: a paired peer reaches the summary without the shared bearer to
     serveWeb: false,
     users: createUserStore(),
     remoteAddr: () => "127.0.0.1",
-    auth: openAuth,
+    auth: sessionAware,
   });
   const peerHost = { host: "box.local:7777" };
+  // Adding the peer is an admin route: it needs the token *and* a session.
   await app.request("/api/peers", {
     method: "POST",
-    headers: { ...peerHost, origin: "http://box.local:7777", "x-argus-token": "server-token" },
+    headers: {
+      ...peerHost,
+      origin: "http://box.local:7777",
+      "x-argus-token": "server-token",
+      cookie: `argus_session=${SESSION}`,
+    },
     body: JSON.stringify({ label: "Box", url: "http://box.local:7777", secret: PEER_SECRET }),
   });
 
@@ -2239,10 +2591,77 @@ test("federation: a paired peer reaches the summary without the shared bearer to
   });
   assert.equal(res.status, 200, "a paired peer is authenticated by its pairing");
 
-  // Every other route still demands the token.
+  // Every other route still demands a credential — token or session, neither sent.
   assert.equal((await app.request("/api/fleet", { headers: peerHost })).status, 401);
   // And an unpaired caller still gets nothing, token or no token.
   assert.equal((await app.request("/api/federation/summary", { headers: peerHost })).status, 401);
+});
+
+test("auth status tells the UI whether a session is required at all", async () => {
+  // The UI cannot infer this: signed out, a loopback server reads fine and a
+  // token-gated one 401s every panel. Without the flag the dashboard either
+  // gates a local server that needs no login or mounts one that refuses it.
+  const open = await makeApp({}, signedOut).request("/api/auth/status", { headers: loopback });
+  assert.equal(((await open.json()) as { sessionRequired: boolean }).sessionRequired, false);
+
+  const gated = await makeApp({ token: "s3cret" }, signedOut).request("/api/auth/status", {
+    headers: loopback,
+  });
+  assert.equal(((await gated.json()) as { sessionRequired: boolean }).sessionRequired, true);
+});
+
+test("with ARGUS_TOKEN set, the browser reaches the API by logging in", async () => {
+  // The end-to-end shape of the dashboard's own path, through the real auth
+  // service: ARGUS_TOKEN is set (mandatory on an exposed bind), and the browser
+  // has no way to know it. Before the session credential existed, every request
+  // the UI made was rejected before its route ran — a working API and a dead UI.
+  const users = createUserStore();
+  const auth = createAuthService({ store: users });
+  const app = createApp({
+    config: { ...config, token: "s3cret" },
+    engine: fakeEngine,
+    broadcast: () => {},
+    serveWeb: false,
+    users,
+    auth,
+    remoteAddr: () => "127.0.0.1",
+  });
+
+  // 1. A cold dashboard can ask whether it needs to log in.
+  const status = await app.request("/api/auth/status", { headers: loopback });
+  assert.equal(status.status, 200, "the UI can discover it needs a login");
+
+  // 2. Reads are refused, with the code the UI renders a login form for.
+  const cold = await app.request("/api/overview", { headers: loopback });
+  assert.equal(cold.status, 401);
+  assert.equal(((await cold.json()) as { code?: string }).code, "auth_required");
+
+  // 3. Creating the root account is reachable without the shared token.
+  const created = await app.request("/api/auth/setup", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ username: "root", password: "correct horse battery" }),
+  });
+  assert.equal(created.status, 201);
+
+  // 4. The session cookie it hands back is accepted in place of the token.
+  const cookie = created.headers.get("set-cookie") ?? "";
+  assert.match(cookie, /argus_session=/);
+  const session = /argus_session=([^;]+)/.exec(cookie)?.[1] ?? "";
+  const warm = await app.request("/api/overview", {
+    headers: { ...loopback, cookie: `argus_session=${session}` },
+  });
+  assert.equal(warm.status, 200, "a logged-in browser reads the API without the token");
+
+  // 5. Logging out revokes it again — the cookie is not a permanent bypass.
+  await app.request("/api/auth/logout", {
+    method: "POST",
+    headers: { ...sameOrigin, cookie: `argus_session=${session}` },
+  });
+  const after = await app.request("/api/overview", {
+    headers: { ...loopback, cookie: `argus_session=${session}` },
+  });
+  assert.equal(after.status, 401, "a revoked session stops being a credential");
 });
 
 test("the agent completion signal survives ARGUS_TOKEN without a bearer header", async () => {
@@ -2259,7 +2678,9 @@ test("the agent completion signal survives ARGUS_TOKEN without a bearer header",
 });
 
 test("ARGUS_TOKEN still guards the routes next to the signal", async () => {
-  const app = makeApp({ token: "secret" });
+  // Signed out on purpose: with neither the shared token nor a session, these
+  // two must still be refused while the signal beside them goes through.
+  const app = makeApp({ token: "secret" }, signedOut);
   for (const path of ["/api/instances/inst-1/abort", "/api/instances/inst-1/approve"]) {
     const res = await app.request(path, { method: "POST", headers: sameOrigin });
     assert.equal(res.status, 401, path);
@@ -2390,4 +2811,500 @@ test("routing: the signal route forwards a structured result to the engine", asy
   });
   assert.equal((seen[1] as { result?: unknown }).result, undefined);
   assert.match(String((seen[1] as { resultError: string }).resultError), /could not be parsed/);
+});
+
+test("GET /api/runs/:id/invocation serves the recorded invocation, 404 when none", async () => {
+  const runs = await import("./sources/runs.js");
+  await runs.writeInvocation({
+    runId: "inv1",
+    instanceId: "i1",
+    phaseId: "investigate",
+    step: "research",
+    attempt: 0,
+    runtime: "claude",
+    bin: "claude",
+    args: ["-p", "--disallowedTools", "Bash"],
+    cwd: "/repo",
+    envNames: ["HOME", "PATH"],
+    envStripped: ["ARGUS_TOKEN"],
+    capabilities: { filesystem: "read-only" },
+    limitations: [],
+    materializedFiles: [],
+    artifactDir: null,
+    resultFile: null,
+    timeoutSeconds: 600,
+    deadlineAt: "2026-06-30T12:10:00.000Z",
+    gitHead: "abc123",
+    startedAt: "2026-06-30T12:00:00.000Z",
+  });
+  const app = makeApp();
+  const ok = await app.request("/api/runs/inv1/invocation", { headers: loopback });
+  assert.equal(ok.status, 200);
+  const body = (await ok.json()) as { envStripped: string[]; args: string[] };
+  assert.deepEqual(body.envStripped, ["ARGUS_TOKEN"]);
+  assert.deepEqual(body.args, ["-p", "--disallowedTools", "Bash"]);
+  assert.equal((await app.request("/api/runs/nope/invocation", { headers: loopback })).status, 404);
+  assert.equal((await app.request("/api/runs/../x/invocation", { headers: loopback })).status, 404);
+});
+
+// ── Gated artifact review ────────────────────────────────────────────────────
+
+async function gatedInstance(app: ReturnType<typeof makeApp>) {
+  const created = await postPipeline(app, [dagPhase("draft", { gated: true })]);
+  assert.equal(created.status, 201);
+  const def = (await created.json()) as PipelineDefinition;
+  const artifactDir = path.join(home, "artifacts", "i-gate", "draft");
+  mkdirSync(path.join(artifactDir, "notes"), { recursive: true });
+  writeFileSync(path.join(artifactDir, "report.md"), "# Report\n\nbody");
+  writeFileSync(path.join(artifactDir, "notes", "raw.txt"), "raw");
+  const inst = liveInstance(def, "i-gate", "awaiting-approval");
+  const gated: PipelineInstance = {
+    ...inst,
+    phases: [
+      {
+        id: "draft",
+        name: "draft",
+        gated: true,
+        status: "awaiting-approval",
+        steps: [{ name: "s", runId: "r1", status: "succeeded" }],
+        attempt: 0,
+        payload: { summary: "drafted" },
+        artifactDir,
+      },
+      {
+        id: "later",
+        name: "later",
+        gated: false,
+        status: "pending",
+        steps: [{ name: "s", runId: null, status: "pending" }],
+        attempt: 0,
+        payload: null,
+      },
+    ],
+  };
+  await writeInstance(gated);
+  return { def, inst: gated, artifactDir };
+}
+
+test("review: lists a paused phase's artifacts without a login", async () => {
+  const app = makeApp({}, signedOut);
+  const { inst } = await gatedInstance(makeApp());
+  const res = await app.request(`/api/instances/${inst.id}/phases/draft/review`, {
+    headers: loopback,
+  });
+  assert.equal(res.status, 200);
+  const review = (await res.json()) as {
+    phaseId: string;
+    status: string;
+    canApprove: boolean;
+    payload: unknown;
+    artifacts: { path: string; text: boolean }[];
+  };
+  assert.equal(review.phaseId, "draft");
+  assert.equal(review.status, "awaiting-approval");
+  assert.equal(review.canApprove, true);
+  assert.deepEqual(review.payload, { summary: "drafted" });
+  assert.deepEqual(
+    review.artifacts.map((a) => a.path),
+    ["notes/raw.txt", "report.md"],
+  );
+  assert.ok(res.headers.get("etag"), "reads carry an ETag like every other GET");
+  const again = await app.request(`/api/instances/${inst.id}/phases/draft/review`, {
+    headers: { ...loopback, "if-none-match": res.headers.get("etag")! },
+  });
+  assert.equal(again.status, 304);
+});
+
+test("review: 404 for an unknown instance or phase, 409 for one that is not paused", async () => {
+  const app = makeApp();
+  const { inst } = await gatedInstance(app);
+  const missing = await app.request("/api/instances/nope/phases/draft/review", {
+    headers: loopback,
+  });
+  assert.equal(missing.status, 404);
+  const noPhase = await app.request(`/api/instances/${inst.id}/phases/ghost/review`, {
+    headers: loopback,
+  });
+  assert.equal(noPhase.status, 404);
+  const pending = await app.request(`/api/instances/${inst.id}/phases/later/review`, {
+    headers: loopback,
+  });
+  assert.equal(pending.status, 409);
+  assert.match(((await pending.json()) as { error: string }).error, /pending/);
+});
+
+test("artifact: serves one file by relative path and refuses escapes", async () => {
+  const app = makeApp({}, signedOut);
+  const { inst } = await gatedInstance(makeApp());
+  const base = `/api/instances/${inst.id}/phases/draft/artifact`;
+  const ok = await app.request(`${base}?path=${encodeURIComponent("notes/raw.txt")}`, {
+    headers: loopback,
+  });
+  assert.equal(ok.status, 200);
+  const body = (await ok.json()) as { path: string; content?: string; text: boolean };
+  assert.equal(body.path, "notes/raw.txt");
+  assert.equal(body.text, true);
+  assert.equal(body.content, "raw");
+
+  const noPath = await app.request(base, { headers: loopback });
+  assert.equal(noPath.status, 400);
+  const escape = await app.request(`${base}?path=${encodeURIComponent("../../secret")}`, {
+    headers: loopback,
+  });
+  assert.equal(escape.status, 400);
+  const absolute = await app.request(
+    `${base}?path=${encodeURIComponent(path.join(home, "artifacts"))}`,
+    { headers: loopback },
+  );
+  assert.equal(absolute.status, 400);
+  const missing = await app.request(`${base}?path=nope.md`, { headers: loopback });
+  assert.equal(missing.status, 404);
+  const noDir = await app.request(
+    `/api/instances/${inst.id}/phases/later/artifact?path=report.md`,
+    { headers: loopback },
+  );
+  assert.equal(noDir.status, 404);
+});
+
+test("approve and revise forward the named phase to the engine and stay admin-gated", async () => {
+  const seen: { approve?: unknown[]; revise?: unknown[] } = {};
+  const engine: Engine = {
+    ...fakeEngine,
+    approve: async (...args) => {
+      seen.approve = args;
+      return { ok: true, code: 200 };
+    },
+    revise: async (...args) => {
+      seen.revise = args;
+      return { ok: true, code: 200 };
+    },
+  };
+  const users = createUserStore();
+  const wire = (eng: Engine, auth: AuthService) =>
+    createApp({
+      config,
+      engine: eng,
+      broadcast: () => {},
+      serveWeb: false,
+      users,
+      remoteAddr: () => "127.0.0.1",
+      auth,
+    });
+  const app = wire(engine, openAuth);
+  const approve = await app.request("/api/instances/i1/approve", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ answers: "yes", phaseId: "draft" }),
+  });
+  assert.equal(approve.status, 200);
+  // The route adds who asked, from the session — never from the body.
+  const source = {
+    channel: "http",
+    principal: { kind: "session", username: "test", role: "root" },
+  };
+  assert.deepEqual(seen.approve, ["i1", "yes", { phaseId: "draft", source }]);
+
+  const revise = await app.request("/api/instances/i1/revise", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ note: "tighten", phaseId: "draft" }),
+  });
+  assert.equal(revise.status, 200);
+  assert.deepEqual(seen.revise, ["i1", "tighten", { phaseId: "draft", source }]);
+
+  // A bare POST is still a valid approval of the single paused phase.
+  const bare = await app.request("/api/instances/i1/approve", {
+    method: "POST",
+    headers: sameOrigin,
+  });
+  assert.equal(bare.status, 200);
+  assert.deepEqual(seen.approve, ["i1", undefined, { source }]);
+
+  // Signed out, the same body is refused before the engine hears of it.
+  const gated = wire(fakeEngine, signedOut);
+  const refused = await gated.request("/api/instances/i1/approve", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ phaseId: "draft" }),
+  });
+  assert.equal(refused.status, 401);
+});
+
+// ── Webhooks (POST /api/hooks/{pipelines,schedules}/:id) ────────────────────
+
+function makeFiringApp(over: Partial<ArgusConfig> = {}) {
+  const eng: Engine = {
+    ...fakeEngine,
+    start: async () => ({ id: "inst-hooked" }) as PipelineInstance,
+  };
+  const users = createUserStore();
+  return createApp({
+    config: { ...config, ...over },
+    engine: eng,
+    broadcast: () => {},
+    serveWeb: false,
+    users,
+    remoteAddr: () => "127.0.0.1",
+    auth: openAuth,
+  });
+}
+
+async function postWebhookPipeline(app: ReturnType<typeof makeApp>) {
+  const res = await postPipeline2(app, { kind: "webhook" });
+  assert.equal(res.status, 201);
+  return (await res.json()) as PipelineDefinition;
+}
+
+async function postPipeline2(app: ReturnType<typeof makeApp>, trigger: unknown) {
+  return app.request("/api/pipelines", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({ name: "hooked", trigger, phases: [dagPhase("p")] }),
+  });
+}
+
+async function postWebhookSchedule(app: ReturnType<typeof makeApp>) {
+  const res = await app.request("/api/schedules", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({
+      name: "hooked",
+      prompt: "go",
+      cwd: home,
+      trigger: { kind: "webhook" },
+    }),
+  });
+  assert.equal(res.status, 201);
+  return (await res.json()) as { id: string; hookToken: string };
+}
+
+test("POST /api/hooks/pipelines/:id fires the pipeline and returns 202 + instanceId", async () => {
+  const app = makeApp();
+  const def = await postWebhookPipeline(app);
+  const started: unknown[] = [];
+  const eng: Engine = {
+    ...fakeEngine,
+    start: async (id, trigger, firing) => {
+      started.push([id, trigger, firing]);
+      return { id: "inst-hooked" } as PipelineInstance;
+    },
+  };
+  const users = createUserStore();
+  const wired = createApp({
+    config,
+    engine: eng,
+    broadcast: () => {},
+    serveWeb: false,
+    users,
+    remoteAddr: () => "127.0.0.1",
+    auth: openAuth,
+  });
+  const res = await wired.request(`/api/hooks/pipelines/${def.id}`, {
+    method: "POST",
+    headers: { host: "localhost:7777", authorization: `Bearer ${def.hookToken}` },
+    body: JSON.stringify({ hello: "world" }),
+  });
+  assert.equal(res.status, 202);
+  assert.deepEqual(await res.json(), { instanceId: "inst-hooked" });
+  assert.deepEqual(started, [[def.id, "webhook", { triggerPayload: { hello: "world" } }]]);
+});
+
+test("POST /api/hooks/pipelines/:id 404s an unknown id and a non-webhook trigger alike", async () => {
+  const app = makeApp();
+  const manual = await postPipeline(app, [dagPhase("p")]);
+  const def = (await manual.json()) as PipelineDefinition;
+  const unknown = await app.request("/api/hooks/pipelines/nope", {
+    method: "POST",
+    headers: { host: "localhost:7777", authorization: "Bearer whatever" },
+  });
+  assert.equal(unknown.status, 404);
+  const wrongKind = await app.request(`/api/hooks/pipelines/${def.id}`, {
+    method: "POST",
+    headers: { host: "localhost:7777", authorization: "Bearer whatever" },
+  });
+  assert.equal(wrongKind.status, 404);
+});
+
+test("POST /api/hooks/pipelines/:id 401s a missing or wrong token", async () => {
+  const app = makeApp();
+  const def = await postWebhookPipeline(app);
+  const missing = await app.request(`/api/hooks/pipelines/${def.id}`, {
+    method: "POST",
+    headers: { host: "localhost:7777" },
+  });
+  assert.equal(missing.status, 401);
+  const wrong = await app.request(`/api/hooks/pipelines/${def.id}`, {
+    method: "POST",
+    headers: { host: "localhost:7777", authorization: "Bearer nope" },
+  });
+  assert.equal(wrong.status, 401);
+});
+
+test("POST /api/hooks/pipelines/:id does not accept ARGUS_TOKEN as a substitute for hookToken", async () => {
+  const app = makeFiringApp({ token: "shared-secret" });
+  const def = await postWebhookPipeline(app);
+  const res = await app.request(`/api/hooks/pipelines/${def.id}`, {
+    method: "POST",
+    headers: { host: "localhost:7777", authorization: "Bearer shared-secret" },
+  });
+  assert.equal(res.status, 401);
+  // The right credential — the hook's own token — still works.
+  const ok = await app.request(`/api/hooks/pipelines/${def.id}`, {
+    method: "POST",
+    headers: { host: "localhost:7777", authorization: `Bearer ${def.hookToken}` },
+  });
+  assert.equal(ok.status, 202);
+});
+
+test("POST /api/hooks/pipelines/:id ignores the Origin/CSRF check but keeps the Host allowlist", async () => {
+  const app = makeFiringApp();
+  const def = await postWebhookPipeline(app);
+  // A foreign Origin would 403 an ordinary mutating route; the hook route lets
+  // it through, since a webhook sender is a server, not a CSRF'd browser.
+  const foreignOrigin = await app.request(`/api/hooks/pipelines/${def.id}`, {
+    method: "POST",
+    headers: {
+      host: "localhost:7777",
+      origin: "https://evil.example",
+      authorization: `Bearer ${def.hookToken}`,
+    },
+  });
+  assert.equal(foreignOrigin.status, 202);
+  // The Host allowlist is not exempt: an unrecognized Host still 403s.
+  const badHost = await app.request(`/api/hooks/pipelines/${def.id}`, {
+    method: "POST",
+    headers: { host: "evil.example", authorization: `Bearer ${def.hookToken}` },
+  });
+  assert.equal(badHost.status, 403);
+});
+
+test("POST /api/hooks/pipelines/:id 409s a disabled pipeline", async () => {
+  const app = makeApp();
+  const def = await postWebhookPipeline(app);
+  await app.request(`/api/pipelines/${def.id}`, {
+    method: "PATCH",
+    headers: sameOrigin,
+    body: JSON.stringify({ enabled: false }),
+  });
+  const res = await app.request(`/api/hooks/pipelines/${def.id}`, {
+    method: "POST",
+    headers: { host: "localhost:7777", authorization: `Bearer ${def.hookToken}` },
+  });
+  assert.equal(res.status, 409);
+});
+
+test("POST /api/hooks/pipelines/:id 413s a body over 64 KiB", async () => {
+  const app = makeApp();
+  const def = await postWebhookPipeline(app);
+  const big = "x".repeat(64 * 1024 + 1);
+  const res = await app.request(`/api/hooks/pipelines/${def.id}`, {
+    method: "POST",
+    headers: { host: "localhost:7777", authorization: `Bearer ${def.hookToken}` },
+    body: JSON.stringify({ big }),
+  });
+  assert.equal(res.status, 413);
+});
+
+test("POST /api/hooks/pipelines/:id 409s with the running instance id under overlap=skip", async () => {
+  const app = makeApp();
+  const created = await postPipeline2(app, { kind: "webhook" });
+  const def = (await created.json()) as PipelineDefinition;
+  await writeInstance({
+    id: "inst-running",
+    pipelineId: def.id,
+    pipelineName: def.name,
+    status: "running",
+    currentPhaseIndex: 0,
+    phases: [],
+    trigger: "manual",
+    signalToken: "tok",
+    createdAt: "2026-06-30T12:00:00.000Z",
+    updatedAt: "2026-06-30T12:00:00.000Z",
+    endedAt: null,
+  } as PipelineInstance);
+  const res = await app.request(`/api/hooks/pipelines/${def.id}`, {
+    method: "POST",
+    headers: { host: "localhost:7777", authorization: `Bearer ${def.hookToken}` },
+  });
+  assert.equal(res.status, 409);
+  const body = (await res.json()) as { instanceId: string };
+  assert.equal(body.instanceId, "inst-running");
+});
+
+test("POST /api/pipelines/:id/hook-token/rotate mints a new token, refuses a non-webhook pipeline", async () => {
+  const app = makeApp();
+  const def = await postWebhookPipeline(app);
+  const rotated = await app.request(`/api/pipelines/${def.id}/hook-token/rotate`, {
+    method: "POST",
+    headers: sameOrigin,
+  });
+  assert.equal(rotated.status, 200);
+  const body = (await rotated.json()) as PipelineDefinition;
+  assert.notEqual(body.hookToken, def.hookToken);
+
+  const plain = (await (await postPipeline(app, [dagPhase("p")])).json()) as PipelineDefinition;
+  const refused = await app.request(`/api/pipelines/${plain.id}/hook-token/rotate`, {
+    method: "POST",
+    headers: sameOrigin,
+  });
+  assert.equal(refused.status, 400);
+});
+
+test("POST /api/hooks/schedules/:id fires the schedule with trigger: webhook, returns runId", async () => {
+  const app = makeApp();
+  const schedule = await postWebhookSchedule(app);
+  const res = await app.request(`/api/hooks/schedules/${schedule.id}`, {
+    method: "POST",
+    headers: { host: "localhost:7777", authorization: `Bearer ${schedule.hookToken}` },
+  });
+  assert.equal(res.status, 202);
+  const body = (await res.json()) as { runId: string };
+  assert.equal(typeof body.runId, "string");
+  const run = await app.request(`/api/runs/${body.runId}`, { headers: loopback });
+  const runBody = (await run.json()) as { run: { trigger: string } };
+  assert.equal(runBody.run.trigger, "webhook");
+});
+
+test("POST /api/hooks/schedules/:id 404s an unknown id and 401s a bad token", async () => {
+  const app = makeApp();
+  const schedule = await postWebhookSchedule(app);
+  const unknown = await app.request("/api/hooks/schedules/nope", {
+    method: "POST",
+    headers: { host: "localhost:7777", authorization: "Bearer x" },
+  });
+  assert.equal(unknown.status, 404);
+  const badToken = await app.request(`/api/hooks/schedules/${schedule.id}`, {
+    method: "POST",
+    headers: { host: "localhost:7777", authorization: "Bearer wrong" },
+  });
+  assert.equal(badToken.status, 401);
+});
+
+test("POST /api/schedules/:id/hook-token/rotate mints a new token, refuses a non-webhook schedule", async () => {
+  const app = makeApp();
+  const schedule = await postWebhookSchedule(app);
+  const rotated = await app.request(`/api/schedules/${schedule.id}/hook-token/rotate`, {
+    method: "POST",
+    headers: sameOrigin,
+  });
+  assert.equal(rotated.status, 200);
+  const body = (await rotated.json()) as { hookToken: string };
+  assert.notEqual(body.hookToken, schedule.hookToken);
+
+  const plainRes = await app.request("/api/schedules", {
+    method: "POST",
+    headers: sameOrigin,
+    body: JSON.stringify({
+      name: "plain",
+      prompt: "go",
+      cwd: home,
+      trigger: { kind: "daily", time: "02:00" },
+    }),
+  });
+  const plain = (await plainRes.json()) as { id: string };
+  const refused = await app.request(`/api/schedules/${plain.id}/hook-token/rotate`, {
+    method: "POST",
+    headers: sameOrigin,
+  });
+  assert.equal(refused.status, 400);
 });

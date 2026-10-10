@@ -19,7 +19,12 @@
 //     `ARGUS_OUTCOME: failed` or `ARGUS_OUTCOME: blocked` emits "failed";
 //     anything else emits "completed". This lets a run that stops cleanly but
 //     concluded it failed/was blocked report that, instead of being rubber-
-//     stamped as a success.
+//     stamped as a success. A "completed" is not the hook's verdict either:
+//     Argus re-reads the final message it is sent and, under the default
+//     `required` completion policy, refuses a completion with no
+//     `ARGUS_OUTCOME: succeeded` marker. Since version 2 the hook also sends
+//     its own version and marker reading (`completion`), which Argus only
+//     compares against its own.
 //   * A run that stops while background tasks/subagents are still in flight is
 //     reported "deferred": the process is NOT torn down — Claude keeps it alive
 //     and fires Stop again once the deferred work finishes, and that later Stop
@@ -38,12 +43,42 @@
 // ARGUS_SIGNAL_TOKEN / ARGUS_RESULT_FILE from the environment the engine
 // injected. No-ops when not running under a pipeline (env unset), so it is safe
 // to register globally.
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 /** A final message reporting a failed/blocked outcome via the sentinel line,
  *  capturing any trailing reason text on that same line. */
 const OUTCOME_RE = /ARGUS_OUTCOME:\s*(failed|blocked)\b[^\S\r\n]*(.*)/i;
+
+/**
+ * This hook's protocol version, sent with every signal beside its own reading
+ * of the outcome marker. Version 1 (unversioned) sent neither; a server that
+ * predates version 2 ignores both fields.
+ */
+export const HOOK_VERSION = 2;
+
+/** Every outcome marker in a message. Must stay byte-for-byte the same pattern
+ *  as `classifyOutcomeMarker` in server/src/harness/completion.ts — a test
+ *  runs both over one corpus. */
+const MARKER_RE = /\bARGUS_OUTCOME:\s*(succeeded|failed|blocked)\b/gi;
+
+/**
+ * This hook's reading of the outcome marker in the agent's final message:
+ * "missing", "conflicting", or the one conclusion found. Sent to Argus as
+ * metadata only — Argus classifies the delivered message itself and compares,
+ * and never takes this reading over its own.
+ */
+export function classifyMarker(message) {
+  const text = typeof message === "string" ? message : "";
+  const found = [];
+  for (const m of text.matchAll(MARKER_RE)) {
+    const kind = m[1].toLowerCase();
+    if (!found.includes(kind)) found.push(kind);
+  }
+  if (found.length === 0) return "missing";
+  if (found.length > 1) return "conflicting";
+  return found[0];
+}
 
 /** Background-task statuses that mean the work is still in flight at Stop time.
  *  Anything not matching (done/completed/failed/cancelled/…) is treated as
@@ -181,15 +216,17 @@ function respond() {
 
 /**
  * Deliver one signal and reject on every condition the hook runner needs to
- * report: transport errors and non-2xx responses alike. Exported so the exact
- * HTTP contract can be regression-tested without starting a pipeline.
+ * report: transport errors and non-2xx responses alike. An HTTP rejection
+ * carries its `status`, so a caller can tell an answer Argus gave from a
+ * request that never got one. Exported so the exact HTTP contract can be
+ * regression-tested without starting a pipeline.
  */
-export async function deliverSignal(url, body, fetchImpl = globalThis.fetch) {
+export async function deliverSignal(url, body, fetchImpl = globalThis.fetch, timeoutMs = 10_000) {
   const response = await fetchImpl(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(10_000),
+    body: typeof body === "string" ? body : JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (response.ok) return;
 
@@ -200,7 +237,62 @@ export async function deliverSignal(url, body, fetchImpl = globalThis.fetch) {
     // Status and statusText still make the delivery failure diagnosable.
   }
   const status = `${response.status}${response.statusText ? ` ${response.statusText}` : ""}`;
-  throw new Error(`Argus signal endpoint returned HTTP ${status}${detail ? `: ${detail}` : ""}`);
+  throw Object.assign(
+    new Error(`Argus signal endpoint returned HTTP ${status}${detail ? `: ${detail}` : ""}`),
+    { status: response.status },
+  );
+}
+
+/**
+ * How long the hook keeps trying to deliver. Qwen kills a hook at 60 s (Claude
+ * and Codex allow 600 s), so this stays well inside the strictest runtime.
+ */
+export const DELIVERY_BUDGET_MS = 45_000;
+
+/** Pauses between attempts; the last one repeats until the budget is spent. */
+export const DELIVERY_BACKOFF_MS = [500, 1_000, 2_000, 4_000, 8_000];
+
+/**
+ * Deliver a signal, retrying while Argus may still take it. A run's slot is
+ * held until its hook returns, so giving up early is how a finished run gets
+ * healed as a failure: a busy or restarting server must be waited out, not
+ * abandoned.
+ *
+ * Only a transport error (refused, reset, timed out) or a 5xx is retried. A
+ * 4xx is Argus's considered answer — a bad token, an unknown instance — and
+ * sending the same request again cannot change it. Every attempt sends the
+ * identical body, and Argus ignores a duplicate of a signal it already applied
+ * (`step-not-running`), so a retry after a lost response is harmless.
+ *
+ * Retries end when the budget does, not after a fixed count: each attempt may
+ * wait for whatever is left of it, and the last error is rethrown.
+ */
+export async function deliverWithRetry(
+  url,
+  body,
+  {
+    fetchImpl = globalThis.fetch,
+    budgetMs = DELIVERY_BUDGET_MS,
+    backoffMs = DELIVERY_BACKOFF_MS,
+    sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    now = Date.now,
+  } = {},
+) {
+  const payload = JSON.stringify(body);
+  const deadline = now() + budgetMs;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await deliverSignal(url, payload, fetchImpl, Math.max(1, deadline - now()));
+      return;
+    } catch (error) {
+      const status = error && typeof error === "object" ? error.status : undefined;
+      if (typeof status === "number" && status < 500) throw error;
+      const pause = backoffMs[Math.min(attempt, backoffMs.length - 1)] ?? 0;
+      const left = deadline - now();
+      if (left <= pause) throw error;
+      await sleep(pause);
+    }
+  }
 }
 
 function reportFailure(error) {
@@ -246,7 +338,7 @@ function main() {
     // must never select a branch, so its result file is left unread.
     const result = type === "completed" ? readResultFile(process.env.ARGUS_RESULT_FILE) : {};
     try {
-      await deliverSignal(url, {
+      await deliverWithRetry(url, {
         instanceId: process.env.ARGUS_INSTANCE_ID,
         phaseId: process.env.ARGUS_PHASE_ID,
         runId: process.env.ARGUS_RUN_ID,
@@ -254,6 +346,9 @@ function main() {
         token: process.env.ARGUS_SIGNAL_TOKEN,
         payload,
         ...result,
+        // Additive (hook v2): this hook's version and its own reading of the
+        // marker. Argus re-reads the message itself; this is only compared.
+        completion: { hookVersion: HOOK_VERSION, marker: classifyMarker(lastMessage(payload)) },
       });
     } catch (error) {
       reportFailure(error);
@@ -266,4 +361,27 @@ function main() {
   });
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) main();
+/**
+ * True when this module is the process entry point, including when it was
+ * invoked through a symlink.
+ *
+ * Node resolves `import.meta.url` to the realpath, while `process.argv[1]`
+ * keeps whatever path the caller typed. Comparing the two unresolved means a
+ * hook symlinked into `~/.claude/hooks` never runs `main()` — it exits 0 in
+ * silence, and the phase it should have completed fails minutes later with
+ * "run ended without emitting a completion signal", which points at the agent
+ * rather than at the hook. Setup copies the file, so this only bites the
+ * person who linked it, which is to say whoever is working on Argus itself.
+ */
+function isMain() {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  if (import.meta.url === pathToFileURL(entry).href) return true;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(entry)).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isMain()) main();

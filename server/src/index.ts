@@ -11,7 +11,13 @@ import {
   checkAll as checkPrereqs,
   preflight as preflightPrereqs,
 } from "./setup/prereqs.js";
-import { assertBindIsSafe, assertPeersAreSafe, describeListenError, loadConfig } from "./config.js";
+import {
+  assertBindIsSafe,
+  assertPeersAreSafe,
+  describeListenError,
+  loadConfig,
+  selfBaseUrl,
+} from "./config.js";
 import { isUpgradeAllowed } from "./security.js";
 import { VERSION } from "./version.js";
 import {
@@ -39,14 +45,16 @@ import { buildMonitors } from "./sources/monitors.js";
 import { buildIssues, readTriage } from "./sources/issues.js";
 import { buildWatchtower, readResets } from "./sources/watchtower.js";
 import { readFailureClasses } from "./sources/autopsy.js";
-import { failingVerdicts, readVerdicts } from "./sources/verdict.js";
+import { journal } from "./sources/journal.js";
+import { failingVerdicts, readCurrentVerdicts, readVerdicts } from "./sources/verdict.js";
 import { readPipelines } from "./sources/pipelines.js";
 import { readInstances } from "./sources/instances.js";
 import { createAnalysisRunner } from "./sources/analysis.js";
+import { countAnalysisPasses, createShadowExperiments } from "./decision/experiments.js";
 import { readSessionLines } from "./sources/sessions.js";
 import { readSchedules } from "./sources/schedules.js";
 import { createApp } from "./app.js";
-import { createAuthService } from "./auth.js";
+import { createAuthService, sessionTokenFromCookieHeader } from "./auth.js";
 import { createUserStore } from "./userStore.js";
 import { createRunTailer } from "./runTailer.js";
 import { log } from "./log.js";
@@ -86,7 +94,7 @@ const engine = createEngine({
   now: () => new Date(),
   newId: () => randomUUID(),
   spawn: defaultPipelineSpawn,
-  signalUrlBase: `http://127.0.0.1:${PORT}`,
+  signalUrlBase: selfBaseUrl(config),
   maxConcurrent: config.maxConcurrentRuns,
   tickMs: config.schedulerTickMs,
   tailer,
@@ -104,7 +112,16 @@ const auth = createAuthService({ store: users });
 // One runner for every bounded analysis pass in the process — the
 // on-demand routes and the background watcher share its concurrency and spend
 // gate, so "one pass at a time" means one, not one per caller.
-const analysis = createAnalysisRunner();
+//
+// Wrapped once in a pass counter: it only delegates, so the gate is still this
+// runner's, and the H2 shadow collection below can see that another feature
+// ran a pass since its last check and stand aside (RFC §P.4).
+const analysis = countAnalysisPasses(createAnalysisRunner());
+// The shadow experiments (RFC §P, §Q): H2 off unless ARGUS_DECISIONS=on and
+// ARGUS_DECISIONS_H2_COLLECT=on, H1 off unless ARGUS_DECISIONS=on and
+// ARGUS_DECISIONS_H1_COLLECT=on. They share one call allowance and at most one
+// provider invocation per tick; building them touches no file.
+const experiments = createShadowExperiments({ runner: analysis });
 /**
  * Constellation polls its peers on the same tick as everything else.
  *
@@ -126,7 +143,10 @@ const app = createApp({
   users,
   analysis,
   activity: () => tailer.latest(),
+  activityLog: (runId) => tailer.events(runId),
   fleet: () => fleetPoller.state(),
+  decisionsH2Status: () => experiments.h2.status(),
+  decisionsH1Status: () => experiments.h1.status(),
 });
 
 const server = serve({ fetch: app.fetch, port: PORT, hostname: config.host }, (info) => {
@@ -185,6 +205,7 @@ server.on("upgrade", (req, socket, head) => {
       token: (req.headers["x-argus-token"] as string | undefined) ?? undefined,
     },
     config,
+    auth.verify(sessionTokenFromCookieHeader(req.headers.cookie)) !== null,
   );
   if (!allowed) {
     socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
@@ -236,7 +257,7 @@ const monitorWatcher = createMonitorWatcher({
         severity: alert.event === "monitor.recovered" ? "info" : "warning",
         subject: alert.name,
         detail: alert.detail,
-        href: "#/monitors",
+        href: "#/health",
       }),
     );
   },
@@ -287,15 +308,32 @@ const autopsyWatcher = createAutopsyWatcher({
 const verdictWatcher = createVerdictWatcher({
   runner: analysis,
   now: () => new Date(),
+  // Trajectory analysis reads the same transcripts Autopsy does. It runs only
+  // for rubrics that declare a trajectory.
+  readLines: readSessionLines,
   readRuns,
   readSchedules,
   readPipelines,
   readInstances,
-  approve: (instanceId) => engine.approve(instanceId),
+  // The automated boundary, never the operator approve: it re-checks the
+  // verdict basis under the instance lock and refuses any gate that commits
+  // knowledge, and the decision it records says a rule — not a person — opened
+  // the gate.
+  approveAutomatically: (request) => engine.approveAutomatically(request),
   onVerdict: () => broadcast({ type: "issues:changed" }),
-  onAutoApprove: (instanceId, score) => {
-    log.info("gate auto-approved on verdict", { instanceId, score });
+  onAutoApprove: (instanceId, phaseId, score) => {
+    log.info("gate auto-approved on verdict", { instanceId, phaseId, score });
     broadcast({ type: "pipelines:changed" });
+  },
+  onAutoApprovalWithheld: (instanceId, phaseId, attempt, reason) => {
+    log.warn("gate auto-approval withheld", { instanceId, phaseId, attempt, reason });
+    void journal(instanceId, {
+      at: new Date().toISOString(),
+      kind: "phase.auto-approval-withheld",
+      phaseId,
+      attempt,
+      detail: reason,
+    });
   },
 });
 /**
@@ -358,7 +396,9 @@ const vaultWatcher = createVaultWatcher({
   now: () => new Date(),
   readRuns,
   readIncidents,
-  readVerdicts,
+  // The Vault's `scores` table holds one row per run: feed it each run's
+  // current verdict, not every re-judgment.
+  readVerdicts: readCurrentVerdicts,
   readSpend: readSpendLedger,
   readAnomalies: async () => {
     const now = new Date();
@@ -368,6 +408,9 @@ const vaultWatcher = createVaultWatcher({
 });
 const scheduler = startScheduler({
   onChange: () => broadcast({ type: "schedules:changed" }),
+  // Lets the scheduler's chain pass (`after` triggers) fire a target pipeline
+  // without pipelineEngine.ts and scheduler.ts importing one another.
+  startPipeline: (pipelineId, trigger, firing) => engine.start(pipelineId, trigger, firing),
   onTick: async () => {
     await engine.reconcile();
     await monitorWatcher.check();
@@ -378,6 +421,10 @@ const scheduler = startScheduler({
     await sentinelWatcher.check();
     await vaultWatcher.check();
     await fleetPoller.check();
+    // Last, and awaited: a shadow call must never be in flight when the next
+    // tick's Autopsy or Verdict asks the runner, because a busy refusal is a
+    // permanent failed record for them. H1 then H2, one invocation at most.
+    await experiments.check();
   },
   onFailure: (run) =>
     void postWebhook(config.webhookUrl, buildRunFailurePayload(run, new Date().toISOString())),
@@ -403,6 +450,9 @@ async function shutdown() {
   await stopWatchingSessions();
   await scheduler.stop();
   await tailer.stop();
+  // Let deferred launches and verifications land: a half-written instance is
+  // what an unclean stop looks like to the next boot's reconcile pass.
+  await Promise.race([engine.drain(), new Promise((r) => setTimeout(r, 5000))]);
   await killLiveRuns();
   if (wss) {
     for (const client of wss.clients) client.terminate();

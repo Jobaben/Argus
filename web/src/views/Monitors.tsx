@@ -7,7 +7,6 @@ import {
   Handoff,
   HealthCounter,
   HeartbeatBar,
-  Page,
   SkeletonGrid,
   TimeAgo,
   useClock,
@@ -128,7 +127,11 @@ const COUNTERS: { status: MonitorStatus; label: string; alarming?: boolean }[] =
   { status: "paused", label: "Paused" },
 ];
 
-export default function Monitors() {
+/**
+ * The Monitors half of Health. No `Page` of its own: `Health` supplies the
+ * heading and the switch to Watchtower, so this is the content alone.
+ */
+export function MonitorsPanel() {
   // Rows come and go and change places as health changes; FLIP glides them
   // there instead of letting the list teleport under the reader.
   const flip = useFlip();
@@ -137,7 +140,7 @@ export default function Monitors() {
   const shown = filter === null ? monitors : monitors.filter((m) => m.status === filter);
 
   return (
-    <Page title="Monitors" crumbs={[{ label: "Scheduler", href: "#/schedules" }]}>
+    <>
       <p className="mb-6 text-sm text-ink-faint">
         Dead-man's switch over your schedules — a monitor goes down when a slot passes and nothing
         ran, even if Argus itself was asleep at the time
@@ -217,6 +220,8 @@ export default function Monitors() {
           </div>
         )}
       </Handoff>
-    </Page>
+    </>
   );
 }
+
+export default MonitorsPanel;

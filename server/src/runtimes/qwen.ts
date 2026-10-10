@@ -47,15 +47,70 @@
 
 import { qwenHome } from "../qwenHome.js";
 import { deriveStreamJsonActivity, topLevelObjectSpans } from "./claude.js";
-import { EMPTY_ENVELOPE, basename, clip, extraArgs } from "./types.js";
+import {
+  EMPTY_ENVELOPE,
+  reportedCostUsd,
+  basename,
+  channelGranted,
+  channelUnavailable,
+  clip,
+  extraArgs,
+  unsupportedCapabilities,
+} from "./types.js";
 import type {
   AgentRuntime,
   AnalysisPlanOptions,
+  CapabilityRequest,
   RunEnvelope,
   RunPlanOptions,
   SpawnPlan,
 } from "./types.js";
 import type { ActivityEvent } from "@argus/contracts";
+
+/**
+ * Whether the operator has turned on Qwen Code's container sandbox through
+ * `ARGUS_QWEN_ARGS` (`--sandbox` / `-s`, optionally with a value). Inside it
+ * the CLI mounts the project directory and its own home, not Argus's data
+ * directory — so a path Argus owns is not there to be written.
+ */
+export function qwenSandboxed(): boolean {
+  return extraArgs(process.env.ARGUS_QWEN_ARGS).some(
+    (a) => a === "-s" || a === "--sandbox" || a.startsWith("--sandbox="),
+  );
+}
+
+/**
+ * Qwen Code has no per-invocation capability control — `--approval-mode` is
+ * the only knob, and it's already spoken for by the yolo/default split
+ * between an ordinary run and an analysis pass — so every key a profile sets
+ * is reported as a limitation rather than silently dropped.
+ *
+ * Argus's own channels are a separate question with a more useful answer:
+ * `--approval-mode yolo` runs the write and shell tools unsandboxed, so every
+ * channel is reachable — unless the operator's `ARGUS_QWEN_ARGS` puts the
+ * run in the CLI's container sandbox, where Argus's directories are not
+ * mounted and every channel is reported unavailable rather than left to fail
+ * at write time.
+ */
+function qwenCapabilities(
+  cap: CapabilityRequest | undefined,
+): Pick<SpawnPlan, "files" | "limitations" | "channels"> {
+  if (!cap) return {};
+  const sandboxed = qwenSandboxed();
+  return {
+    files: [],
+    limitations: unsupportedCapabilities(cap.profile, "Qwen Code", []),
+    channels: cap.channels.map((channel) =>
+      sandboxed
+        ? channelUnavailable(
+            channel,
+            "Qwen Code",
+            "container sandbox (--sandbox in ARGUS_QWEN_ARGS) does not mount",
+          )
+        : channelGranted(channel),
+    ),
+  };
+}
 
 /** Aliases for the models Qwen Code ships pointed at by default. A local
  *  endpoint's model name is whatever the operator loaded, so it comes from
@@ -149,10 +204,10 @@ export function parseQwenEnvelope(stdout: string): RunEnvelope {
     const sum = inTok + outTok;
     // Qwen Code reports no cost of its own. A locally served model has none to
     // report, and a hosted one would need a price list Argus does not have.
-    const cost = Number(obj.total_cost_usd);
+    const cost = reportedCostUsd(obj.total_cost_usd);
     return {
       result: typeof obj.result === "string" ? obj.result : null,
-      costUsd: Number.isFinite(cost) ? cost : null,
+      costUsd: cost,
       tokens: Number.isFinite(sum) && sum > 0 ? sum : null,
       isError: typeof obj.is_error === "boolean" ? obj.is_error : null,
       sessionId: typeof obj.session_id === "string" ? obj.session_id : null,
@@ -244,21 +299,23 @@ export const qwenRuntime: AgentRuntime = {
   // The Stop hook is authoritative, as it is for Claude Code.
   outcomeFromRecord: false,
 
-  batchPlan({ prompt, model, systemPrompt }: RunPlanOptions): SpawnPlan {
+  batchPlan({ prompt, model, systemPrompt, capabilities }: RunPlanOptions): SpawnPlan {
     return {
       bin: bin(),
       args: qwenArgs({ outputFormat: "json", approvalMode: "yolo", model }),
       stdin: composePrompt(prompt, systemPrompt),
       env: runEnv(),
+      ...qwenCapabilities(capabilities),
     };
   },
 
-  streamPlan({ prompt, model, systemPrompt }: RunPlanOptions): SpawnPlan {
+  streamPlan({ prompt, model, systemPrompt, capabilities }: RunPlanOptions): SpawnPlan {
     return {
       bin: bin(),
       args: qwenArgs({ outputFormat: "stream-json", approvalMode: "yolo", model }),
       stdin: composePrompt(prompt, systemPrompt),
       env: runEnv(),
+      ...qwenCapabilities(capabilities),
     };
   },
 

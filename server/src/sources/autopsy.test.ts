@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   AUTOPSY_KEEP,
+  AUTOPSY_PROMPT_VERSION,
   PROMPT_EVENT_CAP,
   PROMPT_MAX_CHARS,
   buildAutopsyPrompt,
@@ -236,12 +237,47 @@ test("with analysis disabled the record says skipped, not failed", async () => {
   assert.equal(autopsy.status, "skipped");
 });
 
-test("re-running replaces the previous autopsy rather than accumulating", async () => {
-  await performAutopsy(run(), deps(respond(envelope("no json"))));
-  await performAutopsy(run(), deps(respond(envelope(GOOD_ANSWER))));
+test("re-running keeps the earlier pass, and the newest is the run's current autopsy", async () => {
+  // Phase 0 of the Decision Plane RFC: what a model said earlier is part of the
+  // record of what it has said, so a re-run appends rather than replacing.
+  const first = await performAutopsy(run(), deps(respond(envelope("no json"))));
+  const second = await performAutopsy(run(), deps(respond(envelope(GOOD_ANSWER))));
   const all = await readAutopsies();
-  assert.equal(all.length, 1);
-  assert.equal(all[0].status, "ready");
+  assert.equal(all.length, 2);
+  assert.notEqual(first.id, second.id);
+  assert.deepEqual(new Set(all.map((a) => a.id)), new Set([first.id, second.id]));
+  assert.equal((await readAutopsy("run-1"))?.id, second.id);
+  assert.equal((await readAutopsy("run-1"))?.status, "ready");
+  assert.equal((await readFailureClasses()).get("run-1"), "missing-context");
+});
+
+test("a newer failed pass supersedes an older class for clustering — it is not resurrected", async () => {
+  await performAutopsy(run(), deps(respond(envelope(GOOD_ANSWER))));
+  await performAutopsy(run(), {
+    ...deps(respond(envelope("no json"))),
+    now: () => new Date(NOW.getTime() + 60_000),
+  });
+  assert.equal((await readAutopsy("run-1"))?.status, "failed");
+  assert.equal((await readFailureClasses()).has("run-1"), false);
+});
+
+test("an autopsy is stamped with the runtime, the model asked for, no invented reported model, and the prompt version", async () => {
+  const a = await performAutopsy(run(), deps(respond(envelope(GOOD_ANSWER))));
+  assert.match(a.id ?? "", /^A-[0-9a-f]{16}$/);
+  assert.deepEqual(a.provenance, {
+    runtime: "claude",
+    requestedModel: "haiku",
+    reportedModel: null,
+    promptVersion: AUTOPSY_PROMPT_VERSION,
+  });
+  // Even a refusal says which CLI and model it would have asked.
+  const skipped = await performAutopsy(run(), {
+    runner: createAnalysisRunner({ spawn: respond(""), now: () => NOW, enabled: () => false }),
+    now: () => NOW,
+    readLines: async () => [],
+  });
+  assert.equal(skipped.status, "skipped");
+  assert.equal(skipped.provenance?.runtime, "claude");
 });
 
 test("the store is capped so it cannot grow without bound", async () => {
@@ -307,4 +343,66 @@ test("only ready autopsies contribute a failure class to clustering", async () =
   const classes = await readFailureClasses();
   assert.equal(classes.get("ready"), "timeout");
   assert.equal(classes.has("broken"), false, "a pass with no diagnosis is not a diagnosis");
+});
+
+// ── Prompt bytes (Hardening Item 5) ─────────────────────────────────────────
+
+/** A transcript exercising every timeline shape: text, thinking, a tool that
+ *  errored, an edit, a long multi-line label, and an orphan error result. */
+function goldenLines(): unknown[] {
+  return [
+    {
+      type: "user",
+      timestamp: iso(500),
+      message: { role: "user", content: "Triage the overnight failures.\n  Be brief." },
+    },
+    assistant(1_000, [{ type: "thinking", thinking: "First,\n\tread the   lockfile." }]),
+    assistant(2_000, [
+      { type: "tool_use", id: "t1", name: "Bash", input: { command: "npm ci\n--no-audit" } },
+    ]),
+    {
+      type: "user",
+      timestamp: iso(4_500),
+      message: {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "t1", is_error: true, content: "ENOENT lockfile" },
+        ],
+      },
+    },
+    assistant(6_000, [
+      {
+        type: "tool_use",
+        id: "t2",
+        name: "Edit",
+        input: { file_path: "/repo/src/a.ts", old_string: "a\nb", new_string: "c" },
+      },
+    ]),
+    assistant(7_000, [{ type: "text", text: `long ${"word ".repeat(120)}end` }]),
+    {
+      type: "user",
+      timestamp: iso(8_000),
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "zz", is_error: true, content: "orphan" }],
+      },
+    },
+  ];
+}
+
+test("the Autopsy prompt bytes are unchanged by the shared timeline formatter", async () => {
+  const { createHash } = await import("node:crypto");
+  const sha = (s: string) => createHash("sha256").update(s).digest("hex");
+  const rec = buildRecording(run({ outcome: "failed" }), goldenLines(), NOW);
+  const prompt = buildAutopsyPrompt(run({ outcome: "failed" }), rec);
+  const truncated = buildAutopsyPrompt(run(), { ...rec, truncated: true });
+  const empty = buildAutopsyPrompt(run(), buildRecording(run(), [], NOW));
+  assert.deepEqual(
+    [sha(prompt), sha(truncated), sha(empty)],
+    [
+      "5110dda2db9975030989894ec3240fe7b93b8ca167c5c57078094ec6c42934ea",
+      "fcbc387e695ee3948796183128699b3a9e6d9ce51118222d49f398fcb66f4c4e",
+      "6b0bec2b827b7c917f1bf48308f9de5782c4c8b1a734b2aea0d4475908e10b4a",
+    ],
+  );
 });

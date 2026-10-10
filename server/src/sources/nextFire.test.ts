@@ -346,3 +346,34 @@ test("shouldFire: catchUp still respects enabled=false", () => {
   });
   assert.equal(shouldFire(s, at(2026, 5, 22, 9, 0), graceMsFor(30000)), false);
 });
+
+// ── webhook / after: no clock grid at all ────────────────────────────────────
+
+test("webhook and after triggers never report a previous or next fire", () => {
+  const now = at(2026, 5, 22, 12, 0);
+  const anchor = at(2026, 5, 22, 0, 0);
+  for (const trigger of [
+    { kind: "webhook" as const },
+    { kind: "after" as const, pipelineId: "p1", on: "any" as const },
+  ]) {
+    assert.equal(previousFireTime(trigger, anchor, now), null);
+    assert.equal(nextFireTime(trigger, now), null);
+    assert.equal(nextFireAfter(trigger, anchor, now), null);
+  }
+});
+
+test("shouldFire: false for a webhook trigger, however long enabled", () => {
+  const s = baseSchedule({
+    trigger: { kind: "webhook" },
+    createdAt: at(2026, 1, 1, 0, 0).toISOString(),
+  });
+  assert.equal(shouldFire(s, at(2026, 5, 22, 12, 0), graceMsFor(30000)), false);
+});
+
+test("shouldFire: false for an after trigger — it fires from the chain pass, not the tick", () => {
+  const s = baseSchedule({
+    trigger: { kind: "after", pipelineId: "p1", on: "succeeded" },
+    createdAt: at(2026, 1, 1, 0, 0).toISOString(),
+  });
+  assert.equal(shouldFire(s, at(2026, 5, 22, 12, 0), graceMsFor(30000)), false);
+});

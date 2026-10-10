@@ -8,12 +8,16 @@ import {
   PROMPT_MAX_CHARS,
   RubricValidationError,
   VERDICT_KEEP,
+  VERDICT_PROMPT_VERSION,
   buildVerdictPrompt,
   buildVerdictTrends,
   failingVerdicts,
   parseVerdictResponse,
   performVerdict,
+  readCurrentVerdicts,
+  readVerdict,
   readVerdicts,
+  rubricDigest,
   validateAutoApprove,
   validateRubric,
   weightedScore,
@@ -253,6 +257,46 @@ test("regression: a failed pass is stored, so the run is not re-judged every tic
   const v = await performVerdict(run(), RUBRIC, deps(respond(envelope("not json"))));
   assert.equal(v.status, "failed");
   assert.equal((await readVerdicts()).length, 1);
+});
+
+test("re-judging keeps every judgment; the newest is the run's current verdict", async () => {
+  const first = await performVerdict(run(), RUBRIC, deps(respond(envelope(GOOD))));
+  const second = await performVerdict(run(), RUBRIC, deps(respond(envelope("not json"))));
+  const all = await readVerdicts();
+  assert.equal(all.length, 2, "an earlier judgment may be what explains an earlier approval");
+  assert.notEqual(first.id, second.id);
+  assert.equal((await readVerdict(run().id))?.id, second.id);
+  assert.equal((await readCurrentVerdicts()).length, 1);
+});
+
+test("trends and regressions count each run once, by its current verdict", async () => {
+  const low = JSON.stringify({ criteria: [{ id: "coverage", score: 1, note: "bad" }] });
+  await performVerdict(run(), RUBRIC, deps(respond(envelope(low))));
+  await performVerdict(run(), RUBRIC, {
+    ...deps(respond(envelope(GOOD))),
+    now: () => new Date(Date.parse("2026-07-20T12:05:00.000Z")),
+  });
+  const all = await readVerdicts();
+  assert.equal(all.length, 2);
+  const report = buildVerdictTrends(all, new Map(), new Date());
+  assert.equal(report.summary.scored, 1, "one point for one run");
+  assert.equal(report.trends[0].latest, 7.3);
+  assert.equal(failingVerdicts(all).size, 0, "the superseded low score is not a live regression");
+});
+
+test("a verdict is stamped with provenance and the digest of the rubric it was judged under", async () => {
+  const v = await performVerdict(run(), RUBRIC, deps(respond(envelope(GOOD))));
+  assert.match(v.id ?? "", /^V-[0-9a-f]{16}$/);
+  assert.deepEqual(v.provenance, {
+    runtime: "claude",
+    requestedModel: "haiku",
+    reportedModel: null,
+    promptVersion: VERDICT_PROMPT_VERSION,
+  });
+  assert.equal(v.rubricDigest, rubricDigest(RUBRIC));
+  // The digest is the question, not the policy: moving minScore keeps it.
+  assert.equal(rubricDigest({ ...RUBRIC, minScore: 9 }), rubricDigest(RUBRIC));
+  assert.notEqual(rubricDigest({ ...RUBRIC, goal: "Something else" }), rubricDigest(RUBRIC));
 });
 
 test("the verdict store is capped", async () => {

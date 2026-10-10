@@ -1,0 +1,48 @@
+{
+  "id": "8a4a1975-0cab-49d8-b9ca-46ca22ed511e",
+  "name": "H2 Shadow Evidence — 5 runs per hour",
+  "phases": [
+    {
+      "id": "307b92bf-2c43-4c84-8371-50a9f5e25a43",
+      "name": "Evaluate controlled business scenario",
+      "cwd": "C:/GIT/Argus/experiments/shadow-feeder",
+      "steps": [
+        {
+          "name": "Evaluate one case honestly",
+          "prompt": "This is a controlled, read-only business scenario benchmark for Argus H2 shadow measurement. Use the Bash tool to run exactly `node select-case.mjs` in the current directory, without a cd prefix or other commands. This exact command is pre-authorized. The selector reads ARGUS_RUN_ID from the actual process environment; do not infer environment availability from the prompt. If the command is denied, report the permission denial rather than claiming an environment variable is absent. Do not use PowerShell or inspect any additional file. Read the selected scenario, then fulfil its task using only the supplied facts. Return the corpus tag, scenario ID, run ID, calculation or reasoning, and the requested decision. Check your arithmetic and constraints. If a requested exact answer cannot be derived because required information is missing or the constraints contradict each other, explain exactly why and honestly report blocked against that task; do not invent data or silently choose which rule to ignore. A feasible task with a negative business decision is still successfully answered. Do not write any file, access the network, inspect other projects, or change Argus stores. Do not invoke skills, delegate, start background work, or perform implementation. Finish with a concise plain-text result, with enough evidence for a later reviewer to understand whether the task was accomplished. This controlled workload measures collection and trace sensitivity; it does not establish production failure rates or cause-label accuracy."
+        }
+      ],
+      "gated": false,
+      "timeoutSeconds": 240,
+      "capabilities": {
+        "filesystem": "read-only",
+        "tools": {
+          "allow": [
+            "Bash(node select-case.mjs)"
+          ],
+          "deny": [
+            "PowerShell",
+            "Edit",
+            "Write",
+            "NotebookEdit",
+            "WebFetch",
+            "WebSearch"
+          ]
+        }
+      }
+    }
+  ],
+  "trigger": {
+    "kind": "windowed",
+    "startTime": "00:00",
+    "endTime": "23:59",
+    "everyMinutes": 12
+  },
+  "enabled": true,
+  "overlapPolicy": "skip",
+  "lastStartedAt": "2026-10-08T10:20:12.779Z",
+  "createdAt": "2026-10-08T09:42:59.514Z",
+  "updatedAt": "2026-10-08T10:23:01.650Z",
+  "runtime": "claude",
+  "model": "haiku"
+}

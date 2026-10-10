@@ -73,8 +73,11 @@ describe("Briefing", () => {
     expect(screen.getByText("Nightly triage")).toBeInTheDocument();
     expect(screen.getByText(/needs approval/)).toBeInTheDocument();
     const links = screen.getAllByRole("link");
-    expect(links.some((l) => l.getAttribute("href") === "#/monitors")).toBe(true);
-    expect(links.some((l) => l.getAttribute("href") === "#/pipelines")).toBe(true);
+    expect(links.some((l) => l.getAttribute("href") === "#/health")).toBe(true);
+    // A gate is acted on in the Command Center's review drawer, so the card
+    // deep-links to that instance's drawer — not to the Pipelines page, which
+    // can only stop it.
+    expect(links.some((l) => l.getAttribute("href") === "#/command/i1")).toBe(true);
   });
 
   it("summarizes the window: run counts, cost, failures, new issues, finished pipelines", () => {

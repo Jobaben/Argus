@@ -1,0 +1,6 @@
+{
+  "at": "2026-10-09T06:13:58.656Z",
+  "redactedFields": 64,
+  "scope": "Retained baseline/report evidence only; experiment input definitions and live store unchanged",
+  "backupLimitation": "Retained store backup evidence has capability environment values redacted; it is not a byte-identical restoration payload. Original raw store was backed up before mutation and mutation guard used original bytes."
+}

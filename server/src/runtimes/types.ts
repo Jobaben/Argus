@@ -25,6 +25,9 @@ import type {
   ActivityEvent,
   AgentRuntimeCapabilities,
   AgentRuntimeId,
+  CapabilityProfile,
+  InvocationChannelAccess,
+  InvocationChannelKind,
   ReasoningEffort,
 } from "@argus/contracts";
 
@@ -49,6 +52,97 @@ export interface RunEnvelope {
   sessionId: string | null;
 }
 
+/** A file the engine must write before spawning; paths are absolute, inside
+ *  `CapabilityRequest.invocationDir`. */
+export interface MaterializedFile {
+  path: string;
+  contents: string;
+}
+
+/**
+ * One Argus-owned path the agent process must be able to reach during the
+ * invocation, as the runtime receives it (docs/HARNESS.md § Argus-owned
+ * invocation channels).
+ *
+ * Channels are the protocol between the agent and Argus — the result file, the
+ * KnowledgeDelta file, the artifact and memory directories — and they live
+ * outside the working tree, so whatever a profile says about the rest of the
+ * filesystem, a runtime must map every channel into its sandbox (or report
+ * that it cannot). The runtime is handed *one* list and answers for every
+ * entry; nothing about these paths is special-cased per kind on the runtime
+ * side. A read-only channel (Phase 4's semantic context) will arrive through
+ * the same list with `access: "read"`.
+ */
+export interface InvocationChannel {
+  kind: InvocationChannelKind;
+  /** The variable the agent learns `path` from. */
+  envVar: string;
+  /** The path the agent is told about: a file or a directory, absolute. */
+  path: string;
+  /** The directory access must be granted on: `path` itself for a directory
+   *  channel, its parent for a file channel. Sandboxes grant directories. */
+  dir: string;
+  access: InvocationChannelAccess;
+  /** Whether the launch depends on this channel. Decided by the engine, never
+   *  by the runtime; a runtime reports availability the same way either way. */
+  required: boolean;
+  /** Human label for limitation strings: "result file", "KnowledgeDelta file", … */
+  label: string;
+}
+
+/** A runtime's verdict on one channel: reachable under this invocation's
+ *  effective filesystem mode, or not, and why not. */
+export interface ChannelOutcome {
+  channel: InvocationChannel;
+  status: "granted" | "unavailable";
+  /** Present when `unavailable`: one human-readable sentence naming the
+   *  runtime, the mode and the channel. */
+  reason?: string;
+}
+
+/** The limitation sentence for an unreachable channel, in one shape for every
+ *  runtime so the record and the docs can be read the same way. */
+export function channelUnavailable(
+  channel: InvocationChannel,
+  runtimeLabel: string,
+  why: string,
+): ChannelOutcome {
+  return {
+    channel,
+    status: "unavailable",
+    reason: `${runtimeLabel} ${why} the ${channel.label} (${channel.envVar})`,
+  };
+}
+
+export function channelGranted(channel: InvocationChannel): ChannelOutcome {
+  return { channel, status: "granted" };
+}
+
+export interface CapabilityRequest {
+  profile: CapabilityProfile;
+  /** Per-invocation directory Argus created for config files (absolute, exists). */
+  invocationDir: string;
+  /** The run's working directory (absolute). */
+  cwd: string;
+  /**
+   * Every Argus-owned path this invocation must be able to reach — the result
+   * file, the KnowledgeDelta file, the artifact directory, the memory
+   * directory — with the access each needs. The runtime maps each one into
+   * its own sandbox (`--add-dir`, `writable_roots`, …) whatever `filesystem`
+   * says about the working tree, and reports one {@link ChannelOutcome} per
+   * entry in `SpawnPlan.channels`. Empty when the invocation has none.
+   */
+  channels: InvocationChannel[];
+  /**
+   * Shell command lines for Argus's own completion hooks, so a runtime that can
+   * carry hooks per invocation can register them itself instead of relying on
+   * the operator's global config. `stop` fires when the agent finishes; `gate`
+   * fires before the agent asks the user a question (Claude Code's
+   * AskUserQuestion).
+   */
+  hooks?: { stop: string; gate: string };
+}
+
 /** Everything needed to start one run, with nothing runtime-specific left over. */
 export interface SpawnPlan {
   bin: string;
@@ -57,6 +151,21 @@ export interface SpawnPlan {
   stdin: string;
   /** Extra environment for the child, merged over `process.env` by the caller. */
   env: Record<string, string>;
+  /** Files to write before spawning (invocation-specific config). Absent/empty
+   *  when no capabilities were requested. */
+  files?: MaterializedFile[];
+  /** Declared capabilities this runtime could not enforce (human-readable, one
+   *  per item). Empty when fully enforced. Channel availability is *not*
+   *  reported here — see `channels`. */
+  limitations?: string[];
+  /**
+   * One verdict per `CapabilityRequest.channels` entry, in the same order:
+   * whether this invocation's effective filesystem mode lets the agent reach
+   * the path. Present exactly when capabilities were requested. The engine
+   * turns an `unavailable` verdict into a recorded limitation, and into a
+   * refusal when the channel is required and enforcement is strict.
+   */
+  channels?: ChannelOutcome[];
 }
 
 export interface RunPlanOptions {
@@ -73,9 +182,13 @@ export interface RunPlanOptions {
    * either way.
    */
   systemPrompt?: string;
+  /** The capability profile for this invocation, when the phase declares one. */
+  capabilities?: CapabilityRequest;
 }
 
 export interface AnalysisPlanOptions {
+  decisionIsolation?: boolean;
+  reasoningEffort?: ReasoningEffort;
   prompt: string;
   /** Empty string means "let the CLI use its configured default". */
   model?: string | null;
@@ -149,4 +262,46 @@ export function extraArgs(raw: string | undefined): string[] {
   let m: RegExpExecArray | null;
   while ((m = re.exec(raw)) !== null) out.push(m[1] ?? m[2] ?? m[3]);
   return out;
+}
+
+/**
+ * The `CapabilityProfile` keys a runtime maps onto its own invocation, in a
+ * fixed order so a runtime's limitations list is deterministic. `env` and
+ * `enforcement` are excluded: both are engine-owned (the engine applies the
+ * env policy itself and decides strict vs. best-effort), never a runtime's to
+ * enforce or report on.
+ */
+const PROFILE_KEYS: (keyof CapabilityProfile)[] = [
+  "filesystem",
+  "tools",
+  "mcpServers",
+  "additionalDirectories",
+  "settingSources",
+  "permissionMode",
+  "maxTurns",
+];
+
+/**
+ * One limitation string for every key present in `profile` (mcpServers counts
+ * as present even when it is `{}`) that isn't in `supported` — phrased
+ * `${runtimeLabel} cannot enforce "${key}" for this invocation` so a gap is
+ * reported rather than silently producing a null the UI can't explain.
+ */
+export function unsupportedCapabilities(
+  profile: CapabilityProfile,
+  runtimeLabel: string,
+  supported: (keyof CapabilityProfile)[],
+): string[] {
+  const supportedSet = new Set(supported);
+  const out: string[] = [];
+  for (const key of PROFILE_KEYS) {
+    if (profile[key] === undefined) continue;
+    if (supportedSet.has(key)) continue;
+    out.push(`${runtimeLabel} cannot enforce "${key}" for this invocation`);
+  }
+  return out;
+}
+
+export function reportedCostUsd(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }

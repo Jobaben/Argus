@@ -11,7 +11,12 @@ import {
 } from "./sources/dag.js";
 import { RouteEvaluationError, evaluateRoutes, validateResult } from "./sources/routing.js";
 import type {
+  AgentRuntimeId,
+  CandidateOutcome,
+  CandidatePolicy,
   DependencyEdge,
+  PhaseFailureClass,
+  PhaseKnowledgeCommit,
   PhaseProgress,
   PipelineDefinition,
   PipelineInstance,
@@ -19,7 +24,17 @@ import type {
   RetryableClass,
   RetryPolicy,
   RouteDecision,
+  StepCompletion,
+  StepProgress,
+  StepStatus,
+  VerificationReport,
 } from "./sources/pipelineTypes.js";
+import type {
+  GateDecision,
+  PendingGateOperation,
+  TransitionEvent,
+  TransitionEventKind,
+} from "@argus/contracts";
 
 /**
  * The pure state transitions of a pipeline instance.
@@ -59,11 +74,74 @@ export interface TransitionResult {
   startPhases: number[];
   /** Present on every settled transition; absent when nothing was settled. */
   routing?: RouteOutcome;
+  /**
+   * Phase ids whose steps have all reported success and whose declared checks
+   * Argus must now run. The phase stays `running` until the engine reports the
+   * result through {@link applyVerification}; nothing downstream is ready yet.
+   */
+  verify?: string[];
+  /** Set by {@link applyVerification} when the report was taken; absent when it
+   *  was refused as stale. */
+  verificationApplied?: boolean;
+  /**
+   * One candidate of a `candidates` phase whose own `checks` Argus must now run,
+   * inside that candidate's worktree. The phase stays `running`: the selection
+   * is not decidable until enough candidates have reported.
+   */
+  verifyCandidate?: { phaseId: string; candidate: number };
+  /**
+   * Set whenever a candidate of a `candidates` phase moved. The engine answers
+   * it by re-evaluating the selection ({@link selectCandidate}) with the run
+   * records the cost comparison needs, which is I/O and therefore not done here.
+   */
+  candidatesMoved?: string;
+  /**
+   * Phase ids whose every acceptance condition has been met — steps
+   * succeeded, result validated, checks passed, gate approved — and whose
+   * staged KnowledgeDeltas Argus must now commit before the phase may
+   * succeed. The phase stays `running` with `knowledge.status: "pending"`
+   * until the engine reports through {@link applyKnowledgeCommit}; nothing
+   * downstream is ready yet.
+   */
+  commitKnowledge?: string[];
+  /** Set by {@link applyKnowledgeCommit} when the verdict was taken; absent
+   *  when it was refused as stale. */
+  knowledgeApplied?: boolean;
+  /** Set by {@link advance} when the signal matched nothing it may drive and
+   *  the instance was returned untouched. */
+  ignored?: "unknown-phase" | "phase-not-running" | "unknown-run" | "step-not-running";
+  /**
+   * What this transition did, in order — nested transitions (a signal that
+   * settles the graph, a selection that concludes the phase) contribute their
+   * own entries. The engine records them with the instance save that commits
+   * the result, so every pipeline status change on disk is attributed to a
+   * transition. Absent on a transition that changed nothing.
+   */
+  events?: TransitionEvent[];
+}
+
+/** One event, with only the fields that are set. */
+export function transitionEvent(
+  kind: TransitionEventKind,
+  fields: { phaseId?: string; attempt?: number; runId?: string; detail?: string } = {},
+): TransitionEvent {
+  return {
+    kind,
+    ...(fields.phaseId !== undefined ? { phaseId: fields.phaseId } : {}),
+    ...(fields.attempt !== undefined ? { attempt: fields.attempt } : {}),
+    ...(fields.runId !== undefined ? { runId: fields.runId } : {}),
+    ...(fields.detail !== undefined ? { detail: fields.detail } : {}),
+  };
+}
+
+/** `res` with `events` put ahead of whatever it already carried. */
+function withEvents(res: TransitionResult, events: TransitionEvent[]): TransitionResult {
+  return { ...res, events: [...events, ...(res.events ?? [])] };
 }
 
 /** Kept for definitions and tests that predate `{{artifacts.<name>}}`. */
 export function applyTemplate(prompt: string, prevPayload: unknown): string {
-  return interpolate(prompt, prevPayload);
+  return interpolate(prompt, prevPayload).prompt;
 }
 
 function touch(inst: PipelineInstance, nowISO: string): void {
@@ -101,6 +179,14 @@ function withReason(payload: unknown, reason: string): unknown {
     : { reason };
 }
 
+/** Record how a failure was classed, beside its reason, so the record explains
+ *  the retry policy's decision without re-deriving it. */
+export function withFailureClass(payload: unknown, failureClass: PhaseFailureClass): unknown {
+  return payload && typeof payload === "object" && !Array.isArray(payload)
+    ? { ...(payload as Record<string, unknown>), failureClass }
+    : { failureClass };
+}
+
 /** Publish a succeeded phase's payload under its declared artifact name. */
 function publishArtifact(def: PipelineDefinition, inst: PipelineInstance, phaseId: string): void {
   const name = def.phases.find((p) => p.id === phaseId)?.produces;
@@ -124,16 +210,20 @@ function publishArtifact(def: PipelineDefinition, inst: PipelineInstance, phaseI
 function resolvePhaseResult(
   def: PipelineDefinition,
   phase: PhaseProgress,
+  /** Which of the phase's steps may have delivered the result. Defaults to all
+   *  of them; a `candidates` phase passes only the winner, because the losers'
+   *  submissions are drafts the phase decided against, not contradictions. */
+  steps: StepProgress[] = phase.steps,
 ): { ok: true; value?: unknown } | { ok: false; reason: string } {
   const phaseDef = def.phases.find((p) => p.id === phase.id);
   if (!phaseDef?.result) return { ok: true };
   const artifact = phaseDef.result.artifact;
   const wanted = resultStepName(phaseDef);
 
-  const unreadable = phase.steps.find((s) => s.resultError);
+  const unreadable = steps.find((s) => s.resultError);
   if (unreadable) return { ok: false, reason: `result "${artifact}": ${unreadable.resultError}` };
 
-  const submitted = phase.steps.filter((s) => s.result !== undefined);
+  const submitted = steps.filter((s) => s.result !== undefined);
   if (new Set(submitted.map((s) => JSON.stringify(s.result))).size > 1) {
     return {
       ok: false,
@@ -292,6 +382,7 @@ export function settle(
   nowISO: string,
   priorFailures: RouteFailure[] = [],
 ): TransitionResult {
+  const statusBefore = inst.status;
   const routing: RouteOutcome = { decisions: [], skipped: [], failures: [...priorFailures] };
   recordRouteDecisions(def, inst, routing);
   propagateSkips(def, inst, routing);
@@ -304,6 +395,23 @@ export function settle(
     // fetching the definition (which may since have been edited).
     inst.phases[i].needs = needs.get(inst.phases[i].id) ?? [];
   }
+  const events: TransitionEvent[] = [
+    ...routing.decisions.map((d) =>
+      transitionEvent("route-decided", { phaseId: d.sourcePhase, detail: d.reason }),
+    ),
+    ...routing.failures
+      .slice(priorFailures.length)
+      .map((f) =>
+        transitionEvent("route-decided", { phaseId: f.phaseId, detail: `failed: ${f.reason}` }),
+      ),
+    ...routing.skipped.map((id) => transitionEvent("phase-skipped", { phaseId: id })),
+    ...startPhases.map((i) =>
+      transitionEvent("phase-started", {
+        phaseId: inst.phases[i].id,
+        attempt: inst.phases[i].attempt,
+      }),
+    ),
+  ];
 
   const outcome = instanceOutcome(def, inst);
   if (outcome === "succeeded") {
@@ -321,14 +429,20 @@ export function settle(
 
   inst.currentPhaseIndex = currentIndex(inst);
   touch(inst, nowISO);
-  return { instance: inst, startPhases, routing };
+  if (inst.status !== statusBefore) {
+    events.push(transitionEvent("instance-status", { detail: `${statusBefore} → ${inst.status}` }));
+  }
+  return { instance: inst, startPhases, routing, events };
 }
 
 export function initInstance(
   def: PipelineDefinition,
-  trigger: "manual" | "scheduled",
+  trigger: PipelineInstance["trigger"],
   ids: { instanceId: string; token: string },
   nowISO: string,
+  /** Set for `trigger: "webhook"` (the request body) or `"chained"` (the
+   *  source instance's outcome) — absent for `"manual"`/`"scheduled"`. */
+  firing?: { triggerPayload?: unknown; chainedFrom?: string },
 ): TransitionResult {
   if (def.phases.length === 0) throw new Error("pipeline has no phases");
   const needs = resolveNeeds(def.phases);
@@ -351,13 +465,22 @@ export function initInstance(
     currentPhaseIndex: 0,
     phases,
     trigger,
+    ...(firing?.triggerPayload !== undefined ? { triggerPayload: firing.triggerPayload } : {}),
+    ...(firing?.chainedFrom !== undefined ? { chainedFrom: firing.chainedFrom } : {}),
     signalToken: ids.token,
+    // Every run of this instance gets its own token; the instance-wide one
+    // above is kept only so the record keeps its shape, and is never accepted.
+    signalScheme: "run-token-v1",
     createdAt: nowISO,
     updatedAt: nowISO,
     endedAt: null,
     artifacts: {},
+    // Snapshotted here, in the same record as the phase list it describes: the
+    // instance carries its own definition from its first write, so nothing an
+    // author saves afterwards can reach it.
+    definition: def,
   };
-  return settle(def, instance, nowISO);
+  return withEvents(settle(def, instance, nowISO), [transitionEvent("init")]);
 }
 
 export function advance(
@@ -365,18 +488,101 @@ export function advance(
   inst: PipelineInstance,
   signal: PipelineSignal,
   nowISO: string,
+  failureClass?: PhaseFailureClass,
+  completion?: StepCompletion,
+): TransitionResult {
+  const res = advanceSignal(def, inst, signal, nowISO, failureClass, completion);
+  if (res.ignored) return res;
+  const phase = inst.phases.find((p) => p.id === signal.phaseId);
+  const events = [
+    transitionEvent("signal", {
+      phaseId: signal.phaseId,
+      runId: signal.runId,
+      ...(phase ? { attempt: phase.attempt } : {}),
+      detail: failureClass ? `${signal.type} (${failureClass})` : signal.type,
+    }),
+  ];
+  if (completion) {
+    events.push(
+      transitionEvent("completion-recorded", {
+        phaseId: signal.phaseId,
+        runId: signal.runId,
+        detail: `${completion.verdict}: marker ${completion.marker} (${completion.policy})`,
+      }),
+    );
+  }
+  if (res.verify?.length) {
+    for (const id of res.verify)
+      events.push(transitionEvent("verification-started", { phaseId: id }));
+  }
+  if (res.verifyCandidate) {
+    events.push(
+      transitionEvent("verification-started", {
+        phaseId: res.verifyCandidate.phaseId,
+        detail: `c${res.verifyCandidate.candidate}`,
+      }),
+    );
+  }
+  return withEvents(res, events);
+}
+
+function advanceSignal(
+  def: PipelineDefinition,
+  inst: PipelineInstance,
+  signal: PipelineSignal,
+  nowISO: string,
+  /**
+   * How a `failed` signal was classed, when the caller already knows (a
+   * deadline, a dead run record, an invocation Argus refused to make).
+   *
+   * Read only on a candidates phase, which records the class per candidate
+   * because its phase-level payload belongs to whichever candidate wins. An
+   * ordinary phase's class is applied by the engine after the transition, as
+   * it always was.
+   */
+  failureClass?: PhaseFailureClass,
+  /**
+   * What Argus decided about the run's completion report, recorded on the
+   * step the signal drives. Decided by the caller (it reads the run's final
+   * message and the phase's policy); recorded here, so the step's own
+   * account and its status change land in the same transition.
+   */
+  completion?: StepCompletion,
 ): TransitionResult {
   // Located by id, not by a cursor: with a fan-out, several phases are live at
   // once and the signalling one is whichever sent it.
   const phase = inst.phases.find((p) => p.id === signal.phaseId);
-  if (!phase || phase.status !== "running") return { instance: inst, startPhases: [] };
+  if (!phase) return { instance: inst, startPhases: [], ignored: "unknown-phase" };
+  if (phase.status !== "running") {
+    return { instance: inst, startPhases: [], ignored: "phase-not-running" };
+  }
 
   // Only a run currently tracked by this phase may drive it. A signal whose
   // runId matches no step comes from a stale or duplicate concurrent run (its
   // runId was overwritten by a later revise/re-spawn) and is ignored, so it
   // can't terminalize or advance the instance behind the tracked run's back.
   const step = phase.steps.find((s) => s.runId === signal.runId);
-  if (!step) return { instance: inst, startPhases: [] };
+  if (!step) return { instance: inst, startPhases: [], ignored: "unknown-run" };
+  // A step that has already reported — or was failed, aborted or superseded
+  // by Argus — has been decided. A duplicate or late signal for it must not
+  // re-decide it: a second `completed` would overwrite the payload and result
+  // a sibling may already have read, and a late `failed` would fail a phase
+  // whose step had succeeded. (A `needs-input` pause moves the phase to
+  // `awaiting-approval`, so the same run's later Stop never reaches here;
+  // the gate's approve or revise is what resumes it.)
+  if (step.status !== "running") {
+    return { instance: inst, startPhases: [], ignored: "step-not-running" };
+  }
+  if (completion) step.completion = completion;
+
+  // A candidate is not a step of a phase in the ordinary sense: its failure
+  // does not fail the phase, and its success does not conclude it. Everything
+  // about that lives in one place rather than as conditions sprinkled below.
+  const phaseDef = def.phases.find((p) => p.id === phase.id);
+  if (phaseDef?.candidates && step.candidate !== undefined) {
+    return advanceCandidate(inst, phase, step, signal, nowISO, failureClass);
+  }
+
   step.status = signal.type === "failed" ? "failed" : "succeeded";
   if (signal.payload !== undefined) phase.payload = signal.payload;
   // A structured result belongs to the step that submitted it until every step
@@ -396,6 +602,7 @@ export function advance(
   }
   if (signal.type === "needs-input") {
     phase.status = "awaiting-approval";
+    phase.pause = "needs-input";
     return settle(def, inst, nowISO);
   }
   // completed
@@ -422,17 +629,661 @@ export function advance(
   }
   if (resolved.value !== undefined) phase.result = resolved.value;
 
+  // Agent completion is not phase success. A phase with declared checks stays
+  // running while Argus verifies the work itself; the gate and the successors
+  // wait for that verdict, not for the agent's.
+  const checks = def.phases.find((p) => p.id === phase.id)?.checks;
+  if (checks && checks.length > 0) {
+    phase.verification = { status: "running", startedAt: nowISO, checks: [] };
+    touch(inst, nowISO);
+    return { instance: inst, startPhases: [], verify: [phase.id] };
+  }
+  return concludePhase(def, inst, phase, nowISO);
+}
+
+/** Every step is in and every check has passed: pause at the gate, or
+ *  succeed — through the knowledge commit when the attempt staged any. */
+function concludePhase(
+  def: PipelineDefinition,
+  inst: PipelineInstance,
+  phase: PhaseProgress,
+  nowISO: string,
+): TransitionResult {
   if (phase.gated) {
     phase.status = "awaiting-approval";
-    return settle(def, inst, nowISO);
+    phase.pause = "gate";
+    return withEvents(settle(def, inst, nowISO), [
+      transitionEvent("phase-paused", {
+        phaseId: phase.id,
+        attempt: phase.attempt,
+        detail: "gate",
+      }),
+    ]);
+  }
+  return succeedPhase(def, inst, phase, nowISO);
+}
+
+/**
+ * The KnowledgeDeltas this attempt would commit: one per step whose run
+ * staged one and whose step *succeeded*. A losing candidate's step is
+ * `aborted` and its delta is not eligible, however valid it was.
+ */
+export function stagedDeltaIds(phase: PhaseProgress): string[] {
+  return phase.steps.flatMap((s) =>
+    s.status === "succeeded" && s.knowledgeDelta?.status === "staged" ? [s.knowledgeDelta.id] : [],
+  );
+}
+
+/**
+ * The rule-verification proposals this attempt would commit (Phase 6): one per
+ * step whose run staged one and whose step *succeeded*. Exactly the same
+ * eligibility rule as {@link stagedDeltaIds}, so an abandoned attempt's
+ * conformance results can no more become durable than its claims can.
+ */
+export function stagedVerificationIds(phase: PhaseProgress): string[] {
+  return phase.steps.flatMap((s) =>
+    s.status === "succeeded" && s.ruleVerification?.status === "staged"
+      ? [s.ruleVerification.id]
+      : [],
+  );
+}
+
+/**
+ * The change proposals this attempt would accept (Phase 7): one per step whose
+ * run staged one and whose step *succeeded*. Exactly the same eligibility rule
+ * as {@link stagedDeltaIds}, so an abandoned attempt's reasoning can no more
+ * become canonical intent than its claims can become canonical knowledge.
+ */
+export function stagedChangeProposalIds(phase: PhaseProgress): string[] {
+  return phase.steps.flatMap((s) =>
+    s.status === "succeeded" && s.changeProposal?.status === "staged" ? [s.changeProposal.id] : [],
+  );
+}
+
+/**
+ * The acceptance-criterion results this attempt would commit (Phase 8): one
+ * per step whose run staged one and whose step *succeeded*. Exactly the same
+ * eligibility rule as {@link stagedDeltaIds}, so an abandoned attempt's
+ * acceptance results can no more become durable than its claims can.
+ */
+export function stagedAcceptanceIds(phase: PhaseProgress): string[] {
+  return phase.steps.flatMap((s) =>
+    s.status === "succeeded" && s.acceptanceVerification?.status === "staged"
+      ? [s.acceptanceVerification.id]
+      : [],
+  );
+}
+
+/**
+ * The last rung of the acceptance ladder. A phase whose attempt staged no
+ * KnowledgeDelta succeeds here exactly as it always did. One that did stays
+ * `running` under `knowledge.status: "pending"` — the same shape as a phase
+ * under `verification.status: "running"` — and hands the engine the phase id:
+ * the commit is I/O against `knowledge.json`, which a pure transition cannot
+ * do, and the phase must not read as succeeded until it has happened. The
+ * held phase is persisted in that state, so a restart between the ledger
+ * write and the instance write is healed by committing again (idempotent).
+ */
+function succeedPhase(
+  def: PipelineDefinition,
+  inst: PipelineInstance,
+  phase: PhaseProgress,
+  nowISO: string,
+): TransitionResult {
+  const deltas = stagedDeltaIds(phase);
+  const verifications = stagedVerificationIds(phase);
+  const changeProposals = stagedChangeProposalIds(phase);
+  const acceptanceVerifications = stagedAcceptanceIds(phase);
+  if (
+    deltas.length > 0 ||
+    verifications.length > 0 ||
+    changeProposals.length > 0 ||
+    acceptanceVerifications.length > 0
+  ) {
+    phase.status = "running";
+    phase.knowledge = {
+      status: "pending",
+      deltas,
+      ...(verifications.length > 0 ? { verifications } : {}),
+      ...(changeProposals.length > 0 ? { changeProposals } : {}),
+      ...(acceptanceVerifications.length > 0 ? { acceptanceVerifications } : {}),
+      startedAt: nowISO,
+    };
+    return withEvents({ ...settle(def, inst, nowISO), commitKnowledge: [phase.id] }, [
+      transitionEvent("knowledge-pending", { phaseId: phase.id, attempt: phase.attempt }),
+    ]);
   }
   phase.status = "succeeded";
   publishArtifact(def, inst, phase.id);
-  return settle(def, inst, nowISO);
+  return withEvents(settle(def, inst, nowISO), [
+    transitionEvent("phase-succeeded", { phaseId: phase.id, attempt: phase.attempt }),
+  ]);
+}
+
+/** What the engine learned from committing a phase's staged deltas. */
+export type KnowledgeCommitVerdict =
+  | { ok: true }
+  /**
+   * `failureClass` is set when the engine knows which half of the commit was
+   * refused — a forged acceptance check is not a knowledge-delta failure, and
+   * a retry policy that opted into one class must not be triggered by the
+   * other. Absent, the class is derived below from what the attempt staged,
+   * exactly as it was before Phase 8.
+   */
+  | { ok: false; reason: string; failureClass?: RetryableClass };
+
+/**
+ * Record the outcome of committing a phase attempt's staged KnowledgeDeltas.
+ *
+ * Only a phase still `running` under a `pending` commit takes the verdict: an
+ * abort or a revise in the window has already decided otherwise. A committed
+ * ledger concludes the phase as `succeeded` exactly as a delta-less phase
+ * would have; a refused commit — the ledger moved under a precondition, two
+ * steps' proposals conflicted — fails the phase under the `knowledge-delta`
+ * class with the ledger's own reason, so the retry note or the person
+ * revising sees precisely what was refused.
+ */
+export function applyKnowledgeCommit(
+  def: PipelineDefinition,
+  inst: PipelineInstance,
+  phaseId: string,
+  verdict: KnowledgeCommitVerdict,
+  nowISO: string,
+): TransitionResult {
+  const phase = inst.phases.find((p) => p.id === phaseId);
+  if (!phase || phase.status !== "running" || phase.knowledge?.status !== "pending") {
+    return { instance: inst, startPhases: [] };
+  }
+  const held = phase.knowledge;
+  const heldVerifications = held.verifications ?? [];
+  const heldChanges = held.changeProposals ?? [];
+  const heldAcceptance = held.acceptanceVerifications ?? [];
+  const mark = (status: "applied" | "rejected") => {
+    for (const s of phase.steps) {
+      if (s.knowledgeDelta && held.deltas.includes(s.knowledgeDelta.id)) {
+        s.knowledgeDelta = { ...s.knowledgeDelta, status };
+      }
+      if (s.ruleVerification && heldVerifications.includes(s.ruleVerification.id)) {
+        s.ruleVerification = { ...s.ruleVerification, status };
+      }
+      if (s.acceptanceVerification && heldAcceptance.includes(s.acceptanceVerification.id)) {
+        s.acceptanceVerification = { ...s.acceptanceVerification, status };
+      }
+      if (s.changeProposal && heldChanges.includes(s.changeProposal.id)) {
+        // A change proposal is `accepted`, not `applied`: what became canonical
+        // is its delta, and what became durable is the record of the request.
+        s.changeProposal = {
+          ...s.changeProposal,
+          status: status === "applied" ? "accepted" : "rejected",
+        };
+      }
+    }
+  };
+  if (verdict.ok) {
+    phase.knowledge = { ...held, status: "applied", endedAt: nowISO };
+    mark("applied");
+    phase.status = "succeeded";
+    publishArtifact(def, inst, phase.id);
+    return withEvents({ ...settle(def, inst, nowISO), knowledgeApplied: true }, [
+      transitionEvent("knowledge-committed", {
+        phaseId: phase.id,
+        attempt: phase.attempt,
+        detail: "applied",
+      }),
+    ]);
+  }
+  phase.knowledge = { ...held, status: "rejected", endedAt: nowISO, reason: verdict.reason };
+  mark("rejected");
+  phase.status = "failed";
+  phase.payload = withFailureClass(
+    withReason(phase.payload, verdict.reason),
+    verdict.failureClass ?? commitFailureClass(held),
+  );
+  failLeftoverSteps(phase);
+  return withEvents({ ...settle(def, inst, nowISO), knowledgeApplied: true }, [
+    transitionEvent("knowledge-committed", {
+      phaseId: phase.id,
+      attempt: phase.attempt,
+      detail: `refused: ${verdict.reason}`,
+    }),
+  ]);
+}
+
+/**
+ * Which class a refused commit falls under when the caller did not say.
+ *
+ * The commit is one transition over every half, so one class has to name it:
+ * `change-proposal` when a change proposal was at stake — it is the outermost
+ * thing the attempt was doing; then the conformance halves when no delta was;
+ * `knowledge-delta` otherwise, unchanged from Phase 3.
+ */
+export function commitFailureClass(held: PhaseKnowledgeCommit): RetryableClass {
+  if ((held.changeProposals ?? []).length > 0) return "change-proposal";
+  if (held.deltas.length > 0) return "knowledge-delta";
+  if ((held.verifications ?? []).length > 0) return "rule-verification";
+  if ((held.acceptanceVerifications ?? []).length > 0) return "acceptance-verification";
+  return "knowledge-delta";
+}
+
+/** One line naming what failed, for the phase's failure reason. */
+export function verificationFailureReason(report: VerificationReport): string {
+  const failed = report.checks.filter((c) => c.status === "failed");
+  if (failed.length === 0) return "verification failed";
+  return `verification failed: ${failed.map((c) => `${c.label} (${c.detail})`).join("; ")}`;
+}
+
+/**
+ * Record the outcome of Argus's own checks over a phase whose steps have all
+ * reported success.
+ *
+ * Only a phase still `running` under a `running` verification takes the
+ * report: an abort, a revise or a competing transition in the window while the
+ * checks ran has already decided otherwise, and a stale report must not undo
+ * it. A passing report concludes the phase exactly as a check-less phase would
+ * have at the last step's signal; a failing one fails the phase under the
+ * `verification` class, carrying the report as evidence for the retry, the
+ * revise, or the person reading the board.
+ */
+export function applyVerification(
+  def: PipelineDefinition,
+  inst: PipelineInstance,
+  phaseId: string,
+  report: VerificationReport,
+  nowISO: string,
+): TransitionResult {
+  const phase = inst.phases.find((p) => p.id === phaseId);
+  if (!phase || phase.status !== "running" || phase.verification?.status !== "running") {
+    return { instance: inst, startPhases: [] };
+  }
+  phase.verification = report;
+  const applied = transitionEvent("verification-applied", {
+    phaseId,
+    attempt: phase.attempt,
+    detail: report.status,
+  });
+  if (report.status === "passed") {
+    return withEvents({ ...concludePhase(def, inst, phase, nowISO), verificationApplied: true }, [
+      applied,
+    ]);
+  }
+
+  phase.status = "failed";
+  phase.payload = withFailureClass(
+    withReason(phase.payload, verificationFailureReason(report)),
+    "verification",
+  );
+  failLeftoverSteps(phase);
+  return withEvents({ ...settle(def, inst, nowISO), verificationApplied: true }, [applied]);
+}
+
+// ── Candidates: best-of-N with verifier-gated selection ──────────────────────
+
+/**
+ * Where one candidate has got to, as selection sees it.
+ *
+ * Three states, and the middle one is the whole point: a candidate that has
+ * *finished running* is not yet a candidate that has *won*. It has won when its
+ * own copy of the phase's checks passed inside its own worktree.
+ */
+export type CandidateState = "running" | "verified" | "lost";
+
+/**
+ * One candidate as the selectors read it: the persisted step, joined with the
+ * cost and duration its run reported.
+ *
+ * The join is the caller's job (the engine reads the run records), which keeps
+ * every rule below a pure function of plain data — and makes "cheapest wins"
+ * testable without a filesystem.
+ */
+export interface CandidateRecord {
+  candidate: number;
+  status: StepStatus;
+  /** Whether its checks passed. Null = it never reached them. */
+  verified: boolean | null;
+  /** When its checks finished, for "first". Null = they did not. */
+  verifiedAt: string | null;
+  costUsd: number | null;
+  durationMs: number | null;
+  runtime: AgentRuntimeId | null;
+  model: string | null;
+  /** Why it lost, when it did. */
+  reason?: string;
+  /** How its own failure was classed, for {@link candidateFailureClass}. */
+  failureClass?: PhaseFailureClass;
+}
+
+export function candidateState(record: CandidateRecord): CandidateState {
+  if (record.verified === true) return "verified";
+  if (record.verified === false) return "lost";
+  if (record.status === "failed" || record.status === "aborted" || record.status === "skipped") {
+    return "lost";
+  }
+  return "running";
+}
+
+/** The record for one persisted candidate step, before the run join. */
+export function candidateRecordOf(step: StepProgress): CandidateRecord {
+  const verification = step.verification;
+  return {
+    candidate: step.candidate ?? 0,
+    status: step.status,
+    verified:
+      verification?.status === "passed" ? true : verification?.status === "failed" ? false : null,
+    verifiedAt: verification?.endedAt ?? null,
+    costUsd: null,
+    durationMs: null,
+    runtime: null,
+    model: null,
+    ...(step.failure ? { reason: step.failure.reason, failureClass: step.failure.class } : {}),
+  };
+}
+
+/** What the selection concluded, without acting on it. */
+export type CandidateSelection =
+  { kind: "pending" } | { kind: "selected"; candidate: number } | { kind: "none" };
+
+/** Nulls sort last: an unknown cost is not a cheap one. */
+function orMax(n: number | null): number {
+  return n == null ? Number.POSITIVE_INFINITY : n;
+}
+
+/**
+ * Which candidate the phase keeps, if the question can be answered yet.
+ *
+ * `first-verified` answers as soon as one candidate's checks pass — the whole
+ * point being that the siblings are then killed rather than paid for. Among
+ * several already-verified candidates (a restart re-evaluating, or two reports
+ * landing in the same tick) the earliest to finish its checks wins, then the
+ * lowest index: a rule that reads the same off the persisted records however
+ * many times it is applied.
+ *
+ * `cheapest-verified` waits for every candidate to settle and then buys the
+ * cheapest verified draft, tie-broken by duration and then by index.
+ *
+ * Pure and total: `pending` means "ask again later", `none` means "nothing can
+ * still win".
+ */
+export function selectCandidate(
+  policy: CandidatePolicy,
+  records: CandidateRecord[],
+): CandidateSelection {
+  const verified = records.filter((r) => candidateState(r) === "verified");
+  const running = records.filter((r) => candidateState(r) === "running");
+
+  if (policy.select === "first-verified") {
+    if (verified.length > 0) {
+      const winner = [...verified].sort(
+        (a, b) =>
+          (a.verifiedAt ?? "").localeCompare(b.verifiedAt ?? "") || a.candidate - b.candidate,
+      )[0];
+      return { kind: "selected", candidate: winner.candidate };
+    }
+    return running.length > 0 ? { kind: "pending" } : { kind: "none" };
+  }
+
+  // cheapest-verified: no decision until the last candidate has had its say,
+  // because the one still running may be the cheap one.
+  if (running.length > 0) return { kind: "pending" };
+  if (verified.length === 0) return { kind: "none" };
+  const winner = [...verified].sort(
+    (a, b) =>
+      orMax(a.costUsd) - orMax(b.costUsd) ||
+      orMax(a.durationMs) - orMax(b.durationMs) ||
+      a.candidate - b.candidate,
+  )[0];
+  return { kind: "selected", candidate: winner.candidate };
+}
+
+/**
+ * How a phase whose every candidate lost is classed for the retry policy.
+ *
+ * The last candidate to settle is the one whose story the phase tells, so its
+ * class is used when every candidate agrees with it. When they disagree, a
+ * `verification` failure outranks the rest — a candidate that got as far as the
+ * checks and was rejected by them is the most informative thing that happened,
+ * and it is the class an author who opted into retrying verification meant.
+ * Failing both, `exit-code`: something ran and did not work out.
+ */
+export function candidateFailureClass(records: CandidateRecord[]): PhaseFailureClass {
+  const classes = records.map((r) => r.failureClass).filter((c): c is PhaseFailureClass => !!c);
+  if (classes.length === 0) return "exit-code";
+  const last = classes[classes.length - 1];
+  if (classes.every((c) => c === last)) return last;
+  if (classes.includes("verification")) return "verification";
+  return "exit-code";
+}
+
+/** One line per candidate: what it was, and why it is not the answer. */
+export function candidateFailureReason(records: CandidateRecord[]): string {
+  const lines = [...records]
+    .sort((a, b) => a.candidate - b.candidate)
+    .map((r) => {
+      const who = [r.runtime, r.model].filter(Boolean).join(" ");
+      const label = who ? `c${r.candidate} (${who})` : `c${r.candidate}`;
+      return `${label}: ${r.reason ?? (r.verified === false ? "checks failed" : r.status)}`;
+    });
+  return `no candidate passed its checks — ${lines.join("; ")}`;
+}
+
+/** The outcomes written onto the phase once it settles, newest evidence first
+ *  in candidate order so the board can list them without re-sorting. */
+export function toCandidateOutcomes(records: CandidateRecord[]): CandidateOutcome[] {
+  return [...records]
+    .sort((a, b) => a.candidate - b.candidate)
+    .map((r) => ({
+      candidate: r.candidate,
+      status: r.status,
+      verified: r.verified,
+      costUsd: r.costUsd,
+      durationMs: r.durationMs,
+      runtime: r.runtime,
+      model: r.model,
+      ...(r.reason ? { reason: r.reason } : {}),
+    }));
+}
+
+/**
+ * One candidate reported. Nothing about the phase is decided here.
+ *
+ * A candidate's payload, result and failure are held on its own step: the phase
+ * publishes exactly one of them, and which one is a question only the selection
+ * can answer. So this records what arrived and hands the caller a
+ * `candidatesMoved` flag, and the engine re-runs the selection with the run
+ * records it alone can read.
+ */
+function advanceCandidate(
+  inst: PipelineInstance,
+  phase: PhaseProgress,
+  step: StepProgress,
+  signal: PipelineSignal,
+  nowISO: string,
+  failureClass?: PhaseFailureClass,
+): TransitionResult {
+  if (signal.payload !== undefined) step.payload = signal.payload;
+  if (signal.result !== undefined) step.result = signal.result;
+  if (signal.resultError !== undefined) step.resultError = signal.resultError;
+  touch(inst, nowISO);
+
+  if (signal.type === "completed") {
+    step.status = "succeeded";
+    // Even a phase with no `checks` goes through verification: an empty check
+    // list passes trivially, and one code path for "is this candidate any
+    // good" is worth more than the microseconds it costs.
+    step.verification = { status: "running", startedAt: nowISO, checks: [] };
+    return {
+      instance: inst,
+      startPhases: [],
+      verifyCandidate: { phaseId: phase.id, candidate: step.candidate ?? 0 },
+      candidatesMoved: phase.id,
+    };
+  }
+
+  // `needs-input` has nowhere to go on a candidate: the gate of a candidates
+  // phase opens after selection, on the winner, so a draft that stops to ask a
+  // question has stopped without delivering one. It loses, and says so.
+  const reason =
+    signal.type === "needs-input"
+      ? "candidate asked for input; a candidate phase gates on its winner, not on a draft"
+      : (payloadReason(step.payload) ?? DEFAULT_FAIL_REASON);
+  step.status = "failed";
+  step.failure = { class: failureClass ?? "signal", reason };
+  return { instance: inst, startPhases: [], candidatesMoved: phase.id };
+}
+
+/**
+ * Record one candidate's own verification report.
+ *
+ * Refused unless that candidate is still `succeeded` under a `running` report —
+ * a revise, an abort or a selection that already happened has decided
+ * otherwise, and a report from the losing side of that decision must not
+ * reopen it.
+ */
+export function applyCandidateVerification(
+  inst: PipelineInstance,
+  phaseId: string,
+  candidate: number,
+  report: VerificationReport,
+  nowISO: string,
+): TransitionResult {
+  const phase = inst.phases.find((p) => p.id === phaseId);
+  const step = phase?.steps.find((s) => s.candidate === candidate);
+  if (!phase || !step || phase.status !== "running" || step.verification?.status !== "running") {
+    return { instance: inst, startPhases: [] };
+  }
+  step.verification = report;
+  if (report.status !== "passed") {
+    step.failure = { class: "verification", reason: verificationFailureReason(report) };
+  }
+  touch(inst, nowISO);
+  return {
+    instance: inst,
+    startPhases: [],
+    verificationApplied: true,
+    candidatesMoved: phaseId,
+    events: [
+      transitionEvent("candidate-verification-applied", {
+        phaseId,
+        attempt: phase.attempt,
+        detail: `c${candidate} ${report.status}`,
+      }),
+    ],
+  };
+}
+
+/**
+ * The selection landed: one candidate is the phase's work and the rest are not.
+ *
+ * The winner's worktree, verification report, payload and result become the
+ * phase's own — a downstream phase reading `{{previous.payload}}` must never see
+ * a draft the pipeline threw away. The losers are marked `aborted` rather than
+ * `failed`: nothing went wrong with them, they were simply not chosen, and a
+ * board that says "failed" about three-quarters of a successful phase is a
+ * board nobody trusts.
+ *
+ * The caller has already killed whatever was still running (and removed the
+ * losing worktrees); this only writes down what that means.
+ */
+export function applyCandidateSelection(
+  def: PipelineDefinition,
+  inst: PipelineInstance,
+  phaseId: string,
+  candidate: number,
+  outcomes: CandidateOutcome[],
+  nowISO: string,
+): TransitionResult {
+  const phase = inst.phases.find((p) => p.id === phaseId);
+  const winner = phase?.steps.find((s) => s.candidate === candidate);
+  if (!phase || !winner || phase.status !== "running") {
+    return { instance: inst, startPhases: [] };
+  }
+  for (const s of phase.steps) {
+    if (s === winner) continue;
+    if (s.status === "pending" || s.status === "running" || s.status === "succeeded") {
+      s.status = "aborted";
+      s.failure ??= { class: "exit-code", reason: `superseded by candidate ${candidate}` };
+    }
+  }
+  phase.selectedCandidate = candidate;
+  phase.candidateOutcomes = outcomes;
+  phase.payload = winner.payload ?? null;
+  phase.verification = winner.verification;
+  phase.workspace = winner.workspace ?? null;
+  const selected = transitionEvent("candidate-selected", {
+    phaseId,
+    attempt: phase.attempt,
+    detail: `c${candidate}`,
+  });
+
+  const resolved = resolvePhaseResult(def, phase, [winner]);
+  if (!resolved.ok) {
+    phase.status = "failed";
+    phase.payload = withReason(phase.payload, resolved.reason);
+    return withEvents(settle(def, inst, nowISO, [{ phaseId, reason: resolved.reason }]), [
+      selected,
+      transitionEvent("phase-failed", { phaseId, attempt: phase.attempt, detail: resolved.reason }),
+    ]);
+  }
+  if (resolved.value !== undefined) phase.result = resolved.value;
+  return withEvents(concludePhase(def, inst, phase, nowISO), [selected]);
+}
+
+/**
+ * Every candidate lost. The phase fails once, with every draft's fate in the
+ * reason — the point of running N of them is that the N failures together say
+ * more than any one of them, and a retry (or a person) gets all of it.
+ */
+export function applyCandidatesExhausted(
+  def: PipelineDefinition,
+  inst: PipelineInstance,
+  phaseId: string,
+  failureClass: PhaseFailureClass,
+  reason: string,
+  outcomes: CandidateOutcome[],
+  nowISO: string,
+): TransitionResult {
+  const phase = inst.phases.find((p) => p.id === phaseId);
+  if (!phase || phase.status !== "running") return { instance: inst, startPhases: [] };
+  phase.selectedCandidate = null;
+  phase.candidateOutcomes = outcomes;
+  phase.status = "failed";
+  phase.payload = withFailureClass(withReason(phase.payload, reason), failureClass);
+  failLeftoverSteps(phase);
+  return withEvents(settle(def, inst, nowISO), [
+    transitionEvent("candidates-exhausted", {
+      phaseId,
+      attempt: phase.attempt,
+      detail: failureClass,
+    }),
+  ]);
+}
+
+/**
+ * Fail a phase that is about to launch but whose definition is gone: the
+ * pipeline was edited under a live instance and no longer names this phase.
+ * A `configuration` failure, never retried, because running again cannot
+ * bring the phase back; a person fixes the definition or revises elsewhere.
+ * Only a `running` phase is taken (the one a revise, retry or settle just
+ * marked); anything else is left alone.
+ */
+export function applyUnlaunchable(
+  def: PipelineDefinition,
+  inst: PipelineInstance,
+  phaseId: string,
+  reason: string,
+  nowISO: string,
+): TransitionResult {
+  const phase = inst.phases.find((p) => p.id === phaseId);
+  if (!phase || phase.status !== "running") return { instance: inst, startPhases: [] };
+  phase.status = "failed";
+  phase.payload = withFailureClass(withReason(phase.payload, reason), "configuration");
+  failLeftoverSteps(phase);
+  return withEvents(settle(def, inst, nowISO), [
+    transitionEvent("unlaunchable", { phaseId, attempt: phase.attempt, detail: reason }),
+  ]);
 }
 
 /** The phase a human action targets: the named one, else the single paused one. */
-function pausedPhase(inst: PipelineInstance, phaseId?: string): PhaseProgress | undefined {
+export function pausedPhase(inst: PipelineInstance, phaseId?: string): PhaseProgress | undefined {
   if (phaseId) return inst.phases.find((p) => p.id === phaseId);
   return (
     inst.phases.find((p) => p.status === "awaiting-approval") ??
@@ -452,9 +1303,11 @@ export function applyApprove(
     throw new Error("instance is not awaiting approval");
   }
   if (answers !== undefined) phase.payload = answers;
-  phase.status = "succeeded";
-  publishArtifact(def, inst, phase.id);
-  return settle(def, inst, nowISO);
+  // Approval is the gate's acceptance condition; the staged knowledge commits
+  // only now, never when the agent finished or the checks passed.
+  return withEvents(succeedPhase(def, inst, phase, nowISO), [
+    transitionEvent("approve", { phaseId: phase.id, attempt: phase.attempt }),
+  ]);
 }
 
 export function applyRevise(
@@ -476,13 +1329,106 @@ export function applyRevise(
   inst.endedAt = null;
   inst.currentPhaseIndex = inst.phases.indexOf(phase);
   touch(inst, nowISO);
-  return { instance: inst, startPhases: [inst.phases.indexOf(phase)] };
+  return {
+    instance: inst,
+    startPhases: [inst.phases.indexOf(phase)],
+    events: [transitionEvent("revise", { phaseId: phase.id, attempt: phase.attempt })],
+  };
 }
 
 function restartPhase(phase: PhaseProgress): void {
   phase.attempt += 1;
   phase.status = "running";
-  phase.steps = phase.steps.map((s) => ({ name: s.name, runId: null, status: "pending" }));
+  // One entry per declared step, not per candidate run: `startPhase` plans the
+  // attempt afresh and overwrites this, and a candidate phase's next attempt
+  // may not even have the same `count`.
+  const names = [...new Set(phase.steps.map((s) => s.name))];
+  phase.steps = names.map((name) => ({ name, runId: null, status: "pending" }));
+  // A fresh attempt is verified afresh; the previous report stays in the
+  // journal, and in the payload's reason, not on the live phase.
+  delete phase.verification;
+  // And its knowledge is proposed afresh: the previous attempt's staged deltas
+  // (on the steps just replaced) are superseded, never committed.
+  delete phase.knowledge;
+  // So is a fresh attempt selected afresh. The previous attempt's outcomes are
+  // evidence about a run that no longer exists.
+  delete phase.selectedCandidate;
+  delete phase.candidateOutcomes;
+  delete phase.pause;
+}
+
+/**
+ * Re-open one implementation phase for a **targeted remediation** attempt, and
+ * put the phases that verify it back to `pending` so they run again against
+ * the new implementation (Phase 8).
+ *
+ * Deliberately not {@link applyRetry} and deliberately not {@link applyRevise},
+ * although it shares their mechanics. The three mean different things and the
+ * history must keep them apart:
+ *
+ *   retry        the same intended work; the execution failed operationally.
+ *   revise       a person decided to try again, and reset the budget.
+ *   remediation  the implementation *executed*; Argus's own verification
+ *                proved the accepted intent is unmet, and a new attempt is
+ *                launched with the exact failures as its input.
+ *
+ * So the retry budget is untouched (a remediation is not a retry, and must not
+ * consume or reset a policy the author wrote about spawn failures), and the
+ * loop's own bound is the realization's `maxAttempts`, checked by the caller
+ * before this is ever reached.
+ *
+ * Only the named phases move. Everything earlier — discovery, change intent,
+ * the human approval that made the intent canonical — stays exactly as it was:
+ * accepted history, not work to redo. A realization never re-runs the whole
+ * pipeline.
+ */
+export function applyRemediation(
+  inst: PipelineInstance,
+  implementationPhaseId: string,
+  /** The phases downstream of it that must run again: the verification half,
+   *  and anything between. Reset to `pending`, not restarted, so `settle`
+   *  starts them in dependency order when the implementation succeeds. */
+  downstreamPhaseIds: string[],
+  nowISO: string,
+): TransitionResult {
+  const phase = inst.phases.find((p) => p.id === implementationPhaseId);
+  if (!phase) return { instance: inst, startPhases: [] };
+  for (const id of downstreamPhaseIds) {
+    const downstream = inst.phases.find((p) => p.id === id);
+    if (!downstream || downstream.id === implementationPhaseId) continue;
+    downstream.attempt += 1;
+    downstream.status = "pending";
+    downstream.payload = null;
+    const names = [...new Set(downstream.steps.map((st) => st.name))];
+    downstream.steps = names.map((name) => ({ name, runId: null, status: "pending" }));
+    delete downstream.verification;
+    delete downstream.knowledge;
+    delete downstream.result;
+    delete downstream.selectedCandidate;
+    delete downstream.candidateOutcomes;
+    delete downstream.ruleVerification;
+    delete downstream.acceptanceVerification;
+  }
+  restartPhase(phase);
+  phase.payload = null;
+  // Not `settle`: like a retry and a revise, a remediation re-opens one phase
+  // and hands the engine that phase to launch. Re-settling here would re-run
+  // routing decisions over phases that already made them.
+  inst.status = "running";
+  inst.endedAt = null;
+  inst.currentPhaseIndex = inst.phases.indexOf(phase);
+  touch(inst, nowISO);
+  return {
+    instance: inst,
+    startPhases: [inst.phases.indexOf(phase)],
+    events: [
+      transitionEvent("remediation", {
+        phaseId: implementationPhaseId,
+        attempt: phase.attempt,
+        detail: downstreamPhaseIds.join(", "),
+      }),
+    ],
+  };
 }
 
 export function applyAbort(inst: PipelineInstance, nowISO: string): PipelineInstance {
@@ -507,7 +1453,7 @@ export function applyAbort(inst: PipelineInstance, nowISO: string): PipelineInst
 
 // ── Retry ───────────────────────────────────────────────────────────────────
 
-const DEFAULT_RETRYABLE: RetryableClass[] = ["spawn", "exit-code"];
+const DEFAULT_RETRYABLE: RetryableClass[] = ["spawn", "exit-code", "unverified"];
 
 /**
  * Whether a failed phase gets another automatic attempt.
@@ -516,7 +1462,12 @@ const DEFAULT_RETRYABLE: RetryableClass[] = ["spawn", "exit-code"];
  * failure has *considered* the work and reported on it, and re-running the same
  * prompt is unlikely to change its mind — it just costs the same money twice.
  * A process that never started, or died on a non-zero exit, plausibly hit
- * something transient.
+ * something transient. An `unverified` completion — no marker, or markers that
+ * contradict each other — is the same kind of thing: the agent reported
+ * nothing Argus could accept, not a verdict, and the retry note tells the next
+ * attempt exactly which marker is required. (Before the class existed the
+ * run-record path classed this case `exit-code`, so the default is unchanged
+ * for it; a policy that lists classes explicitly must name `unverified`.)
  */
 export function shouldRetry(
   policy: RetryPolicy | undefined,
@@ -556,5 +1507,195 @@ export function applyRetry(
   inst.endedAt = null;
   inst.currentPhaseIndex = inst.phases.indexOf(phase);
   touch(inst, nowISO);
-  return { instance: inst, startPhases: [inst.phases.indexOf(phase)] };
+  return {
+    instance: inst,
+    startPhases: [inst.phases.indexOf(phase)],
+    events: [transitionEvent("retry-started", { phaseId, attempt: phase.attempt })],
+  };
+}
+
+// ── Engine-requested transitions ─────────────────────────────────────────────
+//
+// State the engine decides on from I/O it alone can do — which runs it planned,
+// when a retry is due, which gate decision it made durable — but which is
+// pipeline state all the same, and so is written here, as a transition with
+// its own event, rather than by the engine in place.
+
+/** What the engine planned for one phase attempt, before any process starts. */
+export interface LaunchPlan {
+  steps: StepProgress[];
+  artifactDir: string;
+}
+
+/**
+ * Record a phase attempt's planned runs: one step per run, every one
+ * `running`, and the attempt's per-attempt summaries cleared — a previous
+ * attempt's counts describe work nobody can accept any more. Refused (no
+ * change) for a phase that is not `running`, or whose steps already carry run
+ * ids for this attempt: a phase attempt is planned once.
+ */
+export function applyLaunchPlan(
+  inst: PipelineInstance,
+  phaseId: string,
+  plan: LaunchPlan,
+  nowISO: string,
+): TransitionResult {
+  const phase = inst.phases.find((p) => p.id === phaseId);
+  if (!phase || phase.status !== "running" || phase.steps.some((s) => s.runId)) {
+    return { instance: inst, startPhases: [] };
+  }
+  phase.steps = plan.steps;
+  phase.status = "running";
+  phase.artifactDir = plan.artifactDir;
+  delete phase.discovery;
+  delete phase.ruleVerification;
+  delete phase.changeIntent;
+  delete phase.acceptanceVerification;
+  touch(inst, nowISO);
+  return {
+    instance: inst,
+    startPhases: [],
+    events: [
+      transitionEvent("launch-planned", {
+        phaseId,
+        attempt: phase.attempt,
+        detail: `${plan.steps.length} run${plan.steps.length === 1 ? "" : "s"}`,
+      }),
+    ],
+  };
+}
+
+/** Write how a failed phase's failure was classed, beside its reason. */
+export function classifyFailure(
+  inst: PipelineInstance,
+  phaseId: string,
+  failureClass: PhaseFailureClass,
+): TransitionResult {
+  const phase = inst.phases.find((p) => p.id === phaseId);
+  if (!phase || phase.status !== "failed") return { instance: inst, startPhases: [] };
+  phase.payload = withFailureClass(phase.payload, failureClass);
+  return {
+    instance: inst,
+    startPhases: [],
+    events: [
+      transitionEvent("failure-classified", {
+        phaseId,
+        attempt: phase.attempt,
+        detail: failureClass,
+      }),
+    ],
+  };
+}
+
+/**
+ * Schedule a failed phase's next automatic attempt: the time is the engine's
+ * (it applies the policy's backoff to its clock), the meaning is this — the
+ * instance is no longer terminal, because something is still going to happen.
+ */
+export function scheduleRetry(
+  inst: PipelineInstance,
+  phaseId: string,
+  retryAt: string,
+): TransitionResult {
+  const phase = inst.phases.find((p) => p.id === phaseId);
+  if (!phase || phase.status !== "failed") return { instance: inst, startPhases: [] };
+  const statusBefore = inst.status;
+  phase.retryAt = retryAt;
+  inst.status = "running";
+  inst.endedAt = null;
+  const events = [
+    transitionEvent("retry-scheduled", { phaseId, attempt: phase.attempt, detail: retryAt }),
+  ];
+  if (statusBefore !== inst.status) {
+    events.push(transitionEvent("instance-status", { detail: `${statusBefore} → running` }));
+  }
+  return { instance: inst, startPhases: [], events };
+}
+
+/**
+ * Link a durable gate decision to the instance and mark its operation
+ * pending — the commit point of every approve, revise and abort. Nothing else
+ * changes: the effects come after, and the link must not carry any of them.
+ */
+export function applyGateLink(
+  inst: PipelineInstance,
+  decision: Pick<GateDecision, "id" | "decision">,
+  op: Omit<PendingGateOperation, "decisionId" | "decision" | "startedAt">,
+  nowISO: string,
+): TransitionResult {
+  inst.gateDecisionIds = [...(inst.gateDecisionIds ?? []), decision.id];
+  inst.pendingGateOperation = {
+    decisionId: decision.id,
+    decision: decision.decision,
+    startedAt: nowISO,
+    ...op,
+  };
+  return {
+    instance: inst,
+    startPhases: [],
+    events: [
+      transitionEvent("gate-linked", {
+        ...(op.phaseId ? { phaseId: op.phaseId } : {}),
+        ...(op.attempt !== null ? { attempt: op.attempt } : {}),
+        detail: `${decision.decision} ${decision.id}`,
+      }),
+    ],
+  };
+}
+
+/** The gate operation's effects are done: clear its pending marker. */
+export function applyGateComplete(inst: PipelineInstance): TransitionResult {
+  const op = inst.pendingGateOperation;
+  if (!op) return { instance: inst, startPhases: [] };
+  delete inst.pendingGateOperation;
+  return {
+    instance: inst,
+    startPhases: [],
+    events: [
+      transitionEvent("gate-completed", {
+        ...(op.phaseId ? { phaseId: op.phaseId } : {}),
+        detail: `${op.decision} ${op.decisionId}`,
+      }),
+    ],
+  };
+}
+
+/** Forget the worktrees of losing candidates whose directories are gone. */
+export function applyCandidateTreesRemoved(
+  inst: PipelineInstance,
+  phaseId: string,
+  candidates: number[],
+): TransitionResult {
+  const phase = inst.phases.find((p) => p.id === phaseId);
+  if (!phase || candidates.length === 0) return { instance: inst, startPhases: [] };
+  for (const step of phase.steps) {
+    if (step.candidate !== undefined && candidates.includes(step.candidate)) step.workspace = null;
+  }
+  return {
+    instance: inst,
+    startPhases: [],
+    events: [
+      transitionEvent("candidate-tree-removed", {
+        phaseId,
+        attempt: phase.attempt,
+        detail: candidates.map((c) => `c${c}`).join(", "),
+      }),
+    ],
+  };
+}
+
+/** {@link applyAbort} as a transition result, with its events. */
+export function abortTransition(inst: PipelineInstance, nowISO: string): TransitionResult {
+  const aborted = inst.phases
+    .filter((p) => p.status === "running" || p.status === "awaiting-approval")
+    .map((p) => p.id);
+  applyAbort(inst, nowISO);
+  return {
+    instance: inst,
+    startPhases: [],
+    events: [
+      transitionEvent("abort", { detail: aborted.join(", ") }),
+      ...aborted.map((id) => transitionEvent("phase-failed", { phaseId: id, detail: "aborted" })),
+    ],
+  };
 }

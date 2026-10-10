@@ -1,12 +1,14 @@
 import { readFile, readdir, rm, stat } from "node:fs/promises";
 import { open } from "node:fs/promises";
-import { spawnSync } from "node:child_process";
+import { signalProcessTree } from "../processTree.js";
 import path from "node:path";
 import { paths } from "../claudeHome.js";
 import { atomicWriteJson } from "./atomicWrite.js";
 import { cached, invalidate, patchCached } from "./cache.js";
 import { createFileMemo } from "./fileMemo.js";
+import { KeyedMutex } from "../mutex.js";
 import type { Run } from "./scheduleTypes.js";
+import type { AgentInvocationRecord } from "./pipelineTypes.js";
 
 export const LOG_CAP_BYTES = 1_048_576; // 1 MB
 export const RUN_KEEP = 50;
@@ -33,13 +35,28 @@ export function runLogPath(id: string): string {
 }
 
 /**
- * The per-run file a result-producing step writes its structured decision to.
+ * The per-run file a result-producing step writes its structured decision to:
+ * `results/<runId>/result.json`.
  *
  * Beside the run rather than beside the instance: the file belongs to one
  * attempt of one step, so a retry writes a fresh path and can never read back
- * the previous attempt's decision.
+ * the previous attempt's decision. In a directory of its own, like the
+ * KnowledgeDelta file, because the directory is what a sandbox is granted
+ * (docs/HARNESS.md § Argus-owned invocation channels): admitting this run's
+ * result must not admit every other run's.
  */
 export function runResultPath(id: string): string {
+  return path.join(runResultDir(id), "result.json");
+}
+
+/** The directory a run's result channel grants — one per run. */
+export function runResultDir(id: string): string {
+  return path.join(paths.resultsDir(), id);
+}
+
+/** Where result files lived before they had a directory each: `results/<runId>.json`.
+ *  Still read, so a run in flight across the upgrade settles, and still pruned. */
+export function legacyRunResultPath(id: string): string {
   return path.join(paths.argus(), "results", `${id}.json`);
 }
 
@@ -56,19 +73,68 @@ export async function readRunResult(
 ): Promise<{ result?: unknown; resultError?: string }> {
   if (!RUN_ID_RE.test(id)) return {};
   let raw: string;
+  let file = runResultPath(id);
   try {
-    raw = await readFile(runResultPath(id), "utf8");
+    raw = await readFile(file, "utf8");
   } catch {
-    return {};
+    try {
+      file = legacyRunResultPath(id);
+      raw = await readFile(file, "utf8");
+    } catch {
+      return {};
+    }
   }
   try {
     return { result: JSON.parse(raw) as unknown };
   } catch (e) {
     return {
-      resultError: `the result file at ${runResultPath(id)} could not be parsed as JSON: ${
+      resultError: `the result file at ${file} could not be parsed as JSON: ${
         e instanceof Error ? e.message : String(e)
       }`,
     };
+  }
+}
+
+/**
+ * The per-run directory holding what Argus launched: the invocation record and
+ * any settings/MCP files materialized for that one process. Beside the run,
+ * like the result file, so a retry gets a fresh directory and the record of an
+ * attempt is never overwritten by the next one.
+ */
+export function runInvocationDir(id: string): string {
+  return path.join(paths.invocationsDir(), id);
+}
+
+export function runInvocationPath(id: string): string {
+  return path.join(runInvocationDir(id), "invocation.json");
+}
+
+export async function writeInvocation(record: AgentInvocationRecord): Promise<void> {
+  await atomicWriteJson(runInvocationPath(record.runId), record);
+}
+
+/**
+ * Every run id with an invocation directory on disk, unsorted. A directory
+ * scan — invocation records are per run and pruned with the run, so the
+ * volume is bounded by retention. Used to answer the reverse provenance
+ * question "which runs were supplied this claim revision?" from the records
+ * themselves rather than from a second store.
+ */
+export async function readInvocationRunIds(): Promise<string[]> {
+  try {
+    return (await readdir(paths.invocationsDir())).filter((n) => RUN_ID_RE.test(n));
+  } catch {
+    return [];
+  }
+}
+
+/** The invocation record, or null when the run predates them or is unknown. */
+export async function readInvocation(id: string): Promise<AgentInvocationRecord | null> {
+  if (!RUN_ID_RE.test(id)) return null;
+  try {
+    return JSON.parse(await readFile(runInvocationPath(id), "utf8")) as AgentInvocationRecord;
+  } catch {
+    return null;
   }
 }
 
@@ -127,12 +193,20 @@ export async function writeRun(run: Run): Promise<void> {
  * run is gone.
  */
 export async function patchRun(id: string, patch: Partial<Run>): Promise<Run | null> {
-  const current = await readRunFile(id);
-  if (!current) return null;
-  const next = { ...current, ...patch };
-  await writeRun(next);
-  return next;
+  // Serialized per run: the completion handler, the signal path and the
+  // deadline handler can all patch one record within the same few
+  // milliseconds, and two unlocked read-modify-writes lose whichever landed
+  // first.
+  return patchLocks.withLock(id, async () => {
+    const current = await readRunFile(id);
+    if (!current) return null;
+    const next = { ...current, ...patch };
+    await writeRun(next);
+    return next;
+  });
 }
+
+const patchLocks = new KeyedMutex();
 
 async function readRunFile(id: string): Promise<Run | null> {
   const file = runJsonPath(id);
@@ -209,26 +283,18 @@ export async function readRun(id: string): Promise<{ run: Run; log: string } | n
 
 /** Kill a run's whole process tree if it's alive. An agent CLI spawns its own
  *  subprocesses (tools, shells); a plain kill on the recorded pid would orphan
- *  them, so use taskkill /T on win32. On POSIX, detached:true makes the child
- *  a group leader, so signal the group, falling back to the single pid.
+ *  them, so use taskkill /T on win32 (see processTree.ts). On POSIX,
+ *  detached:true makes the child a group leader, so signal the group, falling
+ *  back to the single pid.
  *  Returns whether a signal was sent. */
-export async function killRunProcess(pid: number | null): Promise<boolean> {
+export async function killRunProcess(
+  pid: number | null,
+  signal: NodeJS.Signals = "SIGTERM",
+): Promise<boolean> {
   if (!pid) return false;
-  if (process.platform === "win32") {
-    const res = spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
-    return res.status === 0;
-  }
-  try {
-    process.kill(-pid);
-    return true;
-  } catch {
-    try {
-      process.kill(pid);
-      return true;
-    } catch {
-      return false;
-    }
-  }
+  // Runs are spawned detached on POSIX (their own process group); on Windows
+  // this is `taskkill /T /F`, which is forceful whatever `signal` says.
+  return signalProcessTree(pid, signal, { grouped: true });
 }
 
 /** Cancel a scheduler run: kill its live process and mark it cancelled.
@@ -260,7 +326,13 @@ export async function pruneRuns(scheduleId: string, keep: number): Promise<void>
     drop.flatMap((r) => [
       rm(runJsonPath(r.id), { force: true }),
       rm(runLogPath(r.id), { force: true }),
-      rm(runResultPath(r.id), { force: true }),
+      rm(runResultDir(r.id), { recursive: true, force: true }),
+      rm(legacyRunResultPath(r.id), { force: true }),
+      rm(runInvocationDir(r.id), { recursive: true, force: true }),
+      // The run's KnowledgeDelta staging (its proposal and Argus's record).
+      // The canonical audit trail outlives it: an applied delta is recorded
+      // in knowledge.json's `deltas`, which is never pruned.
+      rm(path.join(paths.knowledgeDeltasDir(), r.id), { recursive: true, force: true }),
     ]),
   );
   for (const r of drop) parseMemo.forget(r.id);

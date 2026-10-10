@@ -1,0 +1,3 @@
+baseline-platform-tests.log
+h2-focused-tests.log
+h2-tests.log

@@ -1,0 +1,2642 @@
+[
+  {
+    "path": ".worktrees/argus-local/bin/argus.mjs",
+    "sha256": "b0f77af812bc00a9b1cfdd06961d2e641a6908dbc2d10496dc237965f5baf2da"
+  },
+  {
+    "path": ".worktrees/argus-local/contracts/src/watchtower.ts",
+    "sha256": "d975390c555040ba32cb56c10c70813ffbd175251a14a9d6e7be093a135c7a02"
+  },
+  {
+    "path": ".worktrees/argus-local/contracts/src/verdict.ts",
+    "sha256": "a18535c39b59603374477093b04c2a42bca8b88c5c2a390f351104af58ea0011"
+  },
+  {
+    "path": ".worktrees/argus-local/contracts/src/vault.ts",
+    "sha256": "d20bb6c775bdc19c7e1fc8657275a2545cc600c29abfe1cb3d6c61de250ea48d"
+  },
+  {
+    "path": ".worktrees/argus-local/contracts/src/tuning.ts",
+    "sha256": "b8b66c73b36b8d70d2a32b5314dca7ce2719b5b8e8d8901ddc044bc7525e2cdf"
+  },
+  {
+    "path": ".worktrees/argus-local/contracts/src/sentinel.ts",
+    "sha256": "2bd4661f3c5d24e6a9f4e558f49bbf92949c1c3d9710c8f557d1e61627d9a119"
+  },
+  {
+    "path": ".worktrees/argus-local/contracts/src/schedules.ts",
+    "sha256": "ba1fbf1d8b9a023063f89ba3221aaa82e983a68871f3fe36e69fb874341a9daa"
+  },
+  {
+    "path": ".worktrees/argus-local/contracts/src/runtimes.ts",
+    "sha256": "785d54b63ab7e2efee4020f9cc7199a6118ac88be9426ffa6992c1bcb797529d"
+  },
+  {
+    "path": ".worktrees/argus-local/contracts/src/reliability.ts",
+    "sha256": "aa3de28e781b4a0f7bb0613611d08b63bd7aabb072963c624a1587e18fa2d67f"
+  },
+  {
+    "path": ".worktrees/argus-local/contracts/src/recorder.ts",
+    "sha256": "64fe4a9d54c2fe9840f1c3f5525dc862514688c2116849e934ea3e9a78140a0e"
+  },
+  {
+    "path": ".worktrees/argus-local/contracts/src/pipelines.ts",
+    "sha256": "5bbe52780eeee84c00c819f9e0280e3bfbe106efc146ff8ddabef1f827ddb276"
+  },
+  {
+    "path": ".worktrees/argus-local/contracts/src/palette.ts",
+    "sha256": "e638f2494d10e6857b217349b834fbab0710b353b0780e41c0a59f1659c3272a"
+  },
+  {
+    "path": ".worktrees/argus-local/contracts/src/omnibar.ts",
+    "sha256": "faf8fe74b36e8068ea011bf756528e0fea30e16d2ec455f2865c409e17819bb7"
+  },
+  {
+    "path": ".worktrees/argus-local/contracts/src/monitors.ts",
+    "sha256": "d0f55498ca2dbc204c547b15e458370c6fbefdb608ca1c78b4f7ebfe9e2cb775"
+  },
+  {
+    "path": ".worktrees/argus-local/contracts/src/live.ts",
+    "sha256": "26b1c6d96b857b6f72e5d870817536d6ce51f84a808971ebe57e8339f65cb332"
+  },
+  {
+    "path": ".worktrees/argus-local/contracts/src/ledger.ts",
+    "sha256": "cf988282bf7958ff5d783c79cfc50574e5e5c8401337034289085c30f4b3b5e6"
+  },
+  {
+    "path": ".worktrees/argus-local/contracts/src/knowledge.ts",
+    "sha256": "a1a5e5f92e4d6638e676215896ed9e8334a51d869c1e9c101361e5a1b24a4bc1"
+  },
+  {
+    "path": ".worktrees/argus-local/contracts/src/issues.ts",
+    "sha256": "d7a757fb810f113affcb47e6e11bdbacac76daf5716fd7b5c3570c1631cb103f"
+  },
+  {
+    "path": ".worktrees/argus-local/contracts/src/insight.ts",
+    "sha256": "d388c838a866011fcd98070fd41171ac45ae67b50c7b7b7e89ceda1f707ba45e"
+  },
+  {
+    "path": ".worktrees/argus-local/contracts/src/index.ts",
+    "sha256": "1ba2e5bb90eb1d9ea33c883f09cf58ede00b81a1d00c50b821cfc0c40b1981a8"
+  },
+  {
+    "path": ".worktrees/argus-local/contracts/src/gates.ts",
+    "sha256": "90c5336df8e872925be77bf1d7a2347f88fec51cbf7b62db3222d49daea0c599"
+  },
+  {
+    "path": ".worktrees/argus-local/contracts/src/decision.ts",
+    "sha256": "1b81083e126f294fedfab03b7f4336f792a9182333a59d4649d3631af5b52c55"
+  },
+  {
+    "path": ".worktrees/argus-local/contracts/src/constellation.ts",
+    "sha256": "96cdb4201e08ff8340e95e2694c6b1e182ceca9a8c8cd26abf2fa1b946352851"
+  },
+  {
+    "path": ".worktrees/argus-local/contracts/src/chronicle.ts",
+    "sha256": "56d849f3ee1732a140f8dc64443737398f6440647cca25e0f52035c9ac3a33e9"
+  },
+  {
+    "path": ".worktrees/argus-local/contracts/src/catalog.ts",
+    "sha256": "075fca98d689e15131fee3305b5494dcc9e0ed4363afa3b8bb144a11f512ca82"
+  },
+  {
+    "path": ".worktrees/argus-local/contracts/src/budget.ts",
+    "sha256": "baadfbc50e2e3317266dd8b0a78d1f6a164ece556a6c5631c0c74a9fda0c8a77"
+  },
+  {
+    "path": ".worktrees/argus-local/contracts/src/briefing.ts",
+    "sha256": "cc5367d5200cdfde1366124d9239146bde679c4009fcbfe50c1f27446957e918"
+  },
+  {
+    "path": ".worktrees/argus-local/contracts/src/autopsy.ts",
+    "sha256": "85a719d9885506ce440320954d9805f83e96baae159fa5791fde38541ba66fd6"
+  },
+  {
+    "path": ".worktrees/argus-local/contracts/src/agents.ts",
+    "sha256": "e5d80cac8c36e97ff2763a5759e819e8b37570dff716f5fbb3a055e05d4c1dc4"
+  },
+  {
+    "path": ".worktrees/argus-local/contracts/src/admin.ts",
+    "sha256": "7edb6532236be1e7a69800a78da086686ee339972efa028e1be61be12da90a3f"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/app.test.ts",
+    "sha256": "ac239bbcf08b622c515f59d87efd47bc61c851f488b3f4a7ee59e996760299e1"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/log.ts",
+    "sha256": "a83be51936d8d9209d67427d91d584be5227a5e232d74dec01320212e989aa16"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/log.test.ts",
+    "sha256": "e91604dd607e1735fe0111f19389af7b3796e38a0d2e67f281997e5133ceec72"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/pipelineTransitions.test.ts",
+    "sha256": "a7c9058ae6d155bf8cb54223fe7a89922dd7d89cc72aa2c309e8fce36e0c89d4"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/pipelineProcess.ts",
+    "sha256": "c8750d39bc0c84154ee70f45d1f1956cc3770bb178b57e7a32cbc07f668b3164"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/pipelineProcess.test.ts",
+    "sha256": "fcbbd087da525fc3cfe298275af5f641efcdfb8fc4d27fe297ceaa4742db04b0"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/pipelineEngineHarness.test.ts",
+    "sha256": "841a9b62e38ccf4a0d1e9ef54b3fca9c891a24b7b309a65798437469379d1331"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/pipelineEngine.ts",
+    "sha256": "01bf1836d3a3db3d29329c39b56dc7a0b3f3128ecc18f1cefe83dbb6ea1f3ea5"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/pipelineEngine.test.ts",
+    "sha256": "af771fc99634a66f869e25fe12535083ab2840f5f41e35d25176dd4eca7c316a"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/parseRunEnvelope.test.ts",
+    "sha256": "f34f91fb2c8ed60cd13b45b87de1428756d7b052e00adf46b174736a09604797"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/opencodeHome.ts",
+    "sha256": "223e9e284888e2a904c3c253cfcbd13db9e7d8b575e8b4e74e6abccab9b9605c"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/omnibarExecutor.ts",
+    "sha256": "2c2758eb985e574c9dce23650a34c2ed908887e680c784c8cdebf91762417eb2"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/omnibarExecutor.test.ts",
+    "sha256": "229eeaa44ddd5b3908655ec86d98dcb26e13ebdbb563d0d61717d9100407ef35"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/notify.ts",
+    "sha256": "a03a33ebaadfdaa97aa2bb204d1764910b526c86c52a87643101c724a2ce4000"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/notify.test.ts",
+    "sha256": "f6f5e133ce7a008edbbc7ee4222b46b7eb28b5a8b1c5b3719a2024da67beb39f"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/mutex.ts",
+    "sha256": "28954aa2dbbf25f2041af458c20b8fae70674db7fbbff0b5c7221b73bf06ea78"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/mutex.test.ts",
+    "sha256": "8673705caa03433db318dd1d81a091eb02bd11a0f87a62a9288a26c05b79b37e"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/monitorWatcher.ts",
+    "sha256": "c92d0924d27b2ff27c9f1651bad6690402f9579f1550a140c4577bbd0ddb48da"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/monitorWatcher.test.ts",
+    "sha256": "b6b4a13f0ca70cc3982e00ff75b35f627d075f3d925d65563d947a1db14cb969"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/weave.test.ts",
+    "sha256": "6274de35e0697b1c452dffafe86c4f52c417dfbb6d793f837efbf8206277d73d"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/watchtowerWatcher.ts",
+    "sha256": "21e92e8ee7fa221230c4e1ae0d4941cc72a80489091ab7c4a55a9c513dadcf49"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/watchtowerWatcher.test.ts",
+    "sha256": "21f17b279b074b45965acba129fe1134a053a2590d0398a3739cc931566f1460"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/watch.ts",
+    "sha256": "376f2ab7913462a166e2053d2767da39b22909cd01f9847a580e749832d2832c"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/version.ts",
+    "sha256": "b77e8550cf094e6c4e74e5894d9003c0e50bfb90f490cedf0151cbbdbc856bc3"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/verdictWatcher.ts",
+    "sha256": "e074302aed37c47e2da40373e8516e9322970078e384bbf086089284b4c4a4e6"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/verdictWatcher.test.ts",
+    "sha256": "42c5d5267ccaff096023658b4b611a5f0af646a91ab8e9c210d8289b043b39ff"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/vaultWatcher.ts",
+    "sha256": "d85244317eb1c8c64db8ac17b4467b3e10ea5f69733aaabac680f9854e8b6671"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/vaultWatcher.test.ts",
+    "sha256": "d69aab7fc9098f896217ea6d9a235bf3549bc6187d76842cdbacfe6bcc659009"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/codexHome.ts",
+    "sha256": "aec0ca37ded6dc1371726596f16d4108f68199e84f20d703d61a751aa68fa9ef"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useInsight.ts",
+    "sha256": "3473aa08517ecf678c454d486871836524ab8c51cb1a36aa3531d80463084969"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useHashRoute.ts",
+    "sha256": "08a3c4488cb3ce9282d66da1e1e4c98b3206e9444a90eeb86ffb55c8c1dc1460"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useHashRoute.test.ts",
+    "sha256": "7f87243c0edd1dfd1a4c7a04f0bd7d1447463801506a31829509c8d6fb365cd6"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useGateReview.ts",
+    "sha256": "1cdc2bbd508b105d006e31208f4b29f66adc9bc7a8009053ee6a7fecda10efb7"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useFleet.ts",
+    "sha256": "3c18df7907fb46d469201969a53df6e30e3e7a08b1e227652e1e9ce71aa4f868"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useFleet.test.tsx",
+    "sha256": "23839a7fcc8a05db680abc02f2f6d934906c3f12a6c6af788fead17219d7a7d2"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useDecisionH1.ts",
+    "sha256": "4ad371e62492c4a14a4870c111ddbb115f7cb4acd9a1e4772fa5e6138b5f0e2d"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useDecisionExperiments.ts",
+    "sha256": "e3c7c7c8fa737298b2026c8fdf0d1beaea7de5fcab5c84e85d99dd8e0940d37e"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useChronicle.ts",
+    "sha256": "ee2d7bc052cdb5e2aecc009af7eddb79bb65d642e69b4d0098aba4f001e613fc"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useBudget.ts",
+    "sha256": "76fbbee141e66b93fbeb70482837cba21deec1d8c1d91ae93c52d24a623971e6"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useBriefing.ts",
+    "sha256": "a4d117f99d604c209eae0eb772d5ea5819c39196aa1366b9b66d4c8ac5c79ef2"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useAutopsy.ts",
+    "sha256": "5709f11bef404ed95ab1752ac9a5372fc84f5bb9a29897fdbea1af589f2f37bd"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useAutopsy.test.tsx",
+    "sha256": "5b1552da7c82b5e1cc49f38c1dbc4e4046838ac3b6298002d540ebf7ad3e535b"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useAuth.ts",
+    "sha256": "fc2da3158a372f7b9fbaaacde57a2bd21e99a0d142fee4dcd88343016e3ea69b"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useAgents.ts",
+    "sha256": "81eb524641cdf77f5ad6aee8ca5705a277695ec2cf211320777a2ccc2a51b96e"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/types.ts",
+    "sha256": "cb2acb75736740c9b2137a96ffbc057fbae18ea4254751730ad2fb5c7dd3ce71"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/vault/vault.test.ts",
+    "sha256": "3370fe443995fea0a95617cec9d73d9cf0e4496d03bce41d8492e8877f877ecf"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/vault/query.ts",
+    "sha256": "e6b10b985c1f800960eca4e73648bcd9c5fbb5e058fe814a10d1c4764e4f098f"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/vault/otel.ts",
+    "sha256": "37a7338bded842dc847fdb1f06b0adea71ea519ee76c81dce5dd0aa3a957b2c3"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/vault/otel.test.ts",
+    "sha256": "833f2696f4d09a1146def825979d52d6765e6beda9844bc964dcceba76bda947"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/vault/ingest.ts",
+    "sha256": "a8b86c5a9273e77d96d6952d88c52975ffca67f1c5a7b44c5b26a903e92caacf"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/vault/db.ts",
+    "sha256": "a80269a66ba923569b9d9c367c1c37295a0d7337aad6d8540447235abafd955f"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/userStore.ts",
+    "sha256": "9990a5cb7c136e84f40e3a2cb12026c615bf2adf42fd6bda799ac2f4aa73c3d3"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/userStore.test.ts",
+    "sha256": "efcf92707e99388fb74f1c134d653d8b63b235e9294fc55f7c3315393f79a011"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/testHome.ts",
+    "sha256": "4e013e30f8e0e938264fc56a2f105c10c88c500ca02e1b11675df0c149d35b03"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/static.ts",
+    "sha256": "fc1acc55e46a053644654bfc31c4d1790583aa048df86eae791d20bf88263035"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/static.test.ts",
+    "sha256": "cdff359566b6987f7cbcfffe8b88c105d852468e211fe5c02ced4d0626e92b9d"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/gateRecovery.test.ts",
+    "sha256": "3d80c827fa07d467fb27a4e4b61d8ef00dccc99b40dafc4b6110433c703070bc"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/gateDecisionsEngine.test.ts",
+    "sha256": "21bf09901ab86489f8daaeaae11cfe5b24c20b8a285b6747018c08641dcbd281"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/runtimes/types.ts",
+    "sha256": "6b3a8fce413f7120f8d7cb3ee247eb22d9a8c41803df98c964e861775f39a47d"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/runtimes/registry.test.ts",
+    "sha256": "f54d218d583f27b0a430908ba41e1c5517f9add67b4fa5c2ca37e53e349c5116"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/runtimes/qwen.ts",
+    "sha256": "2227caa39e208ba449af4f048bdc4c8de9f7cb223a446ad76a2d56bc77cc36d5"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/runtimes/qwen.test.ts",
+    "sha256": "52d40cc11a13da6f8860af6c0b04f5b696f522d2188a2d384fa5ca8efbc2fc96"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/runtimes/opencode.ts",
+    "sha256": "e541b0de475a4e6e935888fe02295e6f4e355afe95e04b4622660d0c99e0c563"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/runtimes/opencode.test.ts",
+    "sha256": "b3a8f7d7dc0484701e82591296b48ec77dc1f052fde8831019c82b59eadbb0e8"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/runtimes/index.ts",
+    "sha256": "f4c294eefe0ce15928577d6419a887fa57129844a4977389b08218b9560c6a2b"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/runtimes/codex.ts",
+    "sha256": "4cb871dfc5b37713c565fceeaf430c88dabb9765f9ba586184cd1b86a04f152e"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/runtimes/codex.test.ts",
+    "sha256": "2f6dadbd818d6c776233c992c024327802494cc82135ef87d862702aead1d493"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/runtimes/claude.ts",
+    "sha256": "89fc93f9b4464a355c0ab284b59f4a511f844f837622b624fbcabcb2a9e9b8be"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/runtimes/claude.test.ts",
+    "sha256": "655c190b0012ac6fbe6284fd5bf2f3c0886316c8fc830e1a65e98a391b20c501"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/runtimes/channels.test.ts",
+    "sha256": "f01e0548c57de77256af0482d678b8368037c7a2a9b358baea96a30a7b23042f"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/runtimes/capabilities.test.ts",
+    "sha256": "bb8cc86ee761d9ea388804f87ba3226ec50bb6f9b7981d9606d8b98ca30126ad"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/runTailer.ts",
+    "sha256": "bfadb641b169fae00222fa5fb896c50acd7c21b2c27fc93d74b6930e2e58ff36"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/runTailer.test.ts",
+    "sha256": "4d4867cc5f62562758b8457725244056460e750ce39ce81f72ac47a0f9b022e8"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/routeWorkedExample.test.ts",
+    "sha256": "dab10e6f5aa79e696f26ecdfce46893987c42ba9d0e0cd18b0e7a3fc025cf569"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/routeTuning.test.ts",
+    "sha256": "811af3bf2f5a63c8f8da89b4e42800b9dca39d62b31eada38f385bdd386da984"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/routeSettle.test.ts",
+    "sha256": "03f6d0e42d8b9164bca10a44710f1a791626d7281368381f3f0ed724baaa5249"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/routeExecution.test.ts",
+    "sha256": "291bf298e2d67783dd772ee461ade2a46604f1e5a1f9b7c483df4f75909946b9"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/resultTransport.test.ts",
+    "sha256": "c15fb451c48251fd35e2794e20143b9591a1c516ebcd91baff543201dccaa7ef"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/requestLog.ts",
+    "sha256": "ac3b3567f19ac58c80f02155ba88ba040ee4edb5984dad398995aed936698a5b"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/requestLog.test.ts",
+    "sha256": "15217366d5752ca7b27a98d2a4732e4a5a0b8009a4460ccf11ab65041cc57667"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/qwenHome.ts",
+    "sha256": "1ce46430acba2f2e05064064bb3976ba02d341c434480d070062546aa819c66f"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/pipelineTransitions.ts",
+    "sha256": "9b3a784ca24a395aeeeefc8d263cda2a9385cefd19049d32a53da853f054d696"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/security.ts",
+    "sha256": "0735088545509fc020e2c0a3202cb83645f427223770b68f46d30c431db4c037"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/security.test.ts",
+    "sha256": "afc643420f71454e051dac4067d4cb3a0f626efe989a4056b8ee6af13c5c02bf"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/scheduler.ts",
+    "sha256": "a58b7685708619e3a76f471bd91f4defdc10a9e11079773b8b6fdbb2280e2c1d"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/scheduler.test.ts",
+    "sha256": "07897875ed2207730903848c74380ec2cd43c04c20ce403b547cd01a7a0e4642"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sentinelWatcher.ts",
+    "sha256": "d16671e012446d16a3ef4cc84be2c5b40924011b758f3984679ee6e687e81538"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sentinelWatcher.test.ts",
+    "sha256": "9f9efaf93b37ebeecc241eec3247b78fb1916dea3bcd401bf59d91b181753a82"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/verificationStaging.ts",
+    "sha256": "d37655c02de9ee53d41367e699d5159daf7b4975df70db5e136795c46a8f0327"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/verificationEngine.test.ts",
+    "sha256": "3c2214984be7a4609f49bf29692c2ee5821adab10b211ba0baa15f5c34d489e4"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/validate.ts",
+    "sha256": "6fde8fc84c1080cd1f69c72bbe6bf5aa9a84ade7bcef432acad556ed67b68202"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/store.ts",
+    "sha256": "95a6746112b5d5ed382606fd644ed71d4f968e027fa0b13ddc3e95cf8dd3b239"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/store.test.ts",
+    "sha256": "91597cc2d366116884590d7c19d1174992d7631e3f13dff568ea3269bbf0a3ba"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/staging.ts",
+    "sha256": "8ef77f9cf6f081e476d0847d84145ca0ae1a2513903e637167b22e7e0f1cd2c8"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/sourcePath.ts",
+    "sha256": "75d314a71472d38c214b0602dfd00fc1ca4906be1373d1392587381caab01dd4"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/scopeEngine.test.ts",
+    "sha256": "e137377cbea28b3651f63b54dbf1a61e2418786cd0b28af7d0eb7089ba960849"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/scope.ts",
+    "sha256": "73cb05d6c22c0af75d5b7cb51d91ef9cc1566fc6c9d3d156631a0b18dcd72538"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/scope.test.ts",
+    "sha256": "b71afa0200436e9cf022f993183f52889954b4fddd5ec18060d51ae725207842"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/ruleVerification.ts",
+    "sha256": "bad6a028ae229da8c4989fe2bcf70ed9750a14ffb5a6b094d40ed52d124af40e"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/ruleVerification.test.ts",
+    "sha256": "ca83a3955ccceb030142d823b505c80cc9a63c9dd73ee5e861ccfede8cbf1716"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/routes.ts",
+    "sha256": "867d37120c592d6d5b1e9abf4849aa0c7f7aea81c3a6c03dc385ccea02c71847"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/routes.test.ts",
+    "sha256": "8e8f0204846fa56b115ec94bc13d91ad1bed69a77b9beddab6d110afe99cd2b9"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/realizationEngine.test.ts",
+    "sha256": "31d1511555df4090e5bf5a3c536b7b587b2519f1804d77f635769cf554e4dad9"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/realization.ts",
+    "sha256": "602a7f1c97da275ff9d132dd86556371f1d361ece2ad1cbec48b392cf9433620"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/realization.test.ts",
+    "sha256": "6e8eaa48d6a4e38570c6dd75634977554ccd19d37c8ce8ed74d30a282895ae70"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/kernel.ts",
+    "sha256": "91257edf8a905ca4de1e89904629783e5e2ac75604ec637737ce199c3551d26e"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/kernel.test.ts",
+    "sha256": "9da3af561358969e8d698d4df4e4a9f03c0521e3a01fdb2fa2206600e15e5c82"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/isolation.test.ts",
+    "sha256": "3e189c90375cf2427f01bc61d9788c2b68d9edadb2c5f5ea971dc7c3901270a6"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/implementationScope.ts",
+    "sha256": "0612b3fbdbb0c7fb00405c3505f67a43823cd073c876ca755eef6ad4ad8193f8"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/implementationScope.test.ts",
+    "sha256": "9a719b9291f479051a7a1042bcf15ff68e7bc6dbb24b151e5aa7d6a291b213f2"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/impact.ts",
+    "sha256": "399fa6ae181c3ae072b945df3f1052350eb06d5dc4b83d43a4b00fde5508fb84"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/impact.test.ts",
+    "sha256": "45221a2f97f5554f4a098401ec6da7860e6cff9d63510864f01ab9c51d570e1e"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/errors.ts",
+    "sha256": "d1d248cf1dde7cc1720ac1903e53b5d06afb44cf78785c55c6490aa6dd4db129"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/discoveryEngine.test.ts",
+    "sha256": "72c6542d672b91fb9a4190b367bee6e13e88dfad5b828e7e66e32e6b089a8b43"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/discovery.ts",
+    "sha256": "a77ac6c0d45029c699b9396705e69cb61b4f980d00d294efa1a47776cc790b06"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/discovery.test.ts",
+    "sha256": "23823f68d9ba3b640795c47e15f1ec4cb0fec24c8109134234fe78861e903583"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/deltaEngine.test.ts",
+    "sha256": "2ba3841079b58a9c9432220efad478765e9f46a35a9504bb8030ace098ed3429"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/delta.ts",
+    "sha256": "16f512f4ad42fdbea28d84a4d2006ead18e924155efed05af7684aed9b4b9c61"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/delta.test.ts",
+    "sha256": "fc3704b217b82a812c39d16bbaa743141dadc42ec0b58589bfbec4cf0c1bcb84"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/legacyRoutes.test.ts",
+    "sha256": "ec15a526b8d9752a0db650f7369bce34283ee804fdce5286f6407628480979a3"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/index.css",
+    "sha256": "6443f07896c2ead3f082b5cab8dd146d06eb49d307e89ef991db870e18e1dd68"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/contextEngine.test.ts",
+    "sha256": "760741d342b4db7de5498ade2168384222fcc55acea079aa98e1d5a0f53bffc4"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/contextDurability.test.ts",
+    "sha256": "ebe8174f65798b1a514606ebbd535c3c585db9d08fbeca9a8535ef6092725d4a"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/context.ts",
+    "sha256": "128b7fad010b33572ebda515563a8ecf92c70a12cb91c44519eb5d35e386191f"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/context.test.ts",
+    "sha256": "de28ebacda410c5e79791f0c99e8ec94ae4990e0ac6c7afaebcde1c333cf89c7"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/changeStaging.ts",
+    "sha256": "c5393cba492ad965eced8c9d71585eaf7eb1e35a8667cac6995342083dda8f92"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/changeIntent.ts",
+    "sha256": "9f45735db7d1f54298ad4b0bdc685f16bba559e9643f61bd37c0e03ea28a524b"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/changeIntent.test.ts",
+    "sha256": "fcbdf89108688f66ad508b6e11ea9873c6842d28b84cd41ea73cc155447baaa5"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/changeEngine.test.ts",
+    "sha256": "fc12b0b83b974c6feb353d325a8dfff220364a822095ad729490fe6dd2538b28"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/acceptanceStaging.ts",
+    "sha256": "70da2ee0736a8c7de929df71bf504350fbe1301594ff7bf3d11e10af3026531b"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/acceptance.ts",
+    "sha256": "98974207f600b7c3050c9265f7bfeecbad7b813632009bbe70863353f3c7bf2b"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/knowledge/acceptance.test.ts",
+    "sha256": "c622a813581757e5e89ad83f92d33bc46cdcc5442771b91fcc8d2d5a3e499ae8"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/index.ts",
+    "sha256": "fb0cb3cd28a9e28f91e9c53b456fdb359647c95079765476a5861d514fdf3947"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/httpCache.ts",
+    "sha256": "abd63e764f43042490f93574cd48e3dad840899ddce2066a48e3f80be433e1db"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/httpCache.test.ts",
+    "sha256": "89bf8869f6fc93aad3a7793717c0c5629f0237d440f1b698416f5df2a4f47a1e"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/hooks.test.ts",
+    "sha256": "255b5d55a09a75024f213a47568f800b1dc27b1006c1c70fa4a275c947c2ab95"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/cli/tailCore.ts",
+    "sha256": "67b051f3a73e23fddbaaeb5faa8f3b373750d2dc298213e45ab85e1c5946ae69"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/cli/tailCore.test.ts",
+    "sha256": "aeb87527ec89158291ddc94b08657750ed51cf3aff01f1f3517e3a511cd8d1b6"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/cli/tail.ts",
+    "sha256": "61085145d60094cd2275bfd6ca76980bf4ca415923ceb59a656264356a30ee54"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/cli/tail.test.ts",
+    "sha256": "382e4d064f703d00efcb3f069668e632e9f39f3de9da4fb32ed4b78856970ba2"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/cli/gateCore.ts",
+    "sha256": "3154abd8f3915a9f96f0325124a8f1e681f506d953f341bc74ff8fa3da6af5dc"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/cli/gateCore.test.ts",
+    "sha256": "c42d17511983614f74ecb24cd369da160b7e2d29aeff7fb4bd5467c6c8a9b224"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/cli/gate.ts",
+    "sha256": "e9983d14b3fd9c837412be828dbce2e1492b8f7ea71973869c21dca280bbdc74"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/cli/gate.test.ts",
+    "sha256": "4c40845178cf28c6f804de6b3dd48cb8024f9ea752ee672d02e1b832fa42d2bf"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/claudeHome.ts",
+    "sha256": "a129b82af0ece86e4e1827c291ba32ba2831b4f49d7d83a4dfd24479ce25a1c6"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/claudeHome.test.ts",
+    "sha256": "d9e4a90b0ca027652e7f98137e4c46194547db018618fbec1157f7150b47736e"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/budgetWatcher.ts",
+    "sha256": "36bb9fb9d619ea7121e431b7ae3c2da18e7725b25127703c01829eec91c8347c"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/autopsyWatcher.ts",
+    "sha256": "ac8328a4fc1dcda2c3ad62939aba9bdf8a1c7e018dbf03cd5aa74abe901c8ff8"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/autopsyWatcher.test.ts",
+    "sha256": "0dd2b05a5607229f2ccc9d83911f8e847b2ae4158631fd7939066aadc20fa3ac"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/auth.ts",
+    "sha256": "db1b0af64c207eeb69a34fdfa09c9f5ed1c0282d7fe317ac69bb711587f8eca5"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/auth.test.ts",
+    "sha256": "92dff9a22213e317d78a8529541974dea793a15401d4e369e0d3f67b40dc35af"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/appEngine.test.ts",
+    "sha256": "e1dab4d7f4ab440ff878ed71eb1fca1b32e9abf7ed55ea096e4bd85b70717281"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/app.ts",
+    "sha256": "1a91da6153ffd5592cfb4c920acd133e8c019137eaa1a26c5e481702b5d12616"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/config.ts",
+    "sha256": "55393668ee7c6872dc624d02e3017456ed5861b995610f5ba0b383bffe3686ba"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/config.test.ts",
+    "sha256": "b248cc915e7b65a6f23b214680de81e9da4758eb3f06e3489e27cb68cb660a62"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/test/setup.ts",
+    "sha256": "011c5d55d5fbb79730fee1b9a7bbcc6cb9ba9ef6fdf88b82bfcbf300cc4e8b07"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/sources.test.ts",
+    "sha256": "fec98475e54669f9f1c9449ba26850aad2feb9ca2c9908030a2ad19b5fe9555d"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/setup/qwenSettings.ts",
+    "sha256": "894a5a2724da36e4b46f7cba46aedd5eff482641053104c14081888d59346ac2"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/setup/qwenSettings.test.ts",
+    "sha256": "8da0665cdca585c6044042ad9e116b8b6c76c35546fa6d4db0b9f19cc4b50518"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/setup/prereqs.ts",
+    "sha256": "8342fd31bec377d580c10c340e5a244e8cbede446dadf2c7412da98ca11d58ee"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/setup/prereqs.test.ts",
+    "sha256": "dbcd7a8651927dabe9b6a1a7b8f904890a5b679ae23de899546c5d2a38cfda88"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/setup/codexConfig.ts",
+    "sha256": "dac2bec0d53b77f0cfb489f3a53ab77d311a940f9f6490d4dc8f2ddd747e5b26"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/setup/codexConfig.test.ts",
+    "sha256": "bba99f1ab0392f330df580c63e85db122173fd33b338c204e7b41d17ddaf4162"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/main.tsx",
+    "sha256": "85cf3d4051e99adacf6b4f1bac9d749851893df8d9778bca7902ceea1e0baf65"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/federation/summary.ts",
+    "sha256": "4242bff4e9a4700d809a13f691cf8551f67d212be9d74438889f702217b9f290"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/federation/poll.ts",
+    "sha256": "1d66a4a4f8fe392be13f6d154ad1b2c85ed8bd98bbcb39b929a431f3c6004359"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/federation/peers.ts",
+    "sha256": "ad689f627694875d73f7232296ec98cd9b106913918e2bc0316aaaf404faca43"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/federation/fleet.ts",
+    "sha256": "f65052655045085c9fd0e967fb07a25b923cee1fb76246a52ec951656dbdc399"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/federation/federation.test.ts",
+    "sha256": "c5d757e5b10195c98ea1e1d2a75a70db45d44fa7e17b00778999dcb579552555"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/federation/envelope.ts",
+    "sha256": "85a1ac64386921042d8373b618ce5066e0392a137d0d924f2a7592df89d2ba4d"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/federation/envelope.test.ts",
+    "sha256": "4e5b1a5286f71796ae361581fbfa0b7e8c64cb8102966659d40bc3374963cd13"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/authGate.test.tsx",
+    "sha256": "8b1390aff6cdb6c7ead9b64011922c277926b96119428861bd86331a2958a0d8"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/App.tsx",
+    "sha256": "a2a71746cd6c66d70adf834e267bbc5d929b26de0c163bab0c2d246df1d93e5a"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/App.test.tsx",
+    "sha256": "c6446dfbadbc676adef48448c559b4532afc5b3b4564b707507a38cf0106e455"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/fleet/useMachineFacet.ts",
+    "sha256": "2101e9dee3692e7831611e6855cc88a601f59b7fba6f0fc6bcacbba15a71341c"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/fleet/peerViews.test.tsx",
+    "sha256": "819448fb563b97e48de3ae4b4a8606acdad47d1f1b8ea91f6944b50a2e598b5e"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/fleet/MachineFacet.tsx",
+    "sha256": "045c4e1dc8f4347ee2e14b7991c4aa9707a341e5704aa182739dd0279aaf7800"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/fleet/MachineFacet.test.tsx",
+    "sha256": "02c1d8e481103eb35c01fca1473994fb020687725078081559461965ec30add7"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/testSupport.ts",
+    "sha256": "16ed5db3666ca9e397ad28884e24687760865e5ae9db5e65b214ba8c9f9a80b6"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/storage.ts",
+    "sha256": "93e576b01c5be0903d7bae9933422073b1a42a18a18be9d70ae1b7eedf1a3044"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/service.ts",
+    "sha256": "2d9147e8402227301d5e9767584edec75d7aadd4d187cee06fb0ba04c4039732"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/service.test.ts",
+    "sha256": "8b979c6fff12c6060f237a1ab5a08a083dd24096cb6e67de92cc491ec91b8cfd"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/replay.ts",
+    "sha256": "4af179792443ac374205ee2ea8733e25000f20cd397db7304df52b8f5fd613c5"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/replay.test.ts",
+    "sha256": "b13c426a4faab63cc4e12361310d834544ecd204290b9b5fc91ab165c1a7da29"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/registry.ts",
+    "sha256": "0fefa002b32bf35601b3a705026f16a5187b3b56e2896ae78b850c1c2a35ca81"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/registry.test.ts",
+    "sha256": "e0c9d10790bedd6ebfe3c1ba08f835da40467e41ed7cfa63ace13709dd29b060"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/redaction.ts",
+    "sha256": "a0d830b594e31be211462c8d360aec89abf0847ec9d9e79e172fe54b58da3316"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/live/useLiveResource.ts",
+    "sha256": "98ba52aa11b78f7f50858e9574d92ee91603d8b841869d2f5ca1c8bd11caad37"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/live/useLiveResource.test.tsx",
+    "sha256": "cfa9cdf0517e74dfb076b6c736cbee0cb70788aaff93cb79c5bc8f1e9703be40"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/live/mergeTail.ts",
+    "sha256": "104c99d9248d1dad884c2c470b04d40df9bca6b766de948ff0d4f0b84b91ba77"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/live/mergeTail.test.ts",
+    "sha256": "c1f13e744e50354b6ca282771bc76627d355b2f2b5865797a50a61275f34b4b4"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/live/liveSocket.ts",
+    "sha256": "522644ae91e189ff1bcc951912e42084d684a88ca08f67e8fa0ba780f0bdc6bb"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/live/liveSocket.test.ts",
+    "sha256": "2eb0fee6a20b649ef9492af01a72433afdf75a24727f6360a55430f246531be7"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/legacyRoutes.ts",
+    "sha256": "39d4aafa8cb5b131a848ae28575e645ace85a25e083e6451e2075f0d55822947"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/gatePolicy.test.ts",
+    "sha256": "ddffdc68759d1c86f9db2b1ff494eaa96ced92b0ce4d69667cf0606c30a9f803"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/gateDecisions.ts",
+    "sha256": "642a14c075ef78477ce15e9ff8a957559a5dce225ae9f2ee6267ea4a529eb976"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/fileMemo.ts",
+    "sha256": "b44265479050f6e41a1006d037608537c16110e97fbddc7b8dc74629bfe317d9"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/fileMemo.test.ts",
+    "sha256": "bfb07cafda0f4089141a1fae57a0ed6924d5e4177f140271b5e9b4744dbde4c7"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/diagnose.ts",
+    "sha256": "5125cb60b1523d85f913eb29cb967453a3814c127fe031d37bf6291a9c6e7e41"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/diagnose.test.ts",
+    "sha256": "17c2d5ca919165334a024a498435ea815e4aec6859227a725d39ace2bc3316f4"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/dag.ts",
+    "sha256": "19d0168c10212b5e9d7d841c24fc7e4abe4190f2a54c4228cb67822e3d1eaff7"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/dag.test.ts",
+    "sha256": "bd42ffab983b2c4388249e372f8e123b462dca190059964c96be5ffc19b2b222"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/daemon.ts",
+    "sha256": "0569947720d8d66d5a1b316ed5e9f0c8af455f49ef6a1b91add482f50b596ce0"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/cron.ts",
+    "sha256": "82e5bbde1d664b219fc8dbc72440e90055aed0dd62c59769798fcbac2964e49b"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/codexSessions.ts",
+    "sha256": "c041a3bb275a4e01d5a9cabd50253407c856385b91e0a33d4f990581b7973302"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/codexSessions.test.ts",
+    "sha256": "14e79c92ff1e6c8cadb7cb4d555e0be14f0d9267d9ac38d3f6be5a9267d7eead"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/codexSessionRead.test.ts",
+    "sha256": "de827a5518fb67772df62b5aec2d77873ccb89efe16314ebdc20d39d47efb02f"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/chronicle.ts",
+    "sha256": "37e608d14614b54ea41e6d5d2c2c758353cc70518be0734ed881b42110ae65f4"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/chronicle.test.ts",
+    "sha256": "e39f61fd7a1407f49d693d978c2861a87e72344a9121b310df38a8083ab00ddd"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/chains.ts",
+    "sha256": "16f6609c55b801c0d58526da84f80807c36fe94281f21cbab336c10714536a8d"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/cache.ts",
+    "sha256": "2ee42d60313cbefdb18c76426b1e5864aaca8f9e2175eda5973d20e59b504603"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/cache.test.ts",
+    "sha256": "c1db8b5fa9af274290cbb4ade2e1b56aef8a73ca66d7c366a11d872ec01b1309"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/budgetAlerts.ts",
+    "sha256": "ad643e173ed63fec29841dc628fde8bd372c1f32049402c88f4bcbe25e3162c5"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/budgetAlerts.test.ts",
+    "sha256": "0b9f3b7ae6bf7e72d4bfb2bf042887996f7fde002172bedf813bc22f340830ca"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/budget.ts",
+    "sha256": "a6e6c591e631a5f124870407263a7d9f4f1cab0c04c619cc787d3ffc9cc78077"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/budget.test.ts",
+    "sha256": "4ef7778533718bba2a30110936cd6b949a2614ca9689b7ebe3f2c0f93dfba31b"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/briefing.ts",
+    "sha256": "f191461541b5915439413c812fbaf894fb8990f898d05017e753cdbbbf2ab419"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/briefing.test.ts",
+    "sha256": "455506e4488a6f3e504c363cc79e77c60f97e44b5ac63c655793df5c05161799"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/autopsy.ts",
+    "sha256": "7fb4548f9218d0af01a307a41d4780f2d585bf3f27fd4d533e7dd7e5f843692c"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/autopsy.test.ts",
+    "sha256": "948c6b7f05f04e64e047cfcd210a8e06a87545b0719b4c5649d4f81ff26d3a2e"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/atomicWrite.ts",
+    "sha256": "6ffdba264f5c303a3ff9177e8ab96da98ae6e9d8f1495592c69b567fcbf98f6f"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/artifacts.ts",
+    "sha256": "34134253f8e7ad21a4c898f5692f807704b0c8cc6ba45a789017ba138130f4d9"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/artifacts.test.ts",
+    "sha256": "3f4011ee065ffe733b2585b64d8e5dd2e7f6d95a2af457124115945d00852401"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/analysis.ts",
+    "sha256": "03e9458cf716af5fea91ba3ae8ca7680a269c0da292c9d5071e2e93c367a717d"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/analysis.test.ts",
+    "sha256": "a77e813f5193045e742f4202781508e4e9884b567e52f58527672e201fcf2d06"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/nextFire.test.ts",
+    "sha256": "52496d0eed8f7cc3b6bca56dbbf036373ef7f39bf6ea3fb2de1cae130763af33"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/monitors.ts",
+    "sha256": "5ca5c143766b0d9b9f7414a0f6e5cc716dd766c08bcd937bf893a1275e29ed8b"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/monitors.test.ts",
+    "sha256": "5e8ffa3c1621d5dbba670972413ea13073bd5762b26c5a93a444d1efd9e8321e"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/monitorAlerts.ts",
+    "sha256": "cd5e577be1ca51bbdd252b977f38f70387f1cd28202689a01ea548cccf4aa570"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/monitorAlerts.test.ts",
+    "sha256": "fa075565208ef715e7961256bc418598fe48a827b9f4579f21037d6e6fb5dad3"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/ledger.ts",
+    "sha256": "d863bb8e419dbdb27d346353bc3afe25505e902b26c44ff709496c71ed3467d0"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/ledger.test.ts",
+    "sha256": "f227bc2b02d803d6ce58c8df234091272d98faa6718ef73bf10be6bf19d8cb7b"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/launch.ts",
+    "sha256": "00dc67c37264e833e205a2c785df509558b273ee7faebbe5efb267d7f7b2e3c7"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/launch.test.ts",
+    "sha256": "8d52f454c9e211f3ccb83af12646a83fd733ed54c0f0f2ae8988567d1a53e34b"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/jsonArrayStore.ts",
+    "sha256": "05f7b4c3f90eedbf4f4bbf90f3fc26ed74a0efbafc175874fef8625b47393005"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/journal.ts",
+    "sha256": "bc22585b56697d6ce719e128ea77f46c63b7511a81bcdd2d75ab72427aa5795d"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/jobs.ts",
+    "sha256": "1b77e5a59095edf1a76e85e3c1bc8ebaac43f185f596e2feec830c3f74cdd105"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/jobs.test.ts",
+    "sha256": "8e0c14cbf0bd71856a30c78f2b076deb28caa5e90453ffd40aef43c9661de229"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/issues.ts",
+    "sha256": "76babf13fbad39c33b3560568de24a8e17a490a2ab4c94a66ee33cea5e837adb"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/issues.test.ts",
+    "sha256": "50212071a10815d3a1bcd6c4e70b763646ce3b9de9abdd00fe44aea0c6859542"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/inventory.ts",
+    "sha256": "74f8b4fc4b52d857e39f1dc6989b3779ebac86483ee33ff3680cf4d55a14e2f8"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/instances.ts",
+    "sha256": "28163dbaffcb5f18b769e8a61690411b0f0a70316f5c09c3557fdbaf95fdd37a"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/instances.test.ts",
+    "sha256": "2d8c919d68fb50c56f37c182359e4df8403d20579c485d5783acd8b47d69dd9f"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/insight.ts",
+    "sha256": "381cbe8f97a4185cf2bf89dc1c7891aa0acd84d9aaa3417e7d111aed5baf40c5"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/insight.test.ts",
+    "sha256": "77233ff7cca24d32040c68a1b4f73f75f02aa2033318449ed314149831072931"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/history.ts",
+    "sha256": "18947eccde93ee30dead869a4d22d9aa63a69228ff953c30bf0e8fce131b66c8"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/gatePolicy.ts",
+    "sha256": "d3065232b8ff54e7a65c97f2b86f84a37dd6520af5f0631edc8fa7a249988bd4"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/qwenSessionRead.test.ts",
+    "sha256": "b438a45468164159f23ef0aba6993e268ffaa3dbfa507a93314788461db3a55a"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/projects.ts",
+    "sha256": "b4dde8b8687787194d589567aa38d920309022652d063a41a14aa379a4298ea3"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/planStore.ts",
+    "sha256": "2a45422056e3525e5abbdde2279a3c7e06d405755377c1f1467b302b8006b21b"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/planStore.test.ts",
+    "sha256": "7c070bdeb6d14b89a274f9e8e7473b6791bf80e4da85a321c40b4fc12ed9b7c2"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/harness/workspace.ts",
+    "sha256": "78f36ab3bb76542237a2907c0258173009d99d2c1981251252b4fa68a27f3c27"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/pipelineTypes.ts",
+    "sha256": "e69ffc41451eb50effc13603e0d659db7ab4c8a3f2df2b9f999b4e865c70c144"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/pipelinesHarness.test.ts",
+    "sha256": "59ec1abf6fb2a00d99dc272aa44c195809187c34473801b4fe0fa824464ad915"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/pipelines.ts",
+    "sha256": "477a88b3ccb1cc6f37ca2460bc7fc034d71279644bcc7c8c1adbd0a7585545ea"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/harness/workspace.test.ts",
+    "sha256": "fc4b2bed73ed81f9842ffab950ef46af5a5b7c491129f01d51344f4f47ca5f6d"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/pipelines.test.ts",
+    "sha256": "5bb57d2ab48c0f24083dee48563057ade06da05813382ff2eeaa9c537145432e"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/palette.ts",
+    "sha256": "ce252e3e4e2356f2a1eb3b0a1c5dc42135e9eba490f0ae307faf08b51636dc5a"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/harness/verificationE2e.test.ts",
+    "sha256": "e6df45ef79a4974f1daab2b0a41f0b6f98cf5f0cecfc46898fdcee044f88f40d"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/palette.test.ts",
+    "sha256": "9547804eabc4b3ca18e622c042bd932ea36ad86ec825e46a79af8e2459b99951"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/overview.ts",
+    "sha256": "a5ccc972dbadfd817320cba9f9e4d59c6a06eabf816d63c536704c995b777573"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/overview.test.ts",
+    "sha256": "e3dace4cf462d88cbc5e8a09d97857530495071919fa192ff469a4a008d39bd5"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/harness/verification.ts",
+    "sha256": "c9acb305969dc261ab8c3c0b610296ce9565182950c2d8c78f1de3df5acc34ab"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/omnibar.ts",
+    "sha256": "7ad306836e1295ec0aea4584df48c110cd5dad4785be8bce81864b4ac56c0673"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/harness/verification.test.ts",
+    "sha256": "8e73c8147b9fb9c42b6201c7cb60dde90ae875a97b9a73035b772e7d051a4e67"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/omnibar.test.ts",
+    "sha256": "5223828de5ef8e84f01c98ef87cf25c56b57093477e9b283e3cca977030da3fd"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/nextFire.ts",
+    "sha256": "4bf8cc7c5359ba96e9f44b14f071f5fbda997052f55cd4860a5452898ea4d314"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/harness/stall.ts",
+    "sha256": "f7abb88c3d070af9dd7447fe24f8a521ed78cc21a52d82c42f0588a00da7af5f"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/harness/stall.test.ts",
+    "sha256": "2e037300fb2b1eda3f5b28daadea15791f0f5cb806802083d7df3cf988ba4093"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/harness/reviewFixes.test.ts",
+    "sha256": "413ffa5c4b48864e5d44d341ac1fa1e924d9ddb1ad7bbeec61d09d16cf24d707"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/routing.ts",
+    "sha256": "434f819bd2b78605a6e4fc31b7ef70764688f7571bca7be914083c488c95e57f"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/harness/realizationE2e.test.ts",
+    "sha256": "3f3ce316d4422916fa287a5e932b3e758429d222a2d31f484774695d992837fe"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/routing.test.ts",
+    "sha256": "3c85df7fa460eb7111fa2170c11530a5fbf64e4fa1830f9fc307fbd00665aa67"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/harness/memory.ts",
+    "sha256": "953d4f52a9590e5f06af18ad9d97552385e1fbefe0ce2cecff25a931e697ff3f"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/routeValidation.test.ts",
+    "sha256": "53c4efc92c0a8300329005ae00aa2877b1d911cadea5418411e04f8d658364de"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/routeAuthoring.ts",
+    "sha256": "500af0ff8968800b59fdbe7faa07ec709ca3e200cef51cb005957fc9ab78b153"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/harness/memory.test.ts",
+    "sha256": "7395265935af5736ea91cd559ce83af711cb5db8656ae07768d382109ba12c9d"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/reliability.ts",
+    "sha256": "efd62f071a94793ed175f2fc122eccb4df9be00b38342afbcc785592eeffe9dc"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/harness/invocation.ts",
+    "sha256": "dd16e20f43385041d5cfa848d5e64f7a9c0d4979b1a089c288b2d3521f677fdd"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/reliability.test.ts",
+    "sha256": "00383eef16f7e513a268024986f0e186d3c0d521f797092683e8f00893f15be0"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/recorder.ts",
+    "sha256": "8d6567733f5323652d168218b108ab8fbfc0ac99b2acd8b5f042d6150c3290cd"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/recorder.test.ts",
+    "sha256": "13c8053b17c0253ffeabb668337a60f50764ef0dae5283dda9e5baf68d63594b"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/readJson.ts",
+    "sha256": "e67962c5f004c14083e9348c12222f56bfc68131f58c87c6f38be2bf528a375c"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/qwenSessions.ts",
+    "sha256": "824371ee987f18bd92fa8f3ec55ce54581b627ad3a90da9a7df8e5507c34ab30"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/qwenSessions.test.ts",
+    "sha256": "a2dd7ba43b6cce238e2d7067f82b2872cb4d5ce7b42e4ce9a5e9198f35ffafb0"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/schedules.ts",
+    "sha256": "72f1f7053ba732c46eabc7756631d6c2322b2a60b8c9733cd2d3edc5ec11bb6b"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/notify/useToastQueue.ts",
+    "sha256": "0c7af35a4ccd02356f5e4c4753dc82955ad34af726bcbd778f0fc52163022dd9"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/schedules.test.ts",
+    "sha256": "b88d424cc6f72320e2b39f4c954ed3ecc9967ea11cebc41e3f26107dcb297d9d"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/harness/invocation.test.ts",
+    "sha256": "9f1b694d36866fd278302757bdb1ed6a9d561211a9fa17de5c7e31ba85edee0d"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/runtimeInfo.ts",
+    "sha256": "42c01bdd45b9f4440b61253e6a5752939dda03f2dccf090ad8db2330707a4264"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/notify/useMonitorAlerts.ts",
+    "sha256": "8c1c8ba8749f00673100cea39e8ae5f6e8b5fbbd9a207009a97e828325488f2c"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/runs.ts",
+    "sha256": "d7e547b674dbdda7fd60a11914aaf3718a93af060a3698dcb696613be0d5b446"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/harness/fakeAgent.mjs",
+    "sha256": "5d661690c53d56abb57d3381e248ddc0e07645e63192bae8d0e85d5b4bf2a7e6"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/notify/useMonitorAlerts.test.tsx",
+    "sha256": "d96cca06ae79cc1c8aff1fb846c6ded6f281069169bc07e5377ba0880fa4aaf9"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/runs.test.ts",
+    "sha256": "f95baf3d84a929850df9a29d685a96bfa0905221a3af7b1fc0e5d0247b5a3c08"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/harness/e2eSupport.ts",
+    "sha256": "6597b8c1c9a437c4c9c72a295074bfd0b660b582840e3e5d70bb1c4d8fb23a75"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/notify/useIncidentAlerts.ts",
+    "sha256": "c92633dd45e9cb7a7e0e1425faf920bc738650efd1df3c1978ce748904b0876c"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/harness/e2e.test.ts",
+    "sha256": "7dbdefce4c0e07154ea9264f56745e1593dec5f715286df88c99c5b3cebd169b"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/notify/useIncidentAlerts.test.tsx",
+    "sha256": "41816b7254cab076ad2047001f42f071488e55efc882fcb4bc2c155bbb3fd508"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/sentinel.test.ts",
+    "sha256": "a86a67758b1c60d904e462e2923e9f0399cc68f424dd3635f0bc51cac1816bda"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/notify/useBudgetAlerts.ts",
+    "sha256": "039c25f590c774108de6bb5b17480ff9d55da1ede0bdd78d8f125023277c8e28"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/searchDaemonCron.test.ts",
+    "sha256": "a09148c12e965100c99c065fd4a14b36c5f4b2211c00add5212c605282420252"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/notify/useBudgetAlerts.test.tsx",
+    "sha256": "b4084613a621245487ec3f9d67c7d612c8c40aa3906930fc72bbeb087e670312"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/harness/childEnv.ts",
+    "sha256": "c5fefad423b1986fb4639524fea062596014472554a2bb3865c06d9ac5286384"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/search.ts",
+    "sha256": "e6232ca39d61865f50c5d620c288f6efa7b00deea1c9880d71a179a1d6e5ff65"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/notify/useAnomalyAlerts.ts",
+    "sha256": "21065a4aa0a8461ddece09b71de13c3fde16faec20ff4316392ad35f5af9efaa"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/scheduleTypes.ts",
+    "sha256": "bd9168736e000d1c12fef832e72e2672b45ce356d423219a7418e7949c45cef5"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/harness/childEnv.test.ts",
+    "sha256": "0964e83fed7fd81b506dabe494745e29e5c8550299565fd5aed1796ff8b3d7b2"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/notify/useAnomalyAlerts.test.tsx",
+    "sha256": "b30880694856e2cd8dd278aea6a27b2b0655c62e2f2f75444fcd528b5987f45f"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/sessionMarkdown.test.ts",
+    "sha256": "8186b9b4c995613e8d7a0b4b7f15bdbee5b63c2edde9858d760f7ba9534d4535"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/harness/channels.ts",
+    "sha256": "913fa50c1c5d95738645879a4a50bd2842f5bbcddad1cf020be9aa906366df6e"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/harness/changeIntentE2e.test.ts",
+    "sha256": "c370e88c90b14fee628c0cda7547aab57e077ba45896f64f9e357d2960ada504"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/sentinel.ts",
+    "sha256": "3863ce001376c35cf43b7c3fb46dcb63400bb808aa021c9cb2fab871482b5213"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/stats.ts",
+    "sha256": "2d14486ce616bfa25be1de58cc12c7dc067e69d347bd43503ea411c7b7c5f586"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/sources.test.ts",
+    "sha256": "a895640a8d87ff3f460148e8e69e56ccb2863a39b14842ed77c2b10559a52ed3"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/sessionTail.test.ts",
+    "sha256": "ab381436eb54bb8d468499327c5a612f64897cac2194e0a8f5302c87e992724f"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/sessions.ts",
+    "sha256": "ca8ede4bd8c3ea38c0993cabe8a991ca0c33ace56621e232a0b8e3af6984b1a6"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/notify/useAgentNotifications.ts",
+    "sha256": "faa7a1d062bcb933da606163348f87e5b4802ea0e2e9a916f134fbf07e36fa2c"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/notify/useAgentNotifications.test.tsx",
+    "sha256": "4d9179a255db9c3f40bffefad3da4700a47945faada547ff1793a573d18875dc"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/totals.ts",
+    "sha256": "7daa38a8d88d6d4a2090985c0786299ef27e0f65578230d6820c1f80ebaf2a9e"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/notify/notificationLog.ts",
+    "sha256": "e49de30d8a9244cfe6b3914b0fc4263b8385860419bd46a09c7f096f1c128698"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/notify/notificationLog.test.tsx",
+    "sha256": "26ec6028927330cc2a7ddb6728c3f4c6561942eb10e434b23db1feb67e777a19"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/totals.test.ts",
+    "sha256": "552331fd0e12ac157e793e8498b95f684d85a059fcab1328c1767e8e56fbc181"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/notify/NotificationCenter.tsx",
+    "sha256": "4b769a27ea800d2ba5194703e0c9a9ea5670608e6b064726827388fb92836bf0"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/notify/fireNotification.ts",
+    "sha256": "00f0622436282866f91031acef8af30fec60519ba5af0dde1973dbfd5061595f"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/tasks.ts",
+    "sha256": "8a25f8aa07f8af0684e6492b263f65f1f8411fce35fe10ef319d6602aaf5f382"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/notify/fireNotification.test.ts",
+    "sha256": "9919747ae0fc0e28d0b0192bb2b461c240fdc94352bf37b6295ae8946c567ede"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/notify/detectTransitions.ts",
+    "sha256": "a9f4a939c07c746e5c2a13d2eed4cc1f63e0b3ca2d43a793c97697ee102e7128"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/notify/detectTransitions.test.ts",
+    "sha256": "06abfcc60afa4ced82b453c476b581392e523f1cbe6b4ccca58bb3b12afae4cd"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/tuning.ts",
+    "sha256": "7f521218b4d786bbdcd1e87f7630d7ccc06897bbfd7e142d35f023fcbf4720e5"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/tuning.test.ts",
+    "sha256": "ebc17e2070bb4ed53d55fe8c5f71e8f81008100c5312649cb576b24ed46bd771"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/NavBar.tsx",
+    "sha256": "308088be0ed77b3197f54e65ef6e5e9b26579a23a0eb89d393b3b4b3230d962f"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/NavBar.test.tsx",
+    "sha256": "0bf9a2be484e2112d579f881348fce26bd624fc17f6d11dc4a14f32d4fa89c70"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/validateTrigger.test.ts",
+    "sha256": "03d9dc3ed86c6bc120e548b38f6d33b74edf48f7909586fa1cd30f062566c80b"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/types.ts",
+    "sha256": "dead2f3e5a8557ba59adea24ccca2e5c43a215b2a97cfab43ee9165624a88d70"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/verdict.ts",
+    "sha256": "b526932f9aef76816a91308e6a3492f96f057101a9cb946c0bb236da15612076"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/verdict.test.ts",
+    "sha256": "b439a639f0e2cfdff698a64a505600aee580e28d43d61a992fe79358b77878b5"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/watchtower.test.ts",
+    "sha256": "3a9e4facdbe8dd267c8d5d7bba0518321e9d3f7adb05e316130b2d36d8d30901"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/sessionLines.test.ts",
+    "sha256": "5e122f32962194e3c7521a46af1158b7e36bf299dd5739c36320ba83caae7220"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/sources/watchtower.ts",
+    "sha256": "e072fc95836d42dfba4ee122a2483182ca8fa8520570b374f0dcadbbd0b56049"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/claudeCli.test.ts",
+    "sha256": "31056d0c8314d5339848e9f48409b8793476246f4cd66bd61713e3384fa183c1"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useVault.ts",
+    "sha256": "aa3e7eee3092c133346e7446b533944e2ddad25eea660c84d5f0775f4ffd20af"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useVault.test.tsx",
+    "sha256": "4c3f223a1fde3cb0ccc6279176878f63c8ece9910df55523accc58482bb2bdc8"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useUsers.ts",
+    "sha256": "04e8643f447f09a62c88fcabc4a64183bae6f12badb604bdf07be897dbbc0f42"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useTuning.ts",
+    "sha256": "9111e9d2c1011cc5fae4074bd012def04f23d54085e118f87b460c473f22f98b"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useTotals.ts",
+    "sha256": "62da3215da8d19ec670719888f95ae2ecc67e1aa9e8542d15563b4c37c4fce5b"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useTimeline.ts",
+    "sha256": "091b9dc57cfa862c6f886fcd05984a5ba8fde263710b0ba2a23791611d025263"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useStats.ts",
+    "sha256": "6d4374e18d9f737f9fa4f84ae2487f08e673c3c8d5cabd8b2833472f305db078"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useSetup.ts",
+    "sha256": "3687f8844075a72ba8191e33d572bcdbaf1bd51b53eaa8fa21dd0b7434d77d83"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useSessionTail.ts",
+    "sha256": "d635ac8828d4f034bab0eea86a987f533bf6ecd97a85cd66f640338890800d9f"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useSessions.ts",
+    "sha256": "15df9cf36d663e527be5ef8807b933164363eae7b957c40ffd69b2859456a8d9"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useSentinel.ts",
+    "sha256": "174a0cc18b013c4cd058d3eb82fda26d275ff7c81f669f3b8cf96fecdeead63a"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useSentinel.test.tsx",
+    "sha256": "183c1600a97c509808760875829741f5ac2f74bced090edcbf7791669b4b441f"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/canonical.ts",
+    "sha256": "e8208e96df4195ec5f4a7c19f1841a322a735f48b480de7bc37428bca49f8851"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useSearch.ts",
+    "sha256": "c518a60e64553beb2c3b5dfc10f854c52070e02cb88bdb59459428907b71892e"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useSchedules.ts",
+    "sha256": "ca598818de4f2435de275ffa3e37e3c0f1e8bd0c51b0d484a377b43171df9cf3"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/canonical.test.ts",
+    "sha256": "936b28bd05137ba9da56684fc478ab3fa607ad4216b9ed21d2f843bc19c4570d"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useRuntimes.ts",
+    "sha256": "891805b7dc3543f8cd30afd211a1bb63bd4e2e8b94685343420452aa080b9cf4"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/answers.ts",
+    "sha256": "9fa4dbc394bdb7161227aea51ba8b612420a170abf391ce0dd91cc60b224d878"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useRuntimes.test.tsx",
+    "sha256": "37b0d11a360c0d9a4a98fee83f171b2f6d8717b9c7a6243932e2dfc6958c228f"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/answers.test.ts",
+    "sha256": "f30847f3a72bb7074d4503a7e00e18283414e9e3508be5b424842c67f7d2c5fe"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useRuns.ts",
+    "sha256": "cdbd8d2765f0b2ed33449943c6fe75a9de27cde0522eca71e49a07057c12cc67"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useRunActivity.ts",
+    "sha256": "3005b858bacf8b99a3d3e4186a10eed66d27be4cee8079578f05d81b9fda3976"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/usePipelines.test.tsx",
+    "sha256": "40936550eea61753939065b51514f972d14cf2b647bb8ae04bf51c6c97f18f3e"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useRunActivity.test.tsx",
+    "sha256": "46524a1728d246042bdebf2fc291da62360457919ac304e3f201a6ec7903e9d1"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/currency.ts",
+    "sha256": "22e2d8179c5af6500fcbee2274c9a102dc363ca606d1b713e292c651e80452cf"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useOverview.ts",
+    "sha256": "42b8ab46d16511540b0fd054ac5f54afc9b7038f714998d9d6ca349b2a81f586"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useReliability.ts",
+    "sha256": "574a20d0e905a2e8c79d64b998cdb8a466866a6cd05ef9571eb24eb6d891b027"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/currency.test.ts",
+    "sha256": "a675ea56bbc20dd457fdc4b6d1803caef7052eb2bf440b5d7857fbad38e6edf0"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useOmnibar.ts",
+    "sha256": "157cf7c7daedc645bb6ce67f2f1c1d4902cd8f5cc8ac938be3e134721328c678"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useRecording.ts",
+    "sha256": "d6151014df07ed7fee24b8c42b84c0e558912d56c67d2f86f30914215ab2a702"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/definitions.ts",
+    "sha256": "9fb129a233d2c8e500adf58cbafd610abe7d2981dca29b7a8e28a90dc3a6bb47"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useRecording.test.tsx",
+    "sha256": "8a2cdc286182c5c2db024b6aaeadba356cd212a28d0f239f9c60e2786129dee9"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/experiments.ts",
+    "sha256": "32166b996086414de83e6f086c71a7459021a26ed398b53f6a43e95e3c4dac9f"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/usePipelines.ts",
+    "sha256": "f922dcd780147da9c85064e405420a1430147c57987326ffa7a80257fe5d961e"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useLaunch.ts",
+    "sha256": "56c31bc449b8b64268628aac2a14e7023523c4b795d9e14b4c7497e729b4e1df"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useIssues.ts",
+    "sha256": "d8688ff46124c94aefd54b3162ab7aabf902d20833c8ddcf9d5d00ce9351c099"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useInventory.ts",
+    "sha256": "fd7cb3ee584f965345dd7cbe866146e4e4dd73a90eb9a73f49a5ed5908935c94"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useLedger.test.tsx",
+    "sha256": "87944b8e10fcb06e9c2b6efd84d9529139b35014b0201603c2d742fad05af257"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useLedger.ts",
+    "sha256": "c5db92afc521509b27f7d9e92e501a0660fc092f7ab10344a9c2e9867c2b2ab3"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useMonitors.ts",
+    "sha256": "1816f66b7c8f2cb4d04756f84a3f394ae44011a24aa4d112482f06f57e93c0e2"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/FlightRecorder.tsx",
+    "sha256": "dd4c81eac9daac080d0440f4ceb084cc424e9e9bb6740608ce9914308c1ced43"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/FlightRecorder.test.tsx",
+    "sha256": "a58652b012e611a9bec7e7a43b8bde12b9f3e9a93adeb2c98ddbe7b38cd70058"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/journal.ts",
+    "sha256": "5bbb10ecf134826b2cb8efbcf238972cc7058525225e737bf71d7395efebce31"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Fleet.tsx",
+    "sha256": "9ea4b19b2df827f78ace3d12b8076e159c04ad164efd1ce8dcd7b0a58aad89c5"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/journal.test.ts",
+    "sha256": "34b60e27ee10ee9e97a49da9f55e68ef67ec55d04dca169ff4c962e2f22291f9"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Fleet.test.tsx",
+    "sha256": "d99d18f87000eb335fc0b7821fa040a5816cf483776918c4b18e1b6f2b49c64b"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/decisionValue.ts",
+    "sha256": "c024098d929264e929966ccf7a340416ae0752a1dc102840d0935b19ea785be8"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/isolation.test.ts",
+    "sha256": "ccf635108ed96f84206d3d5519104a51ac28edd97c24e89e1d4ebd77c1e002b5"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/decisionValue.test.ts",
+    "sha256": "5bb83a535536d75a2cd7b5ec33ab74a9857e3b8ac7bf94117ecea20f94b491ab"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/DecisionH1.tsx",
+    "sha256": "6639190576139ec596d7e8e08f7461b622365f4989d505d44187b0c5ab690882"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/integrity.test.ts",
+    "sha256": "bac45d8de5068935fe5ce83bfd33c0821bbf00c44e4edd450210c65054e54c9c"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/DecisionH1.test.tsx",
+    "sha256": "50cdb2b7561be48ad4d70ec70458e49c1a0270fb87e662fbc83aebc79f0d839a"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/DecisionExperiments.tsx",
+    "sha256": "bbc1ad61b6a5a9002c4b16f35e25f6291273497d6badab642215fc7e51c54c32"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Pipelines.test.tsx",
+    "sha256": "7b5e63759e86d33375c9f48b484e8e99d2acfc11369ad763b5dab4b5b8b3926a"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/DecisionExperiments.test.tsx",
+    "sha256": "afc4bc0d1a5f70f545a38fc3ca3c60499ae26f2b5d94cc907076392a090011a3"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/CommandCenterRoutes.test.tsx",
+    "sha256": "cbad42acc16eefe528d0553119cdcb0a6478b230c8a6b1aa9ef144b8a193d5c5"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/PipelineRoutes.tsx",
+    "sha256": "4d38f6b419bdbc87523822664fae3f3529d115184d4799443d6bfd57425c0a1c"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/CommandCenter.tsx",
+    "sha256": "a5700d46cbacf6e8fd5a45b314292d3e996369e0ccad46b282d47b51b118fe7e"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/CommandCenter.test.tsx",
+    "sha256": "661f0a009a835d7b8defdea5842a5a6a03687a81f84e18e0b15e066b957413ee"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/PipelineFormRoutes.test.tsx",
+    "sha256": "30bc27de2397092e8f093e6261a651b6175433c165ab00e53d1c6ef53c3fa33e"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Chronicle.tsx",
+    "sha256": "ac6ad040bca84fe6f674d3ef7d825075d42690ce602cb88e7c2e0aa7b0775a08"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/PipelineForm.tsx",
+    "sha256": "affda92927a36c9b91c8d0f2faf2828e687c643363f4ee8fee7579719a060031"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/PipelineForm.test.tsx",
+    "sha256": "e552cdf0b794ec2ec17accfac1154173e2eb068f45b7fd6d81a2ec14b1c856f2"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Chronicle.test.tsx",
+    "sha256": "82ebc7cfaa173c16c5f4ec771214cc49661f73de4f88713cb508e21d206ac5f5"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/phaseGraphLayout.ts",
+    "sha256": "e44704560919dadb8b10c195db602e1440dead65df09b132a6b595ab27314313"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/PhaseGraph.tsx",
+    "sha256": "c9016c74f24690f66335dbf3e79adbc39662d5932339de041aa97b1a6b8d8178"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/budgetProjection.ts",
+    "sha256": "1926b864fe55e23f994c42fcd0751b528e96009f7182a7a9c542a38b3bbda0a0"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/PhaseGraph.test.tsx",
+    "sha256": "c542885bbc0e3e6f4e57cea1c7c5e5737771e0954489ce3875eefab1f32ed8d3"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/budgetProjection.test.ts",
+    "sha256": "3cdfaed758f93cf5c78188ef14dc9fac257241408a95a57f470b1545780c9a3d"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/phaseGraph.test.ts",
+    "sha256": "1d039590e24a9934327dde1a413597c5c7717cb5e53be548cff7de5f7d9d687c"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Budget.tsx",
+    "sha256": "8958edbe09a3e2083cde78204e4af828f0a8d3665d541632776d35e574e7b5f1"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/phaseAttention.ts",
+    "sha256": "d20dd4002f17a9b91fa70f3085a761236135a9adfdae0e82035512d831dfe6cd"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Budget.test.tsx",
+    "sha256": "c45a6c0a58f375ef37452bdcc9eb8d9ce2e6898826d85ab6726b627ab527272b"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Monitors.tsx",
+    "sha256": "39b823d470be72d2d0ed586378b09c30bb23aa9f92371f8ebd9ebd6b3f859574"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Briefing.tsx",
+    "sha256": "7c240fb2470571bc6fd89c577feb812c835c06c9c3dde0add773ffa9a7f9365b"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Monitors.test.tsx",
+    "sha256": "dfa02341ba662a87fdcb3684ede5b55d00469437538c679bf88afbdb313c41f0"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Briefing.test.tsx",
+    "sha256": "3ca8b073200e07f92ebf30e12a584398c2e079dcf2a883722a24d3d961d88a39"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/LedgerPanels.tsx",
+    "sha256": "568256349c57650ddaf06c7a8fe25d2a6a2964891012a671fad85602004d39fd"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/AutopsyPanel.tsx",
+    "sha256": "b881335dd9b7847765de061495b1b31140ea755f91dddde90fad2527a7efe2e4"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/LedgerPanels.test.tsx",
+    "sha256": "bd3b4da2a5e2f49c1b4cd5aed76a4dc36379c9cbc69171cdd5d7c4916b2e4818"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/AutopsyPanel.test.tsx",
+    "sha256": "631842107714c8a06bba71ca04dd1abc869089a72cdeaf3e275f5d26c46d67fe"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Launch.tsx",
+    "sha256": "704be0ed5a14903b5d42d36fa09f8de169b549e5d831ba17105573e26aca4137"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/AgentDetail.tsx",
+    "sha256": "adcf69bb28b1328426a1a9e6411cc0a639867b3af392e4fa435bb6504c419be1"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Launch.test.tsx",
+    "sha256": "1c6d6a9bb42625ef22df234af7cdb538942b838695e98507b554b216aa6d1db6"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/AdminAuthPanel.tsx",
+    "sha256": "370d95c011040c42d0fa212f7c09a385bba5b974ed139e04f656046fb2ef798c"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/laneGraphLayout.ts",
+    "sha256": "631e5f20d0c7fa314b83e0f812ce600c4d9cd2fe6c31761bbedf2c2df89524ec"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/AdminAuthPanel.test.tsx",
+    "sha256": "7c6a16c2c15c82127a476fb6d08d83ab5aa101aec2152af6d4b762c99591213b"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/laneGraphLayout.test.ts",
+    "sha256": "28fca3feb917b1fb92eac203ede1781a9a175833f39137827760ccfc572c0481"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/cmd/usePalette.ts",
+    "sha256": "e93d37f6d04bbd8c66b4bf67f08d257b79e3bf47d0413f46ec9f534fe25cc7f4"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/ActivityRail.tsx",
+    "sha256": "01faf27701261c73f471394e651d36b60ede8b05e80ba041d4cf0c17c4a68b83"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Issues.tsx",
+    "sha256": "d9632157a53c0e369c2817d4ab39ef82b7b3cdcf8f6dff9fd856b3d36bcac883"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/cmd/useGlobalKeys.ts",
+    "sha256": "57f709aa69665c9c7d49448af947929996a0125f83a2acad7c710b666f210055"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/ActivityRail.test.tsx",
+    "sha256": "b5576d45a53cd616ab97782b1c0aea7f5d24b33ee787dca2c12f790b1b09da7d"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useWatchtower.ts",
+    "sha256": "b5f102797b64217ec332dbd3a692cb8a196eb7461a474444bef09fb8a095435c"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useWatchtower.test.tsx",
+    "sha256": "ecc0645481bc02f51211dd692f86a1ea7266d2e0c5872714bbc6b65c462239a9"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useVerdict.ts",
+    "sha256": "12ef26d03ab7cc3616175151f9e900a2f09c25b61c079b2ef26f346b1c1e705c"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/useVerdict.test.tsx",
+    "sha256": "e688fe40dd95bcc82a5f4e1d7e5902981516d25e30fea1ca9bfd406169ac27d4"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/cmd/ShortcutHelp.tsx",
+    "sha256": "0c48789394d67fc914d85ba1d59274d2fa04d873cc27f977acb8fff713d3eaae"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/cmd/shellBindings.ts",
+    "sha256": "a537044a398f0c251987fbdec89aa31d3f6ee2b67d1f0ab37200f3e35ee2c3d0"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/cmd/recents.ts",
+    "sha256": "95a0ddfba1746442bca5ab680f5f9622d6946d032860715360dcb6c837b058bb"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/sessionList.test.ts",
+    "sha256": "f5220473affee8a73f2d47c49dbcf579de04e5e6b57a3f0d08e8b6083ce9f8ad"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Issues.test.tsx",
+    "sha256": "a526e9e5e49982c1c6e0f59c7686fd8f53f11ea6c9b5adb314fdfe38699261c8"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/cmd/OmnibarIntent.tsx",
+    "sha256": "67ed09438a4bf3adb98131c834cbf778dda86ed98ac5f90e8a8b95d5302980d1"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Sentinel.tsx",
+    "sha256": "aee4fe2502a3cc3d0217d7fdef9e70e6a01478d80dd5606a4ab8cc4834242a6f"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Inventory.tsx",
+    "sha256": "c7a8300664b019f7556261af06f59ed30fafbb060c01ca90f4058a6b5c745d34"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/cmd/OmnibarIntent.test.tsx",
+    "sha256": "5a4cbb9aafa3c0842b5cb821f06e043dfca6da387b28d52a20589c3cd307aaec"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Sentinel.test.tsx",
+    "sha256": "43be380d67d05fcfcee2049c6e33fe5962c293e215f319db08cf83057f929660"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Health.tsx",
+    "sha256": "b9c6799c7352ec37713652719ec89738f8d99bdb53919446063c50566ae700c9"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/cmd/keys.ts",
+    "sha256": "cd67d70f0888ea4f529f31b3dcdd403a236f0158070ad5f0ac74a156935daa5c"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Search.tsx",
+    "sha256": "e5a667e9506a87f01fdd1cba6142392600f92b5811e90a15ecfbfb767596d270"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Health.test.tsx",
+    "sha256": "c94e3f4bef25df8743aa80fd9193bbfcd12ae400216dbf118dd4687a79ac0f1e"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/cmd/keys.test.ts",
+    "sha256": "9b474d0ecc55b83f5a6f746d073ade44b856c8611393369789a75f306e504ac7"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Search.test.tsx",
+    "sha256": "622a527b112415453dc156db375e61493e2d947d9ce8c489bbb1d5347f7312c4"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/GateDrawer.tsx",
+    "sha256": "8604404bdfe9fedcc2571e0c45b8b0e84af54051679f2ff838bde9fb41290b92"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/cmd/intent.ts",
+    "sha256": "2703fa671a061c1c449aa7189628bb3eec1977b17e382021a2b1f74743a7380f"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Schedules.tsx",
+    "sha256": "8b7fe2f8fd109508bdeacf4f6fef99961deabc63d6b66ad6f4f29ed94b2ee487"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/GateDrawer.test.tsx",
+    "sha256": "0dab44261f4435cf290c9325e10964c0fcb6fa8b4b45cfaca1a8fc53f54769bd"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/cmd/intent.test.ts",
+    "sha256": "f48c702fe26c35098f2104f467a3a275289e4b2d27a6200de3493380aae9030d"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Schedules.test.tsx",
+    "sha256": "f1b3d2f48147a3f55ce098bb7fdfe6688925a8f68865d236a1ec0a002925175a"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/cmd/index.ts",
+    "sha256": "04452c65b45f7c9d93f973560607556d1e89d1d6ac1cf362797a04532d4d7d8e"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/scheduleHealth.ts",
+    "sha256": "e9e22f49a19415fe958555d1a58df86ae201e9b4b46981da5b9fdfab0837dc86"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/cmd/fuzzy.ts",
+    "sha256": "28727d1f554f492f9fd7359a3dbabb140b3491c607856ef677697cd74d713e59"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/scheduleHealth.test.ts",
+    "sha256": "26666f48e044536a4e4f03a9ad0c1d4205da471d602b6ee934537270baf90df8"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/cmd/fuzzy.test.ts",
+    "sha256": "8e6fc0db0e74ea76c3e441275a6222c21c2f21e028f80a2aee74192c919efb13"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/ReliabilityCard.tsx",
+    "sha256": "a2e2e9a9d17ecb0283b4dd352d31b315a774c9f33508bc45f92d50f945a07610"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/ReliabilityCard.test.tsx",
+    "sha256": "3c69aaf5ce24f741225efe0a1a98df253dc51aae4d048267f6d4915640ac89e9"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/recorderTrack.ts",
+    "sha256": "2e7bdbb19f876e0159f00b7e1113a45420b2e8ee7d28473637e1de3f3f33371c"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/cmd/commands.ts",
+    "sha256": "f73b13c6f3ba6a9b6791183103c8cf9007fb9b10068de34fba6d20ed6d1f5c57"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/recorderTrack.test.ts",
+    "sha256": "37674458f227fd1ff5e26a52bccfca58b66b2e06708bcf19d352ecb92b434f2a"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/RunRow.tsx",
+    "sha256": "7788aa582d9683b4733f3daffc5c101b8c8e6b947e38e7bdbf1c8e45cc16f062"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Pipelines.tsx",
+    "sha256": "4052a40fba713f0c81d427e53a4998c36a0f4905c2f33963104b129ef463f337"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/cmd/commands.test.ts",
+    "sha256": "3939518c7adaef1b4b03d3061401f2f55fbe86d1a4698b3d81157305a2ab6cd8"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/routeAuthoring.ts",
+    "sha256": "98d34dfd1b579047a2c28dabc039281f06cef7314a30e6c4e0b73b019c82e703"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/cmd/CommandPalette.tsx",
+    "sha256": "b6faaa500a4cd95d94aed32420e704cac02d4690f54771ca06ebbfd32e0d989e"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/routeAuthoring.test.ts",
+    "sha256": "002dc8ef1ca5dda4661ded27756589331602b8164a52542938f81a14123f3bbc"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/cmd/CommandPalette.test.tsx",
+    "sha256": "28750ef1547e2b15dc7da7dd3c73a85f583b7cf413799074f041b389b3b30408"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/projection.test.ts",
+    "sha256": "06da9c4938a0db9fa6b3945560db94482ee1d9732082e5fbab8c0d08549dfdab"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/observations.ts",
+    "sha256": "1d69cd13a1edb38ed8ae3ea55c49f8e18ff04977ce3a77fe46da7aa40b87b8fa"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/StepDrawer.test.tsx",
+    "sha256": "dde7615388276b89c2beffa1422897746b713c04bd9856fdf812767202ae5073"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/observations.test.ts",
+    "sha256": "c01f52675b98c6299a2cff87befb307a2b1c1d5d7c56185dd22c6a0b4029c1c1"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/statsGroups.ts",
+    "sha256": "07dbc1e9be873a2722297747acdad9eb05d1f2e963e96ed4ce5d93f10a7f8579"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Stats.tsx",
+    "sha256": "c6a92a7938f855aaec8a0ee24e0295f593571be017398b28bb9d02b3acc8d8ef"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/SetupBanner.tsx",
+    "sha256": "e3002501ad786c5a656215cbfbc032b4cecd102329dd9b9fba418096009b9be5"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Stats.test.tsx",
+    "sha256": "6171ac050fa7405e97ae40e065580c589e0858b3dbded095db3bbd3c9ca5fb54"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/useLaneLayout.ts",
+    "sha256": "7279f79f92c2eda3a25db4ddb84222ee6ad72001ce67aad89c04ddfa79d2c47e"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/SetupBanner.test.tsx",
+    "sha256": "f4e8bcc890518af34120b4c5cfaddb5432294c2f817adadf88753f1332050c80"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/SituationStrip.tsx",
+    "sha256": "4c241b717bbd12d6718dead557a2f44e26e4e6caa8f4da2c123ad32e162135e8"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/TuningDrawer.tsx",
+    "sha256": "9228f8a3b48d170fd3fb9904684d7cbab2aeded477a63ebea41788c96da9c770"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Sessions.tsx",
+    "sha256": "7a718b634e1102abf477b9fa65fdceb2e8e93a4688f3deb637b282cfcc3be156"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/TuningDrawer.test.tsx",
+    "sha256": "b383641eecd731fbb87a240d06db6d928ba21127f6147e0ecb36b6c3bff21145"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/SituationStrip.test.tsx",
+    "sha256": "9f1dee585441f4ed2b32ae719fb1521a973321d11026d86438b357b57e529432"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Sessions.test.tsx",
+    "sha256": "3b3d77dcbe0688dedfce2c3610e6a792541c1b248a4c20cd08450896640e980f"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/tuningApply.ts",
+    "sha256": "4ea3e303e43d2764b2616a92e86126c7211efb35e5bede6144797433ac07be50"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/sessionList.ts",
+    "sha256": "0d9558128a445d749367ae1714fca2a459e26d05750eec1b64e6bdd3a3836662"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/tuningApply.test.ts",
+    "sha256": "3823b5e805821fdafc90e38f242d9ff13c795c640c9882e1558ffef6fd25cd15"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/VaultPanels.tsx",
+    "sha256": "daf7072128280e4fd05c7af22b14ea9ead6b085a684a06d6a70254b0fcd9de01"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/StepDrawer.tsx",
+    "sha256": "7f166bb64a6663554698bc9adf702bbaf71a869a92f8a06062ee1a1fcbdee375"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Users.tsx",
+    "sha256": "d40325d3e9f70067b472b56900e6e1770ec0befc80f9908f37d9ed51278ab053"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/VaultPanels.test.tsx",
+    "sha256": "cffb5d5bed960a37b5e53e11c8ac4b54183e0b9a3de54f974cabbfa381ea858d"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Users.test.tsx",
+    "sha256": "2679e03dec9eac80a8995ae7f0f98dab12d625b6e6f468d9acebd4f270cbd766"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/VerdictPanel.tsx",
+    "sha256": "a7f0e4da67f72e7df66d5e69f394ee444749c12947e8bac01b9fe82915920591"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Watchtower.test.tsx",
+    "sha256": "198acb9dbae67ce1628b8f7dbe626730e7c338853ec605f055d87df0fda733f8"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/VerdictPanel.test.tsx",
+    "sha256": "95ef8f9894cbc2e8cf381a51a0e36adff952d3d90df4c484d9de844dea8fc858"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/views/Watchtower.tsx",
+    "sha256": "302d742ab96a6711b8750dddf348bb509d4414888a2178101103e20e6ff15c6b"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/projection.ts",
+    "sha256": "39acb3e4a2563ebc6a320642674aef32b81aed5c56910625c0df346e23456cf4"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/providers/types.ts",
+    "sha256": "3bfb3220c8c2364f509a16fdd719246bb28637a49b02d9ebeee72f6e73b1d1a3"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/providers/mock.ts",
+    "sha256": "9f170b14c8c54c3cbe30ddee0962542f263a0f2d8922672d593cb4919d5b749c"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/providers/deterministic.ts",
+    "sha256": "ce6a86ecc374d7985434c4a580d6ae79f85a7a656db6d8561c31ed261a0de6e9"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/providers/claudeCli.ts",
+    "sha256": "46c797ccece6c4894478c865d3f36dc030b3acce2ae417deadf8888ddf3d6da8"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/viewTransition.ts",
+    "sha256": "1e87ffee8d220fdfe8657c3e3e156a57af3f3a87eb1d510cd12dae21b4aa0b6a"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/viewTransition.test.ts",
+    "sha256": "4e91256155485ea5f9339e6a8cb2793f695afa056d1a38df99c80c04225c96f7"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/TriggerFields.tsx",
+    "sha256": "4fd2e1de08bfce3d754955e2ee0d8d703fcb9c65263abe255943cfb4aa0d55e3"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/TriggerFields.test.tsx",
+    "sha256": "d3be7bf9646acc99d1b5cf94f7ba9d0177976da9f038b1b5ad9169cd993236d6"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/tokens.test.ts",
+    "sha256": "91bf2107759caaf0200fe1381943b7e505ddb2aa3895adf3be0e36937947ee8d"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/Toast.tsx",
+    "sha256": "d23ed33bdc132eda2b4f1fb5b1c6127471893e6c009bad318f12c5ac16dd5eda"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/Toast.test.tsx",
+    "sha256": "e6ffbb1dcccc2b1da4207382746f43385e0ffb7172154f492f694d0b169349cd"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/TimeAgo.tsx",
+    "sha256": "51f463aaa44bf7458662020ae7be8bfba45d7e8d0ec01ddfa7562dfd48608095"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/SweepBar.tsx",
+    "sha256": "5f828d9d7e066ad19266854cc69e585213bb93904171ce47a517f283c6eba42a"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/StatusPill.tsx",
+    "sha256": "0ea4258bc60b101b83e09cf5b22aa1adb90215c1457e7e259983d6153e34d7a2"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/StatusPill.test.tsx",
+    "sha256": "3f69aed374b28454ec477406f38b93925afb3ac14bf474668ab84e4da4c5a41b"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/status.ts",
+    "sha256": "39364d0677ecd714fa4cad95dfcd6ee2892f4db60619b046ece2ebc7e2aee0b9"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/status.test.ts",
+    "sha256": "ce37b116423b16dc5d638e86ed0503375b76b13be1ef3bfe8d62acb29ce6f12e"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/spring.ts",
+    "sha256": "a4c2186b3904689d53b695a22ae14c3069d6aea2e0f6cba91f12ad34146ac415"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/spring.test.ts",
+    "sha256": "ef874fb67070f3401c9a93c72de22d09df99c3a8efd35ac2535ee62a759ef44b"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/slug.ts",
+    "sha256": "a789ed86fbb443e0af1158d3f7341a7fffbb33d6259189212d9f1b671557f2d0"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/Skeleton.tsx",
+    "sha256": "108b9bea630bb293f1144f4fe3112b4dcb7b357a1a0b5d534350948e9c4b02d4"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/SegmentedControl.tsx",
+    "sha256": "701f5b9f9d0b201d33c5fafda93897966b7fa683a2faf1ce08aa3001027f76c7"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/SegmentedControl.test.tsx",
+    "sha256": "6157179982593bc21ed421c9c42e685ea175c28c60817a9f6cb6a5a42e32ea43"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/Section.tsx",
+    "sha256": "a2af1d1281a14a00c230fb8f3851ff97c8bcdf50a8eee226550904413546b7ba"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/RuntimeSelect.tsx",
+    "sha256": "d245039df80ec1a831fdddd55f84697ea9e636157e86f33f1bafb23317648aab"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/RuntimeSelect.test.tsx",
+    "sha256": "ae92ab97b7f908bf6bd2149142a97607b08280c21925d223a6dbe22a0cb73dd4"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/RuntimeBadge.tsx",
+    "sha256": "f58e1eff44fe962f3260ab33600263c75ded988081e8ec531b2fbfbae2d72ae6"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/RubricFields.tsx",
+    "sha256": "654ac38e7209fd59041a0954fa67e7f8a107d4db4d36ee4af78af2daf3a42fe8"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/RubricFields.test.tsx",
+    "sha256": "6d8152f383c0fb247ae6442f125ab116a5cea2d26477c5cd2241e1ae37e26825"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/routes.ts",
+    "sha256": "98eb8fa89826120294c04475340a0ba6f66dd600332bd7826fffd4b41f4c62bf"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/routes.test.ts",
+    "sha256": "7d6b0e608fc42a5120fed237e6c6379ce4f9a9956fe427e69f12d396ab183074"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/routePills.test.ts",
+    "sha256": "5edb520592c47cefd3e2f949caba07bf24be5dea5bb5bbfed4ac0a4a29290bfe"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/ReasoningEffortSelect.tsx",
+    "sha256": "32db34b768156be9627b783fcd67def24ab8d419a8d5d612034f3380088129de"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/ReasoningEffortSelect.test.tsx",
+    "sha256": "df0d07573d80809e74f249b7345d27cd82933547dbf28d00af511690108cee84"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/rail.ts",
+    "sha256": "6b1c81280085bcc475c507d4887bc56e4269c357758472630f3914092cef967e"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/primitives.test.tsx",
+    "sha256": "9ba8e162ab959d337ba51a75a968c98e346a2ce6bb974fee7b8e0daedbbf1d62"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/presence.ts",
+    "sha256": "9022b8bb3a8e97ef96247cc97d111ad627bad18736f4a73425480bc7729740f6"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/presence.test.tsx",
+    "sha256": "89a082e3952383ea54b7f218ff30a3a50b221560ca04bc62b6f6180f63332813"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/Page.tsx",
+    "sha256": "20547275f185ce17aadaff38e8c866d8251b6805cb036051c604352c1316cd51"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/Page.test.tsx",
+    "sha256": "42a49ef3c2e1faef412f0f6b6a05ba570e95cd7d77c402b2e51dd3453e3d5257"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/overviewRow.ts",
+    "sha256": "a840adc4018152cdfadbcdd2c3d6780973a15688a64c6381ab47255ea5bcf91f"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/overviewRow.test.ts",
+    "sha256": "a7ed75d6cd3832936e5bbe931d33ae0cb8346101e79c4606921e5405d4b3e308"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/motion.ts",
+    "sha256": "f6ffc834151079c01a23528df708175e8135fe1e72515e32d504ec26f0f6b316"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/motion.test.ts",
+    "sha256": "e7a3c5b2a9eb0280c083221809375c53b1afb6891f9f2bdb2c3ed883beff42cf"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/MoreMenu.tsx",
+    "sha256": "de9d4383b3123ea2ce34dcbc661baf13232c831ad33ae4ceeb4e30378444e71e"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/MoreMenu.test.tsx",
+    "sha256": "e800cf742a753a3c9ccc2226fc4532a842371f73e2597b294b0c9c52453b9301"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/ModelSelect.tsx",
+    "sha256": "912aee12138948c13cb579616c4a7e677f36b635a711f8bd4ab303a75ba90b6e"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/Meter.tsx",
+    "sha256": "2262a1e03160b1c9f15111681be76c713f81a1c2f3e19481d11b68ba627c3a83"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/Meter.test.tsx",
+    "sha256": "d9c61758e983ff13c8b10fb69266b52e341f748535ef3a63405d72fdd0204047"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/markdownText.ts",
+    "sha256": "bc3bdfc48190fe7dda6b9a894e686ec790b830bd0aecd2660e9cddd9adbe245a"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/Markdown.tsx",
+    "sha256": "0c2b7073f551f608af8d1d0ab76d39365d4aaf4e0c3314f205324ef7f603b321"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/Markdown.test.tsx",
+    "sha256": "a3fddec143150bdc45f1b8e2c2ef392d35c7b9354a96b74dcc0822c638c593c0"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/IrisMark.tsx",
+    "sha256": "823d72187241ff289b02b6518396422444e9d8060c3507dd517f0a7717d6828c"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h1/watcher.ts",
+    "sha256": "8a63e5c4bdd61a8b9183d0ab67a87d0ec64e8e46be5065e56f87a0d94f69494e"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h1/watcher.test.ts",
+    "sha256": "d52f4febde2c03707319f9093a98679ac8e9ce8ffbe26d9eccc7b4bb107a917d"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h1/units.test.ts",
+    "sha256": "d7b7adbaf2d52ec601a2551ac8d55ac70366bb3ebba95128af254c35725dc744"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h1/testSupport.ts",
+    "sha256": "9fdb8fea7c24e7d0b27de0de08bf2a80bc2d99674cfa5c7705743b0da5fc4f89"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h1/stateIsolation.test.ts",
+    "sha256": "7dce6ba784dafc7ff752fad45c9ec33b88a08dc8ae82fdeca4b50235155cb31f"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h1/snapshots.ts",
+    "sha256": "5af1a827b905a06c14a484d70e03ba74f4a4ad0dd31dd74127edc005830da88e"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h1/service.test.ts",
+    "sha256": "3740cb71327035942ccfa1d6923e0f9985c475649d23ee1861d345a8de9edcc1"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h1/resilience.test.ts",
+    "sha256": "0ae808cd2260ba7feb3f62f9b1bd4d43b2cb10f55d5e3bda99c8cd9bcd0c4f41"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h1/report.ts",
+    "sha256": "e5f01f4e16a544d9dbf79d90b776ed50b03e0e6893539cd36809e7b34f1b18d8"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h1/report.test.ts",
+    "sha256": "2f65fa7f752b775bd8f46e49d42cf6372481183f7b29319d6b1e6a7cdcef76ef"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h1/projection.ts",
+    "sha256": "6606393a115ecdd2ef6318d90ad84862acfd5d282f9034d0d4bcb1a0e99b7352"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h1/metrics.ts",
+    "sha256": "1898f7b62a36cd9502a16f681f4b1e225c4858c5ab0cbef49127ef7b7d7a3b6b"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h1/metrics.test.ts",
+    "sha256": "9103df680a8f899fe3094c489375537ac121110c7d8f5fc6b65808db7afa680b"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h1/ledger.ts",
+    "sha256": "a121fdafc390a148d2b8c69f5da5e4a5906fdba3006ed98ee5d1ff6d82524fdd"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h1/gate.ts",
+    "sha256": "13ea914a52600c4d46ab202924823da9134c66872f9a13a8444c1d5bb2fa5691"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h1/experiments.test.ts",
+    "sha256": "7b2e9e0be715383a14bdc0fc700fe11a6445f9fc3d943fad869bf003072d4074"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h1/entry.ts",
+    "sha256": "b6d6e6ea9c86f0f6cf72f984d79f9d9f31c2add245b01319c37cf7e56034e13c"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/IrisMark.test.tsx",
+    "sha256": "8e048b2b4e658e9c9e39a3300ea2ffb846ef2617540fc1037f1dabfee9578bad"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h1/definitions.ts",
+    "sha256": "65ac01be0d7a6f105c61a4d6af0ad4282559bcd0fffe6a2f28ac223f12cd947c"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/index.ts",
+    "sha256": "f234647169a95a09d5daeade10fea76011c6c5bea53f3f9f8cd9cc255c1c8368"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h1/config.ts",
+    "sha256": "e71688b9f73be1dcc373feb98bf0cf8a2607e46ac8fa99e088695df947871102"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/HeartbeatBar.tsx",
+    "sha256": "66c8067abaab938a0e5c7c9b5e4d4aec2c3e97a79b9e163f3a34c383a73e8bbf"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h1/collect.ts",
+    "sha256": "c8d039bebdc284e3eabce86161da9ef60bcd6406aaccd0f224d06c013beb54a5"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/HeartbeatBar.test.tsx",
+    "sha256": "8eabe62fd652125c838f866c0b7b9b5a9aaa3ea0e3f6801ad01386d7b4c801c1"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h1/collect.test.ts",
+    "sha256": "81e6cd48154d378a0e9bd136d38e12c846f600fe64dff1d22d264021011bab86"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/HealthCounter.tsx",
+    "sha256": "53387a22f9077ad592dca061a1c04c99613d3cbd782fc1a89f7c3cf091f788e7"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h1/baselines.ts",
+    "sha256": "9af5fc508c9ae16b2a405d11c4ee931d32ac9a5a89554db0b2a4d0033c744698"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/HealthCounter.test.tsx",
+    "sha256": "92cf15da99ccec4e22fe1801e80c9950a3912c0aca8252cf3b37601e149c2597"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/gesture.ts",
+    "sha256": "cb9b5a11663b72320122518c70957bba78a8896d76ae11f497924e83163211a9"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/gesture.test.ts",
+    "sha256": "a37e38e3c1728bf38c06238866791e5e068f22d59b42e77e12427dfffcd87e49"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/format.ts",
+    "sha256": "2970d03295ad4b2e0e5c323edd632c4982b16ba3f2bd3cc9a4892045f7142bc6"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/format.test.ts",
+    "sha256": "a2f46f55bbdcaf8a344a43cb19e017e3de0583472957ce7e514493dd13d00f66"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/flip.ts",
+    "sha256": "fdad8a6ae3ad72688bd85029d4e8e972c2ab18493371abad436be13a9119971d"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/flip.test.tsx",
+    "sha256": "51953818d86cedf142d87ce7f7dcca479881e9a00002d6669a23588f616dfabb"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/ErrorBoundary.tsx",
+    "sha256": "f1918c7292d177dc3039189db1c250458d2479e51a3a41aa33cb465c1687c0e9"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/ErrorBoundary.test.tsx",
+    "sha256": "c517b14ec043106f499cb4b1979d0e0ea9a470c77dc4fb43aaee2cf16229cec1"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/EmptyState.tsx",
+    "sha256": "c3982800ccb7680f7ceba589401470c897d3250eb1ee5d18862a8c3150080bb7"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/Drawer.tsx",
+    "sha256": "da60058ea638858ad45ea99f85d61d64414bb91d88aecb85945eb66cb125670b"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/ConnectionPill.test.tsx",
+    "sha256": "7c7fbc8173e2e68edaf68b957c64e4035e7777b665c4ca615e23bf25dff764fa"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/Drawer.test.tsx",
+    "sha256": "eb2902e7cdd1b6e65d99978396297a82609d2812b2d3798af79af27ca5e50f4c"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/clock.ts",
+    "sha256": "787c3a6e58afb899a57f4b6ea0568327d5d819e79384db4351fc23b8353df868"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/direction.ts",
+    "sha256": "6c8ec4eaa6add7804ef06d085d723fef506b506c1f2137892831490b0ede27dc"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/clock.test.tsx",
+    "sha256": "a63b07785ef7d10edf404580d47189e1af49372b551e7991116b6d913a2cfb1e"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/direction.test.ts",
+    "sha256": "d942832f4b464d8b0602ca336305f4f50aa88e2cd57f2f0dc3582424c3507650"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/chronicleLayout.ts",
+    "sha256": "30b6ac3b10a9ca756cfe8a29a3afa1ba9789b18e239bccd58b066f5a2e71742b"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/ConnectionPill.tsx",
+    "sha256": "8bf65974cdd9c3e5c558c5f84e236e9e80ca1992a9247f539449892a7d817a14"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/chronicleLayout.test.ts",
+    "sha256": "1624fdc9debd0508dd0091bce3dc5cd64cc2a6d1cd71b6bab00e0bda93cf344e"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/Card.tsx",
+    "sha256": "a2a2c219366a54094003f52a57a170555b3db3648a494764c3b235736940de3c"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/AlertStrip.tsx",
+    "sha256": "91bb90d392fe4f39367433f5d1e2981411a7f5bfb70b3fb4a599aa72f6b8bb4a"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/AgentTile.tsx",
+    "sha256": "e24aec6d46f784ab73f3af3419da1c14b4274fe0149c33041ed1ae2d27ef7fa8"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/AlertStrip.test.tsx",
+    "sha256": "609e2b9899dd5b34f17e34bf388ef7345303c6b763f5fa2f0808585b284c246e"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/AgentTile.test.tsx",
+    "sha256": "6c03566c5e4c143a810c96bc4746b3010b51fd759d5c44d152d1d4d67401fa7a"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/ActivityEvent.tsx",
+    "sha256": "6be170320af1a2aaff445195c88d2ca2afe2cd04342fa00d04ce1a001f9aa2ee"
+  },
+  {
+    "path": ".worktrees/argus-local/web/src/ds/ActivityEvent.test.tsx",
+    "sha256": "61c54648c5a0f360808bda7adc3ee9f34d7170f22edea452d8ac13c8e05200ad"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h2/watcher.ts",
+    "sha256": "1225c34b1c264d5ed625e9fab732cc897bceaf449b3e053ee6b0d2b8c29f26cb"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h2/watcher.test.ts",
+    "sha256": "a2dc10be2815ff9745d79260a6afd554300459248815009427331d4cca8e2134"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h2/units.test.ts",
+    "sha256": "f9e9e9d495db7cecf0ad2e26e27d6711648aec81dbf68e13eea871464ff3cc58"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h2/testSupport.ts",
+    "sha256": "c24fd092bc5be27b1daf7a3e8767a929dd86e426ff2e6696dca1b3298034ec92"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h2/stateIsolation.test.ts",
+    "sha256": "e7a452e138c547efef38c66f764ac04a12034ac73b794a4d3364f94431b2c17a"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h2/sampling.ts",
+    "sha256": "a66ef760420edd7b3467d0a5411d4fd0b3de4e76b1685a552429e1240191ac86"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h2/route.test.ts",
+    "sha256": "17166db84aa95b8799e577e22a5533a11a561622afcdd3815b4a8891f984dccc"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h2/report.ts",
+    "sha256": "21d294d50094ed2541c39d41169e5d1eb0c4f0e20c3a9cba9057c7b2a6321a82"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h2/report.test.ts",
+    "sha256": "47ae0fac7cf1938094549fc49c9a0245b86b499dc0b4e6d58caf712bf7d5ac4b"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h2/metrics.ts",
+    "sha256": "a3c05f0f561aa81cc4c28496c939dcdc6f103b574e71bceba7f7b591a1791e9d"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h2/metrics.test.ts",
+    "sha256": "5d2317330e9ea02858974fd62ac791b9b0eca9df3a13f8559c0f4a04d9b71bd2"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h2/ledger.ts",
+    "sha256": "ade7b29227d1bd97abd3580c5c86c33f06beea781dbeb84acd4455c96457b3c9"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h2/items.ts",
+    "sha256": "aec8abe789bd654cf332cde1563edc3f940ef6ec05983c79a0d5ffbc4377aeb9"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h2/entry.ts",
+    "sha256": "bd8babba2e9eb36cba33bc208fe0033834c9408da4f230fbf2b1f05395ee372e"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h2/config.ts",
+    "sha256": "1a62709d7aa38fc172918bfca79dd521498d2f398c1245a1334dc4816568df65"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/h2/activity.ts",
+    "sha256": "c040c76d0a792e559d58d8d6ce405190ce024d24694327314f1e7e89730e0e15"
+  },
+  {
+    "path": ".worktrees/argus-local/server/src/decision/projections/runFailure.ts",
+    "sha256": "f8036d138a940977d741f1d89d070c011ffbf1cdd2ec544228f9232502868be4"
+  }
+]

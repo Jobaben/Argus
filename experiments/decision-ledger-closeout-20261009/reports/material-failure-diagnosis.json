@@ -1,0 +1,97 @@
+{
+  "at": "2026-10-09T06:14:26.819Z",
+  "analysisRuns": [
+    {
+      "instanceId": "11f62635-cd5a-49b2-9946-ded7684bdd33",
+      "pipelineId": "b931a14e-6839-4bbf-b875-15e60c97c525",
+      "status": "failed",
+      "runs": [
+        {
+          "id": "71c00152-769c-4990-983d-fb5fde0fde6c",
+          "status": "failed",
+          "outcome": "failed",
+          "error": "exit code 1",
+          "startedAt": "2026-10-09T06:00:26.967Z",
+          "endedAt": "2026-10-09T06:00:33.008Z",
+          "costUsd": null
+        }
+      ]
+    },
+    {
+      "instanceId": "1be7a5b4-adf2-4bd8-bd9f-ab62537e6736",
+      "pipelineId": "676cd88f-4ba1-4fe8-9637-c03e5ae9ed11",
+      "status": "failed",
+      "runs": [
+        {
+          "id": "08f0a551-51e0-4464-b652-9159044f0e74",
+          "status": "failed",
+          "outcome": "failed",
+          "error": "exit code 1",
+          "startedAt": "2026-10-09T03:30:24.709Z",
+          "endedAt": "2026-10-09T03:30:30.053Z",
+          "costUsd": null
+        }
+      ]
+    }
+  ],
+  "actualPrimaryError": "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.",
+  "apiObservation": {
+    "at": "2026-10-09T06:06:44Z",
+    "address": "127.0.0.1:7777",
+    "error": "Connection refused",
+    "listenerObserved": false,
+    "serviceCause": "unknown; no restart or state repair attempted"
+  },
+  "providerFailures": [
+    {
+      "id": "DA-PjTFDkVdMWFmVXu9",
+      "runId": "15b370ed-5aca-47f6-8009-4f516e18750e",
+      "question": {
+        "digest": "d4d865156893e71c165c09d02ed56410250a67c0dd34b45f27846675aedaa0a8",
+        "id": "run.failure-cause.residual",
+        "version": 1
+      },
+      "outcome": {
+        "detail": "the pass produced no result",
+        "failure": "no-output",
+        "status": "failed"
+      },
+      "costUsd": null,
+      "snapshot": {
+        "bytes": 3159,
+        "projection": {
+          "digest": "f8f7bcbd015648c992d6a5682baed9356ab6d5d85e661ad69c496ad9e8c82853",
+          "id": "run-failure",
+          "version": 1
+        },
+        "sha256": "02afa2fe7e4c3fb649d5fc9345c4f8a799cb207aac1c932a7f419ac9154369de"
+      }
+    },
+    {
+      "id": "DA-UANXMngCZBR12Yh1",
+      "runId": "15b370ed-5aca-47f6-8009-4f516e18750e",
+      "question": {
+        "digest": "4e22c0439828b768eca5543c17527c26981bc4993774b2b7906c20bca7f5f5f9",
+        "id": "run.termination-probe",
+        "version": 1
+      },
+      "outcome": {
+        "detail": "the pass produced no result",
+        "failure": "no-output",
+        "status": "failed"
+      },
+      "costUsd": null,
+      "snapshot": {
+        "bytes": 3050,
+        "projection": {
+          "digest": "cd6292c099f7162632dc43cc2d2caee31b117f3750369172cffb0e9109eaab80",
+          "id": "run-failure.blind",
+          "version": 1
+        },
+        "sha256": "dff5b421afaeed9f2ccc7170e91e07e4269babd349f119d6b43c755b0682b8a6"
+      }
+    }
+  ],
+  "retryDisposition": "No unchanged retry; no new workloads after cutoff; retained native evidence complete despite scheduled analysis failure",
+  "consumerImplication": "Failed inference is explicit unavailable evidence, never favorable policy input"
+}

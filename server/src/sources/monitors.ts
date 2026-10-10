@@ -30,6 +30,12 @@ function periodMs(trigger: Trigger): number {
       return 24 * 3_600_000;
     case "weekly":
       return 7 * 24 * 3_600_000;
+    case "webhook":
+    case "after":
+      // No cadence to miss: `previousFireTime` never reports a slot owed for
+      // either kind, so `monitorFor` never reaches the branch that reads this
+      // grace value for them. The number just has to be finite.
+      return 24 * 3_600_000;
   }
 }
 

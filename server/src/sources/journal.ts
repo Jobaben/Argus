@@ -35,6 +35,21 @@ export type JournalKind =
   | "instance.started"
   | "phase.started"
   | "step.spawned"
+  | "step.timed-out"
+  | "step.stalled"
+  | "step.exit-mismatch"
+  /** A recorded request to end a run found its process still alive with no
+   *  delivery by this process (a crash between the two), and was delivered. */
+  | "step.termination-redelivered"
+  /** A run whose step was already decided was found still alive with no
+   *  request to end it (a crash before the sweep that would have), and ended. */
+  | "step.orphan-stopped"
+  /** A phase attempt the saved instance says is running, with no run planned
+   *  (a crash between the transition and the launch), was launched. */
+  | "phase.launch-recovered"
+  | "phase.verifying"
+  | "phase.verified"
+  | "phase.candidate-selected"
   | "phase.signalled"
   | "phase.succeeded"
   | "phase.failed"
@@ -42,9 +57,54 @@ export type JournalKind =
   | "phase.retrying"
   | "phase.revised"
   | "phase.approved"
+  /** A gate declares autoApprove but commits knowledge, so it waits for a person. */
+  | "phase.auto-approval-withheld"
+  /** An interrupted approve / revise / abort was carried through on recovery. */
+  | "gate.operation-completed"
   | "route.selection"
   | "route.skip"
   | "route.failure"
+  | "workspace.created"
+  | "workspace.removed"
+  | "memory.trimmed"
+  | "knowledge.supplied"
+  | "knowledge.integrity"
+  | "knowledge.staged"
+  | "knowledge.rejected"
+  | "knowledge.applied"
+  | "knowledge.superseded"
+  | "verification.staged"
+  | "verification.rejected"
+  | "verification.applied"
+  | "verification.superseded"
+  | "change.staged"
+  | "change.rejected"
+  | "change.accepted"
+  | "change.superseded"
+  | "acceptance.staged"
+  | "acceptance.rejected"
+  | "acceptance.applied"
+  | "acceptance.superseded"
+  /**
+   * Change realization (Phase 8). A closed vocabulary rather than free text,
+   * because "did this accepted change get implemented, and how did it
+   * converge?" is a question the journal is asked directly:
+   *
+   *   realization.started                 attempt 1 launched against CP-12
+   *   realization.implementation-completed the implementation attempt ended
+   *   realization.verification-completed   its verification was accepted
+   *   realization.remediation-started      a targeted attempt 2..n launched
+   *   realization.succeeded                every required dimension held
+   *   realization.failed                   terminal without success
+   *   realization.stale                    the semantic target moved under it
+   */
+  | "realization.started"
+  | "realization.implementation-completed"
+  | "realization.verification-completed"
+  | "realization.remediation-started"
+  | "realization.succeeded"
+  | "realization.failed"
+  | "realization.stale"
   | "instance.ended";
 
 export interface JournalEntry {

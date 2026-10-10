@@ -50,6 +50,13 @@ export interface RunTailer {
   track(runId: string, instanceId: string, runtime?: AgentRuntimeId | null): void;
   untrack(runId: string): void;
   latest(): Map<string, ActivityEvent>;
+  /**
+   * The retained activity of one tracked run, oldest first — the last
+   * `RING_CAP` events, which is what a client that connects mid-run needs to
+   * say what the step has been doing rather than only what it did last.
+   * Empty for a run that is not tracked (finished, or never a pipeline step).
+   */
+  events(runId: string): ActivityEvent[];
   poke(runId: string): void;
   stop(): Promise<void>;
 }
@@ -230,6 +237,10 @@ export function createRunTailer(deps: TailerDeps): RunTailer {
     return out;
   }
 
+  function events(runId: string): ActivityEvent[] {
+    return runs.get(runId)?.events.slice() ?? [];
+  }
+
   async function stop(): Promise<void> {
     for (const st of runs.values()) {
       if (st.flushTimer) clearTimeout(st.flushTimer);
@@ -239,5 +250,5 @@ export function createRunTailer(deps: TailerDeps): RunTailer {
     await watcher?.close();
   }
 
-  return { track, untrack, latest, poke, stop };
+  return { track, untrack, latest, events, poke, stop };
 }

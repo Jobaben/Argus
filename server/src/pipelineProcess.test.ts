@@ -1,5 +1,14 @@
 import { EventEmitter, once } from "node:events";
-import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmdirSync,
+  rmSync,
+} from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -73,6 +82,40 @@ async function waitForExit(pid: number, timeoutMs = 5000): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
 }
+
+async function removeFixtureDirectory(home: string): Promise<void> {
+  await rm(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
+}
+
+test(
+  "Windows fixture cleanup waits for a process to release its current directory",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "argus-pipeline-cleanup-"));
+    const child = nodeSpawn(
+      process.execPath,
+      ["-e", 'process.on("message", () => process.exit(0)); process.send("ready");'],
+      { cwd: home, windowsHide: true, stdio: ["ignore", "ignore", "ignore", "ipc"] },
+    );
+    const ready = once(child, "message");
+    const closed = once(child, "close");
+    let release: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await ready;
+      assert.equal(isAlive(child.pid!), true);
+      assert.throws(() => rmdirSync(home), { code: "EBUSY" });
+      release = setTimeout(() => child.send("release", () => {}), 100);
+      await removeFixtureDirectory(home);
+      assert.equal(existsSync(home), false);
+      assert.equal((await closed)[0], 0);
+    } finally {
+      if (release) clearTimeout(release);
+      if (child.pid && isAlive(child.pid)) child.kill();
+      await closed;
+      rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  },
+);
 
 function assertRejectedHostCleaned(host: FakeHost): void {
   assert.equal(host.destroyed, true);
@@ -639,7 +682,11 @@ test(
       if (agentPid && Number.isInteger(agentPid) && agentPid > 0) {
         await waitForExit(agentPid).catch(() => {});
       }
-      rmSync(home, { recursive: true, force: true });
+      // The agent's host runs in `home` and may still be exiting after the
+      // agent itself has: Windows refuses to remove a process's current
+      // directory (EBUSY) until it has gone, so let rm retry for a while —
+      // under a loaded CI runner the host has been seen to outlive 2 s.
+      await removeFixtureDirectory(home);
     }
   },
 );

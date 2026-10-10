@@ -1,0 +1,26 @@
+{
+  "format": "argus.integration-review",
+  "version": 1,
+  "at": "2026-10-10T11:39:14.1415564Z",
+  "requestedAction": "Independent review, then commit pending integration, reconcile remote history and push main if approved",
+  "approved": true,
+  "blockers": [],
+  "reviewScope": [
+    "Shared CLI admission, cancellation and execution-disposition safeguards",
+    "Runtime isolation and H2 Codex integration",
+    "Application preservation and intentional deletions",
+    "Historical evidence and recovery patches credential check",
+    "Repository staging and remaining checkout inventory"
+  ],
+  "reviewResult": "No blocking defects or credentials found",
+  "reviewMethod": "Read-only review of staged code and existing validation evidence; full test suite not rerun",
+  "remoteCommit": "6cfbf178c1ec58dd278909c0c4830c3990a5b3b5",
+  "foundationCommit": "a60d3f9fb0a6f5de89b8ac287114d4f7b2ef7652",
+  "identicalRemoteAndFoundationTree": "686d361411d833f4c50e36de82dd2fddebebdd03",
+  "historyReconciliation": "After pending merge commit, use an ours-strategy merge of the exact verified remote commit; code already included from the identical foundation tree",
+  "limitations": [
+    "Twenty documented baseline server failures remain",
+    "Live operation remains unverified"
+  ],
+  "recovery": "Branches, original staged-state stash and local ignored recovery archives retained"
+}

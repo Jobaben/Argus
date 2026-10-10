@@ -1,0 +1,58 @@
+{
+  "injectionEvidence": {
+    "result": "Source agent treated quoted instructions and self-asserted authority as data",
+    "limit": "This tests controlled workload behavior; no native shadow assessment of either case exists yet, and it does not establish judge injection resistance.",
+    "cases": [
+      "I1",
+      "I2"
+    ]
+  },
+  "sourceProcessTerminations": {
+    "deadline": 2,
+    "normal": 14
+  },
+  "sourceRunCount": 16,
+  "sourceOutcomes": {
+    "succeeded": 4,
+    "unsuccessful": 12
+  },
+  "at": "2026-10-08T23:13:35.592Z",
+  "applicationCodeChanged": false,
+  "nativeCohortAssessmentCount": 0,
+  "recommendation": "No extra repetitions: the full cohort is complete and native selected assessments nearly fill the current allowance. Wait for FIFO collection, then review exact inputs; source task behavior does not establish assessment robustness.",
+  "integrity": {
+    "envelopesChecked": 359,
+    "envelopeFailures": 0,
+    "snapshotsChecked": 66,
+    "snapshotFailures": [],
+    "applicationFilesChecked": 660,
+    "applicationChanges": []
+  },
+  "census": [
+    {
+      "Count": 4,
+      "Name": "run.failure-cause.residual, excluded, successful"
+    },
+    {
+      "Count": 6,
+      "Name": "run.failure-cause.residual, not-selected"
+    },
+    {
+      "Count": 6,
+      "Name": "run.failure-cause.residual, selected"
+    },
+    {
+      "Count": 16,
+      "Name": "run.termination-probe, selected"
+    }
+  ],
+  "experimentComplete": false,
+  "globalQueue": {
+    "maxCallsPerRolling24h": 96,
+    "selectedPending": 28,
+    "minimumGapMinutes": 12,
+    "roughDrainHoursAtNoDeferrals": 5.6,
+    "expectedEventualMaximum": 94,
+    "answered": 66
+  }
+}

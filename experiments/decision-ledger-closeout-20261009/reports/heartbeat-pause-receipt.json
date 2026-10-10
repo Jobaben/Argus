@@ -1,0 +1,7 @@
+{
+  "at": "2026-10-09T06:38:35.616Z",
+  "automationId": "argus-decision-ledger-overnight-closeout",
+  "status": "PAUSED",
+  "otherFieldsPreserved": true,
+  "verification": "Automation update response and subsequent on-disk configuration comparison"
+}

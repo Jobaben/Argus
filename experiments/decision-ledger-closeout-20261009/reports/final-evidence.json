@@ -1,0 +1,216 @@
+{
+  "at": "2026-10-09T06:37:35.062Z",
+  "status": "closed-with-explicit-unproven-release-prerequisites",
+  "method": "Native read-only report replay over persisted journal and collection ledger; API unavailable",
+  "source": {
+    "runs": 16,
+    "genuineTimeouts": 2,
+    "normalProcessCompletions": 14,
+    "taskSuccessful": 4,
+    "taskUnsuccessful": 12,
+    "knownCostUsd": 0.2436119,
+    "unknownCostRecords": 2
+  },
+  "ownedQuestions": {
+    "total": 32,
+    "outcomes": {
+      "not-selected": 6,
+      "assessed": 22,
+      "excluded": 4
+    },
+    "selected": 22,
+    "expired": 0,
+    "pending": 0,
+    "lost": 0
+  },
+  "ownedProbe": {
+    "assessed": 16,
+    "answered": 15,
+    "providerFailed": 1,
+    "correctAnswered": 14,
+    "endedNormallyReference": 14,
+    "deadlineReference": 2,
+    "misclassification": {
+      "assessmentId": "DA-LTBtryz1tHbJf4iX",
+      "runId": "5f272024-1fbc-4433-9d00-50eec876a197",
+      "reference": "ended-normally",
+      "answer": "permission-denied",
+      "probability": 0.98
+    },
+    "validity": "Both correct deadline answers explicitly rely on intended class in schedule names. No blind discrimination or calibration claim."
+  },
+  "ownedResidual": {
+    "assessed": 6,
+    "answered": 5,
+    "providerFailed": 1,
+    "referenceLabels": 0,
+    "accuracy": "unmeasured",
+    "calibration": "unmeasured"
+  },
+  "nativeGlobal": {
+    "probeAssessed": 79,
+    "probeAnswered": 78,
+    "probeCorrectAnswered": 76,
+    "residualAssessed": 15,
+    "residualAnswered": 14,
+    "knownCostUsd": 3.121496,
+    "unknownCostRecords": 2,
+    "pending": 0
+  },
+  "ownedAssessmentCost": {
+    "knownUsd": 0.684078,
+    "unknownRecords": 2
+  },
+  "analysis": [
+    {
+      "id": "11f62635-cd5a-49b2-9946-ded7684bdd33",
+      "pipelineId": "b931a14e-6839-4bbf-b875-15e60c97c525",
+      "status": "failed",
+      "createdAt": "2026-10-09T06:00:26.688Z",
+      "endedAt": "2026-10-09T06:00:56.215Z",
+      "phases": [
+        {
+          "id": "final-evidence",
+          "status": "failed",
+          "payload": {
+            "reason": "exit code 1",
+            "failureClass": "exit-code"
+          }
+        }
+      ],
+      "runs": [
+        {
+          "id": "71c00152-769c-4990-983d-fb5fde0fde6c",
+          "status": "failed",
+          "outcome": "failed",
+          "error": "exit code 1",
+          "startedAt": "2026-10-09T06:00:26.967Z",
+          "endedAt": "2026-10-09T06:00:33.008Z",
+          "costUsd": null
+        }
+      ]
+    },
+    {
+      "id": "1be7a5b4-adf2-4bd8-bd9f-ab62537e6736",
+      "pipelineId": "676cd88f-4ba1-4fe8-9637-c03e5ae9ed11",
+      "status": "failed",
+      "createdAt": "2026-10-09T03:30:24.453Z",
+      "endedAt": "2026-10-09T03:30:53.944Z",
+      "phases": [
+        {
+          "id": "evidence",
+          "status": "failed",
+          "payload": {
+            "reason": "exit code 1",
+            "failureClass": "exit-code"
+          }
+        },
+        {
+          "id": "review",
+          "status": "pending",
+          "payload": null
+        },
+        {
+          "id": "architecture",
+          "status": "pending",
+          "payload": null
+        },
+        {
+          "id": "backlog",
+          "status": "pending",
+          "payload": null
+        },
+        {
+          "id": "closure",
+          "status": "pending",
+          "payload": null
+        }
+      ],
+      "runs": [
+        {
+          "id": "08f0a551-51e0-4464-b652-9159044f0e74",
+          "status": "failed",
+          "outcome": "failed",
+          "error": "exit code 1",
+          "startedAt": "2026-10-09T03:30:24.709Z",
+          "endedAt": "2026-10-09T03:30:30.053Z",
+          "costUsd": null
+        }
+      ]
+    }
+  ],
+  "analysisDiagnosis": {
+    "primary": "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.",
+    "secondary": [
+      "Model cache schema missing supports_parallel_tool_calls",
+      "Model metadata fallback",
+      "Context7 MCP authentication-required transport errors"
+    ],
+    "scheduledAnalysisSucceeded": false,
+    "unchangedRetryPerformed": false,
+    "serviceRestartPerformed": false,
+    "sourceOfFinalArtifacts": "Coordinator evidence synthesis and independent subagent review; not the failed scheduled analysis"
+  },
+  "verification": {
+    "at": "2026-10-09T06:37:35.062Z",
+    "envelopesChecked": 445,
+    "envelopeFailures": 0,
+    "snapshotsChecked": 94,
+    "snapshotFailures": [],
+    "applicationFilesChecked": 660,
+    "applicationChanges": [],
+    "offlineNativeReplayByteIdentical": true,
+    "nativeReportUnchangedSinceEvidenceAudit": true,
+    "nativeReportIntegrity": {
+      "history": "complete",
+      "ledger": [],
+      "journal": {
+        "gaps": 0,
+        "notices": []
+      },
+      "findings": []
+    },
+    "allOwnedDisabledPersisted": true,
+    "oldFeederPaused": true,
+    "unrelatedWorkshopDefinitionUnchanged": true,
+    "ownedInstances": 18,
+    "ownedInstancesActive": 0,
+    "exactlyOneInstancePerOwnedDefinition": true,
+    "liveApiAvailable": false,
+    "liveReloadVerified": false,
+    "limitation": "Final read-only API check refused connection; persisted cleanup verified, live reload unavailable"
+  },
+  "scheduleCleanup": {
+    "at": "2026-10-09T06:08:49.396Z",
+    "disabled": [
+      "676cd88f-4ba1-4fe8-9637-c03e5ae9ed11",
+      "b931a14e-6839-4bbf-b875-15e60c97c525"
+    ],
+    "backup": "experiments/decision-ledger-closeout-20261009/baseline/pipelines-before-final-disable-2026-10-09T06-08-49.396Z.json",
+    "atomicStoreVerified": true,
+    "liveReloadVerified": false,
+    "liveReloadLimitation": "API connection refused; cannot verify running app reload. Persisted store is disabled.",
+    "oldFeederPaused": true,
+    "unrelatedDefinitionsPreserved": true
+  },
+  "constantNormalBaseline": {
+    "ownedAllSelected": {
+      "correct": 14,
+      "total": 16
+    },
+    "ownedProbeEndToEnd": {
+      "correct": 14,
+      "total": 16
+    },
+    "globalAllSelected": {
+      "correct": 77,
+      "total": 79
+    },
+    "globalProbeEndToEnd": {
+      "correct": 76,
+      "total": 79
+    },
+    "interpretation": "Constant ended-normally uses no input and is a descriptive class-imbalance baseline. The owned model matches its total correct count after provider failure; global model is below it. Small contaminated cohort is not a fair held-out efficacy or safety proof."
+  },
+  "finalCutoffReconciled": true
+}

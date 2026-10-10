@@ -262,3 +262,101 @@ test("validatePipelinePatch validates and can clear model", async () => {
   assert.equal(cleared.model, undefined);
   assert.throws(() => m.validatePipelinePatch({ model: "  " }), /model must be a non-empty string/);
 });
+
+// ── webhook / after triggers ─────────────────────────────────────────────────
+
+test("a webhook trigger mints a hookToken on create, stable across edits", async () => {
+  const m = await fresh();
+  const created = await m.createPipeline(
+    m.validatePipelineInput(goodInput({ trigger: { kind: "webhook" } })),
+    new Date(2026, 5, 30, 9, 0),
+    "p-hook",
+  );
+  assert.equal(typeof created.hookToken, "string");
+  assert.ok(created.hookToken.length > 20);
+
+  const updated = await m.updatePipeline(
+    "p-hook",
+    m.validatePipelinePatch({ name: "renamed" }),
+    new Date(2026, 5, 30, 10, 0),
+  );
+  assert.equal(updated.hookToken, created.hookToken);
+});
+
+test("rotatePipelineHookToken mints a fresh token, refuses a non-webhook pipeline", async () => {
+  const m = await fresh();
+  const created = await m.createPipeline(
+    m.validatePipelineInput(goodInput({ trigger: { kind: "webhook" } })),
+    new Date(2026, 5, 30, 9, 0),
+    "p-rotate",
+  );
+  const rotated = await m.rotatePipelineHookToken("p-rotate", new Date(2026, 5, 30, 10, 0));
+  assert.notEqual(rotated.hookToken, created.hookToken);
+
+  const plain = await m.createPipeline(
+    m.validatePipelineInput(goodInput()),
+    new Date(2026, 5, 30, 9, 0),
+    "p-plain",
+  );
+  await assert.rejects(
+    () => m.rotatePipelineHookToken("p-plain", new Date()),
+    (e: Error) => e.name === "PipelineValidationError",
+  );
+  void plain;
+});
+
+test("an after trigger refuses a self-chain", async () => {
+  const m = await fresh();
+  await m.createPipeline(m.validatePipelineInput(goodInput()), new Date(), "p-self");
+  const patch = m.validatePipelinePatch({
+    trigger: { kind: "after", pipelineId: "p-self", on: "any" },
+  });
+  await assert.rejects(
+    () => m.updatePipeline("p-self", patch, new Date()),
+    (e: Error) => e.name === "PipelineValidationError" && /chain after itself/.test(e.message),
+  );
+});
+
+test("an after trigger must name a pipeline that exists", async () => {
+  const m = await fresh();
+  const input = m.validatePipelineInput(
+    goodInput({ trigger: { kind: "after", pipelineId: "nope", on: "any" } }),
+  );
+  await assert.rejects(
+    () => m.createPipeline(input, new Date(), "p-badafter"),
+    (e: Error) => e.name === "PipelineValidationError",
+  );
+});
+
+test("an after trigger refuses a direct two-node cycle", async () => {
+  const m = await fresh();
+  await m.createPipeline(m.validatePipelineInput(goodInput()), new Date(), "a");
+  await m.createPipeline(
+    m.validatePipelineInput(
+      goodInput({ trigger: { kind: "after", pipelineId: "a", on: "succeeded" } }),
+    ),
+    new Date(),
+    "b",
+  );
+  // a after b, while b is already after a — a direct cycle.
+  const patch = m.validatePipelinePatch({
+    trigger: { kind: "after", pipelineId: "b", on: "succeeded" },
+  });
+  await assert.rejects(
+    () => m.updatePipeline("a", patch, new Date()),
+    (e: Error) => e.name === "PipelineValidationError" && /cycle/.test(e.message),
+  );
+});
+
+test("an after trigger between two otherwise-unrelated pipelines is fine", async () => {
+  const m = await fresh();
+  await m.createPipeline(m.validatePipelineInput(goodInput()), new Date(), "source");
+  const created = await m.createPipeline(
+    m.validatePipelineInput(
+      goodInput({ trigger: { kind: "after", pipelineId: "source", on: "any" } }),
+    ),
+    new Date(),
+    "target",
+  );
+  assert.equal(created.trigger.pipelineId, "source");
+});

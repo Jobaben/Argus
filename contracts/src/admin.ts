@@ -16,6 +16,16 @@ export interface AuthStatus {
   authenticated: boolean;
   username: string | null;
   role: Role | null;
+  /**
+   * Whether ordinary API reads need a logged-in session — true exactly when the
+   * server has `ARGUS_TOKEN` set, which a browser cannot present.
+   *
+   * The UI cannot infer this: signed out on a loopback server the dashboard
+   * reads fine, and signed out on a token-gated one every panel 401s. Without
+   * the flag it would either gate a local server that needs no login, or mount
+   * a dashboard whose every request is refused.
+   */
+  sessionRequired: boolean;
 }
 
 export type PrereqStatus = "ok" | "missing" | "outdated" | "error";

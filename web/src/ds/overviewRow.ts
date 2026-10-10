@@ -2,7 +2,10 @@ import type { DsStatus } from "./status";
 import { edgeViews, effectiveEdges, type RouteEdgeView } from "./routes";
 import type {
   AgentRuntimeId,
+  CandidateOutcome,
   DependencyEdge,
+  VerificationReport,
+  WorkspaceRecord,
   InstanceStatus,
   RouteDecision,
   PhaseStatus,
@@ -12,6 +15,7 @@ import type {
   OverviewCost,
   OverviewEntry,
   PipelineInstance,
+  StepCompletion,
 } from "../types";
 
 export interface StepPill {
@@ -35,6 +39,43 @@ export interface StepPill {
   startedAt: string | null;
   /** Final run duration once the step ended. */
   durationMs: number | null;
+  /** The isolated worktree the step's phase ran in, when it declared one.
+   *  Carried onto the step because the drawer is where a run is explained. */
+  workspace?: WorkspaceRecord | null;
+  /**
+   * Which candidate of a best-of-N phase this run is (0-based), and how many
+   * there are. Null on an ordinary step, which is the whole of its own work.
+   */
+  candidate: { index: number; total: number } | null;
+  /** This candidate's own checks: `true` passed, `false` failed, `null` still
+   *  running or never reached. Always null on an ordinary step, which is
+   *  verified phase-wide rather than per run. */
+  verified: boolean | null;
+  /** This candidate won its phase's selection. */
+  selected: boolean;
+  /**
+   * This candidate was stopped because another one won.
+   *
+   * Distinct from `failed` on purpose: nothing went wrong with a superseded
+   * draft, and a board that reports three failures inside a phase that
+   * succeeded is a board that teaches people to ignore red.
+   */
+  superseded: boolean;
+  /**
+   * How the run's own completion report reached Argus and what Argus decided
+   * about it. The agent's word only — never a statement that its work was
+   * checked. Absent when the run has not reported (or predates the record).
+   */
+  completion?: StepCompletion;
+}
+
+/** What a phase's candidates came to, for the one line a phase pill can spare. */
+export interface CandidateSummary {
+  total: number;
+  verified: number;
+  /** The winning candidate index, or null while the selection is open (or when
+   *  no candidate could win). */
+  selected: number | null;
 }
 
 export interface PhasePill {
@@ -73,12 +114,16 @@ export interface PhasePill {
   decision?: RouteDecision | null;
   /** Why this phase was skipped: the phase that decided, and on what grounds. */
   skipCause?: { source: string; label: string } | null;
+  /** Best-of-N, summarised: how many drafts verified, and which one won. Null
+   *  on an ordinary phase. */
+  candidates?: CandidateSummary | null;
 }
 
 /**
- * The actionable gate for a row. Present when the instance is paused awaiting a
- * human: `awaiting-approval` (Approve + Revise) or `failed` (Revise-only retry,
- * since the engine's applyRevise also accepts a failed instance).
+ * One phase of a row waiting on a human: `awaiting-approval` (Approve + Revise)
+ * or `failed` (Revise-only retry, since the engine's applyRevise also accepts a
+ * failed instance). The board renders an opener per gate; the decision itself
+ * is made in the review drawer, nowhere else.
  */
 export interface OverviewGate {
   phaseId: string;
@@ -92,7 +137,8 @@ export interface OverviewRow {
   updatedAt: string | null;
   phases: PhasePill[];
   instanceId: string | null;
-  gate: OverviewGate | null;
+  /** Every phase waiting on a human; empty when nothing is. */
+  gates: OverviewGate[];
   failure: { step: string | null; reason: string | null; kind: string | null } | null;
   /** Total spend of the latest run (all attempts); null when unknown. */
   cost: OverviewCost | null;
@@ -101,6 +147,9 @@ export interface OverviewRow {
   /** Short instance id, set only when the pipeline has several concurrent
    *  instances on the board so their otherwise-identical cards can be told apart. */
   instanceLabel: string | null;
+  /** How the latest/active instance was fired. Null when there is no instance
+   *  yet (the "never run" row). */
+  trigger: PipelineInstance["trigger"] | null;
 }
 
 const PHASE_STATUS_TO_DS: Record<PhaseStatus, DsStatus> = {
@@ -133,18 +182,40 @@ const FALLBACK_STEP_STATUS: Record<PhaseStatus, DsStatus> = {
   aborted: "stopped",
 };
 
+/** Whether one candidate's own checks have reported, and what they said. */
+function verifiedOf(step: PhaseProgress["steps"][number]): boolean | null {
+  const status = (step.verification as VerificationReport | undefined)?.status;
+  if (status === "passed") return true;
+  if (status === "failed") return false;
+  return null;
+}
+
 function stepPills(
   phase: PhaseProgress,
   def: PhaseDef | undefined,
   defaultModel: string | null,
   defaultRuntime: AgentRuntimeId | null,
 ): StepPill[] {
-  // Definition model/runtime for a step, by position (progress steps are
-  // created from the definition's step list in order). The runtime chain
-  // mirrors the engine's: step, then phase, then pipeline.
-  const defModel = (i: number) => def?.steps[i]?.model ?? defaultModel;
-  const defRuntime = (i: number) => def?.steps[i]?.runtime ?? def?.runtime ?? defaultRuntime;
+  // A candidates phase runs `count` copies of one step, so the definition's
+  // step list is read by candidate rather than by position — and the model and
+  // runtime a candidate was launched with come from its variant first.
+  const total = def?.candidates?.count ?? 0;
+  const variants = def?.candidates?.variants ?? [];
+  const variantOf = (i: number) => (variants.length ? variants[i % variants.length] : undefined);
+  const defIndex = (i: number, candidate: number | undefined) => (candidate === undefined ? i : 0);
+  const defModel = (i: number, candidate: number | undefined) =>
+    (candidate === undefined ? undefined : variantOf(candidate)?.model) ??
+    def?.steps[defIndex(i, candidate)]?.model ??
+    defaultModel;
+  const defRuntime = (i: number, candidate: number | undefined) =>
+    (candidate === undefined ? undefined : variantOf(candidate)?.runtime) ??
+    def?.steps[defIndex(i, candidate)]?.runtime ??
+    def?.runtime ??
+    defaultRuntime;
   if (phase.steps.length > 0) {
+    // `count` on the definition can disagree with the attempt that actually ran
+    // (an edit mid-flight); the attempt is what happened, so it wins.
+    const ran = phase.steps.filter((s) => s.candidate !== undefined).length;
     return phase.steps.map((s, i) => ({
       name: s.name,
       runId: s.runId,
@@ -152,25 +223,106 @@ function stepPills(
       costUsd: s.costUsd ?? null,
       tokens: s.tokens ?? null,
       // Absent = no run record joined yet; fall back to the definition.
-      model: s.model !== undefined ? s.model : defModel(i),
-      runtime: s.runtime !== undefined ? s.runtime : defRuntime(i),
+      model: s.model !== undefined ? s.model : defModel(i, s.candidate),
+      runtime: s.runtime !== undefined ? s.runtime : defRuntime(i, s.candidate),
       currentActivity: s.currentActivity ?? null,
       startedAt: s.startedAt ?? null,
       durationMs: s.durationMs ?? null,
+      candidate:
+        s.candidate === undefined
+          ? null
+          : { index: s.candidate, total: Math.max(ran, total, s.candidate + 1) },
+      verified: verifiedOf(s),
+      selected: s.candidate !== undefined && phase.selectedCandidate === s.candidate,
+      // A draft stopped because a sibling won. Only ever true once a winner
+      // exists, so a candidate killed by an abort still reads as stopped.
+      superseded:
+        s.candidate !== undefined &&
+        s.status === "aborted" &&
+        phase.selectedCandidate != null &&
+        phase.selectedCandidate !== s.candidate,
+      ...(s.completion ? { completion: s.completion } : {}),
+      // Only when there is one: a step of a phase that ran in its own cwd has
+      // no workspace to speak of, and an always-present null would say it did.
+      // A candidate carries its own tree; everyone else shares the phase's.
+      ...(s.workspace
+        ? { workspace: s.workspace }
+        : phase.workspace
+          ? { workspace: phase.workspace }
+          : {}),
     }));
   }
-  return (def?.steps ?? []).map((s) => ({
-    name: s.name,
-    runId: null,
-    status: FALLBACK_STEP_STATUS[phase.status],
-    costUsd: null,
-    tokens: null,
-    model: s.model ?? defaultModel,
-    runtime: s.runtime ?? def?.runtime ?? defaultRuntime,
-    currentActivity: null,
-    startedAt: null,
-    durationMs: null,
-  }));
+  // A phase that has not started yet: one tile per declared step, or one per
+  // planned candidate, so the board shows what is about to happen.
+  const upcoming: StepPill[] =
+    total > 0 && def?.steps[0]
+      ? Array.from({ length: total }, (_, i) => ({
+          name: def.steps[0].name,
+          runId: null,
+          status: FALLBACK_STEP_STATUS[phase.status],
+          costUsd: null,
+          tokens: null,
+          model: variantOf(i)?.model ?? def.steps[0].model ?? defaultModel,
+          runtime: variantOf(i)?.runtime ?? def.steps[0].runtime ?? def.runtime ?? defaultRuntime,
+          currentActivity: null,
+          startedAt: null,
+          durationMs: null,
+          candidate: { index: i, total },
+          verified: null,
+          selected: false,
+          superseded: false,
+          ...(phase.workspace ? { workspace: phase.workspace } : {}),
+        }))
+      : (def?.steps ?? []).map((s) => ({
+          name: s.name,
+          runId: null,
+          status: FALLBACK_STEP_STATUS[phase.status],
+          costUsd: null,
+          tokens: null,
+          model: s.model ?? defaultModel,
+          runtime: s.runtime ?? def?.runtime ?? defaultRuntime,
+          currentActivity: null,
+          startedAt: null,
+          durationMs: null,
+          candidate: null,
+          verified: null,
+          selected: false,
+          superseded: false,
+          ...(phase.workspace ? { workspace: phase.workspace } : {}),
+        }));
+  return upcoming;
+}
+
+/**
+ * Best-of-N in one line: how many drafts cleared the checks, and which one the
+ * phase kept.
+ *
+ * Read from the live steps while the phase runs and from the recorded outcomes
+ * once it has settled — the losers' step records survive, but the outcomes are
+ * what the phase itself decided, and they are the honest source after the fact.
+ */
+function candidateSummary(
+  phase: PhaseProgress,
+  def: PhaseDef | undefined,
+): CandidateSummary | null {
+  const outcomes = (phase.candidateOutcomes ?? []) as CandidateOutcome[];
+  const running = phase.steps.filter((s) => s.candidate !== undefined);
+  if (outcomes.length === 0 && running.length === 0 && !def?.candidates) return null;
+  if (outcomes.length > 0) {
+    return {
+      total: outcomes.length,
+      verified: outcomes.filter((o) => o.verified === true).length,
+      selected: phase.selectedCandidate ?? null,
+    };
+  }
+  if (running.length === 0) {
+    return { total: def?.candidates?.count ?? 0, verified: 0, selected: null };
+  }
+  return {
+    total: running.length,
+    verified: running.filter((s) => verifiedOf(s) === true).length,
+    selected: phase.selectedCandidate ?? null,
+  };
 }
 
 const INSTANCE_BADGE: Record<InstanceStatus, DsStatus> = {
@@ -186,17 +338,19 @@ function activeStepName(phase: PhaseProgress): string | null {
   return phase.steps.find((s) => s.status === "running")?.name ?? null;
 }
 
-function gateFor(latest: OverviewEntry["latest"]): OverviewGate | null {
-  if (!latest) return null;
+function gatesFor(latest: OverviewEntry["latest"]): OverviewGate[] {
+  if (!latest) return [];
   if (latest.status === "awaiting-approval") {
-    const phase = latest.phases.find((p) => p.status === "awaiting-approval");
-    if (phase) return { phaseId: phase.id, canApprove: true };
+    return latest.phases
+      .filter((p) => p.status === "awaiting-approval")
+      .map((p) => ({ phaseId: p.id, canApprove: true }));
   }
   if (latest.status === "failed") {
-    const phase = latest.phases.find((p) => p.status === "failed");
-    if (phase) return { phaseId: phase.id, canApprove: false };
+    return latest.phases
+      .filter((p) => p.status === "failed")
+      .map((p) => ({ phaseId: p.id, canApprove: false }));
   }
-  return null;
+  return [];
 }
 
 function extractReason(payload: unknown): string | null {
@@ -249,13 +403,17 @@ function skipCauseFor(
 }
 
 function instanceRow(
-  definition: OverviewEntry["definition"],
+  live: OverviewEntry["definition"],
   instance: PipelineInstance,
   cost: OverviewCost | null,
 ): OverviewRow {
-  // Conditions live in the definition; the instance carries only resolved ids.
-  // A phase the definition no longer has falls back to its recorded edges —
-  // a mid-flight edit costs the labels, never the graph.
+  // What the instance actually runs: the definition it snapshotted when it
+  // started. The live one may since have been edited, and labelling running
+  // work with prompts and models it is not using would be a lie. An instance
+  // from before the snapshot existed reads the live definition, as it always
+  // did; a phase that definition no longer has falls back to its recorded
+  // edges — a mid-flight edit costs the labels, never the graph.
+  const definition = instance.definition ?? live;
   const defEdges = effectiveEdges(definition.phases);
   const decisions = instance.routeDecisions ?? [];
   const statusById = new Map(instance.phases.map((p) => [p.id, p.status]));
@@ -281,20 +439,26 @@ function instanceRow(
     edges: edgeViews(edgesFor(p)),
     decision: decisions.find((d) => d.sourcePhase === p.id) ?? null,
     skipCause: skipCauseFor(p, edgeViews(edgesFor(p)), decisions, statusById),
+    candidates: candidateSummary(
+      p,
+      definition.phases.find((d) => d.id === p.id),
+    ),
   }));
 
   return {
-    pipelineId: definition.id,
-    name: definition.name,
+    // The row still belongs to the live pipeline's card, whatever it is called now.
+    pipelineId: live.id,
+    name: live.name,
     badge: INSTANCE_BADGE[instance.status],
     updatedAt: instance.updatedAt,
     phases,
     instanceId: instance.id,
-    gate: gateFor(instance),
+    gates: gatesFor(instance),
     failure: failureFor(instance),
     cost,
     model: definition.model ?? null,
     instanceLabel: null,
+    trigger: instance.trigger,
   };
 }
 
@@ -313,17 +477,30 @@ export function toOverviewRow(entry: OverviewEntry): OverviewRow {
         name: p.name,
         status: "idle" as const,
         activeStep: null,
-        steps: p.steps.map((s) => ({
+        steps: (p.candidates
+          ? Array.from({ length: p.candidates.count }, (_, i) => ({
+              step: p.steps[0],
+              candidate: { index: i, total: p.candidates!.count },
+              variant: p.candidates!.variants?.length
+                ? p.candidates!.variants[i % p.candidates!.variants.length]
+                : undefined,
+            }))
+          : p.steps.map((step) => ({ step, candidate: null, variant: undefined }))
+        ).map(({ step: s, candidate, variant }) => ({
           name: s.name,
           runId: null,
           status: "idle" as const,
           costUsd: null,
           tokens: null,
-          model: s.model ?? definition.model ?? null,
-          runtime: s.runtime ?? p.runtime ?? definition.runtime ?? null,
+          model: variant?.model ?? s.model ?? definition.model ?? null,
+          runtime: variant?.runtime ?? s.runtime ?? p.runtime ?? definition.runtime ?? null,
           currentActivity: null,
           startedAt: null,
           durationMs: null,
+          candidate,
+          verified: null,
+          selected: false,
+          superseded: false,
         })),
         reason: null,
         gated: p.gated,
@@ -337,13 +514,17 @@ export function toOverviewRow(entry: OverviewEntry): OverviewRow {
         edges: edgeViews(edges.get(p.id) ?? []),
         decision: null,
         skipCause: null,
+        candidates: p.candidates
+          ? { total: p.candidates.count, verified: 0, selected: null }
+          : null,
       })),
       instanceId: null,
-      gate: null,
+      gates: [],
       failure: null,
       cost: null,
       model: definition.model ?? null,
       instanceLabel: null,
+      trigger: null,
     };
   }
 

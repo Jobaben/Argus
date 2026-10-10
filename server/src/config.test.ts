@@ -5,7 +5,9 @@ import {
   ConfigError,
   describeListenError,
   isExposedBind,
+  isLoopbackUrl,
   loadConfig,
+  selfBaseUrl,
 } from "./config.js";
 import type { ArgusConfig } from "./config.js";
 
@@ -75,6 +77,38 @@ describe("loadConfig", () => {
     } finally {
       if (previous !== undefined) process.env.ARGUS_HOST = previous;
     }
+  });
+});
+
+describe("selfBaseUrl", () => {
+  it("addresses the interface Argus actually bound, not loopback", () => {
+    // The regression: with ARGUS_HOST set to a LAN address the socket exists
+    // only there, so a completion signal posted to 127.0.0.1 is refused and
+    // every pipeline step ends "without emitting a completion signal".
+    assert.equal(selfBaseUrl(config({ host: "10.59.1.53" })), "http://10.59.1.53:7777");
+  });
+
+  it("keeps the loopback default and a named host verbatim", () => {
+    assert.equal(selfBaseUrl(config()), "http://127.0.0.1:7777");
+    assert.equal(selfBaseUrl(config({ host: "localhost", port: 8080 })), "http://localhost:8080");
+  });
+
+  it("dials loopback for a wildcard bind, which has no address to dial", () => {
+    assert.equal(selfBaseUrl(config({ host: "0.0.0.0" })), "http://127.0.0.1:7777");
+    assert.equal(selfBaseUrl(config({ host: "::" })), "http://[::1]:7777");
+    assert.equal(selfBaseUrl(config({ host: "[::]" })), "http://[::1]:7777");
+  });
+
+  it("brackets an IPv6 literal so the URL parses", () => {
+    assert.equal(selfBaseUrl(config({ host: "::1" })), "http://[::1]:7777");
+    assert.equal(selfBaseUrl(config({ host: "[::1]" })), "http://[::1]:7777");
+    assert.equal(selfBaseUrl(config({ host: "fd00::1" })), "http://[fd00::1]:7777");
+  });
+
+  it("returns a URL the loopback check and URL parser both accept", () => {
+    assert.equal(new URL(selfBaseUrl(config())).port, "7777");
+    assert.equal(isLoopbackUrl(selfBaseUrl(config())), true);
+    assert.equal(isLoopbackUrl(selfBaseUrl(config({ host: "10.59.1.53" }))), false);
   });
 });
 

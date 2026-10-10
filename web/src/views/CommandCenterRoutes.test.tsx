@@ -180,10 +180,15 @@ describe("the board on a routed instance", () => {
     expect(chip.textContent).toMatch(/skip/);
   });
 
-  it("draws the condition that governs a conditional branch", () => {
+  it("draws the condition that governs a conditional branch on its edge, not in the node", () => {
     render(<CommandCenter />);
-    const chip = screen.getByRole("button", { name: /Publish/ });
-    expect(chip.textContent).toMatch(/if Evaluate: accepted = true/);
+    // The condition is a label on the edge from Evaluate — the value alone,
+    // since the source is the line it sits on — and the node keeps its name.
+    const labels = screen.getAllByTestId("route-label").map((l) => l.textContent);
+    expect(labels).toEqual(expect.arrayContaining(["accepted = true", "accepted = false"]));
+    const node = screen.getByRole("button", { name: /Publish/ });
+    expect(node.textContent).not.toMatch(/if /);
+    expect(node.getAttribute("title")).toMatch(/only if evaluate: accepted = true/);
     expect(screen.getByRole("button", { name: /Report/ }).getAttribute("title")).toMatch(
       /accepts publish skipped/,
     );
@@ -198,6 +203,39 @@ describe("the board on a routed instance", () => {
     expect(decision.textContent).toMatch(/\{"accepted":true\}/);
     expect(decision.textContent).toMatch(/→ Publish/);
     expect(decision.textContent).toMatch(/skipped Repair/);
+  });
+
+  it("takes a wordy decision apart instead of printing it as a wall of JSON", () => {
+    const wordy = routed();
+    wordy.latest!.routeDecisions = [
+      {
+        ...wordy.latest!.routeDecisions![0],
+        value: {
+          verdict: "blocked",
+          missing: [
+            "The .NET SDK pinned by global.json is not installed on this machine",
+            "No test project references the Admin assembly, so the criterion cannot be covered",
+          ],
+        },
+      },
+    ];
+    mockOverview.overview = [wordy];
+    render(<CommandCenter />);
+    fireEvent.click(screen.getAllByRole("button", { name: /Evaluate/ })[0]);
+    const decision = screen.getByTestId("phase-decision");
+    // The value moves out of the sentence and into fields; a list reads as a
+    // list, and the braces and quotes are gone from the prose.
+    expect(decision.textContent).not.toMatch(/\{"verdict"/);
+    expect(screen.getByTestId("decision-fields").textContent).toMatch(/verdict/);
+    const bullets = screen.getByTestId("decision-fields").querySelectorAll("li");
+    expect([...bullets].map((li) => li.textContent)).toEqual([
+      "·The .NET SDK pinned by global.json is not installed on this machine",
+      "·No test project references the Admin assembly, so the criterion cannot be covered",
+    ]);
+    const toggle = screen.getByRole("button", { name: /Full value/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+    expect(screen.getByRole("button", { name: /Less/ })).toHaveAttribute("aria-expanded", "true");
   });
 
   it("explains a skipped phase in the words of the decision that skipped it", () => {

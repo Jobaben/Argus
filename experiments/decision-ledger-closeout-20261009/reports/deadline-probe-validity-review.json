@@ -1,0 +1,38 @@
+{
+  "at": "2026-10-09T00:43:20.808Z",
+  "id": "deadline-probe-schedule-name-contamination",
+  "severity": "evaluation-validity",
+  "assessmentId": "DA-uaffv7M-3hUV3f5m",
+  "runId": "a0a71822-d824-4b5b-879e-0fda9e31d120",
+  "snapshotSha256": "3f801b836ae77b6a02ff1cc0913f9544994af2d6ca3c7145ef66837635d963b4",
+  "observedTermination": "timed-out",
+  "nativeAnswer": "deadline",
+  "nativeProbability": 0.85,
+  "retainedInputPointer": "/body/run/scheduleName",
+  "retainedValue": "Decision closeout D1 - deadline · Controlled case D1",
+  "directRationaleEvidence": "Schedule name explicitly references 'deadline'",
+  "finding": "The blinded termination projection retains a schedule name that declares the intended class. The native rationale explicitly uses this hint. This correct answer cannot establish independent timeout discrimination or consumer calibration.",
+  "proved": "A genuine timeout completed the native FIFO census, projection, provider assessment, journal and report path with verified hashes.",
+  "notProved": [
+    "Independent deadline recognition",
+    "Class-specific calibration",
+    "Safety of a pipeline policy that acts on inferred termination"
+  ],
+  "scope": "Class hints occur in other controlled pipeline names too; examine each retained snapshot and rationale separately. D3/D4 intended deadline labels are not observed deadline references.",
+  "requiredFutureValidation": [
+    "Use neutral source names and prompts without expected-label hints",
+    "Audit the actual frozen projection for metadata and case-ID leakage before elicitation",
+    "Separate reference observations from judge inputs",
+    "Compare with an appropriate baseline on independently labeled class-balanced held-out cases"
+  ],
+  "action": "Preserve current evidence and schedules. No app changes or repeat source calls. Treat contaminated answers as path evidence, not blinded generalization proof.",
+  "followup": {
+    "at": "2026-10-09T01:13:26.902Z",
+    "secondAssessmentId": "DA-yyHxzh_GNAq9rcQO",
+    "secondRunId": "f040025f-acb7-4661-976c-101063a65955",
+    "secondSnapshotSha256": "6ddd34157ebc6887a5ff87f8f9562f08abf48df9adbc24cb7038767316186a2c",
+    "secondProbability": 0.7999999999999998,
+    "secondRationaleAlsoCitesScheduleName": true,
+    "D3ProbeCorrectDespiteIntendedDeadlineName": true
+  }
+}

@@ -1,0 +1,127 @@
+{
+  "runtime": "codex",
+  "trigger": {
+    "time": "05:30",
+    "kind": "daily"
+  },
+  "phases": [
+    {
+      "timeoutSeconds": 1800,
+      "id": "evidence",
+      "checks": [
+        {
+          "kind": "file",
+          "path": "reports/evidence-audit.json",
+          "minBytes": 100
+        }
+      ],
+      "steps": [
+        {
+          "reasoningEffort": "high",
+          "prompt": "This is an analysis-only experiment closeout. The user forbids any Argus application code changes. Work only with current running Argus evidence and the isolated experiment directory. Do not edit Argus source, tests, dependencies, configuration, canonical stores, other projects or other pipelines; do not restart any service or install anything. No commit or push. No network calls, credential inspection, delegation or background work. Read-only source inspection is permitted to verify existing contracts, but do not run Argus test suites or claim existing tests were executed. Only create requested report artifacts under reports/ in this cwd, plus write ARGUS_RESULT_FILE if supplied. Preserve prior outputs; do not weaken findings into success. Agent reviews are model opinions, never human labels. Read plan.json and baseline/capture.json before acting.\n\nRead baseline/decisions-h2.json, decisions-h1.json, pipelines.json and budget.json. Read the current retained decision journal and H2 collection ledger under C:/Users/ushab/.claude/argus using raw read-only file operations. Do not instantiate mutating services. Reconcile census, attempt, result and assessment records; verify each relied-on snapshot hash, provenance, question/version and shadow mode. Separate baseline feeder and this intervention by exact pipeline/run IDs. Review every residual and every erroneous/uncertain probe against its retained input. Derive statistics through deterministic arithmetic, not estimates. Write reports/evidence-audit.json and reports/evidence-audit.md with captured timestamps, per-class denominators, all unresolved items, evidence IDs and explicit measurement limits. If intervention IDs are absent, mark source experiment awaiting authenticated execution; still audit the baseline.",
+          "name": "Audit the complete native shadow evidence"
+        }
+      ],
+      "gated": false,
+      "cwd": "C:/GIT/Argus/experiments/decision-ledger-closeout-20261009",
+      "name": "Audit the complete native shadow evidence",
+      "stallSeconds": 300
+    },
+    {
+      "timeoutSeconds": 1800,
+      "id": "review",
+      "checks": [
+        {
+          "kind": "file",
+          "path": "reports/independent-review.json",
+          "minBytes": 100
+        }
+      ],
+      "steps": [
+        {
+          "reasoningEffort": "high",
+          "prompt": "This is an analysis-only experiment closeout. The user forbids any Argus application code changes. Work only with current running Argus evidence and the isolated experiment directory. Do not edit Argus source, tests, dependencies, configuration, canonical stores, other projects or other pipelines; do not restart any service or install anything. No commit or push. No network calls, credential inspection, delegation or background work. Read-only source inspection is permitted to verify existing contracts, but do not run Argus test suites or claim existing tests were executed. Only create requested report artifacts under reports/ in this cwd, plus write ARGUS_RESULT_FILE if supplied. Preserve prior outputs; do not weaken findings into success. Agent reviews are model opinions, never human labels. Read plan.json and baseline/capture.json before acting.\n\nRead reports/evidence-audit.json, plan.json and current native H1/H2 source/RFC read-only. Independently challenge numerical denominators, causality, leaked subject-authored claims, taxonomy overlap, sample representativeness and claims of proof. Explain where optional cause references and genuine gate decisions are missing. Write reports/independent-review.json and .md: each finding needs source artifact/assessment ID and a consequence for development. Do not create synthetic labels or count your own agreement as correctness.",
+          "name": "Independently challenge experiment conclusions"
+        }
+      ],
+      "gated": false,
+      "cwd": "C:/GIT/Argus/experiments/decision-ledger-closeout-20261009",
+      "name": "Independently challenge experiment conclusions",
+      "stallSeconds": 300
+    },
+    {
+      "timeoutSeconds": 1800,
+      "id": "architecture",
+      "checks": [
+        {
+          "kind": "file",
+          "path": "reports/development-plan.md",
+          "minBytes": 100
+        }
+      ],
+      "steps": [
+        {
+          "reasoningEffort": "high",
+          "prompt": "This is an analysis-only experiment closeout. The user forbids any Argus application code changes. Work only with current running Argus evidence and the isolated experiment directory. Do not edit Argus source, tests, dependencies, configuration, canonical stores, other projects or other pipelines; do not restart any service or install anything. No commit or push. No network calls, credential inspection, delegation or background work. Read-only source inspection is permitted to verify existing contracts, but do not run Argus test suites or claim existing tests were executed. Only create requested report artifacts under reports/ in this cwd, plus write ARGUS_RESULT_FILE if supplied. Preserve prior outputs; do not weaken findings into success. Agent reviews are model opinions, never human labels. Read plan.json and baseline/capture.json before acting.\n\nRead preceding evidence and independent review, plus development-plan-draft.md if present. Verify implemented versus proposed behavior in current sources. Write a thorough reports/development-plan.md and reports/consumer-matrix.json. Specify SOLID module boundaries, immutable typed records, provenance and full version identities, scope and repository/attempt binding, integrity/retention, replay versus reevaluation, idempotence and concurrency, policy decision audit, observability, failure/staleness fallback, data migration and rollback. Explain exactly how pipeline definitions, invocations, checkpoints, verification, change proposals and knowledge acceptance could consume the ledger. For each consumer state accept/defer/reject, demonstrated evidence, prerequisites, permitted effects, release criterion and rollback. Keep observation/inference/accepted knowledge/policy distinct; no assessment grants permission, opens gates or establishes evaluateSupport. Do not implement any application behavior.",
+          "name": "Develop the ledger and consumer architecture"
+        }
+      ],
+      "gated": false,
+      "cwd": "C:/GIT/Argus/experiments/decision-ledger-closeout-20261009",
+      "name": "Develop the ledger and consumer architecture",
+      "stallSeconds": 300
+    },
+    {
+      "timeoutSeconds": 1800,
+      "id": "backlog",
+      "checks": [
+        {
+          "kind": "file",
+          "path": "reports/implementation-backlog.json",
+          "minBytes": 100
+        }
+      ],
+      "steps": [
+        {
+          "reasoningEffort": "high",
+          "prompt": "This is an analysis-only experiment closeout. The user forbids any Argus application code changes. Work only with current running Argus evidence and the isolated experiment directory. Do not edit Argus source, tests, dependencies, configuration, canonical stores, other projects or other pipelines; do not restart any service or install anything. No commit or push. No network calls, credential inspection, delegation or background work. Read-only source inspection is permitted to verify existing contracts, but do not run Argus test suites or claim existing tests were executed. Only create requested report artifacts under reports/ in this cwd, plus write ARGUS_RESULT_FILE if supplied. Preserve prior outputs; do not weaken findings into success. Agent reviews are model opinions, never human labels. Read plan.json and baseline/capture.json before acting.\n\nRead the architecture and all findings. Write reports/implementation-backlog.json and .md with sequenced small development slices, exact existing modules/interfaces likely affected, dependencies, invariants, acceptance criteria, meaningful tests, validation commands for future implementation, rollout and rollback. Clearly distinguish tests already evidenced from test cases only specified. Include supported frozen-snapshot reevaluation/reference capture as prerequisites where needed, future blinded H1 cohort, independently reviewed residual labels, per-class coverage and version-bound canaries. Consumer thresholds must be proposed policy, never retroactively proven by this corpus.",
+          "name": "Specify a reviewable implementation and verification backlog"
+        }
+      ],
+      "gated": false,
+      "cwd": "C:/GIT/Argus/experiments/decision-ledger-closeout-20261009",
+      "name": "Specify a reviewable implementation and verification backlog",
+      "stallSeconds": 300
+    },
+    {
+      "timeoutSeconds": 1800,
+      "id": "closure",
+      "checks": [
+        {
+          "kind": "file",
+          "path": "reports/closure-decision.json",
+          "minBytes": 100
+        }
+      ],
+      "steps": [
+        {
+          "reasoningEffort": "high",
+          "prompt": "This is an analysis-only experiment closeout. The user forbids any Argus application code changes. Work only with current running Argus evidence and the isolated experiment directory. Do not edit Argus source, tests, dependencies, configuration, canonical stores, other projects or other pipelines; do not restart any service or install anything. No commit or push. No network calls, credential inspection, delegation or background work. Read-only source inspection is permitted to verify existing contracts, but do not run Argus test suites or claim existing tests were executed. Only create requested report artifacts under reports/ in this cwd, plus write ARGUS_RESULT_FILE if supplied. Preserve prior outputs; do not weaken findings into success. Agent reviews are model opinions, never human labels. Read plan.json and baseline/capture.json before acting.\n\nRead every prior report and current native evidence read-only. Reconcile final counts and unresolved work. Write reports/experiment-results.json, reports/closure-decision.json and a concise standalone reports/report.html. State which experiment purpose is fulfilled, what remains unproven, and a defensible accept/defer/reject decision for each consumer. Recommend stopping repetitive exploratory collection rather than running indefinitely; do not imply the user approved release thresholds. Include all artifact links and exact pipeline/instance/run IDs where known. At most 2000 words in final human-readable report. Do not modify application code, definitions, credentials or canonical stores. If source workloads or final collection are unfinished, set experimentComplete=false and name the precise missing evidence; the design document can still be complete. Return artifact paths and decision summary.",
+          "name": "Make the experiment stopping decision"
+        }
+      ],
+      "gated": false,
+      "cwd": "C:/GIT/Argus/experiments/decision-ledger-closeout-20261009",
+      "name": "Make the experiment stopping decision",
+      "stallSeconds": 300
+    }
+  ],
+  "reasoningEffort": "high",
+  "enabled": true,
+  "capabilities": {
+    "enforcement": "strict",
+    "filesystem": "workspace-write"
+  },
+  "name": "Decision Ledger - Evidence closure and pipeline development plan",
+  "overlapPolicy": "skip"
+}

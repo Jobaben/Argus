@@ -1,0 +1,80 @@
+{
+  "ok": true,
+  "prereqs": [
+    {
+      "id": "signal-stop-hook",
+      "label": "Signal Stop hook",
+      "fixable": true,
+      "status": "ok"
+    },
+    {
+      "id": "gate-pretooluse-hook",
+      "label": "Gate PreToolUse hook",
+      "fixable": true,
+      "status": "ok"
+    },
+    {
+      "id": "argus-data-dir",
+      "label": "Argus data directories",
+      "fixable": true,
+      "status": "ok"
+    },
+    {
+      "id": "claude-cli",
+      "label": "Claude CLI on PATH",
+      "fixable": false,
+      "status": "ok"
+    },
+    {
+      "id": "codex-cli",
+      "label": "Codex CLI on PATH",
+      "fixable": false,
+      "status": "ok"
+    },
+    {
+      "id": "codex-signal-hook",
+      "label": "Codex signal stop hook",
+      "fixable": true,
+      "status": "ok"
+    },
+    {
+      "id": "opencode-cli",
+      "label": "OpenCode CLI on PATH",
+      "fixable": false,
+      "status": "ok",
+      "detail": "Not checked — nothing on this machine runs on OpenCode."
+    },
+    {
+      "id": "qwen-cli",
+      "label": "Qwen Code CLI on PATH",
+      "fixable": false,
+      "status": "ok",
+      "detail": "Not checked — nothing on this machine runs on Qwen Code."
+    },
+    {
+      "id": "qwen-signal-hook",
+      "label": "Qwen Code signal stop hook",
+      "fixable": true,
+      "status": "ok",
+      "detail": "Not checked — nothing on this machine runs on Qwen Code."
+    },
+    {
+      "id": "node-runtime",
+      "label": "Node on PATH",
+      "fixable": false,
+      "status": "ok"
+    },
+    {
+      "id": "pipelines-parse",
+      "label": "pipelines.json parses",
+      "fixable": false,
+      "status": "ok"
+    },
+    {
+      "id": "settings-parse",
+      "label": "settings.json parses",
+      "fixable": false,
+      "status": "ok"
+    }
+  ]
+}

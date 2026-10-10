@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-09T06:08:49.396Z",
+  "disabled": [
+    "676cd88f-4ba1-4fe8-9637-c03e5ae9ed11",
+    "b931a14e-6839-4bbf-b875-15e60c97c525"
+  ],
+  "backup": "experiments/decision-ledger-closeout-20261009/baseline/pipelines-before-final-disable-2026-10-09T06-08-49.396Z.json",
+  "atomicStoreVerified": true,
+  "liveReloadVerified": false,
+  "liveReloadLimitation": "API connection refused; cannot verify running app reload. Persisted store is disabled.",
+  "oldFeederPaused": true,
+  "unrelatedDefinitionsPreserved": true
+}

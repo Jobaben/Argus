@@ -1,0 +1,127 @@
+{
+  "at": "2026-10-09T06:37:35.062Z",
+  "status": "final",
+  "stopBroadShadowExperiments": true,
+  "decision": "Accept ledger and advisory consumer development; defer enforcing consumers; reject automatic authority or model-derived termination.",
+  "evidence": {
+    "total": 32,
+    "outcomes": {
+      "not-selected": 6,
+      "assessed": 22,
+      "excluded": 4
+    },
+    "selected": 22,
+    "expired": 0,
+    "pending": 0,
+    "lost": 0
+  },
+  "consumers": [
+    {
+      "consumer": "Deterministic process termination",
+      "decision": "accept",
+      "scope": "Preserve existing observed termination; model probe used only for evaluation",
+      "releaseEvidence": "Recorded real timeouts and normal-process blocked tasks; P1 high-confidence wrong probe reinforces observation authority"
+    },
+    {
+      "consumer": "Ledger read model and provenance",
+      "decision": "accept-development",
+      "scope": "Extend existing journal with truthful read-only, state-bound access; no second authority store",
+      "releasePrerequisites": [
+        "Focused future implementation tests",
+        "Unknown-cost and failed/abstained/corrupt/unavailable states",
+        "Exact question/provider/projection/attempt/artifact binding",
+        "Read-isolation and replay checks"
+      ]
+    },
+    {
+      "consumer": "Cause summaries and review display",
+      "decision": "accept-development-defer-release",
+      "scope": "Advisory hypotheses linked to evidence; expose uncertainty; retain Autopsy",
+      "releasePrerequisites": [
+        "Visible inference and currency labels",
+        "Independent cause taxonomy and reference adjudication for correctness claims",
+        "Neutral metadata and no active-study leakage"
+      ]
+    },
+    {
+      "consumer": "Pipeline escalation or withholding auto-approval",
+      "decision": "defer",
+      "scope": "Only explicitly authorized escalation consumers; never widen permission",
+      "releasePrerequisites": [
+        "Prospective genuine operator/reference evidence",
+        "Approved loss function and class-specific thresholds",
+        "Missing/failed/stale assessment fallback",
+        "State recheck and atomic idempotent application",
+        "Audited rollback and drift monitoring"
+      ]
+    },
+    {
+      "consumer": "Automatic gate opening or knowledge acceptance",
+      "decision": "reject",
+      "scope": "Assessment cannot confer authority, support, acceptance satisfaction or change canonical knowledge",
+      "releasePrerequisites": []
+    },
+    {
+      "consumer": "Replacing deterministic termination with model inference",
+      "decision": "reject",
+      "scope": "Observed process facts remain authoritative",
+      "releasePrerequisites": []
+    },
+    {
+      "consumer": "Broad repetitive shadow feeder",
+      "decision": "retire",
+      "scope": "Keep paused; use bounded consumer-specific validation for future releases",
+      "releasePrerequisites": [
+        "Future tests use neutral metadata, frozen inputs and pre-agreed thresholds"
+      ]
+    }
+  ],
+  "provedLive": [
+    "16 isolated source workloads executed through the existing scheduled pipeline path",
+    "Two genuine timeouts and fourteen normal process completions are recorded",
+    "22 selected assessments recorded, including two provider failures, with no pending/expired/lost owned items",
+    "Retained hashes validate and native offline report replays identically"
+  ],
+  "sourceInspectedExisting": [
+    "Versioned definitions and projections",
+    "Existing journal, bounded snapshots and currency derivation",
+    "Read-only H1/H2 report and escalation-only policy type contracts"
+  ],
+  "unimplementedOrUnproven": [
+    "Calibrated cause inference and independent deadline discrimination",
+    "Safe enforcement, operator correctness or skipped-review behavior",
+    "Retained-snapshot reevaluation interface",
+    "Identity-bound idempotent policy engine integration and rollback",
+    "Neutral-metadata held-out evaluation",
+    "Live reload confirmation after cleanup while API unavailable"
+  ],
+  "materialFailures": [
+    "Both scheduled analysis pipelines rejected inherited model before inference",
+    "Two native T1 assessments failed with no-output and unknown cost",
+    "P1 probe mislabeled tool denial as process termination",
+    "Both true deadline answers explicitly used class-bearing schedule names"
+  ],
+  "cleanup": {
+    "at": "2026-10-09T06:08:49.396Z",
+    "disabled": [
+      "676cd88f-4ba1-4fe8-9637-c03e5ae9ed11",
+      "b931a14e-6839-4bbf-b875-15e60c97c525"
+    ],
+    "backup": "experiments/decision-ledger-closeout-20261009/baseline/pipelines-before-final-disable-2026-10-09T06-08-49.396Z.json",
+    "atomicStoreVerified": true,
+    "liveReloadVerified": false,
+    "liveReloadLimitation": "API connection refused; cannot verify running app reload. Persisted store is disabled.",
+    "oldFeederPaused": true,
+    "unrelatedDefinitionsPreserved": true
+  },
+  "applicationCodeChanged": false,
+  "review": "reports/independent-closeout-plan-review.json",
+  "nextAction": "Develop only the accepted scoped backlog under separate authorization. Release prerequisites remain unimplemented/unproven; broad feeder remains retired.",
+  "reviewCorrectionsApplied": [
+    "Prepared intent distinct from applied transition",
+    "DL-07 depends on DL-09",
+    "Runbook readiness before adapter release"
+  ],
+  "finalCutoffReconciled": true,
+  "verification": "reports/final-cutoff-verification.json"
+}

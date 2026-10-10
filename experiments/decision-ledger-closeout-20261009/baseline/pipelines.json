@@ -1,0 +1,1305 @@
+{
+  "pipelines": [
+    {
+      "id": "cb865f26-52b8-4c79-bc4d-f71dd4323ee9",
+      "name": "Workshop Studio — Knowledge-driven development loop",
+      "phases": [
+        {
+          "id": "713c76cc-d89d-41ea-b322-d7c83e47920c",
+          "name": "Iteration 1: graph-based planning",
+          "cwd": "C:/GIT/Argus/experiments/knowledge-loop",
+          "steps": [
+            {
+              "name": "Iteration 1: graph-based planning",
+              "prompt": "Work only in C:/GIT/Argus/experiments/knowledge-loop. Build Workshop Studio: a polished local web app for workshop discovery, bookings and waitlists. This is a development-process experiment: durable business knowledge and traceable decisions matter as much as the UI. Use synthetic data; no payment services or deployment. Follow SOLID and keep the scope small. Do not commit, push, or alter Argus source or other projects. Stage only this app's changes when handing off. Every invocation is fresh: read the project's brief, relevant iteration documents and ARGUS_KNOWLEDGE_CONTEXT_FILE before acting. Never edit Argus's canonical knowledge store or read another project's claims. Publish knowledge only through ARGUS_KNOWLEDGE_DELTA_FILE using the injected contract. Keep assumptions explicit, never describe an assumption as verified. Reference consumed and premise claims by the exact supplied ID:vN. New claims use localId, never invented canonical IDs. Never edit Argus's supplied context files. Stop and report blocked on a missing prerequisite or conflicting requirements; never invent success or retry a failed fix without fresh diagnosis. No background work may remain at completion.\n\nRead all supplied canonical knowledge, including earlier decisions and learning, plus docs/business-brief.md and existing verification reports. Write docs/iterations/1/decision.md and docs/iterations/1/decision.json. Compare at least three feasible next increments by user value, evidence strength, dependency readiness and risk. Choose exactly one small increment; for iteration 1 it must produce a runnable end-to-end MVP. Later choices must respond to previous verification or business findings, not simply follow a predefined feature list. Cite exact premise refs and show why the alternatives lost. Record acceptance criteria, preserved rules, test plan, uncertainties and intended changes. Write a KnowledgeDelta containing at most two claims: a decision justified by supplied premises, and optionally an explicitly labelled assumption. Record consumed refs and attach evidence to the decision document. Preserve previous decisions as history; a new choice must not silently rewrite them. The final message must include the selected option, alternatives and premise refs.",
+              "reasoningEffort": "high"
+            }
+          ],
+          "gated": false,
+          "needs": [],
+          "rubric": {
+            "goal": "Choose the next product increment from canonical business knowledge with explicit evidence and preserved rules.",
+            "criteria": [
+              {
+                "id": "knowledge-grounding",
+                "label": "The selected increment cites exact supplied business claims and prior learning.",
+                "weight": 3
+              },
+              {
+                "id": "alternatives",
+                "label": "Three alternatives are compared with defensible trade-offs."
+              },
+              {
+                "id": "acceptance",
+                "label": "The plan has measurable acceptance criteria and preserves established rules.",
+                "weight": 2
+              }
+            ]
+          },
+          "checks": [
+            {
+              "kind": "file",
+              "path": "docs/iterations/1/decision.md",
+              "minBytes": 100
+            },
+            {
+              "kind": "file",
+              "path": "docs/iterations/1/decision.json",
+              "minBytes": 100
+            }
+          ],
+          "knowledgeDelta": "required",
+          "knowledgeContext": {
+            "claims": [
+              {
+                "id": "RULE-a68e1104.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-601253ed.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-b7f950c7.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-7958a127.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "DECISION-4ffa4f8e.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "ASSUME-c695ffe5.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-c6a8ad60.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "CONSTRAINT-bdee3ebc.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-5b30a2a6.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-38533031.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "DECISION-936b8783.a4080615",
+                "revision": "active"
+              }
+            ]
+          }
+        },
+        {
+          "id": "f85aed58-47f9-4c5d-968e-7bbcc127cd90",
+          "name": "Iteration 1: implement selected increment",
+          "cwd": "C:/GIT/Argus/experiments/knowledge-loop",
+          "steps": [
+            {
+              "name": "Iteration 1: implement selected increment",
+              "prompt": "Work only in C:/GIT/Argus/experiments/knowledge-loop. Build Workshop Studio: a polished local web app for workshop discovery, bookings and waitlists. This is a development-process experiment: durable business knowledge and traceable decisions matter as much as the UI. Use synthetic data; no payment services or deployment. Follow SOLID and keep the scope small. Do not commit, push, or alter Argus source or other projects. Stage only this app's changes when handing off. Every invocation is fresh: read the project's brief, relevant iteration documents and ARGUS_KNOWLEDGE_CONTEXT_FILE before acting. Never edit Argus's canonical knowledge store or read another project's claims. Publish knowledge only through ARGUS_KNOWLEDGE_DELTA_FILE using the injected contract. Keep assumptions explicit, never describe an assumption as verified. Reference consumed and premise claims by the exact supplied ID:vN. New claims use localId, never invented canonical IDs. Never edit Argus's supplied context files. Stop and report blocked on a missing prerequisite or conflicting requirements; never invent success or retry a failed fix without fresh diagnosis. No background work may remain at completion.\n\nRead docs/iterations/1/decision.md and decision.json and all supplied knowledge. Implement only the selected increment. In iteration 1 use a minimal TypeScript web stack with local persistence, synthetic workshop data, a distinctive coherent visual design and responsive accessible UI. Provide package.json scripts build and test; tests must cover meaningful business behavior rather than mirror implementation. In later iterations reuse the existing stack. Run the relevant checks, then write docs/iterations/1/implementation.md describing files changed, behavior implemented, validation and limitations. Preserve all established business rules. Do not publish a KnowledgeDelta in this implementation phase: findings are evaluated by the following verification and learning phases. Do not claim that a successful build proves browser behavior."
+            }
+          ],
+          "gated": false,
+          "needs": [
+            "713c76cc-d89d-41ea-b322-d7c83e47920c"
+          ],
+          "checks": [
+            {
+              "kind": "file",
+              "path": "docs/iterations/1/implementation.md",
+              "minBytes": 100
+            },
+            {
+              "kind": "command",
+              "run": "npm run build",
+              "timeoutSeconds": 180
+            },
+            {
+              "kind": "command",
+              "run": "npm test",
+              "timeoutSeconds": 180
+            }
+          ],
+          "knowledgeContext": {
+            "claims": [
+              {
+                "id": "RULE-a68e1104.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-601253ed.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-b7f950c7.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-7958a127.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "DECISION-4ffa4f8e.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "ASSUME-c695ffe5.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-c6a8ad60.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "CONSTRAINT-bdee3ebc.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-5b30a2a6.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-38533031.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "DECISION-936b8783.a4080615",
+                "revision": "active"
+              }
+            ],
+            "fromPhases": [
+              {
+                "phaseId": "713c76cc-d89d-41ea-b322-d7c83e47920c"
+              }
+            ]
+          }
+        },
+        {
+          "id": "7f9c9f4f-73d3-4aca-9312-0271ebbe7fbf",
+          "name": "Iteration 1: verify behavior against knowledge",
+          "cwd": "C:/GIT/Argus/experiments/knowledge-loop",
+          "steps": [
+            {
+              "name": "Iteration 1: verify behavior against knowledge",
+              "prompt": "Work only in C:/GIT/Argus/experiments/knowledge-loop. Build Workshop Studio: a polished local web app for workshop discovery, bookings and waitlists. This is a development-process experiment: durable business knowledge and traceable decisions matter as much as the UI. Use synthetic data; no payment services or deployment. Follow SOLID and keep the scope small. Do not commit, push, or alter Argus source or other projects. Stage only this app's changes when handing off. Every invocation is fresh: read the project's brief, relevant iteration documents and ARGUS_KNOWLEDGE_CONTEXT_FILE before acting. Never edit Argus's canonical knowledge store or read another project's claims. Publish knowledge only through ARGUS_KNOWLEDGE_DELTA_FILE using the injected contract. Keep assumptions explicit, never describe an assumption as verified. Reference consumed and premise claims by the exact supplied ID:vN. New claims use localId, never invented canonical IDs. Never edit Argus's supplied context files. Stop and report blocked on a missing prerequisite or conflicting requirements; never invent success or retry a failed fix without fresh diagnosis. No background work may remain at completion.\n\nIndependently inspect the implementation against docs/iterations/1/decision.md, every supplied business rule and prior regression requirements. Run npm run build and npm test. Exercise a browser flow if browser tooling is available: browse a workshop, book its last place, attempt overbooking/duplicate booking, join its waitlist and cancel a booking. Use the tests and graph to choose additional cases for this iteration. Write docs/iterations/1/verification.md and verification.json: criterion-by-criterion outcome, business-rule conformance, exact commands/results and evidence locations, unmet criteria and limits. Separate deterministic test evidence, observed browser behavior and unverified behavior. A missing required capability or an unmet acceptance criterion is blocked/failed, not success. Do not publish a KnowledgeDelta in this phase. Do not fix code here or convert a failing test into a weakened business rule."
+            }
+          ],
+          "gated": false,
+          "needs": [
+            "f85aed58-47f9-4c5d-968e-7bbcc127cd90"
+          ],
+          "checks": [
+            {
+              "kind": "file",
+              "path": "docs/iterations/1/verification.md",
+              "minBytes": 100
+            },
+            {
+              "kind": "file",
+              "path": "docs/iterations/1/verification.json",
+              "minBytes": 100
+            },
+            {
+              "kind": "command",
+              "run": "npm run build",
+              "timeoutSeconds": 180
+            },
+            {
+              "kind": "command",
+              "run": "npm test",
+              "timeoutSeconds": 180
+            }
+          ],
+          "knowledgeContext": {
+            "claims": [
+              {
+                "id": "RULE-a68e1104.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-601253ed.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-b7f950c7.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-7958a127.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "DECISION-4ffa4f8e.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "ASSUME-c695ffe5.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-c6a8ad60.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "CONSTRAINT-bdee3ebc.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-5b30a2a6.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-38533031.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "DECISION-936b8783.a4080615",
+                "revision": "active"
+              }
+            ],
+            "fromPhases": [
+              {
+                "phaseId": "713c76cc-d89d-41ea-b322-d7c83e47920c"
+              }
+            ]
+          }
+        },
+        {
+          "id": "e8e03be3-9988-45ec-81e5-81218f5935c0",
+          "name": "Iteration 1: expand business graph",
+          "cwd": "C:/GIT/Argus/experiments/knowledge-loop",
+          "steps": [
+            {
+              "name": "Iteration 1: expand business graph",
+              "prompt": "Work only in C:/GIT/Argus/experiments/knowledge-loop. Build Workshop Studio: a polished local web app for workshop discovery, bookings and waitlists. This is a development-process experiment: durable business knowledge and traceable decisions matter as much as the UI. Use synthetic data; no payment services or deployment. Follow SOLID and keep the scope small. Do not commit, push, or alter Argus source or other projects. Stage only this app's changes when handing off. Every invocation is fresh: read the project's brief, relevant iteration documents and ARGUS_KNOWLEDGE_CONTEXT_FILE before acting. Never edit Argus's canonical knowledge store or read another project's claims. Publish knowledge only through ARGUS_KNOWLEDGE_DELTA_FILE using the injected contract. Keep assumptions explicit, never describe an assumption as verified. Reference consumed and premise claims by the exact supplied ID:vN. New claims use localId, never invented canonical IDs. Never edit Argus's supplied context files. Stop and report blocked on a missing prerequisite or conflicting requirements; never invent success or retry a failed fix without fresh diagnosis. No background work may remain at completion.\n\nRead this iteration's decision, implementation and verification reports and all supplied canonical knowledge. Write docs/iterations/1/learning.md and graph-change.json. Publish a KnowledgeDelta with one to three evidence-backed durable claims, plus justified revisions where evidence actually contradicts a supplied claim. Grow meaningful justification/evidence/consumption edges: identify the exact prior claims supporting a conclusion, cite real verification documents or source files, and record consumed refs. Do not add unsupported claims simply to inflate graph size, duplicate prior rules or treat proposed behavior as proven business value. Preserve uncertainty. Record candidate next questions for the following planner. State which knowledge is new, changed, retained or still unknown. The delta must be nonempty and valid; use expectedRevision for revisions and exact supplied refs for premises.",
+              "model": "gpt-5.5",
+              "reasoningEffort": "high"
+            }
+          ],
+          "gated": false,
+          "needs": [
+            "7f9c9f4f-73d3-4aca-9312-0271ebbe7fbf"
+          ],
+          "checks": [
+            {
+              "kind": "file",
+              "path": "docs/iterations/1/learning.md",
+              "minBytes": 100
+            },
+            {
+              "kind": "file",
+              "path": "docs/iterations/1/graph-change.json",
+              "minBytes": 100
+            }
+          ],
+          "knowledgeDelta": "required",
+          "knowledgeContext": {
+            "claims": [
+              {
+                "id": "RULE-a68e1104.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-601253ed.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-b7f950c7.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-7958a127.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "DECISION-4ffa4f8e.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "ASSUME-c695ffe5.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-c6a8ad60.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "CONSTRAINT-bdee3ebc.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-5b30a2a6.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-38533031.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "DECISION-936b8783.a4080615",
+                "revision": "active"
+              }
+            ],
+            "fromPhases": [
+              {
+                "phaseId": "713c76cc-d89d-41ea-b322-d7c83e47920c"
+              }
+            ]
+          }
+        },
+        {
+          "id": "64f470c7-175b-4480-a7f0-7ffcf6dc8246",
+          "name": "Iteration 2: graph-based planning",
+          "cwd": "C:/GIT/Argus/experiments/knowledge-loop",
+          "steps": [
+            {
+              "name": "Iteration 2: graph-based planning",
+              "prompt": "Work only in C:/GIT/Argus/experiments/knowledge-loop. Build Workshop Studio: a polished local web app for workshop discovery, bookings and waitlists. This is a development-process experiment: durable business knowledge and traceable decisions matter as much as the UI. Use synthetic data; no payment services or deployment. Follow SOLID and keep the scope small. Do not commit, push, or alter Argus source or other projects. Stage only this app's changes when handing off. Every invocation is fresh: read the project's brief, relevant iteration documents and ARGUS_KNOWLEDGE_CONTEXT_FILE before acting. Never edit Argus's canonical knowledge store or read another project's claims. Publish knowledge only through ARGUS_KNOWLEDGE_DELTA_FILE using the injected contract. Keep assumptions explicit, never describe an assumption as verified. Reference consumed and premise claims by the exact supplied ID:vN. New claims use localId, never invented canonical IDs. Never edit Argus's supplied context files. Stop and report blocked on a missing prerequisite or conflicting requirements; never invent success or retry a failed fix without fresh diagnosis. No background work may remain at completion.\n\nRead all supplied canonical knowledge, including earlier decisions and learning, plus docs/business-brief.md and existing verification reports. Write docs/iterations/2/decision.md and docs/iterations/2/decision.json. Compare at least three feasible next increments by user value, evidence strength, dependency readiness and risk. Choose exactly one small increment; for iteration 1 it must produce a runnable end-to-end MVP. Later choices must respond to previous verification or business findings, not simply follow a predefined feature list. Cite exact premise refs and show why the alternatives lost. Record acceptance criteria, preserved rules, test plan, uncertainties and intended changes. Write a KnowledgeDelta containing at most two claims: a decision justified by supplied premises, and optionally an explicitly labelled assumption. Record consumed refs and attach evidence to the decision document. Preserve previous decisions as history; a new choice must not silently rewrite them. The final message must include the selected option, alternatives and premise refs.",
+              "model": "gpt-5.5",
+              "reasoningEffort": "high"
+            }
+          ],
+          "gated": false,
+          "needs": [
+            "e8e03be3-9988-45ec-81e5-81218f5935c0"
+          ],
+          "rubric": {
+            "goal": "Choose the next product increment from canonical business knowledge with explicit evidence and preserved rules.",
+            "criteria": [
+              {
+                "id": "knowledge-grounding",
+                "label": "The selected increment cites exact supplied business claims and prior learning.",
+                "weight": 3
+              },
+              {
+                "id": "alternatives",
+                "label": "Three alternatives are compared with defensible trade-offs."
+              },
+              {
+                "id": "acceptance",
+                "label": "The plan has measurable acceptance criteria and preserves established rules.",
+                "weight": 2
+              }
+            ]
+          },
+          "checks": [
+            {
+              "kind": "file",
+              "path": "docs/iterations/2/decision.md",
+              "minBytes": 100
+            },
+            {
+              "kind": "file",
+              "path": "docs/iterations/2/decision.json",
+              "minBytes": 100
+            }
+          ],
+          "knowledgeDelta": "required",
+          "knowledgeContext": {
+            "claims": [
+              {
+                "id": "RULE-a68e1104.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-601253ed.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-b7f950c7.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-7958a127.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "DECISION-4ffa4f8e.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "ASSUME-c695ffe5.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-c6a8ad60.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "CONSTRAINT-bdee3ebc.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-5b30a2a6.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-38533031.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "DECISION-936b8783.a4080615",
+                "revision": "active"
+              }
+            ],
+            "fromPhases": [
+              {
+                "phaseId": "713c76cc-d89d-41ea-b322-d7c83e47920c"
+              },
+              {
+                "phaseId": "e8e03be3-9988-45ec-81e5-81218f5935c0"
+              }
+            ]
+          }
+        },
+        {
+          "id": "2cd6e29a-b1ab-4f5d-9359-fb24a8a85ff1",
+          "name": "Iteration 2: implement selected increment",
+          "cwd": "C:/GIT/Argus/experiments/knowledge-loop",
+          "steps": [
+            {
+              "name": "Iteration 2: implement selected increment",
+              "prompt": "Work only in C:/GIT/Argus/experiments/knowledge-loop. Build Workshop Studio: a polished local web app for workshop discovery, bookings and waitlists. This is a development-process experiment: durable business knowledge and traceable decisions matter as much as the UI. Use synthetic data; no payment services or deployment. Follow SOLID and keep the scope small. Do not commit, push, or alter Argus source or other projects. Stage only this app's changes when handing off. Every invocation is fresh: read the project's brief, relevant iteration documents and ARGUS_KNOWLEDGE_CONTEXT_FILE before acting. Never edit Argus's canonical knowledge store or read another project's claims. Publish knowledge only through ARGUS_KNOWLEDGE_DELTA_FILE using the injected contract. Keep assumptions explicit, never describe an assumption as verified. Reference consumed and premise claims by the exact supplied ID:vN. New claims use localId, never invented canonical IDs. Never edit Argus's supplied context files. Stop and report blocked on a missing prerequisite or conflicting requirements; never invent success or retry a failed fix without fresh diagnosis. No background work may remain at completion.\n\nRead docs/iterations/2/decision.md and decision.json and all supplied knowledge. Implement only the selected increment. In iteration 1 use a minimal TypeScript web stack with local persistence, synthetic workshop data, a distinctive coherent visual design and responsive accessible UI. Provide package.json scripts build and test; tests must cover meaningful business behavior rather than mirror implementation. In later iterations reuse the existing stack. Run the relevant checks, then write docs/iterations/2/implementation.md describing files changed, behavior implemented, validation and limitations. Preserve all established business rules. Do not publish a KnowledgeDelta in this implementation phase: findings are evaluated by the following verification and learning phases. Do not claim that a successful build proves browser behavior."
+            }
+          ],
+          "gated": false,
+          "needs": [
+            "64f470c7-175b-4480-a7f0-7ffcf6dc8246"
+          ],
+          "checks": [
+            {
+              "kind": "file",
+              "path": "docs/iterations/2/implementation.md",
+              "minBytes": 100
+            },
+            {
+              "kind": "command",
+              "run": "npm run build",
+              "timeoutSeconds": 180
+            },
+            {
+              "kind": "command",
+              "run": "npm test",
+              "timeoutSeconds": 180
+            }
+          ],
+          "knowledgeContext": {
+            "claims": [
+              {
+                "id": "RULE-a68e1104.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-601253ed.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-b7f950c7.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-7958a127.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "DECISION-4ffa4f8e.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "ASSUME-c695ffe5.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-c6a8ad60.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "CONSTRAINT-bdee3ebc.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-5b30a2a6.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-38533031.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "DECISION-936b8783.a4080615",
+                "revision": "active"
+              }
+            ],
+            "fromPhases": [
+              {
+                "phaseId": "713c76cc-d89d-41ea-b322-d7c83e47920c"
+              },
+              {
+                "phaseId": "e8e03be3-9988-45ec-81e5-81218f5935c0"
+              },
+              {
+                "phaseId": "64f470c7-175b-4480-a7f0-7ffcf6dc8246"
+              }
+            ]
+          }
+        },
+        {
+          "id": "120370db-88d6-4577-a0c1-734a31a9550e",
+          "name": "Iteration 2: verify behavior against knowledge",
+          "cwd": "C:/GIT/Argus/experiments/knowledge-loop",
+          "steps": [
+            {
+              "name": "Iteration 2: verify behavior against knowledge",
+              "prompt": "Work only in C:/GIT/Argus/experiments/knowledge-loop. Build Workshop Studio: a polished local web app for workshop discovery, bookings and waitlists. This is a development-process experiment: durable business knowledge and traceable decisions matter as much as the UI. Use synthetic data; no payment services or deployment. Follow SOLID and keep the scope small. Do not commit, push, or alter Argus source or other projects. Stage only this app's changes when handing off. Every invocation is fresh: read the project's brief, relevant iteration documents and ARGUS_KNOWLEDGE_CONTEXT_FILE before acting. Never edit Argus's canonical knowledge store or read another project's claims. Publish knowledge only through ARGUS_KNOWLEDGE_DELTA_FILE using the injected contract. Keep assumptions explicit, never describe an assumption as verified. Reference consumed and premise claims by the exact supplied ID:vN. New claims use localId, never invented canonical IDs. Never edit Argus's supplied context files. Stop and report blocked on a missing prerequisite or conflicting requirements; never invent success or retry a failed fix without fresh diagnosis. No background work may remain at completion.\n\nIndependently inspect the implementation against docs/iterations/2/decision.md, every supplied business rule and prior regression requirements. Run npm run build and npm test. Exercise a browser flow if browser tooling is available: browse a workshop, book its last place, attempt overbooking/duplicate booking, join its waitlist and cancel a booking. Use the tests and graph to choose additional cases for this iteration. Write docs/iterations/2/verification.md and verification.json: criterion-by-criterion outcome, business-rule conformance, exact commands/results and evidence locations, unmet criteria and limits. Separate deterministic test evidence, observed browser behavior and unverified behavior. A missing required capability or an unmet acceptance criterion is blocked/failed, not success. Do not publish a KnowledgeDelta in this phase. Do not fix code here or convert a failing test into a weakened business rule.",
+              "reasoningEffort": "high"
+            }
+          ],
+          "gated": false,
+          "needs": [
+            "2cd6e29a-b1ab-4f5d-9359-fb24a8a85ff1"
+          ],
+          "checks": [
+            {
+              "kind": "file",
+              "path": "docs/iterations/2/verification.md",
+              "minBytes": 100
+            },
+            {
+              "kind": "file",
+              "path": "docs/iterations/2/verification.json",
+              "minBytes": 100
+            },
+            {
+              "kind": "command",
+              "run": "npm run build",
+              "timeoutSeconds": 180
+            },
+            {
+              "kind": "command",
+              "run": "npm test",
+              "timeoutSeconds": 180
+            }
+          ],
+          "knowledgeContext": {
+            "claims": [
+              {
+                "id": "RULE-a68e1104.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-601253ed.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-b7f950c7.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-7958a127.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "DECISION-4ffa4f8e.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "ASSUME-c695ffe5.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-c6a8ad60.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "CONSTRAINT-bdee3ebc.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-5b30a2a6.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-38533031.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "DECISION-936b8783.a4080615",
+                "revision": "active"
+              }
+            ],
+            "fromPhases": [
+              {
+                "phaseId": "713c76cc-d89d-41ea-b322-d7c83e47920c"
+              },
+              {
+                "phaseId": "e8e03be3-9988-45ec-81e5-81218f5935c0"
+              },
+              {
+                "phaseId": "64f470c7-175b-4480-a7f0-7ffcf6dc8246"
+              }
+            ]
+          }
+        },
+        {
+          "id": "4e9737b0-d672-4b6b-b5a0-a11c30f177c7",
+          "name": "Iteration 2: expand business graph",
+          "cwd": "C:/GIT/Argus/experiments/knowledge-loop",
+          "steps": [
+            {
+              "name": "Iteration 2: expand business graph",
+              "prompt": "Work only in C:/GIT/Argus/experiments/knowledge-loop. Build Workshop Studio: a polished local web app for workshop discovery, bookings and waitlists. This is a development-process experiment: durable business knowledge and traceable decisions matter as much as the UI. Use synthetic data; no payment services or deployment. Follow SOLID and keep the scope small. Do not commit, push, or alter Argus source or other projects. Stage only this app's changes when handing off. Every invocation is fresh: read the project's brief, relevant iteration documents and ARGUS_KNOWLEDGE_CONTEXT_FILE before acting. Never edit Argus's canonical knowledge store or read another project's claims. Publish knowledge only through ARGUS_KNOWLEDGE_DELTA_FILE using the injected contract. Keep assumptions explicit, never describe an assumption as verified. Reference consumed and premise claims by the exact supplied ID:vN. New claims use localId, never invented canonical IDs. Never edit Argus's supplied context files. Stop and report blocked on a missing prerequisite or conflicting requirements; never invent success or retry a failed fix without fresh diagnosis. No background work may remain at completion.\n\nRead this iteration's decision, implementation and verification reports and all supplied canonical knowledge. Write docs/iterations/2/learning.md and graph-change.json. Publish a KnowledgeDelta with one to three evidence-backed durable claims, plus justified revisions where evidence actually contradicts a supplied claim. Grow meaningful justification/evidence/consumption edges: identify the exact prior claims supporting a conclusion, cite real verification documents or source files, and record consumed refs. Do not add unsupported claims simply to inflate graph size, duplicate prior rules or treat proposed behavior as proven business value. Preserve uncertainty. Record candidate next questions for the following planner. State which knowledge is new, changed, retained or still unknown. The delta must be nonempty and valid; use expectedRevision for revisions and exact supplied refs for premises.",
+              "reasoningEffort": "high"
+            }
+          ],
+          "gated": false,
+          "needs": [
+            "120370db-88d6-4577-a0c1-734a31a9550e"
+          ],
+          "checks": [
+            {
+              "kind": "file",
+              "path": "docs/iterations/2/learning.md",
+              "minBytes": 100
+            },
+            {
+              "kind": "file",
+              "path": "docs/iterations/2/graph-change.json",
+              "minBytes": 100
+            }
+          ],
+          "knowledgeDelta": "required",
+          "knowledgeContext": {
+            "claims": [
+              {
+                "id": "RULE-a68e1104.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-601253ed.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-b7f950c7.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-7958a127.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "DECISION-4ffa4f8e.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "ASSUME-c695ffe5.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-c6a8ad60.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "CONSTRAINT-bdee3ebc.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-5b30a2a6.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-38533031.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "DECISION-936b8783.a4080615",
+                "revision": "active"
+              }
+            ],
+            "fromPhases": [
+              {
+                "phaseId": "713c76cc-d89d-41ea-b322-d7c83e47920c"
+              },
+              {
+                "phaseId": "e8e03be3-9988-45ec-81e5-81218f5935c0"
+              },
+              {
+                "phaseId": "64f470c7-175b-4480-a7f0-7ffcf6dc8246"
+              }
+            ]
+          }
+        },
+        {
+          "id": "d5f23c04-4015-489a-a013-65847be4d5ec",
+          "name": "Iteration 3: graph-based planning",
+          "cwd": "C:/GIT/Argus/experiments/knowledge-loop",
+          "steps": [
+            {
+              "name": "Iteration 3: graph-based planning",
+              "prompt": "Work only in C:/GIT/Argus/experiments/knowledge-loop. Build Workshop Studio: a polished local web app for workshop discovery, bookings and waitlists. This is a development-process experiment: durable business knowledge and traceable decisions matter as much as the UI. Use synthetic data; no payment services or deployment. Follow SOLID and keep the scope small. Do not commit, push, or alter Argus source or other projects. Stage only this app's changes when handing off. Every invocation is fresh: read the project's brief, relevant iteration documents and ARGUS_KNOWLEDGE_CONTEXT_FILE before acting. Never edit Argus's canonical knowledge store or read another project's claims. Publish knowledge only through ARGUS_KNOWLEDGE_DELTA_FILE using the injected contract. Keep assumptions explicit, never describe an assumption as verified. Reference consumed and premise claims by the exact supplied ID:vN. New claims use localId, never invented canonical IDs. Never edit Argus's supplied context files. Stop and report blocked on a missing prerequisite or conflicting requirements; never invent success or retry a failed fix without fresh diagnosis. No background work may remain at completion.\n\nRead all supplied canonical knowledge, including earlier decisions and learning, plus docs/business-brief.md and existing verification reports. Write docs/iterations/3/decision.md and docs/iterations/3/decision.json. Compare at least three feasible next increments by user value, evidence strength, dependency readiness and risk. Choose exactly one small increment; for iteration 1 it must produce a runnable end-to-end MVP. Later choices must respond to previous verification or business findings, not simply follow a predefined feature list. Cite exact premise refs and show why the alternatives lost. Record acceptance criteria, preserved rules, test plan, uncertainties and intended changes. Write a KnowledgeDelta containing at most two claims: a decision justified by supplied premises, and optionally an explicitly labelled assumption. Record consumed refs and attach evidence to the decision document. Preserve previous decisions as history; a new choice must not silently rewrite them. The final message must include the selected option, alternatives and premise refs.",
+              "model": "gpt-5.5",
+              "reasoningEffort": "high"
+            }
+          ],
+          "gated": false,
+          "needs": [
+            "4e9737b0-d672-4b6b-b5a0-a11c30f177c7"
+          ],
+          "rubric": {
+            "goal": "Choose the next product increment from canonical business knowledge with explicit evidence and preserved rules.",
+            "criteria": [
+              {
+                "id": "knowledge-grounding",
+                "label": "The selected increment cites exact supplied business claims and prior learning.",
+                "weight": 3
+              },
+              {
+                "id": "alternatives",
+                "label": "Three alternatives are compared with defensible trade-offs."
+              },
+              {
+                "id": "acceptance",
+                "label": "The plan has measurable acceptance criteria and preserves established rules.",
+                "weight": 2
+              }
+            ]
+          },
+          "checks": [
+            {
+              "kind": "file",
+              "path": "docs/iterations/3/decision.md",
+              "minBytes": 100
+            },
+            {
+              "kind": "file",
+              "path": "docs/iterations/3/decision.json",
+              "minBytes": 100
+            }
+          ],
+          "knowledgeDelta": "required",
+          "knowledgeContext": {
+            "claims": [
+              {
+                "id": "RULE-a68e1104.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-601253ed.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-b7f950c7.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-7958a127.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "DECISION-4ffa4f8e.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "ASSUME-c695ffe5.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-c6a8ad60.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "CONSTRAINT-bdee3ebc.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-5b30a2a6.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-38533031.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "DECISION-936b8783.a4080615",
+                "revision": "active"
+              }
+            ],
+            "fromPhases": [
+              {
+                "phaseId": "713c76cc-d89d-41ea-b322-d7c83e47920c"
+              },
+              {
+                "phaseId": "e8e03be3-9988-45ec-81e5-81218f5935c0"
+              },
+              {
+                "phaseId": "64f470c7-175b-4480-a7f0-7ffcf6dc8246"
+              },
+              {
+                "phaseId": "4e9737b0-d672-4b6b-b5a0-a11c30f177c7"
+              }
+            ]
+          }
+        },
+        {
+          "id": "55d9888a-2f9d-445d-9ff2-ebbd69062fb4",
+          "name": "Iteration 3: implement selected increment",
+          "cwd": "C:/GIT/Argus/experiments/knowledge-loop",
+          "steps": [
+            {
+              "name": "Iteration 3: implement selected increment",
+              "prompt": "Work only in C:/GIT/Argus/experiments/knowledge-loop. Build Workshop Studio: a polished local web app for workshop discovery, bookings and waitlists. This is a development-process experiment: durable business knowledge and traceable decisions matter as much as the UI. Use synthetic data; no payment services or deployment. Follow SOLID and keep the scope small. Do not commit, push, or alter Argus source or other projects. Stage only this app's changes when handing off. Every invocation is fresh: read the project's brief, relevant iteration documents and ARGUS_KNOWLEDGE_CONTEXT_FILE before acting. Never edit Argus's canonical knowledge store or read another project's claims. Publish knowledge only through ARGUS_KNOWLEDGE_DELTA_FILE using the injected contract. Keep assumptions explicit, never describe an assumption as verified. Reference consumed and premise claims by the exact supplied ID:vN. New claims use localId, never invented canonical IDs. Never edit Argus's supplied context files. Stop and report blocked on a missing prerequisite or conflicting requirements; never invent success or retry a failed fix without fresh diagnosis. No background work may remain at completion.\n\nRead docs/iterations/3/decision.md and decision.json and all supplied knowledge. Implement only the selected increment. In iteration 1 use a minimal TypeScript web stack with local persistence, synthetic workshop data, a distinctive coherent visual design and responsive accessible UI. Provide package.json scripts build and test; tests must cover meaningful business behavior rather than mirror implementation. In later iterations reuse the existing stack. Run the relevant checks, then write docs/iterations/3/implementation.md describing files changed, behavior implemented, validation and limitations. Preserve all established business rules. Do not publish a KnowledgeDelta in this implementation phase: findings are evaluated by the following verification and learning phases. Do not claim that a successful build proves browser behavior."
+            }
+          ],
+          "gated": false,
+          "needs": [
+            "d5f23c04-4015-489a-a013-65847be4d5ec"
+          ],
+          "checks": [
+            {
+              "kind": "file",
+              "path": "docs/iterations/3/implementation.md",
+              "minBytes": 100
+            },
+            {
+              "kind": "command",
+              "run": "npm run build",
+              "timeoutSeconds": 180
+            },
+            {
+              "kind": "command",
+              "run": "npm test",
+              "timeoutSeconds": 180
+            }
+          ],
+          "knowledgeContext": {
+            "claims": [
+              {
+                "id": "RULE-a68e1104.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-601253ed.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-b7f950c7.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-7958a127.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "DECISION-4ffa4f8e.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "ASSUME-c695ffe5.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-c6a8ad60.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "CONSTRAINT-bdee3ebc.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-5b30a2a6.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-38533031.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "DECISION-936b8783.a4080615",
+                "revision": "active"
+              }
+            ],
+            "fromPhases": [
+              {
+                "phaseId": "713c76cc-d89d-41ea-b322-d7c83e47920c"
+              },
+              {
+                "phaseId": "e8e03be3-9988-45ec-81e5-81218f5935c0"
+              },
+              {
+                "phaseId": "64f470c7-175b-4480-a7f0-7ffcf6dc8246"
+              },
+              {
+                "phaseId": "4e9737b0-d672-4b6b-b5a0-a11c30f177c7"
+              },
+              {
+                "phaseId": "d5f23c04-4015-489a-a013-65847be4d5ec"
+              }
+            ]
+          }
+        },
+        {
+          "id": "442e3ee8-47d3-4e93-afa5-8163be500700",
+          "name": "Iteration 3: verify behavior against knowledge",
+          "cwd": "C:/GIT/Argus/experiments/knowledge-loop",
+          "steps": [
+            {
+              "name": "Iteration 3: verify behavior against knowledge",
+              "prompt": "Work only in C:/GIT/Argus/experiments/knowledge-loop. Build Workshop Studio: a polished local web app for workshop discovery, bookings and waitlists. This is a development-process experiment: durable business knowledge and traceable decisions matter as much as the UI. Use synthetic data; no payment services or deployment. Follow SOLID and keep the scope small. Do not commit, push, or alter Argus source or other projects. Stage only this app's changes when handing off. Every invocation is fresh: read the project's brief, relevant iteration documents and ARGUS_KNOWLEDGE_CONTEXT_FILE before acting. Never edit Argus's canonical knowledge store or read another project's claims. Publish knowledge only through ARGUS_KNOWLEDGE_DELTA_FILE using the injected contract. Keep assumptions explicit, never describe an assumption as verified. Reference consumed and premise claims by the exact supplied ID:vN. New claims use localId, never invented canonical IDs. Never edit Argus's supplied context files. Stop and report blocked on a missing prerequisite or conflicting requirements; never invent success or retry a failed fix without fresh diagnosis. No background work may remain at completion.\n\nIndependently inspect the implementation against docs/iterations/3/decision.md, every supplied business rule and prior regression requirements. Run npm run build and npm test. Exercise a browser flow if browser tooling is available: browse a workshop, book its last place, attempt overbooking/duplicate booking, join its waitlist and cancel a booking. Use the tests and graph to choose additional cases for this iteration. Write docs/iterations/3/verification.md and verification.json: criterion-by-criterion outcome, business-rule conformance, exact commands/results and evidence locations, unmet criteria and limits. Separate deterministic test evidence, observed browser behavior and unverified behavior. A missing required capability or an unmet acceptance criterion is blocked/failed, not success. Do not publish a KnowledgeDelta in this phase. Do not fix code here or convert a failing test into a weakened business rule."
+            }
+          ],
+          "gated": false,
+          "needs": [
+            "55d9888a-2f9d-445d-9ff2-ebbd69062fb4"
+          ],
+          "checks": [
+            {
+              "kind": "file",
+              "path": "docs/iterations/3/verification.md",
+              "minBytes": 100
+            },
+            {
+              "kind": "file",
+              "path": "docs/iterations/3/verification.json",
+              "minBytes": 100
+            },
+            {
+              "kind": "command",
+              "run": "npm run build",
+              "timeoutSeconds": 180
+            },
+            {
+              "kind": "command",
+              "run": "npm test",
+              "timeoutSeconds": 180
+            }
+          ],
+          "knowledgeContext": {
+            "claims": [
+              {
+                "id": "RULE-a68e1104.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-601253ed.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-b7f950c7.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-7958a127.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "DECISION-4ffa4f8e.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "ASSUME-c695ffe5.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-c6a8ad60.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "CONSTRAINT-bdee3ebc.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-5b30a2a6.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-38533031.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "DECISION-936b8783.a4080615",
+                "revision": "active"
+              }
+            ],
+            "fromPhases": [
+              {
+                "phaseId": "713c76cc-d89d-41ea-b322-d7c83e47920c"
+              },
+              {
+                "phaseId": "e8e03be3-9988-45ec-81e5-81218f5935c0"
+              },
+              {
+                "phaseId": "64f470c7-175b-4480-a7f0-7ffcf6dc8246"
+              },
+              {
+                "phaseId": "4e9737b0-d672-4b6b-b5a0-a11c30f177c7"
+              },
+              {
+                "phaseId": "d5f23c04-4015-489a-a013-65847be4d5ec"
+              }
+            ]
+          }
+        },
+        {
+          "id": "ae7cf4c4-22f3-484d-bba3-1135098bd32e",
+          "name": "Iteration 3: expand business graph",
+          "cwd": "C:/GIT/Argus/experiments/knowledge-loop",
+          "steps": [
+            {
+              "name": "Iteration 3: expand business graph",
+              "prompt": "Work only in C:/GIT/Argus/experiments/knowledge-loop. Build Workshop Studio: a polished local web app for workshop discovery, bookings and waitlists. This is a development-process experiment: durable business knowledge and traceable decisions matter as much as the UI. Use synthetic data; no payment services or deployment. Follow SOLID and keep the scope small. Do not commit, push, or alter Argus source or other projects. Stage only this app's changes when handing off. Every invocation is fresh: read the project's brief, relevant iteration documents and ARGUS_KNOWLEDGE_CONTEXT_FILE before acting. Never edit Argus's canonical knowledge store or read another project's claims. Publish knowledge only through ARGUS_KNOWLEDGE_DELTA_FILE using the injected contract. Keep assumptions explicit, never describe an assumption as verified. Reference consumed and premise claims by the exact supplied ID:vN. New claims use localId, never invented canonical IDs. Never edit Argus's supplied context files. Stop and report blocked on a missing prerequisite or conflicting requirements; never invent success or retry a failed fix without fresh diagnosis. No background work may remain at completion.\n\nRead this iteration's decision, implementation and verification reports and all supplied canonical knowledge. Write docs/iterations/3/learning.md and graph-change.json. Publish a KnowledgeDelta with one to three evidence-backed durable claims, plus justified revisions where evidence actually contradicts a supplied claim. Grow meaningful justification/evidence/consumption edges: identify the exact prior claims supporting a conclusion, cite real verification documents or source files, and record consumed refs. Do not add unsupported claims simply to inflate graph size, duplicate prior rules or treat proposed behavior as proven business value. Preserve uncertainty. Record candidate next questions for the following planner. State which knowledge is new, changed, retained or still unknown. The delta must be nonempty and valid; use expectedRevision for revisions and exact supplied refs for premises.",
+              "model": "gpt-5.5",
+              "reasoningEffort": "high"
+            }
+          ],
+          "gated": false,
+          "needs": [
+            "442e3ee8-47d3-4e93-afa5-8163be500700"
+          ],
+          "checks": [
+            {
+              "kind": "file",
+              "path": "docs/iterations/3/learning.md",
+              "minBytes": 100
+            },
+            {
+              "kind": "file",
+              "path": "docs/iterations/3/graph-change.json",
+              "minBytes": 100
+            }
+          ],
+          "knowledgeDelta": "required",
+          "knowledgeContext": {
+            "claims": [
+              {
+                "id": "RULE-a68e1104.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-601253ed.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-b7f950c7.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-7958a127.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "DECISION-4ffa4f8e.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "ASSUME-c695ffe5.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-c6a8ad60.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "CONSTRAINT-bdee3ebc.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-5b30a2a6.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-38533031.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "DECISION-936b8783.a4080615",
+                "revision": "active"
+              }
+            ],
+            "fromPhases": [
+              {
+                "phaseId": "713c76cc-d89d-41ea-b322-d7c83e47920c"
+              },
+              {
+                "phaseId": "e8e03be3-9988-45ec-81e5-81218f5935c0"
+              },
+              {
+                "phaseId": "64f470c7-175b-4480-a7f0-7ffcf6dc8246"
+              },
+              {
+                "phaseId": "4e9737b0-d672-4b6b-b5a0-a11c30f177c7"
+              },
+              {
+                "phaseId": "d5f23c04-4015-489a-a013-65847be4d5ec"
+              }
+            ]
+          }
+        },
+        {
+          "id": "4a044875-e975-47ef-b507-4b5c8c06f957",
+          "name": "Evaluate knowledge-driven development experiment",
+          "cwd": "C:/GIT/Argus/experiments/knowledge-loop",
+          "steps": [
+            {
+              "name": "Evaluate knowledge-driven development experiment",
+              "prompt": "Work only in C:/GIT/Argus/experiments/knowledge-loop. Build Workshop Studio: a polished local web app for workshop discovery, bookings and waitlists. This is a development-process experiment: durable business knowledge and traceable decisions matter as much as the UI. Use synthetic data; no payment services or deployment. Follow SOLID and keep the scope small. Do not commit, push, or alter Argus source or other projects. Stage only this app's changes when handing off. Every invocation is fresh: read the project's brief, relevant iteration documents and ARGUS_KNOWLEDGE_CONTEXT_FILE before acting. Never edit Argus's canonical knowledge store or read another project's claims. Publish knowledge only through ARGUS_KNOWLEDGE_DELTA_FILE using the injected contract. Keep assumptions explicit, never describe an assumption as verified. Reference consumed and premise claims by the exact supplied ID:vN. New claims use localId, never invented canonical IDs. Never edit Argus's supplied context files. Stop and report blocked on a missing prerequisite or conflicting requirements; never invent success or retry a failed fix without fresh diagnosis. No background work may remain at completion.\n\nRead all supplied claims and all three iterations' artifacts. Write docs/experiment-report.md and experiment-report.json. Demonstrate: which exact knowledge revisions each planner consumed, decisions derived from those premises, evidence added per iteration, changed assumptions and preserved rules, and how later decisions differ because of earlier learning. Measure claims and meaningful edges using actual accepted records; distinguish planned deltas from accepted Ledger knowledge. Do not invent canonical IDs or query unauthorized scopes. Report whether graph expansion improved decisions, with counterexamples and remaining gaps. Explain that planner phases are agent reasoning backed by Knowledge Ledger; native Decision Plane gate/failure assessment is distinct and no experimental collection was enabled by this pipeline. Include final run/build/test instructions and known limits. Do not publish additional knowledge or start another cycle."
+            }
+          ],
+          "gated": false,
+          "needs": [
+            "ae7cf4c4-22f3-484d-bba3-1135098bd32e"
+          ],
+          "checks": [
+            {
+              "kind": "file",
+              "path": "docs/experiment-report.md",
+              "minBytes": 100
+            },
+            {
+              "kind": "file",
+              "path": "docs/experiment-report.json",
+              "minBytes": 100
+            }
+          ],
+          "knowledgeContext": {
+            "claims": [
+              {
+                "id": "RULE-a68e1104.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-601253ed.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-b7f950c7.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-7958a127.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "DECISION-4ffa4f8e.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "ASSUME-c695ffe5.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-c6a8ad60.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "CONSTRAINT-bdee3ebc.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-5b30a2a6.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "RULE-38533031.a4080615",
+                "revision": "active"
+              },
+              {
+                "id": "DECISION-936b8783.a4080615",
+                "revision": "active"
+              }
+            ],
+            "fromPhases": [
+              {
+                "phaseId": "713c76cc-d89d-41ea-b322-d7c83e47920c"
+              },
+              {
+                "phaseId": "e8e03be3-9988-45ec-81e5-81218f5935c0"
+              },
+              {
+                "phaseId": "64f470c7-175b-4480-a7f0-7ffcf6dc8246"
+              },
+              {
+                "phaseId": "4e9737b0-d672-4b6b-b5a0-a11c30f177c7"
+              },
+              {
+                "phaseId": "d5f23c04-4015-489a-a013-65847be4d5ec"
+              },
+              {
+                "phaseId": "ae7cf4c4-22f3-484d-bba3-1135098bd32e"
+              }
+            ]
+          }
+        }
+      ],
+      "trigger": null,
+      "enabled": true,
+      "overlapPolicy": "skip",
+      "runtime": "codex",
+      "knowledgeScope": {
+        "projectId": "workshop-studio-knowledge-loop"
+      },
+      "lastStartedAt": "2026-10-02T06:35:21.14Z",
+      "createdAt": "2026-10-01T17:45:17.597Z",
+      "updatedAt": "2026-10-02T12:31:28.234Z",
+      "model": "gpt-5.5",
+      "capabilities": {
+        "filesystem": "workspace-write"
+      }
+    },
+    {
+      "id": "8a4a1975-0cab-49d8-b9ca-46ca22ed511e",
+      "name": "H2 Shadow Evidence — 5 runs per hour",
+      "phases": [
+        {
+          "id": "307b92bf-2c43-4c84-8371-50a9f5e25a43",
+          "name": "Evaluate controlled business scenario",
+          "cwd": "C:/GIT/Argus/experiments/shadow-feeder",
+          "steps": [
+            {
+              "name": "Evaluate one case honestly",
+              "prompt": "This is a controlled, read-only business scenario benchmark for Argus H2 shadow measurement. Use the Bash tool to run exactly `node select-case.mjs` in the current directory, without a cd prefix or other commands. This exact command is pre-authorized. The selector reads ARGUS_RUN_ID from the actual process environment; do not infer environment availability from the prompt. If the command is denied, report the permission denial rather than claiming an environment variable is absent. Do not use PowerShell or inspect any additional file. Read the selected scenario, then fulfil its task using only the supplied facts. Return the corpus tag, scenario ID, run ID, calculation or reasoning, and the requested decision. Check your arithmetic and constraints. If a requested exact answer cannot be derived because required information is missing or the constraints contradict each other, explain exactly why and honestly report blocked against that task; do not invent data or silently choose which rule to ignore. A feasible task with a negative business decision is still successfully answered. Do not write any file, access the network, inspect other projects, or change Argus stores. Do not invoke skills, delegate, start background work, or perform implementation. Finish with a concise plain-text result, with enough evidence for a later reviewer to understand whether the task was accomplished. This controlled workload measures collection and trace sensitivity; it does not establish production failure rates or cause-label accuracy."
+            }
+          ],
+          "gated": false,
+          "timeoutSeconds": 240,
+          "capabilities": {
+            "filesystem": "read-only",
+            "tools": {
+              "allow": [
+                "Bash(node select-case.mjs)"
+              ],
+              "deny": [
+                "PowerShell",
+                "Edit",
+                "Write",
+                "NotebookEdit",
+                "WebFetch",
+                "WebSearch"
+              ]
+            }
+          }
+        }
+      ],
+      "trigger": {
+        "kind": "windowed",
+        "startTime": "00:00",
+        "endTime": "23:59",
+        "everyMinutes": 12
+      },
+      "enabled": true,
+      "overlapPolicy": "skip",
+      "lastStartedAt": "2026-10-08T22:00:23.056Z",
+      "createdAt": "2026-10-08T09:42:59.514Z",
+      "updatedAt": "2026-10-08T10:23:01.65Z",
+      "runtime": "claude",
+      "model": "haiku"
+    }
+  ]
+}

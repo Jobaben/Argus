@@ -48,11 +48,9 @@ import SetupBanner from "./views/SetupBanner";
  */
 const Briefing = lazy(() => import("./views/Briefing"));
 const Chronicle = lazy(() => import("./views/Chronicle"));
-const Launch = lazy(() => import("./views/Launch"));
 const Schedules = lazy(() => import("./views/Schedules"));
-const Monitors = lazy(() => import("./views/Monitors"));
+const Health = lazy(() => import("./views/Health"));
 const Fleet = lazy(() => import("./views/Fleet"));
-const Watchtower = lazy(() => import("./views/Watchtower"));
 const Sentinel = lazy(() => import("./views/Sentinel"));
 const Issues = lazy(() => import("./views/Issues"));
 const Pipelines = lazy(() => import("./views/Pipelines"));
@@ -60,15 +58,18 @@ const Budget = lazy(() => import("./views/Budget"));
 const Search = lazy(() => import("./views/Search"));
 const Stats = lazy(() => import("./views/Stats"));
 const Inventory = lazy(() => import("./views/Inventory"));
-const Projects = lazy(() => import("./views/Projects"));
-const Tasks = lazy(() => import("./views/Tasks"));
 const Users = lazy(() => import("./views/Users"));
+const DecisionExperiments = lazy(() => import("./views/DecisionExperiments"));
+const KnowledgeView = lazy(() => import("./views/knowledge/KnowledgeView"));
 const Sessions = lazy(() => import("./views/Sessions"));
-const ActivityFeed = lazy(() => import("./views/ActivityFeed"));
 const AgentDetail = lazy(() => import("./views/AgentDetail"));
 const FlightRecorder = lazy(() => import("./views/FlightRecorder"));
 import { useBriefing } from "./useBriefing";
 import { useAuth } from "./useAuth";
+import { applyLegacyRedirect, legacyRedirect } from "./legacyRoutes";
+const AdminAuthPanel = lazy(() =>
+  import("./views/AdminAuthPanel").then((m) => ({ default: m.AdminAuthPanel })),
+);
 import {
   CommandPalette,
   NAV_CHORDS,
@@ -151,28 +152,38 @@ function AgentsView({
   );
 }
 
+/**
+ * The nav, by role.
+ *
+ * Eight **destinations** in the bar: the ones with something to *do* or a
+ * question only they answer. Launch is the Scheduler's One-off sub-tab (a
+ * one-off run is a schedule with no trigger), and Monitors and Watchtower are
+ * the two halves of Health (both per-schedule, both read-only). Sentinel sits
+ * in the **overflow** menu with the reference pages: it holds the stateful
+ * record of signals the Briefing already surfaces, so it is where you go with
+ * an incident in hand, not where you learn about one. Search is reached by
+ * `/` and the palette. **Drill-downs** have no tab — links, breadcrumbs and the
+ * palette reach them — and legacy hashes are rewritten in `legacyRoutes.ts`.
+ */
 const TAB_META: { id: string; label: string; role: RouteRole }[] = [
   { id: "command", label: "Command Center", role: "destination" },
   { id: "briefing", label: "Briefing", role: "destination" },
   { id: "chronicle", label: "Chronicle", role: "destination" },
-  { id: "launch", label: "Launch", role: "destination" },
   { id: "schedules", label: "Scheduler", role: "destination" },
-  { id: "monitors", label: "Monitors", role: "destination" },
-  { id: "watchtower", label: "Watchtower", role: "destination" },
-  { id: "sentinel", label: "Sentinel", role: "destination" },
-  { id: "issues", label: "Issues", role: "destination" },
   { id: "pipelines", label: "Pipelines", role: "destination" },
+  { id: "health", label: "Health", role: "destination" },
+  { id: "issues", label: "Issues", role: "destination" },
   { id: "budget", label: "Budget", role: "destination" },
-  { id: "fleet", label: "Fleet", role: "overflow" },
-  { id: "search", label: "Search", role: "utility" },
+  { id: "sentinel", label: "Sentinel", role: "overflow" },
+  { id: "sessions", label: "Sessions", role: "overflow" },
   { id: "stats", label: "Stats", role: "overflow" },
   { id: "inventory", label: "Inventory", role: "overflow" },
-  { id: "projects", label: "Projects", role: "overflow" },
-  { id: "tasks", label: "Tasks", role: "overflow" },
+  { id: "fleet", label: "Fleet", role: "overflow" },
   { id: "users", label: "Users", role: "overflow" },
+  { id: "experiments", label: "Experiments", role: "overflow" },
+  { id: "knowledge", label: "Knowledge", role: "overflow" },
+  { id: "search", label: "Search", role: "utility" },
   { id: "agents", label: "Agents", role: "drilldown" },
-  { id: "sessions", label: "Sessions", role: "drilldown" },
-  { id: "activity", label: "Activity", role: "drilldown" },
   { id: "agent", label: "Detail", role: "drilldown" },
   { id: "run", label: "Flight Recorder", role: "drilldown" },
 ];
@@ -189,8 +200,15 @@ function ViewLoading({ label }: { label: string }) {
   );
 }
 
+function tabIdOf(hash: string): string {
+  return hash.replace(/^#\/?/, "").split("/")[0] || "command";
+}
+
+/** The tab the current hash means — a legacy hash resolved to its new home,
+ *  so the first paint is the right view and not one frame of the old one. */
 function currentTabId(): string {
-  return window.location.hash.replace(/^#\/?/, "").split("/")[0] || "command";
+  const hash = window.location.hash;
+  return tabIdOf(legacyRedirect(hash) ?? hash);
 }
 
 const ROLE_BY_TAB = new Map(TAB_META.map((t) => [t.id, t.role] as const));
@@ -220,7 +238,7 @@ async function postAction(path: string): Promise<void> {
   }
 }
 
-export default function App() {
+function Dashboard() {
   const [active, setActive] = useState<string>(currentTabId);
   const [direction, setDirection] = useState<RouteDirection>("lateral");
   const agentsState = useAgents();
@@ -263,7 +281,15 @@ export default function App() {
   const leavingRef = useRef(active);
   useEffect(() => {
     const onHash = () => {
+      // A legacy hash is rewritten in place; the rewrite fires its own
+      // hashchange, which is the one that navigates.
+      if (applyLegacyRedirect()) return;
       const next = currentTabId();
+      // A hash change that stays on the same view — a deep link opening a gate
+      // on the board, or the board dropping it again — changes nothing this
+      // container renders. A view transition here would crossfade the page
+      // into itself and, for its duration, hand hit-testing to the snapshot.
+      if (next === leavingRef.current) return;
       const direction = routeDirection(leavingRef.current, next, roleOf);
       leavingRef.current = next;
       setRouteDirection(direction);
@@ -275,6 +301,9 @@ export default function App() {
       startViewTransition(() => flushSync(() => setActive(next)));
     };
     window.addEventListener("hashchange", onHash);
+    // Arrived on a legacy hash: `currentTabId` already resolved the view, so
+    // this only fixes the address bar (and the history entry) to match.
+    applyLegacyRedirect();
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
@@ -356,7 +385,6 @@ export default function App() {
     () => ({
       destinations: paletteDestinations,
       canAdmin: auth.status?.authenticated === true,
-      approveGate: (instanceId: string) => postAction(`/api/instances/${instanceId}/approve`),
       runSchedule: (scheduleId: string) => postAction(`/api/schedules/${scheduleId}/run`),
       markCaughtUp: async () => {
         await briefingState.ack();
@@ -380,14 +408,10 @@ export default function App() {
         );
       case "chronicle":
         return <Chronicle />;
-      case "launch":
-        return <Launch />;
       case "schedules":
         return <Schedules />;
-      case "monitors":
-        return <Monitors />;
-      case "watchtower":
-        return <Watchtower />;
+      case "health":
+        return <Health />;
       case "sentinel":
         return <Sentinel />;
       case "issues":
@@ -404,12 +428,12 @@ export default function App() {
         return <Stats />;
       case "inventory":
         return <Inventory />;
-      case "projects":
-        return <Projects />;
-      case "tasks":
-        return <Tasks />;
       case "users":
         return <Users />;
+      case "experiments":
+        return <DecisionExperiments />;
+      case "knowledge":
+        return <KnowledgeView />;
       case "agents":
         return (
           <AgentsView
@@ -420,8 +444,6 @@ export default function App() {
         );
       case "sessions":
         return <Sessions />;
-      case "activity":
-        return <ActivityFeed />;
       case "agent":
         return <AgentDetail />;
       case "run":
@@ -485,6 +507,64 @@ export default function App() {
         onClose={() => setShortcutsOpen(false)}
         bindings={bindings}
       />
+    </div>
+  );
+}
+
+/**
+ * The sign-in wall for a token-gated server.
+ *
+ * `ARGUS_TOKEN` is mandatory on an exposed bind and unknowable to a browser, so
+ * a session is the only credential the UI can hold. Rendering the dashboard
+ * without one used to mount every data hook at once and retry each on a backoff
+ * — a screen of empty panels over a wall of 401s, with the only way in buried
+ * on the Pipelines page.
+ *
+ * Gating *above* `Dashboard` is what makes it quiet: the hooks live inside that
+ * subtree, so refusing to render it means the requests are never made, rather
+ * than made and discarded.
+ *
+ * Deliberately fails open. The wall appears only when the server says a session
+ * is required and we know we lack one; an unreachable `/api/auth/status` renders
+ * the dashboard, whose own error strips report a server that is down. Nothing is
+ * protected by this choice — every route is enforced server-side regardless —
+ * so the cost of guessing wrong is a login form nobody needed, and fail-open
+ * keeps a loopback server working exactly as before.
+ */
+export default function App() {
+  const { status, loading, login, setup, register } = useAuth();
+
+  if (status === null) {
+    // First status fetch in flight: showing nothing beats flashing a login form
+    // at someone who turns out to be signed in already.
+    return loading ? <ViewLoading label="Argus" /> : <Dashboard />;
+  }
+  if (!status.sessionRequired || status.authenticated) return <Dashboard />;
+
+  return (
+    <div className="flex min-h-screen items-center justify-center p-6">
+      <div className="w-full max-w-sm">
+        <h1 className="mb-1 text-lg text-ink">Argus</h1>
+        <p className="mb-6 text-sm text-ink-dim">
+          This server requires an account. Sign in to see the dashboard.
+        </p>
+        <ErrorBoundary label="Sign in" resetKey={String(status.configured)}>
+          <Suspense
+            fallback={
+              <Loading label="sign in">
+                <SkeletonGrid count={1} columns={1} lines={3} />
+              </Loading>
+            }
+          >
+            <AdminAuthPanel
+              configured={status.configured}
+              onLogin={login}
+              onSetup={setup}
+              onRegister={register}
+            />
+          </Suspense>
+        </ErrorBoundary>
+      </div>
     </div>
   );
 }

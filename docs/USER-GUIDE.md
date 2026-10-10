@@ -6,7 +6,7 @@ the XDG data directory OpenCode keeps. It watches the files those CLIs already w
 transcripts, history, stats) and turns them into a live web view — and it can
 fire its own scheduled and pipelined runs on top, on **any** of them.
 
-**Four runtimes.** Anywhere Argus starts a run — the Launch tab, a schedule, a
+**Four runtimes.** Anywhere Argus starts a run — a one-off run, a schedule, a
 pipeline — you can choose **Claude Code** (`claude -p`), **Codex**
 (`codex exec`), **OpenCode** (`opencode run`) or **Qwen Code** (`qwen`). Inside a
 pipeline the choice goes finer still: a phase, or a single step, can override the
@@ -37,10 +37,9 @@ hooks under `~/.claude/hooks/`, `~/.codex/hooks/` and `~/.qwen/hooks/`, a hook
 entry in `~/.claude/settings.json` and `~/.qwen/settings.json`, and an appended
 `[[hooks.stop]]` block in `~/.codex/config.toml` (appended — your existing config
 is never rewritten). The
-monitoring tabs (Agents, Sessions, Activity, Projects, Stats, Search,
-Inventory, Tasks) are observe-only, while the Launch, Scheduler, Pipelines,
-Issues, Budget and Users tabs let you create, run, revise, triage, cap and
-cancel work.
+monitoring views (Health, Agents, Sessions, Stats, Search, Inventory) are
+observe-only, while the Scheduler, Pipelines, Issues, Budget, Sentinel and
+Users tabs let you create, run, revise, triage, cap and cancel work.
 
 **Security note:** because Argus can launch agents with your
 credentials, the server binds to loopback (`127.0.0.1`) only and rejects
@@ -53,39 +52,41 @@ can do, and where the data comes from.
 
 ## Contents
 
-| #   | Feature                                | Route          | What it answers                            |
-| --- | -------------------------------------- | -------------- | ------------------------------------------ |
-| 0   | [Global UI](#global-ui)                | —              | nav, live dot, auto-refresh, setup banner  |
-| 1   | [Command Center](#1-command-center)    | `#/command`    | how are my pipelines doing right now?      |
-| 2   | [Briefing](#2-briefing)                | `#/briefing`   | what happened while I was away?            |
-| 3   | [Chronicle](#3-chronicle)              | `#/chronicle`  | what ran when, across every source?        |
-| 4   | [Launch](#4-launch)                    | `#/launch`     | fire one agent run right now               |
-| 5   | [Scheduler](#5-scheduler)              | `#/schedules`  | fire agent runs on a schedule              |
-| 6   | [Monitors](#6-monitors)                | `#/monitors`   | did my schedules actually run?             |
-| 7   | [Issues](#7-issues)                    | `#/issues`     | why are runs failing, grouped by cause?    |
-| 8   | [Pipelines](#8-pipelines)              | `#/pipelines`  | author multi-phase, human-gated flows      |
-| 9   | [Budget](#9-budget)                    | `#/budget`     | how much am I spending — and cap it        |
-| 10  | [Users & sign-in](#10-users--sign-in)  | `#/users`      | who may run/edit pipelines?                |
-| 11  | [Search](#11-search)                   | `#/search`     | where did I say/see _that_?                |
-| 12  | [Agents](#12-agents)                   | `#/agents`     | what's running / done / failed right now?  |
-| 13  | [Agent Detail](#13-agent-detail)       | `#/agent/<id>` | how did _this_ agent get here?             |
-| 14  | [Sessions](#14-sessions)               | `#/sessions`   | what was actually said in a conversation?  |
-| 15  | [Activity](#15-activity)               | `#/activity`   | what have I prompted lately, everywhere?   |
-| 16  | [Projects](#16-projects)               | `#/projects`   | which folders are active, and when?        |
-| 17  | [Stats](#17-stats)                     | `#/stats`      | what's my usage / cost / token spend?      |
-| 18  | [Inventory](#18-inventory)             | `#/inventory`  | what's installed and available?            |
-| 19  | [Tasks](#19-tasks)                     | `#/tasks`      | what task workspaces exist / are locked?   |
-| 20  | [Cron panel](#20-cron-panel)           | Scheduler tab  | why native cron routines can't be shown    |
-| 21  | [Flight Recorder](#21-flight-recorder) | `#/run/<id>`   | what was it doing at minute four?          |
-| 22  | [Watchtower](#22-watchtower)           | `#/watchtower` | did it run the way it _usually_ runs?      |
-| 23  | [Autopsy](#23-autopsy)                 | `#/run/<id>`   | why did this run fail, in one paragraph?   |
-| 24  | [Verdict](#24-verdict)                 | `#/run/<id>`   | was the output any _good_?                 |
-| 25  | [Sentinel](#25-sentinel)               | `#/sentinel`   | what is on fire, and who has it?           |
-| 26  | [Weave](#26-weave)                     | `#/pipelines`  | fan-out, fan-in, retries, artifacts        |
-| 27  | [Ledger](#27-ledger)                   | `#/budget`     | where did the money go, and where next?    |
-| 28  | [The Vault](#28-the-vault)             | `#/stats`      | what happened last quarter, and last year? |
-| 29  | [Omnibar](#29-omnibar)                 | `⌘K`           | say it, see the exact changes, confirm     |
-| 30  | [Constellation](#30-constellation)     | `#/fleet`      | N machines, one lens                       |
+| #   | Feature                                | Route                  | What it answers                            |
+| --- | -------------------------------------- | ---------------------- | ------------------------------------------ |
+| 0   | [Global UI](#global-ui)                | —                      | nav, live dot, auto-refresh, setup banner  |
+| 1   | [Command Center](#1-command-center)    | `#/command`            | how are my pipelines doing right now?      |
+| 2   | [Briefing](#2-briefing)                | `#/briefing`           | what happened while I was away?            |
+| 3   | [Chronicle](#3-chronicle)              | `#/chronicle`          | what ran when, across every source?        |
+| 4   | [One-off runs](#4-one-off-runs)        | `#/schedules/oneoff`   | fire one agent run right now               |
+| 5   | [Scheduler](#5-scheduler)              | `#/schedules`          | fire agent runs on a schedule              |
+| 6   | [Monitors](#6-monitors)                | `#/health`             | did my schedules actually run?             |
+| 7   | [Issues](#7-issues)                    | `#/issues`             | why are runs failing, grouped by cause?    |
+| 8   | [Pipelines](#8-pipelines)              | `#/pipelines`          | author multi-phase, human-gated flows      |
+| 9   | [Budget](#9-budget)                    | `#/budget`             | how much am I spending — and cap it        |
+| 10  | [Users & sign-in](#10-users--sign-in)  | `#/users`              | who may run/edit pipelines?                |
+| 11  | [Search](#11-search)                   | `#/search`             | where did I say/see _that_?                |
+| 12  | [Agents](#12-agents)                   | `#/agents`             | what's running / done / failed right now?  |
+| 13  | [Agent Detail](#13-agent-detail)       | `#/agent/<id>`         | how did _this_ agent get here?             |
+| 14  | [Sessions](#14-sessions)               | `#/sessions`           | what was actually said in a conversation?  |
+| 15  | [Activity](#15-activity)               | _(removed)_            | `GET /api/activity` only                   |
+| 16  | [Projects](#16-projects)               | `#/sessions/<project>` | which folders are active, and when?        |
+| 17  | [Stats](#17-stats)                     | `#/stats`              | what's my usage / cost / token spend?      |
+| 18  | [Inventory](#18-inventory)             | `#/inventory`          | what's installed and available?            |
+| 19  | [Tasks](#19-tasks)                     | _(removed)_            | `GET /api/tasks` only                      |
+| 20  | [Cron panel](#20-cron-panel)           | _(removed)_            | why native cron routines can't be shown    |
+| 21  | [Flight Recorder](#21-flight-recorder) | `#/run/<id>`           | what was it doing at minute four?          |
+| 22  | [Watchtower](#22-watchtower)           | `#/health/watchtower`  | did it run the way it _usually_ runs?      |
+| 23  | [Autopsy](#23-autopsy)                 | `#/run/<id>`           | why did this run fail, in one paragraph?   |
+| 24  | [Verdict](#24-verdict)                 | `#/run/<id>`           | was the output any _good_?                 |
+| 25  | [Sentinel](#25-sentinel)               | `#/sentinel`           | what is on fire, and who has it?           |
+| 26  | [Weave](#26-weave)                     | `#/pipelines`          | fan-out, fan-in, retries, artifacts        |
+| 27  | [Ledger](#27-ledger)                   | `#/budget`             | where did the money go, and where next?    |
+| 28  | [The Vault](#28-the-vault)             | `#/stats`              | what happened last quarter, and last year? |
+| 29  | [Omnibar](#29-omnibar)                 | `⌘K`                   | say it, see the exact changes, confirm     |
+| 30  | [Constellation](#30-constellation)     | `#/fleet`              | N machines, one lens                       |
+| 31  | [`argus tail`](#31-argus-tail)         | terminal               | what is it doing, when I can't see the UI? |
+| 34  | [Knowledge](#34-knowledge)             | `#/knowledge`          | what does Argus believe, and why?          |
 
 ---
 
@@ -104,8 +105,8 @@ health, the issues it raised, and the action that fires it now._
   characters and it fuzzy-matches across every destination, pipeline, schedule,
   failing monitor, open issue, background agent, project and recent transcript —
   "dpa" finds _Dependency audit_, "rt" finds _Release train_. It also carries
-  **actions**: approve a pipeline waiting at a gate, run a schedule now, mark the
-  Briefing caught up. `↑`/`↓` move, `Enter` runs, `Esc` closes; the rows you use
+  **actions**: open the review of a pipeline waiting at a gate, run a schedule
+  now, mark the Briefing caught up. `↑`/`↓` move, `Enter` runs, `Esc` closes; the rows you use
   float to the top next time you open it with an empty query. An action that
   talks to the server keeps the palette open long enough to report a failure
   rather than closing over it. The **Jump to… ⌘K** button in the bar opens the
@@ -126,12 +127,17 @@ health, the issues it raised, and the action that fires it now._
   them fire while you are in another tab. Each entry links to the view it is
   about; opening the panel marks them read. For what changed while Argus ran
   without you at all, use [Briefing](#2-briefing).
-- **Navigation** is split by role: the nine **destination** tabs (Command
-  Center, Briefing, Chronicle, Launch, Scheduler, Monitors, Issues, Pipelines,
-  Budget) sit in the bar; the **⋯ More** menu holds the reference tabs
-  (Stats, Inventory, Projects, Tasks, Users). Drill-down views (Agents,
-  Detail, Sessions, Activity) are reached through links, breadcrumbs and the
-  palette. On a phone the bar collapses to a **menu** naming your current
+- **Navigation** is split by role: the eight **destination** tabs (Command
+  Center, Briefing, Chronicle, Scheduler, Pipelines, Health, Issues, Budget)
+  sit in the bar; the **⋯ More** menu holds Sentinel and the reference pages
+  (Sessions, Stats, Inventory, Fleet, and Users for the root account).
+  Scheduler and Health each carry a sub-tab in the hash — **Schedules |
+  One-off** and **Monitors | Watchtower** — so a link lands on the half it
+  means. Drill-down views (Agents, Detail, Flight Recorder) are reached
+  through links, breadcrumbs and the palette; Search through `/` and the
+  palette. Old hashes (`#/launch`, `#/monitors`, `#/watchtower`,
+  `#/projects`, `#/activity`, `#/tasks`) are rewritten to where their content
+  went. On a phone the bar collapses to a **menu** naming your current
   destination, listing every tab at once with its attention badge.
 - **Auto-refresh:** the server pushes a "something changed" ping over a
   WebSocket whenever a watched file mutates, and the UI re-fetches. Those
@@ -174,10 +180,11 @@ _Pipelines at a glance — the home tab._ Route: `#/command`
 
 ![Command Center](screenshots/command-center.png)
 
-**Purpose:** one card per pipeline, attention-first, with a compact **phase
-rail** summarizing the whole pipeline and a **focus panel** showing one phase's
-step tiles at a time. Approve/Revise gates appear inline on the row that needs
-you — this is the wall you keep open on a second monitor.
+**Purpose:** one card per pipeline, attention-first, with a **phase graph**
+drawing the whole pipeline's shape and a **focus panel** beside it showing one
+phase's step tiles at a time. A phase waiting on you gets a **Review** button
+on its row that opens the review drawer — this is the wall you keep open on a
+second monitor.
 
 **What you see:**
 
@@ -198,41 +205,76 @@ you — this is the wall you keep open on a second monitor.
   (e.g. `fable`, `opus`), an aggregated **status pill** (`awaiting approval`
   wins over `failed` over `working`…), the latest run's **Σ cost** (tokens +
   USD, including superseded revise attempts), and a freshness stamp.
-- Under the header, the **phase rail**: one numbered chip per phase carrying
+- Under the header, the **phase graph**: one numbered node per phase carrying
   its status dot, name, a `gate` marker, a `try N` marker after a retry or
   revise, and one mini-dot per step (a `done/total` count once dots stop being
-  countable). Chips are grouped into **stages** separated by arrows — phases
-  that can run at the same time stack inside one stage, so a branching
-  pipeline reads as a graph and a 14-phase pipeline stays one card tall.
-  Hovering a chip names what the phase waits for.
-- Beneath the rail, the **focus panel**: one phase's **step tiles** — step
-  name, `job <runId>`, a status pill, the failure reason if it failed, a live
-  activity line and animated sweep bar while working, and a per-step meter —
-  duration, tokens, dollars (e.g. `2m 19s · 23.5k tok · $1.09`). By default
-  the focus **follows the action** — the gate awaiting you, else the failure,
-  else the live work, else the next phase up — so an untouched board always
-  shows the detail that matters right now.
+  countable). **Stages** — phases that can run at the same time — are rows,
+  read top to bottom; the chain that continues stays in the left lane and
+  branches that end the run hang to its right. When the stages are too wide
+  for the card (a fan-out of many parallel phases), the graph turns sideways:
+  stages become columns read left to right, and the parallel phases stack as
+  one column. An edge that skips a stage runs down a lane of its own, so it
+  never crosses a node. Every dependency is a drawn
+  edge, so a fan-out reads as a fan-out and a join as a join: the path that
+  ran is the green thread, a branch that was decided against is dashed, and a
+  phase nothing depends on ends with a small terminator. A **route
+  condition** sits as a label on the edge it governs, carrying the value
+  alone (`verdict = "approved"`) — the phase that decides it is the line the
+  label sits on. A skipped phase shows a hollow dot and a struck name.
+  Hovering a node shows its full name, what the phase waits for and the
+  conditions on it.
+  The graph is scaled to fit the width of its tile (down to 60%) and scrolls in both
+  directions beyond that. It **follows the run**: the running phase (or the
+  middle of several running together) is kept centred, and the view glides
+  to the next phase as the run moves on — the first and last phase centre
+  too. Scrolling the graph yourself, or clicking a node, stops following;
+  **Follow** (top-right of the tile) resumes it. **1:1** shows the graph at
+  full size and **Fit** goes back. Edges with more graph beyond them fade out.
+- Beside the graph (below it on a narrow card), the **focus panel**: one
+  phase's **step tiles** — step name, `job <runId>`, a status pill, the
+  failure reason if it failed, a live activity line and animated sweep bar
+  while working, and a per-step meter — duration, tokens, dollars (e.g.
+  `2m 19s · 23.5k tok · $1.09`). Its header names what the phase waited for
+  (`←`) and where its routes lead (`→`), each with the condition it needs. By
+  default the focus **follows the action** — the gate awaiting you, else the
+  failure, else the live work, else the next phase up — so an untouched board
+  always shows the detail that matters right now.
 - If two instances of one pipeline run concurrently, the card splits into
-  labeled sub-sections, one per instance, each with its own rail and focus.
+  labeled sub-sections, one per instance, each with its own graph and focus.
 - **Total spend** (top-right): the all-time board total. **Reset total** is a
   two-click armed confirm — the reset is irreversible.
 
 **What you can do:**
 
-- **Approve** (green) a gated phase that's awaiting you — the pipeline resumes.
-  `⌘K` → "approve" reaches the same action without finding the card first.
-- **Revise** (labeled **Retry** after a crash-restart) — optionally attach a
-  revise note, hit **Send**, and the phase restarts with your feedback.
+- **Review** a gated phase that's awaiting you. The button opens the **review
+  drawer**: the agent's closing note, the phase's structured result and Argus's
+  own checks when it declared any, and every file the phase left in its
+  artifact directory. The closing note renders as a document (it is the
+  agent's last message, which is markdown); on a failed phase the one-line
+  reason sits above it, and the rest of what the runtime handed the Stop hook
+  — session id, transcript path, background tasks and the like — waits behind
+  a **Raw payload** toggle. A `.md` artifact renders as a document; any other
+  text file shows raw; a binary shows its size. The file a check required is badged
+  **required** and opens first. `⌘K` → "review" reaches the same drawer
+  without finding the card first, and `#/command/<instanceId>` deep-links to
+  it — that is the link `argus tail` prints beside a waiting gate.
+- **Approve** (green, in the drawer) continues the pipeline with exactly what
+  is shown. **Revise** (labeled **Retry** after a crash-restart) asks for a
+  note — your revision — and **Send** restarts the phase with it appended to
+  the agent's prompt; that attempt's files are discarded. Nothing in the drawer
+  edits an artifact: the note is how you change the outcome. Approve and Revise
+  live in the drawer and nowhere else on the board.
 - Both actions require a signed-in, approved account (see
-  [Users & sign-in](#10-users--sign-in)); the buttons render for everyone but
-  the server answers 401 unless you're authenticated.
-- **Click a phase chip** to pin that phase's steps into the focus panel —
-  every step of every phase is one click away; click the pinned chip again to
-  return to following the action.
+  [Users & sign-in](#10-users--sign-in)); looking is open to everyone, and the
+  server answers 401 to a decision unless you're authenticated. From a terminal,
+  `argus approve` / `argus revise` do the same (see [`argus tail`](#31-argus-tail)).
+- **Click a phase node** to pin that phase's steps into the focus panel —
+  every step of every phase is one click away; the edges into and out of the
+  pinned node light up; click it again to return to following the action.
 
 ![Phase focus](screenshots/command-center-focus.png)
 
-_A pinned phase: the rail keeps the whole pipeline ambient while the focus
+_A pinned phase: the graph keeps the whole pipeline ambient while the focus
 panel shows the steps being asked about._
 
 - **Click a step's name** to open its drawer, over the board rather than away
@@ -282,7 +324,7 @@ deep-linking to the tab where you act on it:
 - **Monitor down** (→ Monitors): a schedule's expected run never arrived —
   the dead-man's switch fired.
 - **Awaiting approval** (→ Pipelines): a gated pipeline phase is paused
-  waiting for your Approve/Revise.
+  waiting for you to review it.
 - **Monitor failing** (→ Monitors): the schedule runs, but its last completed
   run failed.
 - **Open issue** (→ Issues): an unresolved failure group, with its occurrence
@@ -354,13 +396,16 @@ the scheduler's run records with `~/.claude/jobs/` and
 
 ---
 
-## 4. Launch
+## 4. One-off runs
 
-_Fire one agent run right now._ Route: `#/launch`
+_Fire one agent run right now._ Route: `#/schedules/oneoff` — the Scheduler's
+**One-off** sub-tab. (`#/launch` still lands here.)
 
 ![Launch](screenshots/launch.png)
 
-**Purpose:** not everything deserves a schedule. Launch fires a **single
+**Purpose:** not everything deserves a schedule. A one-off is a schedule with
+no trigger — same form, same run rows, same machinery — so it lives inside the
+Scheduler rather than as a tab of its own. It fires a **single
 one-off run** — a quick audit, a report, a cleanup — straight from the
 dashboard: prompt, working directory, go. No schedule object is created and
 nothing recurs.
@@ -420,7 +465,7 @@ _Recurring agent runs, owned by Argus._ Route: `#/schedules`
 **Purpose:** define headless prompts that Argus fires on a trigger — nightly
 audits, periodic report generators, cleanup jobs — then watch their run
 history and logs without leaving the page. Two sub-tabs: **Schedules** (this
-section) and **Cron** (see [Cron panel](#20-cron-panel)).
+section) and **One-off** (see [One-off runs](#4-one-off-runs)).
 
 **Creating a schedule** — click **+ New schedule**:
 
@@ -432,9 +477,10 @@ section) and **Cron** (see [Cron panel](#20-cron-panel)).
 - **Runtime** — Claude Code, Codex, OpenCode, Qwen Code, or the server default.
 - **Working directory** — absolute path the agent runs in.
 - **Trigger** — one of: **every N minutes** (interval), **daily at HH:MM**,
-  **weekly on a day at HH:MM**, or **windowed** (every N minutes, but only
+  **weekly on a day at HH:MM**, **windowed** (every N minutes, but only
   between a start and end time on selected weekdays — e.g. "every 30 min,
-  09:00–13:00, Mon–Fri"). Overlap policy defaults to _skip if still running_.
+  09:00–13:00, Mon–Fri"), **Webhook**, or **After pipeline** (see below).
+  Overlap policy defaults to _skip if still running_.
 - **Catch up a missed run on recovery** — off by default. Normally a slot
   only fires within a short grace window (a few minutes), so if the machine
   was asleep or Argus wasn't running when a slot came due, that slot is
@@ -446,6 +492,33 @@ section) and **Cron** (see [Cron panel](#20-cron-panel)).
   stale run is worse than no run.
 - **Save schedule** stays disabled until name, prompt and working directory
   are filled.
+
+**Webhook and after-pipeline triggers.** Two more trigger kinds, shared with
+Pipelines (see [§8](#8-pipelines)):
+
+- **Webhook** — this schedule fires when something else `POST`s to a URL
+  Argus mints for it, not on any clock. Once saved, the trigger editor shows
+  the hook's **URL** and **token** (each with a Copy button) and a **Rotate**
+  action that invalidates the old token immediately — use it if the token
+  ever leaks. The sender authenticates with `Authorization: Bearer <token>`;
+  reaching the hook from another machine needs the same non-default
+  `ARGUS_HOST`/`ARGUS_TOKEN` setup any remote access to Argus needs (see
+  [the API reference](API.md#security)) — the hook's own token is a separate
+  credential from `ARGUS_TOKEN` and does not substitute for it anywhere else.
+- **After pipeline** — this schedule fires once a chosen **pipeline**'s
+  instance ends, on **succeeded**, **failed**, or **any** outcome. Only
+  pipelines can be a chain's source (a schedule's own runs have nothing to
+  chain from); this schedule still fires its ordinary prompt, tagged
+  `chained` instead of `scheduled` in its run history.
+
+**What counts as a succeeded run.** The process must exit 0 _and_ the CLI's
+own result envelope must not report an error (`is_error: true` for Claude
+Code, a failed turn for Codex, an error part for OpenCode). A run whose CLI
+exited cleanly after saying "Invalid API key" or refusing the prompt is
+recorded **failed**, with that message as its error, and reaches failure
+notifications and Issues like any other failure. A clean exit whose log has no
+envelope to read is still a success — the exit code is the precondition, the
+envelope is the verdict.
 
 **The summary strip** above the list answers "is my scheduler healthy?"
 without reading a card: how many schedules exist, how many are **failing** or
@@ -462,8 +535,9 @@ reading.
 median duration of the runs listed below, and a **catch-up** chip when
 missed-run recovery is on. Below that the working directory, and the **last five
 runs** — status pill, relative start time (hover for the exact instant),
-duration, cost and tokens if reported, and a `manual` tag on run-now firings —
-with a `3/5 passed` ratio beside them.
+duration, cost and tokens if reported, and a `manual`/`webhook`/`chained` tag
+naming how the run was fired (nothing shown for an ordinary scheduled firing)
+— with a `3/5 passed` ratio beside them.
 
 A schedule that has failed **more than once in a row** says so in a red band,
 with the first line of the most recent error, because one failure is already
@@ -490,7 +564,9 @@ via `GET/POST /api/schedules`, `PUT/DELETE /api/schedules/:id`,
 
 ## 6. Monitors
 
-_A dead-man's switch over your schedules._ Route: `#/monitors`
+_A dead-man's switch over your schedules._ Route: `#/health` — the **Monitors**
+half of the Health tab (`g m`); its other half is
+[Watchtower](#22-watchtower). (`#/monitors` still lands here.)
 
 ![Monitors](screenshots/monitors.png)
 
@@ -609,9 +685,11 @@ action requires a signed-in, root-approved account.
 ![Pipeline form](screenshots/pipeline-form.png)
 
 - **Name**, **trigger** (manual — i.e. no trigger — or interval / daily /
-  weekly / windowed), **overlap policy** (skip if running / allow overlap),
-  and a pipeline-default **model** (Opus, Sonnet, Haiku, custom, or inherit
-  the CLI default).
+  weekly / windowed / **Webhook** / **After pipeline** — see
+  [§5 Scheduler](#5-scheduler) for what the last two do and how the webhook's
+  URL and token are shown once saved), **overlap policy** (skip if running /
+  allow overlap), and a pipeline-default **model** (Opus, Sonnet, Haiku,
+  custom, or inherit the CLI default).
 - A **phase rail** — the same stage layout as the Command Center board: one
   chip per phase, phases that start together stacked in one column, gates
   marked, and a red dot on any phase that still needs a field. The rail is the
@@ -638,26 +716,80 @@ action requires a signed-in, root-approved account.
 - **Run now** — start an instance (hidden while one is running unless overlap
   is allowed).
 - **Stop / Stop all (N)** — abort active instances (with confirm).
-- **Enable / Disable**, **Edit**, **Delete** (with confirm).
+- **Enable / Disable**, **Edit**, **Delete** (with confirm). An instance runs
+  the definition it started with — snapshotted onto the instance — so editing
+  the pipeline while instances are running or waiting at a gate does not change
+  them. Saving such an edit asks first, so you know a fixed prompt lands on the
+  _next_ start rather than the one you are watching; renaming, changing the
+  trigger or overlap policy, and enabling or disabling save without asking.
 - Approving/revising a **gated phase** happens on the Command Center, inline
   on the paused row.
 
+**Reliability:** each card has a **Reliability ▾** disclosure — open it and,
+over the trailing 30 days, Argus shows the pipeline's **first-attempt pass
+rate** (settled instances where every phase that ran passed on its very first
+try) and its **lucky-pass rate** (successful instances that only got there
+after a retry or a human revise), a day-by-day sparkline of succeeded vs.
+failed instances, and a per-phase table naming each phase's first-try / lucky
+/ failed counts and its most common failure class. A rate reads as "—" rather
+than 0% when nothing has settled yet in the window — an unproven pipeline is
+not the same fact as a broken one. This is Argus grading its own retry loop,
+not the agent's output (that's [Verdict](#24-verdict)) or a run's shape
+against its own history (that's [Watchtower](#22-watchtower)).
+
+**Memory:** a pipeline can turn on `memory` (via the API — see
+[HARNESS.md §13](HARNESS.md#13-context-and-memory)) to keep a small durable
+notes file, `NOTES.md`, that survives from one instance to the next. Off by
+default. Once enabled, a step's prompt can read the notes back with
+`{{memory}}` and append to them at `$ARGUS_MEMORY_DIR/NOTES.md` — handy for a
+pipeline that should remember a decision, a gotcha, or something a previous
+run tried and learned from, without re-deriving it every time. Argus trims the
+file back to its cap after each instance settles, and never deletes it, even
+if the pipeline itself is later deleted.
+
+**Stall detection:** a step's `timeoutSeconds` catches a run that goes on too
+long; it does nothing for one that is technically still alive but has stopped
+producing any output at all — stuck on a hung command, say. A phase (or a
+step) can additionally set a **stall** limit (`stallSeconds`, editable right
+beside the timeout field in the phase panel): if that many seconds pass with
+no new activity from the step, Argus kills it and fails the phase the same way
+it would a timeout, distinguishing the two in the run's record and journal so
+you can tell "it ran out of time" from "it went quiet."
+
 **How steps complete:** the Stop-hook and gate-hook installed by Setup let
 each spawned agent signal "step finished" / "needs input" back to Argus
-(`POST /api/instances/:id/signal`, authenticated by a per-instance token —
-this is the one instance endpoint that doesn't need a login). The Stop hook is
-preferred; where a finished process did not signal — because its runtime's hook
-is best-effort (Codex) or because it has no command hook at all (OpenCode) —
-Argus can recover only from a successful run record whose final message contains
-one unambiguous `ARGUS_OUTCOME: succeeded`, which is why an OpenCode phase
-advances on the next reconcile tick rather than instantly. Failed, blocked, missing, and conflicting outcomes
-fail safely. Hook delivery errors and non-2xx responses are written into the
-run log for diagnosis.
+(`POST /api/instances/:id/signal`, authenticated by a token Argus hands each
+run for that run alone — this is the one instance endpoint that doesn't need a
+login). By default, a completion requires one unambiguous
+`ARGUS_OUTCOME: succeeded` marker in the final message. Missing or conflicting
+outcomes are classified as `unverified`. A pipeline (or phase) can declare
+`"completion": { "marker": "lenient" }` to accept a markerless completion
+**signal**, but failed, blocked and conflicting markers still refuse completion.
+Leniency does not apply to run-record recovery.
+
+The marker is the agent's own report, not a check that its work is right. The
+Stop hook is preferred; where a finished process did not signal — because its
+runtime's hook is best-effort (Codex) or because it has no command hook at all
+(OpenCode) — Argus can recover only from a successful run record whose final
+message contains one unambiguous `ARGUS_OUTCOME: succeeded`. An OpenCode phase
+therefore advances on the next reconcile tick rather than instantly. New run
+tokens are bound to the instance, phase, attempt and run, with only their digests
+persisted. Legacy instance tokens apply only to launches made before the
+upgrade. Reapply Setup's hooks when upgrading to the version 2 hook protocol.
+Hook delivery errors and non-2xx responses are written into the run log for
+diagnosis.
 
 **Where the data comes from:** `~/.claude/argus/pipelines.json` and instance
 records under `~/.claude/argus/instances/` via `GET/POST /api/pipelines`,
 `PUT/PATCH/DELETE /api/pipelines/:id`, `POST /api/pipelines/:id/start`,
-`GET /api/overview`, `POST /api/instances/:id/{approve,revise,abort}`.
+`GET /api/overview`, `GET /api/instances/:id/phases/:phaseId/{review,artifact}`,
+`POST /api/instances/:id/{approve,revise,abort}`,
+`GET /api/pipelines/:id/reliability?days=` (the Reliability disclosure; see
+[the API reference](API.md#reliability)); a webhook trigger additionally uses
+`POST /api/pipelines/:id/hook-token/rotate` and is fired from outside Argus at
+`POST /api/hooks/pipelines/:id`; an after-pipeline trigger is evaluated by the
+scheduler tick against `~/.claude/argus/chains.json` (see
+[the API reference](API.md#webhook-and-chained-triggers-v04)).
 
 ---
 
@@ -767,7 +899,8 @@ machine running Argus and bootstrap again.
 
 ## 11. Search
 
-_Full-text across all transcripts._ Route: `#/search` (the 🔍 in the nav)
+_Full-text across all transcripts._ Route: `#/search` (`/` from anywhere, or
+the palette — it has no tab of its own)
 
 ![Search](screenshots/search.png)
 
@@ -850,7 +983,8 @@ the main list.
 
 ## 14. Sessions
 
-_Browse & read transcripts._ Route: `#/sessions`
+_Browse & read transcripts._ Route: `#/sessions` (⋯ More menu);
+`#/sessions/<project>` narrows the list to one working directory.
 
 ![Sessions](screenshots/sessions.png)
 
@@ -892,6 +1026,12 @@ results come back in relevance order, freshest first among equal matches.
 
 ## 15. Activity
 
+_Removed from the UI._ `GET /api/activity` still serves the feed; `#/activity`
+lands on Sessions, which shows the same prompts in the transcripts they belong
+to, and Search finds them by text.
+
+<details><summary>What the page was</summary>
+
 _Global prompt feed._ Route: `#/activity`
 
 ![Activity](screenshots/activity.png)
@@ -905,9 +1045,18 @@ relative timestamp, and the prompt text (truncated to ~240 chars). Read-only.
 **Where the data comes from:** `GET /api/activity`, reading
 `~/.claude/history.jsonl` (most recent ~100 entries).
 
+</details>
+
 ---
 
 ## 16. Projects
+
+_Folded into Sessions._ A project is now a filter on the transcript list:
+`#/sessions/<project>` shows that working directory's sessions with a chip
+naming it, and the palette's project entries land there. `#/projects` lands on
+Sessions. `GET /api/projects` is unchanged.
+
+<details><summary>What the page was</summary>
 
 _Working-directories overview._ Route: `#/projects`
 
@@ -926,6 +1075,8 @@ touched. Informational only — drill into content via Sessions or Search.
 
 **Where the data comes from:** `GET /api/projects`, scanning
 `~/.claude/projects/` subdirectories.
+
+</details>
 
 ---
 
@@ -981,6 +1132,11 @@ do." No install/remove actions.
 
 ## 19. Tasks
 
+_Removed from the UI._ `GET /api/tasks` still serves the listing; `#/tasks`
+lands on the Command Center.
+
+<details><summary>What the page was</summary>
+
 _Task-queue workspace inventory._ Route: `#/tasks`
 
 ![Tasks](screenshots/tasks.png)
@@ -995,9 +1151,17 @@ locked/in use, green = open), and last-updated time. Read-only.
 **Where the data comes from:** `GET /api/tasks`, scanning
 `~/.claude/tasks/<id>/` for `.lock` / `.highwatermark` files.
 
+</details>
+
 ---
 
 ## 20. Cron panel
+
+_Removed from the UI._ The sub-tab was three panels explaining that it could
+show nothing; the explanation is below and `GET /api/cron` still returns it.
+The Scheduler's second sub-tab is now [One-off runs](#4-one-off-runs).
+
+<details><summary>What the panel was</summary>
 
 _An honest empty state, by design._ Found under **Scheduler → Cron** sub-tab
 (there is deliberately no `#/cron` route).
@@ -1025,6 +1189,8 @@ harness-managed routines.
 
 **Where the data comes from:** `GET /api/cron`, returning
 `{ available: false, reason, howTo }` plus filename hints.
+
+</details>
 
 ---
 
@@ -1087,8 +1253,9 @@ is persisted — the transcript stays the source of truth.
 
 ## 22. Watchtower
 
-_Learned envelopes, and the runs that leave them._ Route: `#/watchtower`
-(`g w`)
+_Learned envelopes, and the runs that leave them._ Route:
+`#/health/watchtower` — the **Watchtower** half of the Health tab, beside
+[Monitors](#6-monitors). (`#/watchtower` still lands here.)
 
 **Purpose:** Monitors answer "did it run". Issues answer "did it fail".
 Neither catches the run that **succeeded**, took nine minutes instead of two,
@@ -1267,31 +1434,136 @@ drawn red.
 - A response that scores none of your criteria is a **failure, not a zero**.
 
 **Gates that open themselves.** A gated phase with a rubric may declare
-**auto-approve at N**. When every judged step of the phase scores at least N,
-the gate passes unattended. Two properties matter and hold: a gate with **no
-verdict yet waits** (silence is not approval), and a gate whose verdict came
-back _below_ the bar waits for a human, forever. Auto-approval only ever skips
-the wait for work that has already been judged good — and it is the phase's
-**worst** step that decides, not the average, because averaging lets one
-excellent step carry a bad one through the gate you set to catch it.
+**auto-approve at N**. Every relevant run must have a current, ready verdict
+matching the rubric and scoring at least N; a best-of-N phase uses its selected
+candidate. Missing, failed, stale or below-threshold judgments withhold approval.
+The phase's **worst** relevant score decides, not the average.
 
-**Bounds:** completed runs under a rubric are judged automatically, **one per
-scheduler tick**, newest first, skipping anything older than 24 hours. Every
+This applies only to ordinary gates with a confirmed pause cause, never an
+agent's `needs-input` question or a pause of unknown cause. A phase configured
+to commit knowledge, or carrying staged knowledge, still needs operator review.
+A judge score is a rubric rating, not a calibrated probability of correctness.
+
+**Judging how the agent worked (trajectory).** A rubric may add an optional
+`trajectory` block. It is **off unless you write it**, and it is declared in the
+definition's JSON through the API (the schedule form and the pipeline form have
+no fields for it):
+
+```json
+{
+  "rubric": {
+    "goal": "A triage summary that names every new failure.",
+    "criteria": [{ "id": "coverage", "label": "Names every new failure" }],
+    "trajectory": {
+      "criteria": [{ "id": "focus", "label": "Stayed on the task" }],
+      "minScore": 6,
+      "check": { "holdOn": ["destructive-command", "path"] }
+    }
+  },
+  "autoApprove": { "verdict": 8, "trajectory": 7 }
+}
+```
+
+- **`criteria`** (optional) — what a judge should score the _path_ on, written
+  like output criteria. One extra judge call per run, scored against a timeline
+  of the run's first 20 and last 60 events.
+- **`minScore`** (optional, needs criteria) — a trajectory score below it is
+  marked a regression on the run and in `trajectoryTrends` (API only for now; the
+  Quality trends card shows output scores). Unlike an output regression it opens
+  no issue.
+- **`check.holdOn`** (optional) — signals that, when observed, **hold an
+  automated approval** for a person. No model is involved. Choose from
+  `repetition`, `errors`, `edit-revert`, `path` and `destructive-command`. This
+  is an automation hold only: it does not fail verification, pause the phase or
+  change what you can approve yourself, and it is not a verification check (for
+  that, see _A verification check on the path_ below).
+- **`autoApprove.trajectory`** (optional, gated phases) — the bar for the
+  trajectory score. Leave it out and the `verdict` bar applies to it too. It
+  needs trajectory criteria.
+
+You must declare criteria, a check or both. With a trajectory declared, a gate
+only opens itself when every relevant run also has a usable trajectory judgment:
+one that is missing, skipped (no transcript to read), failed, older than the
+rubric, or based on a **truncated recording** (the Flight Recorder keeps only the
+last 2,000 events) holds the gate, as does an observed held signal or a score
+under the bar. A missing or truncated recording is not treated as a clean run: it
+simply cannot clear the gate, and you decide.
+
+**The signals are heuristics, not findings.** They are simple counts over what
+the Flight Recorder kept, and each has blind spots: shell tricks, aliases and
+scripts hide destructive commands, a shell write hides a path escape, a revert
+by `git checkout` is invisible, and quoted text such as `echo rm -rf` is a false
+positive. Polling counts as repetition. **A zero means "not observed", never
+"did not happen"**, and a positive is a prompt to look, not proof of a problem.
+The run page shows what was observed and what a check held on; HARNESS §19 has
+the exact rules. A trajectory assessment never counts as evidence in the
+Knowledge Ledger, and it cannot open a gate that commits knowledge.
+
+**A verification check on the path.** `holdOn` only ever holds an automated
+approval. To make a phase _fail verification_ when recorded signal counts exceed
+your limits, add a `trajectory` check to the phase's `checks`, beside
+`command`, `artifact`, `file`
+and `changed-files`. It is declared in the pipeline's JSON through the API, needs
+no `rubric`, and uses no model:
+
+```json
+{
+  "id": "implement",
+  "checks": [
+    { "kind": "command", "run": "npm test" },
+    {
+      "kind": "trajectory",
+      "thresholds": { "destructive-command": 0, "path": 0, "errors": 5 },
+      "requireTranscript": true
+    }
+  ]
+}
+```
+
+- **`thresholds`** (required) — for each signal you name, the largest count you
+  will accept: a whole number from 0 to 10,000. Name at least one. A run whose
+  count goes above a threshold fails the check, even if the recording was
+  truncated, because what it kept is real. The counts are: `repetition`, the number
+  of distinct non-file tool calls repeated three or more times; `errors`, tool
+  calls that errored plus error results with no matching call; `edit-revert`,
+  edits that mirror an earlier edit; `path`, file-tool writes outside the working
+  directory or to sensitive paths; `destructive-command`, Bash commands matching
+  the destructive list.
+- **`requireTranscript`** (optional, default off) — what to do when Argus cannot
+  tell. If a run has no readable transcript, or the recording was truncated and
+  nothing over a threshold showed in what was kept, the thresholds cannot be shown
+  to hold. With `requireTranscript` on, the check **fails**. With it off, the check
+  is **not evaluated**: it shows as `–` "(not evaluated)" in the review drawer, is
+  never counted as passed, and does not fail the phase. A check with no runs to
+  look at is treated the same way.
+
+The check looks at the runs behind the phase: the selected candidate's when a
+best-of-N candidate was selected, otherwise every step of the attempt; a
+candidate being verified is checked on its own run. A not-evaluated check cannot
+be cited as evidence in the Knowledge Ledger (a knowledge commit that cites it is
+refused). Remember the signals are heuristics, so keep thresholds above what
+legitimate work produces: polling and a failing test run both count.
+
+**Bounds:** completed runs under a rubric are judged automatically, with at most
+one output judgment and one optional trajectory judgment per scheduler tick,
+newest first, skipping anything older than 24 hours. Every
 pass shares the same guardrails as [Autopsy](#23-autopsy) — one at a time,
 90-second timeout, metered into the spend ledger, refused under the budget hard
 stop, and switched off entirely by `ARGUS_ANALYSIS=off`.
 
 **Where the data comes from:** `GET /api/runs/:id/verdict`,
-`POST /api/runs/:id/verdict` (admin), `GET /api/verdicts`. Scores live in
-`~/.claude/argus/verdicts.json`; rubrics live on the schedule or pipeline
-definition.
+`POST /api/runs/:id/verdict` (admin), `GET /api/verdicts` (output `trends`
+and, separately, `trajectoryTrends`). Scores live in
+`~/.claude/argus/verdicts.json`, trajectory judgments among them under the
+same 400-record cap; rubrics live on the schedule or pipeline definition.
 
 ---
 
 ## 25. Sentinel
 
 _Incidents, escalation, and a diagnostic that proposes but never acts._ Route:
-`#/sentinel` (`g n`)
+`#/sentinel` (`g n`, or the ⋯ More menu — the Briefing is where a signal is
+first seen; Sentinel is where its record lives)
 
 **Purpose:** Monitors, Issues and Watchtower each raise a _signal_. None of them
 holds the state that makes a signal answerable — who saw it, when it was
@@ -1396,8 +1668,12 @@ mean _unknown_, not _parallel_.
 
 - Both branches of a fan-out start together; a fan-in waits for **every**
   dependency, not the first one to finish.
-- A gate in one branch does **not** stop the other. The board points at the
-  gate, because that is what needs a human.
+- A gate pauses the instance's handling of agent outcomes, verification
+  results and candidate selection. A sibling process may keep running, but
+  incoming completion signals are acknowledged and ignored while the instance
+  awaits approval. Already-committed launches and knowledge commits can still
+  be recovered for running sibling phases; recovery never opens the waiting
+  gate. The board points at the gate that needs a human.
 - A failed branch does not terminalize the instance while a sibling is still
   running — that would render a stopped pipeline with a live process still
   writing into it. The failure is recorded on the phase; the instance settles to
@@ -1410,10 +1686,14 @@ each time (capped at an hour), and which failures are worth retrying:
 
 - `spawn` — the process never started,
 - `exit-code` — it exited non-zero,
-- `signal` — the agent _reported_ failure.
+- `signal` — the agent _reported_ failure,
+- `unverified` — completion had no valid, unambiguous outcome marker.
 
-The default is `["spawn", "exit-code"]`, and the omission is deliberate: an
-agent that signalled failure has considered the work and reported on it, so
+When a retry policy is declared, its default failure list is
+`["spawn", "exit-code", "unverified"]`. An explicit `retryOn` list replaces
+that default, so add `unverified` if marker failures should retry.
+The omission of `signal` is deliberate: an agent that signalled failure has
+considered the work and reported on it, so
 re-running the same prompt mostly just spends the money twice. Retries are
 _scheduled_ (a timestamp on the phase) rather than held in a timer, so a backoff
 survives a restart. A **revise** resets the retry budget — otherwise a phase
@@ -1929,6 +2209,369 @@ are polled once per scheduler tick, with a four-second timeout and no retries.
 
 ---
 
+## 31. `argus tail`
+
+_What is it doing, when I can't see the UI?_ Not a tab — a command.
+
+**Purpose:** every view above assumes a browser pointed at the machine. Often
+there isn't one: you are on a phone, and the only window onto the box is a
+terminal — an SSH session, or a Claude Code session driven through Remote
+Control. `argus tail` is the dashboard for that window. It prints the same
+facts as text, one line each, and returns on its own, so a person can read it
+and an agent can relay it.
+
+```bash
+argus tail                        # snapshot, then follow the live feed for 60s
+argus tail --for 0                # snapshot only
+argus tail --for 5m --until-idle  # follow until nothing is running
+argus tail --json                 # one JSON object per line
+```
+
+**What you see.** Every line is `HH:MM:SS <icon> <text>`.
+
+The **snapshot** comes first: a summary line (how many running, how many
+waiting for approval, live background agents, monitors down, open issues,
+today's spend against the budget); one ▶ line per running run — its board name
+(`Pipeline › phase › step`), runtime if not the default, elapsed time, time left
+before its deadline if it has one, and what it is doing right now — with its
+last few activity lines indented beneath it, oldest first; one ⏸ line per
+pipeline waiting at a gate, with the agent's own summary of what it wants
+approved; one ● line per live Claude Code background agent; recent outcomes
+(✓ ✗) inside the `--since` window, newest first, with duration, cost, the
+failure reason or the first line of the result; the next scheduled firing (⏲);
+and `○ idle` when nothing at all is running.
+
+Then it **follows**. Per-tool activity from running pipeline steps streams as
+it happens (⚙ a tool call, 💬 the agent's own words, ○ session started, ■
+finished). Runs starting (▶) and ending (■ ✓ / ✗); phases starting, succeeding,
+failing or being skipped (→); pipelines starting, pausing at a gate (⏸),
+resuming and ending; background agents changing state (●); and every alert the
+bell would ring — monitor (⚠), budget ($), anomaly (↯), incident (🔥). A closing
+── line says why it stopped (window elapsed, went idle, Ctrl-C), how many
+events it printed, and how many runs are still going.
+
+**How it works.** It is a client of the running server: the same port, the
+same `ARGUS_TOKEN` (`--url` and `--token` override both). It reads the API the
+dashboard reads and follows the same WebSocket. The payload frames print
+directly; the payload-free `*:changed` pings trigger conditional re-reads of
+runs, the board and the agents, which it diffs against its previous read to
+produce "run X started" rather than "something changed". A dropped socket
+reconnects with backoff and re-reads everything on the way back, and a
+twenty-second safety re-read covers a ping that never arrived.
+
+**The window matters.** When stdout is not a terminal — an agent's tool call, a
+pipe — the default is to follow for 60 seconds and exit, so a call with a
+timeout always returns a complete, self-describing answer; on a real terminal
+the default is to follow until Ctrl-C. `--for` sets it explicitly (`--for 0` is
+a pure snapshot), and `--until-idle` ends it early once nothing is running.
+Each run's snapshot catches anything that happened between calls, so "run it
+again" is the whole continuation story.
+
+**Honest limits.** Only pipeline steps stream per-tool activity, because only
+they run with a live transcript (`--output-format stream-json`); schedule and
+one-off runs are batch runs and show start and finish lines only. A gate needs
+a human: the tail tells you a pipeline is waiting and never decides for you.
+Each ⏸ line carries the link to that gate's review drawer and the matching
+`argus approve` command, so the person reading the relay can look, then act.
+
+**Deciding from the terminal.** Two sibling commands make the decision the
+review drawer makes, for the window that has no browser:
+
+```bash
+argus approve <instanceId> [--phase <phaseId>]                  # continue the pipeline
+argus revise  <instanceId> --note "<what to change>" [--phase <phaseId>]  # run the phase again
+```
+
+Both need an Argus account, because they call the same admin-gated routes the
+drawer does. Set `ARGUS_USER` and `ARGUS_PASSWORD` in the shell, or answer the
+prompt on a real terminal (a tool call has no terminal, so an agent relaying
+the tail needs the variables). The session lasts for the one call and is never
+written to disk. `--note` is required for `revise` — the note is the revision.
+`--phase` is only needed when the ⏸ line shows one. `--json` prints the outcome
+as one object; the exit status is `0` when the decision landed, `1` when Argus
+refused it or could not be reached (the one line on stderr says why), `2` for
+bad arguments. Approving here is exactly approving in the drawer: what the
+agent produced is what continues, so look first — the tail printed the link.
+
+**For an agent.** `argus tail --install-skill` installs the bundled
+`argus-tail` skill for every agent CLI it finds on PATH. Claude Code and Codex
+discover skills the same way — a `skills/<name>/SKILL.md` tree under the CLI's
+home, `name` and `description` frontmatter, chosen implicitly when a request
+matches the description or by name — so it is one file, written in the
+dialect both accept, landing in `~/.claude/skills/` (honouring
+`ARGUS_CLAUDE_HOME`) and `~/.codex/skills/` (honouring `ARGUS_CODEX_HOME` and
+`CODEX_HOME`). `--install-skill=claude`, `=codex` or `=all` chooses
+explicitly; bare, it installs for what is present and says what it skipped.
+From then on a session of either CLI on that machine answers "what is Argus
+doing?", "has the release pipeline finished?", `/argus-tail` (Claude Code) or
+`$argus-tail` (Codex) by running the command and relaying the lines —
+including a remote session on your phone, which is the case this exists for.
+The skill teaches the icon vocabulary, the bounded-window habit, and to quote
+failure reasons verbatim. Inside the Argus checkout both CLIs find it without
+installing: Claude Code at `.claude/skills/argus-tail/`, Codex at
+`.agents/skills/argus-tail/` — a plain copy of the same file rather than a
+symlink, so a Windows checkout without symlink support has it too, and a test
+fails if the two copies ever differ.
+
+**Where the data comes from:** `GET /api/health`, `/api/runs`,
+`/api/overview`, `/api/agents`, `/api/insight`, `/api/runs/:id/activity` (the
+tailer's retained events for a running step), and `WS /ws`.
+
+---
+
+## 32. Decision experiments (H2 shadow collection)
+
+An **experiment**, off by default, that asks a model two questions about
+finished runs and measures the answers against what Argus itself recorded.
+Nothing reads the answers: they are `mode: "shadow"` with no consumers. No
+route, gate, retry, approval, ledger record, prompt, Autopsy or Verdict output
+changes because of them. The design is RFC 2026-09-29 §P.
+
+**The two questions are kept apart.**
+
+- **Probe:** `run.termination-probe` v1 asks "from this trace alone, how did
+  this run end?"
+  - It sees the _blind_ projection. Status, exit code, error and termination
+    are withheld.
+  - Its reference label is the termination Argus observed, so its accuracy
+    is measurable.
+- **Residual:** `run.failure-cause.residual` v1 asks why an unsuccessful run
+  did not accomplish its task.
+  - It is asked only of runs that ended on their own or hit a deadline.
+  - No reference labels exist for it, so **its accuracy is shown as
+    unmeasured**.
+
+Probe accuracy is never residual accuracy.
+
+### Turning it on
+
+Nothing collects until both switches are set, and `ARGUS_ANALYSIS=off` wins
+over them:
+
+```sh
+ARGUS_DECISIONS=on ARGUS_DECISIONS_H2_COLLECT=on argus
+```
+
+Every value below has a conservative default. An invalid value turns
+collection off and names itself on the Experiments page; it is never replaced
+by a guess.
+
+| Variable                                  | Default        | Meaning                                                   |
+| ----------------------------------------- | -------------- | --------------------------------------------------------- |
+| `ARGUS_DECISIONS_H2_MODEL`                | runner default | Explicit model for the Claude CLI adapter (one per item). |
+| `ARGUS_DECISIONS_H2_RESIDUAL_RATE`        | `0.5`          | Share of eligible runs sampled for the residual question. |
+| `ARGUS_DECISIONS_H2_PROBE_RATE`           | `0.1`          | Share of eligible runs sampled for the probe.             |
+| `ARGUS_DECISIONS_H2_MAX_CALLS_PER_DAY`    | `20` (0–96)    | Provider invocations per rolling 24 hours.                |
+| `ARGUS_DECISIONS_H2_MIN_INTERVAL_MINUTES` | `15`           | Minimum gap between invocations.                          |
+| `ARGUS_DECISIONS_H2_MAX_USD_PER_DAY`      | `1`            | Recorded cost per rolling 24 hours, including H1 calls.   |
+| `ARGUS_DECISIONS_H2_SEED`                 | `argus-h2`     | Seed of the deterministic sampling draw.                  |
+
+The runner default model is `haiku` for Claude, or `ARGUS_ANALYSIS_MODEL`.
+The adapter always runs the `claude` CLI.
+
+### What it does, and what bounds it
+
+- **Where it runs.** It runs on the scheduler tick, after every other watcher,
+  and the tick waits for it. It never runs under an instance lock, and never
+  while another analysis pass is in flight.
+- **Existing work first.** It waits a whole tick after any Autopsy, Verdict,
+  Sentinel or on-demand pass, so it never makes those see a busy runner.
+- **Per tick:** at most one provider invocation, across H2 and H1 (§33)
+  together. The spend hard stop pauses it for 15 minutes.
+- **Shared allowance.** When H1 has made calls in the last 24 hours, H2's
+  daily call cap, dollar cap and minimum interval count both experiments'
+  calls, so enabling both never doubles the allowance.
+- **Which runs.** A run counts if it ended at or after collection was first
+  switched on, and is between 10 minutes and 24 hours old. History is never
+  drained.
+  - A selected item that is not reached within 24 hours **expires**.
+  - A run seen too late is counted as `missed-window`.
+- **Sampling** hashes the seed, the question and the run id, and nothing
+  about how the run ended. Every considered run, sampled or not, gets a
+  census line with its exclusion reason, if any. That is how the report
+  explains its population.
+- **Exclusions:**
+  - non-Claude runtimes;
+  - runs whose termination is not derivable (interrupted, killed, cancelled,
+    skipped);
+  - for the residual question, successful runs and runs that never ran.
+- **Retries.** A refusal that made no call (budget, busy, disabled, storage)
+  or missing input is retried at most 3 times, 30 minutes apart. Nothing
+  that did, or may have, reached the provider is ever retried automatically.
+- **Restarts.** An invocation interrupted by a restart is recorded as an
+  **unknown outcome**. It still counts against the limits, and it is not
+  re-sent. Exactly-once execution is not claimed.
+- **Records.**
+  - The collection ledger, `~/.claude/argus/decision-experiments/h2/collection.jsonl`,
+    is append-only and capped at 32 MiB. Collection stops at the cap.
+  - The assessments and their input snapshots are in the Decision Journal,
+    `~/.claude/argus/decisions/`.
+
+  Neither is ever pruned automatically.
+
+H1 assessments share the Decision Journal. The H2 report's
+`outsideExperiment` count therefore includes them; it is not a count of H2
+assessments alone. Spend limits use recorded costs from completed calls; they
+do not guarantee that an in-flight call cannot take spending over the cap.
+
+### Reading the report
+
+**More → Experiments** (`GET /api/decisions/h2`) is a replay of those
+records. Opening it never starts collection, calls a model or writes
+anything. It shows, for each question version and exact provider identity
+(requested model, reported model, adapter version):
+
+- the census by termination class;
+- attempts by outcome;
+- cost, latency, tokens and snapshot size;
+- integrity findings.
+
+For the probe it also shows:
+
+- answered-only accuracy _with coverage_, and end-to-end accuracy (where
+  abstentions and failures count as wrong);
+- per-class recall and the majority-class share, so a skewed sample reads as
+  skewed;
+- Cohen's κ, a confusion matrix, and a multiclass Brier score (0–2);
+- reliability buckets (only at n ≥ 20) and ECE (only at n ≥ 200).
+
+Every interval is a Wilson 95 % interval.
+
+**How to read it.** A probe score says how well a model recovers a fact Argus
+already knows. It does not show that the model knows why a run failed, and
+nothing on the page authorises an approval. The deterministic baseline reads
+**not applicable**, because no H2 rule exists. Autopsy is **not compared**:
+it uses a different taxonomy.
+
+### Turning it off
+
+Unset either switch and restart. Nothing is deleted, and the report still
+renders from what was retained. An invocation in flight at shutdown is
+reported as an unknown outcome on the next enabled start, and is not
+re-sent.
+
+## 33. Decision experiments (H1 gate operator action)
+
+A second experiment, off by default, that predicts **what the operator will
+do** at an ordinary pipeline gate: will they send this phase attempt back
+(revise or abort) rather than approve it as it stands? It predicts behaviour,
+not correctness. **An agreement figure can never justify skipping review**:
+an approved attempt may still be wrong, and a revised one may have been fine.
+The design is RFC 2026-09-29 §Q.
+
+Nothing reads the predictions. No gate badge, score, ordering or approval
+changes, and the gate drawer shows exactly what it showed before.
+
+### Turning it on
+
+```sh
+ARGUS_DECISIONS=on ARGUS_DECISIONS_H1_COLLECT=on argus
+```
+
+`ARGUS_ANALYSIS=off` wins. An invalid value turns H1 off and names itself.
+
+| Variable                                   | Default        | Meaning                                                                                 |
+| ------------------------------------------ | -------------- | --------------------------------------------------------------------------------------- |
+| `ARGUS_DECISIONS_H1_RATE`                  | `1`            | Share of captured gates sampled for a model call.                                       |
+| `ARGUS_DECISIONS_H1_MODELS`                | runner default | Up to three of `haiku`, `sonnet`, `opus` or a `claude-…` id; each gate is assigned one. |
+| `ARGUS_DECISIONS_H1_MAX_CALLS_PER_DAY`     | `20` (0–96)    | H1 and H2 calls combined, per rolling 24 hours.                                         |
+| `ARGUS_DECISIONS_H1_MAX_OWN_CALLS_PER_DAY` | `10`           | H1's own share of that.                                                                 |
+| `ARGUS_DECISIONS_H1_MIN_INTERVAL_MINUTES`  | `15`           | Minimum gap since the last call of either experiment.                                   |
+| `ARGUS_DECISIONS_H1_MAX_USD_PER_DAY`       | `1`            | Recorded H1 and H2 cost combined, per rolling 24 hours.                                 |
+| `ARGUS_DECISIONS_H1_SEED`                  | `argus-h1`     | Seed of the deterministic sampling draw.                                                |
+
+Several models compare **between** gates: each gate gets one model, never a
+second call. The requested model is recorded; the model the CLI actually
+used is not reported, and stays blank rather than guessed.
+
+### What it does
+
+- **Which gates.** Only a phase paused at an ordinary `gate`, on its exact
+  attempt, with no decision on record yet. Questions an agent asked
+  (`needs-input`) and pauses of unknown cause are excluded. A best-of-N
+  phase is judged on the selected candidate. Gates whose phase declares
+  `autoApprove` are reported as their own population.
+- **Capture first, no call needed.** Within a tick of the pause, Argus
+  captures a bounded, redacted snapshot of the review:
+  - step prompts and final messages;
+  - the result and the checks;
+  - changed files and line counts, never file content;
+  - staged-record outcomes and warnings;
+  - Watchtower anomalies and the attempt number.
+
+  It also records two baselines: a rule result, and whether auto-approval
+  would have opened the gate. It then re-reads the gate to prove nobody had
+  acted yet.
+
+- **Then, budget allowing, one call** on that captured snapshot. It is
+  re-checked just before the call and again just after. If you act while
+  the call is running, that prediction is kept but not scored.
+- **"As it stands."** If the review changes while the gate waits (a
+  different final message, result, check or file), the item is not compared
+  with your action.
+- **Your action.** Only an applied operator decision on that exact attempt
+  counts: approve means "not sent back", and revise or abort means "sent
+  back". Automated approvals, unattributed or unfinished decisions, and
+  pruned instances are never labels, and never negatives. A signed-in
+  session is an account, not proof that a person clicked.
+- **Records** live in `~/.claude/argus/decision-experiments/h1/`: an
+  append-only ledger (32 MiB cap) and the captured snapshots (64 MiB cap).
+  Collection stops at either cap, and nothing is pruned automatically.
+
+### Reading the report
+
+The Experiments page has an H1 section (`GET /api/decisions/h1`).
+
+- **Only settled gates** contribute to report results; only valid applied
+  operator decisions supply comparison labels. A gate still waiting on you
+  appears only in a count, so the page cannot show you a prediction for a
+  pending gate.
+- **For each population and model**, it shows:
+  - the confusion matrix, coverage, and agreement with your action;
+  - **false close** (predicted approve, you sent it back) and **false
+    escalation** (predicted sent back, you approved);
+  - κ;
+  - for model probabilities only: Brier, reliability buckets (n ≥ 20) and
+    ECE (n ≥ 200).
+
+  Proportion intervals use Wilson 95 % intervals. AUROC uses a
+  Hanley–McNeil 95 % interval.
+
+- **The baselines** sit beside the models:
+  - The rule baseline is a rule result, not a probability.
+  - The Verdict baseline is compared at the decision level, and its score
+    is a rating: its only rank figure is an AUROC.
+  - Auto-approval qualification is versioned. Historical v1 captures keep
+    their original rules; v2 adds trajectory requirements. The report separates
+    qualification versions rather than pooling different rules.
+
+### Turning it off
+
+Unset either switch and restart. Nothing is deleted, and the report still
+renders.
+
+## 34. Knowledge
+
+A read-only view of the [Knowledge Ledger](KNOWLEDGE-LEDGER.md): the business
+rules, facts and other claims Argus has accepted, the evidence behind each one,
+and who relied on it. Reach it from **More → Knowledge**, `g k`, or the palette.
+
+- **The overview** is one sentence about the whole ledger (how many claims,
+  whether all are supported, how many rules anyone has verified), a bar
+  showing the mix of kinds, and one card per module. **Group by** switches the
+  cards to source files. Pick a scope to see one project's knowledge.
+- **A card, a kind or a search** opens the matching claims, grouped by kind.
+  **Only what needs a look** narrows to flagged claims.
+- **A claim** opens a drawer: what it says, why Argus believes it (its
+  evidence and justifications), whether anyone checked the code obeys it, and
+  which runs used it or were given it.
+- **Normal says nothing.** An active, supported claim carries no badge. A
+  badge appears only for _contested_, _violated_, _stale_, _superseded_ or
+  _unsupported_. Every underlined word and every **?** explains itself, and
+  **How to read this page** lists every mark and term.
+
+Data: `GET /api/knowledge/atlas` (optionally `?project=&repository=`).
+
 ## Quick mental model
 
 | Tab                 | Answers the question                       | Source                                      |
@@ -1956,6 +2599,7 @@ are polled once per scheduler tick, with a four-second timeout and no retries.
 | **Ledger**          | Where did the money go, and where next?    | `argus/runs/` + `argus/spend.json`          |
 | **The Vault**       | What happened last quarter, and last year? | `argus/vault.sqlite` (a rebuildable cache)  |
 | **Omnibar**         | Say it, see the exact changes, confirm     | schedules + issues + instances + budget     |
+| **`argus tail`**    | What is it doing, when I can't see the UI? | the API + `WS /ws`, narrated as text        |
 
 _Screenshots in this guide live in [`docs/screenshots/`](screenshots/) and
 were captured from a live instance. To refresh them after a UI change, run the

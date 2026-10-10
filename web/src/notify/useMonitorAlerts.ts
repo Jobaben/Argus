@@ -53,7 +53,7 @@ export function useMonitorAlerts() {
           tone: alert.event === "monitor.recovered" ? "ok" : "fail",
           title,
           detail: alert.detail,
-          href: "#/monitors",
+          href: "#/health",
         });
         if (typeof Notification !== "undefined" && Notification.permission === "granted") {
           try {

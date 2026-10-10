@@ -30,9 +30,26 @@ describe("App shell", () => {
     await act(async () => {});
     expect(screen.getByRole("link", { name: "Command Center" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Scheduler" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Health" })).toBeInTheDocument();
+    // Folded into Scheduler and Health respectively — no tab of their own.
+    expect(screen.queryByRole("link", { name: "Launch" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Monitors" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Watchtower" })).toBeNull();
+    // Overflow and removed routes are not in the bar.
     expect(screen.queryByRole("link", { name: "Inventory" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Sessions" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Sentinel" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Activity" })).toBeNull();
+  });
+
+  it("rewrites a legacy hash to where its content went, without a history entry", async () => {
+    window.location.hash = "#/monitors";
+    await act(async () => {
+      render(<App />);
+    });
+    await act(async () => {});
+    expect(window.location.hash).toBe("#/health");
+    expect(await screen.findByRole("heading", { name: "Health" })).toBeInTheDocument();
   });
 });
 
@@ -110,6 +127,33 @@ describe("route direction", () => {
         for (const update of deferred) update();
       });
       expect(screen.getByRole("link", { name: "Command Center" })).toBeInTheDocument();
+    } finally {
+      doc.startViewTransition = original;
+    }
+  });
+
+  it("does not start a view transition for a hash change within the same view", async () => {
+    // Opening a gate deep link (`#/command/<instance>`) and closing it again both
+    // change the hash without changing the view. A transition there crossfades
+    // the page into itself and hands hit-testing to the snapshot meanwhile.
+    type Deferrable = { startViewTransition?: (cb: () => void) => unknown };
+    const doc = document as unknown as Deferrable;
+    const original = doc.startViewTransition;
+    const started = vi.fn((cb: () => void) => {
+      cb();
+      return { finished: Promise.resolve() };
+    });
+    doc.startViewTransition = started;
+    try {
+      await mount();
+      await act(async () => goto("#/command/some-instance"));
+      await act(async () => goto("#/command"));
+      expect(started).not.toHaveBeenCalled();
+      expect(screen.getByRole("link", { name: "Command Center" })).toBeInTheDocument();
+
+      // A genuine route change still transitions.
+      await act(async () => goto("#/agent/abc"));
+      expect(started).toHaveBeenCalledTimes(1);
     } finally {
       doc.startViewTransition = original;
     }

@@ -26,15 +26,14 @@ export const NAV_CHORDS: Record<string, string> = {
   command: "c",
   briefing: "b",
   chronicle: "h",
-  launch: "l",
   schedules: "s",
-  monitors: "m",
-  watchtower: "w",
+  health: "m",
   sentinel: "n",
   issues: "i",
   pipelines: "p",
   budget: "u",
   agents: "a",
+  knowledge: "k",
 };
 
 export function useShellBindings(destinations: Destination[], actions: ShellActions): Binding[] {

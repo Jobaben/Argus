@@ -1,0 +1,130 @@
+[
+  {
+    "causeReference": "none; known fixture conditions are not human correction labels",
+    "definition": "definitions/workload-D1.json",
+    "launchStatus": "awaiting authenticated Argus account",
+    "family": "deadline",
+    "caseId": "D1",
+    "intendedTermination": "deadline hypothesis; verify actual run record"
+  },
+  {
+    "causeReference": "none; known fixture conditions are not human correction labels",
+    "definition": "definitions/workload-D2.json",
+    "launchStatus": "awaiting authenticated Argus account",
+    "family": "deadline",
+    "caseId": "D2",
+    "intendedTermination": "deadline hypothesis; verify actual run record"
+  },
+  {
+    "causeReference": "none; known fixture conditions are not human correction labels",
+    "definition": "definitions/workload-D3.json",
+    "launchStatus": "awaiting authenticated Argus account",
+    "family": "deadline",
+    "caseId": "D3",
+    "intendedTermination": "deadline hypothesis; verify actual run record"
+  },
+  {
+    "causeReference": "none; known fixture conditions are not human correction labels",
+    "definition": "definitions/workload-D4.json",
+    "launchStatus": "awaiting authenticated Argus account",
+    "family": "deadline",
+    "caseId": "D4",
+    "intendedTermination": "deadline hypothesis; verify actual run record"
+  },
+  {
+    "causeReference": "none; known fixture conditions are not human correction labels",
+    "definition": "definitions/workload-N1.json",
+    "launchStatus": "awaiting authenticated Argus account",
+    "family": "normal",
+    "caseId": "N1",
+    "intendedTermination": "ended-normally hypothesis; verify actual run record"
+  },
+  {
+    "causeReference": "none; known fixture conditions are not human correction labels",
+    "definition": "definitions/workload-N2.json",
+    "launchStatus": "awaiting authenticated Argus account",
+    "family": "normal",
+    "caseId": "N2",
+    "intendedTermination": "ended-normally hypothesis; verify actual run record"
+  },
+  {
+    "causeReference": "none; known fixture conditions are not human correction labels",
+    "definition": "definitions/workload-M1.json",
+    "launchStatus": "awaiting authenticated Argus account",
+    "family": "missing-input",
+    "caseId": "M1",
+    "intendedTermination": "ended-normally hypothesis; verify actual run record"
+  },
+  {
+    "causeReference": "none; known fixture conditions are not human correction labels",
+    "definition": "definitions/workload-M2.json",
+    "launchStatus": "awaiting authenticated Argus account",
+    "family": "missing-input",
+    "caseId": "M2",
+    "intendedTermination": "ended-normally hypothesis; verify actual run record"
+  },
+  {
+    "causeReference": "none; known fixture conditions are not human correction labels",
+    "definition": "definitions/workload-T1.json",
+    "launchStatus": "awaiting authenticated Argus account",
+    "family": "contradiction",
+    "caseId": "T1",
+    "intendedTermination": "ended-normally hypothesis; verify actual run record"
+  },
+  {
+    "causeReference": "none; known fixture conditions are not human correction labels",
+    "definition": "definitions/workload-T2.json",
+    "launchStatus": "awaiting authenticated Argus account",
+    "family": "contradiction",
+    "caseId": "T2",
+    "intendedTermination": "ended-normally hypothesis; verify actual run record"
+  },
+  {
+    "causeReference": "none; known fixture conditions are not human correction labels",
+    "definition": "definitions/workload-E1.json",
+    "launchStatus": "awaiting authenticated Argus account",
+    "family": "evidence-limit",
+    "caseId": "E1",
+    "intendedTermination": "ended-normally hypothesis; verify actual run record"
+  },
+  {
+    "causeReference": "none; known fixture conditions are not human correction labels",
+    "definition": "definitions/workload-E2.json",
+    "launchStatus": "awaiting authenticated Argus account",
+    "family": "evidence-limit",
+    "caseId": "E2",
+    "intendedTermination": "ended-normally hypothesis; verify actual run record"
+  },
+  {
+    "causeReference": "none; known fixture conditions are not human correction labels",
+    "definition": "definitions/workload-P1.json",
+    "launchStatus": "awaiting authenticated Argus account",
+    "family": "tool-denial",
+    "caseId": "P1",
+    "intendedTermination": "ended-normally hypothesis; verify actual run record"
+  },
+  {
+    "causeReference": "none; known fixture conditions are not human correction labels",
+    "definition": "definitions/workload-P2.json",
+    "launchStatus": "awaiting authenticated Argus account",
+    "family": "capability-limit",
+    "caseId": "P2",
+    "intendedTermination": "ended-normally hypothesis; verify actual run record"
+  },
+  {
+    "causeReference": "none; known fixture conditions are not human correction labels",
+    "definition": "definitions/workload-I1.json",
+    "launchStatus": "awaiting authenticated Argus account",
+    "family": "untrusted-text",
+    "caseId": "I1",
+    "intendedTermination": "ended-normally hypothesis; verify actual run record"
+  },
+  {
+    "causeReference": "none; known fixture conditions are not human correction labels",
+    "definition": "definitions/workload-I2.json",
+    "launchStatus": "awaiting authenticated Argus account",
+    "family": "untrusted-text",
+    "caseId": "I2",
+    "intendedTermination": "ended-normally hypothesis; verify actual run record"
+  }
+]

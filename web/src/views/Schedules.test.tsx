@@ -33,6 +33,19 @@ vi.mock("../useRuns", () => ({
   useRuns: () => ({ runs: mockState.runs, loading: false, error: null }),
 }));
 
+const route: { segments: string[] } = { segments: ["schedules"] };
+vi.mock("../useHashRoute", () => ({ useHashRoute: () => route.segments }));
+
+vi.mock("../useLaunch", () => ({
+  useLaunch: () => ({
+    runs: [],
+    loading: false,
+    error: null,
+    launch: vi.fn().mockResolvedValue(undefined),
+    cancelRun: vi.fn().mockResolvedValue(undefined),
+  }),
+}));
+
 vi.mock("../useRuntimes", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../useRuntimes")>()),
   useRuntimes: () => ({
@@ -227,5 +240,27 @@ describe("Schedules health", () => {
     mockState.schedules = [schedule()];
     render(<Schedules />);
     expect(screen.getByText(/No runs recorded yet/)).toBeTruthy();
+  });
+
+  it("offers One-off as its second sub-tab, in the hash", () => {
+    route.segments = ["schedules"];
+    render(<Schedules />);
+    expect(screen.getByRole("link", { name: "Schedules" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "One-off" })).toHaveAttribute(
+      "href",
+      "#/schedules/oneoff",
+    );
+    expect(screen.queryByRole("button", { name: /Launch/ })).toBeNull();
+  });
+
+  it("shows the one-off launch form when the hash names it", () => {
+    route.segments = ["schedules", "oneoff"];
+    render(<Schedules />);
+    expect(screen.getByRole("link", { name: "One-off" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: /Launch/ })).toBeInTheDocument();
+    expect(screen.getByText(/Nothing launched yet/)).toBeInTheDocument();
+    // The Scheduler's own action belongs to the Schedules sub-tab only.
+    expect(screen.queryByRole("button", { name: /New schedule/ })).toBeNull();
+    route.segments = ["schedules"];
   });
 });

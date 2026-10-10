@@ -1,0 +1,204 @@
+{
+  "config": {
+    "dailyUsd": null,
+    "monthlyUsd": null,
+    "blockScheduled": false,
+    "updatedAt": null
+  },
+  "status": {
+    "state": "unset",
+    "today": {
+      "spentUsd": 0.0752952,
+      "limitUsd": null,
+      "ratio": null
+    },
+    "month": {
+      "spentUsd": 7.587637499999999,
+      "limitUsd": null,
+      "ratio": null
+    },
+    "blockScheduled": false
+  },
+  "days": [
+    {
+      "date": "2026-09-10",
+      "usd": 0,
+      "tokens": 0,
+      "runs": 0
+    },
+    {
+      "date": "2026-09-11",
+      "usd": 0,
+      "tokens": 0,
+      "runs": 0
+    },
+    {
+      "date": "2026-09-12",
+      "usd": 0,
+      "tokens": 0,
+      "runs": 0
+    },
+    {
+      "date": "2026-09-13",
+      "usd": 0,
+      "tokens": 0,
+      "runs": 0
+    },
+    {
+      "date": "2026-09-14",
+      "usd": 0,
+      "tokens": 0,
+      "runs": 0
+    },
+    {
+      "date": "2026-09-15",
+      "usd": 0,
+      "tokens": 0,
+      "runs": 0
+    },
+    {
+      "date": "2026-09-16",
+      "usd": 0,
+      "tokens": 0,
+      "runs": 0
+    },
+    {
+      "date": "2026-09-17",
+      "usd": 0,
+      "tokens": 0,
+      "runs": 0
+    },
+    {
+      "date": "2026-09-18",
+      "usd": 0,
+      "tokens": 0,
+      "runs": 0
+    },
+    {
+      "date": "2026-09-19",
+      "usd": 0,
+      "tokens": 0,
+      "runs": 0
+    },
+    {
+      "date": "2026-09-20",
+      "usd": 0,
+      "tokens": 0,
+      "runs": 0
+    },
+    {
+      "date": "2026-09-21",
+      "usd": 0,
+      "tokens": 0,
+      "runs": 0
+    },
+    {
+      "date": "2026-09-22",
+      "usd": 0,
+      "tokens": 0,
+      "runs": 0
+    },
+    {
+      "date": "2026-09-23",
+      "usd": 0,
+      "tokens": 0,
+      "runs": 0
+    },
+    {
+      "date": "2026-09-24",
+      "usd": 0,
+      "tokens": 0,
+      "runs": 0
+    },
+    {
+      "date": "2026-09-25",
+      "usd": 0,
+      "tokens": 0,
+      "runs": 0
+    },
+    {
+      "date": "2026-09-26",
+      "usd": 0,
+      "tokens": 0,
+      "runs": 0
+    },
+    {
+      "date": "2026-09-27",
+      "usd": 0,
+      "tokens": 0,
+      "runs": 0
+    },
+    {
+      "date": "2026-09-28",
+      "usd": 0,
+      "tokens": 0,
+      "runs": 0
+    },
+    {
+      "date": "2026-09-29",
+      "usd": 0,
+      "tokens": 0,
+      "runs": 0
+    },
+    {
+      "date": "2026-09-30",
+      "usd": 0,
+      "tokens": 0,
+      "runs": 0
+    },
+    {
+      "date": "2026-10-01",
+      "usd": 1.000399,
+      "tokens": 2830856,
+      "runs": 27
+    },
+    {
+      "date": "2026-10-02",
+      "usd": 0.1474954,
+      "tokens": 1067239,
+      "runs": 4
+    },
+    {
+      "date": "2026-10-03",
+      "usd": 0,
+      "tokens": 0,
+      "runs": 0
+    },
+    {
+      "date": "2026-10-04",
+      "usd": 0,
+      "tokens": 0,
+      "runs": 0
+    },
+    {
+      "date": "2026-10-05",
+      "usd": 0,
+      "tokens": 0,
+      "runs": 0
+    },
+    {
+      "date": "2026-10-06",
+      "usd": 0,
+      "tokens": 0,
+      "runs": 0
+    },
+    {
+      "date": "2026-10-07",
+      "usd": 0,
+      "tokens": 0,
+      "runs": 0
+    },
+    {
+      "date": "2026-10-08",
+      "usd": 6.364447899999998,
+      "tokens": 174478,
+      "runs": 146
+    },
+    {
+      "date": "2026-10-09",
+      "usd": 0.0752952,
+      "tokens": 1258,
+      "runs": 2
+    }
+  ]
+}

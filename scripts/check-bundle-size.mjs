@@ -35,8 +35,16 @@ import { fileURLToPath } from "node:url";
  * `spring`, `gesture`, `direction`, `viewTransition`). None of it can be lazy —
  * it is what every route's entrance and exit is built from, so a lazy boundary
  * would make the first navigation the one that does not animate.
+ *
+ * Raised from 120 to 122 by the harness wave. The board is the default route,
+ * so what it needs to draw a phase is shell code: the candidate, workspace and
+ * trigger pills in `ds/overviewRow` and `ds/format` added ~0.7 kB gzip. The
+ * webhook and chaining editors were kept out of the shell by importing
+ * `TriggerFields` directly from its module in the two lazy forms that use it
+ * rather than through the `ds` barrel; `main` was already 0.6 kB over before
+ * the wave, so the new figure is measured, not padded.
  */
-const BUDGET_KB = 120;
+const BUDGET_KB = 122;
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const distDir = path.join(repoRoot, "web", "dist");

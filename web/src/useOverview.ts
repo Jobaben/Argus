@@ -2,6 +2,11 @@ import { useCallback } from "react";
 import { useLiveResource } from "./live/useLiveResource";
 import type { OverviewEntry } from "./types";
 
+/** Which paused phase a gate action targets, when a fan-out has several. */
+export interface GateActionOptions {
+  phaseId?: string;
+}
+
 /** Lists the pipeline overview, refreshing on "pipelines:changed", and exposes
  *  the instance gate actions. Actions only POST — the resulting server
  *  broadcast drives the single refresh (no optimistic refetch here). */
@@ -34,9 +39,21 @@ export function useOverview() {
     [],
   );
 
-  const approve = useCallback((instanceId: string) => act(instanceId, "approve"), [act]);
+  // `phaseId` names which paused phase is meant; absent, the single paused one.
+  const approve = useCallback(
+    (instanceId: string, opts: GateActionOptions = {}) =>
+      act(instanceId, "approve", opts.phaseId ? { phaseId: opts.phaseId } : undefined),
+    [act],
+  );
   const revise = useCallback(
-    (instanceId: string, note?: string) => act(instanceId, "revise", note ? { note } : undefined),
+    (instanceId: string, note?: string, opts: GateActionOptions = {}) =>
+      act(
+        instanceId,
+        "revise",
+        note || opts.phaseId
+          ? { ...(note ? { note } : {}), ...(opts.phaseId ? { phaseId: opts.phaseId } : {}) }
+          : undefined,
+      ),
     [act],
   );
   const abort = useCallback((instanceId: string) => act(instanceId, "abort"), [act]);

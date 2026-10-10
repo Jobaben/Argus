@@ -1,0 +1,158 @@
+{
+  "format": "argus.experiment-development-plan",
+  "version": 1,
+  "date": "2026-10-09",
+  "status": "proposed-not-implemented",
+  "sourceTree": "C:/GIT/Argus/.worktrees/argus-local",
+  "applicationCodeChanged": false,
+  "purpose": "Close broad exploratory shadow collection with an evidence-bound development decision and bounded consumer release gates",
+  "invariants": [
+    "Observations, assessments, policy evaluations and applied decisions remain distinct",
+    "Assessments never establish knowledge support or acceptance satisfaction",
+    "No assessment opens a gate or grants permission",
+    "Knowledge-committing boundaries retain human authority",
+    "Missing, stale, failed or corrupt input never becomes current favorable evidence",
+    "Historical replay is independent from live applicability",
+    "Provider calls remain outside instance locks and within shared limits"
+  ],
+  "implemented": [
+    "Versioned question/projection registry",
+    "Retained snapshot journal and replay",
+    "Derived currency",
+    "H2 shadow collection",
+    "H1 blinded collection and baselines",
+    "Read-only experiment report routes",
+    "Escalation-only policy type contract"
+  ],
+  "unprovenOrUnavailable": [
+    "Residual cause accuracy without independent labels",
+    "H1 correctness or safe skipped review",
+    "Three unsupported probe reference classes",
+    "Public retained-snapshot reevaluation",
+    "Live multi-writer safety",
+    "New enforcing consumer behavior"
+  ],
+  "backlog": [
+    {
+      "id": "DL-01",
+      "deliverable": "Closeout ADR and evidence manifest",
+      "dependsOn": [],
+      "release": "Known disposition for all experiment items and explicit measured/unmeasured claims"
+    },
+    {
+      "id": "DL-02",
+      "deliverable": "Consumer contract and journal read model",
+      "dependsOn": [
+        "DL-01"
+      ],
+      "release": "Read isolation, deterministic replay and truthful currency"
+    },
+    {
+      "id": "DL-03",
+      "deliverable": "Supported budgeted retained-snapshot evaluation",
+      "dependsOn": [
+        "DL-02"
+      ],
+      "release": "Single writer, immutable reevaluation, bounded invocation and unknown-call reconciliation"
+    },
+    {
+      "id": "DL-04",
+      "deliverable": "Cause adjudication and optional independent references",
+      "dependsOn": [
+        "DL-01"
+      ],
+      "release": "Blinded reviewed taxonomy and distinct reference stream"
+    },
+    {
+      "id": "DL-05",
+      "deliverable": "Advisory run/gate display",
+      "dependsOn": [
+        "DL-02"
+      ],
+      "release": "Visible inference/currency limitations, no active-study label leakage or authority"
+    },
+    {
+      "id": "DL-06",
+      "deliverable": "Pure escalation policy and audit records",
+      "dependsOn": [
+        "DL-02"
+      ],
+      "release": "Approved identity-bound rules, typed fallback and replayable audit"
+    },
+    {
+      "id": "DL-07",
+      "deliverable": "Ordinary-phase engine adapter",
+      "dependsOn": [
+        "DL-06",
+        "DL-09"
+      ],
+      "release": "Prospective evidence gate passed; atomic eligibility check; idempotence; no knowledge bypass"
+    },
+    {
+      "id": "DL-08",
+      "deliverable": "Artifact and acceptance advisory links",
+      "dependsOn": [
+        "DL-05"
+      ],
+      "release": "Artifact/criterion/verification identity binding with unchanged support and completion semantics"
+    },
+    {
+      "id": "DL-09",
+      "deliverable": "Drift and retirement runbook",
+      "dependsOn": [
+        "DL-03"
+      ],
+      "release": "Canary monitoring and tested disable/recovery before DL-07 release"
+    }
+  ],
+  "binding": [
+    "instanceId",
+    "phaseId",
+    "attempt",
+    "selectedRunAndCandidateIds",
+    "questionDefinitionDigest",
+    "projectionDigest",
+    "providerIdentity",
+    "policyVersionAndDigest",
+    "configurationDigest",
+    "reviewStateDigest",
+    "referencedArtifactHashes",
+    "claimRevisionsWhenApplicable",
+    "repositoryStateWhenApplicable",
+    "criterionAndVerificationIdentityWhenApplicable"
+  ],
+  "fallbacks": {
+    "advisory": "Keep existing review behavior and expose missing/stale/unavailable status",
+    "configuredEnforcingEscalation": "Withhold ordinary auto-approval when a required assessment is unavailable; retain human review; must be explicitly authorized per consumer",
+    "knowledgeCommit": "Existing human boundary applies",
+    "unknownInvocation": "Count as possibly spent, never automatically resend",
+    "corruption": "Stop affected writing/application and report reason"
+  },
+  "releaseEvidence": {
+    "integrity": "Zero unexplained findings in released evidence set",
+    "replay": "Byte-identical frozen report without live-source dependency",
+    "calibrationDisplayMinimum": 200,
+    "reliabilityBinMinimum": 20,
+    "proposedFalseCloseUpperBound": 0.05,
+    "thresholdApprovalRequired": true,
+    "wilson95ZeroMissClassDenominatorFor5Percent": 73,
+    "wilson95ZeroMissClassDenominatorFor1Percent": 381,
+    "correctnessReference": "Independent review; operator behavior alone is insufficient",
+    "stability": "k=3 retained-snapshot evaluations; tolerances preregistered",
+    "canarySuggestedSize": 50
+  },
+  "rollback": "Disable consumer/evaluation/display feature; restore existing hardened review flow; retain historical journal, observations and audit records",
+  "validationOfThisArtifact": "Document-only plan; JSON parsing and cross-artifact backlog consistency to be checked; no new application behavior claimed",
+  "sourceReferences": [
+    "docs/rfc/2026-09-29-decision-plane.md",
+    "contracts/src/decision.ts",
+    "server/src/decision/observations.ts",
+    "server/src/decision/currency.ts",
+    "server/src/decision/service.ts",
+    "server/src/decision/h1/baselines.ts",
+    "server/src/decision/h2/config.ts",
+    "server/src/decision/h2/report.ts",
+    "server/src/app.ts"
+  ],
+  "policyApplicationSemantics": "Prepared intent is not an applied effect. Mark applied only at durable transition or settlement, binding exact engine state and idempotency key."
+}

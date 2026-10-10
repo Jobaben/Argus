@@ -1,0 +1,1008 @@
+{
+  "capturedAt": "2026-10-08T10:28:07.401Z",
+  "pipelineId": "8a4a1975-0cab-49d8-b9ca-46ca22ed511e",
+  "definition": {
+    "id": "8a4a1975-0cab-49d8-b9ca-46ca22ed511e",
+    "name": "H2 Shadow Evidence — 5 runs per hour",
+    "phases": [
+      {
+        "id": "307b92bf-2c43-4c84-8371-50a9f5e25a43",
+        "name": "Evaluate controlled business scenario",
+        "cwd": "C:/GIT/Argus/experiments/shadow-feeder",
+        "steps": [
+          {
+            "name": "Evaluate one case honestly",
+            "prompt": "This is a controlled, read-only business scenario benchmark for Argus H2 shadow measurement. Use the Bash tool to run exactly `node select-case.mjs` in the current directory, without a cd prefix or other commands. This exact command is pre-authorized. The selector reads ARGUS_RUN_ID from the actual process environment; do not infer environment availability from the prompt. If the command is denied, report the permission denial rather than claiming an environment variable is absent. Do not use PowerShell or inspect any additional file. Read the selected scenario, then fulfil its task using only the supplied facts. Return the corpus tag, scenario ID, run ID, calculation or reasoning, and the requested decision. Check your arithmetic and constraints. If a requested exact answer cannot be derived because required information is missing or the constraints contradict each other, explain exactly why and honestly report blocked against that task; do not invent data or silently choose which rule to ignore. A feasible task with a negative business decision is still successfully answered. Do not write any file, access the network, inspect other projects, or change Argus stores. Do not invoke skills, delegate, start background work, or perform implementation. Finish with a concise plain-text result, with enough evidence for a later reviewer to understand whether the task was accomplished. This controlled workload measures collection and trace sensitivity; it does not establish production failure rates or cause-label accuracy."
+          }
+        ],
+        "gated": false,
+        "timeoutSeconds": 240,
+        "capabilities": {
+          "filesystem": "read-only",
+          "tools": {
+            "allow": [
+              "Bash(node select-case.mjs)"
+            ],
+            "deny": [
+              "PowerShell",
+              "Edit",
+              "Write",
+              "NotebookEdit",
+              "WebFetch",
+              "WebSearch"
+            ]
+          }
+        }
+      }
+    ],
+    "trigger": {
+      "kind": "windowed",
+      "startTime": "00:00",
+      "endTime": "23:59",
+      "everyMinutes": 12
+    },
+    "enabled": true,
+    "overlapPolicy": "skip",
+    "lastStartedAt": "2026-10-08T10:24:12.838Z",
+    "createdAt": "2026-10-08T09:42:59.514Z",
+    "updatedAt": "2026-10-08T10:23:01.650Z",
+    "runtime": "claude",
+    "model": "haiku"
+  },
+  "health": {
+    "ok": true,
+    "version": "0.4.0",
+    "claudeHome": "C:\\Users\\ushab\\.claude",
+    "codexHome": "C:\\Users\\ushab\\.codex",
+    "service": "argus"
+  },
+  "setup": {
+    "ok": true,
+    "prereqs": [
+      {
+        "id": "signal-stop-hook",
+        "label": "Signal Stop hook",
+        "fixable": true,
+        "status": "ok"
+      },
+      {
+        "id": "gate-pretooluse-hook",
+        "label": "Gate PreToolUse hook",
+        "fixable": true,
+        "status": "ok"
+      },
+      {
+        "id": "argus-data-dir",
+        "label": "Argus data directories",
+        "fixable": true,
+        "status": "ok"
+      },
+      {
+        "id": "claude-cli",
+        "label": "Claude CLI on PATH",
+        "fixable": false,
+        "status": "ok"
+      },
+      {
+        "id": "codex-cli",
+        "label": "Codex CLI on PATH",
+        "fixable": false,
+        "status": "ok"
+      },
+      {
+        "id": "codex-signal-hook",
+        "label": "Codex signal stop hook",
+        "fixable": true,
+        "status": "ok"
+      },
+      {
+        "id": "opencode-cli",
+        "label": "OpenCode CLI on PATH",
+        "fixable": false,
+        "status": "ok",
+        "detail": "Not checked — nothing on this machine runs on OpenCode."
+      },
+      {
+        "id": "qwen-cli",
+        "label": "Qwen Code CLI on PATH",
+        "fixable": false,
+        "status": "ok",
+        "detail": "Not checked — nothing on this machine runs on Qwen Code."
+      },
+      {
+        "id": "qwen-signal-hook",
+        "label": "Qwen Code signal stop hook",
+        "fixable": true,
+        "status": "ok",
+        "detail": "Not checked — nothing on this machine runs on Qwen Code."
+      },
+      {
+        "id": "node-runtime",
+        "label": "Node on PATH",
+        "fixable": false,
+        "status": "ok"
+      },
+      {
+        "id": "pipelines-parse",
+        "label": "pipelines.json parses",
+        "fixable": false,
+        "status": "ok"
+      },
+      {
+        "id": "settings-parse",
+        "label": "settings.json parses",
+        "fixable": false,
+        "status": "ok"
+      }
+    ]
+  },
+  "collection": {
+    "enabled": true,
+    "reasons": [],
+    "settings": {
+      "residualRate": 0.5,
+      "probeRate": 1,
+      "maxCallsPer24h": 96,
+      "minCallIntervalMs": 720000,
+      "maxUsdPer24h": 10,
+      "requestedModel": "haiku",
+      "seed": "argus-h2"
+    },
+    "watcher": {
+      "state": "waiting",
+      "detail": "the minimum interval since the last provider invocation has not passed",
+      "until": null
+    }
+  },
+  "report": {
+    "report": {
+      "id": "decision-h2-report",
+      "version": 1
+    },
+    "asOf": {
+      "seq": 10,
+      "at": "2026-10-08T10:18:42.557Z"
+    },
+    "collection": {
+      "start": "2026-10-08T09:43:42.177Z",
+      "configs": [
+        {
+          "digest": "ba565d08072eac571798b72d86db7f0c9ce96afcc2f35af669f9bcbdde684a7b",
+          "firstAt": "2026-10-08T09:43:42.177Z",
+          "seed": "argus-h2",
+          "rates": [
+            {
+              "id": "run.failure-cause.residual",
+              "version": 1,
+              "rate": 0.5
+            },
+            {
+              "id": "run.termination-probe",
+              "version": 1,
+              "rate": 1
+            }
+          ],
+          "window": {
+            "maxAgeMs": 86400000,
+            "minAgeMs": 600000
+          },
+          "limits": {
+            "maxCallsPer24h": 96,
+            "maxTriesPerItem": 3,
+            "maxUsdPer24h": 10,
+            "minCallIntervalMs": 720000,
+            "retryAfterMs": 1800000
+          },
+          "provider": {
+            "provider": "claude-cli",
+            "requestedModel": "haiku",
+            "adapterVersion": 1
+          },
+          "census": 4,
+          "attempts": 2
+        }
+      ]
+    },
+    "definitions": [
+      {
+        "role": "residual",
+        "id": "run.failure-cause.residual",
+        "version": 1,
+        "digest": "d4d865156893e71c165c09d02ed56410250a67c0dd34b45f27846675aedaa0a8",
+        "definition": "registered",
+        "projection": {
+          "id": "run-failure",
+          "version": 1,
+          "digest": "f8f7bcbd015648c992d6a5682baed9356ab6d5d85e661ad69c496ad9e8c82853"
+        },
+        "options": [
+          "prompt-ambiguity",
+          "missing-context",
+          "tool-misuse",
+          "environment",
+          "model-refusal",
+          "task-infeasible",
+          "other"
+        ]
+      },
+      {
+        "role": "probe",
+        "id": "run.termination-probe",
+        "version": 1,
+        "digest": "4e22c0439828b768eca5543c17527c26981bc4993774b2b7906c20bca7f5f5f9",
+        "definition": "registered",
+        "projection": {
+          "id": "run-failure.blind",
+          "version": 1,
+          "digest": "cd6292c099f7162632dc43cc2d2caee31b117f3750369172cffb0e9109eaab80"
+        },
+        "options": [
+          "deadline",
+          "never-ran",
+          "output-refused",
+          "rate-limited",
+          "permission-denied",
+          "ended-normally"
+        ]
+      }
+    ],
+    "census": [
+      {
+        "role": "residual",
+        "question": {
+          "id": "run.failure-cause.residual",
+          "version": 1
+        },
+        "considered": 2,
+        "excluded": {
+          "successful": 1
+        },
+        "strata": [
+          {
+            "stratum": "ended-normally",
+            "eligible": 1,
+            "selected": 1,
+            "notSelected": 0,
+            "assessed": 1,
+            "lost": 0,
+            "constructionError": 0,
+            "expired": 0,
+            "abandoned": 0,
+            "pending": 0
+          }
+        ]
+      },
+      {
+        "role": "probe",
+        "question": {
+          "id": "run.termination-probe",
+          "version": 1
+        },
+        "considered": 2,
+        "excluded": {},
+        "strata": [
+          {
+            "stratum": "ended-normally",
+            "eligible": 2,
+            "selected": 2,
+            "notSelected": 0,
+            "assessed": 1,
+            "lost": 0,
+            "constructionError": 0,
+            "expired": 0,
+            "abandoned": 0,
+            "pending": 1
+          }
+        ]
+      }
+    ],
+    "probe": [
+      {
+        "question": {
+          "id": "run.termination-probe",
+          "version": 1,
+          "digest": "4e22c0439828b768eca5543c17527c26981bc4993774b2b7906c20bca7f5f5f9",
+          "definition": "registered"
+        },
+        "projection": {
+          "digest": "cd6292c099f7162632dc43cc2d2caee31b117f3750369172cffb0e9109eaab80",
+          "id": "run-failure.blind",
+          "version": 1
+        },
+        "provider": {
+          "adapterVersion": 1,
+          "elicitation": "verbalized",
+          "provider": "claude-cli",
+          "reportedModel": null,
+          "requestedModel": "haiku"
+        },
+        "attempts": {
+          "answered": 1,
+          "abstained": 0,
+          "provider-failed": 0,
+          "refused": 0,
+          "missing-input": 0,
+          "construction-error": 0,
+          "unrecorded": 0,
+          "unknown-outcome": 0,
+          "unresolved": 0
+        },
+        "assessed": 1,
+        "answered": 1,
+        "abstained": 0,
+        "failed": 0,
+        "refusals": {},
+        "usage": {
+          "latencyMs": {
+            "n": 1,
+            "p50": 9774,
+            "p95": 9774,
+            "max": 9774
+          },
+          "costUsd": {
+            "total": 0.074912,
+            "meanKnown": 0.074912,
+            "known": 1,
+            "unknown": 0
+          },
+          "tokens": {
+            "total": 566,
+            "meanKnown": 566,
+            "known": 1,
+            "unknown": 0
+          },
+          "snapshotBytes": {
+            "n": 1,
+            "p50": 3008,
+            "p95": 3008,
+            "max": 3008
+          }
+        },
+        "reference": {
+          "stream": "observed-termination",
+          "bearing": 1,
+          "excluded": {}
+        },
+        "classes": [
+          {
+            "label": "deadline",
+            "n": 0,
+            "answered": 0,
+            "abstained": 0,
+            "failed": 0,
+            "correct": 0,
+            "recallAnswered": {
+              "k": 0,
+              "n": 0,
+              "value": null,
+              "ci95": null
+            },
+            "recallEndToEnd": {
+              "k": 0,
+              "n": 0,
+              "value": null,
+              "ci95": null
+            }
+          },
+          {
+            "label": "never-ran",
+            "n": 0,
+            "answered": 0,
+            "abstained": 0,
+            "failed": 0,
+            "correct": 0,
+            "recallAnswered": {
+              "k": 0,
+              "n": 0,
+              "value": null,
+              "ci95": null
+            },
+            "recallEndToEnd": {
+              "k": 0,
+              "n": 0,
+              "value": null,
+              "ci95": null
+            }
+          },
+          {
+            "label": "output-refused",
+            "n": 0,
+            "answered": 0,
+            "abstained": 0,
+            "failed": 0,
+            "correct": 0,
+            "recallAnswered": {
+              "k": 0,
+              "n": 0,
+              "value": null,
+              "ci95": null
+            },
+            "recallEndToEnd": {
+              "k": 0,
+              "n": 0,
+              "value": null,
+              "ci95": null
+            }
+          },
+          {
+            "label": "rate-limited",
+            "n": 0,
+            "answered": 0,
+            "abstained": 0,
+            "failed": 0,
+            "correct": 0,
+            "recallAnswered": {
+              "k": 0,
+              "n": 0,
+              "value": null,
+              "ci95": null
+            },
+            "recallEndToEnd": {
+              "k": 0,
+              "n": 0,
+              "value": null,
+              "ci95": null
+            }
+          },
+          {
+            "label": "permission-denied",
+            "n": 0,
+            "answered": 0,
+            "abstained": 0,
+            "failed": 0,
+            "correct": 0,
+            "recallAnswered": {
+              "k": 0,
+              "n": 0,
+              "value": null,
+              "ci95": null
+            },
+            "recallEndToEnd": {
+              "k": 0,
+              "n": 0,
+              "value": null,
+              "ci95": null
+            }
+          },
+          {
+            "label": "ended-normally",
+            "n": 1,
+            "answered": 1,
+            "abstained": 0,
+            "failed": 0,
+            "correct": 1,
+            "recallAnswered": {
+              "k": 1,
+              "n": 1,
+              "value": 1,
+              "ci95": [
+                0.206549,
+                1
+              ]
+            },
+            "recallEndToEnd": {
+              "k": 1,
+              "n": 1,
+              "value": 1,
+              "ci95": [
+                0.206549,
+                1
+              ]
+            }
+          }
+        ],
+        "confusion": {
+          "rows": [
+            "deadline",
+            "never-ran",
+            "output-refused",
+            "rate-limited",
+            "permission-denied",
+            "ended-normally"
+          ],
+          "columns": [
+            "deadline",
+            "never-ran",
+            "output-refused",
+            "rate-limited",
+            "permission-denied",
+            "ended-normally",
+            "tie",
+            "abstained",
+            "failed"
+          ],
+          "counts": [
+            [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              0,
+              0,
+              1,
+              0,
+              0,
+              0
+            ]
+          ]
+        },
+        "ties": 0,
+        "accuracyAnswered": {
+          "k": 1,
+          "n": 1,
+          "value": 1,
+          "ci95": [
+            0.206549,
+            1
+          ]
+        },
+        "coverage": {
+          "k": 1,
+          "n": 1,
+          "value": 1,
+          "ci95": [
+            0.206549,
+            1
+          ]
+        },
+        "accuracyEndToEnd": {
+          "k": 1,
+          "n": 1,
+          "value": 1,
+          "ci95": [
+            0.206549,
+            1
+          ]
+        },
+        "macroRecall": {
+          "answered": 1,
+          "endToEnd": 1
+        },
+        "majorityClassShare": 1,
+        "kappa": {
+          "status": "unmeasured",
+          "reason": "chance agreement is 1"
+        },
+        "brier": {
+          "status": "measured",
+          "value": {
+            "value": 0,
+            "n": 1
+          }
+        },
+        "reliability": {
+          "minBucket": 20,
+          "buckets": [
+            {
+              "lower": 0,
+              "upper": 0.1,
+              "n": 0,
+              "status": "unmeasured",
+              "meanConfidence": null,
+              "accuracy": null
+            },
+            {
+              "lower": 0.1,
+              "upper": 0.2,
+              "n": 0,
+              "status": "unmeasured",
+              "meanConfidence": null,
+              "accuracy": null
+            },
+            {
+              "lower": 0.2,
+              "upper": 0.3,
+              "n": 0,
+              "status": "unmeasured",
+              "meanConfidence": null,
+              "accuracy": null
+            },
+            {
+              "lower": 0.3,
+              "upper": 0.4,
+              "n": 0,
+              "status": "unmeasured",
+              "meanConfidence": null,
+              "accuracy": null
+            },
+            {
+              "lower": 0.4,
+              "upper": 0.5,
+              "n": 0,
+              "status": "unmeasured",
+              "meanConfidence": null,
+              "accuracy": null
+            },
+            {
+              "lower": 0.5,
+              "upper": 0.6,
+              "n": 0,
+              "status": "unmeasured",
+              "meanConfidence": null,
+              "accuracy": null
+            },
+            {
+              "lower": 0.6,
+              "upper": 0.7,
+              "n": 0,
+              "status": "unmeasured",
+              "meanConfidence": null,
+              "accuracy": null
+            },
+            {
+              "lower": 0.7,
+              "upper": 0.8,
+              "n": 0,
+              "status": "unmeasured",
+              "meanConfidence": null,
+              "accuracy": null
+            },
+            {
+              "lower": 0.8,
+              "upper": 0.9,
+              "n": 0,
+              "status": "unmeasured",
+              "meanConfidence": null,
+              "accuracy": null
+            },
+            {
+              "lower": 0.9,
+              "upper": 1,
+              "n": 1,
+              "status": "unmeasured",
+              "meanConfidence": null,
+              "accuracy": null
+            }
+          ]
+        },
+        "ece": {
+          "status": "unmeasured",
+          "reason": "n = 1 < 200"
+        }
+      }
+    ],
+    "residual": [
+      {
+        "question": {
+          "id": "run.failure-cause.residual",
+          "version": 1,
+          "digest": "d4d865156893e71c165c09d02ed56410250a67c0dd34b45f27846675aedaa0a8",
+          "definition": "registered"
+        },
+        "projection": {
+          "digest": "f8f7bcbd015648c992d6a5682baed9356ab6d5d85e661ad69c496ad9e8c82853",
+          "id": "run-failure",
+          "version": 1
+        },
+        "provider": {
+          "adapterVersion": 1,
+          "elicitation": "verbalized",
+          "provider": "claude-cli",
+          "reportedModel": null,
+          "requestedModel": "haiku"
+        },
+        "attempts": {
+          "answered": 1,
+          "abstained": 0,
+          "provider-failed": 0,
+          "refused": 0,
+          "missing-input": 0,
+          "construction-error": 0,
+          "unrecorded": 0,
+          "unknown-outcome": 0,
+          "unresolved": 0
+        },
+        "assessed": 1,
+        "answered": 1,
+        "abstained": 0,
+        "failed": 0,
+        "refusals": {},
+        "usage": {
+          "latencyMs": {
+            "n": 1,
+            "p50": 13770,
+            "p95": 13770,
+            "max": 13770
+          },
+          "costUsd": {
+            "total": 0.03697,
+            "meanKnown": 0.03697,
+            "known": 1,
+            "unknown": 0
+          },
+          "tokens": {
+            "total": 1020,
+            "meanKnown": 1020,
+            "known": 1,
+            "unknown": 0
+          },
+          "snapshotBytes": {
+            "n": 1,
+            "p50": 7968,
+            "p95": 7968,
+            "max": 7968
+          }
+        },
+        "strata": [
+          {
+            "stratum": "ended-normally",
+            "assessed": 1,
+            "answered": 1,
+            "abstained": 0,
+            "failed": 0
+          }
+        ],
+        "accuracy": {
+          "status": "unmeasured",
+          "reason": "no reference labels exist for the residual question: human corrections are optional (Decision 3) and none are recorded"
+        },
+        "probability": {
+          "status": "unmeasured",
+          "reason": "no reference labels exist for the residual question: human corrections are optional (Decision 3) and none are recorded"
+        },
+        "topAnswers": {
+          "environment": 1
+        }
+      }
+    ],
+    "baselines": [
+      {
+        "provider": "deterministic",
+        "status": "not-applicable",
+        "reason": "the deterministic provider has no H2 rules: observed termination is an observation, no rule infers a residual cause, and answering the probe from withheld fields would be circular (§O.4)"
+      },
+      {
+        "provider": "autopsy",
+        "status": "not-compared",
+        "reason": "Autopsy classifies on its own 11-way taxonomy with its own provenance; no mapping to either H2 question is published, so it is not compared numerically"
+      }
+    ],
+    "outsideExperiment": 0,
+    "methods": {
+      "population": "one table per question id, version and digest, and per recorded provider identity (provider, requestedModel, reportedModel, adapterVersion, elicitation); probe and residual are never pooled",
+      "denominators": "assessed = answered + abstained + provider-failed with its assessment present and consistent; answered-only accuracy = correct / answered with coverage = answered / assessed-with-reference; end-to-end accuracy = correct / assessed-with-reference (abstentions and failures count as not correct); refusals, missing input, unrecorded and unknown outcomes are not assessments and are counted beside the table",
+      "ties": "the prediction is the unique most probable option; an exact tie is 'tie', which is never correct",
+      "intervals": "Wilson score interval, 95 % (z = 1.959964); null when n = 0",
+      "brier": "multiclass Brier in the original form: mean over answered reference-bearing items of the sum over all K options of (p − y)²; range 0–2; not divided by K",
+      "reliability": "top-probability confidence in 10 equal-width bins, bin = min(9, floor(10·p)); a bin is shown only at n ≥ 20",
+      "ece": "n-weighted mean |accuracy − confidence| over non-empty bins, only at N ≥ 200",
+      "kappa": "Cohen's κ over answered items, with 'tie' as a prediction category",
+      "percentiles": "nearest-rank",
+      "probabilities": "only distributions that validate against the registered question with the recorded digest; ratings and provider statistics are never read as probabilities",
+      "references": "probe references are Argus's observed termination, retained with source digest in the collection ledger at attempt time; residual accuracy is unmeasured without valid labels"
+    },
+    "integrity": {
+      "history": "complete",
+      "ledger": [],
+      "journal": {
+        "gaps": 0,
+        "notices": []
+      },
+      "findings": []
+    }
+  },
+  "instances": [
+    {
+      "id": "6467c389-2a68-4d36-b2da-7e118ed360b3",
+      "status": "succeeded",
+      "trigger": "scheduled",
+      "createdAt": "2026-10-08T10:24:12.838Z"
+    },
+    {
+      "id": "36b33ebf-ffc9-4988-b05a-346090c775d4",
+      "status": "failed",
+      "trigger": "scheduled",
+      "createdAt": "2026-10-08T10:20:12.779Z"
+    },
+    {
+      "id": "d1fa8245-92e8-47fb-951a-03cefc90ef89",
+      "status": "failed",
+      "trigger": "scheduled",
+      "createdAt": "2026-10-08T10:07:42.629Z"
+    },
+    {
+      "id": "b52e2a79-a847-4403-ab42-db5e6f79c732",
+      "status": "succeeded",
+      "trigger": "scheduled",
+      "createdAt": "2026-10-08T09:55:12.483Z"
+    }
+  ],
+  "runs": [
+    {
+      "id": "96c4b36e-2ade-40cd-bc12-f886418f23e9",
+      "instanceId": "6467c389-2a68-4d36-b2da-7e118ed360b3",
+      "status": "succeeded",
+      "outcome": "succeeded",
+      "runtime": "claude",
+      "model": "haiku",
+      "startedAt": "2026-10-08T10:24:12.923Z",
+      "endedAt": "2026-10-08T10:24:24.090Z",
+      "durationMs": 11231,
+      "costUsd": 0.0446904,
+      "resultSummary": "**Corpus:** controlled-business-scenarios-v1  \n**Scenario ID:** waitlist  \n**Run ID:** 96c4b36e-2ade-40cd-bc12-f886418f23e9\n\n**Task:** Select next eligible attendee using FIFO and accessibility eligibility.\n\n**Calculation:**\nWaiting queue ordered by join time (FIFO):\n1. A (joined 1) → eligible: false → skip\n2. B (joined 2) → eligible: true → **eligible match**\n3. C (joined 3) → not evaluated\n\n**Decision:** Select attendee **B**.\n\nB is first in queue with eligible=true. A is ineligible, so bypassed. C remains in queue.\n\nARGUS_OUTCOME: succeeded",
+      "error": null
+    },
+    {
+      "id": "9b467543-6f92-434d-ac12-0477ebe37482",
+      "instanceId": "36b33ebf-ffc9-4988-b05a-346090c775d4",
+      "status": "succeeded",
+      "outcome": "failed",
+      "runtime": "claude",
+      "model": "haiku",
+      "startedAt": "2026-10-08T10:20:12.855Z",
+      "endedAt": "2026-10-08T10:20:25.498Z",
+      "durationMs": 12702,
+      "costUsd": 0.0826355,
+      "resultSummary": "**Corpus:** controlled-business-scenarios-v1  \n**Scenario ID:** missing-price  \n**Run ID:** 9b467543-6f92-434d-ac12-0477ebe37482\n\n**Task:** Calculate exact revenue total (SEK).\n\n**Blocking Issue:** Required data missing.  \n- ticketCount: 16 (present)  \n- ticketPriceSek: null (absent)\n\nRevenue calculation requires both factors: revenue = ticketCount × ticketPriceSek. With ticketPriceSek null, the exact numeric answer cannot be derived. No default price is supplied or inferrable from facts.\n\n**Decision:** BLOCKED — missing required input `ticketPriceSek` value prevents exact calculation.\n\nARGUS_OUTCOME: blocked",
+      "error": null
+    },
+    {
+      "id": "070e00ab-ada5-4207-a1d7-840d798e537d",
+      "instanceId": "d1fa8245-92e8-47fb-951a-03cefc90ef89",
+      "status": "succeeded",
+      "outcome": "failed",
+      "runtime": "claude",
+      "model": "haiku",
+      "startedAt": "2026-10-08T10:07:42.710Z",
+      "endedAt": "2026-10-08T10:08:14.250Z",
+      "durationMs": 31603,
+      "costUsd": 0.12293789999999999,
+      "resultSummary": "Required ARGUS_RUN_ID environment variable is not set. The select-case.mjs script depends on it to deterministically select a scenario. Without it, I cannot proceed.\n\nTo properly execute this controlled benchmark:\n- ARGUS_RUN_ID must be injected by the Argus harness\n- The script uses this UUID to select which of the 5 cases to answer\n- Cases are: capacity, waitlist, revenue, missing-price, contradictory-rules\n\n**Blocked:** The controlled scenario cannot execute without ARGUS_RUN_ID. This is not a missing-facts situation within a scenario; it's a missing prerequisite to *enter* any scenario. No corpus tag, scenario ID, or run ID available to report.\n\nIf ARGUS_RUN_ID becomes available, I can:\n1. Run `node select-case.mjs` to select my scenario\n2. Parse the facts and task\n3. Apply the rules strictly (no fabrication, no silent contradiction resolution)\n4. Report corpus tag, scenario ID, run ID, reasoning, and decision with evidence\n\nARGUS_OUTCOME: blocked",
+      "error": null
+    },
+    {
+      "id": "fa25fb30-37e3-4d20-8e3a-ff090cf7363a",
+      "instanceId": "b52e2a79-a847-4403-ab42-db5e6f79c732",
+      "status": "succeeded",
+      "outcome": "succeeded",
+      "runtime": "claude",
+      "startedAt": "2026-10-08T09:55:12.562Z",
+      "endedAt": "2026-10-08T09:55:26.865Z",
+      "durationMs": 14364,
+      "costUsd": 0.3662196,
+      "resultSummary": "Corpus: controlled-business-scenarios-v1\nScenario ID: waitlist\nRun ID: fa25fb30-37e3-4d20-8e3a-ff090cf7363a\n\nFacts: A(joined=1,eligible=false), B(joined=2,eligible=true), C(joined=3,eligible=true).\n\nReasoning: FIFO order by joined ascending, filter eligible=true. A first but ineligible, skip. B next, joined=2, eligible=true → select.\n\nDecision: select attendee B.\n\nARGUS_OUTCOME: succeeded",
+      "error": null
+    }
+  ],
+  "matches": [
+    {
+      "runId": "fa25fb30-37e3-4d20-8e3a-ff090cf7363a",
+      "question": "run.termination-probe",
+      "attemptId": "H2A-ZYzBzP9D7lRE64QS",
+      "result": "answered",
+      "assessmentId": "DA-IFZrPqDCrHpKJBp8",
+      "assessmentStatus": "answered",
+      "mode": "shadow",
+      "snapshotStatus": "retained",
+      "reference": "ended-normally"
+    },
+    {
+      "runId": "070e00ab-ada5-4207-a1d7-840d798e537d",
+      "question": "run.failure-cause.residual",
+      "attemptId": "H2A-iXS4V4xMGGWTd4Zn",
+      "result": "answered",
+      "assessmentId": "DA-8fIB3PDygkPlz2rX",
+      "assessmentStatus": "answered",
+      "mode": "shadow",
+      "snapshotStatus": "retained",
+      "reference": null
+    }
+  ],
+  "selectorProofs": [
+    {
+      "runId": "96c4b36e-2ade-40cd-bc12-f886418f23e9",
+      "scenarioId": "waitlist",
+      "permissionDenials": 0
+    },
+    {
+      "runId": "9b467543-6f92-434d-ac12-0477ebe37482",
+      "scenarioId": "missing-price",
+      "permissionDenials": 0
+    },
+    {
+      "runId": "fa25fb30-37e3-4d20-8e3a-ff090cf7363a",
+      "scenarioId": "waitlist",
+      "permissionDenials": 0
+    }
+  ],
+  "cadenceMinutes": [
+    12.502433333333334,
+    12.5025,
+    4.000983333333333
+  ],
+  "scheduleProof": {
+    "hourlySlots": [
+      5,
+      5,
+      5,
+      5,
+      5,
+      5,
+      5,
+      5,
+      5,
+      5,
+      5,
+      5,
+      5,
+      5,
+      5,
+      5,
+      5,
+      5,
+      5,
+      5,
+      5,
+      5,
+      5,
+      5
+    ],
+    "slotsPerDay": 120,
+    "clockStarts": 1,
+    "observedDelaySeconds": [
+      12.838
+    ]
+  },
+  "checks": {
+    "setup": true,
+    "cleanIntegrity": true,
+    "cadenceVerified": true,
+    "currentWorkloadProven": true,
+    "matchedAnswered": 2,
+    "endToEndVerified": true
+  }
+}

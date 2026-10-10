@@ -1,0 +1,17 @@
+# Argus Decision Ledger experiment closeout
+
+**Decision:** retire broad repetitive shadow experiments. Proceed with the existing ledger’s audit/read model and advisory consumers; defer enforcing pipeline consumers; reject model-granted authority, automatic knowledge acceptance, and replacing observed termination. This is a development decision, not a claim that new consumers are implemented or safe to release.
+
+All 16 isolated workloads completed. Of 32 candidate questions, 22 were selected and assessed, six were not selected, and four were excluded as successful residual cases. No selected item remains pending, expired or lost. The 22 assessments contain 20 answers and two no-output provider failures.
+
+The owned termination probe got 14 of 15 answered references correct; one selected probe failed. It wrongly classified a normally completed process with a denied Bash tool as permission-denied at probability 0.98. Both correctly recognized real timeouts explicitly used deadline in the schedule name, so these are contaminated evaluation inputs. Residual cause correctness and calibration remain unmeasured: no genuine human reference labels exist.
+
+The live experiment proves the scheduled workload, FIFO maturity/selection, retained snapshot and assessment-recording paths. Native persisted replay has complete history and no integrity findings; 445 envelopes and 94 snapshots verify, and replay bytes match. All 660 application source hashes remain unchanged. Those properties do not establish independent inference accuracy, safe enforcement, crash recovery or future engine integration.
+
+Build in sequence: evidence manifest and ADR → consumer contract/read model → bounded retained-snapshot evaluation and independent cause adjudication → advisory display → pure policy/audit records and tested drift/rollback runbook → explicitly authorized ordinary-phase engine adapter after acceptance gates; artifact links follow advisory-display readiness. The nine-slice backlog contains dependencies and release criteria; the development plan contains binding, fallback and acceptance tests. Future validation must use neutral metadata, frozen inputs, pre-agreed class-specific error costs and genuine independent references.
+
+Both scheduled Codex analysis jobs failed before inference because their inherited CLI model was unsupported for the ChatGPT account. No retry, app change or restart was attempted. This report is coordinator synthesis with an independent plan review. The final Argus API check refuses connections, so cleanup is verified in the atomically updated local definition store, with live reload unverified. All owned schedules are disabled; the old feeder stays paused; unrelated definitions are preserved.
+
+Known owned workload cost: $0.2436119, with two unknown records. Known owned assessment cost: $0.684078, with two unknown records. Entire native H2 assessment history: $3.121496 known, with two unknown records. Both analysis-run costs are unknown. These are separate populations; no estimate is treated as an enforced total.
+
+Final cutoff reconciliation completed after 08:30 Stockholm. All 18 owned instances are terminal with exactly one instance per definition; all owned schedules remain disabled in the persisted store. See experiment-results.json for exact IDs; consumer-matrix.json for decisions; development-plan.md and implementation-backlog.json for the proposed work.

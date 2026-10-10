@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { deriveQwenActivity, parseQwenEnvelope, qwenRuntime } from "./qwen.js";
+import type { CapabilityRequest } from "./types.js";
 
 const RESET = { ...process.env };
 function withEnv(vars: Record<string, string | undefined>, fn: () => void): void {
@@ -177,4 +178,75 @@ test("the model picker leads with whatever the configured endpoint serves", () =
     assert.ok(models.includes("qwen3-coder-plus"));
     assert.ok(models.includes("vl-max"));
   });
+});
+
+const CAP_REQUEST: CapabilityRequest = {
+  profile: {
+    filesystem: "read-only",
+    tools: { allow: ["read_file"] },
+    mcpServers: {},
+    additionalDirectories: ["/a"],
+    settingSources: ["project"],
+    permissionMode: "plan",
+    maxTurns: 3,
+  },
+  invocationDir: "/inv",
+  cwd: "/work",
+  channels: [],
+};
+
+test("Qwen Code has no per-invocation control at all: every present key is a limitation", () => {
+  const plan = qwenRuntime.streamPlan({ prompt: "p", capabilities: CAP_REQUEST });
+  assert.deepEqual(plan.limitations, [
+    'Qwen Code cannot enforce "filesystem" for this invocation',
+    'Qwen Code cannot enforce "tools" for this invocation',
+    'Qwen Code cannot enforce "mcpServers" for this invocation',
+    'Qwen Code cannot enforce "additionalDirectories" for this invocation',
+    'Qwen Code cannot enforce "settingSources" for this invocation',
+    'Qwen Code cannot enforce "permissionMode" for this invocation',
+    'Qwen Code cannot enforce "maxTurns" for this invocation',
+  ]);
+  assert.deepEqual(plan.files, []);
+  assert.deepEqual(plan.args, qwenRuntime.streamPlan({ prompt: "p" }).args);
+});
+
+test("no capabilities means no files/limitations on the plan at all", () => {
+  const plan = qwenRuntime.batchPlan({ prompt: "p" });
+  assert.equal("files" in plan, false);
+  assert.equal("limitations" in plan, false);
+});
+
+test("an empty profile reports no limitations", () => {
+  const plan = qwenRuntime.batchPlan({
+    prompt: "p",
+    capabilities: { profile: {}, invocationDir: "/inv", cwd: "/work", channels: [] },
+  });
+  assert.deepEqual(plan.limitations, []);
+});
+
+test("explicit null monetary cost is unknown and explicit numeric zero is known", () => {
+  assert.equal(
+    parseQwenEnvelope(JSON.stringify({ type: "result", result: "{}", total_cost_usd: null }))
+      .costUsd,
+    null,
+  );
+  assert.equal(
+    parseQwenEnvelope(JSON.stringify({ type: "result", result: "{}", total_cost_usd: 0 })).costUsd,
+    0,
+  );
+});
+
+test("only finite nonnegative numeric monetary scalars are known", () => {
+  for (const cost of [-0.2, "", " ", false, true, [], [0], {}, "0", "0.2", null]) {
+    assert.equal(
+      parseQwenEnvelope(JSON.stringify({ type: "result", result: "{}", total_cost_usd: cost }))
+        .costUsd,
+      null,
+    );
+  }
+  assert.equal(
+    parseQwenEnvelope(JSON.stringify({ type: "result", result: "{}", total_cost_usd: 0.2 }))
+      .costUsd,
+    0.2,
+  );
 });

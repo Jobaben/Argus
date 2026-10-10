@@ -1,0 +1,19 @@
+{
+  "at": "2026-10-09T08:54:04.884Z",
+  "url": "http://192.168.0.203:8788/argus-closeout/",
+  "bindAddress": "192.168.0.203",
+  "port": 8788,
+  "pid": 18804,
+  "httpStatus": 200,
+  "servedContent": "Only the generated report and development-plan HTML; no filesystem browsing or other file routes",
+  "firewall": "Existing enabled public-profile TCP allow for C:/Program Files/nodejs/node.exe matches current Public Ethernet profile; new narrow rule attempt denied by Windows and no firewall setting was changed",
+  "mobileVerification": {
+    "viewportWidth": 390,
+    "contentWidth": 375,
+    "horizontalOverflow": false,
+    "detailsExpanded": 11,
+    "detailsTotal": 11,
+    "tableCellsBecomeCards": true
+  },
+  "applicationCodeChanged": false
+}

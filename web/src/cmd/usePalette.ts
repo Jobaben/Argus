@@ -17,7 +17,6 @@ export function usePalette(
   ctx: {
     destinations: Destination[];
     canAdmin: boolean;
-    approveGate: (instanceId: string) => Promise<unknown>;
     runSchedule: (scheduleId: string) => Promise<unknown>;
     markCaughtUp: () => Promise<unknown>;
     showShortcuts: () => void;
@@ -39,7 +38,6 @@ export function usePalette(
         entries: data,
         canAdmin: ctx.canAdmin,
         actions: {
-          approveGate: ctx.approveGate,
           runSchedule: ctx.runSchedule,
           markCaughtUp: ctx.markCaughtUp,
           showShortcuts: ctx.showShortcuts,

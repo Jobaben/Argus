@@ -183,7 +183,7 @@ test("incidents and anomalies become searchable events", async () => {
     const hits = vaultSearch("median").hits;
     assert.equal(hits.length, 1);
     assert.equal(hits[0].kind, "event");
-    assert.equal(hits[0].href, "#/watchtower");
+    assert.equal(hits[0].href, "#/health/watchtower");
   });
 });
 
@@ -390,7 +390,7 @@ test("a monitor or budget transition is archived as it happens", async () => {
       severity: "warning",
       subject: "Nightly triage",
       detail: "no run in 26 hours",
-      href: "#/monitors",
+      href: "#/health",
     })!;
     assert.equal(ingestAlert(event), true);
 
@@ -400,7 +400,7 @@ test("a monitor or budget transition is archived as it happens", async () => {
     // disk can answer "how often did this flap last quarter".
     const hits = vaultSearch("26 hours").hits;
     assert.equal(hits.length, 1);
-    assert.equal(hits[0].href, "#/monitors");
+    assert.equal(hits[0].href, "#/health");
   });
 });
 
@@ -435,7 +435,7 @@ test("an alert with no usable timestamp is dropped, not stored at the epoch", as
         severity: "warning",
         subject: "x",
         detail: "y",
-        href: "#/monitors",
+        href: "#/health",
       }),
       null,
     );
@@ -454,7 +454,7 @@ test("archiving an alert while the Vault is off is a clean false, not a throw", 
         severity: "warning",
         subject: "x",
         detail: "y",
-        href: "#/monitors",
+        href: "#/health",
       })!;
       // An alert that fails to archive must not break the alert.
       assert.equal(ingestAlert(event), false);

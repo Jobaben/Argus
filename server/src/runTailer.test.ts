@@ -212,6 +212,30 @@ test("tracking a run with an existing log rebuilds from disk (adopt path)", asyn
   await tailer.stop();
 });
 
+test("events() returns a run's retained activity oldest-first, and nothing once untracked", async () => {
+  const { createRunTailer, logPath } = await loadTailer();
+  const tailer = createRunTailer({
+    broadcast: () => {},
+    now: () => new Date(),
+    flushMs: 5,
+    watch: false,
+  });
+  writeFileSync(logPath("r-ev"), toolLine("first") + toolLine("second"));
+  tailer.track("r-ev", "inst-ev");
+  await waitFor(() => tailer.latest().get("r-ev")?.label === "Bash: second");
+  assert.deepEqual(
+    tailer.events("r-ev").map((e: { label: string }) => e.label),
+    ["Bash: first", "Bash: second"],
+  );
+  // A copy, not the ring itself: a caller mutating it must not touch the tailer.
+  tailer.events("r-ev").length = 0;
+  assert.equal(tailer.events("r-ev").length, 2);
+  assert.deepEqual(tailer.events("never-tracked"), []);
+  tailer.untrack("r-ev");
+  assert.deepEqual(tailer.events("r-ev"), []);
+  await tailer.stop();
+});
+
 test("untrack drops state; a missing log file is tolerated", async () => {
   const { createRunTailer, logPath } = await loadTailer();
   const tailer = createRunTailer({

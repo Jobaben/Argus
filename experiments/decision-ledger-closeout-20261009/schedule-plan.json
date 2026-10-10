@@ -1,0 +1,12 @@
+{
+  "everyDefinitionDisabledAfterFirstScheduledInstance": true,
+  "originalFeeder": "pause",
+  "automaticFollowup": "argus-decision-ledger-overnight-closeout",
+  "firstSourceSlot": "2026-10-09T00:17:03.1342111+02:00",
+  "analysis": "2026-10-09 05:30 Europe/Stockholm",
+  "cleanupDeadline": "2026-10-09 08:30 Europe/Stockholm",
+  "cadenceMinutes": 2,
+  "method": "authorized local definition reload supported by setup-argus-pipeline; authenticated read API verifies",
+  "sourceCases": 16,
+  "final": "2026-10-09 08:00 Europe/Stockholm"
+}

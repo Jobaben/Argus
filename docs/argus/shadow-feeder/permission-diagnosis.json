@@ -1,0 +1,45 @@
+[
+  {
+    "runId": "fa25fb30-37e3-4d20-8e3a-ff090cf7363a",
+    "denials": [],
+    "costUsd": 0.3662196,
+    "result": "Corpus: controlled-business-scenarios-v1\nScenario ID: waitlist\nRun ID: fa25fb30-37e3-4d20-8e3a-ff090cf7363a\n\nFacts: A(joined=1,eligible=false), B(joined=2,eligible=true), C(joined=3,eligible=true).\n\nReasoning: FIFO order by joined ascending, filter eligible=true. A first but ineligible, skip. B next, joined=2, eligible=true → select.\n\nDecision: select attendee B.\n\nARGUS_OUTCOME: succeeded"
+  },
+  {
+    "runId": "070e00ab-ada5-4207-a1d7-840d798e537d",
+    "denials": [
+      {
+        "tool_name": "PowerShell",
+        "tool_use_id": "toolu_01TtMb9Qp3PR7C94XS8wAMWQ",
+        "tool_input": {
+          "command": "cd C:\\GIT\\Argus\\experiments\\shadow-feeder; node select-case.mjs",
+          "description": "Select and display the benchmark scenario"
+        }
+      },
+      {
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_018FZV88WAhCJfNMWNhmuLPw",
+        "tool_input": {
+          "command": "node select-case.mjs",
+          "description": "Select and display the benchmark scenario"
+        }
+      },
+      {
+        "tool_name": "Read",
+        "tool_use_id": "toolu_01MipqDJwArjAEDGxeTrgcyq",
+        "tool_input": {
+          "file_path": "C:\\GIT\\Argus\\docs\\argus\\shadow-feeder\\creation-evidence.json"
+        }
+      },
+      {
+        "tool_name": "Read",
+        "tool_use_id": "toolu_01VC37m3uCzBQvUd9MNQtb4x",
+        "tool_input": {
+          "file_path": "C:\\GIT\\Argus\\docs\\argus\\shadow-feeder\\runtime-evidence.json"
+        }
+      }
+    ],
+    "costUsd": 0.12293789999999999,
+    "result": "Required ARGUS_RUN_ID environment variable is not set. The select-case.mjs script depends on it to deterministically select a scenario. Without it, I cannot proceed.\n\nTo properly execute this controlled benchmark:\n- ARGUS_RUN_ID must be injected by the Argus harness\n- The script uses this UUID to select which of the 5 cases to answer\n- Cases are: capacity, waitlist, revenue, missing-price, contradictory-rules\n\n**Blocked:** The controlled scenario cannot execute without ARGUS_RUN_ID. This is not a missing-facts situation within a scenario; it's a missing prerequisite to *enter* any scenario. No corpus tag, scenario ID, or run ID available to report.\n\nIf ARGUS_RUN_ID becomes available, I can:\n1. Run `node select-case.mjs` to select my scenario\n2. Parse the facts and task\n3. Apply the rules strictly (no fabrication, no silent contradiction resolution)\n4. Report corpus tag, scenario ID, run ID, reasoning, and decision with evidence\n\nARGUS_OUTCOME: blocked"
+  }
+]

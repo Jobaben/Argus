@@ -41,15 +41,48 @@
  */
 
 import { opencodeHome } from "../opencodeHome.js";
-import { EMPTY_ENVELOPE, basename, clip, extraArgs } from "./types.js";
+import {
+  EMPTY_ENVELOPE,
+  reportedCostUsd,
+  basename,
+  channelGranted,
+  clip,
+  extraArgs,
+  unsupportedCapabilities,
+} from "./types.js";
 import type {
   AgentRuntime,
   AnalysisPlanOptions,
+  CapabilityRequest,
   RunEnvelope,
   RunPlanOptions,
   SpawnPlan,
 } from "./types.js";
 import type { ActivityEvent, ReasoningEffort } from "@argus/contracts";
+
+/**
+ * OpenCode has no per-invocation capability control at all — no scoped tool
+ * flags, no MCP allowlist, no settings-source override, nothing — so every
+ * key a profile sets is reported as a limitation rather than silently
+ * dropped.
+ *
+ * The same absence answers for Argus's own channels: `opencode run --auto`
+ * runs its tools unsandboxed and auto-approved, so a path outside the working
+ * directory is as reachable as one inside it. Every channel is granted — not
+ * because OpenCode scopes it, but because nothing stands in the way. (A
+ * `filesystem: "read-only"` profile is still reported unenforceable above; the
+ * two statements are both true.)
+ */
+function opencodeCapabilities(
+  cap: CapabilityRequest | undefined,
+): Pick<SpawnPlan, "files" | "limitations" | "channels"> {
+  if (!cap) return {};
+  return {
+    files: [],
+    limitations: unsupportedCapabilities(cap.profile, "OpenCode", []),
+    channels: cap.channels.map(channelGranted),
+  };
+}
 
 /**
  * `--variant` is documented as provider-specific, so this is the subset of
@@ -139,6 +172,7 @@ export function parseOpencodeEnvelope(stdout: string): RunEnvelope {
   let sessionId: string | null = null;
   let tokens: number | null = null;
   let costUsd: number | null = null;
+  let unknownCost = false;
   let isError: boolean | null = null;
   let errorMessage: string | null = null;
 
@@ -168,8 +202,9 @@ export function parseOpencodeEnvelope(stdout: string): RunEnvelope {
         const outTok = Number(part.tokens?.output ?? 0);
         const sum = inTok + outTok;
         if (Number.isFinite(sum) && sum > 0) tokens = (tokens ?? 0) + sum;
-        const cost = Number(part.cost);
-        if (Number.isFinite(cost)) costUsd = round6((costUsd ?? 0) + cost);
+        const cost = reportedCostUsd(part.cost);
+        if (cost === null) unknownCost = true;
+        else costUsd = round6((costUsd ?? 0) + cost);
         // A step that finished on `stop` is a clean end of turn unless an error
         // event said otherwise.
         if (part.reason === "stop" && isError === null) isError = false;
@@ -194,7 +229,7 @@ export function parseOpencodeEnvelope(stdout: string): RunEnvelope {
     // With no assistant text to report, the failure text is the closest thing
     // to a result — and it is what the run card would otherwise leave blank.
     result: result ?? errorMessage,
-    costUsd,
+    costUsd: unknownCost ? null : reportedCostUsd(costUsd),
     tokens,
     isError,
     sessionId,
@@ -311,23 +346,37 @@ export const opencodeRuntime: AgentRuntime = {
   // is the completion protocol rather than a backstop for one.
   outcomeFromRecord: true,
 
-  batchPlan({ prompt, model, reasoningEffort, systemPrompt }: RunPlanOptions): SpawnPlan {
+  batchPlan({
+    prompt,
+    model,
+    reasoningEffort,
+    systemPrompt,
+    capabilities,
+  }: RunPlanOptions): SpawnPlan {
     return {
       bin: bin(),
       args: runArgs({ model, reasoningEffort }),
       stdin: composePrompt(prompt, systemPrompt),
       env: {},
+      ...opencodeCapabilities(capabilities),
     };
   },
 
   // `--format json` is already a live NDJSON stream, so a step run and a batch
   // run take the same argv; only the consumer of the log differs.
-  streamPlan({ prompt, model, reasoningEffort, systemPrompt }: RunPlanOptions): SpawnPlan {
+  streamPlan({
+    prompt,
+    model,
+    reasoningEffort,
+    systemPrompt,
+    capabilities,
+  }: RunPlanOptions): SpawnPlan {
     return {
       bin: bin(),
       args: runArgs({ model, reasoningEffort }),
       stdin: composePrompt(prompt, systemPrompt),
       env: {},
+      ...opencodeCapabilities(capabilities),
     };
   },
 

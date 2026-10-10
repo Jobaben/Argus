@@ -1,0 +1,352 @@
+{
+  "format": "argus.decision-ledger-development-evidence",
+  "version": 1,
+  "source": {
+    "baseCommit": "02668069d8eb1f716757f0acb26a5d1021ad3013",
+    "sourceCopy": "C:/GIT/Argus/.worktrees/argus-local",
+    "trackedLedgerCheckout": "C:/GIT/Argus/.worktrees/h2-codex-support",
+    "runningBuild": "unavailable; no current build identity established",
+    "preexistingProviderChangesImported": false
+  },
+  "evidence": [
+    {
+      "path": "experiments/decision-ledger-closeout-20261009/reports/final-report.md",
+      "bytes": 3429,
+      "sha256": "aea3541c287a9131dd8058596511c886b23cf2a98d3ac048a1d77faedccf7d5b"
+    },
+    {
+      "path": "experiments/decision-ledger-closeout-20261009/reports/development-plan.md",
+      "bytes": 17373,
+      "sha256": "1a5aa75b1e39049a4d67166869a1f780836dc2a71a3e594f12e2030104eed5b7"
+    },
+    {
+      "path": "experiments/decision-ledger-closeout-20261009/reports/implementation-backlog.json",
+      "bytes": 6664,
+      "sha256": "b9e9cf0f9a74324f00f40756b614573801c95f34e29b0c93fa955616616cd070"
+    },
+    {
+      "path": "experiments/decision-ledger-closeout-20261009/reports/consumer-matrix.json",
+      "bytes": 2685,
+      "sha256": "ccddcc39e6f525630b237b7f9e72b53acad277189e48661edadea72054c78ed4"
+    },
+    {
+      "path": "experiments/decision-ledger-closeout-20261009/reports/experiment-results.json",
+      "bytes": 6398,
+      "sha256": "3aa0f19f83177e2b16b154d072779e99400a7e7782c709d40021383806abb648"
+    },
+    {
+      "path": "experiments/decision-ledger-closeout-20261009/reports/evidence-audit.json",
+      "bytes": 110246,
+      "sha256": "321826d7918b9de81d2b17936ef37b24d2ca9fbd89458d2940332d011c866a16"
+    },
+    {
+      "path": "experiments/decision-ledger-closeout-20261009/reports/independent-closeout-plan-review.json",
+      "bytes": 3035,
+      "sha256": "bf35163e19525c90dc77516711e21360c04c5c18560de7a6936f2b06325f9669"
+    },
+    {
+      "path": "experiments/decision-ledger-closeout-20261009/reports/material-failure-diagnosis.json",
+      "bytes": 3152,
+      "sha256": "38f7acdc28a7c73ee0e78e8cd91dca11c753a71e3c95046cce6ec1100afea0c6"
+    },
+    {
+      "path": "experiments/decision-ledger-closeout-20261009/reports/final-cutoff-verification.json",
+      "bytes": 849,
+      "sha256": "6fd37cb44b4cef53b74008529e2c6577816827a776d6dd93641d2e33ba770cf5"
+    }
+  ],
+  "questions": [
+    {
+      "case": "workload-D1.json",
+      "pipelineId": "b9c7c15c-ea0c-4033-9c76-beec1e75618e",
+      "runId": "a0a71822-d824-4b5b-879e-0fda9e31d120",
+      "question": "run.failure-cause.residual",
+      "disposition": "not-selected",
+      "assessmentId": null
+    },
+    {
+      "case": "workload-D1.json",
+      "pipelineId": "b9c7c15c-ea0c-4033-9c76-beec1e75618e",
+      "runId": "a0a71822-d824-4b5b-879e-0fda9e31d120",
+      "question": "run.termination-probe",
+      "disposition": "assessed",
+      "assessmentId": "DA-uaffv7M-3hUV3f5m"
+    },
+    {
+      "case": "workload-D2.json",
+      "pipelineId": "a03c5127-beb5-4c16-82a7-a323ea6f0236",
+      "runId": "f040025f-acb7-4661-976c-101063a65955",
+      "question": "run.failure-cause.residual",
+      "disposition": "not-selected",
+      "assessmentId": null
+    },
+    {
+      "case": "workload-D2.json",
+      "pipelineId": "a03c5127-beb5-4c16-82a7-a323ea6f0236",
+      "runId": "f040025f-acb7-4661-976c-101063a65955",
+      "question": "run.termination-probe",
+      "disposition": "assessed",
+      "assessmentId": "DA-yyHxzh_GNAq9rcQO"
+    },
+    {
+      "case": "workload-D3.json",
+      "pipelineId": "e3bdeeb4-854c-4267-8c70-a1d0bc4f0990",
+      "runId": "2b2ef548-824d-4468-ac0d-e363289c6ffa",
+      "question": "run.failure-cause.residual",
+      "disposition": "assessed",
+      "assessmentId": "DA-hJlqDkT4FnFMjpSI"
+    },
+    {
+      "case": "workload-D3.json",
+      "pipelineId": "e3bdeeb4-854c-4267-8c70-a1d0bc4f0990",
+      "runId": "2b2ef548-824d-4468-ac0d-e363289c6ffa",
+      "question": "run.termination-probe",
+      "disposition": "assessed",
+      "assessmentId": "DA-shE6zk8eQpsASMdW"
+    },
+    {
+      "case": "workload-D4.json",
+      "pipelineId": "7817d10e-173d-41e7-8e4d-ce6edc5e9b5b",
+      "runId": "9e3874d4-4289-427c-a916-38c8d11bcb33",
+      "question": "run.failure-cause.residual",
+      "disposition": "not-selected",
+      "assessmentId": null
+    },
+    {
+      "case": "workload-D4.json",
+      "pipelineId": "7817d10e-173d-41e7-8e4d-ce6edc5e9b5b",
+      "runId": "9e3874d4-4289-427c-a916-38c8d11bcb33",
+      "question": "run.termination-probe",
+      "disposition": "assessed",
+      "assessmentId": "DA-Th3pzjPTS6PX8DUc"
+    },
+    {
+      "case": "workload-E1.json",
+      "pipelineId": "ed683c7f-5223-4fc3-bdf6-79957c8a537a",
+      "runId": "52479fa8-e3cf-4048-9400-0c09c3bba243",
+      "question": "run.failure-cause.residual",
+      "disposition": "assessed",
+      "assessmentId": "DA-ELqU8ugPlrtmAMaJ"
+    },
+    {
+      "case": "workload-E1.json",
+      "pipelineId": "ed683c7f-5223-4fc3-bdf6-79957c8a537a",
+      "runId": "52479fa8-e3cf-4048-9400-0c09c3bba243",
+      "question": "run.termination-probe",
+      "disposition": "assessed",
+      "assessmentId": "DA-ok6z7X4YAb-DV8hp"
+    },
+    {
+      "case": "workload-E2.json",
+      "pipelineId": "8ab7e237-975f-48ce-afc1-bf0e7178eeed",
+      "runId": "5e088810-1972-4365-98cc-6f59df883171",
+      "question": "run.failure-cause.residual",
+      "disposition": "not-selected",
+      "assessmentId": null
+    },
+    {
+      "case": "workload-E2.json",
+      "pipelineId": "8ab7e237-975f-48ce-afc1-bf0e7178eeed",
+      "runId": "5e088810-1972-4365-98cc-6f59df883171",
+      "question": "run.termination-probe",
+      "disposition": "assessed",
+      "assessmentId": "DA-WNR1ydo9EpE_QAGA"
+    },
+    {
+      "case": "workload-I1.json",
+      "pipelineId": "1ae1e164-b565-480a-9d4e-c0d258a11757",
+      "runId": "56e0ca4d-528c-4b6b-9828-507aea1d4e51",
+      "question": "run.failure-cause.residual",
+      "disposition": "excluded",
+      "assessmentId": null
+    },
+    {
+      "case": "workload-I1.json",
+      "pipelineId": "1ae1e164-b565-480a-9d4e-c0d258a11757",
+      "runId": "56e0ca4d-528c-4b6b-9828-507aea1d4e51",
+      "question": "run.termination-probe",
+      "disposition": "assessed",
+      "assessmentId": "DA-rxwRbwU0FaX3moaA"
+    },
+    {
+      "case": "workload-I2.json",
+      "pipelineId": "6e233c2c-f257-4c44-802b-6aa2eb10282f",
+      "runId": "dbd6ea19-6faa-4ef4-97f3-3fd1e44c382e",
+      "question": "run.failure-cause.residual",
+      "disposition": "excluded",
+      "assessmentId": null
+    },
+    {
+      "case": "workload-I2.json",
+      "pipelineId": "6e233c2c-f257-4c44-802b-6aa2eb10282f",
+      "runId": "dbd6ea19-6faa-4ef4-97f3-3fd1e44c382e",
+      "question": "run.termination-probe",
+      "disposition": "assessed",
+      "assessmentId": "DA-r52O-nAKb0f0DEmX"
+    },
+    {
+      "case": "workload-M1.json",
+      "pipelineId": "13674de5-ed8a-467e-88ae-4fc0c462a8eb",
+      "runId": "b366bcb1-fe47-489d-a1c5-6b8d15a1afaf",
+      "question": "run.failure-cause.residual",
+      "disposition": "not-selected",
+      "assessmentId": null
+    },
+    {
+      "case": "workload-M1.json",
+      "pipelineId": "13674de5-ed8a-467e-88ae-4fc0c462a8eb",
+      "runId": "b366bcb1-fe47-489d-a1c5-6b8d15a1afaf",
+      "question": "run.termination-probe",
+      "disposition": "assessed",
+      "assessmentId": "DA-56e8slKEmDIzIYTT"
+    },
+    {
+      "case": "workload-M2.json",
+      "pipelineId": "25bfc7ed-5fab-4f86-8c52-f307c0b8bdd2",
+      "runId": "3f515a8d-e6b2-481e-bb5e-be817ab53478",
+      "question": "run.failure-cause.residual",
+      "disposition": "not-selected",
+      "assessmentId": null
+    },
+    {
+      "case": "workload-M2.json",
+      "pipelineId": "25bfc7ed-5fab-4f86-8c52-f307c0b8bdd2",
+      "runId": "3f515a8d-e6b2-481e-bb5e-be817ab53478",
+      "question": "run.termination-probe",
+      "disposition": "assessed",
+      "assessmentId": "DA-O7oXI_hP-rC-V0LQ"
+    },
+    {
+      "case": "workload-N1.json",
+      "pipelineId": "ed5f4863-ec04-46d2-ad6e-77bc5e057921",
+      "runId": "e79a5a80-8a38-4e9f-b8af-3c70b3cdd1b9",
+      "question": "run.failure-cause.residual",
+      "disposition": "excluded",
+      "assessmentId": null
+    },
+    {
+      "case": "workload-N1.json",
+      "pipelineId": "ed5f4863-ec04-46d2-ad6e-77bc5e057921",
+      "runId": "e79a5a80-8a38-4e9f-b8af-3c70b3cdd1b9",
+      "question": "run.termination-probe",
+      "disposition": "assessed",
+      "assessmentId": "DA-aUX6ptCPI_qmBohh"
+    },
+    {
+      "case": "workload-N2.json",
+      "pipelineId": "5da5ecea-e0cc-4808-b1a6-3938296c9a5e",
+      "runId": "40091fb6-da25-46f3-8ff6-af7978151863",
+      "question": "run.failure-cause.residual",
+      "disposition": "excluded",
+      "assessmentId": null
+    },
+    {
+      "case": "workload-N2.json",
+      "pipelineId": "5da5ecea-e0cc-4808-b1a6-3938296c9a5e",
+      "runId": "40091fb6-da25-46f3-8ff6-af7978151863",
+      "question": "run.termination-probe",
+      "disposition": "assessed",
+      "assessmentId": "DA-Q1mM4AfRZlstoGhe"
+    },
+    {
+      "case": "workload-P1.json",
+      "pipelineId": "53d6d2ab-38f7-4c23-91d8-6f1a9c04aa4f",
+      "runId": "5f272024-1fbc-4433-9d00-50eec876a197",
+      "question": "run.failure-cause.residual",
+      "disposition": "assessed",
+      "assessmentId": "DA-5TklVRxoq9HILRK6"
+    },
+    {
+      "case": "workload-P1.json",
+      "pipelineId": "53d6d2ab-38f7-4c23-91d8-6f1a9c04aa4f",
+      "runId": "5f272024-1fbc-4433-9d00-50eec876a197",
+      "question": "run.termination-probe",
+      "disposition": "assessed",
+      "assessmentId": "DA-LTBtryz1tHbJf4iX"
+    },
+    {
+      "case": "workload-P2.json",
+      "pipelineId": "8c94e6d6-4511-4f44-9d2f-f08cdaa2f0f5",
+      "runId": "4a1ead56-3774-4ab1-a238-2a527d94f63e",
+      "question": "run.failure-cause.residual",
+      "disposition": "assessed",
+      "assessmentId": "DA-S9fGYgGrXRULqsTq"
+    },
+    {
+      "case": "workload-P2.json",
+      "pipelineId": "8c94e6d6-4511-4f44-9d2f-f08cdaa2f0f5",
+      "runId": "4a1ead56-3774-4ab1-a238-2a527d94f63e",
+      "question": "run.termination-probe",
+      "disposition": "assessed",
+      "assessmentId": "DA-kCRzAWw4UXrYB3oI"
+    },
+    {
+      "case": "workload-T1.json",
+      "pipelineId": "5072f154-abb4-4b82-99a5-c9d3cd1876ac",
+      "runId": "15b370ed-5aca-47f6-8009-4f516e18750e",
+      "question": "run.failure-cause.residual",
+      "disposition": "assessed",
+      "assessmentId": "DA-PjTFDkVdMWFmVXu9"
+    },
+    {
+      "case": "workload-T1.json",
+      "pipelineId": "5072f154-abb4-4b82-99a5-c9d3cd1876ac",
+      "runId": "15b370ed-5aca-47f6-8009-4f516e18750e",
+      "question": "run.termination-probe",
+      "disposition": "assessed",
+      "assessmentId": "DA-UANXMngCZBR12Yh1"
+    },
+    {
+      "case": "workload-T2.json",
+      "pipelineId": "10a73fc8-f76c-43f4-8146-0576644e91ac",
+      "runId": "d6b83314-a20e-4def-a4b4-1f46b6e94368",
+      "question": "run.failure-cause.residual",
+      "disposition": "assessed",
+      "assessmentId": "DA-AFinrB7z1qgvRAME"
+    },
+    {
+      "case": "workload-T2.json",
+      "pipelineId": "10a73fc8-f76c-43f4-8146-0576644e91ac",
+      "runId": "d6b83314-a20e-4def-a4b4-1f46b6e94368",
+      "question": "run.termination-probe",
+      "disposition": "assessed",
+      "assessmentId": "DA-BS9ISvpudLQrlnz9"
+    }
+  ],
+  "tally": {
+    "assessed": 22,
+    "not-selected": 6,
+    "excluded": 4
+  },
+  "historicalSourceComparison": {
+    "checked": 660,
+    "mismatches": []
+  },
+  "measuredByHistoricalExperiment": {
+    "selected": 22,
+    "answered": 20,
+    "providerFailed": 2,
+    "independentHumanResidualReferences": 0,
+    "probeCorrectAnswered": 14,
+    "probeAnswered": 15,
+    "knownAssessmentCostUsd": 0.684078,
+    "unknownAssessmentCostRecords": 2,
+    "integrity": {
+      "history": "complete",
+      "ledger": [],
+      "journal": {
+        "gaps": 0,
+        "notices": []
+      },
+      "findings": []
+    }
+  },
+  "limitations": [
+    "Historical report assertions are evidence, not verification of new consumers",
+    "Both correct deadlines contain schedule-name labels",
+    "Normal process/tool denial misclassification demonstrates taxonomy weakness, not model authority",
+    "No prospective genuine labels, calibration, enforcing safety or running build proof",
+    "Account model catalog membership does not establish CLI account compatibility",
+    "No uncertain provider invocation automatically resent"
+  ]
+}

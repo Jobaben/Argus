@@ -1,0 +1,72 @@
+{
+  "at": "2026-10-09T06:37:35.062Z",
+  "completed": true,
+  "stage": "Closed: evidence-bound development decision; consumer releases deferred pending explicit gates",
+  "sourceInstances": 16,
+  "sourceFinished": 16,
+  "sourceRunning": 0,
+  "genuineDeadlineRuns": [
+    "a0a71822-d824-4b5b-879e-0fda9e31d120",
+    "f040025f-acb7-4661-976c-101063a65955"
+  ],
+  "sourceKnownCostUsd": 0.2436119,
+  "sourceUnknownCost": 2,
+  "probeAnswered": 78,
+  "residualAnswered": 14,
+  "selectedPendingGlobal": 0,
+  "interventionAssessments": 22,
+  "verification": {
+    "at": "2026-10-09T06:37:35.062Z",
+    "envelopesChecked": 445,
+    "envelopeFailures": 0,
+    "snapshotsChecked": 94,
+    "snapshotFailures": [],
+    "applicationFilesChecked": 660,
+    "applicationChanges": [],
+    "offlineNativeReplayByteIdentical": true,
+    "nativeReportUnchangedSinceEvidenceAudit": true,
+    "nativeReportIntegrity": {
+      "history": "complete",
+      "ledger": [],
+      "journal": {
+        "gaps": 0,
+        "notices": []
+      },
+      "findings": []
+    },
+    "allOwnedDisabledPersisted": true,
+    "oldFeederPaused": true,
+    "unrelatedWorkshopDefinitionUnchanged": true,
+    "ownedInstances": 18,
+    "ownedInstancesActive": 0,
+    "exactlyOneInstancePerOwnedDefinition": true,
+    "liveApiAvailable": false,
+    "liveReloadVerified": false,
+    "limitation": "Final read-only API check refused connection; persisted cleanup verified, live reload unavailable"
+  },
+  "disabledThisTick": [
+    "676cd88f-4ba1-4fe8-9637-c03e5ae9ed11",
+    "b931a14e-6839-4bbf-b875-15e60c97c525"
+  ],
+  "remainingEnabledOwned": [],
+  "oldFeederPaused": true,
+  "materialFindings": [
+    {
+      "id": "deadline-probe-schedule-name-contamination",
+      "report": "reports/deadline-probe-validity-review.json"
+    }
+  ],
+  "liveApiAvailable": false,
+  "analysisFailure": "Both Codex CLI runs rejected inherited gpt-6.1-sol model for ChatGPT account before inference; no retry or service changes",
+  "closeoutArtifactsPrepared": true,
+  "independentReview": "reports/independent-closeout-plan-review.json",
+  "scheduledAnalysisSucceeded": false,
+  "liveReloadVerified": false,
+  "cutoffReconciliationPending": false,
+  "nextAction": "No further experiment work scheduled. Review staged reports and independently reviewed development backlog; application implementation requires separate authorization.",
+  "finalCutoffReconciled": true,
+  "finalReport": "reports/final-report.md",
+  "developmentPlan": "reports/development-plan.md",
+  "heartbeatStatus": "PAUSED",
+  "heartbeatOtherFieldsPreserved": true
+}

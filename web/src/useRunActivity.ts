@@ -22,7 +22,13 @@ export function useRunActivity(): Map<string, LiveActivity> {
           if (msg.type !== "run:activity" || !msg.runId || msg.events.length === 0) return;
           const last = msg.events[msg.events.length - 1];
           const runId = msg.runId;
-          setActivity((prev) => new Map(prev).set(runId, { label: last.label, at: last.at }));
+          setActivity((prev) => {
+            // A heartbeat frame that repeats the line already on screen is not
+            // a change; returning `prev` lets React skip the board render.
+            const seen = prev.get(runId);
+            if (seen && seen.label === last.label && seen.at === last.at) return prev;
+            return new Map(prev).set(runId, { label: last.label, at: last.at });
+          });
         },
       }),
     [],

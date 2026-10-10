@@ -30,7 +30,7 @@ function Badge({ count }: { count: number }) {
  * The mobile destination sheet.
  *
  * On a phone the horizontal tab strip was technically usable and practically
- * not: nine destinations in a 360px scroller means the one you want is almost
+ * not: eight destinations in a 360px scroller means the one you want is almost
  * always off-screen, with no indication of how many others exist. A sheet shows
  * every destination at once, at a real tap size, with its attention badge — and
  * it is the same `destinations` array the desktop bar renders, so the two can't

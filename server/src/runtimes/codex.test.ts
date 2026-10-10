@@ -2,6 +2,21 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { codexRuntime, estimateCodexCost, parseCodexEnvelope } from "./codex.js";
 import { deriveCodexActivity } from "./codex.js";
+import type { CapabilityRequest, InvocationChannel } from "./types.js";
+import type { CapabilityProfile } from "@argus/contracts";
+
+/** An Argus-owned write channel, as the engine hands one to the runtime. */
+function artifactChannel(dir: string, required = false): InvocationChannel {
+  return {
+    kind: "artifact-dir",
+    envVar: "ARGUS_ARTIFACT_DIR",
+    path: dir,
+    dir,
+    access: "write",
+    required,
+    label: "artifact directory",
+  };
+}
 
 const RESET = { ...process.env };
 function withEnv(vars: Record<string, string | undefined>, fn: () => void): void {
@@ -230,4 +245,236 @@ test("activity: reasoning is skipped, matching how thinking blocks are treated",
 test("activity: malformed lines yield nothing", () => {
   assert.deepEqual(deriveCodexActivity("{oops", "t"), []);
   assert.deepEqual(deriveCodexActivity("", "t"), []);
+});
+
+function capRequest(
+  profile: CapabilityProfile,
+  overrides: Partial<Omit<CapabilityRequest, "profile">> = {},
+): CapabilityRequest {
+  return {
+    profile,
+    invocationDir: "/inv",
+    cwd: "/work",
+    channels: [],
+    ...overrides,
+  };
+}
+
+test("filesystem overrides --sandbox, including ARGUS_CODEX_SANDBOX", () => {
+  withEnv({ ARGUS_CODEX_SANDBOX: "danger-full-access" }, () => {
+    const plan = codexRuntime.streamPlan({
+      prompt: "p",
+      capabilities: capRequest({ filesystem: "read-only" }),
+    });
+    const i = plan.args.indexOf("--sandbox");
+    assert.equal(plan.args[i + 1], "read-only");
+  });
+});
+
+test("filesystem: unrestricted maps to Codex's danger-full-access sandbox", () => {
+  const plan = codexRuntime.streamPlan({
+    prompt: "p",
+    capabilities: capRequest({ filesystem: "unrestricted" }),
+  });
+  const i = plan.args.indexOf("--sandbox");
+  assert.equal(plan.args[i + 1], "danger-full-access");
+});
+
+test("no profile.filesystem keeps the env-based sandbox default", () => {
+  withEnv({ ARGUS_CODEX_SANDBOX: "danger-full-access" }, () => {
+    const plan = codexRuntime.streamPlan({ prompt: "p", capabilities: capRequest({}) });
+    const i = plan.args.indexOf("--sandbox");
+    assert.equal(plan.args[i + 1], "danger-full-access");
+  });
+});
+
+test("additionalDirectories becomes a writable_roots -c override", () => {
+  const plan = codexRuntime.streamPlan({
+    prompt: "p",
+    capabilities: capRequest({
+      filesystem: "workspace-write",
+      additionalDirectories: ["/a", "/b"],
+    }),
+  });
+  const i = plan.args.indexOf("-c");
+  assert.ok(i > -1);
+  assert.equal(plan.args[i + 1], 'sandbox_workspace_write.writable_roots=["/a","/b"]');
+});
+
+test("a write channel joins writable_roots under workspace-write and is granted", () => {
+  const plan = codexRuntime.streamPlan({
+    prompt: "p",
+    capabilities: capRequest(
+      { filesystem: "workspace-write", additionalDirectories: ["/a"] },
+      { channels: [artifactChannel("/artifacts/run-1")] },
+    ),
+  });
+  const i = plan.args.indexOf("-c");
+  assert.equal(
+    plan.args[i + 1],
+    'sandbox_workspace_write.writable_roots=["/a","/artifacts/run-1"]',
+  );
+  assert.equal(plan.channels?.[0].status, "granted");
+});
+
+test("read-only reports a write channel unavailable instead of adding it to writable_roots", () => {
+  const plan = codexRuntime.streamPlan({
+    prompt: "p",
+    capabilities: capRequest(
+      { filesystem: "read-only" },
+      { channels: [artifactChannel("/artifacts/run-2")] },
+    ),
+  });
+  assert.equal(
+    plan.args.some((a) => a.includes("writable_roots")),
+    false,
+  );
+  // Channel availability is its own verdict, not a profile limitation: the
+  // engine decides whether it blocks from whether the channel is required.
+  assert.deepEqual(plan.limitations, []);
+  assert.equal(plan.channels?.[0].status, "unavailable");
+  assert.equal(
+    plan.channels?.[0].reason,
+    "Codex read-only sandbox prevents writing the artifact directory (ARGUS_ARTIFACT_DIR)",
+  );
+});
+
+test("mcpServers becomes dotted -c overrides per server, and is always a limitation", () => {
+  const plan = codexRuntime.streamPlan({
+    prompt: "p",
+    capabilities: capRequest({
+      mcpServers: {
+        docs: { command: "docs-mcp", args: ["--stdio"], env: { FOO: "bar" } },
+        remote: { url: "https://example.com/mcp", headers: { Authorization: "Bearer x" } },
+      },
+    }),
+  });
+  const cIdx = (flag: string) =>
+    plan.args.findIndex((a, i) => i > 0 && plan.args[i - 1] === "-c" && a === flag);
+  assert.ok(cIdx('mcp_servers.docs.command="docs-mcp"') > -1);
+  assert.ok(cIdx('mcp_servers.docs.args=["--stdio"]') > -1);
+  assert.ok(cIdx('mcp_servers.docs.env.FOO="bar"') > -1);
+  assert.ok(cIdx('mcp_servers.remote.url="https://example.com/mcp"') > -1);
+  assert.ok(cIdx('mcp_servers.remote.headers.Authorization="Bearer x"') > -1);
+  assert.ok(
+    plan.limitations?.includes("Codex cannot exclude MCP servers configured in config.toml"),
+  );
+});
+
+test("an empty mcpServers object still reports the limitation", () => {
+  const plan = codexRuntime.streamPlan({
+    prompt: "p",
+    capabilities: capRequest({ mcpServers: {} }),
+  });
+  assert.deepEqual(plan.limitations, [
+    "Codex cannot exclude MCP servers configured in config.toml",
+  ]);
+});
+
+test("tools, settingSources, permissionMode and maxTurns are all reported as limitations", () => {
+  const plan = codexRuntime.streamPlan({
+    prompt: "p",
+    capabilities: capRequest({
+      tools: { allow: ["Read"] },
+      settingSources: ["project"],
+      permissionMode: "plan",
+      maxTurns: 4,
+    }),
+  });
+  assert.deepEqual(plan.limitations, [
+    'Codex cannot enforce "tools" for this invocation',
+    'Codex cannot enforce "settingSources" for this invocation',
+    'Codex cannot enforce "permissionMode" for this invocation',
+    'Codex cannot enforce "maxTurns" for this invocation',
+  ]);
+});
+
+test("capabilities always add files: [] since Codex writes no config files", () => {
+  const plan = codexRuntime.streamPlan({ prompt: "p", capabilities: capRequest({}) });
+  assert.deepEqual(plan.files, []);
+});
+
+test("hooks are ignored: Codex hooks live only in config.toml", () => {
+  const plan = codexRuntime.streamPlan({
+    prompt: "p",
+    capabilities: capRequest({}, { hooks: { stop: "s", gate: "g" } }),
+  });
+  assert.equal(plan.args.includes("s"), false);
+  assert.equal(plan.args.includes("g"), false);
+  assert.deepEqual(plan.limitations, []);
+});
+
+test("no capabilities means no files/limitations at all, and argv is unchanged", () => {
+  const plan = codexRuntime.streamPlan({ prompt: "p" });
+  assert.equal("files" in plan, false);
+  assert.equal("limitations" in plan, false);
+});
+
+// ── Regression: the artifact dir is writable under the *effective* sandbox ──
+// Previously the writable-roots/limitation logic keyed off
+// `profile.filesystem` alone, so a profile that set no filesystem mode (only
+// e.g. `additionalDirectories`) never made the artifact dir writable even
+// though the operator's own default sandbox (ARGUS_CODEX_SANDBOX, or its
+// "workspace-write" fallback) is what the process actually runs under.
+
+test("the artifact dir is writable under the operator's default sandbox when the profile sets no filesystem mode", () => {
+  withEnv({ ARGUS_CODEX_SANDBOX: undefined }, () => {
+    const plan = codexRuntime.streamPlan({
+      prompt: "p",
+      capabilities: capRequest(
+        { additionalDirectories: [] },
+        { channels: [artifactChannel("/art")] },
+      ),
+    });
+    const i = plan.args.indexOf("-c");
+    assert.ok(i > -1, "expected a sandbox_workspace_write.writable_roots override");
+    assert.ok(plan.args[i + 1].includes("/art"), plan.args[i + 1]);
+    assert.equal(plan.channels?.[0].status, "granted");
+  });
+});
+
+test("a read-only ARGUS_CODEX_SANDBOX reports the artifact channel unavailable even with no filesystem capability set", () => {
+  withEnv({ ARGUS_CODEX_SANDBOX: "read-only" }, () => {
+    const plan = codexRuntime.streamPlan({
+      prompt: "p",
+      capabilities: capRequest(
+        { additionalDirectories: [] },
+        { channels: [artifactChannel("/art")] },
+      ),
+    });
+    assert.equal(plan.channels?.[0].status, "unavailable");
+    assert.match(plan.channels?.[0].reason ?? "", /read-only sandbox prevents writing/);
+  });
+});
+
+test("Codex analysis fixes read-only, noninteractive approval and requested reasoning", () => {
+  withEnv({ ARGUS_CODEX_ARGS: undefined }, () => {
+    const p = codexRuntime.analysisPlan({
+      prompt: "question",
+      model: "gpt-5.6-luna",
+      reasoningEffort: "low",
+      decisionIsolation: true,
+    });
+    assert.equal(p.args[p.args.indexOf("--sandbox") + 1], "read-only");
+    assert.ok(p.args.includes('approval_policy="never"'));
+    assert.ok(p.args.includes('web_search="disabled"'));
+    assert.ok(p.args.includes('model_reasoning_effort="low"'));
+  });
+});
+
+test("read-only Codex refuses operator escape args instead of bypassing the sandbox", () => {
+  withEnv({ ARGUS_CODEX_ARGS: "--dangerously-bypass-approvals-and-sandbox" }, () => {
+    assert.throws(
+      () => codexRuntime.analysisPlan({ prompt: "p", decisionIsolation: true }),
+      /incompatible/,
+    );
+    assert.throws(
+      () =>
+        codexRuntime.streamPlan({
+          prompt: "p",
+          capabilities: capRequest({ filesystem: "read-only" }),
+        }),
+      /incompatible/,
+    );
+  });
 });

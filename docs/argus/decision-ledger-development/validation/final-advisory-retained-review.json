@@ -1,0 +1,129 @@
+{
+  "format": "argus.final-advisory-retained-review",
+  "version": 1,
+  "at": "2026-10-10T04:32:00.9986064Z",
+  "baseCommit": "02668069d8eb1f716757f0acb26a5d1021ad3013",
+  "status": "scoped-clean",
+  "findings": [],
+  "method": "Read actual tracked diffs and untracked new sources, corresponding tests and recorded validation. No tests repeated or provider calls; no unresolved concrete finding requiring a new repro.",
+  "scope": "Advisory route/reader/currency, V1/V2 definitions and projections, offline evaluation input, service preparation, invocation ledger/coordinator and guarded dispatch integration",
+  "recordedEvidence": [
+    "validation/dispatch-boundary-validation.json",
+    "validation/evaluation-input-validation.json",
+    "validation/retained-coordinator-validation.json"
+  ],
+  "limitations": [
+    "Independent source review is not a human reference label, calibration evidence or a live integration validation.",
+    "Production startup does not inject the advisory reader or coordinator.",
+    "Offline audit receipts remain unauthenticated references; artifacts are always dispatchable=false. Reviewed-byte dispatch is still blocked.",
+    "Cross-process fenced writer and actual shared gate coverage are injected prerequisites; reservation lifetime/revocation semantics remain unresolved.",
+    "Fresh account-bound capability evidence, artifact identity versioning, operator cohort and enforcement release gates remain unavailable."
+  ],
+  "source": [
+    {
+      "path": "server/src/app.ts",
+      "sha256": "8e6bd9896319af2304dd882341851c02a552008f446cb7fbe4523629c06a6a71",
+      "matchesFrozenInventory": true
+    },
+    {
+      "path": "server/src/decision/advisoryRoute.test.ts",
+      "sha256": "34bd29bb88b771b063428f82844905730dbf89ebc944a71b814ec470f62d8c53",
+      "matchesFrozenInventory": true
+    },
+    {
+      "path": "server/src/decision/currency.ts",
+      "sha256": "22499d6bfec98e7bf3b4db662e34005ec25921d1ed035916eed6ba5cca154c2c",
+      "matchesFrozenInventory": true
+    },
+    {
+      "path": "server/src/decision/definitions.ts",
+      "sha256": "7d9d8bfa24786bb3dffe3bc3ffa1d71e12713b3913690b4c37a1c92dbc62b372",
+      "matchesFrozenInventory": true
+    },
+    {
+      "path": "server/src/decision/dispatchAdmission.integration.test.ts",
+      "sha256": "819a6f4323770737ffc2b195b0e0eaac86a522e65d4c0e7d983586ff7a9e8ed1",
+      "matchesFrozenInventory": true
+    },
+    {
+      "path": "server/src/decision/evaluationCoordinator.test.ts",
+      "sha256": "ab30a9fd6e70c68c99c518712cba9091845e874e43e2bd54bc6992283b5c5138",
+      "matchesFrozenInventory": true
+    },
+    {
+      "path": "server/src/decision/evaluationCoordinator.ts",
+      "sha256": "108bea7f8cfff5683ed17b3c26c587a1c7652b2a7bc8d3d003dfa3bac1c9aa3b",
+      "matchesFrozenInventory": true
+    },
+    {
+      "path": "server/src/decision/evaluationInput.test.ts",
+      "sha256": "88c904205afe038b182d6fbf2479a059bfa104e094bbe638d8b3b77bf9ccb71b",
+      "matchesFrozenInventory": true
+    },
+    {
+      "path": "server/src/decision/evaluationInput.ts",
+      "sha256": "df350ed37cb77fb46180349f623dcbb2fe19b7ec7c3d06b309f0d06750738e4d",
+      "matchesFrozenInventory": true
+    },
+    {
+      "path": "server/src/decision/evaluationV2.test.ts",
+      "sha256": "59cf8349b20def64446f38e055353e72db90467b42f1210458f2888e7f9539b8",
+      "matchesFrozenInventory": true
+    },
+    {
+      "path": "server/src/decision/invocationLedger.test.ts",
+      "sha256": "cca564699d4447c86033f95b909408400a7581216b9e0c3e4c96b47293f4fed2",
+      "matchesFrozenInventory": true
+    },
+    {
+      "path": "server/src/decision/invocationLedger.ts",
+      "sha256": "8a05a96aebce51bbb23dd82d6cbf583c37df00f24a919631da0d3c5404f384e7",
+      "matchesFrozenInventory": true
+    },
+    {
+      "path": "server/src/decision/isolation.test.ts",
+      "sha256": "73edbe4888bd16cb8a2dbecd6fac9ad4058bae649eb7a13e05100bbcc35b4754",
+      "matchesFrozenInventory": true
+    },
+    {
+      "path": "server/src/decision/projections/runFailure.ts",
+      "sha256": "f034e16280527455e187f5c201af3aca8bbfbab3f38e118be6153e7d18f75e3f",
+      "matchesFrozenInventory": true
+    },
+    {
+      "path": "server/src/decision/providers/claudeCli.ts",
+      "sha256": "8d6af9477c2da926ff17abee3a4de2d45dcfb31a3672b7b6a2bedb9528aa16b4",
+      "matchesFrozenInventory": true
+    },
+    {
+      "path": "server/src/decision/providers/types.ts",
+      "sha256": "6ec5b11b8a353e6516f8cbeb70f6afcd65b4bf1a6676da7426457063e7574bec",
+      "matchesFrozenInventory": true
+    },
+    {
+      "path": "server/src/decision/reader.test.ts",
+      "sha256": "7092c4a7587f402839f1b3aa577f8bf3450a276908fec758af13b5a1adc29afa",
+      "matchesFrozenInventory": true
+    },
+    {
+      "path": "server/src/decision/reader.ts",
+      "sha256": "067fd68d7a6d3209563a1fd9c0661616947db3b1183d035edb4064715acfb148",
+      "matchesFrozenInventory": true
+    },
+    {
+      "path": "server/src/decision/registry.test.ts",
+      "sha256": "374e944598a2627a3afaa1ef62dcd81768afa3b42ed45c1e02986138d7ee202d",
+      "matchesFrozenInventory": true
+    },
+    {
+      "path": "server/src/decision/service.test.ts",
+      "sha256": "37df0bfcd3328aaacfa7aad3968bc3faf7b977781a2c1732b7551aeb360c3193",
+      "matchesFrozenInventory": true
+    },
+    {
+      "path": "server/src/decision/service.ts",
+      "sha256": "9fadc13890d258f479ab77ca5a58b408abf4cabeebc2e22fcff3fd51bf4200ab",
+      "matchesFrozenInventory": true
+    }
+  ]
+}

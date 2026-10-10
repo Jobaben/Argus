@@ -1,9 +1,10 @@
-import { test, beforeEach } from "node:test";
+import { test, afterEach, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createEngine } from "./pipelineEngine.js";
+import { createEngine as createEngineUntracked } from "./pipelineEngine.js";
+import { fakeKill } from "./testPlatform.js";
 import {
   createPipeline,
   updatePipeline,
@@ -15,6 +16,7 @@ import { readJournal } from "./sources/journal.js";
 import { readRun } from "./sources/runs.js";
 import type { EngineDeps } from "./pipelineEngine.js";
 import type { PipelineInstance } from "./sources/pipelineTypes.js";
+import { testRunToken } from "./testSignalToken.js";
 
 /**
  * Routing through the real engine: what gets persisted, what gets journalled,
@@ -32,6 +34,22 @@ beforeEach(() => {
   process.env.ARGUS_CLAUDE_HOME = home;
 });
 
+// Every engine a test creates is drained before the next test starts. Its
+// detached work (a phase launch queued off a signal, a verification) resolves
+// its paths from ARGUS_CLAUDE_HOME when it writes, so work still in flight
+// after `beforeEach` has pointed that at a fresh home would land there: a
+// running instance of the same pipeline appearing in the next test's empty
+// home, which its `start` then refuses as an overlap.
+const engines: ReturnType<typeof createEngineUntracked>[] = [];
+function createEngine(deps: EngineDeps): ReturnType<typeof createEngineUntracked> {
+  const e = createEngineUntracked(deps);
+  engines.push(e);
+  return e;
+}
+afterEach(async () => {
+  await Promise.all(engines.splice(0).map((e) => e.drain()));
+});
+
 let counter = 0;
 function recordingSpawn() {
   const calls: { runId: string; env: Record<string, string> }[] = [];
@@ -46,8 +64,10 @@ const baseDeps = (over: Partial<EngineDeps> & { spawn: EngineDeps["spawn"] }): E
   now: () => new Date(2026, 7, 13, 12, 0),
   newId: () => `id-${++counter}`,
   signalUrlBase: "http://localhost:7777",
+  newSignalToken: testRunToken,
   maxConcurrent: 4,
   tickMs: 30000,
+  kill: fakeKill().kill,
   ...over,
 });
 
@@ -124,10 +144,30 @@ async function complete(
     phaseId,
     runId: rec.calls[rec.calls.length - 1].runId,
     type: "completed",
-    token: inst.signalToken,
+    token: testRunToken(rec.calls[rec.calls.length - 1].runId),
+    // What a real stop hook delivers: the final message, ending with the
+    // marker the default completion policy requires.
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
     ...extra,
   });
 }
+/**
+ * The persisted run record, once it exists.
+ *
+ * `waitForCalls` observes the spawn, which the engine records *before* it
+ * writes the run file; a test that read the file the instant the call appeared
+ * would be racing an atomic tmp+rename write it has no reason to.
+ */
+async function readRunWhenWritten(runId: string, timeoutMs = 2000) {
+  const start = Date.now();
+  for (;;) {
+    const record = await readRun(runId);
+    if (record) return record;
+    if (Date.now() - start > timeoutMs) throw new Error(`run ${runId} was never persisted`);
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
 /** The persisted instance, which these tests always expect to exist. */
 async function readInst(id: string): Promise<PipelineInstance> {
   return (await readInstance(id))!;
@@ -170,9 +210,11 @@ test("the worked example runs its selected branch and succeeds with the other sk
   assert.equal(statusOf(current, "publish"), "running");
   assert.equal(statusOf(current, "repair"), "skipped");
 
-  // The published result reaches the branch it selected.
-  const shipRun = await readRun(rec.calls[1].runId);
-  assert.equal(shipRun!.run.prompt, 'ship {"accepted":true}');
+  // The published result reaches the branch it selected. The run record is
+  // written just *after* the spawn the poll above observed, so wait for it
+  // rather than racing it.
+  const shipRun = await readRunWhenWritten(rec.calls[1].runId);
+  assert.equal(shipRun.run.prompt, 'ship {"accepted":true}');
 
   await complete(e, inst!, rec, "publish");
   await waitForCalls(rec, 3);

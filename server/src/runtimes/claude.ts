@@ -10,16 +10,273 @@
  */
 
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { claudeHome } from "../claudeHome.js";
-import { EMPTY_ENVELOPE, basename, clip, extraArgs } from "./types.js";
+import {
+  EMPTY_ENVELOPE,
+  reportedCostUsd,
+  basename,
+  channelGranted,
+  channelUnavailable,
+  clip,
+  extraArgs,
+  unsupportedCapabilities,
+} from "./types.js";
 import type {
   AgentRuntime,
   AnalysisPlanOptions,
+  CapabilityRequest,
+  ChannelOutcome,
+  InvocationChannel,
+  MaterializedFile,
   RunEnvelope,
   RunPlanOptions,
   SpawnPlan,
 } from "./types.js";
 import type { ActivityEvent } from "@argus/contracts";
+
+/** Every `CapabilityProfile` key Claude Code can map onto its own invocation —
+ *  which is all of them; the one gap (a shell tool, Bash or PowerShell, left
+ *  unrestricted under `read-only`) is reported as a specific limitation rather
+ *  than the generic "cannot enforce" one, so it never appears in this list. */
+const CLAUDE_SUPPORTED_CAPABILITIES = [
+  "filesystem",
+  "tools",
+  "mcpServers",
+  "additionalDirectories",
+  "settingSources",
+  "permissionMode",
+  "maxTurns",
+] as const;
+
+/** The shell tools a read-only profile must close: either one can write
+ *  anywhere its command line reaches, whatever the `Edit` rules say. */
+const SHELL_TOOLS = ["Bash", "PowerShell"] as const;
+
+/** A bare, unscoped allow rule for `tool` — one that leaves the shell
+ *  unrestricted regardless of `filesystem: "read-only"`. */
+function isBareShellRule(rule: string, tool: string): boolean {
+  return rule === tool || rule === `${tool}(*)` || rule === `${tool}(*:*)`;
+}
+
+interface ClaudeCapabilityResult {
+  args: string[];
+  files: MaterializedFile[];
+  limitations: string[];
+  channels: ChannelOutcome[];
+}
+
+/**
+ * `p` as Claude Code's permission rules spell an absolute path, without the
+ * leading `/` that marks a rule path absolute: `/work/repo` on POSIX, and
+ * `/c/work/repo` for `C:\work\repo` on Windows — the only Windows form a rule
+ * matches (docs/HARNESS.md §3). The rule is then `Edit(/${rulePath}/**)`.
+ *
+ * The path's own shape says which it is — a drive letter is Windows, a
+ * leading `/` is POSIX — so the result never depends on the host Argus runs
+ * on. Null for a path no rule can name: a comma or newline (the rules travel
+ * comma-joined in one flag, so the rule would split and silently match
+ * nothing), a UNC share, or anything that is neither shape.
+ */
+export function toClaudeRulePath(p: string): string | null {
+  if (/[,\r\n]/.test(p)) return null;
+  const drive = /^([A-Za-z]):[\\/]/.exec(p);
+  if (drive) {
+    const rest = path.win32.normalize(p.slice(2)).replace(/\\/g, "/").replace(/\/+$/, "");
+    return `/${drive[1].toLowerCase()}${rest}`;
+  }
+  if (!p.startsWith("/") || p.startsWith("//")) return null;
+  return path.posix.normalize(p).replace(/\/+$/, "");
+}
+
+/** Is `dir` the root itself or somewhere beneath it? Lexical, on the rule
+ *  paths — the same view the `Edit(//root/**)` deny rule takes, which for a
+ *  Windows path matches regardless of case. */
+function isWithin(dir: string, root: string): boolean {
+  const fold = (p: string) =>
+    /^[A-Za-z]:/.test(p) ? toClaudeRulePath(p)?.toLowerCase() : toClaudeRulePath(p);
+  const d = fold(dir);
+  const r = fold(root);
+  if (d == null || r == null) return false;
+  return d === r || d.startsWith(`${r}/`);
+}
+
+const UNNAMEABLE = "contains a comma or newline, or is a UNC share";
+
+/**
+ * Claude Code's answer for every Argus-owned channel: `--add-dir` on the
+ * channel's directory, which admits it to the invocation's working set
+ * whatever `filesystem` says about the repository. Claude Code has no OS
+ * sandbox, so a path outside the working directory is reachable once it is
+ * added; the one thing that can still stand in the way is the read-only
+ * profile's own `Edit(//root/**)` deny rule, when a channel happens to live
+ * *under* a denied root (a working directory that is the operator's home,
+ * say). That case is deterministic from the paths alone and is reported
+ * rather than left to fail at write time.
+ *
+ * A **read** channel (the KnowledgeContext file) is admitted the same way and
+ * then denied for edits: `--add-dir` alone would make its directory editable
+ * under `workspace-write`, and Argus → agent data is not the agent's to
+ * change. A **write** channel is admitted and then allowed for edits:
+ * `--add-dir` alone still leaves each edit to a permission prompt, which a
+ * headless run under the default mode refuses. Both rules are appended to the
+ * caller's lists, which is why they are threaded through; a path the rule
+ * grammar cannot express is a limitation, since the channel stays reachable
+ * but its integrity — or, for a write channel, its writability under the
+ * default mode — no longer follows from a rule.
+ */
+function claudeChannels(
+  channels: InvocationChannel[],
+  deniedRoots: string[],
+  args: string[],
+  allow: string[],
+  deny: string[],
+  limitations: string[],
+): ChannelOutcome[] {
+  return channels.map((channel) => {
+    args.push("--add-dir", channel.dir);
+    const rulePath = toClaudeRulePath(channel.dir);
+    if (channel.access === "read") {
+      if (rulePath === null) {
+        limitations.push(
+          `Claude Code cannot deny edits to the ${channel.label} (${channel.envVar}): its path ${UNNAMEABLE}`,
+        );
+      } else if (!deniedRoots.some((root) => isWithin(channel.dir, root))) {
+        deny.push(`Edit(/${rulePath}/**)`);
+      }
+      return channelGranted(channel);
+    }
+    if (channel.access === "write") {
+      const under = deniedRoots.find((root) => isWithin(channel.dir, root));
+      if (under !== undefined) {
+        return channelUnavailable(
+          channel,
+          "Claude Code",
+          `read-only denies edits under ${under}, which contains`,
+        );
+      }
+      if (rulePath === null) {
+        limitations.push(
+          `Claude Code cannot allow edits to the ${channel.label} (${channel.envVar}) by rule: its path ${UNNAMEABLE}`,
+        );
+      } else if (!allow.includes(`Edit(/${rulePath}/**)`)) {
+        allow.push(`Edit(/${rulePath}/**)`);
+      }
+    }
+    return channelGranted(channel);
+  });
+}
+
+/**
+ * Maps a {@link CapabilityRequest} onto Claude Code's own flags and config
+ * files. Shared by `batchPlan` and `streamPlan` so the two forms can never
+ * drift on what a profile means.
+ */
+function buildClaudeCapabilities(cap: CapabilityRequest | undefined): ClaudeCapabilityResult {
+  if (!cap) return { args: [], files: [], limitations: [], channels: [] };
+  const { profile, invocationDir, cwd, channels, hooks } = cap;
+  const args: string[] = [];
+  const files: MaterializedFile[] = [];
+  const limitations = unsupportedCapabilities(profile, "Claude Code", [
+    ...CLAUDE_SUPPORTED_CAPABILITIES,
+  ]);
+
+  const allow = [...(profile.tools?.allow ?? [])];
+  const deny = [...(profile.tools?.deny ?? [])];
+  const deniedRoots: string[] = [];
+
+  if (profile.filesystem === "read-only") {
+    // An `Edit(path)` rule governs every built-in file-editing tool — Edit,
+    // Write, MultiEdit, NotebookEdit — per Claude Code's permission rules;
+    // `Write(path)` rules are accepted but never consulted, so this is the one
+    // rule shape that actually denies writes under these roots. Argus's own
+    // channels (the artifact directory, the result and delta files) are
+    // outside them on purpose: a read-only researcher still writes its report
+    // and its proposal there.
+    for (const root of [cwd, ...(profile.additionalDirectories ?? [])]) {
+      const rulePath = toClaudeRulePath(root);
+      if (rulePath === null) {
+        // A rule that cannot name the root would silently match nothing and
+        // leave it writable.
+        limitations.push(`read-only cannot be expressed for a path that ${UNNAMEABLE}: ${root}`);
+        continue;
+      }
+      deny.push(`Edit(/${rulePath}/**)`);
+      deniedRoots.push(root);
+    }
+
+    // The same three outcomes for each shell: a bare allow is a limitation,
+    // a scoped allow keeps the tool to the commands it names, and no allow at
+    // all denies it. PowerShell's own path checks refuse many writes, but they
+    // are heuristics over the command text, not rules (docs/HARNESS.md §3).
+    for (const tool of SHELL_TOOLS) {
+      const rules = allow.filter((r) => r === tool || r.startsWith(`${tool}(`));
+      if (rules.some((r) => isBareShellRule(r, tool))) {
+        limitations.push(
+          `read-only cannot prevent shell writes while ${tool} is allowed unrestricted`,
+        );
+      } else if (!rules.some((r) => !isBareShellRule(r, tool))) {
+        deny.push(tool);
+      }
+    }
+  }
+  // "workspace-write" needs no extra rules: Claude Code's default already
+  // scopes edits to cwd + additional dirs. "unrestricted" needs none either.
+
+  if (profile.mcpServers !== undefined) {
+    const mcpPath = `${invocationDir}/mcp.json`;
+    files.push({
+      path: mcpPath,
+      contents: `${JSON.stringify({ mcpServers: profile.mcpServers }, null, 2)}\n`,
+    });
+    args.push("--mcp-config", mcpPath, "--strict-mcp-config");
+  }
+
+  for (const dir of profile.additionalDirectories ?? []) args.push("--add-dir", dir);
+  // Every Argus-owned channel — the artifact directory, the result file's and
+  // the KnowledgeDelta file's directories, the memory directory — is admitted
+  // the same way, no matter what the profile said about the rest of the
+  // filesystem: the protocol between the agent and Argus is not the agent's
+  // to be restricted from.
+  const channelOutcomes = claudeChannels(channels, deniedRoots, args, allow, deny, limitations);
+
+  // The tool rules go on argv after the channels have had their say: a read
+  // channel adds its own Edit deny, a write channel its Edit allow, and the
+  // rules travel in one flag each.
+  if (allow.length) args.push("--allowedTools", allow.join(","));
+  if (deny.length) args.push("--disallowedTools", deny.join(","));
+
+  if (profile.settingSources !== undefined) {
+    args.push("--setting-sources", profile.settingSources.join(","));
+  }
+  if (profile.permissionMode) args.push("--permission-mode", profile.permissionMode);
+  if (profile.maxTurns !== undefined) args.push("--max-turns", String(profile.maxTurns));
+
+  if (hooks) {
+    const settingsPath = `${invocationDir}/settings.json`;
+    files.push({
+      path: settingsPath,
+      contents: `${JSON.stringify(
+        {
+          hooks: {
+            Stop: [{ matcher: "", hooks: [{ type: "command", command: hooks.stop }] }],
+            PreToolUse: [
+              {
+                matcher: "AskUserQuestion",
+                hooks: [{ type: "command", command: hooks.gate }],
+              },
+            ],
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    });
+    args.push("--settings", settingsPath);
+  }
+
+  return { args, files, limitations, channels: channelOutcomes };
+}
 
 /**
  * The default analysis model.
@@ -47,10 +304,11 @@ export function parseClaudeEnvelope(stdout: string): RunEnvelope {
     const inTok = Number(usage.input_tokens ?? 0);
     const outTok = Number(usage.output_tokens ?? 0);
     const tokens = Number.isFinite(inTok + outTok) && inTok + outTok > 0 ? inTok + outTok : null;
-    const cost = Number(obj.total_cost_usd ?? obj.cost_usd);
+    const rawCost = obj.total_cost_usd ?? obj.cost_usd;
+    const cost = reportedCostUsd(rawCost);
     return {
       result: typeof obj.result === "string" ? obj.result : null,
-      costUsd: Number.isFinite(cost) ? cost : null,
+      costUsd: cost,
       tokens,
       isError: typeof obj.is_error === "boolean" ? obj.is_error : null,
       // Claude Code takes the session id Argus hands it, so there is never
@@ -228,7 +486,8 @@ export const claudeRuntime: AgentRuntime = {
    * linked) and `--output-format json`, which prints one result envelope we can
    * mine for the result text, cost and tokens.
    */
-  batchPlan({ prompt, sessionId, model }: RunPlanOptions): SpawnPlan {
+  batchPlan({ prompt, sessionId, model, capabilities }: RunPlanOptions): SpawnPlan {
+    const cap = buildClaudeCapabilities(capabilities);
     return {
       bin: bin(),
       args: [
@@ -238,10 +497,14 @@ export const claudeRuntime: AgentRuntime = {
         "--session-id",
         sessionId || randomUUID(),
         ...modelArgs(model),
+        ...cap.args,
         ...extraArgs(process.env.ARGUS_CLAUDE_ARGS),
       ],
       stdin: prompt,
       env: {},
+      ...(capabilities
+        ? { files: cap.files, limitations: cap.limitations, channels: cap.channels }
+        : {}),
     };
   },
 
@@ -250,7 +513,8 @@ export const claudeRuntime: AgentRuntime = {
    * NDJSON transcript the run tailer can follow; the CLI requires `--verbose`
    * alongside it in `-p` mode.
    */
-  streamPlan({ prompt, sessionId, model, systemPrompt }: RunPlanOptions): SpawnPlan {
+  streamPlan({ prompt, sessionId, model, systemPrompt, capabilities }: RunPlanOptions): SpawnPlan {
+    const cap = buildClaudeCapabilities(capabilities);
     return {
       bin: bin(),
       args: [
@@ -262,6 +526,7 @@ export const claudeRuntime: AgentRuntime = {
         sessionId || randomUUID(),
         ...(systemPrompt ? ["--append-system-prompt", systemPrompt] : []),
         ...modelArgs(model),
+        ...cap.args,
         ...extraArgs(process.env.ARGUS_CLAUDE_ARGS),
       ],
       stdin: prompt,
@@ -272,6 +537,9 @@ export const claudeRuntime: AgentRuntime = {
         // ignore the var but would reject the unknown flag.
         CLAUDE_CODE_FORWARD_SUBAGENT_TEXT: "1",
       },
+      ...(capabilities
+        ? { files: cap.files, limitations: cap.limitations, channels: cap.channels }
+        : {}),
     };
   },
 

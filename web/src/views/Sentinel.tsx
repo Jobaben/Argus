@@ -147,7 +147,7 @@ function IncidentCard({
           </span>
         )}
         {incident.scheduleId && (
-          <a href="#/monitors" className="font-mono text-[11px] text-queue hover:underline">
+          <a href="#/health" className="font-mono text-[11px] text-queue hover:underline">
             monitor
           </a>
         )}
@@ -366,7 +366,7 @@ export default function Sentinel() {
   const resolved = state.incidents.filter((i) => i.status === "resolved");
 
   return (
-    <Page title="Sentinel" crumbs={[{ label: "Monitors", href: "#/monitors" }]}>
+    <Page title="Sentinel" crumbs={[{ label: "Monitors", href: "#/health" }]}>
       <section className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <HealthCounter label="Open" value={state.summary.open} tone="fail" />
         <HealthCounter label="Acknowledged" value={state.summary.acknowledged} tone="run" />

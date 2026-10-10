@@ -200,12 +200,12 @@ export function SituationStrip({
     [
       { count: c.gatesWaiting, label: "awaiting you", tone: "attention", href: "#/command" },
       { count: c.failedInstances, label: "failed", tone: "bad", href: "#/command" },
-      { count: c.runsInFlight, label: "running", tone: "busy", href: "#/launch" },
+      { count: c.runsInFlight, label: "running", tone: "busy", href: "#/chronicle" },
       { count: c.liveAgents, label: "live agents", tone: "live", href: "#/agents" },
-      { count: c.monitorsDown, label: "down", tone: "bad", href: "#/monitors" },
-      { count: c.monitorsFailing, label: "failing", tone: "bad", href: "#/monitors" },
+      { count: c.monitorsDown, label: "down", tone: "bad", href: "#/health" },
+      { count: c.monitorsFailing, label: "failing", tone: "bad", href: "#/health" },
       { count: c.openIssues, label: "open issues", tone: "attention", href: "#/issues" },
-      { count: c.anomalies, label: "anomalies", tone: "attention", href: "#/watchtower" },
+      { count: c.anomalies, label: "anomalies", tone: "attention", href: "#/health/watchtower" },
     ] satisfies { count: number; label: string; tone: Tone; href: string }[]
   ).filter((s) => s.count > 0);
 

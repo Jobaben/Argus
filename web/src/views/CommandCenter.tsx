@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Suspense, lazy, useMemo, useState } from "react";
 import { runtimeLabel } from "../useRuntimes";
 import { useMachineFacet } from "../fleet/useMachineFacet";
 import { MachinePicker, PeerBanner, PeerEmpty } from "../fleet/MachineFacet";
@@ -7,9 +7,14 @@ import { useInsight } from "../useInsight";
 import { useRuns } from "../useRuns";
 import { SituationStrip } from "./SituationStrip";
 import { ActivityRail } from "./ActivityRail";
-import { PhaseRail } from "./PhaseRail";
+import { PhaseGraph } from "./PhaseGraph";
+import { FOCUS_MIN_PX, useBoardArrangement, useElementWidth } from "./useLaneLayout";
+import { edgeState } from "./laneGraphLayout";
+import { decisionFields, isLongValue } from "./decisionValue";
 import { attentionPhase } from "./phaseAttention";
-import { StepDrawer, type StepSelection } from "./StepDrawer";
+import type { StepSelection } from "./StepDrawer";
+import type { GateSelection } from "./GateDrawer";
+import { hashSegments, useHashRoute } from "../useHashRoute";
 import { useRunActivity } from "../useRunActivity";
 import type { LiveActivity } from "../useRunActivity";
 import { useTotals } from "../useTotals";
@@ -36,6 +41,14 @@ import {
   useTicker,
 } from "../ds";
 import type { OverviewRow, OverviewGate, PhasePill, StepPill, DsStatus } from "../ds";
+import type { RouteDecision } from "../types";
+
+const StepDrawer = lazy(() => import("./StepDrawer").then((m) => ({ default: m.StepDrawer })));
+
+// The review drawer carries the markdown lexer, which the board does not need
+// until a gate is actually opened — so it is its own chunk, fetched on first
+// open, and the Command Center (an eager route) stays inside the size budget.
+const GateDrawer = lazy(() => import("./GateDrawer").then((m) => ({ default: m.GateDrawer })));
 
 /**
  * The board re-renders in place as pipelines change state, which is invisible
@@ -71,113 +84,25 @@ function useBoardAnnouncer(rows: OverviewRow[]): string {
   return seen.message;
 }
 
-function Gate({
-  instanceId,
-  canApprove,
-  approve,
-  revise,
-  reviseLabel = "Revise",
-}: {
-  instanceId: string;
-  canApprove: boolean;
-  approve: (id: string) => Promise<unknown>;
-  revise: (id: string, note?: string) => Promise<unknown>;
-  reviseLabel?: string;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [noteOpen, setNoteOpen] = useState(false);
-  const [note, setNote] = useState("");
-  const [err, setErr] = useState<string | null>(null);
-  const [sent, setSent] = useState<string | null>(null);
-
-  // On success we leave busy=true: the row is expected to refresh away on the
-  // next "pipelines:changed" ping (or the 10s poll), which also clears any
-  // double-click window. A polite status line announces the accepted action
-  // until then. On failure we surface the reason and re-enable.
-  const run = (action: () => Promise<unknown>, sentLabel: string) => {
-    setBusy(true);
-    setErr(null);
-    void action()
-      .then(() => setSent(sentLabel))
-      .catch((e: unknown) => {
-        setErr(e instanceof Error ? e.message : String(e));
-        setBusy(false);
-      });
-  };
-
-  return (
-    <div className="mt-1.5 flex flex-col gap-1.5">
-      <div className="flex gap-1.5">
-        {canApprove && (
-          <button
-            type="button"
-            onClick={() => run(() => approve(instanceId), "Approved — pipeline resuming")}
-            disabled={busy}
-            className="rounded-md border border-ok bg-ok/10 px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-ok transition-transform duration-(--duration-press) disabled:opacity-40 motion-safe:active:scale-[0.97]"
-          >
-            Approve
-          </button>
-        )}
-        <button
-          type="button"
-          onClick={() => setNoteOpen((o) => !o)}
-          disabled={busy}
-          className="rounded-md border border-await bg-await/10 px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-await transition-transform duration-(--duration-press) disabled:opacity-40 motion-safe:active:scale-[0.97]"
-        >
-          {reviseLabel}
-        </button>
-      </div>
-      {noteOpen && (
-        <div className="flex gap-1.5">
-          <input
-            type="text"
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            aria-label="Revision note"
-            placeholder="Revise note (optional)"
-            className="min-w-0 flex-1 rounded-md border border-line bg-surface px-2 py-1 font-mono text-[11px] text-ink placeholder:text-ink-faint"
-          />
-          <button
-            type="button"
-            onClick={() =>
-              run(
-                () => revise(instanceId, note.trim() || undefined),
-                "Revision sent — phase restarting",
-              )
-            }
-            disabled={busy}
-            className="rounded-md border border-await bg-await/10 px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-await transition-transform duration-(--duration-press) disabled:opacity-40 motion-safe:active:scale-[0.97]"
-          >
-            Send
-          </button>
-        </div>
-      )}
-      {sent && !err && (
-        <p role="status" className="font-mono text-[10px] text-ok">
-          {sent}
-        </p>
-      )}
-      {err && (
-        <p role="alert" className="font-mono text-[10px] text-fail">
-          {err}
-        </p>
-      )}
-    </div>
-  );
+/** What a candidate badge means, spelled out for the tooltip. */
+function candidateTitle(step: StepPill): string {
+  const which = `Candidate ${(step.candidate?.index ?? 0) + 1} of ${step.candidate?.total ?? 1}`;
+  if (step.selected) return `${which} — selected: its checks passed`;
+  if (step.verified === false) return `${which} — its checks failed`;
+  if (step.superseded) return `${which} — superseded by the candidate that won`;
+  return `${which} — competing drafts of the same step; the phase's checks pick one`;
 }
 
 function StepTile({
   step,
   reason,
   live,
-  now,
   rowModel,
   onOpen,
 }: {
   step: StepPill;
   reason: string | null;
   live: LiveActivity | null;
-  now: number;
   /** Pipeline-level model shown in the card header; the tile only repeats a
    *  model when its own differs from this. */
   rowModel: string | null;
@@ -186,6 +111,10 @@ function StepTile({
 }) {
   const token = STATUS[step.status].token;
   const working = step.status === "working";
+  // The elapsed clock lives in the tile that shows it. One clock at the board
+  // root re-rendered every card once a second for the sake of a few labels —
+  // and each of those renders re-measured the whole board for FLIP.
+  const now = useTicker(working);
   const activity = working ? (live?.label ?? step.currentActivity) : null;
   const elapsed =
     working && step.startedAt ? formatElapsed(now - new Date(step.startedAt).getTime()) : null;
@@ -225,8 +154,27 @@ function StepTile({
           className="min-w-0 flex-1 text-left"
           title="Open this step's run, log and cost"
         >
-          <div className="break-words text-tile-name font-bold leading-tight underline decoration-transparent decoration-dotted underline-offset-[3px] transition duration-(--duration-quick) hover:decoration-ink-faint">
-            {step.name}
+          <div className="flex min-w-0 items-baseline gap-1.5">
+            {step.candidate && (
+              // Which draft this is. The badge carries the verdict too, because
+              // "c2" on its own says nothing about whether c2 is any good.
+              <span
+                data-testid="candidate-badge"
+                title={candidateTitle(step)}
+                className={`shrink-0 rounded border px-1 font-mono text-[9px] font-bold uppercase leading-[15px] tracking-[0.08em] ${
+                  step.selected
+                    ? "border-ok/50 bg-ok/10 text-ok"
+                    : step.verified === false
+                      ? "border-fail/40 text-fail"
+                      : "border-line text-ink-faint"
+                }`}
+              >
+                c{step.candidate.index + 1}
+              </span>
+            )}
+            <span className="min-w-0 break-words text-tile-name font-bold leading-tight underline decoration-transparent decoration-dotted underline-offset-[3px] transition duration-(--duration-quick) hover:decoration-ink-faint">
+              {step.name}
+            </span>
           </div>
           <div className="mt-0.5 font-mono text-id text-ink-faint">
             {step.runId ? `job ${step.runId}` : "job ——"}
@@ -241,8 +189,22 @@ function StepTile({
             )}
           </div>
         </button>
-        <StatusPill status={step.status} size="sm" />
+        {step.superseded ? (
+          // Not "stopped": this draft was not interrupted, it was outrun.
+          <span
+            data-testid="candidate-superseded"
+            title="Another candidate passed its checks first, so this one was stopped"
+            className="shrink-0 rounded-full border border-line px-1.5 font-mono text-[9px] uppercase leading-[16px] tracking-[0.08em] text-ink-faint"
+          >
+            superseded
+          </span>
+        ) : (
+          <StatusPill status={step.status} size="sm" />
+        )}
       </div>
+      {step.selected && (
+        <div className="font-mono text-meter text-ok">✓ selected — its checks passed</div>
+      )}
       {reason && (
         <div className={`text-detail leading-snug ${TILE_DETAIL[token] ?? "text-ink-dim"}`}>
           {reason}
@@ -281,11 +243,99 @@ function StepTile({
 }
 
 /**
- * One phase's step tiles — the focus panel under the rail.
+ * The route decision a phase's own result took: the value, what it selected,
+ * what it consequently skipped.
+ *
+ * A short value stays on the line — `{"accepted":true}` is already the clearest
+ * form of itself and a layout around it is ceremony. A long one is lifted into
+ * a block of its own fields, a list drawn as a list, and folded to a few lines
+ * until asked for. What it replaces was one paragraph of raw JSON broken
+ * mid-word, which on a real agent verdict ran to a dozen lines and pushed the
+ * step tiles — the reason anyone opened the phase — under the fold.
+ */
+function DecisionNote({
+  decision,
+  name,
+}: {
+  decision: RouteDecision;
+  /** Phase ids as the names the reader knows them by. */
+  name: (id: string) => string;
+}) {
+  const [open, setOpen] = useState(false);
+  const long = isLongValue(decision.value);
+  return (
+    <div data-testid="phase-decision" className="min-w-0 px-0.5 text-[11px] text-ink-faint">
+      <p className="min-w-0">
+        <span className="font-mono text-ink-dim">{decision.artifact}</span>{" "}
+        {!long && (
+          <>
+            <span className="break-words font-mono text-ink-dim">
+              {JSON.stringify(decision.value)}
+            </span>{" "}
+          </>
+        )}
+        → {decision.selected.length > 0 ? decision.selected.map(name).join(", ") : "nothing"}
+        {decision.skipped.length > 0 && (
+          <span> · skipped {decision.skipped.map(name).join(", ")}</span>
+        )}
+      </p>
+      {long && (
+        <div className="mt-1.5">
+          <dl
+            data-testid="decision-fields"
+            className={`flex min-w-0 flex-col gap-1.5 rounded-lg border border-line/70 bg-ground-2/60 px-2.5 py-2 ${
+              open
+                ? ""
+                : "max-h-24 overflow-hidden [mask-image:linear-gradient(to_bottom,black_55%,transparent)]"
+            }`}
+          >
+            {decisionFields(decision.value).map((field, i) => (
+              <div key={field.key ?? i} className="min-w-0">
+                {field.key && (
+                  <dt className="font-mono text-[9px] font-bold uppercase tracking-[0.12em] text-ink-faint">
+                    {field.key}
+                  </dt>
+                )}
+                <dd className="min-w-0 break-words leading-[1.55] text-ink-dim">
+                  {field.kind === "list" ? (
+                    <ul className="flex flex-col gap-1">
+                      {field.items.map((item, j) => (
+                        <li key={j} className="flex min-w-0 gap-1.5">
+                          <span aria-hidden="true" className="text-ink-faint">
+                            ·
+                          </span>
+                          <span className="min-w-0">{item}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    field.text
+                  )}
+                </dd>
+              </div>
+            ))}
+          </dl>
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
+            className="mt-1 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint transition hover:text-ink"
+          >
+            <span aria-hidden="true">{open ? "▾" : "▸"}</span>
+            {open ? "Less" : "Full value"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * One phase's step tiles — the focus panel beside the graph.
  *
  * The board used to render every step of every phase at all times, which put a
  * 14-phase pipeline at several screens per card, most of it "queued" tiles
- * carrying nothing. Now the rail above is the complete always-on summary and
+ * carrying nothing. Now the graph is the complete always-on summary and
  * this panel renders the one phase being asked about, keyed by the caller so a
  * focus change enters as a change (same posture as a route swap: the outgoing
  * content is gone by the time React commits, the incoming one arrives with the
@@ -294,36 +344,55 @@ function StepTile({
 function PhaseFocus({
   pill,
   index,
+  phases,
   phaseNames,
   instanceId,
   gate,
-  approve,
-  revise,
   reviseLabel,
   liveActivity,
-  now,
   rowModel,
   onOpenStep,
+  onOpenGate,
 }: {
   pill: PhasePill;
   index: number;
+  /** Every phase of the instance, to name where this one's routes lead. */
+  phases: PhasePill[];
   /** Phase names by id, to render `needs` as names rather than ids. */
   phaseNames: Map<string, string>;
   instanceId: string | null;
+  /** This phase's gate, when it is the one waiting on a human. */
   gate: OverviewGate | null;
-  approve: (id: string) => Promise<unknown>;
-  revise: (id: string, note?: string) => Promise<unknown>;
   reviseLabel?: string;
   liveActivity: Map<string, LiveActivity>;
-  now: number;
   rowModel: string | null;
   onOpenStep: (step: StepPill, phaseName: string, reason: string | null, originY: number) => void;
+  /** Open the review drawer — the only place Approve and Revise live. */
+  onOpenGate: (originY: number) => void;
 }) {
   const name = (id: string) => phaseNames.get(id) ?? id;
   const edges =
     pill.edges ??
     pill.needs.map((n) => ({ phase: n, label: "always", conditional: false, allowSkipped: false }));
   const needNames = pill.needs.map(name);
+  // Where this phase leads, with the condition each route needs. The graph
+  // draws the same labels on its edges; this is the line for a reader who is
+  // looking at the steps and asks "and then?" — including a route that is
+  // still to be decided by the result these steps produce.
+  const routes = phases.flatMap((q) => {
+    const edge = (q.edges ?? []).find((e) => e.phase === pill.id);
+    const linked = edge !== undefined || q.needs.includes(pill.id);
+    if (!linked || q.id === pill.id) return [];
+    return [
+      {
+        to: q,
+        index: phases.indexOf(q),
+        condition: edge?.conditional ? edge.label : null,
+        state: edgeState(pill, q),
+      },
+    ];
+  });
+  const undecided = routes.some((r) => r.condition) && pill.status !== "done";
   return (
     <div className="flex min-w-0 flex-col gap-2.5 motion-safe:animate-[slide-up_var(--duration-base)_var(--ease-out-expo)_both]">
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 px-0.5">
@@ -372,28 +441,43 @@ function PhaseFocus({
           </span>
         )}
       </div>
+      {routes.length > 0 && (
+        <p
+          data-testid="phase-routes"
+          className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 px-0.5 text-[11px] text-ink-faint"
+        >
+          <span aria-hidden="true">→</span>
+          {routes.map((r, i) => (
+            <span key={r.to.id} className="inline-flex min-w-0 items-center gap-1.5">
+              {i > 0 && <span className="opacity-60">·</span>}
+              {r.condition && (
+                <span
+                  className={`rounded border bg-surface-2 px-[5px] font-mono text-[8.5px] leading-[14px] ${
+                    r.state === "taken"
+                      ? "border-ok/40 text-ink-dim"
+                      : r.state === "skipped"
+                        ? "border-line text-ink-faint opacity-60"
+                        : "border-line text-ink-faint"
+                  }`}
+                >
+                  {r.condition}
+                </span>
+              )}
+              <span className={`min-w-0 truncate ${r.state === "skipped" ? "" : "text-ink-dim"}`}>
+                {String(r.index + 1).padStart(2, "0")} {r.to.name}
+              </span>
+            </span>
+          ))}
+          {undecided && <span className="opacity-60">— decided by this phase's result</span>}
+        </p>
+      )}
       {/* Why this phase did not run, in the words of the decision that said so. */}
       {pill.skipped && pill.skipCause && (
         <p data-testid="phase-skip" className="px-0.5 text-[11px] text-ink-faint">
           Not selected — {name(pill.skipCause.source)}: {pill.skipCause.label}
         </p>
       )}
-      {/* The decision this phase's own result took: the value, then what it
-          selected and what it consequently skipped. Compact on purpose — the
-          journal has the long form, this is the line that stops the reader
-          asking. */}
-      {pill.decision && (
-        <p data-testid="phase-decision" className="min-w-0 px-0.5 text-[11px] text-ink-faint">
-          <span className="font-mono text-ink-dim">{pill.decision.artifact}</span>{" "}
-          <span className="font-mono break-all">{JSON.stringify(pill.decision.value)}</span> →{" "}
-          {pill.decision.selected.length > 0
-            ? pill.decision.selected.map(name).join(", ")
-            : "nothing"}
-          {pill.decision.skipped.length > 0 && (
-            <span> · skipped {pill.decision.skipped.map(name).join(", ")}</span>
-          )}
-        </p>
-      )}
+      {pill.decision && <DecisionNote decision={pill.decision} name={name} />}
       <ol
         aria-label={`Steps of phase ${pill.name}`}
         data-testid="phase-grid"
@@ -410,7 +494,6 @@ function PhaseFocus({
                 step={step}
                 reason={reason}
                 live={step.runId ? (liveActivity.get(step.runId) ?? null) : null}
-                now={now}
                 rowModel={rowModel}
                 onOpen={(originY) => onOpenStep(step, pill.name, reason, originY)}
               />
@@ -418,21 +501,30 @@ function PhaseFocus({
           );
         })}
       </ol>
+      {/* One opener, no decision here: the artifacts this phase produced are
+          what is being approved, and they live in the review drawer. */}
       {instanceId && gate?.phaseId === pill.id && (
-        <Gate
-          instanceId={instanceId}
-          canApprove={gate.canApprove}
-          approve={approve}
-          revise={revise}
-          reviseLabel={reviseLabel}
-        />
+        <div className="mt-1.5">
+          <button
+            type="button"
+            data-testid="gate-opener"
+            onClick={(e) => onOpenGate(e.currentTarget.getBoundingClientRect().top)}
+            className={`rounded-md border px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.08em] transition-transform duration-(--duration-press) motion-safe:active:scale-[0.97] ${
+              gate.canApprove
+                ? "border-await bg-await/10 text-await"
+                : "border-fail/40 bg-fail/10 text-fail"
+            }`}
+          >
+            {gate.canApprove ? "Review" : `Review · ${reviseLabel ?? "Revise"}`}
+          </button>
+        </div>
       )}
     </div>
   );
 }
 
 /**
- * One instance's rail + focus panel, and the selection between them.
+ * One instance's graph + focus panel, and the selection between them.
  *
  * The focus follows the action by default — the gate waiting on you, the
  * failure, the live work (see {@link attentionPhase}) — so an untouched board
@@ -443,18 +535,14 @@ function PhaseFocus({
  */
 function InstanceBoard({
   row,
-  approve,
-  revise,
   liveActivity,
-  now,
   onOpenStep,
+  onOpenGate,
 }: {
   row: OverviewRow;
-  approve: (id: string) => Promise<unknown>;
-  revise: (id: string, note?: string) => Promise<unknown>;
   liveActivity: Map<string, LiveActivity>;
-  now: number;
   onOpenStep: (selection: StepSelection) => void;
+  onOpenGate: (selection: GateSelection) => void;
 }) {
   const [pinned, setPinned] = useState<string | null>(null);
   // A pin outlives the phase it names only if the definition was edited
@@ -464,10 +552,31 @@ function InstanceBoard({
   const selectedIndex = row.phases.findIndex((p) => p.id === selectedId);
   const selected = selectedIndex === -1 ? null : row.phases[selectedIndex];
   const phaseNames = useMemo(() => new Map(row.phases.map((p) => [p.id, p.name])), [row.phases]);
+  // The graph sits beside the focus panel on a wide card and above it on a
+  // narrow one — the step tiles need the horizontal room more than the graph
+  // does, so the graph is what moves. Measured here, not with a viewport
+  // breakpoint: the card's width depends on whether the activity rail is
+  // beside the board, which a media query cannot see.
+  const [boardRef, width] = useElementWidth<HTMLDivElement>();
+  const { layout, stacked, graphTrackPx } = useBoardArrangement(row.phases, width);
   return (
-    <div className="flex min-w-0 flex-col gap-3">
-      <PhaseRail
+    <div
+      ref={boardRef}
+      data-testid="instance-board"
+      className={`min-w-0 ${stacked ? "flex flex-col gap-3" : "grid items-start gap-4"}`}
+      // Neither track can take the other's room: the graph's is capped and
+      // may shrink, the panel's has a floor.
+      style={
+        stacked
+          ? undefined
+          : {
+              gridTemplateColumns: `minmax(0, ${graphTrackPx}px) minmax(${FOCUS_MIN_PX}px, 1fr)`,
+            }
+      }
+    >
+      <PhaseGraph
         phases={row.phases}
+        layout={layout}
         selectedId={selectedId}
         onSelect={(id) => setPinned((prev) => (prev === id ? null : id))}
       />
@@ -479,18 +588,26 @@ function InstanceBoard({
           key={selected.id}
           pill={selected}
           index={selectedIndex}
+          phases={row.phases}
           phaseNames={phaseNames}
           instanceId={row.instanceId}
-          gate={row.gate}
-          approve={approve}
-          revise={revise}
+          gate={row.gates.find((g) => g.phaseId === selected.id) ?? null}
           reviseLabel={row.failure?.kind === "restarted" ? "Retry" : "Revise"}
           liveActivity={liveActivity}
-          now={now}
           rowModel={row.model}
           onOpenStep={(step, phaseName, reason, originY) =>
             onOpenStep({ step, pipelineName: row.name, phaseName, reason, originY })
           }
+          onOpenGate={(originY) => {
+            if (row.instanceId) {
+              onOpenGate({
+                instanceId: row.instanceId,
+                phaseId: selected.id,
+                pipelineName: row.name,
+                originY,
+              });
+            }
+          }}
         />
       )}
     </div>
@@ -505,22 +622,18 @@ function InstanceBoard({
  */
 function Row({
   rows,
-  approve,
-  revise,
   liveActivity,
-  now,
   index,
   onOpenStep,
+  onOpenGate,
   ref,
 }: {
   rows: OverviewRow[];
-  approve: (id: string) => Promise<unknown>;
-  revise: (id: string, note?: string) => Promise<unknown>;
   liveActivity: Map<string, LiveActivity>;
-  now: number;
   /** Position in the board, for the entrance stagger. */
   index: number;
   onOpenStep: (selection: StepSelection) => void;
+  onOpenGate: (selection: GateSelection) => void;
   /** FLIP registration, so the card glides when the board re-orders. */
   ref?: React.Ref<HTMLElement>;
 }) {
@@ -533,7 +646,7 @@ function Row({
       // flashing in all at once; capped in `staggerDelay` so a long board still
       // finishes fast.
       style={{ animationDelay: staggerDelay(index) }}
-      className="rounded-tile border border-line bg-gradient-to-b from-surface-2 to-surface px-4 py-3.5 motion-safe:animate-[slide-up_var(--duration-base)_var(--ease-out-expo)_both]"
+      className="min-w-0 overflow-x-clip rounded-tile border border-line bg-gradient-to-b from-surface-2 to-surface px-4 py-3.5 motion-safe:animate-[slide-up_var(--duration-base)_var(--ease-out-expo)_both]"
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         {/* `break-words` here used to hyphenate the pipeline name one letter per
@@ -597,17 +710,15 @@ function Row({
                 </span>
               </div>
             )}
-            {/* The rail is the whole pipeline at a glance — statuses, stages,
-                gates, step progress — and the focus panel under it renders one
-                phase's step tiles at a time, following the action unless a chip
-                is pinned. The complete view for linear and branching runs. */}
+            {/* The graph is the whole pipeline at a glance — statuses, stages,
+                edges, routes, gates, step progress — and the focus panel beside
+                it renders one phase's step tiles at a time, following the
+                action unless a node is pinned. */}
             <InstanceBoard
               row={row}
-              approve={approve}
-              revise={revise}
               liveActivity={liveActivity}
-              now={now}
               onOpenStep={onOpenStep}
+              onOpenGate={onOpenGate}
             />
           </section>
         ))}
@@ -728,7 +839,36 @@ export default function CommandCenter() {
   const { situation, loading: situationLoading } = useInsight();
   const { runs, loading: runsLoading, cancelRun } = useRuns();
   const [selected, setSelected] = useState<StepSelection | null>(null);
+  const [stepEverOpened, setStepEverOpened] = useState(false);
+  if (selected && !stepEverOpened) setStepEverOpened(true);
+  const [pickedGate, setPickedGate] = useState<GateSelection | null>(null);
   const rows = useMemo(() => overview.flatMap(toOverviewRows), [overview]);
+  // `#/command/<instanceId>[/<phaseId>]` opens the review drawer — the link the
+  // palette and `argus tail` hand out. Derived from the hash and the board, not
+  // stored, so it cannot drift from either. Never on a peer's board: a gate is
+  // decided by the machine that owns it, and this server does not.
+  const segments = useHashRoute();
+  const linkedGate = useMemo<GateSelection | null>(() => {
+    if (facet.peer) return null;
+    const [tab, instanceId, phaseId] = segments;
+    if (tab !== "command" || !instanceId) return null;
+    const row = rows.find((r) => r.instanceId === instanceId);
+    if (!row) return null;
+    const target = phaseId ? row.gates.find((g) => g.phaseId === phaseId) : row.gates[0];
+    return target ? { instanceId, phaseId: target.phaseId, pipelineName: row.name } : null;
+  }, [segments, rows, facet.peer]);
+  const gate = pickedGate ?? linkedGate;
+  // Once a gate has been opened the drawer stays mounted (closed), so its exit
+  // animation plays and the next open is instant. Set during render, not in an
+  // effect: the value follows `gate` and nothing outside React needs telling.
+  const [everOpened, setEverOpened] = useState(false);
+  if (gate && !everOpened) setEverOpened(true);
+  const closeGate = () => {
+    setPickedGate(null);
+    // Drop the deep link too, or the board would reopen what was just closed.
+    const here = hashSegments();
+    if (here[0] === "command" && here.length > 1) window.location.hash = "#/command";
+  };
   // One card per pipeline: concurrent instances of the same pipeline share a
   // card and contribute a phase grid each.
   const groups = useMemo(() => {
@@ -746,12 +886,6 @@ export default function CommandCenter() {
   // glides there shows exactly what moved.
   const flip = useFlip();
   const liveActivity = useRunActivity();
-  const anyWorking = useMemo(
-    () => rows.some((r) => r.phases.some((p) => p.steps.some((s) => s.status === "working"))),
-    [rows],
-  );
-  // One clock for every running tile; idle boards do not tick.
-  const now = useTicker(anyWorking);
 
   return (
     <Page wide title="Command Center" actions={<BoardTotal totals={totals} reset={reset} />}>
@@ -802,11 +936,9 @@ export default function CommandCenter() {
                     ref={flip(group[0].pipelineId)}
                     index={i}
                     rows={group}
-                    approve={approve}
-                    revise={revise}
                     liveActivity={liveActivity}
-                    now={now}
                     onOpenStep={setSelected}
+                    onOpenGate={setPickedGate}
                   />
                 ))}
               </div>
@@ -820,7 +952,20 @@ export default function CommandCenter() {
           )}
         </Handoff>
       )}
-      <StepDrawer selection={selected} onClose={() => setSelected(null)} onCancelRun={cancelRun} />
+      {stepEverOpened && (
+        <Suspense fallback={null}>
+          <StepDrawer
+            selection={selected}
+            onClose={() => setSelected(null)}
+            onCancelRun={cancelRun}
+          />
+        </Suspense>
+      )}
+      {everOpened && (
+        <Suspense fallback={null}>
+          <GateDrawer selection={gate} onClose={closeGate} approve={approve} revise={revise} />
+        </Suspense>
+      )}
     </Page>
   );
 }

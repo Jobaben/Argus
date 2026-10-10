@@ -1,0 +1,96 @@
+{
+  "at": "2026-10-10T09:24:21.807Z",
+  "store": "C:\\Users\\ushab\\.claude\\argus\\pipelines.json",
+  "backup": "C:\\GIT\\Argus\\experiments\\pipeline-cleanup-20261010\\pipelines-before-cleanup.json",
+  "beforeCount": 20,
+  "afterCount": 0,
+  "archived": [
+    {
+      "id": "cb865f26-52b8-4c79-bc4d-f71dd4323ee9",
+      "name": "Workshop Studio — Knowledge-driven development loop"
+    },
+    {
+      "id": "8a4a1975-0cab-49d8-b9ca-46ca22ed511e",
+      "name": "H2 Shadow Evidence — 5 runs per hour"
+    },
+    {
+      "id": "676cd88f-4ba1-4fe8-9637-c03e5ae9ed11",
+      "name": "Decision Ledger - Evidence closure and pipeline development plan"
+    },
+    {
+      "id": "b931a14e-6839-4bbf-b875-15e60c97c525",
+      "name": "Decision Ledger - Final overnight evidence and stopping decision"
+    },
+    {
+      "id": "b9c7c15c-ea0c-4033-9c76-beec1e75618e",
+      "name": "Decision closeout D1 - deadline"
+    },
+    {
+      "id": "a03c5127-beb5-4c16-82a7-a323ea6f0236",
+      "name": "Decision closeout D2 - deadline"
+    },
+    {
+      "id": "e3bdeeb4-854c-4267-8c70-a1d0bc4f0990",
+      "name": "Decision closeout D3 - deadline"
+    },
+    {
+      "id": "7817d10e-173d-41e7-8e4d-ce6edc5e9b5b",
+      "name": "Decision closeout D4 - deadline"
+    },
+    {
+      "id": "ed683c7f-5223-4fc3-bdf6-79957c8a537a",
+      "name": "Decision closeout E1 - evidence-limit"
+    },
+    {
+      "id": "8ab7e237-975f-48ce-afc1-bf0e7178eeed",
+      "name": "Decision closeout E2 - evidence-limit"
+    },
+    {
+      "id": "1ae1e164-b565-480a-9d4e-c0d258a11757",
+      "name": "Decision closeout I1 - untrusted-text"
+    },
+    {
+      "id": "6e233c2c-f257-4c44-802b-6aa2eb10282f",
+      "name": "Decision closeout I2 - untrusted-text"
+    },
+    {
+      "id": "13674de5-ed8a-467e-88ae-4fc0c462a8eb",
+      "name": "Decision closeout M1 - missing-input"
+    },
+    {
+      "id": "25bfc7ed-5fab-4f86-8c52-f307c0b8bdd2",
+      "name": "Decision closeout M2 - missing-input"
+    },
+    {
+      "id": "ed5f4863-ec04-46d2-ad6e-77bc5e057921",
+      "name": "Decision closeout N1 - normal"
+    },
+    {
+      "id": "5da5ecea-e0cc-4808-b1a6-3938296c9a5e",
+      "name": "Decision closeout N2 - normal"
+    },
+    {
+      "id": "53d6d2ab-38f7-4c23-91d8-6f1a9c04aa4f",
+      "name": "Decision closeout P1 - tool-denial"
+    },
+    {
+      "id": "8c94e6d6-4511-4f44-9d2f-f08cdaa2f0f5",
+      "name": "Decision closeout P2 - capability-limit"
+    },
+    {
+      "id": "5072f154-abb4-4b82-99a5-c9d3cd1876ac",
+      "name": "Decision closeout T1 - contradiction"
+    },
+    {
+      "id": "10a73fc8-f76c-43f4-8146-0576644e91ac",
+      "name": "Decision closeout T2 - contradiction"
+    }
+  ],
+  "originalSha256": "5cab7077a213594797ea0fba622b8a92e953fde4638f3e902ba99d78f3e4b7e5",
+  "currentSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+  "storeVerified": true,
+  "preservedFiles": 1281,
+  "historyAndLedgerHashesUnchanged": true,
+  "liveReloadVerified": false,
+  "liveReloadLimitation": "Local Argus port 7777 refused connections; cleanup verified in persisted store."
+}

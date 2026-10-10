@@ -1,0 +1,38 @@
+{
+  "format": "argus.independent-closeout-plan-review",
+  "date": "2026-10-09",
+  "reviewType": "independent-agent-document-review-not-human-labeling",
+  "decision": "accept-corrected-development-direction; defer-new-consumer-release",
+  "applicationCodeChanged": false,
+  "testsRun": false,
+  "correctEvidenceSeparation": true,
+  "ownedAssessmentAccountingReviewed": {"assessed": 22, "answered": 20, "providerFailed": 2, "probeAnsweredCorrect": 14, "probeAnswered": 15, "probeSelected": 16},
+  "limitations": [
+    "Both true deadline answers use class-bearing schedule metadata; no blind recognition or calibration claim",
+    "Residual cause references absent; agent reviews are not human labels",
+    "P1 tool denial is not process termination",
+    "API reload after local cleanup is unverified",
+    "Scheduled Codex analyses failed; final artifacts are coordinator synthesis",
+    "Illustrative sample sizes and repeat counts are not demonstrated safety"
+  ],
+  "requiredReportCorrections": [
+    {"id": "R1", "target": "development-plan.md DL-06", "requirement": "Prepared application intent precedes transition; applied settlement reflects actual durable transition and reconciliation, never intent alone"},
+    {"id": "R2", "target": "implementation-backlog.json DL-07", "requirement": "Explicit DL-09 release dependency for tested drift, disable and recovery runbook"},
+    {"id": "R3", "target": "final-report.md build sequence", "requirement": "Runbook readiness before engine release; artifact links may follow DL-05 independently"}
+  ],
+  "releasePrerequisites": [
+    "Read isolation and retained evidence/currency fidelity",
+    "Exact provider/question/projection/attempt/state/artifact/criterion identities",
+    "Failed/no-output/unknown-cost states remain explicit and never favorable",
+    "Supported runtime/model preflight before budgeted evaluation",
+    "Neutral metadata and audited frozen input without label leakage",
+    "Independent taxonomy and genuine prospective references",
+    "Consumer-specific loss function and preregistered class-specific thresholds",
+    "Final state recheck, idempotent applied settlement and crash/restart reconciliation",
+    "Tested consumer disable, recovery, rollback and drift readiness"
+  ],
+  "mathematics": {"wilson95ZeroError5PercentN": 73, "wilson95ZeroError1PercentN": 381, "validity": "Illustrative independent class-specific trials only; not evidence of passing release gates"},
+  "correctionResolution": {"R1": "Applied and verified in development-plan.md and backlog policyApplicationSemantics", "R2": "Applied and verified DL-07 depends on DL-06 and DL-09", "R3": "Applied and verified final-report.md runbook readiness before engine release"},
+  "coordinatorFollowup": "Reconcile at or after 08:30 Stockholm and retain API reload limitation unless actually verified",
+  "claimsNotMade": ["New consumers implemented", "Human adjudication completed", "Scheduled analyses succeeded", "API recovered", "Crash recovery exercised live", "Inference calibrated"]
+}

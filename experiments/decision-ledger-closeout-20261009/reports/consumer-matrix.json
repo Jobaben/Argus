@@ -1,0 +1,65 @@
+{
+  "at": "2026-10-09T06:10:17.594Z",
+  "implementedByThisExperiment": false,
+  "consumers": [
+    {
+      "consumer": "Deterministic process termination",
+      "decision": "accept",
+      "scope": "Preserve existing observed termination; model probe used only for evaluation",
+      "releaseEvidence": "Recorded real timeouts and normal-process blocked tasks; P1 high-confidence wrong probe reinforces observation authority"
+    },
+    {
+      "consumer": "Ledger read model and provenance",
+      "decision": "accept-development",
+      "scope": "Extend existing journal with truthful read-only, state-bound access; no second authority store",
+      "releasePrerequisites": [
+        "Focused future implementation tests",
+        "Unknown-cost and failed/abstained/corrupt/unavailable states",
+        "Exact question/provider/projection/attempt/artifact binding",
+        "Read-isolation and replay checks"
+      ]
+    },
+    {
+      "consumer": "Cause summaries and review display",
+      "decision": "accept-development-defer-release",
+      "scope": "Advisory hypotheses linked to evidence; expose uncertainty; retain Autopsy",
+      "releasePrerequisites": [
+        "Visible inference and currency labels",
+        "Independent cause taxonomy and reference adjudication for correctness claims",
+        "Neutral metadata and no active-study leakage"
+      ]
+    },
+    {
+      "consumer": "Pipeline escalation or withholding auto-approval",
+      "decision": "defer",
+      "scope": "Only explicitly authorized escalation consumers; never widen permission",
+      "releasePrerequisites": [
+        "Prospective genuine operator/reference evidence",
+        "Approved loss function and class-specific thresholds",
+        "Missing/failed/stale assessment fallback",
+        "State recheck and atomic idempotent application",
+        "Audited rollback and drift monitoring"
+      ]
+    },
+    {
+      "consumer": "Automatic gate opening or knowledge acceptance",
+      "decision": "reject",
+      "scope": "Assessment cannot confer authority, support, acceptance satisfaction or change canonical knowledge",
+      "releasePrerequisites": []
+    },
+    {
+      "consumer": "Replacing deterministic termination with model inference",
+      "decision": "reject",
+      "scope": "Observed process facts remain authoritative",
+      "releasePrerequisites": []
+    },
+    {
+      "consumer": "Broad repetitive shadow feeder",
+      "decision": "retire",
+      "scope": "Keep paused; use bounded consumer-specific validation for future releases",
+      "releasePrerequisites": [
+        "Future tests use neutral metadata, frozen inputs and pre-agreed thresholds"
+      ]
+    }
+  ]
+}

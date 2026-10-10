@@ -5,8 +5,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createApp } from "./app.js";
 import { createEngine } from "./pipelineEngine.js";
+import { fakeKill } from "./testPlatform.js";
 import type { ArgusConfig } from "./config.js";
 import type { AuthService } from "./auth.js";
+import { testRunToken } from "./testSignalToken.js";
 
 let home: string;
 beforeEach(() => {
@@ -46,7 +48,9 @@ function appWith(over: Partial<Parameters<typeof createEngine>[0]> = {}) {
     newId: () => `id-${Math.random().toString(36).slice(2)}`,
     spawn: hangingSpawn,
     signalUrlBase: "http://127.0.0.1:7777",
+    newSignalToken: testRunToken,
     maxConcurrent: 4,
+    kill: fakeKill().kill,
     ...over,
   });
   const app = createApp({ config, engine, broadcast: () => {}, serveWeb: false, auth: openAuth });
@@ -127,7 +131,13 @@ test("real engine: a valid completed signal advances a non-gated phase and spawn
   const sig = await app.request(`/api/instances/${started.id}/signal`, {
     method: "POST",
     headers: same,
-    body: JSON.stringify({ phaseId: "a", runId, type: "completed", token: inst.signalToken }),
+    body: JSON.stringify({
+      phaseId: "a",
+      runId,
+      type: "completed",
+      token: testRunToken(runId),
+      payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
+    }),
   });
   assert.equal(sig.status, 202);
 
@@ -159,7 +169,7 @@ test("real engine: gated phase → needs-input pauses, approve advances to the n
       phaseId: "a",
       runId: inst.phases[0].steps[0].runId,
       type: "needs-input",
-      token: inst.signalToken,
+      token: testRunToken(inst.phases[0].steps[0].runId),
       payload: "Q?",
     }),
   });
@@ -192,7 +202,7 @@ test("real engine: revise re-runs the paused phase (200, back to running)", asyn
       phaseId: "a",
       runId: inst.phases[0].steps[0].runId,
       type: "needs-input",
-      token: inst.signalToken,
+      token: testRunToken(inst.phases[0].steps[0].runId),
     }),
   });
   assert.equal((await getInstance(app, started.id)).status, "awaiting-approval");
@@ -289,4 +299,63 @@ test("real engine: instance + overview reads reflect the started instance", asyn
     overview: unknown[];
   };
   assert.equal(overview.overview.length, 1);
+});
+
+// ── Gate decision provenance over HTTP (Phase 0) ────────────────────────────
+
+test("regression: an approval's principal comes from the session; a body claiming to be someone is ignored", async () => {
+  const { app } = appWith();
+  const def = await createTwoPhase(app, true);
+  const start = await app.request(`/api/pipelines/${def.id}/start`, {
+    method: "POST",
+    headers: same,
+  });
+  const started = (await start.json()) as { id: string };
+  const inst = await getInstance(app, started.id);
+  await app.request(`/api/instances/${started.id}/signal`, {
+    method: "POST",
+    headers: same,
+    body: JSON.stringify({
+      phaseId: "a",
+      runId: inst.phases[0].steps[0].runId,
+      type: "needs-input",
+      token: testRunToken(inst.phases[0].steps[0].runId),
+    }),
+  });
+
+  const approve = await app.request(`/api/instances/${started.id}/approve`, {
+    method: "POST",
+    headers: same,
+    body: JSON.stringify({
+      actor: "human",
+      mechanism: "operator",
+      principal: { kind: "session", username: "mallory", role: "root" },
+      source: { channel: "http", principal: { kind: "session", username: "mallory" } },
+    }),
+  });
+  assert.equal(approve.status, 200);
+
+  const read = await app.request(`/api/instances/${started.id}/gate-decisions`, {
+    headers: loopback,
+  });
+  assert.equal(read.status, 200);
+  const body = (await read.json()) as {
+    decisions: Array<{ mechanism: string; channel: string; principal: unknown; effect: string }>;
+    undocumented: unknown[];
+  };
+  assert.equal(body.decisions.length, 1);
+  assert.equal(body.decisions[0].mechanism, "operator");
+  assert.equal(body.decisions[0].channel, "http");
+  assert.deepEqual(body.decisions[0].principal, {
+    kind: "session",
+    username: "admin",
+    role: "root",
+  });
+  assert.equal(body.decisions[0].effect, "applied");
+});
+
+test("the gate-decision read is a 404 for an instance Argus has never heard of", async () => {
+  const { app } = appWith();
+  const res = await app.request(`/api/instances/nope/gate-decisions`, { headers: loopback });
+  assert.equal(res.status, 404);
 });

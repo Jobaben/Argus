@@ -123,11 +123,19 @@ export default function Stats() {
 
   return (
     <Page title="Usage stats">
-      <p className="mb-6 text-sm text-ink-faint">
+      <p className="mb-1 text-sm text-ink-faint">
         Aggregate Claude Code usage across all projects
         {stats?.lastComputedDate && (
           <span className="text-ink-faint"> · computed {stats.lastComputedDate}</span>
         )}
+      </p>
+      <p className="mb-6 max-w-prose text-xs text-ink-faint">
+        Claude Code's own telemetry, interactive sessions included. What the runs Argus launched
+        cost is a different ledger, under{" "}
+        <a href="#/budget" className="text-queue underline hover:text-ink">
+          Budget
+        </a>
+        .
       </p>
 
       {error && (

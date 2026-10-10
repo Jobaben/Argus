@@ -1,0 +1,517 @@
+{
+  "collection": {
+    "enabled": false,
+    "reasons": [
+      "ARGUS_DECISIONS_H1_COLLECT is not on"
+    ],
+    "settings": {
+      "rate": 1,
+      "seed": "argus-h1",
+      "models": [
+        null
+      ],
+      "maxCallsPer24h": 20,
+      "maxOwnCallsPer24h": 10,
+      "minCallIntervalMs": 900000,
+      "maxUsdPer24h": 1
+    },
+    "watcher": {
+      "state": "inactive",
+      "detail": "ARGUS_DECISIONS_H1_COLLECT is not on",
+      "until": null
+    }
+  },
+  "report": {
+    "report": {
+      "id": "decision-h1-report",
+      "version": 1
+    },
+    "asOf": {
+      "seq": 0,
+      "at": null
+    },
+    "statement": "Agreement here is agreement with what the operator did at the gate: behaviour, not correctness. An approved attempt may still be wrong and a revised one may have been fine. No figure in this report can justify skipping review.",
+    "collection": {
+      "start": null,
+      "configs": []
+    },
+    "definitions": [
+      {
+        "kind": "question",
+        "id": "gate.operator-action",
+        "version": 1,
+        "digest": "11c9144c87f385eff1a0781422c4c8eeecb79b86f1063d209ec68d6779534ad1",
+        "status": "registered"
+      },
+      {
+        "kind": "projection",
+        "id": "gate-review",
+        "version": 1,
+        "digest": "da70aaae8038b7741f95609f6718c18de570b99fb67d00fadaf000b2d39596ef",
+        "status": "registered"
+      },
+      {
+        "kind": "rules",
+        "id": "gate-operator-action.rules",
+        "version": 1,
+        "digest": "711cdd8c7d82c14f7ecef37ef6ce314afc7357ff97b7a55aa34c010ec5e16c09",
+        "status": "registered"
+      },
+      {
+        "kind": "qualification",
+        "id": "auto-approval-qualification",
+        "version": 1,
+        "digest": "b2041f398f64873dd7914452ed0f46a9ec3cc6d7a7dc863d0addb3a8c937ede1",
+        "status": "registered"
+      }
+    ],
+    "gates": {
+      "excluded": {}
+    },
+    "census": [
+      {
+        "population": "manual",
+        "captured": 0,
+        "sampled": 0,
+        "notSampled": 0,
+        "pending": 0,
+        "resolved": 0,
+        "windowClosed": 0,
+        "labeled": {
+          "sentBack": 0,
+          "notSentBack": 0,
+          "approve": 0,
+          "revise": 0,
+          "abort": 0
+        },
+        "unlabeled": {},
+        "state": {
+          "held": 0,
+          "changed": 0,
+          "unobserved": 0
+        },
+        "principals": {},
+        "notCalled": {}
+      },
+      {
+        "population": "auto-approve-declared",
+        "captured": 0,
+        "sampled": 0,
+        "notSampled": 0,
+        "pending": 0,
+        "resolved": 0,
+        "windowClosed": 0,
+        "labeled": {
+          "sentBack": 0,
+          "notSentBack": 0,
+          "approve": 0,
+          "revise": 0,
+          "abort": 0
+        },
+        "unlabeled": {},
+        "state": {
+          "held": 0,
+          "changed": 0,
+          "unobserved": 0
+        },
+        "principals": {},
+        "notCalled": {}
+      }
+    ],
+    "pending": {
+      "total": 0,
+      "byPopulation": {
+        "manual": 0,
+        "auto-approve-declared": 0
+      }
+    },
+    "deterministic": [
+      {
+        "population": "manual",
+        "definition": {
+          "id": "gate-operator-action.rules",
+          "version": 1,
+          "digest": "711cdd8c7d82c14f7ecef37ef6ce314afc7357ff97b7a55aa34c010ec5e16c09"
+        },
+        "scored": 0,
+        "agreement": {
+          "columns": [
+            "flag",
+            "no-flag",
+            "insufficient-data"
+          ],
+          "sentBackColumn": "flag",
+          "approveColumn": "no-flag",
+          "decidedColumns": [
+            "flag",
+            "no-flag"
+          ],
+          "confusion": {
+            "rows": [
+              "sent-back",
+              "not-sent-back"
+            ],
+            "columns": [
+              "flag",
+              "no-flag",
+              "insufficient-data"
+            ],
+            "counts": [
+              [
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0
+              ]
+            ]
+          },
+          "scored": 0,
+          "answered": 0,
+          "coverage": {
+            "k": 0,
+            "n": 0,
+            "value": null,
+            "ci95": null
+          },
+          "agreementAnswered": {
+            "k": 0,
+            "n": 0,
+            "value": null,
+            "ci95": null
+          },
+          "agreementEndToEnd": {
+            "k": 0,
+            "n": 0,
+            "value": null,
+            "ci95": null
+          },
+          "falseClose": {
+            "k": 0,
+            "n": 0,
+            "value": null,
+            "ci95": null
+          },
+          "falseEscalation": {
+            "k": 0,
+            "n": 0,
+            "value": null,
+            "ci95": null
+          },
+          "kappa": {
+            "status": "unmeasured",
+            "reason": "no answered item in the scoring set"
+          }
+        }
+      },
+      {
+        "population": "auto-approve-declared",
+        "definition": {
+          "id": "gate-operator-action.rules",
+          "version": 1,
+          "digest": "711cdd8c7d82c14f7ecef37ef6ce314afc7357ff97b7a55aa34c010ec5e16c09"
+        },
+        "scored": 0,
+        "agreement": {
+          "columns": [
+            "flag",
+            "no-flag",
+            "insufficient-data"
+          ],
+          "sentBackColumn": "flag",
+          "approveColumn": "no-flag",
+          "decidedColumns": [
+            "flag",
+            "no-flag"
+          ],
+          "confusion": {
+            "rows": [
+              "sent-back",
+              "not-sent-back"
+            ],
+            "columns": [
+              "flag",
+              "no-flag",
+              "insufficient-data"
+            ],
+            "counts": [
+              [
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0
+              ]
+            ]
+          },
+          "scored": 0,
+          "answered": 0,
+          "coverage": {
+            "k": 0,
+            "n": 0,
+            "value": null,
+            "ci95": null
+          },
+          "agreementAnswered": {
+            "k": 0,
+            "n": 0,
+            "value": null,
+            "ci95": null
+          },
+          "agreementEndToEnd": {
+            "k": 0,
+            "n": 0,
+            "value": null,
+            "ci95": null
+          },
+          "falseClose": {
+            "k": 0,
+            "n": 0,
+            "value": null,
+            "ci95": null
+          },
+          "falseEscalation": {
+            "k": 0,
+            "n": 0,
+            "value": null,
+            "ci95": null
+          },
+          "kappa": {
+            "status": "unmeasured",
+            "reason": "no answered item in the scoring set"
+          }
+        }
+      }
+    ],
+    "verdict": [
+      {
+        "population": "manual",
+        "definition": {
+          "id": "auto-approval-qualification",
+          "version": 1,
+          "digest": "b2041f398f64873dd7914452ed0f46a9ec3cc6d7a7dc863d0addb3a8c937ede1"
+        },
+        "scored": 0,
+        "agreement": {
+          "columns": [
+            "below-threshold",
+            "qualifies",
+            "not-configured",
+            "ineligible",
+            "insufficient-data"
+          ],
+          "sentBackColumn": "below-threshold",
+          "approveColumn": "qualifies",
+          "decidedColumns": [
+            "below-threshold",
+            "qualifies"
+          ],
+          "confusion": {
+            "rows": [
+              "sent-back",
+              "not-sent-back"
+            ],
+            "columns": [
+              "below-threshold",
+              "qualifies",
+              "not-configured",
+              "ineligible",
+              "insufficient-data"
+            ],
+            "counts": [
+              [
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                0
+              ]
+            ]
+          },
+          "scored": 0,
+          "answered": 0,
+          "coverage": {
+            "k": 0,
+            "n": 0,
+            "value": null,
+            "ci95": null
+          },
+          "agreementAnswered": {
+            "k": 0,
+            "n": 0,
+            "value": null,
+            "ci95": null
+          },
+          "agreementEndToEnd": {
+            "k": 0,
+            "n": 0,
+            "value": null,
+            "ci95": null
+          },
+          "falseClose": {
+            "k": 0,
+            "n": 0,
+            "value": null,
+            "ci95": null
+          },
+          "falseEscalation": {
+            "k": 0,
+            "n": 0,
+            "value": null,
+            "ci95": null
+          },
+          "kappa": {
+            "status": "unmeasured",
+            "reason": "no answered item in the scoring set"
+          }
+        },
+        "auroc": {
+          "status": "unmeasured",
+          "reason": "needs both classes: 0 sent back, 0 not sent back"
+        }
+      },
+      {
+        "population": "auto-approve-declared",
+        "definition": {
+          "id": "auto-approval-qualification",
+          "version": 1,
+          "digest": "b2041f398f64873dd7914452ed0f46a9ec3cc6d7a7dc863d0addb3a8c937ede1"
+        },
+        "scored": 0,
+        "agreement": {
+          "columns": [
+            "below-threshold",
+            "qualifies",
+            "not-configured",
+            "ineligible",
+            "insufficient-data"
+          ],
+          "sentBackColumn": "below-threshold",
+          "approveColumn": "qualifies",
+          "decidedColumns": [
+            "below-threshold",
+            "qualifies"
+          ],
+          "confusion": {
+            "rows": [
+              "sent-back",
+              "not-sent-back"
+            ],
+            "columns": [
+              "below-threshold",
+              "qualifies",
+              "not-configured",
+              "ineligible",
+              "insufficient-data"
+            ],
+            "counts": [
+              [
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                0
+              ]
+            ]
+          },
+          "scored": 0,
+          "answered": 0,
+          "coverage": {
+            "k": 0,
+            "n": 0,
+            "value": null,
+            "ci95": null
+          },
+          "agreementAnswered": {
+            "k": 0,
+            "n": 0,
+            "value": null,
+            "ci95": null
+          },
+          "agreementEndToEnd": {
+            "k": 0,
+            "n": 0,
+            "value": null,
+            "ci95": null
+          },
+          "falseClose": {
+            "k": 0,
+            "n": 0,
+            "value": null,
+            "ci95": null
+          },
+          "falseEscalation": {
+            "k": 0,
+            "n": 0,
+            "value": null,
+            "ci95": null
+          },
+          "kappa": {
+            "status": "unmeasured",
+            "reason": "no answered item in the scoring set"
+          }
+        },
+        "auroc": {
+          "status": "unmeasured",
+          "reason": "needs both classes: 0 sent back, 0 not sent back"
+        }
+      }
+    ],
+    "models": [],
+    "spend": {
+      "attempts": 0,
+      "spent": 0,
+      "usdTotal": 0,
+      "usdUnknown": 0
+    },
+    "methods": {
+      "target": "gate.operator-action@1: will the operator send this phase attempt back (revise or abort) rather than approve it as it stands? p is the probability of sent back",
+      "populations": "manual gates and gates whose definition declares autoApprove are separate populations; model rows are further split by question id, version and digest, projection digest and full provider identity; nothing is pooled",
+      "scoring": "an item is scored when it is settled with an applied operator decision on the exact attempt, its review state held (no drift, and the action bracketed by observations at most 10 minutes apart), and, for a model row, its assessment is present and a post-check after the result saw the attempt still eligible and unchanged",
+      "threshold": "a model predicts sent back when p > 0.5 and approve when p < 0.5; p = 0.5 is a tie, answered but never agreement, never a false close and never a false escalation",
+      "agreement": "agreement with operator behaviour, not correctness: answered-only = agreeing / answered, with coverage = answered / scored; end-to-end = agreeing / scored, where abstentions, failures and coverage gaps count as not agreeing",
+      "falseClose": "predicts approve / operator sent back, over answered items (ties in the denominator)",
+      "falseEscalation": "predicts sent back / operator approved, over answered items (ties in the denominator)",
+      "intervals": "Wilson score interval, 95 % (z = 1.959964); null when n = 0",
+      "brier": "model rows only: mean (p − y)² over answered scored items with a validated probability, y = 1 for sent back; range 0–1",
+      "reliability": "model rows only: 10 equal-width bins of p, bin = min(9, floor(10·p)), mean p against the observed sent-back rate, shown only at n ≥ 20",
+      "ece": "model rows only: n-weighted mean |observed rate − mean p| over non-empty bins, only at N ≥ 200",
+      "kappa": "Cohen's κ over answered items, with tie as a prediction category",
+      "deterministic": "gate-operator-action.rules@1, a rule result (flag / no-flag / insufficient-data) computed at capture from the captured body and recomputed here; never a probability",
+      "verdict": "auto-approval-qualification@1 at capture: qualifies is compared as approve and below-threshold as sent back; not-configured, ineligible and insufficient-data are coverage gaps. The rating (minimum current score over relevant steps) is ordinal: no Brier, calibration or score/10",
+      "auroc": "Verdict rows: Mann–Whitney AUROC with sent back positive and a lower rating expected to mean sent back, ties ½, Hanley–McNeil 95 % interval",
+      "references": "applied operator gate decisions on the exact attempt, retained with the record's digest at settlement; automated, unattributed, incomplete, unapplied, conflicting and unknown records are never references, and unlabeled items are never negatives. A session principal is an account, not proof of a person",
+      "blinding": "only settled items whose attempt left the gate contribute to any cell; unsettled items, including those already called, appear only as pending counts",
+      "percentiles": "nearest-rank"
+    },
+    "integrity": {
+      "history": "complete",
+      "ledger": [],
+      "journal": {
+        "gaps": 0,
+        "notices": []
+      },
+      "findings": []
+    }
+  }
+}

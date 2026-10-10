@@ -1,0 +1,104 @@
+{
+  "default": "claude",
+  "runtimes": [
+    {
+      "id": "claude",
+      "label": "Claude Code",
+      "bin": "claude",
+      "home": "C:\\Users\\ushab\\.claude",
+      "available": true,
+      "isDefault": true,
+      "models": [
+        "opus",
+        "sonnet",
+        "haiku"
+      ],
+      "reasoningEfforts": [],
+      "capabilities": {
+        "presetSessionId": true,
+        "appendSystemPrompt": true,
+        "reportsCost": true,
+        "reportsTokens": true,
+        "signalHook": true,
+        "liveActivity": true,
+        "transcripts": true
+      }
+    },
+    {
+      "id": "codex",
+      "label": "Codex",
+      "bin": "codex",
+      "home": "C:\\Users\\ushab\\.codex",
+      "available": true,
+      "isDefault": false,
+      "models": [
+        "gpt-6.1-sol",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna"
+      ],
+      "reasoningEfforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "capabilities": {
+        "presetSessionId": false,
+        "appendSystemPrompt": false,
+        "reportsCost": false,
+        "reportsTokens": true,
+        "signalHook": true,
+        "liveActivity": true,
+        "transcripts": true
+      }
+    },
+    {
+      "id": "opencode",
+      "label": "OpenCode",
+      "bin": "opencode",
+      "home": "C:\\Users\\ushab\\.local\\share\\opencode",
+      "available": true,
+      "isDefault": false,
+      "models": [],
+      "reasoningEfforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
+      "capabilities": {
+        "presetSessionId": false,
+        "appendSystemPrompt": false,
+        "reportsCost": true,
+        "reportsTokens": true,
+        "signalHook": false,
+        "liveActivity": true,
+        "transcripts": false
+      }
+    },
+    {
+      "id": "qwen",
+      "label": "Qwen Code",
+      "bin": "qwen",
+      "home": "C:\\Users\\ushab\\.qwen",
+      "available": true,
+      "isDefault": false,
+      "models": [
+        "qwen3-coder-plus",
+        "qwen3-coder-flash"
+      ],
+      "reasoningEfforts": [],
+      "capabilities": {
+        "presetSessionId": false,
+        "appendSystemPrompt": false,
+        "reportsCost": false,
+        "reportsTokens": true,
+        "signalHook": true,
+        "liveActivity": true,
+        "transcripts": true
+      }
+    }
+  ]
+}

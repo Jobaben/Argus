@@ -1,5 +1,7 @@
 import { Hono, type Context } from "hono";
+import type { DecisionReader } from "./decision/reader.js";
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { hostname } from "node:os";
 import { claudeHome } from "./claudeHome.js";
 import { codexHome } from "./codexHome.js";
@@ -23,9 +25,17 @@ import {
 } from "./sources/autopsy.js";
 import { analysisEnabled, createAnalysisRunner, type AnalysisRunner } from "./sources/analysis.js";
 import {
+  isTuningInFlight,
+  performPipelineTuning,
+  readTuningReport,
+  seedTuningReport,
+  writeTuningReport,
+} from "./sources/tuning.js";
+import {
   buildVerdictTrends,
   failingVerdicts,
   performVerdict,
+  readCurrentVerdicts,
   readVerdict,
   readVerdicts,
 } from "./sources/verdict.js";
@@ -59,13 +69,14 @@ import {
   createSchedule,
   deleteSchedule,
   readSchedulesWithNext,
+  rotateScheduleHookToken,
   updateSchedule,
   validateInput,
   validatePatch,
   ScheduleValidationError,
   readSchedules,
 } from "./sources/schedules.js";
-import { readRun, readRuns, cancelRun } from "./sources/runs.js";
+import { readInvocation, readRun, readRuns, cancelRun } from "./sources/runs.js";
 import { buildMonitors } from "./sources/monitors.js";
 import {
   buildIssues,
@@ -79,12 +90,16 @@ import {
   createPipeline,
   deletePipeline,
   readPipelines,
+  rotatePipelineHookToken,
   updatePipeline,
   validatePipelinePatch,
   validatePipelineInput,
   PipelineValidationError,
+  type PipelineInput,
 } from "./sources/pipelines.js";
 import { readInstance, readInstances } from "./sources/instances.js";
+import { deriveReliability, withStepMetrics } from "./sources/reliability.js";
+import { buildPhaseReview, readPhaseArtifact, resolveArtifactPath } from "./sources/artifacts.js";
 import {
   buildBriefing,
   clampSince,
@@ -133,17 +148,25 @@ import {
 import { newSecret, pairingId, seal } from "./federation/envelope.js";
 import { buildSummary } from "./federation/summary.js";
 import { buildFleet } from "./federation/fleet.js";
-import type { MachineSummary } from "@argus/contracts";
+import type {
+  GateDecisionPrincipal,
+  H1CollectionStatus,
+  H2CollectionStatus,
+  MachineSummary,
+} from "@argus/contracts";
+import { buildGateDecisionsResponse, readGateDecisions } from "./sources/gateDecisions.js";
+import { readTransitionLog } from "./transitionLog/store.js";
+import { compareIntegrity } from "./transitionLog/fold.js";
 import { buildOverview } from "./sources/overview.js";
 import { buildPalette } from "./sources/palette.js";
 import { buildSituation } from "./sources/insight.js";
 import { PreflightError, type Engine } from "./pipelineEngine.js";
-import type { PipelineSignal } from "./sources/pipelineTypes.js";
+import type { PipelineDefinition, PipelineSignal } from "./sources/pipelineTypes.js";
 import type { ActivityEvent } from "./runTailer.js";
 import { defaultSpawn, fireOneOff, fireRun, isAlive } from "./scheduler.js";
 import { LaunchValidationError, validateLaunchInput } from "./sources/launch.js";
 import type { ArgusConfig } from "./config.js";
-import { securityMiddleware } from "./security.js";
+import { safeEqual, securityMiddleware } from "./security.js";
 import { conditionalGet } from "./httpCache.js";
 import { requestLog } from "./requestLog.js";
 import { log } from "./log.js";
@@ -166,7 +189,10 @@ import {
   type UserStore,
 } from "./userStore.js";
 import { VERSION } from "./version.js";
+import { knowledgeRoutes } from "./knowledge/routes.js";
 import { mountWebApp } from "./static.js";
+import { readH1ReportResponse } from "./decision/h1/entry.js";
+import { readH2ReportResponse } from "./decision/h2/entry.js";
 import { buildRunFailurePayload, postWebhook } from "./notify.js";
 
 /** The window the pruned JSON run files can still answer on their own. */
@@ -194,6 +220,8 @@ export interface AppDeps {
   fleet?: () => { summaries: Map<string, MachineSummary>; health: Map<string, PeerHealth> };
   /** Latest activity per running step run, from the run tailer. */
   activity?: () => Map<string, ActivityEvent>;
+  /** The retained activity of one running step run, oldest first. */
+  activityLog?: (runId: string) => ActivityEvent[];
   /** Admin auth for pipeline edit/run routes. Defaults to the real service. */
   auth?: AuthService;
   /** User accounts backing auth. Defaults to the real store. */
@@ -202,6 +230,13 @@ export interface AppDeps {
   remoteAddr?: (c: Context) => string | null;
   /** Bounded analysis runner (Autopsy). Defaults to the real one. */
   analysis?: AnalysisRunner;
+  /**
+   * The H2 shadow collection's live, in-memory state (RFC §P). Reading it
+   * calls nothing. Absent = derived from the environment alone.
+   */
+  decisionsH2Status?: () => H2CollectionStatus;
+  decisionsH1Status?: () => H1CollectionStatus;
+  decisionsReader?: DecisionReader;
 }
 
 /**
@@ -278,7 +313,12 @@ export function createApp(deps: AppDeps): Hono {
   // and the ETag layer wraps the handler's body, so it sits inside the security
   // gate (a rejected request never gets a tag) but outside every route.
   app.use("/api/*", requestLog());
-  app.use("/api/*", securityMiddleware(config));
+  // A session is the browser's credential: it cannot present ARGUS_TOKEN, which
+  // is a server-side env var the page never sees.
+  app.use(
+    "/api/*",
+    securityMiddleware(config, (c) => auth.verify(sessionToken(c)) !== null),
+  );
   app.use("/api/*", conditionalGet());
 
   app.get("/api/health", (c) =>
@@ -310,7 +350,16 @@ export function createApp(deps: AppDeps): Hono {
 
   app.get("/api/auth/status", async (c) => {
     const { configured, username, role } = await auth.status(sessionToken(c));
-    return c.json({ configured, authenticated: username !== null, username, role });
+    return c.json({
+      configured,
+      authenticated: username !== null,
+      username,
+      role,
+      // With a shared token set, a browser has no credential except a session,
+      // so the UI must ask for a login before mounting a dashboard that would
+      // otherwise 401 on every panel.
+      sessionRequired: config.token !== null,
+    });
   });
 
   const LOOPBACK_ADDRS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
@@ -436,11 +485,15 @@ export function createApp(deps: AppDeps): Hono {
   app.on(["POST", "PUT", "PATCH", "DELETE"], "/api/pipelines", admin);
   app.on(["POST", "PUT", "PATCH", "DELETE"], "/api/pipelines/:id", admin);
   app.use("/api/pipelines/:id/start", admin);
+  // Rotating a hook token is a pipeline-definition mutation like any other.
+  app.use("/api/pipelines/:id/hook-token/rotate", admin);
   // Instance gate controls run/steer pipelines. /signal is NOT admin-gated:
   // it is called by headless agent hooks and carries its own per-instance
   // token, verified by the engine.
   // Producing a postmortem spawns an agent; relaunching spawns a real run.
   app.on(["POST"], "/api/runs/:id/autopsy", admin);
+  // Tuning a pipeline's settings spawns one agent pass per phase.
+  app.on(["POST"], "/api/pipelines/:id/tune", admin);
   app.on(["POST"], "/api/runs/:id/verdict", admin);
   // Incident actions mutate shared operator state; diagnosing spawns an agent.
   app.use("/api/sentinel/policy", admin);
@@ -458,6 +511,10 @@ export function createApp(deps: AppDeps): Hono {
   app.use("/api/fleet/label", admin);
   app.use("/api/omnibar/plan", admin);
   app.use("/api/omnibar/execute", admin);
+  // Knowledge Ledger: proposals (claims, revisions, evidence, justifications)
+  // are admin writes; reads stay open like every other dashboard read.
+  app.on(["POST", "PUT", "PATCH", "DELETE"], "/api/knowledge/*", admin);
+  app.route("/api/knowledge", knowledgeRoutes());
 
   app.get("/api/setup", async (c) =>
     c.json(await import("./setup/prereqs.js").then((m) => m.checkAll())),
@@ -562,7 +619,7 @@ export function createApp(deps: AppDeps): Hono {
     if (typeof raw.toModel !== "string" || !/^[A-Za-z0-9._ ()-]{1,80}$/.test(raw.toModel)) {
       return c.json({ error: "toModel is required" }, 400);
     }
-    const [runs, verdicts] = await Promise.all([readRuns(), readVerdicts()]);
+    const [runs, verdicts] = await Promise.all([readRuns(), readCurrentVerdicts()]);
     const windowFloor = Date.now() - 30 * 86_400_000;
     const window = runs.filter((r) => {
       const at = Date.parse(r.endedAt ?? r.startedAt ?? r.queuedAt);
@@ -702,6 +759,18 @@ export function createApp(deps: AppDeps): Hono {
     }
   });
 
+  // Regenerates the schedule's webhook credential. The old token stops
+  // working the instant this returns — an ordinary save never does this.
+  app.post("/api/schedules/:id/hook-token/rotate", async (c) => {
+    try {
+      const updated = await rotateScheduleHookToken(c.req.param("id"), new Date());
+      if (!updated) return c.json({ error: "not found" }, 404);
+      return c.json(updated);
+    } catch (e) {
+      return fail(c, e, ScheduleValidationError);
+    }
+  });
+
   // One-off launch: fire a single agent run right now, no schedule needed.
   app.post("/api/launch", async (c) => {
     const body = await jsonBody(c);
@@ -732,6 +801,24 @@ export function createApp(deps: AppDeps): Hono {
   app.get("/api/runs/:id", async (c) => {
     const got = await readRun(c.req.param("id"));
     return got ? c.json(got) : c.json({ error: "not found" }, 404);
+  });
+
+  // The live activity the tailer has retained for a running pipeline step —
+  // what a client arriving mid-run (the `argus tail` terminal frontend) shows
+  // before the next `run:activity` frame lands. Empty, not 404, for a run the
+  // tailer is not following: a finished step or a batch run has a log to read
+  // via `GET /api/runs/:id`, but no live tail.
+  app.get("/api/runs/:id/activity", (c) =>
+    c.json({ events: deps.activityLog?.(c.req.param("id")) ?? [] }),
+  );
+
+  // What Argus actually launched for a pipeline step: executable, argv, the
+  // environment by name, the capability profile as applied and its
+  // limitations, the config files written for it, the repository state.
+  // Values of environment variables are never recorded, so this is safe to read.
+  app.get("/api/runs/:id/invocation", async (c) => {
+    const record = await readInvocation(c.req.param("id"));
+    return record ? c.json(record) : c.json({ error: "not found" }, 404);
   });
 
   // The Flight Recorder: the run's transcript replayed as a scrubbable causal
@@ -926,15 +1013,20 @@ export function createApp(deps: AppDeps): Hono {
     // Thresholds live on the definitions, not on the stored verdicts: an author
     // who tightens the bar should see the new line on the old history.
     const minScores = new Map<string, number | null>();
+    // Trajectory scores have their own bar and their own trend lines.
+    const trajectoryMinScores = new Map<string, number | null>();
     for (const s of schedules) {
       minScores.set(`schedule:${s.id}`, s.rubric?.minScore ?? null);
+      trajectoryMinScores.set(`schedule:${s.id}`, s.rubric?.trajectory?.minScore ?? null);
     }
     for (const p of pipelines) {
       for (const phase of p.phases) {
-        minScores.set(`phase:pipeline:${p.id}:${phase.id}`, phase.rubric?.minScore ?? null);
+        const key = `phase:pipeline:${p.id}:${phase.id}`;
+        minScores.set(key, phase.rubric?.minScore ?? null);
+        trajectoryMinScores.set(key, phase.rubric?.trajectory?.minScore ?? null);
       }
     }
-    return c.json(buildVerdictTrends(verdicts, minScores, new Date()));
+    return c.json(buildVerdictTrends(verdicts, minScores, new Date(), trajectoryMinScores));
   });
 
   app.get("/api/runs/:id/verdict", async (c) => {
@@ -944,6 +1036,9 @@ export function createApp(deps: AppDeps): Hono {
     const rubric = rubricFor(got.run, schedules, pipelines);
     return c.json({
       verdict: await readVerdict(got.run.id),
+      // The run's current trajectory judgment, kept apart from its output
+      // verdict; null when none was made (or it has been pruned).
+      trajectory: await readVerdict(got.run.id, "trajectory"),
       rubric,
       unavailable: rubric
         ? analysisEnabled()
@@ -1118,17 +1213,70 @@ export function createApp(deps: AppDeps): Hono {
   });
 
   // PUT replaces via the full-input validator; PATCH merges via the partial one.
+  /**
+   * The definition fields that decide what an instance *executes*. A change to
+   * any of them under a live instance is refused (409) unless `?force=1`. Not
+   * because the edit would reach the instance — it cannot; each instance runs
+   * against the definition it snapshotted at start — but because an author who
+   * fixes a prompt and watches the running instance for the fix would otherwise
+   * wait for something that only the *next* start will show. Name, trigger,
+   * enabled and overlap policy change nothing about work already in flight and
+   * save freely.
+   */
+  const EXECUTION_KEYS = [
+    "phases",
+    "model",
+    "reasoningEffort",
+    "runtime",
+    "capabilities",
+    "workspace",
+    "memory",
+    // Phase-level execution fields — `checks`, `retry`, `workspace`,
+    // `candidates`, `stallSeconds` — are not listed separately: they only
+    // ever arrive inside `phases`, and a per-phase key here would not be a
+    // key of the input. `contextLimits` is left off deliberately: it only
+    // affects how much of a placeholder's *value* reaches the prompt, never
+    // what the phase does, so editing it while an instance is running is safe.
+  ] as const;
+  function changesExecution(current: PipelineDefinition, patch: Partial<PipelineInput>): boolean {
+    return EXECUTION_KEYS.some((k) => k in patch && !isDeepStrictEqual(patch[k], current[k]));
+  }
+  /** Instances that started under the current definition and are still going. */
+  async function liveInstancesOf(pipelineId: string) {
+    return (await readInstances({ pipelineId })).filter(
+      (i) => i.status === "running" || i.status === "awaiting-approval",
+    );
+  }
+
   const pipelineUpdateHandler =
-    (validate: (v: unknown) => Parameters<typeof updatePipeline>[1]) => async (c: Context) => {
+    (validate: (v: unknown) => Partial<PipelineInput>) => async (c: Context) => {
       const body = await jsonBody(c);
       if (!body.ok) return body.res;
       try {
         // Plain `Context` can't infer the :id param type; missing id → "" → 404.
-        const updated = await updatePipeline(
-          c.req.param("id") ?? "",
-          validate(body.value),
-          new Date(),
-        );
+        const id = c.req.param("id") ?? "";
+        const patch = validate(body.value);
+        const current = (await readPipelines()).find((d) => d.id === id);
+        if (!current) return c.json({ error: "not found" }, 404);
+        const force = ["1", "true"].includes(c.req.query("force") ?? "");
+        if (!force && changesExecution(current, patch)) {
+          const live = await liveInstancesOf(id);
+          if (live.length > 0) {
+            const n = live.length;
+            return c.json(
+              {
+                error:
+                  `${n} instance${n === 1 ? " is" : "s are"} running under "${current.name}". ` +
+                  "They keep the definition they started with; this edit applies to the next " +
+                  "start only. Repeat with ?force=1 to save it anyway.",
+                code: "instances-running",
+                instances: live.map((i) => ({ id: i.id, status: i.status })),
+              },
+              409,
+            );
+          }
+        }
+        const updated = await updatePipeline(id, patch, new Date());
         if (!updated) return c.json({ error: "not found" }, 404);
         return c.json(updated);
       } catch (e) {
@@ -1156,9 +1304,184 @@ export function createApp(deps: AppDeps): Hono {
     }
   });
 
+  // Regenerates the pipeline's webhook credential. The old token stops
+  // working the instant this returns — an ordinary save never does this.
+  app.post("/api/pipelines/:id/hook-token/rotate", async (c) => {
+    try {
+      const updated = await rotatePipelineHookToken(c.req.param("id"), new Date());
+      if (!updated) return c.json({ error: "not found" }, 404);
+      return c.json(updated);
+    } catch (e) {
+      return fail(c, e, PipelineValidationError);
+    }
+  });
+
   app.get("/api/pipelines/:id/instances", async (c) =>
     c.json({ instances: await readInstances({ pipelineId: c.req.param("id") }) }),
   );
+
+  // First-attempt pass rate, lucky passes and stalls over a trailing window —
+  // see sources/reliability.ts for the derivation and its "first attempt" rule.
+  app.get("/api/pipelines/:id/reliability", async (c) => {
+    const id = c.req.param("id");
+    const def = (await readPipelines()).find((d) => d.id === id);
+    if (!def) return c.json({ error: "not found" }, 404);
+    const daysRaw = Number(c.req.query("days"));
+    const days = Number.isFinite(daysRaw) ? Math.min(365, Math.max(1, daysRaw)) : 30;
+    const [instances, runs] = await Promise.all([readInstances({ pipelineId: id }), readRuns()]);
+    return c.json(deriveReliability(id, withStepMetrics(instances, runs), new Date(), days));
+  });
+
+  // ── Tuning ────────────────────────────────────────────────────────────────
+  // Reading a report is open; producing one spawns an agent per phase, so the
+  // POST sits behind the admin gate. Nothing here writes to the definition: a
+  // proposal is applied by the client through the ordinary pipeline update,
+  // with its validators and its running-instances refusal.
+
+  app.get("/api/pipelines/:id/tune", async (c) => {
+    const id = c.req.param("id");
+    const def = (await readPipelines()).find((d) => d.id === id);
+    if (!def) return c.json({ error: "not found" }, 404);
+    const report = await readTuningReport(def.id);
+    return c.json({
+      report,
+      unavailable: analysisEnabled() ? null : "tuning passes are disabled (ARGUS_ANALYSIS=off)",
+    });
+  });
+
+  app.post("/api/pipelines/:id/tune", async (c) => {
+    const id = c.req.param("id");
+    const def = (await readPipelines()).find((d) => d.id === id);
+    if (!def) return c.json({ error: "not found" }, 404);
+    const now = new Date();
+    if (isTuningInFlight(await readTuningReport(def.id), now)) {
+      return c.json({ error: "a tuning pass is already running for this pipeline" }, 409);
+    }
+    const seed = await writeTuningReport(seedTuningReport(def, randomUUID(), now));
+    broadcast({ type: "tuning:changed" });
+    // Not awaited: one pass per phase at up to 90s each would hold the request
+    // open for minutes. The report is persisted after every phase and the
+    // client re-fetches on each ping.
+    void performPipelineTuning(def, seed, {
+      runner: analysis,
+      now: () => new Date(),
+      onProgress: async () => broadcast({ type: "tuning:changed" }),
+    }).catch((err) => log.error("tuning pass failed", { pipelineId: def.id, err }));
+    return c.json({ report: seed, unavailable: null }, 202);
+  });
+
+  // ── Webhooks ──────────────────────────────────────────────────────────────
+  // POST /api/hooks/{pipelines,schedules}/:id — fires a definition whose
+  // trigger is `kind: "webhook"`. Authenticated by that definition's own
+  // `hookToken` (see security.ts's `isHookRoute`, which exempts these two
+  // routes from the shared `ARGUS_TOKEN` gate and the Origin/CSRF check, but
+  // not from the Host allowlist), never by `ARGUS_TOKEN` itself. Reaching this
+  // route from another machine needs the same `ARGUS_HOST`/`ARGUS_TOKEN` setup
+  // any non-loopback bind already requires — see README.md and docs/API.md.
+
+  const MAX_HOOK_BODY_BYTES = 64 * 1024;
+
+  function hookBearer(header: string | undefined): string | null {
+    if (!header) return null;
+    const m = /^Bearer\s+(.+)$/i.exec(header.trim());
+    return m ? m[1] : null;
+  }
+
+  /** Reads and JSON-parses the webhook body, capped at 64 KiB. An empty body
+   *  is a valid webhook (no payload); anything over the cap is a 413 before
+   *  it is ever parsed. */
+  async function hookBody(
+    c: Context,
+  ): Promise<{ ok: true; value: unknown } | { ok: false; res: Response }> {
+    const buf = await c.req.arrayBuffer();
+    if (buf.byteLength > MAX_HOOK_BODY_BYTES) {
+      return { ok: false, res: c.json({ error: "payload too large" }, 413) };
+    }
+    if (buf.byteLength === 0) return { ok: true, value: undefined };
+    try {
+      return { ok: true, value: JSON.parse(new TextDecoder().decode(buf)) as unknown };
+    } catch {
+      return { ok: false, res: c.json({ error: "invalid JSON body" }, 400) };
+    }
+  }
+
+  app.post("/api/hooks/pipelines/:id", async (c) => {
+    const id = c.req.param("id");
+    const def = (await readPipelines()).find((d) => d.id === id);
+    // Wrong kind and unknown id both 404, identically: a prober guessing ids
+    // learns nothing about which pipelines exist or how they're triggered.
+    if (!def || def.trigger?.kind !== "webhook") return c.json({ error: "not found" }, 404);
+    if (!def.hookToken || !safeEqual(hookBearer(c.req.header("authorization")), def.hookToken)) {
+      return c.json({ error: "unauthorized" }, 401);
+    }
+    if (!def.enabled) return c.json({ error: "pipeline is disabled" }, 409);
+    const body = await hookBody(c);
+    if (!body.ok) return body.res;
+    // Checked here, not left to engine.start()'s own overlap guard, so a
+    // skip can name the instance already in flight instead of just "busy".
+    if (def.overlapPolicy === "skip") {
+      const busy = (await readInstances({ pipelineId: id })).find(
+        (i) => i.status === "running" || i.status === "awaiting-approval",
+      );
+      if (busy) {
+        return c.json(
+          { error: "an instance is already running (overlap=skip)", instanceId: busy.id },
+          409,
+        );
+      }
+    }
+    try {
+      const inst = await engine.start(id, "webhook", { triggerPayload: body.value });
+      if (!inst) return c.json({ error: "an instance is already running (overlap=skip)" }, 409);
+      return c.json({ instanceId: inst.id }, 202);
+    } catch (e) {
+      if (e instanceof PreflightError) return c.json({ error: e.message, reasons: e.reasons }, 412);
+      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+    }
+  });
+
+  app.post("/api/hooks/schedules/:id", async (c) => {
+    const id = c.req.param("id");
+    const schedule = (await readSchedules()).find((s) => s.id === id);
+    if (!schedule || schedule.trigger.kind !== "webhook")
+      return c.json({ error: "not found" }, 404);
+    if (
+      !schedule.hookToken ||
+      !safeEqual(hookBearer(c.req.header("authorization")), schedule.hookToken)
+    ) {
+      return c.json({ error: "unauthorized" }, 401);
+    }
+    if (!schedule.enabled) return c.json({ error: "schedule is disabled" }, 409);
+    // The body is validated (and size-capped) the same way as the pipeline
+    // hook even though a scheduled run has nowhere to carry it: it fires its
+    // prompt exactly like any other scheduled run, per the trigger's own doc.
+    const body = await hookBody(c);
+    if (!body.ok) return body.res;
+    if (schedule.overlapPolicy === "skip") {
+      const live = (await readRuns({ scheduleId: id })).find(
+        (r) => r.status === "running" && isAlive(r.pid),
+      );
+      if (live) {
+        return c.json(
+          { error: "a run is already in progress (overlap=skip)", runId: live.id },
+          409,
+        );
+      }
+    }
+    try {
+      const run = await fireRun(schedule, "webhook", {
+        now: () => new Date(),
+        spawn: defaultSpawn,
+        tickMs: config.schedulerTickMs,
+        newId: () => randomUUID(),
+        onChange: () => broadcast({ type: "schedules:changed" }),
+        onFailure: notifyRunFailed,
+      });
+      return c.json({ runId: run.id }, 202);
+    } catch (e) {
+      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+    }
+  });
 
   app.get("/api/overview", async (c) => {
     const [defs, insts, runs] = await Promise.all([readPipelines(), readInstances(), readRuns()]);
@@ -1261,6 +1584,100 @@ export function createApp(deps: AppDeps): Hono {
     return inst ? c.json(inst) : c.json({ error: "not found" }, 404);
   });
 
+  app.get("/api/decisions/assessments/:id", async (c) => {
+    if (!deps.decisionsReader) return c.json({ ok: false, reason: "reader-unavailable" }, 503);
+    const consumers = c.req.queries("consumer");
+    const runs = c.req.queries("runId");
+    if (consumers?.length !== 1 || runs?.length !== 1 || !consumers[0].trim() || !runs[0].trim()) {
+      return c.json({ ok: false, reason: "invalid-query" }, 400);
+    }
+    const result = await deps.decisionsReader.read({
+      assessmentId: c.req.param("id"),
+      consumerId: consumers[0],
+      subject: { kind: "run", runId: runs[0] },
+    });
+    if (result.ok) return c.json(result);
+    const status =
+      result.reason === "invalid-id"
+        ? 400
+        : result.reason === "unknown-assessment"
+          ? 404
+          : result.reason === "subject-mismatch"
+            ? 409
+            : result.reason === "journal-unavailable"
+              ? 503
+              : result.reason === "malformed-assessment"
+                ? 422
+                : 403;
+    return c.json(result, status);
+  });
+  // The H2 shadow experiment's report (RFC §P.7): a replay of retained
+  // records. Read-only by construction — it never enables collection, never
+  // calls a provider and never re-evaluates. Counts and identities only; no
+  // snapshot body or model rationale leaves the journal here.
+  app.get("/api/decisions/h2", async (c) =>
+    c.json(await readH2ReportResponse(deps.decisionsH2Status)),
+  );
+
+  // The H1 shadow experiment's report (RFC §Q.11). Read-only like H2's, and
+  // blinded: only gates whose attempt has been settled contribute; a pending
+  // gate appears only in aggregate counts, so nothing here can show an
+  // operator the prediction for a gate still waiting on them.
+  app.get("/api/decisions/h1", async (c) =>
+    c.json(await readH1ReportResponse(deps.decisionsH1Status)),
+  );
+
+  /**
+   * Who or what decided each gate of an instance, with whether each decision
+   * took effect. Works after the instance is pruned (effects then read
+   * `unknown`); gates decided before decisions were recorded are listed as
+   * `undocumented`, never attributed.
+   */
+  app.get("/api/instances/:id/gate-decisions", async (c) => {
+    const id = c.req.param("id");
+    const [inst, records] = await Promise.all([readInstance(id), readGateDecisions(id)]);
+    if (!inst && records.length === 0) return c.json({ error: "not found" }, 404);
+    return c.json(buildGateDecisionsResponse(id, inst, records));
+  });
+
+  // The instance's transition log, compared with the saved instance
+  // (contracts/src/transitions.ts). Diagnostic only: it never repairs either,
+  // and nothing reads it to decide what the engine does next.
+  app.get("/api/instances/:id/transitions/integrity", async (c) => {
+    const id = c.req.param("id");
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(id)) return c.json({ error: "not found" }, 404);
+    const [inst, log] = await Promise.all([readInstance(id), readTransitionLog(id)]);
+    if (!inst && !log.present) return c.json({ error: "not found" }, 404);
+    return c.json(compareIntegrity(id, inst, log));
+  });
+
+  // ── Gated artifact review ─────────────────────────────────────────────────
+  // What a paused phase left for a human to look at, derived per read from the
+  // instance and its artifact directory. Reads stay open like every other read;
+  // the decision itself goes through the admin-gated approve/revise beside them.
+  app.get("/api/instances/:id/phases/:phaseId/review", async (c) => {
+    const inst = await readInstance(c.req.param("id"));
+    if (!inst) return c.json({ error: "not found" }, 404);
+    const def = inst.definition ?? (await readPipelines()).find((d) => d.id === inst.pipelineId);
+    const res = await buildPhaseReview(inst, c.req.param("phaseId"), def);
+    return res.ok ? c.json(res.review) : c.json({ error: res.error }, res.code);
+  });
+
+  app.get("/api/instances/:id/phases/:phaseId/artifact", async (c) => {
+    const rel = c.req.query("path");
+    if (!rel) return c.json({ error: "path is required" }, 400);
+    const inst = await readInstance(c.req.param("id"));
+    if (!inst) return c.json({ error: "not found" }, 404);
+    const phase = inst.phases.find((p) => p.id === c.req.param("phaseId"));
+    if (!phase) return c.json({ error: "not found" }, 404);
+    if (!phase.artifactDir) return c.json({ error: "phase has no artifact directory" }, 404);
+    if (resolveArtifactPath(phase.artifactDir, rel) === null) {
+      return c.json({ error: "path escapes the artifact directory" }, 400);
+    }
+    const content = await readPhaseArtifact(phase.artifactDir, rel);
+    return content ? c.json(content) : c.json({ error: "not found" }, 404);
+  });
+
   app.post("/api/instances/:id/signal", async (c) => {
     const parsed = await jsonBody(c);
     if (!parsed.ok) return parsed.res;
@@ -1277,6 +1694,10 @@ export function createApp(deps: AppDeps): Hono {
       // against the phase's schema, so no shape is assumed here.
       ...(body.result === undefined ? {} : { result: body.result }),
       ...(typeof body.resultError === "string" ? { resultError: body.resultError } : {}),
+      // The hook's own version and marker reading (hook v2+), verbatim and
+      // untrusted: the engine validates it and only compares it against its
+      // own reading of the final message.
+      ...(body.completion === undefined ? {} : { completion: body.completion }),
     };
     const res = await engine.onSignal(id, signal);
     return c.json({ ok: res.ok }, res.code as 200 | 202 | 403 | 404);
@@ -1288,18 +1709,64 @@ export function createApp(deps: AppDeps): Hono {
       ? ((body.value as Record<string, unknown>)[key] as T | undefined)
       : undefined;
 
+  // `phaseId` names which paused phase is meant when a fan-out has several
+  // waiting; absent, the single paused phase. See `ApproveRequest`/`ReviseRequest`.
+  // `attempt`, when given, binds the decision to the attempt the operator
+  // looked at: the engine refuses it if the phase has moved on since.
+  const phaseTarget = (body: Awaited<ReturnType<typeof jsonBody>>) => {
+    const phaseId = optionalField<unknown>(body, "phaseId");
+    const attempt = optionalField<unknown>(body, "attempt");
+    return {
+      ...(typeof phaseId === "string" && phaseId ? { phaseId } : {}),
+      ...(typeof attempt === "number" && Number.isInteger(attempt) && attempt >= 0
+        ? { attempt }
+        : {}),
+    };
+  };
+
+  /**
+   * Who is deciding, as the server established it: the authenticated session
+   * these routes require. Nothing in the request body is consulted — a client
+   * that sends `actor`, `principal` or `mechanism` fields is ignored, because
+   * a claim of being a person is not evidence of being one.
+   */
+  const operatorPrincipal = (c: Context): GateDecisionPrincipal => {
+    const session = auth.verify(sessionToken(c));
+    return session
+      ? { kind: "session", username: session.username, role: session.role }
+      : { kind: "unknown" };
+  };
+
   app.post("/api/instances/:id/approve", async (c) => {
-    const answers = optionalField<unknown>(await jsonBody(c), "answers");
-    return engineReply(c, await engine.approve(c.req.param("id"), answers));
+    const body = await jsonBody(c);
+    const answers = optionalField<unknown>(body, "answers");
+    const source = { channel: "http" as const, principal: operatorPrincipal(c) };
+    return engineReply(
+      c,
+      await engine.approve(c.req.param("id"), answers, { ...phaseTarget(body), source }),
+    );
   });
 
   app.post("/api/instances/:id/revise", async (c) => {
-    const note = optionalField<string>(await jsonBody(c), "note");
-    return engineReply(c, await engine.revise(c.req.param("id"), note));
+    const body = await jsonBody(c);
+    const note = optionalField<unknown>(body, "note");
+    const source = { channel: "http" as const, principal: operatorPrincipal(c) };
+    return engineReply(
+      c,
+      await engine.revise(c.req.param("id"), typeof note === "string" ? note : undefined, {
+        ...phaseTarget(body),
+        source,
+      }),
+    );
   });
 
   app.post("/api/instances/:id/abort", async (c) =>
-    engineReply(c, await engine.abort(c.req.param("id"))),
+    engineReply(
+      c,
+      await engine.abort(c.req.param("id"), {
+        source: { channel: "http", principal: operatorPrincipal(c) },
+      }),
+    ),
   );
 
   // ── Constellation ─────────────────────────────────────────────────────────
@@ -1481,7 +1948,9 @@ export function createApp(deps: AppDeps): Hono {
         await setTriage(fingerprint, state, issue.lastSeen, new Date());
       },
       abortInstance: async (id) => {
-        const reply = await engine.abort(id);
+        const reply = await engine.abort(id, {
+          source: { channel: "omnibar", principal: operatorPrincipal(c) },
+        });
         if (!reply.ok) throw new Error(reply.error ?? `could not abort ${id}`);
       },
       setBudget: async (patch) => {

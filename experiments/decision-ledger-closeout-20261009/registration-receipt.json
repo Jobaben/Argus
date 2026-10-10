@@ -1,0 +1,176 @@
+{
+  "registeredAt": "2026-10-08T22:14:22.641Z",
+  "method": "authorized atomic local pipeline configuration; native validator; existing running app reload",
+  "backup": "C:/GIT/Argus/experiments/decision-ledger-closeout-20261009/baseline/pipelines-before-closeout-2026-10-08T22-14-22.641Z.json",
+  "originalSha256": "7d07f0c8d5004e9f916aba2c61239f85b399ba8b902a053c3095eae4571c6202",
+  "originalCount": 2,
+  "addedCount": 18,
+  "pausedFeeder": "8a4a1975-0cab-49d8-b9ca-46ca22ed511e",
+  "unrelatedDefinitionsPreserved": true,
+  "pipelines": [
+    {
+      "id": "676cd88f-4ba1-4fe8-9637-c03e5ae9ed11",
+      "name": "Decision Ledger - Evidence closure and pipeline development plan",
+      "sourceFile": "analysis-pipeline.json",
+      "trigger": {
+        "kind": "daily",
+        "time": "05:30"
+      }
+    },
+    {
+      "id": "b931a14e-6839-4bbf-b875-15e60c97c525",
+      "name": "Decision Ledger - Final overnight evidence and stopping decision",
+      "sourceFile": "final-pipeline.json",
+      "trigger": {
+        "kind": "daily",
+        "time": "08:00"
+      }
+    },
+    {
+      "id": "b9c7c15c-ea0c-4033-9c76-beec1e75618e",
+      "name": "Decision closeout D1 - deadline",
+      "sourceFile": "workload-D1.json",
+      "trigger": {
+        "kind": "daily",
+        "time": "00:17"
+      }
+    },
+    {
+      "id": "a03c5127-beb5-4c16-82a7-a323ea6f0236",
+      "name": "Decision closeout D2 - deadline",
+      "sourceFile": "workload-D2.json",
+      "trigger": {
+        "kind": "daily",
+        "time": "00:19"
+      }
+    },
+    {
+      "id": "e3bdeeb4-854c-4267-8c70-a1d0bc4f0990",
+      "name": "Decision closeout D3 - deadline",
+      "sourceFile": "workload-D3.json",
+      "trigger": {
+        "kind": "daily",
+        "time": "00:21"
+      }
+    },
+    {
+      "id": "7817d10e-173d-41e7-8e4d-ce6edc5e9b5b",
+      "name": "Decision closeout D4 - deadline",
+      "sourceFile": "workload-D4.json",
+      "trigger": {
+        "kind": "daily",
+        "time": "00:23"
+      }
+    },
+    {
+      "id": "ed683c7f-5223-4fc3-bdf6-79957c8a537a",
+      "name": "Decision closeout E1 - evidence-limit",
+      "sourceFile": "workload-E1.json",
+      "trigger": {
+        "kind": "daily",
+        "time": "00:37"
+      }
+    },
+    {
+      "id": "8ab7e237-975f-48ce-afc1-bf0e7178eeed",
+      "name": "Decision closeout E2 - evidence-limit",
+      "sourceFile": "workload-E2.json",
+      "trigger": {
+        "kind": "daily",
+        "time": "00:39"
+      }
+    },
+    {
+      "id": "1ae1e164-b565-480a-9d4e-c0d258a11757",
+      "name": "Decision closeout I1 - untrusted-text",
+      "sourceFile": "workload-I1.json",
+      "trigger": {
+        "kind": "daily",
+        "time": "00:45"
+      }
+    },
+    {
+      "id": "6e233c2c-f257-4c44-802b-6aa2eb10282f",
+      "name": "Decision closeout I2 - untrusted-text",
+      "sourceFile": "workload-I2.json",
+      "trigger": {
+        "kind": "daily",
+        "time": "00:47"
+      }
+    },
+    {
+      "id": "13674de5-ed8a-467e-88ae-4fc0c462a8eb",
+      "name": "Decision closeout M1 - missing-input",
+      "sourceFile": "workload-M1.json",
+      "trigger": {
+        "kind": "daily",
+        "time": "00:29"
+      }
+    },
+    {
+      "id": "25bfc7ed-5fab-4f86-8c52-f307c0b8bdd2",
+      "name": "Decision closeout M2 - missing-input",
+      "sourceFile": "workload-M2.json",
+      "trigger": {
+        "kind": "daily",
+        "time": "00:31"
+      }
+    },
+    {
+      "id": "ed5f4863-ec04-46d2-ad6e-77bc5e057921",
+      "name": "Decision closeout N1 - normal",
+      "sourceFile": "workload-N1.json",
+      "trigger": {
+        "kind": "daily",
+        "time": "00:25"
+      }
+    },
+    {
+      "id": "5da5ecea-e0cc-4808-b1a6-3938296c9a5e",
+      "name": "Decision closeout N2 - normal",
+      "sourceFile": "workload-N2.json",
+      "trigger": {
+        "kind": "daily",
+        "time": "00:27"
+      }
+    },
+    {
+      "id": "53d6d2ab-38f7-4c23-91d8-6f1a9c04aa4f",
+      "name": "Decision closeout P1 - tool-denial",
+      "sourceFile": "workload-P1.json",
+      "trigger": {
+        "kind": "daily",
+        "time": "00:41"
+      }
+    },
+    {
+      "id": "8c94e6d6-4511-4f44-9d2f-f08cdaa2f0f5",
+      "name": "Decision closeout P2 - capability-limit",
+      "sourceFile": "workload-P2.json",
+      "trigger": {
+        "kind": "daily",
+        "time": "00:43"
+      }
+    },
+    {
+      "id": "5072f154-abb4-4b82-99a5-c9d3cd1876ac",
+      "name": "Decision closeout T1 - contradiction",
+      "sourceFile": "workload-T1.json",
+      "trigger": {
+        "kind": "daily",
+        "time": "00:33"
+      }
+    },
+    {
+      "id": "10a73fc8-f76c-43f4-8146-0576644e91ac",
+      "name": "Decision closeout T2 - contradiction",
+      "sourceFile": "workload-T2.json",
+      "trigger": {
+        "kind": "daily",
+        "time": "00:35"
+      }
+    }
+  ],
+  "sourceLaunched": true,
+  "verifiedLiveReload": true
+}
