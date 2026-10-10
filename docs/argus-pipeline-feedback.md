@@ -37,11 +37,11 @@ document until it reaches the **Approved** status below.
 
 **Current status: `Awaiting answers`**
 
-| Status | Meaning | Who sets it |
-| --- | --- | --- |
-| `Awaiting answers` | The request is published; one or more questions are still unanswered. | The requester, when publishing this document. |
-| `Ready for triage` | All eight questions are answered and every checklist item below is ticked. | The answerer, once the checklist passes. |
-| `Approved` | Triage has accepted the answers as a sufficient basis for planning work. | The named approver, after triage. |
+| Status             | Meaning                                                                    | Who sets it                                   |
+| ------------------ | -------------------------------------------------------------------------- | --------------------------------------------- |
+| `Awaiting answers` | The request is published; one or more questions are still unanswered.      | The requester, when publishing this document. |
+| `Ready for triage` | All eight questions are answered and every checklist item below is ticked. | The answerer, once the checklist passes.      |
+| `Approved`         | Triage has accepted the answers as a sufficient basis for planning work.   | The named approver, after triage.             |
 
 Change the status by editing the **Current status** line above, and record the
 date on the **Last updated** line at the top of the file.
@@ -160,6 +160,6 @@ _(unanswered)_
 
 Add one line per substantive edit, newest last.
 
-| Date | Who | What changed |
-| --- | --- | --- |
+| Date       | Who       | What changed                                                   |
+| ---------- | --------- | -------------------------------------------------------------- |
 | 2026-08-16 | Requester | Initial feedback request published; status `Awaiting answers`. |

@@ -42,6 +42,12 @@ and its implementation amendments. Existing H1/H2 collection is different from
 releasing these new consumers. H1 predicts operator behavior, not correctness;
 H2 residual cause accuracy remains dependent on genuine references.
 
+The additive [DL06 policy preparation guide](../argus/decision-ledger-development/policy-preparation.md)
+describes the server-local probability evaluator and immutable prepared friction
+intents. Preparation has `applied: false`; production policy rules, calibrated
+thresholds, wiring and durable application remain outstanding. Historical
+closeout records retain their scope.
+
 ## Experiments and historical records
 
 The shadow feeder and controlled closeout cases are historical studies.
