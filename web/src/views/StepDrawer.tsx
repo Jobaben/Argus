@@ -1,16 +1,9 @@
+import { Drawer } from "../ds/Drawer";
 import { Fragment, useEffect, useState } from "react";
 import { runtimeLabel } from "../useRuntimes";
 import type { Run, StepCompletion } from "../types";
 import type { StepPill } from "../ds";
-import {
-  Drawer,
-  Skeleton,
-  StatusPill,
-  formatMs,
-  formatTokens,
-  formatUsd,
-  parseRunLog,
-} from "../ds";
+import { Skeleton, StatusPill, formatMs, formatTokens, formatUsd, parseRunLog } from "../ds";
 
 /**
  * Everything Argus knows about one step of a pipeline, without leaving the board.

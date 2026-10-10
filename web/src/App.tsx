@@ -67,7 +67,9 @@ const FlightRecorder = lazy(() => import("./views/FlightRecorder"));
 import { useBriefing } from "./useBriefing";
 import { useAuth } from "./useAuth";
 import { applyLegacyRedirect, legacyRedirect } from "./legacyRoutes";
-import { AdminAuthPanel } from "./views/AdminAuthPanel";
+const AdminAuthPanel = lazy(() =>
+  import("./views/AdminAuthPanel").then((m) => ({ default: m.AdminAuthPanel })),
+);
 import {
   CommandPalette,
   NAV_CHORDS,
@@ -546,12 +548,22 @@ export default function App() {
         <p className="mb-6 text-sm text-ink-dim">
           This server requires an account. Sign in to see the dashboard.
         </p>
-        <AdminAuthPanel
-          configured={status.configured}
-          onLogin={login}
-          onSetup={setup}
-          onRegister={register}
-        />
+        <ErrorBoundary label="Sign in" resetKey={String(status.configured)}>
+          <Suspense
+            fallback={
+              <Loading label="sign in">
+                <SkeletonGrid count={1} columns={1} lines={3} />
+              </Loading>
+            }
+          >
+            <AdminAuthPanel
+              configured={status.configured}
+              onLogin={login}
+              onSetup={setup}
+              onRegister={register}
+            />
+          </Suspense>
+        </ErrorBoundary>
       </div>
     </div>
   );

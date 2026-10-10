@@ -1,6 +1,7 @@
+import { Drawer } from "../../ds/Drawer";
 import type { ReactNode } from "react";
 import type { AtlasClaim, ClaimRef, KnowledgeAtlas } from "@argus/contracts";
-import { Drawer, TimeAgo } from "../../ds";
+import { TimeAgo } from "../../ds";
 import { useClaimDetail } from "../../useClaimDetail";
 import { KIND_TERMS, TERMS } from "../knowledgeGlossary";
 import {

@@ -15,7 +15,7 @@ export {
   SkeletonText,
   SkeletonTile,
 } from "./Skeleton";
-export { Drawer } from "./Drawer";
+// Drawer stays out of this eager barrel so its shell loads with lazy drawers.
 export { InfoTip } from "./InfoTip";
 export { Legend } from "./Legend";
 export type { LegendItem } from "./Legend";

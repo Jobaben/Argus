@@ -12,7 +12,7 @@ import { FOCUS_MIN_PX, useBoardArrangement, useElementWidth } from "./useLaneLay
 import { edgeState } from "./laneGraphLayout";
 import { decisionFields, isLongValue } from "./decisionValue";
 import { attentionPhase } from "./phaseAttention";
-import { StepDrawer, type StepSelection } from "./StepDrawer";
+import type { StepSelection } from "./StepDrawer";
 import type { GateSelection } from "./GateDrawer";
 import { hashSegments, useHashRoute } from "../useHashRoute";
 import { useRunActivity } from "../useRunActivity";
@@ -42,6 +42,8 @@ import {
 } from "../ds";
 import type { OverviewRow, OverviewGate, PhasePill, StepPill, DsStatus } from "../ds";
 import type { RouteDecision } from "../types";
+
+const StepDrawer = lazy(() => import("./StepDrawer").then((m) => ({ default: m.StepDrawer })));
 
 // The review drawer carries the markdown lexer, which the board does not need
 // until a gate is actually opened — so it is its own chunk, fetched on first
@@ -837,6 +839,8 @@ export default function CommandCenter() {
   const { situation, loading: situationLoading } = useInsight();
   const { runs, loading: runsLoading, cancelRun } = useRuns();
   const [selected, setSelected] = useState<StepSelection | null>(null);
+  const [stepEverOpened, setStepEverOpened] = useState(false);
+  if (selected && !stepEverOpened) setStepEverOpened(true);
   const [pickedGate, setPickedGate] = useState<GateSelection | null>(null);
   const rows = useMemo(() => overview.flatMap(toOverviewRows), [overview]);
   // `#/command/<instanceId>[/<phaseId>]` opens the review drawer — the link the
@@ -948,7 +952,15 @@ export default function CommandCenter() {
           )}
         </Handoff>
       )}
-      <StepDrawer selection={selected} onClose={() => setSelected(null)} onCancelRun={cancelRun} />
+      {stepEverOpened && (
+        <Suspense fallback={null}>
+          <StepDrawer
+            selection={selected}
+            onClose={() => setSelected(null)}
+            onCancelRun={cancelRun}
+          />
+        </Suspense>
+      )}
       {everOpened && (
         <Suspense fallback={null}>
           <GateDrawer selection={gate} onClose={closeGate} approve={approve} revise={revise} />

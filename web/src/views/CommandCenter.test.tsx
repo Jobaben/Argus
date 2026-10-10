@@ -579,3 +579,17 @@ describe("CommandCenter", () => {
     );
   });
 });
+
+it("loads step details on selection and can close and reopen the drawer", async () => {
+  mockOverview.overview = [entry("step-inspection", "running", ["running"])];
+  render(<CommandCenter />);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  const opener = screen.getByText("step-x").closest("button")!;
+  fireEvent.click(opener);
+  const dialog = await screen.findByRole("dialog");
+  expect(within(dialog).getByText("step-x")).toBeInTheDocument();
+  fireEvent.click(within(dialog).getByRole("button", { name: /^esc$/i }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  fireEvent.click(opener);
+  expect(await screen.findByRole("dialog")).toHaveTextContent("step-x");
+});

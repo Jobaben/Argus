@@ -1,4 +1,5 @@
-import { Drawer, Legend, type LegendItem } from "../../ds";
+import { Drawer } from "../../ds/Drawer";
+import { Legend, type LegendItem } from "../../ds";
 import {
   AXES,
   KIND_TERMS,

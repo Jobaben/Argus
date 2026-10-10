@@ -58,7 +58,7 @@ describe("auth gate", () => {
     });
     await mount();
 
-    expect(screen.getByRole("form", { name: "Login" })).toBeInTheDocument();
+    expect(await screen.findByRole("form", { name: "Login" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Command Center" })).toBeNull();
   });
 

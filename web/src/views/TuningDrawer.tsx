@@ -1,5 +1,6 @@
+import { Drawer } from "../ds/Drawer";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Drawer, StatusPill, type DsStatus } from "../ds";
+import { StatusPill, type DsStatus } from "../ds";
 import { useTuning } from "../useTuning";
 import type {
   PhaseTuning,
