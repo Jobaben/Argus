@@ -7,3 +7,12 @@ coverage
 *.log
 # design cards mirror the remote claude.ai/design project byte-for-byte
 design/**/*.html
+# Retained experiment evidence and capture tools preserve their original bytes.
+docs/argus/shadow-feeder/*.json
+docs/argus/shadow-feeder/*.mjs
+docs/argus/shadow-feeder/*.html
+experiments/decision-ledger-closeout-20261009/
+experiments/pipeline-cleanup-20261010/
+experiments/shadow-feeder/cases.json
+experiments/shadow-feeder/select-case.mjs
+experiments/worktree-salvage-20261010/
