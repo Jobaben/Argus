@@ -184,16 +184,29 @@ test("a refusal inside the runner is not a call: retried at most three times, 30
 
 test("a started call's guard failure name cannot release spend, while typed service refusal can", async () => {
   const h = h2Harness();
-  const result = await h.service.assess({ question: "run.failure-cause.residual", subject: { kind: "run", runId: "run-1" }, provider: "claude-cli" });
+  const result = await h.service.assess({
+    question: "run.failure-cause.residual",
+    subject: { kind: "run", runId: "run-1" },
+    provider: "claude-cli",
+  });
   assert.ok(result.ok);
   assert.equal(h.spawns.length, 1);
   for (const failure of ["disabled", "busy", "budget-blocked", "aborted", "unsafe-cwd"]) {
-    const assessment = { ...result.assessment, costUsd: null, outcome: { status: "failed" as const, failure, detail: "started call" } };
+    const assessment = {
+      ...result.assessment,
+      costUsd: null,
+      outcome: { status: "failed" as const, failure, detail: "started call" },
+    };
     const classified = fromAssessment(assessment);
     assert.equal(classified.class, "provider-failed", failure);
     assert.equal(classified.providerCalled, "yes", failure);
     assert.equal(classified.costUsd, null);
-    const refusal = classifyServiceResult({ ok: false, reason: failure as "disabled", detail: "guard", providerCalled: false });
+    const refusal = classifyServiceResult({
+      ok: false,
+      reason: failure as "disabled",
+      detail: "guard",
+      providerCalled: false,
+    });
     assert.equal(refusal.class, "refused", failure);
     assert.equal(refusal.providerCalled, "no", failure);
   }

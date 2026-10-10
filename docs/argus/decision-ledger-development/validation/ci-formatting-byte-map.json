@@ -1,0 +1,170 @@
+{
+  "format": "argus.ci-formatting-byte-map",
+  "version": 1,
+  "originalCommit": "a7a7703fb736db330770b23f4b3ba688eec56f5e",
+  "meaning": "Formatting only. Original committed evidence/probe bytes remain available at the original Git blob IDs. Preformat working-copy newlines may differ. Historical counts, interpretation and frozen source hashes are not revised.",
+  "files": [
+    {
+      "path": "docs/argus/decision-ledger-development/bounded-acceptance-protocol.md",
+      "originalGitBlob": "3f4c644ee82d3c1523ea8ffd1a8cb7330b3ce41d",
+      "originalWorkingCopySha256": "085b540b0c5fa78b7f4599cc19f3b2bcd13cbb695ff3299b311753f97e8ef728",
+      "originalGitBlobSha256": "085b540b0c5fa78b7f4599cc19f3b2bcd13cbb695ff3299b311753f97e8ef728",
+      "formattedSha256": "12ac7af4ee00c980af846d6c4a8805093bd82307bb702a07bff95e09df832d65"
+    },
+    {
+      "path": "docs/argus/decision-ledger-development/implementation-status-matrix.md",
+      "originalGitBlob": "1aece984db4b49fdc78656ff049f3b88934a4925",
+      "originalWorkingCopySha256": "c6fc8d625eb9ecbce5e7bf534353d10a3dea9ee87fe73c2111ffe0dd48e40f8d",
+      "originalGitBlobSha256": "c6fc8d625eb9ecbce5e7bf534353d10a3dea9ee87fe73c2111ffe0dd48e40f8d",
+      "formattedSha256": "51bcdd8e407095085dcb68f262f81fb0db8803e70ec37d450503c5cdfb436e35"
+    },
+    {
+      "path": "docs/argus/decision-ledger-development/validation/evaluation-input-review-repro.ts",
+      "originalGitBlob": "76d4796d4a9965e63a6fda32054bb53c9f4dd689",
+      "originalWorkingCopySha256": "6745f438e909c16d75bb00c8d3738b0810f6c234653067f0e7d5a1a4606d7e71",
+      "originalGitBlobSha256": "6745f438e909c16d75bb00c8d3738b0810f6c234653067f0e7d5a1a4606d7e71",
+      "formattedSha256": "f75d096ef2e7e219b9e1074ba63e652940e313c46acd5857383a78228293f4cb"
+    },
+    {
+      "path": "docs/argus/decision-ledger-development/validation/final-cutoff-verification.json",
+      "originalGitBlob": "6241a5711ee659d6dbc5d39b43b2a8fb823caf57",
+      "originalWorkingCopySha256": "7f19081065067c780c296970fbd495958c40d34913448f1b52d55aa1aae63fc6",
+      "originalGitBlobSha256": "bcf028b2df1d8fb00efded30811d3b937d251700f7686fa7fe0e0a0c0684e34a",
+      "formattedSha256": "76644ce5a05d71906b08f9f035e98b687eeae09e6af86bf625d9b21870223d9f"
+    },
+    {
+      "path": "docs/argus/decision-ledger-development/validation/integrated-dispatch-fence-gap-boundary-review.mts",
+      "originalGitBlob": "0901436e3e5bfcace5fc89727bb1b005e79add7e",
+      "originalWorkingCopySha256": "a303daeb011721b5f0895d6102c5a229be5225d2dbfaa1fc19ad081bec75ad73",
+      "originalGitBlobSha256": "e27bee3144fbb2bae9837a103e7a1e74f19b2eae52201249b2f118101142cf06",
+      "formattedSha256": "2f98c94242ff4d5efd7d522d9ce67f43f9a3cd3ec1e0a63ab916af2d44650a9b"
+    },
+    {
+      "path": "docs/argus/decision-ledger-development/validation/integrated-dispatch-fence-gap.mts",
+      "originalGitBlob": "0dbde878e9d1fb0fc93abfd40e6154d74a666a3b",
+      "originalWorkingCopySha256": "24035fbb09c951e0785b2ba155092a3adbc29da24d1acb8a7af2300371d7985b",
+      "originalGitBlobSha256": "24035fbb09c951e0785b2ba155092a3adbc29da24d1acb8a7af2300371d7985b",
+      "formattedSha256": "7c6c11d6e18f2e8902b0f6ea0c2406eb797b59bc9a20b81eafd0f53f69e437f4"
+    },
+    {
+      "path": "docs/argus/decision-ledger-development/validation/integrated-dispatch-gap-boundary-review.mts",
+      "originalGitBlob": "8115fcab844e09e4ef0d3c971c8ae9c67e327e2c",
+      "originalWorkingCopySha256": "f246f67fc62bc7844f6caff4844610b812cc520341df2286c746f6e3ae8490eb",
+      "originalGitBlobSha256": "674fa774f5c30d5bbcbfa49c8ca3fb093d4dfd97c9b76aa48b4e5df91c22dac4",
+      "formattedSha256": "ea2ebfe2b574be46bc5e906839486ce749862b980ab9b16a701a00cf632c0b3f"
+    },
+    {
+      "path": "docs/argus/decision-ledger-development/validation/integrated-dispatch-gap.mts",
+      "originalGitBlob": "0f72a4000e048898377a9b43f0dc034a11839b96",
+      "originalWorkingCopySha256": "5da10acb1563223bee0f0b64ddb097b2988037cc2c004d4c5c0ac8e040954db2",
+      "originalGitBlobSha256": "5da10acb1563223bee0f0b64ddb097b2988037cc2c004d4c5c0ac8e040954db2",
+      "formattedSha256": "85df5d605d12382edc936f128eb2ff86124be460abe2533cbda96a8ac654b2c2"
+    },
+    {
+      "path": "docs/argus/decision-ledger-development/validation/precall-accounting-probe.mts",
+      "originalGitBlob": "6ea13b0f6de856183533aba9846055b8ce0dde9e",
+      "originalWorkingCopySha256": "aee764845e2c45c1239c7ae272224b121991f37ac820a3f203f373c5dbdb5fa6",
+      "originalGitBlobSha256": "6be1870abcb980da6bdab4322be0d8c0f1fbb0be4c545009b708d8d89f7a5e33",
+      "formattedSha256": "97a75d9d09864d69eea318532d14e82d3c725690c8e294b3eef654068dcf2096"
+    },
+    {
+      "path": "docs/argus/decision-ledger-development/validation/precall-coordinator-probe.mts",
+      "originalGitBlob": "fcadddd51a8a68ab28d739686fd623180a016e5a",
+      "originalWorkingCopySha256": "dbdc3874c613a3ee43d981933f6dceb26f1e6c68b2d80220733ac7249df4b2e3",
+      "originalGitBlobSha256": "dbdc3874c613a3ee43d981933f6dceb26f1e6c68b2d80220733ac7249df4b2e3",
+      "formattedSha256": "bb510bd14f6bc96b2a926d115ffa88301504eff539bdc4f53a6db415946b99a4"
+    },
+    {
+      "path": "docs/argus/decision-ledger-development/validation/precall-independent-missing-response-probe.mts",
+      "originalGitBlob": "727b0d3e1ed602b45bc02329bba5aea5f08c0ca6",
+      "originalWorkingCopySha256": "cdd1f05fcab8e31f80c2a58fbfd5675037d9883192d33eb61ea0bb6860ef2867",
+      "originalGitBlobSha256": "cdd1f05fcab8e31f80c2a58fbfd5675037d9883192d33eb61ea0bb6860ef2867",
+      "formattedSha256": "4d0482682e27e93ffc298b723785ed97eb3760299cb2192c928d4829e4b2d877"
+    },
+    {
+      "path": "server/src/decision/claudeCli.test.ts",
+      "originalGitBlob": "7d41ab9c1ac8638f14fa09b9a9eae6e256edbbc9",
+      "originalWorkingCopySha256": "2955f405b6a1fc1ab732f255e74a3b328a2a139eaa17e5f1fc1def432a3ceae8",
+      "originalGitBlobSha256": "2955f405b6a1fc1ab732f255e74a3b328a2a139eaa17e5f1fc1def432a3ceae8",
+      "formattedSha256": "b94cad613347afb27d4218ed4edff33d6c0098e0847942d5d694f029a33ef151"
+    },
+    {
+      "path": "server/src/decision/h1/report.test.ts",
+      "originalGitBlob": "2afb863bfb4c6b02fad1c90ff748390ed68de160",
+      "originalWorkingCopySha256": "4d475c48fbe2460a699e84be15d144f7a294e538228bce348983fe0bfe85c53a",
+      "originalGitBlobSha256": "4d475c48fbe2460a699e84be15d144f7a294e538228bce348983fe0bfe85c53a",
+      "formattedSha256": "73aaf8967c381d30472185c6aa1aaf26405f793d98bfa12e9ce74909768c96cf"
+    },
+    {
+      "path": "server/src/decision/h2/activity.test.ts",
+      "originalGitBlob": "8407ef5fc942d532d4ac7455e7ee7d2c1e752e6e",
+      "originalWorkingCopySha256": "d7c5116827d9f2136ba13c9beb0eb57c09c6656b208a8f1d0292a99c206de8f2",
+      "originalGitBlobSha256": "d7c5116827d9f2136ba13c9beb0eb57c09c6656b208a8f1d0292a99c206de8f2",
+      "formattedSha256": "0572a548fafa3293fcf86180db76d5dff070db2ef93e459d6abf9a3d58f715e0"
+    },
+    {
+      "path": "server/src/decision/h2/activity.ts",
+      "originalGitBlob": "f1137d9528588a938ea7cf9ad50ebf98800b2623",
+      "originalWorkingCopySha256": "df35b8994ff8be5edff9694a8cd3d3cb78e25aa9d0f05384e13261535372d291",
+      "originalGitBlobSha256": "43260158217c4e54d75f5f9c2c0646b5f8697a522fccc34f173ada0a48f73a48",
+      "formattedSha256": "7cb85af9c74406aecedf62656a37d8d58eed8c334810f443907da0b3760ed4e8"
+    },
+    {
+      "path": "server/src/decision/h2/report.test.ts",
+      "originalGitBlob": "6f4d6ee342de9f8fbba1f255b3904de43dc8bf7d",
+      "originalWorkingCopySha256": "a85b78f69208186494181cec809c7e006e4f29ef6353459bfbd1a141e0f4fa13",
+      "originalGitBlobSha256": "a85b78f69208186494181cec809c7e006e4f29ef6353459bfbd1a141e0f4fa13",
+      "formattedSha256": "c6db34f4e8682f45fd1712521bff8239ef52da52c1a9741d8a882e545c5b86b5"
+    },
+    {
+      "path": "server/src/decision/h2/watcher.test.ts",
+      "originalGitBlob": "00797d29f518747a4e6e8915ba36ffea5f97a5ee",
+      "originalWorkingCopySha256": "444a2ba6bc5142f44d3ddffc0d9bb5c0efe3419d37d771f0958568a9191899d2",
+      "originalGitBlobSha256": "444a2ba6bc5142f44d3ddffc0d9bb5c0efe3419d37d771f0958568a9191899d2",
+      "formattedSha256": "0e5405af76da1b1f9ba2af6661fff79b57286d0bc5152e57729d60d031564571"
+    },
+    {
+      "path": "server/src/decision/h2/watcher.ts",
+      "originalGitBlob": "14ac2787118d7189183a9a963cef69477447ff0a",
+      "originalWorkingCopySha256": "fda5a3b1e0ea4d4320680461a19d51ff5852b8ed8f215253590347f4151b5551",
+      "originalGitBlobSha256": "fda5a3b1e0ea4d4320680461a19d51ff5852b8ed8f215253590347f4151b5551",
+      "formattedSha256": "abcd1ddc565b689525669da8bab44f84f99c98239d7981d5ab57742f3fa42571"
+    },
+    {
+      "path": "server/src/decision/providers/claudeCli.ts",
+      "originalGitBlob": "218f615abf3b35d67bb44dfa055364daefcbc39d",
+      "originalWorkingCopySha256": "8d6af9477c2da926ff17abee3a4de2d45dcfb31a3672b7b6a2bedb9528aa16b4",
+      "originalGitBlobSha256": "8d6af9477c2da926ff17abee3a4de2d45dcfb31a3672b7b6a2bedb9528aa16b4",
+      "formattedSha256": "bb3881da2c5de3f909584c670776b2913ab108fc98ccfa4f8d90824f49315a49"
+    },
+    {
+      "path": "server/src/decision/providers/mock.ts",
+      "originalGitBlob": "bf824abd74e969a5c8b92a8f7258ad9503eb89d9",
+      "originalWorkingCopySha256": "8f0b0f900576f6f796d822e09282d7ae8b8a9de06f9cd92767986397601a5e6e",
+      "originalGitBlobSha256": "42ee3f0628b256879e8e4d5b379efb4a6219b859ee1e98d9eb61d5592948453e",
+      "formattedSha256": "0be80f30fdf7e0d911105f64ccb06e052e2d58f1722a27b94bd49bb89753526a"
+    },
+    {
+      "path": "server/src/decision/providers/types.ts",
+      "originalGitBlob": "354080406dfccba3acdc99eed4ea8214cc4bb345",
+      "originalWorkingCopySha256": "6ec5b11b8a353e6516f8cbeb70f6afcd65b4bf1a6676da7426457063e7574bec",
+      "originalGitBlobSha256": "6ec5b11b8a353e6516f8cbeb70f6afcd65b4bf1a6676da7426457063e7574bec",
+      "formattedSha256": "cb13af6c7d09a90e2f3805ccb1b647d4ffcf405a03b2929e0d732a69e26e17a6"
+    },
+    {
+      "path": "server/src/sources/analysis.test.ts",
+      "originalGitBlob": "261e1f7338dcc8bec9da4547f816f8655adc0f63",
+      "originalWorkingCopySha256": "a7e494ab5ab4ac445892f9861ff6a8c3c818dbb897a006f28ed9ddf5f65ee27b",
+      "originalGitBlobSha256": "a7e494ab5ab4ac445892f9861ff6a8c3c818dbb897a006f28ed9ddf5f65ee27b",
+      "formattedSha256": "27be543d84cabb622bcaceed476f41e5df39bdb7c3da697bfd7cdcdf7388a39c"
+    },
+    {
+      "path": "server/src/sources/analysis.ts",
+      "originalGitBlob": "47227f99607ed83f6616bcae44dda8ae604a1439",
+      "originalWorkingCopySha256": "f850268bffca0d9268839bd014303468e7be8a9cb9bb73b3b44afedfa2fedd25",
+      "originalGitBlobSha256": "f850268bffca0d9268839bd014303468e7be8a9cb9bb73b3b44afedfa2fedd25",
+      "formattedSha256": "0ad4553f9d4fdae4c8c827f5f07a33993370a80ed309e87cd61d8b2d79feaa04"
+    }
+  ],
+  "verifiedFormatterEquivalentFiles": 23
+}

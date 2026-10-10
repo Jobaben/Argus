@@ -37,5 +37,10 @@ export interface DecisionProvider {
     snapshot: StoredSnapshot,
     signal: AbortSignal,
   ): Promise<ProviderResponse>;
-  assessWithAdmission?(q: DecisionQuestion, snapshot: StoredSnapshot, signal: AbortSignal, admission: DispatchAdmission): Promise<ProviderResponse>;
+  assessWithAdmission?(
+    q: DecisionQuestion,
+    snapshot: StoredSnapshot,
+    signal: AbortSignal,
+    admission: DispatchAdmission,
+  ): Promise<ProviderResponse>;
 }

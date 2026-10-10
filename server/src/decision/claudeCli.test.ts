@@ -89,10 +89,20 @@ const assessResidual = (h: ReturnType<typeof harness>) =>
 
 test("guarded Claude refuses an unsupported runner without calling ordinary run", async () => {
   let calls = 0;
-  const runner: AnalysisRunner = { run: async () => { calls++; throw new Error("unchecked run"); }, inFlight: () => 0 };
+  const runner: AnalysisRunner = {
+    run: async () => {
+      calls++;
+      throw new Error("unchecked run");
+    },
+    inFlight: () => 0,
+  };
   const provider = createClaudeCliProvider({ runner, cwd: emptyDir() });
-  const result = await provider.assessWithAdmission!(RESIDUAL_CAUSE_V1, fakeSnapshot(), new AbortController().signal,
-    async () => ({ ok: true, validateNow: () => ({ ok: true }) }));
+  const result = await provider.assessWithAdmission!(
+    RESIDUAL_CAUSE_V1,
+    fakeSnapshot(),
+    new AbortController().signal,
+    async () => ({ ok: true, validateNow: () => ({ ok: true }) }),
+  );
   assert.equal(calls, 0);
   assert.equal(result.executionDisposition, "not-called");
   assert.equal(result.outcome.status === "failed" && result.outcome.failure, "dispatch-refused");
@@ -102,10 +112,25 @@ test("guarded Claude observes abort in budget and final validation windows", asy
   for (const window of ["budget", "final"]) {
     const controller = new AbortController();
     const { provider, rec } = setup(envelope(JSON.stringify({ p: RESIDUAL_P })), {
-      runnerDeps: { blocked: async () => { if (window === "budget") controller.abort(); return false; } },
+      runnerDeps: {
+        blocked: async () => {
+          if (window === "budget") controller.abort();
+          return false;
+        },
+      },
     });
-    const result = await provider.assessWithAdmission!(RESIDUAL_CAUSE_V1, fakeSnapshot(), controller.signal,
-      async () => ({ ok: true, validateNow: () => { if (window === "final") controller.abort(); return { ok: true }; } }));
+    const result = await provider.assessWithAdmission!(
+      RESIDUAL_CAUSE_V1,
+      fakeSnapshot(),
+      controller.signal,
+      async () => ({
+        ok: true,
+        validateNow: () => {
+          if (window === "final") controller.abort();
+          return { ok: true };
+        },
+      }),
+    );
     assert.equal(rec.seen.length, 0);
     assert.equal(result.executionDisposition, "not-called");
     assert.equal(result.outcome.status === "failed" && result.outcome.failure, "dispatch-refused");
@@ -117,17 +142,35 @@ test("guarded Claude observes abort in budget and final validation windows", asy
 test("guarded mock validates after admission microtasks before consuming a script", async () => {
   let current = true;
   let scripts = 0;
-  const provider = createMockProvider({ script: () => { scripts++; return { abstain: "test" }; } });
-  const result = await provider.assessWithAdmission!(RESIDUAL_CAUSE_V1, fakeSnapshot(), new AbortController().signal,
+  const provider = createMockProvider({
+    script: () => {
+      scripts++;
+      return { abstain: "test" };
+    },
+  });
+  const result = await provider.assessWithAdmission!(
+    RESIDUAL_CAUSE_V1,
+    fakeSnapshot(),
+    new AbortController().signal,
     async () => {
-      queueMicrotask(() => { current = false; });
-      return { ok: true, validateNow: () => current ? { ok: true } : { ok: false, detail: "stale" } };
-    });
+      queueMicrotask(() => {
+        current = false;
+      });
+      return {
+        ok: true,
+        validateNow: () => (current ? { ok: true } : { ok: false, detail: "stale" }),
+      };
+    },
+  );
   assert.equal(provider.calls.length, 0);
   assert.equal(scripts, 0);
   assert.equal(result.executionDisposition, "not-called");
-  await provider.assessWithAdmission!(RESIDUAL_CAUSE_V1, fakeSnapshot(), new AbortController().signal,
-    async () => ({ ok: true, validateNow: () => ({ ok: true }) }));
+  await provider.assessWithAdmission!(
+    RESIDUAL_CAUSE_V1,
+    fakeSnapshot(),
+    new AbortController().signal,
+    async () => ({ ok: true, validateNow: () => ({ ok: true }) }),
+  );
   assert.equal(provider.calls.length, 1);
   assert.equal(scripts, 1);
 });

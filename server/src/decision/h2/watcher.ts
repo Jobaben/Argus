@@ -13,14 +13,7 @@ import type { DecisionJournal } from "../journal.js";
 import type { DecisionRegistry } from "../registry.js";
 import type { DecisionService, ServiceResult } from "../service.js";
 import type { H2Enablement, H2Settings } from "./config.js";
-import {
-  indexLedger,
-  isSpent,
-  itemKey,
-  itemStatus,
-  latestConfig,
-  type Item,
-} from "./items.js";
+import { indexLedger, isSpent, itemKey, itemStatus, latestConfig, type Item } from "./items.js";
 import {
   CONFIG_FORMAT,
   isDamaged,

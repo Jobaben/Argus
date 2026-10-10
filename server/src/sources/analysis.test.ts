@@ -65,13 +65,25 @@ test("guarded dispatch rechecks after budget await and admission microtasks", as
     let spawned = 0;
     const runner = createAnalysisRunner({
       enabled: () => true,
-      blocked: async () => { if (window === "budget") current = false; return false; },
-      spawn: () => { spawned++; return respond(envelope('{"a":1}'))({} as never); },
+      blocked: async () => {
+        if (window === "budget") current = false;
+        return false;
+      },
+      spawn: () => {
+        spawned++;
+        return respond(envelope('{"a":1}'))({} as never);
+      },
       meter: async () => {},
     });
     const result = await runner.runWithAdmission!(base, parseOk, async () => {
-      if (window === "microtask") queueMicrotask(() => { current = false; });
-      return { ok: true, validateNow: () => current ? { ok: true } : { ok: false, detail: "stale" } };
+      if (window === "microtask")
+        queueMicrotask(() => {
+          current = false;
+        });
+      return {
+        ok: true,
+        validateNow: () => (current ? { ok: true } : { ok: false, detail: "stale" }),
+      };
     });
     assert.equal(spawned, 0);
     assert.equal(result.failure, "dispatch-refused");
@@ -85,17 +97,36 @@ test("guarded dispatch rechecks after budget await and admission microtasks", as
 test("guarded dispatch refuses malformed, throwing, denied and async checks without spawning", async () => {
   const admissions: unknown[] = [
     async () => ({ ok: false, detail: "denied" }),
-    async () => { throw new Error("admission failed"); },
+    async () => {
+      throw new Error("admission failed");
+    },
     async () => null,
     async () => ({ ok: true }),
-    async () => ({ ok: true, validateNow: () => { throw new Error("final failed"); } }),
+    async () => ({
+      ok: true,
+      validateNow: () => {
+        throw new Error("final failed");
+      },
+    }),
     async () => ({ ok: true, validateNow: async () => ({ ok: true }) }),
-    async () => ({ ok: true, validateNow: async () => { throw new Error("async final failed"); } }),
+    async () => ({
+      ok: true,
+      validateNow: async () => {
+        throw new Error("async final failed");
+      },
+    }),
     async () => ({ ok: true, validateNow: () => ({ ok: 1 }) }),
   ];
   let spawned = 0;
-  const runner = createAnalysisRunner({ enabled: () => true, blocked: async () => false,
-    spawn: () => { spawned++; return respond(envelope('{"a":1}'))({} as never); }, meter: async () => {} });
+  const runner = createAnalysisRunner({
+    enabled: () => true,
+    blocked: async () => false,
+    spawn: () => {
+      spawned++;
+      return respond(envelope('{"a":1}'))({} as never);
+    },
+    meter: async () => {},
+  });
   for (const admission of admissions) {
     const result = await runner.runWithAdmission!(base, parseOk, admission as never);
     assert.equal(result.failure, "dispatch-refused");
@@ -103,7 +134,10 @@ test("guarded dispatch refuses malformed, throwing, denied and async checks with
     assert.equal(runner.inFlight(), 0);
   }
   assert.equal(spawned, 0);
-  const result = await runner.runWithAdmission!(base, parseOk, async () => ({ ok: true, validateNow: () => ({ ok: true }) }));
+  const result = await runner.runWithAdmission!(base, parseOk, async () => ({
+    ok: true,
+    validateNow: () => ({ ok: true }),
+  }));
   assert.equal(spawned, 1);
   assert.equal(result.ok, true);
   assert.equal(result.executionDisposition, "possibly-called");

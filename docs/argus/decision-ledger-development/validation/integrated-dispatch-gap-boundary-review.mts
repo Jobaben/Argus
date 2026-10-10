@@ -4,7 +4,11 @@ import path from "node:path";
 import { writeFileSync } from "node:fs";
 import { createEvaluationCoordinator } from "file:///C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus/server/src/decision/evaluationCoordinator.ts";
 import { InvocationLedger } from "file:///C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus/server/src/decision/invocationLedger.ts";
-import { harness, tempRoot, RESIDUAL_P } from "file:///C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus/server/src/decision/testSupport.ts";
+import {
+  harness,
+  tempRoot,
+  RESIDUAL_P,
+} from "file:///C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus/server/src/decision/testSupport.ts";
 import { createMockProvider } from "file:///C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus/server/src/decision/providers/mock.ts";
 import { canonicalDigest } from "file:///C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus/server/src/decision/canonical.ts";
 import { h2Harness } from "file:///C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus/server/src/decision/h2/testSupport.ts";
@@ -32,8 +36,14 @@ export async function fixture(
   const now = () => new Date("2026-10-10T01:00:00.000Z"),
     expiresAt = "2026-10-11T00:00:00.000Z",
     d = "a".repeat(64);
-  const reservations = new Map<string, import("file:///C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus/server/src/decision/invocationLedger.ts").Reservation>();
-  const settlements = new Map<string, import("file:///C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus/server/src/decision/invocationLedger.ts").InvocationSettlement>();
+  const reservations = new Map<
+    string,
+    import("file:///C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus/server/src/decision/invocationLedger.ts").Reservation
+  >();
+  const settlements = new Map<
+    string,
+    import("file:///C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus/server/src/decision/invocationLedger.ts").InvocationSettlement
+  >();
   const owner = {
     identity: "fixture",
     fence: "1",
@@ -70,36 +80,41 @@ export async function fixture(
       : {}),
   });
   owner.ledgerFile = ledger.file;
-  const gate: import("file:///C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus/server/src/decision/evaluationCoordinator.ts").SharedEvaluationGate = {
-    acquire: async (b: import("file:///C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus/server/src/decision/evaluationCoordinator.ts").AdmissionBinding) => {
-      if (options.deny === "gate") throw Error("unknown spend or insufficient allowance");
-      const r = {
-        id: `R-${b.invocationId}`,
-        invocationId: b.invocationId,
-        requestDigest: b.requestDigest,
-        scope: b.scope,
-        policyDigest: b.policyDigest,
-        allowanceUsd: b.allowanceUsd,
-      };
-      reservations.set(b.invocationId, r);
-      return r;
-    },
-    validate: async () => {
-      if (options.deny === "validate") throw Error("expired reservation");
-    },
-    lookup: async (id: string) => reservations.get(id) ?? null,
-    orphans: async () => [...reservations.values()],
-    recoverOrphan: async () => null,
-    settle: async (
-      r: import("file:///C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus/server/src/decision/invocationLedger.ts").Reservation,
-      s: import("file:///C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus/server/src/decision/invocationLedger.ts").InvocationSettlement,
-    ) => {
-      settlements.set(r.invocationId, s);
-    },
-    cancelProvenUncalled: async (r: import("file:///C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus/server/src/decision/invocationLedger.ts").Reservation) => {
-      reservations.delete(r.invocationId);
-    },
-  };
+  const gate: import("file:///C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus/server/src/decision/evaluationCoordinator.ts").SharedEvaluationGate =
+    {
+      acquire: async (
+        b: import("file:///C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus/server/src/decision/evaluationCoordinator.ts").AdmissionBinding,
+      ) => {
+        if (options.deny === "gate") throw Error("unknown spend or insufficient allowance");
+        const r = {
+          id: `R-${b.invocationId}`,
+          invocationId: b.invocationId,
+          requestDigest: b.requestDigest,
+          scope: b.scope,
+          policyDigest: b.policyDigest,
+          allowanceUsd: b.allowanceUsd,
+        };
+        reservations.set(b.invocationId, r);
+        return r;
+      },
+      validate: async () => {
+        if (options.deny === "validate") throw Error("expired reservation");
+      },
+      lookup: async (id: string) => reservations.get(id) ?? null,
+      orphans: async () => [...reservations.values()],
+      recoverOrphan: async () => null,
+      settle: async (
+        r: import("file:///C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus/server/src/decision/invocationLedger.ts").Reservation,
+        s: import("file:///C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus/server/src/decision/invocationLedger.ts").InvocationSettlement,
+      ) => {
+        settlements.set(r.invocationId, s);
+      },
+      cancelProvenUncalled: async (
+        r: import("file:///C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus/server/src/decision/invocationLedger.ts").Reservation,
+      ) => {
+        reservations.delete(r.invocationId);
+      },
+    };
   const deps = {
     ledger,
     service: h.service,
@@ -108,7 +123,9 @@ export async function fixture(
     gate,
     now,
     authorization: {
-      authorize: async (b: import("file:///C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus/server/src/decision/evaluationCoordinator.ts").AdmissionBinding) => {
+      authorize: async (
+        b: import("file:///C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus/server/src/decision/evaluationCoordinator.ts").AdmissionBinding,
+      ) => {
         if (options.deny === "authorization") throw Error("denied");
         return {
           reference: "grant",
@@ -124,7 +141,9 @@ export async function fixture(
       },
     },
     preflight: {
-      check: async (b: import("file:///C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus/server/src/decision/evaluationCoordinator.ts").AdmissionBinding) => {
+      check: async (
+        b: import("file:///C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus/server/src/decision/evaluationCoordinator.ts").AdmissionBinding,
+      ) => {
         if (options.deny === "preflight") throw Error("unsupported account");
         return {
           reference: "preflight",
@@ -159,21 +178,52 @@ export async function fixture(
   };
 }
 import { createAnalysisRunner } from "file:///C:/Users/ushab/.codex/worktrees/decision-ledger-foundations-h2/Argus/server/src/sources/analysis.ts";
-const f = await fixture(), h = h2Harness();
-const parent = await h.service.assess({question:"run.failure-cause.residual",subject:{kind:"run",runId:"run-1"},provider:"claude-cli"});
-assert.ok(parent.ok);
-let spawns=0, observedExpired=false, coordinatorTime="2026-10-10T01:00:00.000Z";
-const runner=createAnalysisRunner({
- enabled:()=>true,
- blocked:async()=>{await Promise.resolve(); coordinatorTime="2026-10-12T01:00:00.000Z"; observedExpired=true; return false;},
- meter:async()=>{},
- spawn:()=>{spawns++; return {kill(){},done:Promise.resolve({code:0,stdout:JSON.stringify({result:JSON.stringify({p:RESIDUAL_P}),total_cost_usd:0.1}),error:null})};}
+const f = await fixture(),
+  h = h2Harness();
+const parent = await h.service.assess({
+  question: "run.failure-cause.residual",
+  subject: { kind: "run", runId: "run-1" },
+  provider: "claude-cli",
 });
-h.runner.run=runner.run; h.runner.runWithAdmission=runner.runWithAdmission;
-const journalEntriesBefore=(await h.journal.read()).entries.length;
-const result=await createEvaluationCoordinator({...f.deps,now:()=>new Date(coordinatorTime),service:h.service,journal:h.journal}).execute({...f.request,assessmentId:parent.assessment.id,provider:"claude-cli"});
-console.log(JSON.stringify({observedExpired,spawns,result},null,2));
-assert.equal(spawns,0,"expired authorization must refuse at actual spawn boundary");
+assert.ok(parent.ok);
+let spawns = 0,
+  observedExpired = false,
+  coordinatorTime = "2026-10-10T01:00:00.000Z";
+const runner = createAnalysisRunner({
+  enabled: () => true,
+  blocked: async () => {
+    await Promise.resolve();
+    coordinatorTime = "2026-10-12T01:00:00.000Z";
+    observedExpired = true;
+    return false;
+  },
+  meter: async () => {},
+  spawn: () => {
+    spawns++;
+    return {
+      kill() {},
+      done: Promise.resolve({
+        code: 0,
+        stdout: JSON.stringify({ result: JSON.stringify({ p: RESIDUAL_P }), total_cost_usd: 0.1 }),
+        error: null,
+      }),
+    };
+  },
+});
+h.runner.run = runner.run;
+h.runner.runWithAdmission = runner.runWithAdmission;
+const journalEntriesBefore = (await h.journal.read()).entries.length;
+const result = await createEvaluationCoordinator({
+  ...f.deps,
+  now: () => new Date(coordinatorTime),
+  service: h.service,
+  journal: h.journal,
+}).execute({ ...f.request, assessmentId: parent.assessment.id, provider: "claude-cli" });
+console.log(JSON.stringify({ observedExpired, spawns, result }, null, 2));
+assert.equal(spawns, 0, "expired authorization must refuse at actual spawn boundary");
 
-
-assert.equal((await h.journal.read()).entries.length,journalEntriesBefore,"proven dispatch refusal must not append assessment");
+assert.equal(
+  (await h.journal.read()).entries.length,
+  journalEntriesBefore,
+  "proven dispatch refusal must not append assessment",
+);

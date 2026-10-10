@@ -296,7 +296,11 @@ export interface AnalysisRunner {
    * confidently in the wrong schema is a clean `unparseable`, not a crash.
    */
   run<T>(req: AnalysisRequest, parse: (value: unknown) => T | null): Promise<AnalysisResult<T>>;
-  runWithAdmission?<T>(req: AnalysisRequest, parse: (value: unknown) => T | null, admission: AnalysisDispatchAdmission): Promise<AnalysisResult<T>>;
+  runWithAdmission?<T>(
+    req: AnalysisRequest,
+    parse: (value: unknown) => T | null,
+    admission: AnalysisDispatchAdmission,
+  ): Promise<AnalysisResult<T>>;
   /** How many passes are executing right now. */
   inFlight(): number;
 }
@@ -314,14 +318,23 @@ export function dispatchValidationDetail(value: unknown): string | null {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     const check = value as Record<string, unknown>;
     if (!("then" in check) && check.ok === true) return null;
-    if (check.ok === false && typeof check.detail === "string" && check.detail.trim()) return check.detail;
+    if (check.ok === false && typeof check.detail === "string" && check.detail.trim())
+      return check.detail;
   }
   return "malformed dispatch validation";
 }
 
-export async function prepareDispatchAdmission(admission: AnalysisDispatchAdmission): Promise<() => DispatchValidation> {
+export async function prepareDispatchAdmission(
+  admission: AnalysisDispatchAdmission,
+): Promise<() => DispatchValidation> {
   const check = await admission();
-  if (!check || typeof check !== "object" || Array.isArray(check) || check.ok !== true || typeof check.validateNow !== "function") {
+  if (
+    !check ||
+    typeof check !== "object" ||
+    Array.isArray(check) ||
+    check.ok !== true ||
+    typeof check.validateNow !== "function"
+  ) {
     throw new Error(dispatchValidationDetail(check) ?? "missing final dispatch validation");
   }
   return check.validateNow;
@@ -446,7 +459,11 @@ export function createAnalysisRunner(deps: AnalysisRunnerDeps = {}): AnalysisRun
           const refusal = dispatchValidationDetail(validateNow());
           if (refusal !== null) return failed<T>("dispatch-refused", refusal, who);
         } catch (error) {
-          return failed<T>("dispatch-refused", error instanceof Error ? error.message : "dispatch admission failed", who);
+          return failed<T>(
+            "dispatch-refused",
+            error instanceof Error ? error.message : "dispatch admission failed",
+            who,
+          );
         }
       }
       const handle = spawn(spawnOptions);
@@ -555,5 +572,9 @@ export function createAnalysisRunner(deps: AnalysisRunnerDeps = {}): AnalysisRun
     }
   }
 
-  return { run: (req, parse) => run(req, parse), runWithAdmission: (req, parse, admission) => run(req, parse, async () => admission()), inFlight: () => running };
+  return {
+    run: (req, parse) => run(req, parse),
+    runWithAdmission: (req, parse, admission) => run(req, parse, async () => admission()),
+    inFlight: () => running,
+  };
 }

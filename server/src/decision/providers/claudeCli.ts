@@ -5,7 +5,11 @@ import type {
   ProviderIdentity,
   StoredSnapshot,
 } from "@argus/contracts";
-import { analysisModel, type AnalysisRunner, type AnalysisDispatchAdmission } from "../../sources/analysis.js";
+import {
+  analysisModel,
+  type AnalysisRunner,
+  type AnalysisDispatchAdmission,
+} from "../../sources/analysis.js";
 import { answerKeys, interpretDistribution, rawExcerpt } from "../answers.js";
 import { canonicalJson } from "../canonical.js";
 import type { DecisionProvider, ProviderResponse } from "./types.js";
@@ -163,107 +167,120 @@ export function createClaudeCliProvider(opts: ClaudeCliProviderOptions): Decisio
     adapterVersion: CLAUDE_CLI_ADAPTER_VERSION,
     elicitation: "verbalized",
   });
-  async function assess(q: DecisionQuestion, snapshot: StoredSnapshot, signal: AbortSignal, admission?: AnalysisDispatchAdmission): Promise<ProviderResponse> {
-      const unrun = (failure: string, detail: string): ProviderResponse => ({
-        executionDisposition: "not-called",
-        identity: declared(),
-        outcome: { status: "failed", failure, detail },
-        costUsd: null,
-        tokens: null,
-      });
-      if (signal.aborted) return unrun("aborted", "cancelled before the call");
-      if (!(await isEmptyDir(opts.cwd))) {
-        return unrun("unsafe-cwd", `the provider directory ${opts.cwd} is missing or not empty`);
-      }
-      if (signal.aborted) return unrun("aborted", "cancelled before the call");
-      const request = {
-          kind: "decide" as const,
-          prompt: renderDecisionPrompt(q, snapshot),
-          cwd: opts.cwd,
-          runtime: "claude" as const,
-          ...(opts.model ? { model: opts.model } : {}),
-          ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
-        };
-        // Accept any JSON object here; the answer space is checked below, so
-        // a well-formed but wrong answer is an `invalid-answer` with its raw
-        // text kept, not the runner's generic `unparseable`.
-      const parse = (value: unknown) => (value && typeof value === "object" ? value : null);
-      if (admission !== undefined && typeof opts.runner.runWithAdmission !== "function") {
-        return unrun("dispatch-refused", "the runner does not support dispatch admission");
-      }
-      const result = admission === undefined
+  async function assess(
+    q: DecisionQuestion,
+    snapshot: StoredSnapshot,
+    signal: AbortSignal,
+    admission?: AnalysisDispatchAdmission,
+  ): Promise<ProviderResponse> {
+    const unrun = (failure: string, detail: string): ProviderResponse => ({
+      executionDisposition: "not-called",
+      identity: declared(),
+      outcome: { status: "failed", failure, detail },
+      costUsd: null,
+      tokens: null,
+    });
+    if (signal.aborted) return unrun("aborted", "cancelled before the call");
+    if (!(await isEmptyDir(opts.cwd))) {
+      return unrun("unsafe-cwd", `the provider directory ${opts.cwd} is missing or not empty`);
+    }
+    if (signal.aborted) return unrun("aborted", "cancelled before the call");
+    const request = {
+      kind: "decide" as const,
+      prompt: renderDecisionPrompt(q, snapshot),
+      cwd: opts.cwd,
+      runtime: "claude" as const,
+      ...(opts.model ? { model: opts.model } : {}),
+      ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
+    };
+    // Accept any JSON object here; the answer space is checked below, so
+    // a well-formed but wrong answer is an `invalid-answer` with its raw
+    // text kept, not the runner's generic `unparseable`.
+    const parse = (value: unknown) => (value && typeof value === "object" ? value : null);
+    if (admission !== undefined && typeof opts.runner.runWithAdmission !== "function") {
+      return unrun("dispatch-refused", "the runner does not support dispatch admission");
+    }
+    const result =
+      admission === undefined
         ? await opts.runner.run(request, parse)
         : await opts.runner.runWithAdmission!(request, parse, async () => {
-          const check = await admission();
-          if (!check || check.ok !== true || typeof check.validateNow !== "function") return check;
-          return { ok: true, validateNow: () => {
-            if (signal.aborted) return { ok: false, detail: "cancelled before dispatch" };
-            const final = check.validateNow();
-            if (signal.aborted) return { ok: false, detail: "cancelled before dispatch" };
-            return final;
-          } };
-        });
-      const identity: ProviderIdentity = {
-        provider: "claude-cli",
-        requestedModel: result.requestedModel,
-        reportedModel: result.reportedModel,
-        adapterVersion: CLAUDE_CLI_ADAPTER_VERSION,
-        elicitation: "verbalized",
-      };
-      const validUsage = (value: unknown): number | null =>
-        typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
-      const usage = { costUsd: validUsage(result.costUsd), tokens: validUsage(result.tokens) };
-      const noUsage = (value: unknown): boolean =>
-        value === null || (typeof value === "number" && Number.isFinite(value) && value === 0);
-      const disposition = result.executionDisposition;
-      const consistentRefusal =
-        result.ok === false &&
-        result.value === null &&
-        result.raw === "" &&
-        (result.failure === "disabled" ||
-          result.failure === "busy" ||
-          result.failure === "budget-blocked" ||
-          result.failure === "dispatch-refused") &&
-        noUsage(result.costUsd) &&
-        noUsage(result.tokens) &&
-        result.reportedModel === null;
-      if (
-        (disposition === "not-called" && !consistentRefusal) ||
-        (disposition !== undefined &&
-          disposition !== "not-called" &&
-          disposition !== "possibly-called")
-      ) {
-        return {
-          identity,
-          ...usage,
-          executionDisposition: "possibly-called",
-          outcome: {
-            status: "failed",
-            failure: "invalid-execution-disposition",
-            detail: "the runner supplied inconsistent execution evidence",
-          },
-        };
-      }
-      const executionDisposition = disposition === "not-called" ? "not-called" : "possibly-called";
-      if (!result.ok || result.value === null) {
-        const outcome: DecisionOutcome = {
-          status: "failed",
-          failure: result.failure ?? "unknown",
-          detail: result.error ?? "the pass failed",
-        };
-        if (result.raw) outcome.rawExcerpt = rawExcerpt(result.raw);
-        return { identity, outcome, ...usage, executionDisposition };
-      }
+            const check = await admission();
+            if (!check || check.ok !== true || typeof check.validateNow !== "function")
+              return check;
+            return {
+              ok: true,
+              validateNow: () => {
+                if (signal.aborted) return { ok: false, detail: "cancelled before dispatch" };
+                const final = check.validateNow();
+                if (signal.aborted) return { ok: false, detail: "cancelled before dispatch" };
+                return final;
+              },
+            };
+          });
+    const identity: ProviderIdentity = {
+      provider: "claude-cli",
+      requestedModel: result.requestedModel,
+      reportedModel: result.reportedModel,
+      adapterVersion: CLAUDE_CLI_ADAPTER_VERSION,
+      elicitation: "verbalized",
+    };
+    const validUsage = (value: unknown): number | null =>
+      typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+    const usage = { costUsd: validUsage(result.costUsd), tokens: validUsage(result.tokens) };
+    const noUsage = (value: unknown): boolean =>
+      value === null || (typeof value === "number" && Number.isFinite(value) && value === 0);
+    const disposition = result.executionDisposition;
+    const consistentRefusal =
+      result.ok === false &&
+      result.value === null &&
+      result.raw === "" &&
+      (result.failure === "disabled" ||
+        result.failure === "busy" ||
+        result.failure === "budget-blocked" ||
+        result.failure === "dispatch-refused") &&
+      noUsage(result.costUsd) &&
+      noUsage(result.tokens) &&
+      result.reportedModel === null;
+    if (
+      (disposition === "not-called" && !consistentRefusal) ||
+      (disposition !== undefined &&
+        disposition !== "not-called" &&
+        disposition !== "possibly-called")
+    ) {
       return {
         identity,
-        outcome: readClaudeAnswer(q, result.value, result.raw),
         ...usage,
-        executionDisposition,
+        executionDisposition: "possibly-called",
+        outcome: {
+          status: "failed",
+          failure: "invalid-execution-disposition",
+          detail: "the runner supplied inconsistent execution evidence",
+        },
       };
+    }
+    const executionDisposition = disposition === "not-called" ? "not-called" : "possibly-called";
+    if (!result.ok || result.value === null) {
+      const outcome: DecisionOutcome = {
+        status: "failed",
+        failure: result.failure ?? "unknown",
+        detail: result.error ?? "the pass failed",
+      };
+      if (result.raw) outcome.rawExcerpt = rawExcerpt(result.raw);
+      return { identity, outcome, ...usage, executionDisposition };
+    }
+    return {
+      identity,
+      outcome: readClaudeAnswer(q, result.value, result.raw),
+      ...usage,
+      executionDisposition,
+    };
   }
   return {
-    kind: "claude-cli", identity: declared, supports: () => true,
+    kind: "claude-cli",
+    identity: declared,
+    supports: () => true,
     assess: (q, snapshot, signal) => assess(q, snapshot, signal),
-    assessWithAdmission: (q, snapshot, signal, admission) => assess(q, snapshot, signal, async () => admission()),
+    assessWithAdmission: (q, snapshot, signal, admission) =>
+      assess(q, snapshot, signal, async () => admission()),
   };
 }

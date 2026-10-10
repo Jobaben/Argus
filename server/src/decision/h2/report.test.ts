@@ -278,11 +278,23 @@ function probeFixture() {
 test("legacy journal guard names remain potentially spent while explicit ledger refusals retain priority", () => {
   const f = fixture();
   for (const failure of ["disabled", "busy", "budget-blocked", "aborted", "unsafe-cwd"]) {
-    f.item({ role: "probe", label: "deadline", cls: "provider-failed", noResult: true,
-      outcome: { status: "failed", failure, detail: "legacy" }, costUsd: null });
+    f.item({
+      role: "probe",
+      label: "deadline",
+      cls: "provider-failed",
+      noResult: true,
+      outcome: { status: "failed", failure, detail: "legacy" },
+      costUsd: null,
+    });
   }
-  f.item({ role: "probe", label: "deadline", cls: "refused", code: "disabled",
-    outcome: { status: "failed", failure: "disabled", detail: "historical explicit refusal" }, costUsd: null });
+  f.item({
+    role: "probe",
+    label: "deadline",
+    cls: "refused",
+    code: "disabled",
+    outcome: { status: "failed", failure: "disabled", detail: "historical explicit refusal" },
+    costUsd: null,
+  });
   const report = buildH2Report({ ledger: f.ledger(), journal: f.journal(), registry: f.registry });
   assert.equal(report.probe[0].attempts["provider-failed"], 5);
   assert.equal(report.probe[0].attempts.refused, 1);

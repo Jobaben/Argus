@@ -112,14 +112,7 @@
   },
   "stagedOwnedFiles": 93,
   "closedAt": "2026-10-10T06:34:48.6863802Z",
-  "heartbeatPreservedFields": [
-    "id",
-    "kind",
-    "name",
-    "prompt",
-    "rrule",
-    "targetThreadId"
-  ],
+  "heartbeatPreservedFields": ["id", "kind", "name", "prompt", "rrule", "targetThreadId"],
   "independentCutoffReview": "Confirmed by final_advisory_retained_review at cutoff:21scope hashes still match; no source delta or new finding. Earlier complementary29scope completes46unique coverage.",
   "finalDeliveryVerification": {
     "at": "2026-10-10T06:36:14.7654689Z",
