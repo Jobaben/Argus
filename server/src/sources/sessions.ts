@@ -52,6 +52,45 @@ interface RawLine {
   cwd?: string;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function normalizeLine(raw: unknown): RawLine | null {
+  if (!isRecord(raw)) return null;
+  let message: RawMessage | undefined;
+  if (isRecord(raw.message)) {
+    const content = raw.message.content;
+    message = {
+      role: stringField(raw.message.role),
+      model: stringField(raw.message.model),
+      content: Array.isArray(content)
+        ? content.filter(isRecord).map((item) => ({
+            type: stringField(item.type),
+            text: stringField(item.text),
+            thinking: stringField(item.thinking),
+            name: stringField(item.name),
+            input: item.input,
+            content: item.content,
+            is_error: item.is_error === true,
+          }))
+        : stringField(content),
+    };
+  }
+  return {
+    type: stringField(raw.type),
+    aiTitle: stringField(raw.aiTitle),
+    isMeta: raw.isMeta === true,
+    timestamp: stringField(raw.timestamp),
+    cwd: stringField(raw.cwd),
+    message,
+  };
+}
+
 export type { SessionDetail, SessionMessage, SessionSummary, SessionTail } from "@argus/contracts";
 
 /**
@@ -254,10 +293,9 @@ async function listSessionFiles(): Promise<TranscriptFile[]> {
 async function readLines(kind: TranscriptKind, file: string): Promise<RawLine[]> {
   const raw = await readJsonl<unknown>(file);
   const translate = translatorFor(kind);
-  if (!translate) return raw as RawLine[];
   const out: RawLine[] = [];
   for (const line of raw) {
-    const translated = translate(line);
+    const translated = normalizeLine(translate ? translate(line) : line);
     if (translated) out.push(translated);
   }
   return out;
@@ -545,8 +583,8 @@ function ingestParsed(state: TailState, raw: unknown): void {
   // a reload of the same session agree message for message.
   const translate = translatorFor(state.kind);
   const parsed = translate ? translate(raw) : raw;
-  if (!parsed || typeof parsed !== "object") return;
-  const line = parsed as RawLine;
+  const line = normalizeLine(parsed);
+  if (!line) return;
   if (line.cwd) state.cwd = line.cwd;
   if (!isMessageLine(line.type) && line.message?.model) state.model = line.message.model;
   if (line.timestamp) {

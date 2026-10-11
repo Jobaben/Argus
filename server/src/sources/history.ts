@@ -3,14 +3,6 @@ import { paths } from "../claudeHome.js";
 import { cached } from "./cache.js";
 import type { Activity } from "@argus/contracts";
 
-/** One raw line in `history.jsonl`. */
-interface HistoryEntry {
-  display?: string;
-  timestamp?: number;
-  project?: string;
-  sessionId?: string;
-}
-
 export type { Activity } from "@argus/contracts";
 
 // history.jsonl is append-only and only the newest `limit` entries are served,
@@ -22,11 +14,19 @@ function lastSegment(p: string): string {
   return p.split(/[\\/]/).filter(Boolean).pop() ?? p;
 }
 
-function normalize(entry: HistoryEntry): Activity {
-  const cwd = entry.project?.trim() ?? "";
+function normalize(value: unknown): Activity | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const entry = value as Record<string, unknown>;
+  if (typeof entry.display !== "string") return null;
+  if (entry.project != null && typeof entry.project !== "string") return null;
+  const text = entry.display.trim();
+  if (!text) return null;
+  const date = typeof entry.timestamp === "number" ? new Date(entry.timestamp) : null;
+  if (date && !Number.isFinite(date.getTime())) return null;
+  const cwd = typeof entry.project === "string" ? entry.project.trim() : "";
   return {
-    ts: typeof entry.timestamp === "number" ? new Date(entry.timestamp).toISOString() : "",
-    text: entry.display?.trim() ?? "",
+    ts: date?.toISOString() ?? "",
+    text,
     project: cwd ? lastSegment(cwd) : "",
     cwd,
   };
@@ -55,24 +55,25 @@ async function readTail(file: string, maxBytes: number): Promise<string> {
 /** Reads the prompt history, most recent first, capped at `limit` entries.
  *  Tail-reads the file and caches the burst of live refetches (short TTL). */
 export async function readActivity(limit = 100): Promise<Activity[]> {
-  return cached(`activity:${limit}`, 1500, async () => {
+  const file = paths.history();
+  return cached(`activity:${file}:${limit}`, 1500, async () => {
     let raw: string;
     try {
-      raw = await readTail(paths.history(), TAIL_BYTES);
+      raw = await readTail(file, TAIL_BYTES);
     } catch {
       return [];
     }
-    const entries: HistoryEntry[] = [];
+    const entries: Activity[] = [];
     for (const line of raw.split("\n")) {
       const trimmed = line.trim();
       if (!trimmed) continue;
       try {
-        entries.push(JSON.parse(trimmed) as HistoryEntry);
+        const activity = normalize(JSON.parse(trimmed));
+        if (activity) entries.push(activity);
       } catch {
         // skip malformed line
       }
     }
-    const normalized = entries.map(normalize).filter((a) => a.text.length > 0);
-    return normalized.reverse().slice(0, limit);
+    return entries.reverse().slice(0, limit);
   });
 }
