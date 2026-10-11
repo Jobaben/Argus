@@ -98,6 +98,7 @@ Markdown and HTML versions are listed separately when both exist. Runtime data, 
 - [Decision Ledger foundations implementation plan](../argus/decision-ledger-development/implementation-plan.md)
 - [Implementation status matrix](../argus/decision-ledger-development/implementation-status-matrix.md)
 - [Next-slice feasibility: retained evaluation and policy preparation](../argus/decision-ledger-development/next-slice-feasibility.md)
+- [DL06 policy preparation developer guide](../argus/decision-ledger-development/policy-preparation.md)
 - [Pre-call accounting diagnosis](../argus/decision-ledger-development/precall-accounting-diagnosis.md)
 - [Explicit execution provenance plan](../argus/decision-ledger-development/precall-accounting-plan.md)
 - [Decision Ledger development progress](../argus/decision-ledger-development/progress-history.md)
@@ -136,4 +137,4 @@ Markdown and HTML versions are listed separately when both exist. Runtime data, 
 - [Living-data choreography](../../design/foundations/motion-choreography/index.html) — HTML
 - [Motion lifecycle](../../design/foundations/motion-lifecycle/index.html) — HTML
 
-**Inventory:** 97 documents, including this catalog. Source code, skills and runtime artifacts are outside this prose-document inventory.
+**Inventory:** 98 documents, including this catalog. Source code, skills and runtime artifacts are outside this prose-document inventory.
