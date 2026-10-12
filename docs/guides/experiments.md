@@ -61,18 +61,24 @@ Every value below has a conservative default. An invalid value turns
 collection off and names itself on the Experiments page; it is never replaced
 by a guess.
 
-| Variable                                  | Default        | Meaning                                                   |
-| ----------------------------------------- | -------------- | --------------------------------------------------------- |
-| `ARGUS_DECISIONS_H2_MODEL`                | runner default | Explicit model for the Claude CLI adapter (one per item). |
-| `ARGUS_DECISIONS_H2_RESIDUAL_RATE`        | `0.5`          | Share of eligible runs sampled for the residual question. |
-| `ARGUS_DECISIONS_H2_PROBE_RATE`           | `0.1`          | Share of eligible runs sampled for the probe.             |
-| `ARGUS_DECISIONS_H2_MAX_CALLS_PER_DAY`    | `20` (0–96)    | Provider invocations per rolling 24 hours.                |
-| `ARGUS_DECISIONS_H2_MIN_INTERVAL_MINUTES` | `15`           | Minimum gap between invocations.                          |
-| `ARGUS_DECISIONS_H2_MAX_USD_PER_DAY`      | `1`            | Recorded cost per rolling 24 hours, including H1 calls.   |
-| `ARGUS_DECISIONS_H2_SEED`                 | `argus-h2`     | Seed of the deterministic sampling draw.                  |
+| Variable                                  | Default        | Meaning                                                                                                                              |
+| ----------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `ARGUS_DECISIONS_H2_RUNTIME`              | `claude`       | The CLI that answers: `claude` or `codex`.                                                                                           |
+| `ARGUS_DECISIONS_H2_MODEL`                | runner default | Explicit model (one per item). Required under `codex`, where it must name a Codex model; a `gpt-*` model under `claude` is an error. |
+| `ARGUS_DECISIONS_H2_REASONING_EFFORT`     | unset          | Codex only: `low`, `medium`, `high` or `xhigh`.                                                                                      |
+| `ARGUS_DECISIONS_H2_RESIDUAL_RATE`        | `0.5`          | Share of eligible runs sampled for the residual question.                                                                            |
+| `ARGUS_DECISIONS_H2_PROBE_RATE`           | `0.1`          | Share of eligible runs sampled for the probe.                                                                                        |
+| `ARGUS_DECISIONS_H2_MAX_CALLS_PER_DAY`    | `20` (0–96)    | Provider invocations per rolling 24 hours.                                                                                           |
+| `ARGUS_DECISIONS_H2_MIN_INTERVAL_MINUTES` | `15`           | Minimum gap between invocations.                                                                                                     |
+| `ARGUS_DECISIONS_H2_MAX_USD_PER_DAY`      | `1`            | Recorded cost per rolling 24 hours, including H1 calls.                                                                              |
+| `ARGUS_DECISIONS_H2_SEED`                 | `argus-h2`     | Seed of the deterministic sampling draw.                                                                                             |
 
-The runner default model is `haiku` for Claude, or `ARGUS_ANALYSIS_MODEL`.
-The adapter always runs the `claude` CLI.
+Under `claude`, the runner default model is `haiku`, or `ARGUS_ANALYSIS_MODEL`.
+Under `codex`, the call runs with the read-only Codex lockdown (no hooks, MCP
+servers or web search, and a restricted shell environment) and refuses
+`ARGUS_CODEX_ARGS`. Its cost is known only for models in Argus's Codex price
+list; any other model records an unknown cost, which blocks further calls for
+24 hours. Codex runs are sampled alongside Claude runs, whichever CLI answers.
 
 ### What it does, and what bounds it
 

@@ -1630,7 +1630,8 @@ read.
 - **`collection`** is the live, in-memory state:
   - whether collection is enabled, and if not, why (each unset switch or
     invalid setting);
-  - the effective settings;
+  - the effective settings, including `runtime` (`claude` or `codex`),
+    `provider` (`claude-cli` or `codex-cli`) and `reasoningEffort`;
   - the watcher's state (`inactive`, `waiting`, `paused` or `halted`), with a
     detail and a pause end.
 - **`report`** is `decision-h2-report` v1. It is a deterministic replay of
@@ -1678,6 +1679,35 @@ contribute to any figure. A gate still waiting on its operator appears only
 in `pending` counts, so nothing here shows a prediction, rule result or
 Verdict classification for it. It never calls a provider or writes, not even
 a directory. The gate review route is unchanged by H1.
+
+### Advisory assessment read
+
+`GET /api/decisions/assessments/:id?consumer=<id>&runId=<id>` reads one
+retained Decision Journal assessment for a registered advisory consumer. It
+makes no model call and writes nothing.
+
+**Inert by default.** A stock server configures no reader, so the route
+answers `503 { "ok": false, "reason": "reader-unavailable" }`.
+
+- `consumer` and `runId` must each appear exactly once and be non-blank, or
+  the answer is `400 { "ok": false, "reason": "invalid-query" }`.
+- **Refusals** carry `{ ok: false, reason }`:
+
+  | Status | `reason`                                                                                     |
+  | ------ | -------------------------------------------------------------------------------------------- |
+  | `400`  | `invalid-id`                                                                                 |
+  | `403`  | `unknown-consumer`, `unsupported-question`, `unsupported-projection`, `unsupported-provider` |
+  | `404`  | `unknown-assessment`                                                                         |
+  | `409`  | `subject-mismatch` (the assessment is not about that run)                                    |
+  | `422`  | `malformed-assessment`                                                                       |
+  | `503`  | `journal-unavailable`                                                                        |
+
+- **A success** is `{ ok: true, value }` (`AdvisoryAssessment` in
+  `server/src/decision/reader.ts`). `value` carries the assessment, its
+  journal provenance and integrity, the retained snapshot lookup, its
+  currency, `presentation` (`current`, `stale`, `historical` or
+  `unavailable`), `usable` with its `reasons`, a known or unknown `cost`,
+  and `authority: "inference-only"`.
 
 ### Artifacts
 

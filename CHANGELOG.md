@@ -5,6 +5,123 @@ All notable changes to Argus are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-12
+
+> **Breaking changes.** Pre-1.0, so this bumps the minor version. Check these
+> before you upgrade from 0.4.0:
+>
+> - **Completions without a marker fail.** `completion.marker` defaults to
+>   `required`, so a `completed` signal whose final message has no
+>   `ARGUS_OUTCOME` line is refused as `unverified`. In 0.4.0 that counted as
+>   success. To keep the old behaviour, set
+>   `{ "completion": { "marker": "lenient" } }` on the pipeline or a phase.
+> - **Signal tokens are per run.** New instances accept only the token minted
+>   for that run in `ARGUS_SIGNAL_TOKEN`; the instance-wide `signalToken` gets
+>   a `403`. Installed hooks keep working. Scripts that POST
+>   `/api/instances/:id/signal` with `signalToken` do not.
+> - **Editing a pipeline with live instances returns `409`.**
+>   `PUT`/`PATCH /api/pipelines/:id` that changes what runs (phases, model,
+>   effort, runtime, capabilities) while an instance is running or awaiting
+>   approval returns `409` with `code: "instances-running"`. Pass `?force=1`
+>   to save anyway. Running instances keep the definition they started with.
+> - **Argus won't start on an exposed bind without a token.** A non-loopback
+>   `ARGUS_HOST` without `ARGUS_TOKEN` exits instead of logging a warning. The
+>   same goes for a non-loopback peer that has no pairing secret.
+> - **`npm start` binds to loopback.** It no longer sets
+>   `ARGUS_HOST=0.0.0.0` and `ARGUS_ALLOWED_HOSTS=10.59.1.53`. To keep a LAN
+>   bind, set both yourself, plus `ARGUS_TOKEN`.
+> - **Exit 0 with an error counts as failed.** A scheduled or one-off run
+>   whose CLI exits 0 but reports `is_error: true` is recorded as `failed`,
+>   which fires failure notifications and creates Issues.
+
+### Added
+
+- **Advisory read route for retained assessments (inert by default).**
+  `GET /api/decisions/assessments/:id?consumer=<id>&runId=<id>` reads one
+  Decision Journal assessment for a registered advisory consumer. It makes
+  no model call. A stock server configures no reader, so the route answers
+  `503 { ok: false, reason: "reader-unavailable" }`.
+  - `consumer` and `runId` must each appear exactly once and be non-blank,
+    or the answer is `400 invalid-query`.
+  - Refusals map to `400 invalid-id`, `404 unknown-assessment`,
+    `409 subject-mismatch`, `422 malformed-assessment`,
+    `503 journal-unavailable`, and `403` for an unknown consumer or an
+    unsupported question, projection or provider.
+  - A success carries currency, presentation (`current`, `stale`,
+    `historical`, `unavailable`), `usable`, reasons, known or unknown cost
+    and `authority: "inference-only"`.
+
+### Changed
+
+- **Read-only Codex steps run locked down, and finish from the run record.**
+  A step whose capability profile sets `filesystem: "read-only"` on the Codex
+  runtime gets extra `-c` overrides. `ARGUS_CODEX_SANDBOX=read-only` without
+  a profile does not.
+  - `features.hooks=false` turns off every Codex hook, including Argus's
+    `[[hooks.stop]]` signal. Completion is recovered from the run record on
+    the next reconcile tick (`completion_source: "run-record-fallback"`).
+  - On that path a missing or conflicting `ARGUS_OUTCOME` marker always
+    fails the step as `unverified`, so `completion: { marker: "lenient" }`
+    does not accept a markerless read-only Codex step.
+  - `approval_policy="never"`, `web_search="disabled"`, and
+    `features.plugins`, `features.apps` and `features.multi_agent` off.
+  - Every `[mcp_servers.<name>]` table in the Codex home's `config.toml` is
+    set to `enabled=false`. Servers declared in any other form are not
+    matched. A `config.toml` that exists but cannot be read fails the launch.
+  - Commands run by the agent's shell see only `PATH`, `PATHEXT`,
+    `SystemRoot`, `WINDIR`, `TEMP`, `TMP`, `USERPROFILE`, `HOME` and
+    `ARGUS_RUN_ID`. The `ARGUS_*_FILE` channel variables are not among them,
+    so channel paths come from the prompt. Builds that rely on other
+    variables (`JAVA_HOME`, `NODE_OPTIONS`, proxy settings) may break.
+  - `ARGUS_CODEX_ARGS` is refused: the launch throws "ARGUS_CODEX_ARGS is
+    incompatible with enforced read-only execution", and the run fails as
+    `spawn`, which the default policy retries.
+- **An analysis pass fails when its CLI fails.** A pass whose process exits
+  non-zero, ends without an exit code, or reports `is_error: true` is a
+  failure: `nonzero-exit`, `exit-code-unavailable` or `runtime-failed`. It
+  used to be parsed as an answer if its output held JSON. This applies to
+  every pass on the shared runner: Verdict, trajectory, Autopsy, Diagnose,
+  tuning, the omnibar planner and Decision Plane calls, so Verdict
+  auto-approval can stop where it used to pass.
+- **Sign-in and the step drawer load on demand.** The sign-in panel and the
+  Command Center step drawer are separate chunks, fetched when first needed.
+  The sign-in wall shows "Loading sign in" while its chunk loads. If the
+  chunk fails, an error boundary takes the panel's place and the dashboard
+  stays locked, with no data reads.
+- **Documentation reorganised.** `docs/README.md` indexes new
+  `getting-started/`, `guides/`, `reference/` and `development/` sections and
+  an agent reading guide. The README and USER-GUIDE are shortened to point
+  there.
+
+### Fixed
+
+- **One malformed history line no longer breaks the activity feed.** A
+  `history.jsonl` record that is not an object, has a non-string `display`
+  or `project`, or has a timestamp outside the JavaScript date range is
+  skipped on its own; it used to throw. The 1.5 s cache is keyed by the
+  resolved history file as well as the limit, so a changed Claude home is
+  not served the old home's entries.
+- **Malformed transcript lines no longer break session views.** Session
+  summary, detail and live tail share one shape check. Non-object lines and
+  content blocks are dropped, and title, timestamp, cwd, role, model, text,
+  thinking and tool-name fields are accepted only as strings. Valid
+  neighbouring messages still show. Raw lines for the Recorder are
+  unchanged.
+- **Unusable cost figures are unknown, not money.** Claude, Qwen and
+  OpenCode envelopes accept only a finite, non-negative number as a cost.
+  Negative, string, boolean, array and null values become `null`. An
+  OpenCode run with any unusable step cost has an unknown total, not a
+  partial sum, and an overflowing total is unknown.
+
+### Security
+
+- **Decision Plane calls no longer inherit the server environment.** H1 and
+  H2 CLI calls are spawned through the child-environment policy. They used
+  to get the server's whole `process.env`, `ARGUS_TOKEN` and
+  `ARGUS_WEBHOOK_URL` included. A Codex decision call also gets the
+  read-only lockdown above and refuses `ARGUS_CODEX_ARGS`. Other analysis
+  passes still inherit the full environment.
+
 ### Added
 
 - **Trajectory signals and optional judging (Hardening Item 5, off by default).**
@@ -125,6 +242,8 @@ All notable changes to Argus are documented here. The format follows
   - It settles each gate from applied operator decisions on the exact
     attempt, retained in its own ledger.
   - H1 and H2 share one call allowance and at most one invocation per tick.
+  - A call in the last 24 hours whose cost is unknown blocks both
+    experiments' admission until it ages out, rather than counting as free.
 
   The Experiments page and `GET /api/decisions/h1` report settled gates
   only, and show pending gates as counts. No gate, badge, ordering or
@@ -142,6 +261,24 @@ All notable changes to Argus are documented here. The format follows
     reference, in its own append-only ledger.
   - An interrupted call is recorded as an unknown outcome and is never
     re-sent.
+  - `ARGUS_DECISIONS_H2_RUNTIME=claude|codex` (default `claude`) picks the
+    CLI. `codex` needs `ARGUS_DECISIONS_H2_MODEL` to name a Codex model
+    explicitly, and a `gpt-*` model under `claude` is an error.
+    `ARGUS_DECISIONS_H2_REASONING_EFFORT=low|medium|high|xhigh` is
+    Codex-only. An invalid combination turns collection off and is listed
+    in the status reasons. Cost is known only for models in Argus's Codex
+    price list; any other model records an unknown cost, which blocks
+    further calls for 24 hours.
+  - Codex runs are sampled alongside Claude runs, whichever runtime
+    answers. The eligibility rules moved to `@2`
+    (`runtime-not-supported@2`), so the first tick after upgrading appends
+    a new `config` record. A Codex config also records `reasoningEffort`.
+  - The `GET /api/decisions/h2` status settings gain `runtime`, `provider`
+    and `reasoningEffort`.
+  - A refusal proven to precede any call (`disabled`, `busy`,
+    `budget-blocked`, `aborted`, `unsafe-cwd`, `dispatch-refused`) is not
+    appended to the Decision Journal as a failed assessment. The
+    collection ledger still records it as `refused`.
 
   **More → Experiments** (`GET /api/decisions/h2`) is a read-only
   deterministic replay. It shows separate probe and residual tables, with
