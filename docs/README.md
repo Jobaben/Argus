@@ -34,7 +34,6 @@ docs/
   research/             dated research and capability comparisons
   rfc/                  design proposals with implementation amendments
   argus/                dated development evidence and experiment handoffs
-  superpowers/          historical design specifications and plans
 ```
 
 The detailed technical references keep their existing paths so code, evidence

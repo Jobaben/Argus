@@ -75,18 +75,6 @@ Markdown and HTML versions are listed separately when both exist. Runtime data, 
 
 - [RFC: A provider-neutral Decision Plane for Argus](../rfc/2026-09-29-decision-plane.md)
 
-## Historical design specifications and plans
-
-- [Scheduled Runs Monitoring — Implementation Plan](../superpowers/plans/2026-06-22-scheduled-runs-monitoring.md)
-- [Scheduler Re-frame — Navbar Redesign Implementation Plan](../superpowers/plans/2026-06-24-scheduler-reframe-navbar.md)
-- [Argus Design System Implementation Plan](../superpowers/plans/2026-06-26-argus-design-system.md)
-- [Windows Pipeline Console Host Implementation Plan](../superpowers/plans/2026-08-10-windows-pipeline-console-host.md)
-- [Scheduled Runs, Monitored by Argus — Design](../superpowers/specs/2026-06-22-scheduled-runs-monitoring-design.md)
-- [Re-frame Argus around the Scheduler — navbar redesign](../superpowers/specs/2026-06-23-scheduler-reframe-navbar-design.md)
-- [Argus Design System — Design Spec](../superpowers/specs/2026-06-26-argus-design-system-design.md)
-- [Windows Pipeline Console Host Design](../superpowers/specs/2026-08-10-windows-pipeline-console-host-design.md)
-- [Outcome-Based Pipeline Routing Design](../superpowers/specs/2026-08-13-outcome-routing-design.md)
-
 ## Decision Ledger development and validation records
 
 - [Acceptance input and advisory identity prerequisites](../argus/decision-ledger-development/acceptance-input-prerequisites.md)
@@ -128,6 +116,11 @@ Markdown and HTML versions are listed separately when both exist. Runtime data, 
 - [Argus Decision Ledger closeout](../../experiments/decision-ledger-closeout-20261009/reports/report.html) — HTML
 - [Experiment pipeline cleanup](../../experiments/pipeline-cleanup-20261010/README.md)
 - [Shadow feeder](../../experiments/shadow-feeder/README.md)
+
+## Pipeline reliability plan
+
+- [Plan: Argus pipeline reliability (every audit finding)](../argus/reliability/plan.md)
+- [Handoff: Argus reliability plan](../argus/reliability/handoff.md)
 
 ## Design-system sources
 
