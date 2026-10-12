@@ -11,27 +11,35 @@
 
 ## Where things stand
 
-| Item                               | State                                                                                                                                                                                                                                                                                |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| WS1, WS2, follow-ups #1/#4         | ✅ on `main` and pushed (`fa470ed`).                                                                                                                                                                                                                                                 |
-| `main`                             | `39b58dc`, even with `origin/main`, with 12 commits by others since `fa470ed` (Decision Ledger, docs reorg, Codex read-only isolation, transcript readers). `server/src/engine/`, `pipelineTransitions.ts`, `dag.ts`, `harness/`, `bin/` and `hooks/` are untouched since `fa470ed`. |
-| Plan                               | Re-baselined against `39b58dc` on 2026-10-12. Every open question is answered (the plan's "Decisions on the re-baseline"). Two follow-ups: confirm the narrowed soak wording (decision 1), and in WS3 ask what a missing `ARGUS_TOKEN` does (decision 4).                            |
-| WS14 (instance status under gates) | ⬜ **Next** after the `v0.5.0` release, on `fix/gate-state-guards`, before WS3. Order and grown scope approved (decision 7).                                                                                                                                                         |
-| WS3–WS13                           | ⬜ Not started.                                                                                                                                                                                                                                                                      |
-| Live proof of WS1/WS2              | Ready for verification only. It comes with WS11's discovery-pipeline fan-out.                                                                                                                                                                                                        |
+| Item                               | State                                                                                                                                                                                                                                                                |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| WS1, WS2, follow-ups #1/#4         | ✅ on `main` and pushed (`fa470ed`).                                                                                                                                                                                                                                 |
+| `main`                             | `ee69bb4` (this plan and handoff moved into the repo), on top of `db13709` (`docs/superpowers` deleted) and `75deb5f` (`v0.5.0`, tagged). All pushed. The engine, `pipelineTransitions.ts`, `dag.ts`, `harness/`, `bin/` and `hooks/` are untouched since `fa470ed`. |
+| Plan                               | Re-baselined against `39b58dc` on 2026-10-12. Every open question is answered, and the narrowed soak wording is confirmed (the plan's "Decisions on the re-baseline"). One follow-up: in WS3, ask what a missing `ARGUS_TOKEN` does (decision 4).                    |
+| WS14 (instance status under gates) | 🟡 **Next.** `fix/gate-state-guards` exists with no commits of its own; its three failing tests are written but stashed (see below). Order and grown scope approved (decision 7).                                                                                    |
+| WS3–WS13                           | ⬜ Not started.                                                                                                                                                                                                                                                      |
+| Live proof of WS1/WS2              | Ready for verification only. It comes with WS11's discovery-pipeline fan-out.                                                                                                                                                                                        |
 
 **State at 2026-10-12, end of session:**
 
 - **`v0.5.0` is released:** commit `75deb5f` on `main`, tag `v0.5.0`, both pushed. It includes the CHANGELOG gap fill, the breaking-changes callout, and docs for the advisory assessment route and the H2 runtime and effort settings.
   - `npm run check` was not green locally: 3 server baseline failures, plus 1 web locale failure (`sessionList.test.ts` expects "Thursday" and gets "torsdag").
 - **The six merged branches are deleted.** A detached worktree remains at `.claude/worktrees/argus-workspace-setup-0dc225`; it was not touched.
-- **The plan and this handoff moved into the repo** (`docs/argus/reliability/`), staged on `main` for the user to commit and push. Until that commit lands, the WS14 tests stay stashed ("ws14 red tests"); after it, rebase `fix/gate-state-guards` onto `main` and pop the stash.
-- **`fix/gate-state-guards` is cut from `main`.** WS14's three behavioural tests sit unstaged in `server/src/pipelineEngineHarness.test.ts` (section "WS14") on the original checkout (`C:GITrgus`) and fail as intended. They exist nowhere else until the branch is committed and pushed; on another machine, rewrite them from the plan's WS14 step 4. `onFailure` fires at the approve, not at the stall, so test 2 pins the right path.
-- **Orphan `48fab3f6` is still `awaiting-approval` on disk** (file unchanged since 2026-07-02). The user reported "killed the running instance", and the Argus server on :7777 is down. Confirm with the user whether the orphan still needs aborting in the UI.
+- **The plan and this handoff live in the repo** (`docs/argus/reliability/`, committed as `ee69bb4`). The OneDrive originals are deleted. The `docs/superpowers` links are gone from the catalog and `docs/README.md`.
+- **WS14's three failing tests are stashed** in the original checkout as "ws14 red tests" (`git stash list`), a change to `server/src/pipelineEngineHarness.test.ts`, section "WS14".
+  - They fail on `75deb5f` for the intended reasons. `onFailure` fires at the approve, not at the stall, so test 2 pins the right path.
+  - They exist nowhere else. On another machine, rewrite them from the plan's WS14 step 4. A's failure must be a **stall**, not a failed check, because check results wait for a pending gate decision.
+- **Orphan `48fab3f6` is still `awaiting-approval` on disk** (file unchanged since 2026-07-02). The user reported "killed the running instance", and the Argus server on :7777 was down afterwards. Ask the user whether the orphan still needs aborting in the UI.
 
 **Next session:**
 
-1. Check `git status`: on `fix/gate-state-guards`, with the WS14 tests unstaged. If `main` moved past `75deb5f`, check `git diff --stat 75deb5f..main -- server/src/engine server/src/pipelineTransitions.ts server/src/sources/dag.ts`.
+1. In the original checkout (`C:/GIT/argus`), bring the branch up and restore the tests:
+   - `git switch fix/gate-state-guards`;
+   - `git merge --ff-only main` (the branch has no commits of its own);
+   - `git stash pop`.
+
+   Rerun the three WS14 tests and confirm they still fail. If `main` has moved past `ee69bb4`, first run `git diff --stat 75deb5f..main -- server/src/engine server/src/pipelineTransitions.ts server/src/sources/dag.ts`.
+
 2. Implement WS14 per the plan's WS14 section. Order:
    - the `sources/instanceStatus.ts` predicates and `liveStatus`;
    - the four transitions;
@@ -66,7 +74,7 @@ The full inventory, with every site, is in the plan's WS14 section. It changes o
 
 ## Open items carried over
 
-1. **WS4 registry backfill:** WS2 `read-only-enforced`, `stall-at-gate` (`fa470ed`), WS14 `instance-status-derived`, and possibly `codex-read-only-isolation` (open question 3).
+1. **WS4 registry backfill:** WS2 `read-only-enforced`, `stall-at-gate` (`fa470ed`), WS14 `instance-status-derived`, and `codex-read-only-isolation` (adopted, decision 3).
 2. **`bypassPermissions` PowerShell probe:** unprobed. The script is [`ws2-run-probe.sh`](ws2-run-probe.sh) in this folder (edit its `BASE` first).
 
 ## Environment gotchas (this Windows checkout)
@@ -86,4 +94,4 @@ The full inventory, with every site, is in the plan's WS14 section. It changes o
 ## Decisions taken on 2026-10-12 that need action outside the code
 
 - **Orphan instance `48fab3f6`** (deleted pipeline `cf12d32d`, gate waiting since 2026-07-02): the user approved aborting it. `POST /api/instances/:id/abort` needs a logged-in admin session; `ARGUS_TOKEN` only passes the outer `/api/*` gate (health returns 200 with it). The user aborts it in the web UI. Never edit `instances.json` by hand.
-- **The running server reports `0.4.0`.** After the release, restart it from the new build.
+- **The local server last reported `0.4.0`**, then was stopped. Start it from a `0.5.0` build.

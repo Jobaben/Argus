@@ -338,7 +338,7 @@ Decisions:
    - flags raw instance-status comparisons in `engine/`, with an allowlist of file + line + reason;
    - flags any `inst.status = "running"` write in `pipelineTransitions.ts` outside `settle`/`initInstance`. A read-only regex alone would not have caught this class.
 4. **Behavioural tests, written first and shown failing on `39b58dc`.** Use three-phase fixtures: a two-phase one passes for the wrong reason, because masking lets `failure.ts:242` accept the instance.
-   - **Status 2026-10-12:** written in `pipelineEngineHarness.test.ts` (section "WS14"), unstaged on `fix/gate-state-guards` (cut from `75deb5f`), and failing on `39b58dc` for the intended reasons: (1) `running` after the retry is scheduled beside B's gate; (2) `onFailure` fires once while A's retry is pending; (3) `running` after revising G1 while G2 waits.
+   - **Status 2026-10-12:** written in `pipelineEngineHarness.test.ts` (section "WS14"), stashed as "ws14 red tests" in the original checkout (the handoff says how to restore them), and failing on `75deb5f` for the intended reasons: (1) `running` after the retry is scheduled beside B's gate; (2) `onFailure` fires once while A's retry is pending; (3) `running` after revising G1 while G2 waits.
    1. A is retryable and fails by a **stall** (`retryOn: ["timeout"]`), B is gated, C completes. A failed check would not do: check results wait for a pending gate decision. A relaunches at `retryAt`, and the instance still reads `awaiting-approval`.
    2. A's retry is pending, B is approved, nothing else is live. No `onFailure`, the worktree is kept, and A relaunches.
    3. Two parallel gates, revise one. The instance stays `awaiting-approval`, and verdictWatcher still sees the other gate.
