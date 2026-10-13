@@ -3,6 +3,7 @@ import type { Agent } from "./types.js";
 import type { Issue } from "./issues.js";
 import type { MonitorHealth } from "./monitors.js";
 import type { PipelineDefinition, PipelineInstance } from "./pipelineTypes.js";
+import { hasWaitingGate } from "./instanceStatus.js";
 import type { Project } from "./projects.js";
 import type { ScheduleWithNext } from "./scheduleTypes.js";
 import type { SessionSummary } from "./sessions.js";
@@ -91,7 +92,7 @@ export interface PaletteInput {
 
 /** The phase currently blocking on a human, if this instance has one. */
 function waitingGate(inst: PipelineInstance | undefined): string | null {
-  if (!inst || inst.status !== "awaiting-approval") return null;
+  if (!inst || !hasWaitingGate(inst)) return null;
   return inst.id;
 }
 

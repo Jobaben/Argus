@@ -162,6 +162,7 @@ import { buildPalette } from "./sources/palette.js";
 import { buildSituation } from "./sources/insight.js";
 import { PreflightError, type Engine } from "./pipelineEngine.js";
 import type { PipelineDefinition, PipelineSignal } from "./sources/pipelineTypes.js";
+import { isTerminal, resumable } from "./sources/instanceStatus.js";
 import type { ActivityEvent } from "./runTailer.js";
 import { defaultSpawn, fireOneOff, fireRun, isAlive } from "./scheduler.js";
 import { LaunchValidationError, validateLaunchInput } from "./sources/launch.js";
@@ -1243,9 +1244,7 @@ export function createApp(deps: AppDeps): Hono {
   }
   /** Instances that started under the current definition and are still going. */
   async function liveInstancesOf(pipelineId: string) {
-    return (await readInstances({ pipelineId })).filter(
-      (i) => i.status === "running" || i.status === "awaiting-approval",
-    );
+    return (await readInstances({ pipelineId })).filter((i) => resumable(i.status));
   }
 
   const pipelineUpdateHandler =
@@ -1287,11 +1286,48 @@ export function createApp(deps: AppDeps): Hono {
   app.put("/api/pipelines/:id", pipelineUpdateHandler(validatePipelineInput));
   app.patch("/api/pipelines/:id", pipelineUpdateHandler(validatePipelinePatch));
 
-  app.delete("/api/pipelines/:id", async (c) =>
-    (await deletePipeline(c.req.param("id")))
-      ? c.json({ ok: true })
-      : c.json({ error: "not found" }, 404),
-  );
+  // A pipeline is deleted only once nothing runs under it: its live instances
+  // are aborted first, as an operator would from their cards. Left live, they
+  // would keep waiting at gates with no definition and no card to stop them.
+  // Starts wait meanwhile, so none slips in between the aborts and the delete,
+  // and the aborts carry their cause, so none fires an `after` chain.
+  app.delete("/api/pipelines/:id", async (c) => {
+    const id = c.req.param("id");
+    const source = { channel: "http" as const, principal: operatorPrincipal(c) };
+    const outcome = await engine.withStartsHeld(id, async () => {
+      if (!(await readPipelines()).some((d) => d.id === id)) return { status: 404 as const };
+      const aborted: string[] = [];
+      for (const inst of await liveInstancesOf(id)) {
+        const reply = await engine.abort(inst.id, { source, cause: "pipeline-deleted" });
+        if (reply.ok) {
+          aborted.push(inst.id);
+          continue;
+        }
+        // Ended on its own in the meantime: nothing left to stop.
+        const now = await readInstance(inst.id);
+        if (now && isTerminal(now.status)) continue;
+        return { status: 409 as const, instanceId: inst.id, reply, aborted };
+      }
+      return (await deletePipeline(id))
+        ? { status: 200 as const, aborted }
+        : { status: 404 as const };
+    });
+    if (outcome.status === 404) return c.json({ error: "not found" }, 404);
+    if (outcome.status === 409) {
+      return c.json(
+        {
+          error:
+            `instance ${outcome.instanceId} could not be stopped ` +
+            `(${outcome.reply.error ?? outcome.reply.code}); the pipeline was not deleted`,
+          code: "instance-not-stopped",
+          instanceId: outcome.instanceId,
+          aborted: outcome.aborted,
+        },
+        409,
+      );
+    }
+    return c.json({ ok: true, aborted: outcome.aborted });
+  });
 
   app.post("/api/pipelines/:id/start", async (c) => {
     try {
@@ -1420,9 +1456,7 @@ export function createApp(deps: AppDeps): Hono {
     // Checked here, not left to engine.start()'s own overlap guard, so a
     // skip can name the instance already in flight instead of just "busy".
     if (def.overlapPolicy === "skip") {
-      const busy = (await readInstances({ pipelineId: id })).find(
-        (i) => i.status === "running" || i.status === "awaiting-approval",
-      );
+      const busy = (await readInstances({ pipelineId: id })).find((i) => resumable(i.status));
       if (busy) {
         return c.json(
           { error: "an instance is already running (overlap=skip)", instanceId: busy.id },

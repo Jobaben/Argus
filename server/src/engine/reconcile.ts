@@ -14,7 +14,7 @@ import type { Run } from "../sources/scheduleTypes.js";
 import type { RetryableClass, StepCompletion } from "../sources/pipelineTypes.js";
 import { log } from "../log.js";
 import { failureClassOfRecord, recoverRunOutcome } from "./outcome.js";
-import { resumable } from "./constants.js";
+import { appliesResults, resumable } from "../sources/instanceStatus.js";
 import type { EngineCore, EngineFns } from "./context.js";
 
 /** The reconcile tick: gate recovery, adopted runs, due retries, stalls, healing, owed launches and the decided-run sweep. Moved verbatim from `createEngine`. */
@@ -280,7 +280,7 @@ export function createReconcile(core: EngineCore) {
           current = res.instance;
         }
         if (!resumable(current.status)) return;
-        const paused = current.status === "awaiting-approval";
+        const paused = !appliesResults(current.status);
         // A phase whose checks were running when Argus stopped is verified
         // again: the checks are Argus's own and deterministic, and the
         // attempt key makes a duplicate report a no-op. Not while a gate is
@@ -535,13 +535,15 @@ export function createReconcile(core: EngineCore) {
           if (instance.status === "failed") deps.onFailure?.(instance);
           deps.onChange?.();
           current = instance;
-          if (current.status !== "running" && current.status !== "awaiting-approval") break;
+          // A heal that opened a gate pauses the rest, as a gate already
+          // waiting when the pass began does (above).
+          if (!appliesResults(current.status)) break;
         }
         // A restart can land between a candidate's last report and the
         // selection that report implied. The decision is a pure function of
         // what is on disk, so it is simply asked again — and answers `pending`,
         // harmlessly, for every phase still genuinely waiting.
-        if (current.status === "running") {
+        if (appliesResults(current.status)) {
           for (const i of livePhases(current)) {
             const phase = current.phases[i];
             if (phase.status !== "running") continue;

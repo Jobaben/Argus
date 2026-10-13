@@ -730,6 +730,65 @@ test("reconcile tags a restart-interrupted phase as retryable", async () => {
   assert.match((phase.payload as { reason: string }).reason, /revise to retry/);
 });
 
+test("a heal that opens a gate leaves the sibling's heal for after the decision", async () => {
+  const { engine, pipelines, instances } = await load();
+  const runs = runsMod;
+  await seedPipeline(pipelines, {
+    runtime: "codex",
+    phases: [
+      {
+        id: "g",
+        name: "G",
+        cwd: home,
+        gated: true,
+        needs: [],
+        steps: [{ name: "s", prompt: "g" }],
+      },
+      {
+        id: "p",
+        name: "P",
+        cwd: home,
+        gated: false,
+        needs: [],
+        steps: [{ name: "s", prompt: "p" }],
+      },
+    ],
+  });
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const inst = await e.start("p1", "manual");
+  assert.equal(rec.calls.length, 2, "both phases start together");
+  // Both runs finished while Argus was down; neither report arrived.
+  for (const { runId } of rec.calls) {
+    const got = await runs.readRun(runId);
+    await runs.writeRun({
+      ...got!.run,
+      status: "succeeded",
+      exitCode: 0,
+      pid: 2_000_000_000,
+      resultSummary: "done\nARGUS_OUTCOME: succeeded",
+      endedAt: new Date().toISOString(),
+    });
+  }
+
+  await e.reconcile();
+
+  // Healing waits for a gate decision, whether the gate was waiting when the
+  // pass began or a heal in this pass opened it.
+  let after = await instances.readInstance(inst!.id);
+  const status = (id: string) => after!.phases.find((p: { id: string }) => p.id === id)!.status;
+  assert.equal(status("g"), "awaiting-approval", "G is healed to its gate");
+  assert.equal(status("p"), "running", "P waits for the decision");
+  assert.equal(after?.status, "awaiting-approval", "the instance waits on G");
+
+  const approved = await e.approve(inst!.id, undefined, { phaseId: "g" });
+  assert.equal(approved.ok, true, "G is approved");
+  await e.reconcile();
+  after = await instances.readInstance(inst!.id);
+  assert.equal(status("p"), "succeeded", "P is healed once the gate is decided");
+  assert.equal(after?.status, "succeeded", "the instance completes");
+});
+
 test("OUTCOME_CONTRACT carries the sentinel the Stop hook matches", () => {
   // Stop hook regex: /ARGUS_OUTCOME:\s*(failed|blocked)/i
   assert.match(OUTCOME_CONTRACT, /ARGUS_OUTCOME:/);
@@ -1514,6 +1573,32 @@ test("deleting the definition under a running instance leaves the instance able 
   assert.equal(done.ok, true);
   await e.drain();
   assert.equal((await instances.readInstance(inst!.id)).status, "succeeded");
+});
+
+test("a start while the pipeline's starts are held waits, then reads the definition the holder left", async () => {
+  const { engine, pipelines, instances } = await load();
+  await seedPipeline(pipelines);
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  let release!: () => void;
+  const released = new Promise<void>((r) => (release = r));
+  let entered!: () => void;
+  const holding = new Promise<void>((r) => (entered = r));
+
+  const held = e.withStartsHeld("p1", async () => {
+    entered();
+    await released;
+    assert.equal(await pipelines.deletePipeline("p1"), true);
+  });
+  await holding;
+  const starting = e.start("p1", "manual");
+  // Give the start every chance to run ahead of the hold.
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal((await instances.readInstances({ pipelineId: "p1" })).length, 0, "it waits");
+  release();
+  await held;
+  await assert.rejects(starting, /pipeline not found/, "then finds the pipeline gone");
+  assert.equal(rec.calls.length, 0, "and launched nothing");
 });
 
 test("a signal for a phase the instance does not have is journalled as ignored", async () => {

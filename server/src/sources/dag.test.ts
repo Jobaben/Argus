@@ -231,6 +231,13 @@ test("regression: an all-terminal graph containing a failed phase is not succeed
   );
 });
 
+test("a failed phase with a retry scheduled keeps the instance running", () => {
+  const parallel = [phase("a"), phase("b")];
+  const waiting = instance(parallel, { a: "failed", b: "succeeded" });
+  waiting.phases[0].retryAt = "2026-10-13T12:00:00.000Z";
+  assert.equal(instanceOutcome(def(parallel), waiting), "running", "the retry is still to come");
+});
+
 test("currentPhaseIndex prefers the gate a human has to act on", () => {
   const phases = [phase("a"), phase("b", ["a"]), phase("c", ["a"])];
   assert.equal(

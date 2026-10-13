@@ -90,6 +90,11 @@ action requires a signed-in, root-approved account.
   them. Saving such an edit asks first, so you know a fixed prompt lands on the
   _next_ start rather than the one you are watching; renaming, changing the
   trigger or overlap policy, and enabling or disabling save without asking.
+  **Delete** stops the pipeline's running and waiting instances first (the
+  confirm says how many), then removes it. Pipelines chained `after` it do
+  not start from those stops. An instance left live by a pipeline
+  deleted before this existed still gets a card on the Command Center, marked
+  _pipeline deleted_, with a **Stop** button.
 - Approving/revising a **gated phase** happens on the Command Center, inline
   on the paused row.
 
@@ -288,7 +293,10 @@ considered the work and reported on it, so
 re-running the same prompt mostly just spends the money twice. Retries are
 _scheduled_ (a timestamp on the phase) rather than held in a timer, so a backoff
 survives a restart. A **revise** resets the retry budget — otherwise a phase
-that had exhausted its retries could never be revised again.
+that had exhausted its retries could never be revised again. While a retry is
+scheduled the instance stays live: it does not end as failed, notify or clean
+up its worktrees first. A retry also runs while a sibling waits at its gate,
+and the instance keeps reading _awaiting approval_ until that gate is decided.
 
 **Routing: letting the work decide what happens next.**
 

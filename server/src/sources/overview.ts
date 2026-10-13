@@ -2,6 +2,7 @@ import type { PipelineDefinition, PipelineInstance, InstanceStatus } from "./pip
 import type { Run } from "./scheduleTypes.js";
 import type { ActivityEvent } from "../runTailer.js";
 import type { OverviewCost, OverviewEntry } from "@argus/contracts";
+import { resumable } from "./instanceStatus.js";
 
 export type { OverviewCost, OverviewEntry } from "@argus/contracts";
 
@@ -64,12 +65,38 @@ function instanceCost(instanceId: string, runs: Run[]): OverviewCost {
 }
 
 /**
+ * What the board shows for a deleted pipeline: the instance's own snapshot, or
+ * for an instance written before snapshots a stand-in with no phases (the board
+ * then draws the graph from the instance's recorded edges, as it does for a
+ * phase an edit removed).
+ */
+function orphanDefinition(inst: PipelineInstance): PipelineDefinition {
+  return (
+    inst.definition ?? {
+      id: inst.pipelineId,
+      name: inst.pipelineName,
+      phases: [],
+      trigger: null,
+      enabled: false,
+      overlapPolicy: "allow",
+      lastStartedAt: inst.createdAt,
+      createdAt: inst.createdAt,
+      updatedAt: inst.updatedAt,
+    }
+  );
+}
+
+/**
  * Pair each definition with its latest instance and sort attention-first.
  * `instances` is expected newest-first (createdAt desc), as readInstances returns;
  * the first instance seen per pipelineId is therefore its latest.
  * `runs` (when given) joins per-step cost/tokens/timing onto the latest
  * instance and totals the instance's spend. `activity` (when given) further
  * joins each running step's latest tailer event.
+ *
+ * Live instances of a pipeline that has since been deleted get an entry too,
+ * marked `orphaned`: without one they would have no card and no abort control,
+ * while the gate counts (`insight.ts`) would still count them.
  */
 export function buildOverview(
   definitions: PipelineDefinition[],
@@ -83,8 +110,6 @@ export function buildOverview(
     if (list) list.push(i);
     else byPipeline.set(i.pipelineId, [i]);
   }
-  const nonTerminal = (i: PipelineInstance) =>
-    i.status === "running" || i.status === "awaiting-approval";
   // The board's concurrent generation: non-terminal instances plus terminal
   // ones that overlapped the latest instance's lifetime (ended at/after its
   // start), so a just-stopped sibling stays visible beside its peers. A lone
@@ -93,13 +118,12 @@ export function buildOverview(
     const latest = list[0];
     if (!latest) return [];
     const overlapping = list.filter(
-      (i) => nonTerminal(i) || (i.endedAt !== null && i.endedAt >= latest.createdAt),
+      (i) => resumable(i.status) || (i.endedAt !== null && i.endedAt >= latest.createdAt),
     );
-    return overlapping.length > 1 ? overlapping : list.filter(nonTerminal);
+    return overlapping.length > 1 ? overlapping : list.filter((i) => resumable(i.status));
   };
   const byRunId = new Map(runs.map((r) => [r.id, r]));
-  const entries: OverviewEntry[] = definitions.map((definition) => {
-    const list = byPipeline.get(definition.id) ?? [];
+  const entry = (definition: PipelineDefinition, list: PipelineInstance[]): OverviewEntry => {
     const latest = list[0] ?? null;
     return {
       definition,
@@ -110,7 +134,17 @@ export function buildOverview(
         cost: instanceCost(i.id, runs),
       })),
     };
-  });
+  };
+  const entries: OverviewEntry[] = definitions.map((definition) =>
+    entry(definition, byPipeline.get(definition.id) ?? []),
+  );
+  const defined = new Set(definitions.map((d) => d.id));
+  for (const [pipelineId, list] of byPipeline) {
+    if (defined.has(pipelineId)) continue;
+    const live = list.filter((i) => resumable(i.status));
+    if (live.length === 0) continue;
+    entries.push({ ...entry(orphanDefinition(live[0]), live), orphaned: true });
+  }
   return entries.sort((a, b) => {
     const r = rank(a.latest) - rank(b.latest);
     if (r !== 0) return r;

@@ -251,6 +251,36 @@ test("MANUAL STATE: an interrupted check waits while a gate is paused, then runs
   assert.equal(await journalCount(inst.id, "phase.verified"), 1, "verified exactly once");
 });
 
+test("a phase finishing beside a waiting gate runs its checks once, after the decision", async () => {
+  await seed([
+    phase("x", { needs: [], checks: [{ kind: "command", run: "exit 0", label: "ok" }] }),
+    phase("y", { gated: true, needs: [] }),
+  ]);
+  const h = harness();
+  const e = h.make();
+  const inst = (await e.start("p1", "manual"))!;
+  const started = await load(inst.id);
+  await complete(e, inst.id, "y", phaseOf(started, "y").steps[0].runId!);
+  await settle(e);
+  assert.equal((await load(inst.id)).status, "awaiting-approval", "y waits at its gate");
+
+  await complete(e, inst.id, "x", phaseOf(started, "x").steps[0].runId!);
+  await settle(e);
+  // The result could not be applied under the pending decision, so the
+  // checks are not run only to be thrown away.
+  assert.equal(await journalCount(inst.id, "phase.verifying"), 0, "no run while the gate waits");
+  assert.equal(phaseOf(await load(inst.id), "x").verification?.status, "running");
+
+  assert.equal((await e.approve(inst.id, undefined, { phaseId: "y" })).ok, true);
+  await settle(e);
+  await e.reconcile();
+  await settle(e);
+  const after = await load(inst.id);
+  assert.equal(phaseOf(after, "x").verification?.status, "passed");
+  assert.equal(after.status, "succeeded");
+  assert.equal(await journalCount(inst.id, "phase.verifying"), 1, "the checks ran exactly once");
+});
+
 // ── knowledge ───────────────────────────────────────────────────────────────
 
 function stageDelta(runId: string, statement: string) {

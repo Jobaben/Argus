@@ -4,6 +4,7 @@ import type { ResolvedKnowledgeContext } from "../knowledge/context.js";
 import { readTransitionLog } from "../transitionLog/store.js";
 import type { AppendOutcome } from "../transitionLog/store.js";
 import type {
+  AbortCause,
   TransitionRecord,
   GateDecision,
   GateDecisionChannel,
@@ -302,7 +303,19 @@ export interface Engine {
   approveAutomatically(request: AutomatedApproval): Promise<ActionResult>;
   /** Send a paused phase back to its agent with the human's note. */
   revise(instanceId: string, note?: string, options?: GateTarget): Promise<ActionResult>;
-  abort(instanceId: string, options?: { source?: OperatorSource }): Promise<ActionResult>;
+  /** Stop the instance. `cause` records why, when the operator did not
+   *  choose this instance itself (see `AbortCause`). */
+  abort(
+    instanceId: string,
+    options?: { source?: OperatorSource; cause?: AbortCause },
+  ): Promise<ActionResult>;
+  /**
+   * Run `work` while no instance of the pipeline can be created: a `start`
+   * issued meanwhile waits, then reads the definition as `work` left it. For
+   * deleting a pipeline, so no instance appears between stopping the live
+   * ones and removing the definition.
+   */
+  withStartsHeld<T>(pipelineId: string, work: () => Promise<T>): Promise<T>;
   reconcile(): Promise<void>;
   /** On boot: claim still-alive runs from running instances so they keep
    *  their concurrency slots and get finalized by reconcile when they end. */

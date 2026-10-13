@@ -27,6 +27,7 @@ import {
 } from "./runtimes/index.js";
 import type { Run, RunStatus, Schedule } from "./sources/scheduleTypes.js";
 import type { PipelineDefinition, PipelineInstance } from "./sources/pipelineTypes.js";
+import { resumable } from "./sources/instanceStatus.js";
 import type { AgentRuntimeId, BudgetEnforcement, ReasoningEffort } from "@argus/contracts";
 import { log } from "./log.js";
 
@@ -514,7 +515,7 @@ function afterMatches(
   status: PipelineInstance["status"],
   on: "succeeded" | "failed" | "any",
 ): boolean {
-  if (status === "running" || status === "awaiting-approval") return false;
+  if (resumable(status)) return false;
   if (on === "any") return true;
   if (on === "succeeded") return status === "succeeded";
   // "failed": an aborted instance never finished its work either, so it
@@ -599,6 +600,9 @@ async function processChains(deps: SchedulerDeps): Promise<void> {
           inst.endedAt !== null &&
           new Date(inst.endedAt).getTime() > updatedAtMs &&
           afterMatches(inst.status, target.on) &&
+          // Stopped because its pipeline was deleted: nothing it chains to
+          // was meant to follow the deletion.
+          inst.abortCause !== "pipeline-deleted" &&
           !alreadyChained(ledger, inst.id, target.id),
       )
       // Oldest first: a burst of source instances that ended while Argus was

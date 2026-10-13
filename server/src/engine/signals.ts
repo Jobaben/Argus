@@ -9,6 +9,7 @@ import { advance } from "../pipelineTransitions.js";
 import { journal } from "../sources/journal.js";
 import type { Run } from "../sources/scheduleTypes.js";
 import type { PipelineInstance, PipelineSignal } from "../sources/pipelineTypes.js";
+import { resumable } from "../sources/instanceStatus.js";
 import { log } from "../log.js";
 import type { ActionResult } from "./types.js";
 import type { EngineCore, EngineFns } from "./context.js";
@@ -101,9 +102,7 @@ export function createSignals(core: EngineCore) {
       // A sibling paused at a gate leaves the instance `awaiting-approval`;
       // this run's own phase is still running and its report still counts.
       // Only a terminal or aborted instance ignores it.
-      if (inst.status !== "running" && inst.status !== "awaiting-approval") {
-        return { ok: true, code: 200 };
-      }
+      if (!resumable(inst.status)) return { ok: true, code: 200 };
       const def = await defFor(inst);
       if (!def) return { ok: false, code: 404 };
       const live = liveStep(inst, signal.phaseId, signal.runId);

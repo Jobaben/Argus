@@ -9,6 +9,7 @@ import type {
 import type { Schedule } from "./scheduleTypes.js";
 import type { Issue } from "./issues.js";
 import type { PipelineInstance } from "./pipelineTypes.js";
+import { resumable } from "./instanceStatus.js";
 import type { BudgetConfig } from "@argus/contracts";
 import type { AnalysisRunner } from "./analysis.js";
 
@@ -85,7 +86,7 @@ export function buildCatalogue(ctx: OmnibarContext): string {
     .map((i) => `  ${i.fingerprint} | ${i.title.slice(0, 100)} | ${i.count} occurrences`)
     .join("\n");
   const live = ctx.instances
-    .filter((i) => i.status === "running" || i.status === "awaiting-approval")
+    .filter((i) => resumable(i.status))
     .slice(0, CATALOGUE_CAP)
     .map((i) => `  ${i.id} | ${i.pipelineName} | ${i.status}`)
     .join("\n");
@@ -210,7 +211,7 @@ export function resolveMutation(
     case "instance.abort": {
       const inst = ctx.instances.find((i) => i.id === targetId);
       if (!inst) return { dropped: `dropped "abort": no live instance ${targetId || "(none)"}` };
-      if (inst.status !== "running" && inst.status !== "awaiting-approval") {
+      if (!resumable(inst.status)) {
         return { dropped: `${inst.pipelineName} is already ${inst.status}` };
       }
       return {

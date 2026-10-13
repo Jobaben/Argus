@@ -9,6 +9,7 @@ import type {
 } from "@argus/contracts";
 import type { Issue } from "../sources/issues.js";
 import type { PipelineInstance } from "../sources/pipelineTypes.js";
+import { hasWaitingGate, inFlight, resumable } from "../sources/instanceStatus.js";
 import type { Run } from "../sources/scheduleTypes.js";
 import type { BudgetStatus } from "@argus/contracts";
 
@@ -76,7 +77,7 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 /** The bounded detail the fleet-wide views read. Pure. */
 export function buildFacets(input: SummaryInput): MachineFacets {
   const pipelines: PeerPipeline[] = input.instances
-    .filter((i) => i.status === "running" || i.status === "awaiting-approval")
+    .filter((i) => resumable(i.status))
     .slice(0, FACET_PIPELINES)
     .map((i) => ({
       id: i.id,
@@ -157,8 +158,10 @@ export function buildSummary(input: SummaryInput): MachineSummary {
     monitorsDown: input.monitors.filter((m) => m.status === "down").length,
     monitorsFailing: input.monitors.filter((m) => m.status === "failing").length,
     openIssues: input.issues.filter((i) => i.state === "open").length,
-    liveInstances: input.instances.filter((i) => i.status === "running").length,
-    gatedInstances: input.instances.filter((i) => i.status === "awaiting-approval").length,
+    // In flight, not merely live: one paused only at a gate is counted as
+    // gated alone, one with a sibling still running as both.
+    liveInstances: input.instances.filter(inFlight).length,
+    gatedInstances: input.instances.filter(hasWaitingGate).length,
     runsToday: today.length,
     failuresToday: today.filter((r) => r.status === "failed" || r.outcome === "failed").length,
     spendTodayUsd: round2(input.budget.today.spentUsd),

@@ -149,8 +149,17 @@ export interface PendingGateOperation {
   answers?: unknown;
   /** Revise only: the operator's note for the next attempt's prompt. */
   note?: string;
+  /** Abort only: why, when it was not a decision about this instance alone. */
+  cause?: AbortCause;
   startedAt: string;
 }
+
+/**
+ * Why an instance was aborted, when an operator did not choose to stop that
+ * instance itself. `pipeline-deleted`: its pipeline was deleted, which stops
+ * every live instance first. Such an instance fires no `after` chain.
+ */
+export type AbortCause = "pipeline-deleted";
 
 /**
  * Whether a decision took effect. Derived from the instance, never trusted

@@ -548,6 +548,43 @@ test("tick honours `on`: a failed source instance does not chain an on:succeeded
   assert.equal(started, 0);
 });
 
+test("tick chains an aborted source into an on:failed target, but not one its pipeline's deletion aborted", async () => {
+  const { scheduler } = await load();
+  const { pipelines, instances } = await loadChainDeps();
+  await pipelines.createPipeline(
+    pipelines.validatePipelineInput(sourcePipelineInput()),
+    new Date(2026, 5, 22, 8, 0),
+    "source",
+  );
+  for (const [id, on] of [
+    ["on-failed", "failed"],
+    ["on-any", "any"],
+  ]) {
+    await pipelines.createPipeline(
+      pipelines.validatePipelineInput(
+        sourcePipelineInput({ name: id, trigger: { kind: "after", pipelineId: "source", on } }),
+      ),
+      new Date(2026, 5, 22, 8, 0),
+      id,
+    );
+  }
+  await instances.writeInstance(fakeInstance({ id: "stopped", status: "aborted" }));
+  await instances.writeInstance(
+    fakeInstance({ id: "deleted", status: "aborted", abortCause: "pipeline-deleted" }),
+  );
+
+  const chainedFrom: string[] = [];
+  await scheduler.tick(
+    deps({
+      startPipeline: async (_id: string, _trigger: string, firing: { chainedFrom: string }) => (
+        chainedFrom.push(firing.chainedFrom),
+        { id: "x" }
+      ),
+    }),
+  );
+  assert.deepEqual(chainedFrom.sort(), ["stopped", "stopped"], "an operator's abort still chains");
+});
+
 test("tick chains an after-triggered schedule as a normal scheduled run, trigger: chained", async () => {
   const { scheduler, schedules, runs } = await load();
   const { pipelines, instances } = await loadChainDeps();

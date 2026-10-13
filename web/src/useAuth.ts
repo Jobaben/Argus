@@ -64,5 +64,8 @@ export function useAuth() {
     refresh();
   }, [refresh]);
 
-  return { status: data, loading, error, refresh, login, setup, register, logout };
+  // Signed in: the one rule for showing an admin control (stop, delete, edit).
+  const isAdmin = data?.authenticated === true;
+
+  return { status: data, isAdmin, loading, error, refresh, login, setup, register, logout };
 }

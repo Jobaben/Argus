@@ -284,7 +284,12 @@ function PipelineCard({
           <button
             type="button"
             onClick={() => {
-              if (confirm(`Delete pipeline "${def.name}"?`)) void remove(def.id);
+              const n = live.activeIds.length;
+              const stops =
+                n === 0
+                  ? ""
+                  : ` Its ${n === 1 ? "running instance" : `${n} running instances`} will be stopped first, and in-progress work discarded.`;
+              if (confirm(`Delete pipeline "${def.name}"?${stops}`)) void remove(def.id);
             }}
             className="rounded-lg border border-fail/20 px-2.5 py-1 text-xs text-fail hover:bg-fail/10"
           >
@@ -301,7 +306,7 @@ export default function Pipelines() {
     usePipelines();
   const { overview, abort } = useOverview();
   const auth = useAuth();
-  const isAdmin = auth.status?.authenticated === true;
+  const { isAdmin } = auth;
   const liveByPipeline = useMemo(() => {
     const m = new Map<string, PipelineLive>();
     for (const entry of overview) {

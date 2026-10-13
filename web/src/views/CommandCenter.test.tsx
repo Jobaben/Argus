@@ -6,6 +6,15 @@ import CommandCenter from "./CommandCenter";
 
 const approve = vi.fn(() => new Promise<Response>(() => {})); // never resolves: lets us assert disabled-after-click
 const revise = vi.fn(() => new Promise<Response>(() => {}));
+const abort = vi.fn(() => Promise.resolve(new Response(null, { status: 200 })));
+
+const mockAuth: { authenticated: boolean } = { authenticated: true };
+vi.mock("../useAuth", () => ({
+  useAuth: () => ({
+    status: { authenticated: mockAuth.authenticated },
+    isAdmin: mockAuth.authenticated,
+  }),
+}));
 
 // The review drawer's read side, canned: these tests are about the board
 // handing off to the drawer and the drawer being the only place that acts.
@@ -55,7 +64,7 @@ const mockOverview: { overview: OverviewEntry[]; loading: boolean; error: string
 };
 
 vi.mock("../useOverview", () => ({
-  useOverview: () => ({ ...mockOverview, refresh: vi.fn(), approve, revise }),
+  useOverview: () => ({ ...mockOverview, refresh: vi.fn(), approve, revise, abort }),
 }));
 
 const mockActivity = new Map<string, { label: string; at: string }>();
@@ -125,6 +134,8 @@ function entry(name: string, status: InstanceStatus, phaseStatuses: PhaseStatus[
 beforeEach(() => {
   approve.mockClear();
   revise.mockClear();
+  abort.mockClear();
+  mockAuth.authenticated = true;
   resetTotals.mockClear();
   mockOverview.overview = [];
   mockOverview.loading = false;
@@ -592,4 +603,57 @@ it("loads step details on selection and can close and reopen the drawer", async 
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   fireEvent.click(opener);
   expect(await screen.findByRole("dialog")).toHaveTextContent("step-x");
+});
+
+describe("an instance whose pipeline was deleted", () => {
+  const orphan = (): OverviewEntry => ({
+    ...entry("gone", "awaiting-approval", ["awaiting-approval"]),
+    orphaned: true,
+  });
+
+  it("is on the board, says so, and an admin can stop it", async () => {
+    mockOverview.overview = [orphan()];
+    vi.stubGlobal("confirm", () => true);
+    render(<CommandCenter />);
+    expect(screen.getByText("pipeline deleted")).toBeInTheDocument();
+    expect(screen.queryByTestId("gate-opener")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    await waitFor(() => expect(abort).toHaveBeenCalledWith("gone-i1"));
+    vi.unstubAllGlobals();
+  });
+
+  it("shows a failed stop under that instance's row only", async () => {
+    const e = orphan();
+    const second = { ...e.latest!, id: "gone-i2" };
+    e.active = [
+      { instance: e.latest!, cost: { usd: null, tokens: null } },
+      { instance: second, cost: { usd: null, tokens: null } },
+    ];
+    mockOverview.overview = [e];
+    vi.stubGlobal("confirm", () => true);
+    abort.mockRejectedValueOnce(new Error("held"));
+    render(<CommandCenter />);
+    const stops = screen.getAllByRole("button", { name: "Stop" });
+    expect(stops).toHaveLength(2);
+    fireEvent.click(stops[1]);
+    await waitFor(() => expect(screen.getAllByText("held")).toHaveLength(1));
+    expect(abort).toHaveBeenCalledWith("gone-i2");
+    expect(stops[1].parentElement).toHaveTextContent("held");
+    vi.unstubAllGlobals();
+  });
+
+  it("offers no stop control when signed out", () => {
+    mockAuth.authenticated = false;
+    mockOverview.overview = [orphan()];
+    render(<CommandCenter />);
+    expect(screen.getByText("pipeline deleted")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+  });
+
+  it("an ordinary pipeline's card has no stop control", () => {
+    mockOverview.overview = [awaiting()];
+    render(<CommandCenter />);
+    expect(screen.queryByText("pipeline deleted")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+  });
 });

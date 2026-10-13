@@ -9,6 +9,7 @@ import type {
   RouteDecision,
 } from "./pipelineTypes.js";
 import { normalizeNeeds } from "./routing.js";
+import { pendingRetry } from "./instanceStatus.js";
 
 /**
  * Weave: the pipeline as a typed directed acyclic graph.
@@ -334,6 +335,9 @@ export function instanceOutcome(
   inst: PipelineInstance,
 ): "running" | "succeeded" | "blocked" {
   if (livePhases(inst).length > 0) return "running";
+  // A scheduled retry is work still to come: ending the instance here would
+  // announce a failure (and clean its worktrees) that the retry may undo.
+  if (pendingRetry(inst)) return "running";
   if (readyPhases(def, inst).length > 0) return "running";
   // Terminal and intentional: a skipped phase is work routing decided against,
   // so an instance whose every phase either succeeded or was deliberately

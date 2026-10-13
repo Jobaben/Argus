@@ -34,6 +34,7 @@ import type {
   Run,
   Situation,
 } from "@argus/contracts";
+import { hasWaitingGate, inFlight, isTerminal, resumable } from "../sources/instanceStatus.js";
 
 // ── Options ──────────────────────────────────────────────────────────────────
 
@@ -391,7 +392,6 @@ export function render(line: TailLine, json: boolean): string {
 // ── Labels ───────────────────────────────────────────────────────────────────
 
 const TERMINAL_RUN = new Set(["succeeded", "failed", "skipped", "interrupted", "cancelled"]);
-const TERMINAL_INSTANCE = new Set(["succeeded", "failed", "aborted"]);
 
 /** Which instances an overview entry puts on the board: every concurrent one,
  *  or the lone latest. Deduplicated by id. */
@@ -522,7 +522,7 @@ export function buildSnapshot(input: SnapshotInput): TailLine[] {
   const lines: TailLine[] = [];
 
   const running = runs.filter((r) => r.status === "running");
-  const gates = instances.filter((i) => i.status === "awaiting-approval");
+  const gates = instances.filter(hasWaitingGate);
   const liveAgents = agents.filter(
     (a) => a.live || a.status === "working" || a.status === "queued",
   );
@@ -648,7 +648,7 @@ export function buildSnapshot(input: SnapshotInput): TailLine[] {
     });
   }
   for (const inst of instances) {
-    if (!TERMINAL_INSTANCE.has(inst.status) || (inst.endedAt ?? "") < sinceIso) continue;
+    if (!isTerminal(inst.status) || (inst.endedAt ?? "") < sinceIso) continue;
     lines.push({
       at: inst.endedAt ?? at,
       kind: "snapshot.recent",
@@ -696,6 +696,8 @@ function failedPhaseNote(inst: PipelineInstance): string {
 
 interface InstanceMemo {
   status: PipelineInstance["status"];
+  /** See `inFlight`: a gate alone leaves the instance idle. */
+  inFlight: boolean;
   pipelineName: string;
   phases: Map<string, { name: string; status: string; attempt: number }>;
 }
@@ -726,7 +728,7 @@ export class Tracker {
   /** True when nothing the tracker knows of is still in flight. */
   isIdle(): boolean {
     for (const r of this.runs.values()) if (r.status === "running") return false;
-    for (const i of this.instances.values()) if (i.status === "running") return false;
+    for (const i of this.instances.values()) if (i.inFlight) return false;
     return true;
   }
 
@@ -799,6 +801,7 @@ export class Tracker {
       const before = this.instances.get(inst.id);
       const memo: InstanceMemo = {
         status: inst.status,
+        inFlight: inFlight(inst),
         pipelineName: inst.pipelineName,
         phases: new Map(
           inst.phases.map((p) => [p.id, { name: p.name, status: p.status, attempt: p.attempt }]),
@@ -808,7 +811,9 @@ export class Tracker {
       if (prime) continue;
       const at = inst.updatedAt || nowIso;
       if (!before) {
-        if (inst.status === "running") {
+        if (hasWaitingGate(inst)) {
+          lines.push(this.gateLine(inst, at));
+        } else if (resumable(inst.status)) {
           lines.push({
             at: inst.createdAt || at,
             kind: "pipeline.started",
@@ -817,9 +822,7 @@ export class Tracker {
             label: inst.pipelineName,
             status: "running",
           });
-        } else if (inst.status === "awaiting-approval") {
-          lines.push(this.gateLine(inst, at));
-        } else if (TERMINAL_INSTANCE.has(inst.status)) {
+        } else if (isTerminal(inst.status)) {
           lines.push(this.instanceEndedLine(inst, at));
         }
         continue;
@@ -850,8 +853,8 @@ export class Tracker {
         });
       }
       if (before.status !== inst.status) {
-        if (inst.status === "awaiting-approval") lines.push(this.gateLine(inst, at));
-        else if (inst.status === "running")
+        if (hasWaitingGate(inst)) lines.push(this.gateLine(inst, at));
+        else if (resumable(inst.status))
           lines.push({
             at,
             kind: "pipeline.resumed",
@@ -860,7 +863,7 @@ export class Tracker {
             label: inst.pipelineName,
             status: "running",
           });
-        else if (TERMINAL_INSTANCE.has(inst.status)) lines.push(this.instanceEndedLine(inst, at));
+        else if (isTerminal(inst.status)) lines.push(this.instanceEndedLine(inst, at));
       }
     }
     return lines;

@@ -321,6 +321,28 @@ refused at launch, for example because its capability profile cannot be
 enforced: its phase fails under `configuration` even while a sibling waits at
 its gate.
 
+### Instance status is derived from the phases
+
+A live instance's status is never written by hand. Every transition that
+keeps an instance live (settle, revise, remediation, a retry starting or being
+scheduled) sets it with `liveStatus`: `awaiting-approval` while any phase
+waits at a gate, else `running`. A transition that wrote `running` would hide
+a sibling's waiting gate from auto-approval, from the gate counts and from the
+rule that results wait for a gate decision.
+
+A failed phase with a retry scheduled (`retryAt`) counts as live in
+`instanceOutcome`, so the instance does not end as `failed` while a retry is
+pending: no `onFailure`, no `instance.ended`, no `after: failed` chain and no
+worktree cleanup. A due retry runs while a sibling waits at its gate.
+
+The questions are named once, in `server/src/sources/instanceStatus.ts`:
+`resumable` (the engine may still act), `isTerminal`, `appliesResults`
+(results apply only while no gate waits), `hasWaitingGate` (asked of the
+phases, for every count and badge), `pendingRetry` and `liveStatus`.
+`engine/instanceStatus.test.ts` fails on an inline `running` or
+`awaiting-approval` comparison of an instance's status in the engine or the
+transitions, on a spelled-out terminal check, and on a hand-written live status.
+
 ### The hook retries delivery
 
 The stop hook (`hooks/argus-signal.mjs`) does not give up on the first failed
@@ -2578,7 +2600,9 @@ and it is at-least-once. "Exactly once" is not claimed for effects in general.
   - Results wait for the gate decision: healing a run that ended without
     signalling, check results (not applied to a paused instance, so
     interrupted checks are not re-run until then) and candidate selection. A
-    run that does signal is accepted by the signal path meanwhile (§2).
+    run that does signal is accepted by the signal path meanwhile (§2). This
+    holds when a heal in the same pass is what opened the gate: the pass
+    stops healing there, and the siblings are healed after the decision.
   - Every recovered effect acts only on phases that are themselves `running`.
     Recovery never touches, approves or resumes the paused phase.
 

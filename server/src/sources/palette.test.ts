@@ -220,7 +220,26 @@ describe("buildPalette", () => {
     const { entries } = buildPalette(
       input({
         pipelines: [def()],
-        latestByPipeline: new Map([["pl1", inst({ id: "i9", status: "awaiting-approval" })]]),
+        latestByPipeline: new Map([
+          [
+            "pl1",
+            inst({
+              id: "i9",
+              status: "awaiting-approval",
+              phases: [
+                {
+                  id: "review",
+                  name: "Review",
+                  gated: true,
+                  status: "awaiting-approval",
+                  steps: [],
+                  attempt: 1,
+                  payload: null,
+                },
+              ],
+            }),
+          ],
+        ]),
       }),
       NOW,
     );

@@ -312,3 +312,35 @@ test("breaks ties by updatedAt desc then definition name", () => {
     ["alpha", "zeta"],
   );
 });
+
+test("live instances of a deleted pipeline get one orphaned entry; ended ones none", () => {
+  const instances = [
+    inst("live2", "gone", "running", "2026-06-30T11:00:00.000Z"),
+    inst("live1", "gone", "awaiting-approval", "2026-06-30T10:00:00.000Z"),
+    inst("done", "ended", "succeeded", "2026-06-30T09:00:00.000Z"),
+  ];
+  const out = buildOverview([def("a")], instances);
+  const orphans = out.filter((e) => e.orphaned);
+  assert.equal(orphans.length, 1, "one entry per deleted pipeline, none for an ended one");
+  const [orphan] = orphans;
+  assert.equal(orphan.definition.id, "gone", "keyed by the deleted pipeline's id");
+  assert.equal(orphan.definition.name, "gone", "named after the instance's pipeline");
+  assert.deepEqual(orphan.definition.phases, [], "no snapshot: a stand-in with no phases");
+  assert.equal(orphan.latest?.id, "live2", "the newest live instance leads");
+  assert.deepEqual(
+    orphan.active.map((a) => a.instance.id),
+    ["live2", "live1"],
+    "both live instances share the card",
+  );
+});
+
+test("an orphaned entry uses the instance's snapshot when it has one", () => {
+  const snapshot = def("gone", "Gone");
+  const live = {
+    ...inst("i", "gone", "running", "2026-06-30T10:00:00.000Z"),
+    definition: snapshot,
+  };
+  const [orphan] = buildOverview([], [live]);
+  assert.equal(orphan.orphaned, true, "marked as orphaned");
+  assert.equal(orphan.definition, snapshot, "the snapshot is the definition");
+});

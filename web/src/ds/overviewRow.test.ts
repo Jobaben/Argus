@@ -317,6 +317,22 @@ describe("toOverviewRow", () => {
     expect(row.gates).toEqual([{ phaseId: "impl", canApprove: false }]);
   });
 
+  it("exposes a waiting gate on an instance whose status reads running", () => {
+    const row = toOverviewRow({
+      definition: def(),
+      latest: inst("running", ["running", "awaiting-approval"]),
+    });
+    expect(row.gates).toEqual([{ phaseId: "impl", canApprove: true }]);
+  });
+
+  it("has no gate on an ended instance, whatever its phases say", () => {
+    const row = toOverviewRow({
+      definition: def(),
+      latest: inst("aborted", ["succeeded", "awaiting-approval"]),
+    });
+    expect(row.gates).toEqual([]);
+  });
+
   it("has no gate on a running instance", () => {
     const row = toOverviewRow({
       definition: def(),

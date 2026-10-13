@@ -52,6 +52,7 @@ const fakeEngine: Engine = {
   approveAutomatically: async () => ({ ok: true as const, code: 200 }),
   revise: async () => ({ ok: true, code: 200 }),
   abort: async () => ({ ok: true, code: 200 }),
+  withStartsHeld: (_pipelineId, work) => work(),
   reconcile: async () => {},
   adopt: async () => {},
   drain: async () => {},

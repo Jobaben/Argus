@@ -227,6 +227,7 @@ export type {
 } from "./verdict.js";
 
 export type {
+  AbortCause,
   GateDecision,
   GateDecisionChannel,
   GateDecisionEffect,

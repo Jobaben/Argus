@@ -70,9 +70,20 @@ export function createEngine(deps: EngineDeps): Engine {
   Object.assign(fns, createGates(core));
   Object.assign(fns, createReconcile(core));
 
-  const { start, onSignal, approve, approveAutomatically, revise, abort, reconcile, adopt } = fns;
+  const {
+    start,
+    withStartsHeld,
+    onSignal,
+    approve,
+    approveAutomatically,
+    revise,
+    abort,
+    reconcile,
+    adopt,
+  } = fns;
   return {
     start,
+    withStartsHeld,
     onSignal,
     approve,
     approveAutomatically,

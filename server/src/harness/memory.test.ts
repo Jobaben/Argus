@@ -7,7 +7,6 @@ import path from "node:path";
 import {
   DEFAULT_MEMORY_BYTES,
   ensureMemoryDir,
-  isSettled,
   memoryDirFor,
   memoryNotesPath,
   readMemoryNotes,
@@ -109,15 +108,7 @@ test("trimMemoryIfNeeded trims the head on a line boundary, keeping the newest c
   assert.equal(await trimMemoryIfNeeded("p4", cap), false);
 });
 
-// ── isSettled / summarizeInstance ─────────────────────────────────────────
-
-test("isSettled: only succeeded/failed/aborted count; running/awaiting-approval don't", () => {
-  assert.equal(isSettled({ status: "succeeded" }), true);
-  assert.equal(isSettled({ status: "failed" }), true);
-  assert.equal(isSettled({ status: "aborted" }), true);
-  assert.equal(isSettled({ status: "running" }), false);
-  assert.equal(isSettled({ status: "awaiting-approval" }), false);
-});
+// ── summarizeInstance ─────────────────────────────────────────────────────
 
 test("summarizeInstance is empty for an instance that has not settled", () => {
   assert.equal(summarizeInstance(baseInstance({ status: "running" })), "");

@@ -3,6 +3,7 @@ import { DEFAULT_MEMORY_BYTES, trimMemoryIfNeeded } from "../harness/memory.js";
 import { readPipelines } from "../sources/pipelines.js";
 import { journal } from "../sources/journal.js";
 import type { PipelineDefinition, PipelineInstance } from "../sources/pipelineTypes.js";
+import { resumable } from "../sources/instanceStatus.js";
 import { log } from "../log.js";
 import type { EngineCore, EngineFns } from "./context.js";
 
@@ -27,7 +28,7 @@ export function createStore(core: EngineCore) {
   async function saveInstance(inst: PipelineInstance): Promise<void> {
     await retireStagedDeltas(inst);
     await persist.commit(inst);
-    if (inst.status === "running" || inst.status === "awaiting-approval") {
+    if (resumable(inst.status)) {
       // Alive again — a revise of a failed instance, a scheduled retry. What it
       // creates from here is cleaned up by the settlement that follows.
       cleaned.delete(inst.id);

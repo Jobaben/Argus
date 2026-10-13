@@ -19,6 +19,7 @@ import {
 import { rubricDigest, withCurrentVerdicts } from "../sources/verdict.js";
 import { hasTrajectory } from "../sources/trajectory.js";
 import type {
+  AbortCause,
   TransitionSource,
   GateDecision,
   GateDecisionPhaseRef,
@@ -33,6 +34,7 @@ import type {
 } from "../sources/pipelineTypes.js";
 import type { TransitionResult } from "../pipelineTransitions.js";
 import { log } from "../log.js";
+import { isTerminal } from "../sources/instanceStatus.js";
 import type {
   ActionResult,
   AutomatedApproval,
@@ -216,8 +218,8 @@ export function createGates(core: EngineCore) {
     await stopRuns(op.stopRunIds, "aborted");
     await probe("abort:killed", inst.id);
     let aborted = inst;
-    if (inst.status !== "succeeded" && inst.status !== "failed" && inst.status !== "aborted") {
-      aborted = T(abortTransition(inst, nowISO())).instance;
+    if (!isTerminal(inst.status)) {
+      aborted = T(abortTransition(inst, nowISO(), op.cause)).instance;
     }
     // An abort ends every realization this instance was driving: a
     // completion question nothing will ever answer is not left `running`.
@@ -664,13 +666,13 @@ export function createGates(core: EngineCore) {
 
   async function abort(
     instanceId: string,
-    options: { source?: OperatorSource } = {},
+    options: { source?: OperatorSource; cause?: AbortCause } = {},
   ): Promise<ActionResult> {
     return locks.withLock(instanceId, async () => {
       const read = await readForDecision(instanceId);
       if ("refusal" in read) return read.refusal;
       const inst = read.inst;
-      if (inst.status === "succeeded" || inst.status === "failed" || inst.status === "aborted") {
+      if (isTerminal(inst.status)) {
         return { ok: false, code: 409, error: "instance is already terminal" };
       }
       const source = options.source ?? UNSPECIFIED;
@@ -693,6 +695,7 @@ export function createGates(core: EngineCore) {
         phaseId: null,
         attempt: null,
         stopRunIds: stopTargets(inst.phases),
+        ...(options.cause ? { cause: options.cause } : {}),
       });
       if (unlinked) return unlinked;
       await continueAbort(inst, inst.pendingGateOperation!);

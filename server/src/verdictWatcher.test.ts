@@ -349,11 +349,34 @@ test("a gated phase with no autoApprove is never opened automatically", async ()
   assert.equal(approved.length, 0);
 });
 
-test("an instance that is not awaiting approval is untouched", async () => {
+test("an instance with no phase waiting at a gate is untouched", async () => {
+  await writeVerdict(verdict("step-1", 10));
+  const running = instance({ status: "running" });
+  running.phases[0].status = "running";
+  delete running.phases[0].pause;
+  const { w, approved } = watcher({ pipelines: [pipeline()], instances: [running] });
+  await w.check();
+  assert.equal(approved.length, 0, "nothing waits, so nothing is approved");
+});
+
+test("regression: a gate is seen even when the instance status reads running", async () => {
+  // The status four transitions used to write beside a sibling's waiting gate.
   await writeVerdict(verdict("step-1", 10));
   const { w, approved } = watcher({
     pipelines: [pipeline()],
     instances: [instance({ status: "running" })],
+  });
+  await w.check();
+  assert.equal(approved.length, 1, "the waiting gate is judged and opened");
+});
+
+test("regression: an instance of a deleted pipeline is never opened by a score", async () => {
+  // Its snapshot still declares autoApprove, but the board leaves the gate to
+  // the operator's Stop; a rule must not advance it under no pipeline.
+  await writeVerdict(verdict("step-1", 10));
+  const { w, approved } = watcher({
+    pipelines: [],
+    instances: [instance({ definition: pipeline() })],
   });
   await w.check();
   assert.equal(approved.length, 0);

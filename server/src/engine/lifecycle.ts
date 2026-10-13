@@ -9,7 +9,7 @@ import { parseEnvelopeFor } from "../runtimes/index.js";
 import type { Run } from "../sources/scheduleTypes.js";
 import type { PhaseFailureClass, PipelineInstance } from "../sources/pipelineTypes.js";
 import { log } from "../log.js";
-import { resumable } from "./constants.js";
+import { resumable } from "../sources/instanceStatus.js";
 import type { EngineCore, EngineFns } from "./context.js";
 
 /** Process lifecycle: awaiting a run's exit, deadlines and stalls, and the one way Argus ends a run (`terminateRun`). Moved verbatim from `createEngine`. */

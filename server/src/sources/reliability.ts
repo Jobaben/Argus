@@ -1,4 +1,5 @@
 import type { PhaseFailureClass, PhaseProgress, PipelineInstance } from "./pipelineTypes.js";
+import { isTerminal } from "./instanceStatus.js";
 import type { Run } from "./scheduleTypes.js";
 import type { PhaseReliability, PipelineReliability } from "@argus/contracts";
 
@@ -62,10 +63,6 @@ function dayKey(iso: string): string {
  *  no `endedAt`, rather than dropping the instance from the window. */
 function settledAt(inst: PipelineInstance): string {
   return inst.endedAt ?? inst.updatedAt;
-}
-
-function isSettled(inst: PipelineInstance): boolean {
-  return inst.status === "succeeded" || inst.status === "failed" || inst.status === "aborted";
 }
 
 /** A phase not reached, or skipped by a route, ran nowhere. */
@@ -210,7 +207,7 @@ export function deriveReliability(
 ): PipelineReliability {
   const floor = now.getTime() - Math.max(0, windowDays) * DAY_MS;
   const settled = instances.filter((i) => {
-    if (i.pipelineId !== pipelineId || !isSettled(i)) return false;
+    if (i.pipelineId !== pipelineId || !isTerminal(i.status)) return false;
     const at = Date.parse(settledAt(i));
     return Number.isFinite(at) && at >= floor && at <= now.getTime();
   });

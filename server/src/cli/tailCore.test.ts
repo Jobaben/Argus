@@ -596,6 +596,22 @@ describe("Tracker", () => {
     );
   });
 
+  it("is not idle while a retry is due beside a waiting gate", () => {
+    const t = new Tracker(() => NOW);
+    const waiting = (retryAt: string | null) =>
+      instance({
+        status: "awaiting-approval",
+        phases: [
+          { ...instance().phases[0], status: "failed", retryAt },
+          { ...instance().phases[1], status: "awaiting-approval" },
+        ],
+      });
+    t.applyOverview([entry(waiting(null))]);
+    assert.equal(t.isIdle(), true, "a gate alone waits on a person");
+    t.applyOverview([entry(waiting("2026-07-07T10:40:00.000Z"))]);
+    assert.equal(t.isIdle(), false, "the retry will run without one");
+  });
+
   it("tags a webhook- or chain-fired instance start the same way", () => {
     const t = new Tracker(() => NOW);
     // The first read of any instance is the silent baseline (same rule as runs).

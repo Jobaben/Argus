@@ -5,6 +5,57 @@ All notable changes to Argus are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Deleting a pipeline stops its live instances first.**
+  `DELETE /api/pipelines/:id` aborts every instance still running or waiting
+  at a gate, then deletes the definition. The reply names them
+  (`{ ok, aborted: [ids] }`). If one cannot be stopped, the pipeline is kept
+  and the route returns `409` with `code: "instance-not-stopped"`. The
+  Pipelines confirm says how many instances it will stop. While the delete
+  runs, new starts of the pipeline wait (then fail: it is gone), so none slips
+  in between. An instance the delete stopped carries
+  `abortCause: "pipeline-deleted"` and fires no `after` chain; an operator's
+  own abort still counts as `failed` for chaining.
+- **Instances of a deleted pipeline get a board card.** `GET /api/overview`
+  adds an entry marked `orphaned: true` for each deleted pipeline that still
+  has live instances. The Command Center shows it as _pipeline deleted_ with a
+  **Stop** button, so the "awaiting you" count always leads to a card. Its
+  gate is not opened by `autoApprove` either.
+- **The fleet's "running" count is instances with work in flight.**
+  `liveInstances` in `GET /api/fleet` counts an instance with a phase running
+  or a retry due, so one paused only at a gate is counted as gated alone, and
+  one with a sibling still running as both. `argus tail --until-idle` uses the
+  same rule: it no longer exits while a retry is due beside a waiting gate.
+
+### Fixed
+
+- **A sibling's waiting gate is no longer hidden.** Revise, remediation, a
+  retry starting and a retry being scheduled each wrote the instance as
+  `running`, even while another phase waited at its gate. The status is now
+  derived from the phases on every transition, so the instance keeps reading
+  `awaiting-approval`. This changes what follows:
+  - auto-approval and the gate counts (briefing, palette, insight,
+    `argus tail`, the fleet summary) see the gate straight away;
+  - check results and candidate verifications beside a waiting gate now wait
+    for the decision, as documented. Before, the masked status let some
+    through. They are not run until then either, so a check suite is not run
+    once for nothing and again after the decision.
+- **A scheduled retry no longer ends the instance as failed.** With nothing
+  else live, a phase failing with a retry scheduled used to end the instance
+  as `failed`: `onFailure` fired, `instance.ended` was journaled, an
+  `after: failed` chain could start, and the worktrees were cleaned before the
+  retry ran. A pending retry now keeps the instance live. Instances already on
+  disk as `failed` with a `retryAt` are no longer revived.
+- **A due retry runs while a sibling waits at its gate.** It used to wait for
+  the human decision.
+- **The board shows a gate an older instance hides.** An instance saved with
+  `running` beside a waiting gate now gets its Review button, matching the
+  server's "awaiting you" count.
+- **Recovery stops healing at a gate it opened.** When healing one finished
+  run during recovery pauses its phase at a gate, the sibling runs are healed
+  after the decision, the same as when the gate was already waiting.
+
 ## [0.5.0] - 2026-10-12
 
 > **Breaking changes.** Pre-1.0, so this bumps the minor version. Check these

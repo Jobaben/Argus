@@ -2201,3 +2201,196 @@ test("stallSeconds absent: no stall check ever runs, however long a step is quie
   await e.reconcile();
   assert.equal((await instances.readInstance(inst!.id)).phases[0].status, "running");
 });
+
+// ── WS14: instance status under gates ───────────────────────────────────────
+// Three phases each: with two, masking lets runDueRetries accept the instance
+// and the tests would pass for the wrong reason.
+
+/** Answer the spawn recorded for `phaseId` with a successful completion. */
+async function completePhase(e: any, instanceId: string, rec: any, phaseId: string) {
+  const call = [...rec.calls].reverse().find((c: any) => c.env.ARGUS_PHASE_ID === phaseId);
+  assert.ok(call, `a run was spawned for ${phaseId}`);
+  await e.onSignal(instanceId, {
+    instanceId,
+    phaseId,
+    runId: call.run.id,
+    type: "completed",
+    token: testRunToken(call.run.id),
+    payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
+  });
+  await e.drain();
+}
+
+// A stall, not a failed check: check results wait for a pending gate decision,
+// while the stall pass fails a step beside a waiting gate.
+const stallsAndRetries = (cwd: string) => ({
+  id: "a",
+  name: "A",
+  cwd,
+  gated: false,
+  needs: [],
+  stallSeconds: 30,
+  retry: { attempts: 2, backoffSeconds: 60, retryOn: ["timeout"] },
+  steps: [{ name: "s", prompt: "a" }],
+});
+
+/** Let A stall, and wait until its failure has scheduled the retry. */
+async function stallA(e: any, instances: any, instanceId: string) {
+  await e.reconcile();
+  await waitFor(async () => {
+    const a = (await instances.readInstance(instanceId)).phases.find((p: any) => p.id === "a");
+    return a.status === "failed" && Boolean(a.retryAt);
+  }).catch(() => {});
+  const a = (await instances.readInstance(instanceId)).phases.find((p: any) => p.id === "a");
+  assert.equal(a.status, "failed", "A failed on its stall");
+  assert.ok(a.retryAt, "A's retry is scheduled");
+}
+
+test("a retry pending beside a waiting gate keeps the instance waiting, and still runs", async () => {
+  const { engine, pipelines, instances } = await load();
+  await seed(pipelines, [
+    stallsAndRetries(home),
+    { id: "b", name: "B", cwd: home, gated: true, needs: [], steps: [{ name: "s", prompt: "b" }] },
+    { id: "c", name: "C", cwd: home, gated: false, needs: [], steps: [{ name: "s", prompt: "c" }] },
+  ]);
+  const rec = recordingSpawn();
+  let clock = new Date(2026, 5, 30, 12, 0, 0);
+  const e = engine.createEngine(
+    baseDeps({ spawn: rec.spawn, kill: () => true, killGraceMs: 50, now: () => clock }),
+  );
+  const inst = await e.start("p1", "manual");
+  assert.equal(rec.calls.length, 3, "all three phases start together");
+
+  await completePhase(e, inst!.id, rec, "b");
+  clock = new Date(clock.getTime() + 31_000);
+  await stallA(e, instances, inst!.id);
+  assert.equal(
+    (await instances.readInstance(inst!.id)).status,
+    "awaiting-approval",
+    "scheduling a retry does not hide B's gate",
+  );
+
+  await completePhase(e, inst!.id, rec, "c");
+  clock = new Date(clock.getTime() + 61_000);
+  await e.reconcile();
+  await waitFor(() => rec.calls.length === 4).catch(() => {});
+  assert.equal(rec.calls.length, 4, "A's due retry runs although B waits at its gate");
+  assert.equal(rec.calls[3].env.ARGUS_PHASE_ID, "a", "the fourth spawn is A's retry");
+  const after = await instances.readInstance(inst!.id);
+  assert.equal(after.status, "awaiting-approval", "relaunching A does not hide B's gate");
+});
+
+test("a retry pending when the last gate is approved keeps the instance alive", async (t) => {
+  if (!gitAvailable()) return t.skip("git not available");
+  const { engine, pipelines, instances, journalSrc } = await load();
+  const repo = makeRepo();
+  await seed(
+    pipelines,
+    [
+      stallsAndRetries(repo),
+      {
+        id: "b",
+        name: "B",
+        cwd: repo,
+        gated: true,
+        needs: [],
+        steps: [{ name: "s", prompt: "b" }],
+      },
+      {
+        id: "c",
+        name: "C",
+        cwd: repo,
+        gated: false,
+        needs: [],
+        steps: [{ name: "s", prompt: "c" }],
+      },
+    ],
+    { workspace: { scope: "instance" } },
+  );
+  const rec = recordingSpawn();
+  let failures = 0;
+  let clock = new Date(2026, 5, 30, 12, 0, 0);
+  const e = engine.createEngine(
+    baseDeps({
+      spawn: rec.spawn,
+      kill: () => true,
+      killGraceMs: 50,
+      now: () => clock,
+      onFailure: () => failures++,
+    }),
+  );
+  const inst = await e.start("p1", "manual");
+  const shared = path.join(paths.worktreesDir(), inst!.id, "shared");
+
+  await completePhase(e, inst!.id, rec, "c");
+  await completePhase(e, inst!.id, rec, "b");
+  clock = new Date(clock.getTime() + 31_000);
+  await stallA(e, instances, inst!.id);
+  assert.equal(failures, 0, "no onFailure when A stalls beside B's gate");
+  const approved = await e.approve(inst!.id, undefined, { phaseId: "b" });
+  assert.equal(approved.ok, true, "B's gate is approved");
+  await e.drain();
+
+  const after = await instances.readInstance(inst!.id);
+  assert.equal(failures, 0, "no onFailure while A's retry is pending");
+  assert.equal(after.status, "running", "a pending retry keeps the instance live");
+  assert.equal(existsSync(shared), true, "the shared worktree is kept for the retry");
+  const j = await journalSrc.readJournal(inst!.id);
+  assert.equal(
+    j.some((entry: any) => entry.kind === "instance.ended"),
+    false,
+    "the instance has not ended",
+  );
+
+  clock = new Date(clock.getTime() + 61_000);
+  await e.reconcile();
+  await waitFor(() => rec.calls.length === 4).catch(() => {});
+  assert.equal(rec.calls.length, 4, "A's retry runs");
+  assert.equal(rec.calls[3].run.cwd, shared, "the retry runs in the kept worktree");
+});
+
+test("revising one of two waiting gates keeps the instance waiting on the other", async () => {
+  const { engine, pipelines, instances } = await load();
+  await seed(pipelines, [
+    {
+      id: "g1",
+      name: "G1",
+      cwd: home,
+      gated: true,
+      needs: [],
+      steps: [{ name: "s", prompt: "1" }],
+    },
+    {
+      id: "g2",
+      name: "G2",
+      cwd: home,
+      gated: true,
+      needs: [],
+      steps: [{ name: "s", prompt: "2" }],
+    },
+    { id: "c", name: "C", cwd: home, gated: false, needs: [], steps: [{ name: "s", prompt: "c" }] },
+  ]);
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const inst = await e.start("p1", "manual");
+
+  await completePhase(e, inst!.id, rec, "g1");
+  await completePhase(e, inst!.id, rec, "g2");
+  assert.equal(
+    (await instances.readInstance(inst!.id)).status,
+    "awaiting-approval",
+    "both gates wait",
+  );
+
+  const revised = await e.revise(inst!.id, "again", { phaseId: "g1" });
+  assert.equal(revised.ok, true, "G1 is revised");
+  await e.drain();
+  const after = await instances.readInstance(inst!.id);
+  assert.equal(
+    after.phases.find((p: any) => p.id === "g2").status,
+    "awaiting-approval",
+    "G2 still waits",
+  );
+  // verdictWatcher only looks at instances whose status reads awaiting-approval.
+  assert.equal(after.status, "awaiting-approval", "revising G1 does not hide G2's gate");
+});

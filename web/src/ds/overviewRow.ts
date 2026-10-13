@@ -150,6 +150,8 @@ export interface OverviewRow {
   /** How the latest/active instance was fired. Null when there is no instance
    *  yet (the "never run" row). */
   trigger: PipelineInstance["trigger"] | null;
+  /** The pipeline was deleted while this instance was live: abort is all that is left. */
+  orphaned?: true;
 }
 
 const PHASE_STATUS_TO_DS: Record<PhaseStatus, DsStatus> = {
@@ -340,17 +342,18 @@ function activeStepName(phase: PhaseProgress): string | null {
 
 function gatesFor(latest: OverviewEntry["latest"]): OverviewGate[] {
   if (!latest) return [];
-  if (latest.status === "awaiting-approval") {
-    return latest.phases
-      .filter((p) => p.status === "awaiting-approval")
-      .map((p) => ({ phaseId: p.id, canApprove: true }));
-  }
   if (latest.status === "failed") {
     return latest.phases
       .filter((p) => p.status === "failed")
       .map((p) => ({ phaseId: p.id, canApprove: false }));
   }
-  return [];
+  if (latest.status !== "running" && latest.status !== "awaiting-approval") return [];
+  // A waiting gate is read off the phases, as the server counts it: an
+  // instance saved before its status was derived from them can read
+  // `running` beside one.
+  return latest.phases
+    .filter((p) => p.status === "awaiting-approval")
+    .map((p) => ({ phaseId: p.id, canApprove: true }));
 }
 
 function extractReason(payload: unknown): string | null {
@@ -528,8 +531,11 @@ export function toOverviewRow(entry: OverviewEntry): OverviewRow {
     };
   }
 
-  return instanceRow(definition, latest, entry.cost ?? null);
+  return { ...instanceRow(definition, latest, entry.cost ?? null), ...orphanedOf(entry) };
 }
+
+const orphanedOf = (entry: OverviewEntry): Pick<OverviewRow, "orphaned"> =>
+  entry.orphaned ? { orphaned: true } : {};
 
 /**
  * One row per concurrent instance. With overlapPolicy "allow" a pipeline can
@@ -543,5 +549,6 @@ export function toOverviewRows(entry: OverviewEntry): OverviewRow[] {
   return active.map((a) => ({
     ...instanceRow(entry.definition, a.instance, a.cost),
     instanceLabel: active.length > 1 ? a.instance.id.slice(0, 8) : null,
+    ...orphanedOf(entry),
   }));
 }

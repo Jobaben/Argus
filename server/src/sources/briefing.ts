@@ -5,6 +5,7 @@ import { isFailure } from "./issues.js";
 import type { Issue } from "./issues.js";
 import type { MonitorHealth } from "./monitors.js";
 import type { PipelineInstance } from "./pipelineTypes.js";
+import { hasWaitingGate } from "./instanceStatus.js";
 import type { Run, RunStatus } from "./scheduleTypes.js";
 import type { Anomaly, AttentionItem, Briefing } from "@argus/contracts";
 
@@ -71,15 +72,13 @@ function buildAttention(input: BriefingInput): AttentionItem[] {
     (m.status === "down" ? down : failing).push(item);
   }
 
-  const gates: AttentionItem[] = input.instances
-    .filter((i) => i.status === "awaiting-approval")
-    .map((i) => ({
-      kind: "gate-waiting",
-      id: i.id,
-      title: `${i.pipelineName} is waiting for you`,
-      detail: `phase "${waitingGateName(i)}" needs approval`,
-      at: i.updatedAt,
-    }));
+  const gates: AttentionItem[] = input.instances.filter(hasWaitingGate).map((i) => ({
+    kind: "gate-waiting",
+    id: i.id,
+    title: `${i.pipelineName} is waiting for you`,
+    detail: `phase "${waitingGateName(i)}" needs approval`,
+    at: i.updatedAt,
+  }));
 
   const openIssues: AttentionItem[] = input.issues
     .filter((i) => i.state === "open")

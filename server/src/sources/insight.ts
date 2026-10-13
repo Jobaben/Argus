@@ -9,6 +9,7 @@ import type { Agent } from "./types.js";
 import type { Issue } from "./issues.js";
 import type { MonitorHealth } from "./monitors.js";
 import type { PipelineDefinition, PipelineInstance } from "./pipelineTypes.js";
+import { hasWaitingGate } from "./instanceStatus.js";
 import type { Run, ScheduleWithNext } from "./scheduleTypes.js";
 import { nextFireAfter } from "./nextFire.js";
 
@@ -49,17 +50,6 @@ function isInFlight(run: Run): boolean {
   return run.status === "running";
 }
 
-/**
- * A phase waiting on a human.
- *
- * Counted per *instance*, not per phase: an instance has at most one current
- * phase, so counting phases would double-count a re-run gate and make the
- * number disagree with the board.
- */
-function isWaitingGate(inst: PipelineInstance): boolean {
-  return inst.status === "awaiting-approval";
-}
-
 function countStatuses(input: SituationInput): SituationCounts {
   let monitorsDown = 0;
   let monitorsFailing = 0;
@@ -69,7 +59,9 @@ function countStatuses(input: SituationInput): SituationCounts {
   }
   return {
     runsInFlight: input.runs.filter(isInFlight).length,
-    gatesWaiting: input.instances.filter(isWaitingGate).length,
+    // Counted per *instance*, not per phase: counting phases would
+    // double-count a re-run gate and make the number disagree with the board.
+    gatesWaiting: input.instances.filter(hasWaitingGate).length,
     failedInstances: input.instances.filter((i) => i.status === "failed").length,
     monitorsDown,
     monitorsFailing,

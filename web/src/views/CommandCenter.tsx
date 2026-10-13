@@ -3,6 +3,7 @@ import { runtimeLabel } from "../useRuntimes";
 import { useMachineFacet } from "../fleet/useMachineFacet";
 import { MachinePicker, PeerBanner, PeerEmpty } from "../fleet/MachineFacet";
 import { useOverview } from "../useOverview";
+import { useAuth } from "../useAuth";
 import { useInsight } from "../useInsight";
 import { useRuns } from "../useRuns";
 import { SituationStrip } from "./SituationStrip";
@@ -591,7 +592,8 @@ function InstanceBoard({
           phases={row.phases}
           phaseNames={phaseNames}
           instanceId={row.instanceId}
-          gate={row.gates.find((g) => g.phaseId === selected.id) ?? null}
+          // A deleted pipeline's gate is not decided here: stopping is all that is left.
+          gate={row.orphaned ? null : (row.gates.find((g) => g.phaseId === selected.id) ?? null)}
           reviseLabel={row.failure?.kind === "restarted" ? "Retry" : "Revise"}
           liveActivity={liveActivity}
           rowModel={row.model}
@@ -626,6 +628,7 @@ function Row({
   index,
   onOpenStep,
   onOpenGate,
+  onAbort,
   ref,
 }: {
   rows: OverviewRow[];
@@ -634,11 +637,31 @@ function Row({
   index: number;
   onOpenStep: (selection: StepSelection) => void;
   onOpenGate: (selection: GateSelection) => void;
+  /** Stop an instance of a deleted pipeline; absent when signed out. */
+  onAbort?: (instanceId: string) => Promise<unknown>;
   /** FLIP registration, so the card glides when the board re-orders. */
   ref?: React.Ref<HTMLElement>;
 }) {
   const first = rows[0];
   const multi = rows.length > 1;
+  // By instance: each row has its own Stop, and its own failure.
+  const [abortError, setAbortError] = useState<{ instanceId: string; message: string } | null>(
+    null,
+  );
+  const stop = (instanceId: string) => {
+    if (!onAbort) return;
+    if (
+      !confirm(
+        `Stop this instance of the deleted pipeline "${first.name}"? In-progress work will be discarded.`,
+      )
+    ) {
+      return;
+    }
+    setAbortError(null);
+    onAbort(instanceId).catch((e: unknown) =>
+      setAbortError({ instanceId, message: e instanceof Error ? e.message : String(e) }),
+    );
+  };
   return (
     <article
       ref={ref}
@@ -653,6 +676,14 @@ function Row({
             line once the row ran out of space on a phone. Wrapping the row
             instead keeps the name intact. */}
         <span className="text-[15px] font-extrabold tracking-[0.02em] text-ink">{first.name}</span>
+        {first.orphaned && (
+          <span
+            className="rounded-full border border-fail/30 px-2 font-mono text-[10px] uppercase tracking-[0.14em] text-fail"
+            title="This pipeline was deleted while these instances were live. Stopping them is the only action left."
+          >
+            pipeline deleted
+          </span>
+        )}
         <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint">
           {first.phases.length} phases
         </span>
@@ -708,6 +739,20 @@ function Row({
                 <span className="ml-auto font-mono text-[10px]">
                   <TimeAgo iso={row.updatedAt} />
                 </span>
+              </div>
+            )}
+            {row.orphaned && onAbort && row.instanceId && (
+              <div className="mb-3 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => stop(row.instanceId!)}
+                  className="rounded-lg bg-fail/15 px-2.5 py-1 text-xs text-fail ring-1 ring-fail/30 hover:bg-fail/25"
+                >
+                  Stop
+                </button>
+                {abortError?.instanceId === row.instanceId && (
+                  <span className="text-xs text-fail">{abortError.message}</span>
+                )}
               </div>
             )}
             {/* The graph is the whole pipeline at a glance — statuses, stages,
@@ -834,7 +879,8 @@ function PeerBoard({ facet }: { facet: ReturnType<typeof useMachineFacet> }) {
 
 export default function CommandCenter() {
   const facet = useMachineFacet();
-  const { overview, loading, error, approve, revise } = useOverview();
+  const { overview, loading, error, approve, revise, abort } = useOverview();
+  const { isAdmin } = useAuth();
   const { totals, reset } = useTotals();
   const { situation, loading: situationLoading } = useInsight();
   const { runs, loading: runsLoading, cancelRun } = useRuns();
@@ -853,7 +899,7 @@ export default function CommandCenter() {
     const [tab, instanceId, phaseId] = segments;
     if (tab !== "command" || !instanceId) return null;
     const row = rows.find((r) => r.instanceId === instanceId);
-    if (!row) return null;
+    if (!row || row.orphaned) return null;
     const target = phaseId ? row.gates.find((g) => g.phaseId === phaseId) : row.gates[0];
     return target ? { instanceId, phaseId: target.phaseId, pipelineName: row.name } : null;
   }, [segments, rows, facet.peer]);
@@ -939,6 +985,7 @@ export default function CommandCenter() {
                     liveActivity={liveActivity}
                     onOpenStep={setSelected}
                     onOpenGate={setPickedGate}
+                    onAbort={isAdmin ? abort : undefined}
                   />
                 ))}
               </div>

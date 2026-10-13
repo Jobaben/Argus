@@ -7,18 +7,31 @@
 - the WS14 section.
 
 **Repo:** `C:\GIT\argus`. The remote `origin` is GitHub (`Jobaben/Argus`), not Azure DevOps. A plain `git push` works. Never use `gh`.
-**Updated:** 2026-10-13. Lives in the repo so any session or machine can continue; update it in place at the end of each session rather than creating a new file.
+**Updated:** 2026-10-13 (WS14 staged, code-review follow-ups included). Lives in the repo so any session or machine can continue; update it in place at the end of each session rather than creating a new file.
 
 ## Where things stand
 
-| Item                               | State                                                                                                                                                                                                                                                                |
-| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| WS1, WS2, follow-ups #1/#4         | ✅ on `main` and pushed (`fa470ed`).                                                                                                                                                                                                                                 |
-| `main`                             | `ee69bb4` (this plan and handoff moved into the repo), on top of `db13709` (`docs/superpowers` deleted) and `75deb5f` (`v0.5.0`, tagged). All pushed. The engine, `pipelineTransitions.ts`, `dag.ts`, `harness/`, `bin/` and `hooks/` are untouched since `fa470ed`. |
-| Plan                               | Re-baselined against `39b58dc` on 2026-10-12. Every open question is answered, and the narrowed soak wording is confirmed (the plan's "Decisions on the re-baseline"). One follow-up: in WS3, ask what a missing `ARGUS_TOKEN` does (decision 4).                    |
-| WS14 (instance status under gates) | 🟡 **Next.** `fix/gate-state-guards` exists with no commits of its own; its three failing tests are written but stashed (see below). Order and grown scope approved (decision 7).                                                                                    |
-| WS3–WS13                           | ⬜ Not started.                                                                                                                                                                                                                                                      |
-| Live proof of WS1/WS2              | Ready for verification only. It comes with WS11's discovery-pipeline fan-out.                                                                                                                                                                                        |
+| Item                               | State                                                                                                                                                                                                                                                                                                      |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| WS1, WS2, follow-ups #1/#4         | ✅ on `main` and pushed (`fa470ed`).                                                                                                                                                                                                                                                                       |
+| `main`                             | `eb7663f` (handoff and plan updates), on top of `ee69bb4` (this plan and handoff moved into the repo), `db13709` (`docs/superpowers` deleted) and `75deb5f` (`v0.5.0`, tagged). All pushed. The engine, `pipelineTransitions.ts`, `dag.ts`, `harness/`, `bin/` and `hooks/` are untouched since `fa470ed`. |
+| Plan                               | Re-baselined against `39b58dc` on 2026-10-12. Every open question is answered, and the narrowed soak wording is confirmed (the plan's "Decisions on the re-baseline"). One follow-up: in WS3, ask what a missing `ARGUS_TOKEN` does (decision 4).                                                          |
+| WS14 (instance status under gates) | 🔵 **Staged for review** on `fix/gate-state-guards` (2026-10-13), uncommitted. Steps 1–5 done, plus the code-review follow-ups; the plan's WS14 "Outcome" block lists what changed and what was decided.                                                                                                                                    |
+| WS3–WS13                           | ⬜ Not started.                                                                                                                                                                                                                                                                                            |
+| Live proof of WS1/WS2              | Ready for verification only. It comes with WS11's discovery-pipeline fan-out.                                                                                                                                                                                                                              |
+
+**State at 2026-10-13, end of session:**
+
+- **WS14 is staged, not committed.** The stash is popped and gone; the three red tests are now green, in `pipelineEngineHarness.test.ts` section "WS14".
+- **Done gate (Windows):**
+  - `test:timeboxed`: 3,237 tests, 3,209 pass, 25 skipped, 3 fail, all three baseline (CRLF Codex skill copy, "blowing the output cap", "analysis spawn: kill()").
+  - typecheck, lint, `prettier --check --end-of-line auto`, `check-contracts-runtime`, `git diff --check`: pass.
+  - `server test:coverage`: 4 fail, all baseline (the three above plus the load-only `processTree` "timed-out command"). No threshold failed.
+  - `web test:coverage`: 3 fail, none real: `sessionList` (locale, baseline) and two `Fleet.test.tsx` tests that pass alone (load-only).
+  - build, `check-bundle-size` (121.8 kB of 122 kB, **0.2 kB headroom**: WS4/WS7/WS8 web additions must be lazy), `check-motion-budget`, `argus --help`: pass.
+- **Two decisions taken (2026-10-13):** `DELETE /api/pipelines/:id` aborts live instances first; a recovery heal that opens a gate stops the heal loop.
+- **A `/code-review` pass found 10 items; the user said "fix all".** All are fixed and staged (the plan's "Code-review follow-ups"), except approving a snapshot orphan through the API, which stays: it is the snapshot contract an existing engine test pins.
+- **Orphan `48fab3f6` is still `awaiting-approval`** (checked 2026-10-13). Once WS14 is running, it is the live acceptance case: it shows on the Command Center as _pipeline deleted_ with a Stop button.
 
 **State at 2026-10-12, end of session:**
 
@@ -37,23 +50,9 @@
 
 **Next session:**
 
-1. In the original checkout (`C:/GIT/argus`), bring the branch up and restore the tests:
-   - `git switch fix/gate-state-guards` (fast-forwarded to `85b0009`, with no commits of its own);
-   - `git merge --ff-only main` (in case `main` has moved since);
-   - `git stash pop`.
-
-   Rerun the three WS14 tests and confirm they still fail. If `main` has moved past `ee69bb4`, first run `git diff --stat 75deb5f..main -- server/src/engine server/src/pipelineTransitions.ts server/src/sources/dag.ts`.
-
-2. Implement WS14 per the plan's WS14 section. Order:
-   - the `sources/instanceStatus.ts` predicates and `liveStatus`;
-   - the four transitions;
-   - `pendingRetry` in `instanceOutcome`, and `runDueRetries` filtering on `resumable`;
-   - the guard test;
-   - the inline-spelling sweep;
-   - the display surfaces;
-   - instances whose pipeline was deleted (plan WS14 step 5);
-   - the docs, the CHANGELOG ("Fixed") and the registry note.
-3. Turn the three tests green, then run the full done gate (baseline-relative). Stage, stop, and report.
+1. The user reviews and commits WS14 on `fix/gate-state-guards`, merges it, and cuts a release (decision 2).
+2. Live acceptance: start the server from that build, open the Command Center, and stop `48fab3f6` from its _pipeline deleted_ card. Check that the "awaiting you" count drops to 0.
+3. Then WS3, from the updated `main`. Ask what a missing `ARGUS_TOKEN` does (decision 4).
 
 ## WS14 in one paragraph
 
@@ -81,6 +80,8 @@ The full inventory, with every site, is in the plan's WS14 section. It changes o
 
 1. **WS4 registry backfill:** WS2 `read-only-enforced`, `stall-at-gate` (`fa470ed`), WS14 `instance-status-derived`, and `codex-read-only-isolation` (adopted, decision 3).
 2. **`bypassPermissions` PowerShell probe:** unprobed. The script is [`ws2-run-probe.sh`](ws2-run-probe.sh) in this folder (edit its `BASE` first).
+
+**Web load-only failures (2026-10-13).** Under parallel load (web coverage beside a server suite) these time out at 5 s and pass alone: `CommandCenter.test.tsx` "opens the review drawer…" and "revise needs a note…", `Fleet.test.tsx` ×2, `PipelineForm.test.tsx` (several), `PipelineFormRoutes.test.tsx` ×2, `Schedules.test.tsx` catch-up. Run web coverage on its own, and rerun a failing file alone before calling it real.
 
 ## Environment gotchas (this Windows checkout)
 

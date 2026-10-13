@@ -1,5 +1,5 @@
 /** Pipeline definitions, running instances, and the board overview. */
-import type { PendingGateOperation } from "./gates.js";
+import type { AbortCause, PendingGateOperation } from "./gates.js";
 
 import type { AgentRuntimeId, ReasoningEffort } from "./runtimes.js";
 import type { Trigger } from "./schedules.js";
@@ -1358,6 +1358,9 @@ export interface PipelineInstance {
   gateDecisionIds?: string[];
   /** A gate decision whose effects are under way — see `PendingGateOperation`. */
   pendingGateOperation?: PendingGateOperation;
+  /** Set in the save that aborted the instance, when the abort had a cause
+   *  beyond the operator stopping it — see {@link AbortCause}. */
+  abortCause?: AbortCause;
   /**
    * Where this saved state stands in the instance's transition log
    * (`contracts/src/transitions.ts`). Absent on an instance that has not been
@@ -1408,6 +1411,12 @@ export interface OverviewEntry {
    *  overlapped the latest instance, so a just-stopped sibling stays visible
    *  beside its peers. Empty when only the lone `latest` instance remains. */
   active: { instance: PipelineInstance; cost: OverviewCost }[];
+  /**
+   * The pipeline was deleted while these instances were still live. `definition`
+   * is then the latest instance's snapshot, or (for an instance written before
+   * snapshots) a stand-in with no phases; the only action left is abort.
+   */
+  orphaned?: true;
 }
 
 // ── Gated artifact review ────────────────────────────────────────────────────

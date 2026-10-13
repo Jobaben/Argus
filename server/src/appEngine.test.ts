@@ -9,6 +9,8 @@ import { fakeKill } from "./testPlatform.js";
 import type { ArgusConfig } from "./config.js";
 import type { AuthService } from "./auth.js";
 import { testRunToken } from "./testSignalToken.js";
+import { deletePipeline } from "./sources/pipelines.js";
+import { readInstance, writeInstance } from "./sources/instances.js";
 
 let home: string;
 beforeEach(() => {
@@ -103,6 +105,7 @@ interface InstanceShape {
   signalToken: string;
   status: string;
   currentPhaseIndex: number;
+  abortCause?: string;
   phases: { id: string; status: string; steps: { runId: string; status: string }[] }[];
 }
 
@@ -299,6 +302,141 @@ test("real engine: instance + overview reads reflect the started instance", asyn
     overview: unknown[];
   };
   assert.equal(overview.overview.length, 1);
+});
+
+// ── Instances whose pipeline was deleted (WS14) ─────────────────────────────
+
+/** Start the two-phase gated pipeline and pause its first phase at the gate. */
+async function startPausedAtGate(app: ReturnType<typeof appWith>["app"]) {
+  const def = await createTwoPhase(app, true);
+  const start = await app.request(`/api/pipelines/${def.id}/start`, {
+    method: "POST",
+    headers: same,
+  });
+  const { id } = (await start.json()) as { id: string };
+  const runId = (await getInstance(app, id)).phases[0].steps[0].runId;
+  const sig = await app.request(`/api/instances/${id}/signal`, {
+    method: "POST",
+    headers: same,
+    body: JSON.stringify({
+      phaseId: "a",
+      runId,
+      type: "needs-input",
+      token: testRunToken(runId),
+      payload: "Q?",
+    }),
+  });
+  assert.equal(sig.status, 202, "the gate signal is accepted");
+  assert.equal((await getInstance(app, id)).status, "awaiting-approval", "A waits at its gate");
+  return { pipelineId: def.id, instanceId: id };
+}
+
+async function hasPipeline(app: ReturnType<typeof appWith>["app"], id: string) {
+  const res = await app.request("/api/pipelines", { headers: loopback });
+  return ((await res.json()) as { pipelines: { id: string }[] }).pipelines.some((p) => p.id === id);
+}
+
+interface OverviewShape {
+  overview: {
+    definition: { id: string };
+    orphaned?: boolean;
+    latest: { id: string; phases: { status: string }[] } | null;
+  }[];
+}
+
+test("deleting a pipeline aborts its live instances first", async () => {
+  const { app } = appWith();
+  const { pipelineId, instanceId } = await startPausedAtGate(app);
+
+  const res = await app.request(`/api/pipelines/${pipelineId}`, {
+    method: "DELETE",
+    headers: same,
+  });
+  assert.equal(res.status, 200, "the delete succeeds");
+  assert.deepEqual(
+    ((await res.json()) as { aborted: string[] }).aborted,
+    [instanceId],
+    "the reply names what it stopped",
+  );
+  const stopped = await getInstance(app, instanceId);
+  assert.equal(stopped.status, "aborted", "the instance is aborted");
+  assert.equal(stopped.abortCause, "pipeline-deleted", "and says why, so it chains nothing");
+  assert.equal(await hasPipeline(app, pipelineId), false, "the pipeline is deleted");
+  const board = (await (
+    await app.request("/api/overview", { headers: loopback })
+  ).json()) as OverviewShape;
+  assert.equal(board.overview.length, 0, "nothing is left on the board");
+});
+
+test("a live instance of a deleted pipeline is on the board, counted, and can be aborted", async () => {
+  const { app } = appWith();
+  const { pipelineId, instanceId } = await startPausedAtGate(app);
+  // Deleted behind the route's back, as a pipeline deleted before WS14 was,
+  // and with no snapshot, as an instance written before snapshots existed.
+  assert.equal(await deletePipeline(pipelineId), true, "the definition is removed");
+  const stored = await readInstance(instanceId);
+  delete stored!.definition;
+  await writeInstance(stored!);
+
+  const board = (await (
+    await app.request("/api/overview", { headers: loopback })
+  ).json()) as OverviewShape;
+  assert.equal(board.overview.length, 1, "the orphan gets a card");
+  const [entry] = board.overview;
+  assert.equal(entry.orphaned, true, "marked as orphaned");
+  assert.equal(entry.definition.id, pipelineId, "under its own pipeline id");
+  assert.equal(entry.latest?.id, instanceId, "showing the live instance");
+
+  const insight = (await (await app.request("/api/insight", { headers: loopback })).json()) as {
+    counts: { gatesWaiting: number };
+  };
+  const onBoard = board.overview.filter((e) =>
+    e.latest?.phases.some((p) => p.status === "awaiting-approval"),
+  ).length;
+  assert.equal(insight.counts.gatesWaiting, onBoard, "the gate count matches the board");
+  assert.equal(onBoard, 1, "one gate waits");
+
+  const approve = await app.request(`/api/instances/${instanceId}/approve`, {
+    method: "POST",
+    headers: same,
+  });
+  assert.equal(
+    approve.status,
+    404,
+    "no definition, no approval: refused before anything is recorded",
+  );
+  const abort = await app.request(`/api/instances/${instanceId}/abort`, {
+    method: "POST",
+    headers: same,
+  });
+  assert.equal(abort.status, 200, "the abort works without the definition");
+  const after = (await (
+    await app.request("/api/overview", { headers: loopback })
+  ).json()) as OverviewShape;
+  assert.equal(after.overview.length, 0, "an ended orphan leaves the board");
+});
+
+test("a delete whose abort is refused keeps the pipeline", async () => {
+  const { app: started, engine } = appWith();
+  const { pipelineId, instanceId } = await startPausedAtGate(started);
+  // The same store, behind an engine that cannot stop the instance.
+  const app = createApp({
+    config,
+    engine: { ...engine, abort: async () => ({ ok: false, code: 409, error: "held" }) },
+    broadcast: () => {},
+    serveWeb: false,
+    auth: openAuth,
+  });
+
+  const res = await app.request(`/api/pipelines/${pipelineId}`, {
+    method: "DELETE",
+    headers: same,
+  });
+  assert.equal(res.status, 409, "the delete is refused");
+  const body = (await res.json()) as { code: string; instanceId: string };
+  assert.equal(body.code, "instance-not-stopped", "says why");
+  assert.equal(body.instanceId, instanceId, "names the instance");
+  assert.equal(await hasPipeline(app, pipelineId), true, "the definition is kept");
 });
 
 // ── Gate decision provenance over HTTP (Phase 0) ────────────────────────────

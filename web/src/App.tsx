@@ -384,14 +384,14 @@ function Dashboard() {
   const paletteCtx = useMemo(
     () => ({
       destinations: paletteDestinations,
-      canAdmin: auth.status?.authenticated === true,
+      canAdmin: auth.isAdmin,
       runSchedule: (scheduleId: string) => postAction(`/api/schedules/${scheduleId}/run`),
       markCaughtUp: async () => {
         await briefingState.ack();
       },
       showShortcuts: () => setShortcutsOpen(true),
     }),
-    [paletteDestinations, auth.status?.authenticated, briefingState],
+    [paletteDestinations, auth.isAdmin, briefingState],
   );
   const { commands, loading: paletteLoading } = usePalette(palette.open, paletteCtx);
 

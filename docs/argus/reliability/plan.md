@@ -151,7 +151,7 @@ Status legend: ⬜ not started · 🟡 in progress · 🔵 staged for review · 
 | ✅     | WS1  | Completion delivery (the race, gate drops); server first, hook in a later commit | `fix/completion-delivery`, then `fix/hook-delivery-retry` | Discards completed work today                                              | –                                                    |
 | ✅     | WS2  | Read-only enforcement and channel access                                         | `fix/claude-permission-rules`                             | Security gap                                                               | –                                                    |
 | ✅     | –    | WS1/WS2 follow-ups: stall pass at a gate, test D ordering                        | `fix/stall-at-gate` (`fa470ed`)                           | Same class as WS1/WS2's gate guards                                        | –                                                    |
-| 🟡     | WS14 | Instance status under gates (derivation, predicates, guard test)                 | `fix/gate-state-guards`                                   | The gate-guard bugs keep recurring one path at a time; runs **before WS3** | –                                                    |
+| 🔵     | WS14 | Instance status under gates (derivation, predicates, guard test)                 | `fix/gate-state-guards`                                   | The gate-guard bugs keep recurring one path at a time; runs **before WS3** | –                                                    |
 | ⬜     | WS3  | Pinned release, state lock, build id                                             | `feat/pinned-release`                                     | Later development stops moving running pipelines                           | WS14 (order only)                                    |
 | ⬜     | WS4  | `contractVersion`, registry, `pipeline upgrade`                                  | `feat/behaviour-change-registry`                          | Later workstreams register their changes                                   | –                                                    |
 | ⬜     | WS5  | Workspace and git reliability                                                    | `fix/worktree-reliability`                                | Timeouts, long paths, cleanup race                                         | –                                                    |
@@ -301,8 +301,29 @@ Decisions:
 
 ## WS14 — Instance status under gates
 
-**Status:** 🟡 in progress on `fix/gate-state-guards` (added 2026-10-12). Order (before WS3) and the grown scope are approved (decision 7).
-**Branch:** `fix/gate-state-guards`
+**Status:** 🔵 staged for review on `fix/gate-state-guards` (2026-10-13). Order (before WS3) and the grown scope are approved (decision 7).
+
+**Outcome, 2026-10-13.** Steps 1–5 are implemented and staged:
+
+- `sources/instanceStatus.ts` holds the predicates, imported from there everywhere (engine modules included). `settle` and the four transitions write `liveStatus`, `instanceOutcome` counts `pendingRetry`, and `runDueRetries` filters on `resumable` (re-checked under the lock).
+- The guard test (`engine/instanceStatus.test.ts`) keys its allowlist on file + trimmed line text rather than line numbers, so an unrelated edit above it cannot break it. Two entries: the decided-run sweep in `reconcile.ts`.
+- **Step 4's `reconcile.ts:538` case, decided by the user:** a heal that opens a gate stops the loop (`!appliesResults`), matching the documented policy and the paused-at-entry path. The siblings heal after the decision.
+- **Step 5, decided by the user: abort first.** `DELETE /api/pipelines/:id` aborts live instances, then deletes. It returns `409 instance-not-stopped` and keeps the definition if one cannot be stopped. `GET /api/overview` adds `orphaned: true` entries. The Command Center shows them as _pipeline deleted_ with a Stop button for admins.
+- Three existing tests encoded the masked state (status `awaiting-approval` with no waiting phase, or `running` over a waiting phase): `federation.test.ts` summary, `palette.test.ts` gate entry and `verdictWatcher.test.ts` "not awaiting". Their fixtures were made consistent, and verdictWatcher gained the masked-gate regression.
+- **Code-review follow-ups, same day (user: "fix all"):**
+  - Delete runs under `engine.withStartsHeld(id)`: `start` holds the same per-pipeline lock from reading the definition to launching its first phases, so no instance appears between the aborts and the delete. Starts of one pipeline are now serialized through their first launch.
+  - The delete's aborts carry `cause: "pipeline-deleted"` (persisted in `PendingGateOperation`, then `PipelineInstance.abortCause` in the abort save). `processChains` skips them; an operator's abort still chains as `failed`.
+  - `verdictWatcher` skips instances whose pipeline is gone.
+  - `queueVerification`/`queueCandidateVerification` return before running checks while a gate waits; reconcile queues them after the decision (test counts `phase.verifying`: 0, then 1).
+  - New predicate `inFlight` (a phase running, a retry due, or no gate): the fleet's `liveInstances` and `argus tail --until-idle` use it. The tail's started/resumed lines ask `hasWaitingGate` first, then `resumable`.
+  - The web board's `gatesFor` reads waiting gates off the phases of any live instance. `useAuth` returns `isAdmin`. An orphan card keys its Stop error by instance.
+  - The alias wrappers (`isSettled`, `isWaitingGate`, `nonTerminal`) and the `engine/constants.ts` re-export are gone. The guard test scans `sources/`, `cli/`, `federation/`, `scheduler.ts`, `app.ts` and `verdictWatcher.ts` too, and knows `i` and `latest` as instance names.
+  - Instances on disk as `failed` with a `retryAt`: **0** on this machine (2026-10-13), so no migration; the CHANGELOG note stands.
+- **Not changed, adjacent:**
+  - `currentPhaseIndex` after revise/retry/remediation still points at the restarted phase, not the waiting gate. Nothing selects a gate by it (`pausedPhase` searches the phases); only `notify.ts` reads it, on failure.
+  - `argus tail` prints no line when a second gate opens on an instance already waiting.
+  - An orphan that carries a snapshot can still be approved through the API. That is the snapshot contract, pinned by `pipelineEngine.test.ts` "deleting the definition under a running instance leaves the instance able to finish". The board hides the gate on orphans, auto-approval skips them, and an orphan with no snapshot is refused (404) before anything is recorded.
+    **Branch:** `fix/gate-state-guards`
 
 **Why.** WS1 made it legal for an instance to read `awaiting-approval` while sibling phases keep running. Every path that asks "is this instance running?" was then fixed one at a time: WS1a signals, WS1b `concludeUnlaunchable`, WS2 `failStep`/`adopt`, `fa470ed` the stall pass. The inventory at `39b58dc` (every instance-level status check in `server/src`) shows the root cause is not the guards but the **status itself**:
 
@@ -457,7 +478,7 @@ Docs: RELEASING.md, README, USER-GUIDE.md, API.md, CHANGELOG.
      - **v4 `read-only-enforced`** (WS2): any `filesystem: "read-only"` phase.
      - _(re-baseline, entries to add; final numbering is set when WS4 is built)_:
        - **`stall-at-gate`** (`fa470ed`): any phase with `stallSeconds` in a pipeline with a gated phase.
-       - **`instance-status-derived`** (WS14): a pending retry no longer ends the instance as `failed`.
+       - **`instance-status-derived`** (WS14): a pending retry no longer ends the instance as `failed`; a due retry runs beside a waiting gate; auto-approval sees a gate a transition used to mask; check and candidate results beside a waiting gate wait for the decision; recovery stops healing at a gate it opened. Suggested match (settle when WS4 is built): any phase with `retry`, or a gated phase in a pipeline with parallel phases. Also: instances already on disk as `failed` with a `retryAt` are no longer revived, and `DELETE /api/pipelines/:id` aborts live instances (author-visible, not definition-matched).
        - **`codex-read-only-isolation`** (`821d047`; adopted, decision 3): Codex `filesystem: "read-only"` phases run without hooks, MCP or web search, with an env allowlist.
      - _(re-baseline)_ v1's match list is both too narrow and too broad:
        - **too narrow:** CHANGELOG `:596-603` also moved `knowledge-deltas`, `rule-verifications`, `change-proposals` and `acceptance-verifications` (`claudeHome.ts:88-101`);

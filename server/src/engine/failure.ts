@@ -19,6 +19,7 @@ import type {
 import type { RouteOutcome, TransitionResult } from "../pipelineTransitions.js";
 import { log } from "../log.js";
 import { buildRetryNote } from "./outcome.js";
+import { resumable } from "../sources/instanceStatus.js";
 import type { EngineCore, EngineFns } from "./context.js";
 
 /** Failing a phase or a step, classing the failure, scheduling retries, and journalling what routing decided. Moved verbatim from `createEngine`. */
@@ -236,16 +237,20 @@ export function createFailure(core: EngineCore) {
     return rescheduled;
   }
 
-  /** Start every retry whose backoff has elapsed. Called from reconcile. */
+  /**
+   * Start every retry whose backoff has elapsed. Called from reconcile. A gate
+   * waiting beside the failed phase does not hold its retry back, and an
+   * instance with a retry pending never reads `failed` (`instanceOutcome`).
+   */
   async function runDueRetries(now: Date): Promise<void> {
     for (const candidate of await readInstances()) {
-      if (candidate.status !== "running" && candidate.status !== "failed") continue;
+      if (!resumable(candidate.status)) continue;
       if (!candidate.phases.some((p) => p.retryAt)) continue;
       const def = await defFor(candidate);
       if (!def) continue;
       await locks.withLock(candidate.id, async () => {
         const inst = await readLive(candidate.id, "retry");
-        if (!inst) return;
+        if (!inst || !resumable(inst.status)) return;
         const due = inst.phases.filter(
           (p) => p.status === "failed" && p.retryAt && Date.parse(p.retryAt) <= now.getTime(),
         );

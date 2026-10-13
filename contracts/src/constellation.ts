@@ -92,7 +92,10 @@ export interface MachineSummary {
   monitorsDown: number;
   monitorsFailing: number;
   openIssues: number;
+  /** Instances with work in flight: a phase running or a retry due, not
+   *  only a gate waiting. One can be counted here and as gated. */
   liveInstances: number;
+  /** Instances with a phase waiting at a gate. */
   gatedInstances: number;
   runsToday: number;
   failuresToday: number;

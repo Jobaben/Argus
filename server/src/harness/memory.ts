@@ -22,6 +22,7 @@ import { paths } from "../claudeHome.js";
 import { safeSegment } from "./invocation.js";
 import { utf8SliceSuffix } from "../sources/dag.js";
 import type { PipelineInstance } from "../sources/pipelineTypes.js";
+import { isTerminal } from "../sources/instanceStatus.js";
 
 /** Default cap for `NOTES.md`, applied when `memory.maxBytes` is absent. */
 export const DEFAULT_MEMORY_BYTES = 8 * 1024;
@@ -98,14 +99,6 @@ function reasonOf(payload: unknown): string | null {
   return null;
 }
 
-const SETTLED: PipelineInstance["status"][] = ["succeeded", "failed", "aborted"];
-
-/** Is this instance done — one `summarizeInstance` (and `{{previous.instance}}`)
- *  may describe, as opposed to one still in flight? */
-export function isSettled(inst: Pick<PipelineInstance, "status">): boolean {
-  return SETTLED.includes(inst.status);
-}
-
 /**
  * A one-paragraph, plain-text summary of a settled instance: what
  * `{{previous.instance}}` interpolates to. Pure — the caller finds the
@@ -118,7 +111,7 @@ export function isSettled(inst: Pick<PipelineInstance, "status">): boolean {
  * none at all.
  */
 export function summarizeInstance(inst: PipelineInstance): string {
-  if (!isSettled(inst)) return "";
+  if (!isTerminal(inst.status)) return "";
   const endedAt = inst.endedAt ?? inst.updatedAt;
   const parts = [`Previous run ${inst.status} (ended ${endedAt})`];
 

@@ -10,6 +10,7 @@ import { performTrajectoryVerdict } from "./sources/trajectoryVerdict.js";
 import { autoApprovalQualification } from "./sources/gatePolicy.js";
 import type { AutomatedApproval } from "./pipelineEngine.js";
 import type { PipelineDefinition, PipelineInstance } from "./sources/pipelineTypes.js";
+import { hasWaitingGate } from "./sources/instanceStatus.js";
 import type { Run, Schedule } from "./sources/scheduleTypes.js";
 import type { Rubric } from "@argus/contracts";
 import { log } from "./log.js";
@@ -209,9 +210,12 @@ async function openQualifiedGates(
   instances: PipelineInstance[],
   withheld: Set<string>,
 ): Promise<void> {
-  // `settle` keeps the instance status `awaiting-approval` exactly while some
-  // phase is waiting; the engine re-checks the phase itself under its lock.
-  const live = instances.filter((i) => i.status === "awaiting-approval");
+  // Asked of the phases, not the instance status; the engine re-checks the
+  // phase itself under its lock. An instance whose pipeline was deleted is
+  // left for the operator to stop, as the board leaves it: no rule opens it.
+  const live = instances.filter(
+    (i) => hasWaitingGate(i) && pipelines.some((p) => p.id === i.pipelineId),
+  );
   if (live.length === 0) return;
   const all = await readVerdicts();
   const byRun = new Map(currentVerdicts(all).map((v) => [v.runId, v]));

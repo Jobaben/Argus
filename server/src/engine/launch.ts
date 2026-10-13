@@ -27,7 +27,6 @@ import { createWorktree, workspacePolicyFor, workspaceTarget } from "../harness/
 import {
   DEFAULT_MEMORY_BYTES,
   ensureMemoryDir,
-  isSettled,
   memoryDirFor,
   readMemoryNotes,
   summarizeInstance,
@@ -112,6 +111,7 @@ import type {
   SpawnUnit,
 } from "./types.js";
 import { PreflightError } from "./spawn.js";
+import { isTerminal, resumable } from "../sources/instanceStatus.js";
 import {
   STEP_CONTRACT,
   artifactInstruction,
@@ -321,7 +321,7 @@ export function createLaunch(core: EngineCore) {
     let previousInstanceSummary = "";
     if (promptsHere.includes("{{previous.instance}}")) {
       const siblings = (await readInstances({ pipelineId: def.id }))
-        .filter((i) => i.id !== inst.id && i.createdAt < inst.createdAt && isSettled(i))
+        .filter((i) => i.id !== inst.id && i.createdAt < inst.createdAt && isTerminal(i.status))
         .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
       if (siblings[0]) previousInstanceSummary = summarizeInstance(siblings[0]);
     }
@@ -940,7 +940,7 @@ export function createLaunch(core: EngineCore) {
             const phase = fresh?.phases.find((p) => p.id === phaseDef.id);
             const wanted =
               !!fresh &&
-              (fresh.status === "running" || fresh.status === "awaiting-approval") &&
+              resumable(fresh.status) &&
               phase?.status === "running" &&
               phase.attempt === launch.attempt &&
               phase.steps.some((s) => s.runId === run.id && s.status === "running") &&
@@ -987,7 +987,7 @@ export function createLaunch(core: EngineCore) {
     for (const { run, reason } of unlaunchable) {
       // A queued run can be refused after a sibling paused at its gate, which
       // leaves the instance `awaiting-approval` while this phase still runs.
-      if (inst.status !== "running" && inst.status !== "awaiting-approval") break;
+      if (!resumable(inst.status)) break;
       readyAfterFailure.push(
         ...failStepInPlace(def, inst, phaseDef.id, run.id, "configuration", reason).startPhases,
       );
@@ -1329,45 +1329,57 @@ export function createLaunch(core: EngineCore) {
     return { handle };
   }
 
+  /** The lock a pipeline's instance creation holds, apart from any instance's. */
+  const startsOf = (pipelineId: string) => `pipeline-starts:${pipelineId}`;
+
+  function withStartsHeld<T>(pipelineId: string, work: () => Promise<T>): Promise<T> {
+    return locks.withLock(startsOf(pipelineId), work);
+  }
+
   async function start(
     pipelineId: string,
     trigger: PipelineInstance["trigger"] = "manual",
     firing?: { triggerPayload?: unknown; chainedFrom?: string },
   ) {
-    const def = await loadDef(pipelineId);
-    if (!def) throw new Error("pipeline not found");
-    if (def.overlapPolicy === "skip") {
-      const busy = (await readInstances({ pipelineId })).some(
-        (i) => i.status === "running" || i.status === "awaiting-approval",
+    // From reading the definition until the first phases are launched, so a
+    // delete holding the pipeline's starts finds every instance it has to
+    // stop, and never stops one whose launch is still to come.
+    const instance = await withStartsHeld(pipelineId, async () => {
+      const def = await loadDef(pipelineId);
+      if (!def) throw new Error("pipeline not found");
+      if (def.overlapPolicy === "skip") {
+        const busy = (await readInstances({ pipelineId })).some((i) => resumable(i.status));
+        if (busy) return null;
+      }
+      if (deps.preflight) {
+        const pf = await deps.preflight();
+        if (!pf.ok) throw new PreflightError(pf.reasons);
+      }
+      const init = initInstance(
+        def,
+        trigger,
+        { instanceId: deps.newId(), token: deps.newId() },
+        nowISO(),
+        firing,
       );
-      if (busy) return null;
-    }
-    if (deps.preflight) {
-      const pf = await deps.preflight();
-      if (!pf.ok) throw new PreflightError(pf.reasons);
-    }
-    const init = initInstance(
-      def,
-      trigger,
-      { instanceId: deps.newId(), token: deps.newId() },
-      nowISO(),
-      firing,
-    );
-    persist.fresh(init.instance, "start");
-    const { instance, startPhases: ready } = T(init);
-    await saveInstance(instance);
-    await markPipelineStarted(def.id, instance.createdAt);
-    void journal(instance.id, {
-      at: instance.createdAt,
-      kind: "instance.started",
-      detail: `${def.name} (${trigger})`,
+      persist.fresh(init.instance, "start");
+      const { instance, startPhases: ready } = T(init);
+      await saveInstance(instance);
+      await markPipelineStarted(def.id, instance.createdAt);
+      void journal(instance.id, {
+        at: instance.createdAt,
+        kind: "instance.started",
+        detail: `${def.name} (${trigger})`,
+      });
+      // Under the lock like every other launch, so a reconcile tick that sees
+      // the new instance cannot mistake a step still being prepared for one
+      // whose launch was lost. Runs past the concurrency cap are left queued
+      // for a slot, off the lock; this returns without waiting for them.
+      await locks.withLock(instance.id, () => startPhases(def, instance, ready));
+      return instance;
     });
-    // Under the lock like every other launch, so a reconcile tick that sees
-    // the new instance cannot mistake a step still being prepared for one
-    // whose launch was lost. Runs past the concurrency cap are left queued
-    // for a slot, off the lock; this returns without waiting for them.
-    await locks.withLock(instance.id, () => startPhases(def, instance, ready));
-    await pruneInstances(def.id, INSTANCE_KEEP);
+    if (!instance) return null;
+    await pruneInstances(pipelineId, INSTANCE_KEEP);
     deps.onChange?.();
     return instance;
   }
@@ -1401,9 +1413,7 @@ export function createLaunch(core: EngineCore) {
           // directly while other gates wait, and this deferred path — used by
           // gate recovery and reconcile — must not be stricter than that. A
           // terminal or aborted instance launches nothing.
-          if (!fresh || (fresh.status !== "running" && fresh.status !== "awaiting-approval")) {
-            return;
-          }
+          if (!fresh || !resumable(fresh.status)) return;
           // Re-resolve by phase id: an abort/revise landing in the transition
           // window may have changed which work is live. Only phases that are
           // themselves running are launched — never a paused one.
@@ -1426,6 +1436,7 @@ export function createLaunch(core: EngineCore) {
     resolveChangeRequest,
     launchStep,
     start,
+    withStartsHeld,
     queueReadyPhases,
   };
 }

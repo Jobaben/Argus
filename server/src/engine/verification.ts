@@ -18,6 +18,7 @@ import type {
   PipelineInstance,
 } from "../sources/pipelineTypes.js";
 import { log } from "../log.js";
+import { appliesResults } from "../sources/instanceStatus.js";
 import { readRun } from "../sources/runs.js";
 import { readSessionLines } from "../sources/sessions.js";
 import { buildRecording } from "../sources/recorder.js";
@@ -108,6 +109,10 @@ export function createVerification(core: EngineCore) {
         const inst = await readInstance(instanceId);
         const phase = inst?.phases.find((p) => p.id === phaseId);
         if (!inst || !phase) return;
+        // A result would not be applied while a gate waits (below), so the
+        // checks are not run only to be thrown away: reconcile queues them
+        // again once the decision is taken.
+        if (!appliesResults(inst.status)) return;
         void journal(instanceId, {
           at: nowISO(),
           kind: "phase.verifying",
@@ -148,7 +153,7 @@ export function createVerification(core: EngineCore) {
         });
         await locks.withLock(instanceId, async () => {
           const fresh = await readLive(instanceId, "verification");
-          if (!fresh || fresh.status !== "running") return;
+          if (!fresh || !appliesResults(fresh.status)) return;
           const current = fresh.phases.find((p) => p.id === phaseId);
           if (!current || current.attempt !== attempt) return;
           let res = T(applyVerification(def, fresh, phaseId, report, nowISO()));
@@ -223,6 +228,8 @@ export function createVerification(core: EngineCore) {
         const phase = inst?.phases.find((p) => p.id === phaseId);
         const step = phase?.steps.find((s) => s.candidate === candidate);
         if (!inst || !phase || !step) return;
+        // As for the phase's own checks: not run while a gate waits.
+        if (!appliesResults(inst.status)) return;
         const count = phaseDef.checks?.length ?? 0;
         void journal(instanceId, {
           at: nowISO(),
@@ -259,7 +266,7 @@ export function createVerification(core: EngineCore) {
         });
         await locks.withLock(instanceId, async () => {
           const fresh = await readLive(instanceId, "candidate-verification");
-          if (!fresh || fresh.status !== "running") return;
+          if (!fresh || !appliesResults(fresh.status)) return;
           const current = fresh.phases.find((p) => p.id === phaseId);
           if (!current || current.attempt !== attempt) return;
           const res = T(applyCandidateVerification(fresh, phaseId, candidate, report, nowISO()));

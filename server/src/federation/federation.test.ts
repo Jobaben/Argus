@@ -142,9 +142,9 @@ function summaryInput(over: Record<string, unknown> = {}) {
     monitors: [monitor("down"), monitor("failing"), monitor("up")],
     issues: [{ state: "open" }, { state: "resolved" }] as Issue[],
     instances: [
-      { status: "running" },
-      { status: "awaiting-approval" },
-      { status: "succeeded" },
+      { status: "running", phases: [{ status: "running" }] },
+      { status: "awaiting-approval", phases: [{ status: "awaiting-approval" }] },
+      { status: "succeeded", phases: [{ status: "succeeded" }] },
     ] as PipelineInstance[],
     runs: [
       { endedAt: NOW.toISOString(), status: "succeeded" },
@@ -157,6 +157,22 @@ function summaryInput(over: Record<string, unknown> = {}) {
     ...over,
   };
 }
+
+test("a gated instance with a sibling still running is live and gated; a gate alone is gated only", () => {
+  const s = buildSummary(
+    summaryInput({
+      instances: [
+        { status: "awaiting-approval", phases: [{ status: "awaiting-approval" }] },
+        {
+          status: "awaiting-approval",
+          phases: [{ status: "awaiting-approval" }, { status: "running" }],
+        },
+      ] as PipelineInstance[],
+    }),
+  );
+  assert.equal(s.liveInstances, 1);
+  assert.equal(s.gatedInstances, 2);
+});
 
 test("a summary is counts and nothing identifying", () => {
   const s = buildSummary(summaryInput());

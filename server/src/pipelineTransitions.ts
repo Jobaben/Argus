@@ -10,6 +10,7 @@ import {
   skippablePhases,
 } from "./sources/dag.js";
 import { RouteEvaluationError, evaluateRoutes, validateResult } from "./sources/routing.js";
+import { isTerminal, liveStatus } from "./sources/instanceStatus.js";
 import type {
   AgentRuntimeId,
   CandidateOutcome,
@@ -30,6 +31,7 @@ import type {
   VerificationReport,
 } from "./sources/pipelineTypes.js";
 import type {
+  AbortCause,
   GateDecision,
   PendingGateOperation,
   TransitionEvent,
@@ -421,9 +423,7 @@ export function settle(
     inst.status = "failed";
     inst.endedAt = nowISO;
   } else {
-    inst.status = inst.phases.some((p) => p.status === "awaiting-approval")
-      ? "awaiting-approval"
-      : "running";
+    inst.status = liveStatus(inst);
     inst.endedAt = null;
   }
 
@@ -1325,7 +1325,8 @@ export function applyRevise(
   // could not be revised more than once.
   phase.retries = 0;
   phase.retryAt = null;
-  inst.status = "running";
+  // Derived, not `running`: a sibling may still wait at its gate.
+  inst.status = liveStatus(inst);
   inst.endedAt = null;
   inst.currentPhaseIndex = inst.phases.indexOf(phase);
   touch(inst, nowISO);
@@ -1414,7 +1415,7 @@ export function applyRemediation(
   // Not `settle`: like a retry and a revise, a remediation re-opens one phase
   // and hands the engine that phase to launch. Re-settling here would re-run
   // routing decisions over phases that already made them.
-  inst.status = "running";
+  inst.status = liveStatus(inst);
   inst.endedAt = null;
   inst.currentPhaseIndex = inst.phases.indexOf(phase);
   touch(inst, nowISO);
@@ -1431,8 +1432,12 @@ export function applyRemediation(
   };
 }
 
-export function applyAbort(inst: PipelineInstance, nowISO: string): PipelineInstance {
-  if (inst.status === "succeeded" || inst.status === "failed" || inst.status === "aborted") {
+export function applyAbort(
+  inst: PipelineInstance,
+  nowISO: string,
+  cause?: AbortCause,
+): PipelineInstance {
+  if (isTerminal(inst.status)) {
     throw new Error("instance is already terminal");
   }
   // Close out every in-flight phase, not just one: with a fan-out there can be
@@ -1447,6 +1452,7 @@ export function applyAbort(inst: PipelineInstance, nowISO: string): PipelineInst
   }
   inst.status = "aborted";
   inst.endedAt = nowISO;
+  if (cause) inst.abortCause = cause;
   touch(inst, nowISO);
   return inst;
 }
@@ -1503,7 +1509,7 @@ export function applyRetry(
   restartPhase(phase);
   phase.retries = (phase.retries ?? 0) + 1;
   phase.retryAt = null;
-  inst.status = "running";
+  inst.status = liveStatus(inst);
   inst.endedAt = null;
   inst.currentPhaseIndex = inst.phases.indexOf(phase);
   touch(inst, nowISO);
@@ -1601,13 +1607,13 @@ export function scheduleRetry(
   if (!phase || phase.status !== "failed") return { instance: inst, startPhases: [] };
   const statusBefore = inst.status;
   phase.retryAt = retryAt;
-  inst.status = "running";
+  inst.status = liveStatus(inst);
   inst.endedAt = null;
   const events = [
     transitionEvent("retry-scheduled", { phaseId, attempt: phase.attempt, detail: retryAt }),
   ];
   if (statusBefore !== inst.status) {
-    events.push(transitionEvent("instance-status", { detail: `${statusBefore} → running` }));
+    events.push(transitionEvent("instance-status", { detail: `${statusBefore} → ${inst.status}` }));
   }
   return { instance: inst, startPhases: [], events };
 }
@@ -1685,11 +1691,15 @@ export function applyCandidateTreesRemoved(
 }
 
 /** {@link applyAbort} as a transition result, with its events. */
-export function abortTransition(inst: PipelineInstance, nowISO: string): TransitionResult {
+export function abortTransition(
+  inst: PipelineInstance,
+  nowISO: string,
+  cause?: AbortCause,
+): TransitionResult {
   const aborted = inst.phases
     .filter((p) => p.status === "running" || p.status === "awaiting-approval")
     .map((p) => p.id);
-  applyAbort(inst, nowISO);
+  applyAbort(inst, nowISO, cause);
   return {
     instance: inst,
     startPhases: [],
