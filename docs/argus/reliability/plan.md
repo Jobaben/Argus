@@ -151,7 +151,7 @@ Status legend: ⬜ not started · 🟡 in progress · 🔵 staged for review · 
 | ✅     | WS1  | Completion delivery (the race, gate drops); server first, hook in a later commit | `fix/completion-delivery`, then `fix/hook-delivery-retry` | Discards completed work today                                              | –                                                    |
 | ✅     | WS2  | Read-only enforcement and channel access                                         | `fix/claude-permission-rules`                             | Security gap                                                               | –                                                    |
 | ✅     | –    | WS1/WS2 follow-ups: stall pass at a gate, test D ordering                        | `fix/stall-at-gate` (`fa470ed`)                           | Same class as WS1/WS2's gate guards                                        | –                                                    |
-| 🔵     | WS14 | Instance status under gates (derivation, predicates, guard test)                 | `fix/gate-state-guards`                                   | The gate-guard bugs keep recurring one path at a time; runs **before WS3** | –                                                    |
+| ✅     | WS14 | Instance status under gates (derivation, predicates, guard test)                 | `fix/gate-state-guards` (`7f2dac2`)                       | The gate-guard bugs keep recurring one path at a time; runs **before WS3** | –                                                    |
 | ⬜     | WS3  | Pinned release, state lock, build id                                             | `feat/pinned-release`                                     | Later development stops moving running pipelines                           | WS14 (order only)                                    |
 | ⬜     | WS4  | `contractVersion`, registry, `pipeline upgrade`                                  | `feat/behaviour-change-registry`                          | Later workstreams register their changes                                   | –                                                    |
 | ⬜     | WS5  | Workspace and git reliability                                                    | `fix/worktree-reliability`                                | Timeouts, long paths, cleanup race                                         | –                                                    |
@@ -301,7 +301,7 @@ Decisions:
 
 ## WS14 — Instance status under gates
 
-**Status:** 🔵 staged for review on `fix/gate-state-guards` (2026-10-13). Order (before WS3) and the grown scope are approved (decision 7).
+**Status:** ✅ merged to `main` as `7f2dac2` and pushed (2026-10-13); `fix/gate-state-guards` is deleted. Order (before WS3) and the grown scope are approved (decision 7).
 
 **Outcome, 2026-10-13.** Steps 1–5 are implemented and staged:
 

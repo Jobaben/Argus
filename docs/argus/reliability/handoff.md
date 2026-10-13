@@ -7,22 +7,22 @@
 - the WS14 section.
 
 **Repo:** `C:\GIT\argus`. The remote `origin` is GitHub (`Jobaben/Argus`), not Azure DevOps. A plain `git push` works. Never use `gh`.
-**Updated:** 2026-10-13 (WS14 staged, code-review follow-ups included). Lives in the repo so any session or machine can continue; update it in place at the end of each session rather than creating a new file.
+**Updated:** 2026-10-13 (WS14 merged to `main` as `7f2dac2` and pushed). Lives in the repo so any session or machine can continue; update it in place at the end of each session rather than creating a new file.
 
 ## Where things stand
 
-| Item                               | State                                                                                                                                                                                                                                                                                                      |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| WS1, WS2, follow-ups #1/#4         | ✅ on `main` and pushed (`fa470ed`).                                                                                                                                                                                                                                                                       |
-| `main`                             | `eb7663f` (handoff and plan updates), on top of `ee69bb4` (this plan and handoff moved into the repo), `db13709` (`docs/superpowers` deleted) and `75deb5f` (`v0.5.0`, tagged). All pushed. The engine, `pipelineTransitions.ts`, `dag.ts`, `harness/`, `bin/` and `hooks/` are untouched since `fa470ed`. |
-| Plan                               | Re-baselined against `39b58dc` on 2026-10-12. Every open question is answered, and the narrowed soak wording is confirmed (the plan's "Decisions on the re-baseline"). One follow-up: in WS3, ask what a missing `ARGUS_TOKEN` does (decision 4).                                                          |
-| WS14 (instance status under gates) | 🔵 **Staged for review** on `fix/gate-state-guards` (2026-10-13), uncommitted. Steps 1–5 done, plus the code-review follow-ups; the plan's WS14 "Outcome" block lists what changed and what was decided.                                                                                                                                    |
-| WS3–WS13                           | ⬜ Not started.                                                                                                                                                                                                                                                                                            |
-| Live proof of WS1/WS2              | Ready for verification only. It comes with WS11's discovery-pipeline fan-out.                                                                                                                                                                                                                              |
+| Item                               | State                                                                                                                                                                                                                                             |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| WS1, WS2, follow-ups #1/#4         | ✅ on `main` and pushed (`fa470ed`).                                                                                                                                                                                                              |
+| `main`                             | `7f2dac2` (WS14), fast-forwarded on top of `eb7663f` (handoff and plan updates) and `75deb5f` (`v0.5.0`, tagged). All pushed. WS14 is not in a release yet.                                                                                       |
+| Plan                               | Re-baselined against `39b58dc` on 2026-10-12. Every open question is answered, and the narrowed soak wording is confirmed (the plan's "Decisions on the re-baseline"). One follow-up: in WS3, ask what a missing `ARGUS_TOKEN` does (decision 4). |
+| WS14 (instance status under gates) | ✅ On `main` and pushed (`7f2dac2`, 2026-10-13). `fix/gate-state-guards` is deleted (it was never on `origin`). The plan's WS14 "Outcome" block lists what changed and what was decided.                                                          |
+| WS3–WS13                           | ⬜ Not started.                                                                                                                                                                                                                                   |
+| Live proof of WS1/WS2              | Ready for verification only. It comes with WS11's discovery-pipeline fan-out.                                                                                                                                                                     |
 
 **State at 2026-10-13, end of session:**
 
-- **WS14 is staged, not committed.** The stash is popped and gone; the three red tests are now green, in `pipelineEngineHarness.test.ts` section "WS14".
+- **WS14 is merged.** The user committed it as `7f2dac2`; it was fast-forwarded into `main`, pushed, and the branch deleted. No release is cut yet. The stash is popped and gone; the three red tests are now green, in `pipelineEngineHarness.test.ts` section "WS14".
 - **Done gate (Windows):**
   - `test:timeboxed`: 3,237 tests, 3,209 pass, 25 skipped, 3 fail, all three baseline (CRLF Codex skill copy, "blowing the output cap", "analysis spawn: kill()").
   - typecheck, lint, `prettier --check --end-of-line auto`, `check-contracts-runtime`, `git diff --check`: pass.
@@ -50,7 +50,7 @@
 
 **Next session:**
 
-1. The user reviews and commits WS14 on `fix/gate-state-guards`, merges it, and cuts a release (decision 2).
+1. Cut a release containing WS14 (decision 2). WS14 is already on `main` (`7f2dac2`).
 2. Live acceptance: start the server from that build, open the Command Center, and stop `48fab3f6` from its _pipeline deleted_ card. Check that the "awaiting you" count drops to 0.
 3. Then WS3, from the updated `main`. Ask what a missing `ARGUS_TOKEN` does (decision 4).
 
