@@ -343,6 +343,14 @@ Decisions:
    2. A's retry is pending, B is approved, nothing else is live. No `onFailure`, the worktree is kept, and A relaunches.
    3. Two parallel gates, revise one. The instance stays `awaiting-approval`, and verdictWatcher still sees the other gate.
    - Plus: a `reconcile.ts:538` case (two orphaned siblings, the first heal gates) to decide whether the loop's current behaviour is intended.
+5. **Instances whose pipeline was deleted** (added 2026-10-13, found through orphan `48fab3f6`).
+   - **How it happens.** `DELETE /api/pipelines/:id` (`app.ts:1290`) does not check for live instances, so deleting a pipeline can leave an instance stuck as `running` or `awaiting-approval`.
+   - **Why it's stuck.** `buildOverview` (`sources/overview.ts`) only builds entries from the definitions, so the instance has no card and no abort button. Yet `insight.ts:72` `gatesWaiting` still counts it: the "awaiting you" chip shows 1 and links to nothing. The abort route itself works without the definition (`engine/gates.ts` `abort`).
+   - **The fix:**
+     - deleting a pipeline with live instances is refused with 409, or aborts them first (the user decides which);
+     - non-terminal instances with no definition appear on the board with an abort control;
+     - the counts and the board agree, using the `hasWaitingGate` predicate from step 1.
+   - **Tests:** deleting a pipeline with a live instance; an orphan instance appears in the overview and can be aborted; `gatesWaiting` matches what the board shows.
 
 **Registry (WS4 backfill):** this changes outcomes. A pending retry no longer ends the instance as `failed` (no spurious `onFailure`, `instance.ended`, `after:failed` chain or worktree cleanup), and auto-approval sees gates sooner. Add an entry next to WS2's and the stall-at-gate one.
 

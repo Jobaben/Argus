@@ -7,7 +7,7 @@
 - the WS14 section.
 
 **Repo:** `C:\GIT\argus`. The remote `origin` is GitHub (`Jobaben/Argus`), not Azure DevOps. A plain `git push` works. Never use `gh`.
-**Updated:** 2026-10-12. Lives in the repo so any session or machine can continue; update it in place at the end of each session rather than creating a new file.
+**Updated:** 2026-10-13. Lives in the repo so any session or machine can continue; update it in place at the end of each session rather than creating a new file.
 
 ## Where things stand
 
@@ -24,18 +24,22 @@
 
 - **`v0.5.0` is released:** commit `75deb5f` on `main`, tag `v0.5.0`, both pushed. It includes the CHANGELOG gap fill, the breaking-changes callout, and docs for the advisory assessment route and the H2 runtime and effort settings.
   - `npm run check` was not green locally: 3 server baseline failures, plus 1 web locale failure (`sessionList.test.ts` expects "Thursday" and gets "torsdag").
-- **The six merged branches are deleted.** A detached worktree remains at `.claude/worktrees/argus-workspace-setup-0dc225`; it was not touched.
+- **Branches cleaned up (2026-10-13).** `origin` holds only `main`. Locally there are only `main` and `fix/gate-state-guards`, and no extra worktrees.
+  - Merged branches were deleted.
+  - Unmerged work older than two weeks and not in the plan was dropped. That covers `agent/derive-name-name-source` `1c3e5b9`, `agent/macos-tmpdir-realpath` `c6e7116` and the UX analysis `b058b90`.
+  - The five dependabot branches were deleted too, which closed their PRs. Dependabot offers newer versions on its next run.
+  - To restore a dropped branch, run `git push origin <sha>:refs/heads/<name>`.
 - **The plan and this handoff live in the repo** (`docs/argus/reliability/`, committed as `ee69bb4`). The OneDrive originals are deleted. The `docs/superpowers` links are gone from the catalog and `docs/README.md`.
 - **WS14's three failing tests are stashed** in the original checkout as "ws14 red tests" (`git stash list`), a change to `server/src/pipelineEngineHarness.test.ts`, section "WS14".
   - They fail on `75deb5f` for the intended reasons. `onFailure` fires at the approve, not at the stall, so test 2 pins the right path.
   - They exist nowhere else. On another machine, rewrite them from the plan's WS14 step 4. A's failure must be a **stall**, not a failed check, because check results wait for a pending gate decision.
-- **Orphan `48fab3f6` is still `awaiting-approval` on disk** (file unchanged since 2026-07-02). The user reported "killed the running instance", and the Argus server on :7777 was down afterwards. Ask the user whether the orphan still needs aborting in the UI.
+- **Orphan `48fab3f6` is still `awaiting-approval` on disk** (file unchanged since 2026-07-02). The UI has no control for it (it is the gap in plan WS14 step 5). On 2026-10-13 the user was given a browser-console `fetch` to `POST /api/instances/48fab3f6-9145-4a30-a082-85e97d13e84f/abort` from a signed-in tab. Check the instance file to see whether it has been aborted.
 
 **Next session:**
 
 1. In the original checkout (`C:/GIT/argus`), bring the branch up and restore the tests:
-   - `git switch fix/gate-state-guards`;
-   - `git merge --ff-only main` (the branch has no commits of its own);
+   - `git switch fix/gate-state-guards` (fast-forwarded to `85b0009`, with no commits of its own);
+   - `git merge --ff-only main` (in case `main` has moved since);
    - `git stash pop`.
 
    Rerun the three WS14 tests and confirm they still fail. If `main` has moved past `ee69bb4`, first run `git diff --stat 75deb5f..main -- server/src/engine server/src/pipelineTransitions.ts server/src/sources/dag.ts`.
@@ -47,6 +51,7 @@
    - the guard test;
    - the inline-spelling sweep;
    - the display surfaces;
+   - instances whose pipeline was deleted (plan WS14 step 5);
    - the docs, the CHANGELOG ("Fixed") and the registry note.
 3. Turn the three tests green, then run the full done gate (baseline-relative). Stage, stop, and report.
 
