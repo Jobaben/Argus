@@ -5,7 +5,7 @@ All notable changes to Argus are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.6.0] - 2026-10-13
+## [0.6.0] - 2026-10-14
 
 > **Breaking changes.** Pre-1.0, so this bumps the minor version. Check these
 > before you upgrade from 0.5.0:

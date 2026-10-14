@@ -7,18 +7,30 @@
 - the WS14 section.
 
 **Repo:** `C:\GIT\argus`. The remote `origin` is GitHub (`Jobaben/Argus`), not Azure DevOps. A plain `git push` works. Never use `gh`.
-**Updated:** 2026-10-13 (WS14 merged to `main` as `7f2dac2` and pushed). Lives in the repo so any session or machine can continue; update it in place at the end of each session rather than creating a new file.
+**Updated:** 2026-10-14 (`v0.6.0` staged with WS14; not yet committed or tagged). Lives in the repo so any session or machine can continue; update it in place at the end of each session rather than creating a new file.
 
 ## Where things stand
 
 | Item                               | State                                                                                                                                                                                                                                             |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | WS1, WS2, follow-ups #1/#4         | ✅ on `main` and pushed (`fa470ed`).                                                                                                                                                                                                              |
-| `main`                             | `7f2dac2` (WS14), fast-forwarded on top of `eb7663f` (handoff and plan updates) and `75deb5f` (`v0.5.0`, tagged). All pushed. WS14 is not in a release yet.                                                                                       |
+| `main`                             | `7f2dac2` (WS14), fast-forwarded on top of `eb7663f` (handoff and plan updates) and `75deb5f` (`v0.5.0`, tagged). All pushed. WS14 ships in `v0.6.0`, which is staged.                                                                            |
 | Plan                               | Re-baselined against `39b58dc` on 2026-10-12. Every open question is answered, and the narrowed soak wording is confirmed (the plan's "Decisions on the re-baseline"). One follow-up: in WS3, ask what a missing `ARGUS_TOKEN` does (decision 4). |
 | WS14 (instance status under gates) | ✅ On `main` and pushed (`7f2dac2`, 2026-10-13). `fix/gate-state-guards` is deleted (it was never on `origin`). The plan's WS14 "Outcome" block lists what changed and what was decided.                                                          |
 | WS3–WS13                           | ⬜ Not started.                                                                                                                                                                                                                                   |
 | Live proof of WS1/WS2              | Ready for verification only. It comes with WS11's discovery-pipeline fan-out.                                                                                                                                                                     |
+
+**State at 2026-10-14:**
+
+- **`v0.6.0` is staged, not committed.** The CHANGELOG roll is on `main` as `d1cd8c1`, with a breaking-changes callout: deleting a pipeline aborts its instances (or returns `409`), a scheduled retry keeps the instance live, and `liveInstances` counts work in flight. Those make it a minor release under RELEASING.md. Staged: the date set to 2026-10-14, plus the version in the four `package.json` files and `package-lock.json`. The lock diff is held to the five version fields: `npm version` also flips unrelated `peer` flags, so those were reverted.
+- **`npm run check` on `ed3924d`:** typecheck and lint pass. The server suite (3,244 tests) has 5 failures:
+  - the three baseline failures;
+  - `processTree` "timed-out command" (fails only under load);
+  - **new:** `pipelineEngine` "a completed step folds its cost into the all-time totals". It got `0.14 !== 0.07` and passes alone. This is a test-isolation leak, not a double count in the product. The test before it (from `ceab917`, 2026-07-09, older than WS14) also writes a 0.07 run, but it waits only for `succeeded`, not for its totals fold. Under load that fold crosses `beforeEach`'s `ARGUS_CLAUDE_HOME` repoint and lands in the next test's home: the same leak the comment at `pipelineEngine.test.ts:1010` describes. The fix, if wanted, is to make the earlier test wait for `countedInTotals`.
+
+  The check stops at the server failures, so the web suite was run on its own: 54 failures under load (47 of them 5 s timeouts). Rerun alone, the 20 failing files leave only the baseline `sessionList` locale failure.
+
+- **Orphan `48fab3f6` is still `awaiting-approval`** (instance file unchanged since 2026-07-02). The live acceptance case is still there.
 
 **State at 2026-10-13, end of session:**
 
@@ -50,7 +62,7 @@
 
 **Next session:**
 
-1. Cut a release containing WS14 (decision 2). WS14 is already on `main` (`7f2dac2`).
+1. Commit, tag and push the staged `v0.6.0` (RELEASING.md steps 4–5), if not done yet.
 2. Live acceptance: start the server from that build, open the Command Center, and stop `48fab3f6` from its _pipeline deleted_ card. Check that the "awaiting you" count drops to 0.
 3. Then WS3, from the updated `main`. Ask what a missing `ARGUS_TOKEN` does (decision 4).
 
