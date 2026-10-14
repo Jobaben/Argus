@@ -4,17 +4,17 @@
 
 - the **Re-baseline** section at the top, including the **Decisions on the re-baseline**;
 - the ground rules;
-- the WS14 section.
+- the WS3 section, including its **Re-baseline** block.
 
 **Repo:** `C:\GIT\argus`. The remote `origin` is GitHub (`Jobaben/Argus`), not Azure DevOps. A plain `git push` works. Never use `gh`.
-**Updated:** 2026-10-14 (`v0.6.0` staged with WS14; not yet committed or tagged). Lives in the repo so any session or machine can continue; update it in place at the end of each session rather than creating a new file.
+**Updated:** 2026-10-14 (the release is renumbered `v1.0.0` and staged on top of `52fdecf`; not committed or tagged yet; WS3 is next). Lives in the repo so any session or machine can continue; update it in place at the end of each session rather than creating a new file.
 
 ## Where things stand
 
 | Item                               | State                                                                                                                                                                                                                                             |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | WS1, WS2, follow-ups #1/#4         | ✅ on `main` and pushed (`fa470ed`).                                                                                                                                                                                                              |
-| `main`                             | `7f2dac2` (WS14), fast-forwarded on top of `eb7663f` (handoff and plan updates) and `75deb5f` (`v0.5.0`, tagged). All pushed. WS14 ships in `v0.6.0`, which is staged.                                                                            |
+| `main`                             | `52fdecf`, which bumped to `0.6.0` (its message reads "WS14 implemented"). It sits on `d1cd8c1` (CHANGELOG roll) and `7f2dac2` (WS14). All pushed. `0.6.0` was never tagged. The release is `v1.0.0`, staged on top.                              |
 | Plan                               | Re-baselined against `39b58dc` on 2026-10-12. Every open question is answered, and the narrowed soak wording is confirmed (the plan's "Decisions on the re-baseline"). One follow-up: in WS3, ask what a missing `ARGUS_TOKEN` does (decision 4). |
 | WS14 (instance status under gates) | ✅ On `main` and pushed (`7f2dac2`, 2026-10-13). `fix/gate-state-guards` is deleted (it was never on `origin`). The plan's WS14 "Outcome" block lists what changed and what was decided.                                                          |
 | WS3–WS13                           | ⬜ Not started.                                                                                                                                                                                                                                   |
@@ -22,7 +22,7 @@
 
 **State at 2026-10-14:**
 
-- **`v0.6.0` is staged, not committed.** The CHANGELOG roll is on `main` as `d1cd8c1`, with a breaking-changes callout: deleting a pipeline aborts its instances (or returns `409`), a scheduled retry keeps the instance live, and `liveInstances` counts work in flight. Those make it a minor release under RELEASING.md. Staged: the date set to 2026-10-14, plus the version in the four `package.json` files and `package-lock.json`. The lock diff is held to the five version fields: `npm version` also flips unrelated `peer` flags, so those were reverted.
+- **The release is `v1.0.0` (the user's decision, 2026-10-14).** It was first cut as `0.6.0` (`52fdecf`, pushed, never tagged). Because `52fdecf` is already on `origin`, the renumbering is a new change on top, not a rewrite. It is staged: the CHANGELOG header becomes `[1.0.0] - 2026-10-14`, and the callout drops its "Pre-1.0, so this bumps the minor version" line. The version in the four `package.json` files and `package-lock.json` becomes `1.0.0`. RELEASING.md's cadence now uses post-1.0 SemVer: a breaking change bumps **major** (WS8's `no-work` outcome, for one, may count as breaking). The CHANGELOG roll is `d1cd8c1`, with a breaking-changes callout: deleting a pipeline aborts its instances (or returns `409`), a scheduled retry keeps the instance live, and `liveInstances` counts work in flight. The lock diff is held to the five version fields: `npm version` also flips unrelated `peer` flags, so those were reverted.
 - **`npm run check` on `ed3924d`:** typecheck and lint pass. The server suite (3,244 tests) has 5 failures:
   - the three baseline failures;
   - `processTree` "timed-out command" (fails only under load);
@@ -62,23 +62,33 @@
 
 **Next session:**
 
-1. Commit, tag and push the staged `v0.6.0` (RELEASING.md steps 4–5), if not done yet.
+1. If not done yet, commit the staged renumbering as `chore(release): v1.0.0`, then tag and push it (RELEASING.md steps 4–5): `git tag -a v1.0.0 -m "Argus 1.0.0"`, then `git push origin main --follow-tags`. Do not tag `0.6.0`.
 2. Live acceptance: start the server from that build, open the Command Center, and stop `48fab3f6` from its _pipeline deleted_ card. Check that the "awaiting you" count drops to 0.
-3. Then WS3, from the updated `main`. Ask what a missing `ARGUS_TOKEN` does (decision 4).
+3. Start WS3 on `feat/pinned-release`, cut from `main` at the `v1.0.0` commit. Before writing any code, ask the open half of decision 4: with no `ARGUS_TOKEN`, does the server refuse to start, or does only the lock probe fail closed (count a live pid as held)?
 
-## WS14 in one paragraph
+## WS3 in one paragraph
 
-Four transitions write `inst.status = "running"` without deriving it, which hides a sibling's waiting gate: `applyRevise` `:1328`, `applyRemediation` `:1417`, `applyRetry` `:1506` and `scheduleRetry` `:1604` in `pipelineTransitions.ts`. `instanceOutcome` (`sources/dag.ts`) also ignores `retryAt`, so a pending retry turns the instance falsely `failed`. Both are verified by reading the code.
+The server runs from the dev checkout, so every rebuild moves the pipelines already running, and nothing stops a second server from sharing the same state directory. WS3 adds three things:
 
-The fix:
+- **`argus release`.** It extracts a commit with `git archive` into `~/.claude-argus/releases/<version>-<sha7>/`, builds it there and points `current.json` at it. The launcher then runs that build; `--dev` forces the checkout and prints a warning.
+- **A build id on `/api/health`:** `build {kind, sha, dir, id?}`.
+- **`server.lock`.** Created with `wx` under `paths.argus()`, it refuses a second server on the same state, whichever port that server uses. It is also the Decision Ledger's only guard across processes.
 
-- one `liveStatus(inst)` derivation;
-- `pendingRetry` counted as live;
-- named predicates in a non-engine module (`sources/instanceStatus.ts`);
-- a guard test over status reads **and** writes;
-- phase-derived `hasWaitingGate` for verdictWatcher and the display counts.
+Steps 1–5 and the tests are in the plan's WS3 section. Its **Re-baseline** block lists the spawn sites the plan misses in `bin/argus.mjs`, `releasesRoot`'s three env rules, where to acquire and release the lock in `index.ts`, and the adopted additions:
 
-The full inventory, with every site, is in the plan's WS14 section. It changes outcomes, so it gets a WS4 registry entry.
+- `export-ignore` for `experiments/`;
+- a manual check that a second server on another port is refused;
+- a RELEASING.md note that rolling back with `--use` can hide data.
+
+**Line references that moved since the re-baseline (`39b58dc..52fdecf`).** WS3 touches only three files that changed: `app.ts`, `app.test.ts` and `docs/API.md` (WS14).
+
+- The health route is at `app.ts:325` (the plan says `:324-332`).
+- The "Pipeline definitions: mutations only" block starts at `:485` (the plan says `:484`).
+- Recheck the `app.test.ts` admin-route list and the API.md health lines before you cite them.
+
+`bin/`, `index.ts`, `claudeHome.ts`, `setup/prereqs.ts`, `harness/invocation.ts` and RELEASING.md are unchanged, so the plan's references to them still hold.
+
+**First check in WS3** (from the plan): confirm which hook path the per-run settings actually embed. This machine's `~/.claude/settings.json` points at the global copy.
 
 ## Baseline at `39b58dc` (this machine)
 

@@ -10,9 +10,9 @@ rule:
   accumulate more than one feature-sized entry.
 - **Fixes-only?** Cut a patch release whenever a fix is worth having on a
   tagged version — same day is fine.
-- Pre-1.0 SemVer: **minor** (`0.x.0`) for features, **patch** (`0.x.y`) for
-  fixes/hardening. Breaking changes to the API or on-disk formats also bump
-  minor while we're pre-1.0, and get a callout in the changelog.
+- SemVer from 1.0.0 on: **minor** (`x.Y.0`) for features, **patch**
+  (`x.y.Z`) for fixes/hardening. Breaking changes to the API or on-disk
+  formats bump **major** (`X.0.0`) and get a callout in the changelog.
 
 ## Checklist
 

@@ -5,10 +5,9 @@ All notable changes to Argus are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.6.0] - 2026-10-14
+## [1.0.0] - 2026-10-14
 
-> **Breaking changes.** Pre-1.0, so this bumps the minor version. Check these
-> before you upgrade from 0.5.0:
+> **Breaking changes.** Check these before you upgrade from 0.5.0:
 >
 > - **Deleting a pipeline stops its live instances.**
 >   `DELETE /api/pipelines/:id` aborts every running or gated instance before
