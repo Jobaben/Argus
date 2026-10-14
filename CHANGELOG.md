@@ -5,6 +5,21 @@ All notable changes to Argus are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-13
+
+> **Breaking changes.** Pre-1.0, so this bumps the minor version. Check these
+> before you upgrade from 0.5.0:
+>
+> - **Deleting a pipeline stops its live instances.**
+>   `DELETE /api/pipelines/:id` aborts every running or gated instance before
+>   it deletes the definition. If one cannot be stopped, the call returns
+>   `409` with `code: "instance-not-stopped"` and the pipeline is kept.
+> - **A scheduled retry keeps the instance live.** A phase that fails with a
+>   retry scheduled no longer ends the instance as `failed`, so `onFailure`,
+>   `instance.ended` and `after: failed` chains wait for the retry's result.
+> - **`liveInstances` in `GET /api/fleet` counts work in flight.** An instance
+>   paused only at a gate is no longer counted as running.
+
 ### Changed
 
 - **Deleting a pipeline stops its live instances first.**
