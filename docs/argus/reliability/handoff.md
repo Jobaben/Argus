@@ -7,18 +7,18 @@
 - the WS3 section, including its **Re-baseline** block.
 
 **Repo:** `C:\GIT\argus`. The remote `origin` is GitHub (`Jobaben/Argus`), not Azure DevOps. A plain `git push` works. Never use `gh`.
-**Updated:** 2026-10-15 (`v1.0.0` is committed as `f09bdf1`, tagged and pushed; WS3 is staged on `feat/pinned-release`, not committed). Lives in the repo so any session or machine can continue; update it in place at the end of each session rather than creating a new file.
+**Updated:** 2026-10-15 (`v1.0.0` is `f09bdf1`, tagged and pushed; WS3 is merged to `main` as `6ce0dbe` and pushed). Lives in the repo so any session or machine can continue; update it in place at the end of each session rather than creating a new file.
 
 ## Where things stand
 
 | Item                               | State                                                                                                                                                                                                                                             |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | WS1, WS2, follow-ups #1/#4         | ✅ on `main` and pushed (`fa470ed`).                                                                                                                                                                                                              |
-| `main`                             | `52fdecf`, which bumped to `0.6.0` (its message reads "WS14 implemented"). It sits on `d1cd8c1` (CHANGELOG roll) and `7f2dac2` (WS14). All pushed. `0.6.0` was never tagged. The release is `v1.0.0`, staged on top.                              |
+| `main`                             | `6ce0dbe` (WS3) on `f09bdf1` (`v1.0.0`). All pushed. WS3 sits under `[Unreleased]`; no release has been cut since `v1.0.0`.                                                                                                                       |
 | Plan                               | Re-baselined against `39b58dc` on 2026-10-12. Every open question is answered, and the narrowed soak wording is confirmed (the plan's "Decisions on the re-baseline"). One follow-up: in WS3, ask what a missing `ARGUS_TOKEN` does (decision 4). |
 | WS14 (instance status under gates) | ✅ On `main` and pushed (`7f2dac2`, 2026-10-13). `fix/gate-state-guards` is deleted (it was never on `origin`). The plan's WS14 "Outcome" block lists what changed and what was decided.                                                          |
 | `v1.0.0`                           | ✅ `f09bdf1`, tag `v1.0.0` pushed (2026-10-14).                                                                                                                                                                                                   |
-| WS3 (pinned release, lock, build)  | 🔵 Staged on `feat/pinned-release` (2026-10-15), uncommitted. The plan's WS3 "Outcome" block lists what changed, what was verified live and what is left for manual checks.                                                                       |
+| WS3 (pinned release, lock, build)  | ✅ On `main` and pushed (`6ce0dbe`, 2026-10-15). The plan's WS3 "Outcome" block lists what changed, what was verified live and what is left for manual checks.                                                                                    |
 | WS4–WS13                           | ⬜ Not started.                                                                                                                                                                                                                                   |
 | Live proof of WS1/WS2              | Ready for verification only. It comes with WS11's discovery-pipeline fan-out.                                                                                                                                                                     |
 
@@ -72,10 +72,9 @@
 
 **Next session:**
 
-1. The user reviews and commits WS3 on `feat/pinned-release`, then merges it into `main`.
-2. Manual checks (plan WS3 "Ready for verification"): `npm run dev` is refused while `argus` runs; `argus release` on the real home, then `argus`, makes health show `build.kind: "release"`; `--use <previous>` rolls back. Also Ctrl+C under `argus`: on Windows it may leave a dead-pid `server.lock` (the launcher forwards a hard kill); the next start takes it over, so either outcome is acceptable.
-3. Cut the next release after the merge. My recommendation is a minor bump (WS3 adds features; its two behaviour changes are in the `[Unreleased]` callout), but the version is the user's call. From now on, pin each release with `argus release --ref vX.Y.Z` (RELEASING.md step 6).
-4. Then WS4 on `feat/behaviour-change-registry`.
+1. Manual checks (plan WS3 "Ready for verification"): `npm run dev` is refused while `argus` runs; `argus release` on the real home, then `argus`, makes health show `build.kind: "release"`; `--use <previous>` rolls back. Also Ctrl+C under `argus`: on Windows it may leave a dead-pid `server.lock` (the launcher forwards a hard kill); the next start takes it over, so either outcome is acceptable.
+2. Cut the next release. My recommendation is a minor bump (WS3 adds features; its two behaviour changes are in the `[Unreleased]` callout), but the version is the user's call. From now on, pin each release with `argus release --ref vX.Y.Z` (RELEASING.md step 6).
+3. Then WS4 on `feat/behaviour-change-registry`.
 
 ## WS3 in one paragraph
 
