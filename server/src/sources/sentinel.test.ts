@@ -190,6 +190,39 @@ test("regression: a condition that persists does not open a second incident", ()
   assert.equal(second.alerts.length, 0);
 });
 
+test("regression: two anomalous runs of one metric open one incident, not twins", () => {
+  // Watchtower reports an anomaly per run; the condition key names only the
+  // metric, so two flagged runs used to persist two incidents with one id.
+  const conditions = deriveConditions({
+    monitors: [],
+    issues: [],
+    anomalies: [
+      anomaly({ id: "schedule:s1|cost|r2", runId: "r2", detail: "3.8× median cost" }),
+      anomaly({ id: "schedule:s1|cost|r1", runId: "r1", detail: "3.6× median cost" }),
+    ],
+    resolvedFingerprints: noResolved,
+  });
+  const { incidents, alerts } = reconcileIncidents([], conditions, POLICY, NOW);
+  assert.equal(incidents.length, 1);
+  assert.equal(incidents[0].detail, "3.8× median cost", "the first (newest) anomaly wins");
+  assert.equal(alerts.length, 1);
+});
+
+test("regression: twins persisted by an earlier tick collapse, and resolve once", () => {
+  const [opened] = reconcileIncidents([], [condition()], POLICY, NOW).incidents;
+  const newer = { ...opened, updatedAt: later(1).toISOString(), detail: "newer" };
+  const twins = [opened, newer];
+
+  const live = reconcileIncidents(twins, [condition()], POLICY, later(2));
+  assert.equal(live.incidents.length, 1);
+  assert.equal(live.incidents[0].updatedAt, newer.updatedAt, "the most recently updated twin wins");
+
+  const cleared = reconcileIncidents(twins, [], POLICY, later(2));
+  assert.equal(cleared.incidents.length, 1);
+  assert.equal(cleared.incidents[0].status, "resolved");
+  assert.equal(cleared.alerts.length, 1, "one resolution, not one per twin");
+});
+
 test("an unacknowledged incident escalates on the clock, one level at a time", () => {
   const opened = reconcileIncidents([], [condition()], POLICY, NOW).incidents;
   assert.equal(opened[0].nextEscalationAt, later(30).toISOString());

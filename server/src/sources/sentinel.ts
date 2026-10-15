@@ -342,8 +342,20 @@ export function reconcileIncidents(
 ): ReconcileResult {
   const at = now.toISOString();
   const alerts: IncidentAlert[] = [];
-  const byKey = new Map(existing.map((i) => [i.key, i]));
-  const live = new Set(conditions.map((c) => c.key));
+  // One incident per key, on both sides. Several conditions can share a key —
+  // Watchtower reports an anomaly per run, the key names only the metric — and
+  // the first wins (anomalies arrive newest first). Twins already persisted by
+  // an earlier tick collapse to the most recently updated one.
+  const byKey = new Map<string, Incident>();
+  for (const incident of existing) {
+    const kept = byKey.get(incident.key);
+    if (!kept || incident.updatedAt > kept.updatedAt) byKey.set(incident.key, incident);
+  }
+  const unique = new Map<string, Condition>();
+  for (const condition of conditions) {
+    if (!unique.has(condition.key)) unique.set(condition.key, condition);
+  }
+  const live = new Set(unique.keys());
   const out: Incident[] = [];
 
   const alert = (incident: Incident, event: IncidentAlert["event"], detail: string): void => {
@@ -359,7 +371,7 @@ export function reconcileIncidents(
     });
   };
 
-  for (const condition of conditions) {
+  for (const condition of unique.values()) {
     const prior = byKey.get(condition.key);
 
     if (!prior) {
@@ -433,7 +445,7 @@ export function reconcileIncidents(
   }
 
   // Conditions that have cleared: resolve, once.
-  for (const prior of existing) {
+  for (const prior of byKey.values()) {
     if (live.has(prior.key)) continue;
     if (prior.status === "resolved") {
       out.push(prior);
