@@ -1,7 +1,7 @@
 import { serve } from "@hono/node-server";
 import { WebSocketServer } from "ws";
 import { randomUUID } from "node:crypto";
-import { claudeHome } from "./claudeHome.js";
+import { claudeHome, paths } from "./claudeHome.js";
 import { watchAgents, watchSchedules, watchExtensions, watchSessions } from "./watch.js";
 import { readRuns, killRunProcess } from "./sources/runs.js";
 import { createEngine, defaultPipelineSpawn } from "./pipelineEngine.js";
@@ -58,6 +58,8 @@ import { createAuthService, sessionTokenFromCookieHeader } from "./auth.js";
 import { createUserStore } from "./userStore.js";
 import { createRunTailer } from "./runTailer.js";
 import { log } from "./log.js";
+import { buildLabel, readBuildInfo } from "./buildInfo.js";
+import { acquireStateLock, probeHolder } from "./stateLock.js";
 
 const config = loadConfig();
 
@@ -76,6 +78,40 @@ try {
 }
 
 const PORT = config.port;
+
+const build = readBuildInfo();
+if (build.kind === "dev")
+  log.warn(
+    `running the dev checkout (${buildLabel(build)}): rebuilding or switching branches here moves running pipelines. Pin one with \`argus release\`.`,
+  );
+
+// One server per state directory, taken before anything reads or writes it:
+// the engine, scheduler, tailer and setup below all assume they are alone.
+const stateLock = await acquireStateLock(
+  { port: PORT, url: selfBaseUrl(config), claudeHome: claudeHome(), build: buildLabel(build) },
+  {
+    dir: paths.argus(),
+    isAlive,
+    probe: (holder) => probeHolder(holder, claudeHome(), config.token),
+    now: () => new Date(),
+    pid: process.pid,
+  },
+);
+if (!stateLock.acquired) {
+  const h = stateLock.holder;
+  log.error(
+    `another Argus server owns this state directory (${paths.argus()}): ${stateLock.reason}.
+` +
+      (h
+        ? `    holder: pid ${h.pid}, ${h.url}, build ${h.build ?? "?"}, since ${h.startedAt}
+`
+        : "") +
+      `    Stop that server first. If no Argus is running, delete ${stateLock.file}.`,
+  );
+  process.exit(1);
+}
+// Every exit path — shutdown, a listen error, a fatal throw — leaves through here.
+process.on("exit", stateLock.release);
 
 // broadcast is wired to the WebSocket server created below; it's referenced by
 // the engine and app before `wss` exists, so guard the null window.
@@ -139,6 +175,7 @@ const app = createApp({
   config,
   engine,
   broadcast,
+  build,
   auth,
   users,
   analysis,

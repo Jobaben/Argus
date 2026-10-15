@@ -79,6 +79,12 @@ npm run build
 ```
 
 `npm run dev` exposes the web UI on port 5757 and API on 7777 by default.
+Only one server may own a state directory (`server.lock`), so while `argus`
+runs a pinned release against your real Claude home, a dev server on that
+home is refused. Give the dev server its own state and port instead, for
+example `ARGUS_CLAUDE_HOME=~/.claude-dev ARGUS_PORT=7780 npm run dev` (the
+Vite proxy reads the same `ARGUS_PORT`), or stop the release server first.
+See [Operations](../reference/operations.md#one-server-per-state-directory).
 `npm run build` builds web and server; `npm start` serves the built app on one
 port. `npm run check` combines typecheck, lint and tests. Use focused tests for
 the affected behavior before broader checks; report failures with their actual

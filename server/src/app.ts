@@ -149,9 +149,11 @@ import { newSecret, pairingId, seal } from "./federation/envelope.js";
 import { buildSummary } from "./federation/summary.js";
 import { buildFleet } from "./federation/fleet.js";
 import type {
+  BuildInfo,
   GateDecisionPrincipal,
   H1CollectionStatus,
   H2CollectionStatus,
+  HealthResponse,
   MachineSummary,
 } from "@argus/contracts";
 import { buildGateDecisionsResponse, readGateDecisions } from "./sources/gateDecisions.js";
@@ -212,6 +214,8 @@ export interface AppDeps {
   broadcast: (message: unknown) => void;
   /** Whether to mount the built SPA (skipped in tests). Defaults to true. */
   serveWeb?: boolean;
+  /** Which build is serving, reported on `/api/health`. Absent = not reported. */
+  build?: BuildInfo;
   /**
    * Verified peer summaries and health, from the federation poller.
    *
@@ -329,7 +333,8 @@ export function createApp(deps: AppDeps): Hono {
       claudeHome: claudeHome(),
       codexHome: codexHome(),
       service: "argus",
-    }),
+      ...(deps.build ? { build: deps.build } : {}),
+    } satisfies HealthResponse),
   );
 
   // Which agent CLIs this machine can drive. Read-only and unprivileged: the

@@ -35,3 +35,28 @@ rule:
    git tag -a vX.Y.Z -m "Argus X.Y.Z"
    git push origin main --follow-tags
    ```
+
+6. Pin it on the machine that runs your pipelines, from the checkout:
+
+   ```sh
+   node bin/argus.mjs release --ref vX.Y.Z
+   ```
+
+   This builds the tagged commit into its own folder,
+   `~/.claude-argus-releases/X.Y.Z-<sha7>/`, and points `current.json` at it.
+   Restart `argus` to run it; `GET /api/health` then reports
+   `build.kind: "release"` with that id. The folder name and the tag name the
+   same commit, but they are independent: a release can be cut from any ref,
+   and a tag does not build anything.
+
+## Rolling back
+
+`argus release --list` shows the built releases; `argus release --use <id>`
+pins an earlier one, and a restart runs it. Releases are never deleted,
+because runs they launched point at their hooks.
+
+Rolling back can **hide** data. An older build can read a store a newer one
+wrote as if it were empty: the Knowledge Ledger, for one, shows no claims and
+refuses to write a ledger version it does not know. Nothing is deleted, and
+pinning the newer release again shows it. `--use` warns when the target is
+older than the pinned release.

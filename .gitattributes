@@ -3,3 +3,7 @@
 # anything: Windows checkouts stop growing CRLF that byte-level tests (the
 # bundled skill's frontmatter, prettier's format check) would trip over.
 * text=auto eol=lf
+
+# Not part of a release: `argus release` extracts with `git archive`, which
+# leaves these out.
+experiments/ export-ignore

@@ -138,6 +138,8 @@ Restart with the same launcher command. If you update Argus source and want a fr
 node bin/argus.mjs --agent codex --rebuild --open
 ```
 
+`--rebuild` rebuilds the checkout. Once you pin a release with `node bin/argus.mjs release`, the launcher runs that release instead and never rebuilds it; cut a new release to update. See [Terminal: `argus release`](../guides/terminal.md#argus-release).
+
 See [Operations](../reference/operations.md) for shutdown, restart, retained data, and troubleshooting.
 
 ## Troubleshooting

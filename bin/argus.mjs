@@ -2,17 +2,21 @@
 /**
  * `argus` — single-command entry point.
  *
- * Ensures a production build exists (building it on first run), then starts
- * the single-port server (UI + API together, loopback:7777 by default).
- * Everything the server honours (ARGUS_PORT, ARGUS_HOST, ARGUS_TOKEN, …)
- * passes straight through; `--port` is a convenience override.
+ * Runs the pinned release (`argus release`, under ~/.claude-argus-releases)
+ * when one is pinned, else the dev checkout, building the checkout on first
+ * run, then starts the single-port server (UI + API together,
+ * loopback:7777 by default). Everything the server honours (ARGUS_PORT,
+ * ARGUS_HOST, ARGUS_TOKEN, …) passes straight through; `--port` is a
+ * convenience override.
  */
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { BuildTargetError, resolveBuildRoot } from "./lib/buildTarget.mjs";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+/** The checkout this launcher lives in; `argus release` always builds from it. */
+const checkout = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 
 const HELP = `argus — the all-seeing monitor for your Claude Code agents
@@ -21,6 +25,7 @@ Usage: argus [options]
        argus tail [tail options]
        argus approve <instanceId> [--phase <id>]
        argus revise <instanceId> --note "<text>" [--phase <id>]
+       argus release [--ref <ref>] | --list | --use <id>
 
 Commands:
   (none)         serve the dashboard and API on one port
@@ -33,13 +38,21 @@ Commands:
                  (ARGUS_USER / ARGUS_PASSWORD, or the prompt).
   revise         send a paused phase back to its agent with a note; the phase
                  runs again. Same credentials. \`argus revise --help\`.
+  release        build a commit into its own folder and pin it, so pipelines
+                 keep running while you work in the checkout.
+                 \`argus release --help\`.
+
+Every command runs the pinned release when there is one, else the checkout
+(with a warning).
 
 Options:
   --open         open the dashboard in your browser once the server is up
   --agent <id>   default runtime: claude, codex, opencode or qwen
                  (default: $ARGUS_AGENT or claude)
   --port <n>     port to serve on (default: $ARGUS_PORT or 7777)
-  --rebuild      rebuild the UI and server even if a build already exists
+  --rebuild      rebuild the checkout's UI and server even if a build
+                 exists (the checkout only; a release is never rebuilt)
+  --dev          run the checkout even when a release is pinned
   --version      print the Argus version
   --help         show this help
 
@@ -91,32 +104,78 @@ function parseArgs(argv) {
   return opts;
 }
 
+// `--dev` applies to every command, so it is taken out before anything parses
+// or forwards the arguments: tail's and gate's parsers reject unknown flags.
+const dev = process.argv.slice(2).includes("--dev");
+const argv = process.argv.slice(2).filter((a) => a !== "--dev");
+
+let resolved = null;
+/** The tree to run, resolved once; notices go to stderr so stdout stays clean. */
+function target() {
+  if (resolved) return resolved;
+  try {
+    resolved = resolveBuildRoot({ checkout, dev });
+  } catch (e) {
+    if (e instanceof BuildTargetError) fail(e.message);
+    throw e;
+  }
+  if (resolved.kind === "dev") console.error(`[argus] WARNING: ${resolved.warning}`);
+  else console.error(`[argus] release ${resolved.id}`);
+  return resolved;
+}
+
 function version() {
-  return JSON.parse(readFileSync(path.join(root, "package.json"), "utf8")).version;
+  return JSON.parse(readFileSync(path.join(target().root, "package.json"), "utf8")).version;
 }
 
 function run(args, label) {
   console.log(`[argus] ${label}…`);
   // Node refuses to spawn .cmd files without a shell (CVE-2024-27980 → EINVAL).
   const res = spawnSync(npm, args, {
-    cwd: root,
+    cwd: checkout,
     stdio: "inherit",
     shell: process.platform === "win32",
   });
   if (res.status !== 0) fail(`${label} failed (exit ${res.status ?? "?"})`);
 }
 
-/** Build check: make sure UI + compiled server exist before starting. */
-function ensureBuilt(rebuild) {
-  const missing =
-    !existsSync(path.join(root, "web", "dist", "index.html")) ||
-    !existsSync(path.join(root, "server", "dist", "index.js"));
+/**
+ * Build check: make sure UI + compiled server exist before starting. Only the
+ * checkout is ever installed or built here; a release was built once, by
+ * `argus release`, and is never touched again.
+ */
+function ensureBuilt(t, rebuild, extra = []) {
+  if (t.kind === "release") {
+    if (rebuild)
+      fail(
+        "--rebuild rebuilds the checkout, and a pinned release is never rebuilt: cut a new one with `argus release`, or add --dev",
+      );
+    return;
+  }
+  const missing = [
+    path.join("web", "dist", "index.html"),
+    path.join("server", "dist", "index.js"),
+    ...extra,
+  ].some((p) => !existsSync(path.join(checkout, p)));
   if (!missing && !rebuild) return;
-  if (!existsSync(path.join(root, "node_modules"))) run(["ci"], "installing dependencies");
+  if (!existsSync(path.join(checkout, "node_modules"))) run(["ci"], "installing dependencies");
   run(
     ["run", "build"],
     missing ? "no build found — building UI and server" : "rebuilding UI and server",
   );
+}
+
+/** Runs one of the compiled CLIs in `t`, mirroring its exit and signals. */
+function delegate(t, script, args) {
+  const child = spawn(
+    process.execPath,
+    [path.join(t.root, "server", "dist", "cli", script), ...args],
+    { cwd: t.root, env: process.env, stdio: "inherit" },
+  );
+  child.on("exit", (code, signal) => process.exit(signal ? 130 : (code ?? 1)));
+  // Ctrl-C reaches the child through the shared terminal; forward it when it
+  // arrives here first so the child prints its closing line either way.
+  for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => child.kill(sig));
 }
 
 function opener(url) {
@@ -153,43 +212,37 @@ if (major < 22) fail(`Node >= 22 required (you have ${process.versions.node})`);
  * (same port, same token), so it needs the compiled server tree but starts no
  * server of its own. Everything after `tail` belongs to it.
  */
-if (process.argv[2] === "tail") {
-  ensureBuilt(false);
-  const child = spawn(
-    process.execPath,
-    [path.join(root, "server", "dist", "cli", "tail.js"), ...process.argv.slice(3)],
-    { cwd: root, env: process.env, stdio: "inherit" },
-  );
-  child.on("exit", (code, signal) => process.exit(signal ? 130 : (code ?? 1)));
-  // Ctrl-C reaches the child through the shared terminal; forward it when it
-  // arrives here first so the child prints its closing line either way.
-  for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => child.kill(sig));
-} else if (process.argv[2] === "approve" || process.argv[2] === "revise") {
+if (argv[0] === "tail") {
+  const t = target();
+  ensureBuilt(t, false);
+  delegate(t, "tail.js", argv.slice(1));
+} else if (argv[0] === "approve" || argv[0] === "revise") {
   // The terminal's Approve / Revise: same server, same token, plus an admin
   // login for the one call. The verb travels as the first argument.
-  ensureBuilt(false);
-  const child = spawn(
-    process.execPath,
-    [path.join(root, "server", "dist", "cli", "gate.js"), ...process.argv.slice(2)],
-    { cwd: root, env: process.env, stdio: "inherit" },
-  );
-  child.on("exit", (code, signal) => process.exit(signal ? 130 : (code ?? 1)));
-  for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => child.kill(sig));
+  const t = target();
+  ensureBuilt(t, false);
+  delegate(t, "gate.js", argv);
+} else if (argv[0] === "release") {
+  // Always the checkout's: it is what builds and pins the releases.
+  const t = { kind: "dev", root: checkout };
+  ensureBuilt(t, false, [path.join("server", "dist", "cli", "release.js")]);
+  delegate(t, "release.js", argv.slice(1));
 } else {
   serve();
 }
 
 function serve() {
-  const opts = parseArgs(process.argv.slice(2));
-  ensureBuilt(opts.rebuild);
+  const opts = parseArgs(argv);
+  const t = target();
+  ensureBuilt(t, opts.rebuild);
 
   const env = { ...process.env };
   if (opts.port !== null) env.ARGUS_PORT = String(opts.port);
   if (opts.agent !== null) env.ARGUS_AGENT = opts.agent;
   const port = opts.port ?? (Number(process.env.ARGUS_PORT || "") || 7777);
 
-  const child = spawn(process.execPath, [path.join(root, "server", "dist", "index.js")], {
-    cwd: root,
+  const child = spawn(process.execPath, [path.join(t.root, "server", "dist", "index.js")], {
+    cwd: t.root,
     env,
     stdio: "inherit",
   });

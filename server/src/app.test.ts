@@ -121,6 +121,28 @@ test("GET /api/health names both agent homes", async () => {
   assert.equal(typeof body.codexHome, "string");
 });
 
+test("GET /api/health reports the serving build when one is given, and omits it otherwise", async () => {
+  const build = { kind: "release", sha: "a".repeat(40), dir: "/r", id: "1.0.0-aaaaaaa" } as const;
+  const app = createApp({
+    config,
+    engine: fakeEngine,
+    broadcast: () => {},
+    serveWeb: false,
+    users: createUserStore(),
+    remoteAddr: () => "127.0.0.1",
+    auth: openAuth,
+    build,
+  });
+  const body = (await (await app.request("/api/health", { headers: loopback })).json()) as {
+    build?: unknown;
+  };
+  assert.deepEqual(body.build, build, "health carries the build");
+  const bare = (await (await makeApp().request("/api/health", { headers: loopback })).json()) as {
+    build?: unknown;
+  };
+  assert.equal(bare.build, undefined, "no build given, none reported");
+});
+
 test("GET /api/runtimes lists every runtime, its default, and its capabilities", async () => {
   const res = await makeApp().request("/api/runtimes", { headers: loopback });
   assert.equal(res.status, 200);

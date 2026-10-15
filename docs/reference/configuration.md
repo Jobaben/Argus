@@ -111,6 +111,8 @@ Paths below are relative to the configured Claude home unless another home is sh
 | Runs and transitions         | `argus/runs/`, `argus/transitions/`, `argus/invocations/`                                  | Execution history, diagnostic integrity and invocation provenance            |
 | Argus user/application state | `argus/users.json`, budget/spend/knowledge files, `vault.sqlite` and other `argus/` stores | Accounts and retained product data; preserve the entire directory for backup |
 | Agent writable outputs       | `<argusWorkRoot>/`                                                                         | Artifacts, result channels, worktrees, pipeline memory and ledger staging    |
+| Server lock                  | `argus/server.lock`                                                                        | One server per state directory; removed on exit (see Operations)             |
+| Pinned releases              | `<releasesRoot>/<version>-<sha7>/`, `<releasesRoot>/current.json`                          | `argus release` builds; a sibling of the Claude home, never pruned           |
 
 CLI jobs, histories and transcripts are read-only input to Argus. Argus owns its application stores and, during setup, writes hook files and registrations in the configured CLI homes. Setup runs automatically on server startup; starting Argus is therefore not a wholly read-only operation. See [Operations](operations.md#missing-cli-authentication-or-hooks).
 

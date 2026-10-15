@@ -59,6 +59,7 @@ Some features are panels within a page rather than separate destinations.
 | Omnibar                          | Command palette                                 | [Natural-language preview](navigation.md#omnibar)                                              |
 | Constellation / Fleet            | More → Fleet, `#/fleet`                         | [Multiple machines](administration.md#constellation)                                           |
 | `argus tail`, approve and revise | Terminal                                        | [Terminal guide](terminal.md#argus-tail)                                                       |
+| `argus release`, pinned builds   | Terminal                                        | [Terminal guide](terminal.md#argus-release)                                                    |
 | H2 decision experiment           | More → Experiments, `#/experiments`             | [Failure/outcome shadow evidence](experiments.md#decision-experiments-h2-shadow-collection)    |
 | H1 decision experiment           | More → Experiments, `#/experiments`             | [Operator-action shadow evidence](experiments.md#decision-experiments-h1-gate-operator-action) |
 | Knowledge                        | More → Knowledge, `#/knowledge`                 | [Claims and evidence](knowledge.md#knowledge)                                                  |

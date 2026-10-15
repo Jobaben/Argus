@@ -7,7 +7,7 @@
 - the WS3 section, including its **Re-baseline** block.
 
 **Repo:** `C:\GIT\argus`. The remote `origin` is GitHub (`Jobaben/Argus`), not Azure DevOps. A plain `git push` works. Never use `gh`.
-**Updated:** 2026-10-14 (the release is renumbered `v1.0.0` and staged on top of `52fdecf`; not committed or tagged yet; WS3 is next). Lives in the repo so any session or machine can continue; update it in place at the end of each session rather than creating a new file.
+**Updated:** 2026-10-15 (`v1.0.0` is committed as `f09bdf1`, tagged and pushed; WS3 is staged on `feat/pinned-release`, not committed). Lives in the repo so any session or machine can continue; update it in place at the end of each session rather than creating a new file.
 
 ## Where things stand
 
@@ -17,8 +17,18 @@
 | `main`                             | `52fdecf`, which bumped to `0.6.0` (its message reads "WS14 implemented"). It sits on `d1cd8c1` (CHANGELOG roll) and `7f2dac2` (WS14). All pushed. `0.6.0` was never tagged. The release is `v1.0.0`, staged on top.                              |
 | Plan                               | Re-baselined against `39b58dc` on 2026-10-12. Every open question is answered, and the narrowed soak wording is confirmed (the plan's "Decisions on the re-baseline"). One follow-up: in WS3, ask what a missing `ARGUS_TOKEN` does (decision 4). |
 | WS14 (instance status under gates) | ✅ On `main` and pushed (`7f2dac2`, 2026-10-13). `fix/gate-state-guards` is deleted (it was never on `origin`). The plan's WS14 "Outcome" block lists what changed and what was decided.                                                          |
-| WS3–WS13                           | ⬜ Not started.                                                                                                                                                                                                                                   |
+| `v1.0.0`                           | ✅ `f09bdf1`, tag `v1.0.0` pushed (2026-10-14).                                                                                                                                                                                                   |
+| WS3 (pinned release, lock, build)  | 🔵 Staged on `feat/pinned-release` (2026-10-15), uncommitted. The plan's WS3 "Outcome" block lists what changed, what was verified live and what is left for manual checks.                                                                       |
+| WS4–WS13                           | ⬜ Not started.                                                                                                                                                                                                                                   |
 | Live proof of WS1/WS2              | Ready for verification only. It comes with WS11's discovery-pipeline fan-out.                                                                                                                                                                     |
+
+**State at 2026-10-15:**
+
+- **Release done.** The user committed the renumbering as `f09bdf1` ("V1.0.0 releases"); tag `v1.0.0` is pushed. Orphan `48fab3f6` is **aborted** (2026-10-14 05:44 UTC), so the live acceptance case is closed.
+- **Decisions (2026-10-14):** a missing `ARGUS_TOKEN` never stops startup, only the lock probe fails closed; connection refused at the holder's recorded URL after 60 s is stale; releases live in `~/.claude-argus-releases` (a sibling of the work root, not under it). All recorded in the plan.
+- **First WS3 check answered:** per-run settings embed the build's own `hooks/` (all 67 hook-carrying invocation records point at `C:/GIT/argus/hooks/argus-signal.mjs`), so releases must never be pruned.
+- **Done gate on the WS3 diff (Windows):** typecheck, lint, `prettier --check --end-of-line auto .`, `check-contracts-runtime`, `git diff --check`, build and `argus --help` pass. `test:timeboxed`: 3,284 tests, 3,258 pass, 25 skipped, 1 fail (baseline CRLF Codex skill copy). `server test:coverage` (rerun after the `sameDirectory` fix): 3,285 tests, 1 fail (the same baseline), no threshold failed (79.0 % lines). The first coverage run also failed `release --use` once (load-only; see the plan). Web is untouched apart from the contract type, so web tests and bundle checks were not rerun.
+- **Adjacent, not changed (ask first):** `openWhenUp` (`--open`) probes `/api/health` without the token, so with `ARGUS_TOKEN` set the browser never opens automatically; and the launcher's Ctrl+C forwarding is a hard kill on Windows, which skips `engine.drain()` (predates WS3).
 
 **State at 2026-10-14:**
 
@@ -62,15 +72,16 @@
 
 **Next session:**
 
-1. If not done yet, commit the staged renumbering as `chore(release): v1.0.0`, then tag and push it (RELEASING.md steps 4–5): `git tag -a v1.0.0 -m "Argus 1.0.0"`, then `git push origin main --follow-tags`. Do not tag `0.6.0`.
-2. Live acceptance: start the server from that build, open the Command Center, and stop `48fab3f6` from its _pipeline deleted_ card. Check that the "awaiting you" count drops to 0.
-3. Start WS3 on `feat/pinned-release`, cut from `main` at the `v1.0.0` commit. Before writing any code, ask the open half of decision 4: with no `ARGUS_TOKEN`, does the server refuse to start, or does only the lock probe fail closed (count a live pid as held)?
+1. The user reviews and commits WS3 on `feat/pinned-release`, then merges it into `main`.
+2. Manual checks (plan WS3 "Ready for verification"): `npm run dev` is refused while `argus` runs; `argus release` on the real home, then `argus`, makes health show `build.kind: "release"`; `--use <previous>` rolls back. Also Ctrl+C under `argus`: on Windows it may leave a dead-pid `server.lock` (the launcher forwards a hard kill); the next start takes it over, so either outcome is acceptable.
+3. Cut the next release after the merge. My recommendation is a minor bump (WS3 adds features; its two behaviour changes are in the `[Unreleased]` callout), but the version is the user's call. From now on, pin each release with `argus release --ref vX.Y.Z` (RELEASING.md step 6).
+4. Then WS4 on `feat/behaviour-change-registry`.
 
 ## WS3 in one paragraph
 
 The server runs from the dev checkout, so every rebuild moves the pipelines already running, and nothing stops a second server from sharing the same state directory. WS3 adds three things:
 
-- **`argus release`.** It extracts a commit with `git archive` into `~/.claude-argus/releases/<version>-<sha7>/`, builds it there and points `current.json` at it. The launcher then runs that build; `--dev` forces the checkout and prints a warning.
+- **`argus release`.** It extracts a commit with `git archive` into `~/.claude-argus-releases/<version>-<sha7>/`, builds it there and points `current.json` at it. The launcher then runs that build; `--dev` forces the checkout and prints a warning.
 - **A build id on `/api/health`:** `build {kind, sha, dir, id?}`.
 - **`server.lock`.** Created with `wx` under `paths.argus()`, it refuses a second server on the same state, whichever port that server uses. It is also the Decision Ledger's only guard across processes.
 

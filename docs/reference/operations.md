@@ -6,20 +6,27 @@ Use this page to establish which process, build, configuration and state directo
 
 ## Startup and build identity
 
-Argus requires Node 22 or newer. In a checkout, install dependencies with `npm ci`. There are two serving modes:
+Argus requires Node 22 or newer. In a checkout, install dependencies with `npm ci`. These are the ways to serve it:
 
 | Mode               | Command                           | Browser URL             | Behavior                                                                                       |
 | ------------------ | --------------------------------- | ----------------------- | ---------------------------------------------------------------------------------------------- |
 | Development        | `npm run dev`                     | `http://localhost:5757` | Vite web development server on 5757 proxies API/WS requests to the Node server, normally 7777. |
 | Production build   | `npm run build`, then `npm start` | `http://127.0.0.1:7777` | Compiled server serves UI and API on one port.                                                 |
-| Checkout launcher  | `node bin/argus.mjs --open`       | `http://127.0.0.1:7777` | Ensures build artifacts exist, then starts compiled production server.                         |
+| Pinned release     | `argus release`, then `argus`     | `http://127.0.0.1:7777` | Runs the release `current.json` pins, built once in its own folder; see below.                 |
+| Checkout launcher  | `node bin/argus.mjs --open`       | `http://127.0.0.1:7777` | With no release pinned (or with `--dev`): ensures build artifacts exist, then starts them.     |
 | Installed launcher | `argus --open`                    | `http://127.0.0.1:7777` | Same behavior, using the installed package's checkout/build.                                   |
 
-The launcher builds only when `web/dist/index.html` or `server/dist/index.js` is missing, or when you pass `--rebuild`. It does not compare source timestamps. After source changes, rebuild the intended checkout and restart its server deliberately; `npm start` runs the existing compiled server. Another checkout, global installation or already running process may serve a different build. A successful offline check or staged diff does not prove that the running service contains those changes.
+**Pinned releases.** `argus release [--ref <ref>]` extracts one commit (default `HEAD`) with `git archive` into `<releasesRoot>/<version>-<sha7>/`, runs `npm ci` and `npm run build` there, smoke-checks the build, writes `release.json` last and then points `current.json` at it. `<releasesRoot>` is a sibling of the Claude home, `~/.claude-argus-releases` by default (it follows `ARGUS_CLAUDE_HOME` and `CLAUDE_CONFIG_DIR`, not `ARGUS_WORK_DIR`). Every launcher command (`argus`, `tail`, `approve`, `revise`) then runs that folder rather than the checkout, so rebuilding or switching branches in the checkout no longer moves running pipelines; restart `argus` to pick up a newly pinned release. Uncommitted changes are never in a release. `argus release --list` shows the built releases and `--use <id>` pins another one. Releases are never deleted: runs launched from one embed its `hooks/` path, so pruning one would break their completion signal. A pointer to a missing or unfinished release is an error, never a silent fallback to the checkout.
 
-Launcher flags: `--open`, `--agent <claude|codex|opencode|qwen>`, `--port <n>`, `--rebuild`, `--version`, `--help`. The launcher passes environment variables to its child. Installing `argus` globally (`npm i -g .` or `npm link`) changes the user's command environment; a checkout launch avoids needing that installation. [Launcher source](../../bin/argus.mjs), [root scripts](../../package.json).
+With no release pinned, or with `--dev`, the launcher runs the checkout and prints a warning. It builds the checkout only when `web/dist/index.html` or `server/dist/index.js` is missing, or when you pass `--rebuild`; it does not compare source timestamps, and it never installs or rebuilds a release. `GET /api/health` reports which build is serving (`build.kind` is `release` or `dev`, with its commit and directory), and a dev server logs a warning at startup. A successful offline check or staged diff does not prove that the running service contains those changes.
+
+Launcher flags: `--open`, `--agent <claude|codex|opencode|qwen>`, `--port <n>`, `--rebuild`, `--dev`, `--version`, `--help`. The launcher passes environment variables to its child. Installing `argus` globally (`npm i -g .` or `npm link`) changes the user's command environment; a checkout launch avoids needing that installation. [Launcher source](../../bin/argus.mjs), [root scripts](../../package.json).
 
 `--open` probes the loopback health endpoint and opens a loopback URL. A non-loopback-only bind, token-protected health route or startup taking over 20 seconds can make automatic opening time out even when the process is listening. Use the actual configured URL and browser login manually after inspecting the startup log.
+
+### One server per state directory
+
+At startup the server takes `<claudeHome>/argus/server.lock`, before its engine, scheduler or setup touch any state, and removes it on a clean exit. A lock left behind by a killed server (on Windows the launcher may forward Ctrl+C as an outright termination) is taken over once its pid is gone. A second server on the same state directory, on any port, refuses to start and names the holder. The lock records the holder's pid, address, build and start time. It counts as held while that pid is alive and either the lock is under 60 seconds old or the holder's `/api/health` reports the same Claude home. When that cannot be confirmed (a `401` because the starting server has no `ARGUS_TOKEN`, a timeout), it still counts as held. It is stale when the pid is gone, when the health route reports another Claude home, or when nothing listens at the recorded address (the pid was reused). If no Argus is running and startup is still refused, delete the file the message names. The lock covers servers only: scripts that write Argus stores directly bypass it, so use the API while a server runs. [State lock](../../server/src/stateLock.ts).
 
 ## Port and connection problems
 
@@ -161,6 +168,7 @@ For a coherent backup, arrange an operator maintenance window: let active runs f
 - The actual `ARGUS_WORK_DIR` root, including artifacts, memory, per-run staging and worktrees. Isolated Git worktrees depend on their repository's Git metadata; preserve the associated repository or use a Git-aware backup strategy as well.
 - The configured source repositories and relevant CLI homes/configuration when the recovery scope includes transcripts and hook registrations. Keep credentials and account stores protected.
 - The effective environment/path settings, Argus version and build/checkout identity needed to interpret the snapshot.
+- The pinned release folder (`<releasesRoot>/<id>/`, named by `current.json`) while any retained run was launched from it: those runs embed its hook path. Do not restore `argus/server.lock`; a stopped server leaves none.
 
 A restore is an explicit operator action: retain the pre-restore state, keep the target server stopped, restore the matching application/work snapshot and compatible repository metadata, then inspect definitions, pending instances and stored paths before resuming execution. Use appropriate ownership and permissions. Do not mix individual historical stores with current instances or alter CLI-owned transcripts/config files to force agreement.
 

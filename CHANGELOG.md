@@ -5,6 +5,41 @@ All notable changes to Argus are documented here. The format follows
 
 ## [Unreleased]
 
+> **Behaviour changes.** Check these before you upgrade:
+>
+> - **A second server on the same state directory refuses to start.** Two
+>   servers sharing `~/.claude/argus` used to run side by side, on any two
+>   ports. Now the second exits with a message naming the first.
+> - **`argus` runs the pinned release once you pin one.** After
+>   `argus release`, the launcher no longer runs, builds or rebuilds the
+>   checkout; `--dev` restores the old behaviour for one launch.
+
+### Added
+
+- **`argus release`: pinned release builds.** `argus release [--ref <ref>]`
+  extracts a commit with `git archive` into
+  `~/.claude-argus-releases/<version>-<sha7>/`, installs and builds it there,
+  smoke-checks it and pins it in `current.json`. Every launcher command then
+  runs that folder, so rebuilding or switching branches in the checkout no
+  longer moves running pipelines. `--list` shows the built releases and
+  `--use <id>` pins another; `--use` warns when rolling back to an older
+  version, which can hide data a newer one wrote. Releases are never deleted,
+  because the runs they launched embed their hook path. With nothing pinned,
+  or with `--dev`, the launcher runs the checkout and warns. A pointer to a
+  missing release is an error, never a silent fallback. `experiments/` is
+  left out of releases (`export-ignore`).
+- **`server.lock`: one server per state directory.** The server takes
+  `<claudeHome>/argus/server.lock` before its engine, scheduler or setup
+  start, and removes it on a clean exit (a killed server's lock is taken over once its pid is gone). A lock whose pid is alive counts as held
+  for 60 s, then while the holder's `/api/health` reports the same Claude
+  home or cannot be checked (a `401`, a timeout). It is stale when the pid is
+  gone, when health reports another home, or when nothing listens at the
+  holder's recorded address. It is also the Decision Ledger's only guard
+  across processes.
+- **`build` on `GET /api/health`:** `{ kind: "release" | "dev", sha, dir, id? }`,
+  optional in the contract (`HealthResponse.build`). A dev build logs a
+  warning at startup.
+
 ## [1.0.0] - 2026-10-14
 
 > **Breaking changes.** Check these before you upgrade from 0.5.0:

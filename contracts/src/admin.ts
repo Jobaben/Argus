@@ -53,4 +53,17 @@ export interface HealthResponse {
   /** Where Codex keeps its state, watched the same way `claudeHome` is. */
   codexHome: string;
   service: "argus";
+  /** Which build is serving: a pinned release (`argus release`) or the dev
+   *  checkout. Optional so older servers still satisfy the shape. */
+  build?: BuildInfo;
+}
+
+export interface BuildInfo {
+  kind: "release" | "dev";
+  /** The commit it was built from; null when a dev checkout's git is unreadable. */
+  sha: string | null;
+  /** The directory the server runs from. */
+  dir: string;
+  /** The release id (`<version>-<sha7>`); absent on a dev build. */
+  id?: string;
 }

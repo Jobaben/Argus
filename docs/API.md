@@ -67,12 +67,25 @@ default); `4xx` logs at `warn`, `5xx` at `error`. `ARGUS_LOG_LEVEL` and
 ```json
 {
   "ok": true,
-  "version": "0.4.0",
+  "version": "1.0.0",
   "claudeHome": "/home/you/.claude",
   "codexHome": "/home/you/.codex",
-  "service": "argus"
+  "service": "argus",
+  "build": {
+    "kind": "release",
+    "sha": "f09bdf109f5728b985613d789a43403528aa7890",
+    "dir": "/home/you/.claude-argus-releases/1.0.0-f09bdf1",
+    "id": "1.0.0-f09bdf1"
+  }
 }
 ```
+
+`build` says which tree is serving: `kind: "release"` for a build `argus release`
+pinned (with its `id`), or `"dev"` for a checkout, whose `sha` is the
+checkout's `HEAD` at startup (`null` when git cannot say) and may not match
+uncommitted sources. It is optional in the contract, so older servers omit it.
+A second server is identified by this route when it probes a `server.lock`
+holder; see [Operations](reference/operations.md#one-server-per-state-directory).
 
 ### `GET /api/runtimes`
 
@@ -316,9 +329,7 @@ access is the trust root) and run first-time setup again.
 
 ### `GET /api/health`
 
-```json
-{ "ok": true, "version": "0.2.0", "claudeHome": "/home/you/.claude", "service": "argus" }
-```
+Shape under [Core](#get-apihealth).
 
 ## Read coverage (v0.2)
 

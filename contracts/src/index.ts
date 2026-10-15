@@ -167,6 +167,7 @@ export type {
 
 export type {
   AuthStatus,
+  BuildInfo,
   HealthResponse,
   PrereqResult,
   PrereqStatus,

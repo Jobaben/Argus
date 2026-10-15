@@ -20,6 +20,7 @@ A running Argus server; use the same URL/port and token as that server. Gate act
 ## On this page
 
 - [`argus tail`](#argus-tail)
+- [`argus release`](#argus-release)
 
 ## `argus tail`
 
@@ -129,3 +130,27 @@ fails if the two copies ever differ.
 **Where the data comes from:** `GET /api/health`, `/api/runs`,
 `/api/overview`, `/api/agents`, `/api/insight`, `/api/runs/:id/activity` (the
 tailer's retained events for a running step), and `WS /ws`.
+
+## `argus release`
+
+_Keep pipelines running while I work on Argus._
+
+**Purpose:** without a release, `argus` runs the checkout, so every rebuild
+or branch switch changes the code under pipelines that are already running,
+including the completion hook their agents call. `argus release` builds one
+commit into its own folder and pins it; from then on every `argus` command
+runs that folder, and the checkout is yours to change.
+
+```sh
+node bin/argus.mjs release               # build HEAD and pin it
+node bin/argus.mjs release --ref v1.0.0  # build a tag or any ref
+node bin/argus.mjs release --list        # built releases; * is pinned
+node bin/argus.mjs release --use <id>    # pin another (roll back or forward)
+node bin/argus.mjs --dev                 # run the checkout anyway, with a warning
+```
+
+Restart `argus` after pinning. A release contains only the commit, never
+uncommitted changes, and is never deleted, because the runs it launched
+embed its hook path. Rolling back to an older release can hide data a newer
+one wrote; see [Releasing](../RELEASING.md#rolling-back). Where releases live
+and how the launcher picks one: [Operations](../reference/operations.md#startup-and-build-identity).
