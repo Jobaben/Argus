@@ -9,11 +9,14 @@ import {
 import { buildChildEnv } from "../harness/childEnv.js";
 import { runChecks } from "../harness/verification.js";
 import type { WorkingTreeSnapshot } from "../harness/verification.js";
+import { workspacePolicyFor, workspaceTarget } from "../harness/workspace.js";
 import { readInstance } from "../sources/instances.js";
 import { applyCandidateVerification, applyVerification } from "../pipelineTransitions.js";
 import { journal } from "../sources/journal.js";
 import type {
+  PhaseDef,
   PhaseFailurePayload,
+  PhaseProgress,
   PipelineDefinition,
   PipelineInstance,
 } from "../sources/pipelineTypes.js";
@@ -31,6 +34,49 @@ import type { EngineCore, EngineFns } from "./context.js";
 function notEvaluated(checks: Array<{ status: string }>): string {
   const n = checks.filter((c) => c.status === "not-evaluated").length;
   return n > 0 ? ` (${n} not evaluated)` : "";
+}
+
+/**
+ * The baseline a phase attempt's `changed-files` check is measured from. A
+ * retry is judged on what the phase changed since the first attempt of its
+ * retry chain, as long as that attempt worked in the same tree; an attempt
+ * whose tree is its own (`scope: "attempt"`) is measured from its own
+ * baseline. Falls back to later attempts, and finally this one, when an
+ * earlier baseline was never recorded.
+ */
+async function readPhaseBaseline(
+  instanceId: string,
+  def: PipelineDefinition,
+  phaseDef: PhaseDef,
+  phase: Pick<PhaseProgress, "baselineAttempt">,
+  attempt: number,
+): Promise<WorkingTreeSnapshot | null> {
+  const policy = workspacePolicyFor(def, phaseDef);
+  const treeOf = (n: number) =>
+    !policy || policy.scope === "none"
+      ? phaseDef.cwd
+      : workspaceTarget({
+          root: paths.worktreesDir(),
+          instanceId,
+          phaseId: phaseDef.id,
+          attempt: n,
+          policy,
+        }).path;
+  const tree = treeOf(attempt);
+  for (let n = Math.min(phase.baselineAttempt ?? attempt, attempt); n <= attempt; n++) {
+    if (treeOf(n) !== tree) continue;
+    try {
+      return JSON.parse(
+        await readFile(
+          phaseBaselinePath(paths.invocationsDir(), instanceId, phaseDef.id, n),
+          "utf8",
+        ),
+      ) as WorkingTreeSnapshot;
+    } catch {
+      /* no baseline recorded (not a git repository, or no changed-files check) */
+    }
+  }
+  return null;
 }
 
 export function createVerification(core: EngineCore) {
@@ -120,17 +166,7 @@ export function createVerification(core: EngineCore) {
           attempt,
           detail: `${phaseDef.checks?.length ?? 0} check${phaseDef.checks?.length === 1 ? "" : "s"}`,
         });
-        let baseline: WorkingTreeSnapshot | null = null;
-        try {
-          baseline = JSON.parse(
-            await readFile(
-              phaseBaselinePath(paths.invocationsDir(), instanceId, phaseId, attempt),
-              "utf8",
-            ),
-          ) as WorkingTreeSnapshot;
-        } catch {
-          /* no baseline recorded (not a git repository, or no changed-files check) */
-        }
+        const baseline = await readPhaseBaseline(instanceId, def, phaseDef, phase, attempt);
         const report = await runChecks(phaseDef.checks ?? [], {
           // The checks look at the work, so they look where the work happened:
           // the phase's worktree when it had one, its own cwd otherwise.

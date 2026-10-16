@@ -1497,9 +1497,12 @@ can start. `produces` must match `[A-Za-z0-9_-]{1,40}`.
 ### Instance fields
 
 `PhaseProgress` gains `needs` (resolved, so the board can draw the graph without
-the definition — which may since have been edited), `retries`, `retryAt`, and
-`result` (the validated structured outcome, kept apart from the free-form
-`payload` so gate answers and existing artifacts stay compatible).
+the definition — which may since have been edited), `retries`, `retryAt`,
+`baselineAttempt` (the first attempt of the current automatic retry chain,
+whose baseline a `changed-files` check is measured from while the tree carries
+over; absent outside a retry chain), and `result` (the validated structured
+outcome, kept apart from the free-form `payload` so gate answers and existing
+artifacts stay compatible).
 `StepProgress` gains `result` / `resultError` — the submission as it arrived,
 held per step because a phase's result lands with one step's signal while its
 siblings may still be running. `PipelineInstance` gains

@@ -1040,6 +1040,18 @@ baseline/current identity actually differs counts, so a phase run against an
 already-dirty tree isn't credited (or blamed) for pre-existing changes it
 never touched.
 
+**A retry is measured from the start of its retry chain.** Each attempt still
+records its own baseline, but an automatic retry is the same intended work, so
+when it reuses the tree an earlier attempt changed (`workspace.scope:
+"instance"`, or no workspace) its check is measured from the baseline of the
+chain's first attempt (`PhaseProgress.baselineAttempt`). A retry that only
+re-runs what the first attempt already committed — say, after a test
+environment outage — passes `requireChanges` instead of failing with "no files
+changed". An attempt in a tree of its own (`scope: "attempt"`, cut fresh from
+the base) keeps its own baseline, so commits that landed on the base in between
+are never credited as work. A revise or a remediation asks for new work: it
+clears `baselineAttempt` and is measured from its own baseline.
+
 **Commits the agent made are included, not just the working tree.** A commit
 leaves a clean tree, which the working-tree diff alone can't see — so
 whenever `HEAD` moved between the baseline and the current snapshot, Argus

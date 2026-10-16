@@ -114,6 +114,36 @@ test("with no worktree and no recorded baseline, changes are unavailable, never 
   assert.equal(input.changes.repository, null);
 });
 
+test("with no worktree, a retry's changes are measured from the first attempt of its retry chain", async () => {
+  const { dir } = repo();
+  const real = defaultH1Sources();
+  const first = await real.workingTree(dir);
+  writeFileSync(path.join(dir, "b.txt"), "new\n");
+  git(dir, "add", "b.txt");
+  git(dir, "commit", "-q", "-m", "work");
+  const retry = await real.workingTree(dir);
+
+  const world = gateWorld();
+  const inst = gateInstance({ phase: { attempt: 1, baselineAttempt: 0 }, phaseDef: { cwd: dir } });
+  world.put(inst);
+  const input = await gatherGateReview(
+    {
+      ...sourcesFor(world),
+      async readPhaseBaseline(_instanceId, _phaseId, attempt) {
+        return [first, retry][attempt] ?? null;
+      },
+    },
+    inst,
+    inst.phases[0],
+    inst.definition,
+    new Date(),
+    {},
+  );
+  const files = input.changes.files;
+  assert.equal(files.status, "available");
+  assert.deepEqual(files.status === "available" && files.paths, ["b.txt"]);
+});
+
 test("a worktree path that is not a git work tree is unavailable", async () => {
   const world = gateWorld();
   const dir = tempRoot("argus-h1-nogit-");

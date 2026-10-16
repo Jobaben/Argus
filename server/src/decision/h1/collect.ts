@@ -113,6 +113,25 @@ export function defaultH1Sources(): H1Sources {
 
 const unavailable = (reason: string) => ({ status: "unavailable" as const, reason });
 
+/**
+ * The baseline the phase's `changed-files` check was measured from. Without a
+ * worktree every attempt works in the phase's own cwd, so a retry is measured
+ * from the first attempt of its retry chain, falling back to later attempts
+ * when an earlier baseline was never recorded.
+ */
+async function phaseBaseline(
+  src: H1Sources,
+  instanceId: string,
+  phase: PhaseProgress,
+): Promise<WorkingTreeSnapshot | null> {
+  const first = Math.min(phase.baselineAttempt ?? phase.attempt, phase.attempt);
+  for (let n = first; n <= phase.attempt; n++) {
+    const baseline = await src.readPhaseBaseline(instanceId, phase.id, n);
+    if (baseline) return baseline;
+  }
+  return null;
+}
+
 async function gatherChanges(
   src: H1Sources,
   inst: PipelineInstance,
@@ -145,7 +164,7 @@ async function gatherChanges(
       repository: repositoryStateFrom(current),
     };
   }
-  const baseline = await src.readPhaseBaseline(inst.id, phase.id, phase.attempt);
+  const baseline = await phaseBaseline(src, inst.id, phase);
   const cwd = phaseDef?.cwd;
   if (!baseline || !cwd) {
     const why = unavailable("no attempt worktree and no recorded phase baseline");

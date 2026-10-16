@@ -1356,6 +1356,7 @@ function restartPhase(phase: PhaseProgress): void {
   delete phase.selectedCandidate;
   delete phase.candidateOutcomes;
   delete phase.pause;
+  delete phase.baselineAttempt;
 }
 
 /**
@@ -1409,6 +1410,7 @@ export function applyRemediation(
     delete downstream.candidateOutcomes;
     delete downstream.ruleVerification;
     delete downstream.acceptanceVerification;
+    delete downstream.baselineAttempt;
   }
   restartPhase(phase);
   phase.payload = null;
@@ -1506,7 +1508,9 @@ export function applyRetry(
 ): TransitionResult {
   const phase = inst.phases.find((p) => p.id === phaseId);
   if (!phase || phase.status !== "failed") return { instance: inst, startPhases: [] };
+  const baselineAttempt = phase.baselineAttempt ?? phase.attempt;
   restartPhase(phase);
+  phase.baselineAttempt = baselineAttempt;
   phase.retries = (phase.retries ?? 0) + 1;
   phase.retryAt = null;
   inst.status = liveStatus(inst);

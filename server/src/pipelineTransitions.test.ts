@@ -7,6 +7,7 @@ import {
   applyCandidateSelection,
   applyCandidateVerification,
   applyCandidatesExhausted,
+  applyRemediation,
   applyRevise,
   applyAbort,
   applyTemplate,
@@ -232,6 +233,18 @@ test("applyRevise re-runs the current phase with a bumped attempt", () => {
   assert.equal(r.instance.phases[0].status, "running");
   assert.equal(r.instance.phases[0].steps[0].runId, null);
   assert.equal(r.instance.status, "running");
+});
+
+test("applyRemediation asks for new work, so no phase it re-opens keeps a retry chain's baseline", () => {
+  const inst = started(def());
+  advance(def(), inst, sig({ type: "failed" }), NOW);
+  inst.phases[0].baselineAttempt = 0;
+  inst.phases[1].baselineAttempt = 0;
+  const r = applyRemediation(inst, "brainstorm", ["plan"], NOW);
+  assert.deepEqual(r.startPhases, [0]);
+  assert.equal(r.instance.phases[0].baselineAttempt, undefined);
+  assert.equal(r.instance.phases[1].baselineAttempt, undefined);
+  assert.equal(r.instance.phases[1].status, "pending");
 });
 
 test("applyAbort marks the instance aborted", () => {

@@ -1194,6 +1194,14 @@ export interface PhaseProgress {
   /** When the next automatic retry is due, while one is pending. */
   retryAt?: string | null;
   /**
+   * The first attempt of the current automatic retry chain, set by a retry and
+   * cleared by a revise or a remediation (which ask for new work). While the
+   * tree carries over, a `changed-files` check is measured from that attempt's
+   * baseline, so a retry is judged on what the phase changed, not only on what
+   * the retry did. Absent: the attempt is measured from its own baseline.
+   */
+  baselineAttempt?: number;
+  /**
    * Why the phase is (or last was) `awaiting-approval`: `gate` — every step
    * finished, its result validated and its checks passed, and the phase is
    * gated; `needs-input` — an agent asked a question, which pauses the phase
