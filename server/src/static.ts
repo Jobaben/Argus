@@ -85,8 +85,17 @@ export function mountWebApp(app: Hono): string | null {
   // rather than on the first navigation.
   readIndex();
   app.get("/assets/*", (c) => serveFile(c, dir, c.req.path) ?? c.notFound());
-  app.get("/vite.svg", (c) => serveFile(c, dir, c.req.path) ?? c.notFound());
-  app.get("/favicon.ico", (c) => serveFile(c, dir, c.req.path) ?? c.notFound());
+  for (const file of [
+    "/vite.svg",
+    "/favicon.ico",
+    "/favicon.svg",
+    "/apple-touch-icon.png",
+    "/icon-192.png",
+    "/icon-512.png",
+    "/manifest.webmanifest",
+  ]) {
+    app.get(file, (c) => serveFile(c, dir, c.req.path) ?? c.notFound());
+  }
   // SPA fallback for every non-API GET; leave /api and /ws to their handlers
   // (and to the JSON 404) so a missing endpoint doesn't return HTML.
   app.get("*", (c) => {
