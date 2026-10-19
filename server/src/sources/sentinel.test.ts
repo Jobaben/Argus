@@ -293,6 +293,43 @@ test("resolving by hand sticks only while the condition is gone", () => {
   assert.ok(next.incidents[0].timeline.some((e) => e.kind === "reopened"));
 });
 
+const anomalyCondition = (runId: string): Condition =>
+  condition({ key: "anomaly:k1:cost", source: "anomaly", scheduleId: null, runId });
+
+test("an anomaly resolved by hand stays resolved while the same run is the outlier", () => {
+  const opened = reconcileIncidents([], [anomalyCondition("r1")], POLICY, NOW).incidents;
+  const byHand = [resolveByHand(opened[0], "ada", "known slow run", later(1))];
+
+  const next = reconcileIncidents(byHand, [anomalyCondition("r1")], POLICY, later(2));
+  assert.equal(next.incidents[0].status, "resolved");
+  assert.equal(next.alerts.length, 0);
+});
+
+test("a new outlier run reopens a resolved anomaly, and resolving that one sticks", () => {
+  const opened = reconcileIncidents([], [anomalyCondition("r1")], POLICY, NOW).incidents;
+  const byHand = [resolveByHand(opened[0], "ada", "known slow run", later(1))];
+
+  const recurred = reconcileIncidents(byHand, [anomalyCondition("r2")], POLICY, later(2));
+  assert.equal(recurred.incidents[0].status, "open");
+  assert.equal(recurred.incidents[0].runId, "r2");
+  assert.equal(recurred.alerts[0].event, "incident.opened");
+
+  const again = [resolveByHand(recurred.incidents[0], "ada", "also known", later(3))];
+  const next = reconcileIncidents(again, [anomalyCondition("r2")], POLICY, later(4));
+  assert.equal(next.incidents[0].status, "resolved");
+  assert.equal(next.alerts.length, 0);
+});
+
+test("an open anomaly tracks the newest outlier run, so a later resolve sticks", () => {
+  const opened = reconcileIncidents([], [anomalyCondition("r1")], POLICY, NOW).incidents;
+  const live = reconcileIncidents(opened, [anomalyCondition("r2")], POLICY, later(1)).incidents;
+  assert.equal(live[0].runId, "r2");
+
+  const byHand = [resolveByHand(live[0], "ada", "known", later(2))];
+  const next = reconcileIncidents(byHand, [anomalyCondition("r2")], POLICY, later(3));
+  assert.equal(next.incidents[0].status, "resolved");
+});
+
 test("resolved incidents age out, and the timeline is capped", () => {
   const opened = reconcileIncidents([], [condition()], POLICY, NOW).incidents;
   const resolved = reconcileIncidents(opened, [], POLICY, later(1)).incidents;

@@ -403,6 +403,18 @@ export function reconcileIncidents(
       continue;
     }
 
+    // An anomaly is a fact about one past run, and it stays in Watchtower's
+    // window for days. Once resolved, only a *different* outlier run is new
+    // evidence; the same run would otherwise reopen it every tick.
+    if (
+      prior.status === "resolved" &&
+      condition.source === "anomaly" &&
+      condition.runId === prior.runId
+    ) {
+      out.push(prior);
+      continue;
+    }
+
     // The condition is still live. A resolved incident whose condition came
     // back reopens rather than opening a second one: the history of a recurring
     // problem is the most useful thing about it.
@@ -412,6 +424,8 @@ export function reconcileIncidents(
         status: "open",
         severity: condition.severity,
         detail: condition.detail,
+        scheduleId: condition.scheduleId,
+        runId: condition.runId,
         resolvedAt: null,
         acknowledgedAt: null,
         acknowledgedBy: null,
@@ -425,7 +439,13 @@ export function reconcileIncidents(
     }
 
     // Escalate an unacknowledged incident whose clock has run out.
-    let current: Incident = { ...prior, detail: condition.detail, severity: condition.severity };
+    let current: Incident = {
+      ...prior,
+      detail: condition.detail,
+      severity: condition.severity,
+      scheduleId: condition.scheduleId,
+      runId: condition.runId,
+    };
     if (
       current.status === "open" &&
       current.nextEscalationAt !== null &&
@@ -502,7 +522,8 @@ export function acknowledge(incident: Incident, by: string, now: Date): Incident
  *
  * Note that reconciliation will **reopen** this on the next tick if the
  * underlying condition is still live — which is correct, and the timeline says
- * so rather than silently undoing the click.
+ * so rather than silently undoing the click. Anomalies are the exception: they
+ * reopen only when a different run is the outlier.
  */
 export function resolveByHand(incident: Incident, by: string, note: string, now: Date): Incident {
   const at = now.toISOString();
