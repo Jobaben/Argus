@@ -15,16 +15,9 @@ import {
   formatTrigger,
   Handoff,
   Icon,
-  InfoTip,
   Page,
-  ModelSelect,
   prefersReducedMotion,
-  ReasoningEffortSelect,
-  RubricFields,
-  RuntimeBadge,
-  RuntimeSelect,
   Skeleton,
-  Tabs,
   TimeAgo,
   useClock,
   useFlip,
@@ -43,6 +36,13 @@ import {
   type ScheduleHealth,
   type ScheduleState,
 } from "./scheduleHealth";
+import { InfoTip } from "../ds/InfoTip";
+import { ModelSelect } from "../ds/ModelSelect";
+import { ReasoningEffortSelect } from "../ds/ReasoningEffortSelect";
+import { RubricFields } from "../ds/RubricFields";
+import { RuntimeBadge } from "../ds/RuntimeBadge";
+import { RuntimeSelect } from "../ds/RuntimeSelect";
+import { Tabs } from "../ds/Tabs";
 
 /**
  * Countdown to this schedule's next firing, on its own second-resolution clock.

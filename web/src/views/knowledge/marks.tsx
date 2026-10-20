@@ -1,8 +1,9 @@
 import type { ReactNode } from "react";
 import type { ClaimKind } from "@argus/contracts";
-import { Icon, InfoTip, type IconName } from "../../ds";
+import { Icon, type IconName } from "../../ds";
 import { KIND_TERMS, TERMS, type TermId } from "../knowledgeGlossary";
 import type { ExceptionTone } from "../knowledgeModel";
+import { InfoTip } from "../../ds/InfoTip";
 
 const TONE: Record<ExceptionTone, string> = {
   fail: "border-fail/35 bg-fail/12 text-fail",

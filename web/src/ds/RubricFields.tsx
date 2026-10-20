@@ -120,7 +120,7 @@ export function RubricFields({
                   <IconButton
                     icon="close"
                     label={`Remove criterion ${i + 1}`}
-                    className="hover:text-fail"
+                    variant="quiet-danger"
                     onClick={() =>
                       onChange({ ...rubric, criteria: rubric.criteria.filter((_, j) => j !== i) })
                     }

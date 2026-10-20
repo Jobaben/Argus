@@ -1,5 +1,5 @@
-export { CommandPalette } from "./CommandPalette";
-export { ShortcutHelp } from "./ShortcutHelp";
+// CommandPalette and ShortcutHelp are imported from their own modules (App
+// loads them lazily); a re-export here would put them back in the first paint.
 export { usePalette, usePaletteState } from "./usePalette";
 export { useGlobalKeys } from "./useGlobalKeys";
 export { formatKeys, isTypingTarget, dispatchKey, CHORD_WINDOW_MS } from "./keys";

@@ -22,16 +22,6 @@ export const KIND_ORDER: ClaimKind[] = [
   "decision",
 ];
 
-/** Kind is shape, not colour: the status colours stay reserved for exceptions. */
-export const KIND_GLYPH: Record<ClaimKind, string> = {
-  "business-rule": "◆",
-  constraint: "■",
-  fact: "●",
-  assumption: "○",
-  conclusion: "▲",
-  decision: "★",
-};
-
 const MODULE_RE = /^\s*\[([^\]\n]{1,80})\]\s*/;
 
 /** Discovery prefixes a statement with the module it read: `[Commerce] …`. */

@@ -1,8 +1,9 @@
 import type { AtlasClaim, ClaimKind } from "@argus/contracts";
-import { Icon, InfoTip, staggerDelay } from "../../ds";
+import { Icon, staggerDelay } from "../../ds";
 import { KIND_TERMS } from "../knowledgeGlossary";
 import { kindCounts, plural, type ClaimGroup } from "../knowledgeModel";
 import { KindMark } from "./marks";
+import { InfoTip } from "../../ds/InfoTip";
 
 /**
  * The overview: one quiet card per shelf. A card only draws the eye (an

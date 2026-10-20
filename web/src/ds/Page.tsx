@@ -75,7 +75,9 @@ export function Page({
             )}
           </div>
           {actions != null && (
-            <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>
+            // `min-w-0`, not `shrink-0`: actions wrap within the header on a
+            // phone instead of forcing it wider than the screen.
+            <div className="flex min-w-0 flex-wrap items-center gap-2">{actions}</div>
           )}
         </header>
       )}

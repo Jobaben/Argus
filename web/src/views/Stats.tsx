@@ -6,7 +6,6 @@ import {
   ButtonLink,
   EmptyState,
   Handoff,
-  InfoTip,
   Page,
   Section,
   Skeleton,
@@ -14,6 +13,7 @@ import {
 } from "../ds";
 import { hasSessionData, hasTokenData } from "./statsGroups";
 import { VaultPanels } from "./VaultPanels";
+import { InfoTip } from "../ds/InfoTip";
 
 function compact(n: number): string {
   if (!Number.isFinite(n)) return "0";

@@ -6,7 +6,6 @@ import {
   HealthCounter,
   Icon,
   IconButton,
-  InfoTip,
   Page,
   Section,
   SkeletonGrid,
@@ -18,6 +17,7 @@ import {
 } from "../ds";
 import { useFleet } from "../useFleet";
 import type { FleetMachine, MachineSummary, PeerStatus } from "../types";
+import { InfoTip } from "../ds/InfoTip";
 
 /**
  * Constellation's page: N machines, one lens.
@@ -125,14 +125,12 @@ function MachineCard({ machine, onUnpair }: { machine: FleetMachine; onUnpair: (
               </span>
             )}
             {/* Destructive and immediate, but quiet until reached for: three red
-                outlines on a board read as three failures. Red on hover (marked
-                important, or the ghost variant's own hover ink wins), and named
-                for its machine, since every card has one. */}
+                outlines on a board read as three failures. Red only on hover, and
+                named for its machine, since every card has one. */}
             <Button
               size="sm"
-              variant="ghost"
+              variant="quiet-danger"
               icon="trash"
-              className="hover:text-fail!"
               title={`Unpair ${name}`}
               aria-label={`unpair ${name}`}
               onClick={onUnpair}

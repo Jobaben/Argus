@@ -56,11 +56,7 @@ export default function KnowledgeView() {
         )
       }
       actions={
-        // Capped at the phone's content width so the picker and the guide
-        // button wrap onto two lines instead of pushing the page sideways:
-        // `Page` keeps its actions from shrinking, so they cannot wrap on their
-        // own. From `sm` up they fit on one line and the cap is lifted.
-        <div className="flex max-w-[calc(100vw-2rem)] flex-wrap items-center gap-2 sm:max-w-none">
+        <div className="flex flex-wrap items-center gap-2">
           {data && <ScopePicker atlas={data} value={scope} onChange={setScope} />}
           <Button icon="info" onClick={openGuide}>
             How to read this page

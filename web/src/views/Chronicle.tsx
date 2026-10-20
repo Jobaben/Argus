@@ -14,7 +14,6 @@ import {
   Handoff,
   HealthCounter,
   Icon,
-  Legend,
   Page,
   SegmentedControl,
   SkeletonCounters,
@@ -22,8 +21,9 @@ import {
   TimeAgo,
   useSyncedDelay,
 } from "../ds";
-import type { IconName, LegendItem } from "../ds";
+import type { IconName } from "../ds";
 import { axisTicks, shortenLanePath, spanGeometry } from "../ds/chronicleLayout";
+import { Legend, type LegendItem } from "../ds/Legend";
 
 const WINDOWS = [
   { value: "1", label: "1h" },

@@ -11,7 +11,6 @@ import {
   formatUsd,
   Handoff,
   Icon,
-  InfoTip,
   Page,
   Section,
   SkeletonTile,
@@ -20,6 +19,7 @@ import {
   useClock,
 } from "../ds";
 import { LedgerPanels } from "./LedgerPanels";
+import { InfoTip } from "../ds/InfoTip";
 
 /** Where the budget's alerts fire, as a share of a limit. Drawn on each meter
  *  as a tick, so "approaching" has a place on the bar and not only a word. */
@@ -608,7 +608,7 @@ function PeerBudget({ facet }: { facet: ReturnType<typeof useMachineFacet> }) {
 
 export default function Budget() {
   const facet = useMachineFacet();
-  const { budget, loading, error, save } = useBudget();
+  const { budget, loading, error, refresh, save } = useBudget();
   // The shared clock, so the projection's "days elapsed" rolls over at midnight
   // without reading the wall clock during render.
   const now = useClock();
@@ -663,7 +663,15 @@ export default function Budget() {
 
       {error && (
         <div className="mb-6">
-          <AlertStrip subject="Budget" message={`Couldn't reach the Argus server: ${error}`} />
+          <AlertStrip
+            subject="Budget"
+            message={`Couldn't reach the Argus server: ${error}`}
+            action={
+              <Button size="sm" icon="retry" onClick={() => void refresh()}>
+                Retry
+              </Button>
+            }
+          />
         </div>
       )}
 

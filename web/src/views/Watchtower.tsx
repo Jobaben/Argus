@@ -12,7 +12,6 @@ import {
   HealthCounter,
   Icon,
   IconButton,
-  InfoTip,
   Section,
   SegmentedControl,
   SkeletonCounters,
@@ -23,6 +22,7 @@ import { useWatchtower } from "../useWatchtower";
 import { useVerdictTrends } from "../useVerdict";
 import { VerdictSparkline } from "./VerdictPanel";
 import type { Anomaly, AnomalyMetric, Baseline, MetricBaseline } from "../types";
+import { InfoTip } from "../ds/InfoTip";
 
 /**
  * Watchtower.

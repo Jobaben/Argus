@@ -1,5 +1,5 @@
 import { Drawer } from "../../ds/Drawer";
-import { Icon, Legend, type LegendItem } from "../../ds";
+import { Icon } from "../../ds";
 import {
   AXES,
   KIND_TERMS,
@@ -10,6 +10,7 @@ import {
 } from "../knowledgeGlossary";
 import { FLAGGED, KIND_ORDER } from "../knowledgeModel";
 import { ExceptionBadge, KindMark } from "./marks";
+import { Legend, type LegendItem } from "../../ds/Legend";
 
 function termItem(id: TermId): LegendItem {
   const t = TERMS[id];

@@ -11,13 +11,13 @@ import {
   Handoff,
   Icon,
   labelClass,
-  ModelSelect,
   prefersReducedMotion,
-  ReasoningEffortSelect,
-  RuntimeSelect,
   SkeletonRows,
 } from "../ds";
 import { LiveDot, RunRow } from "./RunRow";
+import { ModelSelect } from "../ds/ModelSelect";
+import { ReasoningEffortSelect } from "../ds/ReasoningEffortSelect";
+import { RuntimeSelect } from "../ds/RuntimeSelect";
 
 const EMPTY: LaunchInput = { name: "", prompt: "", cwd: "" };
 

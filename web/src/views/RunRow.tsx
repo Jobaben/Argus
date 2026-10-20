@@ -6,7 +6,6 @@ import {
   DURATION,
   Icon,
   Loading,
-  RuntimeBadge,
   SkeletonText,
   StatusPill,
   TimeAgo,
@@ -18,6 +17,7 @@ import {
   useSyncedDelay,
 } from "../ds";
 import { useRuntimes } from "../useRuntimes";
+import { RuntimeBadge } from "../ds/RuntimeBadge";
 
 /**
  * The "something is in flight" dot, breathing in phase with every other live

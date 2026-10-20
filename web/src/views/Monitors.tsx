@@ -7,7 +7,6 @@ import {
   formatDuration,
   Handoff,
   HealthCounter,
-  HeartbeatBar,
   Skeleton,
   SkeletonGrid,
   TimeAgo,
@@ -17,6 +16,7 @@ import {
 import type { ColorToken } from "../ds";
 import { useMonitors } from "../useMonitors";
 import type { MonitorHealth, MonitorStatus } from "../types";
+import { HeartbeatBar } from "../ds/HeartbeatBar";
 
 const PILL: Record<MonitorStatus, { label: string; token: ColorToken }> = {
   up: { label: "Up", token: "ok" },

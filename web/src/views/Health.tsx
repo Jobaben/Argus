@@ -1,7 +1,9 @@
-import { InfoTip, Page, Tabs } from "../ds";
+import { Page } from "../ds";
 import { useHashRoute } from "../useHashRoute";
 import { MonitorsPanel } from "./Monitors";
 import { WatchtowerPanel } from "./Watchtower";
+import { InfoTip } from "../ds/InfoTip";
+import { Tabs } from "../ds/Tabs";
 
 /**
  * Health: one page for the two read-only views of how schedules are doing.

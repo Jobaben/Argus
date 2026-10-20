@@ -73,15 +73,20 @@ import { applyLegacyRedirect, legacyRedirect } from "./legacyRoutes";
 const AdminAuthPanel = lazy(() =>
   import("./views/AdminAuthPanel").then((m) => ({ default: m.AdminAuthPanel })),
 );
-import {
-  CommandPalette,
-  NAV_CHORDS,
-  ShortcutHelp,
-  useGlobalKeys,
-  usePalette,
-  usePaletteState,
-  useShellBindings,
-} from "./cmd";
+import { NAV_CHORDS, useGlobalKeys, usePalette, usePaletteState, useShellBindings } from "./cmd";
+
+/**
+ * The palette and the shortcut sheet are their own chunk. Neither is visible
+ * until a key is pressed, so neither belongs in what the first paint has to
+ * download — but both are rendered from the start (closed), which fetches the
+ * chunk straight after that paint, so the first ⌘K still opens at once.
+ */
+const CommandPalette = lazy(() =>
+  import("./cmd/CommandPalette").then((m) => ({ default: m.CommandPalette })),
+);
+const ShortcutHelp = lazy(() =>
+  import("./cmd/ShortcutHelp").then((m) => ({ default: m.ShortcutHelp })),
+);
 
 function AgentsView({
   agents,
@@ -510,17 +515,24 @@ function Dashboard() {
         </div>
       </main>
       <ToastRegion toasts={toasts} onDismiss={dismiss} />
-      <CommandPalette
-        open={palette.open}
-        onClose={palette.hide}
-        commands={commands}
-        loading={paletteLoading}
-      />
-      <ShortcutHelp
-        open={shortcutsOpen}
-        onClose={() => setShortcutsOpen(false)}
-        bindings={bindings}
-      />
+      {/* Its own boundary: a chunk that fails to arrive (the server restarting
+          under a deploy) costs the palette, not the whole dashboard, and
+          opening it again is the retry. */}
+      <ErrorBoundary label="the command palette" resetKey={`${palette.open}:${shortcutsOpen}`}>
+        <Suspense fallback={null}>
+          <CommandPalette
+            open={palette.open}
+            onClose={palette.hide}
+            commands={commands}
+            loading={paletteLoading}
+          />
+          <ShortcutHelp
+            open={shortcutsOpen}
+            onClose={() => setShortcutsOpen(false)}
+            bindings={bindings}
+          />
+        </Suspense>
+      </ErrorBoundary>
     </div>
   );
 }

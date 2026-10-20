@@ -19,14 +19,14 @@ import {
   Icon,
   IconButton,
   labelClass,
-  ModelSelect,
-  ReasoningEffortSelect,
-  RuntimeSelect,
 } from "../ds";
 import { TriggerFields } from "../ds/TriggerFields";
 import { useRuntimes } from "../useRuntimes";
 import { graphColumns, graphEdges } from "./phaseGraphLayout";
 import { EdgeConditions, ResultEditor } from "./PipelineRoutes";
+import { ModelSelect } from "../ds/ModelSelect";
+import { ReasoningEffortSelect } from "../ds/ReasoningEffortSelect";
+import { RuntimeSelect } from "../ds/RuntimeSelect";
 
 /**
  * The pipeline editor as rail + focus panel.

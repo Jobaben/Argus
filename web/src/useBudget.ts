@@ -28,5 +28,5 @@ export function useBudget() {
     [refresh],
   );
 
-  return { budget: data, loading, error, save };
+  return { budget: data, loading, error, refresh, save };
 }
