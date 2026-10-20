@@ -6,7 +6,7 @@
  */
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -1414,4 +1414,176 @@ test("knowledgeScope: a patch can set it and clearing it makes the pipeline unsc
     new Date(),
   );
   assert.equal("knowledgeScope" in cleared, false);
+});
+
+// ── claudeConfigDir: the pipeline's own Claude config folder ─────────────────
+
+/** A config folder of the pipeline's own: a sibling of the test's Claude home,
+ *  so it neither is nor contains that home or Argus's work root. */
+const configFolder = () => mkdtempSync(path.join(tmpdir(), "argus-config-folder-"));
+
+test("claudeConfigDir: absent stays absent, and a folder round-trips resolved through create", async () => {
+  const m = await fresh();
+  assert.equal("claudeConfigDir" in m.validatePipelineInput(goodInput()), false);
+  const dir = configFolder();
+  const created = await m.createPipeline(
+    m.validatePipelineInput(goodInput({ claudeConfigDir: `${dir}${path.sep}` })),
+    new Date(),
+    "p-folder",
+  );
+  assert.equal(created.claudeConfigDir, dir, "stored resolved, without the trailing separator");
+  const [persisted] = await m.readPipelines();
+  assert.equal(persisted.claudeConfigDir, dir);
+});
+
+test("claudeConfigDir: a relative, missing, non-directory or unnameable path is refused", async () => {
+  const m = await fresh();
+  const dir = configFolder();
+  const file = path.join(dir, "settings.json");
+  writeFileSync(file, "{}");
+  const comma = path.join(dir, "a,b");
+  mkdirSync(comma);
+  const cases: Array<[unknown, RegExp]> = [
+    ["relative/folder", /claudeConfigDir must be an absolute path/],
+    ["", /claudeConfigDir must be an absolute path/],
+    [42, /claudeConfigDir must be an absolute path/],
+    [path.join(dir, "missing"), /claudeConfigDir does not exist/],
+    [file, /claudeConfigDir does not exist/],
+    [comma, /claudeConfigDir must be a path a permission rule can name/],
+  ];
+  for (const [value, message] of cases) {
+    assert.throws(
+      () => m.validatePipelineInput(goodInput({ claudeConfigDir: value })),
+      message,
+      String(value),
+    );
+  }
+});
+
+test("claudeConfigDir: the operator's Claude home, or a folder containing it or Argus's work root, is refused", async () => {
+  const m = await fresh();
+  assert.throws(
+    () => m.validatePipelineInput(goodInput({ claudeConfigDir: home })),
+    /claudeConfigDir is the operator's own Claude home/,
+  );
+  assert.throws(
+    () => m.validatePipelineInput(goodInput({ claudeConfigDir: path.dirname(home) })),
+    /claudeConfigDir contains the operator's Claude home/,
+  );
+  const dir = configFolder();
+  const before = process.env.ARGUS_WORK_DIR;
+  process.env.ARGUS_WORK_DIR = path.join(dir, "work");
+  try {
+    assert.throws(
+      () => m.validatePipelineInput(goodInput({ claudeConfigDir: dir })),
+      /claudeConfigDir contains Argus's work root/,
+    );
+  } finally {
+    if (before === undefined) delete process.env.ARGUS_WORK_DIR;
+    else process.env.ARGUS_WORK_DIR = before;
+  }
+});
+
+test("claudeConfigDir: an env.set.CLAUDE_CONFIG_DIR at any level is refused beside it", async () => {
+  const m = await fresh();
+  const dir = configFolder();
+  const set = { env: { set: { CLAUDE_CONFIG_DIR: dir } } };
+  const phase = (over: Record<string, unknown>) => [
+    {
+      id: "brainstorm",
+      name: "Brainstorm",
+      cwd: home,
+      gated: false,
+      steps: [{ name: "bs", prompt: "go" }],
+      ...over,
+    },
+  ];
+  const variants: Array<[Record<string, unknown>, RegExp]> = [
+    [{ capabilities: set }, /pipeline: capabilities\.env\.set\.CLAUDE_CONFIG_DIR conflicts/],
+    [{ phases: phase({ capabilities: set }) }, /phase "brainstorm": capabilities\.env\.set/],
+    [
+      { phases: phase({ steps: [{ name: "bs", prompt: "go", capabilities: set }] }) },
+      /phase "brainstorm": step "bs": capabilities\.env\.set/,
+    ],
+  ];
+  for (const [over, message] of variants) {
+    assert.throws(
+      () => m.validatePipelineInput(goodInput({ ...over, claudeConfigDir: dir })),
+      message,
+    );
+  }
+  // Without the field, the env.set route still saves: the pipeline already on
+  // it keeps working until it moves to claudeConfigDir.
+  const legacy = m.validatePipelineInput(goodInput({ capabilities: set }));
+  assert.equal(legacy.capabilities.env.set.CLAUDE_CONFIG_DIR, dir);
+});
+
+test("claudeConfigDir: a phase cwd or additional directory inside the folder is refused", async () => {
+  const m = await fresh();
+  const dir = configFolder();
+  const inside = path.join(dir, "repo");
+  mkdirSync(inside);
+  assert.throws(
+    () =>
+      m.validatePipelineInput(
+        goodInput({
+          claudeConfigDir: dir,
+          phases: [
+            { id: "p", name: "P", cwd: inside, gated: false, steps: [{ name: "s", prompt: "x" }] },
+          ],
+        }),
+      ),
+    /phase "p": cwd .* is inside claudeConfigDir/,
+  );
+  assert.throws(
+    () =>
+      m.validatePipelineInput(
+        goodInput({ claudeConfigDir: dir, capabilities: { additionalDirectories: [inside] } }),
+      ),
+    /pipeline: additionalDirectories entry .* is inside claudeConfigDir/,
+  );
+});
+
+test("claudeConfigDir: a patch sets it, null clears it, and a merge that conflicts is refused", async () => {
+  const m = await fresh();
+  const dir = configFolder();
+  await m.createPipeline(m.validatePipelineInput(goodInput()), new Date(), "p-patch");
+
+  const set = await m.updatePipeline(
+    "p-patch",
+    m.validatePipelinePatch({ claudeConfigDir: dir }),
+    new Date(),
+  );
+  assert.equal(set.claudeConfigDir, dir);
+
+  // The patch alone is fine — it only carries phases — but the definition it
+  // would produce names the folder twice.
+  await assert.rejects(
+    m.updatePipeline(
+      "p-patch",
+      m.validatePipelinePatch({
+        phases: [
+          {
+            id: "brainstorm",
+            name: "Brainstorm",
+            cwd: home,
+            gated: false,
+            capabilities: { env: { set: { CLAUDE_CONFIG_DIR: dir } } },
+            steps: [{ name: "bs", prompt: "go" }],
+          },
+        ],
+      }),
+      new Date(),
+    ),
+    /capabilities\.env\.set\.CLAUDE_CONFIG_DIR conflicts with claudeConfigDir/,
+  );
+  const [unchanged] = await m.readPipelines();
+  assert.equal(unchanged.phases[0].capabilities, undefined, "the refused merge was not written");
+
+  const cleared = await m.updatePipeline(
+    "p-patch",
+    m.validatePipelinePatch({ claudeConfigDir: null }),
+    new Date(),
+  );
+  assert.equal("claudeConfigDir" in cleared, false);
 });

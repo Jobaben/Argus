@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { claudeRuntime, toClaudeRulePath } from "./claude.js";
-import type { CapabilityRequest, InvocationChannel } from "./types.js";
+import type { CapabilityRequest, ClaudeConfigRequest, InvocationChannel } from "./types.js";
 import type { CapabilityProfile } from "@argus/contracts";
 
 const RESET = { ...process.env };
@@ -558,4 +558,130 @@ test("a write channel no rule can name stays granted and is reported", () => {
   assert.deepEqual(plan.limitations, [
     "Claude Code cannot allow edits to the artifact directory (ARGUS_ARTIFACT_DIR) by rule: its path contains a comma or newline, or is a UNC share",
   ]);
+});
+
+// ── The pipeline's own config folder (claudeConfigDir) ─────────────────────
+
+const HOOKS = { stop: "argus-signal.mjs stop", gate: "argus-signal.mjs gate" };
+
+function folder(dir: string, invocationDir = "/inv"): ClaudeConfigRequest {
+  return {
+    dir,
+    invocationDir,
+    hooks: HOOKS,
+    excludeClaudeMd: ["/home/op/.claude/CLAUDE.md"],
+  };
+}
+
+test("a config folder alone points the CLI at it, protects it and registers Argus's hooks", () => {
+  withEnv({ ARGUS_CLAUDE_ARGS: undefined }, () => {
+    const plan = claudeRuntime.streamPlan({
+      prompt: "p",
+      sessionId: SESSION_ID,
+      claudeConfig: folder("/home/op/.claude-pipelines/loop"),
+    });
+    assert.equal(plan.env.CLAUDE_CONFIG_DIR, "/home/op/.claude-pipelines/loop");
+    assert.equal(
+      plan.env.CLAUDE_CODE_FORWARD_SUBAGENT_TEXT,
+      "1",
+      "the stream plan's own env stays",
+    );
+    assert.deepEqual(
+      deniedOf(plan.args),
+      [
+        "Read(//home/op/.claude-pipelines/loop/settings.json)",
+        "Read(//home/op/.claude-pipelines/loop/.credentials.json)",
+        "Edit(//home/op/.claude-pipelines/loop/**)",
+      ],
+      "the sign-in files are unreadable and the folder is not editable",
+    );
+    const si = plan.args.indexOf("--settings");
+    assert.equal(plan.args[si + 1], "/inv/settings.json", "the per-run settings are passed");
+    assert.equal(plan.files?.length, 1);
+    assert.deepEqual(JSON.parse(plan.files![0].contents), {
+      hooks: {
+        Stop: [{ matcher: "", hooks: [{ type: "command", command: HOOKS.stop }] }],
+        PreToolUse: [
+          { matcher: "AskUserQuestion", hooks: [{ type: "command", command: HOOKS.gate }] },
+        ],
+      },
+      claudeMdExcludes: ["/home/op/.claude/CLAUDE.md"],
+    });
+    assert.deepEqual(plan.limitations, [], "a nameable folder has nothing to report");
+    assert.equal("channels" in plan, false, "no profile, so no channel verdicts are claimed");
+    assert.equal(plan.args.includes("--add-dir"), false, "nothing else about the run is shaped");
+  });
+});
+
+test("a config folder with a profile adds its rules to the profile's own and its exclusion to the hooks file", () => {
+  const capabilities = request(
+    { filesystem: "read-only", tools: { deny: ["WebFetch"] } },
+    { hooks: HOOKS, channels: [artifactChannel("/artifacts/run-1")] },
+  );
+  const without = claudeRuntime.streamPlan({ prompt: "p", sessionId: SESSION_ID, capabilities });
+  const withFolder = claudeRuntime.streamPlan({
+    prompt: "p",
+    sessionId: SESSION_ID,
+    capabilities,
+    claudeConfig: folder("/home/op/.claude-pipelines/loop"),
+  });
+  assert.deepEqual(
+    deniedOf(withFolder.args),
+    [
+      ...deniedOf(without.args),
+      "Read(//home/op/.claude-pipelines/loop/settings.json)",
+      "Read(//home/op/.claude-pipelines/loop/.credentials.json)",
+      "Edit(//home/op/.claude-pipelines/loop/**)",
+    ],
+    "one --disallowedTools flag, the folder's rules last",
+  );
+  assert.equal(withFolder.args.filter((a) => a === "--disallowedTools").length, 1);
+  assert.deepEqual(allowedOf(withFolder.args), allowedOf(without.args));
+  assert.deepEqual(withFolder.channels, without.channels, "channels are untouched");
+  const settings = JSON.parse(
+    withFolder.files!.find((f) => f.path === "/inv/settings.json")!.contents,
+  );
+  assert.deepEqual(settings.hooks, JSON.parse(without.files![0].contents).hooks);
+  assert.deepEqual(settings.claudeMdExcludes, ["/home/op/.claude/CLAUDE.md"]);
+  assert.equal(withFolder.env.CLAUDE_CONFIG_DIR, "/home/op/.claude-pipelines/loop");
+  assert.equal(without.env.CLAUDE_CONFIG_DIR, undefined, "no folder, no override");
+});
+
+test("a Windows config folder is protected with the drive-letter rule path", () => {
+  const plan = claudeRuntime.streamPlan({
+    prompt: "p",
+    sessionId: SESSION_ID,
+    claudeConfig: folder("C:\\Users\\op\\.claude-pipelines\\loop", "C:\\inv"),
+  });
+  assert.deepEqual(deniedOf(plan.args), [
+    "Read(//c/Users/op/.claude-pipelines/loop/settings.json)",
+    "Read(//c/Users/op/.claude-pipelines/loop/.credentials.json)",
+    "Edit(//c/Users/op/.claude-pipelines/loop/**)",
+  ]);
+  assert.equal(plan.env.CLAUDE_CONFIG_DIR, "C:\\Users\\op\\.claude-pipelines\\loop");
+});
+
+test("a config folder no rule can name is still applied, and reported as unprotected", () => {
+  const plan = claudeRuntime.streamPlan({
+    prompt: "p",
+    sessionId: SESSION_ID,
+    claudeConfig: folder("/odd,dir/folder"),
+  });
+  assert.equal(plan.env.CLAUDE_CONFIG_DIR, "/odd,dir/folder");
+  assert.equal(plan.args.includes("--disallowedTools"), false, "no rule that would split");
+  assert.deepEqual(plan.limitations, [
+    "Claude Code cannot protect the config folder by rule: its path contains a comma or newline, or is a UNC share: /odd,dir/folder",
+  ]);
+  assert.ok(plan.args.includes("--settings"), "the hooks are registered all the same");
+});
+
+test("the batch form maps a config folder the same way", () => {
+  const plan = claudeRuntime.batchPlan({
+    prompt: "p",
+    sessionId: SESSION_ID,
+    claudeConfig: folder("/home/op/.claude-pipelines/loop"),
+  });
+  assert.deepEqual(plan.env, { CLAUDE_CONFIG_DIR: "/home/op/.claude-pipelines/loop" });
+  assert.equal(deniedOf(plan.args).length, 3);
+  assert.ok(plan.args.includes("--settings"));
 });

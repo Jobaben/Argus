@@ -613,9 +613,10 @@ under <root>, which contains the result file (ARGUS_RESULT_FILE)"`).
   named).
 - `permissionMode` → `--permission-mode <mode>`.
 - `maxTurns` → `--max-turns <n>`.
-- Argus's own Stop/PreToolUse hooks (only ever registered when the phase
-  declares a capability profile at all) are written to
-  `<invocationDir>/settings.json` and passed as `--settings <path>`:
+- Argus's own Stop/PreToolUse hooks (registered when the phase declares a
+  capability profile at all, or the pipeline names its own Claude config
+  folder — §3b) are written to `<invocationDir>/settings.json` and passed as
+  `--settings <path>`:
 
   ```json
   {
@@ -837,22 +838,130 @@ refused for a different reason — the profile itself cannot be enforced — whi
 the channels would have been reachable; under `best-effort` such a run
 launches unrestricted and its channels are granted.
 
+### 3b. A Claude setup folder per pipeline (`claudeConfigDir`)
+
+Every Claude Code step runs `claude -p` on the operator's machine, signed in as
+the operator, and by default the CLI loads the operator's whole personal setup
+from `~/.claude`: `CLAUDE.md`, the settings (hooks, permission grants,
+`defaultMode`), skills, agents and commands, user-scope MCP servers and
+auto-memory. A pipeline's agents then follow rules written for interactive
+work, and neither can be set up without touching the other.
+
+`claudeConfigDir` on the **pipeline** names a folder its Claude steps load
+instead, through `CLAUDE_CONFIG_DIR`. For the CLI that folder replaces
+`~/.claude` completely, so nothing has to be subtracted:
+
+| In the folder                     | Role                                                                                           |
+| --------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `CLAUDE.md`                       | The pipeline's own instructions, loaded as the "global" CLAUDE.md by every agent and subagent. |
+| `settings.json`                   | Sign-in token, attribution, auto-memory, permissions and hooks for this pipeline only.         |
+| `skills/`, `agents/`, `commands/` | The pipeline's own, where it needs any.                                                        |
+| `projects/`                       | Written by the CLI: the session logs of every run, subagents' included.                        |
+
+The repository's own `CLAUDE.md` files, their `@` imports and its `.claude/`
+content still load on top, exactly as for anyone who opens the repository.
+
+**Signing the folder in.** A new folder starts signed out. `claude setup-token`
+creates a long-lived token for the operator's subscription account, and the
+folder's own `settings.json` sets it:
+
+```json
+{
+  "env": { "CLAUDE_CODE_OAUTH_TOKEN": "<token>" },
+  "attribution": { "commit": "", "pr": "" },
+  "autoMemoryEnabled": false
+}
+```
+
+Never as a user-wide environment variable: `CLAUDE_CODE_OAUTH_TOKEN` overrides
+the stored login everywhere, the operator's interactive sessions included. Nor
+in Argus's own environment, where every agent that inherits it would switch to
+it. (`--bare` loads nothing implicitly, but signs in with an API key only, so
+it is no option for a subscription account.)
+
+**What Argus does with it**, for every Claude Code step of the pipeline, with or
+without a capability profile:
+
+- The child environment gets `CLAUDE_CONFIG_DIR=<folder>`. The field belongs to
+  the pipeline, not to a profile, so a phase that declares its own `env` can no
+  longer drop it the way it drops a pipeline's `env.set` (profiles merge by
+  top-level key, §3).
+- `--disallowedTools` gets `Read(//<folder>/settings.json)`,
+  `Read(//<folder>/.credentials.json)` and `Edit(//<folder>/**)`, spelled as in
+  _Rule paths_ above and joined into the same single flag as the profile's own
+  rules. An agent can neither read the sign-in nor rewrite the setup every
+  later run loads. The CLI's own writes there (session logs, its state) are not
+  tool calls and are unaffected. As under `read-only`, a shell the profile
+  leaves open could still print the file: deny `Bash` or scope it.
+- The per-run `<invocationDir>/settings.json` (`--settings`) carries Argus's
+  Stop/PreToolUse hooks even when the phase declares no profile, because the
+  copy Setup installs lives in the operator's home, which the folder replaces:
+  without its own registration the run would never signal. It also carries
+  `claudeMdExcludes` naming the operator's `~/.claude/CLAUDE.md`. CLAUDE.md
+  discovery walks every parent directory of the working directory and reads
+  `<parent>/.claude/CLAUDE.md` too, past the git root, and Argus's worktrees
+  live under `~/.claude-argus/worktrees/`, inside the home folder, so without
+  the exclusion every step would still load the operator's file as a "project"
+  one. Claude Code merges array settings across layers, so the exclusion adds
+  to whatever the folder's own `settings.json` excludes.
+- The run record (`Run.claudeConfigDir`) and the invocation record
+  (`AgentInvocationRecord.claudeConfigDir`) name the folder.
+
+A step on another runtime keeps its own home. Its invocation record says
+`"Codex does not load a Claude config folder: claudeConfigDir does not apply to
+this step"` (or the OpenCode or Qwen Code equivalent), and that is never a
+reason to refuse the launch.
+
+**Validation**, at save time: an absolute path to an existing directory that a
+permission rule can name (no comma or newline, not a UNC share), stored
+resolved. It is refused when it is or contains the operator's Claude home,
+when it contains Argus's work root (the `Edit` deny would cover every worktree
+and channel), when a phase's `cwd` or an `additionalDirectories` entry sits
+inside it, and when any level of the definition also sets
+`capabilities.env.set.CLAUDE_CONFIG_DIR` (`env.set` lands last in the child
+environment, so the two would silently disagree). Changing it while an
+instance runs is an execution edit: `409` without `?force=1`. A patch with
+`claudeConfigDir: null` puts the pipeline back on the operator's setup.
+
+**Transcripts.** The CLI files a folder run's session log under
+`<folder>/projects/<project>/`. Argus finds it through the folder the run
+recorded, never through the current definition, so an edited or deleted
+pipeline keeps its history for as long as its runs are kept: the session list
+and view, the live tail, the Flight Recorder, search and the projects list
+scan the operator's own `projects/` and each recorded folder's
+(`sources/transcriptRoots.ts`), and the session watcher widens to a new folder
+within 15 s of its first run. Once a run is pruned, its transcript stays in
+the folder but no longer shows in Argus.
+
+**Scope.** Pipelines only. Schedules, Launch-tab runs and analysis passes keep
+the operator's own setup.
+
+**What has been probed** (Claude Code 2.1.304 on Windows 11, set up by hand
+through `env.set`): the CLI signs in with the folder's token; the folder's
+`CLAUDE.md`, the repository's and its `@` imports reach a subagent; the
+folder's own `claudeMdExcludes` keeps the parent-walk file out; the `Read` deny
+holds; session logs land in `<folder>/projects/`. Not probed yet: the
+exclusion arriving through the per-run `--settings` layer instead, and a full
+pipeline instance on the field.
+
 ### Configuration precedence
 
 Three layers govern what an invocation can actually do, and this feature
 narrows only the third:
 
-| Layer                                                                                                | Owns                                                                                                                                | After this change                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **GLOBAL USER CONFIG** (`~/.claude/settings.json`, `~/.claude.json`, `~/.codex/config.toml`, …)      | The operator's own hooks, permission grants, and **user-scope MCP servers** (`~/.claude.json`, added via `claude mcp add -s user`). | Still loaded by default. `settingSources` can drop `~/.claude/settings.json` from the invocation (naming only `project`/`local`) — but `~/.claude.json`'s user-scope MCP servers are a **separate file `settingSources` does not touch**; the _only_ way to exclude them is `mcpServers` under `strict-mcp-config`, which replaces the whole MCP server set for that invocation. Declaring no `mcpServers` at all leaves them reachable. |
-| **REPOSITORY CONFIG** (`.claude/settings.json`, `.claude/settings.local.json`, `.mcp.json` in `cwd`) | Project-level hooks, permissions and MCP servers.                                                                                   | Loaded whenever `settingSources` includes `"project"`/`"local"` (the default). A declared `mcpServers` still overrides these via `--strict-mcp-config`.                                                                                                                                                                                                                                                                                  |
-| **ARGUS INVOCATION CONFIG** (`~/.claude/argus/invocations/<runId>/{settings,mcp}.json`)              | This one invocation's Stop/PreToolUse hooks, and (when declared) its exact MCP server set.                                          | New. Written fresh per invocation, never reused across attempts.                                                                                                                                                                                                                                                                                                                                                                         |
+| Layer                                                                                                | Owns                                                                                                                                | After this change                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **GLOBAL USER CONFIG** (`~/.claude/settings.json`, `~/.claude.json`, `~/.codex/config.toml`, …)      | The operator's own hooks, permission grants, and **user-scope MCP servers** (`~/.claude.json`, added via `claude mcp add -s user`). | Still loaded by default. `settingSources` can drop `~/.claude/settings.json` from the invocation (naming only `project`/`local`) — but `~/.claude.json`'s user-scope MCP servers are a **separate file `settingSources` does not touch**; the _only_ way to exclude them is `mcpServers` under `strict-mcp-config`, which replaces the whole MCP server set for that invocation. Declaring no `mcpServers` at all leaves them reachable. A pipeline's own `claudeConfigDir` replaces this whole layer for its Claude steps (§3b). |
+| **REPOSITORY CONFIG** (`.claude/settings.json`, `.claude/settings.local.json`, `.mcp.json` in `cwd`) | Project-level hooks, permissions and MCP servers.                                                                                   | Loaded whenever `settingSources` includes `"project"`/`"local"` (the default). A declared `mcpServers` still overrides these via `--strict-mcp-config`.                                                                                                                                                                                                                                                                                                                                                                           |
+| **ARGUS INVOCATION CONFIG** (`~/.claude/argus/invocations/<runId>/{settings,mcp}.json`)              | This one invocation's Stop/PreToolUse hooks, and (when declared) its exact MCP server set.                                          | New. Written fresh per invocation, never reused across attempts.                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 Credentials are never Argus's concern at any layer: the CLI authenticates
 itself exactly as it does outside Argus (its own login, its own
 `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` if the environment policy passes it
 through). Argus holds no API keys of its own and never materializes one into
-a config file.
+a config file. A pipeline's own config folder (§3b) signs in with the token its
+own `settings.json` carries, which the operator put there; Argus never reads
+or writes that file, and denies its agents `Read` on it.
 
 ## 4. Environment policy
 
@@ -1254,7 +1363,9 @@ could not reach (§3a); empty means every declared key was honoured and every
 channel is reachable (or no profile was declared at all). `channels` lists
 each channel the invocation was offered — its env var, path, access, whether
 the launch depended on it, and `granted` / `unavailable` (with the reason) /
-`unmanaged` (no profile: the CLI's defaults decided). `knowledgeContextFile`
+`unmanaged` (no profile: the CLI's defaults decided). `claudeConfigDir` names
+the pipeline's own Claude config folder the CLI loaded (§3b), absent when the
+step ran on the operator's setup or on another runtime. `knowledgeContextFile`
 and `knowledgeContext` (Phase 4) say exactly which claim revisions Argus
 supplied to the run and the SHA-256 of the file as written — `null` when the
 step declared no `knowledgeContext`, absent on older records. They are the

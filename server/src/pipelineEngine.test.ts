@@ -169,6 +169,53 @@ test("step env names the runtime the hook is running under", async () => {
   assert.equal(rec.calls[0].env.ARGUS_RUNTIME, "claude");
 });
 
+test("a Claude step of a pipeline with a config folder runs on it, and its run records it", async () => {
+  const { engine, pipelines } = await load();
+  const folder = mkdtempSync(path.join(tmpdir(), "argus-engine-folder-"));
+  await seedPipeline(pipelines, { claudeConfigDir: folder });
+  const launched: { runId: string; childEnv: Record<string, string> }[] = [];
+  const spawn = (
+    run: { id: string },
+    _log: string,
+    _env: Record<string, string>,
+    prepared: { env: Record<string, string> },
+  ) => {
+    launched.push({ runId: run.id, childEnv: prepared.env });
+    return { pid: 4242, done: deferred().promise };
+  };
+  const e = engine.createEngine(baseDeps({ spawn }));
+  await e.start("p1", "manual");
+  assert.equal(launched.length, 1);
+  assert.equal(launched[0].childEnv.CLAUDE_CONFIG_DIR, folder, "the child CLI loads the folder");
+  const stored = await runsMod.readRun(launched[0].runId);
+  assert.equal(stored?.run.claudeConfigDir, folder, "the run keeps it for its transcript");
+  const invocation = await runsMod.readInvocation(launched[0].runId);
+  assert.equal(invocation?.claudeConfigDir, folder, "and so does the invocation record");
+});
+
+test("a Codex step of a pipeline with a config folder runs on its own home, and its run records none", async () => {
+  const { engine, pipelines } = await load();
+  const folder = mkdtempSync(path.join(tmpdir(), "argus-engine-folder-"));
+  await seedPipeline(pipelines, { claudeConfigDir: folder, runtime: "codex" });
+  const launched: { runId: string; childEnv: Record<string, string> }[] = [];
+  const spawn = (
+    run: { id: string },
+    _log: string,
+    _env: Record<string, string>,
+    prepared: { env: Record<string, string> },
+  ) => {
+    launched.push({ runId: run.id, childEnv: prepared.env });
+    return { pid: 4243, done: deferred().promise };
+  };
+  const e = engine.createEngine(baseDeps({ spawn }));
+  await e.start("p1", "manual");
+  assert.equal(launched.length, 1);
+  assert.notEqual(launched[0].childEnv.CLAUDE_CONFIG_DIR, folder);
+  const stored = await runsMod.readRun(launched[0].runId);
+  assert.equal(stored?.run.runtime, "codex");
+  assert.equal("claudeConfigDir" in (stored?.run ?? {}), false);
+});
+
 test("the Claude step plan opts the CLI into forwarding subagent text", async () => {
   const engine = await import("./pipelineEngine.js");
   const plan = engine.buildStepPlan({

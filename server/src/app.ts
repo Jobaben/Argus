@@ -1235,6 +1235,7 @@ export function createApp(deps: AppDeps): Hono {
     "reasoningEffort",
     "runtime",
     "capabilities",
+    "claudeConfigDir",
     "workspace",
     "memory",
     // Phase-level execution fields — `checks`, `retry`, `workspace`,

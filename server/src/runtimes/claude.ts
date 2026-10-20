@@ -27,6 +27,7 @@ import type {
   AnalysisPlanOptions,
   CapabilityRequest,
   ChannelOutcome,
+  ClaudeConfigRequest,
   InvocationChannel,
   MaterializedFile,
   RunEnvelope,
@@ -64,6 +65,8 @@ interface ClaudeCapabilityResult {
   files: MaterializedFile[];
   limitations: string[];
   channels: ChannelOutcome[];
+  /** What the child environment needs on top: the config folder, when one is set. */
+  env: Record<string, string>;
 }
 
 /**
@@ -168,12 +171,101 @@ function claudeChannels(
 }
 
 /**
- * Maps a {@link CapabilityRequest} onto Claude Code's own flags and config
- * files. Shared by `batchPlan` and `streamPlan` so the two forms can never
- * drift on what a profile means.
+ * The rules that keep a pipeline's config folder out of its agents' hands: no
+ * `Read` of the two files a sign-in can live in — the folder's `settings.json`
+ * (the `CLAUDE_CODE_OAUTH_TOKEN` it sets) and the CLI's own
+ * `.credentials.json` — and no edits under the folder, which would let one run
+ * rewrite the instructions, permissions and hooks every later run loads. The
+ * CLI's own writes there (session logs, its state) are not tool calls, so the
+ * rules leave them alone. A path no rule can name is a limitation: the folder
+ * would load unprotected.
  */
-function buildClaudeCapabilities(cap: CapabilityRequest | undefined): ClaudeCapabilityResult {
-  if (!cap) return { args: [], files: [], limitations: [], channels: [] };
+function configFolderRules(dir: string, limitations: string[]): string[] {
+  const rulePath = toClaudeRulePath(dir);
+  if (rulePath === null) {
+    limitations.push(
+      `Claude Code cannot protect the config folder by rule: its path ${UNNAMEABLE}: ${dir}`,
+    );
+    return [];
+  }
+  return [
+    `Read(/${rulePath}/settings.json)`,
+    `Read(/${rulePath}/.credentials.json)`,
+    `Edit(/${rulePath}/**)`,
+  ];
+}
+
+/**
+ * This invocation's own settings file: Argus's Stop/PreToolUse hooks and,
+ * under a config folder, the `claudeMdExcludes` that keep the operator's
+ * `CLAUDE.md` out. Claude Code merges array settings across layers, so the
+ * exclusion adds to whatever the folder's own `settings.json` excludes.
+ */
+function claudeSettingsFile(
+  invocationDir: string,
+  hooks: { stop: string; gate: string } | undefined,
+  excludeClaudeMd: string[],
+): MaterializedFile | null {
+  if (!hooks && excludeClaudeMd.length === 0) return null;
+  const settings = {
+    ...(hooks
+      ? {
+          hooks: {
+            Stop: [{ matcher: "", hooks: [{ type: "command", command: hooks.stop }] }],
+            PreToolUse: [
+              {
+                matcher: "AskUserQuestion",
+                hooks: [{ type: "command", command: hooks.gate }],
+              },
+            ],
+          },
+        }
+      : {}),
+    ...(excludeClaudeMd.length > 0 ? { claudeMdExcludes: excludeClaudeMd } : {}),
+  };
+  return {
+    path: `${invocationDir}/settings.json`,
+    contents: `${JSON.stringify(settings, null, 2)}\n`,
+  };
+}
+
+/**
+ * A config folder without a capability profile. Nothing else about the
+ * invocation is shaped — no channels, no tool rules beyond the folder's own —
+ * but Argus's hooks are registered here, because the copy Setup installs is in
+ * the operator's home, which the folder replaces: without them the run would
+ * never signal.
+ */
+function buildClaudeConfigOnly(config: ClaudeConfigRequest): ClaudeCapabilityResult {
+  const limitations: string[] = [];
+  const deny = configFolderRules(config.dir, limitations);
+  const settings = claudeSettingsFile(config.invocationDir, config.hooks, config.excludeClaudeMd);
+  return {
+    args: [
+      ...(deny.length ? ["--disallowedTools", deny.join(",")] : []),
+      ...(settings ? ["--settings", settings.path] : []),
+    ],
+    files: settings ? [settings] : [],
+    limitations,
+    channels: [],
+    env: { CLAUDE_CONFIG_DIR: config.dir },
+  };
+}
+
+/**
+ * Maps a {@link CapabilityRequest} and the pipeline's config folder onto
+ * Claude Code's own flags and config files. Shared by `batchPlan` and
+ * `streamPlan` so the two forms can never drift on what a profile means.
+ */
+function buildClaudeCapabilities(
+  cap: CapabilityRequest | undefined,
+  config?: ClaudeConfigRequest,
+): ClaudeCapabilityResult {
+  if (!cap) {
+    return config
+      ? buildClaudeConfigOnly(config)
+      : { args: [], files: [], limitations: [], channels: [], env: {} };
+  }
   const { profile, invocationDir, cwd, channels, hooks } = cap;
   const args: string[] = [];
   const files: MaterializedFile[] = [];
@@ -239,10 +331,12 @@ function buildClaudeCapabilities(cap: CapabilityRequest | undefined): ClaudeCapa
   // filesystem: the protocol between the agent and Argus is not the agent's
   // to be restricted from.
   const channelOutcomes = claudeChannels(channels, deniedRoots, args, allow, deny, limitations);
+  if (config) deny.push(...configFolderRules(config.dir, limitations));
 
   // The tool rules go on argv after the channels have had their say: a read
   // channel adds its own Edit deny, a write channel its Edit allow, and the
-  // rules travel in one flag each.
+  // rules travel in one flag each — the config folder's denies included,
+  // since how a repeated flag combines is not something to rely on.
   if (allow.length) args.push("--allowedTools", allow.join(","));
   if (deny.length) args.push("--disallowedTools", deny.join(","));
 
@@ -252,30 +346,23 @@ function buildClaudeCapabilities(cap: CapabilityRequest | undefined): ClaudeCapa
   if (profile.permissionMode) args.push("--permission-mode", profile.permissionMode);
   if (profile.maxTurns !== undefined) args.push("--max-turns", String(profile.maxTurns));
 
-  if (hooks) {
-    const settingsPath = `${invocationDir}/settings.json`;
-    files.push({
-      path: settingsPath,
-      contents: `${JSON.stringify(
-        {
-          hooks: {
-            Stop: [{ matcher: "", hooks: [{ type: "command", command: hooks.stop }] }],
-            PreToolUse: [
-              {
-                matcher: "AskUserQuestion",
-                hooks: [{ type: "command", command: hooks.gate }],
-              },
-            ],
-          },
-        },
-        null,
-        2,
-      )}\n`,
-    });
-    args.push("--settings", settingsPath);
+  const settings = claudeSettingsFile(
+    invocationDir,
+    hooks ?? config?.hooks,
+    config?.excludeClaudeMd ?? [],
+  );
+  if (settings) {
+    files.push(settings);
+    args.push("--settings", settings.path);
   }
 
-  return { args, files, limitations, channels: channelOutcomes };
+  return {
+    args,
+    files,
+    limitations,
+    channels: channelOutcomes,
+    env: config ? { CLAUDE_CONFIG_DIR: config.dir } : {},
+  };
 }
 
 /**
@@ -458,6 +545,22 @@ function modelArgs(model: string | null | undefined): string[] {
   return model && model.trim() ? ["--model", model.trim()] : [];
 }
 
+/** The plan's files and limitations whenever anything was requested, and its
+ *  channel verdicts exactly when capabilities were: a config folder alone
+ *  offers no channels to answer for. Nothing at all for a legacy plan. */
+function planExtras(
+  capabilities: CapabilityRequest | undefined,
+  claudeConfig: ClaudeConfigRequest | undefined,
+  cap: ClaudeCapabilityResult,
+): Pick<SpawnPlan, "files" | "limitations" | "channels"> {
+  if (!capabilities && !claudeConfig) return {};
+  return {
+    files: cap.files,
+    limitations: cap.limitations,
+    ...(capabilities ? { channels: cap.channels } : {}),
+  };
+}
+
 export const claudeRuntime: AgentRuntime = {
   id: "claude",
   label: "Claude Code",
@@ -486,8 +589,8 @@ export const claudeRuntime: AgentRuntime = {
    * linked) and `--output-format json`, which prints one result envelope we can
    * mine for the result text, cost and tokens.
    */
-  batchPlan({ prompt, sessionId, model, capabilities }: RunPlanOptions): SpawnPlan {
-    const cap = buildClaudeCapabilities(capabilities);
+  batchPlan({ prompt, sessionId, model, capabilities, claudeConfig }: RunPlanOptions): SpawnPlan {
+    const cap = buildClaudeCapabilities(capabilities, claudeConfig);
     return {
       bin: bin(),
       args: [
@@ -501,10 +604,8 @@ export const claudeRuntime: AgentRuntime = {
         ...extraArgs(process.env.ARGUS_CLAUDE_ARGS),
       ],
       stdin: prompt,
-      env: {},
-      ...(capabilities
-        ? { files: cap.files, limitations: cap.limitations, channels: cap.channels }
-        : {}),
+      env: { ...cap.env },
+      ...planExtras(capabilities, claudeConfig, cap),
     };
   },
 
@@ -513,8 +614,15 @@ export const claudeRuntime: AgentRuntime = {
    * NDJSON transcript the run tailer can follow; the CLI requires `--verbose`
    * alongside it in `-p` mode.
    */
-  streamPlan({ prompt, sessionId, model, systemPrompt, capabilities }: RunPlanOptions): SpawnPlan {
-    const cap = buildClaudeCapabilities(capabilities);
+  streamPlan({
+    prompt,
+    sessionId,
+    model,
+    systemPrompt,
+    capabilities,
+    claudeConfig,
+  }: RunPlanOptions): SpawnPlan {
+    const cap = buildClaudeCapabilities(capabilities, claudeConfig);
     return {
       bin: bin(),
       args: [
@@ -536,10 +644,9 @@ export const claudeRuntime: AgentRuntime = {
         // instead of the equivalent --forward-subagent-text flag: older CLIs
         // ignore the var but would reject the unknown flag.
         CLAUDE_CODE_FORWARD_SUBAGENT_TEXT: "1",
+        ...cap.env,
       },
-      ...(capabilities
-        ? { files: cap.files, limitations: cap.limitations, channels: cap.channels }
-        : {}),
+      ...planExtras(capabilities, claudeConfig, cap),
     };
   },
 

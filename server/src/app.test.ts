@@ -1763,6 +1763,17 @@ test("editing what a pipeline executes is refused while instances are live, unle
   });
   assert.equal(patched.status, 409);
 
+  // So is moving the pipeline onto a Claude config folder of its own: it
+  // decides which setup every Claude step's CLI loads.
+  const moved = await app.request(`/api/pipelines/${def.id}`, {
+    method: "PATCH",
+    headers: sameOrigin,
+    body: JSON.stringify({
+      claudeConfigDir: mkdtempSync(path.join(tmpdir(), "argus-app-folder-")),
+    }),
+  });
+  assert.equal(moved.status, 409);
+
   // Forced, the edit lands — and applies to the next start only.
   const forced = await put(edited, "?force=1");
   assert.equal(forced.status, 200);

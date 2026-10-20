@@ -105,6 +105,12 @@ skill_listing, hook_success, hook_additional_context, deferred_tools_delta
 Useful for summaries: `ai-title` (human title), `last-prompt`/`user` (first
 prompt), `tool_use` count, message count, first/last timestamps where present.
 
+A pipeline that names its own Claude config folder (`claudeConfigDir`,
+HARNESS.md §3b) has the CLI file its runs' transcripts under
+`<folder>/projects/<encoded>/` instead, in the same shape. The run record keeps
+the folder (`Run.claudeConfigDir`), and the readers scan every folder a
+recorded run names beside the default `projects/` (`sources/transcriptRoots.ts`).
+
 ## `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<id>.jsonl` — Codex transcripts
 
 Filed by **date**, not by project, and named for the thread id — which is why a

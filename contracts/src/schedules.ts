@@ -133,6 +133,15 @@ export interface Run {
    */
   runtime?: AgentRuntimeId;
   project: string | null;
+  /**
+   * The Claude configuration folder (`CLAUDE_CONFIG_DIR`) this run's CLI
+   * loaded, when its pipeline names one (`claudeConfigDir`). The CLI files
+   * the session log under `<folder>/projects/<project>/`, not under the
+   * operator's own home, so the folder is kept on the run: its transcript
+   * stays findable after the pipeline is edited or deleted. Absent = the
+   * operator's own Claude home.
+   */
+  claudeConfigDir?: string;
   resultSummary: string | null;
   error: string | null;
   instanceId?: string;

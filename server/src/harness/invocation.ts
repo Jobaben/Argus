@@ -18,12 +18,14 @@
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { operatorClaudeMd } from "../claudeHome.js";
 import { buildChildEnv } from "./childEnv.js";
 import { invocationChannels } from "./channels.js";
 import { runtimeFor, resolveRuntimeId } from "../runtimes/index.js";
 import type {
   CapabilityRequest,
   ChannelOutcome,
+  ClaudeConfigRequest,
   InvocationChannel,
   MaterializedFile,
   SpawnPlan,
@@ -32,6 +34,7 @@ import type { Run } from "../sources/scheduleTypes.js";
 import type { InvocationKnowledgeContext } from "@argus/contracts";
 import type {
   AgentInvocationRecord,
+  AgentRuntimeId,
   CapabilityProfile,
   InvocationChannelKind,
   InvocationChannelRecord,
@@ -59,6 +62,20 @@ export function resolveCapabilities(
   );
   if (layers.length === 0) return undefined;
   return Object.assign({}, ...layers) as CapabilityProfile;
+}
+
+/**
+ * The Claude configuration folder a step's CLI loads: the pipeline's own, for
+ * a Claude Code step, and none for any other runtime — a Claude folder means
+ * nothing to Codex, OpenCode or Qwen Code, which keep their own homes. The
+ * engine records the same answer on the run, so the transcript lookup and
+ * the launch can never disagree about where a session log went.
+ */
+export function claudeConfigDirFor(
+  def: Pick<PipelineDefinition, "claudeConfigDir">,
+  runtime: AgentRuntimeId,
+): string | undefined {
+  return runtime === "claude" ? def.claudeConfigDir : undefined;
 }
 
 /** A step's limit, else its phase's, else none. */
@@ -231,16 +248,29 @@ export function prepareInvocation(inputs: InvocationInputs): PreparedInvocation 
     memoryDir: inputs.memoryDir ?? null,
     phaseDef,
   });
+  const hooks = {
+    stop: invocationHookCommand(),
+    gate: invocationHookCommand("needs-input"),
+  };
   const capabilities: CapabilityRequest | undefined = profile
     ? {
         profile,
         invocationDir: inputs.invocationDir,
         cwd: run.cwd,
         channels,
-        hooks: {
-          stop: invocationHookCommand(),
-          gate: invocationHookCommand("needs-input"),
-        },
+        hooks,
+      }
+    : undefined;
+  // The pipeline's own Claude setup, with or without a profile: it decides
+  // which instructions, settings and hooks the CLI loads at all, so no
+  // phase's capabilities can switch it off.
+  const claudeConfigDir = claudeConfigDirFor(def, runtimeId);
+  const claudeConfig: ClaudeConfigRequest | undefined = claudeConfigDir
+    ? {
+        dir: claudeConfigDir,
+        invocationDir: inputs.invocationDir,
+        hooks,
+        excludeClaudeMd: [operatorClaudeMd()],
       }
     : undefined;
   const plan = runtime.streamPlan({
@@ -250,6 +280,7 @@ export function prepareInvocation(inputs: InvocationInputs): PreparedInvocation 
     reasoningEffort: run.reasoningEffort,
     systemPrompt: inputs.systemPrompt,
     capabilities,
+    claudeConfig,
   });
   const files = plan.files ?? [];
   const strict = (profile?.enforcement ?? "strict") === "strict";
@@ -276,7 +307,16 @@ export function prepareInvocation(inputs: InvocationInputs): PreparedInvocation 
     channelRecords = channels.map((c) => channelRecord(c, "unmanaged"));
   }
   const profileLimitations = plan.limitations ?? [];
-  const limitations = [...profileLimitations, ...channelLimitations];
+  // A Claude folder on a pipeline whose step runs another CLI: nothing to
+  // apply and nothing to refuse, since that CLI keeps its own home either
+  // way. Recorded, so the record never implies the folder was in force.
+  const configNotes =
+    def.claudeConfigDir && !claudeConfigDir
+      ? [
+          `${runtime.label} does not load a Claude config folder: claudeConfigDir does not apply to this step`,
+        ]
+      : [];
+  const limitations = [...profileLimitations, ...channelLimitations, ...configNotes];
 
   const child = buildChildEnv(inputs.parentEnv, profile?.env, plan.env, inputs.argusEnv);
   const deadlineAt =
@@ -314,6 +354,7 @@ export function prepareInvocation(inputs: InvocationInputs): PreparedInvocation 
     acceptanceVerificationFile: inputs.acceptanceVerificationFile ?? null,
     ...(inputs.suppliedInputs?.length ? { suppliedInputs: inputs.suppliedInputs } : {}),
     channels: channelRecords,
+    ...(claudeConfigDir ? { claudeConfigDir } : {}),
     timeoutSeconds: inputs.timeoutSeconds,
     deadlineAt,
     gitHead: inputs.gitHead,

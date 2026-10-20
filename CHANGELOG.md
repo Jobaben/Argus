@@ -39,6 +39,20 @@ All notable changes to Argus are documented here. The format follows
 - **`build` on `GET /api/health`:** `{ kind: "release" | "dev", sha, dir, id? }`,
   optional in the contract (`HealthResponse.build`). A dev build logs a
   warning at startup.
+- **`claudeConfigDir`: a Claude setup folder per pipeline.** A pipeline can
+  name a folder its Claude Code steps load instead of the operator's
+  `~/.claude` (`CLAUDE_CONFIG_DIR`): its own `CLAUDE.md`, settings, skills,
+  agents and commands. It is a pipeline field, not a capability, so a phase
+  that declares its own `env` no longer drops it the way it dropped
+  `env.set.CLAUDE_CONFIG_DIR`. Every Claude step on it gets Argus's own hooks,
+  a `claudeMdExcludes` for the operator's `~/.claude/CLAUDE.md`, and deny
+  rules for `Read` on the folder's `settings.json` and `.credentials.json` and
+  for edits under it, with or without a capability profile. Runs and
+  invocation records keep the folder (`Run.claudeConfigDir`), so the session
+  list and view, the live tail, search and the projects list find a step's
+  transcript in `<folder>/projects/` after the pipeline is edited or deleted.
+  Validated at save time; other runtimes record that it does not apply.
+  Changing it while an instance runs is an execution edit (`409`).
 
 ## [1.0.0] - 2026-10-14
 

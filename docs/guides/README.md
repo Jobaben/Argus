@@ -68,10 +68,11 @@ Some features are panels within a page rather than separate destinations.
 ## Advanced authoring
 
 Some options are API-authored and preserved by the form. The [advanced pipeline
-recipes](pipelines.md#advanced-feature-recipes) map capability profiles,
-verification, worktrees, candidates, memory, recovery and trajectory checks to
-worked examples. The [knowledge authoring map](knowledge.md#authoring-knowledge-workflows)
-covers discovery, verification, change intent and targeted realization.
+recipes](pipelines.md#advanced-feature-recipes) map capability profiles, a
+pipeline's own Claude setup folder, verification, worktrees, candidates,
+memory, recovery and trajectory checks to worked examples. The
+[knowledge authoring map](knowledge.md#authoring-knowledge-workflows) covers
+discovery, verification, change intent and targeted realization.
 
 For exact request bodies and authentication use [API.md](../API.md). For the
 execution and result protocols use [HARNESS.md](../HARNESS.md). Neither a

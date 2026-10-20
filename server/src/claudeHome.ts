@@ -17,6 +17,19 @@ export function claudeHome(): string {
 }
 
 /**
+ * The operator's own global `CLAUDE.md` as a child CLI finds it by walking up
+ * from its working directory: `<home>/.claude/CLAUDE.md`, reached from any
+ * directory under the home folder — which is where Argus's worktrees live by
+ * default. Derived from the OS home, never from {@link claudeHome}: that one
+ * follows `ARGUS_CLAUDE_HOME`, which can point anywhere, while the walk only
+ * ever sees the file at this path. Forward slashes, the form
+ * `claudeMdExcludes` patterns match.
+ */
+export function operatorClaudeMd(): string {
+  return path.join(os.homedir(), ".claude", "CLAUDE.md").replace(/\\/g, "/");
+}
+
+/**
  * Root of every directory an agent writes into: worktrees, file artifacts,
  * memory and the per-run result / ledger channels (`~/.claude-argus` by
  * default, `ARGUS_WORK_DIR` overrides).
