@@ -32,6 +32,7 @@ import {
   Meter,
   Page,
   RAIL,
+  Skeleton,
   SkeletonBoardCard,
   staggerDelay,
   STATUS,
@@ -809,14 +810,31 @@ function Row({
  *  irreversible, so a bare click must not fire it). */
 function BoardTotal({
   totals,
+  loading,
   reset,
 }: {
   totals: { usd: number; tokens: number; since: string } | null;
+  loading: boolean;
   reset: () => Promise<void>;
 }) {
   const [arming, setArming] = useState(false);
   const [busy, setBusy] = useState(false);
-  if (!totals) return null;
+  // Its own height while it loads: the figure is taller than the button beside
+  // it, so arriving into nothing grew the header and shifted the whole board
+  // down — the largest layout shift on the landing page.
+  if (!totals) {
+    return loading ? (
+      // As wide as the real figure and its reset button, so a header that
+      // wraps on a phone wraps the same way before and after it arrives.
+      <span aria-hidden="true" className="flex h-[42px] w-[228px] items-center justify-end gap-2">
+        <span className="flex flex-col items-end gap-1.5">
+          <Skeleton className="h-2.5 w-16" />
+          <Skeleton className="h-5 w-48" />
+        </span>
+        <Skeleton className="h-7 w-7 rounded-control" />
+      </span>
+    ) : null;
+  }
   const sinceLabel = new Date(totals.since).toLocaleString();
   return (
     <div className="flex items-center gap-2">
@@ -1063,7 +1081,7 @@ export default function CommandCenter() {
   const facet = useMachineFacet();
   const { overview, loading, error, approve, revise, abort, refresh } = useOverview();
   const { isAdmin } = useAuth();
-  const { totals, reset } = useTotals();
+  const { totals, loading: totalsLoading, reset } = useTotals();
   const { situation, loading: situationLoading } = useInsight();
   const { runs, loading: runsLoading, cancelRun } = useRuns();
   const [selected, setSelected] = useState<StepSelection | null>(null);
@@ -1122,7 +1140,7 @@ export default function CommandCenter() {
       title="Command Center"
       actions={
         <>
-          <BoardTotal totals={totals} reset={reset} />
+          <BoardTotal totals={totals} loading={totalsLoading} reset={reset} />
           <ButtonLink href="#/schedules/oneoff" variant="primary" icon="bolt" className="ml-2">
             Launch a task
           </ButtonLink>

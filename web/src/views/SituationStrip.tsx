@@ -188,12 +188,16 @@ export function SituationStrip({
       <div
         role="status"
         aria-busy="true"
-        className="mb-4 flex h-[58px] items-center gap-3 rounded-tile border border-line bg-surface px-4 shadow-raised"
+        // Shaped like what usually arrives: one row on a wide screen, and on a
+        // phone the chips wrapping onto a second row above the telemetry line —
+        // so the board below does not jump when the numbers land.
+        className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-3 rounded-tile border border-line bg-surface px-4 py-3 shadow-raised"
       >
         <span className="sr-only">Loading the board situation…</span>
-        <Skeleton className="h-6 w-28" />
-        <Skeleton className="h-6 w-24" />
-        <Skeleton className="ml-auto h-5 w-48" />
+        <Skeleton className="h-8 w-28" />
+        <Skeleton className="h-8 w-24" />
+        <Skeleton className="h-8 w-28 sm:hidden" />
+        <Skeleton className="h-5 w-48 sm:ml-auto" />
       </div>
     );
   }
@@ -259,7 +263,11 @@ export function SituationStrip({
           />
         )}
         <SpendMeter spend={situation.spend} />
-        <Throughput buckets={situation.throughput} />
+        {/* Twenty-four 4px bars: a desk-distance glance, not worth a row of a
+            phone's height. */}
+        <span className="hidden sm:contents">
+          <Throughput buckets={situation.throughput} />
+        </span>
       </div>
     </div>
   );
