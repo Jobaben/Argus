@@ -2,8 +2,8 @@ import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import path from "node:path";
-import { paths } from "../claudeHome.js";
 import { decodeProjectLabel } from "./sessions.js";
+import { claudeProjectRoots } from "./transcriptRoots.js";
 import { CODEX_PROJECT, listCodexSessionFiles, translateRolloutLine } from "./codexSessions.js";
 import { listQwenSessionFiles, translateQwenLine } from "./qwenSessions.js";
 import { encodeProject } from "./runs.js";
@@ -76,20 +76,48 @@ interface TranscriptFile {
 }
 
 async function listTranscriptFiles(): Promise<TranscriptFile[]> {
+  // Every Claude root: the operator's own `projects/` and each pipeline
+  // folder's (transcriptRoots.ts), so a folder run's transcript is searchable
+  // like any other.
+  const claude = await Promise.all((await claudeProjectRoots()).map(listClaudeRoot));
+  // Codex rollouts and Qwen Code chats join the same scan, translated on read,
+  // so a transcript search covers every runtime that keeps readable transcripts
+  // instead of quietly meaning "Claude transcripts only". Codex is filed by date
+  // rather than by project; Qwen Code files by project exactly as Claude does.
+  const codex = (await listCodexSessionFiles()).map((f) => ({
+    project: CODEX_PROJECT,
+    sessionId: f.id,
+    file: f.file,
+    mtime: f.mtime,
+    kind: "codex" as const,
+  }));
+  const qwen = (await listQwenSessionFiles()).map((f) => ({
+    project: f.project,
+    sessionId: f.id,
+    file: f.file,
+    mtime: f.mtime,
+    kind: "qwen" as const,
+  }));
+  return [...claude.flat(), ...codex, ...qwen];
+}
+
+/** Every Claude transcript under one `projects/` root. */
+async function listClaudeRoot(root: string): Promise<TranscriptFile[]> {
   let projectDirs: string[] = [];
   try {
-    const entries = await readdir(paths.projects(), { withFileTypes: true });
+    const entries = await readdir(root, { withFileTypes: true });
     projectDirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
   } catch {
     // No Claude transcripts here, which is an ordinary state on a machine that
-    // runs another agent — and not a reason to skip the scans below. Returning
-    // early is what used to make transcript search silently empty on a
+    // runs another agent — and not a reason to skip the other scans. Giving up
+    // on the whole search is what used to make it silently empty on a
     // Codex-only or Qwen-only install.
+    return [];
   }
 
   const nested = await Promise.all(
     projectDirs.map(async (project) => {
-      const dir = path.join(paths.projects(), project);
+      const dir = path.join(root, project);
       try {
         const files = (await readdir(dir)).filter((f) => f.endsWith(".jsonl"));
         return Promise.all(
@@ -115,25 +143,7 @@ async function listTranscriptFiles(): Promise<TranscriptFile[]> {
       }
     }),
   );
-  // Codex rollouts and Qwen Code chats join the same scan, translated on read,
-  // so a transcript search covers every runtime that keeps readable transcripts
-  // instead of quietly meaning "Claude transcripts only". Codex is filed by date
-  // rather than by project; Qwen Code files by project exactly as Claude does.
-  const codex = (await listCodexSessionFiles()).map((f) => ({
-    project: CODEX_PROJECT,
-    sessionId: f.id,
-    file: f.file,
-    mtime: f.mtime,
-    kind: "codex" as const,
-  }));
-  const qwen = (await listQwenSessionFiles()).map((f) => ({
-    project: f.project,
-    sessionId: f.id,
-    file: f.file,
-    mtime: f.mtime,
-    kind: "qwen" as const,
-  }));
-  return [...nested.flat(), ...codex, ...qwen];
+  return nested.flat();
 }
 
 /** Scans one transcript line by line, pushing matches until the cap is hit. */

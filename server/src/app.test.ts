@@ -1763,6 +1763,17 @@ test("editing what a pipeline executes is refused while instances are live, unle
   });
   assert.equal(patched.status, 409);
 
+  // So is moving the pipeline onto a Claude config folder of its own: it
+  // decides which setup every Claude step's CLI loads.
+  const moved = await app.request(`/api/pipelines/${def.id}`, {
+    method: "PATCH",
+    headers: sameOrigin,
+    body: JSON.stringify({
+      claudeConfigDir: mkdtempSync(path.join(tmpdir(), "argus-app-folder-")),
+    }),
+  });
+  assert.equal(moved.status, 409);
+
   // Forced, the edit lands — and applies to the next start only.
   const forced = await put(edited, "?force=1");
   assert.equal(forced.status, 200);
@@ -1800,7 +1811,9 @@ function settledInstance(
   status: "succeeded" | "failed",
   over: Partial<PipelineInstance> = {},
 ): PipelineInstance {
-  const at = "2026-09-18T12:00:00.000Z";
+  // Settled an hour ago: the route counts back from the real clock, so a fixed
+  // date ages out of its 30-day window (this one did, on 2026-10-18).
+  const at = new Date(Date.now() - 60 * 60 * 1000).toISOString();
   return {
     id,
     pipelineId: def.id,

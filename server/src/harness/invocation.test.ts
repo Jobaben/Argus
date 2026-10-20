@@ -1,12 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  claudeConfigDirFor,
   prepareInvocation,
   resolveCapabilities,
   resolveTimeoutSeconds,
   settleChannels,
 } from "./invocation.js";
 import { invocationChannels } from "./channels.js";
+import { operatorClaudeMd } from "../claudeHome.js";
 import { codexRuntime } from "../runtimes/index.js";
 import type { InvocationInputs } from "./invocation.js";
 import type { InvocationChannel } from "../runtimes/types.js";
@@ -211,6 +213,85 @@ test("prepareInvocation: capabilities (and hooks) reach the runtime only when a 
   const withProfile = prepareInvocation(baseInputs({ phaseDef: makePhase({ capabilities: {} }) }));
   assert.deepEqual(withProfile.record.capabilities, {});
   assert.ok(withProfile.plan.args.includes("--settings"));
+});
+
+// ── prepareInvocation: the pipeline's own config folder ─────────────────────
+
+const FOLDER = "/home/op/.claude-pipelines/loop";
+
+test("config folder: a Claude step without a profile loads the folder, with Argus's hooks and the exclusion", () => {
+  const prepared = prepareInvocation(baseInputs({ def: makeDef({ claudeConfigDir: FOLDER }) }));
+  assert.equal(prepared.env.CLAUDE_CONFIG_DIR, FOLDER, "the child CLI's home is the folder");
+  assert.equal(prepared.record.claudeConfigDir, FOLDER, "the record names it");
+  assert.ok(prepared.record.envNames.includes("CLAUDE_CONFIG_DIR"));
+  assert.equal(prepared.record.capabilities, null, "the folder is not a capability profile");
+  const settings = prepared.files.find((f) => f.path === "/inv/settings.json");
+  assert.ok(settings, "the per-run settings file is materialized");
+  const parsed = JSON.parse(settings!.contents);
+  assert.ok(
+    parsed.hooks?.Stop,
+    "the Stop hook is registered: the installed one is not in the folder",
+  );
+  assert.deepEqual(parsed.claudeMdExcludes, [operatorClaudeMd()]);
+  assert.deepEqual(prepared.record.materializedFiles, ["/inv/settings.json"]);
+  assert.deepEqual(prepared.blocking, []);
+  assert.deepEqual(prepared.record.limitations, []);
+  assert.ok(
+    prepared.record.channels?.every((c) => c.status === "unmanaged"),
+    "without a profile the channels stay unmanaged",
+  );
+});
+
+test("config folder: a phase that declares its own env policy can no longer drop it", () => {
+  // The bug the field exists for: profiles merge by top-level key, so a
+  // phase's `env` used to replace the pipeline's `env.set.CLAUDE_CONFIG_DIR`.
+  const prepared = prepareInvocation(
+    baseInputs({
+      def: makeDef({ claudeConfigDir: FOLDER, capabilities: { env: { inherit: "all" } } }),
+      phaseDef: makePhase({
+        capabilities: { env: { inherit: "minimal", set: { OTHER: "x" } }, filesystem: "read-only" },
+      }),
+    }),
+  );
+  assert.equal(prepared.env.CLAUDE_CONFIG_DIR, FOLDER);
+  assert.equal(prepared.env.OTHER, "x");
+  const denied = prepared.plan.args[prepared.plan.args.indexOf("--disallowedTools") + 1];
+  assert.ok(denied.includes(`Read(/${FOLDER}/settings.json)`), "the token file stays unreadable");
+  assert.ok(denied.includes(`Edit(/${FOLDER}/**)`), "the folder stays uneditable");
+});
+
+test("config folder: a Codex step of the same pipeline ignores it, says so, and still launches", () => {
+  const run = makeRun({ runtime: "codex" });
+  const strict = prepareInvocation(
+    baseInputs({
+      run,
+      def: makeDef({ claudeConfigDir: FOLDER }),
+      phaseDef: makePhase({ capabilities: { filesystem: "workspace-write" } }),
+      parentEnv: { PATH: "/bin" },
+    }),
+  );
+  assert.equal(strict.env.CLAUDE_CONFIG_DIR, undefined, "a Claude folder means nothing to Codex");
+  assert.equal(strict.record.claudeConfigDir, undefined);
+  assert.deepEqual(strict.record.limitations, [
+    "Codex does not load a Claude config folder: claudeConfigDir does not apply to this step",
+  ]);
+  assert.deepEqual(strict.blocking, [], "recorded, never a reason to refuse the launch");
+});
+
+test("config folder: absent, a Claude step's invocation is exactly what it was", () => {
+  const legacy = prepareInvocation(baseInputs());
+  assert.equal(legacy.env.CLAUDE_CONFIG_DIR, undefined);
+  assert.equal("claudeConfigDir" in legacy.record, false, "the legacy record shape");
+  assert.deepEqual(legacy.files, []);
+});
+
+test("claudeConfigDirFor: the pipeline's folder for Claude Code, none for any other runtime", () => {
+  const def = makeDef({ claudeConfigDir: FOLDER });
+  assert.equal(claudeConfigDirFor(def, "claude"), FOLDER);
+  for (const runtime of ["codex", "opencode", "qwen"] as const) {
+    assert.equal(claudeConfigDirFor(def, runtime), undefined, runtime);
+  }
+  assert.equal(claudeConfigDirFor(makeDef(), "claude"), undefined);
 });
 
 // ── prepareInvocation: Argus-owned channels ──────────────────────────────────

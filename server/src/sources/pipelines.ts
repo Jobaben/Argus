@@ -1,6 +1,7 @@
 import { existsSync, statSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { paths } from "../claudeHome.js";
+import { argusWorkRoot, claudeHome, paths } from "../claudeHome.js";
 import { mintHookToken, validateTrigger } from "./schedules.js";
 import { createJsonArrayStore } from "./jsonArrayStore.js";
 import type { Dependency, PhaseDef, PhaseStep, PipelineDefinition } from "./pipelineTypes.js";
@@ -31,6 +32,7 @@ import {
   validateRoutes,
 } from "./routeAuthoring.js";
 import { isRuntimeId, runtimeIdList } from "../runtimes/index.js";
+import { toClaudeRulePath } from "../runtimes/claude.js";
 import {
   ARGUS_PER_INVOCATION_IDENTIFIERS,
   ARGUS_SERVER_SECRETS,
@@ -86,6 +88,7 @@ export interface PipelineInput {
   reasoningEffort?: ReasoningEffort;
   runtime?: AgentRuntimeId;
   capabilities?: CapabilityProfile;
+  claudeConfigDir?: string;
   completion?: CompletionPolicy;
   workspace?: WorkspacePolicy;
   knowledgeScope?: KnowledgeScopePolicy;
@@ -748,6 +751,113 @@ export function validateCapabilities(raw: unknown, ctx: string): CapabilityProfi
   }
 
   return out;
+}
+
+// ── The pipeline's own Claude config folder ──────────────────────────────────
+
+/** Is `child` the directory `parent` itself, or somewhere beneath it?
+ *  Lexical, after resolving both; `path.relative` folds case on Windows. */
+function pathWithin(child: string, parent: string): boolean {
+  const rel = path.relative(path.resolve(parent), path.resolve(child));
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+}
+
+/** The Claude homes a pipeline folder must never be: the one Argus reads, and
+ *  the operator's default `~/.claude`, which differ when Argus's is overridden. */
+function operatorClaudeHomes(): string[] {
+  return [...new Set([path.resolve(claudeHome()), path.join(os.homedir(), ".claude")])];
+}
+
+/**
+ * `claudeConfigDir`, on its own.
+ *
+ * The CLI loads the folder as its whole user setup, and Argus names it in
+ * permission rules (`Read` denies on its sign-in files, an `Edit` deny under
+ * it), so it must be an existing directory now and a path a rule can spell. It
+ * can be neither the operator's own Claude home, which is the setup it exists
+ * to replace, nor a folder containing that home or Argus's work root: the
+ * `Edit` deny would then cover every worktree and channel Argus hands out.
+ * Stored resolved, so a run's recorded folder compares equal to its definition's.
+ */
+function validateClaudeConfigDir(raw: unknown): string | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "string" || !raw.trim() || !path.isAbsolute(raw)) {
+    throw new PipelineValidationError(`claudeConfigDir must be an absolute path: ${String(raw)}`);
+  }
+  if (toClaudeRulePath(raw) === null) {
+    throw new PipelineValidationError(
+      `claudeConfigDir must be a path a permission rule can name (no comma or newline, not a UNC share): ${raw}`,
+    );
+  }
+  if (!existsSync(raw) || !statSync(raw).isDirectory()) {
+    throw new PipelineValidationError(`claudeConfigDir does not exist: ${raw}`);
+  }
+  const dir = path.resolve(raw);
+  for (const home of operatorClaudeHomes()) {
+    if (pathWithin(home, dir)) {
+      throw new PipelineValidationError(
+        pathWithin(dir, home)
+          ? `claudeConfigDir is the operator's own Claude home (${home}); name a folder of the pipeline's own`
+          : `claudeConfigDir contains the operator's Claude home (${home}); name a folder of the pipeline's own`,
+      );
+    }
+  }
+  if (pathWithin(argusWorkRoot(), dir)) {
+    throw new PipelineValidationError(
+      `claudeConfigDir contains Argus's work root (${argusWorkRoot()}), whose worktrees and channels must stay editable`,
+    );
+  }
+  return dir;
+}
+
+/**
+ * `claudeConfigDir` against the rest of the definition, checked wherever the
+ * whole definition is in hand: a full save, and the merge a patch produces.
+ *
+ * - **One folder, named once.** `env.set` lands after everything else in the
+ *   child environment, so an `env.set.CLAUDE_CONFIG_DIR` at any level would
+ *   silently win: the run would load that folder while its record, and the
+ *   transcript lookup, named this one.
+ * - **No working directory inside it.** Argus denies edits under the folder,
+ *   so a phase whose `cwd`, or an additional directory, sat there could not
+ *   edit its own tree.
+ */
+function assertClaudeConfigDirFits(
+  def: Pick<PipelineInput, "claudeConfigDir" | "capabilities" | "phases">,
+): void {
+  const dir = def.claudeConfigDir;
+  if (!dir) return;
+  const profiles = [
+    { where: "pipeline", profile: def.capabilities },
+    ...def.phases.flatMap((phase) => [
+      { where: `phase "${phase.id}"`, profile: phase.capabilities },
+      ...phase.steps.map((step) => ({
+        where: `phase "${phase.id}": step "${step.name}"`,
+        profile: step.capabilities,
+      })),
+    ]),
+  ];
+  for (const { where, profile } of profiles) {
+    if (profile?.env?.set && "CLAUDE_CONFIG_DIR" in profile.env.set) {
+      throw new PipelineValidationError(
+        `${where}: capabilities.env.set.CLAUDE_CONFIG_DIR conflicts with claudeConfigDir; name the folder once, in claudeConfigDir`,
+      );
+    }
+    for (const extra of profile?.additionalDirectories ?? []) {
+      if (pathWithin(extra, dir)) {
+        throw new PipelineValidationError(
+          `${where}: additionalDirectories entry ${extra} is inside claudeConfigDir, where Argus denies edits`,
+        );
+      }
+    }
+  }
+  for (const phase of def.phases) {
+    if (pathWithin(phase.cwd, dir)) {
+      throw new PipelineValidationError(
+        `phase "${phase.id}": cwd ${phase.cwd} is inside claudeConfigDir; Argus denies edits under the folder, so the phase could not edit its own working directory`,
+      );
+    }
+  }
 }
 
 // ── Verification checks ──────────────────────────────────────────────────────
@@ -1899,6 +2009,9 @@ export function validatePipelineInput(raw: unknown): PipelineInput {
   if (runtime) input.runtime = runtime;
   const capabilities = validateCapabilities(r.capabilities, "pipeline");
   if (capabilities) input.capabilities = capabilities;
+  const claudeConfigDir = validateClaudeConfigDir(r.claudeConfigDir);
+  if (claudeConfigDir) input.claudeConfigDir = claudeConfigDir;
+  assertClaudeConfigDirFits(input);
   const completion = validateCompletion(r.completion, "pipeline");
   if (completion) input.completion = completion;
   const workspace = validateWorkspace(r.workspace, "pipeline");
@@ -1945,6 +2058,7 @@ export function validatePipelinePatch(raw: unknown): Partial<PipelineInput> {
   }
   if ("runtime" in r) patch.runtime = validateRuntime(r.runtime, "pipeline");
   if ("capabilities" in r) patch.capabilities = validateCapabilities(r.capabilities, "pipeline");
+  if ("claudeConfigDir" in r) patch.claudeConfigDir = validateClaudeConfigDir(r.claudeConfigDir);
   if ("completion" in r) patch.completion = validateCompletion(r.completion, "pipeline");
   if ("workspace" in r) patch.workspace = validateWorkspace(r.workspace, "pipeline");
   if ("knowledgeScope" in r)
@@ -2006,6 +2120,7 @@ export async function createPipeline(
     ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
     ...(input.runtime ? { runtime: input.runtime } : {}),
     ...(input.capabilities ? { capabilities: input.capabilities } : {}),
+    ...(input.claudeConfigDir ? { claudeConfigDir: input.claudeConfigDir } : {}),
     ...(input.completion ? { completion: input.completion } : {}),
     ...(input.workspace ? { workspace: input.workspace } : {}),
     ...(input.knowledgeScope ? { knowledgeScope: input.knowledgeScope } : {}),
@@ -2060,6 +2175,12 @@ export async function updatePipeline(
       if (patch.capabilities) merged.capabilities = patch.capabilities;
       else delete merged.capabilities;
     }
+    // `claudeConfigDir: null` puts the pipeline back on the operator's own
+    // setup. Runs that already used the folder keep it on their records.
+    if ("claudeConfigDir" in patch) {
+      if (patch.claudeConfigDir) merged.claudeConfigDir = patch.claudeConfigDir;
+      else delete merged.claudeConfigDir;
+    }
     // And for `completion`: null/undefined clears the override back to the
     // effective default, `required`.
     if ("completion" in patch) {
@@ -2095,8 +2216,10 @@ export async function updatePipeline(
     }
     // A PATCH can carry phases without a workspace (or the other way round), so
     // the candidate requirements are re-checked against what the save actually
-    // produces rather than against the fragment that was sent.
+    // produces rather than against the fragment that was sent. The same goes
+    // for the config folder and the phases and profiles it must fit.
     assertCandidatesRunnable(merged.phases, merged.workspace);
+    assertClaudeConfigDirFits(merged);
     list[idx] = merged;
     await writePipelines(list);
     return merged;

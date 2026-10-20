@@ -220,6 +220,32 @@ work.
 
 Exact tuning operations and retained proposals are documented in [API tuning](../API.md#tuning).
 
+### Give the pipeline its own Claude setup
+
+By default every Claude step loads your personal `~/.claude`: your `CLAUDE.md`,
+settings, hooks, skills and MCP servers. To give a pipeline instructions and
+settings of its own instead, point it at a folder with `claudeConfigDir`. The
+form does not show this field; author it through the API, and the form keeps it
+on later saves.
+
+1. Create the folder outside `~/.claude`, for example
+   `~/.claude-pipelines/delivery/`, and put the pipeline's own `CLAUDE.md` in it.
+2. Run `claude setup-token` and put the token in the folder's `settings.json`
+   as `"env": { "CLAUDE_CODE_OAUTH_TOKEN": "<token>" }`. Never set it as a
+   user-wide environment variable: it would sign every session in with it.
+3. Save the pipeline with `"claudeConfigDir": "<absolute path to the folder>"`,
+   for example with `PATCH /api/pipelines/<id>`. If the pipeline set
+   `CLAUDE_CONFIG_DIR` through `capabilities.env.set`, remove that entry in the
+   same save: Argus refuses both together.
+4. Start an instance and open a step's transcript. Each run's own settings
+   exclude your `~/.claude/CLAUDE.md`, its agents may not read the folder's
+   sign-in or edit the folder, and Argus finds the step's transcript in the
+   folder.
+
+Codex, OpenCode and Qwen Code steps of the same pipeline keep their own setup.
+The details, and what Argus adds to each run, are in
+[the harness reference](../HARNESS.md#3b-a-claude-setup-folder-per-pipeline-claudeconfigdir).
+
 ## Weave
 
 _Pipelines as a typed graph: fan-out, fan-in, retries, artifacts, routes._
@@ -366,6 +392,7 @@ The form preserves API-authored settings that it does not expose as editable con
 | Goal                                                      | Recipe                                                                                                                    |
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | Limit CLI capabilities and execution environment          | [Capabilities](../HARNESS.md#3-capability-profiles), [environment policy](../HARNESS.md#4-environment-policy)             |
+| Give a pipeline its own Claude instructions and settings  | [Claude setup folder](../HARNESS.md#3b-a-claude-setup-folder-per-pipeline-claudeconfigdir)                                |
 | Require independently checked results                     | [Completion](../HARNESS.md#2-agent-completion--phase-success), [verification checks](../HARNESS.md#6-verification-checks) |
 | Run in a separate git working tree                        | [Workspace isolation](../HARNESS.md#11-workspace-isolation)                                                               |
 | Compare multiple attempts and select a verified candidate | [Candidates](../HARNESS.md#12-candidates)                                                                                 |

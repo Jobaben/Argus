@@ -143,6 +143,28 @@ export interface CapabilityRequest {
   hooks?: { stop: string; gate: string };
 }
 
+/**
+ * The pipeline's own Claude configuration folder (`claudeConfigDir`), as the
+ * Claude Code runtime receives it: the folder the CLI loads as its whole user
+ * setup (`CLAUDE_CONFIG_DIR`), plus what Argus has to bring along because the
+ * operator's `~/.claude` no longer applies. Requested with or without a
+ * capability profile; other runtimes are never handed one.
+ */
+export interface ClaudeConfigRequest {
+  /** The folder, absolute. */
+  dir: string;
+  /** Per-invocation directory Argus created for config files (absolute, exists). */
+  invocationDir: string;
+  /** Argus's completion hooks. The copy Setup installs lives in the operator's
+   *  home, which the folder replaces, so a run without its own registration
+   *  would never signal. */
+  hooks: { stop: string; gate: string };
+  /** `CLAUDE.md` files the CLI must skip (`claudeMdExcludes`): the operator's
+   *  own, which its parent-directory walk still reaches from a working
+   *  directory under the home folder. Forward slashes. */
+  excludeClaudeMd: string[];
+}
+
 /** Everything needed to start one run, with nothing runtime-specific left over. */
 export interface SpawnPlan {
   bin: string;
@@ -152,10 +174,11 @@ export interface SpawnPlan {
   /** Extra environment for the child, merged over `process.env` by the caller. */
   env: Record<string, string>;
   /** Files to write before spawning (invocation-specific config). Absent/empty
-   *  when no capabilities were requested. */
+   *  when neither capabilities nor a Claude config folder were requested. */
   files?: MaterializedFile[];
   /** Declared capabilities this runtime could not enforce (human-readable, one
-   *  per item). Empty when fully enforced. Channel availability is *not*
+   *  per item), and anything of a requested Claude config folder it could not
+   *  protect. Empty when fully enforced. Channel availability is *not*
    *  reported here — see `channels`. */
   limitations?: string[];
   /**
@@ -184,6 +207,8 @@ export interface RunPlanOptions {
   systemPrompt?: string;
   /** The capability profile for this invocation, when the phase declares one. */
   capabilities?: CapabilityRequest;
+  /** Claude Code only: the pipeline's own config folder, when it names one. */
+  claudeConfig?: ClaudeConfigRequest;
 }
 
 export interface AnalysisPlanOptions {

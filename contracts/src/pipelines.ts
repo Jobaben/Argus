@@ -609,6 +609,10 @@ export interface AgentInvocationRecord {
    * channel model existed.
    */
   channels?: InvocationChannelRecord[];
+  /** The Claude configuration folder the CLI loaded instead of the operator's
+   *  own (`CLAUDE_CONFIG_DIR`), from the pipeline's `claudeConfigDir`. Absent
+   *  when the step ran on the operator's setup, or on another runtime. */
+  claudeConfigDir?: string;
   timeoutSeconds: number | null;
   deadlineAt: string | null;
   /** `git rev-parse HEAD` in cwd at launch, when cwd is a repository. */
@@ -938,6 +942,18 @@ export interface PipelineDefinition {
   /** Default capability profile for every phase that does not declare one. */
   capabilities?: CapabilityProfile;
   /**
+   * The Claude Code configuration folder every Claude step of this pipeline
+   * loads instead of the operator's own `~/.claude` (`CLAUDE_CONFIG_DIR`): its
+   * `CLAUDE.md`, `settings.json`, skills, agents and commands, and where the
+   * CLI files the runs' session logs (`<folder>/projects/`). Absolute, and an
+   * existing directory. Pipeline-level only, so no phase's capability profile
+   * can drop it. Argus also denies agents `Read` on `<folder>/settings.json`
+   * (it holds the sign-in token) and edits under the folder. Absent = the
+   * operator's own setup, exactly as before. Other runtimes ignore it, and
+   * their invocation records say so.
+   */
+  claudeConfigDir?: string;
+  /**
    * Whether a completion must carry an `ARGUS_OUTCOME: succeeded` marker, for
    * every phase that does not declare its own. Absent = `required` — an
    * intentional change from the original permissive behaviour; declare
@@ -986,6 +1002,7 @@ export interface PipelineInput {
   reasoningEffort?: ReasoningEffort;
   runtime?: AgentRuntimeId;
   capabilities?: CapabilityProfile;
+  claudeConfigDir?: string;
   completion?: CompletionPolicy;
   workspace?: WorkspacePolicy;
   knowledgeScope?: KnowledgeScopePolicy;

@@ -13,6 +13,7 @@ import { paths } from "../claudeHome.js";
 import { atomicWriteJson } from "../sources/atomicWrite.js";
 import {
   candidateArtifactDir,
+  claudeConfigDirFor,
   phaseArtifactDir,
   phaseBaselinePath,
   prepareInvocation,
@@ -578,6 +579,9 @@ export function createLaunch(core: EngineCore) {
       );
       const timeoutSeconds = resolveTimeoutSeconds(phaseDef, stepDef);
       const stallSeconds = resolveStallSeconds(phaseDef, stepDef);
+      // Where this run's session log will be filed, when the pipeline gives
+      // its Claude steps a setup folder of their own.
+      const claudeConfigDir = claudeConfigDirFor(def, runtime);
       // Argus-injected blocks ride after the agent's own prompt, in a fixed
       // order. The channel paths and the retry note follow at launch, the
       // note last: it is what matters most on a retry, and recency in the
@@ -668,6 +672,7 @@ export function createLaunch(core: EngineCore) {
         reasoningEffort: variant?.reasoningEffort ?? stepDef.reasoningEffort ?? def.reasoningEffort,
         runtime,
         project: encodeProject(cwd),
+        ...(claudeConfigDir ? { claudeConfigDir } : {}),
         resultSummary: null,
         error: null,
         instanceId: inst.id,

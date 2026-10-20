@@ -101,6 +101,7 @@ Paths below are relative to the configured Claude home unless another home is sh
 | Background agents            | `jobs/<short>/state.json`, `jobs/<short>/timeline.jsonl`                                   | Status, tempo, progress and results                                          |
 | Live workers                 | `daemon/roster.json`, `daemon.status.json`                                                 | Worker presence and daemon state                                             |
 | Claude transcripts           | `projects/<project>/<session>.jsonl`                                                       | Sessions list and transcript detail                                          |
+| Pipeline folder transcripts  | `<claudeConfigDir>/projects/<project>/<session>.jsonl`, for each folder a run recorded     | The same views, for pipelines with their own Claude setup                    |
 | Codex transcripts            | `<codexHome>/sessions/YYYY/MM/DD/rollout-*.jsonl`, plus `archived_sessions/`               | Translated Sessions list, detail and search                                  |
 | Qwen transcripts             | `<qwenHome>/projects/<project>/chats/<session>.jsonl`                                      | Translated Sessions list, detail and search                                  |
 | OpenCode sessions            | `<opencodeHome>/opencode.db`                                                               | Private SQLite schema; Argus does not provide transcript browsing            |

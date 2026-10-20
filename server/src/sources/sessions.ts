@@ -1,10 +1,10 @@
 import { open, readdir, stat } from "node:fs/promises";
 import path from "node:path";
-import { paths } from "../claudeHome.js";
 import { KeyedMutex } from "../mutex.js";
 import { readJsonl } from "./readJson.js";
 import { cached } from "./cache.js";
 import { encodeProject } from "./runs.js";
+import { claudeProjectRoots } from "./transcriptRoots.js";
 import { codexPaths } from "../codexHome.js";
 import { qwenPaths } from "../qwenHome.js";
 import {
@@ -228,19 +228,45 @@ interface TranscriptFile {
   kind: TranscriptKind;
 }
 
-async function listSessionFiles(): Promise<TranscriptFile[]> {
+async function listSessionFiles(roots: string[]): Promise<TranscriptFile[]> {
+  const claude = await Promise.all(roots.map(listClaudeRoot));
+
+  const codex = (await listCodexSessionFiles()).map((f) => ({
+    project: CODEX_PROJECT,
+    id: f.id,
+    file: f.file,
+    mtime: f.mtime,
+    kind: "codex" as const,
+  }));
+  // Qwen Code encodes the working directory into a project segment exactly as
+  // Claude Code does, so its sessions need no reserved bucket: they file
+  // themselves next to the Claude sessions from the same directory.
+  const qwen = (await listQwenSessionFiles()).map((f) => ({
+    project: f.project,
+    id: f.id,
+    file: f.file,
+    mtime: f.mtime,
+    kind: "qwen" as const,
+  }));
+  return [...claude.flat(), ...codex, ...qwen];
+}
+
+/** Every Claude transcript under one `projects/` root (transcriptRoots.ts). */
+async function listClaudeRoot(root: string): Promise<TranscriptFile[]> {
   let projectDirs: string[] = [];
   try {
-    const entries = await readdir(paths.projects(), { withFileTypes: true });
+    const entries = await readdir(root, { withFileTypes: true });
     projectDirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
   } catch {
     // No Claude transcripts here — which is an ordinary state on a Codex-only
-    // machine, not a reason to stop before the Codex scan below.
+    // machine, or for a pipeline folder no run has written to yet, and not a
+    // reason to stop before the other scans.
+    return [];
   }
 
   const all = await Promise.all(
     projectDirs.map(async (project) => {
-      const dir = path.join(paths.projects(), project);
+      const dir = path.join(root, project);
       let files: string[];
       try {
         files = (await readdir(dir)).filter((f) => f.endsWith(".jsonl"));
@@ -267,25 +293,7 @@ async function listSessionFiles(): Promise<TranscriptFile[]> {
       );
     }),
   );
-
-  const codex = (await listCodexSessionFiles()).map((f) => ({
-    project: CODEX_PROJECT,
-    id: f.id,
-    file: f.file,
-    mtime: f.mtime,
-    kind: "codex" as const,
-  }));
-  // Qwen Code encodes the working directory into a project segment exactly as
-  // Claude Code does, so its sessions need no reserved bucket: they file
-  // themselves next to the Claude sessions from the same directory.
-  const qwen = (await listQwenSessionFiles()).map((f) => ({
-    project: f.project,
-    id: f.id,
-    file: f.file,
-    mtime: f.mtime,
-    kind: "qwen" as const,
-  }));
-  return [...all.flat(), ...codex, ...qwen];
+  return all.flat();
 }
 
 /** Parse one transcript into the canonical line shape, translating another
@@ -329,8 +337,8 @@ async function summarizeFile(entry: TranscriptFile): Promise<SessionSummary> {
 }
 
 /** Recent sessions across all projects, newest first (by last activity). */
-async function readSessionsRaw(limit: number): Promise<SessionSummary[]> {
-  const files = await listSessionFiles();
+async function readSessionsRaw(limit: number, roots: string[]): Promise<SessionSummary[]> {
+  const files = await listSessionFiles(roots);
   files.sort((a, b) => b.mtime - a.mtime);
   const slice = files.slice(0, Math.max(0, limit));
 
@@ -341,12 +349,14 @@ async function readSessionsRaw(limit: number): Promise<SessionSummary[]> {
 
 // The list read scans dozens of transcript files; a short-TTL single-flight
 // cache collapses the burst of refetches a single live broadcast triggers.
-// Keyed by both transcript roots as well as the limit, mirroring the runs scan:
+// Keyed by every transcript root as well as the limit, mirroring the runs scan:
 // the roots are configurable, so a key that ignored them would serve one home's
-// listing for another's (and does, to tests with a home per case).
+// listing for another's (and does, to tests with a home per case). A pipeline
+// folder's first run adds a root, and with it a fresh key.
 export async function readSessions(limit = DEFAULT_LIMIT): Promise<SessionSummary[]> {
-  const key = `sessions:${limit}:${paths.projects()}:${codexPaths.sessions()}:${qwenPaths.projects()}`;
-  return cached(key, 1500, () => readSessionsRaw(limit));
+  const roots = await claudeProjectRoots();
+  const key = `sessions:${limit}:${JSON.stringify(roots)}:${codexPaths.sessions()}:${qwenPaths.projects()}`;
+  return cached(key, 1500, () => readSessionsRaw(limit, roots));
 }
 
 interface ResolvedSession {
@@ -358,23 +368,27 @@ interface ResolvedSession {
  * The transcript file behind a `(project, sessionId)` pair.
  *
  * Claude Code's path is composed from the two, guarded so a crafted segment
- * cannot escape `projects/`. Codex files by **date**, not by project, so its
- * rollout is found by id in the index instead — which is what lets a run keep
- * recording its working directory as `project` whichever CLI produced it, and
- * still resolve its transcript. The id is segment-checked either way, and the
- * index only ever holds paths under the Codex home.
+ * cannot escape `projects/`, under each Claude root in turn: the operator's
+ * own, then every pipeline folder a run recorded (transcriptRoots.ts). Session
+ * ids are UUIDs, so the first root that holds the file is the only one. Codex
+ * files by **date**, not by project, so its rollout is found by id in the
+ * index instead — which is what lets a run keep recording its working
+ * directory as `project` whichever CLI produced it, and still resolve its
+ * transcript. The id is segment-checked either way, and the index only ever
+ * holds paths under the Codex home.
  */
 async function resolveSessionPath(project: string, id: string): Promise<ResolvedSession | null> {
   if (!PROJECT_SEG_RE.test(project) || !SESSION_ID_RE.test(id)) return null;
   if (project !== CODEX_PROJECT) {
-    const base = paths.projects();
-    const resolved = path.resolve(base, project, `${id}.jsonl`);
-    if (path.dirname(resolved) !== path.resolve(base, project)) return null;
-    try {
-      await stat(resolved);
-      return { file: resolved, kind: "claude" };
-    } catch {
-      /* no Claude transcript under this project; another runtime's may be */
+    for (const base of await claudeProjectRoots()) {
+      const resolved = path.resolve(base, project, `${id}.jsonl`);
+      if (path.dirname(resolved) !== path.resolve(base, project)) return null;
+      try {
+        await stat(resolved);
+        return { file: resolved, kind: "claude" };
+      } catch {
+        /* not under this root; the next one, or another runtime's, may hold it */
+      }
     }
     // Qwen Code shares the encoded-project namespace, so the same pair composes
     // its path too — one directory deeper. Session ids are UUIDs, so the two
