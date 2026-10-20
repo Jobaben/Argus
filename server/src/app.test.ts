@@ -1811,7 +1811,9 @@ function settledInstance(
   status: "succeeded" | "failed",
   over: Partial<PipelineInstance> = {},
 ): PipelineInstance {
-  const at = "2026-09-18T12:00:00.000Z";
+  // Settled an hour ago: the route counts back from the real clock, so a fixed
+  // date ages out of its 30-day window (this one did, on 2026-10-18).
+  const at = new Date(Date.now() - 60 * 60 * 1000).toISOString();
   return {
     id,
     pipelineId: def.id,
