@@ -325,7 +325,7 @@ same information as a **recording**: every tool call, file diff, token burst
 and cost tick placed on one time axis, with a playhead you can drag.
 
 **How to get there:** expand any run row (Scheduler, Launch, Issues
-occurrences) and click **▶ replay**.
+occurrences) and select **Replay**; the Command Center's activity rail and the Briefing's failure rows link there too.
 
 **What you see:**
 

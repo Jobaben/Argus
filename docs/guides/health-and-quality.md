@@ -135,7 +135,7 @@ leave that envelope.
   **Anomalies** (last 14 days), **Critical**.
 - **Anomalies** first, because they are the news. Each states the multiple in
   words — "3.2× median cost ($0.42 vs $0.13 over 24 runs)" — with a
-  **▶ replay this run** link straight into the
+  **Replay this run** link straight into the
   [Flight Recorder](monitoring.md#flight-recorder), and the robust z-score in a tooltip
   for anyone who wants it.
 - **Learned envelopes** second, because they are the evidence: per unit of
@@ -442,7 +442,7 @@ here would just make a second inbox):
 
 **What you see per incident:** status and severity, how long it has been open,
 a live **escalates in…** countdown, every link that leads somewhere useful
-(the monitor, the issue, **▶ replay the run**), and the **timeline** — opened,
+(the monitor, the issue, **Replay the run**), and the **timeline** — opened,
 escalated, acknowledged, diagnosed, noted, resolved, reopened — each entry
 attributed to Sentinel or to the person who did it.
 

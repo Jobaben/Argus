@@ -49,7 +49,7 @@ When you're **signed out**, the **Login** panel appears here (see
 [Users & sign-in](administration.md#users--sign-in)) — viewing is open, but every mutating
 action requires a signed-in, root-approved account.
 
-**The pipeline form** (+ New pipeline / Edit):
+**The pipeline form** (New pipeline / Edit):
 
 ![Pipeline form](../screenshots/pipeline-form.png)
 
@@ -98,7 +98,7 @@ action requires a signed-in, root-approved account.
 - Approving/revising a **gated phase** happens on the Command Center, inline
   on the paused row.
 
-**Reliability:** each card has a **Reliability ▾** disclosure — open it and,
+**Reliability:** each card has a **Reliability** disclosure — open it and,
 over the trailing 30 days, Argus shows the pipeline's **first-attempt pass
 rate** (settled instances where every phase that ran passed on its very first
 try) and its **lucky-pass rate** (successful instances that only got there

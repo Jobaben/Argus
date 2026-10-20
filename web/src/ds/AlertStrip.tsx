@@ -19,6 +19,7 @@ export function AlertStrip({
   when,
   tone = "error",
   action,
+  role = "status",
 }: {
   subject: string;
   message: string;
@@ -26,13 +27,20 @@ export function AlertStrip({
   tone?: "failed" | "error";
   /** A recovery control — "Retry", "Sign in" — set at the strip's far end. */
   action?: ReactNode;
+  /**
+   * `alert` for the result of something the reader just did (a save, a
+   * triage), which should interrupt; `status` (the default) for a condition
+   * discovered on load. One live region either way — callers used to wrap the
+   * strip in a `role="alert"` div, nesting two.
+   */
+  role?: "status" | "alert";
 }) {
   // In phase with every other ambient indicator on screen: several things
   // pulsing on unrelated rhythms reads as clutter, not as liveness.
   const beat = useSyncedDelay(DURATION.alert);
   return (
     <div
-      role="status"
+      role={role}
       className="flex w-full flex-wrap items-center gap-x-3 gap-y-2 rounded-tile border border-fail/35 bg-gradient-to-r from-fail/14 to-fail/[0.04] px-4 py-3"
     >
       {tone === "failed" ? (

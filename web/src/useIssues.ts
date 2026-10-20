@@ -38,5 +38,13 @@ export function useIssues() {
     return body.occurrences ?? [];
   }, []);
 
-  return { issues: data.issues, summary: data.summary, loading, error, triage, loadOccurrences };
+  return {
+    issues: data.issues,
+    summary: data.summary,
+    loading,
+    error,
+    refresh,
+    triage,
+    loadOccurrences,
+  };
 }

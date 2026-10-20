@@ -59,7 +59,7 @@ This is an instruction to the agent. The one-off form does not set a capability 
 
 ## 3. Launch once
 
-Select **▶ Launch** once. The button becomes available after the prompt and working directory are filled. If validation fails, the form shows an error; correct it before retrying.
+Select **Launch** once. The button becomes available after the prompt and working directory are filled. If validation fails, the form shows an error; correct it before retrying.
 
 **Expected result:** a new entry appears in **Recent one-off runs** with your chosen name and a running status. The form keeps the directory, runtime, model, and effort, while clearing the prompt and name. This confirms that Argus accepted a launch; it does not yet confirm the agent completed it.
 
@@ -67,13 +67,13 @@ Argus runs the CLI headlessly in your chosen directory. There is no recurring tr
 
 ## 4. Read the run and its result
 
-Expand the run row by selecting it or its arrow. Inspect the log while it runs. The expanded log refreshes every three seconds while running; a runtime may emit little or no visible text until it produces its final result. One-off runs use the batch run path, so do not expect the same continuous tool-event stream as a pipeline step.
+Expand the run row by selecting its summary line. Inspect the log while it runs. The expanded log refreshes every three seconds while running; a runtime may emit little or no visible text until it produces its final result. One-off runs use the batch run path, so do not expect the same continuous tool-event stream as a pipeline step.
 
 **Expected result when successful:** the run changes to a success state and the expanded row shows a short README summary ending with `ARGUS_FIRST_RUN_COMPLETE`. Duration and reported tokens/cost appear when available. A marker alone is not evidence of correct content: read the summary and compare it with the README.
 
 If the run fails, the row shows the failure reason or log. Keep that exact message for diagnosis. Common causes are a missing CLI, expired provider credentials, an unavailable model, or an incorrect working directory. See the troubleshooting table below before launching again.
 
-Select **▶ replay** to open the **Flight Recorder** for this run. If the runtime provides a readable transcript and Argus has learned its session ID, the row also offers a **transcript** link. OpenCode's transcripts are stored in its private database and are not readable in Argus Sessions; the run's own result and log remain the useful starting point.
+Select **Replay** on the run row to open the **Flight Recorder** for this run. If the runtime provides a readable transcript and Argus has learned its session ID, the expanded row also offers a **Transcript** link. OpenCode's transcripts are stored in its private database and are not readable in Argus Sessions; the run's own result and log remain the useful starting point.
 
 ## 5. Find the same run elsewhere
 

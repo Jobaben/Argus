@@ -32,11 +32,19 @@ const DOT = {
 export function StatusPill({
   status,
   size = "md",
+  label: override,
 }: {
   status: DsStatus;
   size?: keyof typeof SIZE;
+  /**
+   * A more exact word for this status in this place — "Skipped" on a phase the
+   * status table can only call idle or stopped. The colour still comes from
+   * `status`, so the pill cannot claim a state its tone contradicts.
+   */
+  label?: string;
 }) {
-  const { token, label } = STATUS[status];
+  const { token, label: standard } = STATUS[status];
+  const label = override ?? standard;
   const beat = useSyncedDelay(DURATION.pulse);
   // A status change used to be a hard class swap: `working` was simply replaced
   // by `failed`, with nothing in between, so on a board you were left comparing

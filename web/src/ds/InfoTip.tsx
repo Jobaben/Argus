@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Icon } from "./Icon";
 
 /**
@@ -26,7 +26,34 @@ export function InfoTip({
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLSpanElement>(null);
+  const panelRef = useRef<HTMLSpanElement>(null);
   const panelId = useId();
+
+  // Keep the panel on screen. It hangs from its trigger at a fixed width, so a
+  // trigger near the right edge — a page's actions, the end of a row on a
+  // phone — pushed it past the viewport, and one near the bottom opened below
+  // the fold. Measured once it is laid out and corrected on the element
+  // itself: a nudge sideways, and a flip above the trigger when there is room
+  // there and none below. No state, so the correction costs no second render.
+  useLayoutEffect(() => {
+    const el = panelRef.current;
+    if (!open || !el) return;
+    const margin = 12;
+    const vw = document.documentElement.clientWidth || window.innerWidth;
+    const vh = window.innerHeight;
+    const r = el.getBoundingClientRect();
+    let dx = 0;
+    if (r.right > vw - margin) dx = vw - margin - r.right;
+    if (r.left + dx < margin) dx = margin - r.left;
+    if (dx !== 0) el.style.translate = `${Math.round(dx)}px 0`;
+    const trigger = rootRef.current?.getBoundingClientRect();
+    if (trigger && r.bottom > vh - margin && trigger.top - r.height - 8 > margin) {
+      el.style.top = "auto";
+      el.style.bottom = "100%";
+      el.style.marginTop = "0";
+      el.style.marginBottom = "0.5rem";
+    }
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -66,6 +93,7 @@ export function InfoTip({
       </button>
       {open && (
         <span
+          ref={panelRef}
           id={panelId}
           role="dialog"
           aria-label={title}

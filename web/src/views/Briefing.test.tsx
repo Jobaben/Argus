@@ -149,6 +149,15 @@ describe("Briefing", () => {
     await waitFor(() => expect(button).not.toHaveAttribute("aria-disabled"));
   });
 
+  it("says so when marking caught up fails, rather than failing silently", async () => {
+    const ack = vi.fn(async () => {
+      throw new Error("HTTP 500");
+    });
+    render(<Briefing briefing={briefing()} loading={false} error={null} ack={ack} />);
+    fireEvent.click(screen.getByRole("button", { name: /mark caught up/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/window was not reset: HTTP 500/);
+  });
+
   it("links a failure to the run's transcript, and to Issues when there is none", () => {
     // Every other row on the page linked to the thing it described; the failures
     // list — the most actionable one — was dead.

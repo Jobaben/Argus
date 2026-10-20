@@ -15,11 +15,15 @@
  * - `attention` — solid await-violet. "Review" on something waiting for you.
  * - `danger`    — fail-red outline. Never solid: a destructive action should
  *                 never be the loudest thing on screen.
+ * - `quiet-danger` — a ghost that only turns red under the pointer, for the
+ *                 destructive action that sits at the end of every row (Delete):
+ *                 there and findable, never what the eye lands on first.
  *
  * The class strings live here, apart from the components in `Button.tsx`, so an
  * `<a>` or a `<summary>` can wear them too.
  */
-export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger" | "approve" | "attention";
+export type ButtonVariant =
+  "primary" | "secondary" | "ghost" | "danger" | "quiet-danger" | "approve" | "attention";
 export type ButtonSize = "sm" | "md" | "lg";
 
 export const BASE =
@@ -32,6 +36,7 @@ export const VARIANT: Record<ButtonVariant, string> = {
     "border border-line-strong bg-surface-2 text-ink hover:border-ink-faint/45 hover:bg-surface-3",
   ghost: "text-ink-dim hover:bg-surface-2 hover:text-ink",
   danger: "border border-fail/35 text-fail hover:border-fail/60 hover:bg-fail/10",
+  "quiet-danger": "text-ink-faint hover:bg-fail/10 hover:text-fail focus-visible:text-fail",
   approve: "bg-ok text-ground hover:brightness-110",
   attention: "bg-await text-ground hover:brightness-110",
 };

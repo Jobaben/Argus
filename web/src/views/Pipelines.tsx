@@ -415,7 +415,7 @@ function PipelineCard({
             <IconButton
               icon="trash"
               label="Delete"
-              className="enabled:hover:bg-fail/10 enabled:hover:text-fail"
+              variant="quiet-danger"
               onClick={() => {
                 const n = live.activeIds.length;
                 const stops =

@@ -66,7 +66,10 @@ const PATHS = {
   sparkle:
     "M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9L12 3.5Z M18.5 16v4M16.5 18h4",
   history: "M4.5 12a7.5 7.5 0 1 0 2.4-5.5L4.5 8.8 M4.5 4.5v4.3h4.3 M12 8v4l2.5 1.5",
-  replay: "M8 5.8v12.4a.8.8 0 0 0 1.2.7l10-6.2a.8.8 0 0 0 0-1.4l-10-6.2a.8.8 0 0 0-1.2.7Z",
+  /** Play it back: a turn of the dial around a small play mark — distinct from
+   *  `play`, which starts something new. */
+  replay:
+    "M4.5 12a7.5 7.5 0 1 0 2.4-5.5L4.5 8.8 M4.5 4.5v4.3h4.3 M10.5 9.6v4.8a.5.5 0 0 0 .8.4l3.6-2.4a.5.5 0 0 0 0-.8l-3.6-2.4a.5.5 0 0 0-.8.4Z",
   dot: "M14 12a2 2 0 1 1-4 0a2 2 0 0 1 4 0Z",
   minus: "M5 12h14",
   /** Plain shapes, for marks where the *shape* is the category (the Knowledge

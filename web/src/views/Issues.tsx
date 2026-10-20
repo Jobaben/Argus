@@ -339,7 +339,7 @@ export default function Issues() {
   // there instead of letting the list teleport under the reader.
   const flip = useFlip();
   const facet = useMachineFacet();
-  const { issues, summary, loading, error, triage, loadOccurrences } = useIssues();
+  const { issues, summary, loading, error, refresh, triage, loadOccurrences } = useIssues();
   const [triageError, setTriageError] = useState<string | null>(null);
   const [filter, setFilter] = useState<IssueState | null>(null);
   const shown = filter === null ? issues : issues.filter((i) => i.state === filter);
@@ -379,12 +379,20 @@ export default function Issues() {
         <>
           {error && (
             <div className="mb-6">
-              <AlertStrip subject="Issues" message={`Couldn't load issues: ${error}`} />
+              <AlertStrip
+                subject="Issues"
+                message={`Couldn't load issues: ${error}`}
+                action={
+                  <Button size="sm" icon="retry" onClick={() => void refresh()}>
+                    Retry
+                  </Button>
+                }
+              />
             </div>
           )}
           {triageError && (
             <div className="mb-6">
-              <AlertStrip subject="Triage" message={triageError} />
+              <AlertStrip subject="Triage" message={triageError} role="alert" />
             </div>
           )}
 

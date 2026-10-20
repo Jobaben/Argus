@@ -29,18 +29,6 @@ const PHASE_BADGE: Record<PhaseTuningStatus, DsStatus> = {
   skipped: "stopped",
 };
 
-/** "Skipped" in StatusPill's grey and anatomy. StatusPill only knows its own
- *  words, and its nearest grey state reads "Stopped" — which a phase the pass
- *  chose not to read never was. */
-function SkippedPill() {
-  return (
-    <span className="inline-flex h-5 shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-line-strong bg-ink-faint/8 pl-1.5 pr-2 text-micro font-semibold leading-none text-ink-dim">
-      <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-current" />
-      Skipped
-    </span>
-  );
-}
-
 const EMPTY_SELECTION: ReadonlySet<string> = new Set();
 
 const FIELD_LABEL: Record<TuningProposal["field"], string> = {
@@ -120,11 +108,13 @@ function PhaseSection({
           <span className="font-normal text-ink-faint">{index + 1}. </span>
           {phase.phaseName}
         </h3>
-        {phase.status === "skipped" ? (
-          <SkippedPill />
-        ) : (
-          <StatusPill status={PHASE_BADGE[phase.status]} size="sm" />
-        )}
+        {/* The nearest grey state reads "Stopped", which a phase the pass chose
+            not to read never was — so it is named for what it is. */}
+        <StatusPill
+          status={PHASE_BADGE[phase.status]}
+          size="sm"
+          label={phase.status === "skipped" ? "Skipped" : undefined}
+        />
       </header>
       {phase.summary && <p className="mt-1.5 text-small text-ink-dim">{phase.summary}</p>}
       {phase.status === "running" && (

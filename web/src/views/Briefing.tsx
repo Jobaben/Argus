@@ -374,6 +374,7 @@ export default function Briefing({
   ack: () => Promise<void>;
 }) {
   const [acking, setAcking] = useState(false);
+  const [ackError, setAckError] = useState<string | null>(null);
   const calm = briefing != null && briefing.attentionCount === 0 && briefing.window.totalRuns === 0;
   // Unavailable rather than `disabled`: a disabled button drops keyboard focus
   // to the page the moment it is pressed. And there is nothing to mark read
@@ -382,8 +383,9 @@ export default function Briefing({
   const onAck = () => {
     if (ackUnavailable) return;
     setAcking(true);
+    setAckError(null);
     void ack()
-      .catch(() => {})
+      .catch((e: unknown) => setAckError(e instanceof Error ? e.message : String(e)))
       .finally(() => setAcking(false));
   };
 
@@ -594,6 +596,15 @@ export default function Briefing({
       {error && (
         <div className="mb-6">
           <AlertStrip subject="Briefing" message={`Couldn't reach the Argus server: ${error}`} />
+        </div>
+      )}
+      {ackError && (
+        <div className="mb-6">
+          <AlertStrip
+            subject="Mark caught up"
+            message={`The window was not reset: ${ackError}`}
+            role="alert"
+          />
         </div>
       )}
 

@@ -216,10 +216,22 @@ function useActivePill(activeId: string, tabCount: number) {
     };
     measure();
     // The strip scrolls, and it reflows when the window does — both move the
-    // anchor without changing which one is active.
+    // anchor without changing which one is active. So does the web font
+    // arriving: the first measurement is taken against the fallback face, and
+    // when Hellix swaps in every tab changes width, which left the pill parked
+    // between two tabs until something else happened to re-measure it. A
+    // ResizeObserver on the tabs themselves catches that and a badge appearing.
     track.addEventListener("scroll", measure, { passive: true });
     window.addEventListener("resize", measure);
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    for (const tab of track.querySelectorAll("a")) ro?.observe(tab);
+    let live = true;
+    void document.fonts?.ready.then(() => {
+      if (live) measure();
+    });
     return () => {
+      live = false;
+      ro?.disconnect();
       track.removeEventListener("scroll", measure);
       window.removeEventListener("resize", measure);
     };

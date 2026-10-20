@@ -663,8 +663,9 @@ export default function Sentinel() {
         </div>
       )}
       {actionError && (
-        <div role="alert" className="mb-6">
+        <div className="mb-6">
           <AlertStrip
+            role="alert"
             subject="Not done"
             message={`${actionError}${/auth/i.test(actionError) ? " — sign in to act on incidents." : ""}`}
           />

@@ -201,7 +201,7 @@ export function SkeletonCounters({ count = 4 }: { count?: number }) {
           className="rounded-tile border border-line bg-surface px-4 py-3.5 shadow-raised"
         >
           <Skeleton className="h-7 w-10" />
-          <Skeleton className="mt-2.5 h-2.5 w-16" />
+          <Skeleton className="mt-3.5 h-2.5 w-16" />
         </div>
       ))}
     </div>

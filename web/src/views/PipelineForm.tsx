@@ -55,10 +55,6 @@ const FIELD = `${fieldClass} h-9 w-full`;
 /** For the shared runtime/model/effort pickers, which take their visible name
  *  as `caption` and fill their column themselves. */
 const PICKER = `${fieldClass} h-9`;
-/** A removal that asks nothing first: quiet until hovered, then red. The
- *  `enabled:` prefix is what lets the red outrank the ghost variant's own
- *  hover colours. */
-const REMOVE = "enabled:hover:bg-fail/10 enabled:hover:text-fail";
 /** A pressable chip — a rail phase, a "starts after" toggle — in the button
  *  language: the ghost anatomy (press feedback, disabled convention) on a
  *  quiet surface, lit in the selection colour while pressed. The border colour
@@ -897,7 +893,7 @@ export function PipelineForm({
                   icon="trash"
                   label="Remove phase"
                   size="sm"
-                  className={REMOVE}
+                  variant="quiet-danger"
                   onClick={() => removePhase(pi)}
                 />
               </div>
@@ -1009,7 +1005,7 @@ export function PipelineForm({
                             icon="trash"
                             label="Remove step"
                             size="sm"
-                            className={REMOVE}
+                            variant="quiet-danger"
                             onClick={() =>
                               setPhase(pi, { steps: phase.steps.filter((_, k) => k !== si) })
                             }

@@ -242,8 +242,7 @@ export function ResultEditor({
                     icon="trash"
                     size="sm"
                     label={`Remove result field ${fi + 1}`}
-                    // `enabled:` so the red outranks the ghost variant's hover.
-                    className="enabled:hover:bg-fail/10 enabled:hover:text-fail"
+                    variant="quiet-danger"
                     onClick={() => setFields(fields.filter((_, i) => i !== fi))}
                   />
                 </div>

@@ -41,7 +41,7 @@ nothing recurs.
 
 - **Prompt** (the field is labelled with the runtime you picked — `claude -p`,
   `codex exec`, `opencode run` or `qwen`) and a **working directory** (absolute path,
-  must exist) — the only two required fields; **▶ Launch** stays disabled
+  must exist) — the only two required fields; **Launch** stays disabled
   until both are filled.
 - **Name** (optional) — how the run is titled everywhere; left empty it
   defaults to the prompt's first line (ellipsized at 60 chars).
@@ -91,7 +91,7 @@ audits, periodic report generators, cleanup jobs — then watch their run
 history and logs without leaving the page. Two sub-tabs: **Schedules** (this
 section) and **One-off** (see [One-off runs](#one-off-runs)).
 
-**Creating a schedule** — click **+ New schedule**:
+**Creating a schedule** — click **New schedule**:
 
 ![New schedule form](../screenshots/scheduler-form.png)
 
@@ -100,8 +100,9 @@ section) and **One-off** (see [One-off runs](#one-off-runs)).
   the runtime the schedule will use.
 - **Runtime** — Claude Code, Codex, OpenCode, Qwen Code, or the server default.
 - **Working directory** — absolute path the agent runs in.
-- **Trigger** — one of: **every N minutes** (interval), **daily at HH:MM**,
-  **weekly on a day at HH:MM**, **Webhook**, or **After pipeline** (see below). Windowed triggers are available to pipelines, not schedules.
+- **Trigger** — one of: **On an interval** (every N minutes), **Daily** (at
+  HH:MM), **Weekly** (a day at HH:MM), **On a webhook call**, or **After a
+  pipeline** (see below). Windowed triggers are available to pipelines, not schedules.
   Overlap policy defaults to _skip if still running_.
 - **Catch up a missed run on recovery** — off by default. Normally a slot
   only fires within a short grace window (a few minutes), so if the machine

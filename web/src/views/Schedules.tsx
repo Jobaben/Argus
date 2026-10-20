@@ -833,7 +833,7 @@ function ScheduleCard({
           </p>
         )}
         <Button
-          variant="danger"
+          variant="quiet-danger"
           size="sm"
           icon="trash"
           className="ml-auto"
