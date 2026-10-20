@@ -135,7 +135,8 @@ function AgentsView({
               </ButtonLink>
             }
           >
-            No background agents found yet. Launch one and it'll appear here.
+            A task launched to run in the background shows up here while it works, with its status
+            and what it is doing.
           </EmptyState>
         ) : (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">

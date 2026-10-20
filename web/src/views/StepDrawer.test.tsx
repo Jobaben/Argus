@@ -29,10 +29,15 @@ function selection(over: Partial<StepSelection> = {}): StepSelection {
   };
 }
 
+/** Answers `GET /api/runs/:id` the way the server does: the record and its
+ *  log tail side by side, `{ run, log }`. */
 function stubRun(body: Record<string, unknown>) {
+  const { log, ...run } = body;
   vi.stubGlobal(
     "fetch",
-    vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => body } as Response),
+    vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({ run, log }) } as Response),
   );
 }
 

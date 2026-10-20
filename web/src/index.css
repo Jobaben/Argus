@@ -560,10 +560,16 @@ samp,
 }
 
 /* One consistent, high-contrast focus indicator everywhere; the eye accent
-   clears AA against every surface and never doubles up with hover borders. */
-:focus-visible {
-  outline: 2px solid var(--color-eye);
-  outline-offset: 2px;
+   clears AA against every surface and never doubles up with hover borders.
+   In the base layer, so a component that draws its own focus — a field's
+   border and ring, the stretched hit area of a step tile — can say
+   `focus:outline-none` and be obeyed: unlayered, this rule outranked every
+   utility and those got a second, outer ring. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--color-eye);
+    outline-offset: 2px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
