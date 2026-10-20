@@ -35,28 +35,42 @@ _Pipelines at a glance — the home tab._ Route: `#/command`
 
 **Purpose:** one card per pipeline, attention-first, with a **phase graph**
 drawing the whole pipeline's shape and a **focus panel** beside it showing one
-phase's step tiles at a time. A phase waiting on you gets a **Review** button
-on its row that opens the review drawer — this is the wall you keep open on a
-second monitor.
+phase's step tiles at a time. Everything waiting on you is listed above the
+board under **Needs you**, each with a **Review** button that opens the review
+drawer — this is the wall you keep open on a second monitor.
 
 **What you see:**
 
 - A **situation strip** across the top, answering "does anything need me?"
-  without reading the board: counts for gates awaiting you, failures, runs in
-  flight, live agents, down/failing monitors and open issues — each a link to the
-  view that explains it. It shows **only what is true**: a metric with nothing to
-  report is omitted rather than drawn as a grey zero, and when there is genuinely
-  nothing it says so. On the right: the next scheduled firing with a live
-  countdown, today's spend against your daily limit as a bar, and a 24-hour
-  histogram of run outcomes (failures stacked in red over successes).
+  without reading the board. On the left, what asks something of you: gates
+  awaiting you, failures, down/failing monitors, open issues and anomalies —
+  each a link to the view that explains it, and **awaiting you** / **failed**
+  open the first such review directly. Beside them, the machine at work: runs
+  in flight and live agents. It shows **only what is true**: a metric with
+  nothing to report is omitted rather than drawn as a grey zero, and when
+  nothing is asked of you it says **Nothing needs you** — even while runs are
+  in flight. On the right: the next scheduled firing with a live countdown,
+  today's spend against your daily limit as a bar, and a 24-hour histogram of
+  run outcomes (failures stacked in red over successes).
+- **Needs you**, when anything does: one line per gate waiting for approval
+  (first) and per phase that stopped short, each naming the pipeline and phase,
+  the failure reason where there is one, and a **Review** button into the same
+  drawer the card opens. A card shows one phase at a time, so this is where a
+  second gate in a fan-out, or a gate on a card further down, is never missed.
+  It draws nothing when nothing is waiting.
 - A **live activity rail** down the right: **Live** shows what is running right
   now, including scheduled runs and one-off launches that have no card on the board. Pipeline steps can show current tool activity; batch schedule/one-off invocations do not provide the same per-tool stream. **Recent** lists the last
-  completed runs with outcome, duration and cost. On a narrow screen it moves
-  below the board.
-- A **card per pipeline**: name, phase count, the pipeline's **model chip**
-  (e.g. `fable`, `opus`), an aggregated **status pill** (`awaiting approval`
-  wins over `failed` over `working`…), the latest run's **Σ cost** (tokens +
-  USD, including superseded revise attempts), and a freshness stamp.
+  completed runs with outcome, duration and cost. Every row opens that run's
+  [Flight Recorder](#flight-recorder). From about 1024px wide the rail sits
+  beside the board and stays in view as you scroll; on a narrower screen it
+  moves below the board. It shows on an empty board too, so a scheduled run or
+  one-off launch is visible before any pipeline exists.
+- A **card per pipeline**: name, an aggregated **status pill** (`Needs
+approval` wins over `Failed` over `Working`…), then quieter facts — phase
+  count, the pipeline's **model** (e.g. `fable`, `opus`), the latest run's
+  **run total** (tokens + USD, including superseded revise attempts), and a
+  freshness stamp. A card waiting on you carries a violet wash along its top
+  edge; a failed one, red.
 - Under the header, the **phase graph**: one numbered node per phase carrying
   its status dot, name, a `gate` marker, a `try N` marker after a retry or
   revise, and one mini-dot per step (a `done/total` count once dots stop being
@@ -86,15 +100,22 @@ second monitor.
   phase's **step tiles** — step name, `job <runId>`, a status pill, the
   failure reason if it failed, a live activity line and animated sweep bar
   while working, and a per-step meter — duration, tokens, dollars (e.g.
-  `2m 19s · 23.5k tok · $1.09`). Its header names what the phase waited for
+  `2m 19s · 23.5k tok · $1.09`). Click anywhere on a tile to open its step
+  drawer. When the phase in focus is the one waiting on you (or the one that
+  stopped short), a callout with its **Review** button leads the panel, above
+  the tiles. Its header names what the phase waited for
   (`←`) and where its routes lead (`→`), each with the condition it needs. By
   default the focus **follows the action** — the gate awaiting you, else the
   failure, else the live work, else the next phase up — so an untouched board
   always shows the detail that matters right now.
 - If two instances of one pipeline run concurrently, the card splits into
   labeled sub-sections, one per instance, each with its own graph and focus.
-- **Total spend** (top-right): the all-time board total. **Reset total** is a
-  two-click armed confirm — the reset is irreversible.
+- **Total spend** (top-right): the all-time board total. The small reset
+  button beside it (**Reset total**) is a two-click armed confirm — the reset
+  is irreversible. **Launch a task** beside it is the page's primary action:
+  it opens the Scheduler's one-off form.
+- **Before any pipeline exists**, the board shows the iris and three ways to
+  start: **Launch a task**, **New schedule** and **Build a pipeline**.
 
 **What you can do:**
 

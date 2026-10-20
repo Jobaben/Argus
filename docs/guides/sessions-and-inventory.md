@@ -54,7 +54,7 @@ readable Claude Code, Codex and Qwen Code transcripts under their configured hom
 
 ## Sessions
 
-_Browse & read transcripts._ Route: `#/sessions` (⋯ More menu);
+_Browse & read transcripts._ Route: `#/sessions` (More menu);
 `#/sessions/<project>` narrows the list to one working directory.
 
 ![Sessions](../screenshots/sessions.png)

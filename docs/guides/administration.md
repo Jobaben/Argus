@@ -46,7 +46,7 @@ two-role model: **root** (the first account, manages users) and **members**
 3. **Request an account** — anyone on the machine can register; the account
    lands **pending** until root approves it.
 
-**The Users tab** (visible in ⋯ More only to root): all accounts, **pending
+**The Users tab** (visible in More only to root): all accounts, **pending
 first** — each with username, role, and an "awaiting approval" tag. Root can
 **Approve** or **Reject** a pending registration, and **Remove** an active
 member (never yourself). Non-root visitors see only an explanatory notice

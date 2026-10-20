@@ -1,4 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { Button, ButtonLink } from "./Button";
+import { Icon } from "./Icon";
 
 /**
  * A per-route error boundary.
@@ -60,34 +62,35 @@ export class ErrorBoundary extends Component<Props, State> {
       return <div key={this.state.attempt}>{this.props.children}</div>;
     }
     return (
-      <div className="mx-auto max-w-[1600px] px-6 py-12">
+      <div className="mx-auto max-w-[1600px] px-4 py-10 sm:px-6">
         <div
           role="alert"
-          className="rounded-panel border border-fail/40 bg-fail/10 px-6 py-5 text-sm"
+          className="max-w-3xl rounded-panel border border-fail/35 bg-gradient-to-b from-fail/[0.08] to-surface px-5 py-5 text-sm shadow-raised sm:px-6"
         >
-          <h2 className="text-base font-bold text-fail">Something broke in {this.props.label}</h2>
-          <p className="mt-2 max-w-prose leading-relaxed text-ink-dim">
-            The rest of Argus is unaffected — the navigation, the command palette and every other
-            view still work. This is almost always an unexpected shape in the data this view reads.
-          </p>
-          <pre className="mt-3 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-black/30 p-3 font-mono text-xs text-ink-dim">
+          <div className="flex items-start gap-3">
+            <Icon name="alert" size={20} className="mt-0.5 text-fail" />
+            <div className="min-w-0 flex-1">
+              <h2 className="text-heading font-semibold text-ink">
+                Something broke in {this.props.label}
+              </h2>
+              <p className="mt-1.5 max-w-prose text-small leading-relaxed text-ink-dim">
+                The rest of Argus is unaffected — the navigation, the command palette and every
+                other view still work. This is almost always an unexpected shape in the data this
+                view reads.
+              </p>
+            </div>
+          </div>
+          <pre className="mt-4 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-control border border-line bg-ground-2/80 p-3 font-mono text-caption text-fail-ink">
             {error.message}
           </pre>
           <div className="mt-4 flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={this.retry}
-              className="rounded-md border border-line px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.1em] text-ink-dim transition duration-(--duration-quick) hover:text-ink"
-            >
+            <Button variant="primary" size="sm" icon="retry" onClick={this.retry}>
               Try again
-            </button>
-            <a
-              href="#/command"
-              className="rounded-md border border-line px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.1em] text-ink-dim transition duration-(--duration-quick) hover:text-ink"
-            >
+            </Button>
+            <ButtonLink href="#/command" variant="ghost" size="sm">
               Command Center
-            </a>
-            <span className="font-mono text-[10.5px] text-ink-faint">
+            </ButtonLink>
+            <span className="text-caption text-ink-faint">
               The full stack is in the browser console.
             </span>
           </div>

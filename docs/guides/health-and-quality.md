@@ -423,7 +423,7 @@ same 400-record cap; rubrics live on the schedule or pipeline definition.
 ## Sentinel
 
 _Incidents, escalation, and a diagnostic that proposes but never acts._ Route:
-`#/sentinel` (`g n`, or the ⋯ More menu — the Briefing is where a signal is
+`#/sentinel` (`g n`, or the More menu — the Briefing is where a signal is
 first seen; Sentinel is where its record lives)
 
 **Purpose:** Monitors, Issues and Watchtower each raise a _signal_. None of them

@@ -4,6 +4,8 @@ import type { Agent, AgentStatus } from "./types";
 import { flushSync } from "react-dom";
 import {
   AgentTile,
+  AlertStrip,
+  ButtonLink,
   EmptyState,
   ErrorBoundary,
   Handoff,
@@ -113,8 +115,8 @@ function AgentsView({
       </section>
 
       {error && (
-        <div className="mb-6 rounded-tile border border-fail/30 bg-fail/10 px-4 py-3 text-sm text-fail">
-          Couldn't reach the Argus server: {error}
+        <div className="mb-6">
+          <AlertStrip subject="Agents" message={`Couldn't reach the Argus server: ${error}`} />
         </div>
       )}
 
@@ -124,7 +126,17 @@ function AgentsView({
         skeleton={<SkeletonGrid count={4} columns={2} lines={2} />}
       >
         {agents.length === 0 ? (
-          <EmptyState>No background agents found yet. Launch one and it'll appear here.</EmptyState>
+          <EmptyState
+            icon="bolt"
+            title="No background agents yet"
+            action={
+              <ButtonLink href="#/schedules/oneoff" variant="primary" icon="bolt">
+                Launch a task
+              </ButtonLink>
+            }
+          >
+            No background agents found yet. Launch one and it'll appear here.
+          </EmptyState>
         ) : (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             {agents.map((a, i) => (
