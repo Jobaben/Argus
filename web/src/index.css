@@ -251,10 +251,13 @@ samp,
 }
 
 /* Windows-first: the default scrollbar is a light-grey slab that is the
-   brightest thing on a dark dashboard. Thin, low-contrast, still grabbable. */
-* {
-  scrollbar-width: thin;
+   brightest thing on a dark dashboard. Low-contrast and still grabbable.
+   `scrollbar-color` inherits, so it is set once here rather than through a
+   universal selector every element on every page would have to match; the
+   page's own bar is also made thin, the inner scrollers keep their width. */
+:root {
   scrollbar-color: rgb(146 180 217 / 0.22) transparent;
+  scrollbar-width: thin;
 }
 
 /* Section labels: small, semibold, spaced capitals in the brand face — the one
