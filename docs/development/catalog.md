@@ -122,6 +122,10 @@ Markdown and HTML versions are listed separately when both exist. Runtime data, 
 - [Plan: Argus pipeline reliability (every audit finding)](../argus/reliability/plan.md)
 - [Handoff: Argus reliability plan](../argus/reliability/handoff.md)
 
+## Headless isolation
+
+- [Handoff: a Claude setup folder per pipeline](../argus/headless-isolation/handoff.md)
+
 ## Design-system sources
 
 - [Argus design system — sync sources](../../design/README.md)
