@@ -72,6 +72,61 @@ describe("SituationStrip", () => {
     expect(screen.queryByText(/nothing needs you/i)).toBeNull();
   });
 
+  it("sends the attention chips straight to the review when the board knows which one", () => {
+    render(
+      <SituationStrip
+        situation={situation({
+          counts: {
+            runsInFlight: 2,
+            gatesWaiting: 1,
+            failedInstances: 1,
+            monitorsDown: 0,
+            monitorsFailing: 0,
+            openIssues: 0,
+            liveAgents: 0,
+            anomalies: 0,
+          },
+        })}
+        loading={false}
+        attentionHref="#/command/i1/review"
+        failedHref="#/command/i2/build"
+      />,
+    );
+    expect(screen.getByRole("link", { name: /awaiting you/i })).toHaveAttribute(
+      "href",
+      "#/command/i1/review",
+    );
+    expect(screen.getByRole("link", { name: /failed/i })).toHaveAttribute(
+      "href",
+      "#/command/i2/build",
+    );
+  });
+
+  it("says nothing needs you while work is still running", () => {
+    // Running is the machine at work, not a request of you: the calm message
+    // holds, and only "nothing running" is dropped from it.
+    render(
+      <SituationStrip
+        situation={situation({
+          counts: {
+            runsInFlight: 3,
+            gatesWaiting: 0,
+            failedInstances: 0,
+            monitorsDown: 0,
+            monitorsFailing: 0,
+            openIssues: 0,
+            liveAgents: 0,
+            anomalies: 0,
+          },
+        })}
+        loading={false}
+      />,
+    );
+    expect(screen.getByText(/nothing needs you/i)).toBeInTheDocument();
+    expect(screen.queryByText(/nothing running/i)).toBeNull();
+    expect(screen.getByRole("link", { name: /3 running/i })).toBeInTheDocument();
+  });
+
   it("links each metric to the view that explains it", () => {
     render(
       <SituationStrip

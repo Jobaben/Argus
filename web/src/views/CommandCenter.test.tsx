@@ -407,7 +407,42 @@ describe("CommandCenter", () => {
     expect(screen.getByText("dev")).toBeInTheDocument();
     // one "Failed" pill on the row badge, one on the failed step tile
     expect(screen.getAllByText("Failed")).toHaveLength(2);
-    expect(screen.getByText(/exit code 1/i)).toBeInTheDocument();
+    // The reason is on the failed step's tile — and, once more, on the failure's
+    // line in "Needs you" above the board, which is checked on its own below.
+    const tile = screen.getByRole("button", { name: /^dev/ }).closest("article")!;
+    expect(within(tile).getByText(/exit code 1/i)).toBeInTheDocument();
+  });
+
+  describe("Needs you", () => {
+    it("lists every waiting gate and failure above the board, waiting ones first", () => {
+      mockOverview.overview = [
+        entry("broken", "failed", ["succeeded", "failed"]),
+        entry("auth-refactor", "awaiting-approval", ["succeeded", "awaiting-approval"]),
+      ];
+      render(<CommandCenter />);
+      const inbox = screen.getByRole("region", { name: /needs you/i });
+      const items = within(inbox).getAllByRole("listitem");
+      expect(items).toHaveLength(2);
+      expect(items[0]).toHaveTextContent("auth-refactor · Phase1");
+      expect(items[0]).toHaveTextContent(/waiting for your approval/i);
+      expect(items[1]).toHaveTextContent("broken · Phase1");
+    });
+
+    it("is not drawn when nothing is waiting", () => {
+      mockOverview.overview = [entry("scheduler-prune", "running", ["succeeded", "running"])];
+      render(<CommandCenter />);
+      expect(screen.queryByRole("region", { name: /needs you/i })).toBeNull();
+    });
+
+    it("opens the same review drawer as the board's opener", async () => {
+      mockOverview.overview = [awaiting()];
+      render(<CommandCenter />);
+      const inbox = screen.getByRole("region", { name: /needs you/i });
+      fireEvent.click(within(inbox).getByRole("button", { name: /^review$/i }));
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.click(within(dialog).getByRole("button", { name: /^approve$/i }));
+      expect(approve).toHaveBeenCalledWith("auth-refactor-i1", { phaseId: "ph1" });
+    });
   });
 
   it("surfaces an action error in the drawer and re-enables the gate", async () => {

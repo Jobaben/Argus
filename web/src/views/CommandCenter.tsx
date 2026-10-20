@@ -20,9 +20,15 @@ import { useRunActivity } from "../useRunActivity";
 import type { LiveActivity } from "../useRunActivity";
 import { useTotals } from "../useTotals";
 import {
-  EmptyState,
+  AlertStrip,
+  Button,
+  ButtonLink,
+  chipClass,
   formatElapsed,
   Handoff,
+  Icon,
+  IconButton,
+  IrisMark,
   Meter,
   Page,
   RAIL,
@@ -37,6 +43,7 @@ import {
   toOverviewRows,
   useChangeFlash,
   useFlip,
+  useListPresence,
   useSyncedDelay,
   DURATION,
   useTicker,
@@ -132,7 +139,7 @@ function StepTile({
       // flash fade *in* as slowly as it faded out, which is the wrong way round:
       // attention should be claimed at once and then released on a curve, not
       // eased into and cut off.
-      className={`relative flex flex-col gap-[7px] overflow-hidden rounded-tile border bg-gradient-to-b to-surface pb-2.5 pl-3.5 pr-3 pt-[11px] transition-[box-shadow,border-color,background-color] ${
+      className={`relative flex flex-col gap-2 overflow-hidden rounded-tile border bg-gradient-to-b to-surface pb-3 pl-4 pr-3 pt-3 transition-[box-shadow,border-color,background-color] hover:border-line-strong ${
         justChanged ? "duration-(--duration-quick)" : "duration-(--duration-slow)"
       } ${TILE_SKIN[token]} ${
         justChanged ? "shadow-[0_0_0_1px_var(--color-eye),0_0_24px_-4px_var(--color-eye)]" : ""
@@ -143,16 +150,18 @@ function StepTile({
         className={`absolute inset-y-0 left-0 w-[3px] ${RAIL[token]}`}
       />
       <div className="flex items-start justify-between gap-2">
-        {/* The name is the activator rather than the whole tile: a tile-sized
-            button would swallow the gate's Approve/Revise controls inside it,
-            and a nested interactive element is invalid. */}
+        {/* The name is the activator rather than the whole tile — a tile-sized
+            button around the tile's own content would be a nested interactive
+            element — but its hit area is stretched over the tile by `::after`,
+            so the whole tile opens the drawer. The few things inside that carry
+            a tooltip of their own sit above that layer. */}
         <button
           type="button"
           // The tile's own position, so the drawer grows out of the row you
           // pressed instead of out of the screen edge. Read from the event
           // rather than measured later: by then the board may have re-sorted.
           onClick={(e) => onOpen(e.currentTarget.getBoundingClientRect().top)}
-          className="min-w-0 flex-1 text-left"
+          className="min-w-0 flex-1 text-left after:absolute after:inset-0 after:rounded-tile after:content-[''] focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-eye"
           title="Open this step's run, log and cost"
         >
           <div className="flex min-w-0 items-baseline gap-1.5">
@@ -162,22 +171,18 @@ function StepTile({
               <span
                 data-testid="candidate-badge"
                 title={candidateTitle(step)}
-                className={`shrink-0 rounded border px-1 font-mono text-[9px] font-bold uppercase leading-[15px] tracking-[0.08em] ${
-                  step.selected
-                    ? "border-ok/50 bg-ok/10 text-ok"
-                    : step.verified === false
-                      ? "border-fail/40 text-fail"
-                      : "border-line text-ink-faint"
-                }`}
+                className={`relative z-10 ${chipClass(
+                  step.selected ? "ok" : step.verified === false ? "fail" : "neutral",
+                )}`}
               >
                 c{step.candidate.index + 1}
               </span>
             )}
-            <span className="min-w-0 break-words text-tile-name font-bold leading-tight underline decoration-transparent decoration-dotted underline-offset-[3px] transition duration-(--duration-quick) hover:decoration-ink-faint">
+            <span className="min-w-0 break-words text-tile-name font-semibold leading-snug text-ink">
               {step.name}
             </span>
           </div>
-          <div className="mt-0.5 font-mono text-id text-ink-faint">
+          <div className="mt-0.5 truncate font-mono text-id text-ink-faint">
             {step.runId ? `job ${step.runId}` : "job ——"}
             {step.model && step.model !== rowModel && (
               <span title="Model running this step"> · {step.model}</span>
@@ -195,7 +200,7 @@ function StepTile({
           <span
             data-testid="candidate-superseded"
             title="Another candidate passed its checks first, so this one was stopped"
-            className="shrink-0 rounded-full border border-line px-1.5 font-mono text-[9px] uppercase leading-[16px] tracking-[0.08em] text-ink-faint"
+            className={`relative z-10 ${chipClass("neutral")}`}
           >
             superseded
           </span>
@@ -204,27 +209,30 @@ function StepTile({
         )}
       </div>
       {step.selected && (
-        <div className="font-mono text-meter text-ok">✓ selected — its checks passed</div>
+        <div className="flex items-center gap-1.5 text-caption font-semibold text-ok">
+          <Icon name="check" size={13} strokeWidth={2.25} />
+          selected — its checks passed
+        </div>
       )}
       {reason && (
-        <div className={`text-detail leading-snug ${TILE_DETAIL[token] ?? "text-ink-dim"}`}>
+        <div className={`text-small leading-snug ${TILE_DETAIL[token] ?? "text-ink-dim"}`}>
           {reason}
         </div>
       )}
       {activity && (
-        <div className="break-words font-mono text-meter text-ink-dim">
-          <span aria-hidden="true">▸ </span>
-          {activity}
+        <div className="flex min-w-0 items-start gap-1.5 text-caption leading-snug text-ink-dim">
+          <Icon name="activity" size={13} className="mt-px text-run" />
+          <span className="min-w-0 break-words font-mono">{activity}</span>
         </div>
       )}
       {elapsed && (
-        <div className="font-mono text-meter text-ink-faint">
-          {elapsed} <span className="text-ink-faint/70">elapsed</span>
+        <div className="text-caption text-ink-faint">
+          <span className="font-semibold text-ink-dim">{elapsed}</span> elapsed
         </div>
       )}
       {working && <SweepBar />}
       {hasMeter && (
-        <div className="flex items-center gap-2 font-mono text-meter text-ink-faint">
+        <div className="flex items-center gap-2 text-caption text-ink-faint">
           <Meter
             level="step"
             tokens={step.tokens}
@@ -233,7 +241,7 @@ function StepTile({
             title="Duration, tokens and dollar cost reported by this step's run"
           />
           {step.startedAt && (
-            <span className="ml-auto">
+            <span className="relative z-10 ml-auto">
               <TimeAgo iso={step.startedAt} />
             </span>
           )}
@@ -265,7 +273,7 @@ function DecisionNote({
   const [open, setOpen] = useState(false);
   const long = isLongValue(decision.value);
   return (
-    <div data-testid="phase-decision" className="min-w-0 px-0.5 text-[11px] text-ink-faint">
+    <div data-testid="phase-decision" className="min-w-0 px-0.5 text-caption text-ink-faint">
       <p className="min-w-0">
         <span className="font-mono text-ink-dim">{decision.artifact}</span>{" "}
         {!long && (
@@ -284,7 +292,7 @@ function DecisionNote({
         <div className="mt-1.5">
           <dl
             data-testid="decision-fields"
-            className={`flex min-w-0 flex-col gap-1.5 rounded-lg border border-line/70 bg-ground-2/60 px-2.5 py-2 ${
+            className={`flex min-w-0 flex-col gap-2 rounded-control border border-line bg-ground-2/60 px-3 py-2.5 ${
               open
                 ? ""
                 : "max-h-24 overflow-hidden [mask-image:linear-gradient(to_bottom,black_55%,transparent)]"
@@ -292,11 +300,7 @@ function DecisionNote({
           >
             {decisionFields(decision.value).map((field, i) => (
               <div key={field.key ?? i} className="min-w-0">
-                {field.key && (
-                  <dt className="font-mono text-[9px] font-bold uppercase tracking-[0.12em] text-ink-faint">
-                    {field.key}
-                  </dt>
-                )}
+                {field.key && <dt className="eyebrow">{field.key}</dt>}
                 <dd className="min-w-0 break-words leading-[1.55] text-ink-dim">
                   {field.kind === "list" ? (
                     <ul className="flex flex-col gap-1">
@@ -320,9 +324,13 @@ function DecisionNote({
             type="button"
             onClick={() => setOpen((v) => !v)}
             aria-expanded={open}
-            className="mt-1 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint transition hover:text-ink"
+            className="mt-1 inline-flex h-7 items-center gap-1 rounded-md px-1.5 text-caption font-semibold text-ink-dim transition duration-(--duration-quick) hover:bg-surface-2 hover:text-ink"
           >
-            <span aria-hidden="true">{open ? "▾" : "▸"}</span>
+            <Icon
+              name="chevron-down"
+              size={14}
+              className={`transition-transform duration-(--duration-base) ease-(--ease-out-expo) ${open ? "rotate-180" : ""}`}
+            />
             {open ? "Less" : "Full value"}
           </button>
         </div>
@@ -395,39 +403,32 @@ function PhaseFocus({
   });
   const undecided = routes.some((r) => r.condition) && pill.status !== "done";
   return (
-    <div className="flex min-w-0 flex-col gap-2.5 motion-safe:animate-[slide-up_var(--duration-base)_var(--ease-out-expo)_both]">
-      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 px-0.5">
-        <span className="font-mono text-[10px] text-ink-faint">
+    <div className="flex min-w-0 flex-col gap-3 motion-safe:animate-[slide-up_var(--duration-base)_var(--ease-out-expo)_both]">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-0.5">
+        <span className="font-mono text-caption text-ink-faint">
           {String(index + 1).padStart(2, "0")}
         </span>
-        <span className="min-w-0 break-words font-mono text-label font-bold uppercase tracking-[0.14em] text-ink-dim">
-          {pill.name}
-        </span>
-        <span className="rounded-full border border-line px-2 font-mono text-label text-ink-faint">
+        <span className="min-w-0 break-words text-heading font-semibold text-ink">{pill.name}</span>
+        <span
+          title={`${pill.steps.length} ${pill.steps.length === 1 ? "step" : "steps"}`}
+          className={chipClass("neutral")}
+        >
           {pill.steps.length}
         </span>
         {(pill.attempt ?? 0) > 0 && (
-          <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint">
-            attempt {pill.attempt + 1}
-          </span>
+          <span className={chipClass("neutral")}>attempt {pill.attempt + 1}</span>
         )}
         {pill.retryAt && pill.status === "failed" && (
-          <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-await">
-            retry queued
-          </span>
+          <span className={chipClass("await")}>retry queued</span>
         )}
-        {pill.skipped && (
-          <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint">
-            skipped
-          </span>
-        )}
+        {pill.skipped && <span className={chipClass("neutral")}>skipped</span>}
         {/* Each incoming edge with the condition that governs it: an
             unconditional edge is just the arrow it always was, a conditional
             one says what has to be true, and a skip-tolerant join says it
             accepts a branch that never ran. */}
         {edges.length > 0 && (
           <span
-            className="min-w-0 truncate font-mono text-[10px] text-ink-faint"
+            className="min-w-0 truncate text-caption text-ink-faint"
             title={`Waits for ${needNames.join(", ")}`}
           >
             ←{" "}
@@ -445,7 +446,7 @@ function PhaseFocus({
       {routes.length > 0 && (
         <p
           data-testid="phase-routes"
-          className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 px-0.5 text-[11px] text-ink-faint"
+          className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 px-0.5 text-caption text-ink-faint"
         >
           <span aria-hidden="true">→</span>
           {routes.map((r, i) => (
@@ -453,7 +454,7 @@ function PhaseFocus({
               {i > 0 && <span className="opacity-60">·</span>}
               {r.condition && (
                 <span
-                  className={`rounded border bg-surface-2 px-[5px] font-mono text-[8.5px] leading-[14px] ${
+                  className={`rounded-md border bg-surface-2 px-1.5 font-mono text-micro leading-[18px] ${
                     r.state === "taken"
                       ? "border-ok/40 text-ink-dim"
                       : r.state === "skipped"
@@ -474,11 +475,41 @@ function PhaseFocus({
       )}
       {/* Why this phase did not run, in the words of the decision that said so. */}
       {pill.skipped && pill.skipCause && (
-        <p data-testid="phase-skip" className="px-0.5 text-[11px] text-ink-faint">
+        <p data-testid="phase-skip" className="px-0.5 text-caption text-ink-faint">
           Not selected — {name(pill.skipCause.source)}: {pill.skipCause.label}
         </p>
       )}
       {pill.decision && <DecisionNote decision={pill.decision} name={name} />}
+      {/* One opener, no decision here: the artifacts this phase produced are
+          what is being approved, and they live in the review drawer. It leads
+          the panel rather than trailing the step grid — it is the reason this
+          phase is in focus, and below six tiles it was below the fold. */}
+      {instanceId && gate?.phaseId === pill.id && (
+        <div
+          className={`flex flex-wrap items-center gap-x-3 gap-y-2 rounded-control border px-3 py-2.5 ${
+            gate.canApprove ? "border-await/35 bg-await/[0.07]" : "border-fail/30 bg-fail/[0.06]"
+          }`}
+        >
+          <Icon
+            name={gate.canApprove ? "approve" : "alert"}
+            size={18}
+            className={gate.canApprove ? "text-await" : "text-fail"}
+          />
+          <p className="min-w-0 flex-1 text-small text-ink-dim">
+            {gate.canApprove
+              ? "Paused for your approval. Review what this phase produced, then approve or send it back."
+              : `This phase stopped short. Review what went wrong, then ${(reviseLabel ?? "Revise").toLowerCase()} it.`}
+          </p>
+          <Button
+            data-testid="gate-opener"
+            variant={gate.canApprove ? "attention" : "danger"}
+            iconRight="arrow-right"
+            onClick={(e) => onOpenGate(e.currentTarget.getBoundingClientRect().top)}
+          >
+            {gate.canApprove ? "Review" : `Review · ${reviseLabel ?? "Revise"}`}
+          </Button>
+        </div>
+      )}
       <ol
         aria-label={`Steps of phase ${pill.name}`}
         data-testid="phase-grid"
@@ -502,24 +533,6 @@ function PhaseFocus({
           );
         })}
       </ol>
-      {/* One opener, no decision here: the artifacts this phase produced are
-          what is being approved, and they live in the review drawer. */}
-      {instanceId && gate?.phaseId === pill.id && (
-        <div className="mt-1.5">
-          <button
-            type="button"
-            data-testid="gate-opener"
-            onClick={(e) => onOpenGate(e.currentTarget.getBoundingClientRect().top)}
-            className={`rounded-md border px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.08em] transition-transform duration-(--duration-press) motion-safe:active:scale-[0.97] ${
-              gate.canApprove
-                ? "border-await bg-await/10 text-await"
-                : "border-fail/40 bg-fail/10 text-fail"
-            }`}
-          >
-            {gate.canApprove ? "Review" : `Review · ${reviseLabel ?? "Revise"}`}
-          </button>
-        </div>
-      )}
     </div>
   );
 }
@@ -617,6 +630,24 @@ function InstanceBoard({
 }
 
 /**
+ * A card says what it wants from you before you read it: violet when a gate is
+ * waiting, red when it failed, otherwise the plain panel. The tint is a wash at
+ * the top edge, not a fill — the card is still a card, and the graph and tiles
+ * inside it carry the detail.
+ */
+const CARD_SKIN = {
+  await: "border-await/35 bg-gradient-to-b from-await/[0.07] via-surface to-surface",
+  failed: "border-fail/30 bg-gradient-to-b from-fail/[0.06] via-surface to-surface",
+  plain: "border-line bg-surface",
+} as const;
+
+function cardTone(rows: OverviewRow[]): keyof typeof CARD_SKIN {
+  if (rows.some((r) => r.badge === "await")) return "await";
+  if (rows.some((r) => r.badge === "failed")) return "failed";
+  return "plain";
+}
+
+/**
  * One card per pipeline. Every instance gets a responsive phase grid that
  * wraps into additional rows instead of making the board horizontally scroll.
  * Keeping the grid instance-local also means an older in-flight instance stays
@@ -669,62 +700,63 @@ function Row({
       // flashing in all at once; capped in `staggerDelay` so a long board still
       // finishes fast.
       style={{ animationDelay: staggerDelay(index) }}
-      className="min-w-0 overflow-x-clip rounded-tile border border-line bg-gradient-to-b from-surface-2 to-surface px-4 py-3.5 motion-safe:animate-[slide-up_var(--duration-base)_var(--ease-out-expo)_both]"
+      className={`min-w-0 overflow-x-clip rounded-panel border px-4 pb-4 pt-3.5 shadow-raised motion-safe:animate-[slide-up_var(--duration-base)_var(--ease-out-expo)_both] sm:px-5 ${CARD_SKIN[cardTone(rows)]}`}
     >
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
         {/* `break-words` here used to hyphenate the pipeline name one letter per
             line once the row ran out of space on a phone. Wrapping the row
             instead keeps the name intact. */}
-        <span className="text-[15px] font-extrabold tracking-[0.02em] text-ink">{first.name}</span>
+        <h2 className="text-title font-semibold text-ink">{first.name}</h2>
         {first.orphaned && (
           <span
-            className="rounded-full border border-fail/30 px-2 font-mono text-[10px] uppercase tracking-[0.14em] text-fail"
+            className={chipClass("fail")}
             title="This pipeline was deleted while these instances were live. Stopping them is the only action left."
           >
             pipeline deleted
           </span>
         )}
-        <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint">
-          {first.phases.length} phases
-        </span>
-        {first.model && (
-          <span
-            title="Model running this pipeline (steps that differ say so on their tile)"
-            className="rounded-full border border-line px-2 font-mono text-[10px] text-ink-dim"
-          >
-            {first.model}
-          </span>
-        )}
         {multi ? (
-          <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint">
-            {rows.length} instances
-          </span>
+          <span className={chipClass("neutral")}>{rows.length} instances</span>
         ) : (
-          <>
-            <StatusPill status={first.badge} />
-            {first.cost && (
-              <Meter
-                level="row"
-                tokens={first.cost.tokens}
-                usd={first.cost.usd}
-                title="Total tokens and dollar cost of the latest run, including revised attempts"
-              />
-            )}
-            <span className="ml-auto font-mono text-[10px]">
+          <StatusPill status={first.badge} />
+        )}
+        {/* The card's facts, quietest last: they answer "which one is this?",
+            not "what is it doing?", which the pill and the graph already did. */}
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 text-caption text-ink-faint sm:ml-auto">
+          <span>{first.phases.length} phases</span>
+          {first.model && (
+            <span
+              title="Model running this pipeline (steps that differ say so on their tile)"
+              className="max-w-[16rem] truncate text-ink-dim"
+            >
+              {first.model}
+            </span>
+          )}
+          {!multi && first.cost && (
+            <Meter
+              level="row"
+              divider
+              tokens={first.cost.tokens}
+              usd={first.cost.usd}
+              title="Total tokens and dollar cost of the latest run, including revised attempts"
+            />
+          )}
+          {!multi && (
+            <span className="border-l border-line pl-2.5">
               <TimeAgo iso={first.updatedAt} />
             </span>
-          </>
-        )}
+          )}
+        </div>
       </div>
-      <div className="mt-3.5 flex min-w-0 flex-col gap-4">
+      <div className="mt-4 flex min-w-0 flex-col gap-4">
         {rows.map((row, rowIndex) => (
           <section
             key={row.instanceId ?? row.pipelineId}
             className={`min-w-0 ${rowIndex > 0 ? "border-t border-line pt-3.5" : ""}`}
           >
             {multi && (
-              <div className="mb-3 flex min-w-0 flex-wrap items-center gap-3">
-                <span className="min-w-0 truncate font-mono text-[10px] text-ink-faint">
+              <div className="mb-3 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5">
+                <span className="min-w-0 truncate font-mono text-caption text-ink-dim">
                   #{row.instanceLabel ?? row.instanceId}
                 </span>
                 <StatusPill status={row.badge} size="sm" />
@@ -736,22 +768,23 @@ function Row({
                     title="Total tokens and dollar cost of the latest run, including revised attempts"
                   />
                 )}
-                <span className="ml-auto font-mono text-[10px]">
+                <span className="ml-auto text-caption">
                   <TimeAgo iso={row.updatedAt} />
                 </span>
               </div>
             )}
             {row.orphaned && onAbort && row.instanceId && (
               <div className="mb-3 flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
+                <Button
+                  variant="danger"
+                  size="sm"
+                  icon="stop"
                   onClick={() => stop(row.instanceId!)}
-                  className="rounded-lg bg-fail/15 px-2.5 py-1 text-xs text-fail ring-1 ring-fail/30 hover:bg-fail/25"
                 >
                   Stop
-                </button>
+                </Button>
                 {abortError?.instanceId === row.instanceId && (
-                  <span className="text-xs text-fail">{abortError.message}</span>
+                  <span className="text-caption text-fail-ink">{abortError.message}</span>
                 )}
               </div>
             )}
@@ -786,17 +819,20 @@ function BoardTotal({
   if (!totals) return null;
   const sinceLabel = new Date(totals.since).toLocaleString();
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex items-center gap-2">
       <Meter
         level="board"
         tokens={totals.tokens}
         usd={totals.usd}
         title={`All-time tokens and dollar cost across every completed run since ${sinceLabel}`}
       />
+      {/* Bookkeeping, not an action anyone came here to take: an icon beside
+          the figure it resets, then a two-step confirm. */}
       {arming ? (
         <div className="flex items-center gap-1.5">
-          <button
-            type="button"
+          <Button
+            variant="danger"
+            size="sm"
             onClick={() => {
               setBusy(true);
               void reset().finally(() => {
@@ -805,29 +841,186 @@ function BoardTotal({
               });
             }}
             disabled={busy}
-            className="rounded-md border border-fail bg-fail/10 px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-fail disabled:opacity-40"
           >
             Confirm reset
-          </button>
-          <button
-            type="button"
-            onClick={() => setArming(false)}
-            disabled={busy}
-            className="rounded-md border border-line px-2 py-1 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-dim disabled:opacity-40"
-          >
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setArming(false)} disabled={busy}>
             Cancel
-          </button>
+          </Button>
         </div>
       ) : (
-        <button
-          type="button"
-          onClick={() => setArming(true)}
-          title="Reset the all-time total"
-          className="rounded-md border border-line px-2 py-1 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-faint"
-        >
-          Reset total
-        </button>
+        <IconButton icon="retry" label="Reset total" size="sm" onClick={() => setArming(true)} />
       )}
+    </div>
+  );
+}
+
+interface AttentionItem {
+  key: string;
+  row: OverviewRow;
+  gate: OverviewGate;
+  phaseName: string;
+  /** Why it stopped, for a failure; null for a gate waiting to be approved. */
+  reason: string | null;
+}
+
+/** Every gate on the board, waiting ones first — the order the server already
+ *  sorts the cards in, flattened to one line per decision. */
+function attentionItems(rows: OverviewRow[]): AttentionItem[] {
+  const items = rows.flatMap((row) =>
+    row.orphaned || !row.instanceId
+      ? []
+      : row.gates.map((gate) => {
+          const phase = row.phases.find((p) => p.id === gate.phaseId);
+          return {
+            key: `${row.instanceId}:${gate.phaseId}`,
+            row,
+            gate,
+            phaseName: phase?.name ?? gate.phaseId,
+            reason: gate.canApprove
+              ? null
+              : (phase?.reason ?? row.failure?.reason ?? null)?.split("\n")[0] || null,
+          };
+        }),
+  );
+  return [...items.filter((i) => i.gate.canApprove), ...items.filter((i) => !i.gate.canApprove)];
+}
+
+/** The deep link that opens one gate's review: what the palette and `argus
+ *  tail` hand out, and now what the strip's "awaiting you" chip points at. */
+function gateHref(item: AttentionItem | undefined): string {
+  return item
+    ? `#/command/${encodeURIComponent(item.row.instanceId!)}/${encodeURIComponent(item.gate.phaseId)}`
+    : "#/command";
+}
+
+/**
+ * "Needs you": every decision the board is waiting on, as one list above it.
+ *
+ * The board is sorted attention-first, but a card holds a whole pipeline and
+ * shows one phase at a time, so a fan-out with two gates showed one of them,
+ * and a waiting gate on the fourth card was below the fold. This is the inbox:
+ * one row per gate or failure, the reason in a line, and the Review that opens
+ * it — the same drawer, the same deep link, nothing decided here.
+ */
+function AttentionQueue({
+  items,
+  onOpen,
+}: {
+  items: AttentionItem[];
+  onOpen: (item: AttentionItem, originY: number) => void;
+}) {
+  const shown = useListPresence(items, (i) => i.key);
+  if (shown.length === 0) return null;
+  const waiting = items.filter((i) => i.gate.canApprove).length;
+  return (
+    <section
+      aria-labelledby="needs-you-heading"
+      className="mb-4 overflow-hidden rounded-tile border border-await/30 bg-surface shadow-raised"
+    >
+      <div className="flex items-center gap-2.5 border-b border-line bg-await/[0.05] px-4 py-2.5">
+        <h2 id="needs-you-heading" className="eyebrow !text-await">
+          Needs you
+        </h2>
+        <span className="rounded-full bg-await/15 px-1.5 py-px text-micro font-semibold text-await">
+          {items.length}
+        </span>
+        <span className="ml-auto hidden text-caption text-ink-faint sm:inline">
+          {waiting > 0 && `${waiting} waiting for approval`}
+          {waiting > 0 && items.length > waiting && " · "}
+          {items.length > waiting && `${items.length - waiting} stopped short`}
+        </span>
+      </div>
+      <ul className="divide-y divide-line">
+        {shown.map(({ key, item, leaving }) => {
+          const approve = item.gate.canApprove;
+          const titleId = `needs-you-${key}`;
+          return (
+            <li
+              key={key}
+              inert={leaving}
+              aria-hidden={leaving ? true : undefined}
+              className={`flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 ${
+                leaving
+                  ? "motion-safe:animate-[fade-out_var(--duration-exit)_var(--ease-in-expo)_forwards]"
+                  : "motion-safe:animate-[slide-up_var(--duration-base)_var(--ease-out-expo)_both]"
+              }`}
+            >
+              <span
+                className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
+                  approve ? "bg-await/12 text-await" : "bg-fail/12 text-fail"
+                }`}
+              >
+                <Icon name={approve ? "approve" : "alert"} size={16} />
+              </span>
+              <div className="min-w-0 flex-1 basis-56">
+                {/* One text node: pipeline and phase are one name here, "which
+                    decision", not two facts to scan. */}
+                <p id={titleId} className="truncate text-sm font-semibold text-ink">
+                  {`${item.row.name} · ${item.phaseName}`}
+                </p>
+                <p className="truncate text-caption text-ink-dim">
+                  {approve ? (
+                    "Waiting for your approval"
+                  ) : (
+                    <span className="text-fail-ink">
+                      {item.reason ?? "This phase stopped short"}
+                    </span>
+                  )}
+                  {item.row.updatedAt && (
+                    <span className="text-ink-faint">
+                      {" · "}
+                      <TimeAgo iso={item.row.updatedAt} />
+                    </span>
+                  )}
+                </p>
+              </div>
+              <Button
+                variant={approve ? "attention" : "secondary"}
+                size="sm"
+                iconRight="arrow-right"
+                aria-describedby={titleId}
+                onClick={(e) => onOpen(item, e.currentTarget.getBoundingClientRect().top)}
+              >
+                {approve ? "Review" : item.row.failure?.kind === "restarted" ? "Retry" : "Review"}
+              </Button>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+/**
+ * The board before there is a board.
+ *
+ * A first run used to land on one grey sentence pointing at another tab. This
+ * is the brand's one large appearance on the board — the iris, watching an
+ * empty field — and the three ways to give it something to watch, ranked: a
+ * one-off task is the fastest way to see Argus work, so it is the primary.
+ */
+function EmptyBoard() {
+  return (
+    <div className="flex flex-col items-center rounded-panel border border-line bg-surface px-6 py-14 text-center shadow-raised sm:py-20">
+      <IrisMark size={72} />
+      <h2 className="mt-6 text-title font-semibold text-ink">No pipelines defined yet</h2>
+      <p className="mt-2 max-w-md text-small text-ink-dim">
+        Argus is watching. Pipelines appear here as ordered phases of agent steps, with the gates
+        where a human signs off. Start small: run one task now, put it on a schedule, or build a
+        pipeline.
+      </p>
+      <div className="mt-6 flex flex-wrap justify-center gap-2">
+        <ButtonLink href="#/schedules/oneoff" variant="primary" icon="bolt">
+          Launch a task
+        </ButtonLink>
+        <ButtonLink href="#/schedules" variant="secondary" icon="clock">
+          New schedule
+        </ButtonLink>
+        <ButtonLink href="#/pipelines" variant="secondary" icon="pipeline">
+          Build a pipeline
+        </ButtonLink>
+      </div>
     </div>
   );
 }
@@ -849,25 +1042,14 @@ function PeerBoard({ facet }: { facet: ReturnType<typeof useMachineFacet> }) {
   const pipelines = facet.peer?.summary?.facets.pipelines ?? [];
   if (pipelines.length === 0) return <PeerEmpty what="live pipelines" />;
   return (
-    <ul className="flex flex-col gap-2">
+    <ul className="divide-y divide-line overflow-hidden rounded-tile border border-line bg-surface shadow-raised">
       {pipelines.map((p) => {
         const gated = p.status === "awaiting-approval";
         return (
-          <li
-            key={p.id}
-            className={`flex flex-wrap items-baseline gap-x-3 rounded-tile border bg-surface px-3 py-2 ${
-              gated ? "border-await/40" : "border-line"
-            }`}
-          >
-            <span className="min-w-0 flex-1 truncate text-sm text-ink">{p.name}</span>
-            {p.phase && (
-              <span className="shrink-0 font-mono text-[11px] text-ink-faint">at {p.phase}</span>
-            )}
-            <span
-              className={`shrink-0 font-mono text-[10px] uppercase tracking-[0.1em] ${
-                gated ? "text-await" : "text-run"
-              }`}
-            >
+          <li key={p.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3">
+            <span className="min-w-0 flex-1 truncate text-sm font-semibold text-ink">{p.name}</span>
+            {p.phase && <span className="shrink-0 text-caption text-ink-faint">at {p.phase}</span>}
+            <span className={`shrink-0 ${chipClass(gated ? "await" : "run")}`}>
               {gated ? "needs approval" : p.status}
             </span>
           </li>
@@ -879,7 +1061,7 @@ function PeerBoard({ facet }: { facet: ReturnType<typeof useMachineFacet> }) {
 
 export default function CommandCenter() {
   const facet = useMachineFacet();
-  const { overview, loading, error, approve, revise, abort } = useOverview();
+  const { overview, loading, error, approve, revise, abort, refresh } = useOverview();
   const { isAdmin } = useAuth();
   const { totals, reset } = useTotals();
   const { situation, loading: situationLoading } = useInsight();
@@ -927,6 +1109,7 @@ export default function CommandCenter() {
     return [...byPipeline.values()];
   }, [rows]);
   const announcement = useBoardAnnouncer(rows);
+  const attention = useMemo(() => attentionItems(rows), [rows]);
   // The board's order comes from the server and changes as pipelines start,
   // finish and gate. A card that teleports to its new row shows nothing; one that
   // glides there shows exactly what moved.
@@ -934,16 +1117,42 @@ export default function CommandCenter() {
   const liveActivity = useRunActivity();
 
   return (
-    <Page wide title="Command Center" actions={<BoardTotal totals={totals} reset={reset} />}>
+    <Page
+      wide
+      title="Command Center"
+      actions={
+        <>
+          <BoardTotal totals={totals} reset={reset} />
+          <ButtonLink href="#/schedules/oneoff" variant="primary" icon="bolt" className="ml-2">
+            Launch a task
+          </ButtonLink>
+        </>
+      }
+    >
       <div aria-live="polite" role="status" className="sr-only">
         {announcement}
       </div>
       <MachinePicker facet={facet} label="Show the board from" />
       <PeerBanner facet={facet} />
-      {!facet.peer && <SituationStrip situation={situation} loading={situationLoading} />}
+      {!facet.peer && (
+        <SituationStrip
+          situation={situation}
+          loading={situationLoading}
+          attentionHref={gateHref(attention.find((i) => i.gate.canApprove))}
+          failedHref={gateHref(attention.find((i) => !i.gate.canApprove))}
+        />
+      )}
       {error && (
-        <div className="mb-6 rounded-tile border border-fail/30 bg-fail/10 px-4 py-3 text-sm text-fail">
-          Couldn't reach the Argus server: {error}
+        <div className="mb-4">
+          <AlertStrip
+            subject="Board"
+            message={`Couldn't reach the Argus server: ${error}`}
+            action={
+              <Button size="sm" icon="retry" onClick={() => void refresh()}>
+                Retry
+              </Button>
+            }
+          />
         </div>
       )}
       {facet.peer ? (
@@ -953,50 +1162,56 @@ export default function CommandCenter() {
           busy={loading}
           label="the board"
           skeleton={
-            <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-4">
               <SkeletonBoardCard phases={4} />
               <SkeletonBoardCard phases={3} />
             </div>
           }
         >
-          {rows.length === 0 ? (
-            <EmptyState>
-              No pipelines defined yet. Create one in the{" "}
-              <a
-                href="#/pipelines"
-                className="text-ink underline decoration-line underline-offset-2"
-              >
-                Pipelines
-              </a>{" "}
-              tab.
-            </EmptyState>
-          ) : (
-            // The rail sits beside the board on a wide display and below it on a
-            // narrow one — the board needs the horizontal room more than the rail
-            // does, so the rail is what moves.
-            <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_320px]">
-              <div className="flex min-w-0 flex-col gap-3">
-                {groups.map((group, i) => (
-                  <Row
-                    key={group[0].pipelineId}
-                    ref={flip(group[0].pipelineId)}
-                    index={i}
-                    rows={group}
-                    liveActivity={liveActivity}
-                    onOpenStep={setSelected}
-                    onOpenGate={setPickedGate}
-                    onAbort={isAdmin ? abort : undefined}
+          {/* The rail sits beside the board on a wide display and below it on a
+              narrow one — the board needs the horizontal room more than the rail
+              does, so the rail is what moves. It stays when there are no
+              pipelines too: a schedule or a one-off can be running regardless,
+              and an empty board used to hide the only place that said so. */}
+          <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_300px] 2xl:grid-cols-[minmax(0,1fr)_340px]">
+            <div className="flex min-w-0 flex-col gap-4">
+              {rows.length === 0 ? (
+                <EmptyBoard />
+              ) : (
+                <>
+                  <AttentionQueue
+                    items={attention}
+                    onOpen={(item, originY) =>
+                      setPickedGate({
+                        instanceId: item.row.instanceId!,
+                        phaseId: item.gate.phaseId,
+                        pipelineName: item.row.name,
+                        originY,
+                      })
+                    }
                   />
-                ))}
-              </div>
-              <ActivityRail
-                rows={rows}
-                liveActivity={liveActivity}
-                runs={runs}
-                loading={runsLoading}
-              />
+                  {groups.map((group, i) => (
+                    <Row
+                      key={group[0].pipelineId}
+                      ref={flip(group[0].pipelineId)}
+                      index={i}
+                      rows={group}
+                      liveActivity={liveActivity}
+                      onOpenStep={setSelected}
+                      onOpenGate={setPickedGate}
+                      onAbort={isAdmin ? abort : undefined}
+                    />
+                  ))}
+                </>
+              )}
             </div>
-          )}
+            <ActivityRail
+              rows={rows}
+              liveActivity={liveActivity}
+              runs={runs}
+              loading={runsLoading}
+            />
+          </div>
         </Handoff>
       )}
       {stepEverOpened && (

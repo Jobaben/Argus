@@ -1,5 +1,5 @@
 import type { Situation, ThroughputBucket } from "../types";
-import { Skeleton, formatCountdown, formatUsd, useCountUp, useTicker } from "../ds";
+import { Icon, Skeleton, formatCountdown, formatUsd, useCountUp, useTicker } from "../ds";
 
 /**
  * The one-line answer to "does anything need me?"
@@ -15,12 +15,12 @@ import { Skeleton, formatCountdown, formatUsd, useCountUp, useTicker } from "../
 const TONE = {
   attention: {
     text: "text-await",
-    border: "border-await/40",
+    border: "border-await/35 hover:border-await/60",
     bg: "bg-await/10",
   },
-  bad: { text: "text-fail", border: "border-fail/40", bg: "bg-fail/10" },
-  busy: { text: "text-run", border: "border-run/35", bg: "bg-run/10" },
-  live: { text: "text-eye", border: "border-eye/35", bg: "bg-eye/10" },
+  bad: { text: "text-fail", border: "border-fail/35 hover:border-fail/60", bg: "bg-fail/10" },
+  busy: { text: "text-run", border: "border-run/30 hover:border-run/55", bg: "bg-run/[0.07]" },
+  live: { text: "text-eye", border: "border-eye/30 hover:border-eye/55", bg: "bg-eye/[0.07]" },
   calm: { text: "text-ink-dim", border: "border-line", bg: "bg-transparent" },
 } as const;
 
@@ -42,14 +42,14 @@ function Stat({
   return (
     <a
       href={href}
-      className={`flex items-baseline gap-1.5 rounded-md border px-2.5 py-1 transition duration-(--duration-quick) hover:brightness-125 ${skin.border} ${skin.bg}`}
+      className={`flex h-8 items-center gap-2 rounded-control border px-2.5 transition duration-(--duration-quick) motion-safe:active:scale-[0.97] ${skin.border} ${skin.bg}`}
     >
-      <span className={`text-[15px] font-extrabold leading-none ${skin.text}`}>
+      <span className={`text-[15px] font-semibold leading-none ${skin.text}`}>
         {Math.round(shown)}
-      </span>
-      <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-faint">
-        {label}
-      </span>
+      </span>{" "}
+      {/* The space is for the accessible name — "3 running", not "3running";
+          a flex container draws nothing for it. */}
+      <span className="text-small leading-none text-ink-dim">{label}</span>
     </a>
   );
 }
@@ -68,9 +68,9 @@ function NextFire({ at, name, kind }: { at: string; name: string; kind: string }
       className="flex min-w-0 items-baseline gap-1.5"
       title={`Next ${kind}: ${name} at ${new Date(at).toLocaleString()}`}
     >
-      <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-faint">next</span>
-      <span className="truncate text-[13px] text-ink-dim">{name}</span>
-      <span className="shrink-0 font-mono text-[11px] text-ink">{formatCountdown(ms)}</span>
+      <Icon name="clock" size={14} className="shrink-0 self-center text-ink-faint" />
+      <span className="truncate text-small text-ink-dim">{name}</span>
+      <span className="shrink-0 text-small font-semibold text-ink">{formatCountdown(ms)}</span>
     </span>
   );
 }
@@ -98,10 +98,8 @@ function SpendMeter({ spend }: { spend: Situation["spend"] }) {
           : `Spent ${formatUsd(today.spentUsd)} of the ${formatUsd(today.limitUsd)} daily limit`
       }
     >
-      <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-faint">
-        today
-      </span>
-      <span className="font-mono text-[12px] text-ink">{formatUsd(today.spentUsd)}</span>
+      <span className="text-small text-ink-faint">today</span>
+      <span className="text-small font-semibold text-ink">{formatUsd(today.spentUsd)}</span>
       {today.limitUsd !== null && (
         <>
           <span className="relative h-1.5 w-16 overflow-hidden rounded-full bg-ink-faint/15">
@@ -110,9 +108,7 @@ function SpendMeter({ spend }: { spend: Situation["spend"] }) {
               style={{ width: `${pct ?? 0}%` }}
             />
           </span>
-          <span className="font-mono text-[10px] text-ink-faint">
-            of {formatUsd(today.limitUsd)}
-          </span>
+          <span className="text-caption text-ink-faint">of {formatUsd(today.limitUsd)}</span>
         </>
       )}
     </span>
@@ -141,16 +137,16 @@ function Throughput({ buckets }: { buckets: ThroughputBucket[] }) {
     >
       {buckets.map((bucket) => {
         const total = bucket.succeeded + bucket.failed;
-        const height = total === 0 ? 2 : Math.max(3, Math.round((total / peak) * 20));
+        const height = total === 0 ? 2 : Math.max(3, Math.round((total / peak) * 22));
         const failedShare = total === 0 ? 0 : bucket.failed / total;
         return (
           <span
             key={bucket.at}
-            className="flex w-[3px] flex-col justify-end overflow-hidden rounded-[1px]"
-            style={{ height: 20 }}
+            className="flex w-1 flex-col justify-end overflow-hidden rounded-[1.5px]"
+            style={{ height: 22 }}
           >
             {total === 0 ? (
-              <span className="h-[2px] w-full bg-ink-faint/20" />
+              <span className="h-[2px] w-full bg-ink-faint/25" />
             ) : (
               <>
                 <span
@@ -173,61 +169,88 @@ function Throughput({ buckets }: { buckets: ThroughputBucket[] }) {
 export function SituationStrip({
   situation,
   loading,
+  attentionHref = "#/command",
+  failedHref = "#/command",
 }: {
   situation: Situation | null;
   loading: boolean;
+  /**
+   * Where "awaiting you" goes. The board passes the first waiting gate's deep
+   * link, so the chip opens the review itself rather than linking to the page
+   * it is already on.
+   */
+  attentionHref?: string;
+  /** Where "failed" goes; the board passes the first failed instance's review. */
+  failedHref?: string;
 }) {
   if (loading && !situation) {
     return (
       <div
         role="status"
         aria-busy="true"
-        className="mb-4 flex items-center gap-3 rounded-tile border border-line bg-ground-2 px-4 py-2.5"
+        className="mb-4 flex h-[58px] items-center gap-3 rounded-tile border border-line bg-surface px-4 shadow-raised"
       >
         <span className="sr-only">Loading the board situation…</span>
-        <Skeleton className="h-5 w-24" />
-        <Skeleton className="h-5 w-24" />
-        <Skeleton className="ml-auto h-5 w-40" />
+        <Skeleton className="h-6 w-28" />
+        <Skeleton className="h-6 w-24" />
+        <Skeleton className="ml-auto h-5 w-48" />
       </div>
     );
   }
   if (!situation) return null;
 
   const c = situation.counts;
-  // Only what is true: a zero here would be noise competing with the numbers
-  // that matter.
-  const stats: { count: number; label: string; tone: Tone; href: string }[] = (
+  // Two kinds of number, kept apart. The left asks something of you — a gate,
+  // a failure, a monitor down; the right is the machine going about its work.
+  // Only what is true is shown: a zero would be noise competing with the
+  // numbers that matter, and the left side's silence is itself the message.
+  const attention: { count: number; label: string; tone: Tone; href: string }[] = (
     [
-      { count: c.gatesWaiting, label: "awaiting you", tone: "attention", href: "#/command" },
-      { count: c.failedInstances, label: "failed", tone: "bad", href: "#/command" },
-      { count: c.runsInFlight, label: "running", tone: "busy", href: "#/chronicle" },
-      { count: c.liveAgents, label: "live agents", tone: "live", href: "#/agents" },
+      { count: c.gatesWaiting, label: "awaiting you", tone: "attention", href: attentionHref },
+      { count: c.failedInstances, label: "failed", tone: "bad", href: failedHref },
       { count: c.monitorsDown, label: "down", tone: "bad", href: "#/health" },
       { count: c.monitorsFailing, label: "failing", tone: "bad", href: "#/health" },
       { count: c.openIssues, label: "open issues", tone: "attention", href: "#/issues" },
       { count: c.anomalies, label: "anomalies", tone: "attention", href: "#/health/watchtower" },
     ] satisfies { count: number; label: string; tone: Tone; href: string }[]
   ).filter((s) => s.count > 0);
+  const activity: { count: number; label: string; tone: Tone; href: string }[] = (
+    [
+      { count: c.runsInFlight, label: "running", tone: "busy", href: "#/chronicle" },
+      { count: c.liveAgents, label: "live agents", tone: "live", href: "#/agents" },
+    ] satisfies { count: number; label: string; tone: Tone; href: string }[]
+  ).filter((s) => s.count > 0);
 
-  const allClear = stats.length === 0;
+  const calm = attention.length === 0;
+  const idle = activity.length === 0;
 
   return (
-    <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-tile border border-line bg-ground-2 px-4 py-2.5">
-      {allClear ? (
-        <span className="flex items-center gap-2 text-[13px] text-ink-dim">
-          <span aria-hidden="true" className="text-ok">
-            ●
+    <div className="mb-4 flex flex-wrap items-center gap-x-5 gap-y-3 rounded-tile border border-line bg-surface px-4 py-3 shadow-raised">
+      {calm ? (
+        <span className="flex min-w-0 items-center gap-2.5 text-small text-ink-dim">
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ok/12 text-ok">
+            <Icon name="check" size={16} strokeWidth={2.25} />
           </span>
-          Nothing needs you — no gates waiting, no failures, nothing running.
+          <span>
+            <b className="font-semibold text-ink">Nothing needs you</b> — no gates waiting, no
+            failures{idle ? ", nothing running" : ""}.
+          </span>
         </span>
       ) : (
         <div className="flex flex-wrap items-center gap-2">
-          {stats.map((s) => (
+          {attention.map((s) => (
             <Stat key={s.label} {...s} />
           ))}
         </div>
       )}
-      <div className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-2">
+      {!idle && (
+        <div className="flex flex-wrap items-center gap-2">
+          {activity.map((s) => (
+            <Stat key={s.label} {...s} />
+          ))}
+        </div>
+      )}
+      <div className="flex min-w-0 flex-wrap items-center gap-x-5 gap-y-2 sm:ml-auto">
         {situation.nextFire && (
           <NextFire
             at={situation.nextFire.at}

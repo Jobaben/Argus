@@ -321,7 +321,7 @@ export function NavBar({
           ))}
         </div>
 
-        <div className="ml-auto flex min-w-0 shrink items-center gap-1.5 sm:gap-2">
+        <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2">
           {/* The palette is the fastest path to anything in Argus, so it gets a
               real affordance with its shortcut on it — not a bare icon nobody
               would guess is keyboard-driven. It collapses to the icon alone on
@@ -330,11 +330,11 @@ export function NavBar({
             type="button"
             onClick={onOpenPalette}
             aria-label={`Search — open the command palette (${modLabel})`}
-            className="group flex h-8 items-center gap-2 rounded-control border border-line-strong bg-surface/60 px-2 text-ink-dim transition duration-(--duration-quick) hover:border-ink-faint/45 hover:bg-surface-2 hover:text-ink motion-safe:active:scale-[0.97] sm:pl-2.5 sm:pr-1.5 xl:min-w-56"
+            className="group flex h-8 items-center gap-2 rounded-control border border-line-strong bg-surface/60 px-2 text-ink-dim transition duration-(--duration-quick) hover:border-ink-faint/45 hover:bg-surface-2 hover:text-ink motion-safe:active:scale-[0.97] lg:pl-2.5 lg:pr-1.5 xl:min-w-56"
           >
             <Icon name="search" size={16} />
-            <span className="hidden text-sm sm:inline">Search</span>
-            <span aria-hidden="true" className="kbd ml-auto hidden sm:inline-flex">
+            <span className="hidden text-sm lg:inline">Search</span>
+            <span aria-hidden="true" className="kbd ml-auto hidden lg:inline-flex">
               {modLabel}
             </span>
           </button>

@@ -109,13 +109,17 @@ function PhaseNode({
   const skipped = pill.skipped === true;
   // Same beat as every other pulsing surface on the board.
   const beat = useSyncedDelay(DURATION.pulse);
-  // Tinted borders only for the states that demand attention while unselected.
+  // Tinted borders for the states that demand attention while unselected, and
+  // for work in flight — a running node used to look exactly like an idle one,
+  // which on a long chain made "where is it now?" a hunt for a 6px dot.
   const border =
     pill.status === "failed"
-      ? "border-fail/40 bg-surface hover:bg-surface-2"
+      ? "border-fail/45 bg-fail/[0.07] hover:bg-fail/[0.12]"
       : pill.status === "await"
-        ? "border-await/40 bg-surface hover:bg-surface-2"
-        : "border-line bg-surface hover:border-ink-faint/60 hover:bg-surface-2";
+        ? "border-await/50 bg-await/[0.08] hover:bg-await/[0.13]"
+        : pill.status === "working"
+          ? "border-run/40 bg-surface hover:bg-surface-2"
+          : "border-line bg-surface hover:border-line-strong hover:bg-surface-2";
   return (
     <button
       type="button"
@@ -125,8 +129,11 @@ function PhaseNode({
       data-lane={lane}
       title={chipTitle(pill, index, needNames)}
       style={{ left: x, top: y, width, height }}
-      className={`absolute flex min-w-0 items-center gap-1.5 rounded-md border px-2 text-left transition-[border-color,background-color] duration-(--duration-quick) ${
-        selected ? "border-ink-faint bg-surface-2" : border
+      // Selected is a ring in the eye's colour, not one more shade of border:
+      // it must read at a glance next to a hovered node, which the old
+      // `border-ink-faint` did not.
+      className={`absolute flex min-w-0 items-center gap-1.5 rounded-md border px-2 text-left transition-[border-color,background-color,box-shadow] duration-(--duration-quick) ${
+        selected ? "border-eye/70 bg-surface-2 shadow-[0_0_0_3px_rgb(54_227_232/0.14)]" : border
       }`}
     >
       {/* Hollow, not dim: a skipped phase is terminal, and an outline reads as
@@ -138,12 +145,12 @@ function PhaseNode({
           skipped ? "border border-ink-faint" : PHASE_DOT[pill.status]
         } ${live ? "motion-safe:animate-[pulse_var(--duration-pulse)_ease-in-out_infinite]" : ""}`}
       />
-      <span className="shrink-0 font-mono text-[9px] text-ink-faint">
+      <span className="shrink-0 font-mono text-micro leading-none text-ink-faint">
         {String(index + 1).padStart(2, "0")}
       </span>
       <span
         data-full-name={pill.name}
-        className={`min-w-0 flex-1 truncate text-[11px] font-semibold ${
+        className={`min-w-0 flex-1 truncate text-caption font-semibold ${
           skipped
             ? "text-ink-faint line-through decoration-line"
             : selected
@@ -153,27 +160,15 @@ function PhaseNode({
       >
         {pill.name}
       </span>
-      {skipped && (
-        <span className="shrink-0 font-mono text-[8px] font-bold uppercase tracking-[0.1em] text-ink-faint">
-          skip
-        </span>
-      )}
-      {pill.gated && (
-        <span className="shrink-0 font-mono text-[8px] font-bold uppercase tracking-[0.1em] text-await">
-          gate
-        </span>
-      )}
-      {(pill.attempt ?? 0) > 0 && (
-        <span className="shrink-0 font-mono text-[8px] uppercase tracking-[0.1em] text-ink-faint">
-          try {pill.attempt + 1}
-        </span>
-      )}
+      {skipped && <span className={MARKER}>skip</span>}
+      {pill.gated && <span className={`${MARKER} !text-await`}>gate</span>}
+      {(pill.attempt ?? 0) > 0 && <span className={MARKER}>try {pill.attempt + 1}</span>}
       {/* Best-of-N replaces the step dots: N dots would all be the same step,
           and what a reader wants is how many of the drafts survived. */}
       {pill.candidates && (
         <span
           data-testid="candidate-summary"
-          className="shrink-0 whitespace-nowrap font-mono text-[8.5px] tracking-[0.02em] text-ink-faint"
+          className="shrink-0 whitespace-nowrap text-micro text-ink-faint"
         >
           {candidateNote(pill.candidates)}
         </span>
@@ -189,7 +184,7 @@ function PhaseNode({
             ))}
           </span>
         ) : (
-          <span className="shrink-0 font-mono text-[9px] text-ink-faint">
+          <span className="shrink-0 text-micro text-ink-faint">
             {pill.steps.filter((s) => s.status === "done").length}/{pill.steps.length}
           </span>
         ))}
@@ -224,7 +219,10 @@ const SCROLL_KEYS = new Set([
 ]);
 
 const CONTROL =
-  "rounded border border-line bg-surface-2/90 px-1.5 font-mono text-[9px] uppercase leading-[18px] tracking-[0.1em] text-ink-dim hover:border-ink-faint hover:text-ink";
+  "h-6 rounded-md border border-line-strong bg-surface-2/95 px-2 text-micro font-semibold text-ink-dim shadow-raised backdrop-blur transition duration-(--duration-quick) hover:bg-surface-3 hover:text-ink motion-safe:active:scale-[0.96]";
+
+/** A node's small word — "gate", "skip", "try 2": readable, not shouted. */
+const MARKER = "shrink-0 text-micro font-semibold leading-none text-ink-faint";
 
 function terminatorPath(
   n: { x: number; y: number },
@@ -296,7 +294,7 @@ export function PhaseGraph({
   return (
     <div
       data-orientation={layout.orientation}
-      className="relative w-full min-w-0 max-w-full rounded-tile border border-line/80 bg-ground-2/70"
+      className="relative w-full min-w-0 max-w-full rounded-tile border border-line bg-ground-2/70 shadow-[inset_0_1px_3px_rgb(0_0_0/0.25)]"
     >
       <div
         ref={scrollerRef}
@@ -414,7 +412,7 @@ export function PhaseGraph({
                   key={`label-${e.from}>${e.to}`}
                   data-testid="route-label"
                   style={{ left: e.label!.x, top: e.label!.y }}
-                  className={`absolute -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded border bg-surface-2 px-[5px] font-mono text-[8.5px] leading-[14px] ${
+                  className={`absolute -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-md border bg-surface-2 px-1.5 text-micro leading-[14px] ${
                     hot(e) ? "border-ink-faint text-ink" : LABEL[e.state]
                   }`}
                 >

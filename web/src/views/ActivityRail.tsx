@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import type { Run } from "../types";
 import type { LiveActivity } from "../useRunActivity";
 import {
+  Icon,
   STATUS,
   SkeletonRows,
   TimeAgo,
@@ -29,7 +30,7 @@ const RECENT_LIMIT = 8;
 
 /** Static per-token classes: Tailwind scans source text, so an interpolated
  *  `text-${token}` would never be generated. */
-const DOT: Record<ColorToken, string> = {
+const TEXT: Record<ColorToken, string> = {
   run: "text-run",
   ok: "text-ok",
   fail: "text-fail",
@@ -38,18 +39,58 @@ const DOT: Record<ColorToken, string> = {
   await: "text-await",
 };
 
-function StepLine({ label, activity }: { label: string; activity: LiveActivity | null }) {
+const DOT: Record<ColorToken, string> = {
+  run: "bg-run",
+  ok: "bg-ok",
+  fail: "bg-fail",
+  queue: "bg-queue",
+  idle: "bg-idle",
+  await: "bg-await",
+};
+
+/** A rail row that goes somewhere: the run's Flight Recorder, when it has one.
+ *  The rail used to be a list of dead ends — the most time-sensitive thing on
+ *  the page, and nothing in it could be opened. */
+function RowLink({ runId, children }: { runId: string | null; children: React.ReactNode }) {
+  const shell = "-mx-2 flex flex-col gap-1 rounded-control px-2 py-1.5";
+  return runId ? (
+    <a
+      href={`#/run/${encodeURIComponent(runId)}`}
+      className={`${shell} transition-colors duration-(--duration-quick) hover:bg-surface-2`}
+    >
+      {children}
+    </a>
+  ) : (
+    <div className={shell}>{children}</div>
+  );
+}
+
+function StepLine({
+  label,
+  activity,
+  runId,
+}: {
+  label: string;
+  activity: LiveActivity | null;
+  runId: string | null;
+}) {
   return (
-    <li className="flex flex-col gap-0.5 border-l-2 border-run/50 pl-2.5">
-      <span className="truncate text-[12.5px] font-semibold leading-tight text-ink">{label}</span>
-      {activity ? (
-        <span className="break-words font-mono text-[10.5px] leading-snug text-ink-dim">
-          <span aria-hidden="true">▸ </span>
-          {activity.label}
-        </span>
-      ) : (
-        <span className="font-mono text-[10.5px] text-ink-faint">starting…</span>
-      )}
+    <li className="relative pl-3">
+      <span
+        aria-hidden="true"
+        className="absolute bottom-1.5 left-0 top-1.5 w-[2px] rounded-full bg-run/60"
+      />
+      <RowLink runId={runId}>
+        <span className="truncate text-small font-semibold leading-tight text-ink">{label}</span>
+        {activity ? (
+          <span className="flex min-w-0 items-start gap-1.5 text-caption leading-snug text-ink-dim">
+            <Icon name="activity" size={13} className="mt-px text-run" />
+            <span className="min-w-0 break-words font-mono">{activity.label}</span>
+          </span>
+        ) : (
+          <span className="text-caption text-ink-faint">starting…</span>
+        )}
+      </RowLink>
     </li>
   );
 }
@@ -61,33 +102,37 @@ function RunLine({ run, index }: { run: Run; index: number }) {
   return (
     <li
       style={{ animationDelay: staggerDelay(index, 20, 140) }}
-      className="flex flex-col gap-0.5 motion-safe:animate-[slide-up_var(--duration-base)_var(--ease-out-expo)_both]"
+      className="motion-safe:animate-[slide-up_var(--duration-base)_var(--ease-out-expo)_both]"
     >
-      <span className="flex items-baseline gap-2">
-        <span aria-hidden="true" className={`text-[9px] leading-none ${DOT[token]}`}>
-          ●
+      <RowLink runId={run.id}>
+        <span className="flex items-center gap-2">
+          <span aria-hidden="true" className={`h-1.5 w-1.5 shrink-0 rounded-full ${DOT[token]}`} />
+          <span className="min-w-0 flex-1 truncate text-small leading-tight text-ink-dim">
+            {run.scheduleName}
+          </span>
+          <span className="shrink-0 text-caption">
+            <TimeAgo iso={run.endedAt ?? run.startedAt ?? run.queuedAt} />
+          </span>
         </span>
-        <span className="min-w-0 flex-1 truncate text-[12.5px] leading-tight text-ink-dim">
-          {run.scheduleName}
+        <span className="flex items-baseline gap-2 pl-3.5 text-caption text-ink-faint">
+          <span className={TEXT[token]}>{label.toLowerCase()}</span>
+          {run.durationMs != null && <span>{formatMs(run.durationMs)}</span>}
+          {cost != null && <span>{formatUsd(cost)}</span>}
         </span>
-        <span className="shrink-0 font-mono text-[10px] text-ink-faint">
-          <TimeAgo iso={run.endedAt ?? run.startedAt ?? run.queuedAt} />
-        </span>
-      </span>
-      <span className="flex items-baseline gap-2 pl-[15px] font-mono text-[10px] text-ink-faint">
-        <span className={DOT[token]}>{label.toLowerCase()}</span>
-        {run.durationMs != null && <span>{formatMs(run.durationMs)}</span>}
-        {cost != null && <span>{formatUsd(cost)}</span>}
-      </span>
+      </RowLink>
     </li>
   );
 }
 
 function Heading({ children, count }: { children: string; count?: number }) {
   return (
-    <h2 className="flex items-baseline gap-2 font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-faint">
+    <h2 className="eyebrow flex items-center gap-2">
       {children}
-      {count != null && count > 0 && <span className="text-ink-dim">{count}</span>}
+      {count != null && count > 0 && (
+        <span className="rounded-full bg-run/15 px-1.5 py-px text-[11px] font-semibold tracking-normal text-run">
+          {count}
+        </span>
+      )}
     </h2>
   );
 }
@@ -139,18 +184,23 @@ export function ActivityRail({
   return (
     <aside
       aria-label="Live activity"
-      className="flex flex-col gap-5 rounded-tile border border-line bg-ground-2 px-4 py-3.5"
+      className="flex min-w-0 flex-col gap-6 rounded-tile border border-line bg-surface px-4 pb-3 pt-4 shadow-raised lg:sticky lg:top-[72px]"
     >
-      <section className="flex flex-col gap-2.5">
+      <section className="flex flex-col gap-2">
         <Heading count={working.length + inFlightRuns.length}>Live</Heading>
         {working.length === 0 && inFlightRuns.length === 0 ? (
-          <p className="text-[12px] leading-snug text-ink-faint">
+          <p className="text-small leading-snug text-ink-faint">
             Nothing is running. Steps report their tool calls here as they work.
           </p>
         ) : (
-          <ul className="flex flex-col gap-2.5">
+          <ul className="flex flex-col gap-1">
             {working.map((step) => (
-              <StepLine key={step.key} label={step.label} activity={step.activity} />
+              <StepLine
+                key={step.key}
+                label={step.label}
+                activity={step.activity}
+                runId={step.runId}
+              />
             ))}
             {/* Runs the engine owns but the board does not: scheduled firings and
                 one-off Launches. Without these the rail claims nothing is
@@ -160,23 +210,24 @@ export function ActivityRail({
                 key={run.id}
                 label={run.scheduleName}
                 activity={liveActivity.get(run.id) ?? null}
+                runId={run.id}
               />
             ))}
           </ul>
         )}
       </section>
 
-      <section className="flex flex-col gap-2.5">
+      <section className="flex flex-col gap-2">
         <Heading>Recent</Heading>
         {loading && recent.length === 0 ? (
           <SkeletonRows count={3} />
         ) : recent.length === 0 ? (
-          <p className="text-[12px] leading-snug text-ink-faint">
+          <p className="text-small leading-snug text-ink-faint">
             No completed runs yet. Scheduled firings, pipeline steps and one-off launches all land
             here.
           </p>
         ) : (
-          <ul className="flex flex-col gap-2.5">
+          <ul className="flex flex-col">
             {recent.map((run, i) => (
               <RunLine key={run.id} run={run} index={i} />
             ))}
@@ -184,9 +235,10 @@ export function ActivityRail({
         )}
         <a
           href="#/schedules/oneoff"
-          className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.12em] text-ink-faint transition duration-(--duration-quick) hover:text-ink"
+          className="-mx-2 mt-1 flex items-center justify-between rounded-control px-2 py-1.5 text-small font-semibold text-ink-dim transition duration-(--duration-quick) hover:bg-surface-2 hover:text-ink"
         >
-          All runs →
+          All runs
+          <Icon name="arrow-right" size={15} />
         </a>
       </section>
     </aside>
