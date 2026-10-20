@@ -321,6 +321,10 @@ describe("DecisionExperiments view", () => {
     expect(screen.getByText("Accuracy (answered only)")).toBeTruthy();
     expect(screen.getByText(/Majority-class share — accuracy near this/)).toBeTruthy();
 
+    // Each population has its own section.
+    expect(screen.getByRole("heading", { name: "Probe question", level: 2 })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Residual question", level: 2 })).toBeTruthy();
+
     // Confusion matrix row header and counts.
     const matrix = screen.getByRole("table", { name: /Confusion matrix/ });
     expect(within(matrix).getByRole("rowheader", { name: "crash" })).toBeTruthy();
@@ -331,7 +335,10 @@ describe("DecisionExperiments view", () => {
     expect(screen.getByText("env-drift: 2")).toBeTruthy();
 
     // Baselines, integrity, methods, footer.
-    expect(screen.getByText("deterministic — not-compared — no shared reference yet")).toBeTruthy();
+    // Each baseline is one row: provider, status and the reason, set apart.
+    const baseline = screen.getByText("no shared reference yet").closest("li") as HTMLElement;
+    expect(within(baseline).getByText("deterministic")).toBeTruthy();
+    expect(within(baseline).getByText("not-compared")).toBeTruthy();
     expect(screen.getByText("attempt has no result record")).toBeTruthy();
     expect(screen.getByText("missing segment")).toBeTruthy();
     expect(screen.getAllByText("No findings.").length).toBe(1);
@@ -405,7 +412,10 @@ describe("DecisionExperiments view", () => {
     expect(screen.getByText("No baselines.")).toBeTruthy();
     expect(screen.getAllByText("No findings.").length).toBe(3);
     expect(screen.getByText(/As of ledger record 0 \(no records\)/)).toBeTruthy();
-    expect(screen.queryByText(/Probe: run.termination-probe/)).toBeNull();
+    // No population sections without populations. (The question ids still show
+    // in the Questions list, so this checks the section headings, not the ids.)
+    expect(screen.queryByRole("heading", { name: "Probe question", level: 2 })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Residual question", level: 2 })).toBeNull();
   });
 
   it("reports a load failure", async () => {

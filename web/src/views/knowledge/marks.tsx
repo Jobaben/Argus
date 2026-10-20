@@ -1,35 +1,57 @@
 import type { ReactNode } from "react";
 import type { ClaimKind } from "@argus/contracts";
-import { InfoTip } from "../../ds";
+import { Icon, InfoTip, type IconName } from "../../ds";
 import { KIND_TERMS, TERMS, type TermId } from "../knowledgeGlossary";
-import { KIND_GLYPH, type ExceptionTone } from "../knowledgeModel";
+import type { ExceptionTone } from "../knowledgeModel";
 
 const TONE: Record<ExceptionTone, string> = {
-  fail: "border-fail/45 bg-fail/10 text-fail",
-  run: "border-run/45 bg-run/10 text-run",
-  idle: "border-idle/45 bg-idle/10 text-ink-dim",
+  fail: "border-fail/35 bg-fail/12 text-fail",
+  run: "border-run/30 bg-run/10 text-run",
+  idle: "border-line-strong bg-ink-faint/8 text-ink-dim",
 };
 
-/** A kind's glyph. Shape carries kind; colour stays free for exceptions. */
-export function KindMark({ kind, className = "" }: { kind: ClaimKind; className?: string }) {
+/**
+ * A kind's shape. Drawn rather than typed: the old ◆ ■ ● ○ ▲ ★ glyphs were set
+ * in whatever fallback font the system found, at its size and baseline (and ★
+ * could turn into an emoji). Shape carries kind; colour stays free for
+ * exceptions.
+ */
+const KIND_ICON: Record<ClaimKind, IconName> = {
+  "business-rule": "diamond",
+  constraint: "square",
+  fact: "circle-dot",
+  assumption: "circle-dashed",
+  conclusion: "triangle",
+  decision: "star",
+};
+
+export function KindMark({
+  kind,
+  size = 14,
+  className = "",
+}: {
+  kind: ClaimKind;
+  size?: number;
+  className?: string;
+}) {
   return (
-    <span
-      aria-hidden="true"
-      className={`inline-block w-4 text-center leading-none ${
-        kind === "business-rule" ? "text-ink" : "text-ink-faint"
-      } ${className}`}
-    >
-      {KIND_GLYPH[kind]}
-    </span>
+    <Icon
+      name={KIND_ICON[kind]}
+      size={size}
+      strokeWidth={2}
+      className={`${kind === "business-rule" ? "text-ink" : "text-ink-faint"} ${className}`}
+    />
   );
 }
 
-/** The only coloured mark on a row, and only when something is off. */
+/** The only coloured mark on a row, and only when something is off. Same
+ *  anatomy as `StatusPill` at its small size. */
 export function ExceptionBadge({ term, tone }: { term: TermId; tone: ExceptionTone }) {
   return (
     <span
-      className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 font-mono text-[10px] font-bold uppercase tracking-[0.1em] ${TONE[tone]}`}
+      className={`inline-flex h-5 shrink-0 items-center gap-1 whitespace-nowrap rounded-full border pl-1.5 pr-2 text-micro font-semibold leading-none ${TONE[tone]}`}
     >
+      <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-current" />
       {TERMS[term].term}
     </span>
   );
@@ -68,10 +90,10 @@ export function KindTip({ kind }: { kind: ClaimKind }) {
   );
 }
 
-/** Mono eyebrow heading with an optional explanation beside it. */
+/** Section label with an optional explanation beside it. */
 export function Eyebrow({ children, tip }: { children: ReactNode; tip?: ReactNode }) {
   return (
-    <h3 className="mb-2.5 flex items-center gap-2 font-mono text-[10.5px] font-semibold uppercase tracking-[0.16em] text-ink-faint">
+    <h3 className="eyebrow mb-2.5 flex items-center gap-2">
       {children}
       {tip}
     </h3>

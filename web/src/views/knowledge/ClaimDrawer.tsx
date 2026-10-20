@@ -1,7 +1,7 @@
 import { Drawer } from "../../ds/Drawer";
 import type { ReactNode } from "react";
 import type { AtlasClaim, ClaimRef, KnowledgeAtlas } from "@argus/contracts";
-import { TimeAgo } from "../../ds";
+import { Icon, Loading, SkeletonText, TimeAgo, buttonClass, chipClass } from "../../ds";
 import { useClaimDetail } from "../../useClaimDetail";
 import { KIND_TERMS, TERMS } from "../knowledgeGlossary";
 import {
@@ -41,10 +41,12 @@ export function ClaimDrawer({
       onClose={onClose}
       title={
         claim ? (
-          <span className="flex items-center gap-2">
-            <KindMark kind={claim.kind} />
+          <span className="flex min-w-0 items-center gap-2">
+            <KindMark kind={claim.kind} size={16} />
             {KIND_TERMS[claim.kind].term}
-            <span className="font-mono text-ink-faint">{shortId(claim.id)}</span>
+            <span className="truncate font-mono text-small font-normal text-ink-faint">
+              {shortId(claim.id)}
+            </span>
           </span>
         ) : (
           ""
@@ -56,6 +58,21 @@ export function ClaimDrawer({
     >
       {claim && <ClaimBody key={refKey(claim)} claim={claim} atlas={atlas} onSelect={onSelect} />}
     </Drawer>
+  );
+}
+
+/** Small metadata chips under the statement: kind, module, scope. */
+const CHIP = chipClass();
+
+/** A run as a link to it, labelled with its id unless something better is given. */
+function RunLink({ runId, children }: { runId: string; children?: ReactNode }) {
+  return (
+    <a
+      className="font-mono text-ink-dim underline decoration-line-strong underline-offset-2 transition-colors duration-(--duration-quick) hover:text-ink hover:decoration-ink-faint"
+      href={`#/run/${encodeURIComponent(runId)}`}
+    >
+      {children ?? runId}
+    </a>
   );
 }
 
@@ -79,63 +96,74 @@ function ClaimBody({
   return (
     <div className="flex flex-col gap-7">
       <div>
-        <div className="mb-3 flex flex-wrap items-center gap-2 font-mono text-[11px] text-ink-faint">
-          <Chip>
-            <span className="inline-flex items-center gap-1.5">
-              {KIND_TERMS[claim.kind].term}
-              <KindTip kind={claim.kind} />
-            </span>
-          </Chip>
-          {mod && <Chip>{mod}</Chip>}
-          <Chip>
+        <div className="mb-3 flex flex-wrap items-center gap-1.5">
+          <span className={CHIP}>
+            {KIND_TERMS[claim.kind].term}
+            <KindTip kind={claim.kind} />
+          </span>
+          {mod && <span className={CHIP}>{mod}</span>}
+          <span className={CHIP}>
             <Term id={claim.scope ? "scope" : "unscoped"}>{scopeLabel(claim.scope ?? null)}</Term>
-          </Chip>
+          </span>
           {exception && <ExceptionBadge term={exception.term} tone={exception.tone} />}
         </div>
-        <p className="text-[16px] leading-relaxed text-ink">{stripModule(claim.statement)}</p>
+        <p className="text-title font-normal leading-relaxed text-ink">
+          {stripModule(claim.statement)}
+        </p>
       </div>
 
       <Block title="Why Argus believes it" tip={<Term id="evidence" />}>
-        <p className="mb-3 text-[13.5px] text-ink-dim">
+        <p className="mb-3 text-small text-ink-dim">
           <Term id={claim.support}>{TERMS[claim.support].term}</Term>
           {supportSentence(supporting, opposing, justifications.length)}
         </p>
         {claim.evidence.length > 0 && (
-          <ul className="flex flex-col gap-1.5">
-            {claim.evidence.map((e) => (
-              <li
-                key={e.id}
-                className="flex items-baseline gap-2 rounded-lg border border-line bg-ground-2 px-3 py-2 font-mono text-[11.5px] text-ink-dim"
-              >
-                <span className={e.direction === "opposes" ? "text-fail" : "text-ink-faint"}>
-                  {e.direction === "opposes" ? "−" : "+"}
-                </span>
-                <span className="min-w-0 break-all">{describeSource(e.source)}</span>
-              </li>
-            ))}
+          <ul className="divide-y divide-line rounded-control bg-ground-2/70">
+            {claim.evidence.map((e) => {
+              const opposes = e.direction === "opposes";
+              return (
+                <li
+                  key={e.id}
+                  className="flex items-start gap-2.5 px-3 py-2 font-mono text-caption text-ink-dim"
+                >
+                  <Icon
+                    name={opposes ? "minus" : "plus"}
+                    size={13}
+                    strokeWidth={2.25}
+                    label={opposes ? "Opposes" : "Supports"}
+                    className={`mt-px ${opposes ? "text-fail" : "text-ink-faint"}`}
+                  />
+                  <span className="min-w-0 break-all">{describeSource(e.source)}</span>
+                </li>
+              );
+            })}
           </ul>
         )}
         {justifications.length > 0 && (
           <ul className="mt-3 flex flex-col gap-2">
             {justifications.map(({ justification: j, force }) => (
-              <li
-                key={j.id}
-                className="rounded-lg border border-line bg-ground-2 px-3 py-2 text-[12.5px]"
-              >
-                <div className="mb-1 flex items-center gap-2 font-mono text-[11px] text-ink-faint">
-                  <Term id="justification">{j.id}</Term>
+              <li key={j.id} className="rounded-control bg-ground-2/70 px-3 py-2.5 text-small">
+                <div className="mb-2 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-caption text-ink-faint">
+                  <span className="font-mono">
+                    <Term id="justification">{j.id}</Term>
+                  </span>
                   <span>{j.direction}</span>
-                  <span className={force.inForce ? "" : "text-run"}>
+                  <span
+                    className={
+                      force.inForce ? "text-ink-dim" : "inline-flex font-semibold text-run"
+                    }
+                  >
                     {force.inForce ? "in force" : "out of force"}
                   </span>
                 </div>
-                <div className="flex flex-wrap gap-1.5">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-caption text-ink-faint">Premises</span>
                   {j.premises.map((p) => (
                     <button
                       key={refKey(p)}
                       type="button"
                       onClick={() => onSelect(p)}
-                      className="rounded border border-line px-1.5 py-0.5 font-mono text-[11px] text-ink-dim transition hover:border-eye/50 hover:text-ink"
+                      className={buttonClass("secondary", "sm", "font-mono")}
                     >
                       {shortId(p.id)}:v{p.revision}
                     </button>
@@ -149,7 +177,7 @@ function ClaimBody({
 
       {claim.conformance && (
         <Block title="Has anyone checked it?" tip={<Term id={claim.conformance} align="end" />}>
-          <p className="text-[13.5px] text-ink-dim">
+          <p className="text-small text-ink-dim">
             <span
               className={
                 claim.conformance === "violated"
@@ -162,14 +190,8 @@ function ClaimBody({
             {TERMS[claim.conformance].definition}
           </p>
           {detail.conformance?.latest && (
-            <p className="mt-2 font-mono text-[11.5px] text-ink-faint">
-              Latest by{" "}
-              <a
-                className="text-ink-dim hover:text-ink"
-                href={`#/run/${encodeURIComponent(detail.conformance.latest.execution.runId)}`}
-              >
-                {detail.conformance.latest.execution.runId}
-              </a>
+            <p className="mt-2 text-caption text-ink-faint">
+              Latest by <RunLink runId={detail.conformance.latest.execution.runId} />
               {detail.conformance.latest.repository &&
                 ` at ${detail.conformance.latest.repository.gitHead.slice(0, 8)}`}
             </p>
@@ -185,16 +207,13 @@ function ClaimBody({
       </Block>
 
       <Block title="Where it came from">
-        <p className="text-[13px] text-ink-dim">
+        <p className="text-small text-ink-dim">
           {claim.producedBy?.runId ? (
             <>
               Produced by{" "}
-              <a
-                className="font-mono text-ink hover:text-eye"
-                href={`#/run/${encodeURIComponent(claim.producedBy.runId)}`}
-              >
+              <RunLink runId={claim.producedBy.runId}>
                 {claim.producedBy.phaseId ?? claim.producedBy.runId}
-              </a>
+              </RunLink>
             </>
           ) : (
             "Recorded directly, not by a run"
@@ -202,14 +221,14 @@ function ClaimBody({
           · <TimeAgo iso={claim.createdAt} />
         </p>
         {revisions.length > 1 && (
-          <ol className="mt-3 flex flex-col gap-1.5">
+          <ol className="mt-3 flex flex-col gap-1 border-l border-line pl-3">
             {revisions.map((r) => (
-              <li key={r.revision} className="flex items-baseline gap-2 text-[12.5px]">
+              <li key={r.revision} className="flex items-baseline gap-2.5 text-small">
                 <button
                   type="button"
                   onClick={() => onSelect(r)}
                   aria-current={r.revision === claim.revision || undefined}
-                  className="font-mono text-[11px] text-ink-faint hover:text-ink aria-[current]:text-eye"
+                  className="shrink-0 rounded-sm font-mono text-caption text-ink-faint transition-colors duration-(--duration-quick) hover:text-ink aria-[current]:font-semibold aria-[current]:text-eye"
                 >
                   v{r.revision}
                 </button>
@@ -241,16 +260,22 @@ function supportSentence(supporting: number, opposing: number, justifications: n
 function Reliance({ detail }: { detail: ReturnType<typeof useClaimDetail> }) {
   const consumed = detail.consumers?.consumptions ?? [];
   const supplied = detail.suppliedTo?.executions ?? [];
-  if (detail.loading) return <p className="text-[13px] text-ink-faint">Loading…</p>;
+  if (detail.loading) {
+    return (
+      <Loading label="who relied on it">
+        <SkeletonText lines={2} />
+      </Loading>
+    );
+  }
   if (consumed.length === 0 && supplied.length === 0) {
     return (
-      <p className="text-[13px] text-ink-dim">
+      <p className="text-small text-ink-dim">
         No run has used or been given this claim yet. It is recorded, but nothing builds on it.
       </p>
     );
   }
   return (
-    <ul className="flex flex-col gap-1.5 font-mono text-[11.5px]">
+    <ul className="divide-y divide-line rounded-control bg-ground-2/70">
       {consumed.map((c) => (
         <RunRow key={`c-${c.execution.runId}`} runId={c.execution.runId} label="used it" />
       ))}
@@ -263,10 +288,8 @@ function Reliance({ detail }: { detail: ReturnType<typeof useClaimDetail> }) {
 
 function RunRow({ runId, label }: { runId: string; label: string }) {
   return (
-    <li className="flex items-baseline gap-2 text-ink-faint">
-      <a className="text-ink-dim hover:text-ink" href={`#/run/${encodeURIComponent(runId)}`}>
-        {runId}
-      </a>
+    <li className="flex items-baseline gap-2 px-3 py-2 text-caption text-ink-faint">
+      <RunLink runId={runId} />
       {label}
     </li>
   );
@@ -279,8 +302,4 @@ function Block({ title, tip, children }: { title: string; tip?: ReactNode; child
       {children}
     </section>
   );
-}
-
-function Chip({ children }: { children: ReactNode }) {
-  return <span className="rounded-full border border-line px-2.5 py-0.5">{children}</span>;
 }

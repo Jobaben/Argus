@@ -1,6 +1,18 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { AtlasClaim, ClaimRef, KnowledgeAtlas, KnowledgeScope } from "@argus/contracts";
-import { AlertStrip, EmptyState, Handoff, Page, SegmentedControl, SkeletonGrid } from "../../ds";
+import {
+  AlertStrip,
+  Button,
+  ButtonLink,
+  EmptyState,
+  Handoff,
+  Icon,
+  Page,
+  SegmentedControl,
+  SkeletonGrid,
+  fieldClass,
+  labelClass,
+} from "../../ds";
 import { useKnowledgeAtlas } from "../../useKnowledgeAtlas";
 import {
   NO_FILTER,
@@ -29,47 +41,44 @@ import { KindStrip, ModuleShelves } from "./ModuleShelves";
  */
 export default function KnowledgeView() {
   const [scope, setScope] = useState<KnowledgeScope | null>(null);
-  const { data, loading, error } = useKnowledgeAtlas(scope);
+  const { data, loading, error, refresh } = useKnowledgeAtlas(scope);
   const [guideOpen, setGuideOpen] = useState(false);
+  const openGuide = () => setGuideOpen(true);
 
   return (
-    <Page>
-      <header className="relative mb-8 flex flex-wrap items-end justify-between gap-x-6 gap-y-4">
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute -left-24 -top-32 -z-10 h-80 w-80 rounded-full bg-[radial-gradient(circle,rgb(54_227_232/0.10),transparent_68%)]"
-        />
-        <div className="min-w-0">
-          <p className="mb-2 flex items-center gap-2 font-mono text-[11px] font-bold uppercase tracking-[0.16em] text-eye">
-            <span
-              aria-hidden="true"
-              className="h-1.5 w-1.5 rounded-full bg-eye shadow-[0_0_8px_1px_var(--color-eye)]"
-            />
-            Knowledge ledger
-          </p>
-          <h1 className="text-board-title font-bold tracking-tight text-ink">
-            What Argus believes
-          </h1>
-          {data && <Summary atlas={data} />}
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
+    <Page
+      title="What Argus believes"
+      subtitle={
+        data && data.claims.length > 0 ? (
+          <Summary atlas={data} />
+        ) : (
+          "The knowledge ledger: what Argus has learned about your code, the evidence behind each claim, and who relied on it."
+        )
+      }
+      actions={
+        // Capped at the phone's content width so the picker and the guide
+        // button wrap onto two lines instead of pushing the page sideways:
+        // `Page` keeps its actions from shrinking, so they cannot wrap on their
+        // own. From `sm` up they fit on one line and the cap is lifted.
+        <div className="flex max-w-[calc(100vw-2rem)] flex-wrap items-center gap-2 sm:max-w-none">
           {data && <ScopePicker atlas={data} value={scope} onChange={setScope} />}
-          <button
-            type="button"
-            onClick={() => setGuideOpen(true)}
-            className="inline-flex items-center gap-2 rounded-lg border border-line px-3 py-1.5 text-[13px] text-ink-dim transition duration-(--duration-quick) hover:border-eye/50 hover:text-ink"
-          >
-            <span aria-hidden="true" className="font-mono text-eye">
-              ?
-            </span>
+          <Button icon="info" onClick={openGuide}>
             How to read this page
-          </button>
+          </Button>
         </div>
-      </header>
-
+      }
+    >
       {error && (
         <div className="mb-6">
-          <AlertStrip subject="Knowledge" message={`couldn't load the ledger: ${error}`} />
+          <AlertStrip
+            subject="Knowledge"
+            message={`Couldn't load the ledger: ${error}`}
+            action={
+              <Button size="sm" icon="retry" onClick={refresh}>
+                Retry
+              </Button>
+            }
+          />
         </div>
       )}
       <Handoff
@@ -82,9 +91,20 @@ export default function KnowledgeView() {
           <Explorer key={scopeKey(scope)} atlas={data} />
         ) : (
           !error && (
-            <EmptyState>
-              The ledger holds no knowledge yet. It fills when a phase that discovers rules or
-              writes a knowledge delta has its gate approved.
+            <EmptyState
+              icon="layers"
+              title="The ledger holds no knowledge yet"
+              action={
+                // One next step. The field guide is the header's "How to read
+                // this page", a few pixels above.
+                <ButtonLink href="#/pipelines" variant="primary" iconRight="arrow-right">
+                  Open pipelines
+                </ButtonLink>
+              }
+            >
+              It fills when a pipeline phase that discovers rules or writes a knowledge delta has
+              its gate approved. Each claim then appears here with the evidence behind it and the
+              runs that relied on it.
             </EmptyState>
           )
         )}
@@ -95,10 +115,12 @@ export default function KnowledgeView() {
   );
 }
 
+/** The one-line state of the ledger, set as the page's subtitle. A fragment,
+ *  since `Page` wraps it in its own paragraph. */
 function Summary({ atlas }: { atlas: KnowledgeAtlas }) {
   const s = summarize(atlas);
   return (
-    <p className="mt-2 max-w-[68ch] text-[15px] leading-relaxed text-ink-dim">
+    <>
       <Term id="claim">{plural(s.claims, "claim")}</Term>
       {s.rules > 0 && <>, {plural(s.rules, "business rule")}</>}
       {" · "}
@@ -107,7 +129,9 @@ function Summary({ atlas }: { atlas: KnowledgeAtlas }) {
           all <Term id="supported">supported</Term>
         </>
       ) : (
-        <span className="text-run">{plural(s.exceptions, "needs a look", "need a look")}</span>
+        <span className="font-semibold text-run">
+          {plural(s.exceptions, "needs a look", "need a look")}
+        </span>
       )}
       {s.rules > 0 && (
         <>
@@ -132,7 +156,7 @@ function Summary({ atlas }: { atlas: KnowledgeAtlas }) {
           {plural(s.superseded, "earlier revision")} kept as <Term id="superseded">history</Term>
         </>
       )}
-    </p>
+    </>
   );
 }
 
@@ -153,17 +177,15 @@ function ScopePicker({
   if (owned.length === 0) return null;
   const total = atlas.scopes.reduce((n, s) => n + s.claims, 0);
   return (
-    <label className="flex items-center gap-2 rounded-lg border border-line bg-surface px-3 py-1.5 text-[13px]">
-      <span className="font-mono text-[10.5px] uppercase tracking-[0.12em] text-ink-faint">
-        Scope
-      </span>
+    <label className="flex min-w-0 items-center gap-2">
+      <span className={labelClass}>Scope</span>
       <select
         aria-label="Knowledge scope"
         value={scopeKey(value)}
         onChange={(e) =>
           onChange(owned.find((s) => scopeKey(s.scope) === e.target.value)?.scope ?? null)
         }
-        className="max-w-[16rem] bg-transparent text-ink outline-none"
+        className={`${fieldClass} h-8 w-full max-w-[16rem] cursor-pointer`}
       >
         <option value="">All knowledge ({total})</option>
         {owned.map((s) => (
@@ -186,6 +208,7 @@ function Explorer({ atlas }: { atlas: KnowledgeAtlas }) {
   const [openGroup, setOpenGroup] = useState<string | null>(null);
   const [filter, setFilter] = useState<ClaimFilter>(NO_FILTER);
   const [selected, setSelected] = useState<{ key: string; originY?: number } | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   const active = useMemo(() => activeClaims(atlas), [atlas]);
   const groups = useMemo(() => groupClaims(active, groupBy), [active, groupBy]);
@@ -214,7 +237,7 @@ function Explorer({ atlas }: { atlas: KnowledgeAtlas }) {
 
   return (
     <>
-      <div className="mb-6">
+      <div className="mb-6 rounded-tile border border-line bg-surface px-4 py-3.5 shadow-raised">
         <KindStrip
           claims={base}
           active={filter.kind}
@@ -222,21 +245,17 @@ function Explorer({ atlas }: { atlas: KnowledgeAtlas }) {
         />
       </div>
 
-      <div className="mb-5 flex flex-wrap items-center gap-3">
+      <div className="mb-5 flex flex-wrap items-center gap-x-3 gap-y-2.5">
         {listing ? (
-          <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-2 text-sm">
-            <button
-              type="button"
-              onClick={backToOverview}
-              className="text-ink-faint transition hover:text-ink"
-            >
+          <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-sm">
+            <Button variant="ghost" size="sm" className="-ml-2.5" onClick={backToOverview}>
               Knowledge
-            </button>
-            <span aria-hidden="true" className="text-ink-faint">
-              ›
-            </span>
+            </Button>
+            <Icon name="chevron-right" size={13} className="text-ink-faint/70" />
             <span className="truncate font-semibold text-ink">{group?.label ?? "All claims"}</span>
-            <span className="font-mono text-[12px] text-ink-faint">{shown.length}</span>
+            <span className="rounded-full bg-surface-3 px-1.5 py-px text-micro font-semibold tabular-nums text-ink-dim">
+              {shown.length}
+            </span>
           </nav>
         ) : (
           <SegmentedControl
@@ -251,26 +270,30 @@ function Explorer({ atlas }: { atlas: KnowledgeAtlas }) {
             type="button"
             aria-pressed={filter.exceptionsOnly}
             onClick={() => setFilter((f) => ({ ...f, exceptionsOnly: !f.exceptionsOnly }))}
-            className={`rounded-full border px-3 py-1 text-[12.5px] transition ${
+            className={`inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-caption font-semibold transition duration-(--duration-quick) motion-safe:active:scale-[0.97] ${
               filter.exceptionsOnly
-                ? "border-run/60 bg-run/10 text-run"
-                : "border-line text-ink-dim hover:border-run/50 hover:text-ink"
+                ? "border-run/50 bg-run/10 text-run"
+                : "border-line-strong text-ink-dim hover:border-run/40 hover:bg-surface-2 hover:text-ink"
             }`}
           >
+            <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-run" />
             Only what needs a look · {exceptions}
           </button>
         )}
-        <label className="flex min-w-[14rem] flex-1 items-center gap-2 rounded-lg border border-line bg-surface px-3 py-1.5 sm:ml-auto sm:max-w-sm">
-          <span aria-hidden="true" className="text-xs text-ink-faint">
-            ⌕
-          </span>
+        <label className="relative flex min-w-0 flex-[1_1_14rem] items-center sm:ml-auto sm:max-w-sm">
+          <Icon
+            name="search"
+            size={15}
+            className="pointer-events-none absolute left-2.5 text-ink-faint"
+          />
           <input
+            ref={searchRef}
             type="search"
             aria-label="Search claims by text, id or file"
             placeholder="Search statements, ids, files"
             value={filter.query}
             onChange={(e) => setFilter((f) => ({ ...f, query: e.target.value }))}
-            className="w-full bg-transparent text-sm text-ink placeholder-ink-faint outline-none"
+            className={`${fieldClass} h-8 w-full pl-8`}
           />
         </label>
       </div>
@@ -281,6 +304,13 @@ function Explorer({ atlas }: { atlas: KnowledgeAtlas }) {
           selected={selected?.key ?? null}
           showModule={groupBy !== "module" || group === undefined}
           onSelect={select}
+          onClearFilters={() => {
+            // Clearing can unmount the button that did it (with no shelf open
+            // the overview replaces the list), so focus goes somewhere useful
+            // rather than falling to the page.
+            setFilter(NO_FILTER);
+            searchRef.current?.focus();
+          }}
         />
       ) : (
         <ModuleShelves groups={groups} onOpen={setOpenGroup} />

@@ -2,62 +2,56 @@ import type { ReactNode } from "react";
 import type {
   H2CensusTable,
   H2CollectionStatus,
-  H2Distribution,
-  H2Finding,
-  H2Measured,
   H2PopulationBase,
   H2ProbePopulation,
-  H2Proportion,
   H2Report,
   H2ResidualPopulation,
-  H2Usage,
 } from "@argus/contracts";
 import { useDecisionExperiments } from "../useDecisionExperiments";
-import { DecisionH1Section } from "./DecisionH1";
-import { AlertStrip, Card, EmptyState, Handoff, Page, Section, SkeletonRows } from "../ds";
+import {
+  AsOf,
+  Block,
+  CollectionCard,
+  ConfigWell,
+  Counts,
+  DataTable,
+  DecisionH1Section,
+  DefinitionStatus,
+  EmptyLine,
+  EmptyRow,
+  ExperimentHeader,
+  Facts,
+  IntegrityCard,
+  Matrix,
+  MethodsPanel,
+  Notice,
+  ProportionValue,
+  StatGrid,
+  StatePill,
+  SubHeading,
+  TD,
+  TD_LEFT,
+  Th,
+  UsageFacts,
+  formatMeasured,
+  formatNullable,
+  formatProportion,
+  pct,
+  rate,
+} from "./DecisionH1";
+import {
+  AlertStrip,
+  Button,
+  Card,
+  EmptyState,
+  Handoff,
+  Page,
+  Section,
+  SkeletonRows,
+  chipClass,
+} from "../ds";
 
 // ── Formatting ──────────────────────────────────────────────────────────────
-
-/** 0.625 → "62.5%". */
-function pct(v: number, digits = 1): string {
-  return `${(v * 100).toFixed(digits)}%`;
-}
-
-/** A configured rate: no padding zeros, so 0.05 reads "5%" rather than "5.0%". */
-function rate(v: number): string {
-  return `${+(v * 100).toFixed(2)}%`;
-}
-
-/** "62.5% (5/8, 95% CI 30.6–86.3%)", or "— (n = 0)" when there is nothing to divide. */
-function formatProportion(p: H2Proportion): string {
-  if (p.value === null) return "— (n = 0)";
-  const ci = p.ci95
-    ? `, 95% CI ${(p.ci95[0] * 100).toFixed(1)}–${(p.ci95[1] * 100).toFixed(1)}%`
-    : "";
-  return `${pct(p.value)} (${p.k}/${p.n}${ci})`;
-}
-
-function formatMeasured<T>(m: H2Measured<T>, show: (v: T) => string): string {
-  return m.status === "measured" ? show(m.value) : `unmeasured — ${m.reason}`;
-}
-
-const formatNullable = (v: number | null, show: (n: number) => string): string =>
-  v === null ? "—" : show(v);
-
-const formatDistribution = (d: H2Distribution, unit: string): string =>
-  d.n === 0
-    ? "— (n = 0)"
-    : `p50 ${d.p50 ?? "—"} · p95 ${d.p95 ?? "—"}${d.max !== null ? ` · max ${d.max}` : ""} ${unit} (n = ${d.n})`;
-
-const formatUsdAmount = (v: number): string => `$${v.toFixed(4)}`;
-
-function formatTotals(
-  t: { total: number; meanKnown: number | null; known: number; unknown: number },
-  show: (n: number) => string,
-): string {
-  const mean = t.meanKnown === null ? "—" : show(t.meanKnown);
-  return `total ${show(t.total)} · mean ${mean} (known ${t.known}, unknown ${t.unknown})`;
-}
 
 /** Populations are distinct per question digest, projection and full provider identity. */
 const populationKey = (p: H2PopulationBase): string =>
@@ -69,89 +63,9 @@ const populationKey = (p: H2PopulationBase): string =>
     p.provider,
   ]);
 
-// ── Small presentational pieces ─────────────────────────────────────────────
-
-const TH = "pb-2 pr-3 text-right font-normal";
-const TH_LEFT = "pb-2 pr-3 text-left font-normal";
-const TD = "py-1.5 pr-3 text-right font-mono tabular-nums text-ink";
-const TD_LEFT = "py-1.5 pr-3 text-left text-ink";
-
-function DataTable({
-  caption,
-  head,
-  children,
-}: {
-  caption: string;
-  head: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[32rem] border-collapse text-xs">
-        <caption className="sr-only">{caption}</caption>
-        <thead>
-          <tr className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-faint">
-            {head}
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-line">{children}</tbody>
-      </table>
-    </div>
-  );
-}
-
-function Th({ children, left = false }: { children: ReactNode; left?: boolean }) {
-  return (
-    <th scope="col" className={left ? TH_LEFT : TH}>
-      {children}
-    </th>
-  );
-}
-
-function Heading({ children }: { children: ReactNode }) {
-  return (
-    <h3 className="mb-2 mt-5 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-dim">
-      {children}
-    </h3>
-  );
-}
-
-/** Label/value rows. Plain ink throughout: no metric here is a pass/fail signal. */
-function Facts({ rows }: { rows: Array<[string, ReactNode]> }) {
-  return (
-    <dl className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-x-4 gap-y-1.5 text-sm">
-      {rows.map(([label, value]) => (
-        <div key={label} className="contents">
-          <dt className="text-ink-faint">{label}</dt>
-          <dd className="break-words text-ink">{value}</dd>
-        </div>
-      ))}
-    </dl>
-  );
-}
-
-function Counts({ counts }: { counts: Record<string, number> }) {
-  const entries = Object.entries(counts);
-  if (entries.length === 0) return <>none</>;
-  return <>{entries.map(([k, v]) => `${k}: ${v}`).join(" · ")}</>;
-}
-
-function Notice() {
-  return (
-    <div
-      role="note"
-      className="mb-8 rounded-panel border border-eye/40 bg-surface px-5 py-4 text-sm leading-relaxed text-ink"
-    >
-      <p className="font-semibold">Shadow measurement only.</p>
-      <p className="mt-1 text-ink-dim">
-        These assessments are never read by any route, gate, retry or approval, and nothing here
-        authorises an approval. Probe results measure recovery of an observed fact; they are not
-        residual-cause accuracy. Residual-cause accuracy is unmeasured until valid reference labels
-        exist.
-      </p>
-    </div>
-  );
-}
+/** A machine value as a chip: an answer option, an exclusion reason. */
+const MONO_CHIP =
+  "inline-flex items-center rounded-md border border-line px-1.5 py-px font-mono text-micro text-ink-dim";
 
 // ── Collection ──────────────────────────────────────────────────────────────
 
@@ -166,76 +80,104 @@ function CollectionSection({
   const w = status.watcher;
   return (
     <Section title="Collection">
-      <Card>
-        <Facts
-          rows={[
-            ["Collection", status.enabled ? "Enabled" : "Off"],
-            [
-              "Watcher",
-              `${w.state}${w.detail ? ` — ${w.detail}` : ""}${w.until ? ` (until ${w.until})` : ""}`,
-            ],
-            ["First collection", collection.start ?? "none recorded"],
-          ]}
-        />
-        {!status.enabled && (
-          <>
-            <Heading>Reasons collection is off</Heading>
-            {status.reasons.length === 0 ? (
-              <p className="text-sm text-ink-faint">No reason reported.</p>
-            ) : (
-              <ul className="list-disc space-y-1 pl-5 text-sm text-ink">
-                {status.reasons.map((r) => (
-                  <li key={r}>{r}</li>
-                ))}
-              </ul>
-            )}
-          </>
-        )}
-        <Heading>Settings</Heading>
-        {s ? (
-          <Facts
-            rows={[
-              ["Residual sampling rate", rate(s.residualRate)],
-              ["Probe sampling rate", rate(s.probeRate)],
-              ["Max calls per 24h", String(s.maxCallsPer24h)],
-              ["Min interval between calls", `${+(s.minCallIntervalMs / 60_000).toFixed(2)} min`],
-              ["Max spend per 24h", `$${s.maxUsdPer24h}`],
-              ["Requested model", s.requestedModel ?? "runner default"],
-              ["Seed", <span className="font-mono">{s.seed}</span>],
-            ]}
-          />
-        ) : (
-          <p className="text-sm text-ink-faint">No valid settings.</p>
-        )}
-      </Card>
+      <CollectionCard
+        enabled={status.enabled}
+        reasons={status.reasons}
+        noSettings="No valid settings."
+        state={[
+          [
+            "Collection",
+            <StatePill on={status.enabled}>{status.enabled ? "Enabled" : "Off"}</StatePill>,
+          ],
+          [
+            "Watcher",
+            `${w.state}${w.detail ? ` — ${w.detail}` : ""}${w.until ? ` (until ${w.until})` : ""}`,
+          ],
+          ["First collection", collection.start ?? "none recorded"],
+        ]}
+        settings={
+          s
+            ? [
+                ["Residual sampling rate", rate(s.residualRate)],
+                ["Probe sampling rate", rate(s.probeRate)],
+                ["Max calls per 24h", String(s.maxCallsPer24h)],
+                ["Min interval between calls", `${+(s.minCallIntervalMs / 60_000).toFixed(2)} min`],
+                ["Max spend per 24h", `$${s.maxUsdPer24h}`],
+                ["Requested model", s.requestedModel ?? "runner default"],
+                ["Seed", <span className="font-mono">{s.seed}</span>],
+              ]
+            : null
+        }
+      >
+        <Block title="Collection configs" level={3}>
+          {collection.configs.length === 0 ? (
+            <EmptyLine>No collection config recorded.</EmptyLine>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {collection.configs.map((c) => (
+                <ConfigWell
+                  key={c.digest}
+                  rows={[
+                    ["Digest", <span className="font-mono">{c.digest.slice(0, 12)}</span>],
+                    ["First recorded", c.firstAt],
+                    [
+                      "Sampling rates",
+                      c.rates.map((r) => `${r.id}@${r.version}: ${rate(r.rate)}`).join(" · "),
+                    ],
+                    [
+                      "Provider",
+                      `${c.provider.provider} · requested ${c.provider.requestedModel ?? "default"} · adapter v${c.provider.adapterVersion}`,
+                    ],
+                    ["Census records", String(c.census)],
+                    ["Attempts", String(c.attempts)],
+                  ]}
+                />
+              ))}
+            </div>
+          )}
+        </Block>
+      </CollectionCard>
+    </Section>
+  );
+}
 
-      <Heading>Collection configs</Heading>
-      {collection.configs.length === 0 ? (
-        <p className="text-sm text-ink-faint">No collection config recorded.</p>
-      ) : (
-        <div className="grid gap-2">
-          {collection.configs.map((c) => (
-            <Card key={c.digest}>
-              <Facts
-                rows={[
-                  ["Digest", <span className="font-mono">{c.digest.slice(0, 12)}</span>],
-                  ["First recorded", c.firstAt],
-                  [
-                    "Sampling rates",
-                    c.rates.map((r) => `${r.id}@${r.version}: ${rate(r.rate)}`).join(" · "),
-                  ],
-                  [
-                    "Provider",
-                    `${c.provider.provider} · requested ${c.provider.requestedModel ?? "default"} · adapter v${c.provider.adapterVersion}`,
-                  ],
-                  ["Census records", String(c.census)],
-                  ["Attempts", String(c.attempts)],
-                ]}
-              />
-            </Card>
-          ))}
-        </div>
-      )}
+// ── Questions ───────────────────────────────────────────────────────────────
+
+/**
+ * The two questions as registered: what each may answer, and whether the
+ * definition on disk is the one the report expects. Shown before any result so
+ * a fresh install says what the experiment *would* measure, not only that it
+ * has measured nothing.
+ */
+function QuestionsSection({ definitions }: { definitions: H2Report["definitions"] }) {
+  if (definitions.length === 0) return null;
+  return (
+    <Section title="Questions">
+      <ul className="divide-y divide-line rounded-tile border border-line bg-surface shadow-raised">
+        {definitions.map((d) => (
+          <li key={`${d.role}:${d.id}@${d.version}`} className="px-4 py-3">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+              <span className={`${chipClass()} w-16 justify-center`}>{d.role}</span>
+              <span className="min-w-0 break-all font-mono text-small text-ink">
+                {d.id}@{d.version}
+              </span>
+              <DefinitionStatus status={d.definition} />
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-1.5 sm:pl-[4.75rem]">
+              {d.projection && (
+                <span className="mr-1.5 font-mono text-caption text-ink-faint">
+                  sees {d.projection.id}@{d.projection.version}
+                </span>
+              )}
+              {d.options.map((o) => (
+                <span key={o} className={MONO_CHIP}>
+                  {o}
+                </span>
+              ))}
+            </div>
+          </li>
+        ))}
+      </ul>
     </Section>
   );
 }
@@ -247,113 +189,125 @@ function CensusCard({ table }: { table: H2CensusTable }) {
   const name = `${table.role} ${table.question.id}@${table.question.version}`;
   return (
     <Card>
-      <h3 className="text-sm font-semibold text-ink">{name}</h3>
-      <p className="mt-1 text-sm text-ink-dim">Runs considered: {table.considered}</p>
-      <Heading>Excluded</Heading>
-      {excluded.length === 0 ? (
-        <p className="text-sm text-ink-faint">Nothing excluded.</p>
-      ) : (
-        <ul className="space-y-0.5 text-sm text-ink">
-          {excluded.map(([reason, n]) => (
-            <li key={reason}>
-              {reason} → {n}
-            </li>
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+        <h3 className="flex min-w-0 items-center gap-2 text-heading font-semibold text-ink">
+          <span className={chipClass()}>{table.role}</span>
+          <span className="min-w-0 break-all font-mono text-small">
+            {table.question.id}@{table.question.version}
+          </span>
+        </h3>
+        <p className="text-small text-ink-dim">Runs considered: {table.considered}</p>
+      </div>
+      <Block title="Excluded">
+        {excluded.length === 0 ? (
+          <EmptyLine>Nothing excluded.</EmptyLine>
+        ) : (
+          <ul className="flex flex-wrap gap-1.5">
+            {excluded.map(([reason, n]) => (
+              <li key={reason} className={`${MONO_CHIP} gap-1.5`}>
+                {reason}
+                <span className="font-sans font-semibold text-ink">{n}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Block>
+      <Block title="Strata">
+        <DataTable
+          caption={`Strata for ${name}`}
+          minWidth="min-w-[44rem]"
+          head={
+            <>
+              <Th left>Stratum</Th>
+              <Th>Eligible</Th>
+              <Th>Selected</Th>
+              <Th>Not selected</Th>
+              <Th>Assessed</Th>
+              <Th>Lost</Th>
+              <Th>Construction error</Th>
+              <Th>Expired</Th>
+              <Th>Abandoned</Th>
+              <Th>Pending</Th>
+            </>
+          }
+        >
+          {table.strata.map((s) => (
+            <tr key={s.stratum}>
+              <td className={`${TD_LEFT} font-mono text-caption`}>{s.stratum}</td>
+              <td className={TD}>{s.eligible}</td>
+              <td className={TD}>{s.selected}</td>
+              <td className={TD}>{s.notSelected}</td>
+              <td className={TD}>{s.assessed}</td>
+              <td className={TD}>{s.lost}</td>
+              <td className={TD}>{s.constructionError}</td>
+              <td className={TD}>{s.expired}</td>
+              <td className={TD}>{s.abandoned}</td>
+              <td className={TD}>{s.pending}</td>
+            </tr>
           ))}
-        </ul>
-      )}
-      <Heading>Strata</Heading>
-      <DataTable
-        caption={`Strata for ${name}`}
-        head={
-          <>
-            <Th left>Stratum</Th>
-            <Th>Eligible</Th>
-            <Th>Selected</Th>
-            <Th>Not selected</Th>
-            <Th>Assessed</Th>
-            <Th>Lost</Th>
-            <Th>Construction error</Th>
-            <Th>Expired</Th>
-            <Th>Abandoned</Th>
-            <Th>Pending</Th>
-          </>
-        }
-      >
-        {table.strata.map((s) => (
-          <tr key={s.stratum}>
-            <td className={TD_LEFT}>{s.stratum}</td>
-            <td className={TD}>{s.eligible}</td>
-            <td className={TD}>{s.selected}</td>
-            <td className={TD}>{s.notSelected}</td>
-            <td className={TD}>{s.assessed}</td>
-            <td className={TD}>{s.lost}</td>
-            <td className={TD}>{s.constructionError}</td>
-            <td className={TD}>{s.expired}</td>
-            <td className={TD}>{s.abandoned}</td>
-            <td className={TD}>{s.pending}</td>
-          </tr>
-        ))}
-      </DataTable>
+        </DataTable>
+      </Block>
     </Card>
   );
 }
 
-// ── Populations (shared header, counts, usage) ──────────────────────────────
+// ── Populations (shared header, counts) ─────────────────────────────────────
 
 function PopulationHeader({ p }: { p: H2PopulationBase }) {
   return (
     <>
-      <h3 className="text-sm font-semibold text-ink">
+      <h3 className="mb-2 break-all font-mono text-heading font-semibold text-ink">
         {p.question.id}@{p.question.version}
       </h3>
+      <Facts
+        columns={2}
+        rows={[
+          ["Definition", p.question.definition],
+          ["Projection", `${p.projection.id}@${p.projection.version}`],
+          ["Provider", p.provider.provider],
+          ["Requested model", p.provider.requestedModel ?? "default"],
+          ["Reported model", p.provider.reportedModel ?? "not reported"],
+          ["Adapter version", String(p.provider.adapterVersion)],
+          ["Elicitation", p.provider.elicitation],
+        ]}
+      />
+    </>
+  );
+}
+
+function PopulationCounts({
+  p,
+  extra = [],
+  more = [],
+}: {
+  p: H2PopulationBase;
+  /** Further counts, as tiles. */
+  extra?: Array<[string, number]>;
+  /** Further breakdowns, as rows. */
+  more?: Array<[string, ReactNode]>;
+}) {
+  return (
+    <Block title="Counts">
+      <StatGrid
+        cols={extra.length > 0 ? 5 : 4}
+        items={[
+          ["Assessed", p.assessed],
+          ["Answered", p.answered],
+          ["Abstained", p.abstained],
+          ["Failed", p.failed],
+          ...extra,
+        ]}
+      />
       <div className="mt-3">
         <Facts
           rows={[
-            ["Definition", p.question.definition],
-            ["Projection", `${p.projection.id}@${p.projection.version}`],
-            ["Provider", p.provider.provider],
-            ["Requested model", p.provider.requestedModel ?? "default"],
-            ["Reported model", p.provider.reportedModel ?? "not reported"],
-            ["Adapter version", String(p.provider.adapterVersion)],
-            ["Elicitation", p.provider.elicitation],
+            ["Attempts by class", <Counts counts={p.attempts} />],
+            ["Refusals (no provider call)", <Counts counts={p.refusals} />],
+            ...more,
           ]}
         />
       </div>
-    </>
-  );
-}
-
-function PopulationCounts({ p }: { p: H2PopulationBase }) {
-  return (
-    <>
-      <Heading>Counts</Heading>
-      <Facts
-        rows={[
-          ["Attempts by class", <Counts counts={p.attempts} />],
-          ["Assessed", String(p.assessed)],
-          ["Answered", String(p.answered)],
-          ["Abstained", String(p.abstained)],
-          ["Failed", String(p.failed)],
-          ["Refusals (no provider call)", <Counts counts={p.refusals} />],
-        ]}
-      />
-    </>
-  );
-}
-
-function UsageFacts({ usage }: { usage: H2Usage }) {
-  return (
-    <>
-      <Heading>Usage</Heading>
-      <Facts
-        rows={[
-          ["Latency", formatDistribution(usage.latencyMs, "ms")],
-          ["Cost (USD)", formatTotals(usage.costUsd, formatUsdAmount)],
-          ["Tokens", formatTotals(usage.tokens, (n) => String(Math.round(n * 10) / 10))],
-          ["Snapshot size", formatDistribution(usage.snapshotBytes, "bytes")],
-        ]}
-      />
-    </>
+    </Block>
   );
 }
 
@@ -363,128 +317,120 @@ function ProbeCard({ p }: { p: H2ProbePopulation }) {
   return (
     <Card>
       <PopulationHeader p={p} />
-      <PopulationCounts p={p} />
-      <Facts
-        rows={[
-          ["Reference-bearing", String(p.reference.bearing)],
-          ["Reference-excluded", <Counts counts={p.reference.excluded} />],
-        ]}
+      <PopulationCounts
+        p={p}
+        extra={[["Reference-bearing", p.reference.bearing]]}
+        more={[["Reference-excluded", <Counts counts={p.reference.excluded} />]]}
       />
 
-      <Heading>Metrics</Heading>
-      <Facts
-        rows={[
-          ["Accuracy (answered only)", formatProportion(p.accuracyAnswered)],
-          ["Coverage (answered / assessed with a valid reference)", formatProportion(p.coverage)],
-          [
-            "Accuracy (end-to-end: abstain/fail count as wrong)",
-            formatProportion(p.accuracyEndToEnd),
-          ],
-          ["Macro recall (answered)", formatNullable(p.macroRecall.answered, (v) => pct(v))],
-          ["Macro recall (end-to-end)", formatNullable(p.macroRecall.endToEnd, (v) => pct(v))],
-          [
-            "Majority-class share — accuracy near this is no better than always guessing it",
-            formatNullable(p.majorityClassShare, (v) => pct(v)),
-          ],
-          ["Ties", String(p.ties)],
-          ["Cohen's κ (answered)", formatMeasured(p.kappa, (v) => v.toFixed(3))],
-          [
-            "Brier (multiclass, 0–2)",
-            formatMeasured(p.brier, (v) => `${v.value.toFixed(3)} (n = ${v.n})`),
-          ],
-          ["ECE", formatMeasured(p.ece, (v) => `${v.value.toFixed(3)} (n = ${v.n})`)],
-        ]}
-      />
+      <Block title="Metrics">
+        <Facts
+          rows={[
+            ["Accuracy (answered only)", <ProportionValue p={p.accuracyAnswered} />],
+            [
+              "Coverage (answered / assessed with a valid reference)",
+              <ProportionValue p={p.coverage} />,
+            ],
+            [
+              "Accuracy (end-to-end: abstain/fail count as wrong)",
+              <ProportionValue p={p.accuracyEndToEnd} />,
+            ],
+            ["Macro recall (answered)", formatNullable(p.macroRecall.answered, (v) => pct(v))],
+            ["Macro recall (end-to-end)", formatNullable(p.macroRecall.endToEnd, (v) => pct(v))],
+            [
+              "Majority-class share — accuracy near this is no better than always guessing it",
+              formatNullable(p.majorityClassShare, (v) => pct(v)),
+            ],
+            ["Ties", String(p.ties)],
+            ["Cohen's κ (answered)", formatMeasured(p.kappa, (v) => v.toFixed(3))],
+            [
+              "Brier (multiclass, 0–2)",
+              formatMeasured(p.brier, (v) => `${v.value.toFixed(3)} (n = ${v.n})`),
+            ],
+            ["ECE", formatMeasured(p.ece, (v) => `${v.value.toFixed(3)} (n = ${v.n})`)],
+          ]}
+        />
+      </Block>
 
-      <Heading>Per-class results</Heading>
-      <DataTable
-        caption={`Per-class results for ${name}`}
-        head={
-          <>
-            <Th left>Reference label</Th>
-            <Th>n</Th>
-            <Th>Answered</Th>
-            <Th>Abstained</Th>
-            <Th>Failed</Th>
-            <Th>Correct</Th>
-            <Th>Recall (answered)</Th>
-            <Th>Recall (end-to-end)</Th>
-          </>
-        }
-      >
-        {p.classes.map((c) => (
-          <tr key={c.label}>
-            <td className={TD_LEFT}>{c.label}</td>
-            <td className={TD}>{c.n}</td>
-            <td className={TD}>{c.answered}</td>
-            <td className={TD}>{c.abstained}</td>
-            <td className={TD}>{c.failed}</td>
-            <td className={TD}>{c.correct}</td>
-            <td className={TD}>{formatProportion(c.recallAnswered)}</td>
-            <td className={TD}>{formatProportion(c.recallEndToEnd)}</td>
-          </tr>
-        ))}
-      </DataTable>
+      <Block title="Per-class results">
+        <DataTable
+          caption={`Per-class results for ${name}`}
+          minWidth="min-w-[46rem]"
+          head={
+            <>
+              <Th left>Reference label</Th>
+              <Th>n</Th>
+              <Th>Answered</Th>
+              <Th>Abstained</Th>
+              <Th>Failed</Th>
+              <Th>Correct</Th>
+              <Th>Recall (answered)</Th>
+              <Th>Recall (end-to-end)</Th>
+            </>
+          }
+        >
+          {p.classes.map((c) => (
+            <tr key={c.label}>
+              <td className={TD_LEFT}>{c.label}</td>
+              <td className={TD}>{c.n}</td>
+              <td className={TD}>{c.answered}</td>
+              <td className={TD}>{c.abstained}</td>
+              <td className={TD}>{c.failed}</td>
+              <td className={TD}>{c.correct}</td>
+              <td className={TD}>{formatProportion(c.recallAnswered)}</td>
+              <td className={TD}>{formatProportion(c.recallEndToEnd)}</td>
+            </tr>
+          ))}
+        </DataTable>
+      </Block>
 
-      <Heading>Confusion matrix (rows: reference label, columns: answer)</Heading>
-      <DataTable
-        caption={`Confusion matrix for ${name}`}
-        head={
-          <>
-            <Th left>Reference \ answer</Th>
-            {p.confusion.columns.map((col) => (
-              <Th key={col}>{col}</Th>
-            ))}
-          </>
-        }
-      >
-        {p.confusion.rows.map((row, i) => (
-          <tr key={row}>
-            <th scope="row" className={`${TD_LEFT} font-normal`}>
-              {row}
-            </th>
-            {p.confusion.columns.map((col, j) => (
-              <td key={col} className={TD}>
-                {p.confusion.counts[i][j]}
-              </td>
-            ))}
-          </tr>
-        ))}
-      </DataTable>
-
-      <Heading>Reliability (confidence buckets)</Heading>
-      <DataTable
-        caption={`Reliability buckets for ${name}`}
-        head={
-          <>
-            <Th left>Confidence bucket</Th>
-            <Th>n</Th>
-            <Th>Status</Th>
-            <Th>Mean confidence</Th>
-            <Th>Accuracy</Th>
-          </>
-        }
-      >
-        {p.reliability.buckets.map((b) => (
-          <tr key={b.lower}>
-            <td className={TD_LEFT}>
-              {b.lower}–{b.upper}
-            </td>
-            <td className={TD}>{b.n}</td>
-            <td className={TD}>{b.status}</td>
-            {b.status === "measured" ? (
+      <div className="mt-5 grid gap-x-8 gap-y-5 border-t border-line pt-4 xl:grid-cols-2">
+        <div className="min-w-0">
+          <SubHeading>Confusion matrix (rows: reference label, columns: answer)</SubHeading>
+          <Matrix
+            caption={`Confusion matrix for ${name}`}
+            corner="Reference \ answer"
+            columns={p.confusion.columns}
+            rows={p.confusion.rows}
+            counts={p.confusion.counts}
+          />
+        </div>
+        <div className="min-w-0">
+          <SubHeading>Reliability (confidence buckets)</SubHeading>
+          <DataTable
+            caption={`Reliability buckets for ${name}`}
+            head={
               <>
-                <td className={TD}>{formatNullable(b.meanConfidence, (v) => v.toFixed(3))}</td>
-                <td className={TD}>{formatNullable(b.accuracy, (v) => pct(v))}</td>
+                <Th left>Confidence bucket</Th>
+                <Th>n</Th>
+                <Th>Status</Th>
+                <Th>Mean confidence</Th>
+                <Th>Accuracy</Th>
               </>
-            ) : (
-              <td colSpan={2} className={`${TD} text-ink-faint`}>
-                unmeasured (n &lt; {minBucket})
-              </td>
-            )}
-          </tr>
-        ))}
-      </DataTable>
+            }
+          >
+            {p.reliability.buckets.map((b) => (
+              <tr key={b.lower}>
+                <td className={TD_LEFT}>
+                  {b.lower}–{b.upper}
+                </td>
+                <td className={TD}>{b.n}</td>
+                <td className={`${TD} text-ink-dim`}>{b.status}</td>
+                {b.status === "measured" ? (
+                  <>
+                    <td className={TD}>{formatNullable(b.meanConfidence, (v) => v.toFixed(3))}</td>
+                    <td className={TD}>{formatNullable(b.accuracy, (v) => pct(v))}</td>
+                  </>
+                ) : (
+                  <td colSpan={2} className={`${TD} text-ink-faint`}>
+                    unmeasured (n &lt; {minBucket})
+                  </td>
+                )}
+              </tr>
+            ))}
+          </DataTable>
+        </div>
+      </div>
 
       <UsageFacts usage={p.usage} />
     </Card>
@@ -493,114 +439,109 @@ function ProbeCard({ p }: { p: H2ProbePopulation }) {
 
 function ResidualCard({ p }: { p: H2ResidualPopulation }) {
   const name = `${p.question.id}@${p.question.version}`;
-  const topAnswers = Object.entries(p.topAnswers);
+  const topAnswers = Object.entries(p.topAnswers).sort((a, b) => b[1] - a[1]);
+  const most = Math.max(1, ...topAnswers.map(([, n]) => n));
   return (
     <Card>
       <PopulationHeader p={p} />
       <PopulationCounts p={p} />
 
-      <Heading>Accuracy and probability</Heading>
-      <div className="space-y-1 rounded-lg border border-line px-4 py-3 text-sm font-semibold text-ink">
-        <p>Accuracy: Unmeasured — {p.accuracy.reason}</p>
-        <p>Probability: Unmeasured — {p.probability.reason}</p>
+      <Block title="Accuracy and probability">
+        <dl className="flex flex-col gap-1.5 rounded-control bg-ground-2/70 px-3 py-2.5 text-small">
+          <div className="flex flex-wrap gap-x-3">
+            <dt className="w-24 shrink-0 text-ink-faint">Accuracy</dt>
+            <dd className="font-semibold text-ink">Unmeasured — {p.accuracy.reason}</dd>
+          </div>
+          <div className="flex flex-wrap gap-x-3">
+            <dt className="w-24 shrink-0 text-ink-faint">Probability</dt>
+            <dd className="font-semibold text-ink">Unmeasured — {p.probability.reason}</dd>
+          </div>
+        </dl>
+      </Block>
+
+      <div className="mt-5 grid gap-x-8 gap-y-5 border-t border-line pt-4 xl:grid-cols-2">
+        <div className="min-w-0">
+          <SubHeading>Strata</SubHeading>
+          <DataTable
+            caption={`Strata for ${name}`}
+            head={
+              <>
+                <Th left>Stratum</Th>
+                <Th>Assessed</Th>
+                <Th>Answered</Th>
+                <Th>Abstained</Th>
+                <Th>Failed</Th>
+              </>
+            }
+          >
+            {p.strata.map((s) => (
+              <tr key={s.stratum}>
+                <td className={`${TD_LEFT} font-mono text-caption`}>{s.stratum}</td>
+                <td className={TD}>{s.assessed}</td>
+                <td className={TD}>{s.answered}</td>
+                <td className={TD}>{s.abstained}</td>
+                <td className={TD}>{s.failed}</td>
+              </tr>
+            ))}
+          </DataTable>
+        </div>
+        <div className="min-w-0">
+          <SubHeading>Top-answer counts (descriptive — not accuracy)</SubHeading>
+          {topAnswers.length === 0 ? (
+            <EmptyLine>No answers recorded.</EmptyLine>
+          ) : (
+            // Bars for share of answers given — a description of what the model
+            // said, in neutral ink, never a score.
+            <ul className="flex flex-col gap-2">
+              {topAnswers.map(([answer, n]) => (
+                <li
+                  key={answer}
+                  className="grid grid-cols-[minmax(0,12rem)_minmax(0,1fr)] items-center gap-3"
+                >
+                  <span className="truncate font-mono text-caption text-ink-dim">
+                    {answer}: {n}
+                  </span>
+                  <span aria-hidden="true" className="h-1.5 rounded-full bg-ink-faint/15">
+                    <span
+                      className="block h-full rounded-full bg-ink-faint/60"
+                      style={{ width: `${(n / most) * 100}%` }}
+                    />
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
-
-      <Heading>Strata</Heading>
-      <DataTable
-        caption={`Strata for ${name}`}
-        head={
-          <>
-            <Th left>Stratum</Th>
-            <Th>Assessed</Th>
-            <Th>Answered</Th>
-            <Th>Abstained</Th>
-            <Th>Failed</Th>
-          </>
-        }
-      >
-        {p.strata.map((s) => (
-          <tr key={s.stratum}>
-            <td className={TD_LEFT}>{s.stratum}</td>
-            <td className={TD}>{s.assessed}</td>
-            <td className={TD}>{s.answered}</td>
-            <td className={TD}>{s.abstained}</td>
-            <td className={TD}>{s.failed}</td>
-          </tr>
-        ))}
-      </DataTable>
-
-      <Heading>Top-answer counts (descriptive — not accuracy)</Heading>
-      {topAnswers.length === 0 ? (
-        <p className="text-sm text-ink-faint">No answers recorded.</p>
-      ) : (
-        <ul className="space-y-0.5 text-sm text-ink">
-          {topAnswers.map(([answer, n]) => (
-            <li key={answer}>
-              {answer}: {n}
-            </li>
-          ))}
-        </ul>
-      )}
 
       <UsageFacts usage={p.usage} />
     </Card>
   );
 }
 
-// ── Baselines, integrity, methods ───────────────────────────────────────────
+// ── Baselines ───────────────────────────────────────────────────────────────
 
-function FindingList({ findings }: { findings: H2Finding[] }) {
-  if (findings.length === 0) return <p className="text-sm text-ink-faint">No findings.</p>;
+function BaselinesSection({ baselines }: { baselines: H2Report["baselines"] }) {
   return (
-    <ul className="space-y-2 text-sm text-ink">
-      {findings.map((f, i) => (
-        <li key={i} className="rounded-lg border border-line px-3 py-2">
-          <span className="font-mono text-xs text-ink-dim">
-            {f.kind}
-            {f.line !== null ? ` · line ${f.line}` : ""}
-            {f.attemptId ? ` · ${f.attemptId}` : ""}
-          </span>
-          <p className="mt-0.5">{f.detail}</p>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function IntegritySection({ report }: { report: H2Report }) {
-  const { integrity } = report;
-  return (
-    <Section title="Integrity">
-      <Card>
-        <Facts
-          rows={[
-            ["History (ledger, journal and joins)", integrity.history],
-            ["Journal gaps", String(integrity.journal.gaps)],
-            ["Journal assessments outside the experiment", String(report.outsideExperiment)],
-          ]}
-        />
-        <Heading>Ledger findings</Heading>
-        <FindingList findings={integrity.ledger} />
-        <Heading>Journal notices</Heading>
-        {integrity.journal.notices.length === 0 ? (
-          <p className="text-sm text-ink-faint">No findings.</p>
-        ) : (
-          <ul className="space-y-2 text-sm text-ink">
-            {integrity.journal.notices.map((n, i) => (
-              <li key={i} className="rounded-lg border border-line px-3 py-2">
-                <span className="font-mono text-xs text-ink-dim">
-                  {n.kind}
-                  {n.segment ? ` · ${n.segment}` : ""}
-                  {n.line !== null ? ` · line ${n.line}` : ""}
-                </span>
-                <p className="mt-0.5">{n.detail}</p>
-              </li>
-            ))}
-          </ul>
-        )}
-        <Heading>Findings</Heading>
-        <FindingList findings={integrity.findings} />
-      </Card>
+    <Section title="Baselines">
+      {baselines.length === 0 ? (
+        <EmptyRow>No baselines.</EmptyRow>
+      ) : (
+        <ul className="divide-y divide-line rounded-tile border border-line bg-surface shadow-raised">
+          {baselines.map((b) => (
+            <li
+              key={b.provider}
+              className="flex flex-col gap-x-6 gap-y-1.5 px-4 py-3 sm:flex-row sm:items-baseline"
+            >
+              <span className="flex shrink-0 items-center gap-2 sm:w-64">
+                <span className="text-small font-semibold text-ink">{b.provider}</span>
+                <span className={chipClass()}>{b.status}</span>
+              </span>
+              <span className="min-w-0 max-w-3xl text-small text-ink-dim">{b.reason}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </Section>
   );
 }
@@ -608,19 +549,49 @@ function IntegritySection({ report }: { report: H2Report }) {
 // ── Page ────────────────────────────────────────────────────────────────────
 
 export default function DecisionExperiments() {
-  const { data, loading, error } = useDecisionExperiments();
+  const { data, loading, error, refresh } = useDecisionExperiments();
 
   return (
-    <Page title="Decision experiments">
-      <Notice />
-      {error && (
-        <div className="mb-6">
-          <AlertStrip subject="Error" message={`Couldn't load the H2 report: ${error}`} />
-        </div>
-      )}
-      <Handoff busy={loading && !data} label="H2 report" skeleton={<SkeletonRows count={4} />}>
-        {data ? <Report data={data} /> : !error && <EmptyState>No report available.</EmptyState>}
-      </Handoff>
+    <Page
+      title="Decision experiments"
+      subtitle="Two read-only shadow experiments: what a model answers about runs and gates, set beside what Argus recorded."
+    >
+      <section aria-labelledby="decision-h2-title">
+        <ExperimentHeader
+          id="decision-h2-title"
+          icon="activity"
+          title="H2 — run termination and failure cause"
+        >
+          Asks how a finished run ended, which Argus can check, and why an unsuccessful one failed,
+          which it cannot.
+        </ExperimentHeader>
+        <Notice title="Shadow measurement only.">
+          These assessments are never read by any route, gate, retry or approval, and nothing here
+          authorises an approval. Probe results measure recovery of an observed fact; they are not
+          residual-cause accuracy. Residual-cause accuracy is unmeasured until valid reference
+          labels exist.
+        </Notice>
+        {error && (
+          <div className="mb-6">
+            <AlertStrip
+              subject="Experiments"
+              message={`Couldn't load the H2 report: ${error}`}
+              action={
+                <Button size="sm" icon="retry" onClick={refresh}>
+                  Retry
+                </Button>
+              }
+            />
+          </div>
+        )}
+        <Handoff busy={loading && !data} label="H2 report" skeleton={<SkeletonRows count={4} />}>
+          {data ? (
+            <Report data={data} />
+          ) : (
+            !error && <EmptyState icon="file">No report available.</EmptyState>
+          )}
+        </Handoff>
+      </section>
       <DecisionH1Section />
     </Page>
   );
@@ -636,12 +607,13 @@ function Report({
   return (
     <>
       <CollectionSection status={collection} collection={report.collection} />
+      <QuestionsSection definitions={report.definitions} />
 
       <Section title="Population">
         {report.census.length === 0 ? (
-          <p className="text-sm text-ink-faint">No census recorded.</p>
+          <EmptyRow>No census recorded.</EmptyRow>
         ) : (
-          <div className="grid gap-3">
+          <div className="flex flex-col gap-3">
             {report.census.map((t) => (
               <CensusCard key={`${t.role}:${t.question.id}@${t.question.version}`} table={t} />
             ))}
@@ -650,14 +622,28 @@ function Report({
       </Section>
 
       {noAssessments ? (
-        <div className="mb-8">
-          <EmptyState>No shadow assessments recorded.</EmptyState>
-        </div>
+        <Section title="Assessments">
+          <EmptyState compact icon="inbox" title="No shadow assessments recorded.">
+            {/* Says what is missing, not only that something is: the reasons
+                are the switches that turn collection on. */}
+            {collection.enabled
+              ? "Collection is on. "
+              : `Collection is off${
+                  collection.reasons.length > 0 ? `: ${collection.reasons.join("; ")}` : ""
+                }. It calls a model, so it stays off until you turn it on. `}
+            A sampled run is assessed once it is between 10 minutes and 24 hours old.
+          </EmptyState>
+        </Section>
       ) : (
         <>
           {report.probe.length > 0 && (
-            <Section title="Probe: run.termination-probe">
-              <div className="grid gap-3">
+            <Section title="Probe question">
+              <p className="-mt-1 mb-3 max-w-3xl text-small text-ink-dim">
+                From this trace alone, how did the run end? Asked of a blind projection, with
+                status, exit code and error withheld, and scored against the termination Argus
+                observed.
+              </p>
+              <div className="flex flex-col gap-3">
                 {report.probe.map((p) => (
                   <ProbeCard key={populationKey(p)} p={p} />
                 ))}
@@ -665,8 +651,12 @@ function Report({
             </Section>
           )}
           {report.residual.length > 0 && (
-            <Section title="Residual: run.failure-cause.residual">
-              <div className="grid gap-3">
+            <Section title="Residual question">
+              <p className="-mt-1 mb-3 max-w-3xl text-small text-ink-dim">
+                Why did an unsuccessful run not accomplish its task? Nothing records the true cause,
+                so these answers are described, never scored.
+              </p>
+              <div className="flex flex-col gap-3">
                 {report.residual.map((p) => (
                   <ResidualCard key={populationKey(p)} p={p} />
                 ))}
@@ -676,37 +666,28 @@ function Report({
         </>
       )}
 
-      <Section title="Baselines">
-        {report.baselines.length === 0 ? (
-          <p className="text-sm text-ink-faint">No baselines.</p>
-        ) : (
-          <ul className="space-y-1 text-sm text-ink">
-            {report.baselines.map((b) => (
-              <li key={b.provider}>
-                {b.provider} — {b.status} — {b.reason}
-              </li>
-            ))}
-          </ul>
-        )}
-      </Section>
+      <BaselinesSection baselines={report.baselines} />
 
-      <IntegritySection report={report} />
+      <Section title="Integrity">
+        <IntegrityCard
+          integrity={report.integrity}
+          empty="No findings."
+          facts={[
+            ["History (ledger, journal and joins)", report.integrity.history],
+            ["Journal gaps", String(report.integrity.journal.gaps)],
+            ["Journal assessments outside the experiment", String(report.outsideExperiment)],
+          ]}
+        />
+      </Section>
 
       <Section title="Methods">
-        <dl className="grid gap-3 text-sm">
-          {Object.entries(report.methods).map(([key, text]) => (
-            <div key={key}>
-              <dt className="font-mono text-xs text-ink-dim">{key}</dt>
-              <dd className="mt-0.5 text-ink">{text}</dd>
-            </div>
-          ))}
-        </dl>
+        <MethodsPanel methods={report.methods} />
       </Section>
 
-      <p className="text-xs text-ink-faint">
+      <AsOf>
         As of ledger record {report.asOf.seq} ({report.asOf.at ?? "no records"}). Opening this page
         never starts collection or calls a model.
-      </p>
+      </AsOf>
     </>
   );
 }
