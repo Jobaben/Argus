@@ -1,3 +1,4 @@
+import type { IconName } from "../ds/Icon";
 import type { PaletteEntry, PaletteKind, PaletteSeverity } from "../types";
 import type { Rankable } from "./fuzzy";
 
@@ -28,7 +29,7 @@ export interface Command extends Rankable {
   /** What this does. Returning a promise lets the palette show a pending state. */
   run?: () => void | Promise<unknown>;
   /** Rendered as a leading glyph; keeps kinds distinguishable at a glance. */
-  icon?: string;
+  icon?: IconName;
 }
 
 /** One nav destination, as the shell knows it. */
@@ -39,14 +40,14 @@ export interface Destination {
   chord?: string;
 }
 
-const KIND_ICON: Record<PaletteKind, string> = {
-  pipeline: "▤",
-  schedule: "◷",
-  monitor: "◉",
-  issue: "⚠",
-  agent: "◆",
-  project: "▸",
-  session: "≣",
+const KIND_ICON: Record<PaletteKind, IconName> = {
+  pipeline: "pipeline",
+  schedule: "clock",
+  monitor: "activity",
+  issue: "alert",
+  agent: "bolt",
+  project: "folder",
+  session: "terminal",
 };
 
 const KIND_GROUP: Record<PaletteKind, CommandGroup> = {
@@ -87,7 +88,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
       id: `go:${dest.id}`,
       title: dest.label,
       group: "Go to",
-      icon: "→",
+      icon: "arrow-right",
       badge: dest.chord,
       keywords: ["go", "open", "tab", dest.id],
       href: `#/${dest.id}`,
@@ -105,7 +106,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
       title: `Review gate — ${entry.title}`,
       subtitle: "see what the paused phase produced, then approve or revise",
       group: "Actions",
-      icon: "⏸",
+      icon: "pause",
       severity: "warn",
       keywords: ["approve", "revise", "review", "gate", "resume", "unblock", entry.id],
       href: `#/command/${encodeURIComponent(entry.gateInstanceId)}`,
@@ -120,7 +121,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
       title: `Run now — ${entry.title}`,
       subtitle: "fire this schedule immediately",
       group: "Actions",
-      icon: "▶",
+      icon: "play",
       keywords: ["run", "fire", "trigger", "now", entry.id],
       run: () => ctx.actions.runSchedule(scheduleId),
     });
@@ -131,7 +132,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
     title: "Mark caught up",
     subtitle: "reset the briefing window to now",
     group: "Actions",
-    icon: "✓",
+    icon: "check",
     keywords: ["briefing", "ack", "acknowledge", "clear", "digest"],
     run: () => ctx.actions.markCaughtUp(),
   });
@@ -141,7 +142,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
     title: "Keyboard shortcuts",
     subtitle: "every shortcut in the app",
     group: "Actions",
-    icon: "⌨",
+    icon: "keyboard",
     badge: "?",
     keywords: ["help", "keys", "bindings", "cheatsheet"],
     run: () => ctx.actions.showShortcuts(),

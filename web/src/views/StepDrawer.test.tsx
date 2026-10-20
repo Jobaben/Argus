@@ -209,10 +209,10 @@ describe("StepDrawer", () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
     render(<StepDrawer selection={selection()} onClose={onClose} />);
-    await waitFor(() => expect(screen.getByRole("button", { name: "Esc" })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Close" })).toHaveFocus());
     await user.keyboard("{Escape}");
     expect(onClose).toHaveBeenCalledTimes(1);
-    await user.click(screen.getByRole("button", { name: "Esc" }));
+    await user.click(screen.getByRole("button", { name: "Close" }));
     expect(onClose).toHaveBeenCalledTimes(2);
   });
 
@@ -220,7 +220,7 @@ describe("StepDrawer", () => {
     stubRun({ id: "run_0003", log: "", sessionId: "sess-1", project: "p" });
     const user = userEvent.setup();
     render(<StepDrawer selection={selection()} onClose={vi.fn()} />);
-    const close = screen.getByRole("button", { name: "Esc" });
+    const close = screen.getByRole("button", { name: "Close" });
     await waitFor(() => expect(close).toHaveFocus());
     // Two focusables: the close button and the transcript link. Tabbing past the
     // last must wrap to the first, not escape to the page behind.

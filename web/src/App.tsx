@@ -8,6 +8,7 @@ import {
   ErrorBoundary,
   Handoff,
   HealthCounter,
+  IrisMark,
   Loading,
   Page,
   routeDirection,
@@ -544,10 +545,17 @@ export default function App() {
   return (
     <div className="flex min-h-screen items-center justify-center p-6">
       <div className="w-full max-w-sm">
-        <h1 className="mb-1 text-lg text-ink">Argus</h1>
-        <p className="mb-6 text-sm text-ink-dim">
-          This server requires an account. Sign in to see the dashboard.
-        </p>
+        {/* The first thing a remote operator sees, so it is the brand's one
+            full-size appearance: the iris, watching, above the way in. */}
+        <div className="mb-8 flex flex-col items-center text-center">
+          <IrisMark size={64} />
+          <h1 className="mt-5 text-display font-semibold tracking-[0.14em] text-ink">
+            ARG<span className="text-eye">U</span>S
+          </h1>
+          <p className="mt-2 text-small text-ink-dim">
+            This server requires an account. Sign in to see the dashboard.
+          </p>
+        </div>
         <ErrorBoundary label="Sign in" resetKey={String(status.configured)}>
           <Suspense
             fallback={

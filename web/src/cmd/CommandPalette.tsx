@@ -12,8 +12,19 @@ const OmnibarIntent = lazy(() =>
   import("./OmnibarIntent").then((m) => ({ default: m.OmnibarIntent })),
 );
 import { looksLikeIntent } from "./intent";
-import { DURATION, SURFACE, prefersReducedMotion, usePresence, useSurfaceMotion } from "../ds";
+import {
+  DURATION,
+  Icon,
+  SURFACE,
+  prefersReducedMotion,
+  usePresence,
+  useSurfaceMotion,
+} from "../ds";
 import type { PaletteSeverity } from "../types";
+
+/** ⌘↵ on Apple, Ctrl↵ elsewhere — the hint is the only place the chord is taught. */
+const MOD_ENTER =
+  typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘↵" : "Ctrl ↵";
 
 const SEVERITY_TEXT: Record<PaletteSeverity, string> = {
   none: "text-ink-faint",
@@ -275,12 +286,10 @@ function Palette({
         aria-modal="true"
         aria-label="Command palette"
         onKeyDown={onDialogKeyDown}
-        className="flex w-full max-w-[640px] flex-col overflow-hidden rounded-panel border border-line bg-surface shadow-[0_24px_80px_-12px_rgb(0_0_0/0.8)]"
+        className="flex w-full max-w-[660px] flex-col overflow-hidden rounded-panel bg-surface-2 shadow-overlay"
       >
         <div className="flex items-center gap-3 border-b border-line px-4">
-          <span aria-hidden="true" className="text-base text-ink-faint">
-            ⌕
-          </span>
+          <Icon name="search" size={18} className="text-ink-faint" />
           <input
             ref={inputRef}
             value={query}
@@ -301,13 +310,9 @@ function Palette({
             // The dialog surface and the caret both signal focus, and this input is
             // auto-focused as the palette's only field — so the global focus ring
             // would only add noise around the whole search row.
-            className="min-w-0 flex-1 bg-transparent py-3.5 text-[15px] text-ink outline-none placeholder:text-ink-faint focus-visible:outline-none"
+            className="min-w-0 flex-1 bg-transparent py-4 text-[16px] text-ink outline-none placeholder:text-ink-faint focus-visible:outline-none"
           />
-          {loading && (
-            <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint">
-              indexing…
-            </span>
-          )}
+          {loading && <span className="text-caption text-ink-faint">indexing…</span>}
         </div>
 
         {intent ? (
@@ -329,22 +334,19 @@ function Palette({
             className="max-h-[52vh] overflow-y-auto py-1.5"
           >
             {flat.length === 0 ? (
-              <div className="px-4 py-8 text-center text-sm text-ink-faint">
+              <div className="px-4 py-10 text-center text-small text-ink-dim">
                 <p>Nothing matches “{query}”.</p>
                 {looksLikeIntent(query) && (
-                  <p className="mx-auto mt-2 max-w-sm text-xs">
-                    That reads like an instruction — press <kbd className="text-ink-dim">↵</kbd> and
-                    Argus will show you exactly what it would change before changing anything.
+                  <p className="mx-auto mt-2 max-w-sm text-caption text-ink-faint">
+                    That reads like an instruction — press <kbd className="kbd">↵</kbd> and Argus
+                    will show you exactly what it would change before changing anything.
                   </p>
                 )}
               </div>
             ) : (
               groups.map((group) => (
                 <div key={group.group} role="group" aria-labelledby={`${listboxId}-${group.group}`}>
-                  <div
-                    id={`${listboxId}-${group.group}`}
-                    className="px-4 pb-1 pt-2 font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-faint"
-                  >
+                  <div id={`${listboxId}-${group.group}`} className="eyebrow px-4 pb-1.5 pt-3">
                     {group.group}
                   </div>
                   {group.items.map((command) => {
@@ -365,24 +367,24 @@ function Palette({
                         // A pressed state on the row, not just a hover tint: the
                         // palette is the app's fastest surface and it is the one
                         // place a click had no physical answer at all.
-                        className={`flex cursor-pointer items-center gap-3 px-4 py-2 transition-transform duration-(--duration-press) motion-safe:active:scale-[0.99] ${
+                        className={`relative mx-1.5 flex cursor-pointer items-center gap-3 rounded-control px-2.5 py-2 transition-transform duration-(--duration-press) motion-safe:active:scale-[0.99] ${
                           chosen === command.id
                             ? "bg-eye/15 text-ink"
                             : active
-                              ? "bg-surface-2"
+                              ? "bg-surface-3 shadow-[inset_2px_0_0_var(--color-eye)]"
                               : ""
                         }`}
                       >
                         <span
                           aria-hidden="true"
-                          className={`w-4 shrink-0 text-center text-[12px] ${
+                          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-ground-2/80 ${
                             SEVERITY_TEXT[command.severity ?? "none"]
                           }`}
                         >
-                          {command.icon ?? "·"}
+                          {command.icon ? <Icon name={command.icon} size={15} /> : "·"}
                         </span>
                         <span className="min-w-0 flex-1">
-                          <span className="block truncate text-[13.5px] leading-tight text-ink">
+                          <span className="block truncate text-sm leading-tight text-ink">
                             {highlight(command.title, positionsById.get(command.id) ?? []).map(
                               (segment, i) => (
                                 <span
@@ -395,7 +397,7 @@ function Palette({
                             )}
                           </span>
                           {command.subtitle && (
-                            <span className="mt-0.5 block truncate text-[11.5px] text-ink-faint">
+                            <span className="mt-0.5 block truncate text-caption text-ink-faint">
                               {command.subtitle}
                             </span>
                           )}
@@ -403,14 +405,14 @@ function Palette({
                         {pending === command.id ? (
                           <span
                             role="status"
-                            className="shrink-0 font-mono text-[10px] uppercase tracking-[0.1em] text-run"
+                            className="shrink-0 text-caption font-semibold text-run"
                           >
                             working…
                           </span>
                         ) : (
                           command.badge && (
                             <span
-                              className={`shrink-0 rounded border border-line px-1.5 py-0.5 font-mono text-[10px] ${
+                              className={`shrink-0 rounded-md border border-line px-1.5 py-0.5 text-micro font-semibold ${
                                 SEVERITY_TEXT[command.severity ?? "none"]
                               }`}
                             >
@@ -430,25 +432,25 @@ function Palette({
         {failure && (
           <p
             role="alert"
-            className="border-t border-fail/30 bg-fail/10 px-4 py-2 text-xs text-fail"
+            className="border-t border-fail/30 bg-fail/10 px-4 py-2 text-caption text-fail-ink"
           >
             {failure}
           </p>
         )}
 
-        <div className="flex items-center gap-4 border-t border-line px-4 py-2 font-mono text-[10px] text-ink-faint">
-          <span>
-            <kbd className="text-ink-dim">↑↓</kbd> navigate
+        <div className="flex items-center gap-4 border-t border-line bg-ground-2/50 px-4 py-2 text-caption text-ink-faint">
+          <span className="flex items-center gap-1.5">
+            <kbd className="kbd">↑↓</kbd> navigate
           </span>
-          <span>
-            <kbd className="text-ink-dim">↵</kbd> run
+          <span className="flex items-center gap-1.5">
+            <kbd className="kbd">↵</kbd> run
           </span>
-          <span>
-            <kbd className="text-ink-dim">esc</kbd> {intent ? "back" : "close"}
+          <span className="flex items-center gap-1.5">
+            <kbd className="kbd">esc</kbd> {intent ? "back" : "close"}
           </span>
           {looksLikeIntent(query) && !intent && (
-            <span>
-              <kbd className="text-ink-dim">⌘↵</kbd> interpret
+            <span className="flex items-center gap-1.5">
+              <kbd className="kbd">{MOD_ENTER}</kbd> interpret
             </span>
           )}
           <span className="ml-auto">

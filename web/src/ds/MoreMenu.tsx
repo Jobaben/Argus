@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Icon } from "./Icon";
 import { SURFACE, usePresence, useSurfaceMotion } from "./presence";
 
 export interface MoreItem {
@@ -85,11 +86,18 @@ export function MoreMenu({
             setOpen(true);
           }
         }}
-        className={`shrink-0 rounded-md px-2.5 py-1.5 text-sm font-medium transition motion-safe:active:scale-[0.97] ${
-          active || open ? "bg-surface-2 text-ink" : "text-ink-dim hover:text-ink"
+        className={`flex h-8 shrink-0 items-center gap-1 rounded-control pl-2.5 pr-2 text-sm transition duration-(--duration-quick) motion-safe:active:scale-[0.97] ${
+          active || open
+            ? "bg-surface-2 text-ink"
+            : "text-ink-dim hover:bg-surface-2/60 hover:text-ink"
         }`}
       >
-        ⋯ More
+        More
+        <Icon
+          name="chevron-down"
+          size={14}
+          className={`transition-transform duration-(--duration-base) ease-(--ease-out-expo) ${open ? "rotate-180" : ""}`}
+        />
       </button>
       {present && (
         <>
@@ -111,7 +119,7 @@ export function MoreMenu({
             onKeyDown={onMenuKeyDown}
             inert={!open}
             aria-hidden={open ? undefined : true}
-            className="absolute right-0 z-20 mt-1 min-w-40 rounded-lg border border-line bg-surface p-1 shadow-lg"
+            className="absolute right-0 z-20 mt-1.5 min-w-48 rounded-tile bg-surface-2 p-1.5 shadow-overlay"
           >
             {items.map((it) => (
               <a
@@ -120,11 +128,15 @@ export function MoreMenu({
                 role="menuitem"
                 aria-current={it.id === activeId ? "page" : undefined}
                 onClick={() => close(false)}
-                className={`block rounded-md px-3 py-1.5 text-sm transition hover:bg-surface-2 hover:text-ink focus:bg-surface-2 focus:text-ink focus:outline-none motion-safe:active:scale-[0.98] ${
+                // Focus is the eye's ring, inset, not just a background tint: a
+                // `surface-3` row on a `surface-2` menu was a keyboard user's only
+                // cue and it was nearly invisible.
+                className={`flex items-center justify-between gap-3 rounded-md px-2.5 py-1.5 text-sm transition duration-(--duration-quick) hover:bg-surface-3 hover:text-ink focus:bg-surface-3 focus:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-eye/70 motion-safe:active:scale-[0.98] ${
                   it.id === activeId ? "text-ink" : "text-ink-dim"
                 }`}
               >
                 {it.label}
+                {it.id === activeId && <Icon name="check" size={14} className="text-eye" />}
               </a>
             ))}
           </div>

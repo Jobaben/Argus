@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ConnectionPill,
+  Icon,
   IrisMark,
   MoreMenu,
   SURFACE,
@@ -18,9 +19,15 @@ export interface NavTab {
   badge?: number;
 }
 
+/**
+ * An attention count. Violet, the colour of "waiting on you", not red: the
+ * Briefing's count is everything that wants a human — a gate, a down monitor —
+ * and painting it the colour of failure made a waiting approval look like an
+ * outage.
+ */
 function Badge({ count }: { count: number }) {
   return (
-    <span className="ml-1.5 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-fail/15 px-1.5 py-0.5 font-mono text-[10px] font-bold leading-none text-fail">
+    <span className="ml-1.5 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-await/18 px-1.5 text-micro font-semibold leading-none text-await">
       {count}
     </span>
   );
@@ -54,12 +61,32 @@ function MobileNav({
   // collapses back into rather than shrinking toward its own middle.
   const sheetRef = useSurfaceMotion<HTMLDivElement>(open, SURFACE.rise, exited, "top center");
 
-  // Navigating closes the sheet: the hash change is the confirmation.
+  // Navigating closes the sheet: the hash change is the confirmation. Escape
+  // closes it too and hands focus back to the toggle, and opening it moves
+  // focus to the current destination — a sheet you can open from the keyboard
+  // but not leave from it is a trap.
+  const sheetEl = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!open) return;
     const close = () => setOpen(false);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setOpen(false);
+      buttonRef.current?.focus();
+    };
     window.addEventListener("hashchange", close);
-    return () => window.removeEventListener("hashchange", close);
+    document.addEventListener("keydown", onKey);
+    const raf = requestAnimationFrame(() =>
+      (
+        sheetEl.current?.querySelector<HTMLElement>('[aria-current="page"]') ??
+        sheetEl.current?.querySelector<HTMLElement>("a")
+      )?.focus(),
+    );
+    return () => {
+      window.removeEventListener("hashchange", close);
+      document.removeEventListener("keydown", onKey);
+      cancelAnimationFrame(raf);
+    };
   }, [open]);
 
   const attention = destinations.reduce((n, d) => n + (d.badge ?? 0), 0);
@@ -72,12 +99,10 @@ function MobileNav({
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         aria-label={open ? "Close the menu" : "Open the menu"}
-        className="flex h-8 items-center gap-2 rounded-md border border-line px-2.5 text-sm text-ink-dim transition duration-(--duration-quick) hover:text-ink motion-safe:active:scale-[0.97]"
+        className="flex h-9 items-center gap-2 rounded-control border border-line-strong bg-surface/60 pl-2.5 pr-3 text-sm text-ink transition duration-(--duration-quick) hover:bg-surface-2 motion-safe:active:scale-[0.97]"
       >
-        <span aria-hidden="true" className="font-mono leading-none">
-          {open ? "✕" : "☰"}
-        </span>
-        <span className="max-w-[6.5rem] truncate sm:max-w-[9rem]">{activeLabel ?? "Menu"}</span>
+        <Icon name={open ? "close" : "menu"} size={17} className="text-ink-dim" />
+        <span className="max-w-[9rem] truncate font-semibold">{activeLabel ?? "Menu"}</span>
         {!open && attention > 0 && <Badge count={attention} />}
       </button>
 
@@ -87,26 +112,31 @@ function MobileNav({
               page behind cannot be scrolled by accident. */}
           <div
             ref={scrimRef}
-            className="fixed inset-0 top-[49px] z-20 bg-ground/60 backdrop-blur-[2px]"
+            className="fixed inset-0 top-14 z-20 bg-ground/70 backdrop-blur-[2px]"
             inert={!open}
             aria-hidden={open ? undefined : true}
             onClick={() => setOpen(false)}
           />
           <div
-            ref={sheetRef}
+            ref={(node) => {
+              sheetEl.current = node;
+              sheetRef(node);
+            }}
             inert={!open}
             aria-hidden={open ? undefined : true}
-            className="absolute inset-x-0 top-full z-30 border-b border-line bg-surface px-3 pb-3 pt-2 shadow-[0_24px_60px_-24px_rgb(0_0_0/0.9)]"
+            className="absolute inset-x-0 top-full z-30 border-b border-line-strong bg-surface px-3 pb-4 pt-3 shadow-[0_24px_60px_-24px_rgb(0_0_0/0.9)]"
           >
-            <ul className="grid grid-cols-2 gap-1.5">
+            <ul className="grid grid-cols-2 gap-1">
               {destinations.map((t) => (
                 <li key={t.id}>
                   <a
                     href={`#/${t.id}`}
                     aria-current={t.id === activeId ? "page" : undefined}
                     onClick={() => setOpen(false)}
-                    className={`flex items-center rounded-md px-3 py-2.5 text-sm transition-transform duration-(--duration-press) motion-safe:active:scale-[0.98] ${
-                      t.id === activeId ? "bg-surface-2 font-semibold text-ink" : "text-ink-dim"
+                    className={`flex h-11 items-center rounded-control px-3 text-[15px] transition-transform duration-(--duration-press) motion-safe:active:scale-[0.98] ${
+                      t.id === activeId
+                        ? "bg-surface-3 font-semibold text-ink"
+                        : "text-ink-dim hover:bg-surface-2"
                     }`}
                   >
                     {t.label}
@@ -116,15 +146,17 @@ function MobileNav({
               ))}
             </ul>
             {overflow.length > 0 && (
-              <ul className="mt-2 flex flex-wrap gap-1.5 border-t border-line pt-2">
+              <ul className="mt-3 flex flex-wrap gap-1 border-t border-line pt-3">
                 {overflow.map((o) => (
                   <li key={o.id}>
                     <a
                       href={o.href}
                       aria-current={o.id === activeId ? "page" : undefined}
                       onClick={() => setOpen(false)}
-                      className={`inline-flex rounded-md px-2.5 py-1.5 font-mono text-[11px] uppercase tracking-[0.1em] transition-transform duration-(--duration-press) motion-safe:active:scale-[0.98] ${
-                        o.id === activeId ? "bg-surface-2 text-ink" : "text-ink-faint"
+                      className={`inline-flex h-9 items-center rounded-control px-3 text-sm transition-transform duration-(--duration-press) motion-safe:active:scale-[0.98] ${
+                        o.id === activeId
+                          ? "bg-surface-3 text-ink"
+                          : "text-ink-faint hover:text-ink"
                       }`}
                     >
                       {o.label}
@@ -157,6 +189,14 @@ function MobileNav({
 function useActivePill(activeId: string, tabCount: number) {
   const trackRef = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState<{ left: number; width: number } | null>(null);
+  // Which ends of the strip have tabs scrolled out of sight. Between ~768px and
+  // ~1150px the eight destinations do not fit, and a strip that is silently
+  // clipped reads as "there are only six"; a fade at the clipped edge says
+  // "there is more this way".
+  const [overflow, setOverflow] = useState<{ start: boolean; end: boolean }>({
+    start: false,
+    end: false,
+  });
 
   // Layout effect: the measurement has to land in the same frame as the tab
   // change, or the pill starts sliding one frame after the label goes bold.
@@ -164,6 +204,9 @@ function useActivePill(activeId: string, tabCount: number) {
     const track = trackRef.current;
     if (!track) return;
     const measure = () => {
+      const start = track.scrollLeft > 1;
+      const end = track.scrollLeft + track.clientWidth < track.scrollWidth - 1;
+      setOverflow((o) => (o.start === start && o.end === end ? o : { start, end }));
       const current = track.querySelector<HTMLElement>('[aria-current="page"]');
       if (!current) {
         setBox(null);
@@ -182,8 +225,15 @@ function useActivePill(activeId: string, tabCount: number) {
     };
   }, [activeId, tabCount]);
 
-  return { trackRef, box };
+  return { trackRef, box, overflow };
 }
+
+const FADE = {
+  none: undefined,
+  start: "linear-gradient(to right, transparent, black 28px)",
+  end: "linear-gradient(to right, black calc(100% - 28px), transparent)",
+  both: "linear-gradient(to right, transparent, black 28px, black calc(100% - 28px), transparent)",
+} as const;
 
 export function NavBar({
   destinations,
@@ -199,7 +249,11 @@ export function NavBar({
   onOpenPalette: () => void;
 }) {
   const overflowActive = overflow.some((o) => o.id === activeId);
-  const { trackRef, box: pill } = useActivePill(activeId, destinations.length);
+  const { trackRef, box: pill, overflow: clipped } = useActivePill(activeId, destinations.length);
+  const fade =
+    FADE[
+      clipped.start && clipped.end ? "both" : clipped.start ? "start" : clipped.end ? "end" : "none"
+    ];
   const reduced = prefersReducedMotion();
   // ⌘ on Apple, Ctrl elsewhere — showing the wrong one is worse than showing
   // none, since the hint is the only place most users learn the shortcut.
@@ -210,17 +264,21 @@ export function NavBar({
   return (
     <nav
       aria-label="Primary"
-      className="sticky top-0 z-30 border-b border-line bg-ground/80 backdrop-blur"
+      className="sticky top-0 z-30 border-b border-line bg-ground/75 backdrop-blur-md backdrop-saturate-150"
     >
-      <div className="relative mx-auto flex max-w-[1600px] items-center gap-2 px-3 py-2.5 sm:gap-3 sm:px-6">
+      <div className="relative mx-auto flex h-14 max-w-[1600px] items-center gap-2 px-4 sm:gap-3 sm:px-6">
         {/* The wordmark is the least load-bearing thing in the bar, so it is what
-            gives up room first on a phone. */}
-        <span className="flex shrink-0 items-center gap-2 text-sm font-bold">
-          <IrisMark size={18} />{" "}
-          <span className="hidden sm:inline">
+            gives up room first on a phone. It is also the way home. */}
+        <a
+          href="#/command"
+          aria-label="Argus home"
+          className="flex shrink-0 items-center gap-2.5 rounded-control py-1 pr-1 text-[15px] font-semibold tracking-[0.14em]"
+        >
+          <IrisMark size={22} />
+          <span aria-hidden="true" className="hidden lg:inline">
             ARG<span className="text-eye">U</span>S
           </span>
-        </span>
+        </a>
 
         <MobileNav destinations={destinations} overflow={overflow} activeId={activeId} />
 
@@ -228,7 +286,8 @@ export function NavBar({
             `md` the sheet above replaces them entirely. */}
         <div
           ref={trackRef}
-          className="relative ml-2 hidden min-w-0 items-center gap-1 overflow-x-auto md:flex"
+          style={fade ? { maskImage: fade, WebkitMaskImage: fade } : undefined}
+          className="relative ml-1 hidden min-w-0 items-center gap-0.5 overflow-x-auto [scrollbar-width:none] md:flex lg:ml-3"
         >
           {/* First in DOM order and unpositioned in z, so it paints *under* the
               anchors: same pixels the active tab's own background used to draw,
@@ -252,7 +311,7 @@ export function NavBar({
               key={t.id}
               href={`#/${t.id}`}
               aria-current={t.id === activeId ? "page" : undefined}
-              className={`relative shrink-0 rounded-md px-3 py-1.5 text-sm font-medium transition duration-(--duration-quick) motion-safe:active:scale-[0.97] ${
+              className={`relative flex h-8 shrink-0 items-center rounded-md px-3 text-sm transition duration-(--duration-quick) motion-safe:active:scale-[0.97] ${
                 t.id === activeId ? "text-ink" : "text-ink-dim hover:text-ink"
               }`}
             >
@@ -270,19 +329,14 @@ export function NavBar({
           <button
             type="button"
             onClick={onOpenPalette}
-            aria-label={`Open the command palette (${modLabel})`}
-            className="group flex h-8 items-center gap-2 rounded-md border border-line px-2 text-ink-dim transition duration-(--duration-quick) hover:border-ink-faint/40 hover:text-ink motion-safe:active:scale-[0.97] sm:pr-1.5"
+            aria-label={`Search — open the command palette (${modLabel})`}
+            className="group flex h-8 items-center gap-2 rounded-control border border-line-strong bg-surface/60 px-2 text-ink-dim transition duration-(--duration-quick) hover:border-ink-faint/45 hover:bg-surface-2 hover:text-ink motion-safe:active:scale-[0.97] sm:pl-2.5 sm:pr-1.5 xl:min-w-56"
           >
-            <span aria-hidden="true" className="text-base leading-none">
-              ⌕
-            </span>
-            <span className="hidden text-sm sm:inline">Jump to…</span>
-            <kbd
-              aria-hidden="true"
-              className="hidden rounded border border-line bg-ground-2 px-1.5 py-0.5 font-mono text-[10px] text-ink-faint transition duration-(--duration-quick) group-hover:text-ink-dim sm:inline"
-            >
+            <Icon name="search" size={16} />
+            <span className="hidden text-sm sm:inline">Search</span>
+            <span aria-hidden="true" className="kbd ml-auto hidden sm:inline-flex">
               {modLabel}
-            </kbd>
+            </span>
           </button>
           {/* The overflow menu duplicates the sheet's secondary list on mobile,
               so it only appears once the desktop bar does. */}

@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
+import { Button, Icon, fieldClass } from "../ds";
 
-const FIELD =
-  "w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink placeholder-ink-faint";
+const FIELD = `${fieldClass} h-10 w-full px-3 text-sm`;
 
 type Mode = "login" | "register";
 
@@ -63,11 +63,11 @@ export function AdminAuthPanel({
   return (
     <form
       onSubmit={(e) => void submit(e)}
-      className="max-w-md rounded-xl border border-line bg-surface p-4"
+      className="max-w-md rounded-panel border border-line bg-surface p-5 shadow-raised"
       aria-label={title}
     >
-      <h3 className="text-base font-semibold text-ink">{title}</h3>
-      <p className="mt-1 text-xs text-ink-faint">
+      <h3 className="text-heading font-semibold text-ink">{title}</h3>
+      <p className="mt-1.5 text-small text-ink-dim">
         {!configured
           ? "First run: choose the root credentials that will guard pipeline editing, runs, " +
             "and account approvals. Only works from the server's own machine. " +
@@ -77,7 +77,7 @@ export function AdminAuthPanel({
             : "Editing or running pipelines requires a signed-in, root-approved account."}
       </p>
 
-      <div className="mt-3 grid gap-2">
+      <div className="mt-4 grid gap-2.5">
         {/* A placeholder is not a label: it disappears the moment you type, and
             a screen reader gets nothing to announce the field by. */}
         <input
@@ -103,18 +103,20 @@ export function AdminAuthPanel({
       </div>
 
       {error && (
-        <p role="alert" className="mt-2 text-xs text-fail">
+        <p role="alert" className="mt-3 flex items-center gap-1.5 text-small text-fail-ink">
+          <Icon name="alert" size={15} className="text-fail" />
           {error}
         </p>
       )}
-      {notice && <p className="mt-2 text-xs text-ok">{notice}</p>}
+      {notice && (
+        <p className="mt-3 flex items-center gap-1.5 text-small text-ok">
+          <Icon name="check-circle" size={15} />
+          {notice}
+        </p>
+      )}
 
-      <div className="mt-3 flex items-center gap-3">
-        <button
-          type="submit"
-          disabled={busy}
-          className="rounded-lg bg-ok/20 px-3 py-1.5 text-sm text-ok ring-1 ring-ok/30 hover:bg-ok/30 disabled:opacity-50"
-        >
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <Button type="submit" variant="primary" size="lg" disabled={busy}>
           {!configured
             ? busy
               ? "Creating…"
@@ -126,11 +128,11 @@ export function AdminAuthPanel({
               : busy
                 ? "Signing in…"
                 : "Sign in"}
-        </button>
+        </Button>
         {configured && (
           <button
             type="button"
-            className="text-xs text-ink-dim underline hover:text-ink"
+            className="text-small text-ink-dim underline decoration-line-strong underline-offset-4 transition hover:text-ink hover:decoration-ink-faint"
             onClick={() => {
               setMode(registering ? "login" : "register");
               setError(null);

@@ -49,8 +49,10 @@ export function ConnectionPill({ live }: { live: boolean }) {
         }
         // The label is the first thing to go on a narrow bar: the dot's colour
         // already carries the state, and the words live in the accessible name.
-        className={`inline-flex items-center gap-2 rounded-full border px-2 py-1.5 font-mono text-xs font-semibold uppercase tracking-[0.08em] transition-colors duration-(--duration-base) sm:px-3.5 ${
-          connected ? "border-ok/40 bg-ok/10 text-ok" : "border-fail/40 bg-fail/10 text-fail"
+        // Quiet when all is well — a dot and a word, the way a status light on a
+        // well-run machine is small — and only a filled red pill when it is not.
+        className={`inline-flex h-8 items-center gap-2 rounded-full border px-2 text-caption font-semibold transition-colors duration-(--duration-base) sm:px-3 ${
+          connected ? "border-transparent text-ok" : "border-fail/40 bg-fail/10 text-fail"
         }`}
       >
         <span className="relative h-2 w-2 rounded-full bg-current">
@@ -67,7 +69,7 @@ export function ConnectionPill({ live }: { live: boolean }) {
           <>
             <span className="hidden sm:inline">Offline</span>
             {remaining !== null && remaining > 0 && (
-              <span className="hidden font-normal normal-case tracking-normal text-fail/70 md:inline">
+              <span className="hidden font-normal text-fail/75 md:inline">
                 · retrying in {remaining}s
               </span>
             )}
@@ -78,7 +80,7 @@ export function ConnectionPill({ live }: { live: boolean }) {
         <button
           type="button"
           onClick={reconnectNow}
-          className="rounded-md border border-line px-2 py-1 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-dim transition duration-(--duration-quick) hover:text-ink"
+          className="h-7 rounded-control border border-line-strong bg-surface-2 px-2.5 text-caption font-semibold text-ink transition duration-(--duration-quick) hover:bg-surface-3 motion-safe:active:scale-[0.97]"
         >
           Retry
         </button>

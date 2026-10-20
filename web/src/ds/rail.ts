@@ -24,6 +24,6 @@ export const TILE_SKIN: Record<ColorToken, string> = {
 
 /** Detail-text tint on tinted tiles; fall back to text-ink-dim. */
 export const TILE_DETAIL: Partial<Record<ColorToken, string>> = {
-  fail: "text-[#ffc4ca]",
-  await: "text-[#dcc8ff]",
+  fail: "text-fail-ink",
+  await: "text-await-ink",
 };

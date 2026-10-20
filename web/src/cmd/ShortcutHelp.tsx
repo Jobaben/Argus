@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import { formatKeys, type Binding } from "./keys";
-import { SURFACE, usePresence, useSurfaceMotion } from "../ds";
+import { Icon, SURFACE, usePresence, useSurfaceMotion } from "../ds";
 
 /**
  * The `?` overlay.
@@ -65,41 +65,49 @@ export function ShortcutHelp({
         role="dialog"
         aria-modal="true"
         aria-labelledby="shortcut-help-title"
-        className="w-full max-w-[560px] overflow-hidden rounded-panel border border-line bg-surface shadow-[0_24px_80px_-12px_rgb(0_0_0/0.8)]"
+        className="w-full max-w-[600px] overflow-hidden rounded-panel bg-surface-2 shadow-overlay"
       >
-        <div className="flex items-center justify-between border-b border-line px-5 py-3">
-          <h2 id="shortcut-help-title" className="text-sm font-bold text-ink">
+        <div className="flex items-center justify-between gap-3 border-b border-line px-5 py-3.5">
+          <h2
+            id="shortcut-help-title"
+            className="flex items-center gap-2.5 text-heading font-semibold text-ink"
+          >
+            <Icon name="keyboard" size={18} className="text-ink-dim" />
             Keyboard shortcuts
           </h2>
           <button
             ref={closeRef}
             type="button"
             onClick={onClose}
-            className="rounded-md border border-line px-2 py-1 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-dim transition hover:text-ink motion-safe:active:scale-[0.97]"
+            aria-label="Close"
+            title="Close (Esc)"
+            className="-mr-1.5 flex h-8 items-center gap-1.5 rounded-control px-1.5 text-ink-dim transition hover:bg-surface-3 hover:text-ink motion-safe:active:scale-[0.97]"
           >
-            Esc
+            <span aria-hidden="true" className="kbd hidden sm:inline-flex">
+              Esc
+            </span>
+            <Icon name="close" size={18} />
           </button>
         </div>
-        <div className="max-h-[68vh] overflow-y-auto px-5 py-4">
+        <div className="grid max-h-[68vh] gap-x-8 overflow-y-auto px-5 py-5 sm:grid-cols-2">
           {groups.map(([group, items]) => (
-            <section key={group} className="mb-5 last:mb-0">
-              <h3 className="mb-2 font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-faint">
-                {group}
-              </h3>
-              <dl className="flex flex-col gap-1.5">
+            <section key={group} className="mb-6">
+              <h3 className="eyebrow mb-2.5">{group}</h3>
+              <dl className="flex flex-col gap-2">
                 {items.map((binding) => (
-                  <div key={binding.keys} className="flex items-baseline gap-3">
-                    <dt className="flex shrink-0 gap-1">
+                  <div key={binding.keys} className="flex items-center gap-3">
+                    {/* dt before dd, as a description list requires; the keys are
+                        drawn on the right by order, not by source position. */}
+                    <dt className="order-2 flex shrink-0 gap-1 text-[13px]">
                       {formatKeys(binding.keys, platform).map((cap, i) => (
-                        <kbd
-                          key={i}
-                          className="min-w-[1.75rem] rounded border border-line bg-ground-2 px-1.5 py-0.5 text-center font-mono text-[11px] text-ink-dim"
-                        >
+                        <kbd key={i} className="kbd">
                           {cap}
                         </kbd>
                       ))}
                     </dt>
-                    <dd className="min-w-0 flex-1 text-[13px] text-ink-dim">{binding.label}</dd>
+                    <dd className="order-1 min-w-0 flex-1 text-small text-ink-dim">
+                      {binding.label}
+                    </dd>
                   </div>
                 ))}
               </dl>

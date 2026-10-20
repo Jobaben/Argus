@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { Icon } from "./Icon";
 
 /**
  * An explanation on demand: a small `?` (or any inline trigger) that opens a
@@ -56,28 +57,28 @@ export function InfoTip({
         className={
           trigger
             ? "cursor-help rounded-sm text-inherit underline decoration-ink-faint/60 decoration-dotted underline-offset-4 transition duration-(--duration-quick) hover:decoration-eye"
-            : "inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-line font-mono text-[10px] font-bold leading-none text-ink-faint transition duration-(--duration-quick) hover:border-eye/50 hover:text-ink aria-expanded:border-eye/60 aria-expanded:text-eye"
+            : // 20px target around a 15px glyph: findable without a magnifier,
+              // still small enough to sit beside a heading without competing.
+              "-m-0.5 inline-flex h-5 w-5 cursor-help items-center justify-center rounded-full text-ink-faint transition duration-(--duration-quick) hover:text-ink aria-expanded:text-eye"
         }
       >
-        {trigger ?? "?"}
+        {trigger ?? <Icon name="info" size={15} />}
       </button>
       {open && (
         <span
           id={panelId}
           role="dialog"
           aria-label={title}
-          className={`absolute top-full z-40 mt-2 flex w-72 max-w-[calc(100vw-2rem)] flex-col gap-2 rounded-panel border border-line bg-surface p-3.5 text-left text-[13px] font-normal normal-case leading-relaxed tracking-normal text-ink-dim shadow-[0_24px_60px_-24px_rgb(0_0_0/0.9)] motion-safe:animate-[fade-in_var(--duration-quick)_ease-out] ${
+          className={`absolute top-full z-40 mt-2 flex w-80 max-w-[calc(100vw-2rem)] flex-col gap-2 rounded-tile bg-surface-2 p-4 text-left text-small font-normal normal-case leading-relaxed tracking-normal text-ink-dim shadow-overlay motion-safe:animate-[rise-in_var(--duration-quick)_var(--ease-out-expo)] ${
             align === "end" ? "right-0" : "left-0"
           }`}
         >
-          <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-eye">
-            {title}
-          </span>
+          <span className="text-small font-semibold text-ink">{title}</span>
           <span>{children}</span>
           {note && (
-            <span className="border-l-2 border-eye/40 pl-2.5 text-[12.5px] text-ink">{note}</span>
+            <span className="border-l-2 border-eye/50 pl-2.5 text-caption text-ink">{note}</span>
           )}
-          {footer && <span className="font-mono text-[11px] text-ink-faint">{footer}</span>}
+          {footer && <span className="text-caption text-ink-faint">{footer}</span>}
         </span>
       )}
     </span>

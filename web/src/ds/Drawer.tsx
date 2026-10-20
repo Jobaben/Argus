@@ -3,6 +3,7 @@ import { SURFACE, usePresence, useSurfaceMotion } from "./presence";
 import { createVelocityTracker, flickOutcome } from "./gesture";
 import { DURATION, EASE, prefersReducedMotion } from "./motion";
 import { springLinear } from "./spring";
+import { Icon } from "./Icon";
 
 /** The same spring `index.css` publishes as `--ease-spring-settle`; the Web
  *  Animations API takes an easing *value*, not a custom property reference. */
@@ -30,6 +31,7 @@ function Panel({
   visible,
   onExited,
   originY,
+  size,
 }: {
   title: ReactNode;
   subtitle?: ReactNode;
@@ -41,6 +43,7 @@ function Panel({
   onExited: () => void;
   /** Viewport Y of whatever opened the drawer, so it grows out of that row. */
   originY?: number;
+  size?: "md" | "lg";
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -143,29 +146,40 @@ function Panel({
         aria-modal="true"
         aria-label={typeof title === "string" ? title : "Details"}
         onKeyDown={onKeyDown}
-        className="flex h-full w-full max-w-[520px] flex-col border-l border-line bg-surface shadow-[-24px_0_80px_-24px_rgb(0_0_0/0.9)]"
+        className={`flex h-full w-full ${
+          size === "lg" ? "max-w-[760px]" : "max-w-[540px]"
+        } flex-col border-l border-line-strong bg-surface shadow-[-24px_0_80px_-24px_rgb(0_0_0/0.9)]`}
       >
         <header
           onPointerDown={drag}
-          className="flex items-start gap-3 border-b border-line px-5 py-3.5 touch-none"
+          className="flex items-start gap-3 border-b border-line px-5 pb-4 pt-4 touch-none sm:px-6"
         >
           <div className="min-w-0 flex-1">
-            <h2 className="break-words text-[15px] font-bold leading-tight text-ink">{title}</h2>
-            {subtitle && (
-              <p className="mt-1 break-words font-mono text-[11px] text-ink-faint">{subtitle}</p>
-            )}
+            <h2 className="break-words text-title font-semibold text-ink">{title}</h2>
+            {subtitle && <p className="mt-1 break-words text-caption text-ink-dim">{subtitle}</p>}
           </div>
+          {/* Named "Close", and drawn as one: "Esc" means nothing on a phone. The
+              keycap beside it still teaches the shortcut where there is a key. */}
           <button
             ref={closeRef}
             type="button"
             onClick={onClose}
-            className="shrink-0 rounded-md border border-line px-2 py-1 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-dim transition duration-(--duration-quick) hover:text-ink motion-safe:active:scale-[0.97]"
+            aria-label="Close"
+            title="Close (Esc)"
+            className="-mr-1.5 flex h-8 shrink-0 items-center gap-1.5 rounded-control px-1.5 text-ink-dim transition duration-(--duration-quick) hover:bg-surface-2 hover:text-ink motion-safe:active:scale-[0.97]"
           >
-            Esc
+            <span aria-hidden="true" className="kbd hidden sm:inline-flex">
+              Esc
+            </span>
+            <Icon name="close" size={18} />
           </button>
         </header>
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
-        {footer && <footer className="border-t border-line px-5 py-3">{footer}</footer>}
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 sm:px-6">{children}</div>
+        {footer && (
+          <footer className="border-t border-line bg-ground-2/60 px-5 py-3 sm:px-6">
+            {footer}
+          </footer>
+        )}
       </div>
     </div>
   );
@@ -313,6 +327,8 @@ export function Drawer(props: {
   footer?: ReactNode;
   /** Viewport Y of the row that opened it; the panel grows from there. */
   originY?: number;
+  /** `lg` for a drawer whose content is a document to read — a gate review. */
+  size?: "md" | "lg";
 }) {
   const { open, ...rest } = props;
   const { present, exited } = usePresence(open);

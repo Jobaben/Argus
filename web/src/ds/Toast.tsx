@@ -1,4 +1,5 @@
 import { useFlip } from "./flip";
+import { Icon, type IconName } from "./Icon";
 import { useListPresence } from "./presence";
 
 export interface ToastItem {
@@ -11,14 +12,13 @@ export interface ToastItem {
   detail?: string;
 }
 
-const TONE: Record<ToastItem["tone"], { border: string; badge: string; label: string }> = {
-  ok: { border: "border-ok/40", badge: "border-ok/50 bg-ok/20 text-ok", label: "Done" },
-  fail: { border: "border-fail/45", badge: "border-fail/50 bg-fail/20 text-fail", label: "Failed" },
-  info: {
-    border: "border-queue/40",
-    badge: "border-queue/50 bg-queue/20 text-queue",
-    label: "Notice",
-  },
+const TONE: Record<
+  ToastItem["tone"],
+  { rule: string; text: string; label: string; icon: IconName }
+> = {
+  ok: { rule: "bg-ok", text: "text-ok", label: "Done", icon: "check-circle" },
+  fail: { rule: "bg-fail", text: "text-fail", label: "Failed", icon: "x-circle" },
+  info: { rule: "bg-queue", text: "text-queue", label: "Notice", icon: "info" },
 };
 
 function Toast({
@@ -49,30 +49,30 @@ function Toast({
       // that settle is what does the catching, without the colour or the motion
       // having to shout. Out sideways, off the stack's own axis, so a dismissal
       // never reads as the toast below it moving up.
-      className={`flex items-start gap-3 rounded-panel border ${tone.border} bg-surface px-4 py-3 shadow-[0_8px_30px_rgb(0_0_0/0.25)] ${
+      className={`relative flex items-start gap-3 overflow-hidden rounded-tile bg-surface-2 py-3 pl-4 pr-2 shadow-overlay ${
         leaving
           ? "pointer-events-none motion-safe:animate-[toast-out_var(--duration-exit)_var(--ease-in-expo)_forwards]"
           : "pointer-events-auto motion-safe:animate-[toast-in_var(--duration-base)_var(--ease-spring)_both]"
       }`}
     >
-      <span
-        className={`mt-0.5 shrink-0 rounded-md border px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.14em] ${tone.badge}`}
-      >
-        {tone.label}
-      </span>
+      <span aria-hidden="true" className={`absolute inset-y-0 left-0 w-[3px] ${tone.rule}`} />
+      <Icon name={tone.icon} size={18} className={`mt-px ${tone.text}`} />
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-semibold text-ink">{toast.title}</p>
+        <p className={`text-micro font-semibold uppercase tracking-[0.08em] ${tone.text}`}>
+          {tone.label}
+        </p>
+        <p className="mt-0.5 truncate text-small font-semibold text-ink">{toast.title}</p>
         {toast.detail && (
-          <p className="mt-0.5 truncate font-mono text-xs text-ink-faint">{toast.detail}</p>
+          <p className="mt-0.5 truncate text-caption text-ink-dim">{toast.detail}</p>
         )}
       </div>
       <button
         type="button"
         aria-label="Dismiss notification"
         onClick={() => onDismiss(toast.id)}
-        className="-mr-1 shrink-0 rounded-md px-1.5 text-ink-faint transition hover:text-ink motion-safe:active:scale-90"
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink-faint transition duration-(--duration-quick) hover:bg-surface-3 hover:text-ink motion-safe:active:scale-90"
       >
-        ×
+        <Icon name="close" size={15} />
       </button>
     </div>
   );

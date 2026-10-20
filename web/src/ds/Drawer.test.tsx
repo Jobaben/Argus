@@ -72,7 +72,7 @@ describe("Drawer", () => {
   it("still closes on Escape, from the focus it moves into itself", async () => {
     const user = userEvent.setup();
     const { onClose } = open();
-    await waitFor(() => expect(screen.getByRole("button", { name: "Esc" })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Close" })).toHaveFocus());
     await user.keyboard("{Escape}");
     expect(onClose).toHaveBeenCalled();
   });
@@ -141,7 +141,7 @@ describe("Drawer", () => {
   it("lets a click on the close button be a click, not a drag", async () => {
     withWidth(520);
     const { onClose } = open();
-    await userEvent.click(screen.getByRole("button", { name: "Esc" }));
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(onClose).toHaveBeenCalled();
   });
 });

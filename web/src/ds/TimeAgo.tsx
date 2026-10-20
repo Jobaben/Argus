@@ -16,11 +16,14 @@ import { formatRelativeTime } from "./format";
  */
 export function TimeAgo({ iso }: { iso: string | null | undefined }) {
   const now = useClock();
-  if (!iso) return <span className="font-mono text-ink-faint">—</span>;
+  // The brand face with tabular figures, not the system monospace: these sit
+  // inside sentences ("ran 3m ago"), and a monospace "3m  ago" mid-sentence
+  // reads as a rendering fault.
+  if (!iso) return <span className="text-ink-faint">—</span>;
   return (
     <time
       dateTime={iso}
-      className="font-mono text-ink-faint"
+      className="whitespace-nowrap text-ink-faint"
       title={new Date(iso).toLocaleString()}
     >
       {formatRelativeTime(iso, now)}

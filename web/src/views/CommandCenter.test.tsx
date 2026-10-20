@@ -340,7 +340,7 @@ describe("CommandCenter", () => {
     window.location.hash = "#/command/auth-refactor-i1/ph1";
     const first = render(<CommandCenter />);
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /^esc$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^close$/i }));
     expect(window.location.hash).toBe("#/command");
     first.unmount();
 
@@ -599,7 +599,7 @@ it("loads step details on selection and can close and reopen the drawer", async 
   fireEvent.click(opener);
   const dialog = await screen.findByRole("dialog");
   expect(within(dialog).getByText("step-x")).toBeInTheDocument();
-  fireEvent.click(within(dialog).getByRole("button", { name: /^esc$/i }));
+  fireEvent.click(within(dialog).getByRole("button", { name: /^close$/i }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   fireEvent.click(opener);
   expect(await screen.findByRole("dialog")).toHaveTextContent("step-x");

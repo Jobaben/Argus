@@ -7,34 +7,46 @@
   font-style: normal;
   font-display: swap;
 }
+/* SemiBold answers for every weight from 600 up. The Bold that used to sit at
+   700 was a different, older cut of the face — 230 glyphs, no tabular figures,
+   its own metrics — so a bold number in a table stopped lining up with the
+   semibold one beside it, and headings were set in a font the body text did not
+   belong to. One emphasis weight, from the same family build as the regular:
+   hierarchy comes from size and ink, which is what this scale is for. */
 @font-face {
   font-family: "Hellix";
   src: url("/fonts/Hellix-SemiBold-ma.woff2") format("woff2");
-  font-weight: 600;
-  font-style: normal;
-  font-display: swap;
-}
-@font-face {
-  font-family: "Hellix";
-  src: url("/fonts/Hellix-Bold-webfont.woff2") format("woff2");
-  font-weight: 700;
+  font-weight: 600 900;
   font-style: normal;
   font-display: swap;
 }
 
 @theme {
-  /* Ground & surfaces */
+  /* Ground & surfaces. Three steps of lift, far enough apart to read as
+     *planes* — page, panel, control — rather than as three near-identical
+     navies, plus an inset well for regions nested inside a panel (a graph, a
+     log), which reads as "inside this" without adding another border. */
   --color-ground: #0a0f16;
-  --color-ground-2: #0c121b;
-  --color-surface: #121b26;
-  --color-surface-2: #16212e;
-  --color-line: rgb(146 180 217 / 0.14);
+  --color-ground-2: #0d131c;
+  --color-surface: #111a25;
+  --color-surface-2: #162130;
+  --color-surface-3: #1c2a3b;
+  --color-line: rgb(146 180 217 / 0.13);
+  --color-line-strong: rgb(146 180 217 / 0.24);
 
-  /* Ink ramp — ink-faint lightened to clear WCAG AA (4.5:1) on the dark
-     surfaces; the old #62748b sat around 3.4:1 and failed for body text. */
+  /* Ink ramp. Three tiers that are actually three: primary 15.5:1, secondary
+     9.3:1, tertiary 5.9:1 on `surface`. ink-dim used to sit so close to
+     ink-faint (8.7 vs 6.9) that "secondary" and "tertiary" text were the same
+     thing; ink-faint still clears WCAG AA (4.5:1) on every surface, including
+     the raised `surface-3`. */
   --color-ink: #eaf2fb;
-  --color-ink-dim: #9db0c6;
-  --color-ink-faint: #8b9db4;
+  --color-ink-dim: #aebfd2;
+  --color-ink-faint: #8597ae;
+
+  /* Detail text on a status-tinted tile — the readable, desaturated partner of
+     `fail` and `await`. Were hex literals in three files. */
+  --color-fail-ink: #ffc4ca;
+  --color-await-ink: #dcc8ff;
 
   /* Brand accent — eye (brand + "live" only) */
   --color-eye: #36e3e8;
@@ -51,21 +63,58 @@
   --font-sans: "Hellix", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
   --font-mono: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
 
-  /* Type scale — foundations/type + agent-tile component spec */
+  /* Type scale. Seven steps, each with its own line height, and nothing below
+     11px — the old ad-hoc sizes went down to 8px, which on a dashboard that is
+     read from across a desk is decoration, not text. `display` is a page's
+     title; `title` a card's; `heading` a section inside a card; `body` and
+     `small` running text; `caption` metadata; `micro` the eyebrow labels, and
+     the floor. */
+  --text-display: 26px;
+  --text-display--line-height: 1.15;
+  --text-display--letter-spacing: -0.015em;
+  --text-title: 17px;
+  --text-title--line-height: 1.3;
+  --text-title--letter-spacing: -0.005em;
+  --text-heading: 15px;
+  --text-heading--line-height: 1.35;
+  --text-body: 14px;
+  --text-body--line-height: 1.55;
+  --text-small: 13px;
+  --text-small--line-height: 1.45;
+  --text-caption: 12px;
+  --text-caption--line-height: 1.4;
+  --text-micro: 11px;
+  --text-micro--line-height: 1.3;
+
+  /* Component-spec sizes, kept by name for the places that use them, now on
+     the scale above rather than beside it. */
   --text-glance: 54px;
   --text-glance-sm: 24px;
-  --text-board-title: 22px;
-  --text-body: 14.5px;
-  --text-tile-name: 14.5px;
+  --text-board-title: 26px;
+  --text-board-title--line-height: 1.15;
+  --text-board-title--letter-spacing: -0.015em;
+  --text-tile-name: 14px;
   --text-detail: 12.5px;
   --text-telemetry: 12px;
   --text-label: 11px;
-  --text-id: 10.5px;
-  --text-meter: 10px;
+  --text-id: 11px;
+  --text-meter: 11px;
 
-  /* Radius */
+  /* Radius: a control, a tile inside a panel, and a panel. */
+  --radius-control: 8px;
   --radius-tile: 12px;
-  --radius-panel: 14px;
+  --radius-panel: 16px;
+
+  /* Elevation. `raised` is a panel on the page — a hairline of light along the
+     top edge (where light would catch it) and a soft, low shadow, so a panel
+     sits *on* the ground instead of being outlined against it. `overlay` is
+     anything floating over the page: menus, popovers, the palette. */
+  --shadow-raised:
+    inset 0 1px 0 0 rgb(255 255 255 / 0.035), 0 1px 2px 0 rgb(0 0 0 / 0.35),
+    0 12px 32px -18px rgb(0 0 0 / 0.6);
+  --shadow-overlay:
+    inset 0 1px 0 0 rgb(255 255 255 / 0.05), 0 0 0 1px rgb(146 180 217 / 0.16),
+    0 24px 60px -20px rgb(0 0 0 / 0.85);
 
   /* Motion.
      Three durations, not a continuum: `quick` for state that must feel
@@ -163,10 +212,83 @@ body {
   background: var(--color-ground);
   color: var(--color-ink);
   font-family: var(--font-sans);
+  /* Tabular figures so a column of costs lines up and a ticking duration does
+     not jitter. */
   font-variant-numeric: tabular-nums;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+}
+
+/* The one piece of atmosphere: a faint wash of the eye's cyan from the top of
+   the viewport, so the ground has depth behind the panels instead of being a
+   flat fill. Fixed, on its own layer and never repainted on scroll. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(1100px 520px at 50% -260px, rgb(54 227 232 / 0.055), transparent 70%),
+    radial-gradient(900px 600px at 100% 0%, rgb(77 181 255 / 0.03), transparent 70%);
+}
+
+/* Machine text — ids, paths, logs — is the one place a zero can be read as an
+   O, so the slashed form lives here and not on the counters, where Hellix's
+   slashed zero reads as "Ø". */
+code,
+kbd,
+pre,
+samp,
+.font-mono {
+  font-variant-numeric: tabular-nums slashed-zero;
+}
+
+::selection {
+  background: rgb(54 227 232 / 0.28);
+  color: var(--color-ink);
+}
+
+/* Windows-first: the default scrollbar is a light-grey slab that is the
+   brightest thing on a dark dashboard. Thin, low-contrast, still grabbable. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(146 180 217 / 0.22) transparent;
+}
+
+/* Section labels: small, semibold, spaced capitals in the brand face — the one
+   place capitals are used for structure. It replaces a dozen hand-rolled
+   `font-mono text-[10px] uppercase tracking-[0.1x em]` variants, which were set
+   in whatever monospace the OS supplied and drifted in size and tracking. */
+@utility eyebrow {
+  font-family: var(--font-sans);
+  font-size: var(--text-micro);
+  line-height: var(--text-micro--line-height);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-feature-settings: "case";
+  color: var(--color-ink-faint);
+}
+
+/* A keycap. */
+@utility kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.4em;
+  height: 1.55em;
+  padding: 0 0.4em;
+  border-radius: 5px;
+  border: 1px solid var(--color-line-strong);
+  border-bottom-width: 2px;
+  background: var(--color-ground-2);
+  font-family: var(--font-sans);
+  font-size: 0.78em;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--color-ink-dim);
 }
 
 @keyframes pulse {
