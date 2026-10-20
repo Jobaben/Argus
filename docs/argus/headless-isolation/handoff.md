@@ -1,7 +1,7 @@
 # Handoff: a Claude setup folder per pipeline
 
 **Repo:** `C:\GIT\argus`. The remote `origin` is GitHub (`Jobaben/Argus`). Never use `gh`.
-**Updated:** 2026-10-20, second session. Argus support is built and tested on the branch `claude/busy-keller-i8oz71` (pushed, not merged, no pull request). That session ran in a Linux cloud container, so everything that needs the operator's Windows machine or a real CLI is still open: the probes, the done gate on Windows and the live acceptance. Update this file in place as the work moves.
+**Updated:** 2026-10-20, second session. Argus support is built and tested on the branch `claude/busy-keller-i8oz71`, open as PR #94, not merged. That session ran in a Linux cloud container, so everything that needs the operator's Windows machine or a real CLI is still open: the probes, the done gate on Windows and the live acceptance. Update this file in place as the work moves.
 **Read with:** the [reliability handoff](../reliability/handoff.md) for the done gate, the test baseline and the Windows environment gotchas, and [HARNESS.md §3b](../../HARNESS.md#3b-a-claude-setup-folder-per-pipeline-claudeconfigdir) for what the field does now.
 
 ## Where things stand
@@ -103,7 +103,7 @@ From the docs (code.claude.com, read 2026-10-20), which back the implementation'
 
 **The second session's test results (Linux, Node 22):**
 
-- **Baseline on the unmodified tree:** 3,298 tests, 3,293 pass, 4 skipped, 1 fail. The failure is real and predates this work: `app.test.ts` "GET /api/pipelines/:id/reliability derives from this pipeline's settled instances". Its `settledInstance` fixture pins its timestamps to 2026-09-18 and the route counts 30 days back from now, so it has failed on `main` since 2026-10-18. The fix is to date the fixture relative to now. It is not on this branch.
+- **Baseline on the unmodified tree:** 3,298 tests, 3,293 pass, 4 skipped, 1 fail. The failure is real and predates this work: `app.test.ts` "GET /api/pipelines/:id/reliability derives from this pipeline's settled instances". Its `settledInstance` fixture pins its timestamps to 2026-09-18 and the route counts 30 days back from now, so it has failed on `main` since 2026-10-18, in CI too (both jobs), which also stopped CI before its coverage, build and budget steps. A separate commit on this branch dates the fixture an hour before now; PR #94 asked for green CI and the branch is the only one this session may push to. Cherry-pick it to `main` if the PR waits.
 - **On the branch:** see "Done gate" below.
 
 ## Done gate (Linux, second session)
@@ -136,13 +136,13 @@ Probe these one at a time: real-CLI probes race on `.claude.json`.
   - the three deny rules together in one flag, and the `.credentials.json` rule (only the `settings.json` form was probed);
   - a step **without** a capability profile on a folder: Argus's hooks through `--settings` under `CLAUDE_CONFIG_DIR`. Profile steps already run this way on the current pipeline.
   - the session watcher picking up a new folder (no automated test; the repo has none for `watch.ts`);
-  - the new tests on Windows (the done gate there).
+  - the full done gate on Windows. CI's `windows` job ran the server suite on PR #94's first push: every new test passed, and only the date-pinned baseline failed. The web tests and the checks after them did not run there.
 - **Related, for WS13:** where `.claude.json` lives under `CLAUDE_CONFIG_DIR`. If it moves into the folder, a pipeline's steps race only among themselves, not with the operator's sessions.
 
 ## Next session
 
-1. Review `claude/busy-keller-i8oz71` and merge it if it holds up; that's the user's call. Its commit carries no attribution lines. It is a commit and not a staged change because the cloud session would have lost uncommitted work.
-2. Run the done gate on Windows, using the reliability handoff's commands and gotchas. Compare against that baseline, plus the date-pinned `app.test.ts` failure above.
+1. Review PR #94 (`claude/busy-keller-i8oz71`) and merge it if it holds up; that's the user's call. Its commits carry no attribution lines. They are commits and not staged changes because the cloud session would have lost uncommitted work.
+2. Run the done gate on Windows, using the reliability handoff's commands and gotchas. Compare against that baseline. The date-pinned `app.test.ts` failure above is fixed on this branch.
 3. Probe the unverified rows, one at a time. Use a scratch folder signed in with the existing token, and a scratch repo with marker files, `.claude/agents`, `.claude/commands` and a `.mcp.json`.
 4. **Move "Agentic Delivery Loop" onto the field**, in one save, because the validation refuses the field beside `env.set.CLAUDE_CONFIG_DIR`. Send `claudeConfigDir` together with the `capabilities` (or phases) that no longer carry the `env.set` entry. The per-phase `Read`/`Edit` denies are now redundant, and harmless if kept. Drop them in the same save if wanted.
 5. **Live acceptance:** a pipeline instance on the folder. Check that:
