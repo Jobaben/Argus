@@ -259,7 +259,8 @@ describe("Issues in peer mode", () => {
     const { default: Issues } = await import("../views/Issues");
     render(<Issues />);
     expect(screen.getByText("ECONNREFUSED")).toBeInTheDocument();
-    expect(screen.getByText(/9×/)).toBeInTheDocument();
+    // The occurrence count, written the way the local list writes it.
+    expect(screen.getByText(/×9\b/)).toBeInTheDocument();
   });
 
   it("regression: offers no triage buttons for another machine's issues", async () => {

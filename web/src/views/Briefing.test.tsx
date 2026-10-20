@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import type { Briefing as BriefingData } from "../types";
 import Briefing from "./Briefing";
 
@@ -139,11 +139,14 @@ describe("Briefing", () => {
     expect(screen.getByText(/\$1\.84/)).toBeInTheDocument();
   });
 
-  it("Mark caught up calls ack", () => {
+  it("Mark caught up calls ack", async () => {
     const ack = vi.fn(async () => {});
     render(<Briefing briefing={briefing()} loading={false} error={null} ack={ack} />);
-    fireEvent.click(screen.getByRole("button", { name: /mark caught up/i }));
+    const button = screen.getByRole("button", { name: /mark caught up/i });
+    fireEvent.click(button);
     expect(ack).toHaveBeenCalledOnce();
+    // Available again once the acknowledgement settles.
+    await waitFor(() => expect(button).not.toHaveAttribute("aria-disabled"));
   });
 
   it("links a failure to the run's transcript, and to Issues when there is none", () => {

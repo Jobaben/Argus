@@ -1,6 +1,16 @@
 import { Drawer } from "../ds/Drawer";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { StatusPill, type DsStatus } from "../ds";
+import {
+  AlertStrip,
+  Button,
+  formatCost,
+  Icon,
+  Loading,
+  Skeleton,
+  SkeletonText,
+  StatusPill,
+  type DsStatus,
+} from "../ds";
 import { useTuning } from "../useTuning";
 import type {
   PhaseTuning,
@@ -18,6 +28,18 @@ const PHASE_BADGE: Record<PhaseTuningStatus, DsStatus> = {
   failed: "failed",
   skipped: "stopped",
 };
+
+/** "Skipped" in StatusPill's grey and anatomy. StatusPill only knows its own
+ *  words, and its nearest grey state reads "Stopped" — which a phase the pass
+ *  chose not to read never was. */
+function SkippedPill() {
+  return (
+    <span className="inline-flex h-5 shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-line-strong bg-ink-faint/8 pl-1.5 pr-2 text-micro font-semibold leading-none text-ink-dim">
+      <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-current" />
+      Skipped
+    </span>
+  );
+}
 
 const EMPTY_SELECTION: ReadonlySet<string> = new Set();
 
@@ -42,27 +64,35 @@ function ProposalRow({
     proposal.scope === "step" && proposal.inheritedFrom !== "step"
       ? ` (currently inherited from ${proposal.inheritedFrom})`
       : "";
+  // Ticking a proposal is a selection, so it lights in the selection colour —
+  // not green, which on this app means "it worked".
   return (
-    <li className="rounded-lg border border-line bg-ground-2 px-3 py-2">
-      <label className="flex cursor-pointer items-start gap-2.5">
+    <li>
+      <label
+        className={`flex cursor-pointer items-start gap-3 rounded-control border px-3 py-2.5 transition-[border-color,background-color] duration-(--duration-quick) ${
+          checked
+            ? "border-eye/45 bg-eye/[0.06]"
+            : "border-line bg-ground-2/60 hover:border-line-strong"
+        }`}
+      >
         <input
           type="checkbox"
           checked={checked}
           onChange={onToggle}
-          className="mt-0.5 shrink-0 accent-ok"
+          className="mt-0.5 h-4 w-4 shrink-0 accent-eye"
           aria-label={`Apply ${FIELD_LABEL[proposal.field]} for ${target}`}
         />
         <span className="min-w-0 flex-1">
-          <span className="flex flex-wrap items-baseline gap-x-2 text-xs">
-            <span className="font-medium text-ink">{target}</span>
-            <span className="text-ink-faint">{FIELD_LABEL[proposal.field]}</span>
-            <span className="font-mono text-[11px] text-ink-dim">
-              <span className="line-through opacity-70">{proposal.before}</span>
-              <span aria-hidden="true"> → </span>
-              <span className="text-ink">{proposal.after}</span>
+          <span className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+            <span className="text-small font-semibold text-ink">{target}</span>
+            <span className="text-caption text-ink-faint">{FIELD_LABEL[proposal.field]}</span>
+            <span className="inline-flex items-center gap-1.5 font-mono text-caption">
+              <span className="text-ink-faint line-through">{proposal.before}</span>
+              <Icon name="arrow-right" size={12} className="text-ink-faint" />
+              <span className="font-semibold text-ink">{proposal.after}</span>
             </span>
           </span>
-          <span className="mt-1 block text-xs text-ink-dim">
+          <span className="mt-1 block text-small text-ink-dim">
             {proposal.reason}
             {inherited && <span className="text-ink-faint">{inherited}</span>}
           </span>
@@ -84,28 +114,47 @@ function PhaseSection({
   onToggle: (key: string) => void;
 }) {
   return (
-    <section className="border-t border-line pt-3 first:border-t-0 first:pt-0">
-      <header className="flex items-center justify-between gap-2">
-        <h3 className="truncate text-sm font-semibold text-ink">
-          <span className="text-ink-faint">{index + 1}. </span>
+    <section className="border-t border-line pt-4 first:border-t-0 first:pt-0">
+      <header className="flex items-center justify-between gap-3">
+        <h3 className="min-w-0 truncate text-heading font-semibold text-ink">
+          <span className="font-normal text-ink-faint">{index + 1}. </span>
           {phase.phaseName}
         </h3>
-        <StatusPill status={PHASE_BADGE[phase.status]} size="sm" />
+        {phase.status === "skipped" ? (
+          <SkippedPill />
+        ) : (
+          <StatusPill status={PHASE_BADGE[phase.status]} size="sm" />
+        )}
       </header>
-      {phase.summary && <p className="mt-1 text-xs text-ink-dim">{phase.summary}</p>}
+      {phase.summary && <p className="mt-1.5 text-small text-ink-dim">{phase.summary}</p>}
       {phase.status === "running" && (
-        <p className="mt-1 text-xs text-ink-faint">Reading this phase's steps…</p>
+        <div className="mt-2">
+          <p className="text-caption text-ink-faint">Reading this phase's steps…</p>
+          <SkeletonText lines={2} className="mt-2" />
+        </div>
       )}
-      {(phase.status === "failed" || phase.status === "skipped") && phase.error && (
-        <p className="mt-1 font-mono text-[11px] text-fail/85">{phase.error}</p>
+      {/* A skip is not a failure: its note is said in the pill's quiet grey,
+          and only a failed phase's reason in red. */}
+      {phase.status === "failed" && phase.error && (
+        <p className="mt-1.5 flex items-start gap-1.5 text-caption text-fail-ink">
+          <Icon name="alert" size={14} className="mt-px shrink-0 text-fail" />
+          <span className="min-w-0 break-words">{phase.error}</span>
+        </p>
+      )}
+      {phase.status === "skipped" && phase.error && (
+        <p className="mt-1.5 flex items-start gap-1.5 text-caption text-ink-dim">
+          <Icon name="info" size={14} className="mt-px shrink-0 text-ink-faint" />
+          <span className="min-w-0 break-words">{phase.error}</span>
+        </p>
       )}
       {phase.status === "ready" && phase.proposals.length === 0 && (
-        <p className="mt-2 rounded-lg border border-ok/30 bg-ok/10 px-3 py-2 text-xs text-ok">
+        <p className="mt-2.5 flex items-center gap-2 rounded-control border border-ok/25 bg-ok/[0.06] px-3 py-2 text-small text-ink-dim">
+          <Icon name="check-circle" size={16} className="shrink-0 text-ok" />
           No changes recommended — this phase's settings already fit its steps.
         </p>
       )}
       {phase.proposals.length > 0 && (
-        <ul className="mt-2 space-y-1.5">
+        <ul className="mt-2.5 space-y-2">
           {phase.proposals.map((p) => {
             const key = proposalKey(p);
             return (
@@ -120,15 +169,36 @@ function PhaseSection({
         </ul>
       )}
       {phase.warnings.length > 0 && (
-        <ul className="mt-2 space-y-0.5">
+        <ul className="mt-2.5 space-y-1">
           {phase.warnings.map((w, i) => (
-            <li key={i} className="text-[11px] text-ink-faint">
-              {w}
+            <li key={i} className="flex items-start gap-1.5 text-caption text-ink-faint">
+              <Icon name="info" size={13} className="mt-px shrink-0" />
+              <span className="min-w-0">{w}</span>
             </li>
           ))}
         </ul>
       )}
     </section>
+  );
+}
+
+/** The report's shape while it is on its way: one block per phase. */
+function ReportSkeleton({ phases, label }: { phases: number; label: string }) {
+  return (
+    <Loading label="the analysis">
+      <p className="mb-4 text-caption text-ink-faint">{label}</p>
+      <div className="space-y-5">
+        {Array.from({ length: Math.max(1, phases) }, (_, i) => (
+          <div key={i} className="space-y-2.5">
+            <div className="flex items-center justify-between gap-3">
+              <Skeleton className="h-3.5 w-2/5" />
+              <Skeleton className="h-5 w-16 rounded-full" />
+            </div>
+            <SkeletonText lines={2} />
+          </div>
+        ))}
+      </div>
+    </Loading>
   );
 }
 
@@ -151,7 +221,9 @@ export function TuningDrawer({
   onClose: () => void;
   onApply: (input: PipelineInput) => Promise<void>;
 }) {
-  const { report, unavailable, loading, error, busy, actionError, analyse } = useTuning(def.id);
+  const { report, unavailable, loading, error, busy, actionError, analyse, refresh } = useTuning(
+    def.id,
+  );
   // The selection is keyed by report id: a fresh report's proposals are not
   // the ones that were ticked, so a new id reads as an empty selection.
   const [sel, setSel] = useState<{ reportId: string | null; keys: Set<string> }>({
@@ -178,6 +250,7 @@ export function TuningDrawer({
     [report],
   );
   const running = report?.status === "running";
+  const cost = report ? formatCost(report.tokens, report.costUsd) : null;
 
   const toggle = (key: string) =>
     setSel((prev) => {
@@ -216,51 +289,84 @@ export function TuningDrawer({
       subtitle={subtitle}
       onClose={onClose}
       footer={
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <button
-            type="button"
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="ghost"
+            icon="retry"
             onClick={() => void analyse()}
             disabled={busy || running || Boolean(unavailable)}
-            className="rounded-lg border border-line px-2.5 py-1 text-xs text-ink-dim hover:text-ink disabled:opacity-50"
           >
             Analyze again
-          </button>
-          <button
-            type="button"
+          </Button>
+          {cost && (
+            <span className="text-caption text-ink-faint" title="What this pass has cost so far">
+              {cost}
+            </span>
+          )}
+          <Button
+            variant="primary"
+            icon="check"
+            className="ml-auto"
             onClick={() => void apply()}
             disabled={applying || running || selected.size === 0}
-            className="rounded-lg bg-ok/15 px-3 py-1.5 text-xs text-ok ring-1 ring-ok/30 hover:bg-ok/25 disabled:opacity-50"
           >
             Apply selected ({selected.size})
-          </button>
+          </Button>
         </div>
       }
     >
-      <p className="mb-3 text-xs text-ink-faint">
-        One agent per phase reads the step prompts and judges whether the model, effort, timeout and
-        turn settings fit the work. Prompts are never changed. Nothing is saved until you tick a
-        proposal and apply it.
+      <p className="mb-5 flex items-start gap-2.5 text-small text-ink-dim">
+        <Icon name="sparkle" size={16} className="mt-0.5 shrink-0 text-ink-faint" />
+        <span>
+          One agent per phase reads the step prompts and judges whether the model, effort, timeout
+          and turn settings fit the work. Prompts are never changed. Nothing is saved until you tick
+          a proposal and apply it.
+        </span>
       </p>
       {unavailable && (
-        <p className="mb-3 rounded-lg border border-line bg-ground-2 px-3 py-2 text-xs text-ink-dim">
-          {unavailable}
+        <p className="mb-4 flex items-start gap-2 rounded-control border border-line bg-ground-2/60 px-3 py-2.5 text-small text-ink-dim">
+          <Icon name="info" size={16} className="mt-px shrink-0 text-ink-faint" />
+          <span className="min-w-0">{unavailable}</span>
         </p>
       )}
       {(error || actionError || applyError) && (
-        <p className="mb-3 rounded-lg border border-fail/30 bg-fail/10 px-3 py-2 text-xs text-fail">
-          {applyError ?? actionError ?? error}
-        </p>
+        <div className="mb-4">
+          <AlertStrip
+            subject={applyError ? "Couldn't apply" : "Analyze"}
+            message={applyError ?? actionError ?? error ?? ""}
+            // A refused pass is retried by asking again, a failed read by
+            // reading again. A failed apply has its retry already: Apply.
+            action={
+              applyError ? undefined : (
+                <Button
+                  size="sm"
+                  icon="retry"
+                  disabled={busy}
+                  onClick={() => void (actionError ? analyse() : refresh())}
+                >
+                  Retry
+                </Button>
+              )
+            }
+          />
+        </div>
       )}
       {report?.status === "skipped" && report.error && (
-        <p className="mb-3 rounded-lg border border-line bg-ground-2 px-3 py-2 text-xs text-ink-dim">
-          {report.error}
+        <p className="mb-4 flex items-start gap-2 rounded-control border border-line bg-ground-2/60 px-3 py-2.5 text-small text-ink-dim">
+          <Icon name="info" size={16} className="mt-px shrink-0 text-ink-faint" />
+          <span className="min-w-0">{report.error}</span>
         </p>
       )}
-      {!report && !unavailable && (
-        <p className="text-xs text-ink-faint">{loading ? "Loading…" : "Starting the pass…"}</p>
+      {/* The skeleton promises a report on its way; under an error nothing is,
+          and a shimmer that never resolves contradicts the strip above it. */}
+      {!report && !unavailable && !error && !actionError && (
+        <ReportSkeleton
+          phases={def.phases.length}
+          label={loading ? "Reading the last pass…" : "Starting the pass…"}
+        />
       )}
       {report && (
-        <div className="space-y-3">
+        <div className="space-y-4">
           {report.phases.map((phase, i) => (
             <PhaseSection
               key={phase.phaseId}

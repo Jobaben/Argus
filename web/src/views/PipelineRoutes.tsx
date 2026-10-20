@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { conditionLabel, effectiveEdges } from "../ds";
+import { Button, chipClass, conditionLabel, effectiveEdges, IconButton, labelClass } from "../ds";
 import {
   edgeBetween,
   fieldsToSchema,
@@ -28,8 +28,10 @@ import type { DependencyEdge, PhaseDef, RouteCondition, RoutePredicate } from ".
  * already takes for `retry` and `rubric`: say what is there, change nothing.
  */
 
-const TAG = "rounded-md border border-line px-1.5 py-0.5 font-mono text-[10px] text-ink-faint";
-const LABEL = "font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-ink-faint";
+const TAG = chipClass();
+/** A check box with its words, at the size of the fields beside it. */
+const CHECK = "flex cursor-pointer items-center gap-2 text-caption text-ink-dim";
+const BOX = "h-3.5 w-3.5 shrink-0 accent-eye";
 
 /** Operators, in the reading order an author thinks in. */
 const OPERATORS: { value: RoutePredicate["operator"]; label: string }[] = [
@@ -110,10 +112,11 @@ export function ResultEditor({
     });
 
   return (
-    <div className="space-y-1.5">
-      <label className="flex items-center gap-2 text-sm text-ink-dim">
+    <div className="space-y-3">
+      <label className="flex cursor-pointer items-start gap-2.5 text-small text-ink-dim">
         <input
           type="checkbox"
+          className="mt-0.5 h-4 w-4 shrink-0 accent-eye"
           checked={result !== undefined}
           onChange={(e) =>
             onChange({
@@ -133,28 +136,34 @@ export function ResultEditor({
       </label>
 
       {result && (
-        <div className="space-y-2 border-l border-line pl-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <input
-              className={`${fieldClass} w-44`}
-              aria-label={`Phase ${index + 1} result artifact`}
-              placeholder="Artifact name"
-              value={result.artifact}
-              onChange={(e) => onChange({ result: { ...result, artifact: e.target.value } })}
-            />
+        <div className="min-w-0 space-y-4 rounded-control bg-surface/70 p-3">
+          <div className="flex flex-wrap gap-3">
+            <label className="flex min-w-0 flex-col gap-1.5">
+              <span className={labelClass}>Artifact name</span>
+              <input
+                className={`${fieldClass} w-48 max-w-full font-mono`}
+                aria-label={`Phase ${index + 1} result artifact`}
+                placeholder="Artifact name"
+                value={result.artifact}
+                onChange={(e) => onChange({ result: { ...result, artifact: e.target.value } })}
+              />
+            </label>
             {phase.steps.length > 1 && (
-              <select
-                className={fieldClass}
-                aria-label={`Phase ${index + 1} publishing step`}
-                value={result.resultStep ?? ""}
-                onChange={(e) => onChange({ result: { ...result, resultStep: e.target.value } })}
-              >
-                {phase.steps.map((s, i) => (
-                  <option key={i} value={s.name}>
-                    written by {s.name || `step ${i + 1}`}
-                  </option>
-                ))}
-              </select>
+              <label className="flex min-w-0 flex-col gap-1.5">
+                <span className={labelClass}>Written by</span>
+                <select
+                  className={`${fieldClass} max-w-full`}
+                  aria-label={`Phase ${index + 1} publishing step`}
+                  value={result.resultStep ?? ""}
+                  onChange={(e) => onChange({ result: { ...result, resultStep: e.target.value } })}
+                >
+                  {phase.steps.map((s, i) => (
+                    <option key={i} value={s.name}>
+                      written by {s.name || `step ${i + 1}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
             )}
           </div>
 
@@ -163,12 +172,18 @@ export function ResultEditor({
               schema set via the API
             </span>
           ) : (
-            <div className="space-y-1.5">
-              <span className={LABEL}>Fields</span>
+            <div className="space-y-2">
+              <span className={labelClass}>Fields</span>
+              {fields.length === 0 && (
+                <p className="text-caption text-ink-faint">
+                  No fields yet. A field is one value the agent reports — a verdict, a score — that
+                  a later phase can branch on.
+                </p>
+              )}
               {fields.map((field, fi) => (
                 <div key={fi} className="flex flex-wrap items-center gap-2">
                   <input
-                    className={`${fieldClass} w-36`}
+                    className={`${fieldClass} w-36 font-mono`}
                     aria-label={`Result field ${fi + 1} name`}
                     placeholder="Field name"
                     value={field.name}
@@ -199,7 +214,7 @@ export function ResultEditor({
                       // Remounts on a rename or a reorder, not on a keystroke.
                       key={`${fi}:${field.name}`}
                       initial={field.values}
-                      className={`${fieldClass} w-44`}
+                      className={`${fieldClass} min-w-[10rem] flex-1`}
                       ariaLabel={`Result field ${fi + 1} allowed values`}
                       placeholder="Allowed values (comma-separated)"
                       onChange={(values) =>
@@ -207,9 +222,10 @@ export function ResultEditor({
                       }
                     />
                   )}
-                  <label className="flex items-center gap-1.5 text-[11px] text-ink-dim">
+                  <label className={CHECK}>
                     <input
                       type="checkbox"
+                      className={BOX}
                       aria-label={`Result field ${fi + 1} required`}
                       checked={field.required}
                       onChange={(e) =>
@@ -222,19 +238,19 @@ export function ResultEditor({
                     />
                     required
                   </label>
-                  <button
-                    type="button"
-                    aria-label={`Remove result field ${fi + 1}`}
-                    className="rounded border border-fail/20 px-2 py-0.5 text-xs text-fail hover:bg-fail/10"
+                  <IconButton
+                    icon="trash"
+                    size="sm"
+                    label={`Remove result field ${fi + 1}`}
+                    // `enabled:` so the red outranks the ghost variant's hover.
+                    className="enabled:hover:bg-fail/10 enabled:hover:text-fail"
                     onClick={() => setFields(fields.filter((_, i) => i !== fi))}
-                  >
-                    ✕
-                  </button>
+                  />
                 </div>
               ))}
-              <button
-                type="button"
-                className="rounded border border-line px-2.5 py-1 text-xs text-ink-dim hover:text-ink"
+              <Button
+                size="sm"
+                icon="plus"
                 onClick={() =>
                   setFields([
                     ...fields,
@@ -242,8 +258,8 @@ export function ResultEditor({
                   ])
                 }
               >
-                + add field
-              </button>
+                Add field
+              </Button>
             </div>
           )}
         </div>
@@ -294,145 +310,173 @@ function EdgeRow({
     return { path: [name], operator, value: operator === "one-of" ? [value] : value };
   };
 
+  const skipToggle = (
+    <label
+      className={`${CHECK} ml-auto`}
+      title={`For a join after alternatives: a route that skipped ${sourceName} still lets this phase start`}
+    >
+      <input
+        type="checkbox"
+        className={BOX}
+        aria-label={`Accept a skipped ${sourceName}`}
+        checked={edge.allowSkipped === true}
+        onChange={(e) =>
+          setEdge({
+            phase: edge.phase,
+            ...(edge.when ? { when: edge.when } : {}),
+            ...(e.target.checked ? { allowSkipped: true } : {}),
+          })
+        }
+      />
+      also if {sourceName} is skipped
+    </label>
+  );
+
+  // Read as a sentence — "After Evaluate, run only if accepted is true" — with
+  // the group wiring on a line of its own, because nine controls in one
+  // wrapping row read as nothing at all.
   return (
     <div
       data-testid="edge-condition"
-      className="flex flex-wrap items-center gap-2 rounded-md border border-line/70 bg-ground-2/40 px-2 py-1.5"
+      // A tone block in the phase panel, not another outline inside it.
+      className="min-w-0 space-y-2.5 rounded-control bg-surface px-3 py-2.5"
     >
-      <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-faint">
-        after {sourceName}
-      </span>
-      {editable ? (
-        <select
-          className={fieldClass}
-          aria-label={`When to run after ${sourceName}`}
-          value={mode}
-          onChange={(e) => {
-            const next = e.target.value;
-            if (next === "always") return setWhen(undefined);
-            if (next === "otherwise") {
-              // A default route outside a group is invalid, so name one.
-              return setWhen({
-                group: when?.group ?? groupNames(phases)[0] ?? "routes",
-                default: true,
-              });
-            }
-            setWhen({
-              ...(when?.group ? { group: when.group } : {}),
-              predicate: predicateFor(field?.name ?? "", "equals"),
-            });
-          }}
-        >
-          <option value="always">always</option>
-          {decides && <option value="only-if">only if</option>}
-          <option value="otherwise">otherwise (default route)</option>
-        </select>
-      ) : (
-        <span className={TAG} title="Condition set via the API; preserved on save">
-          {conditionLabel(when)}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-small text-ink-dim">
+          After <span className="font-semibold text-ink">{sourceName}</span>, run
         </span>
-      )}
+        {editable ? (
+          <select
+            className={fieldClass}
+            aria-label={`When to run after ${sourceName}`}
+            value={mode}
+            onChange={(e) => {
+              const next = e.target.value;
+              if (next === "always") return setWhen(undefined);
+              if (next === "otherwise") {
+                // A default route outside a group is invalid, so name one.
+                return setWhen({
+                  group: when?.group ?? groupNames(phases)[0] ?? "routes",
+                  default: true,
+                });
+              }
+              setWhen({
+                ...(when?.group ? { group: when.group } : {}),
+                predicate: predicateFor(field?.name ?? "", "equals"),
+              });
+            }}
+          >
+            <option value="always">always</option>
+            {decides && <option value="only-if">only if</option>}
+            <option value="otherwise">otherwise (default route)</option>
+          </select>
+        ) : (
+          <span className={`${TAG} font-mono`} title="Condition set via the API; preserved on save">
+            {conditionLabel(when)}
+          </span>
+        )}
 
-      {editable && mode === "only-if" && (
-        <>
-          <select
-            className={fieldClass}
-            aria-label={`Condition field for ${sourceName}`}
-            value={when?.predicate?.path[0] ?? ""}
-            onChange={(e) =>
-              setWhen({
-                ...when,
-                predicate: predicateFor(e.target.value, when?.predicate?.operator ?? "equals"),
-              })
-            }
-          >
-            {fields.map((f) => (
-              <option key={f.name} value={f.name}>
-                {f.name}
-              </option>
-            ))}
-          </select>
-          <select
-            className={fieldClass}
-            aria-label={`Condition operator for ${sourceName}`}
-            value={when?.predicate?.operator ?? "equals"}
-            onChange={(e) =>
-              setWhen({
-                ...when,
-                predicate: predicateFor(
-                  when?.predicate?.path[0] ?? field?.name ?? "",
-                  e.target.value as RoutePredicate["operator"],
-                ),
-              })
-            }
-          >
-            {OPERATORS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-          {when?.predicate && when.predicate.operator !== "exists" && (
-            <ValueInput
-              field={field}
-              fieldClass={fieldClass}
-              sourceName={sourceName}
-              predicate={when.predicate}
-              onChange={(predicate) => setWhen({ ...when, predicate })}
-            />
-          )}
-        </>
-      )}
+        {editable && mode === "only-if" && (
+          <>
+            <select
+              className={`${fieldClass} font-mono`}
+              aria-label={`Condition field for ${sourceName}`}
+              value={when?.predicate?.path[0] ?? ""}
+              onChange={(e) =>
+                setWhen({
+                  ...when,
+                  predicate: predicateFor(e.target.value, when?.predicate?.operator ?? "equals"),
+                })
+              }
+            >
+              {fields.map((f) => (
+                <option key={f.name} value={f.name}>
+                  {f.name}
+                </option>
+              ))}
+            </select>
+            <select
+              className={fieldClass}
+              aria-label={`Condition operator for ${sourceName}`}
+              value={when?.predicate?.operator ?? "equals"}
+              onChange={(e) =>
+                setWhen({
+                  ...when,
+                  predicate: predicateFor(
+                    when?.predicate?.path[0] ?? field?.name ?? "",
+                    e.target.value as RoutePredicate["operator"],
+                  ),
+                })
+              }
+            >
+              {OPERATORS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+            {when?.predicate && when.predicate.operator !== "exists" && (
+              <ValueInput
+                field={field}
+                fieldClass={fieldClass}
+                sourceName={sourceName}
+                predicate={when.predicate}
+                onChange={(predicate) => setWhen({ ...when, predicate })}
+              />
+            )}
+          </>
+        )}
+        {(!editable || mode === "always") && skipToggle}
+      </div>
 
       {editable && mode !== "always" && (
-        <>
-          <input
-            className={`${fieldClass} w-28`}
-            aria-label={`Route group for ${sourceName}`}
-            placeholder="group"
-            value={when?.group ?? ""}
-            onChange={(e) => {
-              // Not trimmed here: trimming as you type eats the space you just
-              // pressed. The server trims the name it stores.
-              const group = e.target.value;
-              setWhen({ ...when, ...(group ? { group } : { group: undefined }) } as RouteCondition);
-            }}
-          />
-          {when?.group && (
-            <>
-              {(["exclusive", "required"] as const).map((flag) => (
-                <label key={flag} className="flex items-center gap-1.5 text-[11px] text-ink-dim">
-                  <input
-                    type="checkbox"
-                    aria-label={`Group ${when.group} ${flag}`}
-                    checked={when[flag] === true}
-                    onChange={(e) =>
-                      onPhases(withGroupFlag(phases, when.group!, flag, e.target.checked))
-                    }
-                  />
-                  {flag}
-                </label>
-              ))}
-            </>
-          )}
-        </>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-line pt-2.5">
+          <label className="flex items-center gap-2 text-caption text-ink-dim">
+            <span title="Routes that share a group are one decision: the flags apply to all of them">
+              Route group
+            </span>
+            <input
+              className={`${fieldClass} w-32`}
+              aria-label={`Route group for ${sourceName}`}
+              placeholder="group"
+              value={when?.group ?? ""}
+              onChange={(e) => {
+                // Not trimmed here: trimming as you type eats the space you just
+                // pressed. The server trims the name it stores.
+                const group = e.target.value;
+                setWhen({
+                  ...when,
+                  ...(group ? { group } : { group: undefined }),
+                } as RouteCondition);
+              }}
+            />
+          </label>
+          {when?.group &&
+            (["exclusive", "required"] as const).map((flag) => (
+              <label
+                key={flag}
+                className={CHECK}
+                title={
+                  flag === "exclusive"
+                    ? "At most one route in the group may match; two matches fail the source phase"
+                    : "At least one route in the group must match; none fails the source phase"
+                }
+              >
+                <input
+                  type="checkbox"
+                  className={BOX}
+                  aria-label={`Group ${when.group} ${flag}`}
+                  checked={when[flag] === true}
+                  onChange={(e) =>
+                    onPhases(withGroupFlag(phases, when.group!, flag, e.target.checked))
+                  }
+                />
+                {flag}
+              </label>
+            ))}
+          {skipToggle}
+        </div>
       )}
-
-      <label className="ml-auto flex items-center gap-1.5 text-[11px] text-ink-dim">
-        <input
-          type="checkbox"
-          aria-label={`Accept a skipped ${sourceName}`}
-          checked={edge.allowSkipped === true}
-          onChange={(e) =>
-            setEdge({
-              phase: edge.phase,
-              ...(edge.when ? { when: edge.when } : {}),
-              ...(e.target.checked ? { allowSkipped: true } : {}),
-            })
-          }
-        />
-        accept skipped
-      </label>
     </div>
   );
 }
@@ -528,9 +572,9 @@ export function EdgeConditions({
   if (edges.length === 0) return null;
   const nameOf = (id: string) => phases.find((p) => p.id === id)?.name.trim() || id;
   return (
-    <div className="space-y-1.5">
-      <span className={LABEL}>Routes</span>
-      <div className="space-y-1.5">
+    <div className="mt-4 space-y-2">
+      <span className={labelClass}>Routes</span>
+      <div className="space-y-2">
         {edges.map((edge) => (
           <EdgeRow
             key={edge.phase}

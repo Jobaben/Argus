@@ -81,11 +81,14 @@ describe("Issues", () => {
     expect(screen.getByRole("button", { name: "Reopen" })).toBeInTheDocument();
   });
 
-  it("clicking Resolve calls triage with the fingerprint", () => {
+  it("clicking Resolve calls triage with the fingerprint", async () => {
     mockState.issues = [issue()];
     render(<Issues />);
-    fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+    const button = screen.getByRole("button", { name: "Resolve" });
+    fireEvent.click(button);
     expect(triage).toHaveBeenCalledWith("abcdefabcdefabcd", "resolve");
+    // Available again once the triage settles.
+    await waitFor(() => expect(button).not.toHaveAttribute("aria-disabled"));
   });
 
   it("expanding an issue loads and shows its occurrences", async () => {

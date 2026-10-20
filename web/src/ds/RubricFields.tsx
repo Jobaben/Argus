@@ -1,4 +1,6 @@
 import type { Rubric, RubricCriterion } from "../types";
+import { Button, IconButton } from "./Button";
+import { labelClass } from "./controls";
 import { slugify } from "./slug";
 
 /**
@@ -13,9 +15,15 @@ import { slugify } from "./slug";
  * changing an id starts a new one. Ids are slugified as you type rather than
  * validated after the fact, so the field cannot hold something the server will
  * reject.
+ *
+ * An inset well rather than an outlined box: it is a region of the form it sits
+ * in, and its toggle is its title, so the legend lives inside the well instead
+ * of notched into its border.
  */
 
 const EMPTY: Rubric = { goal: "", criteria: [{ id: "", label: "" }] };
+
+const HINT = "text-caption text-ink-faint";
 
 export function RubricFields({
   value,
@@ -40,30 +48,33 @@ export function RubricFields({
   };
 
   return (
-    <fieldset className="rounded-lg border border-line p-3">
-      <legend className="px-1">
-        <label className="flex items-center gap-2 text-xs font-medium text-ink-dim">
+    <fieldset className="min-w-0 rounded-tile border border-line bg-ground-2/50 p-4">
+      <legend className="float-left w-full">
+        <label className="flex w-fit cursor-pointer items-center gap-2.5">
           <input
             type="checkbox"
+            className="size-4 shrink-0 cursor-pointer accent-eye"
             checked={enabled}
             onChange={(e) => onChange(e.target.checked ? EMPTY : null)}
           />
-          <span>Score the output against a rubric</span>
+          <span className="text-small font-semibold text-ink">
+            Score the output against a rubric
+          </span>
         </label>
       </legend>
 
       {!enabled ? (
-        <p className="text-xs text-ink-faint">
+        <p className={`clear-both max-w-prose pl-6.5 pt-1.5 ${HINT}`}>
           Exit code 0 means the process ended, not that the work was good. Turn this on to have each
           run's output scored 0–10 against criteria you write — scores trend over time, and a score
           under your threshold opens an issue.
         </p>
       ) : (
-        <div className="space-y-3">
-          <label className="block space-y-1 text-xs font-medium text-ink-dim">
-            <span>What does good look like here?</span>
+        <div className="clear-both space-y-5 pt-4">
+          <label className="flex flex-col gap-1.5">
+            <span className={labelClass}>What does good look like here?</span>
             <textarea
-              className={`${fieldClass} h-16`}
+              className={`${fieldClass} min-h-16 w-full resize-y leading-relaxed`}
               placeholder="A triage summary that names every new failure and proposes one next step each."
               value={rubric.goal}
               onChange={(e) => onChange({ ...rubric, goal: e.target.value })}
@@ -71,11 +82,14 @@ export function RubricFields({
           </label>
 
           <div className="space-y-2">
-            <span className="block text-xs font-medium text-ink-dim">Criteria</span>
+            <div className="flex items-baseline gap-2">
+              <span className={labelClass}>Criteria</span>
+              <span className={`hidden sm:inline ${HINT}`}>id · what it checks · weight</span>
+            </div>
             {rubric.criteria.map((c, i) => (
-              <div key={i} className="flex flex-wrap items-start gap-2">
+              <div key={i} className="flex flex-wrap items-center gap-2">
                 <input
-                  className={`${fieldClass} w-28 font-mono text-xs`}
+                  className={`${fieldClass} w-32 font-mono`}
                   placeholder="id"
                   aria-label={`Criterion ${i + 1} id`}
                   value={c.id}
@@ -89,7 +103,7 @@ export function RubricFields({
                   onChange={(e) => setCriterion(i, { label: e.target.value })}
                 />
                 <input
-                  className={`${fieldClass} w-20`}
+                  className={`${fieldClass} w-24`}
                   type="number"
                   min={0.1}
                   step={0.1}
@@ -103,83 +117,95 @@ export function RubricFields({
                   }
                 />
                 {rubric.criteria.length > 1 && (
-                  <button
-                    type="button"
-                    aria-label={`Remove criterion ${i + 1}`}
+                  <IconButton
+                    icon="close"
+                    label={`Remove criterion ${i + 1}`}
+                    className="hover:text-fail"
                     onClick={() =>
                       onChange({ ...rubric, criteria: rubric.criteria.filter((_, j) => j !== i) })
                     }
-                    className="rounded-md border border-line px-2 py-2 text-xs text-ink-faint hover:text-fail"
-                  >
-                    ✕
-                  </button>
+                  />
                 )}
               </div>
             ))}
-            <button
-              type="button"
-              onClick={() =>
-                onChange({ ...rubric, criteria: [...rubric.criteria, { id: "", label: "" }] })
-              }
-              className="rounded-md border border-line px-2 py-1 text-xs text-ink-dim hover:text-ink"
-            >
-              + Criterion
-            </button>
-            <p className="text-[11px] text-ink-faint">
-              The id keys the score history: rename a label freely, change an id and the trend
-              starts over.
-            </p>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                icon="plus"
+                className="-ml-2"
+                onClick={() =>
+                  onChange({ ...rubric, criteria: [...rubric.criteria, { id: "", label: "" }] })
+                }
+              >
+                {/* The plus is drawn; the name still says it, for the reader
+                    who hears the button rather than sees it. */}
+                <span className="sr-only">+</span> Criterion
+              </Button>
+              <p className={HINT}>
+                The id keys the score history: rename a label freely, change an id and the trend
+                starts over.
+              </p>
+            </div>
           </div>
 
-          <label className="block space-y-1 text-xs font-medium text-ink-dim">
-            <span>Regression threshold (optional)</span>
-            <input
-              className={`${fieldClass} w-28`}
-              type="number"
-              min={0}
-              max={10}
-              step={0.5}
-              placeholder="none"
-              // The wrapping label carries the whole explanation; without an
-              // explicit name a screen reader would announce all of it as the
-              // field's label every time focus lands here.
-              aria-label="Regression threshold, 0 to 10"
-              value={rubric.minScore ?? ""}
-              onChange={(e) =>
-                onChange({
-                  ...rubric,
-                  minScore: e.target.value === "" ? undefined : Number(e.target.value),
-                })
-              }
-            />
-            <span className="block text-[11px] font-normal text-ink-faint">
-              A run scoring below this opens an issue, even though the process exited fine. Leave
-              empty to measure without ever failing anything.
-            </span>
-          </label>
-
-          {onAutoApproveChange && (
-            <label className="block space-y-1 text-xs font-medium text-ink-dim">
-              <span>Auto-approve this gate at (optional)</span>
+          <div className="grid gap-5 sm:grid-cols-2">
+            <label className="flex flex-col gap-1.5">
+              <span className="flex items-baseline gap-2">
+                <span className={labelClass}>Regression threshold</span>
+                <span className={HINT}>optional</span>
+              </span>
               <input
                 className={`${fieldClass} w-28`}
                 type="number"
                 min={0}
                 max={10}
                 step={0.5}
-                placeholder="never"
-                aria-label="Auto-approve this gate at, 0 to 10"
-                value={autoApprove ?? ""}
+                placeholder="none"
+                // The wrapping label carries the whole explanation; without an
+                // explicit name a screen reader would announce all of it as the
+                // field's label every time focus lands here.
+                aria-label="Regression threshold, 0 to 10"
+                value={rubric.minScore ?? ""}
                 onChange={(e) =>
-                  onAutoApproveChange(e.target.value === "" ? null : Number(e.target.value))
+                  onChange({
+                    ...rubric,
+                    minScore: e.target.value === "" ? undefined : Number(e.target.value),
+                  })
                 }
               />
-              <span className="block text-[11px] font-normal text-ink-faint">
-                Every step of the phase must score at least this to pass unattended. No score yet,
-                or any step below the bar, and the gate keeps waiting for you.
+              <span className={HINT}>
+                A run scoring below this opens an issue, even though the process exited fine. Leave
+                empty to measure without ever failing anything.
               </span>
             </label>
-          )}
+
+            {onAutoApproveChange && (
+              <label className="flex flex-col gap-1.5">
+                <span className="flex items-baseline gap-2">
+                  <span className={labelClass}>Auto-approve this gate at</span>
+                  <span className={HINT}>optional</span>
+                </span>
+                <input
+                  className={`${fieldClass} w-28`}
+                  type="number"
+                  min={0}
+                  max={10}
+                  step={0.5}
+                  placeholder="never"
+                  aria-label="Auto-approve this gate at, 0 to 10"
+                  value={autoApprove ?? ""}
+                  onChange={(e) =>
+                    onAutoApproveChange(e.target.value === "" ? null : Number(e.target.value))
+                  }
+                />
+                <span className={HINT}>
+                  Every step of the phase must score at least this to pass unattended. No score yet,
+                  or any step below the bar, and the gate keeps waiting for you.
+                </span>
+              </label>
+            )}
+          </div>
         </div>
       )}
     </fieldset>

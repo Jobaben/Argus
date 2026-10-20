@@ -1,4 +1,4 @@
-import { EmptyState, SkeletonText } from "../ds";
+import { Icon, Loading, Skeleton } from "../ds";
 import { useReliability } from "../useReliability";
 import type { PhaseFailureClass, PhaseReliability } from "../types";
 
@@ -41,59 +41,102 @@ function dominantFailure(classes: Partial<Record<PhaseFailureClass, number>>): s
  * "nothing", and a stacked bar collapses to a hairline for either without a
  * connecting line implying a trend between two unrelated gaps.
  */
-function Trend({ trend }: { trend: { day: string; succeeded: number; failed: number }[] }) {
+function Trend({
+  trend,
+  days,
+}: {
+  trend: { day: string; succeeded: number; failed: number }[];
+  days: number;
+}) {
   const max = Math.max(1, ...trend.map((d) => d.succeeded + d.failed));
   return (
-    <div
-      className="flex h-10 items-end gap-px"
-      role="img"
-      aria-label={`Settled runs over the last ${trend.length} days, oldest first: ${trend
-        .map((d) => `${d.day} ${d.succeeded} succeeded ${d.failed} failed`)
-        .join("; ")}`}
-    >
-      {trend.map((d) => {
-        const total = d.succeeded + d.failed;
-        const heightPct = total === 0 ? 4 : Math.max(8, (total / max) * 100);
-        return (
-          <div
-            key={d.day}
-            aria-hidden="true"
-            title={`${d.day}: ${d.succeeded} succeeded, ${d.failed} failed`}
-            className="flex w-1.5 shrink-0 flex-col-reverse overflow-hidden rounded-[1px] bg-ground-2"
-            style={{ height: `${heightPct}%` }}
-          >
-            {d.failed > 0 && (
-              <div className="w-full bg-fail" style={{ height: `${(d.failed / total) * 100}%` }} />
-            )}
-            {d.succeeded > 0 && (
-              <div className="w-full bg-ok" style={{ height: `${(d.succeeded / total) * 100}%` }} />
-            )}
-          </div>
-        );
-      })}
+    <div>
+      {/* The chart says what it counts and over what window; the axis below
+          says where the window starts and ends. */}
+      <div className="mb-1.5 flex items-baseline justify-between gap-3 text-caption text-ink-faint">
+        <span>Settled runs per day</span>
+        <span>last {days} days</span>
+      </div>
+      <div
+        className="flex h-12 items-end gap-0.5"
+        role="img"
+        aria-label={`Settled runs over the last ${trend.length} days, oldest first: ${trend
+          .map((d) => `${d.day} ${d.succeeded} succeeded ${d.failed} failed`)
+          .join("; ")}`}
+      >
+        {trend.map((d) => {
+          const total = d.succeeded + d.failed;
+          const heightPct = total === 0 ? 4 : Math.max(8, (total / max) * 100);
+          return (
+            <div
+              key={d.day}
+              aria-hidden="true"
+              title={`${d.day}: ${d.succeeded} succeeded, ${d.failed} failed`}
+              className="flex min-w-0 max-w-5 flex-1 flex-col-reverse overflow-hidden rounded-[2px] bg-line"
+              style={{ height: `${heightPct}%` }}
+            >
+              {d.failed > 0 && (
+                <div
+                  className="w-full bg-fail"
+                  style={{ height: `${(d.failed / total) * 100}%` }}
+                />
+              )}
+              {d.succeeded > 0 && (
+                <div
+                  className="w-full bg-ok"
+                  style={{ height: `${(d.succeeded / total) * 100}%` }}
+                />
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {trend.length > 1 && (
+        <div aria-hidden="true" className="mt-1 flex justify-between text-micro text-ink-faint">
+          <span>{trend[0].day}</span>
+          <span>{trend[trend.length - 1].day}</span>
+        </div>
+      )}
     </div>
   );
 }
 
 function Stat({ label, value, tone }: { label: string; value: string; tone?: string }) {
   return (
-    <div>
-      <div className={`font-mono text-lg font-extrabold ${tone ?? "text-ink"}`}>{value}</div>
-      <div className="text-[10px] uppercase tracking-[0.1em] text-ink-faint">{label}</div>
+    <div className="min-w-0">
+      <div className={`text-title font-semibold leading-none ${tone ?? "text-ink"}`}>{value}</div>
+      <div className="mt-1.5 text-caption text-ink-dim">{label}</div>
     </div>
   );
 }
 
-function PhaseRow({ p }: { p: PhaseReliability }) {
+/** A count in the table: coloured only when it is not zero, because a column of
+ *  green and red zeros is a table shouting about nothing. */
+function Count({ n, tone }: { n: number; tone: string }) {
   return (
-    <tr className="border-t border-line">
-      <td className="max-w-[9rem] truncate py-1.5 pr-2 text-ink-dim" title={p.name}>
-        {p.name}
+    <td className={`py-2 pr-3 text-right last:pr-0 ${n > 0 ? tone : "text-ink-faint"}`}>{n}</td>
+  );
+}
+
+/** One phase. Where it loses attempts sits under its name rather than in a
+ *  fifth column, which on a phone was the column scrolled out of view. */
+function PhaseRow({ p }: { p: PhaseReliability }) {
+  const dominant = dominantFailure(p.failureClasses);
+  return (
+    <tr className="border-t border-line align-top">
+      <td className="max-w-0 py-2 pr-3">
+        <div className="truncate text-ink" title={p.name}>
+          {p.name}
+        </div>
+        {dominant !== "—" && (
+          <div className="mt-0.5 truncate text-caption text-ink-faint">
+            Mostly <span className="text-ink-dim">{dominant}</span>
+          </div>
+        )}
       </td>
-      <td className="py-1.5 pr-2 text-right font-mono text-ok">{p.firstAttemptPass}</td>
-      <td className="py-1.5 pr-2 text-right font-mono text-await">{p.luckyPass}</td>
-      <td className="py-1.5 pr-2 text-right font-mono text-fail">{p.failed}</td>
-      <td className="py-1.5 text-ink-faint">{dominantFailure(p.failureClasses)}</td>
+      <Count n={p.firstAttemptPass} tone="text-ok" />
+      <Count n={p.luckyPass} tone="text-ink-dim" />
+      <Count n={p.failed} tone="text-fail" />
     </tr>
   );
 }
@@ -106,73 +149,84 @@ function PhaseRow({ p }: { p: PhaseReliability }) {
  */
 export function ReliabilityCard({ pipelineId, days = 30 }: { pipelineId: string; days?: number }) {
   const { reliability, loading, error } = useReliability(pipelineId, days);
+  const firstRate = reliability?.firstAttemptSuccessRate ?? null;
 
   return (
-    <div className="mt-3 rounded-lg border border-line bg-ground-2 p-3">
-      <div className="mb-2.5 flex items-center justify-between gap-2">
-        <span className="font-mono text-[11px] font-bold uppercase tracking-[0.16em] text-ink-faint">
-          Reliability
-        </span>
-        <span className="text-[10px] text-ink-faint">last {days}d</span>
-      </div>
-
+    <div className="mt-1.5 min-w-0 rounded-tile border border-line bg-ground-2/60 p-4 motion-safe:animate-[slide-up_var(--duration-base)_var(--ease-out-expo)_both]">
+      {/* Named by the disclosure that opens it, so no heading of its own: the
+          window is the one thing that toggle does not say. */}
       {loading && !reliability ? (
-        <SkeletonText lines={3} />
+        <Loading label="reliability">
+          <div className="flex gap-8">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="space-y-2">
+                <Skeleton className="h-5 w-12" />
+                <Skeleton className="h-2.5 w-20" />
+              </div>
+            ))}
+          </div>
+          <Skeleton className="mt-4 h-12 w-full" />
+        </Loading>
       ) : error ? (
-        <p className="text-xs text-fail">Couldn't load reliability: {error}</p>
+        <p className="flex items-start gap-1.5 text-small text-fail-ink">
+          <Icon name="alert" size={15} className="mt-px shrink-0 text-fail" />
+          <span className="min-w-0 break-words">Couldn't load reliability: {error}</span>
+        </p>
       ) : !reliability || reliability.instances === 0 ? (
-        <EmptyState>
-          <p className="text-xs text-ink-dim">No settled runs in the last {days} days.</p>
-        </EmptyState>
+        <p className="flex items-center gap-2 text-small text-ink-dim">
+          <Icon name="activity" size={15} className="shrink-0 text-ink-faint" />
+          <span>No settled runs in the last {days} days.</span>
+        </p>
       ) : (
         <>
-          <div className="flex flex-wrap gap-6">
+          <div className="flex flex-wrap items-start gap-x-8 gap-y-3">
+            {/* Green is earned, not given: a pipeline that passes its own checks
+                first time less than half the time is not "healthy" in any
+                sense worth colouring. */}
             <Stat
               label="First-attempt pass"
-              value={pct(reliability.firstAttemptSuccessRate)}
-              tone={
-                reliability.firstAttemptSuccessRate != null &&
-                reliability.firstAttemptSuccessRate < 0.5
-                  ? "text-await"
-                  : "text-ok"
-              }
+              value={pct(firstRate)}
+              tone={firstRate != null && firstRate >= 0.5 ? "text-ok" : "text-ink"}
             />
-            <Stat
-              label="Lucky pass"
-              value={pct(reliability.luckyPassRate)}
-              tone={
-                reliability.luckyPassRate != null && reliability.luckyPassRate > 0
-                  ? "text-await"
-                  : "text-ink"
-              }
-            />
+            <Stat label="Lucky pass" value={pct(reliability.luckyPassRate)} />
             <Stat label="Settled" value={String(reliability.instances)} />
             {reliability.aborted > 0 && (
               <Stat label="Aborted" value={String(reliability.aborted)} />
             )}
           </div>
 
-          <div className="mt-3">
-            <Trend trend={reliability.trend} />
+          <div className="mt-4">
+            <Trend trend={reliability.trend} days={days} />
           </div>
 
           {reliability.phases.length > 0 && (
-            <table className="mt-3 w-full text-xs">
-              <thead>
-                <tr className="text-[10px] uppercase tracking-[0.08em] text-ink-faint">
-                  <th className="pb-1 text-left font-normal">Phase</th>
-                  <th className="pb-1 text-right font-normal">1st try</th>
-                  <th className="pb-1 text-right font-normal">Lucky</th>
-                  <th className="pb-1 text-right font-normal">Failed</th>
-                  <th className="pb-1 text-left font-normal">Dominant failure</th>
-                </tr>
-              </thead>
-              <tbody>
-                {reliability.phases.map((p) => (
-                  <PhaseRow key={p.phaseId} p={p} />
-                ))}
-              </tbody>
-            </table>
+            <div className="mt-4">
+              <table className="w-full text-small">
+                <thead>
+                  <tr>
+                    <th className="eyebrow w-full pb-1.5 pr-3 text-left">Phase</th>
+                    <th
+                      className="eyebrow whitespace-nowrap pb-1.5 pr-3 text-right"
+                      title="Passed its checks on the first attempt"
+                    >
+                      1st try
+                    </th>
+                    <th
+                      className="eyebrow pb-1.5 pr-3 text-right"
+                      title="Passed only after a retry or a revision"
+                    >
+                      Lucky
+                    </th>
+                    <th className="eyebrow pb-1.5 text-right">Failed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {reliability.phases.map((p) => (
+                    <PhaseRow key={p.phaseId} p={p} />
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </>
       )}

@@ -1,5 +1,6 @@
 import { runtimeLabel } from "../useRuntimes";
 import type { AgentRuntimeId } from "../types";
+import { chipClass } from "./controls";
 
 /**
  * Which agent produced this run.
@@ -9,6 +10,9 @@ import type { AgentRuntimeId } from "../types";
  * every row says the same thing is noise; a badge on the one row that differs
  * is the whole point, and answers "why does this phase behave differently" at a
  * glance.
+ *
+ * A neutral chip: which CLI ran something is a category, not a status, so it
+ * takes no status colour.
  */
 export function RuntimeBadge({
   runtime,
@@ -24,7 +28,7 @@ export function RuntimeBadge({
   const named = runtimeLabel(runtime);
   return (
     <span
-      className="rounded border border-line px-1 py-px font-mono text-[10px] uppercase tracking-wide text-ink-faint"
+      className={chipClass()}
       title={title ?? (named ? `Run by the ${named} CLI` : `Run by the ${runtime} CLI`)}
     >
       {runtime}

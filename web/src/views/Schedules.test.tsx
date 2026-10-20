@@ -264,3 +264,59 @@ describe("Schedules health", () => {
     route.segments = ["schedules"];
   });
 });
+
+describe("Schedules editing", () => {
+  beforeEach(() => {
+    route.segments = ["schedules"];
+    mockState.runs = [];
+    mockState.update = vi.fn().mockResolvedValue(undefined);
+  });
+
+  it("keeps an open edit through a re-sort of the list", async () => {
+    // A wide screen: the cards once sat in two stacks there, and a card that
+    // changed stack on a re-sort was remounted — taking the typed edit with it.
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query.includes("min-width"),
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    try {
+      mockState.schedules = [
+        schedule({ id: "a", name: "Alpha" }),
+        schedule({ id: "b", name: "Beta" }),
+      ];
+      const user = userEvent.setup();
+      const { rerender } = render(<Schedules />);
+      await user.click(screen.getAllByRole("button", { name: "Edit" })[1]);
+      const name = screen.getByDisplayValue("Beta");
+      await user.clear(name);
+      await user.type(name, "Beta, edited");
+
+      // Alpha is paused from elsewhere: it drops to the end, and Beta moves up.
+      mockState.schedules = [
+        schedule({ id: "a", name: "Alpha", enabled: false }),
+        schedule({ id: "b", name: "Beta" }),
+      ];
+      rerender(<Schedules />);
+      expect(screen.getByDisplayValue("Beta, edited")).toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("hands focus back to the card's Edit button when the form closes", async () => {
+    mockState.schedules = [
+      schedule({ id: "a", name: "Alpha" }),
+      schedule({ id: "b", name: "Beta" }),
+    ];
+    const user = userEvent.setup();
+    render(<Schedules />);
+    await user.click(screen.getAllByRole("button", { name: "Edit" })[1]);
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getAllByRole("button", { name: "Edit" })[1]).toHaveFocus();
+  });
+});

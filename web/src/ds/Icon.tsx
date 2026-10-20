@@ -68,10 +68,37 @@ const PATHS = {
   history: "M4.5 12a7.5 7.5 0 1 0 2.4-5.5L4.5 8.8 M4.5 4.5v4.3h4.3 M12 8v4l2.5 1.5",
   replay: "M8 5.8v12.4a.8.8 0 0 0 1.2.7l10-6.2a.8.8 0 0 0 0-1.4l-10-6.2a.8.8 0 0 0-1.2.7Z",
   dot: "M14 12a2 2 0 1 1-4 0a2 2 0 0 1 4 0Z",
+  minus: "M5 12h14",
+  /** Plain shapes, for marks where the *shape* is the category (the Knowledge
+   *  view's claim kinds), so colour stays free to mean status. */
+  diamond: "M12 4.5 19.5 12 12 19.5 4.5 12 12 4.5Z",
+  square: "M7 6.5h10a.5.5 0 0 1 .5.5v10a.5.5 0 0 1-.5.5H7a.5.5 0 0 1-.5-.5V7a.5.5 0 0 1 .5-.5Z",
+  "circle-dot":
+    "M12 5.25a6.75 6.75 0 1 0 0 13.5a6.75 6.75 0 0 0 0-13.5Z M13.1 12a1.1 1.1 0 1 1-2.2 0a1.1 1.1 0 0 1 2.2 0Z",
+  "circle-dashed":
+    "M13.17 5.35A6.75 6.75 0 0 1 17.17 7.66 M18.34 9.69A6.75 6.75 0 0 1 18.34 14.31 M17.17 16.34A6.75 6.75 0 0 1 13.17 18.65 M10.83 18.65A6.75 6.75 0 0 1 6.83 16.34 M5.66 14.31A6.75 6.75 0 0 1 5.66 9.69 M6.83 7.66A6.75 6.75 0 0 1 10.83 5.35",
+  triangle: "M12 5.5l7 12.5H5l7-12.5Z",
+  star: "M12 4.75 14 9.75l5.37.36-4.14 3.44 1.33 5.22L12 15.9l-4.56 2.87 1.33-5.22-4.14-3.44L10 9.75 12 4.75Z",
   shield: "M12 3.5 19 6v5.5c0 4.3-2.9 7.6-7 9-4.1-1.4-7-4.7-7-9V6l7-2.5Z M9 12l2.2 2.2L15.5 10",
   layers: "M12 4 3.5 8.5 12 13l8.5-4.5L12 4Z M3.5 12.5 12 17l8.5-4.5 M3.5 16 12 20.5l8.5-4.5",
   folder: "M4.5 6.5a1 1 0 0 1 1-1h4l2 2h7a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1v-11Z",
   link: "M10 14a4 4 0 0 0 5.7.3l2.8-2.8a4 4 0 0 0-5.7-5.7l-1 1 M14 10a4 4 0 0 0-5.7-.3l-2.8 2.8a4 4 0 0 0 5.7 5.7l1-1",
+  /** Transport: to the previous / next event on a recording. */
+  "skip-back":
+    "M6.5 6v12 M17.5 6.6v10.8a.7.7 0 0 1-1.1.6l-8-5.4a.7.7 0 0 1 0-1.2l8-5.4a.7.7 0 0 1 1.1.6Z",
+  "skip-forward":
+    "M17.5 6v12 M6.5 6.6v10.8a.7.7 0 0 0 1.1.6l8-5.4a.7.7 0 0 0 0-1.2l-8-5.4a.7.7 0 0 0-1.1.6Z",
+  /** Where something began: a run's first event. */
+  flag: "M5.5 20.5v-16 M5.5 4.5h11l-2.5 4 2.5 4h-11",
+  /** A speech bubble: a message in a transcript. */
+  message:
+    "M5.5 5h13a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5H10l-4 3.5V16h-.5A1.5 1.5 0 0 1 4 14.5v-8A1.5 1.5 0 0 1 5.5 5Z",
+  /** The bell, struck through: quiet hours held a notification back. */
+  "bell-off": "M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 1.75h-15L6 16.5Z M10 21h4 M4.5 4.5l15 15",
+  /** On/off: whether a pipeline's trigger may fire at all. */
+  power: "M12 3.5v8 M17.3 7.2a7.5 7.5 0 1 1-10.6 0",
+  /** A dial: a score read against a scale (a run's verdict). */
+  gauge: "M6.34 18.66a8 8 0 1 1 11.32 0 M12 13l3.25-3.25",
 } as const;
 
 export type IconName = keyof typeof PATHS;

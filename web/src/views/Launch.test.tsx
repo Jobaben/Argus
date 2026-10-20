@@ -171,3 +171,20 @@ describe("Launch", () => {
     expect(screen.getByText(/Nothing launched yet/)).toBeInTheDocument();
   });
 });
+
+describe("Launch fields", () => {
+  it("names a field by its label and describes it with its hint and help", () => {
+    render(<Launch />);
+    // Help text inside the label used to become part of the field's name.
+    const name = screen.getByRole("textbox", { name: "Name" });
+    expect(name).toHaveAccessibleDescription(/optional.*Defaults to the prompt's first line/);
+  });
+
+  it("moves focus to the filled form on Reuse", async () => {
+    mockState.runs = [run()];
+    const user = userEvent.setup();
+    render(<Launch />);
+    await user.click(screen.getByRole("button", { name: /reuse/i }));
+    expect(screen.getByPlaceholderText(/Summarize the open TODOs/)).toHaveFocus();
+  });
+});
