@@ -135,6 +135,30 @@ describe("StepDrawer", () => {
     expect(screen.getByText("npm audit: 3 critical vulnerabilities")).toBeInTheDocument();
   });
 
+  it("shows the agent's summary without the protocol line it ends with", async () => {
+    stubRun({
+      id: "run_0003",
+      log: "",
+      resultSummary: "Drafted the changelog entry.\nARGUS_OUTCOME: succeeded",
+    });
+    render(<StepDrawer selection={selection()} onClose={vi.fn()} />);
+    expect(await screen.findByText("Drafted the changelog entry.")).toBeInTheDocument();
+    expect(screen.queryByText(/ARGUS_OUTCOME/)).not.toBeInTheDocument();
+  });
+
+  it("falls back to the marker's reason when the marker is all the summary has", async () => {
+    stubRun({
+      id: "run_0003",
+      log: "",
+      resultSummary: "ARGUS_OUTCOME: failed tests are red",
+    });
+    render(
+      <StepDrawer selection={selection({ step: step({ status: "failed" }) })} onClose={vi.fn()} />,
+    );
+    expect(await screen.findByText("tests are red")).toBeInTheDocument();
+    expect(screen.queryByText(/ARGUS_OUTCOME/)).not.toBeInTheDocument();
+  });
+
   it("renders the run log", async () => {
     stubRun({ id: "run_0003", log: "[argus] starting\n[claude] done\n" });
     render(<StepDrawer selection={selection()} onClose={vi.fn()} />);

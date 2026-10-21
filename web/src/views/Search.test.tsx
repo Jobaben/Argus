@@ -55,7 +55,7 @@ describe("Search", () => {
     );
     render(<Search />);
     await user.type(screen.getByRole("searchbox"), "the");
-    await waitFor(() => expect(screen.getByText(/first/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/First/)).toBeInTheDocument());
     expect(screen.getByText(/narrow the query/)).toBeInTheDocument();
     expect(screen.queryByText(/^100 matches$/)).toBeNull();
   });

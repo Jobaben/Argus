@@ -7,7 +7,6 @@ import {
   fieldClass,
   formatCountdown,
   Handoff,
-  HealthCounter,
   Icon,
   Page,
   Section,
@@ -19,6 +18,7 @@ import {
 } from "../ds";
 import { useSentinel } from "../useSentinel";
 import type { Incident, IncidentEventKind, IncidentSeverity, IncidentStatus } from "../types";
+import { HealthCounter } from "../ds/HealthCounter";
 
 /**
  * Sentinel.
@@ -281,15 +281,15 @@ function IncidentCard({
                   <EscalatesIn at={incident.nextEscalationAt} />
                 )}
                 {incident.level > 0 && live && (
-                  <span className="inline-flex items-center gap-1 font-semibold capitalize text-fail">
+                  <span className="inline-flex items-center gap-1 font-semibold text-fail">
                     <Icon name="arrow-up" size={13} />
-                    level {incident.level}
+                    Level {incident.level}
                   </span>
                 )}
                 {incident.acknowledgedBy && (
                   <span className="inline-flex items-center gap-1 text-ink-dim">
                     <Icon name="user" size={13} className="text-await" />
-                    acknowledged by {incident.acknowledgedBy}
+                    Acknowledged by {incident.acknowledgedBy}
                   </span>
                 )}
                 {hasLinks && (
@@ -310,14 +310,8 @@ function IncidentCard({
                       </ButtonLink>
                     )}
                     {incident.fingerprint && (
-                      <ButtonLink
-                        href="#/issues"
-                        variant="ghost"
-                        size="sm"
-                        icon="layers"
-                        className="capitalize"
-                      >
-                        issue
+                      <ButtonLink href="#/issues" variant="ghost" size="sm" icon="layers">
+                        Issue
                       </ButtonLink>
                     )}
                   </span>
@@ -720,14 +714,14 @@ export default function Sentinel() {
           >
             <Handoff busy={firstLoad} label="incidents" skeleton={<SkeletonRows count={3} />}>
               {nothingLoaded ? (
-                <EmptyState compact icon="alert" title="Incidents can't be shown right now.">
+                <EmptyState compact icon="alert" title="Incidents can't be shown right now">
                   Sentinel didn't answer, so this is not an all-clear — just no word yet.
                 </EmptyState>
               ) : live.length === 0 ? (
                 <EmptyState
                   tone="calm"
                   icon="check-circle"
-                  title="Nothing is on fire."
+                  title="Nothing is on fire"
                   action={
                     <ButtonLink href="#/health" iconRight="arrow-right">
                       Health
@@ -789,7 +783,7 @@ export default function Sentinel() {
                   onSave={save}
                 />
               ) : (
-                <EmptyState compact icon="alert" title="The policy can't be shown right now.">
+                <EmptyState compact icon="alert" title="The policy can't be shown right now">
                   Sentinel didn't answer, so these settings are unknown — not off.
                 </EmptyState>
               )}

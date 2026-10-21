@@ -14,6 +14,8 @@ import {
 } from "../ds";
 import { Markdown } from "../ds/Markdown";
 import { useArtifactContent, useGateReview } from "../useGateReview";
+import { splitOutcome } from "./outcome";
+import { KIND_TERMS, TERMS, type TermId } from "./knowledgeGlossary";
 import type { GateActionOptions } from "../useOverview";
 import type {
   AcceptanceCriterion,
@@ -164,31 +166,6 @@ interface Note {
   outcome: string | null;
 }
 
-const OUTCOME_LINE = /^\s*ARGUS_OUTCOME:\s*(\S+)\s*(.*)$/;
-
-/**
- * The agent's protocol line taken off its prose.
- *
- * Every agent ends with `ARGUS_OUTCOME: <outcome> <reason>`, because the prompt
- * Argus gives it demands that, and printed under the human message the line
- * said the same thing again as protocol: "Drafted the changelog… ARGUS_OUTCOME:
- * succeeded". The outcome is kept to be shown as a chip; the payload itself is
- * untouched. A note that is nothing but the marker keeps the marker's reason.
- */
-function splitOutcome(text: string): { prose: string; outcome: string | null } {
-  let outcome: string | null = null;
-  let markerReason = "";
-  const kept = text.split("\n").filter((line) => {
-    const m = OUTCOME_LINE.exec(line);
-    if (!m) return true;
-    outcome = m[1];
-    markerReason = m[2].trim();
-    return false;
-  });
-  const prose = kept.join("\n").trim();
-  return { prose: prose || markerReason, outcome };
-}
-
 /** Loosely the same sentence: case, punctuation, articles and a leading
  *  "failed:" set aside. */
 function sameSentence(a: string, b: string): boolean {
@@ -201,6 +178,8 @@ function sameSentence(a: string, b: string): boolean {
   return norm(a) !== "" && norm(a) === norm(b);
 }
 
+/** The agent's protocol line comes off its prose and is shown as a chip
+ *  instead; the payload itself is untouched. */
 function toNote(label: string, text: string): Note {
   const { prose, outcome } = splitOutcome(text);
   return { label, source: prose, outcome };
@@ -292,7 +271,7 @@ function ClosingNote({ note }: { note: Note }) {
         <span className="eyebrow">{note.label}</span>
         {note.outcome && (
           <span className={chipClass("neutral")} title="The outcome the agent reported">
-            reported {note.outcome}
+            Reported {note.outcome}
           </span>
         )}
       </div>
@@ -489,8 +468,22 @@ function SourceText({ source }: { source: EvidenceSource }) {
 
 /** What kind of claim this is. A category, so a neutral chip: colour is kept
  *  for outcomes, which are statuses. */
+/** A ledger value ("needs-input") as a label, for a value the glossary does
+ *  not name. */
+function asLabel(value: string): string {
+  const words = value.replace(/-/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** A claim's kind in the Knowledge view's words ("Business rule"), with its
+ *  definition on hover, rather than the ledger's key ("business-rule"). */
 function KindTag({ kind }: { kind: string }) {
-  return <span className={chipClass()}>{kind}</span>;
+  const term = KIND_TERMS[kind as keyof typeof KIND_TERMS];
+  return (
+    <span className={chipClass()} title={term?.definition}>
+      {term?.term ?? asLabel(kind)}
+    </span>
+  );
 }
 
 /** An id or a ref beside a chip: machine text, so mono, and quiet. */
@@ -584,7 +577,7 @@ function CandidateRevision({ revision }: { revision: PreviewRevision }) {
         <Ref>
           {revision.claimId} v{revision.expectedRevision} → v{revision.expectedRevision + 1}
         </Ref>
-        {revision.stale && <span className={chipClass("fail")}>stale</span>}
+        {revision.stale && <span className={chipClass("fail")}>Stale</span>}
       </RowHead>
       {revision.current && (
         <p className="mt-1.5 break-words text-small leading-relaxed text-ink-faint line-through decoration-ink-faint/60">
@@ -737,7 +730,12 @@ const OUTCOME_TONE: Record<string, Parameters<typeof chipClass>[0]> = {
 };
 
 function OutcomeTag({ outcome }: { outcome: string }) {
-  return <span className={chipClass(OUTCOME_TONE[outcome] ?? "neutral")}>{outcome}</span>;
+  const term = TERMS[outcome as TermId] as (typeof TERMS)[TermId] | undefined;
+  return (
+    <span className={chipClass(OUTCOME_TONE[outcome] ?? "neutral")} title={term?.definition}>
+      {term?.term ?? asLabel(outcome)}
+    </span>
+  );
 }
 
 function VerificationEvidenceList({ evidence }: { evidence: VerificationEvidence[] }) {
@@ -1033,7 +1031,7 @@ function ReadinessTag({ readiness }: { readiness: ChangeProposalPreview["readine
           : "Unresolved questions or uncovered rule changes: this proposal cannot drive an implementation."
       }
     >
-      {readiness}
+      {asLabel(readiness)}
     </span>
   );
 }
@@ -1313,8 +1311,8 @@ function ArtifactList({
             >
               <Icon name="file" size={15} className={active ? "text-eye" : "text-ink-faint"} />
               <PathLabel path={a.path} />
-              {a.required && <span className={chipClass()}>required</span>}
-              {!a.text && <span className={chipClass()}>binary</span>}
+              {a.required && <span className={chipClass()}>Required</span>}
+              {!a.text && <span className={chipClass()}>Binary</span>}
               <span className="w-16 shrink-0 text-right text-caption text-ink-faint">
                 {formatBytes(a.bytes)}
               </span>

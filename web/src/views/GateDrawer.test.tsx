@@ -155,6 +155,9 @@ describe("GateDrawer — content", () => {
     const note = within(dialog).getByTestId("gate-closing-note");
     expect(within(note).getByRole("heading", { level: 2, name: "Ship" })).toBeInTheDocument();
     expect(within(note).getByText("fsck passes").tagName).toBe("STRONG");
+    // The agent's protocol line is a chip beside the note, not a line in it.
+    expect(within(note).getByText("Reported blocked")).toBeInTheDocument();
+    expect(note).not.toHaveTextContent("ARGUS_OUTCOME");
     // The hook event's bookkeeping is behind a closed toggle, without the
     // fields already shown above it.
     const raw = within(dialog).getByTestId("gate-raw-payload");
@@ -515,8 +518,10 @@ describe("GateDrawer — candidate knowledge", () => {
 
     // A proposed claim is named honestly: no canonical id is implied.
     expect(panel).toHaveTextContent(/local:comment-limit/);
-    expect(within(panel).getAllByText("business-rule").length).toBeGreaterThan(0);
-    expect(within(panel).getByText("assumption")).toBeInTheDocument();
+    // In the Knowledge view's words, not the ledger's keys.
+    expect(within(panel).getAllByText("Business rule").length).toBeGreaterThan(0);
+    expect(within(panel).getByText("Assumption")).toBeInTheDocument();
+    expect(within(panel).queryByText("business-rule")).not.toBeInTheDocument();
 
     // The revision shows before and after.
     expect(panel).toHaveTextContent(/RULE-17 v1 → v2/);
@@ -564,7 +569,7 @@ describe("GateDrawer — candidate knowledge", () => {
       ],
     });
     open();
-    expect(screen.getByTestId("gate-candidate-knowledge")).toHaveTextContent(/stale/);
+    expect(screen.getByTestId("gate-candidate-knowledge")).toHaveTextContent(/Stale/);
   });
 
   it("is absent on an ordinary gate that proposed no knowledge", () => {
@@ -867,7 +872,7 @@ describe("GateDrawer — change intent", () => {
 
     // What was asked for, verbatim, and whether the intent is fit to implement.
     expect(screen.getByTestId("change-request")).toHaveTextContent(/500-character customer/);
-    expect(screen.getByTestId("change-readiness")).toHaveTextContent("ready");
+    expect(screen.getByTestId("change-readiness")).toHaveTextContent("Ready");
 
     // CURRENT — the rule's own support beside what the implementation does.
     // Collapsing these two is how a bug becomes a requirement.
@@ -890,13 +895,13 @@ describe("GateDrawer — change intent", () => {
     const criteria = screen.getByTestId("change-acceptance-criteria");
     expect(criteria).toHaveTextContent(/AC-1/);
     expect(criteria).toHaveTextContent(/501 characters is rejected/);
-    expect(criteria).toHaveTextContent(/regression/);
+    expect(criteria).toHaveTextContent(/Regression/);
 
     expect(screen.getByTestId("change-unresolved-none")).toHaveTextContent("none");
     expect(panel).toHaveTextContent(/Nothing here is canonical yet/);
   });
 
-  it("marks an unfinished proposal needs-input and lists what is unknown", () => {
+  it("marks an unfinished proposal 'Needs input' and lists what is unknown", () => {
     mockReview.review = review({
       changeProposals: [
         changePreview({
@@ -915,7 +920,7 @@ describe("GateDrawer — change intent", () => {
       ],
     });
     open();
-    expect(screen.getByTestId("change-readiness")).toHaveTextContent("needs-input");
+    expect(screen.getByTestId("change-readiness")).toHaveTextContent("Needs input");
     expect(screen.getByTestId("change-unresolved")).toHaveTextContent(
       /What should the new maximum be\?/,
     );

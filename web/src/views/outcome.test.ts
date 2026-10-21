@@ -22,6 +22,13 @@ describe("splitOutcome", () => {
     );
   });
 
+  it("reads a marker on a CRLF line", () => {
+    expect(splitOutcome("Done\r\nARGUS_OUTCOME: failed lint is red\r\n")).toEqual({
+      prose: "Done",
+      outcome: "failed",
+    });
+  });
+
   it("leaves text without a marker alone", () => {
     expect(splitOutcome("  exit code 1  ")).toEqual({ prose: "exit code 1", outcome: null });
     expect(splitOutcome(null)).toEqual({ prose: "", outcome: null });

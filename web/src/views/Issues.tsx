@@ -8,7 +8,6 @@ import {
   chipClass,
   EmptyState,
   Handoff,
-  HealthCounter,
   Icon,
   Page,
   Skeleton,
@@ -20,6 +19,8 @@ import {
 } from "../ds";
 import { useIssues } from "../useIssues";
 import type { FailureClass, Issue, IssueOccurrence, IssueState } from "../types";
+import { withoutOutcome } from "./outcome";
+import { HealthCounter } from "../ds/HealthCounter";
 
 /** Autopsy's taxonomy, spelled for humans. */
 const CLASS_LABEL: Record<FailureClass, string> = {
@@ -35,19 +36,6 @@ const CLASS_LABEL: Record<FailureClass, string> = {
   infrastructure: "Infrastructure",
   other: "Unclassified",
 };
-
-/**
- * Lines an agent writes for the scheduler, not for a person: a reply ends with
- * `ARGUS_OUTCOME: <outcome> <reason>`, and printed after the human message it
- * said the same thing twice, the second time as protocol. Display only — the
- * stored error keeps it. When the marker is all there is, its reason stays.
- */
-function withoutOutcomeMarker(text: string): string {
-  const lines = text.split("\n");
-  const prose = lines.filter((l) => !l.trim().startsWith("ARGUS_OUTCOME:"));
-  if (prose.some((l) => l.trim() !== "")) return prose.join("\n").trim();
-  return text.replace(/^\s*ARGUS_OUTCOME:\s*\S+\s*/, "").trim() || text;
-}
 
 /** StatusPill's anatomy and colours: open is a failure still standing,
  *  resolved is done, ignored is set aside. */
@@ -120,12 +108,14 @@ function Occurrences({ list }: { list: IssueOccurrence[] }) {
           </span>
           {/* The raw line, in mono and allowed a second line: merged wordings
               usually differ only at the end — config.yml against config.yaml —
-              and a one-line clip on a phone cut off exactly that. */}
+              and a one-line clip on a phone cut off exactly that. The agent's
+              protocol line goes; a bare marker with no reason is still the
+              only error on record, so it is shown as it was stored. */}
           <span
             className="order-last line-clamp-2 min-w-0 basis-full break-words font-mono text-ink-faint sm:order-none sm:basis-auto sm:flex-1"
             title={o.error}
           >
-            {withoutOutcomeMarker(o.error)}
+            {withoutOutcome(o.error) || o.error}
           </span>
           {/* "Open run", not "Replay": it opens the recording, and "Replay" on
               a failure reads as "run it again". */}
@@ -479,7 +469,7 @@ export default function Issues() {
                 )}
 
                 {issues.length === 0 ? (
-                  <EmptyState tone="calm" icon="check-circle" title="No failures on record.">
+                  <EmptyState tone="calm" icon="check-circle" title="No failures on record">
                     When a scheduled run fails, Argus fingerprints its error and groups every
                     recurrence under one issue — so twenty timeouts are one thing to fix, with the
                     first and last sighting and every affected schedule attached.

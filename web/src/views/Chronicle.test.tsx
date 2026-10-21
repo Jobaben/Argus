@@ -164,6 +164,26 @@ describe("Chronicle", () => {
     expect(triage.getAttribute("title")).not.toContain("ARGUS_OUTCOME");
   });
 
+  it("keeps the reason when the agent's protocol line is all a span's detail has", () => {
+    mockState.chronicle = {
+      windowStart: "2026-07-09T00:00:00.000Z",
+      windowEnd: "2026-07-09T12:00:00.000Z",
+      groups: [
+        {
+          key: "run:s1",
+          label: "Nightly triage",
+          kind: "run",
+          rows: [[span("x", { status: "failed", detail: "ARGUS_OUTCOME: failed rate limited" })]],
+        },
+      ],
+      totals: { spans: 1, active: 0, failed: 1, costUsd: null, tokens: null },
+    };
+    render(<Chronicle />);
+    const bar = screen.getByRole("link", { name: "Span x, failed" });
+    expect(bar.getAttribute("title")).toContain("rate limited");
+    expect(bar.getAttribute("title")).not.toContain("ARGUS_OUTCOME");
+  });
+
   it("surfaces a fetch error", () => {
     mockState.error = "HTTP 500";
     render(<Chronicle />);

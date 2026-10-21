@@ -14,6 +14,7 @@ import {
   formatUsd,
   parseRunLog,
 } from "../ds";
+import { withoutOutcome } from "./outcome";
 
 /**
  * Everything Argus knows about one step of a pipeline, without leaving the board.
@@ -140,23 +141,6 @@ function useRunDetail(runId: string | null, running: boolean) {
 }
 
 /**
- * The agent's prose without its protocol line. A run's summary ends with
- * `ARGUS_OUTCOME: <outcome> <reason>` for the scheduler to read, and printed
- * under the human sentence it said the same thing again as protocol. Display
- * only; a summary that is nothing but the marker keeps the marker's reason.
- */
-function withoutOutcomeMarker(text: string): string {
-  const marker = /^\s*ARGUS_OUTCOME:\s*\S+\s*/;
-  const lines = text.split("\n");
-  const prose = lines
-    .filter((l) => !marker.test(l))
-    .join("\n")
-    .trim();
-  if (prose) return prose;
-  return text.replace(marker, "").trim() || text;
-}
-
-/**
  * The envelope's fields that are not already in the readout above it.
  *
  * Its cost and tokens are the stat row's figures again (in other units), and
@@ -251,7 +235,9 @@ export function StepDrawer({
     return <Drawer open={false} title="" onClose={onClose} children={null} />;
 
   const run = detail.run;
-  const summary = run?.resultSummary ? withoutOutcomeMarker(run.resultSummary) : null;
+  // The agent's prose without its protocol line, which the status pill below
+  // already says; a bare marker with no reason leaves nothing worth a panel.
+  const summary = withoutOutcome(run?.resultSummary) || null;
   const transcriptHref =
     run?.sessionId && run.project
       ? `#/sessions/${encodeURIComponent(run.project)}/${encodeURIComponent(run.sessionId)}`

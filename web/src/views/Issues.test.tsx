@@ -156,6 +156,25 @@ describe("Issues", () => {
     expect(screen.queryByText(/ARGUS_OUTCOME/)).not.toBeInTheDocument();
   });
 
+  it("keeps the marker's reason when the marker is the whole error", async () => {
+    const user = userEvent.setup();
+    loadOccurrences.mockResolvedValueOnce([
+      {
+        runId: "r9",
+        scheduleId: "s1",
+        scheduleName: "Nightly triage",
+        at: "2026-07-10T06:00:00.000Z",
+        status: "failed" as const,
+        outcome: null,
+        error: "ARGUS_OUTCOME: failed db timeout",
+      },
+    ]);
+    mockState.issues = [issue()];
+    render(<Issues />);
+    await user.click(screen.getByRole("button", { expanded: false }));
+    expect(await screen.findByText("db timeout")).toBeInTheDocument();
+  });
+
   it("hides the counter row when there is nothing on record", () => {
     render(<Issues />);
     expect(screen.queryByRole("region", { name: "Issues by state" })).not.toBeInTheDocument();

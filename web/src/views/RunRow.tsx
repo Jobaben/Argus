@@ -19,6 +19,7 @@ import {
 } from "../ds";
 import { useRuntimes } from "../useRuntimes";
 import { RuntimeBadge } from "../ds/RuntimeBadge";
+import { withoutOutcome } from "./outcome";
 
 /**
  * The "something is in flight" dot, breathing in phase with every other live
@@ -34,20 +35,6 @@ export function LiveDot({ className = "" }: { className?: string }) {
       className={`inline-block h-1.5 w-1.5 shrink-0 animate-[pulse_var(--duration-pulse)_ease-in-out_infinite] rounded-full bg-current ${className}`}
     />
   );
-}
-
-/**
- * A run's summary as a person reads it: without the `ARGUS_OUTCOME: <outcome>
- * <reason>` protocol line the agent prints for the scheduler, which repeats the
- * line above it and whose verdict the status pill already shows.
- */
-function runProse(text: string | null | undefined): string {
-  if (!text) return "";
-  return text
-    .split("\n")
-    .filter((line) => !line.trim().startsWith("ARGUS_OUTCOME:"))
-    .join("\n")
-    .trim();
 }
 
 /** One fact on a metadata line. A `wide` fact is one a phone can do without;
@@ -124,7 +111,11 @@ export function RunRow({
   const [cancelling, setCancelling] = useState(false);
   const isRunning = run.status === "running";
   const succeeded = runDsStatus(run) === "done";
-  const summary = runProse(run.resultSummary);
+  // Without the agent's protocol line: the status pill already shows its verdict.
+  // An error that is nothing but a bare marker is still the only error on
+  // record, so that one is shown as it was stored.
+  const summary = withoutOutcome(run.resultSummary);
+  const error = run.error ? withoutOutcome(run.error) || run.error : null;
   // Badge only the runs that didn't use this server's default agent: a mark on
   // every row when every row says the same thing is noise.
   const { default: defaultRuntime } = useRuntimes();
@@ -309,11 +300,11 @@ export function RunRow({
       </div>
       {open && (
         <div className="space-y-3 px-3 pb-3 pt-1 sm:pl-[2.375rem] sm:pr-4">
-          {run.error && (
+          {error && (
             <div className="flex gap-2.5 rounded-control border border-fail/25 bg-fail/[0.07] px-3 py-2.5">
               <Icon name="alert" size={15} className="mt-px text-fail" />
               <p className="min-w-0 whitespace-pre-wrap break-words font-mono text-caption leading-relaxed text-fail-ink">
-                {run.error}
+                {error}
               </p>
             </div>
           )}
@@ -427,7 +418,7 @@ function RunLog({
         {running && (
           <span className="inline-flex items-center gap-1.5 text-caption text-run">
             <LiveDot />
-            tailing
+            Tailing
           </span>
         )}
         {parsed.truncated && (

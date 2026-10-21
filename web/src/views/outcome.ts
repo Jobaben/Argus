@@ -23,7 +23,9 @@ export interface SplitOutcome {
 export function splitOutcome(text: string | null | undefined): SplitOutcome {
   let outcome: string | null = null;
   let reason = "";
-  const kept = (text ?? "").split("\n").filter((line) => {
+  // Split on CRLF too: `.` stops at a carriage return, so a marker line that
+  // kept one would not match and would be printed.
+  const kept = (text ?? "").split(/\r?\n/).filter((line) => {
     const m = MARKER.exec(line);
     if (!m) return true;
     outcome = m[1] || null;

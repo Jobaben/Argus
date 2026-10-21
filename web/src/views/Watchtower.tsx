@@ -9,7 +9,6 @@ import {
   formatTokens,
   formatUsd,
   Handoff,
-  HealthCounter,
   Icon,
   IconButton,
   Section,
@@ -23,6 +22,7 @@ import { useVerdictTrends } from "../useVerdict";
 import { VerdictSparkline } from "./VerdictPanel";
 import type { Anomaly, AnomalyMetric, Baseline, MetricBaseline } from "../types";
 import { InfoTip } from "../ds/InfoTip";
+import { HealthCounter } from "../ds/HealthCounter";
 
 /**
  * Watchtower.
@@ -466,7 +466,7 @@ export function WatchtowerPanel() {
           !error && (
             <EmptyState
               icon="activity"
-              title="Nothing to learn from yet."
+              title="Nothing to learn from yet"
               action={
                 <ButtonLink href="#/schedules" variant="primary" icon="plus">
                   Create a schedule

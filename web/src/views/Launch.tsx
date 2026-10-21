@@ -454,7 +454,7 @@ export function LaunchPanel() {
             // A load error already says why the list is empty; "nothing
             // launched" under it would be a second, wrong explanation.
             error ? null : (
-              <EmptyState title="Nothing launched yet." icon="bolt">
+              <EmptyState title="Nothing launched yet" icon="bolt">
                 A one-off run is the same machinery a schedule uses, fired once: the log tails live,
                 the cost is metered against your budget, and the transcript is kept. Use{" "}
                 <strong className="font-semibold text-ink">Reuse</strong> on any past run to load

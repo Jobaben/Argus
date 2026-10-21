@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Run } from "../types";
@@ -72,6 +72,9 @@ describe("Launch", () => {
   beforeEach(() => {
     mockState.runs = [];
     mockState.launch = vi.fn().mockResolvedValue(undefined);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("keeps Launch disabled until prompt and cwd are filled", async () => {
@@ -164,6 +167,41 @@ describe("Launch", () => {
     mockState.runs = [run()];
     render(<Launch />);
     expect(screen.queryByText(/across 1 run/)).toBeNull();
+  });
+
+  it("shows a run's summary without the agent's protocol line", async () => {
+    // Expanding the row tails its log; an empty one draws nothing.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ log: "" }) } as Response),
+    );
+    mockState.runs = [run({ resultSummary: "ARGUS_OUTCOME: succeeded nothing needed fixing" })];
+    const user = userEvent.setup();
+    render(<Launch />);
+    await user.click(screen.getByRole("button", { name: /Quick audit/, expanded: false }));
+    // A bare marker still says what happened: its reason is the summary.
+    expect(await screen.findByText("nothing needed fixing")).toBeInTheDocument();
+    expect(screen.queryByText(/ARGUS_OUTCOME/)).not.toBeInTheDocument();
+  });
+
+  it("shows a failed run's error without the agent's protocol line", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ log: "" }) } as Response),
+    );
+    mockState.runs = [
+      run({
+        status: "failed",
+        exitCode: 0,
+        resultSummary: null,
+        error: "lint found 3 errors\nARGUS_OUTCOME: failed lint is red",
+      }),
+    ];
+    const user = userEvent.setup();
+    render(<Launch />);
+    await user.click(screen.getByRole("button", { name: /Quick audit/, expanded: false }));
+    expect(await screen.findByText("lint found 3 errors")).toBeInTheDocument();
+    expect(screen.queryByText(/ARGUS_OUTCOME/)).not.toBeInTheDocument();
   });
 
   it("shows the empty state when nothing has been launched", () => {

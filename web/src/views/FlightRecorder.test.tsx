@@ -93,6 +93,31 @@ describe("FlightRecorder", () => {
     expect(within(now).getByText("build failed")).toBeInTheDocument();
   });
 
+  it("leads with why it failed, without the agent's protocol line", () => {
+    const events = recording().events.map((e) =>
+      e.errored ? { ...e, detail: "\nARGUS_OUTCOME: failed lint is red" } : e,
+    );
+    state.recording = recording({ events });
+    render(<FlightRecorder />);
+    // A bare marker still says why: its reason is the strip's message.
+    expect(screen.getByText("Bash: npm run build", { selector: "b" })).toBeInTheDocument();
+    expect(screen.getByText("lint is red")).toBeInTheDocument();
+    expect(screen.queryByText(/ARGUS_OUTCOME/)).not.toBeInTheDocument();
+  });
+
+  it("keeps a zero side of an edit's line counts out of the status colours", async () => {
+    const events = recording().events.map((e) =>
+      e.errored ? { ...e, path: "src/app.ts", added: 3, removed: 0 } : e,
+    );
+    state.recording = recording({ events });
+    const user = userEvent.setup();
+    render(<FlightRecorder />);
+    await user.click(screen.getByRole("button", { name: /jump to failure/i }));
+    const now = screen.getByRole("complementary", { name: /current event/i });
+    expect(within(now).getByText("+3")).toHaveClass("text-ok");
+    expect(within(now).getByText("−0")).toHaveClass("text-ink-faint");
+  });
+
   it("hides jump-to-failure on a run that did not fail", () => {
     state.recording = recording({ status: "succeeded", failureIndex: null });
     render(<FlightRecorder />);

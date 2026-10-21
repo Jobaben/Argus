@@ -144,7 +144,7 @@ function VaultHitRow({ hit, query }: { hit: VaultSearchHit; query: string }) {
             className={`${chipClass()} mr-1.5 align-[1px]`}
             title="Matched a term that co-occurs with your query in this machine's history, not the query itself"
           >
-            related
+            Related
           </span>
         )}
         <Highlight text={hit.snippet} query={query} />
@@ -282,7 +282,7 @@ function SearchIntro() {
       {/* A keyboard chord is no help on a phone. */}
       <p className="mt-5 hidden flex-wrap items-center gap-x-1.5 gap-y-1 border-t border-line pt-4 text-caption text-ink-faint sm:flex">
         Looking for a pipeline, schedule or session by name? Press
-        <kbd className="kbd text-micro!">{PALETTE_KEYS}</kbd>
+        <kbd className="kbd">{PALETTE_KEYS}</kbd>
         to jump straight to it.
       </p>
     </div>
@@ -307,7 +307,7 @@ function TranscriptResults({
           <p role="status" className="text-caption text-ink-faint">
             {truncated ? (
               <>
-                first <span className="text-ink-dim">{results.length}</span> matches — narrow the
+                First <span className="text-ink-dim">{results.length}</span> matches — narrow the
                 query to see the most relevant ones
               </>
             ) : (
@@ -329,11 +329,11 @@ function TranscriptResults({
           />
         ) : results.length === 0 ? (
           <div role="status">
-            <EmptyState compact icon="search" title={<>No matches for &ldquo;{query}&rdquo;.</>}>
+            <EmptyState compact icon="search" title={<>No matches for &ldquo;{query}&rdquo;</>}>
               The search is literal, not fuzzy — try a shorter fragment
               <span className="hidden sm:inline">
-                , or press <kbd className="kbd text-micro!">{PALETTE_KEYS}</kbd> to jump to a
-                pipeline, schedule or session by name
+                , or press <kbd className="kbd">{PALETTE_KEYS}</kbd> to jump to a pipeline, schedule
+                or session by name
               </span>
               .
             </EmptyState>

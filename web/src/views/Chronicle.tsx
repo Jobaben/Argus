@@ -12,7 +12,6 @@ import {
   formatMs,
   formatUsd,
   Handoff,
-  HealthCounter,
   Icon,
   Page,
   SegmentedControl,
@@ -24,6 +23,8 @@ import {
 import type { IconName } from "../ds";
 import { axisTicks, shortenLanePath, spanGeometry, type SpanGeometry } from "../ds/chronicleLayout";
 import { Legend, type LegendItem } from "../ds/Legend";
+import { withoutOutcome } from "./outcome";
+import { HealthCounter } from "../ds/HealthCounter";
 
 const WINDOWS = [
   { value: "1", label: "1h" },
@@ -124,24 +125,13 @@ const KIND_KEY: LegendItem[] = (Object.keys(KIND) as ChronicleKind[]).map((k) =>
  */
 const LANE_COL = "md:w-60 md:shrink-0 xl:w-72";
 
-/**
- * A run's summary without the line the agent wrote for the scheduler
- * (`ARGUS_OUTCOME: succeeded`): the tooltip already states the status, and the
- * protocol line said it again in machine form.
- */
-function withoutOutcomeMarker(text: string): string {
-  return text
-    .split("\n")
-    .filter((l) => !l.trim().startsWith("ARGUS_OUTCOME:"))
-    .join("\n")
-    .trim();
-}
-
 function spanTitle(span: ChronicleSpan): string {
   const start = new Date(span.startedAt).toLocaleString();
   const end = span.endedAt ? new Date(span.endedAt).toLocaleString() : "now";
   const parts = [`${span.label}`, `${start} → ${end}`, span.status];
-  const detail = span.detail ? withoutOutcomeMarker(span.detail) : "";
+  // The tooltip already states the status; the agent's protocol line under its
+  // summary said it again in machine form.
+  const detail = withoutOutcome(span.detail);
   if (detail) parts.push(detail);
   if (span.costUsd != null) parts.push(formatUsd(span.costUsd));
   return parts.join("\n");
@@ -409,7 +399,7 @@ export default function Chronicle() {
               !error && (
                 <EmptyState
                   icon="history"
-                  title="Nothing happened in this window."
+                  title="Nothing happened in this window"
                   action={
                     <>
                       {wider && (
@@ -469,7 +459,7 @@ export default function Chronicle() {
                         </span>
                       ))}
                       <span className="absolute right-0 top-1 text-micro font-semibold text-eye">
-                        now
+                        Now
                       </span>
                     </div>
                   </div>

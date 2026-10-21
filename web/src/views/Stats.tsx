@@ -551,7 +551,7 @@ export default function Stats() {
             <div className="mb-10">
               <EmptyState
                 icon="activity"
-                title="No usage stats found yet."
+                title="No usage stats found yet"
                 action={
                   <>
                     <Button icon="retry" onClick={() => refresh()}>

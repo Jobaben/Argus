@@ -44,6 +44,7 @@ import {
   stepIndex,
   trackTime,
 } from "./recorderTrack";
+import { firstProseLine } from "./outcome";
 
 /**
  * The Flight Recorder.
@@ -129,16 +130,13 @@ const FAILURE_MESSAGE_MAX = 240;
  * What the failure strip says: the failing event's label — minus a leading
  * "Failed —", which the strip's own badge already says — and the first line of
  * its detail when that adds anything. The protocol line an agent prints for
- * the scheduler (`ARGUS_OUTCOME: …`) is not a reason a person needs to read.
+ * the scheduler is not a reason a person needs to read, though the reason it
+ * carries is, when the detail has nothing else to say.
  */
 function failureSummary(event: RecorderEvent): { subject: string; message: string } {
   const stripped = event.label.replace(/^Failed\s*[—–-]\s*/, "").trim();
   const subject = stripped ? stripped[0].toUpperCase() + stripped.slice(1) : event.label;
-  const first =
-    (event.detail ?? "")
-      .split("\n")
-      .map((line) => line.trim())
-      .find((line) => line !== "" && !line.startsWith("ARGUS_OUTCOME:")) ?? "";
+  const first = firstProseLine(event.detail);
   const clipped =
     first.length > FAILURE_MESSAGE_MAX ? `${first.slice(0, FAILURE_MESSAGE_MAX - 1)}…` : first;
   return { subject, message: clipped && !subject.includes(clipped) ? clipped : "" };
@@ -369,7 +367,7 @@ function NowPanel({ event }: { event: RecorderEvent | null }) {
               <span className={chipClass()}>{event.tool}</span>
             )}
             {event.errored && event.kind !== "error" && (
-              <span className={chipClass("fail")}>error</span>
+              <span className={chipClass("fail")}>Error</span>
             )}
             {event.durationMs != null && (
               <span className="text-caption text-ink-faint">took {formatMs(event.durationMs)}</span>
@@ -385,11 +383,16 @@ function NowPanel({ event }: { event: RecorderEvent | null }) {
           {event.path && (
             <p className="mt-2 break-all font-mono text-caption text-ink-dim">
               {event.path}
+              {/* A zero is quiet: an edit that only added lines read "−0" in red. */}
               {event.added != null && (
                 <>
                   {" "}
-                  <span className="text-ok">+{event.added}</span>{" "}
-                  <span className="text-fail">−{event.removed ?? 0}</span>
+                  <span className={event.added ? "text-ok" : "text-ink-faint"}>
+                    +{event.added}
+                  </span>{" "}
+                  <span className={event.removed ? "text-fail" : "text-ink-faint"}>
+                    −{event.removed ?? 0}
+                  </span>
                 </>
               )}
             </p>
@@ -1043,19 +1046,19 @@ export default function FlightRecorder() {
               <h2 className="eyebrow">Timeline</h2>
               {/* The shortcuts were real and invisible. A pointer user is the one
                   who would gain most from knowing them, and on a phone there is
-                  no keyboard to mention. The keycaps are set at the type floor:
-                  the utility's own 0.78em came to 9px inside a caption. */}
+                  no keyboard to mention. In a caption the keycaps land on the
+                  type floor, which the utility itself holds them to. */}
               <p className="hidden flex-wrap items-center gap-x-4 gap-y-1 text-caption text-ink-faint sm:flex">
                 <span className="inline-flex items-center gap-1.5">
-                  <kbd className="kbd text-micro!">Space</kbd> play or pause
+                  <kbd className="kbd">Space</kbd> play or pause
                 </span>
                 <span className="inline-flex items-center gap-1.5">
-                  <kbd className="kbd text-micro!">←</kbd>
-                  <kbd className="kbd text-micro!">→</kbd> step
+                  <kbd className="kbd">←</kbd>
+                  <kbd className="kbd">→</kbd> step
                 </span>
                 {failureIndex != null && (
                   <span className="inline-flex items-center gap-1.5">
-                    <kbd className="kbd text-micro!">F</kbd> failure
+                    <kbd className="kbd">F</kbd> failure
                   </span>
                 )}
               </p>

@@ -137,7 +137,7 @@ describe("Sentinel", () => {
     };
     render(<Sentinel />);
     expect(screen.queryByRole("button", { name: "Acknowledge" })).not.toBeInTheDocument();
-    expect(screen.getByText(/acknowledged by ada/)).toBeInTheDocument();
+    expect(screen.getByText(/Acknowledged by ada/)).toBeInTheDocument();
   });
 
   it("regression: the diagnostic's remediation is labelled as proposed, not done", () => {
@@ -246,7 +246,7 @@ describe("Sentinel", () => {
   it("an escalated incident shows the level it reached", () => {
     state.state = { ...emptyState(), incidents: [incident({ level: 2 })] };
     render(<Sentinel />);
-    expect(screen.getByText("level 2")).toBeInTheDocument();
+    expect(screen.getByText("Level 2")).toBeInTheDocument();
   });
 
   it("an incident carrying a run links straight to its recording", () => {
@@ -353,7 +353,7 @@ describe("Sentinel — policy edges and states", () => {
       ],
     };
     render(<Sentinel />);
-    expect(screen.getByRole("link", { name: "issue" })).toHaveAttribute("href", "#/issues");
+    expect(screen.getByRole("link", { name: "Issue" })).toHaveAttribute("href", "#/issues");
   });
 
   it("dispatching a diagnostic calls through, and says re-diagnose once one exists", async () => {
