@@ -1,5 +1,10 @@
-import { readRun } from "../sources/runs.js";
+import path from "node:path";
+import type { GateDecision } from "@argus/contracts";
+import { readRun, runInvocationDir } from "../sources/runs.js";
+import { readGateDecisions } from "../sources/gateDecisions.js";
 import { classifyOutcomeMarker } from "../harness/completion.js";
+import { log } from "../log.js";
+import { REVISION_NOTES_MAX_CHARS } from "./constants.js";
 import type {
   VerificationReport,
   PhaseFailureClass,
@@ -8,6 +13,7 @@ import type {
   OutcomeMarkerKind,
   RetryableClass,
   PipelineDefinition,
+  PipelineInstance,
 } from "../sources/pipelineTypes.js";
 import type { Run } from "../sources/scheduleTypes.js";
 
@@ -211,4 +217,93 @@ export async function buildRetryNote(
     attempt,
     maxAttempts: policy?.attempts ?? attempt,
   });
+}
+
+/** One revise decision's note, as a later attempt of its phase is told it. */
+export interface RevisionNote {
+  /** The attempt the note revised (0-based, as the gate-decisions API counts). */
+  attempt: number;
+  note: string;
+}
+
+/**
+ * Every revise note this phase received in this instance, oldest first, read
+ * from the durable gate-decisions record when an attempt is planned. Only a
+ * decision linked to the instance took effect, so an unlinked (not-applied)
+ * record is left out. Reading the record instead of carrying the note forward
+ * is what keeps a note across every launch path: a second revise, a retry
+ * after a revise, and a launch recovery owed after a restart.
+ */
+export async function revisionHistory(
+  inst: PipelineInstance,
+  phaseId: string,
+): Promise<RevisionNote[]> {
+  const linked = new Set(inst.gateDecisionIds ?? []);
+  if (linked.size === 0) return [];
+  let decisions: GateDecision[];
+  try {
+    decisions = await readGateDecisions(inst.id);
+  } catch (e) {
+    log.error("revision notes could not be read; the attempt starts without them", {
+      instanceId: inst.id,
+      phaseId,
+      err: e,
+    });
+    return [];
+  }
+  return decisions
+    .filter((d) => d.decision === "revise" && linked.has(d.id))
+    .sort((a, b) => a.recordedAt.localeCompare(b.recordedAt))
+    .flatMap((d) => {
+      const ref = d.phases[0];
+      return ref?.phaseId === phaseId && d.note?.trim()
+        ? [{ attempt: ref.attempt, note: d.note }]
+        : [];
+    });
+}
+
+/** Where a run's revision notes go in full when they did not all fit its prompt. */
+export function revisionNotesFile(runId: string): string {
+  return path.join(runInvocationDir(runId), "notes", "revision-notes.md");
+}
+
+/**
+ * The block a phase's revision notes add to a prompt, and the full text when
+ * the block had to leave some out.
+ *
+ * Every note is one line, oldest first, labelled with the attempt it revised.
+ * Past {@link REVISION_NOTES_MAX_CHARS} the oldest note stays (it usually
+ * frames the rest), then as many of the newest as fit, and a marker names the
+ * file that holds them all.
+ *
+ * Pure, so the bound is unit-testable without a gate decision on disk.
+ */
+export function revisionNotes(
+  history: RevisionNote[],
+  fullPath: string,
+): { text: string; full: string | null } {
+  if (history.length === 0) return { text: "", full: null };
+  const head = "\n\nRevision notes, oldest first:";
+  const lines = history.map(
+    (n) => `- After attempt ${n.attempt}: ${n.note.trim().replace(/\r?\n/g, "\n  ")}`,
+  );
+  const all = `${head}\n${lines.join("\n")}`;
+  if (all.length <= REVISION_NOTES_MAX_CHARS) return { text: all, full: null };
+
+  const marker = (omitted: number): string =>
+    `- [… ${omitted} note${omitted === 1 ? "" : "s"} omitted for length; all ${lines.length} are in ${fullPath} …]`;
+  // Sized with the largest marker, so a shorter final one can only fit better.
+  let size = head.length + 1 + lines[0].length + 1 + marker(lines.length - 1).length;
+  const newest: string[] = [];
+  for (let i = lines.length - 1; i >= 1; i--) {
+    if (size + 1 + lines[i].length > REVISION_NOTES_MAX_CHARS) break;
+    newest.unshift(lines[i]);
+    size += 1 + lines[i].length;
+  }
+  const omitted = lines.length - 1 - newest.length;
+  const kept = omitted > 0 ? [lines[0], marker(omitted), ...newest] : [lines[0], ...newest];
+  return {
+    text: `${head}\n${kept.join("\n")}`,
+    full: `Revision notes, oldest first:\n${lines.join("\n")}\n`,
+  };
 }

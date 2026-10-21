@@ -76,6 +76,9 @@ export const ARGUS_PER_INVOCATION_IDENTIFIERS: readonly string[] = [
   "ARGUS_CHANGE_REQUEST_FILE",
   "ARGUS_CHANGE_PROPOSAL_FILE",
   "ARGUS_CHANGE_CONTEXT_FILE",
+  // Every revise note of this one run's phase, in full. Inherited, a nested
+  // child would read another run's notes as its own.
+  "ARGUS_REVISION_NOTES_FILE",
 ];
 
 /** The baseline that `inherit: "minimal"` passes through even without `allow`. */

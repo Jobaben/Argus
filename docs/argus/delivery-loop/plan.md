@@ -121,7 +121,7 @@ Status legend: ⬜ not started · 🟡 in progress · 🔵 staged for review · 
 | Status | #             | Workstream                                                                   | Branch / home                                 | Why here                                                                  | Depends on                                              |
 | ------ | ------------- | ---------------------------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------- |
 | 🟡     | DL-A0         | Close out the setup-folder feature (#94): Windows done gate, probes, release | – (probes on this machine; `argus release`)   | Merged but not verified on Windows; the pipeline moves onto it            | – (can run alongside)                                   |
-| ⬜     | DL-A1         | Revise notes accumulate                                                      | `fix/revise-notes-accumulate`                 | Gates are the human control in this model; a lost note is a lost decision | –                                                       |
+| ✅     | DL-A1         | Revise notes accumulate                                                      | `fix/revise-notes-accumulate`                 | Gates are the human control in this model; a lost note is a lost decision | –                                                       |
 | ⬜     | DL-A2a        | Spawn phases                                                                 | `feat/spawn-phases`                           | The core gap: one lane, branch and PR per task                            | –                                                       |
 | ⬜     | DL-A2b        | The parent's view of its children                                            | `feat/spawn-children-context`                 | Learn over the whole instance                                             | DL-A2a                                                  |
 | ⬜     | DL-A2c        | Spawn phases on the board                                                    | `feat/spawn-board`                            | Seeing children, deciding at the `children` pause                         | DL-A2a (contracts)                                      |
@@ -163,7 +163,7 @@ Release after each merged DL-A workstream, as the reliability plan does. DL-A1, 
 
 ### DL-A1 — Revise notes accumulate
 
-**Status:** ⬜ · **Branch:** `fix/revise-notes-accumulate` · **Size:** S–M (about a day) · **Behaviour change.**
+**Status:** ✅ Merged to `main` on 2026-10-21; not released yet, so the pinned server still runs without it · **Branch:** `fix/revise-notes-accumulate` · **Size:** S–M (about a day) · **Behaviour change.**
 
 **Today:**
 

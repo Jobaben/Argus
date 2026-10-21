@@ -602,6 +602,10 @@ export interface AgentInvocationRecord {
    *  (`ARGUS_ACCEPTANCE_VERIFICATION_FILE`). Null on a phase that is not an
    *  acceptance-verification phase; absent on records before Phase 8. */
   acceptanceVerificationFile?: string | null;
+  /** Where every revise note of the phase was written in full
+   *  (`ARGUS_REVISION_NOTES_FILE`), when the prompt could not carry them all.
+   *  Absent otherwise. */
+  revisionNotesFile?: string;
   /**
    * Every Argus-owned channel this invocation was offered, with the access it
    * needs and whether the runtime could honour it. A channel `unavailable`
@@ -850,6 +854,7 @@ export type InvocationChannelKind =
   | "implementation-scope"
   | "remediation-context"
   | "acceptance-verification"
+  | "revision-notes"
   | "artifact-dir"
   | "memory-dir";
 

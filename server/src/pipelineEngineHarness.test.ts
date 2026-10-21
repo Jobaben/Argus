@@ -4,7 +4,8 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } fro
 import { spawn as nodeSpawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { retryNote, failureClassOfRecord } from "./pipelineEngine.js";
+import { retryNote, failureClassOfRecord, revisionNotes } from "./pipelineEngine.js";
+import { REVISION_NOTES_MAX_CHARS } from "./engine/constants.js";
 import { phaseArtifactDir } from "./harness/invocation.js";
 import { paths } from "./claudeHome.js";
 import { isAlive } from "./scheduler.js";
@@ -409,7 +410,9 @@ test("the prompt names the channel paths and ends with the revision note, on a q
   for (const call of rec.calls.slice(2)) {
     const prompt: string = call.run.prompt;
     assert.ok(
-      prompt.endsWith(`${call.env.ARGUS_ARTIFACT_DIR}\n\nRevision note: tighten the intro`),
+      prompt.endsWith(
+        `${call.env.ARGUS_ARTIFACT_DIR}\n\nRevision notes, oldest first:\n- After attempt 0: tighten the intro`,
+      ),
       prompt,
     );
     assert.ok(
@@ -423,6 +426,110 @@ test("the prompt names the channel paths and ends with the revision note, on a q
 });
 
 // ── 6. deadline enforcement ──────────────────────────────────────────────────
+
+test("revision notes past the bound go to ARGUS_REVISION_NOTES_FILE, a granted optional read channel", async () => {
+  const { engine, pipelines, instances } = await load();
+  await seed(pipelines, [
+    {
+      id: "draft",
+      name: "Draft",
+      cwd: home,
+      gated: true,
+      capabilities: { filesystem: "read-only" },
+      steps: [{ name: "a", prompt: "write A" }],
+    },
+  ]);
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const inst = await e.start("p1", "manual");
+  const finish = async (i: number) => {
+    const runId = rec.calls[i].run.id;
+    await e.onSignal(inst!.id, {
+      instanceId: inst!.id,
+      phaseId: "draft",
+      runId,
+      type: "completed",
+      token: testRunToken(runId),
+      payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
+    });
+    rec.dones[i].resolve({ code: 0 });
+    await waitFor(
+      async () => (await instances.readInstance(inst!.id)).status === "awaiting-approval",
+    );
+  };
+
+  const notes = Array.from({ length: 5 }, (_, i) => String(i).repeat(1990));
+  for (let i = 0; i < notes.length; i++) {
+    await finish(i);
+    assert.equal((await e.revise(inst!.id, notes[i], { phaseId: "draft" })).ok, true);
+    await waitFor(() => rec.calls.length === i + 2);
+  }
+
+  assert.equal(rec.calls[1].env.ARGUS_REVISION_NOTES_FILE, undefined, "one note fits: no file");
+  const last = rec.calls[5];
+  const file = last.env.ARGUS_REVISION_NOTES_FILE;
+  assert.ok(file, "five long notes do not fit, so the file is offered");
+  const text = readFileSync(file, "utf8");
+  notes.forEach((n, i) => assert.ok(text.includes(`- After attempt ${i}: ${n}`), String(i)));
+  assert.ok(last.run.prompt.includes(`all 5 are in ${file}`), last.run.prompt.slice(-300));
+  assert.equal(last.prepared.record.revisionNotesFile, file);
+  const channel = last.prepared.record.channels.find((c: any) => c.kind === "revision-notes");
+  assert.equal(channel?.status, "granted");
+  assert.equal(channel?.required, false);
+});
+
+test("a retry after a revise carries the revision notes first and the retry note last", async () => {
+  const { engine, pipelines, instances } = await load();
+  await seed(pipelines, [
+    {
+      id: "checked",
+      name: "Checked",
+      cwd: home,
+      gated: false,
+      retry: { attempts: 2, backoffSeconds: 0, retryOn: ["verification"] },
+      checks: [{ kind: "file", path: "missing.txt" }],
+      steps: [{ name: "s", prompt: "p" }],
+    },
+  ]);
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const inst = await e.start("p1", "manual");
+  const complete = async (i: number) => {
+    const runId = rec.calls[i].run.id;
+    await e.onSignal(inst!.id, {
+      instanceId: inst!.id,
+      phaseId: "checked",
+      runId,
+      type: "completed",
+      token: testRunToken(runId),
+      payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
+    });
+    await e.drain();
+  };
+
+  // Attempt 0 fails its check and is retried; attempt 1 fails too, and the phase fails.
+  await complete(0);
+  await e.reconcile();
+  await waitFor(() => rec.calls.length === 2);
+  await complete(1);
+  await waitFor(async () => (await instances.readInstance(inst!.id)).phases[0].status === "failed");
+
+  // The revise restarts it with a fresh retry budget, and that attempt fails its check again.
+  assert.equal((await e.revise(inst!.id, "add missing.txt", { phaseId: "checked" })).ok, true);
+  await waitFor(() => rec.calls.length === 3);
+  await complete(2);
+  await e.reconcile();
+  await waitFor(() => rec.calls.length === 4);
+
+  const prompt: string = rec.calls[3].run.prompt;
+  const notesAt = prompt.indexOf(
+    "\n\nRevision notes, oldest first:\n- After attempt 1: add missing.txt",
+  );
+  const retryAt = prompt.indexOf("\n\nPrevious attempt (1 of 2) failed — verification:");
+  assert.ok(notesAt >= 0, prompt);
+  assert.ok(retryAt > notesAt, "the retry note comes after the revision notes");
+  assert.ok(!prompt.slice(retryAt).includes("Revision notes"), "nothing follows the retry note");
+});
 
 test("a step past its deadline is killed, timed out, and failed", async () => {
   const { engine, pipelines, instances, runsSrc, journalSrc } = await load();
@@ -1032,6 +1139,49 @@ test("reconcile resumes a verification that was running when Argus stopped", asy
   const inst = await instances.readInstance("inst-y");
   assert.equal(inst.phases[0].status, "succeeded");
   assert.equal(inst.phases[0].verification.status, "passed");
+});
+
+// ── 15a. revisionNotes (pure) ───────────────────────────────────────────────
+
+test("revisionNotes: nothing without history; one line per note, oldest first", () => {
+  assert.deepEqual(revisionNotes([], "/r/notes/revision-notes.md"), { text: "", full: null });
+  assert.deepEqual(
+    revisionNotes(
+      [
+        { attempt: 0, note: "first: seven points" },
+        { attempt: 1, note: "  second\nline two  " },
+      ],
+      "/r/notes/revision-notes.md",
+    ),
+    {
+      text:
+        "\n\nRevision notes, oldest first:\n" +
+        "- After attempt 0: first: seven points\n" +
+        "- After attempt 1: second\n  line two",
+      full: null,
+    },
+  );
+});
+
+test("revisionNotes: past the bound keeps the oldest and the newest, and names the file with all", () => {
+  const history = Array.from({ length: 6 }, (_, i) => ({
+    attempt: i,
+    note: String(i).repeat(1990),
+  }));
+  const { text, full } = revisionNotes(history, "/r/notes/revision-notes.md");
+  assert.ok(text.length <= REVISION_NOTES_MAX_CHARS, String(text.length));
+  const kept = text.split("\n").slice(3);
+  assert.equal(kept.length, 4, text);
+  assert.ok(kept[0].startsWith("- After attempt 0: 000"));
+  assert.equal(
+    kept[1],
+    "- [… 3 notes omitted for length; all 6 are in /r/notes/revision-notes.md …]",
+  );
+  assert.ok(kept[2].startsWith("- After attempt 4: 444"));
+  assert.ok(kept[3].startsWith("- After attempt 5: 555"));
+  for (let i = 0; i < 6; i++) {
+    assert.ok(full?.includes(`- After attempt ${i}: ${String(i).repeat(1990)}`), String(i));
+  }
 });
 
 // ── 15. retryNote / failureClassOfRecord (pure) ──────────────────────────────

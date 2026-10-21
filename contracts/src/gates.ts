@@ -118,7 +118,8 @@ export interface GateDecision {
   trajectoryVerdicts?: GateDecisionTrajectoryBasis[];
   /** Whether the approval carried answers (stored on the phase, not here). */
   answersProvided?: boolean;
-  /** A revise note, clipped. It is operator-authored and already reaches the next prompt. */
+  /** A revise note, clipped to 2,000 characters. Operator-authored: every later
+   *  attempt of the phase reads it from this record, oldest first. */
   note?: string;
   /** Written before the transition is attempted (write-ahead). */
   recordedAt: string;
@@ -147,7 +148,8 @@ export interface PendingGateOperation {
   stopRunIds: string[];
   /** Approve only: the answers to apply. */
   answers?: unknown;
-  /** Revise only: the operator's note for the next attempt's prompt. */
+  /** Revise only: the operator's note, clipped as on the decision record. The
+   *  prompt reads it from that record, not from here. */
   note?: string;
   /** Abort only: why, when it was not a decision about this instance alone. */
   cause?: AbortCause;

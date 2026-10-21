@@ -334,6 +334,26 @@ test("revise interrupted just after linking reads incomplete with nothing done y
   assert.equal((await effects(inst.id))[0].effect, "applied");
 });
 
+test("revise interrupted after its save: the launch owed on restart still carries the note", async () => {
+  const h = harness();
+  const { inst } = await atGate(h, h.make());
+  await h
+    .make(failAt("revise:saved"))
+    .revise(inst.id, "keep the seven points")
+    .catch(() => undefined);
+
+  const restarted = h.make();
+  await restarted.reconcile();
+  await restarted.drain();
+  const builds = h.calls.filter((c) => c.env.ARGUS_PHASE_ID === "build");
+  assert.equal(builds.length, 2, "the revised attempt launched once, on restart");
+  const run = (await readRun(builds[1].runId))!.run;
+  assert.match(
+    run.prompt,
+    /Revision notes, oldest first:\n- After attempt 0: keep the seven points/,
+  );
+});
+
 test("abort interrupted just after linking reads incomplete, and the next action on the instance completes it first", async () => {
   const h = harness();
   const { inst } = await atGate(h, h.make(), { sibling: true });

@@ -39,6 +39,7 @@ export const CHANNEL_ENV_VARS = [
   "ARGUS_IMPLEMENTATION_SCOPE_FILE",
   "ARGUS_REMEDIATION_CONTEXT_FILE",
   "ARGUS_ACCEPTANCE_VERIFICATION_FILE",
+  "ARGUS_REVISION_NOTES_FILE",
   "ARGUS_ARTIFACT_DIR",
   "ARGUS_MEMORY_DIR",
 ] as const;
@@ -71,6 +72,9 @@ export interface ChannelInputs {
   /** `ARGUS_ACCEPTANCE_VERIFICATION_FILE`, when the phase declares
    *  `acceptanceVerification` (Phase 8). Null = not an acceptance phase. */
   acceptanceVerificationFile?: string | null;
+  /** `ARGUS_REVISION_NOTES_FILE`, only when the prompt could not carry every
+   *  revise note. Null = the notes, if any, are all in the prompt. */
+  revisionNotesFile?: string | null;
   /** `ARGUS_ARTIFACT_DIR`. */
   artifactDir: string | null;
   /** `ARGUS_MEMORY_DIR`, when the pipeline's `memory` is enabled. */
@@ -90,7 +94,8 @@ export function phaseUsesArtifacts(phaseDef: Pick<PhaseDef, "checks">): boolean 
  * Every channel this invocation offers, in a fixed order (result, delta,
  * context, rule verification, change request, change proposal, change
  * context, implementation scope, remediation context, acceptance
- * verification, artifacts, memory) so records and argv are deterministic.
+ * verification, revision notes, artifacts, memory) so records and argv are
+ * deterministic.
  *
  * Which channels are *required* — the ones a runtime must be able to deliver
  * or the launch is refused under strict enforcement — follows from what the
@@ -131,6 +136,10 @@ export function phaseUsesArtifacts(phaseDef: Pick<PhaseDef, "checks">): boolean 
  *   realizing, a remediation that cannot read what it is remediating, and an
  *   acceptance run that cannot write its outcomes are all launches that could
  *   not succeed.
+ *
+ * The revision-notes file is never required: it repeats in full the notes the
+ * prompt already carries in part, so a run that cannot open it still has the
+ * oldest note and the newest ones.
  */
 export function invocationChannels(inputs: ChannelInputs): InvocationChannel[] {
   const out: InvocationChannel[] = [];
@@ -248,6 +257,17 @@ export function invocationChannels(inputs: ChannelInputs): InvocationChannel[] {
       access: "write",
       required: true,
       label: "acceptance-verification file",
+    });
+  }
+  if (inputs.revisionNotesFile) {
+    out.push({
+      kind: "revision-notes",
+      envVar: "ARGUS_REVISION_NOTES_FILE",
+      path: inputs.revisionNotesFile,
+      dir: path.dirname(inputs.revisionNotesFile),
+      access: "read",
+      required: false,
+      label: "revision-notes file",
     });
   }
   if (inputs.artifactDir) {

@@ -37,7 +37,12 @@ export {
   buildStepPlan,
   buildClaudeArgs,
 } from "./engine/prompts.js";
-export { recoverRunOutcome, failureClassOfRecord, retryNote } from "./engine/outcome.js";
+export {
+  recoverRunOutcome,
+  failureClassOfRecord,
+  retryNote,
+  revisionNotes,
+} from "./engine/outcome.js";
 export type { RetryNoteInput } from "./engine/outcome.js";
 export type {
   PipelineSpawnFn,

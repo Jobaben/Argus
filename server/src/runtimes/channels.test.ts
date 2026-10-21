@@ -103,6 +103,7 @@ test("CHANNEL_ENV_VARS names every channel's variable, in the list's own order",
     implementationScopeFile: "/s/scope.json",
     remediationContextFile: "/m/remediation.json",
     acceptanceVerificationFile: "/a/acceptance.json",
+    revisionNotesFile: "/n/revision-notes.md",
     artifactDir: "/art",
     memoryDir: "/mem",
     phaseDef: {},
@@ -110,6 +111,33 @@ test("CHANNEL_ENV_VARS names every channel's variable, in the list's own order",
   assert.deepEqual(
     all.map((c) => c.envVar),
     [...CHANNEL_ENV_VARS],
+  );
+});
+
+test("the revision-notes file is an optional read channel in its own folder", () => {
+  const [notes] = invocationChannels({
+    resultFile: null,
+    knowledgeDeltaFile: null,
+    revisionNotesFile: "/n/revision-notes.md",
+    artifactDir: null,
+    memoryDir: null,
+    phaseDef: {},
+  });
+  assert.deepEqual(
+    {
+      kind: notes.kind,
+      envVar: notes.envVar,
+      access: notes.access,
+      required: notes.required,
+      dir: notes.dir,
+    },
+    {
+      kind: "revision-notes",
+      envVar: "ARGUS_REVISION_NOTES_FILE",
+      access: "read",
+      required: false,
+      dir: "/n",
+    },
   );
 });
 

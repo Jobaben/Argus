@@ -112,6 +112,7 @@ import type {
   SpawnUnit,
 } from "./types.js";
 import { PreflightError } from "./spawn.js";
+import { revisionHistory, revisionNotes, revisionNotesFile } from "./outcome.js";
 import { isTerminal, resumable } from "../sources/instanceStatus.js";
 import {
   STEP_CONTRACT,
@@ -477,6 +478,10 @@ export function createLaunch(core: EngineCore) {
       }
     }
 
+    // Every revise note this phase received, read once per attempt from the
+    // durable decision record: the same notes for every run of the attempt,
+    // whichever path launched it.
+    const revisions = await revisionHistory(inst, phaseDef.id);
     const planned: PlannedRun[] = [];
     for (const { stepDef, candidate } of units) {
       let workspace = progress.workspace ?? null;
@@ -696,6 +701,8 @@ export function createLaunch(core: EngineCore) {
         ? (deps.newSignalToken?.(binding) ?? mintSignalToken())
         : null;
       run.signalAuth = signalToken ? signalAuthFor(binding, signalToken) : { scheme: "none" };
+      const notesFile = revisionNotesFile(runId);
+      const notes = revisionNotes(revisions, notesFile);
       planned.push({
         stepDef,
         run,
@@ -711,6 +718,10 @@ export function createLaunch(core: EngineCore) {
         realization: plannedRealization,
         acceptance: plannedAcceptance,
         signalToken,
+        revisionNotes: {
+          text: notes.text,
+          file: notes.full === null ? null : { path: notesFile, contents: notes.full },
+        },
       });
     }
     // Record the runIds on the instance up front, then persist once (no write races).
@@ -813,7 +824,8 @@ export function createLaunch(core: EngineCore) {
           realization: unit.realization,
           acceptance: unit.acceptance,
           signalToken: unit.signalToken,
-          noteSuffix,
+          noteSuffix: unit.revisionNotes.text + noteSuffix,
+          revisionNotesFile: unit.revisionNotes.file,
         },
       });
     }
@@ -1168,6 +1180,9 @@ export function createLaunch(core: EngineCore) {
     if (remediationFile) env.ARGUS_REMEDIATION_CONTEXT_FILE = remediationFile;
     const acceptanceFile = ctx.acceptance ? acceptanceVerificationFile(run.id) : null;
     if (acceptanceFile) env.ARGUS_ACCEPTANCE_VERIFICATION_FILE = acceptanceFile;
+    // Every revise note in full, only when the prompt's block left some out:
+    // an optional read channel, so a profiled run can open it.
+    if (ctx.revisionNotesFile) env.ARGUS_REVISION_NOTES_FILE = ctx.revisionNotesFile.path;
     // The channel paths, now that every one is known, then the retry note —
     // still last, after everything Argus says about this run. Only a run with
     // a capability profile is told the paths: a profile is what can deny the
@@ -1239,6 +1254,7 @@ export function createLaunch(core: EngineCore) {
         implementationScopeFile: scopeFile,
         remediationContextFile: remediationFile,
         acceptanceVerificationFile: acceptanceFile,
+        revisionNotesFile: ctx.revisionNotesFile?.path ?? null,
         suppliedInputs,
         knowledgeContext:
           contextFile && resolvedContext
@@ -1291,6 +1307,10 @@ export function createLaunch(core: EngineCore) {
       for (const file of ctx.contextFiles) {
         await mkdir(path.dirname(file.path), { recursive: true });
         await writeFile(file.path, file.contents, "utf8");
+      }
+      if (ctx.revisionNotesFile) {
+        await mkdir(path.dirname(ctx.revisionNotesFile.path), { recursive: true });
+        await writeFile(ctx.revisionNotesFile.path, ctx.revisionNotesFile.contents, "utf8");
       }
     } catch (e) {
       await writeRun({
@@ -1401,7 +1421,6 @@ export function createLaunch(core: EngineCore) {
     def: PipelineDefinition,
     transitioned: PipelineInstance,
     ready: number[],
-    suffix = "",
   ): void {
     if (ready.length === 0) return;
     const wantIds = ready.map((i) => transitioned.phases[i].id);
@@ -1425,7 +1444,7 @@ export function createLaunch(core: EngineCore) {
           const stillWanted = wantIds
             .map((id) => fresh.phases.findIndex((p) => p.id === id))
             .filter((i) => i >= 0 && fresh.phases[i].status === "running");
-          await startPhases(def, fresh, stillWanted, suffix);
+          await startPhases(def, fresh, stillWanted);
         })
         .catch((e: unknown) => log.error("deferred phase start failed", { instanceId, err: e }))
         .finally(() => {

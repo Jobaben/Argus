@@ -758,6 +758,7 @@ writes its report, its decision and its proposal there.
 | Implementation scope    | `ARGUS_IMPLEMENTATION_SCOPE_FILE`    | Argus → agent | **read**        | the phase declares `implementation` — always required then: the run was authored to realize that scope. Where the ledger says the change lives, with a closed reason code per target. `invocations/<runId>/implementation-scope.json`, per run, `0444`, re-hashed at completion (KNOWLEDGE-LEDGER.md §17.5)                               |
 | Remediation context     | `ARGUS_REMEDIATION_CONTEXT_FILE`     | Argus → agent | **read**        | the attempt is a remediation (2..n) — always required then. The exact rules and criteria the previous attempt left unmet, from Argus's own accepted results rather than the previous agent's transcript. `invocations/<runId>/remediation-context.json`, per run, `0444`, re-hashed at completion (KNOWLEDGE-LEDGER.md §17.10)            |
 | Acceptance verification | `ARGUS_ACCEPTANCE_VERIFICATION_FILE` | agent → Argus | write           | the phase declares `acceptanceVerification` — always required then: the criterion outcomes _are_ the phase's output. `acceptance-verifications/<runId>/acceptance.json`, a directory per run (KNOWLEDGE-LEDGER.md §17.7)                                                                                                                  |
+| Revision notes          | `ARGUS_REVISION_NOTES_FILE`          | Argus → agent | **read**        | never required. Offered only when the phase's revise notes did not all fit the prompt (§13, _Revision notes_): every note in full, oldest first. `invocations/<runId>/notes/revision-notes.md`, in a folder of its own so the read rule covers nothing else                                                                               |
 
 The model (`harness/channels.ts`, `InvocationChannel` in `runtimes/types.ts`):
 `prepareInvocation` builds **one** list of channels — kind, env var, path, the
@@ -801,8 +802,8 @@ no KnowledgeDelta and no file artifacts, with or without a profile, launches
 exactly as it always did.
 
 For a run with a capability profile, every channel's path also travels in the
-run's own prompt, after Argus's other instructions and before any retry or
-revision note (`channelInstruction` in `engine/prompts.ts`, appended by
+run's own prompt, after Argus's other instructions and before any revision
+notes or retry note (`channelInstruction` in `engine/prompts.ts`, appended by
 `launchStep` once the paths are known). A read-only profile denies the shell,
 and with it the only way an agent could read its environment. A run without a
 profile keeps its shell and its prompt exactly as before, and the system prompt
@@ -1953,9 +1954,10 @@ run long, so they are never capped.
 **Placement.** A step's prompt is the agent's own words, first. Everything
 Argus injects rides _after_ it, in a fixed order, short: the result
 instruction (§ pipelineEngine.ts `resultInstruction`), the artifact
-instruction (`artifactInstruction`), the memory instruction (below), and
-last — because recency is what a model weighs most, and a retry note is the
-part most worth remembering — the retry note (§ Retry feedback, below). None
+instruction (`artifactInstruction`), the memory instruction (below), then
+the channel paths (§3a), the phase's revision notes (§ Revision notes, below),
+and last — because recency is what a model weighs most, and a retry note is
+the part most worth remembering — the retry note (§ Retry feedback, below). None
 of this reorders the `OUTCOME_CONTRACT` system-prompt mechanism (§1), which is
 a pure constant carried separately so the prompt cache prefix holds across
 every run.
@@ -2037,6 +2039,37 @@ last in the prompt (above):
 | `unverified`   | The refusal reason: for a missing or conflicting marker, what was found and that a single `ARGUS_OUTCOME` marker is required; for a stop-hook disagreement, the two readings.            |
 
 `configuration` failures are never retried (§2) and so never get a note.
+
+### Revision notes
+
+A revise note is a person's correction, and a phase can be revised more than
+once. Every attempt after a revise is told **every** note its phase received in
+this instance, oldest first — not only the latest:
+
+```
+Revision notes, oldest first:
+- After attempt 0: <the first note>
+- After attempt 1: <the second note>
+```
+
+- **Where they come from.** `startPhase` reads them once per attempt from the
+  durable gate-decisions record (`revisionHistory` in `engine/outcome.ts`):
+  decisions of kind `revise`, with a note, about this phase, and linked to the
+  instance (`gateDecisionIds`). A decision recorded but never linked did not
+  take effect and is left out. Reading the record rather than carrying the
+  note forward is what keeps it on every launch path: a second revise, a
+  retry or remediation after a revise, and a launch recovered after a restart
+  (§18) all carry the same notes.
+- **Clipping and the bound.** A note is clipped to 2,000 characters when it is
+  submitted, and the record, the pending operation and every prompt carry the
+  same text. The block is bounded at 8,000 characters: past it, the oldest
+  note stays (it usually frames the rest), then as many of the newest as fit,
+  and a marker names `ARGUS_REVISION_NOTES_FILE`, an optional read channel
+  (§3a) holding every note in full.
+- **Placement.** After the channel paths and before the retry note, which stays
+  last (§ Placement, above).
+- An attempt already running when Argus is upgraded keeps the prompt it was
+  launched with.
 
 ### Stalls
 

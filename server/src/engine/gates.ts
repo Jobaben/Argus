@@ -35,6 +35,7 @@ import type {
 import type { TransitionResult } from "../pipelineTransitions.js";
 import { log } from "../log.js";
 import { isTerminal } from "../sources/instanceStatus.js";
+import { REVISE_NOTE_MAX } from "./constants.js";
 import type {
   ActionResult,
   AutomatedApproval,
@@ -201,11 +202,10 @@ export function createGates(core: EngineCore) {
     T(applyGateComplete(inst));
     await saveInstance(inst);
     await probe("revise:saved", inst.id);
-    return {
-      instance: inst,
-      startPhases: startIdx,
-      suffix: op.note ? `\n\nRevision note: ${op.note}` : "",
-    };
+    // The note reaches the new attempt from the durable decision record when
+    // the attempt is planned (engine/outcome.ts `revisionHistory`), so it
+    // survives every launch path, not only this one.
+    return { instance: inst, startPhases: startIdx };
   }
 
   /** Step 4–5 for an abort. Idempotent: stopping a dead run is a no-op, an
@@ -314,7 +314,7 @@ export function createGates(core: EngineCore) {
       });
       const def = await defFor(done.instance);
       if (def && done.startPhases.length > 0) {
-        queueReadyPhases(inst.id, def, done.instance, done.startPhases, done.suffix);
+        queueReadyPhases(inst.id, def, done.instance, done.startPhases);
       }
       deps.onChange?.();
       const fresh = await readInstance(instanceId);
@@ -634,7 +634,9 @@ export function createGates(core: EngineCore) {
       const stale = attemptMismatch(target, options.attempt);
       if (stale) return stale;
       const source = options.source ?? UNSPECIFIED;
-      const clipped = typeof note === "string" && note ? note.slice(0, 2000) : undefined;
+      // Clipped once, here: the record and the pending operation carry the
+      // same text, and so does every prompt that repeats it.
+      const clipped = typeof note === "string" && note ? note.slice(0, REVISE_NOTE_MAX) : undefined;
       const written = await writeDecision({
         instanceId: inst.id,
         pipelineId: inst.pipelineId,
@@ -654,11 +656,11 @@ export function createGates(core: EngineCore) {
         // legitimately running is not part of this decision, and killing it
         // would be a silent abort.
         stopRunIds: stopTargets([target]),
-        ...(typeof note === "string" && note ? { note } : {}),
+        ...(clipped ? { note: clipped } : {}),
       });
       if (unlinked) return unlinked;
       const done = await continueRevise(inst, inst.pendingGateOperation!);
-      await startPhases(def, done.instance, done.startPhases, done.suffix);
+      await startPhases(def, done.instance, done.startPhases);
       deps.onChange?.();
       return { ok: true, code: 200 };
     });

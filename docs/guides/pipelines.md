@@ -321,6 +321,10 @@ mean _unknown_, not _parallel_.
   failed once nothing is left that could progress.
 - **Revise** touches only the phase you revised; a sibling that is legitimately
   running is not silently aborted. **Abort** stops everything.
+- **Revise notes add up.** Every later attempt of the phase gets every note
+  you gave it, oldest first, not only the latest, so a short second note
+  never erases a long first one. Notes are clipped to 2,000 characters each.
+  See [HARNESS.md § Revision notes](../HARNESS.md#revision-notes).
 
 **Retries.** A phase may declare `attempts`, a `backoffSeconds` that doubles
 each time (capped at an hour), and which failures are worth retrying:

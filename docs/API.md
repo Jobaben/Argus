@@ -2071,7 +2071,8 @@ only for text and is clipped at 512 KiB, in which case `truncated` is `true`.
 `400` when `path` is missing, absolute, or escapes the directory; `404` for an
 unknown instance, phase or file, or a phase with no artifact directory. The
 viewer is read-only — there is no write route; the human's revision travels as
-the `note` on `POST /api/instances/:id/revise`.
+the `note` on `POST /api/instances/:id/revise`. Every later attempt of that
+phase gets all of its notes, oldest first ([HARNESS.md § Revision notes](HARNESS.md#revision-notes)).
 
 ### `GET /api/instances/:id/transitions/integrity`
 
@@ -2986,7 +2987,7 @@ session — it cannot execute anything.
 | `GET /api/instances/:id/transitions/integrity`          | compare the instance's transition log with the saved instance → `TransitionIntegrityReport`; `404` for an unknown or invalid id; diagnostic only                                                                                                                                                                                           |
 | `GET /api/instances/:id/gate-decisions`                 | the recorded gate decisions (approve / revise / abort) and how each was made, plus gated phases with no decision on record; `404` when neither the instance nor any record exists                                                                                                                                                          |
 | `POST /api/instances/:id/approve`                       | advance past a gate (optional `{ answers, phaseId, attempt }`) — **admin**                                                                                                                                                                                                                                                                 |
-| `POST /api/instances/:id/revise`                        | re-run the paused phase with the human's note (optional `{ note, phaseId, attempt }`) — **admin**                                                                                                                                                                                                                                          |
+| `POST /api/instances/:id/revise`                        | re-run the paused phase with the human's note (optional `{ note, phaseId, attempt }`; the note is clipped to 2000 chars, and every later attempt gets all the phase's notes) — **admin**                                                                                                                                                   |
 | `POST /api/instances/:id/abort`                         | abort the instance — **admin**                                                                                                                                                                                                                                                                                                             |
 | `GET /api/setup`                                        | prerequisite status `{ ok, prereqs[] }`                                                                                                                                                                                                                                                                                                    |
 | `POST /api/setup/apply`                                 | install fixable prerequisites, then re-check → `{ ok, prereqs[] }`                                                                                                                                                                                                                                                                         |
@@ -3153,6 +3154,7 @@ the web UI's setup banner installs the fixable ones with `POST /api/setup/apply`
 | `ARGUS_CHANGE_REQUEST_FILE`    | the requested change and the current conformance of the rules a `changeIntent` phase's step must classify; read-only (KNOWLEDGE-LEDGER.md §16.4) |
 | `ARGUS_CHANGE_PROPOSAL_FILE`   | where a `changeIntent` phase's step writes its ChangeProposal (KNOWLEDGE-LEDGER.md §16.5)                                                        |
 | `ARGUS_CHANGE_CONTEXT_FILE`    | the accepted ChangeProposal a `changeContext` phase's step implements, as exact canonical refs; read-only (KNOWLEDGE-LEDGER.md §16.11)           |
+| `ARGUS_REVISION_NOTES_FILE`    | every revise note of the step's phase in full, oldest first; set only when they did not all fit the prompt; read-only (HARNESS.md §13)           |
 | `ARGUS_MAX_CONCURRENT_RUNS`    | cap on concurrent `claude -p` processes (default 4)                                                                                              |
 
 ## Knowledge Ledger

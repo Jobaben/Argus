@@ -72,6 +72,9 @@ export interface PlannedRun {
   /** This run's own signal token, held in memory only until it is handed to
    *  the process. Null = its runtime has no signal hook, so it gets none. */
   signalToken: string | null;
+  /** The phase's revise notes as this run's prompt carries them (oldest
+   *  first, bounded), and every note in full when the bound left some out. */
+  revisionNotes: { text: string; file: { path: string; contents: string } | null };
 }
 
 /**
@@ -357,9 +360,13 @@ export interface LaunchContext {
   acceptance: PlannedAcceptance | null;
   /** The run's own signal token, or null when its runtime has no hook. */
   signalToken: string | null;
-  /** A retry or revision note, appended at launch after the channel paths so
-   *  it stays the last thing the prompt says. Empty on a first attempt. */
+  /** The phase's revision notes, then a retry note, appended at launch after
+   *  the channel paths so the retry note stays the last thing the prompt
+   *  says. Empty on a first attempt. */
   noteSuffix: string;
+  /** Every revision note in full, for the run's `ARGUS_REVISION_NOTES_FILE`.
+   *  Null unless the prompt's block had to leave notes out. */
+  revisionNotesFile: { path: string; contents: string } | null;
 }
 
 /**
@@ -422,6 +429,5 @@ export type ProposalIntake =
 export interface Continued {
   instance: PipelineInstance;
   startPhases: number[];
-  suffix?: string;
   routing?: TransitionResult["routing"];
 }

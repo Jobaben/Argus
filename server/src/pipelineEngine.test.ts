@@ -23,6 +23,7 @@ import * as runsMod from "./sources/runs.js";
 import * as totalsMod from "./sources/totals.js";
 import { readJournal } from "./sources/journal.js";
 import { testRunToken } from "./testSignalToken.js";
+import { appendGateDecision } from "./sources/gateDecisions.js";
 
 async function load() {
   // Loosely typed, as the dynamic imports these replaced were: the tests read
@@ -1731,7 +1732,7 @@ test("approve and revise act on the named phase, and refuse one that is not paus
   await waitFor(() => rec.calls.length === 2);
   assert.equal(rec.calls[1].env.ARGUS_PHASE_ID, "brainstorm");
   const run = (await runsMod.readRun(rec.calls[1].runId))!.run;
-  assert.match(run.prompt, /Revision note: tighten the intro/);
+  assert.match(run.prompt, /Revision notes, oldest first:\n- After attempt 0: tighten the intro/);
   let cur = await instances.readInstance(inst!.id);
   assert.equal(cur.phases[0].status, "running");
   assert.equal(cur.phases[0].attempt, 1, "one revise past the first attempt (0)");
@@ -1774,6 +1775,59 @@ function completedSignal(instanceId: string, phaseId: string, runId: string) {
     payload: { last_assistant_message: "done\nARGUS_OUTCOME: succeeded" },
   };
 }
+
+test("every revise note reaches the next attempt, oldest first; a record that never took effect does not", async () => {
+  const { engine, pipelines } = await load();
+  await seedPipeline(pipelines);
+  const rec = recordingSpawn();
+  const e = engine.createEngine(baseDeps({ spawn: rec.spawn }));
+  const inst = await e.start("p1", "manual");
+  const ask = (i: number) =>
+    e.onSignal(inst!.id, {
+      instanceId: inst!.id,
+      phaseId: "brainstorm",
+      runId: rec.calls[i].runId,
+      type: "needs-input",
+      token: testRunToken(rec.calls[i].runId),
+    });
+
+  await ask(0);
+  assert.equal(
+    (await e.revise(inst!.id, "first: seven points", { phaseId: "brainstorm" })).ok,
+    true,
+  );
+  await waitFor(() => rec.calls.length === 2);
+  // Recorded but never linked to the instance: it did not take effect.
+  await appendGateDecision({
+    id: "GD-never-linked",
+    instanceId: inst!.id,
+    pipelineId: "p1",
+    decision: "revise",
+    mechanism: "unspecified",
+    channel: "in-process",
+    principal: { kind: "unknown" },
+    phases: [{ phaseId: "brainstorm", attempt: 1, status: "awaiting-approval", runIds: [] }],
+    note: "never applied",
+    recordedAt: new Date().toISOString(),
+  });
+  await ask(1);
+  assert.equal(
+    (await e.revise(inst!.id, "second: fix the name", { phaseId: "brainstorm" })).ok,
+    true,
+  );
+  await waitFor(() => rec.calls.length === 3);
+
+  const run = (await runsMod.readRun(rec.calls[2].runId))!.run;
+  assert.ok(
+    run.prompt.endsWith(
+      "\n\nRevision notes, oldest first:\n" +
+        "- After attempt 0: first: seven points\n" +
+        "- After attempt 1: second: fix the name",
+    ),
+    run.prompt,
+  );
+  assert.doesNotMatch(run.prompt, /never applied/);
+});
 
 test("a completion signal is answered while a later wave waits for a slot", async () => {
   const { engine, pipelines, instances } = await load();

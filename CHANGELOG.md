@@ -13,6 +13,11 @@ All notable changes to Argus are documented here. The format follows
 > - **`argus` runs the pinned release once you pin one.** After
 >   `argus release`, the launcher no longer runs, builds or rebuilds the
 >   checkout; `--dev` restores the old behaviour for one launch.
+> - **A revised phase gets every revise note, under a new heading.** The next
+>   attempt used to get only the latest note, as `Revision note: …`. It now
+>   gets all of the phase's notes, oldest first, under
+>   `Revision notes, oldest first:`, and so do retries and remediations
+>   after a revise. A prompt that matched the old wording no longer does.
 
 ### Added
 
@@ -53,6 +58,19 @@ All notable changes to Argus are documented here. The format follows
   transcript in `<folder>/projects/` after the pipeline is edited or deleted.
   Validated at save time; other runtimes record that it does not apply.
   Changing it while an instance runs is an execution edit (`409`).
+
+### Changed
+
+- **Revise notes add up.** A phase revised twice used to lose its first note:
+  the next attempt got only the note of the revise that started it, and a
+  retry after a revise, or a launch recovered after a restart, got none. Every
+  attempt now reads all of its phase's notes from the gate-decisions record,
+  oldest first and labelled with the attempt each revised, leaving out
+  records that never took effect. The block is bounded at 8,000 characters;
+  past it, the oldest and the newest notes stay, and every note is offered in
+  full as the optional read channel `ARGUS_REVISION_NOTES_FILE`. A note is
+  clipped to 2,000 characters once, when it is submitted, so the record and
+  the prompt carry the same text. **Behaviour change** (see above).
 
 ## [1.0.0] - 2026-10-14
 

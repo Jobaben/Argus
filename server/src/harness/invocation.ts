@@ -157,6 +157,10 @@ export interface InvocationInputs {
    *  phase declares `acceptanceVerification`. `required`: it is the phase's
    *  output. */
   acceptanceVerificationFile?: string | null;
+  /** Where every revise note was written in full, when the prompt could not
+   *  carry them all. Never `required`: the prompt already holds the oldest
+   *  and the newest. */
+  revisionNotesFile?: string | null;
   /**
    * Every Argus-owned read-only input besides the KnowledgeContext, with the
    * SHA-256 of the bytes as written (Phase 8). Recorded so the completion can
@@ -244,6 +248,7 @@ export function prepareInvocation(inputs: InvocationInputs): PreparedInvocation 
     implementationScopeFile: inputs.implementationScopeFile ?? null,
     remediationContextFile: inputs.remediationContextFile ?? null,
     acceptanceVerificationFile: inputs.acceptanceVerificationFile ?? null,
+    revisionNotesFile: inputs.revisionNotesFile ?? null,
     artifactDir: inputs.artifactDir,
     memoryDir: inputs.memoryDir ?? null,
     phaseDef,
@@ -352,6 +357,7 @@ export function prepareInvocation(inputs: InvocationInputs): PreparedInvocation 
     implementationScopeFile: inputs.implementationScopeFile ?? null,
     remediationContextFile: inputs.remediationContextFile ?? null,
     acceptanceVerificationFile: inputs.acceptanceVerificationFile ?? null,
+    ...(inputs.revisionNotesFile ? { revisionNotesFile: inputs.revisionNotesFile } : {}),
     ...(inputs.suppliedInputs?.length ? { suppliedInputs: inputs.suppliedInputs } : {}),
     channels: channelRecords,
     ...(claudeConfigDir ? { claudeConfigDir } : {}),
