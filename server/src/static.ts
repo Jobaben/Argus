@@ -85,6 +85,11 @@ export function mountWebApp(app: Hono): string | null {
   // rather than on the first navigation.
   readIndex();
   app.get("/assets/*", (c) => serveFile(c, dir, c.req.path) ?? c.notFound());
+  // The typeface is referenced by path from the stylesheet (`/fonts/…`), not
+  // emitted into /assets. Without its own route it fell through to the SPA
+  // fallback: the browser was handed index.html for a woff2, rejected it, and
+  // every screen rendered in the fallback system font.
+  app.get("/fonts/*", (c) => serveFile(c, dir, c.req.path) ?? c.notFound());
   for (const file of [
     "/vite.svg",
     "/favicon.ico",

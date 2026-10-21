@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, utimesSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Hono } from "hono";
@@ -156,6 +156,24 @@ describe("mountWebApp", () => {
       assert.equal(res.status, 404, file);
       assert.doesNotMatch(await res.text(), /<html>app<\/html>/, file);
     }
+  });
+
+  it("serves the typeface the stylesheet names, and 404s a missing one rather than sending HTML", async () => {
+    writeIndex("<html>app</html>");
+    mkdirSync(path.join(dir, "fonts"));
+    const woff2 = Buffer.from("wOF2-fixture-bytes");
+    writeFileSync(path.join(dir, "fonts", "Hellix-Regular-ma.woff2"), woff2);
+    const app = new Hono();
+    mountWebApp(app);
+
+    const res = await app.request("/fonts/Hellix-Regular-ma.woff2");
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("content-type"), "font/woff2");
+    assert.deepEqual(Buffer.from(await res.arrayBuffer()), woff2);
+
+    const missing = await app.request("/fonts/Hellix-Bold-webfont.woff2");
+    assert.equal(missing.status, 404);
+    assert.doesNotMatch(await missing.text(), /<html>app<\/html>/);
   });
 
   it("is a no-op with no build, so dev mode is unaffected", () => {
