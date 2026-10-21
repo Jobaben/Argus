@@ -141,7 +141,8 @@ leave that envelope.
 - Four counters: **Envelopes** (warm and judging), **Warming up**,
   **Anomalies** (last 14 days), **Critical**.
 - **Anomalies** first, because they are the news. Each states the multiple in
-  words — "3.2× median cost ($0.42 vs $0.13 over 24 runs)" — with a
+  words — "3.2× median cost ($0.42 vs $0.13 over 24 runs)", or for a run far
+  under its envelope "4.7× shorter than the median duration" — with a
   **Replay this run** link straight into the
   [Flight Recorder](monitoring.md#flight-recorder), and the robust z-score in a tooltip
   for anyone who wants it.

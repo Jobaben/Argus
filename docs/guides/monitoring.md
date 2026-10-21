@@ -103,11 +103,11 @@ approval` wins over `Failed` over `Working`…), then quieter facts — phase
   **Skipped** marker.
   Hovering a node shows its full name, what the phase waits for and the
   conditions on it.
-  The graph is scaled to fit the width of its tile (down to 60%) and scrolls in both
-  directions beyond that. It **follows the run**: the running phase (or the
-  middle of several running together) is kept centred, and the view glides
-  to the next phase as the run moves on — the first and last phase centre
-  too. Scrolling the graph yourself, or clicking a node, stops following.
+  The graph is scaled to fit the width of its tile (down to 82%, so its
+  smallest text stays legible) and scrolls in both directions beyond that. It
+  **follows the run**: the view scrolls only as far as it takes to show the
+  running phases, with the phase after them when there is room, and glides on
+  as the run moves — the first and last phase can still be centred. Scrolling the graph yourself, or clicking a node, stops following.
   The graph's view controls sit in a row of their own above it, so they never
   cover a node: **Follow**, there whenever the graph scrolls, shows pressed
   while the view follows and switches following on or off; **Full size**,
@@ -290,7 +290,8 @@ in one glance, spot overlaps, and click into anything.
 - Four counters: **Runs**, **In flight** (still running), **Failed**, and
   **Run spend** (USD reported by scheduler runs in the window).
 - A key above the timeline: **Run status** (Succeeded, Failed, Still running,
-  Queued, Idle) and **Lane kind**.
+  Queued, Stopped — interrupted or cancelled before it finished — and Idle)
+  and **Lane kind**.
 - One **swimlane per group**, labeled with a neutral icon chip for its kind —
   Schedule (a schedule's runs), Agent (background agents), Session (one lane
   per project) — followed by rows of **span bars** colored by status. A bar

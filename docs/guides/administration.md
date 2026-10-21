@@ -52,7 +52,9 @@ first** under **Waiting for approval**, then **Accounts** — each with
 username, a role badge (**Root** or **Member**), a **You** badge on your own
 row, and when it was requested or joined. Root can
 **Approve** or **Reject** a pending registration, and **Remove** an active
-member (never yourself). An action the server refuses is said on the row it
+member (never yourself). Reject and Remove ask first, in place, and Remove
+says what it does: the account is deleted and anyone signed in as it is
+signed out. An action the server refuses is said on the row it
 was about — "Couldn't approve alice: …". Anyone else who opens `#/users` sees
 what applies to them instead of the list:
 
@@ -198,6 +200,8 @@ about this computer travels to a peer that you did not type in yourself.
 - **Fleet reads use the normal network authentication rules**: a configured
   shared token requires its credential or an authenticated account session.
   **Pairing, unpairing and renaming additionally require an approved account.**
+  **Unpair machine** asks first, on the machine's card: pairing it again takes
+  a new secret entered on both machines.
 - **Refuse-to-boot extends to federation.** Argus already refuses to bind an
   exposed port without `ARGUS_TOKEN`. It now equally refuses to start with a
   peer configured over a non-loopback URL and no pairing secret — that would be
