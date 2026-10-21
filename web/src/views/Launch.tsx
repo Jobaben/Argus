@@ -18,6 +18,7 @@ import { LiveDot, RunRow } from "./RunRow";
 import { ModelSelect } from "../ds/ModelSelect";
 import { ReasoningEffortSelect } from "../ds/ReasoningEffortSelect";
 import { RuntimeSelect } from "../ds/RuntimeSelect";
+import { loadError } from "../live/loadError";
 
 const EMPTY: LaunchInput = { name: "", prompt: "", cwd: "" };
 
@@ -441,7 +442,7 @@ export function LaunchPanel() {
 
         {error && (
           <div className="mb-4">
-            <AlertStrip subject="Couldn't reach the Argus server" message={error} />
+            <AlertStrip subject="Runs" message={loadError("recent runs", error)} />
           </div>
         )}
 

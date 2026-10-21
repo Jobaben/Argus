@@ -27,6 +27,7 @@ import { EdgeConditions, ResultEditor } from "./PipelineRoutes";
 import { ModelSelect } from "../ds/ModelSelect";
 import { ReasoningEffortSelect } from "../ds/ReasoningEffortSelect";
 import { RuntimeSelect } from "../ds/RuntimeSelect";
+import { useAsk, type Ask } from "../ds/useAsk";
 
 /**
  * The pipeline editor as rail + focus panel.
@@ -491,7 +492,7 @@ function EditorChip({
       >
         {phase.name.trim() || "unnamed"}
       </span>
-      {phase.gated && <span className={chipClass("await")}>gate</span>}
+      {phase.gated && <span className={chipClass("await")}>Gate</span>}
       {phase.steps.length > 1 && (
         <span className="shrink-0 text-micro font-normal text-ink-faint">{phase.steps.length}</span>
       )}
@@ -510,7 +511,9 @@ export function PipelineForm({
   autoFocus = false,
 }: {
   initial: PipelineInput;
-  onSubmit: (input: PipelineInput) => Promise<void>;
+  /** Saves the pipeline. `ask` poses a question under Save part-way through
+   *  — when the server will only take the edit once the author says so. */
+  onSubmit: (input: PipelineInput, ask: Ask) => Promise<void>;
   onCancel: () => void;
   /** Every other pipeline, for the "after pipeline" trigger's source select
    *  (this one is excluded to keep a self-chain from ever being offered). */
@@ -529,6 +532,7 @@ export function PipelineForm({
   const [selectedId, setSelectedId] = useState<string | null>(initial.phases[0]?.id ?? null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [ask, question] = useAsk();
   const { runtimes, default: defaultRuntime } = useRuntimes();
   const hintId = useId();
   const nameRef = useRef<HTMLInputElement>(null);
@@ -604,19 +608,23 @@ export function PipelineForm({
     });
 
   const submit = async () => {
+    if (busy) return;
     setBusy(true);
     setErr(null);
     try {
       // autoApprove without a gate is a validation error server-side; dropping
       // it here is what un-checking "gated" means for it.
-      await onSubmit({
-        ...form,
-        phases: form.phases.map((p) => {
-          if (p.gated || p.autoApprove === undefined) return p;
-          const { autoApprove: _dropped, ...rest } = p;
-          return rest;
-        }),
-      });
+      await onSubmit(
+        {
+          ...form,
+          phases: form.phases.map((p) => {
+            if (p.gated || p.autoApprove === undefined) return p;
+            const { autoApprove: _dropped, ...rest } = p;
+            return rest;
+          }),
+        },
+        ask,
+      );
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -675,15 +683,19 @@ export function PipelineForm({
             <Button variant="ghost" size="lg" onClick={onCancel}>
               Cancel
             </Button>
+            {/* Held by aria while it saves, not by `disabled`: a disabled
+                button drops its focus to the page, and a question asked
+                mid-save hands focus back here when it is answered. */}
             <Button
               variant="primary"
               size="lg"
               icon="check"
-              disabled={busy || !canSave}
+              disabled={!canSave}
+              aria-disabled={busy || undefined}
               onClick={submit}
               aria-describedby={canSave ? undefined : hintId}
             >
-              {busy ? "Saving…" : "Save pipeline"}
+              {busy && !question ? "Saving…" : "Save pipeline"}
             </Button>
           </div>
         </div>
@@ -697,6 +709,7 @@ export function PipelineForm({
             <span className="min-w-0">{`Before it can be saved: ${missing.join(" · ")}.`}</span>
           </p>
         )}
+        {question && <div className="mt-3">{question}</div>}
         {err && (
           <div className="mt-3">
             <AlertStrip subject="Couldn't save" message={err} />

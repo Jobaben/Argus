@@ -336,11 +336,21 @@ describe("ActivityRail — recent", () => {
     expect(screen.queryByText(/no completed runs yet/i)).toBeNull();
   });
 
-  it("links to the full run history", () => {
-    render(<ActivityRail rows={[]} liveActivity={NO_ACTIVITY} runs={[]} loading={false} />);
-    expect(screen.getByRole("link", { name: /all runs/i })).toHaveAttribute(
-      "href",
-      "#/schedules/oneoff",
+  it("calls a skipped firing skipped, not idle", () => {
+    render(
+      <ActivityRail
+        rows={[]}
+        liveActivity={NO_ACTIVITY}
+        runs={[run({ status: "skipped" })]}
+        loading={false}
+      />,
     );
+    expect(screen.getByText("Skipped")).toBeInTheDocument();
+    expect(screen.queryByText("Idle")).toBeNull();
+  });
+
+  it("links to the full run history, not the one-off launch form", () => {
+    render(<ActivityRail rows={[]} liveActivity={NO_ACTIVITY} runs={[]} loading={false} />);
+    expect(screen.getByRole("link", { name: /all runs/i })).toHaveAttribute("href", "#/chronicle");
   });
 });

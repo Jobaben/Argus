@@ -63,8 +63,26 @@ import { fileURLToPath } from "node:url";
  * heavy weight), and fonts are outside this measurement. Two kB of headroom,
  * not ten: the reason for the raise is written down, and the next one should
  * be too.
+ *
+ * Raised from 130 to 132 by the QA pass that followed, which measured 130.9 kB
+ * after its trims. It added about 3.3 kB to the first paint and took 2.2 kB back:
+ *   - the Command Center, +~0.8 kB: the reset confirm became a popover that
+ *     takes focus, answers Escape and hands focus back; a board that fails to
+ *     load says why and marks "Needs you" as partial; the phase graph's
+ *     controls moved to a toolbar beside the canvas instead of over its nodes,
+ *     and nodes are sized for their markers and never drawn below a legible
+ *     scale;
+ *   - the shell, +~0.5 kB: focus and a polite announcement on a route change
+ *     that lost focus, the auth state following an in-page sign-in, a phone
+ *     header that never pushes its controls off screen;
+ *   - `live/loadError`, +0.3 kB: an error answer is told apart from an
+ *     unreachable server and keeps the server's reason;
+ *   - the stylesheet, +0.3 kB, for the above;
+ *   - offsets: the peer-machine board, picker and banner (−1.5 kB) and the
+ *     orphaned instance's Stop confirm now load only when they are on screen.
+ * The headroom is back to 1.1 kB.
  */
-const BUDGET_KB = 130;
+const BUDGET_KB = 132;
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const distDir = path.join(repoRoot, "web", "dist");

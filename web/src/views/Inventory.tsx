@@ -11,6 +11,7 @@ import {
   fieldClass,
 } from "../ds";
 import { useInventory, type InventoryItem, type PluginItem } from "../useInventory";
+import { loadError } from "../live/loadError";
 
 /** A path is machine text, in the mono face like the subtitle's. */
 const PATH = "font-mono text-caption text-ink";
@@ -212,7 +213,7 @@ export default function Inventory() {
         <div className="mb-6">
           <AlertStrip
             subject="Inventory"
-            message={`Couldn't load inventory: ${error}`}
+            message={loadError("the inventory", error)}
             action={
               <Button size="sm" icon="retry" onClick={() => refresh()}>
                 Retry

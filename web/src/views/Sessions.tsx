@@ -18,6 +18,7 @@ import {
   type IconName,
 } from "../ds";
 import { filterSessions, groupSessionsByDay } from "./sessionList";
+import { loadError } from "../live/loadError";
 
 function sessionHref(project: string, id: string): string {
   return `#/sessions/${encodeURIComponent(project)}/${encodeURIComponent(id)}`;
@@ -240,7 +241,10 @@ function SkeletonTranscript() {
 }
 
 function SessionTranscript({ project, id }: { project: string; id: string }) {
-  const { header, messages, following, setFollowing, loading, error } = useSessionTail(project, id);
+  const { header, messages, following, setFollowing, loading, error, errorStatus } = useSessionTail(
+    project,
+    id,
+  );
   const endRef = useRef<HTMLDivElement | null>(null);
 
   // Keep the newest message in view while following; a paused reader is left
@@ -252,7 +256,7 @@ function SessionTranscript({ project, id }: { project: string; id: string }) {
   const toolUses = messages.filter((m) => m.toolName).length;
   // The server's answer for a transcript that is not on disk — pruned, or a
   // link from a run whose session was never written. Not a failed load.
-  const notFound = error === "HTTP 404" && !header;
+  const notFound = errorStatus === 404 && !header;
   return (
     <Page
       title={header?.title ?? "Transcript"}
@@ -330,7 +334,7 @@ function SessionTranscript({ project, id }: { project: string; id: string }) {
         <>
           {error && (
             <div className="mb-6">
-              <AlertStrip subject="Couldn't load transcript" message={error} />
+              <AlertStrip subject="Transcript" message={loadError("the transcript", error)} />
             </div>
           )}
           {/* A reading measure. At the page's full width a paragraph of prose
@@ -478,7 +482,7 @@ function SessionList({
         <div className="mb-6">
           <AlertStrip
             subject="Sessions"
-            message={`Couldn't reach the Argus server: ${error}`}
+            message={loadError("sessions", error)}
             action={
               <Button size="sm" icon="retry" onClick={onRetry}>
                 Retry

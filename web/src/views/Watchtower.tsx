@@ -23,6 +23,8 @@ import { VerdictSparkline } from "./VerdictPanel";
 import type { Anomaly, AnomalyMetric, Baseline, MetricBaseline } from "../types";
 import { InfoTip } from "../ds/InfoTip";
 import { HealthCounter } from "../ds/HealthCounter";
+import { splitEnvelopeName } from "./envelopeName";
+import { loadError } from "../live/loadError";
 
 /**
  * Watchtower.
@@ -95,7 +97,7 @@ function MetricCell({
     return (
       <div className="min-w-0">
         {label}
-        <p className="text-caption text-ink-faint">not reported</p>
+        <p className="text-caption text-ink-faint">Not reported</p>
       </div>
     );
   }
@@ -142,6 +144,21 @@ function MetricCell({
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * An envelope's name: the words, and a phase id after them in mono only when
+ * the words do not already say it (see `splitEnvelopeName`). The full stored
+ * name stays in the tooltip.
+ */
+function EnvelopeName({ name, phase }: { name: string; phase: boolean }) {
+  const { label, id } = phase ? splitEnvelopeName(name) : { label: name, id: null };
+  return (
+    <span className="flex min-w-0 items-baseline gap-2" title={name}>
+      <span className="min-w-0 truncate text-small font-semibold text-ink">{label}</span>
+      {id && <span className="shrink-0 font-mono text-caption text-ink-faint">{id}</span>}
+    </span>
   );
 }
 
@@ -199,7 +216,7 @@ function AnomalyRow({ anomaly }: { anomaly: Anomaly }) {
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
           <SeverityPill anomaly={anomaly} />
-          <span className="min-w-0 truncate text-small font-semibold text-ink">{anomaly.name}</span>
+          <EnvelopeName name={anomaly.name} phase={anomaly.scope === "phase"} />
           <span className="text-caption text-ink-faint">
             <TimeAgo iso={anomaly.at} />
           </span>
@@ -265,9 +282,7 @@ function BaselineRow({
       className={`group grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-3 px-4 py-3.5 lg:items-center lg:gap-x-6 ${ENVELOPE_GRID}`}
     >
       <div className="min-w-0">
-        <p className="truncate text-small font-semibold text-ink" title={baseline.name}>
-          {baseline.name}
-        </p>
+        <EnvelopeName name={baseline.name} phase={baseline.scope === "phase"} />
         <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-caption text-ink-faint">
           <span className={`${chipClass("neutral")} capitalize`}>{baseline.scope}</span>
           {warming ? (
@@ -420,7 +435,7 @@ export function WatchtowerPanel() {
         <div className="mb-6">
           <AlertStrip
             subject="Watchtower"
-            message={`Couldn't load Watchtower: ${error}`}
+            message={loadError("Watchtower", error)}
             action={
               <Button size="sm" icon="retry" onClick={() => refresh()}>
                 Retry
@@ -559,7 +574,16 @@ export function WatchtowerPanel() {
                 <InfoTip
                   title="What's an envelope?"
                   align="end"
-                  trigger={<span className="text-caption text-ink-faint">What's an envelope?</span>}
+                  // One line, whatever the width: wrapped, the dotted underline ran
+                  // under two stray fragments beside a heading that had wrapped too.
+                  // A phone has room beside the heading for the short question
+                  // only; the popover's own title still names the term.
+                  trigger={
+                    <span className="whitespace-nowrap text-caption text-ink-faint">
+                      <span className="sm:hidden">What&apos;s this?</span>
+                      <span className="hidden sm:inline">What&apos;s an envelope?</span>
+                    </span>
+                  }
                 >
                   The median and the 5th–95th percentile of that unit of work's own{" "}
                   <strong className="font-semibold text-ink">successful</strong> runs. Failures are

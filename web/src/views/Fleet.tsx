@@ -18,6 +18,7 @@ import { useFleet } from "../useFleet";
 import type { FleetMachine, MachineSummary, PeerStatus } from "../types";
 import { InfoTip } from "../ds/InfoTip";
 import { HealthCounter } from "../ds/HealthCounter";
+import { loadError } from "../live/loadError";
 
 /**
  * Constellation's page: N machines, one lens.
@@ -74,7 +75,10 @@ function PeerPill({ status }: { status: PeerStatus }) {
 /** The five counts a machine reports, as one inset well. A zero is neutral;
  *  an open issue is a failure, so it is red like the monitors beside it. The
  *  words are the fleet totals' own, shortened to fit a fifth of a card, and
- *  said in full in the tooltip. */
+ *  said in full in the tooltip. A column is never narrower than its word:
+ *  equal fifths clipped the longest to "Awai…" on a phone and on a tablet's
+ *  two-up cards, while "Live" beside it had room to spare, so a long word
+ *  takes its width and the rest share what is left. */
 function MachineCounts({ summary }: { summary: MachineSummary }) {
   const cells: { label: string; full: string; value: number; tone: string }[] = [
     { label: "Down", full: "Monitors down", value: summary.monitorsDown, tone: "text-fail" },
@@ -87,21 +91,17 @@ function MachineCounts({ summary }: { summary: MachineSummary }) {
     { label: "Issues", full: "Open issues", value: summary.openIssues, tone: "text-fail" },
     { label: "Live", full: "Live pipelines", value: summary.liveInstances, tone: "text-run" },
     {
-      label: "Awaiting",
+      label: "Approval",
       full: "Needs approval",
       value: summary.gatedInstances,
       tone: "text-await",
     },
   ];
   return (
-    <dl className="mt-3 grid grid-cols-5 divide-x divide-line rounded-control bg-ground-2/60">
+    <dl className="mt-3 grid grid-cols-[repeat(5,1fr)] divide-x divide-line rounded-control bg-ground-2/60">
       {cells.map((c) => (
-        <div
-          key={c.label}
-          title={c.full}
-          className="flex min-w-0 flex-col-reverse px-2.5 py-2 sm:px-3"
-        >
-          <dt className="truncate text-micro font-semibold text-ink-faint">{c.label}</dt>
+        <div key={c.label} title={c.full} className="flex flex-col-reverse px-2 py-2 sm:px-3">
+          <dt className="whitespace-nowrap text-micro font-semibold text-ink-faint">{c.label}</dt>
           <dd
             className={`text-title font-semibold leading-tight ${c.value === 0 ? "text-ink-faint" : c.tone}`}
           >
@@ -358,11 +358,7 @@ export default function Fleet() {
         <div className="mb-6">
           <AlertStrip
             subject="Fleet"
-            message={
-              /^HTTP \d{3}$/.test(error)
-                ? `Couldn't load the fleet: ${error}`
-                : `Couldn't reach the Argus server: ${error}`
-            }
+            message={loadError("the fleet", error)}
             action={
               <Button size="sm" icon="retry" onClick={() => refresh()}>
                 Retry

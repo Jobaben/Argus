@@ -127,12 +127,68 @@ describe("StepDrawer", () => {
       <StepDrawer
         selection={selection({
           step: step({ status: "failed" }),
-          reason: "npm audit: 3 critical vulnerabilities",
+          reason: "exit code 1 from npm audit",
         })}
         onClose={vi.fn()}
       />,
     );
-    expect(screen.getByText("npm audit: 3 critical vulnerabilities")).toBeInTheDocument();
+    // Written by the server as a clause; set in sentence case here.
+    expect(screen.getByText("Exit code 1 from npm audit")).toBeInTheDocument();
+  });
+
+  it("tells a failure once: a sentence, not the protocol, and the agent's fuller words in its place", async () => {
+    stubRun({
+      id: "run_0003",
+      log: "",
+      resultSummary:
+        "Could not reach the advisory database (ETIMEDOUT) after 3 retries.\nARGUS_OUTCOME: failed could not reach advisory database (ETIMEDOUT)",
+    });
+    render(
+      <StepDrawer
+        selection={selection({
+          step: step({ status: "failed" }),
+          reason: "failed: could not reach advisory database (ETIMEDOUT)",
+        })}
+        onClose={vi.fn()}
+      />,
+    );
+    // Before the run arrives: the reason, without the "failed:" the pill says.
+    expect(screen.getByText("Could not reach advisory database (ETIMEDOUT)")).toBeInTheDocument();
+    // After: the agent's own sentence says it, once, where the reason was.
+    expect(
+      await screen.findByText("Could not reach the advisory database (ETIMEDOUT) after 3 retries."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/reach advisory database/)).toBeNull();
+    expect(screen.queryByText(/failed:/)).toBeNull();
+  });
+
+  it("words the log's envelope as the process's, without the figures shown above it", async () => {
+    stubRun({
+      id: "run_0003",
+      log: JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        duration_ms: 61_000,
+        num_turns: 4,
+        total_cost_usd: 0.42,
+        usage: { input_tokens: 115_620, output_tokens: 25_380 },
+      }),
+    });
+    render(
+      <StepDrawer
+        selection={selection({ step: step({ status: "failed", tokens: null }) })}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(await screen.findByText("Process")).toBeInTheDocument();
+    expect(screen.getByText(/^exited cleanly/)).toBeInTheDocument();
+    // The step failed all the same, and the log says why the two disagree.
+    expect(screen.getByText(/failed its outcome check/)).toBeInTheDocument();
+    // Cost and duration are in the readout already; tokens are not, so they
+    // stay, in the app's own format and the reading face.
+    expect(screen.getAllByText("Cost")).toHaveLength(1);
+    expect(screen.getByText("115.6k in / 25.4k out")).not.toHaveClass("font-mono");
   });
 
   it("shows the agent's summary without the protocol line it ends with", async () => {

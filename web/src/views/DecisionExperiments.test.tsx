@@ -293,14 +293,16 @@ describe("DecisionExperiments view", () => {
     });
     render(<DecisionExperiments />);
 
-    expect(await screen.findByText(/Shadow measurement only\./)).toBeTruthy();
+    // Both experiments head their report with the same caveat, in the same words.
+    const h2Region = screen.getByRole("region", { name: /^H2 —/ });
+    expect(await within(h2Region).findByText("Shadow measurement only")).toBeTruthy();
     expect(screen.getByText(/nothing here authorises an approval/)).toBeTruthy();
     expect(
       screen.getByText(/Residual-cause accuracy is unmeasured until valid reference labels/),
     ).toBeTruthy();
 
     // Collection (off): reasons and settings. Within H2's own section: H1 sits
-    // below it in the same anatomy, and says "Off" in the same words.
+    // above it in the same anatomy, and says "Off" in the same words.
     const h2 = within(screen.getByRole("region", { name: /^H2 —/ }));
     expect(h2.getByText("Off")).toBeTruthy();
     expect(screen.getByText("probe rate is out of range")).toBeTruthy();
@@ -347,7 +349,7 @@ describe("DecisionExperiments view", () => {
     expect(within(baseline).getByText("not-compared")).toBeTruthy();
     expect(screen.getByText("attempt has no result record")).toBeTruthy();
     expect(screen.getByText("missing segment")).toBeTruthy();
-    expect(h2.getAllByText("No findings recorded.").length).toBe(1);
+    expect(h2.getAllByText("No findings recorded").length).toBe(1);
     expect(screen.getByText("Wilson 95% intervals.")).toBeTruthy();
     expect(
       screen.getByText(/H2 report as of ledger record 42 \(2026-09-29T12:00:00.000Z\)/),
@@ -357,13 +359,29 @@ describe("DecisionExperiments view", () => {
     expect(document.body.textContent).not.toMatch(/\b(approved|passed|good|safe)\b/i);
   });
 
+  it("lists the experiments in the order they are numbered", async () => {
+    mockFetch({
+      "/api/decisions/h2": () => okJson(fixture),
+      "/api/decisions/h1": () => okJson(h1Fixture),
+    });
+    render(<DecisionExperiments />);
+    const titles = screen
+      .getAllByRole("heading", { level: 2 })
+      .map((h) => h.textContent)
+      .filter((t) => /^H\d —/.test(t ?? ""));
+    expect(titles).toEqual(["H1 — gate operator action", "H2 — run termination and failure cause"]);
+    await screen.findByText("Top-answer counts (descriptive — not accuracy)");
+  });
+
   it("only issues a GET for the report and offers no mutating controls", async () => {
     const spy = mockFetch({
       "/api/decisions/h2": () => okJson(fixture),
       "/api/decisions/h1": () => okJson(h1Fixture),
     });
     render(<DecisionExperiments />);
-    await screen.findByText(/Shadow measurement only\./);
+    await within(screen.getByRole("region", { name: /^H2 —/ })).findByText(
+      "Shadow measurement only",
+    );
     await screen.findByText("Top-answer counts (descriptive — not accuracy)");
 
     expect(spy).toHaveBeenCalled();
@@ -416,11 +434,11 @@ describe("DecisionExperiments view", () => {
     const title = await screen.findByText("No shadow assessments recorded");
     const h2 = within(title.closest("section[aria-labelledby]") as HTMLElement);
     expect(h2.getByText("On")).toBeTruthy();
-    expect(h2.getByText("No valid settings.")).toBeTruthy();
-    expect(h2.getByText("No collection config recorded.")).toBeTruthy();
-    expect(h2.getByText("No census recorded.")).toBeTruthy();
-    expect(h2.getByText("No baselines.")).toBeTruthy();
-    expect(h2.getAllByText("No findings recorded.").length).toBe(3);
+    expect(h2.getByText("No valid settings")).toBeTruthy();
+    expect(h2.getByText("No collection config recorded")).toBeTruthy();
+    expect(h2.getByText("No census recorded")).toBeTruthy();
+    expect(h2.getByText("No baselines")).toBeTruthy();
+    expect(h2.getAllByText("No findings recorded").length).toBe(3);
     expect(screen.getByText(/H2 report as of ledger record 0 \(no records\)/)).toBeTruthy();
     // No population sections without populations. (The question ids still show
     // in the Questions list, so this checks the section headings, not the ids.)

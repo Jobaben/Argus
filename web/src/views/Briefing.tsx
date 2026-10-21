@@ -24,6 +24,8 @@ import {
 import type { Briefing as BriefingData, InstanceStatus, RunStatus } from "../types";
 import { ATTENTION_KINDS, attentionHref } from "./attentionKinds";
 import { firstProseLine } from "./outcome";
+import { sentenceStart } from "./text";
+import { loadError } from "../live/loadError";
 
 type AttentionItem = BriefingData["attention"][number];
 
@@ -124,8 +126,18 @@ function RunCount({ n }: { n: number }) {
   );
 }
 
+/**
+ * A card's detail as a line of its own. The server writes it as a clause
+ * (`phase "Open the PR" needs approval`), so it gets a capital and the
+ * typographic quotes every other line on the page uses.
+ */
+function cardDetail(detail: string): string {
+  return sentenceStart(detail.replace(/"([^"]*)"/g, "“$1”"));
+}
+
 function AttentionCard({ item }: { item: AttentionItem }) {
   const meta = ATTENTION_KINDS[item.kind];
+  const detail = cardDetail(item.detail);
   const beat = useSyncedDelay(DURATION.pulse);
   // Only a gate is *happening* — someone's pipeline is paused on you right now
   // — so only its dot breathes, in phase with every other waiting dot on screen.
@@ -188,8 +200,10 @@ function AttentionCard({ item }: { item: AttentionItem }) {
             >
               {item.title}
             </p>
-            <p className="mt-0.5 truncate text-small text-ink-dim" title={item.detail}>
-              {item.detail}
+            {/* Two lines, as on the rows below: the detail is the reason, and
+                one line cut it to a few words on a phone. */}
+            <p className="mt-0.5 line-clamp-2 break-words text-small text-ink-dim" title={detail}>
+              {detail}
             </p>
           </div>
           {/* Not a second control: the whole card is the link. This is where
@@ -494,7 +508,8 @@ export default function Briefing({
                 icon="layers"
                 iconClass={i.state === "open" ? "text-fail" : "text-ink-faint"}
                 title={<span title={i.title}>{i.title}</span>}
-                trailing={<RunCount n={i.count} />}
+                // A count only when it is news, as on Failures: "×1" said nothing.
+                trailing={i.count > 1 ? <RunCount n={i.count} /> : undefined}
                 detail={
                   <>
                     {i.schedules.join(", ")}
@@ -511,7 +526,10 @@ export default function Briefing({
       ),
     });
   }
-  if (win && win.anomalies.length > 0) {
+  // A critical anomaly is a card up there too; the same rule as for issues.
+  const anomalyCards = new Set(attention.filter((a) => a.kind === "anomaly").map((a) => a.id));
+  const anomalies = win ? win.anomalies.filter((a) => !anomalyCards.has(a.id)) : [];
+  if (anomalies.length > 0) {
     windowSections.push({
       key: "anomalies",
       node: (
@@ -530,7 +548,7 @@ export default function Briefing({
           }
         >
           <RowPanel>
-            {win.anomalies.map((a) => (
+            {anomalies.map((a) => (
               <Row
                 key={a.id}
                 href={`#/run/${encodeURIComponent(a.runId)}`}
@@ -599,7 +617,7 @@ export default function Briefing({
         <div className="mb-6">
           <AlertStrip
             subject="Briefing"
-            message={`Couldn't reach the Argus server: ${error}`}
+            message={loadError("the briefing", error)}
             action={
               refresh && (
                 <Button size="sm" icon="retry" onClick={() => refresh()}>

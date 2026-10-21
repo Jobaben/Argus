@@ -17,6 +17,7 @@ import { useMonitors } from "../useMonitors";
 import type { MonitorHealth, MonitorStatus } from "../types";
 import { HeartbeatBar } from "../ds/HeartbeatBar";
 import { HealthCounter } from "../ds/HealthCounter";
+import { loadError } from "../live/loadError";
 
 const PILL: Record<MonitorStatus, { label: string; token: ColorToken }> = {
   up: { label: "Up", token: "ok" },
@@ -279,7 +280,7 @@ export function MonitorsPanel() {
         <div className="mb-6">
           <AlertStrip
             subject="Monitors"
-            message={`Couldn't load monitors: ${error}`}
+            message={loadError("monitors", error)}
             action={
               <Button size="sm" icon="retry" onClick={() => refresh()}>
                 Retry

@@ -21,16 +21,7 @@ import {
 } from "../ds";
 import { LedgerPanels } from "./LedgerPanels";
 import { InfoTip } from "../ds/InfoTip";
-
-/**
- * A load error in the words that fit it: a status code means the server was
- * reached and failed, anything else (a rejected fetch) that it was not.
- */
-function loadErrorMessage(what: string, error: string): string {
-  return /^HTTP \d{3}$/.test(error)
-    ? `Couldn't load ${what}: ${error}`
-    : `Couldn't reach the Argus server: ${error}`;
-}
+import { loadError } from "../live/loadError";
 
 /** Where the budget's alerts fire, as a share of a limit. Drawn on each meter
  *  as a tick, so "approaching" has a place on the bar and not only a word. */
@@ -742,6 +733,12 @@ export default function Budget() {
   // Until the state is known there is no pill: "no limits set" while loading,
   // or after a failed load, would be a claim nobody has checked.
   const peerState = facet.peer?.summary?.facets.budget.state;
+  // Nothing costed in the ledger's whole window, nor this month or today.
+  const noSpend =
+    budget != null &&
+    budget.status.today.spentUsd === 0 &&
+    budget.status.month.spentUsd === 0 &&
+    budget.days.every((d) => d.usd === 0);
   const state: BudgetState | null = facet.peer
     ? peerState != null && Object.hasOwn(STATE_PILL, peerState)
       ? (peerState as BudgetState)
@@ -789,7 +786,7 @@ export default function Budget() {
         <div className="mb-6">
           <AlertStrip
             subject="Budget"
-            message={loadErrorMessage("the budget", error)}
+            message={loadError("the budget", error)}
             action={
               <Button size="sm" icon="retry" onClick={() => void refresh()}>
                 Retry
@@ -832,24 +829,37 @@ export default function Budget() {
                   window={budget.status.month}
                   limitName="monthly"
                   onSetLimit={() => focusLimit("monthly")}
-                  projectedOver={monthProjectedOver}
+                  projectedOver={!noSpend && monthProjectedOver}
                 />
               </section>
 
               {/* The ledger's panels sit between the raw numbers and the
                   controls, in reading order: a policy acting right now, where
                   the month lands, the days behind it, where the money went, and
-                  what a change would do — then the limits to act on it. */}
-              <LedgerPanels
-                month={budget.status.month}
-                now={now}
-                onProjectedOver={setMonthProjectedOver}
-                history={
-                  <Section title="Last 30 days">
-                    <SpendChart days={budget.days} dailyLimit={budget.config.dailyUsd} />
-                  </Section>
-                }
-              />
+                  what a change would do — then the limits to act on it. With
+                  nothing spent yet each of them had only its own way of saying
+                  so, three times down the page; the one empty state says it
+                  once, and they arrive with the first costed run. */}
+              {noSpend ? (
+                <Section title="Last 30 days">
+                  <EmptyState icon="coin" title="No spend in the last 30 days">
+                    Costs land here as runs report them — a scheduled firing, a pipeline phase or a
+                    Launch, any of which the CLI prices in its result envelope. The forecast and
+                    where the money went appear with the first costed run.
+                  </EmptyState>
+                </Section>
+              ) : (
+                <LedgerPanels
+                  month={budget.status.month}
+                  now={now}
+                  onProjectedOver={setMonthProjectedOver}
+                  history={
+                    <Section title="Last 30 days">
+                      <SpendChart days={budget.days} dailyLimit={budget.config.dailyUsd} />
+                    </Section>
+                  }
+                />
+              )}
 
               <Section title="Limits">
                 <BudgetForm initial={budget.config} onSave={save} />

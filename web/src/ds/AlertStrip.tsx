@@ -53,11 +53,15 @@ export function AlertStrip({
       ) : (
         <Icon name="alert" size={18} className="text-fail" />
       )}
-      <span className="min-w-0 flex-1 text-small">
+      {/* A floor under the message: with none it was the one item that gave
+          way, and a phone squeezed a sentence into 74px between the badge and
+          "at 00:01 · Jump to failure". Now those wrap to a line of their own.
+          12rem, so it still fits beside the badge on a 360px screen. */}
+      <span className="min-w-0 flex-1 basis-48 text-small">
         <b className="font-semibold text-ink">{subject}</b>{" "}
         <span className="break-words text-fail-ink">{message}</span>
       </span>
-      {when && <span className="text-caption text-ink-dim">{when}</span>}
+      {when && <span className="whitespace-nowrap text-caption text-ink-dim">{when}</span>}
       {action}
     </div>
   );

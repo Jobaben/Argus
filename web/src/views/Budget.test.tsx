@@ -133,6 +133,28 @@ describe("Budget", () => {
     expect(screen.queryByText(/On course for/)).toBeNull();
   });
 
+  it("with nothing spent yet, says so once rather than in every panel", () => {
+    mockState.budget = response({
+      status: {
+        state: "ok",
+        today: { spentUsd: 0, limitUsd: 10, ratio: 0 },
+        month: { spentUsd: 0, limitUsd: 50, ratio: 0 },
+        blockScheduled: false,
+      },
+      days: [
+        { date: "2026-07-12", usd: 0, tokens: 0, runs: 0 },
+        { date: "2026-07-13", usd: 0, tokens: 0, runs: 0 },
+      ],
+    });
+    render(<Budget />);
+    expect(screen.getByText("No spend in the last 30 days")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Forecast" })).toBeNull();
+    expect(screen.queryByText(/No costed runs/)).toBeNull();
+    expect(screen.queryByText("No projection yet")).toBeNull();
+    // The limits are still there to set.
+    expect(screen.getByRole("button", { name: /save budget/i })).toBeInTheDocument();
+  });
+
   it("marks the days that broke the daily limit", () => {
     mockState.budget = response({
       config: { dailyUsd: 5, monthlyUsd: null, blockScheduled: false, updatedAt: null },

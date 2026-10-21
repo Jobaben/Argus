@@ -2,6 +2,8 @@ import { Suspense, lazy, useCallback, useEffect, useId, useMemo, useRef, useStat
 import { highlight, rank } from "./fuzzy";
 import { groupCommands, type Command } from "./commands";
 import { pushRecent, readRecents, recencyBonus } from "./recents";
+import { containTab } from "./containTab";
+import { formatKeys } from "./keys";
 /**
  * Lazy: the palette itself must open instantly on ⌘K, and intent mode is only
  * reached once someone deliberately asks for it. Keeping it out of the initial
@@ -32,12 +34,24 @@ function contains(command: Command, q: string): boolean {
   );
 }
 
-/** A two-key chord badge ("g c"), drawn as the shortcut sheet draws it. */
-const CHORD = /^(\S) (\S)$/;
+/** Where each word typed appears in the title as written, or null if one
+ *  does not: a literal match, highlighted where it is rather than where a
+ *  scattered one happened to land. */
+function literalPositions(title: string, q: string): number[] | null {
+  const target = title.toLowerCase();
+  const positions: number[] = [];
+  for (const word of q.toLowerCase().split(/\s+/)) {
+    const at = target.indexOf(word);
+    if (at === -1) return null;
+    for (let i = 0; i < word.length; i += 1) positions.push(at + i);
+  }
+  return positions;
+}
 
-/** ⌘↵ on Apple, Ctrl↵ elsewhere — the hint is the only place the chord is taught. */
-const MOD_ENTER =
-  typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘↵" : "Ctrl ↵";
+const PLATFORM = typeof navigator === "undefined" ? "" : navigator.platform;
+
+/** ⌘↵ on Apple, Ctrl ↵ elsewhere — the hint is the only place the chord is taught. */
+const MOD_ENTER = formatKeys("mod+Enter", PLATFORM)[0];
 
 const SEVERITY_TEXT: Record<PaletteSeverity, string> = {
   none: "text-ink-faint",
@@ -143,8 +157,20 @@ function Palette({
     // Matched as a scattered subsequence, they let "rel" pull in every
     // "Run now" (via "fire this schedule immediately") with nothing
     // highlighted to say why — noise, and mutating actions put forward for no
-    // reason. Titles keep the full fuzzy match.
-    if (q.length > 0) return matches.filter((m) => m.positions.length > 0 || contains(m.item, q));
+    // reason. Titles keep the full fuzzy match, except on an action that
+    // changes something (`literal`), which a scatter across its title must
+    // not surface either. A row found some other way highlights nothing.
+    if (q.length > 0) {
+      return matches.flatMap((m) => {
+        if (m.item.literal) {
+          const positions = literalPositions(m.item.title, q);
+          if (positions) return [{ ...m, positions }];
+        } else if (m.positions.length > 0) {
+          return [m];
+        }
+        return contains(m.item, q) ? [{ ...m, positions: [] }] : [];
+      });
+    }
     // Empty query: float recents to the top. `sort` is stable, so everything
     // else keeps the curated order from buildCommands.
     return [...matches].sort(
@@ -165,6 +191,9 @@ function Palette({
   // can shrink the list under the cursor, and an effect would paint one frame
   // with the highlight past the end.
   const activeIndex = flat.length === 0 ? 0 : Math.min(selected, flat.length - 1);
+  // The listbox exists only while it has options to hold; the combobox says
+  // so, rather than claiming a popup that is not there.
+  const listed = !intent && flat.length > 0;
 
   const runCommand = useCallback(
     (command: Command) => {
@@ -266,7 +295,8 @@ function Palette({
    * leaves intent mode: dropping a typed sentence on a stray keypress is a real
    * cost, and the second press still closes.
    */
-  const onDialogKeyDown = (e: React.KeyboardEvent) => {
+  const onDialogKeyDown = (e: React.KeyboardEvent<HTMLElement>) => {
+    containTab(e);
     if (e.key !== "Escape") return;
     e.preventDefault();
     if (intent) setIntent(null);
@@ -304,8 +334,11 @@ function Palette({
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"
+        // Focusable, not tabbable: a click on the dialog's own text lands focus
+        // here instead of on <body>, so the keys below still apply.
+        tabIndex={-1}
         onKeyDown={onDialogKeyDown}
-        className="flex w-full max-w-[660px] flex-col overflow-hidden rounded-panel bg-surface-2 shadow-overlay"
+        className="flex w-full max-w-[660px] flex-col overflow-hidden rounded-panel bg-surface-2 shadow-overlay focus:outline-none"
       >
         <div className="flex items-center gap-3 border-b border-line px-4">
           <Icon name="search" size={18} className="text-ink-faint" />
@@ -318,10 +351,10 @@ function Palette({
             }}
             onKeyDown={onKeyDown}
             role="combobox"
-            aria-expanded={!intent}
-            aria-controls={listboxId}
+            aria-expanded={listed}
+            aria-controls={listed ? listboxId : undefined}
             aria-autocomplete="list"
-            aria-activedescendant={!intent && flat.length > 0 ? optionId(activeIndex) : undefined}
+            aria-activedescendant={listed ? optionId(activeIndex) : undefined}
             aria-label="Search commands, pipelines, schedules and transcripts"
             placeholder="Jump to or run anything…"
             autoComplete="off"
@@ -331,7 +364,7 @@ function Palette({
             // would only add noise around the whole search row.
             className="min-w-0 flex-1 bg-transparent py-4 text-[16px] text-ink outline-none placeholder:text-ink-faint focus-visible:outline-none"
           />
-          {loading && <span className="text-caption text-ink-faint">indexing…</span>}
+          {loading && <span className="text-caption text-ink-faint">Indexing…</span>}
         </div>
 
         {intent ? (
@@ -344,130 +377,142 @@ function Palette({
           >
             <OmnibarIntent intent={intent} onClose={onClose} />
           </Suspense>
+        ) : !listed ? (
+          // In place of the listbox, not inside it: a listbox may hold only
+          // options and groups, and this holds a link that is a tab stop. Its
+          // padding takes in the list's own, so the panel keeps its height;
+          // and a click here, as on the list, leaves focus in the input.
+          <div
+            onMouseDown={(e) => e.preventDefault()}
+            className="px-4 py-11.5 text-center text-small text-ink-dim"
+          >
+            <p>Nothing matches “{query}”</p>
+            {looksLikeIntent(query) && (
+              <p className="mx-auto mt-2 max-w-sm text-caption text-ink-faint">
+                That reads like an instruction — press <kbd className="kbd">↵</kbd> and Argus will
+                show you exactly what it would change before changing anything.
+              </p>
+            )}
+            {/* Not a dead end: the palette searches names, and what was
+                typed may be in a transcript instead. The query goes with
+                it, so nothing has to be typed twice. */}
+            <a
+              href={`#/search/${encodeURIComponent(query.trim())}`}
+              onClick={onClose}
+              className="mt-4 inline-flex items-center gap-1.5 rounded-control px-2 py-1 text-small font-semibold text-ink-dim transition-colors duration-(--duration-quick) hover:bg-surface-3 hover:text-ink"
+            >
+              Search transcripts instead
+              <Icon name="arrow-right" size={15} />
+            </a>
+          </div>
         ) : (
           <div
             ref={listRef}
             id={listboxId}
             role="listbox"
             aria-label="Results"
+            // Not a tab stop: Chrome makes a scrolling box one, and from it the
+            // arrow keys scrolled instead of moving the highlight. And a click on
+            // a heading or the padding must not take focus from the input.
+            tabIndex={-1}
+            onMouseDown={(e) => e.preventDefault()}
             className="max-h-[52vh] overflow-y-auto py-1.5"
           >
-            {flat.length === 0 ? (
-              <div className="px-4 py-10 text-center text-small text-ink-dim">
-                <p>Nothing matches “{query}”.</p>
-                {looksLikeIntent(query) && (
-                  <p className="mx-auto mt-2 max-w-sm text-caption text-ink-faint">
-                    That reads like an instruction — press <kbd className="kbd">↵</kbd> and Argus
-                    will show you exactly what it would change before changing anything.
-                  </p>
-                )}
-                {/* Not a dead end: the palette searches names, and what was
-                    typed may be in a transcript instead. */}
-                <a
-                  href="#/search"
-                  onClick={onClose}
-                  className="mt-4 inline-flex items-center gap-1.5 rounded-control px-2 py-1 text-small font-semibold text-ink-dim transition-colors duration-(--duration-quick) hover:bg-surface-3 hover:text-ink"
-                >
-                  Search transcripts instead
-                  <Icon name="arrow-right" size={15} />
-                </a>
-              </div>
-            ) : (
-              groups.map((group) => (
-                <div key={group.group} role="group" aria-labelledby={`${listboxId}-${group.group}`}>
-                  <div id={`${listboxId}-${group.group}`} className="eyebrow px-4 pb-1.5 pt-3">
-                    {group.group}
-                  </div>
-                  {group.items.map((command) => {
-                    const index = flat.indexOf(command);
-                    const active = index === activeIndex;
-                    return (
-                      <div
-                        key={command.id}
-                        id={optionId(index)}
-                        role="option"
-                        aria-selected={active}
-                        // The input keeps focus, so rows are pointer targets only.
-                        onMouseMove={() => setSelected(index)}
-                        onMouseDown={(e) => {
-                          e.preventDefault(); // don't steal focus from the input
-                          if (pending === null) runCommand(command);
-                        }}
-                        // A pressed state on the row, not just a hover tint: the
-                        // palette is the app's fastest surface and it is the one
-                        // place a click had no physical answer at all.
-                        className={`relative mx-1.5 flex cursor-pointer items-center gap-3 rounded-control px-2.5 py-2 transition-transform duration-(--duration-press) motion-safe:active:scale-[0.99] ${
-                          chosen === command.id
-                            ? "bg-eye/15 text-ink"
-                            : active
-                              ? "bg-surface-3 shadow-[inset_2px_0_0_var(--color-eye)]"
-                              : ""
+            {groups.map((group) => (
+              <div key={group.group} role="group" aria-labelledby={`${listboxId}-${group.group}`}>
+                <div id={`${listboxId}-${group.group}`} className="eyebrow px-4 pb-1.5 pt-3">
+                  {group.group}
+                </div>
+                {group.items.map((command) => {
+                  const index = flat.indexOf(command);
+                  const active = index === activeIndex;
+                  return (
+                    <div
+                      key={command.id}
+                      id={optionId(index)}
+                      role="option"
+                      aria-selected={active}
+                      // The input keeps focus, so rows are pointer targets only.
+                      onMouseMove={() => setSelected(index)}
+                      onMouseDown={(e) => {
+                        e.preventDefault(); // don't steal focus from the input
+                        if (pending === null) runCommand(command);
+                      }}
+                      // A pressed state on the row, not just a hover tint: the
+                      // palette is the app's fastest surface and it is the one
+                      // place a click had no physical answer at all.
+                      className={`relative mx-1.5 flex cursor-pointer items-center gap-3 rounded-control px-2.5 py-2 transition-transform duration-(--duration-press) motion-safe:active:scale-[0.99] ${
+                        chosen === command.id
+                          ? "bg-eye/15 text-ink"
+                          : active
+                            ? "bg-surface-3 shadow-[inset_2px_0_0_var(--color-eye)]"
+                            : ""
+                      }`}
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-ground-2/80 ${
+                          SEVERITY_TEXT[command.severity ?? "none"]
                         }`}
                       >
-                        <span
-                          aria-hidden="true"
-                          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-ground-2/80 ${
-                            SEVERITY_TEXT[command.severity ?? "none"]
-                          }`}
-                        >
-                          {command.icon ? <Icon name={command.icon} size={15} /> : "·"}
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm leading-tight text-ink">
-                            {highlight(command.title, positionsById.get(command.id) ?? []).map(
-                              (segment, i) => (
-                                <span
-                                  key={i}
-                                  className={segment.match ? "font-bold text-eye" : undefined}
-                                >
-                                  {segment.text}
-                                </span>
-                              ),
-                            )}
-                          </span>
-                          {command.subtitle && (
-                            <span className="mt-0.5 block truncate text-caption text-ink-faint">
-                              {command.subtitle}
-                            </span>
+                        {command.icon ? <Icon name={command.icon} size={15} /> : "·"}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm leading-tight text-ink">
+                          {highlight(command.title, positionsById.get(command.id) ?? []).map(
+                            (segment, i) => (
+                              <span
+                                key={i}
+                                className={segment.match ? "font-bold text-eye" : undefined}
+                              >
+                                {segment.text}
+                              </span>
+                            ),
                           )}
                         </span>
-                        {pending === command.id ? (
-                          <span
-                            role="status"
-                            className="shrink-0 text-caption font-semibold text-run"
-                          >
-                            working…
+                        {command.subtitle && (
+                          <span className="mt-0.5 block truncate text-caption text-ink-faint">
+                            {command.subtitle}
                           </span>
-                        ) : command.badge && CHORD.test(command.badge) ? (
-                          // Keycaps, uppercase, as in the shortcut sheet: one
-                          // shortcut should not be "g c" here and "G C" there.
-                          <span
-                            className="flex shrink-0 items-center gap-1 text-caption"
-                            title={`Shortcut: ${command.badge.replace(" ", " then ")}`}
-                          >
-                            {command.badge.split(" ").map((key, i) => (
-                              <kbd key={i} className="kbd">
-                                {key.toUpperCase()}
-                              </kbd>
-                            ))}
-                          </span>
-                        ) : (
-                          command.badge && (
-                            <span
-                              className={`shrink-0 rounded-md border border-line px-1.5 py-0.5 text-micro font-semibold ${
-                                SEVERITY_TEXT[command.severity ?? "none"]
-                              }`}
-                            >
-                              {command.badge}
-                            </span>
-                          )
                         )}
-                      </div>
-                    );
-                  })}
-                </div>
-              ))
-            )}
+                      </span>
+                      {pending === command.id ? (
+                        <span
+                          role="status"
+                          className="shrink-0 text-caption font-semibold text-run"
+                        >
+                          Working…
+                        </span>
+                      ) : command.keys ? (
+                        // Keycaps spelled as the shortcut sheet spells them,
+                        // for one key as for a chord. A keyboard hint, so not
+                        // on a touch screen.
+                        <span
+                          className="flex shrink-0 items-center gap-1 text-caption pointer-coarse:hidden"
+                          title={`Shortcut: ${formatKeys(command.keys, PLATFORM).join(" then ")}`}
+                        >
+                          {formatKeys(command.keys, PLATFORM).map((cap, i) => (
+                            <kbd key={i} className="kbd">
+                              {cap}
+                            </kbd>
+                          ))}
+                        </span>
+                      ) : (
+                        command.badge && (
+                          <span
+                            className={`shrink-0 rounded-md border border-line px-1.5 py-0.5 text-micro font-semibold ${
+                              SEVERITY_TEXT[command.severity ?? "none"]
+                            }`}
+                          >
+                            {command.badge}
+                          </span>
+                        )
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
           </div>
         )}
 
@@ -481,20 +526,23 @@ function Palette({
         )}
 
         <div className="flex items-center gap-4 border-t border-line bg-ground-2/50 px-4 py-2 text-caption text-ink-faint">
-          <span className="flex items-center gap-1.5">
-            <kbd className="kbd">↑↓</kbd> navigate
-          </span>
-          <span className="flex items-center gap-1.5">
-            <kbd className="kbd">↵</kbd> run
-          </span>
-          <span className="flex items-center gap-1.5">
-            <kbd className="kbd">esc</kbd> {intent ? "back" : "close"}
-          </span>
-          {looksLikeIntent(query) && !intent && (
+          {/* Keys a touch screen does not have; the count stays. */}
+          <span className="contents pointer-coarse:hidden">
             <span className="flex items-center gap-1.5">
-              <kbd className="kbd">{MOD_ENTER}</kbd> interpret
+              <kbd className="kbd">↑↓</kbd> navigate
             </span>
-          )}
+            <span className="flex items-center gap-1.5">
+              <kbd className="kbd">↵</kbd> run
+            </span>
+            <span className="flex items-center gap-1.5">
+              <kbd className="kbd">Esc</kbd> {intent ? "back" : "close"}
+            </span>
+            {looksLikeIntent(query) && !intent && (
+              <span className="flex items-center gap-1.5">
+                <kbd className="kbd">{MOD_ENTER}</kbd> interpret
+              </span>
+            )}
+          </span>
           <span className="ml-auto">
             {flat.length} of {commands.length}
           </span>

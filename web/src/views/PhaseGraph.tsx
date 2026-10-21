@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState } from "react";
+import { useLayoutEffect, useState, type HTMLAttributes } from "react";
 import type { DsStatus, PhasePill } from "../ds";
 import { Button, DURATION, STATUS, useSyncedDelay } from "../ds";
 import { fadeEdges, runwayFor } from "./graphFocus";
@@ -10,6 +10,7 @@ import {
   type LaneLayout,
 } from "./laneGraphLayout";
 import { useGraphFocus } from "./useGraphFocus";
+import { reasonText } from "./text";
 import { useElementWidth } from "./useLaneLayout";
 
 /**
@@ -54,6 +55,27 @@ const LABEL: Record<EdgeState, string> = {
   skipped: "border-line text-ink-faint opacity-60",
 };
 
+/**
+ * A route's condition as a chip, tinted by whether the edge it governs ran.
+ * The graph draws it on the edge; the focus panel's "from" and "to" lines draw
+ * the same one, so a condition looks like itself wherever it appears.
+ */
+export function RouteCondition({
+  state,
+  hot = false,
+  className = "",
+  ...rest
+}: { state: EdgeState; hot?: boolean } & HTMLAttributes<HTMLSpanElement>) {
+  return (
+    <span
+      {...rest}
+      className={`rounded-md border bg-surface-2 px-1.5 text-micro ${
+        hot ? "border-ink-faint text-ink" : LABEL[state]
+      } ${className}`}
+    />
+  );
+}
+
 /** Best-of-N in the space a phase pill has: "2/3 verified · c2 selected". */
 function candidateNote(c: NonNullable<PhasePill["candidates"]>): string {
   const verified = `${c.verified}/${c.total} verified`;
@@ -70,7 +92,8 @@ function chipTitle(pill: PhasePill, index: number, needNames: string[]): string 
   if ((pill.attempt ?? 0) > 0) bits.push(`attempt ${pill.attempt + 1}`);
   if (pill.retryAt && pill.status === "failed") bits.push("retry queued");
   if (pill.candidates) bits.push(candidateNote(pill.candidates));
-  if (pill.reason) bits.push(pill.reason.split("\n")[0]);
+  // Without the "failed:" the scheduler stores it with: the line already says so.
+  if (pill.reason) bits.push(reasonText(pill.reason.split("\n")[0]));
   if (pill.skipCause) bits.push(`not selected — ${pill.skipCause.source}: ${pill.skipCause.label}`);
   for (const edge of pill.edges ?? []) {
     if (edge.conditional) bits.push(`only if ${edge.phase}: ${edge.label}`);
@@ -135,9 +158,11 @@ function PhaseNode({
       // than replacing it — focus follows attention, so the selected node is
       // usually the waiting gate or the failure, and painting it the same
       // cyan as any clicked node hid exactly the status it was selected for.
+      // Focus on the selected node rings outside its selection ring: the
+      // usual 2px offset landed exactly on it, so focusing only brightened it.
       className={`absolute flex min-w-0 items-center gap-1.5 rounded-md border px-2 text-left transition-[border-color,background-color,box-shadow] duration-(--duration-quick) ${border} ${
         selected
-          ? `shadow-[0_0_0_2px_var(--color-ground-2),0_0_0_4px_rgb(54_227_232/0.55)] ${
+          ? `shadow-[0_0_0_2px_var(--color-ground-2),0_0_0_4px_rgb(54_227_232/0.55)] focus-visible:outline-offset-[6px] ${
               pill.status === "failed" || pill.status === "await" || pill.status === "working"
                 ? ""
                 : "!border-line-strong !bg-surface-2"
@@ -278,6 +303,9 @@ export function PhaseGraph({
     x: runwayFor(scaledW, viewportW, pad),
     y: runwayFor(scaledH, MAX_TILE_HEIGHT_PX, pad),
   };
+  // The runway is there exactly when an axis overflows: whether the graph
+  // scrolls, from geometry alone, so the toolbar is settled before any input.
+  const scrolls = viewportW > 0 && (runway.x > 0 || runway.y > 0);
   const { following, pause, resume, centreOn } = useGraphFocus(
     scrollerRef,
     phases,
@@ -301,11 +329,57 @@ export function PhaseGraph({
   // Incident edges paint last so they sit over their neighbours.
   const edges = [...layout.edges].sort((a, b) => Number(hot(a)) - Number(hot(b)));
 
+  // The view controls get a row of their own above the graph. Floated over
+  // it, they covered nodes — on a fitted fan-out, the right third of the very
+  // node the board had selected. The row is there whenever the graph scrolls or
+  // can zoom, which depends on the geometry and not on what the user does, so
+  // following and pausing never move the graph under the pointer. Follow goes
+  // with scrolling alone: in a graph that fits there is nothing to follow, and
+  // a Follow left over from a scrolled view vanished from under the press
+  // that switched it back on.
+  const toolbar = fitScale < 1 || scrolls;
+
   return (
     <div
       data-orientation={layout.orientation}
       className="relative w-full min-w-0 max-w-full rounded-tile border border-line bg-ground-2/70 shadow-[inset_0_1px_3px_rgb(0_0_0/0.25)]"
     >
+      {toolbar && (
+        <div className="flex items-center justify-end gap-1 border-b border-line/70 px-1 py-1">
+          {scrolls && (
+            // A toggle rather than a button that appears once the view is
+            // taken over: pressed, the graph keeps the phase the run is on in
+            // view by itself, which is worth knowing when it moves unasked.
+            <Button
+              variant="ghost"
+              size="sm"
+              icon="eye"
+              data-testid="graph-follow"
+              aria-pressed={following}
+              title={
+                following
+                  ? "Keeping the phase the run is on in view. Press to stop following"
+                  : "Centre the phase the run is on, and keep following it"
+              }
+              onClick={following ? pause : resume}
+              className="aria-pressed:bg-eye/10 aria-pressed:text-eye"
+            >
+              Follow
+            </Button>
+          )}
+          {fitScale < 1 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              data-testid="graph-zoom"
+              title={zoom === "fit" ? "Show the graph at full size" : "Fit the graph to the tile"}
+              onClick={() => setZoom((z) => (z === "fit" ? "actual" : "fit"))}
+            >
+              {zoom === "fit" ? "Full size" : "Fit"}
+            </Button>
+          )}
+        </div>
+      )}
       <div
         ref={scrollerRef}
         role="group"
@@ -418,45 +492,19 @@ export function PhaseGraph({
             {layout.edges
               .filter((e) => e.label)
               .map((e) => (
-                <span
+                <RouteCondition
                   key={`label-${e.from}>${e.to}`}
                   data-testid="route-label"
+                  state={e.state}
+                  hot={hot(e)}
                   style={{ left: e.label!.x, top: e.label!.y }}
-                  className={`absolute -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-md border bg-surface-2 px-1.5 text-micro leading-[14px] ${
-                    hot(e) ? "border-ink-faint text-ink" : LABEL[e.state]
-                  }`}
+                  className="absolute -translate-x-1/2 -translate-y-1/2 whitespace-nowrap leading-[14px]"
                 >
                   {e.label!.text}
-                </span>
+                </RouteCondition>
               ))}
           </div>
         </div>
-      </div>
-      {/* Outside the scroller, so they stay put and never fade; raised, because
-          they float over the edges. */}
-      <div className="absolute right-1.5 top-1.5 flex gap-1">
-        {!following && (
-          <Button
-            size="sm"
-            data-testid="graph-follow"
-            title="Centre the phase the run is on, and keep following it"
-            onClick={resume}
-            className="shadow-raised"
-          >
-            Follow
-          </Button>
-        )}
-        {fitScale < 1 && (
-          <Button
-            size="sm"
-            data-testid="graph-zoom"
-            title={zoom === "fit" ? "Show at full size" : "Fit the graph to the tile"}
-            onClick={() => setZoom((z) => (z === "fit" ? "actual" : "fit"))}
-            className="shadow-raised"
-          >
-            {zoom === "fit" ? "1:1" : "Fit"}
-          </Button>
-        )}
       </div>
     </div>
   );

@@ -45,7 +45,7 @@ export function ConnectionPill({ live }: { live: boolean }) {
             ? "Live: connected to the Argus server"
             : remaining === null
               ? "Offline: connecting to the Argus server"
-              : `Offline: retrying in ${remaining} seconds`
+              : `Offline: retrying in ${remaining} ${remaining === 1 ? "second" : "seconds"}`
         }
         // The label is the first thing to go on a narrow bar: the dot's colour
         // already carries the state, and the words live in the accessible name.
@@ -76,11 +76,13 @@ export function ConnectionPill({ live }: { live: boolean }) {
           </>
         )}
       </span>
+      {/* The one useful thing to do while offline, so on a phone its hit area
+          reaches 44px tall without the bar growing to fit it. */}
       {!connected && (
         <button
           type="button"
           onClick={reconnectNow}
-          className="h-7 rounded-control border border-line-strong bg-surface-2 px-2.5 text-caption font-semibold text-ink transition duration-(--duration-quick) hover:bg-surface-3 motion-safe:active:scale-[0.97]"
+          className="relative h-7 shrink-0 rounded-control border border-line-strong bg-surface-2 px-2.5 text-caption font-semibold text-ink transition duration-(--duration-quick) hover:bg-surface-3 motion-safe:active:scale-[0.97] max-md:before:absolute max-md:before:-inset-x-[3px] max-md:before:-inset-y-2"
         >
           Retry
         </button>

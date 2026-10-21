@@ -14,6 +14,7 @@ import {
 } from "../ds";
 import { AgentTile } from "../ds/AgentTile";
 import { HealthCounter } from "../ds/HealthCounter";
+import { loadError } from "../live/loadError";
 
 /**
  * The background agents, as tiles. The list itself is owned by the shell (the
@@ -54,7 +55,7 @@ export default function AgentsView({
         <div className="mb-6">
           <AlertStrip
             subject="Agents"
-            message={`Couldn't reach the Argus server: ${error}`}
+            message={loadError("agents", error)}
             action={
               <Button size="sm" icon="retry" onClick={() => refresh()}>
                 Retry

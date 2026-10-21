@@ -58,7 +58,7 @@ describe("auth gate", () => {
     });
     await mount();
 
-    expect(await screen.findByRole("form", { name: "Login" })).toBeInTheDocument();
+    expect(await screen.findByRole("form", { name: "Sign in" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Command Center" })).toBeNull();
   });
 
@@ -89,7 +89,7 @@ describe("auth gate", () => {
     await mount();
 
     expect(screen.getByRole("link", { name: "Command Center" })).toBeInTheDocument();
-    expect(screen.queryByRole("form", { name: "Login" })).toBeNull();
+    expect(screen.queryByRole("form", { name: "Sign in" })).toBeNull();
   });
 
   it("never gates a server that needs no session", async () => {
@@ -105,7 +105,7 @@ describe("auth gate", () => {
     await mount();
 
     expect(screen.getByRole("link", { name: "Command Center" })).toBeInTheDocument();
-    expect(screen.queryByRole("form", { name: "Login" })).toBeNull();
+    expect(screen.queryByRole("form", { name: "Sign in" })).toBeNull();
   });
 
   it("falls open to the dashboard when auth status cannot be read", async () => {
@@ -117,6 +117,6 @@ describe("auth gate", () => {
     );
     await mount();
 
-    expect(screen.queryByRole("form", { name: "Login" })).toBeNull();
+    expect(screen.queryByRole("form", { name: "Sign in" })).toBeNull();
   });
 });

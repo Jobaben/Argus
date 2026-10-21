@@ -4,10 +4,16 @@ import userEvent from "@testing-library/user-event";
 import type { RecorderEvent, Recording } from "../types";
 import FlightRecorder from "./FlightRecorder";
 
-const state: { recording: Recording | null; loading: boolean; error: string | null } = {
+const state: {
+  recording: Recording | null;
+  loading: boolean;
+  error: string | null;
+  errorStatus: number | null;
+} = {
   recording: null,
   loading: false,
   error: null,
+  errorStatus: null,
 };
 
 vi.mock("../useRecording", () => ({
@@ -68,6 +74,7 @@ beforeEach(() => {
   state.recording = recording();
   state.loading = false;
   state.error = null;
+  state.errorStatus = null;
 });
 
 describe("FlightRecorder", () => {
@@ -103,6 +110,41 @@ describe("FlightRecorder", () => {
     expect(screen.getByText("Bash: npm run build", { selector: "b" })).toBeInTheDocument();
     expect(screen.getByText("lint is red")).toBeInTheDocument();
     expect(screen.queryByText(/ARGUS_OUTCOME/)).not.toBeInTheDocument();
+  });
+
+  it("says a process exit once, not as subject and message both", () => {
+    // Labelled "Failed — exit code 1" with the detail "exit code 1": the strip
+    // read "Exit code 1 exit code 1".
+    state.recording = recording({
+      events: [
+        ev(0, { kind: "start", label: "Run started — Nightly triage" }),
+        ev(90_000, { kind: "error", label: "Failed — exit code 1", detail: "exit code 1" }),
+      ],
+      failureIndex: 1,
+    });
+    render(<FlightRecorder />);
+    const strip = screen.getByText("Exit code 1", { selector: "b" }).closest("[role=status]");
+    expect(strip).not.toHaveTextContent(/exit code 1.*exit code 1/i);
+  });
+
+  it("shows the run's closing summary without the agent's protocol line", () => {
+    state.recording = recording({
+      status: "succeeded",
+      failureIndex: null,
+      events: [
+        ev(0, { kind: "start", label: "Run started — Nightly triage" }),
+        ev(90_000, {
+          kind: "end",
+          label: "Run finished",
+          detail: "Reviewed 14 commits; one risky change.\nARGUS_OUTCOME: succeeded",
+        }),
+      ],
+    });
+    window.location.hash = "#/run/run-1/90000";
+    render(<FlightRecorder />);
+    const now = screen.getByRole("complementary", { name: /current event/i });
+    expect(within(now).getByText("Reviewed 14 commits; one risky change.")).toBeInTheDocument();
+    expect(now).not.toHaveTextContent(/ARGUS_OUTCOME/);
   });
 
   it("keeps a zero side of an edit's line counts out of the status colours", async () => {
@@ -165,6 +207,22 @@ describe("FlightRecorder", () => {
     expect(screen.queryByRole("slider")).not.toBeInTheDocument();
   });
 
+  it("calls a skipped run skipped, not idle", () => {
+    state.recording = recording({
+      status: "skipped",
+      startedAt: null,
+      endedAt: null,
+      durationMs: 0,
+      events: [],
+      lanes: [],
+      failureIndex: null,
+      unavailable: "not-started",
+    });
+    render(<FlightRecorder />);
+    expect(screen.getByText("Skipped")).toBeInTheDocument();
+    expect(screen.queryByText("Idle")).toBeNull();
+  });
+
   it("labels apportioned cost as apportioned", () => {
     render(<FlightRecorder />);
     expect(screen.getByText(/apportioned by token share/i)).toBeInTheDocument();
@@ -199,6 +257,28 @@ describe("FlightRecorder", () => {
     render(<FlightRecorder />);
     await user.keyboard("f");
     expect(screen.getByRole("slider", { name: /scrub the recording/i })).toHaveValue("60000");
+  });
+
+  it("calls a run the server has no record of not found, with no retry", () => {
+    // The server's 404 carries its own words ("not found"); the page knows it
+    // by the status, and a Retry under it could never succeed.
+    state.recording = null;
+    state.error = "not found";
+    state.errorStatus = 404;
+    render(<FlightRecorder />);
+    expect(screen.getByText("Run not found")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("gives the server's reason when a recording fails to load, with a retry", () => {
+    state.recording = null;
+    state.error = "database is locked";
+    state.errorStatus = 500;
+    render(<FlightRecorder />);
+    expect(
+      screen.getByText("Couldn't load this recording: database is locked"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
   });
 
   it("without a run id it teaches where recordings come from", () => {

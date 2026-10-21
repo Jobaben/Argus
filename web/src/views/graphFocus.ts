@@ -82,9 +82,14 @@ export function followTarget(
  * Empty scroll space on each side of an axis that overflows, so a phase at the
  * very start or end of the graph can still be scrolled to the centre. An axis
  * that fits needs none — it doesn't scroll.
+ *
+ * "Fits" allows half a pixel: a graph scaled to exactly its viewport comes out
+ * a floating-point sliver wider (`w * (v / w)` is not always `v`), and that
+ * sliver used to buy a fitted graph a full runway each side — so it scrolled,
+ * and following centred one phase and pushed the rest out of view.
  */
 export function runwayFor(content: number, viewport: number, pad: number): number {
-  if (viewport <= 0 || content <= viewport) return 0;
+  if (viewport <= 0 || content <= viewport + 0.5) return 0;
   return Math.max(0, viewport / 2 - pad);
 }
 

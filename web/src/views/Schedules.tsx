@@ -24,6 +24,7 @@ import {
   useTicker,
 } from "../ds";
 import { TriggerFields } from "../ds/TriggerFields";
+import { useConfirm } from "../ds/useConfirm";
 import { runtimeCommand, useRuntimes } from "../useRuntimes";
 import { useVerdictTrends } from "../useVerdict";
 import { VerdictSparkline } from "./VerdictPanel";
@@ -45,6 +46,7 @@ import { RubricFields } from "../ds/RubricFields";
 import { RuntimeBadge } from "../ds/RuntimeBadge";
 import { RuntimeSelect } from "../ds/RuntimeSelect";
 import { Tabs } from "../ds/Tabs";
+import { loadError } from "../live/loadError";
 
 /**
  * Countdown to this schedule's next firing, on its own second-resolution clock.
@@ -569,7 +571,7 @@ function ScheduleCard({
   runNow: (id: string) => Promise<unknown>;
   cancelRun: (runId: string) => Promise<unknown>;
   /** FLIP registration, so the card glides when the list re-orders. */
-  ref?: React.Ref<HTMLDivElement>;
+  ref?: React.Ref<HTMLElement>;
   /** The Edit button, so focus can come back to it when the form closes. */
   editRef?: React.Ref<HTMLButtonElement>;
 }) {
@@ -578,6 +580,8 @@ function ScheduleCard({
   const typical = typicalDuration(recent);
   const [actionErr, setActionErr] = useState<string | null>(null);
   const [pending, setPending] = useState<"run" | "toggle" | "delete" | null>(null);
+  const confirm = useConfirm();
+  const titleId = useId();
 
   // Wrap an action so a failed Run-now/Enable/Delete surfaces instead of being
   // silently swallowed by a bare `void promise`, and so its button can say it
@@ -669,8 +673,12 @@ function ScheduleCard({
   }
 
   return (
-    <div
+    // An article named by its title, as a pipeline card is: five cards each
+    // ending "Run now", "Edit", "Disable" told a screen reader nothing about
+    // whose they were.
+    <article
       ref={ref}
+      aria-labelledby={titleId}
       className={`@container flex min-w-0 flex-col rounded-tile border shadow-raised ${cardTone(health.state)}`}
     >
       {/* Full width, one card per row, in priority order. A wide card puts its
@@ -682,7 +690,10 @@ function ScheduleCard({
           <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
             <div className="min-w-0 flex-1 basis-64">
               <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1.5">
-                <h3 className="min-w-0 max-w-full truncate text-title font-semibold text-ink">
+                <h3
+                  id={titleId}
+                  className="min-w-0 max-w-full truncate text-title font-semibold text-ink"
+                >
                   {schedule.name}
                 </h3>
                 <HealthPill state={health.state} />
@@ -816,6 +827,18 @@ function ScheduleCard({
           way: Run now first, Edit beside it, housekeeping at the far end. */}
       <CardFooter
         error={actionErr}
+        question={
+          confirm.armed === "delete" &&
+          confirm.question(
+            {
+              title: `Delete schedule “${schedule.name}”?`,
+              confirm: "Delete schedule",
+              cancel: "Keep",
+              icon: "trash",
+            },
+            () => void act("delete", () => remove(schedule.id))(),
+          )
+        }
         manage={
           <>
             <Button
@@ -839,10 +862,8 @@ function ScheduleCard({
               // Every card's button reads "Delete"; the name says which one.
               aria-label={`Delete ${schedule.name}`}
               disabled={pending === "delete"}
-              onClick={() => {
-                if (confirm(`Delete schedule "${schedule.name}"?`))
-                  void act("delete", () => remove(schedule.id))();
-              }}
+              aria-expanded={confirm.armed === "delete"}
+              onClick={confirm.toggle("delete")}
             >
               Delete
             </Button>
@@ -862,7 +883,7 @@ function ScheduleCard({
           Edit
         </Button>
       </CardFooter>
-    </div>
+    </article>
   );
 }
 
@@ -1076,8 +1097,8 @@ export default function Schedules() {
           {error && (
             <div className="mb-6">
               <AlertStrip
-                subject="Couldn't reach the Argus server"
-                message={error}
+                subject="Schedules"
+                message={loadError("schedules", error)}
                 action={
                   <Button size="sm" icon="retry" onClick={() => void refresh()}>
                     Retry

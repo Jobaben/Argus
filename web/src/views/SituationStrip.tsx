@@ -180,7 +180,7 @@ export function SituationStrip({
   situation: Situation | null;
   loading: boolean;
   /**
-   * Where "awaiting you" goes. The board passes the first waiting gate's deep
+   * Where "need approval" goes. The board passes the first waiting gate's deep
    * link, so the chip opens the review itself rather than linking to the page
    * it is already on.
    */
@@ -217,10 +217,17 @@ export function SituationStrip({
   // left a newcomer to work out that one was a pipeline and one a monitor (the
   // Health page's word, and where both monitor chips lead). An open issue is
   // red like the other failures — it broke and is still broken — while an
-  // anomaly only ran unusually, and asks for a look rather than a fix.
+  // anomaly only ran unusually, and asks for a look rather than a fix. A gate
+  // "needs approval" here as on its card's pill and in "Needs you" below: three
+  // phrasings of one state made a reader wonder whether they were three states.
   const attention: { count: number; label: string; tone: Tone; href: string }[] = (
     [
-      { count: c.gatesWaiting, label: "awaiting you", tone: "attention", href: attentionHref },
+      {
+        count: c.gatesWaiting,
+        label: `${c.gatesWaiting === 1 ? "needs" : "need"} approval`,
+        tone: "attention",
+        href: attentionHref,
+      },
       {
         count: c.failedInstances,
         label: `${noun(c.failedInstances, "pipeline")} failed`,
@@ -272,7 +279,7 @@ export function SituationStrip({
           </span>
           <span>
             <b className="font-semibold text-ink">Nothing needs you</b> — no gates waiting, no
-            failures{idle ? ", nothing running" : ""}.
+            failures{idle ? ", nothing running" : ""}
           </span>
         </span>
       ) : (

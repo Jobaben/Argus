@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef } from "react";
+import { containTab } from "./containTab";
 import { formatKeys, type Binding } from "./keys";
 import { Icon, SURFACE, usePresence, useSurfaceMotion } from "../ds";
 
@@ -65,7 +66,12 @@ export function ShortcutHelp({
         role="dialog"
         aria-modal="true"
         aria-labelledby="shortcut-help-title"
-        className="w-full max-w-[600px] overflow-hidden rounded-panel bg-surface-2 shadow-overlay"
+        // Tab moves between Close and the list, never out to the page behind
+        // the scrim. Focusable but not tabbable, so a click on the heading
+        // keeps focus in the sheet.
+        tabIndex={-1}
+        onKeyDown={containTab}
+        className="w-full max-w-[600px] overflow-hidden rounded-panel bg-surface-2 shadow-overlay focus:outline-none"
       >
         <div className="flex items-center justify-between gap-3 border-b border-line px-5 py-3.5">
           <h2
@@ -89,7 +95,17 @@ export function ShortcutHelp({
             <Icon name="close" size={18} />
           </button>
         </div>
-        <div className="grid max-h-[68vh] gap-x-8 overflow-y-auto px-5 py-5 sm:grid-cols-2">
+        {/* A tab stop of its own. On a short window the list scrolls, and
+            the arrow keys only scroll what has focus. The browser would make
+            a scroller a stop by itself, but containTab steers Tab through
+            real controls only, so the list says it is one. The ring is drawn
+            inside, where the sheet's rounded clip cannot cut it off. */}
+        <div
+          role="region"
+          aria-label="All shortcuts"
+          tabIndex={0}
+          className="grid max-h-[68vh] gap-x-8 overflow-y-auto rounded-b-panel px-5 py-5 focus-visible:-outline-offset-2 sm:grid-cols-2"
+        >
           {groups.map(([group, items]) => (
             <section key={group} className="mb-6">
               <h3 className="eyebrow mb-2.5">{group}</h3>

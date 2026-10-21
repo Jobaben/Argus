@@ -1,20 +1,20 @@
-import { Suspense, lazy, useMemo, useState } from "react";
+import { Suspense, lazy, useMemo, useRef, useState } from "react";
 import { runtimeLabel } from "../useRuntimes";
 import { useMachineFacet } from "../fleet/useMachineFacet";
-import { MachinePicker, PeerBanner, PeerEmpty } from "../fleet/MachineFacet";
 import { useOverview } from "../useOverview";
 import { useAuth } from "../useAuth";
 import { useInsight } from "../useInsight";
 import { useRuns } from "../useRuns";
 import { SituationStrip } from "./SituationStrip";
 import { ActivityRail } from "./ActivityRail";
-import { PhaseGraph } from "./PhaseGraph";
+import { PhaseGraph, RouteCondition } from "./PhaseGraph";
 import { FOCUS_MIN_PX, useBoardArrangement, useElementWidth } from "./useLaneLayout";
 import { edgeState } from "./laneGraphLayout";
 import { decisionFields, isLongValue } from "./decisionValue";
 import { attentionPhase } from "./phaseAttention";
 import { ATTENTION_KINDS, attentionHref } from "./attentionKinds";
 import { firstProseLine, withoutOutcome } from "./outcome";
+import { reasonText } from "./text";
 import type { StepSelection } from "./StepDrawer";
 import type { GateSelection } from "./GateDrawer";
 import { hashSegments, useHashRoute } from "../useHashRoute";
@@ -54,6 +54,7 @@ import {
 } from "../ds";
 import type { OverviewRow, OverviewGate, PhasePill, StepPill, DsStatus } from "../ds";
 import type { AttentionItem as BriefingItem, AttentionKind, RouteDecision } from "../types";
+import { UNREACHABLE, loadError } from "../live/loadError";
 
 const StepDrawer = lazy(() => import("./StepDrawer").then((m) => ({ default: m.StepDrawer })));
 
@@ -61,6 +62,11 @@ const StepDrawer = lazy(() => import("./StepDrawer").then((m) => ({ default: m.S
 // until a gate is actually opened — so it is its own chunk, fetched on first
 // open, and the Command Center (an eager route) stays inside the size budget.
 const GateDrawer = lazy(() => import("./GateDrawer").then((m) => ({ default: m.GateDrawer })));
+// A deleted pipeline's live instance is rare, and its Stop is the one place
+// the board asks a question first, so the confirm is fetched with it.
+const OrphanStop = lazy(() => import("./OrphanStop").then((m) => ({ default: m.OrphanStop })));
+const PeerControls = lazy(() => import("./PeerBoard").then((m) => ({ default: m.PeerControls })));
+const PeerBoard = lazy(() => import("./PeerBoard").then((m) => ({ default: m.PeerBoard })));
 
 /**
  * The board re-renders in place as pipelines change state, which is invisible
@@ -137,6 +143,8 @@ function StepTile({
   const beat = useSyncedDelay(DURATION.pulse);
   const hasMeter =
     step.tokens != null || step.costUsd != null || (finished && step.durationMs != null);
+  // Told as the drawer tells it: no "failed:" beside the Failed pill.
+  const said = reasonText(reason);
   return (
     <article
       // Fast attack, slow release. One duration for both directions made the
@@ -218,9 +226,9 @@ function StepTile({
           Selected — its checks passed
         </div>
       )}
-      {reason && (
+      {said && (
         <div className={`text-small leading-snug ${TILE_DETAIL[token] ?? "text-ink-dim"}`}>
-          {reason}
+          {said}
         </div>
       )}
       {activity && (
@@ -287,7 +295,9 @@ function DecisionNote({
             </span>{" "}
           </>
         )}
-        → {decision.selected.length > 0 ? decision.selected.map(name).join(", ") : "nothing"}
+        {/* The routes line's arrow, set in the text it leads. */}
+        <Icon name="arrow-right" size={13} className="inline-block align-[-2px]" />{" "}
+        {decision.selected.length > 0 ? decision.selected.map(name).join(", ") : "nothing"}
         {decision.skipped.length > 0 && (
           <span> · skipped {decision.skipped.map(name).join(", ")}</span>
         )}
@@ -385,10 +395,10 @@ function PhaseFocus({
   onOpenGate: (originY: number) => void;
 }) {
   const name = (id: string) => phaseNames.get(id) ?? id;
+  const number = (id: string) => String(phases.findIndex((q) => q.id === id) + 1).padStart(2, "0");
   const edges =
     pill.edges ??
     pill.needs.map((n) => ({ phase: n, label: "always", conditional: false, allowSkipped: false }));
-  const needNames = pill.needs.map(name);
   // Where this phase leads, with the condition each route needs. The graph
   // draws the same labels on its edges; this is the line for a reader who is
   // looking at the steps and asks "and then?" — including a route that is
@@ -400,7 +410,6 @@ function PhaseFocus({
     return [
       {
         to: q,
-        index: phases.indexOf(q),
         condition: edge?.conditional ? edge.label : null,
         state: edgeState(pill, q),
       },
@@ -430,55 +439,58 @@ function PhaseFocus({
           <span className={chipClass("await")}>Retry queued</span>
         )}
         {pill.skipped && <span className={chipClass("neutral")}>Skipped</span>}
-        {/* Each incoming edge with the condition that governs it: an
-            unconditional edge is just the arrow it always was, a conditional
-            one says what has to be true, and a skip-tolerant join says it
-            accepts a branch that never ran. The arrow points back at where the
-            work comes from; the set has no left arrow, so it is the right one
-            turned round. */}
-        {edges.length > 0 && (
-          <span
-            className="flex min-w-0 items-center gap-1 text-caption text-ink-faint"
-            title={`Waits for ${needNames.join(", ")}`}
-          >
-            <Icon name="arrow-right" size={13} className="rotate-180" />
-            <span className="truncate">
-              {edges
-                .map(
-                  (e) =>
-                    `${name(e.phase)}${e.conditional ? ` (${e.label})` : ""}${
-                      e.allowSkipped ? " or skipped" : ""
-                    }`,
-                )
-                .join(", ")}
-            </span>
-          </span>
-        )}
       </div>
+      {/* Where the work comes from, then where it goes: one line each, in one
+          form — the phase by number and name, the condition that governs the
+          edge in the same chip the graph draws on it. The incoming line used
+          to sit in the header cut to one line with its conditions in
+          parentheses, so the last dependency was reachable only by tooltip.
+          The set has no left arrow, so "from" is the right one turned round. */}
+      {edges.length > 0 && (
+        <p
+          data-testid="phase-needs"
+          className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 px-0.5 text-caption text-ink-faint"
+        >
+          <Icon name="arrow-right" size={13} className="rotate-180" />
+          <span className="sr-only">Waits for</span>
+          {edges.map((e, i) => (
+            <span key={e.phase} className="inline-flex min-w-0 items-center gap-1.5">
+              {i > 0 && <span className="opacity-60">·</span>}
+              {e.conditional && (
+                <RouteCondition
+                  state={edgeState(phases.find((q) => q.id === e.phase) ?? pill, pill)}
+                  className="leading-[18px]"
+                >
+                  {e.label}
+                </RouteCondition>
+              )}
+              <span className="min-w-0 break-words text-ink-dim">
+                {number(e.phase)} {name(e.phase)}
+              </span>
+              {e.allowSkipped && <span>or skipped</span>}
+            </span>
+          ))}
+        </p>
+      )}
       {routes.length > 0 && (
         <p
           data-testid="phase-routes"
           className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 px-0.5 text-caption text-ink-faint"
         >
           <Icon name="arrow-right" size={13} />
+          <span className="sr-only">Leads to</span>
           {routes.map((r, i) => (
             <span key={r.to.id} className="inline-flex min-w-0 items-center gap-1.5">
               {i > 0 && <span className="opacity-60">·</span>}
               {r.condition && (
-                <span
-                  className={`rounded-md border bg-surface-2 px-1.5 font-mono text-micro leading-[18px] ${
-                    r.state === "taken"
-                      ? "border-ok/40 text-ink-dim"
-                      : r.state === "skipped"
-                        ? "border-line text-ink-faint opacity-60"
-                        : "border-line text-ink-faint"
-                  }`}
-                >
+                <RouteCondition state={r.state} className="leading-[18px]">
                   {r.condition}
-                </span>
+                </RouteCondition>
               )}
-              <span className={`min-w-0 truncate ${r.state === "skipped" ? "" : "text-ink-dim"}`}>
-                {String(r.index + 1).padStart(2, "0")} {r.to.name}
+              <span
+                className={`min-w-0 break-words ${r.state === "skipped" ? "" : "text-ink-dim"}`}
+              >
+                {number(r.to.id)} {r.to.name}
               </span>
             </span>
           ))}
@@ -497,29 +509,40 @@ function PhaseFocus({
           the panel rather than trailing the step grid — it is the reason this
           phase is in focus, and below six tiles it was below the fold. */}
       {instanceId && gate?.phaseId === pill.id && (
+        // Sized by the panel, not the screen: beside the graph the panel can be
+        // narrow at any viewport. Narrow, the button goes under the sentence,
+        // lined up with it; it used to stay beside and squeeze the sentence
+        // into a column of a few words a line.
         <div
-          className={`flex flex-wrap items-center gap-x-3 gap-y-2 rounded-control border px-3 py-2.5 ${
+          className={`@container rounded-control border px-3 py-2.5 ${
             gate.canApprove ? "border-await/35 bg-await/[0.07]" : "border-fail/30 bg-fail/[0.06]"
           }`}
         >
-          <Icon
-            name={gate.canApprove ? "approve" : "alert"}
-            size={18}
-            className={gate.canApprove ? "text-await" : "text-fail"}
-          />
-          <p className="min-w-0 flex-1 text-small text-ink-dim">
-            {gate.canApprove
-              ? "Paused for your approval. Review what this phase produced, then approve or send it back."
-              : `This phase stopped short. Review what went wrong, then ${(reviseLabel ?? "Revise").toLowerCase()} it.`}
-          </p>
-          <Button
-            data-testid="gate-opener"
-            variant={gate.canApprove ? "attention" : "danger"}
-            iconRight="arrow-right"
-            onClick={(e) => onOpenGate(e.currentTarget.getBoundingClientRect().top)}
-          >
-            {gate.canApprove ? "Review" : `Review · ${reviseLabel ?? "Revise"}`}
-          </Button>
+          <div className="flex flex-col items-start gap-2 @lg:flex-row @lg:items-center @lg:gap-3">
+            <div className="flex min-w-0 flex-1 items-start gap-3">
+              <Icon
+                name={gate.canApprove ? "approve" : "alert"}
+                size={18}
+                className={`mt-px ${gate.canApprove ? "text-await" : "text-fail"}`}
+              />
+              <p className="min-w-0 flex-1 text-small text-ink-dim">
+                {gate.canApprove
+                  ? "Paused for your approval. Review what this phase produced, then approve or send it back."
+                  : `This phase failed. Review what went wrong, then ${(reviseLabel ?? "Revise").toLowerCase()} it.`}
+              </p>
+            </div>
+            {/* "Review" here as in "Needs you": it opens the review either way,
+                and the revise or retry is decided in there. */}
+            <Button
+              data-testid="gate-opener"
+              variant={gate.canApprove ? "attention" : "danger"}
+              iconRight="arrow-right"
+              className="ml-[30px] @lg:ml-0"
+              onClick={(e) => onOpenGate(e.currentTarget.getBoundingClientRect().top)}
+            >
+              Review
+            </Button>
+          </div>
         </div>
       )}
       <ol
@@ -700,24 +723,6 @@ function Row({
 }) {
   const first = rows[0];
   const multi = rows.length > 1;
-  // By instance: each row has its own Stop, and its own failure.
-  const [abortError, setAbortError] = useState<{ instanceId: string; message: string } | null>(
-    null,
-  );
-  const stop = (instanceId: string) => {
-    if (!onAbort) return;
-    if (
-      !confirm(
-        `Stop this instance of the deleted pipeline "${first.name}"? In-progress work will be discarded.`,
-      )
-    ) {
-      return;
-    }
-    setAbortError(null);
-    onAbort(instanceId).catch((e: unknown) =>
-      setAbortError({ instanceId, message: e instanceof Error ? e.message : String(e) }),
-    );
-  };
   return (
     <article
       ref={ref}
@@ -753,12 +758,17 @@ function Row({
         <div className="min-w-0 overflow-hidden sm:ml-auto">
           <div className="-ml-4 flex min-w-0 flex-wrap items-center gap-y-1 text-caption text-ink-faint">
             <span className={FACT}>{first.phases.length} phases</span>
+            {/* Cut short inside, not on the fact itself: clipping the fact
+                clipped the dot it carries in front of it too. Mono, as on the
+                step tiles: it is an id, and Hellix's wide hyphens spaced it out. */}
             {first.model && (
               <span
                 title="Model running this pipeline (steps that differ say so on their tile)"
-                className={`${FACT} max-w-[16rem] truncate text-ink-dim`}
+                className={`${FACT} min-w-0`}
               >
-                {first.model}
+                <span className="block max-w-[16rem] truncate font-mono text-id text-ink-dim">
+                  {first.model}
+                </span>
               </span>
             )}
             {!multi && first.cost && (
@@ -805,19 +815,13 @@ function Row({
               </div>
             )}
             {row.orphaned && onAbort && row.instanceId && (
-              <div className="mb-3 flex flex-wrap items-center gap-2">
-                <Button
-                  variant="danger"
-                  size="sm"
-                  icon="stop"
-                  onClick={() => stop(row.instanceId!)}
-                >
-                  Stop
-                </Button>
-                {abortError?.instanceId === row.instanceId && (
-                  <span className="text-caption text-fail-ink">{abortError.message}</span>
-                )}
-              </div>
+              <Suspense fallback={null}>
+                <OrphanStop
+                  pipelineName={first.name}
+                  instanceId={row.instanceId}
+                  onAbort={onAbort}
+                />
+              </Suspense>
             )}
             {/* The graph is the whole pipeline at a glance — statuses, stages,
                 edges, routes, gates, step progress — and the focus panel beside
@@ -849,6 +853,9 @@ function BoardTotal({
 }) {
   const [arming, setArming] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+  const opener = useRef<HTMLButtonElement>(null);
+  const box = useRef<HTMLDivElement>(null);
   // Its own height while it loads: the figure is taller than the button beside
   // it, so arriving into nothing grew the header and shifted the whole board
   // down — the largest layout shift on the landing page.
@@ -869,10 +876,49 @@ function BoardTotal({
     ) : null;
   }
   const sinceLabel = new Date(totals.since).toLocaleString();
+  const close = (refocus: boolean) => {
+    setArming(false);
+    setFailed(null);
+    if (refocus) opener.current?.focus();
+  };
+  const confirmReset = () => {
+    if (busy) return;
+    setBusy(true);
+    setFailed(null);
+    reset().then(
+      () => {
+        setBusy(false);
+        close(false);
+        // Onto the total itself, not the icon: at zero the icon goes, and the
+        // focus it held would fall to the top of the page.
+        box.current?.focus();
+      },
+      (e: unknown) => {
+        setBusy(false);
+        setFailed(e instanceof Error ? e.message : String(e));
+      },
+    );
+  };
   // The gap to the Launch button beside it is the total's own margin, so the
   // button does not sit indented when the total is absent.
   return (
-    <div className="mr-2 flex items-center gap-2">
+    <div
+      ref={box}
+      tabIndex={-1}
+      className="relative mr-2 flex items-center gap-2 rounded-control"
+      // Focus moving on to something else answers "no". Only a real target
+      // counts: a click on bare page moves focus nowhere, and nor does a
+      // click on the icon itself in Safari, which would close and reopen it.
+      onBlur={(e) => {
+        const to = e.relatedTarget as Node | null;
+        if (arming && !busy && to && !e.currentTarget.contains(to)) close(false);
+      }}
+      onKeyDown={(e) => {
+        if (e.key !== "Escape" || !arming || busy) return;
+        e.stopPropagation();
+        close(true);
+      }}
+    >
       {/* Labelled with what it counts, spend across completed runs: a run
           still going on the board below is not in it yet. */}
       <Meter
@@ -883,32 +929,60 @@ function BoardTotal({
         title={`All-time tokens and dollar cost across every completed run since ${sinceLabel}`}
       />
       {/* Bookkeeping, not an action anyone came here to take: an icon beside
-          the figure it resets, then a two-step confirm. Gone at zero, where
-          there is nothing to reset. A confirm already open stays until it is
-          answered: hidden, a total zeroed elsewhere would leave it armed, to
-          reappear unasked with the next completed run. */}
-      {arming ? (
-        <div className="flex items-center gap-1.5">
-          <Button
-            variant="danger"
-            size="sm"
-            onClick={() => {
-              setBusy(true);
-              void reset().finally(() => {
-                setBusy(false);
-                setArming(false);
-              });
-            }}
-            disabled={busy}
-          >
-            Confirm reset
-          </Button>
-          <Button variant="ghost" size="sm" onClick={() => setArming(false)} disabled={busy}>
-            Cancel
-          </Button>
+          the figure it resets, then a confirm. Gone at zero, where there is
+          nothing to reset. A confirm already open stays until it is answered:
+          hidden, a total zeroed elsewhere would leave it armed, to reappear
+          unasked with the next completed run. */}
+      {(arming || totals.usd !== 0 || totals.tokens !== 0) && (
+        <IconButton
+          ref={opener}
+          icon="retry"
+          label="Reset total"
+          size="sm"
+          aria-expanded={arming}
+          onClick={() => (arming ? close(false) : setArming(true))}
+        />
+      )}
+      {/* The confirm drops below the figure rather than in line with it: in
+          line, it widened the header until it wrapped on a tablet, and the
+          whole board jumped down while it was open. It opens on Cancel, the
+          safe answer, and Escape or Cancel hand focus back to the icon. */}
+      {arming && (
+        <div
+          role="group"
+          aria-label="Reset the all-time total"
+          className="absolute left-0 top-full z-20 mt-2 flex w-full min-w-56 flex-col gap-2.5 rounded-tile border border-line-strong bg-surface-2 p-3 shadow-overlay motion-safe:animate-[slide-up_var(--duration-base)_var(--ease-out-expo)_both]"
+        >
+          <p className="text-small text-ink-dim">
+            Start the total again from zero? This can't be undone.
+          </p>
+          {failed && (
+            <p role="alert" className="text-caption text-fail-ink">
+              Couldn't reset: {failed}
+            </p>
+          )}
+          <div className="flex justify-end gap-1.5">
+            <Button
+              variant="ghost"
+              size="sm"
+              autoFocus
+              aria-disabled={busy || undefined}
+              onClick={() => !busy && close(true)}
+            >
+              Cancel
+            </Button>
+            {/* Disabled by aria while it runs, not by `disabled`: a disabled
+                button drops the focus it holds to the page. */}
+            <Button
+              variant="danger"
+              size="sm"
+              aria-disabled={busy || undefined}
+              onClick={confirmReset}
+            >
+              Confirm reset
+            </Button>
+          </div>
         </div>
-      ) : totals.usd === 0 && totals.tokens === 0 ? null : (
-        <IconButton icon="retry" label="Reset total" size="sm" onClick={() => setArming(true)} />
       )}
     </div>
   );
@@ -938,10 +1012,11 @@ function attentionItems(rows: OverviewRow[]): AttentionItem[] {
             phaseName: phase?.name ?? gate.phaseId,
             // The first line of prose, which is what the row has room for. A
             // reason that is nothing but an agent's `ARGUS_OUTCOME` marker
-            // reads as the marker's own reason, never as the protocol line.
+            // reads as the marker's own reason, never as the protocol line;
+            // either way it is told as the drawers tell it.
             reason: gate.canApprove
               ? null
-              : firstProseLine(phase?.reason ?? row.failure?.reason) || null,
+              : reasonText(firstProseLine(phase?.reason ?? row.failure?.reason)) || null,
           };
         }),
   );
@@ -949,7 +1024,7 @@ function attentionItems(rows: OverviewRow[]): AttentionItem[] {
 }
 
 /** The deep link that opens one gate's review: what the palette and `argus
- *  tail` hand out, and now what the strip's "awaiting you" chip points at. */
+ *  tail` hand out, and now what the strip's "need approval" chip points at. */
 function gateHref(item: AttentionItem | undefined): string {
   return item
     ? `#/command/${encodeURIComponent(item.row.instanceId!)}/${encodeURIComponent(item.gate.phaseId)}`
@@ -977,6 +1052,10 @@ const ACROSS = /^(\d+)× across (.+)$/;
 /** Above this many, the rest of the Briefing's list is a link, not more rows. */
 const ELSEWHERE_SHOWN = 4;
 
+/** A "Needs you" row's name, which says which thing: two lines on a phone
+ *  rather than one cut short, like the detail line under it. */
+const NEEDS_TITLE = "break-words text-sm font-semibold text-ink max-sm:line-clamp-2 sm:truncate";
+
 /**
  * The Briefing's attention list minus what the board already says.
  *
@@ -985,6 +1064,13 @@ const ELSEWHERE_SHOWN = 4;
  * counted twice made the inbox, the nav badge and the strip give three
  * different answers to one question. With that one issue folded into the
  * pipeline's row, the inbox counts what the Briefing counts.
+ *
+ * A failing monitor's issue is the same problem twice too ("Monitor failing"
+ * and "Open issue", one schedule, two verbs), so it is folded into the
+ * monitor's row, where it adds what failed and how often. Unlike the
+ * pipeline's fold this one costs the count: the Briefing lists both, so this
+ * list runs one short of its badge per monitor. One row per problem is the
+ * better answer for a list of things to do.
  */
 function elsewhereItems(
   briefing: BriefingItem[] | null | undefined,
@@ -994,31 +1080,47 @@ function elsewhereItems(
   const failed = new Set(
     board.filter((i) => !i.gate.canApprove).map((i) => `${i.row.name} · ${i.phaseName}`),
   );
-  return (
-    briefing
-      // By the table rather than by "not a gate": a kind this build does not
-      // know (a newer server) is left to the Briefing instead of drawn blank.
-      .filter(
-        (i): i is ElsewhereItem["item"] => i.kind !== "gate-waiting" && i.kind in ATTENTION_KINDS,
-      )
-      .filter((i) => {
-        if (i.kind !== "issue-open") return true;
-        const across = ACROSS.exec(i.detail)?.[2];
-        return !(across && failed.has(across));
-      })
-      .sort((a, b) => ATTENTION_KINDS[a.kind].rank - ATTENTION_KINDS[b.kind].rank)
-      .map((item) => {
-        // An issue is titled by where it happens, like every other row here, so
-        // a failing schedule and the issue it raised read as the same thing.
-        const across = item.kind === "issue-open" ? ACROSS.exec(item.detail) : null;
-        return {
-          key: `${item.kind}:${item.id}`,
-          item,
-          title: across ? across[2] : item.title,
-          detail: across ? `${item.title} · ${across[1]}×` : item.detail,
-        };
-      })
+  const known = briefing.filter(
+    // By the table rather than by "not a gate": a kind this build does not
+    // know (a newer server) is left to the Briefing instead of drawn blank.
+    (i): i is ElsewhereItem["item"] => i.kind !== "gate-waiting" && i.kind in ATTENTION_KINDS,
   );
+  const monitors = new Set(
+    known
+      .filter((i) => i.kind === "monitor-down" || i.kind === "monitor-failing")
+      .map((i) => i.title),
+  );
+  // A monitor's issue, by the one schedule it is across.
+  const raised = new Map<string, { id: string; title: string; count: string }>();
+  for (const i of known) {
+    const across = i.kind === "issue-open" ? ACROSS.exec(i.detail) : null;
+    if (across && monitors.has(across[2]) && !raised.has(across[2])) {
+      raised.set(across[2], { id: i.id, title: i.title, count: across[1] });
+    }
+  }
+  return known
+    .filter((i) => {
+      if (i.kind !== "issue-open") return true;
+      const across = ACROSS.exec(i.detail)?.[2];
+      return !(across && (failed.has(across) || raised.get(across)?.id === i.id));
+    })
+    .sort((a, b) => ATTENTION_KINDS[a.kind].rank - ATTENTION_KINDS[b.kind].rank)
+    .map((item) => {
+      // An issue is titled by where it happens, like every other row here, so
+      // a failing schedule and the issue it raised read as the same thing.
+      const across = item.kind === "issue-open" ? ACROSS.exec(item.detail) : null;
+      const issue = item.kind === "issue-open" ? undefined : raised.get(item.title);
+      return {
+        key: `${item.kind}:${item.id}`,
+        item,
+        title: across ? across[2] : item.title,
+        detail: across
+          ? `${item.title} · ${across[1]}×`
+          : issue
+            ? `${item.detail} · ${issue.title} · ${issue.count}×`
+            : item.detail,
+      };
+    });
 }
 
 /**
@@ -1031,15 +1133,18 @@ function elsewhereItems(
  * it — the same drawer, the same deep link, nothing decided here.
  *
  * Below the board's own rows come the Briefing's (see {@link elsewhereItems}),
- * so "what needs me" has one answer on this page and on the nav's badge.
+ * so "what needs me" is answered on this page, not only behind the nav's badge.
  */
 function AttentionQueue({
   items,
   elsewhere,
+  partial,
   onOpen,
 }: {
   items: AttentionItem[];
   elsewhere: ElsewhereItem[];
+  /** The board did not load, so its gates and failures are missing here. */
+  partial: boolean;
   onOpen: (item: AttentionItem, originY: number) => void;
 }) {
   const shown = useListPresence(items, (i) => i.key);
@@ -1061,16 +1166,26 @@ function AttentionQueue({
         <span className="rounded-full bg-await/15 px-1.5 py-px text-micro font-semibold text-await">
           {total}
         </span>
+        {/* The words of the strip and the card pills: one state, one name. */}
         <span className="ml-auto hidden text-caption text-ink-faint sm:inline">
           {[
-            waiting > 0 && `${waiting} waiting for approval`,
-            items.length > waiting && `${items.length - waiting} stopped short`,
-            elsewhere.length > 0 && `${elsewhere.length} outside pipelines`,
+            waiting > 0 && `${waiting} ${waiting === 1 ? "needs" : "need"} approval`,
+            items.length > waiting && `${items.length - waiting} failed`,
+            elsewhere.length > 0 && !partial && `${elsewhere.length} outside pipelines`,
           ]
             .filter(Boolean)
             .join(" · ")}
         </span>
       </div>
+      {/* Said, rather than left to look complete: without the board, a
+          pipeline's gates are missing and its failure can only show as the
+          issue it raised. */}
+      {partial && (
+        <p className="flex items-center gap-2 border-b border-line px-4 py-2 text-caption text-ink-faint">
+          <Icon name="info" size={14} className="shrink-0" />
+          Pipeline gates and failures are missing until the board loads.
+        </p>
+      )}
       <ul className="divide-y divide-line">
         {shown.map(({ key, item, leaving }) => {
           const approve = item.gate.canApprove;
@@ -1096,7 +1211,11 @@ function AttentionQueue({
               <div className="min-w-0 flex-1 basis-56">
                 {/* One text node: pipeline and phase are one name here, "which
                     decision", not two facts to scan. */}
-                <p id={titleId} className="truncate text-sm font-semibold text-ink">
+                <p
+                  id={titleId}
+                  title={`${item.row.name} · ${item.phaseName}`}
+                  className={NEEDS_TITLE}
+                >
                   {`${item.row.name} · ${item.phaseName}`}
                 </p>
                 {/* Two lines on a phone rather than one cut short: the end of a
@@ -1104,11 +1223,9 @@ function AttentionQueue({
                     reading. */}
                 <p className="text-caption text-ink-dim max-sm:line-clamp-2 sm:truncate">
                   {approve ? (
-                    "Waiting for your approval"
+                    "Needs approval"
                   ) : (
-                    <span className="text-fail-ink">
-                      {item.reason ?? "This phase stopped short"}
-                    </span>
+                    <span className="text-fail-ink">{item.reason ?? "This phase failed"}</span>
                   )}
                   {item.row.updatedAt && (
                     <span className="text-ink-faint">
@@ -1127,7 +1244,7 @@ function AttentionQueue({
                 className="max-sm:ml-11"
                 onClick={(e) => onOpen(item, e.currentTarget.getBoundingClientRect().top)}
               >
-                {approve ? "Review" : item.row.failure?.kind === "restarted" ? "Retry" : "Review"}
+                Review
               </Button>
             </li>
           );
@@ -1135,9 +1252,13 @@ function AttentionQueue({
       </ul>
       {shownElsewhere.length > 0 && (
         <>
-          <h3 className="eyebrow border-y border-line bg-ground-2/40 px-4 py-1.5">
-            Outside pipelines
-          </h3>
+          {/* Not while the board is missing: a failed pipeline's issue would
+              be filed here as outside pipelines. */}
+          {!partial && (
+            <h3 className="eyebrow border-y border-line bg-ground-2/40 px-4 py-1.5">
+              Outside pipelines
+            </h3>
+          )}
           <ul className="divide-y divide-line">
             {shownElsewhere.map(({ key, item: entry, leaving }) => {
               const meta = ATTENTION_KINDS[entry.item.kind];
@@ -1162,7 +1283,7 @@ function AttentionQueue({
                     <Icon name={meta.icon} size={16} />
                   </span>
                   <div className="min-w-0 flex-1 basis-56">
-                    <p id={titleId} className="truncate text-sm font-semibold text-ink">
+                    <p id={titleId} title={entry.title} className={NEEDS_TITLE}>
                       {entry.title}
                     </p>
                     <p className="text-caption text-ink-faint max-sm:line-clamp-2 sm:truncate">
@@ -1245,58 +1366,29 @@ function EmptyBoard({ canBuild }: { canBuild: boolean }) {
 }
 
 /**
- * The board while the server cannot be reached and nothing was loaded before.
+ * A load error in the words that fit it. An answer means the server was
+ * reached and the board request failed — the strip, the rail and the Live
+ * pill are plainly still talking to it — so it says why; no answer at all
+ * means the server was not reached.
+ */
+function boardError(error: string): { reached: boolean; message: string } {
+  return { reached: error !== UNREACHABLE, message: loadError("the board", error) };
+}
+
+/**
+ * The board while it cannot load and nothing was loaded before.
  *
  * Not the first-run board: "no pipelines defined yet" under a connection error
  * told a returning operator their pipelines were gone. The strip above says
  * what happened and offers the retry; this only holds the board's place.
  */
-function BoardUnavailable() {
+function BoardUnavailable({ reached }: { reached: boolean }) {
   return (
-    <EmptyState compact icon="pipeline">
-      The board shows here again once Argus is reachable.
+    <EmptyState compact icon="pipeline" title="The board didn't load">
+      {reached
+        ? "Argus keeps trying on its own, and Retry above asks again now."
+        : "It shows here again once Argus is reachable."}
     </EmptyState>
-  );
-}
-
-/**
- * A peer's live pipelines.
- *
- * A card, not the board: the board's phase grid is built from step-level state
- * that a summary does not carry, and drawing an empty grid would say "no steps"
- * where the truth is "not sent". What a peer does send — which pipelines are
- * live and which phase each is at — is exactly the question the board answers
- * at a glance, so that is what this shows.
- *
- * No approve or revise buttons. A gate is opened by the machine that owns it;
- * a button here would either fail or need a second control plane across the
- * pairing, and the link out is the honest affordance.
- */
-/** A peer's status word ("running", "awaiting-approval") as a label. It is a
- *  free string from another machine, so it is only cased, not translated. */
-function peerStatusLabel(status: string): string {
-  const words = status.replace(/-/g, " ");
-  return words.charAt(0).toUpperCase() + words.slice(1);
-}
-
-function PeerBoard({ facet }: { facet: ReturnType<typeof useMachineFacet> }) {
-  const pipelines = facet.peer?.summary?.facets.pipelines ?? [];
-  if (pipelines.length === 0) return <PeerEmpty what="live pipelines" />;
-  return (
-    <ul className="divide-y divide-line overflow-hidden rounded-tile border border-line bg-surface shadow-raised">
-      {pipelines.map((p) => {
-        const gated = p.status === "awaiting-approval";
-        return (
-          <li key={p.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3">
-            <span className="min-w-0 flex-1 truncate text-sm font-semibold text-ink">{p.name}</span>
-            {p.phase && <span className="shrink-0 text-caption text-ink-faint">at {p.phase}</span>}
-            <span className={`shrink-0 ${chipClass(gated ? "await" : "run")}`}>
-              {gated ? STATUS.await.label : peerStatusLabel(p.status)}
-            </span>
-          </li>
-        );
-      })}
-    </ul>
   );
 }
 
@@ -1372,6 +1464,7 @@ export default function CommandCenter({
   // The first-run board carries its own primary "Launch a task"; the header's
   // steps down beside it, so the page still has one thing to press first.
   const firstRun = !facet.peer && !loading && !error && rows.length === 0;
+  const failure = error ? boardError(error) : null;
 
   return (
     <Page
@@ -1379,7 +1472,8 @@ export default function CommandCenter({
       title="Command Center"
       actions={
         <>
-          <BoardTotal totals={totals} loading={totalsLoading} reset={reset} />
+          {/* This machine's spend, so not over another machine's board. */}
+          {!facet.peer && <BoardTotal totals={totals} loading={totalsLoading} reset={reset} />}
           <ButtonLink
             href="#/schedules/oneoff"
             variant={firstRun ? "secondary" : "primary"}
@@ -1393,8 +1487,14 @@ export default function CommandCenter({
       <div aria-live="polite" role="status" className="sr-only">
         {announcement}
       </div>
-      <MachinePicker facet={facet} label="Show the board from" />
-      <PeerBanner facet={facet} />
+      {/* Only a machine paired with others has a picker, a banner or a peer's
+          board to draw, so that code is fetched when it does, not with the
+          first paint of every solo install. */}
+      {facet.machines.length > 1 && (
+        <Suspense fallback={null}>
+          <PeerControls facet={facet} />
+        </Suspense>
+      )}
       {!facet.peer && (
         <SituationStrip
           situation={situation}
@@ -1403,11 +1503,11 @@ export default function CommandCenter({
           failedHref={gateHref(attention.find((i) => !i.gate.canApprove))}
         />
       )}
-      {error && (
+      {failure && (
         <div className="mb-4">
           <AlertStrip
             subject="Board"
-            message={`Couldn't reach the Argus server: ${error}`}
+            message={failure.message}
             action={
               <Button size="sm" icon="retry" onClick={() => void refresh()}>
                 Retry
@@ -1417,7 +1517,9 @@ export default function CommandCenter({
         </div>
       )}
       {facet.peer ? (
-        <PeerBoard facet={facet} />
+        <Suspense fallback={null}>
+          <PeerBoard facet={facet} />
+        </Suspense>
       ) : (
         <Handoff
           busy={loading}
@@ -1441,6 +1543,7 @@ export default function CommandCenter({
               <AttentionQueue
                 items={attention}
                 elsewhere={elsewhere}
+                partial={!!failure && rows.length === 0}
                 onOpen={(item, originY) =>
                   setPickedGate({
                     instanceId: item.row.instanceId!,
@@ -1451,8 +1554,8 @@ export default function CommandCenter({
                 }
               />
               {rows.length === 0 ? (
-                error ? (
-                  <BoardUnavailable />
+                failure ? (
+                  <BoardUnavailable reached={failure.reached} />
                 ) : (
                   <EmptyBoard canBuild={isAdmin} />
                 )
@@ -1476,7 +1579,11 @@ export default function CommandCenter({
               liveActivity={liveActivity}
               runs={runs}
               loading={runsLoading}
-              error={!!error || !!runsError}
+              // Its own request only: every run, pipeline steps included, is
+              // in the run list, so a board that failed to load leaves the
+              // rail whole — and it used to say "unknown until Argus is
+              // reachable" while listing what the server had just sent.
+              error={!!runsError}
             />
           </div>
         </Handoff>

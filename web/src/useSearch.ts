@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { fetchLoad } from "./live/loadError";
 
 import type { SearchResponse, SearchResult } from "@argus/contracts";
 
@@ -43,10 +44,9 @@ export function useSearch(query: string): SearchState {
     const controller = new AbortController();
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`, {
+        const res = await fetchLoad(`/api/search?q=${encodeURIComponent(q)}`, {
           signal: controller.signal,
         });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = (await res.json()) as SearchResponse;
         if (id !== requestId.current) return;
         setResults(data.results ?? []);

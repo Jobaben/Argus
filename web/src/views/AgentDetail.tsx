@@ -22,6 +22,7 @@ import {
   toDsStatus,
   transitionName,
 } from "../ds";
+import { loadError } from "../live/loadError";
 
 /** The timeline's rail dot. The dot carries the colour; the word beside it is
  *  set in ink, so a state is said once in colour and once in words rather than
@@ -179,7 +180,7 @@ function AgentFacts({ agent }: { agent: Agent }) {
 
 function TimelineItem({ entry, last }: { entry: TimelineEntry; last: boolean }) {
   const [open, setOpen] = useState(false);
-  const state = entry.state ?? "unknown";
+  const state = entry.state;
   const hasText = !!entry.text && entry.text.trim().length > 0;
 
   return (
@@ -187,14 +188,19 @@ function TimelineItem({ entry, last }: { entry: TimelineEntry; last: boolean }) 
       {!last && (
         <span aria-hidden="true" className="absolute bottom-0 left-[5px] top-4 w-px bg-line" />
       )}
+      {/* An entry with no state is a progress note ("Edited 3 files"), not a
+          change of state: headed "Idle", a working agent's note said it had
+          stopped. It gets a neutral word and a hollow dot, no status colour. */}
       <span
         aria-hidden="true"
-        className={`absolute left-0 top-[5px] h-[11px] w-[11px] rounded-full ring-4 ring-surface ${DOT_STYLE[state] ?? DOT_STYLE.unknown}`}
+        className={`absolute left-0 top-[5px] h-[11px] w-[11px] rounded-full ring-4 ring-surface ${
+          state ? (DOT_STYLE[state] ?? DOT_STYLE.unknown) : "border-2 border-ink-faint bg-surface"
+        }`}
       />
       <div className={last ? "" : "pb-5"}>
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
           <span className="text-small font-semibold text-ink">
-            {STATUS[toDsStatus(state)].label}
+            {state ? STATUS[toDsStatus(state)].label : "Update"}
           </span>
           <span className="text-caption">
             <TimeAgo iso={entry.at} />
@@ -247,6 +253,13 @@ export default function AgentDetail({ short: shortProp }: { short?: string } = {
     [timeline],
   );
 
+  // The tab and the history list name the agent, as the heading does: the
+  // shell's own title for this route can only say "Agent".
+  const name = short ? (agent?.name ?? `Agent ${short}`) : null;
+  useEffect(() => {
+    if (name) document.title = `${name} — Argus`;
+  }, [name]);
+
   if (!short) {
     return (
       <Page title="Agent" crumbs={[{ label: "Command Center", href: "#/command" }]}>
@@ -270,7 +283,7 @@ export default function AgentDetail({ short: shortProp }: { short?: string } = {
       // The agent's name, when the roster knows it: the page used to say
       // "agent 7a1b" in its heading and the name again in a second heading
       // below it, two titles for one thing.
-      title={agent?.name ?? `Agent ${short}`}
+      title={name}
       subtitle={
         agent ? (
           <AgentCaption agent={agent} />
@@ -291,8 +304,8 @@ export default function AgentDetail({ short: shortProp }: { short?: string } = {
       {error && (
         <div className="mb-6">
           <AlertStrip
-            subject="Couldn't load the timeline"
-            message={error}
+            subject="Timeline"
+            message={loadError("the timeline", error)}
             action={
               <Button size="sm" icon="retry" onClick={() => void refresh()}>
                 Retry
@@ -312,8 +325,8 @@ export default function AgentDetail({ short: shortProp }: { short?: string } = {
             // A roster that failed to load says nothing about this agent:
             // "Unknown agent" under it would be a claim about the data.
             <AlertStrip
-              subject="Couldn't load the agent"
-              message={agentsError}
+              subject="Agent"
+              message={loadError("the agent", agentsError)}
               action={
                 <Button size="sm" icon="retry" onClick={() => void refreshAgents()}>
                   Retry

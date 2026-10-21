@@ -61,6 +61,7 @@ import {
   SkeletonRows,
   chipClass,
 } from "../ds";
+import { loadError } from "../live/loadError";
 
 /** A census table's role, in the words of the section it feeds. */
 const ROLE_LABEL: Record<H2QuestionRole, string> = {
@@ -116,10 +117,10 @@ function CollectionSection({
             ? [
                 ["Residual sampling rate", rate(s.residualRate)],
                 ["Probe sampling rate", rate(s.probeRate)],
+                ["Requested model", s.requestedModel ?? RUNNER_DEFAULT],
                 ["Max calls per 24h", String(s.maxCallsPer24h)],
                 ["Min interval between calls", formatInterval(s.minCallIntervalMs)],
                 ["Max spend per 24h", `$${s.maxUsdPer24h}`],
-                ["Requested model", s.requestedModel ?? RUNNER_DEFAULT],
                 ["Seed", <span className="font-mono">{s.seed}</span>],
               ]
             : null
@@ -127,7 +128,7 @@ function CollectionSection({
       >
         <Block title="Collection configs" level={3}>
           {collection.configs.length === 0 ? (
-            <EmptyLine>No collection config recorded.</EmptyLine>
+            <EmptyLine>No collection config recorded</EmptyLine>
           ) : (
             <div className="flex flex-col gap-2">
               {collection.configs.map((c) => (
@@ -213,7 +214,7 @@ function CensusCard({ table }: { table: H2CensusTable }) {
       </CardTitle>
       <Block title="Excluded">
         {excluded.length === 0 ? (
-          <EmptyLine>Nothing excluded.</EmptyLine>
+          <EmptyLine>Nothing excluded</EmptyLine>
         ) : (
           <ul className="flex flex-wrap gap-1.5">
             {excluded.map(([reason, n]) => (
@@ -503,7 +504,7 @@ function ResidualCard({ p }: { p: H2ResidualPopulation }) {
         <div className="min-w-0">
           <SubHeading>Top-answer counts (descriptive — not accuracy)</SubHeading>
           {topAnswers.length === 0 ? (
-            <EmptyLine>No answers recorded.</EmptyLine>
+            <EmptyLine>No answers recorded</EmptyLine>
           ) : (
             // Bars for share of answers given — a description of what the model
             // said, in neutral ink, never a score.
@@ -540,7 +541,7 @@ function BaselinesSection({ baselines }: { baselines: H2Report["baselines"] }) {
   return (
     <Section title="Baselines">
       {baselines.length === 0 ? (
-        <EmptyRow>No baselines.</EmptyRow>
+        <EmptyRow>No baselines</EmptyRow>
       ) : (
         <ul className="divide-y divide-line rounded-tile border border-line bg-surface shadow-raised">
           {baselines.map((b) => (
@@ -569,9 +570,11 @@ export default function DecisionExperiments() {
   return (
     <Page
       title="Decision experiments"
-      subtitle="Two read-only shadow experiments: what a model answers about runs and gates, set beside what Argus recorded."
+      subtitle="Two read-only shadow experiments: what a model answers about gates and runs, set beside what Argus recorded."
     >
-      <section aria-labelledby="decision-h2-title">
+      {/* In the order they are numbered. */}
+      <DecisionH1Section />
+      <section aria-labelledby="decision-h2-title" className="mt-14 border-t border-line pt-10">
         <ExperimentHeader
           id="decision-h2-title"
           icon="activity"
@@ -584,7 +587,7 @@ export default function DecisionExperiments() {
           <div className="mb-6">
             <AlertStrip
               subject="Experiments"
-              message={`Couldn't load the H2 report: ${error}`}
+              message={loadError("the H2 report", error)}
               action={
                 <Button size="sm" icon="retry" onClick={refresh}>
                   Retry
@@ -597,7 +600,6 @@ export default function DecisionExperiments() {
           {data ? <Report data={data} /> : !error && <NoReport name="H2" />}
         </Handoff>
       </section>
-      <DecisionH1Section />
     </Page>
   );
 }
@@ -628,7 +630,7 @@ function Report({
   return (
     <>
       {/* With the report, as H1's is: the caveat is about these figures. */}
-      <Notice title="Shadow measurement only.">
+      <Notice title="Shadow measurement only">
         These assessments are never read by any route, gate, retry or approval, and nothing here
         authorises an approval. Probe results measure recovery of an observed fact; they are not
         residual-cause accuracy. Residual-cause accuracy is unmeasured until valid reference labels
@@ -675,9 +677,9 @@ function ReportBody({
     <>
       <QuestionsSection definitions={report.definitions} />
 
-      <Section title="Population">
+      <Section title="Census">
         {report.census.length === 0 ? (
-          <EmptyRow>No census recorded.</EmptyRow>
+          <EmptyRow>No census recorded</EmptyRow>
         ) : (
           <div className="flex flex-col gap-3">
             {report.census.map((t) => (
@@ -726,7 +728,7 @@ function ReportBody({
       <Section title="Integrity">
         <IntegrityCard
           integrity={report.integrity}
-          empty="No findings recorded."
+          empty="No findings recorded"
           facts={[
             ["History (ledger, journal and joins)", report.integrity.history],
             ["Journal gaps", String(report.integrity.journal.gaps)],

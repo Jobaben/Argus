@@ -34,8 +34,10 @@ import {
   Section,
   SkeletonRows,
   chipClass,
+  formatUsd,
   type IconName,
 } from "../ds";
+import { loadError } from "../live/loadError";
 
 // ── Formatting ──────────────────────────────────────────────────────────────
 
@@ -43,8 +45,6 @@ const formatDistribution = (d: H2Distribution, unit: string): string =>
   d.n === 0
     ? "— (n = 0)"
     : `p50 ${d.p50 ?? "—"} · p95 ${d.p95 ?? "—"}${d.max !== null ? ` · max ${d.max}` : ""} ${unit} (n = ${d.n})`;
-
-const formatUsdAmount = (v: number): string => `$${v.toFixed(4)}`;
 
 function formatTotals(
   t: { total: number; meanKnown: number | null; known: number; unknown: number },
@@ -662,7 +662,7 @@ export function CollectionCard({
             <div className="mt-4">
               <SubHeading level={3}>Reasons collection is off</SubHeading>
               {reasons.length === 0 ? (
-                <EmptyLine>No reason reported.</EmptyLine>
+                <EmptyLine>No reason reported</EmptyLine>
               ) : (
                 <ul className="flex flex-col gap-1.5 rounded-control bg-ground-2/70 px-3 py-2.5">
                   {reasons.map((r) => (
@@ -680,7 +680,7 @@ export function CollectionCard({
         </div>
         <div className="min-w-0">
           <SubHeading level={3}>Settings</SubHeading>
-          {settings ? <Facts rows={settings} /> : <EmptyLine>No valid settings.</EmptyLine>}
+          {settings ? <Facts rows={settings} /> : <EmptyLine>No valid settings</EmptyLine>}
         </div>
       </div>
       {children}
@@ -704,7 +704,7 @@ export function UsageFacts({ usage }: { usage: H2Usage }) {
         columns={2}
         rows={[
           ["Latency", formatDistribution(usage.latencyMs, "ms")],
-          ["Cost (USD)", formatTotals(usage.costUsd, formatUsdAmount)],
+          ["Cost (USD)", formatTotals(usage.costUsd, formatUsd)],
           ["Tokens", formatTotals(usage.tokens, (n) => String(Math.round(n * 10) / 10))],
           ["Snapshot size", formatDistribution(usage.snapshotBytes, "bytes")],
         ]}
@@ -805,7 +805,7 @@ export function IntegrityCard({
  */
 export function MethodsPanel({ methods }: { methods: Record<string, string> }) {
   const entries = Object.entries(methods);
-  if (entries.length === 0) return <EmptyRow>No method notes recorded.</EmptyRow>;
+  if (entries.length === 0) return <EmptyRow>No method notes recorded</EmptyRow>;
   return (
     <details className="group rounded-tile border border-line bg-surface shadow-raised">
       <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-tile px-4 py-3 text-small text-ink-dim transition-colors duration-(--duration-quick) hover:text-ink [&::-webkit-details-marker]:hidden">
@@ -869,13 +869,14 @@ function CollectionSection({
           ],
           ["First collection", collection.start ?? "none recorded"],
         ]}
+        // The order and words of H2's settings beside it: sampling, model,
+        // call caps, interval, spend, seed.
         settings={
           s
             ? [
                 ["Sampling rate", rate(s.rate)],
-                ["Seed", <span className="font-mono">{s.seed}</span>],
                 [
-                  "Models",
+                  "Requested models",
                   s.models.length === 0
                     ? "none"
                     : s.models.map((m) => m ?? RUNNER_DEFAULT).join(" · "),
@@ -884,13 +885,14 @@ function CollectionSection({
                 ["H1 own share per 24h", String(s.maxOwnCallsPer24h)],
                 ["Min interval between calls", formatInterval(s.minCallIntervalMs)],
                 ["Max spend per 24h", `$${s.maxUsdPer24h}`],
+                ["Seed", <span className="font-mono">{s.seed}</span>],
               ]
             : null
         }
       >
         <Block title="Collection configs" level={3}>
           {collection.configs.length === 0 ? (
-            <EmptyLine>No collection config recorded.</EmptyLine>
+            <EmptyLine>No collection config recorded</EmptyLine>
           ) : (
             <div className="flex flex-col gap-2">
               {collection.configs.map((c) => (
@@ -1013,8 +1015,10 @@ function SpendSection({ spend }: { spend: H1Report["spend"] }) {
           cols={4}
           items={[
             ["Attempts", spend.attempts],
-            ["Spent", spend.spent],
-            ["Total (USD)", `$${spend.usdTotal.toFixed(4)}`, spend.usdTotal],
+            // Attempts that reached the provider, so could have cost money —
+            // a count, which "Spent" beside a dollar total read as a second sum.
+            ["Provider calls", spend.spent],
+            ["Total (USD)", formatUsd(spend.usdTotal), spend.usdTotal],
             ["Unknown cost", spend.usdUnknown],
           ]}
         />
@@ -1296,9 +1300,11 @@ function Report({ data }: { data: NonNullable<ReturnType<typeof useDecisionH1>["
   const empty = report.asOf.seq === 0 && report.models.length === 0;
   return (
     <>
-      <Notice title={report.statement}>
-        H1 is a shadow experiment: no gate, badge, ordering or approval reads these predictions, and
-        gates still waiting on an operator are shown only as counts.
+      {/* H2's anatomy: a short title, then the caveat. The statement is the
+          server's, shown verbatim. */}
+      <Notice title="Shadow measurement only">
+        These predictions are never read by any gate, badge, ordering or approval, and gates still
+        waiting on an operator are shown only as counts. <span>{report.statement}</span>
       </Notice>
 
       <CollectionSection status={collection} collection={report.collection} />
@@ -1344,9 +1350,11 @@ function ReportBody({ report }: { report: H1Report }) {
         <SpendSection spend={report.spend} />
       </div>
 
+      {/* A census of nothing captured is thirty zero tiles; H2 says it in one
+          line, and so does this. */}
       <Section title="Census">
-        {report.census.length === 0 ? (
-          <EmptyRow>No census recorded.</EmptyRow>
+        {report.census.every((c) => c.captured === 0) ? (
+          <EmptyRow>No census recorded</EmptyRow>
         ) : (
           <div className="grid gap-3 xl:grid-cols-2">
             {report.census.map((c) => (
@@ -1358,7 +1366,7 @@ function ReportBody({ report }: { report: H1Report }) {
 
       <BaselineSection
         title="Deterministic baseline"
-        empty={report.deterministic.length === 0 ? "No deterministic baseline rows." : null}
+        empty={report.deterministic.length === 0 ? "No deterministic baseline rows" : null}
         caption="A rule result, not a probability."
       >
         {report.deterministic.map((row) => (
@@ -1368,7 +1376,7 @@ function ReportBody({ report }: { report: H1Report }) {
 
       <BaselineSection
         title="Verdict baseline"
-        empty={report.verdict.length === 0 ? "No verdict baseline rows." : null}
+        empty={report.verdict.length === 0 ? "No verdict baseline rows" : null}
         caption="Verdict scores are ratings; no Brier score or calibration is computed for them."
       >
         {report.verdict.map((row) => (
@@ -1404,7 +1412,7 @@ function ReportBody({ report }: { report: H1Report }) {
       <Section title="Integrity">
         <IntegrityCard
           integrity={report.integrity}
-          empty="No findings recorded."
+          empty="No findings recorded"
           facts={[
             ["History (ledger, journal and joins)", report.integrity.history],
             ["Journal gaps", String(report.integrity.journal.gaps)],
@@ -1434,7 +1442,7 @@ export function DecisionH1Section() {
   const { data, loading, error, refresh } = useDecisionH1();
 
   return (
-    <section aria-labelledby="decision-h1-title" className="mt-14 border-t border-line pt-10">
+    <section aria-labelledby="decision-h1-title">
       <ExperimentHeader id="decision-h1-title" icon="approve" title="H1 — gate operator action">
         Predicts whether the operator will send a phase attempt back at its gate, and compares that
         with what the operator then did.
@@ -1443,7 +1451,7 @@ export function DecisionH1Section() {
         <div className="mb-6">
           <AlertStrip
             subject="Experiments"
-            message={`Couldn't load the H1 report: ${error}`}
+            message={loadError("the H1 report", error)}
             action={
               <Button size="sm" icon="retry" onClick={refresh}>
                 Retry

@@ -15,6 +15,9 @@ import {
   parseRunLog,
 } from "../ds";
 import { withoutOutcome } from "./outcome";
+import { tellOnce } from "./failureReason";
+import { envelopeFields } from "./runEnvelope";
+import { fetchLoad, loadError } from "../live/loadError";
 
 /**
  * Everything Argus knows about one step of a pipeline, without leaving the board.
@@ -111,10 +114,9 @@ function useRunDetail(runId: string | null, running: boolean) {
     const controller = new AbortController();
     const load = async () => {
       try {
-        const res = await fetch(`/api/runs/${encodeURIComponent(runId)}`, {
+        const res = await fetchLoad(`/api/runs/${encodeURIComponent(runId)}`, {
           signal: controller.signal,
         });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         // The record and its log tail arrive side by side, not merged.
         const body = (await res.json()) as { run: Run; log?: string };
         if (!alive) return;
@@ -140,41 +142,16 @@ function useRunDetail(runId: string | null, running: boolean) {
   return state;
 }
 
-/**
- * The envelope's fields that are not already in the readout above it.
- *
- * Its cost and tokens are the stat row's figures again (in other units), and
- * its "Status" is the CLI process's exit — a failed step whose process exited
- * cleanly showed a red "Failed" pill over a log reading "Status success". The
- * process's word is kept, said as what it is.
- */
-function envelopeFields(
-  fields: { label: string; value: string }[],
-  shown: { cost: boolean; tokens: boolean; duration: boolean },
-) {
-  return fields.flatMap((f) => {
-    if (f.label === "Cost" && shown.cost) return [];
-    if (f.label === "Tokens" && shown.tokens) return [];
-    if (f.label === "Duration" && shown.duration) return [];
-    // Claude Code's envelope: "success", or "error (<subtype>)".
-    if (f.label === "Status" && f.value === "success") {
-      return [{ label: "Process", value: "exited cleanly" }];
-    }
-    if (f.label === "Status" && f.value.startsWith("error")) return [{ ...f, label: "Process" }];
-    return [f];
-  });
-}
-
-/** Envelope fields whose value is an identifier. */
-const MACHINE_FIELDS = new Set(["Session", "Thread", "API error"]);
-
 function RunLog({
   log,
   shown,
+  failed,
 }: {
   log: string;
   /** Which figures the drawer's readout already shows. */
   shown: { cost: boolean; tokens: boolean; duration: boolean };
+  /** The step failed, whatever its process said. */
+  failed: boolean;
 }) {
   const parsed = parseRunLog(log);
   if (parsed.kind === "empty") {
@@ -190,17 +167,16 @@ function RunLog({
       )}
       {parsed.kind === "envelope" ? (
         <dl className="grid grid-cols-[max-content_minmax(0,1fr)] items-baseline gap-x-6 gap-y-2 px-4 py-3.5">
-          {envelopeFields(parsed.fields, shown).map((f) => (
+          {envelopeFields(parsed.fields, shown, failed).map((f) => (
             <Fragment key={f.label}>
               <dt className="text-caption text-ink-faint">{f.label}</dt>
               {/* Mono for the ids only: durations, counts and the process's
                   word are read, not copied. */}
               <dd
-                className={`break-words text-caption text-ink-dim ${
-                  MACHINE_FIELDS.has(f.label) ? "font-mono" : ""
-                }`}
+                className={`break-words text-caption text-ink-dim ${f.machine ? "font-mono" : ""}`}
               >
                 {f.value}
+                {f.note && <span className="mt-0.5 block text-ink-faint">{f.note}</span>}
               </dd>
             </Fragment>
           ))}
@@ -237,7 +213,12 @@ export function StepDrawer({
   const run = detail.run;
   // The agent's prose without its protocol line, which the status pill below
   // already says; a bare marker with no reason leaves nothing worth a panel.
-  const summary = withoutOutcome(run?.resultSummary) || null;
+  // When it opens by telling the phase's failure reason, that line is the
+  // reason, said in full, and the panel below keeps the rest: one error used
+  // to be told twice, once as "failed: …" and again as the agent's sentence.
+  const told = tellOnce(selection.reason, withoutOutcome(run?.resultSummary));
+  const reason = told.reason || null;
+  const summary = told.message || null;
   const transcriptHref =
     run?.sessionId && run.project
       ? `#/sessions/${encodeURIComponent(run.project)}/${encodeURIComponent(run.sessionId)}`
@@ -296,11 +277,11 @@ export function StepDrawer({
     >
       <div className="flex flex-col gap-6">
         {/* The outcome first: why it failed, or what it produced. */}
-        {selection.reason && (
+        {reason && (
           <div className="flex items-start gap-2.5 rounded-tile border border-fail/30 bg-fail/[0.07] px-4 py-3">
             <Icon name="x-circle" size={17} className="mt-0.5 text-fail" />
             <p className="min-w-0 whitespace-pre-wrap break-words text-small leading-relaxed text-fail-ink">
-              {selection.reason}
+              {reason}
             </p>
           </div>
         )}
@@ -346,7 +327,9 @@ export function StepDrawer({
                 href={`#/run/${encodeURIComponent(runId)}`}
                 onClick={onClose}
                 title="Open this run in the Flight Recorder"
-                className="break-all rounded-sm font-mono text-caption text-ink-dim underline decoration-line-strong underline-offset-[3px] transition-colors duration-(--duration-quick) hover:text-ink hover:decoration-ink-faint"
+                // Padded past its 14px line to a target a thumb can land on;
+                // the negative margin keeps the row's rhythm.
+                className="-my-2 inline-block break-all rounded-sm py-2 font-mono text-caption text-ink-dim underline decoration-line-strong underline-offset-[3px] transition-colors duration-(--duration-quick) hover:text-ink hover:decoration-ink-faint"
               >
                 {runId}
               </a>
@@ -439,11 +422,12 @@ export function StepDrawer({
               className="flex items-start gap-2 rounded-tile border border-fail/30 bg-fail/[0.07] px-4 py-3 text-small text-fail-ink"
             >
               <Icon name="alert" size={15} className="mt-0.5 text-fail" />
-              <span className="min-w-0 break-words">Couldn't load the run: {detail.error}</span>
+              <span className="min-w-0 break-words">{loadError("the run", detail.error)}</span>
             </p>
           ) : (
             <RunLog
               log={detail.log}
+              failed={step.status === "failed"}
               shown={{
                 cost: step.costUsd != null,
                 tokens: step.tokens != null,

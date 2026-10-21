@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { LedgerReport, WhatIfResult } from "../types";
 import { LedgerPanels } from "./LedgerPanels";
@@ -108,9 +108,27 @@ describe("LedgerPanels", () => {
   it("shows the forecast note when there is not enough history, without a fake number", () => {
     render(<LedgerPanels />);
     // Twice by design: once drawn, once in the live region — that duplication
-    // is the a11y parity, so the assertion names it.
-    expect(screen.getAllByText(/not enough to project a month yet/)).toHaveLength(2);
+    // is the a11y parity, so the assertion names it. The server's "Only 0 full
+    // days of history" is said as none.
+    expect(
+      screen.getAllByText("No full day of history yet — not enough to project a month."),
+    ).toHaveLength(2);
+    expect(screen.queryByText(/only 0 full days/i)).toBeNull();
     expect(screen.getByText("—")).toBeInTheDocument();
+  });
+
+  it("still says 'yet' when the server's zero-day note ends at the history", () => {
+    const note = "Only 0 full days of history.";
+    state.report = { ...emptyReport(), forecast: { ...emptyReport().forecast, note } };
+    render(<LedgerPanels />);
+    expect(screen.getAllByText("No full day of history yet.")).toHaveLength(2);
+  });
+
+  it("keeps the server's note as written once there is a full day", () => {
+    const note = "Only 1 full day of history — not enough to project a month yet.";
+    state.report = { ...emptyReport(), forecast: { ...emptyReport().forecast, samples: 1, note } };
+    render(<LedgerPanels />);
+    expect(screen.getAllByText(note)).toHaveLength(2);
   });
 
   it("shows the projection with its band and confidence", () => {
@@ -142,6 +160,28 @@ describe("LedgerPanels", () => {
     expect(screen.getByText("$6.00")).toBeInTheDocument();
     expect(screen.getByText("75%")).toBeInTheDocument();
     expect(screen.getByText(/3 outside this grouping/)).toBeInTheDocument();
+  });
+
+  it("says a share too small to round to 1% is under 1%, and 0% only for nothing", () => {
+    const report = withSchedules();
+    report.bySchedule.slices.push(
+      {
+        key: "s3",
+        label: "Weekly digest",
+        usd: 0.03,
+        tokens: 400,
+        runs: 1,
+        share: 0.004,
+        perRunUsd: 0.03,
+      },
+      { key: "s4", label: "Health ping", usd: 0, tokens: 0, runs: 2, share: 0, perRunUsd: 0 },
+    );
+    state.report = report;
+    render(<LedgerPanels />);
+    const row = (name: string) => screen.getByText(name).closest("tr")!;
+    expect(within(row("Weekly digest")).getByText("<1%")).toBeInTheDocument();
+    expect(within(row("Weekly digest")).queryByText("0%")).toBeNull();
+    expect(within(row("Health ping")).getByText("0%")).toBeInTheDocument();
   });
 
   it("switching dimension changes what is grouped", async () => {

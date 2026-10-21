@@ -37,7 +37,11 @@ export function useGlobalKeys(bindings: Binding[]): { pending: string | null } {
       // A key pressed as part of an IME composition is not a shortcut.
       if (e.isComposing) return;
       const result = dispatchKey(e, {
-        bindings: bindingsRef.current,
+        // Nor is one a surface has already claimed (the palette's first Escape
+        // only leaves intent mode; closing the palette here as well undid
+        // that). Matched against no bindings rather than skipped, so it still
+        // disarms a chord as any other key does.
+        bindings: e.defaultPrevented ? [] : bindingsRef.current,
         pending: pendingRef.current,
         typing: isTypingTarget(e.target),
         platform: navigator.platform || navigator.userAgent,

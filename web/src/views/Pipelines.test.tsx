@@ -134,10 +134,13 @@ describe("Pipelines tab", () => {
     const user = userEvent.setup();
     const fetchMock = routedFetch([{ definition: p1, latest: instance("running") }]);
     vi.stubGlobal("fetch", fetchMock);
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<Pipelines />);
     await waitFor(() => expect(screen.getByRole("button", { name: /^stop$/i })).toBeTruthy());
     await user.click(screen.getByRole("button", { name: /^stop$/i }));
+    expect(
+      screen.getByRole("group", { name: "Stop running pipeline “Nightly”?" }),
+    ).toHaveAccessibleDescription("In-progress work will be discarded.");
+    await user.click(screen.getByRole("button", { name: "Stop pipeline" }));
     await waitFor(() =>
       expect(
         fetchMock.mock.calls.some(
@@ -175,15 +178,17 @@ describe("Pipelines tab", () => {
     const user = userEvent.setup();
     const { fetchMock, puts } = fetchRefusingEdits();
     vi.stubGlobal("fetch", fetchMock);
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<Pipelines />);
     await waitFor(() => expect(screen.getByRole("button", { name: /^edit$/i })).toBeTruthy());
     await user.click(screen.getByRole("button", { name: /^edit$/i }));
     await user.click(screen.getByRole("button", { name: /save pipeline/i }));
+    const question = await screen.findByRole("group", {
+      name: "1 instance is running under “Nightly”.",
+    });
+    expect(question).toHaveAccessibleDescription(/next start/);
+    expect(puts).toEqual(["/api/pipelines/p1"]);
+    await user.click(screen.getByRole("button", { name: "Save anyway" }));
     await waitFor(() => expect(puts).toEqual(["/api/pipelines/p1", "/api/pipelines/p1?force=1"]));
-    expect(confirmSpy).toHaveBeenCalledWith(
-      expect.stringMatching(/1 instance is running under "Nightly".*next start/),
-    );
     await waitFor(() =>
       expect(screen.queryByRole("button", { name: /save pipeline/i })).toBeNull(),
     );
@@ -193,14 +198,19 @@ describe("Pipelines tab", () => {
     const user = userEvent.setup();
     const { fetchMock, puts } = fetchRefusingEdits();
     vi.stubGlobal("fetch", fetchMock);
-    vi.spyOn(window, "confirm").mockReturnValue(false);
     render(<Pipelines />);
     await waitFor(() => expect(screen.getByRole("button", { name: /^edit$/i })).toBeTruthy());
     await user.click(screen.getByRole("button", { name: /^edit$/i }));
-    await user.click(screen.getByRole("button", { name: /save pipeline/i }));
-    await waitFor(() => expect(puts).toEqual(["/api/pipelines/p1"]));
-    expect(screen.getByRole("button", { name: /save pipeline/i })).toBeTruthy();
-    expect(screen.queryByText(/1 instance is running/)).toBeNull();
+    const save = screen.getByRole("button", { name: /save pipeline/i });
+    await user.click(save);
+    const keep = await screen.findByRole("button", { name: "Keep editing" });
+    expect(keep).toHaveFocus();
+    await user.click(keep);
+    await waitFor(() => expect(screen.queryByText(/1 instance is running/)).toBeNull());
+    expect(puts).toEqual(["/api/pipelines/p1"]);
+    // Still the form, with focus back on the Save that asked.
+    expect(save).toHaveFocus();
+    await waitFor(() => expect(save).not.toHaveAttribute("aria-disabled"));
   });
 
   it("shows 'Stop all (n)' and aborts every active instance when several overlap", async () => {
@@ -222,12 +232,15 @@ describe("Pipelines tab", () => {
       [pAllow],
     );
     vi.stubGlobal("fetch", fetchMock);
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<Pipelines />);
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /stop all \(2\)/i })).toBeTruthy(),
     );
     await user.click(screen.getByRole("button", { name: /stop all \(2\)/i }));
+    expect(
+      screen.getByRole("group", { name: "Stop all 2 running instances of “Nightly”?" }),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Stop 2 instances" }));
     await waitFor(() => {
       for (const id of ["i1", "i2"]) {
         expect(
@@ -239,6 +252,48 @@ describe("Pipelines tab", () => {
         ).toBe(true);
       }
     });
+  });
+
+  /** Whether a DELETE for the pipeline has been sent. */
+  const deleted = (fetchMock: ReturnType<typeof routedFetch>) =>
+    fetchMock.mock.calls.some(
+      ([url, init]) =>
+        String(url).includes("/api/pipelines/p1") &&
+        (init as RequestInit | undefined)?.method === "DELETE",
+    );
+
+  it("asks before deleting, and Keep deletes nothing and hands focus back", async () => {
+    const user = userEvent.setup();
+    const fetchMock = routedFetch([{ definition: p1, latest: instance("running") }]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Pipelines />);
+    const del = await screen.findByRole("button", { name: "Delete Nightly" });
+    await user.click(del);
+    expect(
+      screen.getByRole("group", { name: "Delete pipeline “Nightly”?" }),
+    ).toHaveAccessibleDescription(
+      "Its running instance will be stopped first, and in-progress work discarded.",
+    );
+    expect(screen.getByRole("button", { name: "Keep" })).toHaveFocus();
+    await user.click(screen.getByRole("button", { name: "Keep" }));
+    expect(screen.queryByRole("group", { name: /delete pipeline/i })).toBeNull();
+    expect(del).toHaveFocus();
+    expect(deleted(fetchMock)).toBe(false);
+  });
+
+  it("deletes once the question is answered with Delete pipeline", async () => {
+    const user = userEvent.setup();
+    const fetchMock = routedFetch([{ definition: p1, latest: null }]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Pipelines />);
+    await user.click(await screen.findByRole("button", { name: "Delete Nightly" }));
+    // Nothing is running, so there is no consequence to state.
+    expect(screen.getByRole("group", { name: "Delete pipeline “Nightly”?" })).not.toHaveAttribute(
+      "aria-describedby",
+    );
+    expect(deleted(fetchMock)).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Delete pipeline" }));
+    await waitFor(() => expect(deleted(fetchMock)).toBe(true));
   });
 
   it("shows both Run now and Stop for a running pipeline with overlap=allow", async () => {
@@ -292,6 +347,49 @@ describe("Pipelines tab", () => {
     expect(within(footer).getByRole("button", { name: `Delete ${p1.name}` })).toBeInTheDocument();
   });
 
+  it("names each card by its pipeline, so its repeated buttons say whose they are", async () => {
+    const p2: PipelineDefinition = { ...p1, id: "p2", name: "Weekly" };
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(
+        [
+          { definition: p1, latest: null },
+          { definition: p2, latest: null },
+        ],
+        [p1, p2],
+      ),
+    );
+    render(<Pipelines />);
+    const weekly = await screen.findByRole("article", { name: "Weekly" });
+    expect(within(weekly).getByRole("button", { name: /run now/i })).toBeInTheDocument();
+    expect(within(weekly).getByRole("button", { name: "Edit" })).toBeInTheDocument();
+    expect(screen.getByRole("article", { name: "Nightly" })).toBeInTheDocument();
+  });
+
+  it("says which count is filtering the list", async () => {
+    const user = userEvent.setup();
+    const paused: PipelineDefinition = { ...p1, id: "p2", name: "Weekly", enabled: false };
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(
+        [
+          { definition: p1, latest: null },
+          { definition: paused, latest: null },
+        ],
+        [p1, paused],
+      ),
+    );
+    render(<Pipelines />);
+    const filters = await screen.findByRole("group", { name: "Filter pipelines" });
+    const all = within(filters).getByRole("button", { name: /^all/i });
+    const chip = within(filters).getByRole("button", { name: "1 paused" });
+    expect(all).toHaveAttribute("aria-pressed", "true");
+    await user.click(chip);
+    expect(chip).toHaveAttribute("aria-pressed", "true");
+    expect(all).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByRole("article", { name: "Nightly" })).toBeNull();
+  });
+
   it("shows a Stopped badge for an aborted pipeline", async () => {
     vi.stubGlobal("fetch", routedFetch([{ definition: p1, latest: instance("aborted") }]));
     render(<Pipelines />);
@@ -308,11 +406,11 @@ describe("Pipelines admin gate", () => {
     role: null,
   };
 
-  it("hides edit/run controls and shows the login form when signed out", async () => {
+  it("hides edit/run controls and shows the sign-in form when signed out", async () => {
     vi.stubGlobal("fetch", routedFetch([{ definition: p1, latest: null }], [p1], anon));
     render(<Pipelines />);
     await waitFor(() => expect(screen.getByText("Nightly")).toBeTruthy());
-    expect(screen.getByRole("form", { name: /^login$/i })).toBeTruthy();
+    expect(screen.getByRole("form", { name: "Sign in" })).toBeTruthy();
     expect(screen.getByRole("button", { name: /sign in/i })).toBeTruthy();
     for (const name of [/run now/i, /^edit$/i, /^delete$/i, /new pipeline/i]) {
       expect(screen.queryByRole("button", { name })).toBeNull();
@@ -340,9 +438,29 @@ describe("Pipelines admin gate", () => {
 
     await user.click(screen.getByRole("button", { name: "Sign in to add one" }));
     // The form takes the empty state's place, with the caret in it.
-    expect(screen.getByRole("form", { name: /^login$/i })).toBeTruthy();
+    expect(screen.getByRole("form", { name: "Sign in" })).toBeTruthy();
     expect(screen.queryByText(/no pipelines yet/i)).toBeNull();
     expect(screen.getByLabelText("Username")).toHaveFocus();
+    // Directly under the page's h1, so the next level down.
+    expect(screen.getByRole("heading", { level: 2, name: "Sign in" })).toBeInTheDocument();
+  });
+
+  it("puts the empty state back when the form was opened by mistake", async () => {
+    // The form replaces the explanation of what a pipeline is, and there was
+    // no way back to it short of leaving the page.
+    const user = userEvent.setup();
+    vi.stubGlobal("fetch", routedFetch([], [], anon));
+    render(<Pipelines />);
+    await user.click(await screen.findByRole("button", { name: "Sign in to add one" }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("form")).toBeNull();
+    expect(screen.getByText(/no pipelines yet/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sign in to add one" })).toHaveFocus();
+
+    await user.click(screen.getByRole("button", { name: "Sign in to add one" }));
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("form")).toBeNull();
+    expect(screen.getByRole("button", { name: "Sign in to add one" })).toHaveFocus();
   });
 
   it("posts credentials to /api/auth/login on submit", async () => {
@@ -465,7 +583,33 @@ describe("Pipelines admin gate", () => {
     };
     vi.stubGlobal("fetch", routedFetch([{ definition: p1, latest: failed }]));
     render(<Pipelines />);
-    await waitFor(() => expect(screen.getByText(/prereq missing: gh/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Prereq missing: gh")).toBeTruthy());
+  });
+
+  it("tells a stored `failed: …` reason as the board does, without the verdict", async () => {
+    const failed: PipelineInstance = {
+      ...instance("failed"),
+      phases: [
+        {
+          id: "a",
+          name: "x",
+          gated: false,
+          status: "failed",
+          steps: [{ name: "s", runId: "r1", status: "failed" }],
+          attempt: 1,
+          payload: {
+            kind: "failure",
+            reason: "failed: could not reach advisory database (ETIMEDOUT)",
+          },
+        },
+      ],
+    };
+    vi.stubGlobal("fetch", routedFetch([{ definition: p1, latest: failed }]));
+    render(<Pipelines />);
+    await waitFor(() =>
+      expect(screen.getByText("Could not reach advisory database (ETIMEDOUT)")).toBeTruthy(),
+    );
+    expect(screen.queryByText(/failed:/i)).toBeNull();
   });
 
   it("reads a reason that is only the agent's outcome marker as the marker's reason", async () => {
@@ -485,7 +629,7 @@ describe("Pipelines admin gate", () => {
     };
     vi.stubGlobal("fetch", routedFetch([{ definition: p1, latest: failed }]));
     render(<Pipelines />);
-    await waitFor(() => expect(screen.getByText("tests are red")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Tests are red")).toBeTruthy());
     expect(screen.queryByText(/ARGUS_OUTCOME/)).toBeNull();
   });
 
@@ -515,10 +659,56 @@ describe("Pipelines admin gate", () => {
     };
     vi.stubGlobal("fetch", routedFetch([{ definition: p1, latest: gated }]));
     render(<Pipelines />);
-    await waitFor(() => expect(screen.getByText(/needs approval/i)).toBeTruthy());
+    const card = await screen.findByRole("article", { name: "Nightly" });
+    await waitFor(() => expect(within(card).getByText("Needs approval")).toBeTruthy());
     expect(screen.queryByTitle("A run is in flight")).toBeNull();
     // Stopping it is still offered — an awaiting instance can be aborted.
     expect(screen.getByRole("button", { name: /^stop$/i })).toBeTruthy();
+  });
+
+  it("counts pipelines waiting on a gate in the Command Center's words", async () => {
+    const gated = (pipelineId: string, pipelineName: string): PipelineInstance => ({
+      ...instance("awaiting-approval"),
+      id: `${pipelineId}-i1`,
+      pipelineId,
+      pipelineName,
+      phases: [
+        {
+          id: "a",
+          name: "x",
+          gated: true,
+          status: "awaiting-approval",
+          steps: [{ name: "s", runId: `${pipelineId}-r1`, status: "succeeded" }],
+          attempt: 1,
+          payload: null,
+        },
+      ],
+    });
+    const p2: PipelineDefinition = { ...p1, id: "p2", name: "Weekly" };
+    vi.stubGlobal("fetch", routedFetch([{ definition: p1, latest: gated("p1", "Nightly") }]));
+    const first = render(<Pipelines />);
+    let filters = await screen.findByRole("group", { name: "Filter pipelines" });
+    await waitFor(() =>
+      expect(within(filters).getByRole("button", { name: "1 needs approval" })).toBeTruthy(),
+    );
+    first.unmount();
+
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(
+        [
+          { definition: p1, latest: gated("p1", "Nightly") },
+          { definition: p2, latest: gated("p2", "Weekly") },
+        ],
+        [p1, p2],
+      ),
+    );
+    render(<Pipelines />);
+    filters = await screen.findByRole("group", { name: "Filter pipelines" });
+    await waitFor(() =>
+      expect(within(filters).getByRole("button", { name: "2 need approval" })).toBeTruthy(),
+    );
+    expect(screen.queryByText(/awaiting you/i)).toBeNull();
   });
 });
 

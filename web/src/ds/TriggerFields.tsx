@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { Trigger } from "../types";
 import { Button } from "./Button";
 import { Icon } from "./Icon";
+import { useConfirm } from "./useConfirm";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -225,6 +226,7 @@ export function TriggerFields({
 function WebhookFields({ hook }: { hook?: HookCredential }) {
   const [rotating, setRotating] = useState(false);
   const [copied, setCopied] = useState<"url" | "token" | null>(null);
+  const confirm = useConfirm();
 
   if (!hook) {
     return (
@@ -247,6 +249,14 @@ function WebhookFields({ hook }: { hook?: HookCredential }) {
   };
 
   const busy = rotating || hook.rotating;
+  const rotate = async () => {
+    setRotating(true);
+    try {
+      await hook.onRotate();
+    } finally {
+      setRotating(false);
+    }
+  };
   const valueClass =
     "min-w-0 flex-1 truncate rounded-md border border-line bg-ground px-2 py-1 font-mono text-caption text-ink-dim";
 
@@ -280,25 +290,28 @@ function WebhookFields({ hook }: { hook?: HookCredential }) {
           variant="danger"
           icon="retry"
           disabled={busy}
-          onClick={async () => {
-            if (
-              !confirm(
-                "Rotating invalidates the current token — anything already configured with it will stop working.",
-              )
-            ) {
-              return;
-            }
-            setRotating(true);
-            try {
-              await hook.onRotate();
-            } finally {
-              setRotating(false);
-            }
-          }}
+          aria-expanded={confirm.armed === "rotate"}
+          onClick={confirm.toggle("rotate")}
         >
           {busy ? "Rotating…" : "Rotate token"}
         </Button>
       </div>
+      {/* Across both columns: the token's column alone is narrow on a phone. */}
+      {confirm.armed === "rotate" && (
+        <div className="col-span-2">
+          {confirm.question(
+            {
+              title: "Rotate the webhook token?",
+              detail:
+                "This invalidates the current token — anything already configured with it will stop working.",
+              confirm: "Rotate now",
+              cancel: "Keep token",
+              icon: "retry",
+            },
+            () => void rotate(),
+          )}
+        </div>
+      )}
     </div>
   );
 }

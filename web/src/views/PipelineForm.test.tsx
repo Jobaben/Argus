@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PipelineForm, EMPTY_PIPELINE } from "./PipelineForm";
 
@@ -174,6 +174,18 @@ describe("PipelineForm", () => {
     await user.click(screen.getByRole("button", { name: "Phase 2: Build" }));
     expect((screen.getByLabelText("Phase 2 name") as HTMLInputElement).value).toBe("Build");
     expect(screen.queryByLabelText("Phase 1 name")).toBeNull();
+  });
+
+  it("marks a gated phase in the rail in sentence case, as the phase graph does", () => {
+    const initial = {
+      ...EMPTY_PIPELINE,
+      phases: [
+        { id: "a", name: "Build", cwd: "/tmp", gated: true, steps: [{ name: "s", prompt: "p" }] },
+      ],
+    };
+    render(<PipelineForm initial={initial} onSubmit={vi.fn()} onCancel={vi.fn()} />);
+    const chip = screen.getByRole("button", { name: "Phase 1: Build" });
+    expect(within(chip).getByText("Gate")).toBeInTheDocument();
   });
 
   it("materializes implicit linear edges when a dependency is first edited", async () => {

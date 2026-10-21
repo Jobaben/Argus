@@ -12,24 +12,29 @@ import { Button, Icon } from "../ds";
  * then the ghost actions that open something (Analyze, Edit). Housekeeping is
  * held apart at the far end, as one group that wraps as one on a phone: Enable
  * or Disable, and a Delete that asks before it acts and so stays quiet until
- * reached for. A refused action is said on its own line under the buttons, on
- * the card it is about rather than at the top of a long page.
+ * reached for. Its question (or Stop's) opens on a line of its own under the
+ * buttons, and so does a refused action: on the card it is about rather than
+ * at the top of a long page.
  */
 export function CardFooter({
   children,
   manage,
+  question,
   error,
 }: {
   /** Run controls, then the actions that open something. */
   children: ReactNode;
   /** Enable or Disable, then Delete. */
   manage: ReactNode;
+  /** The confirm a Delete or a Stop has opened, if one has. */
+  question?: ReactNode;
   error?: string | null;
 }) {
   return (
     <footer className="mt-auto flex flex-wrap items-center gap-1.5 rounded-b-tile border-t border-line bg-ground-2/40 px-4 py-2.5 sm:px-5">
       {children}
       <div className="ml-auto flex items-center gap-1">{manage}</div>
+      {question}
       {error && (
         <p role="alert" className="flex basis-full items-start gap-1.5 text-caption text-fail-ink">
           <Icon name="alert" size={14} className="mt-px text-fail" />
@@ -42,11 +47,17 @@ export function CardFooter({
 
 /**
  * A count that filters a list: the button language with a pressed state — a
- * quiet outlined ghost at rest, a lit secondary while its filter is on — so it
- * focuses and presses like every other control. A count's tone is carried by
- * what it says (the failing count's dot and words are red), not by a skin of
- * its own. Shared by the Scheduler and Pipelines, so the two peer pages
- * summarise themselves in one idiom.
+ * quiet outlined ghost at rest, and while its filter is on the selection
+ * colour the pipeline editor's phase chips and the phase graph use for
+ * "this one", edge and wash — so it focuses and presses like every other
+ * control. A count's tone is carried by what it says (the failing count's dot
+ * and words are red), not by a skin of its own. Shared by the Scheduler and
+ * Pipelines, so the two peer pages summarise themselves in one idiom.
+ *
+ * The pressed state used to be a lit secondary: a fill one step lighter and a
+ * border a little brighter. On "1 failed", whose words stay red either way,
+ * that faint fill was all that said the filter was on — about 1.2:1 against
+ * the page. The selection edge is several times brighter than the resting one.
  */
 export function FilterChip({
   selected,
@@ -59,11 +70,11 @@ export function FilterChip({
 }) {
   return (
     <Button
-      variant={selected ? "secondary" : "ghost"}
+      variant="ghost"
       size="sm"
       aria-pressed={selected}
       onClick={onClick}
-      className={selected ? "" : "border border-line"}
+      className="border border-line aria-pressed:border-eye/60 aria-pressed:bg-eye/[0.08] aria-pressed:text-ink"
     >
       {children}
     </Button>

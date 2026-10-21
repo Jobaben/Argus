@@ -33,6 +33,7 @@ import { ClaimList } from "./ClaimList";
 import { FieldGuide } from "./FieldGuide";
 import { Term } from "./marks";
 import { KindStrip, ModuleShelves } from "./ModuleShelves";
+import { loadError } from "../../live/loadError";
 
 /**
  * The Knowledge view: what the ledger believes, revealed one level at a time.
@@ -48,7 +49,10 @@ export default function KnowledgeView() {
 
   return (
     <Page
-      title="What Argus believes"
+      // Named as the nav, the phone header and the tab name it: a reader who
+      // chose "Knowledge" landed under "What Argus believes" and had to check
+      // they were in the right place.
+      title="Knowledge"
       subtitle={
         data && data.claims.length > 0 ? (
           <Summary atlas={data} />
@@ -69,7 +73,7 @@ export default function KnowledgeView() {
         <div className="mb-6">
           <AlertStrip
             subject="Knowledge"
-            message={`Couldn't load the ledger: ${error}`}
+            message={loadError("the ledger", error)}
             action={
               <Button size="sm" icon="retry" onClick={refresh}>
                 Retry

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import type { Heartbeat } from "../types";
 import { useFlip } from "./flip";
 import { DURATION, useChangeFlash, useSyncedDelay } from "./motion";
@@ -26,6 +26,36 @@ const SLOT = "min-w-0.5 max-w-3 flex-1 rounded-full";
  *  a grey tick it read as a skipped run, and a monitor with one run looked like
  *  one with thirty. */
 const EMPTY = "h-1 bg-line";
+
+/** The narrowest a beat is drawn. Thirty slots in a phone's card were 4px
+ *  each — a hairline no finger can hit, on a screen where the tooltip never
+ *  shows — so a strip that cannot give every slot this much shows fewer of
+ *  them: the newest, each wide enough to tap. */
+const MIN_BEAT_PX = 10;
+/** The strip's `gap-[3px]`. */
+const GAP_PX = 3;
+
+/** How many of `max` slots fit the strip at `MIN_BEAT_PX`, kept up to date as
+ *  it resizes. Measured before paint, so a phone never draws thirty first. */
+function useSlotsThatFit(max: number) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [fit, setFit] = useState(max);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => {
+      // Zero is a strip not laid out (or a test's DOM): keep every slot.
+      const width = el.clientWidth;
+      if (width > 0) setFit(Math.max(1, Math.floor((width + GAP_PX) / (MIN_BEAT_PX + GAP_PX))));
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  return [ref, Math.min(fit, max)] as const;
+}
 
 function toneOf(h: Heartbeat): keyof typeof TICK {
   if (h.outcome === "failed" || h.outcome === "blocked") return "fail";
@@ -80,8 +110,9 @@ const STEP: Record<string, (i: number, n: number) => number> = {
  * focus. A slot no run has filled yet is not a link.
  */
 export function HeartbeatBar({ beats, slots = 30 }: { beats: Heartbeat[]; slots?: number }) {
-  const shown = beats.slice(-slots);
-  const pad = Math.max(0, slots - shown.length);
+  const [stripRef, fit] = useSlotsThatFit(slots);
+  const shown = beats.slice(-fit);
+  const pad = Math.max(0, fit - shown.length);
   const newest = shown.length > 0 ? shown[shown.length - 1].runId : null;
   // False on the first render by construction, so a strip does not animate its
   // whole history in on page load — only an *arrival* is an arrival.
@@ -97,6 +128,7 @@ export function HeartbeatBar({ beats, slots = 30 }: { beats: Heartbeat[]; slots?
     : (shown.findLast((h) => h.runId)?.runId ?? null);
   return (
     <div
+      ref={stripRef}
       role="group"
       aria-label={`Last ${shown.length} runs`}
       onKeyDown={(e) => {
@@ -134,7 +166,9 @@ export function HeartbeatBar({ beats, slots = 30 }: { beats: Heartbeat[]; slots?
             tabIndex={h.runId === stop ? 0 : -1}
             onFocus={() => setWalked(h.runId)}
             style={style}
-            className={`${className} focus-visible:scale-y-125`}
+            // The hit area spans the gaps and a little above and below, so
+            // the strip has no dead pixels between beats.
+            className={`${className} relative before:absolute before:-inset-x-[1.5px] before:-inset-y-1 focus-visible:scale-y-125`}
           />
         );
       })}

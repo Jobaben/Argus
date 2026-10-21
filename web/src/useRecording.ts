@@ -12,7 +12,7 @@ const EMPTY: Recording | null = null;
  * local playback state a re-render would fight.
  */
 export function useRecording(runId: string | null) {
-  const { data, loading, error, refresh } = useLiveResource<Recording | null>(
+  const { data, loading, error, errorStatus, refresh } = useLiveResource<Recording | null>(
     runId ? `/api/runs/${encodeURIComponent(runId)}/recording` : null,
     {
       events: ["schedules:changed"],
@@ -20,5 +20,5 @@ export function useRecording(runId: string | null) {
       initial: EMPTY,
     },
   );
-  return { recording: data, loading, error, refresh };
+  return { recording: data, loading, error, errorStatus, refresh };
 }

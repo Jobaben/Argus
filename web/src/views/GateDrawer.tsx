@@ -15,6 +15,8 @@ import {
 import { Markdown } from "../ds/Markdown";
 import { useArtifactContent, useGateReview } from "../useGateReview";
 import { splitOutcome } from "./outcome";
+import { reasonText, tellOnce } from "./failureReason";
+import { sentenceStart } from "./text";
 import { KIND_TERMS, TERMS, type TermId } from "./knowledgeGlossary";
 import type { GateActionOptions } from "../useOverview";
 import type {
@@ -38,6 +40,7 @@ import type {
   RuleVerificationPreviewEntry,
   VerificationEvidence,
 } from "../types";
+import { loadError } from "../live/loadError";
 
 /**
  * The one place a human decides on a gate.
@@ -166,18 +169,6 @@ interface Note {
   outcome: string | null;
 }
 
-/** Loosely the same sentence: case, punctuation, articles and a leading
- *  "failed:" set aside. */
-function sameSentence(a: string, b: string): boolean {
-  const norm = (t: string) =>
-    t
-      .toLowerCase()
-      .replace(/^\s*(failed|blocked|succeeded)\s*:\s*/, "")
-      .replace(/\b(the|a|an)\b/g, "")
-      .replace(/[^a-z0-9]+/g, "");
-  return norm(a) !== "" && norm(a) === norm(b);
-}
-
 /** The agent's protocol line comes off its prose and is shown as a chip
  *  instead; the payload itself is untouched. */
 function toNote(label: string, text: string): Note {
@@ -192,17 +183,31 @@ function payloadParts(value: unknown): PayloadParts {
   if (typeof value !== "object" || Array.isArray(value)) return { ...none, raw: value };
   const { prose, rest } = splitPayload(value as Record<string, unknown>);
   if (Object.keys(prose).length === 0) return { ...none, raw: value };
-  const reason = prose.reason ?? null;
-  const notes = [
-    prose.summary && toNote("Summary", prose.summary),
-    prose.last_assistant_message && toNote("Agent's last message", prose.last_assistant_message),
-  ]
-    .filter((n): n is Note => !!n && n.source !== "")
-    // A note that only repeats the reason above it is the third telling of one
-    // error; the lead panel already said it.
-    .filter((n) => !(reason && sameSentence(n.source, reason)));
+  // The reason as a sentence, and each note without whatever opening line
+  // only tells it again: with the Failed pill, one error used to be told three
+  // times. A note that opens with the reason in fuller words lends that line
+  // to the lead, and goes when it had nothing else to say.
+  let reason = reasonText(prose.reason);
+  const notes: Note[] = [];
+  for (const [label, text] of [
+    ["Summary", prose.summary],
+    ["Agent's last message", prose.last_assistant_message],
+  ] as const) {
+    if (!text) continue;
+    const note = toNote(label, text);
+    const told = tellOnce(reason, note.source);
+    if (told.reason !== reason && /[`*_[<]/.test(told.reason)) {
+      // A line with Markdown in it reads properly only in the note, which
+      // keeps it; the lead gives up its shorter telling instead.
+      reason = "";
+      notes.push(note);
+      continue;
+    }
+    reason = told.reason;
+    if (told.message) notes.push({ ...note, source: told.message });
+  }
   return {
-    reason,
+    reason: reason || null,
     notes,
     raw: Object.keys(rest).length > 0 ? rest : undefined,
     folded: true,
@@ -541,7 +546,7 @@ function JustificationList({ justifications }: { justifications: PreviewJustific
     <ul className="mt-1.5 flex flex-col gap-0.5" aria-label="Justifications">
       {justifications.map((j, i) => (
         <li key={i} className="min-w-0 break-words text-caption text-ink-faint">
-          {j.direction === "opposes" ? "opposed by" : "from"}{" "}
+          {j.direction === "opposes" ? "Opposed by" : "From"}{" "}
           {j.premises.map((p, k) => (
             <Fragment key={k}>
               {k > 0 && " + "}
@@ -577,7 +582,14 @@ function CandidateRevision({ revision }: { revision: PreviewRevision }) {
         <Ref>
           {revision.claimId} v{revision.expectedRevision} → v{revision.expectedRevision + 1}
         </Ref>
-        {revision.stale && <span className={chipClass("fail")}>Stale</span>}
+        {revision.stale && (
+          <span
+            className={chipClass("fail")}
+            title="The ledger has moved past the revision this expects, so the commit will refuse it."
+          >
+            Stale
+          </span>
+        )}
       </RowHead>
       {revision.current && (
         <p className="mt-1.5 break-words text-small leading-relaxed text-ink-faint line-through decoration-ink-faint/60">
@@ -600,6 +612,21 @@ function CandidateRevision({ revision }: { revision: PreviewRevision }) {
   );
 }
 
+/**
+ * A warning as the drawer says it. The server writes them as clauses opening
+ * on a ledger word ("assumption \"…\" carries neither…"), the one lower-case
+ * line in the panel: the opening word is set in sentence case, and a claim
+ * kind in the Knowledge view's words. One that opens on an id or a path
+ * ("local:x", "RULE-17") is machine text and stays exactly as written.
+ */
+function warningText(message: string): string {
+  const m = /^([a-z][a-z-]*)(\s[\s\S]*)$/.exec(message);
+  if (!m) return message;
+  const kind = KIND_TERMS[m[1] as keyof typeof KIND_TERMS] as
+    (typeof KIND_TERMS)[keyof typeof KIND_TERMS] | undefined;
+  return (kind?.term ?? sentenceStart(m[1])) + m[2];
+}
+
 /** Things Argus already knows are questionable, in the colour of "a person
  *  should look at this". */
 function WarningList({ messages, testId }: { messages: string[]; testId: string }) {
@@ -612,7 +639,7 @@ function WarningList({ messages, testId }: { messages: string[]; testId: string 
           className="flex min-w-0 items-start gap-2 rounded-control border border-await/25 bg-await/[0.06] px-3 py-2 text-small text-await-ink"
         >
           <Icon name="alert" size={15} className="mt-0.5 text-await" />
-          <span className="min-w-0 break-words">{m}</span>
+          <span className="min-w-0 break-words">{warningText(m)}</span>
         </li>
       ))}
     </ul>
@@ -681,7 +708,7 @@ function CandidateKnowledge({
       )}
       {consumed.length > 0 && (
         <p className="break-words text-caption text-ink-faint">
-          consumed: <span className="font-mono">{consumed.map((c) => c.ref).join(", ")}</span>
+          Consumed: <span className="font-mono">{consumed.map((c) => c.ref).join(", ")}</span>
         </p>
       )}
     </div>
@@ -776,6 +803,35 @@ function VerificationEvidenceList({ evidence }: { evidence: VerificationEvidence
   );
 }
 
+/**
+ * One axis of a rule's state, in words: "Rule supported", "Implementation
+ * violated". The ledger's `rule: supported` and `impl: violated` sat in mono
+ * beside chips that had already been put into words. The two axes stay side
+ * by side and separately named, because reading them as one is the mistake
+ * this panel exists to prevent.
+ */
+function RuleState({
+  axis,
+  value,
+  title,
+  tone = "text-ink-faint",
+  children,
+}: {
+  axis: "Rule" | "Implementation";
+  value: string;
+  title: string;
+  tone?: string;
+  children?: ReactNode;
+}) {
+  const term = TERMS[value as TermId] as (typeof TERMS)[TermId] | undefined;
+  return (
+    <span className={`text-caption ${tone}`} title={title}>
+      {axis} {(term?.term ?? asLabel(value)).toLowerCase()}
+      {children}
+    </span>
+  );
+}
+
 function VerificationRow({ entry }: { entry: RuleVerificationPreviewEntry }) {
   return (
     <li className="px-3.5 py-3">
@@ -783,9 +839,11 @@ function VerificationRow({ entry }: { entry: RuleVerificationPreviewEntry }) {
         <OutcomeTag outcome={entry.outcome} />
         <Ref>{entry.ref}</Ref>
         {entry.support && (
-          <Ref title="The rule's own support. Independent of whether the code conforms.">
-            rule: {entry.support}
-          </Ref>
+          <RuleState
+            axis="Rule"
+            value={entry.support}
+            title="The rule's own support. Independent of whether the code conforms."
+          />
         )}
       </RowHead>
       {entry.statement && <p className={STATEMENT}>{entry.statement}</p>}
@@ -1049,14 +1107,20 @@ function CurrentRule({ rule }: { rule: ChangeRuleState }) {
       <RowHead>
         <KindTag kind={rule.kind} />
         <Ref>{rule.ref}</Ref>
-        <Ref title="The rule's own support.">rule: {rule.support}</Ref>
-        <span
-          className={`font-mono text-caption ${CONFORMANCE_TONE[rule.conformance] ?? "text-ink-faint"}`}
+        <RuleState axis="Rule" value={rule.support} title="The rule's own support." />
+        <RuleState
+          axis="Implementation"
+          value={rule.conformance}
+          tone={CONFORMANCE_TONE[rule.conformance]}
           title="What the implementation does. Independent of whether the rule is well founded."
         >
-          impl: {rule.conformance}
-          {rule.conformanceAt ? ` @${rule.conformanceAt.slice(0, 8)}` : ""}
-        </span>
+          {rule.conformanceAt && (
+            <>
+              {" at "}
+              <span className="font-mono">{rule.conformanceAt.slice(0, 8)}</span>
+            </>
+          )}
+        </RuleState>
       </RowHead>
       <p className={STATEMENT}>{rule.statement}</p>
     </li>
@@ -1076,7 +1140,9 @@ function AcceptanceCriteria({ criteria }: { criteria: AcceptanceCriterion[] }) {
           key={c.id}
           className="flex min-w-0 flex-wrap items-baseline gap-x-2.5 gap-y-1 px-3.5 py-2.5"
         >
-          <span className="font-mono text-caption text-ink-faint">{c.id}</span>
+          <span className="shrink-0 whitespace-nowrap font-mono text-caption text-ink-faint">
+            {c.id}
+          </span>
           <KindTag kind={c.kind} />
           <span className="min-w-0 basis-full break-words text-small text-ink sm:basis-0 sm:flex-1">
             {c.statement}
@@ -1180,7 +1246,9 @@ function ChangeProposalPanel({
                     <li key={c.ref} className="flex min-w-0 items-start gap-2.5 px-3.5 py-2.5">
                       <Icon name="check" size={14} className="mt-0.5 text-ok" />
                       <span className="min-w-0 break-words text-small text-ink-dim">
-                        <span className="font-mono text-caption text-ink-faint">{c.ref}</span>{" "}
+                        <span className="whitespace-nowrap font-mono text-caption text-ink-faint">
+                          {c.ref}
+                        </span>{" "}
                         {c.statement}
                       </span>
                     </li>
@@ -1212,7 +1280,7 @@ function ChangeProposalPanel({
             <Part label="Unresolved" count={p.unresolved.length}>
               {p.unresolved.length === 0 ? (
                 <p data-testid="change-unresolved-none" className="text-small text-ink-faint">
-                  none
+                  None
                 </p>
               ) : (
                 <ul data-testid="change-unresolved" className={ROWS}>
@@ -1221,7 +1289,10 @@ function ChangeProposalPanel({
                       key={q.id}
                       className="flex min-w-0 items-baseline gap-2.5 px-3.5 py-2.5 text-small"
                     >
-                      <span className="font-mono text-caption text-ink-faint">{q.id}</span>
+                      {/* Whole: an id that may shrink broke "Q-1" over two lines. */}
+                      <span className="shrink-0 whitespace-nowrap font-mono text-caption text-ink-faint">
+                        {q.id}
+                      </span>
                       <span className="min-w-0 break-words text-await-ink">{q.question}</span>
                     </li>
                   ))}
@@ -1374,9 +1445,7 @@ function ArtifactViewer({
     body = (
       <p role="alert" className="flex items-start gap-2 px-4 py-3.5 text-small text-fail">
         <Icon name="alert" size={15} className="mt-0.5" />
-        <span className="min-w-0 break-words">
-          Couldn't load {path}: {error}
-        </span>
+        <span className="min-w-0 break-words">{loadError(path, error)}</span>
       </p>
     );
   } else if (content && !content.text) {
@@ -1438,15 +1507,23 @@ export function GateDrawer({
     selection?.phaseId ?? null,
   );
   if (!selection) return <Drawer open={false} title="" onClose={onClose} children={null} />;
-  // Fresh state per gate: a different phase, or the same one on a new attempt,
-  // must not inherit a half-typed note or a stale "approved" line — so the
-  // panel is keyed on both and simply remounts.
+  // The hook keeps the last gate's review while the next one loads, and it
+  // must not be shown, nor approved, under this gate's title.
+  const current =
+    review?.instanceId === selection.instanceId && review.phaseId === selection.phaseId
+      ? review
+      : null;
+  // Fresh state per gate: a different phase must not inherit a half-typed note
+  // or a stale "approved" line, so the panel is keyed on the gate and remounts.
+  // Not on the attempt: that is unknown until the review arrives, and keying on
+  // it remounted the drawer the moment it did, which replayed its entrance and
+  // lost track of the button that opened it. A new attempt resets in place.
   return (
     <GatePanel
-      key={`${selection.instanceId}/${selection.phaseId}@${review?.attempt ?? "?"}`}
+      key={`${selection.instanceId}/${selection.phaseId}`}
       selection={selection}
-      review={review}
-      loading={loading}
+      review={current}
+      loading={loading || (!current && !error)}
       error={error}
       onClose={onClose}
       approve={approve}
@@ -1501,6 +1578,21 @@ function GatePanel({
   const [note, setNote] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [sent, setSent] = useState<string | null>(null);
+  // The same gate on a new attempt (it was revised and stopped here again)
+  // starts clean. Reset during render, so no frame shows the last attempt's
+  // note or its "Revision sent" line under the new attempt's files.
+  const [attempt, setAttempt] = useState(review?.attempt);
+  if (review && review.attempt !== attempt) {
+    setAttempt(review.attempt);
+    if (attempt !== undefined) {
+      setSelectedPath(null);
+      setBusy(false);
+      setNoteOpen(false);
+      setNote("");
+      setErr(null);
+      setSent(null);
+    }
+  }
   const noteId = useId();
   const noteRef = useRef<HTMLTextAreaElement>(null);
 
@@ -1679,7 +1771,7 @@ function GatePanel({
           className="flex items-start gap-2.5 rounded-tile border border-fail/30 bg-fail/[0.07] px-4 py-3 text-small text-fail-ink"
         >
           <Icon name="alert" size={16} className="mt-0.5 text-fail" />
-          <span className="min-w-0 break-words">Couldn't load the review: {error}</span>
+          <span className="min-w-0 break-words">{loadError("the review", error)}</span>
         </div>
       ) : review ? (
         <div className="flex flex-col gap-8">

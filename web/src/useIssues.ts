@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import { useLiveResource } from "./live/useLiveResource";
+import { fetchLoad } from "./live/loadError";
 import type { Issue, IssueOccurrence, IssuesSummary } from "./types";
 
 const EMPTY: IssuesSummary = { open: 0, resolved: 0, ignored: 0 };
@@ -32,8 +33,7 @@ export function useIssues() {
   );
 
   const loadOccurrences = useCallback(async (fingerprint: string): Promise<IssueOccurrence[]> => {
-    const res = await fetch(`/api/issues/${fingerprint}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const res = await fetchLoad(`/api/issues/${fingerprint}`);
     const body = (await res.json()) as { occurrences?: IssueOccurrence[] };
     return body.occurrences ?? [];
   }, []);

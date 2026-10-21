@@ -130,7 +130,7 @@ describe("KnowledgeView", () => {
   it("opens on a calm overview that says nobody verified the rules", async () => {
     mockFetch(handlers);
     render(<KnowledgeView />);
-    expect(await screen.findByRole("heading", { name: "What Argus believes" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Knowledge", level: 1 })).toBeInTheDocument();
     const summary = screen.getByText(/nobody has checked them against the code yet/);
     expect(summary).toHaveTextContent("4 claims, 2 business rules");
     expect(summary).toHaveTextContent("1 needs a look");

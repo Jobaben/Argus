@@ -14,6 +14,7 @@ import {
 import { hasSessionData, hasTokenData } from "./statsGroups";
 import { VaultPanels } from "./VaultPanels";
 import { InfoTip } from "../ds/InfoTip";
+import { loadError } from "../live/loadError";
 
 function compact(n: number): string {
   if (!Number.isFinite(n)) return "0";
@@ -507,13 +508,7 @@ export default function Stats() {
         <div className="mb-6">
           <AlertStrip
             subject="Stats"
-            message={
-              // A status code means the server answered and failed; anything
-              // else (a rejected fetch) means it was never reached.
-              /^HTTP \d{3}$/.test(error)
-                ? `Couldn't load stats: ${error}`
-                : `Couldn't reach the Argus server: ${error}`
-            }
+            message={loadError("stats", error)}
             action={
               <Button size="sm" icon="retry" onClick={() => refresh()}>
                 Retry

@@ -10,6 +10,8 @@ export interface ToastItem {
   tone: "ok" | "fail" | "info";
   title: string;
   detail?: string;
+  /** The detail is machine text (an agent's job id), so it is set in mono. */
+  detailMono?: boolean;
 }
 
 const TONE: Record<
@@ -61,9 +63,18 @@ function Toast({
         <p className={`text-micro font-semibold uppercase tracking-[0.08em] ${tone.text}`}>
           {tone.label}
         </p>
-        <p className="mt-0.5 truncate text-small font-semibold text-ink">{toast.title}</p>
+        {/* Two lines before it gives up: the title is usually an agent's or a
+            monitor's name, the one thing that says which, and cut to one line
+            "Agent failed: Upgrade lodash acr…" named nothing. */}
+        <p className="mt-0.5 line-clamp-2 break-words text-small font-semibold text-ink">
+          {toast.title}
+        </p>
         {toast.detail && (
-          <p className="mt-0.5 truncate text-caption text-ink-dim">{toast.detail}</p>
+          <p
+            className={`mt-0.5 truncate text-caption text-ink-dim ${toast.detailMono ? "font-mono" : ""}`}
+          >
+            {toast.detail}
+          </p>
         )}
       </div>
       <button

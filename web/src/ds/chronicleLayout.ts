@@ -59,28 +59,92 @@ export function spanGeometry(
 export interface AxisTick {
   pct: number;
   label: string;
+  /** Starts a day or a longer unit: the tick that names where it is, as
+   *  against an hour inside the day. */
+  major: boolean;
 }
 
-/** "14:05" for sub-2-day windows, "Mon 14:05" beyond that. */
-export function tickLabel(atMs: number, rangeMs: number): string {
-  const d = new Date(atMs);
-  const time = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  if (rangeMs <= 48 * 3_600_000) return time;
-  const day = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()];
-  return `${day} ${time}`;
-}
+const MINUTE = 60_000;
+const DAY = 1440 * MINUTE;
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-/** Evenly spaced ticks across the window, inclusive of the start edge. */
-export function axisTicks(windowStartMs: number, windowEndMs: number, count = 6): AxisTick[] {
-  const range = windowEndMs - windowStartMs;
-  if (range <= 0 || count < 1) return [];
-  const ticks: AxisTick[] = [];
-  for (let i = 0; i < count; i++) {
-    const pct = (i / count) * 100;
-    const at = windowStartMs + (range * i) / count;
-    ticks.push({ pct, label: tickLabel(at, range) });
+/**
+ * The steps an axis can be read against, finest first. The minute steps all
+ * divide a day, so a tick lands on the same clock times every day; the day
+ * steps count from the first of the month, and a half month is the 1st and
+ * the 15th.
+ */
+type Step = { unit: "minute" | "day" | "month"; n: number };
+const STEPS: Step[] = [
+  ...[5, 10, 15, 30, 60, 120, 180, 240, 360, 720].map((n) => ({ unit: "minute" as const, n })),
+  { unit: "day", n: 1 },
+  { unit: "day", n: 2 },
+  { unit: "month", n: 0.5 },
+  ...[1, 2, 3, 6, 12].map((n) => ({ unit: "month" as const, n })),
+];
+
+const stepMs = ({ unit, n }: Step): number =>
+  unit === "minute" ? n * MINUTE : unit === "day" ? n * DAY : n * 30.44 * DAY;
+
+const hhmm = (d: Date): string =>
+  `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+
+/** Every instant on `step`'s grid in (start, end], in local time. */
+function gridTimes(step: Step, start: number, end: number): Date[] {
+  const s = new Date(start);
+  const [y, m, d] = [s.getFullYear(), s.getMonth(), s.getDate()];
+  const out: Date[] = [];
+  for (let k = 0; ; k++) {
+    const at =
+      step.unit === "minute"
+        ? new Date(y, m, d, 0, k * step.n)
+        : step.unit === "day"
+          ? new Date(y, m, d + k)
+          : step.n < 1
+            ? new Date(y, m + Math.floor(k / 2), k % 2 === 0 ? 1 : 15)
+            : new Date(y, m + k, 1);
+    if (at.getTime() > end) return out;
+    // A clock time a spring-forward night skips resolves to the hour after
+    // it, which the grid's next step lands on too: one tick, not two.
+    if (at.getTime() <= start || at.getTime() === out.at(-1)?.getTime()) continue;
+    const onGrid =
+      step.unit === "day"
+        ? (at.getDate() - 1) % step.n === 0
+        : step.unit === "month" && step.n >= 1
+          ? at.getMonth() % step.n === 0
+          : true;
+    if (onGrid) out.push(at);
   }
-  return ticks;
+}
+
+/** What a tick says: as little as tells it apart from its neighbours. */
+function label(at: Date, step: Step): string {
+  if (step.unit === "minute") {
+    // Midnight says which day it starts, so a window over a day boundary
+    // shows where the boundary is.
+    return at.getHours() === 0 && at.getMinutes() === 0 ? WEEKDAYS[at.getDay()] : hhmm(at);
+  }
+  if (step.unit === "day") return `${WEEKDAYS[at.getDay()]} ${at.getDate()}`;
+  if (step.n < 1) return `${MONTHS[at.getMonth()]} ${at.getDate()}`;
+  return at.getMonth() === 0 ? String(at.getFullYear()) : MONTHS[at.getMonth()];
+}
+
+/**
+ * Ticks at round times for the window — every four hours on a day, midnights
+ * on a week, months on a year — placed where they fall, at most `max` of them.
+ * They used to be the window's start plus sixths of its length, so a day read
+ * "02:03 06:03 10:03…": minutes that looked like data, not like a scale.
+ */
+export function axisTicks(windowStartMs: number, windowEndMs: number, max = 7): AxisTick[] {
+  const range = windowEndMs - windowStartMs;
+  if (!Number.isFinite(range) || range <= 0 || max < 1) return [];
+  const step = STEPS.find((s) => stepMs(s) * max >= range) ?? STEPS[STEPS.length - 1];
+  return gridTimes(step, windowStartMs, windowEndMs).map((at) => ({
+    pct: ((at.getTime() - windowStartMs) / range) * 100,
+    label: label(at, step),
+    major: step.unit !== "minute" || (at.getHours() === 0 && at.getMinutes() === 0),
+  }));
 }
 
 /**

@@ -21,8 +21,15 @@ export interface Command extends Rankable {
   subtitle?: string;
   keywords?: string[];
   group: CommandGroup;
-  /** Short trailing label: a status word, or the shortcut that also does this. */
+  /** Short trailing label: a status word or a count. */
   badge?: string;
+  /**
+   * The shortcut that also does this, in the key layer's notation ("g c",
+   * "?"), drawn as keycaps. Kept apart from `badge` so a shortcut is never
+   * guessed from the shape of a status word: "?" was drawn as a status badge
+   * because only a two-key chord looked like one.
+   */
+  keys?: string;
   severity?: PaletteSeverity;
   /** Where this goes, for a plain jump. */
   href?: string;
@@ -30,6 +37,13 @@ export interface Command extends Rankable {
   run?: () => void | Promise<unknown>;
   /** Rendered as a leading glyph; keeps kinds distinguishable at a glance. */
   icon?: IconName;
+  /**
+   * Found by its title only when every word typed appears in it as written.
+   * Set on actions that change something: a scattered match ("rel" lighting
+   * R in "Run now" and "el" in "Changelog") is cheap on a jump, which costs a
+   * glance if it is wrong, and not on a row that fires a schedule.
+   */
+  literal?: boolean;
 }
 
 /** One nav destination, as the shell knows it. */
@@ -122,7 +136,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
       title: dest.label,
       group: "Go to",
       icon: "arrow-right",
-      badge: dest.chord,
+      keys: dest.chord,
       keywords: ["go", "open", "tab", dest.id],
       href: `#/${dest.id}`,
     });
@@ -155,6 +169,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
       subtitle: "Fire this schedule immediately",
       group: "Actions",
       icon: "play",
+      literal: true,
       keywords: ["run", "fire", "trigger", "now", entry.id],
       run: () => ctx.actions.runSchedule(scheduleId),
     });
@@ -166,6 +181,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
     subtitle: "Reset the briefing window to now",
     group: "Actions",
     icon: "check",
+    literal: true,
     keywords: ["briefing", "ack", "acknowledge", "clear", "digest"],
     run: () => ctx.actions.markCaughtUp(),
   });
@@ -176,7 +192,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
     subtitle: "Every shortcut in the app",
     group: "Actions",
     icon: "keyboard",
-    badge: "?",
+    keys: "?",
     keywords: ["help", "keys", "bindings", "cheatsheet"],
     run: () => ctx.actions.showShortcuts(),
   });

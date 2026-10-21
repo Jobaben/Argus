@@ -47,7 +47,10 @@ export function useAgentNotifications(agents: Agent[]) {
         key: `${e.short}:${e.status}`,
         tone: e.status === "failed" ? "fail" : "ok",
         title: notificationTitle(e),
+        // The detail is the job id: machine text, so it is set in mono — here,
+        // so the toast and its line in the log both are.
         detail: e.short,
+        detailMono: true,
         href: `#/agent/${encodeURIComponent(e.short)}`,
       });
     }

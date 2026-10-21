@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Button, EmptyState, type IconName } from "../ds";
 import { AdminAuthPanel, type AuthPurpose } from "./AdminAuthPanel";
 
@@ -11,6 +11,10 @@ import { AdminAuthPanel, type AuthPurpose } from "./AdminAuthPanel";
  * another tab for a form it could have shown. The empty state now explains,
  * and its action opens the form in its place, with the caret in its first
  * field, so the page says one thing at a time.
+ *
+ * Opened by mistake, it closes again: Cancel, or Escape, puts the empty state
+ * back — on Pipelines that is also the explanation of what a pipeline is,
+ * which the form had replaced — with focus on the action that opened it.
  */
 export function AccountPrompt({
   configured,
@@ -36,25 +40,25 @@ export function AccountPrompt({
   purpose?: AuthPurpose;
   children: ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
-  const formRef = useRef<HTMLDivElement>(null);
-  // The button that was pressed is gone with the empty state, so focus would
-  // fall back to the top of the document; it goes to the first field instead.
-  useEffect(() => {
-    if (open) formRef.current?.querySelector("input")?.focus();
-  }, [open]);
+  // "cancelled" is closed again after being open. The button that was pressed
+  // goes with the empty state and comes back with it, so each way focus would
+  // fall to the top of the document; it goes to the form's first field on the
+  // way in, and to the re-mounted button on the way out.
+  const [state, setState] = useState<"closed" | "open" | "cancelled">("closed");
 
-  if (open) {
+  if (state === "open") {
     return (
-      <div ref={formRef}>
-        <AdminAuthPanel
-          configured={configured}
-          onLogin={onLogin}
-          onSetup={onSetup}
-          onRegister={onRegister}
-          purpose={purpose}
-        />
-      </div>
+      <AdminAuthPanel
+        configured={configured}
+        onLogin={onLogin}
+        onSetup={onSetup}
+        onRegister={onRegister}
+        purpose={purpose}
+        autoFocus
+        // The form stands in for the page's empty state, directly under its h1.
+        headingLevel={2}
+        onCancel={() => setState("cancelled")}
+      />
     );
   }
   return (
@@ -65,7 +69,8 @@ export function AccountPrompt({
         <Button
           variant="primary"
           icon={configured ? "user" : "shield"}
-          onClick={() => setOpen(true)}
+          autoFocus={state === "cancelled"}
+          onClick={() => setState("open")}
         >
           {configured ? signInLabel : "Create the root account"}
         </Button>

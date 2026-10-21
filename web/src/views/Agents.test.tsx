@@ -48,8 +48,10 @@ describe("Agents", () => {
 
   it("on a failed load, says so once, with a retry, and claims nothing else", async () => {
     const user = userEvent.setup();
-    const { refresh } = renderView({ error: "HTTP 500" });
-    expect(screen.getByText(/Couldn't reach the Argus server: HTTP 500/)).toBeInTheDocument();
+    const { refresh } = renderView({ error: "database is locked" });
+    // The server answered, so this is its reason, not a connection problem.
+    expect(screen.getByText("Couldn't load agents: database is locked")).toBeInTheDocument();
+    expect(screen.queryByText(/couldn't reach/i)).toBeNull();
     expect(screen.queryByText("No background agents yet")).toBeNull();
     expect(screen.queryByRole("region", { name: "Agent counts" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Retry" }));

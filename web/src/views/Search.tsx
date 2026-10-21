@@ -1,4 +1,5 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useHashRoute } from "../useHashRoute";
 import { useSearch, type SearchResult } from "../useSearch";
 import { useVaultSearch } from "../useVault";
 import {
@@ -15,6 +16,8 @@ import {
 } from "../ds";
 import type { VaultSearchHit } from "../types";
 import { formatKeys } from "../cmd/keys";
+import { sentenceStart } from "./text";
+import { loadError } from "../live/loadError";
 
 /** The palette chord as this platform spells it: ⌘K, or Ctrl K. */
 const PALETTE_KEYS = formatKeys(
@@ -116,9 +119,11 @@ function VaultHitRow({ hit, query }: { hit: VaultSearchHit; query: string }) {
     <div className="group relative px-4 py-3 transition-colors duration-(--duration-quick) hover:bg-surface-2/60">
       <div className="flex min-w-0 items-center gap-2">
         <Icon name={isRun ? "history" : "bell"} size={14} className="shrink-0 text-ink-faint" />
+        {/* Two lines on a phone, where one left a dozen characters and runs
+            of one pipeline ("Release Train · Impl…") could not be told apart. */}
         <a
           href={href}
-          className="min-w-0 flex-1 truncate rounded-sm text-small font-semibold text-ink after:absolute after:inset-0 after:content-['']"
+          className="line-clamp-2 min-w-0 flex-1 break-words rounded-sm text-small font-semibold text-ink after:absolute after:inset-0 after:content-[''] sm:line-clamp-1"
         >
           <span className="sr-only">{isRun ? "Run:" : "Event:"}</span>
           {hit.title}
@@ -126,9 +131,10 @@ function VaultHitRow({ hit, query }: { hit: VaultSearchHit; query: string }) {
         <span className="shrink-0 text-caption">
           <TimeAgo iso={hit.at} />
         </span>
-        {/* Runs of one schedule share a title; the id tells them apart. */}
+        {/* Runs of one schedule share a title; the id tells them apart. Not on
+            a phone, where the title needs the room and the time differs. */}
         {isRun && (
-          <span className="shrink-0 font-mono text-caption text-ink-faint">
+          <span className="hidden shrink-0 font-mono text-caption text-ink-faint sm:inline">
             {hit.ref.slice(0, 8)}
           </span>
         )}
@@ -139,9 +145,12 @@ function VaultHitRow({ hit, query }: { hit: VaultSearchHit; query: string }) {
         />
       </div>
       <p className="mt-1 line-clamp-2 pl-[22px] text-caption leading-relaxed text-ink-dim">
+        {/* Above the row's stretched link, or the link takes the pointer and
+            the tooltip never shows. The definition is also said in words
+            above the list, for anyone who cannot hover. */}
         {hit.related && (
           <span
-            className={`${chipClass()} mr-1.5 align-[1px]`}
+            className={`${chipClass()} relative z-10 mr-1.5 cursor-help align-[1px]`}
             title="Matched a term that co-occurs with your query in this machine's history, not the query itself"
           >
             Related
@@ -150,9 +159,13 @@ function VaultHitRow({ hit, query }: { hit: VaultSearchHit; query: string }) {
         <Highlight text={hit.snippet} query={query} />
       </p>
       {transcript && (
+        // It sits right under the row's own link, and at the height of its
+        // words a near miss opened the recording. The hit area reaches into
+        // the gap above and the row's padding below — 33px, a finger's
+        // worth — while the link is drawn, and the row spaced, as before.
         <a
           href={transcript}
-          className="relative z-10 mt-1.5 ml-[22px] inline-flex items-center gap-1.5 rounded-sm text-caption text-ink-faint transition-colors duration-(--duration-quick) hover:text-ink"
+          className="relative z-10 mt-1.5 ml-[22px] inline-flex items-center gap-1.5 rounded-sm text-caption text-ink-faint transition-colors duration-(--duration-quick) before:absolute before:-inset-x-1.5 before:-top-1.5 before:-bottom-2.5 before:content-[''] hover:text-ink"
         >
           <Icon name="terminal" size={13} />
           Transcript
@@ -188,12 +201,13 @@ function SkeletonResults({ rows }: { rows: number }) {
   );
 }
 
-/** The Vault saying something other than results: unavailable, or nothing found. */
-function VaultNote({ children }: { children: React.ReactNode }) {
+/** The Vault saying something other than results: unavailable, or nothing
+ *  found. Its detail is a clause the server wrote, set in sentence case here. */
+function VaultNote({ children }: { children: string }) {
   return (
     <p className="flex items-start gap-2 rounded-tile border border-line bg-surface/50 px-4 py-3 text-caption text-ink-faint">
       <Icon name="info" size={14} className="mt-px shrink-0" />
-      <span>{children}</span>
+      <span>{sentenceStart(children)}</span>
     </p>
   );
 }
@@ -214,7 +228,7 @@ function VaultResults({
         <span className="text-caption text-ink-faint">Indexed by the Vault</span>
       </SectionHead>
       {error ? (
-        <AlertStrip subject="Vault" message={`Couldn't reach the Vault: ${error}`} />
+        <AlertStrip subject="Vault" message={loadError("the Vault", error, "search")} />
       ) : !response.available && !loading ? (
         <VaultNote>
           {response.detail || "The Vault is unavailable, so only transcripts were searched."}
@@ -233,6 +247,8 @@ function VaultResults({
                 <span className="text-ink-dim">{response.relatedTerms.join(", ")}</span> — terms
                 that co-occur with your query in this machine&apos;s own history, not a general
                 language model.
+                {response.hits.some((h) => h.related) &&
+                  " Rows marked Related matched one of these, not your query itself."}
               </span>
             </p>
           )}
@@ -325,7 +341,7 @@ function TranscriptResults({
         {error ? (
           <AlertStrip
             subject="Transcript scan"
-            message={`Couldn't reach the Argus server: ${error}`}
+            message={loadError("transcripts", error, "search")}
           />
         ) : results.length === 0 ? (
           <div role="status">
@@ -355,10 +371,28 @@ function TranscriptResults({
 const SEARCH_FIELD = "[&::-webkit-search-cancel-button]:appearance-none";
 
 export default function Search() {
-  const [input, setInput] = useState("");
+  // A query handed over in the address, as #/search/<query>: the palette's
+  // "Search transcripts instead" brings what was typed there with it.
+  const route = useHashRoute();
+  const handed = route[0] === "search" ? (route[1] ?? "") : "";
+  const [input, setInput] = useState(handed);
+  // A new hand-off while the page is open replaces what is in the box.
+  const [taken, setTaken] = useState(handed);
+  if (handed !== taken) {
+    setTaken(handed);
+    if (handed) setInput(handed);
+  }
   // The clear button goes with the text it clears; focus goes back to the
   // field rather than falling to the page.
   const field = useRef<HTMLInputElement>(null);
+  // Arriving with a query puts the caret in the field, ready to refine it. The
+  // address then drops the query: the box owns it from here, and the same
+  // query handed over again must still change the address to arrive.
+  useEffect(() => {
+    if (!handed) return;
+    field.current?.focus();
+    window.history.replaceState(window.history.state, "", "#/search");
+  }, [handed]);
   const search = useSearch(input);
   const trimmed = input.trim();
   const vault = useVaultSearch(trimmed);

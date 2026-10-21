@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Users from "./Users";
 
@@ -18,6 +18,11 @@ afterEach(() => {
 
 function okJson(body: unknown) {
   return { ok: true, status: 200, json: async () => body } as Response;
+}
+
+/** An error answer with the server's JSON reason, as Hono sends one. */
+function refused(status: number, error: string) {
+  return { ok: false, status, json: async () => ({ error }) } as Response;
 }
 
 const rootStatus = { configured: true, authenticated: true, username: "Josha", role: "root" };
@@ -50,6 +55,19 @@ describe("Users view", () => {
     expect(screen.queryByRole("button", { name: /remove josha/i })).toBeNull();
   });
 
+  it("badges each row in sentence case", async () => {
+    mockFetch({
+      "/api/auth/status": () => okJson(rootStatus),
+      "/api/users": () => okJson({ users: rows }),
+    });
+    render(<Users />);
+    const own = (await screen.findByText("Josha")).closest("li") as HTMLElement;
+    expect(within(own).getByText("Root")).toBeInTheDocument();
+    expect(within(own).getByText("You")).toBeInTheDocument();
+    const alice = screen.getByText("alice").closest("li") as HTMLElement;
+    expect(within(alice).getByText("Member")).toBeInTheDocument();
+  });
+
   it("approves a pending account", async () => {
     const approve = vi.fn(() => okJson({ ok: true }));
     mockFetch({
@@ -60,6 +78,28 @@ describe("Users view", () => {
     render(<Users />);
     await userEvent.click(await screen.findByRole("button", { name: /approve alice/i }));
     await waitFor(() => expect(approve).toHaveBeenCalled());
+  });
+
+  it("says a refused approval on the row it is about, as a sentence", async () => {
+    // It used to be a strip at the top of the page reading "Couldn't complete
+    // that user is not pending", the subject running into the server's clause.
+    mockFetch({
+      "/api/auth/status": () => okJson(rootStatus),
+      "/api/users": () => okJson({ users: rows }),
+      "/api/users/alice/approve": () =>
+        ({
+          ok: false,
+          status: 409,
+          json: async () => ({ error: "user is not pending" }),
+        }) as Response,
+    });
+    render(<Users />);
+    await userEvent.click(await screen.findByRole("button", { name: /approve alice/i }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Couldn't approve alice: user is not pending");
+    expect(alert.closest("li")).toBe(
+      screen.getByRole("button", { name: /approve alice/i }).closest("li"),
+    );
   });
 
   it("tells non-root visitors this page is root-only", async () => {
@@ -81,7 +121,7 @@ describe("Users view", () => {
     });
     render(<Users />);
     await user.click(await screen.findByRole("button", { name: "Sign in" }));
-    expect(screen.getByRole("form", { name: /^login$/i })).toBeTruthy();
+    expect(screen.getByRole("form", { name: "Sign in" })).toBeTruthy();
     expect(screen.getByLabelText("Username")).toHaveFocus();
     // The form says what the account is for here, not on the Pipelines page.
     expect(screen.getByText(/managing accounts is for the root user/i)).toBeTruthy();
@@ -97,7 +137,7 @@ describe("Users view", () => {
     const spy = mockFetch({
       "/api/auth/status": () =>
         okJson({ configured: false, authenticated: false, username: null, role: null }),
-      "/api/users": () => ({ ok: false, status: 401, json: async () => ({}) }) as Response,
+      "/api/users": () => refused(401, "login required"),
     });
     render(<Users />);
     expect(await screen.findByText("No root account yet")).toBeTruthy();
@@ -122,7 +162,9 @@ describe("Users view", () => {
         ),
       "/api/users": () => {
         signedIn = false;
-        return { ok: false, status: 401, json: async () => ({}) } as Response;
+        // The server's real body: the page must know a refusal by its status,
+        // not by the words, which now carry the server's own reason.
+        return refused(401, "login required");
       },
     });
     render(<Users />);
@@ -133,10 +175,10 @@ describe("Users view", () => {
   it("still reports a list that fails for another reason, with a retry", async () => {
     mockFetch({
       "/api/auth/status": () => okJson(rootStatus),
-      "/api/users": () => ({ ok: false, status: 500, json: async () => ({}) }) as Response,
+      "/api/users": () => refused(500, "database is locked"),
     });
     render(<Users />);
-    expect(await screen.findByText(/Couldn't load users: HTTP 500/)).toBeTruthy();
+    expect(await screen.findByText("Couldn't load users: database is locked")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 

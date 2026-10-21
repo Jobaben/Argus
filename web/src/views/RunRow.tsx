@@ -14,12 +14,13 @@ import {
   formatUsd,
   parseRunLog,
   runDsStatus,
+  runStatusLabel,
   useSyncedDelay,
-  type RunLogField,
 } from "../ds";
 import { useRuntimes } from "../useRuntimes";
 import { RuntimeBadge } from "../ds/RuntimeBadge";
 import { withoutOutcome } from "./outcome";
+import { envelopeFields } from "./runEnvelope";
 
 /**
  * The "something is in flight" dot, breathing in phase with every other live
@@ -230,7 +231,7 @@ export function RunRow({
             <span className="min-w-0 flex-1">
               <span className="flex min-w-0 items-center gap-2.5">
                 <span className="inline-flex shrink-0 items-center gap-1.5">
-                  <StatusPill status={runDsStatus(run)} size="sm" />
+                  <StatusPill status={runDsStatus(run)} label={runStatusLabel(run)} size="sm" />
                   {firedMark}
                 </span>
                 <span className="min-w-0 truncate text-small font-semibold text-ink">{label}</span>
@@ -245,7 +246,7 @@ export function RunRow({
               lead={
                 <>
                   <span className="mr-2.5 inline-flex items-center gap-1.5 align-middle">
-                    <StatusPill status={runDsStatus(run)} size="sm" />
+                    <StatusPill status={runDsStatus(run)} label={runStatusLabel(run)} size="sm" />
                     {firedMark}
                   </span>
                   {when}
@@ -322,11 +323,20 @@ export function RunRow({
               </p>
             </div>
           )}
-          <RunLog id={run.id} running={isRunning} failed={run.status === "failed"} />
+          <RunLog
+            id={run.id}
+            running={isRunning}
+            failed={run.status === "failed"}
+            shown={{
+              cost: run.costUsd != null,
+              tokens: run.tokens != null,
+              duration: run.durationMs != null,
+            }}
+          />
           {transcript && run.sessionId && (
             <a
               href={transcript}
-              className="inline-flex items-center gap-1.5 rounded-sm text-caption text-ink-dim transition-colors duration-(--duration-quick) hover:text-ink"
+              className="inline-flex min-h-6 items-center gap-1.5 rounded-sm text-caption text-ink-dim transition-colors duration-(--duration-quick) hover:text-ink"
               title="Open this run's transcript"
             >
               <Icon name="message" size={14} />
@@ -341,40 +351,17 @@ export function RunRow({
   );
 }
 
-/**
- * The log's fields as this row says them. The envelope's "Status" is the agent
- * CLI's own verdict on its session, not the run's: a run the scheduler failed
- * (a refused outcome, a non-zero exit) read "Status success" under a red pill.
- * It is named for what it is, and explained when the two disagree. Cost uses
- * the row's own money format — the log's four decimals sat under "$0.38".
- */
-function logFields(fields: RunLogField[], runFailed: boolean) {
-  return fields.map((f) => {
-    if (f.label === "Status") {
-      const clean = /^(success|completed)/i.test(f.value);
-      return {
-        label: "Agent exit",
-        value: f.value,
-        note:
-          runFailed && clean ? "The agent exited cleanly; the outcome check failed." : undefined,
-      };
-    }
-    if (f.label === "Cost") {
-      const usd = Number(f.value.replace(/^\$/, ""));
-      return { ...f, value: Number.isFinite(usd) ? formatUsd(usd) : f.value };
-    }
-    return f;
-  });
-}
-
 function RunLog({
   id,
   running,
   failed: runFailed,
+  shown,
 }: {
   id: string;
   running: boolean;
   failed: boolean;
+  /** Which figures the row's metadata line already shows. */
+  shown: { cost: boolean; tokens: boolean; duration: boolean };
 }) {
   const [log, setLog] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
@@ -427,14 +414,14 @@ function RunLog({
       </div>
       {parsed.kind === "envelope" ? (
         <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-caption">
-          {logFields(parsed.fields, runFailed).map((f) => (
+          {envelopeFields(parsed.fields, shown, runFailed).map((f) => (
             <Fragment key={f.label}>
               <dt className="text-ink-faint">{f.label}</dt>
-              <dd className="break-words text-ink-dim">
-                <span className="font-mono">{f.value}</span>
-                {"note" in f && f.note && (
-                  <span className="mt-0.5 block text-ink-faint">{f.note}</span>
-                )}
+              {/* Mono for the ids only: durations, counts and the process's
+                  word are read, not copied. */}
+              <dd className={`break-words text-ink-dim ${f.machine ? "font-mono" : ""}`}>
+                {f.value}
+                {f.note && <span className="mt-0.5 block text-ink-faint">{f.note}</span>}
               </dd>
             </Fragment>
           ))}

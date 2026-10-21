@@ -67,7 +67,7 @@ describe("Issues", () => {
     mockState.issues = [issue()];
     mockState.summary = { open: 1, resolved: 0, ignored: 0 };
     render(<Issues />);
-    expect(screen.getByText("timeout after 42s")).toBeInTheDocument();
+    expect(screen.getByText("Timeout after 42s")).toBeInTheDocument();
     expect(screen.getByText("×7")).toBeInTheDocument();
     expect(screen.getByText("open")).toBeInTheDocument();
     expect(screen.getByText("Nightly triage")).toBeInTheDocument();
@@ -94,11 +94,18 @@ describe("Issues", () => {
   it("expanding an issue loads and shows its occurrences", async () => {
     mockState.issues = [issue()];
     render(<Issues />);
-    fireEvent.click(screen.getByRole("button", { name: /timeout after 42s/ }));
+    fireEvent.click(screen.getByRole("button", { name: /timeout after 42s/i }));
     await waitFor(() => {
       expect(loadOccurrences).toHaveBeenCalledWith("abcdefabcdefabcd");
-      expect(screen.getAllByText(/timeout after 42s/).length).toBeGreaterThan(1);
+      // The occurrence keeps the raw line as it was logged, in mono.
+      expect(screen.getByText("timeout after 42s")).toBeInTheDocument();
     });
+  });
+
+  it("starts a server-written title with a capital, as every other title", () => {
+    mockState.issues = [issue({ title: "exit code 1" })];
+    render(<Issues />);
+    expect(screen.getByRole("button", { name: "Exit code 1" })).toBeInTheDocument();
   });
 
   it("surfaces a fetch error", () => {
@@ -115,11 +122,11 @@ describe("Issues", () => {
     ];
     mockState.summary = { open: 1, resolved: 1, ignored: 0 };
     render(<Issues />);
-    expect(screen.getByText("was fixed")).toBeInTheDocument();
+    expect(screen.getByText("Was fixed")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "1 Open" }));
-    expect(screen.queryByText("was fixed")).not.toBeInTheDocument();
-    expect(screen.getByText("still broken")).toBeInTheDocument();
+    expect(screen.queryByText("Was fixed")).not.toBeInTheDocument();
+    expect(screen.getByText("Still broken")).toBeInTheDocument();
     expect(screen.getByText(/Showing 1 open of 2/)).toBeInTheDocument();
   });
 

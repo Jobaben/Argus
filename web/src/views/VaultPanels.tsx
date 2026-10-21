@@ -11,6 +11,7 @@ import {
 } from "../ds";
 import { useVaultQuarters, useVaultStatus } from "../useVault";
 import type { VaultQuarter, VaultStatus } from "../types";
+import { loadError } from "../live/loadError";
 
 /**
  * The Vault's face on the Stats page: the long view, plus an honest account of
@@ -40,7 +41,7 @@ function StatusLine({ status, error }: { status: VaultStatus; error: string | nu
     return (
       <p className="flex items-start gap-2 text-caption text-ink-dim">
         <Icon name="alert" size={14} className="mt-px text-ink-faint" />
-        <span>Couldn&apos;t read the Vault&apos;s status: {error}.</span>
+        <span>{loadError("the Vault's status", error, "read")}.</span>
       </p>
     );
   }
@@ -143,8 +144,8 @@ export function VaultPanels() {
   const statusKnown = status.available || (!statusLoading && !statusError);
   // A failed load with nothing on screen is unknown, not empty: one error
   // with a retry, rather than an empty state claiming the long view is offline.
-  const loadError = error ?? (status.available ? null : statusError);
-  const failed = loadError != null && report.quarters.length === 0;
+  const readError = error ?? (status.available ? null : statusError);
+  const failed = readError != null && report.quarters.length === 0;
 
   return (
     <Section title="Argus runs by quarter">
@@ -172,7 +173,7 @@ export function VaultPanels() {
       {failed ? (
         <AlertStrip
           subject="Vault"
-          message={`Couldn't read the Vault: ${loadError}`}
+          message={loadError("the Vault", readError, "read")}
           action={
             <Button
               size="sm"

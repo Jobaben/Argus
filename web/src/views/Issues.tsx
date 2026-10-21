@@ -20,7 +20,9 @@ import {
 import { useIssues } from "../useIssues";
 import type { FailureClass, Issue, IssueOccurrence, IssueState } from "../types";
 import { withoutOutcome } from "./outcome";
+import { sentenceStart } from "./text";
 import { HealthCounter } from "../ds/HealthCounter";
+import { loadError } from "../live/loadError";
 
 /** Autopsy's taxonomy, spelled for humans. */
 const CLASS_LABEL: Record<FailureClass, string> = {
@@ -91,19 +93,20 @@ function Occurrences({ list }: { list: IssueOccurrence[] }) {
     );
   }
   return (
-    <ul className="mt-3 divide-y divide-line overflow-hidden rounded-control border border-line bg-ground-2/60">
+    // From `sm` up the rows share one set of columns (each row a subgrid of
+    // the list), so the errors start on one line. The schedule's column is as
+    // wide as its longest name, up to a cap: a fixed 11rem cut "Weekly Security
+    // Audit · Tria…" beside an error column with most of the row to spare.
+    <ul className="mt-3 divide-y divide-line overflow-hidden rounded-control border border-line bg-ground-2/60 sm:grid sm:grid-cols-[6rem_fit-content(16rem)_minmax(0,1fr)_auto] sm:gap-x-3">
       {list.map((o) => (
         <li
           key={o.runId}
-          className="flex flex-wrap items-center gap-x-3 gap-y-1 py-1.5 pl-3 pr-1.5 text-caption sm:flex-nowrap"
+          className="flex flex-wrap items-center gap-x-3 gap-y-1 py-1.5 pl-3 pr-1.5 text-caption sm:col-span-4 sm:grid sm:grid-cols-subgrid"
         >
-          <span className="shrink-0 sm:w-24">
+          <span className="shrink-0">
             <TimeAgo iso={o.at} />
           </span>
-          <span
-            className="min-w-0 truncate font-semibold text-ink-dim sm:w-44 sm:shrink-0"
-            title={o.scheduleName}
-          >
+          <span className="min-w-0 truncate font-semibold text-ink-dim" title={o.scheduleName}>
             {o.scheduleName}
           </span>
           {/* The raw line, in mono and allowed a second line: merged wordings
@@ -112,7 +115,7 @@ function Occurrences({ list }: { list: IssueOccurrence[] }) {
               protocol line goes; a bare marker with no reason is still the
               only error on record, so it is shown as it was stored. */}
           <span
-            className="order-last line-clamp-2 min-w-0 basis-full break-words font-mono text-ink-faint sm:order-none sm:basis-auto sm:flex-1"
+            className="order-last line-clamp-2 min-w-0 basis-full break-words font-mono text-ink-faint sm:order-none"
             title={o.error}
           >
             {withoutOutcome(o.error) || o.error}
@@ -220,9 +223,9 @@ function IssueCard({
             className={`min-w-0 break-words text-sm font-semibold transition-colors duration-(--duration-quick) group-hover:text-ink ${
               open ? "text-ink" : "text-ink-dim"
             } ${expanded ? "" : "line-clamp-2"}`}
-            title={issue.title}
+            title={sentenceStart(issue.title)}
           >
-            {issue.title}
+            {sentenceStart(issue.title)}
           </span>
         </button>
         <div className="flex shrink-0 items-center gap-2">
@@ -294,7 +297,7 @@ function IssueCard({
           {failed ? (
             <p className="mt-3 flex items-center gap-2 text-caption text-fail-ink">
               <Icon name="alert" size={14} className="text-fail" />
-              Couldn't load occurrences: {failed}
+              {loadError("occurrences", failed)}
             </p>
           ) : (
             <Handoff
@@ -329,8 +332,11 @@ function PeerIssues({ facet }: { facet: ReturnType<typeof useMachineFacet> }) {
     <ul className="divide-y divide-line overflow-hidden rounded-tile border border-line bg-surface shadow-raised">
       {issues.map((i) => (
         <li key={i.fingerprint} className="flex flex-wrap items-baseline gap-x-3 px-4 py-3">
-          <span className="min-w-0 flex-1 truncate text-sm font-semibold text-ink" title={i.title}>
-            {i.title}
+          <span
+            className="min-w-0 flex-1 truncate text-sm font-semibold text-ink"
+            title={sentenceStart(i.title)}
+          >
+            {sentenceStart(i.title)}
           </span>
           <span className="shrink-0 text-caption text-ink-faint">
             ×{i.count}
@@ -396,7 +402,7 @@ export default function Issues() {
             <div className="mb-6">
               <AlertStrip
                 subject="Issues"
-                message={`Couldn't load issues: ${error}`}
+                message={loadError("issues", error)}
                 action={
                   <Button size="sm" icon="retry" onClick={() => void refresh()}>
                     Retry

@@ -31,10 +31,15 @@ import { AdminAuthPanel } from "./AdminAuthPanel";
 import { AccountPrompt } from "./AccountPrompt";
 import { CardFooter, FilterChip } from "./CardActions";
 import { firstProseLine } from "./outcome";
+import { reasonText } from "./failureReason";
 import { TuningDrawer } from "./TuningDrawer";
 import { toInput } from "./tuningApply";
 import { ReliabilityCard } from "./ReliabilityCard";
 import { InfoTip } from "../ds/InfoTip";
+import type { Question } from "../ds/ConfirmPanel";
+import { useConfirm } from "../ds/useConfirm";
+import type { Ask } from "../ds/useAsk";
+import { loadError } from "../live/loadError";
 
 /** A decision this pipeline is waiting on: a gate to approve, or a failed
  *  phase to retry or revise. Both are answered in the Command Center's review
@@ -57,14 +62,33 @@ interface PipelineLive {
 
 const NEVER_RUN: PipelineLive = { badge: "idle", activeIds: [], latest: null, review: null };
 
-/** The question asked before saving an edit over live instances. */
-function editWhileRunningPrompt(name: string, count: number): string {
+/** What else a Delete does, when instances are running under the pipeline. */
+function deleteDetail(running: number): string | undefined {
+  if (running === 0) return undefined;
+  const which = running === 1 ? "running instance" : `${running} running instances`;
+  return `Its ${which} will be stopped first, and in-progress work discarded.`;
+}
+
+/** Stop's question and verb, for one running instance or several. */
+function stopQuestion(name: string, running: number): Pick<Question, "title" | "confirm"> {
+  return running > 1
+    ? {
+        title: `Stop all ${running} running instances of “${name}”?`,
+        confirm: `Stop ${running} instances`,
+      }
+    : { title: `Stop running pipeline “${name}”?`, confirm: "Stop pipeline" };
+}
+
+/** What is said before saving an edit over live instances; the caller adds the
+ *  verb. Not red: the save discards nothing, it only waits for the next start. */
+function editWhileRunning(name: string, count: number): Omit<Question, "confirm"> {
   const which = count === 1 ? "1 instance is" : `${count} instances are`;
   const they = count === 1 ? "It keeps" : "They keep";
-  return (
-    `${which} running under "${name}". ${they} the definition it started with, ` +
-    "so this edit only applies to the next start. Save anyway?"
-  );
+  return {
+    title: `${which} running under “${name}”.`,
+    detail: `${they} the definition it started with, so this edit only applies to the next start.`,
+    tone: "secondary",
+  };
 }
 
 /** The same deep link the Command Center hands out for a gate. */
@@ -204,14 +228,12 @@ function PipelineCard({
 }) {
   const abortable = live.activeIds.length > 0;
   const stopLabel = live.activeIds.length > 1 ? `Stop all (${live.activeIds.length})` : "Stop";
-  const stopPrompt =
-    live.activeIds.length > 1
-      ? `Stop all ${live.activeIds.length} running instances of "${def.name}"? In-progress work will be discarded.`
-      : `Stop running pipeline "${def.name}"? In-progress work will be discarded.`;
+  const confirm = useConfirm();
   const steps = def.phases.reduce((n, p) => n + p.steps.length, 0);
   const cost = formatCost(live.latest?.cost?.tokens, live.latest?.cost?.usd);
   const failure = live.badge === "failed" ? live.latest?.failure : null;
   const [showReliability, setShowReliability] = useState(false);
+  const titleId = useId();
 
   const chips = [
     def.model && (
@@ -244,14 +266,20 @@ function PipelineCard({
   ].filter(Boolean);
 
   return (
+    // Named by its title: every card's footer reads "Run now", "Edit",
+    // "Disable", so the card is what tells a screen reader whose they are.
     <article
+      aria-labelledby={titleId}
       className={`flex min-w-0 flex-col rounded-tile border shadow-raised ${cardTone(live.badge)}`}
     >
       <div className="min-w-0 px-4 pb-3 pt-4 sm:px-5">
         <header className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-              <h3 className="mr-1 min-w-0 break-words text-title font-semibold text-ink">
+              <h3
+                id={titleId}
+                className="mr-1 min-w-0 break-words text-title font-semibold text-ink"
+              >
                 {def.name}
               </h3>
               {!def.enabled && (
@@ -341,8 +369,10 @@ function PipelineCard({
                 <span className="font-semibold text-ink">{failure.step}: </span>
               ) : null}
               {/* The first line of prose: a reason that is only the agent's
-                  outcome marker reads as the marker's own reason. */}
-              <span>{firstProseLine(failure.reason) || "failed"}</span>
+                  outcome marker reads as the marker's own reason. Told as the
+                  board and the drawers tell it, without a "failed:" the red
+                  box already says. */}
+              <span>{reasonText(firstProseLine(failure.reason)) || "Failed"}</span>
             </p>
             {live.review && !live.review.canApprove && (
               // The box already says "failed"; the button only goes somewhere, so
@@ -382,6 +412,34 @@ function PipelineCard({
       {admin && (
         <CardFooter
           error={error}
+          question={
+            confirm.armed === "delete"
+              ? confirm.question(
+                  {
+                    title: `Delete pipeline “${def.name}”?`,
+                    detail: deleteDetail(live.activeIds.length),
+                    confirm: "Delete pipeline",
+                    cancel: "Keep",
+                    icon: "trash",
+                  },
+                  () => void remove(def.id),
+                )
+              : confirm.armed === "stop"
+                ? confirm.question(
+                    {
+                      ...stopQuestion(def.name, live.activeIds.length),
+                      detail: "In-progress work will be discarded.",
+                      cancel: "Keep running",
+                      icon: "stop",
+                    },
+                    // The instances running when the answer comes, not when
+                    // Stop was pressed.
+                    () => {
+                      for (const id of live.activeIds) void abort(id);
+                    },
+                  )
+                : null
+          }
           manage={
             <>
               <Button
@@ -403,14 +461,8 @@ function PipelineCard({
                 icon="trash"
                 // Every card's button reads "Delete"; the name says which one.
                 aria-label={`Delete ${def.name}`}
-                onClick={() => {
-                  const n = live.activeIds.length;
-                  const stops =
-                    n === 0
-                      ? ""
-                      : ` Its ${n === 1 ? "running instance" : `${n} running instances`} will be stopped first, and in-progress work discarded.`;
-                  if (confirm(`Delete pipeline "${def.name}"?${stops}`)) void remove(def.id);
-                }}
+                aria-expanded={confirm.armed === "delete"}
+                onClick={confirm.toggle("delete")}
               >
                 Delete
               </Button>
@@ -427,11 +479,8 @@ function PipelineCard({
               variant="danger"
               size="sm"
               icon="stop"
-              onClick={() => {
-                if (confirm(stopPrompt)) {
-                  for (const id of live.activeIds) void abort(id);
-                }
-              }}
+              aria-expanded={confirm.armed === "stop"}
+              onClick={confirm.toggle("stop")}
             >
               {stopLabel}
             </Button>
@@ -591,7 +640,11 @@ function ListSummary({
       {waiting > 0 && (
         <FilterChip selected={filter === "await"} onClick={toggle("await")}>
           <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-await" />
-          <span className="text-await">{waiting} awaiting you</span>
+          {/* The Command Center's words for the same state, on its strip and
+              pills: "awaiting you" here read as a different state. */}
+          <span className="text-await">
+            {waiting} {waiting === 1 ? "needs" : "need"} approval
+          </span>
         </FilterChip>
       )}
       {failed > 0 && (
@@ -694,12 +747,13 @@ export default function Pipelines() {
 
   /** Save a definition the way the edit form does: refuse-then-confirm when
    *  instances are running under the current one. */
-  const saveDefinition = async (def: PipelineDefinition, input: PipelineInput) => {
+  const saveDefinition = async (def: PipelineDefinition, input: PipelineInput, ask: Ask) => {
     try {
       await update(def.id, input);
     } catch (e) {
       if (!(e instanceof InstancesRunningError)) throw e;
-      if (!confirm(editWhileRunningPrompt(def.name, e.instances.length))) return;
+      const question = editWhileRunning(def.name, e.instances.length);
+      if (!(await ask({ ...question, confirm: "Apply anyway" }))) return;
       await update(def.id, input, { force: true });
     }
   };
@@ -748,7 +802,7 @@ export default function Pipelines() {
         <div className="mb-6">
           <AlertStrip
             subject="Pipelines"
-            message={`Couldn't load pipelines: ${error}`}
+            message={loadError("pipelines", error)}
             action={
               <Button size="sm" icon="retry" onClick={() => refresh()}>
                 Retry
@@ -791,7 +845,7 @@ export default function Pipelines() {
           key={tuning.id}
           def={tuning}
           onClose={() => setMode({ kind: "none" })}
-          onApply={(input) => saveDefinition(tuning, input)}
+          onApply={(input, ask) => saveDefinition(tuning, input, ask)}
         />
       )}
 
@@ -885,7 +939,7 @@ export default function Pipelines() {
                         autoFocus
                         onRotateHook={() => rotateHookToken(p.id).then(() => {})}
                         onCancel={() => closeForm(() => editButtons.current.get(p.id))}
-                        onSubmit={async (input) => {
+                        onSubmit={async (input, ask) => {
                           try {
                             await update(p.id, input);
                           } catch (e) {
@@ -895,8 +949,13 @@ export default function Pipelines() {
                             // so the author is told the edit will not reach them
                             // before it saves. Declining leaves the form open with
                             // the edit intact.
-                            if (!confirm(editWhileRunningPrompt(p.name, e.instances.length)))
-                              return;
+                            const question = editWhileRunning(p.name, e.instances.length);
+                            const yes = await ask({
+                              ...question,
+                              confirm: "Save anyway",
+                              cancel: "Keep editing",
+                            });
+                            if (!yes) return;
                             await update(p.id, input, { force: true });
                           }
                           closeForm(() => editButtons.current.get(p.id));

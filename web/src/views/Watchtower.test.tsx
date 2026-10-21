@@ -204,14 +204,14 @@ describe("Watchtower", () => {
     );
   });
 
-  it("a metric the runs never reported reads as 'not reported', not as zero", () => {
+  it("a metric the runs never reported reads as 'Not reported', not as zero", () => {
     state.report = {
       ...emptyReport(),
       baselines: [baseline({ cost: null })],
       summary: { ready: 1, warming: 0, anomalies: 0, critical: 0 },
     };
     render(<Watchtower />);
-    const cells = screen.getAllByText("not reported");
+    const cells = screen.getAllByText("Not reported");
     expect(cells).toHaveLength(1);
   });
 
@@ -224,8 +224,34 @@ describe("Watchtower", () => {
       summary: { ready: 1, warming: 0, anomalies: 0, critical: 0 },
     };
     render(<Watchtower />);
-    const card = screen.getByText("Release › build").closest("div");
+    // "Release" does not say which phase, so the id stays, as its own token.
+    expect(screen.getByTitle("Release › build")).toHaveTextContent(/^Releasebuild$/);
+    const card = screen.getByText("Release").closest("div");
     expect(within(card!.parentElement!).getByText("phase")).toBeInTheDocument();
+  });
+
+  it("drops a phase id the phase's own name already says", () => {
+    state.report = {
+      ...emptyReport(),
+      baselines: [
+        baseline({
+          key: "phase:pipeline:p1:fix",
+          scope: "phase",
+          name: "Issue sweep → fix → PR · Implement the fix › fix",
+        }),
+      ],
+      anomalies: [
+        anomaly({
+          key: "phase:pipeline:p1:fix",
+          scope: "phase",
+          name: "Issue sweep → fix → PR · Implement the fix › fix",
+        }),
+      ],
+      summary: { ready: 1, warming: 0, anomalies: 1, critical: 1 },
+    };
+    render(<Watchtower />);
+    expect(screen.getAllByText("Issue sweep → fix → PR · Implement the fix")).toHaveLength(2);
+    expect(screen.queryByText("fix")).not.toBeInTheDocument();
   });
 });
 

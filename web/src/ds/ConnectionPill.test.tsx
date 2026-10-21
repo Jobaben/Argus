@@ -50,7 +50,8 @@ describe("ConnectionPill", () => {
       sockets[0].close();
     });
     expect(screen.getByText(/retrying in \ds/)).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveAccessibleName(/retrying in \d+ seconds/i);
+    // The first backoff is one second, and it is said in the singular.
+    expect(screen.getByRole("status")).toHaveAccessibleName("Offline: retrying in 1 second");
   });
 
   it("offers a manual retry that reconnects without waiting out the backoff", async () => {

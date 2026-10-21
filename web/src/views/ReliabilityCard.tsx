@@ -1,6 +1,7 @@
 import { Icon, Loading, Skeleton } from "../ds";
 import { useReliability } from "../useReliability";
 import type { PhaseFailureClass, PhaseReliability } from "../types";
+import { loadError } from "../live/loadError";
 
 const FAILURE_LABEL: Record<PhaseFailureClass, string> = {
   spawn: "spawn",
@@ -170,7 +171,7 @@ export function ReliabilityCard({ pipelineId, days = 30 }: { pipelineId: string;
       ) : error ? (
         <p className="flex items-start gap-1.5 text-small text-fail-ink">
           <Icon name="alert" size={15} className="mt-px shrink-0 text-fail" />
-          <span className="min-w-0 break-words">Couldn't load reliability: {error}</span>
+          <span className="min-w-0 break-words">{loadError("reliability", error)}</span>
         </p>
       ) : !reliability || reliability.instances === 0 ? (
         <p className="flex items-center gap-2 text-small text-ink-dim">

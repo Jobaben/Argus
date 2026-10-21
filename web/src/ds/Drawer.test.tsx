@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Drawer } from "./Drawer";
 
@@ -143,6 +143,66 @@ describe("Drawer", () => {
     const { onClose } = open();
     await userEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(onClose).toHaveBeenCalled();
+  });
+});
+
+describe("where focus goes when it closes", () => {
+  function Host({ open, k }: { open: boolean; k: string }) {
+    return (
+      <>
+        <button type="button">Open</button>
+        <Drawer key={k} open={open} title="Failing step" onClose={() => {}}>
+          <p>body</p>
+        </Drawer>
+      </>
+    );
+  }
+
+  it("hands focus back to its opener even after remounting while open", async () => {
+    // Remounted under a new key, the drawer found focus on the old panel's
+    // Close button, which left the document a moment later; closing it then
+    // dropped focus on the page body.
+    const { rerender } = render(<Host open={false} k="a" />);
+    const opener = screen.getByRole("button", { name: "Open" });
+    opener.focus();
+    rerender(<Host open k="a" />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Close" })).toHaveFocus());
+
+    rerender(<Host open k="b" />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Close" })).toHaveFocus());
+
+    rerender(<Host open={false} k="b" />);
+    expect(opener).toHaveFocus();
+  });
+
+  it("hands focus back inside a drawer that stays open beneath it", async () => {
+    const user = userEvent.setup();
+    function Stack({ inner }: { inner: boolean }) {
+      return (
+        <>
+          <Drawer open title="Outer" onClose={() => {}}>
+            <button type="button">Open inner</button>
+          </Drawer>
+          <Drawer open={inner} title="Inner" onClose={() => {}}>
+            <p>inner</p>
+          </Drawer>
+        </>
+      );
+    }
+    const { rerender } = render(<Stack inner={false} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Close" })).toHaveFocus());
+    const trigger = screen.getByRole("button", { name: "Open inner" });
+    await user.click(trigger);
+    rerender(<Stack inner />);
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("dialog", { name: "Inner" })).getByRole("button", {
+          name: "Close",
+        }),
+      ).toHaveFocus(),
+    );
+    rerender(<Stack inner={false} />);
+    expect(trigger).toHaveFocus();
   });
 });
 

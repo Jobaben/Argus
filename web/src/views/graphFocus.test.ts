@@ -89,6 +89,13 @@ describe("runwayFor and scrollTargetFor", () => {
     expect(runwayFor(500, 0, 12)).toBe(0);
   });
 
+  it("treats a graph scaled to exactly its viewport as fitting", () => {
+    // 622 * (432 / 622) is a hair over 432 in floating point.
+    const scaled = 622 * (432 / 622);
+    expect(runwayFor(scaled, 432, 12)).toBe(0);
+    expect(runwayFor(433, 432, 12)).toBeGreaterThan(0);
+  });
+
   it("scales the point before centring it", () => {
     expect(
       scrollTargetFor(

@@ -445,11 +445,14 @@ describe("Briefing — first visit", () => {
       <Briefing
         briefing={null}
         loading={false}
-        error="HTTP 502"
+        error="database is locked"
         ack={async () => {}}
         refresh={refresh}
       />,
     );
+    // The server answered: its reason, not a claim that it was unreachable.
+    expect(screen.getByText("Couldn't load the briefing: database is locked")).toBeInTheDocument();
+    expect(screen.queryByText(/couldn't reach/i)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(refresh).toHaveBeenCalledOnce();
   });
@@ -505,5 +508,101 @@ describe("Briefing — Watchtower anomalies", () => {
     expect(label.className).toMatch(/await/);
     // The card it sits in follows the same tone rather than defaulting to red.
     expect(label.closest("div.rounded-tile")?.className).toMatch(/border-await/);
+  });
+});
+
+describe("Briefing — saying each thing once, in sentence case", () => {
+  const anomaly = {
+    id: "schedule:s1|cost|r9",
+    key: "schedule:s1",
+    scope: "schedule" as const,
+    name: "Nightly code review",
+    runId: "r9",
+    scheduleId: "s1",
+    metric: "cost" as const,
+    direction: "high" as const,
+    severity: "critical" as const,
+    value: 0.42,
+    median: 0.13,
+    ratio: 3.2,
+    zScore: 18,
+    at: "2026-07-11T06:00:00.000Z",
+    detail: "3.2× median cost ($0.42 vs $0.13 over 24 runs)",
+  };
+  const issue = (count: number, fingerprint: string, title: string) => ({
+    fingerprint,
+    title,
+    count,
+    firstSeen: "2026-07-11T02:05:00.000Z",
+    lastSeen: "2026-07-11T04:05:00.000Z",
+    schedules: ["Nightly triage"],
+    state: "resolved" as const,
+    members: ["abcdef0123456789"],
+    failureClass: null,
+    lastRunId: "r1",
+  });
+
+  it("starts a card's detail with a capital and quotes a name typographically", () => {
+    const data = briefing({
+      attention: [
+        {
+          kind: "gate-waiting",
+          id: "i1",
+          title: "Release train is waiting for you",
+          detail: 'phase "Open the PR" needs approval',
+          at: "2026-07-11T07:00:00.000Z",
+        },
+        {
+          kind: "monitor-failing",
+          id: "s2",
+          title: "Docs link check",
+          detail: "last completed run failed",
+          at: "2026-07-11T06:00:00.000Z",
+        },
+      ],
+      attentionCount: 2,
+    });
+    render(<Briefing briefing={data} loading={false} error={null} ack={async () => {}} />);
+    const gate = screen.getByText("Phase “Open the PR” needs approval");
+    expect(screen.getByText("Last completed run failed")).toBeInTheDocument();
+    // Two lines before it clips, like the rows below: the reason is the point.
+    expect(gate).toHaveClass("line-clamp-2");
+    expect(gate).not.toHaveClass("truncate");
+  });
+
+  it("does not list a critical anomaly again under the window when it is already a card", () => {
+    const data = briefing({
+      attention: [
+        {
+          kind: "anomaly",
+          id: anomaly.id,
+          title: anomaly.name,
+          detail: anomaly.detail,
+          at: anomaly.at,
+        },
+      ],
+      attentionCount: 1,
+      window: { ...briefing().window, totalRuns: 3, anomalies: [anomaly] },
+    });
+    render(<Briefing briefing={data} loading={false} error={null} ack={async () => {}} />);
+    expect(screen.getAllByText("Nightly code review")).toHaveLength(1);
+    expect(screen.queryByText(/Ran, but not the way it usually runs/i)).not.toBeInTheDocument();
+  });
+
+  it("counts a new issue only when it happened more than once, as Failures does", () => {
+    const data = briefing({
+      window: {
+        ...briefing().window,
+        totalRuns: 3,
+        newIssues: [
+          issue(1, "1111111111111111", "Lint failed once"),
+          issue(3, "2222222222222222", "Deploy timed out"),
+        ],
+      },
+    });
+    render(<Briefing briefing={data} loading={false} error={null} ack={async () => {}} />);
+    const row = (title: string) => screen.getByText(title).closest("a") as HTMLElement;
+    expect(within(row("Lint failed once")).queryByText(/×/)).not.toBeInTheDocument();
+    expect(within(row("Deploy timed out")).getByText("×3")).toBeInTheDocument();
   });
 });

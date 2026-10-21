@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ConnectionPill,
   Icon,
@@ -47,18 +47,15 @@ function MobileNav({
   destinations,
   overflow,
   activeId,
+  activeLabel,
 }: {
   destinations: NavTab[];
   overflow: MoreItem[];
   activeId: string;
+  activeLabel: string;
 }) {
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
-  // A page that lives in the secondary list (Stats, Users…) still names itself
-  // here: falling back to "Menu" left a phone with no idea where it was.
-  const activeLabel = (
-    destinations.find((d) => d.id === activeId) ?? overflow.find((o) => o.id === activeId)
-  )?.label;
   const { present, exited } = usePresence(open);
   const scrimRef = useSurfaceMotion<HTMLDivElement>(open, SURFACE.scrim);
   // `top` — the sheet belongs to the bar it drops out of, so that is the edge it
@@ -66,17 +63,20 @@ function MobileNav({
   const sheetRef = useSurfaceMotion<HTMLDivElement>(open, SURFACE.rise, exited, "top center");
 
   // Navigating closes the sheet: the hash change is the confirmation. Escape
-  // closes it too and hands focus back to the toggle, and opening it moves
-  // focus to the current destination — a sheet you can open from the keyboard
-  // but not leave from it is a trap.
+  // closes it too, and opening it moves focus to the current destination — a
+  // sheet you can open from the keyboard but not leave from it is a trap.
+  // However it closes (a link, the scrim, Escape, a hash change), focus goes
+  // back to the toggle: left on a link in a sheet going inert and then away,
+  // it fell to <body>, and the next Tab started again from the top.
   const sheetEl = useRef<HTMLDivElement | null>(null);
+  const close = useCallback(() => {
+    setOpen(false);
+    buttonRef.current?.focus({ preventScroll: true });
+  }, []);
   useEffect(() => {
     if (!open) return;
-    const close = () => setOpen(false);
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      setOpen(false);
-      buttonRef.current?.focus();
+      if (e.key === "Escape") close();
     };
     window.addEventListener("hashchange", close);
     document.addEventListener("keydown", onKey);
@@ -91,23 +91,53 @@ function MobileNav({
       document.removeEventListener("keydown", onKey);
       cancelAnimationFrame(raf);
     };
-  }, [open]);
+  }, [open, close]);
 
   const attention = destinations.reduce((n, d) => n + (d.badge ?? 0), 0);
 
   return (
-    <div className="md:hidden">
+    // Tabbing out of the open sheet closes it: left open, the next stop is
+    // page content under the scrim, focused where nobody can see it.
+    <div
+      className="min-w-0 md:hidden"
+      onBlur={(e) => {
+        const to = e.relatedTarget;
+        if (open && to instanceof Node && !e.currentTarget.contains(to)) setOpen(false);
+      }}
+    >
+      {/* The one control in the bar that gives way: the page name truncates so
+          the search, bell and connection pill always fit, offline Retry
+          included, at every phone width. The hit area reaches 44px tall on
+          a phone without making the bar any taller. */}
       <button
         ref={buttonRef}
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        aria-label={open ? "Close the menu" : "Open the menu"}
-        className="flex h-9 items-center gap-2 rounded-control border border-line-strong bg-surface/60 pl-2.5 pr-3 text-sm text-ink transition duration-(--duration-quick) hover:bg-surface-2 motion-safe:active:scale-[0.97]"
+        aria-label={
+          open
+            ? "Close the menu"
+            : attention > 0
+              ? `Open the menu (${attention} waiting on you)`
+              : "Open the menu"
+        }
+        className="relative flex h-9 min-w-0 max-w-full items-center gap-2.5 rounded-control border border-line-strong bg-surface/60 pl-2.5 pr-3 text-sm text-ink transition duration-(--duration-quick) before:absolute before:-inset-y-1 before:inset-x-0 hover:bg-surface-2 motion-safe:active:scale-[0.97]"
       >
-        <Icon name={open ? "close" : "menu"} size={17} className="text-ink-dim" />
-        <span className="max-w-[9rem] truncate font-semibold">{activeLabel ?? "Menu"}</span>
-        {!open && attention > 0 && <Badge count={attention} />}
+        {/* The attention count sits on the icon, not after the page name: as a
+            suffix, "Health 5" read as five things wrong with Health when it is
+            everything, anywhere, that is waiting on a person. */}
+        <span className="relative flex shrink-0">
+          <Icon name={open ? "close" : "menu"} size={17} className="text-ink-dim" />
+          {!open && attention > 0 && (
+            <span
+              aria-hidden="true"
+              className="absolute -right-1.5 -top-1.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-await px-1 text-micro font-semibold leading-none text-ground ring-2 ring-ground"
+            >
+              {attention > 9 ? "9+" : attention}
+            </span>
+          )}
+        </span>
+        <span className="min-w-0 truncate font-semibold">{activeLabel}</span>
       </button>
 
       {present && (
@@ -119,7 +149,7 @@ function MobileNav({
             className="fixed inset-0 top-14 z-20 bg-ground/70 backdrop-blur-[2px]"
             inert={!open}
             aria-hidden={open ? undefined : true}
-            onClick={() => setOpen(false)}
+            onClick={close}
           />
           <div
             ref={(node) => {
@@ -136,7 +166,7 @@ function MobileNav({
                   <a
                     href={`#/${t.id}`}
                     aria-current={t.id === activeId ? "page" : undefined}
-                    onClick={() => setOpen(false)}
+                    onClick={close}
                     className={`flex h-11 items-center rounded-control px-3 text-heading transition-transform duration-(--duration-press) motion-safe:active:scale-[0.98] ${
                       t.id === activeId
                         ? "bg-surface-3 font-semibold text-ink"
@@ -156,7 +186,7 @@ function MobileNav({
                     <a
                       href={o.href}
                       aria-current={o.id === activeId ? "page" : undefined}
-                      onClick={() => setOpen(false)}
+                      onClick={close}
                       className={`inline-flex h-9 items-center rounded-control px-3 text-sm transition-transform duration-(--duration-press) motion-safe:active:scale-[0.98] ${
                         o.id === activeId
                           ? "bg-surface-3 text-ink"
@@ -257,12 +287,18 @@ export function NavBar({
   destinations,
   overflow,
   activeId,
+  activeLabel,
   live,
   onOpenPalette,
 }: {
   destinations: NavTab[];
   overflow: MoreItem[];
   activeId: string;
+  /** The current page's name, from the whole route table. Drill-downs (an
+   *  agent, a run) and Search are in neither list, and a page the viewer may
+   *  not see in the menu (Users, signed out) is not in it either; looked up
+   *  from the lists, all of them left the phone header saying only "Menu". */
+  activeLabel: string;
   live: boolean;
   onOpenPalette: () => void;
 }) {
@@ -303,7 +339,12 @@ export function NavBar({
           </span>
         </a>
 
-        <MobileNav destinations={destinations} overflow={overflow} activeId={activeId} />
+        <MobileNav
+          destinations={destinations}
+          overflow={overflow}
+          activeId={activeId}
+          activeLabel={activeLabel}
+        />
 
         {/* Destinations take the room the bar has and no more: the ones that
             do not fit move to the More menu (see useTrack). Below `md` the
@@ -357,13 +398,15 @@ export function NavBar({
           {/* The palette is the fastest path to anything in Argus, so it gets a
               real affordance with its shortcut on it — not a bare icon nobody
               would guess is keyboard-driven. Below xl it gives its label and
-              keycap to the destinations and keeps the shortcut in its tooltip. */}
+              keycap to the destinations and keeps the shortcut in its tooltip.
+              On a phone its hit area grows to 44px tall without the bar
+              growing, as the bell's does. */}
           <button
             type="button"
             onClick={onOpenPalette}
             aria-label={`Search — open the command palette (${modLabel})`}
             title={`Search (${modLabel})`}
-            className="group flex h-8 items-center gap-2 rounded-control border border-line-strong bg-surface/60 px-2 text-ink-dim transition duration-(--duration-quick) hover:border-ink-faint/45 hover:bg-surface-2 hover:text-ink motion-safe:active:scale-[0.97] xl:pl-2.5 xl:pr-1.5 min-[1400px]:min-w-56"
+            className="group relative flex h-8 items-center gap-2 rounded-control border border-line-strong bg-surface/60 px-2 text-ink-dim transition duration-(--duration-quick) hover:border-ink-faint/45 hover:bg-surface-2 hover:text-ink motion-safe:active:scale-[0.97] max-md:before:absolute max-md:before:-inset-x-[3px] max-md:before:-inset-y-1.5 xl:pl-2.5 xl:pr-1.5 min-[1400px]:min-w-56"
           >
             <Icon name="search" size={16} />
             <span className="hidden text-sm xl:inline">Search</span>

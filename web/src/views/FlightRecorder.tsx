@@ -16,6 +16,7 @@ import {
   Page,
   prefersReducedMotion,
   runDsStatus,
+  runStatusLabel,
   SegmentedControl,
   settleFrom,
   Skeleton,
@@ -44,7 +45,8 @@ import {
   stepIndex,
   trackTime,
 } from "./recorderTrack";
-import { firstProseLine } from "./outcome";
+import { firstProseLine, withoutOutcome } from "./outcome";
+import { loadError } from "../live/loadError";
 
 /**
  * The Flight Recorder.
@@ -139,7 +141,10 @@ function failureSummary(event: RecorderEvent): { subject: string; message: strin
   const first = firstProseLine(event.detail);
   const clipped =
     first.length > FAILURE_MESSAGE_MAX ? `${first.slice(0, FAILURE_MESSAGE_MAX - 1)}…` : first;
-  return { subject, message: clipped && !subject.includes(clipped) ? clipped : "" };
+  // Compared without case: a process exit is labelled "Failed — exit code 1"
+  // with the detail "exit code 1", and the strip read "Exit code 1 exit code 1".
+  const repeats = subject.toLowerCase().includes(clipped.toLowerCase());
+  return { subject, message: clipped && !repeats ? clipped : "" };
 }
 
 /**
@@ -343,6 +348,11 @@ const RANGE =
 
 /** The event the playhead is parked on, in full. */
 function NowPanel({ event }: { event: RecorderEvent | null }) {
+  // The run's own end (or failure) carries the agent's summary or error, whose
+  // protocol line is for the scheduler: the event's label already says how it
+  // ended. Events read from the transcript are shown as they were written.
+  const terminal = event?.lane === "agent" && (event.kind === "end" || event.kind === "error");
+  const detail = terminal ? withoutOutcome(event.detail) : event?.detail;
   return (
     <div className="min-h-[10rem] rounded-tile border border-line bg-surface p-4 shadow-raised">
       <div className="mb-3 flex items-center justify-between gap-3">
@@ -404,9 +414,9 @@ function NowPanel({ event }: { event: RecorderEvent | null }) {
               {event.costTotalUsd != null && <> · {formatUsd(event.costTotalUsd)} spent so far</>}
             </p>
           )}
-          {event.detail && (
+          {detail && (
             <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-control border border-line bg-ground-2/60 p-3 font-mono text-caption leading-relaxed text-ink-dim">
-              {event.detail}
+              {detail}
             </pre>
           )}
         </>
@@ -502,7 +512,7 @@ function RunCaption({ recording, durationMs }: { recording: Recording; durationM
   const running = recording.status === "running";
   return (
     <span className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-caption text-ink-faint">
-      <StatusPill status={runDsStatus(recording)} />
+      <StatusPill status={runDsStatus(recording)} label={runStatusLabel(recording)} />
       <a
         href={source.href}
         className="inline-flex items-center gap-1.5 rounded-sm text-ink-dim transition-colors duration-(--duration-quick) hover:text-ink"
@@ -603,7 +613,7 @@ export default function FlightRecorder() {
   const segments = useHashRoute();
   const runId = segments[1] ?? null;
   const deepLinkMs = Number(segments[2]);
-  const { recording, loading, error, refresh } = useRecording(runId);
+  const { recording, loading, error, errorStatus, refresh } = useRecording(runId);
 
   const [t, setT] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -867,7 +877,7 @@ export default function FlightRecorder() {
   // The server answers 404 for a run it has no record of — pruned, or never
   // there. That is an answer about the data, not a failed load: a Retry under
   // it could never succeed.
-  const notFound = error === "HTTP 404";
+  const notFound = errorStatus === 404;
   const retry = (
     <Button size="sm" icon="retry" onClick={() => void refresh()}>
       Retry
@@ -896,7 +906,11 @@ export default function FlightRecorder() {
   if (error && !notFound && !recording) {
     return (
       <Page title="Flight Recorder" crumbs={[{ label: "Chronicle", href: "#/chronicle" }]}>
-        <AlertStrip subject="Couldn't load this recording" message={error} action={retry} />
+        <AlertStrip
+          subject="Recording"
+          message={loadError("this recording", error)}
+          action={retry}
+        />
       </Page>
     );
   }
@@ -971,8 +985,8 @@ export default function FlightRecorder() {
       {error && (
         <div className="mb-6">
           <AlertStrip
-            subject="Couldn't refresh this recording"
-            message={`${error} — showing what was loaded last.`}
+            subject="Recording"
+            message={`${loadError("this recording", error, "refresh")} — showing what was loaded last.`}
             action={retry}
           />
         </div>

@@ -43,9 +43,10 @@ describe("SituationStrip", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("says so explicitly when nothing needs the user", () => {
+  it("says so explicitly when nothing needs the user, as a status, not a sentence", () => {
     render(<SituationStrip situation={situation()} loading={false} />);
-    expect(screen.getByText(/nothing needs you/i)).toBeInTheDocument();
+    const calm = screen.getByText(/nothing needs you/i).parentElement!;
+    expect(calm).toHaveTextContent(/nothing running$/);
   });
 
   it("omits a metric with nothing to report rather than showing a grey zero", () => {
@@ -66,7 +67,8 @@ describe("SituationStrip", () => {
         loading={false}
       />,
     );
-    expect(screen.getByText("awaiting you")).toBeInTheDocument();
+    // The card pill's words, so the strip and the board name one state alike.
+    expect(screen.getByText("need approval")).toBeInTheDocument();
     expect(screen.queryByText("failed")).toBeNull();
     expect(screen.queryByText("open issues")).toBeNull();
     expect(screen.queryByText(/nothing needs you/i)).toBeNull();
@@ -92,7 +94,7 @@ describe("SituationStrip", () => {
         failedHref="#/command/i2/build"
       />,
     );
-    expect(screen.getByRole("link", { name: /awaiting you/i })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /needs? approval/i })).toHaveAttribute(
       "href",
       "#/command/i1/review",
     );
@@ -145,7 +147,7 @@ describe("SituationStrip", () => {
         loading={false}
       />,
     );
-    expect(screen.getByRole("link", { name: /awaiting you/i })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /needs? approval/i })).toHaveAttribute(
       "href",
       "#/command",
     );

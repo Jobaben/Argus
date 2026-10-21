@@ -24,6 +24,7 @@ import type {
   LedgerReport,
 } from "../types";
 import { projectMonth, type MonthProjection } from "./budgetProjection";
+import { loadError } from "../live/loadError";
 
 /**
  * The Ledger: where the money went, where it is going, and what a change would
@@ -56,7 +57,33 @@ const ACTION_COPY: Record<BudgetAction, string> = {
 /** Header and cell classes shared by the attribution table's columns; each
  *  cell adds its own colour and padding, so no two classes fight over one. */
 const TH = "eyebrow py-2.5 font-semibold";
-const NUM = "py-3 pr-3 text-right align-top text-small";
+/** A figure column sized to its widest figure, so the slack goes to the name.
+ *  Fixed widths held room the figures never used while, at 768px, the name
+ *  beside them was cut to a few letters. The left padding keeps neighbouring
+ *  figures apart now that no column has room to spare. */
+const FIT = "w-px whitespace-nowrap pl-4";
+const NUM = `${FIT} py-3 pr-3 text-right align-top text-small`;
+
+/** A slice's share in whole percent. A slice too small to round to 1% still
+ *  cost something, and "0%" beside its price said it cost nothing. */
+function sharePercent(share: number): string {
+  const pct = Math.round(share * 100);
+  return pct === 0 && share > 0 ? "<1%" : `${pct}%`;
+}
+
+/** The forecast's note, as said here. Under the minimum the server writes
+ *  "Only N full days of history", which at zero reads as a few days rather
+ *  than none. Reworded at the edge; the stored note stays as the server wrote
+ *  it, so only its opening is matched and the rest of the sentence carries. */
+const NO_FULL_DAY = /^\s*only\s+0\s+full\s+days?\s+of\s+history\b/i;
+function forecastNote(note: string): string {
+  const opening = NO_FULL_DAY.exec(note);
+  if (!opening) return note;
+  // "…yet — not enough to project a month yet." says "yet" twice. Only the
+  // rest loses its "yet": a note that ends at "history." keeps the new one.
+  const rest = note.slice(opening[0].length).replace(/\s+yet(\.?)\s*$/i, "$1");
+  return `No full day of history yet${rest}`;
+}
 
 function ShareBar({ share }: { share: number }) {
   return (
@@ -159,22 +186,22 @@ function AttributionTable({
             <th scope="col" className={`${TH} pr-3 text-left`}>
               {dimension}
             </th>
-            <th scope="col" className={`${TH} hidden w-20 pr-3 text-right md:table-cell`}>
+            <th scope="col" className={`${TH} ${FIT} hidden pr-3 text-right md:table-cell`}>
               Runs
             </th>
-            <th scope="col" className={`${TH} hidden w-24 pr-3 text-right md:table-cell`}>
+            <th scope="col" className={`${TH} ${FIT} hidden pr-3 text-right md:table-cell`}>
               Per run
             </th>
-            <th scope="col" className={`${TH} hidden w-24 pr-3 text-right md:table-cell`}>
+            <th scope="col" className={`${TH} ${FIT} hidden pr-3 text-right md:table-cell`}>
               Tokens
             </th>
-            <th scope="col" className={`${TH} w-20 pr-3 text-right sm:w-24`}>
+            <th scope="col" className={`${TH} ${FIT} pr-3 text-right`}>
               Cost
             </th>
-            <th scope="col" className={`${TH} hidden w-16 pr-3 text-right sm:table-cell`}>
+            <th scope="col" className={`${TH} ${FIT} hidden pr-3 text-right sm:table-cell`}>
               Share
             </th>
-            <th scope="col" className="w-11 py-2.5 pr-2 sm:w-28 sm:pr-3">
+            <th scope="col" className="w-px py-2.5 pr-2 sm:pr-3">
               <span className="sr-only">Simulate</span>
             </th>
           </tr>
@@ -187,7 +214,9 @@ function AttributionTable({
                 <td className="py-3 pl-4 pr-1 align-top text-small text-ink-faint sm:pr-2">
                   {other ? "" : i + 1}
                 </td>
-                {/* max-w-0 lets the label truncate instead of widening the table. */}
+                {/* max-w-0 lets the label truncate instead of widening the table;
+                    with every other column sized to its content, it takes the
+                    rest of the row. */}
                 <td className="max-w-0 py-3 pr-3 align-top">
                   <SliceLabel label={s.label} kind={kind} other={other} />
                   <div className="mt-2">
@@ -196,9 +225,7 @@ function AttributionTable({
                   {/* Each figure keeps its unit: the line wraps between pairs,
                       never inside one. */}
                   <div className="mt-1.5 text-caption text-ink-faint md:hidden">
-                    <span className="whitespace-nowrap sm:hidden">
-                      {Math.round(s.share * 100)}% ·{" "}
-                    </span>
+                    <span className="whitespace-nowrap sm:hidden">{sharePercent(s.share)} · </span>
                     <span className="whitespace-nowrap">
                       {s.runs} run{s.runs === 1 ? "" : "s"}
                     </span>{" "}
@@ -215,9 +242,9 @@ function AttributionTable({
                 </td>
                 <td className={`${NUM} font-semibold text-ink`}>{formatUsd(s.usd)}</td>
                 <td className={`${NUM} hidden text-ink-dim sm:table-cell`}>
-                  {Math.round(s.share * 100)}%
+                  {sharePercent(s.share)}
                 </td>
-                <td className="py-2 pr-2 text-right align-top sm:pr-3">
+                <td className="w-px py-2 pr-2 text-right align-top sm:pr-3">
                   {!other && (
                     <Button
                       ref={triggerRef(s.key)}
@@ -404,7 +431,7 @@ function ForecastPanel({
           }
         />
         <div className="min-w-0 lg:border-l lg:border-line lg:pl-8">
-          <p className="max-w-prose text-small text-ink">{forecast.note}</p>
+          <p className="max-w-prose text-small text-ink">{forecastNote(forecast.note)}</p>
           {forecast.dailyUsd != null && (
             <p className="mt-2 text-caption text-ink-faint">
               {formatUsd(forecast.dailyUsd)}/day median over {forecast.samples} full days ·{" "}
@@ -468,7 +495,7 @@ function ForecastPanel({
         </div>
         <div className="min-w-0 sm:border-l sm:border-line sm:pl-4">
           <p className="text-heading font-semibold text-ink">No projection yet</p>
-          <p className="mt-1 max-w-prose text-small text-ink-dim">{forecast.note}</p>
+          <p className="mt-1 max-w-prose text-small text-ink-dim">{forecastNote(forecast.note)}</p>
           <p className="mt-2 text-caption text-ink-faint">
             {formatUsd(forecast.monthToDateUsd)} so far this month. The projection is a median of
             full days, so it waits until it has enough of them to be worth reading.
@@ -589,7 +616,7 @@ export function LedgerPanels({
       {/* The forecast moves on a poll and the simulator answers asynchronously;
           both need to reach a reader who is not watching the pixels. */}
       <div aria-live="polite" role="status" className="sr-only">
-        {showStraight ? straightLineSentence(straight, month) : report.forecast.note}
+        {showStraight ? straightLineSentence(straight, month) : forecastNote(report.forecast.note)}
         {simulation?.ok ? ` ${simulation.summary}` : simulation?.unavailable}
       </div>
 
@@ -604,7 +631,7 @@ export function LedgerPanels({
         <div className="mb-10">
           <AlertStrip
             subject="Ledger"
-            message={`Couldn't load the median forecast or where the money went: ${error}`}
+            message={loadError("the median forecast or where the money went", error)}
             action={
               <Button size="sm" icon="retry" onClick={() => refresh()}>
                 Retry

@@ -46,7 +46,11 @@ function Row({ entry, onNavigate }: { entry: LoggedNotification; onNavigate: () 
           </span>
         </span>
         {entry.detail && (
-          <span className="mt-0.5 block break-words text-caption text-ink-faint">
+          <span
+            className={`mt-0.5 block break-words text-caption text-ink-faint ${
+              entry.detailMono ? "font-mono" : ""
+            }`}
+          >
             {entry.detail}
           </span>
         )}
@@ -69,6 +73,7 @@ export function NotificationCenter() {
   const [open, setOpen] = useState(false);
   const unread = unreadCount(log);
   const containerRef = useRef<HTMLDivElement>(null);
+  const bellRef = useRef<HTMLButtonElement>(null);
   const { present, exited } = usePresence(open);
   // Hung off the bell in the top-right corner, so that is the corner it grows
   // from and shrinks back into.
@@ -86,7 +91,14 @@ export function NotificationCenter() {
       if (!containerRef.current?.contains(e.target as Node)) setOpen(false);
     };
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      // An Escape something in front has already claimed (the palette, opened
+      // over this) is not this panel's to act on as well.
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      // Focus in the panel goes back to the bell: the panel turns inert as it
+      // closes, and focus inside it fell to <body>. Focus out on the page
+      // stays where it is.
+      if (containerRef.current?.contains(document.activeElement)) bellRef.current?.focus();
+      setOpen(false);
     };
     document.addEventListener("mousedown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
@@ -99,11 +111,14 @@ export function NotificationCenter() {
   return (
     <div ref={containerRef} className="relative">
       <button
+        ref={bellRef}
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         aria-label={unread > 0 ? `Notifications (${unread} unread)` : "Notifications (none unread)"}
-        className={`relative flex h-8 w-8 items-center justify-center rounded-control transition duration-(--duration-quick) hover:bg-surface-2 hover:text-ink motion-safe:active:scale-[0.95] ${
+        // On a phone the hit area reaches 44px tall (and meets the search
+        // button's) without the bar growing; the bell still draws at 32px.
+        className={`relative flex h-8 w-8 items-center justify-center rounded-control transition duration-(--duration-quick) hover:bg-surface-2 hover:text-ink motion-safe:active:scale-[0.95] max-md:before:absolute max-md:before:-inset-x-[3px] max-md:before:-inset-y-1.5 ${
           open ? "bg-surface-2 text-ink" : "text-ink-dim"
         }`}
       >
@@ -111,7 +126,7 @@ export function NotificationCenter() {
         {unread > 0 && (
           <span
             aria-hidden="true"
-            className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-eye px-1 text-[10px] font-semibold leading-none text-ground ring-2 ring-ground"
+            className="absolute -right-1 -top-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-eye px-1 text-micro font-semibold leading-none text-ground ring-2 ring-ground"
           >
             {unread > 9 ? "9+" : unread}
           </span>
@@ -137,8 +152,15 @@ export function NotificationCenter() {
             {log.length > 0 && (
               <button
                 type="button"
-                onClick={clearNotifications}
-                className="rounded-md px-1.5 py-0.5 text-caption font-semibold text-ink-faint transition duration-(--duration-quick) hover:bg-surface-3 hover:text-ink"
+                onClick={() => {
+                  clearNotifications();
+                  // The button goes with the entries it cleared, so focus goes
+                  // to the bell rather than falling to <body>.
+                  bellRef.current?.focus();
+                }}
+                // Tall enough to press (24px) without the header growing by
+                // the difference.
+                className="-my-0.5 rounded-md px-1.5 py-1 text-caption font-semibold text-ink-faint transition duration-(--duration-quick) hover:bg-surface-3 hover:text-ink"
               >
                 Clear
               </button>

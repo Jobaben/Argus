@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import { useLiveResource } from "./live/useLiveResource";
 
 import type { AuthStatus } from "@argus/contracts";
@@ -17,11 +17,20 @@ export async function postJson(path: string, body: unknown): Promise<void> {
   }
 }
 
+/** Fired on `window` after any instance changes the session. */
+const AUTH_CHANGED = "argus:auth-changed";
+const announceAuthChange = () => window.dispatchEvent(new Event(AUTH_CHANGED));
+
 /**
  * Account session state for the pipeline control surface. The session itself
  * is an HttpOnly cookie the server sets on login/bootstrap — this hook only
  * tracks whether one exists (via /api/auth/status, polled so an expired
  * session is eventually noticed) and exposes the transitions.
+ *
+ * Every caller holds its own copy of the status, so a sign-in from one page's
+ * form used to update that page alone: the nav, the phone header and the
+ * palette went on showing a signed-out viewer until the next poll a minute
+ * later. A transition here tells every instance to re-read the status instead.
  */
 export function useAuth() {
   const { data, loading, error, refresh } = useLiveResource<AuthStatus | null>("/api/auth/status", {
@@ -39,30 +48,31 @@ export function useAuth() {
     pollMs: 60_000,
   });
 
-  const login = useCallback(
-    async (username: string, password: string) => {
-      await postJson("/api/auth/login", { username, password });
-      refresh();
-    },
-    [refresh],
-  );
+  useEffect(() => {
+    const onChange = () => void refresh();
+    window.addEventListener(AUTH_CHANGED, onChange);
+    return () => window.removeEventListener(AUTH_CHANGED, onChange);
+  }, [refresh]);
 
-  const setup = useCallback(
-    async (username: string, password: string) => {
-      await postJson("/api/auth/setup", { username, password });
-      refresh();
-    },
-    [refresh],
-  );
+  const login = useCallback(async (username: string, password: string) => {
+    await postJson("/api/auth/login", { username, password });
+    announceAuthChange();
+  }, []);
+
+  const setup = useCallback(async (username: string, password: string) => {
+    await postJson("/api/auth/setup", { username, password });
+    announceAuthChange();
+  }, []);
 
   const register = useCallback(async (username: string, password: string) => {
     await postJson("/api/auth/register", { username, password });
+    announceAuthChange();
   }, []);
 
   const logout = useCallback(async () => {
     await postJson("/api/auth/logout", {});
-    refresh();
-  }, [refresh]);
+    announceAuthChange();
+  }, []);
 
   // Signed in: the one rule for showing an admin control (stop, delete, edit).
   const isAdmin = data?.authenticated === true;

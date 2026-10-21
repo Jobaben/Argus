@@ -10,6 +10,7 @@ import {
   formatMs,
   formatUsd,
   runDsStatus,
+  runStatusLabel,
   staggerDelay,
   useTicker,
 } from "../ds";
@@ -133,8 +134,8 @@ function StepLine({
 }
 
 function RunLine({ run, index }: { run: Run; index: number }) {
-  const ds = runDsStatus(run);
-  const { token, label } = STATUS[ds];
+  const { token } = STATUS[runDsStatus(run)];
+  const label = runStatusLabel(run);
   const cost = run.costUsd ?? null;
   return (
     <li
@@ -299,8 +300,11 @@ export function ActivityRail({
             ))}
           </ul>
         )}
+        {/* The Chronicle, where every run lands: it went to the one-off launch
+            form, whose list holds one-off runs only and so read "Nothing
+            launched yet" under a rail that had just listed eight. */}
         <a
-          href="#/schedules/oneoff"
+          href="#/chronicle"
           className="-mx-2 mt-1 flex items-center justify-between rounded-control px-2 py-1.5 text-small font-semibold text-ink-dim transition duration-(--duration-quick) hover:bg-surface-2 hover:text-ink"
         >
           All runs

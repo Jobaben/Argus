@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HeartbeatBar } from "./HeartbeatBar";
@@ -62,6 +62,27 @@ describe("HeartbeatBar", () => {
       "#/run/r8",
       "#/run/r9",
     ]);
+  });
+});
+
+describe("a strip too narrow for every slot", () => {
+  afterEach(() => {
+    delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
+  });
+
+  it("shows fewer, wider beats — the newest — rather than hairlines", () => {
+    // 120px holds nine 10px beats with their 3px gaps; thirty would be 1px each.
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+      configurable: true,
+      get: () => 120,
+    });
+    const beats = Array.from({ length: 30 }, (_, i) => beat(`r${i}`));
+    const { container } = render(<HeartbeatBar beats={beats} />);
+    expect(screen.getByRole("group", { name: "Last 9 runs" })).toBeInTheDocument();
+    expect(slots(container)).toHaveLength(9);
+    const links = screen.getAllByRole("link");
+    expect(links[0]).toHaveAttribute("href", "#/run/r21");
+    expect(links.at(-1)).toHaveAttribute("href", "#/run/r29");
   });
 });
 

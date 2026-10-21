@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { NavBar } from "./NavBar";
 
@@ -20,6 +20,7 @@ describe("NavBar", () => {
         destinations={destinations}
         overflow={overflow}
         activeId="command"
+        activeLabel="Command Center"
         live
         onOpenPalette={() => {}}
       />,
@@ -40,6 +41,7 @@ describe("NavBar", () => {
         destinations={destinations}
         overflow={overflow}
         activeId="command"
+        activeLabel="Command Center"
         live
         onOpenPalette={onOpenPalette}
       />,
@@ -63,6 +65,7 @@ describe("NavBar badge", () => {
         ]}
         overflow={overflow}
         activeId="command"
+        activeLabel="Command Center"
         live
         onOpenPalette={() => {}}
       />,
@@ -83,6 +86,7 @@ describe("NavBar badge", () => {
         ]}
         overflow={overflow}
         activeId="command"
+        activeLabel="Command Center"
         live
         onOpenPalette={() => {}}
       />,
@@ -103,17 +107,95 @@ describe("NavBar badge", () => {
     expect(screen.getAllByRole("link", { name: "Stats" }).length).toBeGreaterThan(0);
   });
 
-  it("names a page from the secondary list too, rather than falling back to 'Menu'", () => {
+  it("names a page in neither list, rather than falling back to 'Menu'", () => {
+    // Agents is a drill-down: no tab, no place in the secondary list. The phone
+    // header used to say "Menu" over it.
     render(
       <NavBar
         destinations={destinations}
         overflow={overflow}
-        activeId="stats"
+        activeId="agents"
+        activeLabel="Agents"
         live
         onOpenPalette={() => {}}
       />,
     );
-    expect(screen.getByRole("button", { name: /open the menu/i })).toHaveTextContent("Stats");
+    expect(screen.getByRole("button", { name: /open the menu/i })).toHaveTextContent("Agents");
+  });
+
+  it("says the attention count is waiting on you, not a count for the page", () => {
+    render(
+      <NavBar
+        destinations={[
+          { id: "briefing", label: "Briefing", badge: 5 },
+          { id: "health", label: "Health" },
+        ]}
+        overflow={overflow}
+        activeId="health"
+        activeLabel="Health"
+        live
+        onOpenPalette={() => {}}
+      />,
+    );
+    const toggle = screen.getByRole("button", { name: /open the menu/i });
+    expect(toggle).toHaveAccessibleName("Open the menu (5 waiting on you)");
+    // The page name is a label of its own, with no count run on after it.
+    expect(within(toggle).getByText("Health")).toHaveTextContent(/^Health$/);
+  });
+
+  it("closes the sheet when Tab leaves it, so focus never lands under the scrim", async () => {
+    const user = userEvent.setup();
+    render(
+      <NavBar
+        destinations={destinations}
+        overflow={overflow}
+        activeId="command"
+        activeLabel="Command Center"
+        live
+        onOpenPalette={() => {}}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /open the menu/i }));
+    const toggle = screen.getByRole("button", { name: /close the menu/i });
+    // Opening hands focus to the current destination in the sheet.
+    await waitFor(() => expect(document.activeElement).toHaveAttribute("aria-current", "page"));
+
+    // Moving within the sheet keeps it open. Stats is its last link (the More
+    // menu, which also lists it, is closed).
+    await user.tab();
+    await user.tab();
+    expect(document.activeElement).toHaveTextContent("Stats");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+
+    // Past its last link, focus leaves the menu, and the sheet goes with it.
+    await user.tab();
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).toHaveAccessibleName("Open the menu");
+  });
+
+  it("hands focus back to the toggle when a destination is chosen from the sheet", async () => {
+    const user = userEvent.setup();
+    render(
+      <NavBar
+        destinations={destinations}
+        overflow={overflow}
+        activeId="command"
+        activeLabel="Command Center"
+        live
+        onOpenPalette={() => {}}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /open the menu/i }));
+    const toggle = screen.getByRole("button", { name: /close the menu/i });
+    await waitFor(() => expect(document.activeElement).toHaveAttribute("aria-current", "page"));
+
+    // The next link in the sheet is Scheduler. Choosing it closes the sheet,
+    // and focus goes back to where the menu was opened rather than to <body>.
+    await user.tab();
+    expect(document.activeElement).toHaveTextContent("Scheduler");
+    await user.keyboard("{Enter}");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).toHaveFocus();
   });
 });
 
@@ -161,6 +243,7 @@ describe("priority+ overflow", () => {
         destinations={five}
         overflow={overflow}
         activeId="command"
+        activeLabel="Command Center"
         live
         onOpenPalette={() => {}}
       />,
@@ -189,6 +272,7 @@ describe("priority+ overflow", () => {
         destinations={five}
         overflow={overflow}
         activeId="command"
+        activeLabel="Command Center"
         live
         onOpenPalette={() => {}}
       />,
@@ -210,6 +294,7 @@ describe("priority+ overflow", () => {
         destinations={five}
         overflow={overflow}
         activeId="budget"
+        activeLabel="Budget"
         live
         onOpenPalette={() => {}}
       />,
@@ -236,6 +321,7 @@ describe("the active-destination pill", () => {
         destinations={destinations}
         overflow={overflow}
         activeId="command"
+        activeLabel="Command Center"
         live
         onOpenPalette={() => {}}
       />,
@@ -251,6 +337,7 @@ describe("the active-destination pill", () => {
         destinations={destinations}
         overflow={overflow}
         activeId="schedules"
+        activeLabel="Scheduler"
         live
         onOpenPalette={() => {}}
       />,
@@ -264,6 +351,7 @@ describe("the active-destination pill", () => {
         destinations={destinations}
         overflow={overflow}
         activeId="stats"
+        activeLabel="Stats"
         live
         onOpenPalette={() => {}}
       />,

@@ -90,10 +90,25 @@ describe("buildCommands — labels", () => {
     expect(only(entry({ badge: null }))?.badge).toBeUndefined();
   });
 
-  it("leaves shortcut badges alone, so the palette still draws them as keycaps", () => {
+  it("marks shortcuts as keys, not badges, so a single key is drawn as a keycap too", () => {
     const cmds = buildCommands(ctx([]));
-    expect(cmds.find((c) => c.id === "go:command")?.badge).toBe("g c");
-    expect(cmds.find((c) => c.id === "action:shortcuts")?.badge).toBe("?");
+    const go = cmds.find((c) => c.id === "go:command");
+    const help = cmds.find((c) => c.id === "action:shortcuts");
+    expect(go?.keys).toBe("g c");
+    expect(help?.keys).toBe("?");
+    expect(go?.badge).toBeUndefined();
+    expect(help?.badge).toBeUndefined();
+  });
+
+  it("asks for a literal title match only on actions that change something", () => {
+    const cmds = buildCommands(ctx([{ ...entry({}), runnableScheduleId: "s1" }, gated]));
+    const literal = (id: string) => cmds.find((c) => c.id === id)?.literal ?? false;
+    expect(literal("run:s1")).toBe(true);
+    expect(literal("action:caught-up")).toBe(true);
+    // Jumps and a sheet of shortcuts cost nothing if picked by mistake.
+    expect(literal("go:command")).toBe(false);
+    expect(literal("review:inst-1")).toBe(false);
+    expect(literal("action:shortcuts")).toBe(false);
   });
 
   it("starts every subtitle it wrote with a capital", () => {

@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { render, renderHook, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { useAgentNotifications } from "./useAgentNotifications";
+import { resetNotificationLogForTest } from "./notificationLog";
+import { NotificationCenter } from "./NotificationCenter";
+import { ToastRegion } from "../ds/Toast";
 import type { Agent, AgentStatus } from "../types";
 
 function agent(short: string, status: AgentStatus): Agent {
@@ -34,6 +38,7 @@ class MockNotification {
 }
 
 beforeEach(() => {
+  resetNotificationLogForTest();
   native.length = 0;
   MockNotification.permission = "granted";
   vi.stubGlobal("Notification", MockNotification as unknown as typeof Notification);
@@ -64,5 +69,28 @@ describe("useAgentNotifications", () => {
     await waitFor(() => expect(result.current.toasts).toHaveLength(1));
     expect(result.current.toasts[0].tone).toBe("fail");
     expect(native).toHaveLength(0);
+  });
+
+  it("sets the job id in mono, on the toast and in the log both", async () => {
+    // Pushed with the toast itself, so no consumer has to remember to add it.
+    function Shell({ agents }: { agents: Agent[] }) {
+      const { toasts, dismiss } = useAgentNotifications(agents);
+      return (
+        <>
+          <NotificationCenter />
+          <ToastRegion toasts={toasts} onDismiss={dismiss} />
+        </>
+      );
+    }
+    const user = userEvent.setup();
+    const { rerender } = render(<Shell agents={[agent("job-7f3a", "working")]} />);
+    rerender(<Shell agents={[agent("job-7f3a", "failed")]} />);
+
+    const toast = await screen.findByRole("status");
+    expect(within(toast).getByText("job-7f3a")).toHaveClass("font-mono");
+
+    await user.click(screen.getByRole("button", { name: /notifications/i }));
+    const log = screen.getByRole("dialog", { name: "Notifications" });
+    expect(within(log).getByText("job-7f3a")).toHaveClass("font-mono");
   });
 });

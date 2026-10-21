@@ -20,6 +20,8 @@ import type {
   TuningProposal,
 } from "../types";
 import { applyTuningReport, proposalKey } from "./tuningApply";
+import { useAsk, type Ask } from "../ds/useAsk";
+import { loadError } from "../live/loadError";
 
 const PHASE_BADGE: Record<PhaseTuningStatus, DsStatus> = {
   pending: "queued",
@@ -209,7 +211,9 @@ export function TuningDrawer({
 }: {
   def: PipelineDefinition;
   onClose: () => void;
-  onApply: (input: PipelineInput) => Promise<void>;
+  /** Saves the merged definition; `ask` poses a question above Apply when the
+   *  save needs the author's say-so first. */
+  onApply: (input: PipelineInput, ask: Ask) => Promise<void>;
 }) {
   const { report, unavailable, loading, error, busy, actionError, analyse, refresh } = useTuning(
     def.id,
@@ -222,6 +226,7 @@ export function TuningDrawer({
   });
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
+  const [ask, question] = useAsk();
 
   // One press = one pass. Start it once the first read is in, unless that read
   // shows a pass already running for this pipeline.
@@ -251,12 +256,21 @@ export function TuningDrawer({
     });
 
   const apply = async () => {
-    if (!report || selected.size === 0) return;
+    if (!report || selected.size === 0 || applying) return;
     setApplying(true);
     setApplyError(null);
+    // An author who answers no to a question asked mid-save has not applied
+    // anything, so the drawer stays open with their ticks, as the edit form
+    // stays open with their edit.
+    let declined = false;
+    const asking: Ask = async (question) => {
+      const yes = await ask(question);
+      declined ||= !yes;
+      return yes;
+    };
     try {
-      await onApply(applyTuningReport(def, report, selected));
-      onClose();
+      await onApply(applyTuningReport(def, report, selected), asking);
+      if (!declined) onClose();
     } catch (e) {
       setApplyError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -280,6 +294,7 @@ export function TuningDrawer({
       onClose={onClose}
       footer={
         <div className="flex flex-wrap items-center gap-2">
+          {question}
           <Button
             variant="ghost"
             icon="retry"
@@ -298,7 +313,10 @@ export function TuningDrawer({
             icon="check"
             className="ml-auto"
             onClick={() => void apply()}
-            disabled={applying || running || selected.size === 0}
+            // Held by aria while it saves, so it keeps its focus for a
+            // question asked mid-save to hand back.
+            disabled={running || selected.size === 0}
+            aria-disabled={applying || undefined}
           >
             Apply selected ({selected.size})
           </Button>
@@ -323,7 +341,9 @@ export function TuningDrawer({
         <div className="mb-4">
           <AlertStrip
             subject={applyError ? "Couldn't apply" : "Analyze"}
-            message={applyError ?? actionError ?? error ?? ""}
+            message={
+              applyError ?? actionError ?? (error ? loadError("the tuning report", error) : "")
+            }
             // A refused pass is retried by asking again, a failed read by
             // reading again. A failed apply has its retry already: Apply.
             action={

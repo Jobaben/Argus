@@ -19,6 +19,9 @@ import {
 import { useSentinel } from "../useSentinel";
 import type { Incident, IncidentEventKind, IncidentSeverity, IncidentStatus } from "../types";
 import { HealthCounter } from "../ds/HealthCounter";
+import { splitEnvelopeName } from "./envelopeName";
+import { sentenceStart } from "./text";
+import { loadError } from "../live/loadError";
 
 /**
  * Sentinel.
@@ -99,6 +102,35 @@ function SeverityBadge({
   );
 }
 
+/** An instant the server wrote into a clause, as raw ISO. */
+const ISO_INSTANT = /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})/g;
+
+/**
+ * Server text as a sentence. Details and timeline entries arrive as clauses
+ * ("the most recent completed run failed", "acknowledged") and get their
+ * capital here; a slot time inside one ("…expected at 2026-10-20T22:33:49.022Z")
+ * is read out in the reader's own time instead of UTC machine form, which also
+ * wrapped mid-token on a phone. Display only: the stored text is unchanged.
+ */
+function prose(text: string): string {
+  return sentenceStart(
+    text.replace(ISO_INSTANT, (iso) => {
+      const at = new Date(iso);
+      return Number.isNaN(at.getTime())
+        ? iso
+        : at.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+    }),
+  );
+}
+
+/** An anomaly incident is titled with its envelope's name; a phase id the
+ *  phase's own name already says is dropped, as on Watchtower. */
+function incidentTitle(incident: Incident): string {
+  if (!incident.key.startsWith("anomaly:phase:")) return incident.title;
+  const { label, id } = splitEnvelopeName(incident.title);
+  return id ? `${label} › ${id}` : label;
+}
+
 /** Live countdown to the next escalation. Its own clock, like the board's. */
 function EscalatesIn({ at }: { at: string }) {
   const now = useTicker();
@@ -144,7 +176,7 @@ function Timeline({ incident }: { incident: Incident }) {
               <Icon name={mark.icon} size={13} />
             </span>
             <div className="min-w-0 flex-1 pt-0.5">
-              <p className="break-words text-small text-ink-dim">{e.detail}</p>
+              <p className="break-words text-small text-ink-dim">{prose(e.detail)}</p>
               <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-caption">
                 <TimeAgo iso={e.at} />
                 {e.by !== "sentinel" && (
@@ -187,6 +219,7 @@ function IncidentCard({
   const [pressed, setPressed] = useState<Action | null>(null);
   const busyAction = busy ? pressed : null;
   const live = incident.status !== "resolved";
+  const title = incidentTitle(incident);
   // A resolved incident is history: collapsed, it is one line. A live one is
   // always shown whole; only its timeline folds away.
   const showBody = live || open;
@@ -242,7 +275,7 @@ function IncidentCard({
               Opened <TimeAgo iso={incident.openedAt} />
             </span>
           </div>
-          <h3 className="mt-2.5 break-words text-title font-semibold text-ink">{incident.title}</h3>
+          <h3 className="mt-2.5 break-words text-title font-semibold text-ink">{title}</h3>
         </>
       ) : (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
@@ -253,11 +286,11 @@ function IncidentCard({
               onClick={() => setOpen((o) => !o)}
               aria-expanded={open}
               className="group flex min-w-0 items-start gap-2 rounded-sm text-left"
-              title={incident.title}
+              title={title}
             >
               <span className="mt-0.5">{chevron}</span>
               <span className="min-w-0 break-words text-sm font-semibold text-ink-dim group-hover:text-ink">
-                {incident.title}
+                {title}
               </span>
             </button>
           </h3>
@@ -274,16 +307,18 @@ function IncidentCard({
       <div className={live ? undefined : "pl-6"}>
         {showBody && (
           <>
-            <p className="mt-1 break-words text-small text-ink-dim">{incident.detail}</p>
+            <p className="mt-1 break-words text-small text-ink-dim">{prose(incident.detail)}</p>
             {hasMeta && (
               <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-caption">
                 {incident.status === "open" && incident.nextEscalationAt && (
                   <EscalatesIn at={incident.nextEscalationAt} />
                 )}
+                {/* The server counts rungs from 0, the ladder under Policy from 1:
+                    an incident on its second rung, Escalate, is level 2 in both. */}
                 {incident.level > 0 && live && (
                   <span className="inline-flex items-center gap-1 font-semibold text-fail">
                     <Icon name="arrow-up" size={13} />
-                    Level {incident.level}
+                    Level {incident.level + 1}
                   </span>
                 )}
                 {incident.acknowledgedBy && (
@@ -455,7 +490,7 @@ function IncidentCard({
               value={note}
               onChange={(e) => setNote(e.target.value)}
               placeholder="Add a note to the timeline…"
-              aria-label={`Add a note to ${incident.title}`}
+              aria-label={`Add a note to ${title}`}
               className={`${fieldClass} h-8 flex-1`}
             />
             <Button
@@ -658,7 +693,7 @@ export default function Sentinel() {
         <div className="mb-6">
           <AlertStrip
             subject="Sentinel"
-            message={`Couldn't load Sentinel: ${error}`}
+            message={loadError("Sentinel", error)}
             action={
               <Button size="sm" icon="retry" onClick={() => void refresh()}>
                 Retry

@@ -204,6 +204,54 @@ describe("Launch", () => {
     expect(screen.queryByText(/ARGUS_OUTCOME/)).not.toBeInTheDocument();
   });
 
+  it("words an expanded run's log as the step drawer does, without the row's own figures", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          log: JSON.stringify({
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            duration_ms: 120_000,
+            num_turns: 7,
+            total_cost_usd: 2.1,
+            usage: { input_tokens: 115_620, output_tokens: 25_380 },
+          }),
+        }),
+      } as Response),
+    );
+    mockState.runs = [run({ costUsd: 2.1, tokens: 141_000 })];
+    const user = userEvent.setup();
+    render(<Launch />);
+    await user.click(screen.getByRole("button", { name: /Quick audit/, expanded: false }));
+    expect(await screen.findByText("Process")).toBeInTheDocument();
+    expect(screen.getByText("exited cleanly")).toBeInTheDocument();
+    expect(screen.getByText("Turns")).toBeInTheDocument();
+    // The row's metadata line already says $2.10 and 141.0k tok.
+    expect(screen.queryByText("Agent exit")).toBeNull();
+    expect(screen.queryByText(/115620/)).toBeNull();
+    expect(screen.queryByText("Cost")).toBeNull();
+  });
+
+  it("calls a skipped run skipped, not idle", () => {
+    mockState.runs = [
+      run({
+        status: "skipped",
+        startedAt: null,
+        endedAt: null,
+        durationMs: null,
+        exitCode: null,
+        resultSummary: null,
+      }),
+    ];
+    render(<Launch />);
+    const row = screen.getByRole("button", { name: /Quick audit/, expanded: false });
+    expect(row).toHaveTextContent("Skipped");
+    expect(row).not.toHaveTextContent("Idle");
+  });
+
   it("shows the empty state when nothing has been launched", () => {
     render(<Launch />);
     expect(screen.getByText(/Nothing launched yet/)).toBeInTheDocument();

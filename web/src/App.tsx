@@ -1,4 +1,13 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useAgents } from "./useAgents";
 import { flushSync } from "react-dom";
 import {
@@ -111,7 +120,7 @@ const TAB_META: { id: string; label: string; role: RouteRole }[] = [
   { id: "knowledge", label: "Knowledge", role: "overflow" },
   { id: "search", label: "Search", role: "utility" },
   { id: "agents", label: "Agents", role: "drilldown" },
-  { id: "agent", label: "Detail", role: "drilldown" },
+  { id: "agent", label: "Agent", role: "drilldown" },
   { id: "run", label: "Flight Recorder", role: "drilldown" },
 ];
 
@@ -242,9 +251,30 @@ function Dashboard() {
     [active],
   );
 
-  useEffect(() => {
+  // A layout effect, so it lands before any view's own (passive) effect: the
+  // agent page names its tab after the agent, which this generic label must
+  // not overwrite a moment later.
+  useLayoutEffect(() => {
     document.title = `${activeLabel} — Argus`;
   }, [activeLabel]);
+
+  // Where focus goes on a new view. An in-page link that changes the view
+  // ("Open failed run", an agent tile) is unmounted with the view it was in,
+  // and focus fell to <body>: a screen reader started again from the top of
+  // the document. Main takes it instead, without scrolling, and the live
+  // region below says where you are. Focus that is still somewhere real (the
+  // nav tab that was clicked, a field the new view focused itself) is left
+  // where it is. Compared against the last view rather than skipped once, so
+  // a development double-run of the effect does not take focus on load.
+  const shownRef = useRef(active);
+  useEffect(() => {
+    if (shownRef.current === active) return;
+    shownRef.current = active;
+    const focused = document.activeElement;
+    if (!focused || focused === document.body || !focused.isConnected) {
+      document.getElementById("main")?.focus({ preventScroll: true });
+    }
+  }, [active]);
 
   const destinations: NavTab[] = useMemo(
     () =>
@@ -255,8 +285,12 @@ function Dashboard() {
       })),
     [briefingState.briefing?.attentionCount],
   );
+  // Users is root's page, so it stays out of everyone else's menu, except
+  // while it is the page on screen: More then still marks where you are.
   const overflow: MoreItem[] = TAB_META.filter(
-    (t) => t.role === "overflow" && (t.id !== "users" || auth.status?.role === "root"),
+    (t) =>
+      t.role === "overflow" &&
+      (t.id !== "users" || auth.status?.role === "root" || active === "users"),
   ).map((t) => ({
     id: t.id,
     label: t.label,
@@ -286,10 +320,12 @@ function Dashboard() {
   );
 
   // Palette entries are the same destinations, annotated with the chord that
-  // also reaches them — so the palette teaches its own shortcuts.
+  // also reaches them — so the palette teaches its own shortcuts. A drill-down
+  // with a chord is a place too: Agents has no tab, and on a phone with no
+  // agent live the palette is the only way to it.
   const paletteDestinations = useMemo(
     () =>
-      TAB_META.filter((t) => t.role === "destination" || t.role === "overflow" || t.id === "search")
+      TAB_META.filter((t) => t.role !== "drilldown" || NAV_CHORDS[t.id])
         .filter((t) => t.id !== "users" || auth.status?.role === "root")
         .map((t) => ({
           id: t.id,
@@ -387,14 +423,17 @@ function Dashboard() {
   return (
     <div className="min-h-screen">
       {/* A plain fragment href would be swallowed by the hash router, so the
-          skip link moves focus itself. */}
+          skip link moves focus itself. Hidden *unless* focused, rather than
+          revealed on focus with `not-sr-only`: that also resets the padding,
+          and the link showed as a cramped box with its text running into the
+          tab beneath it. Opaque and raised, it reads as a layer over the bar. */}
       <a
         href="#main"
         onClick={(e) => {
           e.preventDefault();
           document.getElementById("main")?.focus();
         }}
-        className="sr-only rounded-md bg-surface-2 px-3 py-2 text-sm text-ink focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50"
+        className="fixed left-4 top-2.5 z-50 flex h-9 items-center rounded-control bg-surface-3 px-3 text-sm font-semibold text-ink shadow-overlay not-focus:sr-only"
       >
         Skip to content
       </a>
@@ -402,6 +441,7 @@ function Dashboard() {
         destinations={destinations}
         overflow={overflow}
         activeId={active}
+        activeLabel={activeLabel}
         live={agentsState.live}
         onOpenPalette={palette.show}
       />
@@ -425,6 +465,12 @@ function Dashboard() {
           </ErrorBoundary>
         </div>
       </main>
+      {/* The route announcer: the page's name, read out when it changes. Its
+          first text is there before anything listens, so loading the page is
+          not announced as a navigation. */}
+      <p aria-live="polite" className="sr-only">
+        {activeLabel}
+      </p>
       <ToastRegion toasts={toasts} onDismiss={dismiss} />
       {/* Its own boundary: a chunk that fails to arrive (the server restarting
           under a deploy) costs the palette, not the whole dashboard, and
@@ -483,8 +529,13 @@ export default function App() {
           <h1 className="mt-5 text-display font-semibold tracking-[0.14em] text-ink">
             ARG<span className="text-eye">U</span>S
           </h1>
+          {/* Said once, by the panel, on a server with no accounts: "sign in"
+              above "this server has no accounts yet" sent people looking for
+              an account that does not exist. */}
           <p className="mt-2 text-small text-ink-dim">
-            This server requires an account. Sign in to see the dashboard.
+            {status.configured
+              ? "This server requires an account. Sign in to see the dashboard."
+              : "Create the first account to see the dashboard."}
           </p>
         </div>
         <ErrorBoundary label="Sign in" resetKey={String(status.configured)}>
@@ -495,12 +546,17 @@ export default function App() {
               </Loading>
             }
           >
+            {/* The page exists for this form, so it opens focused, and its
+                title is the heading under the wordmark rather than an h3
+                beneath nothing. */}
             <AdminAuthPanel
               configured={status.configured}
               onLogin={login}
               onSetup={setup}
               onRegister={register}
               purpose="dashboard"
+              autoFocus
+              headingLevel={2}
             />
           </Suspense>
         </ErrorBoundary>

@@ -166,6 +166,26 @@ describe("Fleet", () => {
     expect(screen.getByText(/lower bounds/)).toBeInTheDocument();
   });
 
+  it("a machine's counts use the fleet totals' words, shortened", () => {
+    state.fleet = fleetOf(
+      [
+        selfMachine(),
+        {
+          peer: peer(),
+          summary: summary({ machineId: "m2", gatedInstances: 2 }),
+          isSelf: false,
+        },
+      ],
+      2,
+    );
+    render(<Fleet />);
+    // "Needs approval" above, "Approval" in each card — not a third word.
+    const cell = screen.getByText("2", { selector: "dd" }).parentElement!;
+    expect(within(cell).getByText("Approval")).toBeInTheDocument();
+    expect(cell).toHaveAttribute("title", "Needs approval");
+    expect(screen.queryByText("Awaiting")).not.toBeInTheDocument();
+  });
+
   it("a complete fleet says so plainly", () => {
     state.fleet = fleetOf(
       [selfMachine(), { peer: peer(), summary: summary({ machineId: "m2" }), isSelf: false }],
