@@ -9,6 +9,7 @@
   :root {
     --ground:#0a0f16; --ground-2:#0d131c; --surface-3:#1c2a3b; --line:rgb(146 180 217 / .13);
     --ink:#eaf2fb; --ink-dim:#aebfd2; --ink-faint:#8597ae; --eye:#36e3e8;
+    --duration-quick:120ms; --duration-press:70ms;
     --sans:"Hellix","Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
   }
   * { box-sizing:border-box; }
@@ -18,11 +19,16 @@
     border-radius:8px; background:var(--ground-2); padding:2px; }
   .seg button { border:0; border-radius:6px; background:transparent; color:var(--ink-faint);
     cursor:pointer; height:28px; padding:0 10px; font-family:var(--sans); font-size:12px;
-    font-weight:600; transition:color 120ms cubic-bezier(.16,1,.3,1), background-color 120ms cubic-bezier(.16,1,.3,1); }
+    font-weight:600; transition:color var(--duration-quick), background-color var(--duration-quick),
+      transform var(--duration-quick); }
   .seg button[aria-checked="true"] { background:var(--surface-3); color:var(--ink);
     box-shadow:inset 0 1px 0 rgb(255 255 255 / .05); }
   .seg button:hover { color:var(--ink); }
   .seg button:focus-visible { outline:2px solid var(--eye); outline-offset:2px; }
+  /* A press compresses a touch more than a button (.96 vs .97): the segment is smaller. */
+  @media (prefers-reduced-motion: no-preference) {
+    .seg button:active { transform:scale(.96); transition-duration:var(--duration-press); }
+  }
   @media (prefers-reduced-motion: reduce) { .seg button { transition:none; } }
 </style>
 </head>
@@ -31,13 +37,18 @@
        Radio-group semantics (role="radiogroup" + aria-checked), one Tab stop for
        the group, arrow keys move the choice and focus with it. Sentence case in
        the brand face — the same voice as every other control, not tracked mono
-       capitals. Born as the Chronicle's time-window picker. -->
+       capitals. Born as the Chronicle's time-window picker, which now runs from
+       1h to 1y (90d and 1y are served from the Vault). Segments are 28px tall
+       (the sm control height) in a 2px-padded well with the control radius;
+       the selected one is raised onto surface-3. -->
   <div class="seg" role="radiogroup" aria-label="Time window">
     <button role="radio" aria-checked="false" tabindex="-1">1h</button>
     <button role="radio" aria-checked="false" tabindex="-1">6h</button>
     <button role="radio" aria-checked="true" tabindex="0">24h</button>
     <button role="radio" aria-checked="false" tabindex="-1">3d</button>
     <button role="radio" aria-checked="false" tabindex="-1">7d</button>
+    <button role="radio" aria-checked="false" tabindex="-1">90d</button>
+    <button role="radio" aria-checked="false" tabindex="-1">1y</button>
   </div>
   <script>
     const group = document.querySelector(".seg");

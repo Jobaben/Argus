@@ -1,0 +1,139 @@
+<!-- @dsCard group="Components" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<style>
+  /* The tokens this primitive draws with, as web/src/index.css declares them. */
+  :root {
+    --ground:#0a0f16; --ground-2:#0d131c; --surface:#111a25; --surface-2:#162130;
+    --surface-3:#1c2a3b; --line:rgb(146 180 217 / .13); --line-strong:rgb(146 180 217 / .24);
+    --ink:#eaf2fb; --ink-dim:#aebfd2; --ink-faint:#8597ae; --eye:#36e3e8;
+    --ok:#2fe6a4; --fail:#ff5765;
+    --radius-control:8px; --radius-panel:16px;
+    --duration-quick:120ms; --duration-base:180ms; --duration-press:70ms;
+    --ease-out-expo:cubic-bezier(.16,1,.3,1);
+    --shadow-raised:inset 0 1px 0 0 rgb(255 255 255 / .035), 0 1px 2px 0 rgb(0 0 0 / .35),
+      0 12px 32px -18px rgb(0 0 0 / .6);
+    --sans:"Hellix","Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
+  }
+  @font-face { font-family:"Hellix"; src:url("../../fonts/Hellix-Regular-ma.woff2") format("woff2");
+    font-weight:400; font-display:swap; }
+  @font-face { font-family:"Hellix"; src:url("../../fonts/Hellix-SemiBold-ma.woff2") format("woff2");
+    font-weight:600 900; font-display:swap; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans);
+    font-variant-numeric:tabular-nums; min-height:100vh; display:flex; align-items:center;
+    justify-content:center; padding:26px; }
+  svg { display:block; fill:none; stroke:currentColor; stroke-width:1.75;
+    stroke-linecap:round; stroke-linejoin:round; flex:none; }
+
+  .card { width:100%; max-width:560px; border:1px solid var(--line); border-radius:var(--radius-panel);
+    background:var(--surface); box-shadow:var(--shadow-raised); padding:16px 18px 14px; }
+  .card h2 { margin:0; font-size:17px; line-height:1.3; letter-spacing:-.005em; font-weight:600; }
+  .card p.sub { margin:4px 0 14px; font-size:12px; line-height:1.4; color:var(--ink-dim); }
+  .foot { display:flex; flex-wrap:wrap; align-items:center; gap:8px 6px;
+    border-top:1px solid var(--line); padding-top:12px; }
+  .spacer { flex:1; }
+
+  .btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; height:28px;
+    padding:0 10px; border:1px solid transparent; border-radius:var(--radius-control);
+    background:transparent; font-family:var(--sans); font-size:12px; font-weight:600;
+    white-space:nowrap; cursor:pointer;
+    transition:color var(--duration-quick), background-color var(--duration-quick), border-color var(--duration-quick); }
+  .btn:focus-visible { outline:2px solid var(--eye); outline-offset:2px; }
+  @media (prefers-reduced-motion: no-preference) {
+    .btn:active { transform:scale(.97); transition-duration:var(--duration-press); }
+  }
+  .primary { background:var(--ink); color:var(--ground); }
+  .primary:hover { background:#fff; }
+  .secondary { border-color:var(--line-strong); background:var(--surface-2); color:var(--ink); }
+  .secondary:hover { background:var(--surface-3); }
+  .ghost { color:var(--ink-dim); }
+  .ghost:hover { background:var(--surface-2); color:var(--ink); }
+  .danger { border-color:color-mix(in oklab, var(--fail) 35%, transparent); color:var(--fail); }
+  .danger:hover { border-color:color-mix(in oklab, var(--fail) 60%, transparent);
+    background:color-mix(in oklab, var(--fail) 10%, transparent); }
+  .quiet-danger { color:var(--ink-faint); }
+  .quiet-danger:hover, .quiet-danger:focus-visible, .quiet-danger[aria-expanded="true"] {
+    background:color-mix(in oklab, var(--fail) 10%, transparent); color:var(--fail); }
+
+  /* The question: a line of its own under the row that asked it. */
+  .confirm { flex-basis:100%; display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px;
+    border:1px solid var(--line-strong); border-radius:var(--radius-control); background:var(--surface-2);
+    padding:8px 12px; }
+  .confirm[hidden] { display:none; }
+  @media (prefers-reduced-motion: no-preference) {
+    .confirm { animation:slide-up var(--duration-base) var(--ease-out-expo) both; }
+  }
+  @keyframes slide-up { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
+  .confirm p { flex:1 1 224px; min-width:0; margin:0; font-size:13px; line-height:1.45; color:var(--ink-dim); }
+  .confirm p b { font-weight:600; color:var(--ink); }
+  .answers { margin-left:auto; display:flex; align-items:center; gap:6px; }
+  .log { margin:10px 0 0; min-height:16px; font-size:12px; line-height:1.4; color:var(--ink-faint); }
+</style>
+</head>
+<body>
+  <!-- ConfirmPanel + useConfirm (web/src/ds/ConfirmPanel.tsx, useConfirm.tsx;
+       useAsk.tsx for a question that arises mid-action). The app's only way to
+       ask before an action that destroys, discards or overrides — it replaced
+       the browser's confirm(), an unthemed light box that could only say "OK".
+
+       - Asked in place: the panel takes a line of its own under the row of
+         buttons that opened it, and wraps there on a phone.
+       - The title is the question and names its object, in curly quotes:
+         Delete pipeline “Release train”? An optional detail says what else
+         happens.
+       - The danger answer is a verb, not "OK": "Delete schedule", "Stop
+         pipeline", "Unpair machine". The safe answer is as specific: "Keep",
+         "Keep running" (default "Cancel"). A go-ahead that loses nothing takes
+         the secondary tone instead of danger.
+       - Focus lands on the safe answer, so a habitual Enter keeps everything.
+         Escape answers "no" and is stopped there, so it does not also close
+         the drawer around it. Either answer returns focus to the button that
+         asked; pressing that button again closes the question. One question
+         at a time per card. -->
+  <div class="card">
+    <h2>Release train</h2>
+    <p class="sub">4 phases · 1 instance running</p>
+    <div class="foot">
+      <button class="btn primary" type="button"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.8v12.4a.8.8 0 0 0 1.2.7l10-6.2a.8.8 0 0 0 0-1.4l-10-6.2a.8.8 0 0 0-1.2.7Z"/></svg>Run now</button>
+      <button class="btn secondary" type="button"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5.5 18.5 9 8.5 19H5v-3.5l10-10Z M13 7.5l3.5 3.5"/></svg>Edit</button>
+      <span class="spacer"></span>
+      <button class="btn quiet-danger" type="button" id="ask" aria-expanded="true"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 7h15 M9.5 7V5h5v2 M6.5 7l.9 12.2a1 1 0 0 0 1 .8h7.2a1 1 0 0 0 1-.8L17.5 7 M10 11v5M14 11v5"/></svg>Delete</button>
+
+      <div class="confirm" id="q" role="group" aria-labelledby="qt" aria-describedby="qd">
+        <p><b id="qt">Delete pipeline “Release train”?</b> <span id="qd">Its running instance will be stopped first, and in-progress work discarded.</span></p>
+        <div class="answers">
+          <button class="btn ghost" type="button" id="no">Keep</button>
+          <button class="btn danger" type="button" id="yes"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 7h15 M9.5 7V5h5v2 M6.5 7l.9 12.2a1 1 0 0 0 1 .8h7.2a1 1 0 0 0 1-.8L17.5 7 M10 11v5M14 11v5"/></svg>Delete pipeline</button>
+        </div>
+      </div>
+    </div>
+    <p class="log" id="log" aria-live="polite"></p>
+  </div>
+  <script>
+    const ask = document.getElementById("ask");
+    const q = document.getElementById("q");
+    const log = document.getElementById("log");
+    const open = (on) => {
+      q.hidden = !on;
+      ask.setAttribute("aria-expanded", String(on));
+      if (on) document.getElementById("no").focus();
+    };
+    const answer = (yes) => {
+      open(false);
+      ask.focus();
+      log.textContent = yes ? "Deleted. (Demo: nothing was removed.)" : "Kept.";
+    };
+    ask.onclick = () => { log.textContent = ""; open(q.hidden); };
+    document.getElementById("no").onclick = () => answer(false);
+    document.getElementById("yes").onclick = () => answer(true);
+    q.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      answer(false);
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,192 @@
+<!-- @dsCard group="Components" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<style>
+  /* The tokens this primitive draws with, as web/src/index.css declares them. */
+  :root {
+    --ground:#0a0f16; --ground-2:#0d131c; --surface:#111a25; --surface-2:#162130;
+    --surface-3:#1c2a3b; --line:rgb(146 180 217 / .13); --line-strong:rgb(146 180 217 / .24);
+    --ink:#eaf2fb; --ink-dim:#aebfd2; --ink-faint:#8597ae; --eye:#36e3e8;
+    --run:#ffb224; --ok:#2fe6a4; --fail:#ff5765; --fail-ink:#ffc4ca;
+    --radius-control:8px; --radius-tile:12px; --radius-panel:16px;
+    --duration-quick:120ms; --duration-base:180ms; --duration-exit:126ms; --duration-exit-quick:84ms;
+    --duration-press:70ms;
+    --ease-out-expo:cubic-bezier(.16,1,.3,1); --ease-in-expo:cubic-bezier(.7,0,.84,0);
+    --shadow-raised:inset 0 1px 0 0 rgb(255 255 255 / .035), 0 1px 2px 0 rgb(0 0 0 / .35),
+      0 12px 32px -18px rgb(0 0 0 / .6);
+    --sans:"Hellix","Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
+    --mono:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,monospace;
+  }
+  @font-face { font-family:"Hellix"; src:url("../../fonts/Hellix-Regular-ma.woff2") format("woff2");
+    font-weight:400; font-display:swap; }
+  @font-face { font-family:"Hellix"; src:url("../../fonts/Hellix-SemiBold-ma.woff2") format("woff2");
+    font-weight:600 900; font-display:swap; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans);
+    font-variant-numeric:tabular-nums; min-height:100vh; display:flex; align-items:center;
+    justify-content:center; padding:26px; }
+  svg { display:block; fill:none; stroke:currentColor; stroke-width:1.75;
+    stroke-linecap:round; stroke-linejoin:round; flex:none; }
+
+  /* The page behind: a stand-in board, so the drawer is seen over context. */
+  .stage { position:relative; width:100%; max-width:900px; height:520px; overflow:hidden;
+    border:1px solid var(--line); border-radius:var(--radius-panel); background:var(--ground); }
+  .board { padding:20px; display:grid; gap:10px; }
+  .board h1 { margin:0 0 6px; font-size:26px; line-height:1.15; letter-spacing:-.015em; font-weight:600; }
+  .row { display:flex; align-items:center; gap:12px; padding:12px 14px; border:1px solid var(--line);
+    border-radius:var(--radius-tile); background:var(--surface); box-shadow:var(--shadow-raised);
+    font-size:13px; color:var(--ink-dim); }
+  .row b { color:var(--ink); font-weight:600; }
+  .row .grow { flex:1; }
+  .dot { width:8px; height:8px; border-radius:999px; flex:none; }
+
+  .scrim { position:absolute; inset:0; display:flex; justify-content:flex-end;
+    background:color-mix(in oklab, var(--ground) 60%, transparent); backdrop-filter:blur(2px); }
+  .scrim[hidden] { display:none; }
+  .drawer { display:flex; flex-direction:column; height:100%; width:100%; max-width:min(540px, 100% - 3rem);
+    border-left:1px solid var(--line-strong); background:var(--surface);
+    box-shadow:-24px 0 80px -24px rgb(0 0 0 / .9); }
+  header { display:flex; align-items:flex-start; gap:12px; padding:16px 24px; border-bottom:1px solid var(--line); }
+  header .t { min-width:0; flex:1; }
+  header h2 { margin:0; font-size:17px; line-height:1.3; letter-spacing:-.005em; font-weight:600; }
+  header p { margin:4px 0 0; font-size:12px; line-height:1.4; color:var(--ink-dim); }
+  .close { margin-right:-6px; display:flex; align-items:center; gap:6px; height:32px; padding:0 6px;
+    border:0; border-radius:var(--radius-control); background:transparent; color:var(--ink-dim); cursor:pointer;
+    transition:background-color var(--duration-quick), color var(--duration-quick); }
+  .close:hover { background:var(--surface-2); color:var(--ink); }
+  .kbd { display:inline-flex; align-items:center; justify-content:center; min-width:1.4em; height:1.55em;
+    padding:0 .4em; border-radius:5px; border:1px solid var(--line-strong); border-bottom-width:2px;
+    background:var(--ground-2); font-family:var(--sans); font-size:11px; font-weight:600; line-height:1;
+    color:var(--ink-dim); }
+  .body { min-height:0; flex:1; overflow-y:auto; padding:20px 24px; display:grid; gap:14px; align-content:start; }
+  .eyebrow { margin:0 0 6px; font-size:11px; line-height:1.3; font-weight:600; letter-spacing:.08em;
+    text-transform:uppercase; font-feature-settings:"case"; color:var(--ink-faint); }
+  .body p:not(.eyebrow) { margin:0; font-size:14px; line-height:1.55; color:var(--ink-dim); }
+  pre { margin:0; padding:10px 12px; border-radius:var(--radius-control); background:var(--ground-2);
+    font-family:var(--mono); font-size:12px; line-height:1.5; color:var(--ink-dim); white-space:pre-wrap;
+    font-variant-numeric:tabular-nums slashed-zero; }
+  footer { display:flex; flex-wrap:wrap; gap:8px; padding:12px 24px; border-top:1px solid var(--line);
+    background:color-mix(in oklab, var(--ground-2) 60%, transparent); }
+
+  .btn { display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 12px;
+    border:1px solid transparent; border-radius:var(--radius-control); background:transparent;
+    font-family:var(--sans); font-size:13px; font-weight:600; white-space:nowrap; cursor:pointer;
+    transition:background-color var(--duration-quick), color var(--duration-quick); }
+  .primary { background:var(--ink); color:var(--ground); }
+  .primary:hover { background:#fff; }
+  .secondary { border-color:var(--line-strong); background:var(--surface-2); color:var(--ink); }
+  .secondary:hover { background:var(--surface-3); }
+  :focus-visible { outline:2px solid var(--eye); outline-offset:2px; }
+  @media (prefers-reduced-motion: no-preference) {
+    .btn:active, .close:active { transform:scale(.97); transition-duration:var(--duration-press); }
+  }
+  @media (max-width: 640px) { .drawer { max-width:100%; } header, .body, footer { padding-left:20px; padding-right:20px; } .kbd { display:none; } }
+</style>
+</head>
+<body>
+  <!-- Drawer (web/src/ds/Drawer.tsx): a right-edge slide-over that keeps the
+       board on screen behind it, so "check the failing step, then look at the
+       others" is not a round trip through the router.
+
+       - Panel: surface, a line-strong left border, a deep left shadow; 540px
+         wide (760px for size="lg", a document to read such as a gate review),
+         always stopping 3rem short of the left edge; full width on a phone.
+         Header: title (17px SemiBold), optional caption subtitle, and a Close
+         button drawn as one — "Esc" keycap beside the close icon from sm up.
+         Body scrolls; an optional footer sits on a ground-2 wash.
+       - Scrim: ground at 60% with a 2px blur. Clicking it closes.
+       - A real dialog: role="dialog" aria-modal; focus goes to Close on open,
+         Tab is kept inside, Escape closes, and focus returns to the opener as
+         soon as the drawer starts leaving. While leaving it is inert.
+       - Motion: the panel enters in 180ms ease-out-expo from 16px right
+         (growing out of the row that opened it), leaves in 126ms ease-in-expo;
+         the scrim fades in 120ms and out in 84ms. The header can be dragged
+         right and flicked away; it springs back if the flick is too slow.
+         Reduced motion: instant both ways, no drag. -->
+  <div class="stage">
+    <div class="board">
+      <h1>Release train</h1>
+      <div class="row"><span class="dot" style="background:var(--ok)"></span><b>Draft release notes</b><span class="grow"></span>2m 14s</div>
+      <div class="row"><span class="dot" style="background:var(--fail)"></span><b>Run tests</b><span class="grow"></span><button class="btn secondary" type="button" id="opener">Open step</button></div>
+      <div class="row"><span class="dot" style="background:var(--run)"></span><b>Build installers</b><span class="grow"></span>Working</div>
+    </div>
+
+    <div class="scrim" id="scrim">
+      <div class="drawer" id="drawer" role="dialog" aria-modal="true" aria-label="Run tests">
+        <header>
+          <div class="t">
+            <h2>Run tests</h2>
+            <p>Step 2 of 4 · failed after 3m 08s</p>
+          </div>
+          <button class="close" type="button" id="close" aria-label="Close" title="Close (Esc)">
+            <span class="kbd" aria-hidden="true">Esc</span>
+            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></svg>
+          </button>
+        </header>
+        <div class="body">
+          <div>
+            <p class="eyebrow">What happened</p>
+            <p>Three tests failed in the session module after the token refresh change.</p>
+          </div>
+          <div>
+            <p class="eyebrow">Command</p>
+            <pre>npm test -- --run</pre>
+          </div>
+        </div>
+        <footer>
+          <button class="btn primary" type="button"><svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 12a7.5 7.5 0 1 0 2.4-5.5L4.5 8.8 M4.5 4.5v4.3h4.3"/></svg>Retry step</button>
+          <button class="btn secondary" type="button">Open run</button>
+        </footer>
+      </div>
+    </div>
+  </div>
+  <script>
+    const scrim = document.getElementById("scrim");
+    const drawer = document.getElementById("drawer");
+    const opener = document.getElementById("opener");
+    const closeBtn = document.getElementById("close");
+    const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    let returnTo = null;
+
+    function open(from) {
+      returnTo = from || null;
+      scrim.hidden = false;
+      scrim.inert = false;
+      if (!reduced) {
+        scrim.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 120, easing: "ease-out" });
+        drawer.animate(
+          [{ opacity: 0, transform: "translateX(16px)" }, { opacity: 1, transform: "none" }],
+          { duration: 180, easing: "cubic-bezier(.16,1,.3,1)" },
+        );
+      }
+      requestAnimationFrame(() => closeBtn.focus());
+    }
+    function close() {
+      scrim.inert = true;
+      returnTo?.focus();
+      const done = () => { scrim.hidden = true; };
+      if (reduced) return done();
+      scrim.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 84, easing: "cubic-bezier(.7,0,.84,0)", fill: "forwards" });
+      drawer.animate(
+        [{ opacity: 1, transform: "none" }, { opacity: 0, transform: "translateX(16px)" }],
+        { duration: 126, easing: "cubic-bezier(.7,0,.84,0)" },
+      ).onfinish = () => { scrim.getAnimations().forEach((a) => a.cancel()); done(); };
+    }
+    opener.onclick = () => open(opener);
+    closeBtn.onclick = close;
+    scrim.addEventListener("mousedown", (e) => { if (e.target === scrim) close(); });
+    drawer.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { e.stopPropagation(); close(); return; }
+      if (e.key !== "Tab") return;
+      const f = drawer.querySelectorAll("button, a[href], [tabindex]:not([tabindex='-1'])");
+      const first = f[0], last = f[f.length - 1];
+      if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    });
+    // Shown open on load so the card previews the drawer itself.
+    open(opener);
+  </script>
+</body>
+</html>

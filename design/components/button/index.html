@@ -1,0 +1,128 @@
+<!-- @dsCard group="Components" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<style>
+  /* The tokens buttons draw with, as web/src/index.css declares them. */
+  :root {
+    --ground:#0a0f16; --ground-2:#0d131c; --surface:#111a25; --surface-2:#162130;
+    --surface-3:#1c2a3b; --line:rgb(146 180 217 / .13); --line-strong:rgb(146 180 217 / .24);
+    --ink:#eaf2fb; --ink-dim:#aebfd2; --ink-faint:#8597ae; --eye:#36e3e8;
+    --ok:#2fe6a4; --fail:#ff5765; --await:#b585ff;
+    --radius-control:8px; --radius-panel:16px;
+    --duration-quick:120ms; --duration-press:70ms;
+    --shadow-raised:inset 0 1px 0 0 rgb(255 255 255 / .035), 0 1px 2px 0 rgb(0 0 0 / .35),
+      0 12px 32px -18px rgb(0 0 0 / .6);
+    --sans:"Hellix","Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
+  }
+  @font-face { font-family:"Hellix"; src:url("../../fonts/Hellix-Regular-ma.woff2") format("woff2");
+    font-weight:400; font-display:swap; }
+  @font-face { font-family:"Hellix"; src:url("../../fonts/Hellix-SemiBold-ma.woff2") format("woff2");
+    font-weight:600 900; font-display:swap; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans);
+    min-height:100vh; display:flex; align-items:center; justify-content:center; padding:26px; }
+  svg { display:block; fill:none; stroke:currentColor; stroke-width:1.75;
+    stroke-linecap:round; stroke-linejoin:round; flex:none; }
+  .panel { width:100%; max-width:820px; border:1px solid var(--line); border-radius:var(--radius-panel);
+    background:var(--surface); box-shadow:var(--shadow-raised); padding:18px 20px 20px;
+    display:grid; gap:18px; }
+  .eyebrow { margin:0 0 8px; font-size:11px; line-height:1.3; font-weight:600; letter-spacing:.08em;
+    text-transform:uppercase; font-feature-settings:"case"; color:var(--ink-faint); }
+  .row { display:flex; flex-wrap:wrap; align-items:center; gap:8px 10px; }
+  .cell { display:flex; flex-direction:column; align-items:flex-start; gap:6px; }
+  .tag { font-size:11px; line-height:1.3; color:var(--ink-faint); }
+
+  /* BASE */
+  .btn { position:relative; display:inline-flex; flex-shrink:0; align-items:center; justify-content:center;
+    gap:6px; white-space:nowrap; user-select:none; border:1px solid transparent;
+    border-radius:var(--radius-control); background:transparent; font-family:var(--sans);
+    font-weight:600; cursor:pointer;
+    transition:color var(--duration-quick), background-color var(--duration-quick),
+      border-color var(--duration-quick), filter var(--duration-quick), transform var(--duration-quick); }
+  .btn:focus-visible { outline:2px solid var(--eye); outline-offset:2px; }
+  .btn:disabled { opacity:.45; pointer-events:none; }
+  @media (prefers-reduced-motion: no-preference) {
+    .btn:active { transform:scale(.97); transition-duration:var(--duration-press); }
+  }
+  /* SIZE: sm 28 / md 32 / lg 40, icons 14 / 15 / 17. */
+  .sm { height:28px; padding:0 10px; font-size:12px; }
+  .md { height:32px; padding:0 12px; font-size:13px; }
+  .lg { height:40px; padding:0 16px; font-size:14px; }
+  .sq.sm { width:28px; padding:0; } .sq.md { width:32px; padding:0; } .sq.lg { width:40px; padding:0; }
+
+  /* VARIANT — a ranking, not a palette. */
+  .primary { background:var(--ink); color:var(--ground); box-shadow:inset 0 -1px 0 rgb(10 15 22 / .18); }
+  .primary:hover { background:#fff; }
+  .secondary { border-color:var(--line-strong); background:var(--surface-2); color:var(--ink); }
+  .secondary:hover { border-color:color-mix(in oklab, var(--ink-faint) 45%, transparent); background:var(--surface-3); }
+  .ghost { color:var(--ink-dim); }
+  .ghost:hover { background:var(--surface-2); color:var(--ink); }
+  .danger { border-color:color-mix(in oklab, var(--fail) 35%, transparent); color:var(--fail); }
+  .danger:hover { border-color:color-mix(in oklab, var(--fail) 60%, transparent);
+    background:color-mix(in oklab, var(--fail) 10%, transparent); }
+  .quiet-danger { color:var(--ink-faint); }
+  .quiet-danger:hover, .quiet-danger:focus-visible { background:color-mix(in oklab, var(--fail) 10%, transparent); color:var(--fail); }
+  .approve { background:var(--ok); color:var(--ground); }
+  .attention { background:var(--await); color:var(--ground); }
+  .approve:hover, .attention:hover { filter:brightness(1.1); }
+</style>
+</head>
+<body>
+  <!-- Button, ButtonLink, IconButton (web/src/ds/Button.tsx; class strings in
+       controls.ts so an <a> or <summary> can wear them too).
+
+       The variants are a ranking, and the ranking is the point:
+       - primary: solid ink, brand-neutral so status colours stay free to mean
+         status. One per region — the thing you most likely came to do.
+       - secondary (the default): its alternatives. ghost: everything else.
+       - approve (solid ok) and attention (solid await): only where the action
+         is itself a status change — approving a gate, reviewing what waits.
+       - danger: a fail-red outline, never solid; a destructive action is never
+         the loudest thing on screen. quiet-danger: a ghost that turns red only
+         under the pointer or focus, for the Delete at the end of every row.
+         Either one asks first, in place, with ConfirmPanel.
+
+       Sizes sm 28px / md 32px (default) / lg 40px, all SemiBold, in caption /
+       small / body. Labels are sentence-case verbs. Icons come from the set
+       (14 / 15 / 17px), never a text glyph. IconButton is square and its label
+       is required — it is the accessible name and the tooltip. A press scales to
+       .97 over 70ms (motion-safe); disabled is 45% opacity and inert. -->
+  <div class="panel">
+    <section>
+      <p class="eyebrow">Variants</p>
+      <div class="row">
+        <div class="cell"><button class="btn md primary" type="button"><svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.8v12.4a.8.8 0 0 0 1.2.7l10-6.2a.8.8 0 0 0 0-1.4l-10-6.2a.8.8 0 0 0-1.2.7Z"/></svg>Run now</button><span class="tag">Primary</span></div>
+        <div class="cell"><button class="btn md secondary" type="button"><svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5.5 18.5 9 8.5 19H5v-3.5l10-10Z M13 7.5l3.5 3.5"/></svg>Edit</button><span class="tag">Secondary</span></div>
+        <div class="cell"><button class="btn md ghost" type="button"><svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5.5v13M15 5.5v13"/></svg>Pause</button><span class="tag">Ghost</span></div>
+        <div class="cell"><button class="btn md approve" type="button"><svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>Approve</button><span class="tag">Approve</span></div>
+        <div class="cell"><button class="btn md attention" type="button">Review</button><span class="tag">Attention</span></div>
+        <div class="cell"><button class="btn md danger" type="button"><svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z"/></svg>Stop pipeline</button><span class="tag">Danger</span></div>
+        <div class="cell"><button class="btn md quiet-danger" type="button"><svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 7h15 M9.5 7V5h5v2 M6.5 7l.9 12.2a1 1 0 0 0 1 .8h7.2a1 1 0 0 0 1-.8L17.5 7 M10 11v5M14 11v5"/></svg>Delete</button><span class="tag">Quiet danger</span></div>
+      </div>
+    </section>
+
+    <section>
+      <p class="eyebrow">Sizes</p>
+      <div class="row">
+        <div class="cell"><button class="btn sm secondary" type="button"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 12a7.5 7.5 0 1 0 2.4-5.5L4.5 8.8 M4.5 4.5v4.3h4.3"/></svg>Retry</button><span class="tag">Small · 28px</span></div>
+        <div class="cell"><button class="btn md secondary" type="button"><svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 12a7.5 7.5 0 1 0 2.4-5.5L4.5 8.8 M4.5 4.5v4.3h4.3"/></svg>Retry</button><span class="tag">Medium · 32px</span></div>
+        <div class="cell"><button class="btn lg secondary" type="button"><svg width="17" height="17" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 12a7.5 7.5 0 1 0 2.4-5.5L4.5 8.8 M4.5 4.5v4.3h4.3"/></svg>Retry</button><span class="tag">Large · 40px</span></div>
+        <div class="cell"><button class="btn md sq ghost" type="button" aria-label="More actions" title="More actions"><svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.9 12a.9.9 0 1 1-1.8 0a.9.9 0 0 1 1.8 0Z M12.9 12a.9.9 0 1 1-1.8 0a.9.9 0 0 1 1.8 0Z M18.9 12a.9.9 0 1 1-1.8 0a.9.9 0 0 1 1.8 0Z"/></svg></button><span class="tag">Icon button</span></div>
+        <div class="cell"><button class="btn md primary" type="button" disabled>Save</button><span class="tag">Disabled</span></div>
+      </div>
+    </section>
+
+    <section>
+      <p class="eyebrow">One primary per region</p>
+      <div class="row">
+        <button class="btn md primary" type="button"><svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.8v12.4a.8.8 0 0 0 1.2.7l10-6.2a.8.8 0 0 0 0-1.4l-10-6.2a.8.8 0 0 0-1.2.7Z"/></svg>Run now</button>
+        <button class="btn md secondary" type="button"><svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5.5 18.5 9 8.5 19H5v-3.5l10-10Z M13 7.5l3.5 3.5"/></svg>Edit</button>
+        <span style="flex:1"></span>
+        <button class="btn sm quiet-danger" type="button"><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 7h15 M9.5 7V5h5v2 M6.5 7l.9 12.2a1 1 0 0 0 1 .8h7.2a1 1 0 0 0 1-.8L17.5 7 M10 11v5M14 11v5"/></svg>Delete</button>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

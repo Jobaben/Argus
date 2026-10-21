@@ -102,6 +102,10 @@
              border-color:color-mix(in oklab, var(--queue) 50%, transparent); color:var(--queue); }
   .idle    { background:color-mix(in oklab, var(--idle) 15%, transparent);
              border-color:color-mix(in oklab, var(--idle) 40%, transparent); color:var(--idle); }
+  /* Started, then cut short: the same grey at the weight of a bar that did some
+     work, and dashed, so the key's two greys can be told apart on a bar. */
+  .stopped { background:color-mix(in oklab, var(--idle) 25%, transparent); border-style:dashed;
+             border-color:color-mix(in oklab, var(--idle) 60%, transparent); color:var(--idle); }
 
   /* Every live bar breathes on the same beat, in its own colour. */
   .pulse { position:absolute; right:4px; top:50%; width:6px; height:6px; margin-top:-3px;
@@ -118,7 +122,10 @@
        run open-ended into the eye-coloured "Now" line with a pulse.
 
        Colour is status and only status: the bars wear it (succeeded, failed,
-       still running, queued, idle), and the key above the chart states it.
+       still running, queued, stopped, idle), and the key above the chart
+       states it. Stopped — interrupted, cancelled or stopped before it
+       finished — is idle grey, heavier and dashed; Idle is a skipped firing.
+       The same words name each bar in its tooltip and accessible name.
        What a lane is — schedule, agent, session — is a category, drawn as a
        neutral icon chip; those used to be blue, cyan and violet capitals, which
        read as statuses and made a session lane look like it was waiting on you.
@@ -130,6 +137,7 @@
         <div><dt><span class="swatch failed" aria-hidden="true"></span>Failed</dt></div>
         <div><dt><span class="swatch working live" aria-hidden="true"></span>Still running</dt></div>
         <div><dt><span class="swatch queued" aria-hidden="true"></span>Queued</dt></div>
+        <div><dt><span class="swatch stopped" aria-hidden="true"></span>Stopped</dt></div>
         <div><dt><span class="swatch idle" aria-hidden="true"></span>Idle</dt></div>
       </dl>
       <dl class="key" aria-label="Lane kind">
@@ -167,14 +175,17 @@
             <svg width="12" height="12" viewBox="0 0 24 24" aria-label="Agent" role="img"><path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9L12 3.5Z M18.5 16v4M16.5 18h4"/></svg>
           </span>
           <span class="gname">Background agents</span>
-          <span class="count" title="Runs in this lane">3</span>
+          <span class="count" title="Runs in this lane">4</span>
         </div>
         <div class="rows">
           <div class="r">
             <div class="bar done" style="left:6%;width:22%"><span>Fix CI</span></div>
             <div class="bar working open" style="left:62%;width:38%"><span>Refactor auth</span><i class="pulse"></i></div>
           </div>
-          <div class="r"><div class="bar done" style="left:14%;width:18%"><span>Bump deps</span></div></div>
+          <div class="r">
+            <div class="bar done" style="left:14%;width:18%"><span>Bump deps</span></div>
+            <div class="bar stopped" style="left:36%;width:14%"><span>Migrate tests</span></div>
+          </div>
         </div>
       </div>
       <div class="lane">

@@ -1,0 +1,116 @@
+<!-- @dsCard group="Components" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<style>
+  /* The tokens this primitive draws with, as web/src/index.css declares them. */
+  :root {
+    --ground:#0a0f16; --ground-2:#0d131c; --surface:#111a25; --surface-2:#162130;
+    --surface-3:#1c2a3b; --line:rgb(146 180 217 / .13); --line-strong:rgb(146 180 217 / .24);
+    --ink:#eaf2fb; --ink-dim:#aebfd2; --ink-faint:#8597ae; --eye:#36e3e8;
+    --ok:#2fe6a4; --fail:#ff5765;
+    --radius-control:8px; --radius-panel:16px;
+    --duration-quick:120ms; --duration-base:180ms; --duration-press:70ms; --duration-ping:1800ms;
+    --shadow-raised:inset 0 1px 0 0 rgb(255 255 255 / .035), 0 1px 2px 0 rgb(0 0 0 / .35),
+      0 12px 32px -18px rgb(0 0 0 / .6);
+    --sans:"Hellix","Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
+  }
+  @font-face { font-family:"Hellix"; src:url("../../fonts/Hellix-Regular-ma.woff2") format("woff2");
+    font-weight:400; font-display:swap; }
+  @font-face { font-family:"Hellix"; src:url("../../fonts/Hellix-SemiBold-ma.woff2") format("woff2");
+    font-weight:600 900; font-display:swap; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans);
+    font-variant-numeric:tabular-nums; min-height:100vh; display:flex; align-items:center;
+    justify-content:center; padding:26px; }
+  .wrap { width:100%; max-width:680px; display:grid; gap:12px; }
+  /* A stand-in top bar, which is where the pill lives. */
+  .bar { display:flex; align-items:center; gap:12px; height:56px; padding:0 16px;
+    border:1px solid var(--line); border-radius:var(--radius-panel); background:var(--surface);
+    box-shadow:var(--shadow-raised); }
+  .bar .name { flex:1; font-size:12px; line-height:1.4; color:var(--ink-faint); }
+
+  .conn { display:inline-flex; align-items:center; gap:6px; }
+  .pill { display:inline-flex; align-items:center; gap:8px; height:32px; padding:0 12px;
+    border:1px solid transparent; border-radius:999px; font-size:12px; font-weight:600;
+    transition:color var(--duration-base), background-color var(--duration-base), border-color var(--duration-base); }
+  .live { color:var(--ok); }
+  .connecting { color:var(--ink-faint); }
+  .offline { color:var(--fail); border-color:color-mix(in oklab, var(--fail) 40%, transparent);
+    background:color-mix(in oklab, var(--fail) 10%, transparent); }
+  .dot { position:relative; width:8px; height:8px; border-radius:999px; background:currentColor; }
+  .live .dot::after { content:""; position:absolute; inset:-4px; border-radius:999px; background:currentColor;
+    opacity:.5; animation:ping-ring var(--duration-ping) ease-out infinite; }
+  @keyframes ping-ring { 0% { transform:scale(.6); opacity:.5; } 80%,100% { transform:scale(2.4); opacity:0; } }
+  @media (prefers-reduced-motion: reduce) { .live .dot::after { animation:none; display:none; } }
+  .retrying { font-weight:400; color:color-mix(in oklab, var(--fail) 75%, transparent); }
+  .retry { position:relative; height:28px; flex-shrink:0; padding:0 10px; border:1px solid var(--line-strong);
+    border-radius:var(--radius-control); background:var(--surface-2); color:var(--ink); font-family:var(--sans);
+    font-size:12px; font-weight:600; cursor:pointer; transition:background-color var(--duration-quick); }
+  .retry:hover { background:var(--surface-3); }
+  .retry:focus-visible { outline:2px solid var(--eye); outline-offset:2px; }
+  @media (prefers-reduced-motion: no-preference) {
+    .retry:active { transform:scale(.97); transition-duration:var(--duration-press); }
+  }
+  /* On a phone the words go first (the dot's colour carries the state, the
+     words stay in the accessible name), and Retry's hit area reaches 44px. */
+  .phone .pill { padding:0 8px; }
+  .phone .word, .phone .retrying { display:none; }
+  .phone .retry::before { content:""; position:absolute; inset:-8px -3px; }
+</style>
+</head>
+<body>
+  <!-- ConnectionPill (web/src/ds/ConnectionPill.tsx): the live-socket
+       indicator in the top bar. Three states, quiet when all is well:
+
+       - Connecting: before the first attempt has its answer — a faint dot and
+         "Connecting". Every page load used to open on a red "Offline" and a
+         Retry for the fraction of a second the socket takes to connect.
+       - Live: an ok-green dot with a ring that pings on the shared 1800ms beat,
+         and the word "Live". No pill fill: a status light on a well-run
+         machine is small.
+       - Offline: the only filled state — a fail-tinted pill, "Offline", and the
+         real backoff, "· retrying in 8s" (from md up), plus a Retry button,
+         because the reader may know they just fixed the server.
+       - On a narrow bar the words drop and the dot remains; the accessible
+         name keeps them ("Offline: retrying in 8 seconds"). Retry keeps a
+         44px-tall hit area on a phone without growing the bar. -->
+  <div class="wrap">
+    <div class="bar">
+      <span class="name">Connecting</span>
+      <span class="conn"><span class="pill connecting" role="status" aria-label="Connecting to the Argus server"><span class="dot"></span><span class="word">Connecting</span></span></span>
+    </div>
+    <div class="bar">
+      <span class="name">Live</span>
+      <span class="conn"><span class="pill live" role="status" aria-label="Live: connected to the Argus server"><span class="dot"></span><span class="word">Live</span></span></span>
+    </div>
+    <div class="bar">
+      <span class="name">Offline</span>
+      <span class="conn">
+        <span class="pill offline" role="status" aria-label="Offline: retrying in 8 seconds"><span class="dot"></span><span class="word">Offline</span><span class="retrying" id="count">· retrying in 8s</span></span>
+        <button class="retry" type="button" id="retry">Retry</button>
+      </span>
+    </div>
+    <div class="bar phone">
+      <span class="name">Offline, on a phone</span>
+      <span class="conn">
+        <span class="pill offline" role="status" aria-label="Offline: retrying in 8 seconds"><span class="dot"></span><span class="word">Offline</span></span>
+        <button class="retry" type="button">Retry</button>
+      </span>
+    </div>
+  </div>
+  <script>
+    // The countdown is the real backoff, ticking.
+    let n = 8;
+    const count = document.getElementById("count");
+    const pill = count.parentElement;
+    setInterval(() => {
+      n = n <= 1 ? 8 : n - 1;
+      count.textContent = `· retrying in ${n}s`;
+      pill.setAttribute("aria-label", `Offline: retrying in ${n} ${n === 1 ? "second" : "seconds"}`);
+    }, 1000);
+    document.getElementById("retry").onclick = () => { n = 9; };
+  </script>
+</body>
+</html>
