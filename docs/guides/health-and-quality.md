@@ -49,7 +49,9 @@ here.
   to restore. An empty tile is inert: pressing it could only blank the list.
 - One **monitor card** per schedule: its name (links back to the Scheduler),
   a status pill, a **heartbeat bar** of the last 30 runs (one tick per run,
-  colored by outcome), and a stats line — **uptime %** (succeeded vs failed
+  colored by outcome; each tick links to that run's
+  [Flight Recorder](monitoring.md#flight-recorder) and is named by its status
+  and time), and a stats line — **uptime %** (succeeded vs failed
   over the last 30), **last run** time, and either the **next** expected time
   or, when late/down, the slot that was **expected** and missed.
 - Cards that are `down` or `failing` get a red border so they jump out.
@@ -79,7 +81,10 @@ never replays a storm of already-known-down alerts (the Briefing tab is the
 place that shows current bad state).
 
 **What you can do:** the tab itself is deliberately read-only — fix problems
-in the Scheduler or Issues tabs.
+in the Scheduler or Issues tabs. Open any run from its heartbeat tick. From
+the keyboard a heartbeat bar is one tab stop: Tab lands on the newest run (or
+the one you last walked to), `←`/`→`, Home and End walk the bar, Enter opens
+the run, and Tab moves on.
 
 **Where the data comes from:** `GET /api/monitors`, derived on every read
 from schedules + run records (no separate state to go stale); alerts arrive
@@ -442,7 +447,7 @@ here would just make a second inbox):
 
 **What you see per incident:** status and severity, how long it has been open,
 a live **escalates in…** countdown, every link that leads somewhere useful
-(the monitor, the issue, **Replay the run**), and the **timeline** — opened,
+(**Monitor**, **Issue**, **Replay the run**), and the **timeline** — opened,
 escalated, acknowledged, diagnosed, noted, resolved, reopened — each entry
 attributed to Sentinel or to the person who did it.
 

@@ -25,8 +25,8 @@ Access to the host for first-account bootstrap. Fleet pairing needs another runn
 
 ## Users & sign-in
 
-_Who may run and edit pipelines._ Route: `#/users` (root only) + the login
-panel on the Pipelines tab
+_Who may run and edit pipelines._ Route: `#/users` (in More for root) + the
+sign-in panel on the Pipelines tab
 
 ![Users](../screenshots/users.png)
 
@@ -34,7 +34,8 @@ panel on the Pipelines tab
 two-role model: **root** (the first account, manages users) and **members**
 (can run/edit pipelines once approved).
 
-**The three auth flows** (all on the Pipelines tab's panel):
+**The three auth flows** (on the Pipelines tab's panel, and on the Users page
+for anyone not signed in as root):
 
 1. **First launch — create the root account.** On an unconfigured server the
    panel offers a one-time root bootstrap (username + password, min 8 chars).
@@ -47,10 +48,19 @@ two-role model: **root** (the first account, manages users) and **members**
    lands **pending** until root approves it.
 
 **The Users tab** (visible in More only to root): all accounts, **pending
-first** — each with username, role, and an "awaiting approval" tag. Root can
+first** under **Waiting for approval**, then **Accounts** — each with
+username, role, and when it was requested or joined. Root can
 **Approve** or **Reject** a pending registration, and **Remove** an active
-member (never yourself). Non-root visitors see only an explanatory notice
-(that's the screenshot above).
+member (never yourself). Anyone else who opens `#/users` sees what applies to
+them instead of the list:
+
+- a signed-in member: **Only the root user can manage accounts** (that's the
+  screenshot above);
+- signed out: **Sign in as root to manage accounts**, whose **Sign in** button
+  opens the sign-in form in place (it also offers **Need access? Request an
+  account**);
+- an unconfigured server: **No root account yet**, whose **Create the root
+  account** opens the bootstrap form in place (localhost-only, as above).
 
 **Account recovery:** current accounts live in `~/.claude/argus/users.json`, with salted scrypt password hashes. Legacy `auth.json` can be migrated into that store. Deleting only the legacy file does not reset current users. Preserve both files and follow the [operations guidance](../reference/operations.md#backup-and-restore) before attempting host-level recovery.
 

@@ -73,7 +73,7 @@ run bucket (pruned to the same 50-run window a schedule gets), appear as a
 single **"One-off runs"** lane in the [Chronicle](monitoring.md#chronicle), a failed
 launch groups into [Issues](health-and-quality.md#issues) and lands in the
 [Briefing](monitoring.md#briefing)'s failure digest, and reported cost counts toward the
-[Budget](budget-and-history.md#budget) and the Command Center's total spend. They never touch
+[Budget](budget-and-history.md#budget) and the Command Center's all-time total. They never touch
 [Monitors](health-and-quality.md#monitors) — there is no expected slot for a one-off.
 
 **Where the data comes from:** `POST /api/launch` (`202` with the run
@@ -152,8 +152,8 @@ those schedules, press it again (or **Show all**) to go back. A count with
 nothing behind it is not shown at all, so anything visible there is worth
 reading.
 
-**What each schedule card shows:** a state badge — **failing**, **running**,
-**paused**, **healthy** or **never run** — then the humanised trigger ("every
+**What each schedule card shows:** a state badge — **Failing**, **Working**,
+**Paused**, **Healthy** or **Never run** — then the humanised trigger ("every
 6h", "daily at 02:30"), a countdown to the next firing, when it last ran, the
 median duration of the runs listed below, and a **catch-up** chip when
 missed-run recovery is on. Below that the working directory, and the **last five
@@ -169,7 +169,10 @@ schedule says "will not fire" rather than showing a countdown to a slot it will
 ignore, and one with no history at all explains how to test it without waiting
 for a slot.
 
-**What you can do:**
+**What you can do** — from the card's footer, laid out like a pipeline card's:
+**Run now** and **Edit** first, **Disable**/**Enable** and **Delete** at the far
+end. An action the server refuses says why on its own line under the buttons
+(_Couldn't complete that: …_).
 
 - **Run now** — fire immediately, regardless of the trigger.
 - **Enable / Disable** — pause the trigger without deleting anything.

@@ -64,7 +64,8 @@ health, the issues it raised, and the action that fires it now._
 - **Navigation** is split by role: the eight **destination** tabs (Command
   Center, Briefing, Chronicle, Scheduler, Pipelines, Health, Issues, Budget)
   sit in the bar; the **More** menu holds Sentinel and the reference pages
-  (Sessions, Stats, Inventory, Fleet, and Users for the root account).
+  (Sessions, Stats, Inventory, Fleet, Users for the root account, Experiments
+  and Knowledge).
   Scheduler and Health each carry a sub-tab in the hash — **Schedules |
   One-off** and **Monitors | Watchtower** — so a link lands on the half it
   means. Drill-down views (Agents, Detail, Flight Recorder) are reached
@@ -73,8 +74,8 @@ health, the issues it raised, and the action that fires it now._
   `#/projects`, `#/activity`, `#/tasks`) are rewritten to where their content
   went. When the bar is too narrow for every tab, the tab strip scrolls and
   fades at the edge that has more. On a phone the bar collapses to a **menu**
-  naming your current destination, listing every tab at once with its
-  attention badge; `Esc` closes it. The Briefing's badge is violet — it counts
+  naming the page you are on (a page from More included), listing every tab
+  at once with its attention badge; `Esc` closes it. The Briefing's badge is violet — it counts
   what is waiting on a human, not only failures.
 - **Auto-refresh:** the server pushes a "something changed" ping over a
   WebSocket whenever a watched file mutates, and the UI re-fetches. Those

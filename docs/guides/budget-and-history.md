@@ -279,7 +279,7 @@ the alternative is every page broken until a human notices.
 
 Search expands your query with terms that **co-occur with it in this machine's
 own history** — search `backoff` and it may also search `quarantine`, because
-your runs mention them together. Expanded results arrive tagged **related**, and
+your runs mention them together. Expanded results arrive tagged **Related**, and
 the terms used are printed above the results, so an expansion is always visible
 and auditable.
 

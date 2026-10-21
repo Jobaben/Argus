@@ -45,9 +45,12 @@ which is waiting on you and which failed is answerable without leaving the list.
 A failed run names the step and the first line of its reason. A pipeline that has
 never run still shows its phases, greyed, because that is what it is going to do.
 
-When you're **signed out**, the **Login** panel appears here (see
+When you're **signed out**, the sign-in panel sits above the list (see
 [Users & sign-in](administration.md#users--sign-in)) — viewing is open, but every mutating
-action requires a signed-in, root-approved account.
+action requires a signed-in, root-approved account. With no pipelines yet, the
+page says **No pipelines yet** instead, and its button — **Sign in to add one**,
+or **Create the root account** on a fresh installation — opens the same form
+in its place.
 
 **The pipeline form** (New pipeline / Edit):
 
@@ -79,7 +82,10 @@ action requires a signed-in, root-approved account.
   artifacts, rubrics, auto-approve — show as badges on the panel and are
   preserved on save.
 
-**What you can do (signed in):**
+**What you can do (signed in)** — from the card's footer: the run controls
+first, then **Analyze** and **Edit**, with **Disable**/**Enable** and **Delete**
+at the far end. An action the server refuses says why on its own line under
+the buttons (_Couldn't complete that: …_).
 
 - **Run now** — start an instance (hidden while one is running unless overlap
   is allowed).
@@ -94,9 +100,9 @@ action requires a signed-in, root-approved account.
   confirm says how many), then removes it. Pipelines chained `after` it do
   not start from those stops. An instance left live by a pipeline
   deleted before this existed still gets a card on the Command Center, marked
-  _pipeline deleted_, with a **Stop** button.
-- Approving/revising a **gated phase** happens on the Command Center, inline
-  on the paused row.
+  **Pipeline deleted**, with a **Stop** button.
+- Approving/revising a **gated phase** happens in the Command Center's
+  [review drawer](monitoring.md#command-center).
 
 **Reliability:** each card has a **Reliability** disclosure — open it and,
 over the trailing 30 days, Argus shows the pipeline's **first-attempt pass
@@ -362,7 +368,7 @@ ticked, so it runs after whichever branch actually happened.
   the record rather than deciding again. What ran is what the record says ran.
 
 **What you see:** an unrun branch reads as **skipped** — a hollow dot, a struck
-name, `skip` — and the phase panel says which decision skipped it and on what
+name, a **Skipped** marker — and the phase panel says which decision skipped it and on what
 grounds. A conditional chip carries its condition (`if Evaluate: accepted =
 true`), and the deciding phase's panel shows the decision in one line: the
 artifact, the value, what it selected, what it skipped.
