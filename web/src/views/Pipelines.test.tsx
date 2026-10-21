@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Pipelines from "./Pipelines";
 import type { OverviewEntry, PipelineDefinition, PipelineInstance, InstanceStatus } from "../types";
@@ -278,6 +278,20 @@ describe("Pipelines tab", () => {
     expect(screen.queryByRole("button", { name: /^stop$/i })).toBeNull();
   });
 
+  it("lays its footer out as the Scheduler's: run, open, then housekeeping", async () => {
+    vi.stubGlobal("fetch", routedFetch([{ definition: p1, latest: null }]));
+    render(<Pipelines />);
+    const run = await screen.findByRole("button", { name: /run now/i });
+    const footer = run.closest("footer") as HTMLElement;
+    expect(
+      within(footer)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["Run now", "Analyze", "Edit", "Disable", "Delete"]);
+    // One "Delete" per card on screen; a screen reader hears which card's.
+    expect(within(footer).getByRole("button", { name: `Delete ${p1.name}` })).toBeInTheDocument();
+  });
+
   it("shows a Stopped badge for an aborted pipeline", async () => {
     vi.stubGlobal("fetch", routedFetch([{ definition: p1, latest: instance("aborted") }]));
     render(<Pipelines />);
@@ -306,12 +320,29 @@ describe("Pipelines admin gate", () => {
   });
 
   it("offers first-run account creation when no admin exists yet", async () => {
+    const user = userEvent.setup();
     vi.stubGlobal("fetch", routedFetch([], [], firstRun));
     render(<Pipelines />);
-    await waitFor(() =>
-      expect(screen.getByRole("form", { name: /create the root account/i })).toBeTruthy(),
-    );
+    await user.click(await screen.findByRole("button", { name: "Create the root account" }));
+    expect(screen.getByRole("form", { name: /create the root account/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /create & sign in/i })).toBeTruthy();
+  });
+
+  it("says it once when signed out with nothing to show: the empty state leads into the form", async () => {
+    // It used to show the login form *and*, under it, an empty state telling
+    // the reader to sign in above.
+    const user = userEvent.setup();
+    vi.stubGlobal("fetch", routedFetch([], [], anon));
+    render(<Pipelines />);
+    await waitFor(() => expect(screen.getByText(/no pipelines yet/i)).toBeTruthy());
+    expect(screen.queryByRole("form")).toBeNull();
+    expect(screen.queryByText(/sign in above/i)).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Sign in to add one" }));
+    // The form takes the empty state's place, with the caret in it.
+    expect(screen.getByRole("form", { name: /^login$/i })).toBeTruthy();
+    expect(screen.queryByText(/no pipelines yet/i)).toBeNull();
+    expect(screen.getByLabelText("Username")).toHaveFocus();
   });
 
   it("posts credentials to /api/auth/login on submit", async () => {
@@ -319,7 +350,7 @@ describe("Pipelines admin gate", () => {
     const fetchMock = routedFetch([], [], anon);
     vi.stubGlobal("fetch", fetchMock);
     render(<Pipelines />);
-    await waitFor(() => expect(screen.getByRole("button", { name: /sign in/i })).toBeTruthy());
+    await user.click(await screen.findByRole("button", { name: "Sign in to add one" }));
     // By label: the login panel's fields are labelled now, and their
     // placeholders are examples rather than names.
     await user.type(screen.getByLabelText("Username"), "usha");
@@ -435,6 +466,27 @@ describe("Pipelines admin gate", () => {
     vi.stubGlobal("fetch", routedFetch([{ definition: p1, latest: failed }]));
     render(<Pipelines />);
     await waitFor(() => expect(screen.getByText(/prereq missing: gh/)).toBeTruthy());
+  });
+
+  it("reads a reason that is only the agent's outcome marker as the marker's reason", async () => {
+    const failed: PipelineInstance = {
+      ...instance("failed"),
+      phases: [
+        {
+          id: "a",
+          name: "x",
+          gated: false,
+          status: "failed",
+          steps: [{ name: "s", runId: "r1", status: "failed" }],
+          attempt: 1,
+          payload: { kind: "failure", reason: "ARGUS_OUTCOME: failed tests are red" },
+        },
+      ],
+    };
+    vi.stubGlobal("fetch", routedFetch([{ definition: p1, latest: failed }]));
+    render(<Pipelines />);
+    await waitFor(() => expect(screen.getByText("tests are red")).toBeTruthy());
+    expect(screen.queryByText(/ARGUS_OUTCOME/)).toBeNull();
   });
 
   it("teaches what a pipeline is when there are none", async () => {

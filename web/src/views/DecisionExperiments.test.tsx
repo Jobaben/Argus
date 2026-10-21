@@ -299,17 +299,23 @@ describe("DecisionExperiments view", () => {
       screen.getByText(/Residual-cause accuracy is unmeasured until valid reference labels/),
     ).toBeTruthy();
 
-    // Collection (off): reasons and settings.
-    expect(screen.getByText("Off")).toBeTruthy();
+    // Collection (off): reasons and settings. Within H2's own section: H1 sits
+    // below it in the same anatomy, and says "Off" in the same words.
+    const h2 = within(screen.getByRole("region", { name: /^H2 —/ }));
+    expect(h2.getByText("Off")).toBeTruthy();
     expect(screen.getByText("probe rate is out of range")).toBeTruthy();
     expect(screen.getByText("5%")).toBeTruthy();
     expect(screen.getByText("1.5 min")).toBeTruthy();
     expect(screen.getByText("abcdef012345")).toBeTruthy();
 
-    // Identity header.
+    // Identity header. An unset model reads the same way in the settings and
+    // in a population's identity: the runner's default.
     expect(screen.getAllByText("haiku").length).toBeGreaterThan(0);
     expect(screen.getAllByText("not reported").length).toBeGreaterThan(0);
-    expect(screen.getByText("runner default")).toBeTruthy();
+    expect(h2.getAllByText("runner default")).toHaveLength(2);
+    // Each census card is titled by the question it feeds, with its id beside.
+    expect(h2.getByRole("heading", { name: "Probe question", level: 3 })).toBeTruthy();
+    expect(h2.getByText("Runs considered: 30")).toBeTruthy();
 
     // Proportions and unmeasured values.
     expect(screen.getAllByText("62.5% (5/8, 95% CI 30.6–86.3%)").length).toBeGreaterThan(0);
@@ -317,7 +323,7 @@ describe("DecisionExperiments view", () => {
     expect(screen.getByText("unmeasured — n = 5 < 200")).toBeTruthy();
     expect(screen.getByText("unmeasured — one reference class")).toBeTruthy();
     expect(screen.getByText("0.412 (n = 7)")).toBeTruthy();
-    expect(screen.getByText("unmeasured (n < 200)")).toBeTruthy();
+    expect(screen.getByText(/^unmeasured \(n = \d+ < 200\)$/)).toBeTruthy();
     expect(screen.getByText("Accuracy (answered only)")).toBeTruthy();
     expect(screen.getByText(/Majority-class share — accuracy near this/)).toBeTruthy();
 
@@ -341,9 +347,11 @@ describe("DecisionExperiments view", () => {
     expect(within(baseline).getByText("not-compared")).toBeTruthy();
     expect(screen.getByText("attempt has no result record")).toBeTruthy();
     expect(screen.getByText("missing segment")).toBeTruthy();
-    expect(screen.getAllByText("No findings.").length).toBe(1);
+    expect(h2.getAllByText("No findings recorded.").length).toBe(1);
     expect(screen.getByText("Wilson 95% intervals.")).toBeTruthy();
-    expect(screen.getByText(/As of ledger record 42 \(2026-09-29T12:00:00.000Z\)/)).toBeTruthy();
+    expect(
+      screen.getByText(/H2 report as of ledger record 42 \(2026-09-29T12:00:00.000Z\)/),
+    ).toBeTruthy();
 
     // Nothing in the page claims a verdict.
     expect(document.body.textContent).not.toMatch(/\b(approved|passed|good|safe)\b/i);
@@ -404,14 +412,16 @@ describe("DecisionExperiments view", () => {
     });
     render(<DecisionExperiments />);
 
-    expect(await screen.findByText("No shadow assessments recorded.")).toBeTruthy();
-    expect(screen.getByText("Enabled")).toBeTruthy();
-    expect(screen.getByText("No valid settings.")).toBeTruthy();
-    expect(screen.getByText("No collection config recorded.")).toBeTruthy();
-    expect(screen.getByText("No census recorded.")).toBeTruthy();
-    expect(screen.getByText("No baselines.")).toBeTruthy();
-    expect(screen.getAllByText("No findings.").length).toBe(3);
-    expect(screen.getByText(/As of ledger record 0 \(no records\)/)).toBeTruthy();
+    // Titles carry no full stop: a title is a label, not a sentence.
+    const title = await screen.findByText("No shadow assessments recorded");
+    const h2 = within(title.closest("section[aria-labelledby]") as HTMLElement);
+    expect(h2.getByText("On")).toBeTruthy();
+    expect(h2.getByText("No valid settings.")).toBeTruthy();
+    expect(h2.getByText("No collection config recorded.")).toBeTruthy();
+    expect(h2.getByText("No census recorded.")).toBeTruthy();
+    expect(h2.getByText("No baselines.")).toBeTruthy();
+    expect(h2.getAllByText("No findings recorded.").length).toBe(3);
+    expect(screen.getByText(/H2 report as of ledger record 0 \(no records\)/)).toBeTruthy();
     // No population sections without populations. (The question ids still show
     // in the Questions list, so this checks the section headings, not the ids.)
     expect(screen.queryByRole("heading", { name: "Probe question", level: 2 })).toBeNull();
@@ -435,6 +445,6 @@ describe("DecisionExperiments view", () => {
       "/api/decisions/h1": () => okJson(h1Fixture),
     });
     render(<DecisionExperiments />);
-    expect(await screen.findByText("No report available.")).toBeTruthy();
+    expect(await screen.findByText("No H2 report available")).toBeTruthy();
   });
 });

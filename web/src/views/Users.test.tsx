@@ -71,17 +71,73 @@ describe("Users view", () => {
     expect(await screen.findByText(/only the root user/i)).toBeTruthy();
   });
 
-  it("points a signed-out reader at the form instead of dead-ending", async () => {
-    // The sign-in form lives on the Pipelines tab; this page gave no way to know.
-    mockFetch({
+  it("opens the sign-in form in place for a signed-out reader", async () => {
+    // The form used to live on the Pipelines tab, and this page only pointed
+    // there; now the empty state's action is the form.
+    const user = userEvent.setup();
+    const spy = mockFetch({
       "/api/auth/status": () =>
         okJson({ configured: true, authenticated: false, username: null, role: null }),
-      "/api/users": () => okJson({ users: [] }),
     });
     render(<Users />);
-    await waitFor(() => expect(screen.getByText(/Sign in as root/)).toBeTruthy());
-    const link = screen.getByRole("link", { name: /Sign in on the Pipelines tab/ });
-    expect(link.getAttribute("href")).toBe("#/pipelines");
+    await user.click(await screen.findByRole("button", { name: "Sign in" }));
+    expect(screen.getByRole("form", { name: /^login$/i })).toBeTruthy();
+    expect(screen.getByLabelText("Username")).toHaveFocus();
+    // The form says what the account is for here, not on the Pipelines page.
+    expect(screen.getByText(/managing accounts is for the root user/i)).toBeTruthy();
+    expect(screen.queryByText(/pipelines/i)).toBeNull();
+    // The account list is root's; nobody else is made to ask for it.
+    expect(spy.mock.calls.some(([input]) => String(input).includes("/api/users"))).toBe(false);
+  });
+
+  it("offers the first account on an empty install, rather than a 401", async () => {
+    // `/api/users` is root-only: on an install with no accounts it can only
+    // answer 401, which this page used to print as a load error.
+    const user = userEvent.setup();
+    const spy = mockFetch({
+      "/api/auth/status": () =>
+        okJson({ configured: false, authenticated: false, username: null, role: null }),
+      "/api/users": () => ({ ok: false, status: 401, json: async () => ({}) }) as Response,
+    });
+    render(<Users />);
+    expect(await screen.findByText("No root account yet")).toBeTruthy();
+    expect(screen.queryByText(/Couldn't load users/)).toBeNull();
+    expect(screen.queryByText(/HTTP 401/)).toBeNull();
+    expect(spy.mock.calls.some(([input]) => String(input).includes("/api/users"))).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: "Create the root account" }));
+    expect(screen.getByRole("form", { name: /create the root account/i })).toBeTruthy();
+  });
+
+  it("turns a session that ended under the page into the sign-in state, not an error", async () => {
+    // Root's session expires between two reads of the status: the list answers
+    // 401. That is a signed-out reader, and the page says so.
+    let signedIn = true;
+    mockFetch({
+      "/api/auth/status": () =>
+        okJson(
+          signedIn
+            ? rootStatus
+            : { configured: true, authenticated: false, username: null, role: null },
+        ),
+      "/api/users": () => {
+        signedIn = false;
+        return { ok: false, status: 401, json: async () => ({}) } as Response;
+      },
+    });
+    render(<Users />);
+    expect(await screen.findByText("Sign in as root to manage accounts")).toBeTruthy();
+    expect(screen.queryByText(/Couldn't load users/)).toBeNull();
+  });
+
+  it("still reports a list that fails for another reason, with a retry", async () => {
+    mockFetch({
+      "/api/auth/status": () => okJson(rootStatus),
+      "/api/users": () => ({ ok: false, status: 500, json: async () => ({}) }) as Response,
+    });
+    render(<Users />);
+    expect(await screen.findByText(/Couldn't load users: HTTP 500/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
   it("tells a signed-in non-root user why they cannot act, with no dead link", async () => {
@@ -91,7 +147,10 @@ describe("Users view", () => {
       "/api/users": () => okJson({ users: [] }),
     });
     render(<Users />);
-    await waitFor(() => expect(screen.getByText(/Only the root user/)).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByText("Only the root user can manage accounts")).toBeTruthy(),
+    );
     expect(screen.queryByRole("link", { name: /Sign in/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Sign in/ })).toBeNull();
   });
 });

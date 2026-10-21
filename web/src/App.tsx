@@ -1,27 +1,17 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAgents } from "./useAgents";
-import type { Agent, AgentStatus } from "./types";
 import { flushSync } from "react-dom";
 import {
-  AgentTile,
-  AlertStrip,
-  ButtonLink,
-  EmptyState,
   ErrorBoundary,
-  Handoff,
-  HealthCounter,
   IrisMark,
   Loading,
   Page,
   routeDirection,
   setRouteDirection,
   SkeletonGrid,
-  staggerDelay,
   startViewTransition,
   supportsViewTransitions,
   ToastRegion,
-  transitionName,
-  useFlip,
 } from "./ds";
 import type { RouteDirection, RouteRole } from "./ds";
 import { useAgentNotifications } from "./notify/useAgentNotifications";
@@ -66,6 +56,7 @@ const DecisionExperiments = lazy(() => import("./views/DecisionExperiments"));
 const KnowledgeView = lazy(() => import("./views/knowledge/KnowledgeView"));
 const Sessions = lazy(() => import("./views/Sessions"));
 const AgentDetail = lazy(() => import("./views/AgentDetail"));
+const AgentsView = lazy(() => import("./views/Agents"));
 const FlightRecorder = lazy(() => import("./views/FlightRecorder"));
 import { useBriefing } from "./useBriefing";
 import { useAuth } from "./useAuth";
@@ -87,89 +78,6 @@ const PaletteHost = lazy(() =>
 const ShortcutHelp = lazy(() =>
   import("./cmd/ShortcutHelp").then((m) => ({ default: m.ShortcutHelp })),
 );
-
-function AgentsView({
-  agents,
-  loading,
-  error,
-}: {
-  agents: Agent[];
-  loading: boolean;
-  error: string | null;
-}) {
-  // The fleet re-sorts as agents change status; FLIP glides the tiles to their
-  // new places instead of teleporting them.
-  const flip = useFlip();
-  const stats = useMemo(() => {
-    const by = (s: AgentStatus) => agents.filter((a) => a.status === s).length;
-    return {
-      total: agents.length,
-      live: agents.filter((a) => a.live).length,
-      working: by("working"),
-      failed: by("failed"),
-    };
-  }, [agents]);
-
-  return (
-    <Page title="Agents" crumbs={[{ label: "Command Center", href: "#/command" }]}>
-      <section className="mb-8 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <HealthCounter label="Agents" value={stats.total} />
-        <HealthCounter label="Live" value={stats.live} tone="live" />
-        <HealthCounter label="Working" value={stats.working} tone="run" />
-        <HealthCounter label="Failed" value={stats.failed} tone="fail" />
-      </section>
-
-      {error && (
-        <div className="mb-6">
-          <AlertStrip subject="Agents" message={`Couldn't reach the Argus server: ${error}`} />
-        </div>
-      )}
-
-      <Handoff
-        busy={loading}
-        label="agents"
-        skeleton={<SkeletonGrid count={4} columns={2} lines={2} />}
-      >
-        {agents.length === 0 ? (
-          <EmptyState
-            icon="bolt"
-            title="No background agents yet"
-            action={
-              <ButtonLink href="#/schedules/oneoff" variant="primary" icon="bolt">
-                Launch a task
-              </ButtonLink>
-            }
-          >
-            A task launched to run in the background shows up here while it works, with its status
-            and what it is doing.
-          </EmptyState>
-        ) : (
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            {agents.map((a, i) => (
-              <a
-                key={a.short}
-                href={`#/agent/${encodeURIComponent(a.short)}`}
-                ref={flip(a.short)}
-                // The tile and the detail page's header share a transition name, so
-                // where the browser supports it the tile you clicked visibly
-                // *becomes* the page you land on — the strongest available answer to
-                // "where did this come from". Only one element carries any given
-                // name at a time, which is what makes the pairing legal.
-                style={{
-                  animationDelay: staggerDelay(i),
-                  viewTransitionName: transitionName("agent", a.short),
-                }}
-                className="block rounded-tile transition-transform duration-(--duration-quick) hover:-translate-y-0.5 motion-safe:animate-[slide-up_var(--duration-base)_var(--ease-out-expo)_both] motion-safe:active:translate-y-0 motion-safe:active:scale-[0.99]"
-              >
-                <AgentTile agent={a} />
-              </a>
-            ))}
-          </div>
-        )}
-      </Handoff>
-    </Page>
-  );
-}
 
 /**
  * The nav, by role.
@@ -422,6 +330,7 @@ function Dashboard() {
             loading={briefingState.loading}
             error={briefingState.error}
             ack={briefingState.ack}
+            refresh={briefingState.refresh}
           />
         );
       case "chronicle":
@@ -458,6 +367,7 @@ function Dashboard() {
             agents={agentsState.agents}
             loading={agentsState.loading}
             error={agentsState.error}
+            refresh={agentsState.refresh}
           />
         );
       case "sessions":
@@ -590,6 +500,7 @@ export default function App() {
               onLogin={login}
               onSetup={setup}
               onRegister={register}
+              purpose="dashboard"
             />
           </Suspense>
         </ErrorBoundary>

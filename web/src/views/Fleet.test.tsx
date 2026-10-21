@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { FleetMachine, FleetView, MachineSummary, PairingCode, Peer } from "../types";
 import Fleet from "./Fleet";
@@ -191,6 +191,38 @@ describe("Fleet", () => {
     // "Last known, ten minutes ago" is information; an empty card is not.
     expect(screen.getByText("stale")).toBeInTheDocument();
     expect(screen.getByText("7")).toBeInTheDocument();
+  });
+
+  it("reds an open issue count, and leaves a zero neutral", () => {
+    state.fleet = fleetOf(
+      [
+        selfMachine(),
+        {
+          peer: peer(),
+          summary: summary({ machineId: "m2", label: "Build box", openIssues: 7 }),
+          isSelf: false,
+        },
+      ],
+      2,
+    );
+    render(<Fleet />);
+    // The issue count is a failure count, like the monitors beside it.
+    expect(screen.getByText("7").className).toContain("text-fail");
+    // This machine has none: its zero is grey, not red.
+    const laptop = screen.getByText("this machine").closest("div.rounded-tile") as HTMLElement;
+    const issues = within(laptop).getByText("Issues").nextSibling as HTMLElement;
+    expect(issues.textContent).toBe("0");
+    expect(issues.className).toContain("text-ink-faint");
+  });
+
+  it("calls in-flight instances live pipelines, as the Command Center does", () => {
+    state.fleet = fleetOf(
+      [selfMachine(), { peer: peer(), summary: summary({ machineId: "m2" }), isSelf: false }],
+      2,
+    );
+    render(<Fleet />);
+    expect(screen.getByText("Live pipelines")).toBeInTheDocument();
+    expect(screen.queryByText("Running")).toBeNull();
   });
 
   it("an unpaired peer is told what is actually wrong", () => {

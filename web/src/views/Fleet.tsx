@@ -3,7 +3,6 @@ import {
   AlertStrip,
   Button,
   Card,
-  HealthCounter,
   Icon,
   IconButton,
   Page,
@@ -18,6 +17,7 @@ import {
 import { useFleet } from "../useFleet";
 import type { FleetMachine, MachineSummary, PeerStatus } from "../types";
 import { InfoTip } from "../ds/InfoTip";
+import { HealthCounter } from "../ds/HealthCounter";
 
 /**
  * Constellation's page: N machines, one lens.
@@ -71,20 +71,36 @@ function PeerPill({ status }: { status: PeerStatus }) {
   );
 }
 
-/** The five counts a machine reports, as one inset well. A zero is neutral.
- *  The words are the fleet totals' own, shortened to fit a fifth of a card. */
+/** The five counts a machine reports, as one inset well. A zero is neutral;
+ *  an open issue is a failure, so it is red like the monitors beside it. The
+ *  words are the fleet totals' own, shortened to fit a fifth of a card, and
+ *  said in full in the tooltip. */
 function MachineCounts({ summary }: { summary: MachineSummary }) {
-  const cells: { label: string; value: number; tone: string }[] = [
-    { label: "Down", value: summary.monitorsDown, tone: "text-fail" },
-    { label: "Failing", value: summary.monitorsFailing, tone: "text-fail" },
-    { label: "Issues", value: summary.openIssues, tone: "text-ink" },
-    { label: "Running", value: summary.liveInstances, tone: "text-run" },
-    { label: "Awaiting", value: summary.gatedInstances, tone: "text-await" },
+  const cells: { label: string; full: string; value: number; tone: string }[] = [
+    { label: "Down", full: "Monitors down", value: summary.monitorsDown, tone: "text-fail" },
+    {
+      label: "Failing",
+      full: "Monitors failing",
+      value: summary.monitorsFailing,
+      tone: "text-fail",
+    },
+    { label: "Issues", full: "Open issues", value: summary.openIssues, tone: "text-fail" },
+    { label: "Live", full: "Live pipelines", value: summary.liveInstances, tone: "text-run" },
+    {
+      label: "Awaiting",
+      full: "Needs approval",
+      value: summary.gatedInstances,
+      tone: "text-await",
+    },
   ];
   return (
     <dl className="mt-3 grid grid-cols-5 divide-x divide-line rounded-control bg-ground-2/60">
       {cells.map((c) => (
-        <div key={c.label} className="flex min-w-0 flex-col-reverse px-2.5 py-2 sm:px-3">
+        <div
+          key={c.label}
+          title={c.full}
+          className="flex min-w-0 flex-col-reverse px-2.5 py-2 sm:px-3"
+        >
           <dt className="truncate text-micro font-semibold text-ink-faint">{c.label}</dt>
           <dd
             className={`text-title font-semibold leading-tight ${c.value === 0 ? "text-ink-faint" : c.tone}`}
@@ -368,9 +384,11 @@ export default function Fleet() {
           <div className="grid grid-cols-2 gap-3 max-sm:[&>:last-child]:col-span-2 sm:grid-cols-3 lg:grid-cols-5">
             <HealthCounter label="Monitors down" value={t.monitorsDown} tone="fail" />
             <HealthCounter label="Monitors failing" value={t.monitorsFailing} tone="fail" />
-            <HealthCounter label="Open issues" value={t.openIssues} />
-            <HealthCounter label="Running" value={t.liveInstances} tone="run" />
-            <HealthCounter label="Awaiting approval" value={t.gatedInstances} tone="await" />
+            <HealthCounter label="Open issues" value={t.openIssues} tone="fail" />
+            {/* The Command Center's word for the same count: instances with
+                work in flight, which it lists as "live pipelines". */}
+            <HealthCounter label="Live pipelines" value={t.liveInstances} tone="run" />
+            <HealthCounter label="Needs approval" value={t.gatedInstances} tone="await" />
           </div>
           <div className="mt-3 flex flex-col gap-1.5 text-caption sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-x-6">
             {/* A total summed over some of the machines is not a fleet total, and

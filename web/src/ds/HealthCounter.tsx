@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Icon } from "./Icon";
 import { useCountUp } from "./motion";
 
 const TONE = {
@@ -62,17 +63,26 @@ export function HealthCounter({
         }`}
       />
       <div
-        className={`text-[28px] font-semibold leading-none tracking-tight transition-colors duration-(--duration-base) ${
+        className={`text-display font-semibold leading-none tracking-tight transition-colors duration-(--duration-base) ${
           zero ? "text-ink-faint" : TONE[active]
         }`}
       >
         {typeof value === "number" ? <CountingValue value={value} /> : value}
       </div>
-      <div className="mt-2 text-caption font-semibold text-ink-dim">{label}</div>
+      <div className={`mt-2 text-caption font-semibold ${selected ? "text-ink" : "text-ink-dim"}`}>
+        {label}
+      </div>
+      {selected && <Icon name="check" size={14} className="absolute right-3 top-3 text-ink" />}
     </>
   );
-  const shell = `relative overflow-hidden rounded-tile border bg-surface px-4 py-3.5 text-left shadow-raised transition-colors duration-(--duration-base) ${
-    selected ? "border-ink-faint/60 bg-surface-2 ring-1 ring-ink-faint/30" : "border-line"
+  // The filter that is on has to be findable at a glance across a row of six:
+  // a full-ink border with a ring outside it, a lifted surface, a brighter label
+  // and a check, where a slightly different background was all it used to get.
+  // Hover never touches a selected tile, so the pointer cannot make it look off.
+  const shell = `relative overflow-hidden rounded-tile border px-4 py-3.5 text-left shadow-raised transition-colors duration-(--duration-base) ${
+    selected
+      ? "border-ink-dim bg-surface-3 ring-2 ring-ink-dim/25"
+      : `border-line bg-surface ${onClick ? "hover:border-line-strong hover:bg-surface-2" : ""}`
   }`;
 
   // A counter that names a subset the reader wants to see is already the control
@@ -84,7 +94,7 @@ export function HealthCounter({
       onClick={onClick}
       aria-pressed={selected}
       title={title}
-      className={`${shell} cursor-pointer hover:border-line-strong hover:bg-surface-2 motion-safe:active:scale-[0.98]`}
+      className={`${shell} cursor-pointer motion-safe:active:scale-[0.98]`}
     >
       {body}
     </button>

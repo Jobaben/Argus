@@ -6,6 +6,31 @@ const FIELD = `${fieldClass} h-10 w-full px-3 text-sm`;
 type Mode = "login" | "register";
 
 /**
+ * What the account is for, said where the form appears. The panel opens on
+ * Pipelines, on Users and on the sign-in wall, and its reason used to be the
+ * Pipelines one on all three — "editing or running pipelines" above a form
+ * whose only use on the Users page is managing accounts.
+ */
+export type AuthPurpose = "pipelines" | "accounts" | "dashboard";
+
+const REASON: Record<AuthPurpose, { setup: string; login: string }> = {
+  pipelines: {
+    setup:
+      "Building, running and approving pipelines needs an admin account. This first one is root: it also approves every account after it.",
+    login: "Editing or running pipelines requires a signed-in, root-approved account.",
+  },
+  accounts: {
+    setup: "The first account is root. It approves every account registered after it, here.",
+    login: "Approving and managing accounts is for the root user.",
+  },
+  dashboard: {
+    setup:
+      "This server has no accounts yet. The first one is root: it also approves every account after it.",
+    login: "Use an account the root user has approved.",
+  },
+};
+
+/**
  * Auth entry point for the pipeline control surface. Unconfigured servers get
  * the one-time root-bootstrap form (localhost only, enforced server-side);
  * configured servers get login with a switch to request a new account, which
@@ -23,8 +48,10 @@ export function AdminAuthPanel({
   onLogin,
   onSetup,
   onRegister,
+  purpose = "pipelines",
 }: {
   configured: boolean;
+  purpose?: AuthPurpose;
   onLogin: (username: string, password: string) => Promise<void>;
   onSetup: (username: string, password: string) => Promise<void>;
   onRegister: (username: string, password: string) => Promise<void>;
@@ -88,10 +115,10 @@ export function AdminAuthPanel({
             <h3 className="text-heading font-semibold text-ink">{title}</h3>
             <p className="mt-1 max-w-prose text-small text-ink-dim">
               {!configured
-                ? "Building, running and approving pipelines needs an admin account. This first one is root: it also approves every account after it."
+                ? REASON[purpose].setup
                 : registering
                   ? "Your account will be created immediately but stays locked until the root user approves it."
-                  : "Editing or running pipelines requires a signed-in, root-approved account."}
+                  : REASON[purpose].login}
             </p>
             {!configured && (
               <p className="mt-2.5 flex items-start gap-1.5 text-caption text-ink-faint">

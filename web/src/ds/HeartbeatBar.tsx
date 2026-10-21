@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { Heartbeat } from "../types";
 import { useFlip } from "./flip";
 import { DURATION, useChangeFlash, useSyncedDelay } from "./motion";
@@ -40,6 +41,22 @@ function toneOf(h: Heartbeat): keyof typeof TICK {
   }
 }
 
+/** What a beat is, said: its run's status (and a work-level outcome that
+ *  differs from it), then when. The link's name and its tooltip both. */
+function describe(h: Heartbeat): string {
+  const status = h.status.charAt(0).toUpperCase() + h.status.slice(1);
+  const outcome = h.outcome && h.outcome !== "succeeded" ? ` (${h.outcome})` : "";
+  return `${status}${outcome}, ${new Date(h.at).toLocaleString()}`;
+}
+
+/** Keys that walk the strip, and where each one goes from index `i` of `n`. */
+const STEP: Record<string, (i: number, n: number) => number> = {
+  ArrowLeft: (i) => Math.max(0, i - 1),
+  ArrowRight: (i, n) => Math.min(n - 1, i + 1),
+  Home: () => 0,
+  End: (_, n) => n - 1,
+};
+
 /**
  * Uptime-Kuma-style heartbeat strip: one tick per run, oldest → newest.
  *
@@ -55,6 +72,12 @@ function toneOf(h: Heartbeat): keyof typeof TICK {
  * rhythm, started whenever the card mounted — so a board of monitors flickered
  * out of step with every other live thing on the page. It now uses the tokenized
  * pulse with a synced delay, like the status pills and the Chronicle's live bars.
+ *
+ * Each tick is a link to its run, because the red one is the one you want to
+ * open. Thirty links per card would be thirty tab stops per monitor, so the
+ * strip is one: Tab lands on the newest run (or the one last walked to), the
+ * arrow keys and Home and End walk its history, and Enter opens the one in
+ * focus. A slot no run has filled yet is not a link.
  */
 export function HeartbeatBar({ beats, slots = 30 }: { beats: Heartbeat[]; slots?: number }) {
   const shown = beats.slice(-slots);
@@ -65,31 +88,53 @@ export function HeartbeatBar({ beats, slots = 30 }: { beats: Heartbeat[]; slots?
   const arrived = useChangeFlash(newest, DURATION.base);
   const flip = useFlip();
   const beat = useSyncedDelay(DURATION.pulse);
+  // The strip's one tab stop: the beat last walked to, while it is still on
+  // the strip, or else the newest run. It has to follow focus — left on the
+  // newest, Tab from an older beat would land on the newest instead of leaving.
+  const [walked, setWalked] = useState<string | null>(null);
+  const stop = shown.some((h) => h.runId === walked)
+    ? walked
+    : (shown.findLast((h) => h.runId)?.runId ?? null);
   return (
     <div
-      role="img"
+      role="group"
       aria-label={`Last ${shown.length} runs`}
+      onKeyDown={(e) => {
+        const step = STEP[e.key];
+        if (!step) return;
+        const links = [...e.currentTarget.querySelectorAll("a")];
+        const at = links.indexOf(document.activeElement as HTMLAnchorElement);
+        if (at < 0) return;
+        e.preventDefault();
+        links[step(at, links.length)].focus();
+      }}
       // Newest on the right, beside the uptime it adds to; any width the capped
       // slots leave over falls on the left, before the oldest run.
       className="flex h-6 w-full min-w-0 items-end justify-end gap-[3px]"
     >
       {Array.from({ length: pad }, (_, i) => (
-        <span key={`pad-${i}`} className={`${SLOT} ${EMPTY}`} />
+        <span key={`pad-${i}`} aria-hidden="true" className={`${SLOT} ${EMPTY}`} />
       ))}
-      {shown.map((h) => {
+      {shown.map((h, i) => {
         const tone = toneOf(h);
         // The arrival and the breathing are both `animation`, so a running tick
         // that has just landed grows in first and starts breathing after.
         const motion = arrived && h.runId === newest ? ARRIVE : tone === "run" ? PULSE : "";
+        const className = `${SLOT} h-6 origin-bottom transition-transform duration-(--duration-quick) hover:scale-y-125 ${TICK[tone]} ${motion}`;
+        const style = motion === PULSE ? { animationDelay: beat } : undefined;
+        if (!h.runId) return <span key={`beat-${i}`} className={className} style={style} />;
+        const name = describe(h);
         return (
-          <span
+          <a
             key={h.runId}
             ref={flip(h.runId)}
-            title={`${new Date(h.at).toLocaleString()} — ${h.status}${
-              h.outcome && h.outcome !== "succeeded" ? ` (${h.outcome})` : ""
-            }`}
-            style={motion === PULSE ? { animationDelay: beat } : undefined}
-            className={`${SLOT} h-6 origin-bottom transition-transform duration-(--duration-quick) hover:scale-y-125 ${TICK[tone]} ${motion}`}
+            href={`#/run/${encodeURIComponent(h.runId)}`}
+            aria-label={name}
+            title={name}
+            tabIndex={h.runId === stop ? 0 : -1}
+            onFocus={() => setWalked(h.runId)}
+            style={style}
+            className={`${className} focus-visible:scale-y-125`}
           />
         );
       })}

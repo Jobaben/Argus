@@ -24,5 +24,7 @@ export function useBriefing() {
     refresh();
   }, [refresh]);
 
-  return { briefing: data, loading, error, ack };
+  // `refresh` is the Briefing's Retry: a failed load otherwise waits out the
+  // backoff with nothing on screen to press.
+  return { briefing: data, loading, error, ack, refresh };
 }

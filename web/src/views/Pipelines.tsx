@@ -15,7 +15,6 @@ import {
   formatTrigger,
   Handoff,
   Icon,
-  IconButton,
   Page,
   SkeletonTile,
   STATUS,
@@ -29,6 +28,9 @@ import {
 } from "../ds";
 import { PipelineForm, EMPTY_PIPELINE } from "./PipelineForm";
 import { AdminAuthPanel } from "./AdminAuthPanel";
+import { AccountPrompt } from "./AccountPrompt";
+import { CardFooter, FilterChip } from "./CardActions";
+import { firstProseLine } from "./outcome";
 import { TuningDrawer } from "./TuningDrawer";
 import { toInput } from "./tuningApply";
 import { ReliabilityCard } from "./ReliabilityCard";
@@ -338,7 +340,9 @@ function PipelineCard({
               {failure.step ? (
                 <span className="font-semibold text-ink">{failure.step}: </span>
               ) : null}
-              <span>{(failure.reason ?? "failed").split("\n")[0]}</span>
+              {/* The first line of prose: a reason that is only the agent's
+                  outcome marker reads as the marker's own reason. */}
+              <span>{firstProseLine(failure.reason) || "failed"}</span>
             </p>
             {live.review && !live.review.canApprove && (
               // The box already says "failed"; the button only goes somewhere, so
@@ -376,15 +380,52 @@ function PipelineCard({
       </div>
 
       {admin && (
-        <footer className="mt-auto flex flex-wrap items-center gap-2 rounded-b-tile border-t border-line bg-ground-2/40 px-4 py-3 sm:px-5">
+        <CardFooter
+          error={error}
+          manage={
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                icon="power"
+                onClick={() => void setEnabled(def.id, !def.enabled)}
+                title={
+                  def.enabled
+                    ? "Pause its trigger. Run now keeps working."
+                    : "Let its trigger fire again"
+                }
+              >
+                {def.enabled ? "Disable" : "Enable"}
+              </Button>
+              <Button
+                variant="quiet-danger"
+                size="sm"
+                icon="trash"
+                // Every card's button reads "Delete"; the name says which one.
+                aria-label={`Delete ${def.name}`}
+                onClick={() => {
+                  const n = live.activeIds.length;
+                  const stops =
+                    n === 0
+                      ? ""
+                      : ` Its ${n === 1 ? "running instance" : `${n} running instances`} will be stopped first, and in-progress work discarded.`;
+                  if (confirm(`Delete pipeline "${def.name}"?${stops}`)) void remove(def.id);
+                }}
+              >
+                Delete
+              </Button>
+            </>
+          }
+        >
           {(!abortable || def.overlapPolicy === "allow") && (
-            <Button icon="play" onClick={() => void runNow(def.id)}>
+            <Button size="sm" icon="play" onClick={() => void runNow(def.id)}>
               Run now
             </Button>
           )}
           {abortable && (
             <Button
               variant="danger"
+              size="sm"
               icon="stop"
               onClick={() => {
                 if (confirm(stopPrompt)) {
@@ -397,56 +438,17 @@ function PipelineCard({
           )}
           <Button
             variant="ghost"
+            size="sm"
             icon="sparkle"
             onClick={onAnalyze}
             title="Ask one agent per phase whether this pipeline's model and effort settings fit its steps. Prompts are never changed; nothing is saved until you apply a proposal."
           >
             Analyze
           </Button>
-          <Button ref={editRef} variant="ghost" icon="edit" onClick={onEdit}>
+          <Button ref={editRef} variant="ghost" size="sm" icon="edit" onClick={onEdit}>
             Edit
           </Button>
-          {/* Housekeeping sits apart from the run controls, as one group that
-              wraps as one on a phone. Stop is the card's one red outline: Delete
-              asks before it acts, so it can afford to be quiet until hovered —
-              a red box on every card drowned out the one that had failed. */}
-          <div className="ml-auto flex items-center gap-1">
-            <Button
-              variant="ghost"
-              icon="power"
-              onClick={() => void setEnabled(def.id, !def.enabled)}
-              title={
-                def.enabled
-                  ? "Pause its trigger. Run now keeps working."
-                  : "Let its trigger fire again"
-              }
-            >
-              {def.enabled ? "Disable" : "Enable"}
-            </Button>
-            <IconButton
-              icon="trash"
-              label="Delete"
-              variant="quiet-danger"
-              onClick={() => {
-                const n = live.activeIds.length;
-                const stops =
-                  n === 0
-                    ? ""
-                    : ` Its ${n === 1 ? "running instance" : `${n} running instances`} will be stopped first, and in-progress work discarded.`;
-                if (confirm(`Delete pipeline "${def.name}"?${stops}`)) void remove(def.id);
-              }}
-            />
-          </div>
-          {error && (
-            <p
-              role="alert"
-              className="flex basis-full items-start gap-1.5 text-caption text-fail-ink"
-            >
-              <Icon name="alert" size={14} className="mt-px text-fail" />
-              <span className="min-w-0 break-words">Couldn't complete that: {error}</span>
-            </p>
-          )}
-        </footer>
+        </CardFooter>
       )}
     </article>
   );
@@ -528,6 +530,23 @@ function AccountMenu({
   );
 }
 
+/** What a pipeline is, for a page with none: two sentences and the next
+ *  step, with the anatomy on demand. */
+function AboutPipelines() {
+  return (
+    <p className="max-w-xl">
+      Ordered <strong className="text-ink">phases</strong> of headless agent runs. Any phase can be{" "}
+      <strong className="text-ink">gated</strong>, which pauses the pipeline there until a human
+      approves or sends it back with a note.{" "}
+      <InfoTip title="What's a pipeline?">
+        Each phase has a working directory and one or more steps — a step being one headless agent
+        run, on whichever runtime that step, phase or pipeline names. Once created, a pipeline
+        appears on the Command Center wall, where you approve gates and watch steps as they work.
+      </InfoTip>
+    </p>
+  );
+}
+
 type Filter = "all" | "await" | "failed" | "paused";
 
 /** Which pipelines a filter keeps. */
@@ -535,33 +554,6 @@ function matches(filter: Filter, def: PipelineDefinition, live: PipelineLive): b
   if (filter === "all") return true;
   if (filter === "paused") return !def.enabled;
   return live.badge === filter;
-}
-
-/**
- * A count that filters the list — the Scheduler's chip, so the two peer pages
- * summarise themselves in one idiom: a quiet outlined ghost at rest, a lit
- * secondary while its filter is on.
- */
-function FilterChip({
-  selected,
-  onClick,
-  children,
-}: {
-  selected: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <Button
-      variant={selected ? "secondary" : "ghost"}
-      size="sm"
-      aria-pressed={selected}
-      onClick={onClick}
-      className={selected ? "" : "border border-line"}
-    >
-      {children}
-    </Button>
-  );
 }
 
 /**
@@ -766,7 +758,9 @@ export default function Pipelines() {
         </div>
       )}
 
-      {auth.status && !isAdmin && (
+      {/* Above a list, the way to act on it. An empty page asks for the
+          account itself, in its empty state below, so it says so once. */}
+      {auth.status && !isAdmin && (pipelines.length > 0 || error !== null) && (
         <div className="mb-6">
           <AdminAuthPanel
             configured={auth.status.configured}
@@ -816,7 +810,19 @@ export default function Pipelines() {
           // A failed load is not an empty list: the strip above says what
           // happened, and "no pipelines yet" under it would be a second,
           // contradictory answer.
-          error ? null : (
+          error ? null : auth.status && !isAdmin ? (
+            <AccountPrompt
+              configured={auth.status.configured}
+              onLogin={auth.login}
+              onSetup={auth.setup}
+              onRegister={auth.register}
+              icon="pipeline"
+              title="No pipelines yet"
+              signInLabel="Sign in to add one"
+            >
+              <AboutPipelines />
+            </AccountPrompt>
+          ) : (
             <EmptyState
               icon="pipeline"
               title="No pipelines yet"
@@ -828,25 +834,7 @@ export default function Pipelines() {
                 ) : undefined
               }
             >
-              {/* Two sentences and the next step; the anatomy is on demand. */}
-              <p className="max-w-xl">
-                Ordered <strong className="text-ink">phases</strong> of headless agent runs. Any
-                phase can be <strong className="text-ink">gated</strong>, which pauses the pipeline
-                there until a human approves or sends it back with a note.{" "}
-                <InfoTip title="What's a pipeline?">
-                  Each phase has a working directory and one or more steps — a step being one
-                  headless agent run, on whichever runtime that step, phase or pipeline names. Once
-                  created, a pipeline appears on the Command Center wall, where you approve gates
-                  and watch steps as they work.
-                </InfoTip>
-              </p>
-              {!isAdmin && auth.status && (
-                <p className="mt-2 text-ink-dim">
-                  {auth.status.configured
-                    ? "Sign in above to add your first pipeline."
-                    : "Create the root account above to add your first pipeline."}
-                </p>
-              )}
+              <AboutPipelines />
             </EmptyState>
           )
         ) : (
@@ -865,10 +853,10 @@ export default function Pipelines() {
                   icon={filter === "paused" ? "pause" : "check-circle"}
                   title={
                     filter === "await"
-                      ? "Nothing is waiting for you."
+                      ? "Nothing is waiting for you"
                       : filter === "failed"
-                        ? "Nothing has failed."
-                        : "Nothing is paused."
+                        ? "Nothing has failed"
+                        : "Nothing is paused"
                   }
                   action={
                     <Button variant="ghost" size="sm" onClick={() => setFilter("all")}>

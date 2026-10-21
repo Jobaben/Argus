@@ -355,13 +355,14 @@ describe("DecisionH1Section", () => {
   it("shows the statement even when nothing has been collected", async () => {
     await renderLoaded(emptyReport);
     expect(within(screen.getByRole("note")).getByText(STATEMENT)).toBeTruthy();
-    expect(screen.getByText("Collection enabled")).toBeTruthy();
-    expect(screen.getByText("No settings reported.")).toBeTruthy();
-    expect(screen.getByText("No H1 collection config recorded.")).toBeTruthy();
-    expect(screen.getByText("No H1 census recorded.")).toBeTruthy();
+    // The same words as H2's report beside it, for the same states.
+    expect(screen.getByText("On")).toBeTruthy();
+    expect(screen.getByText("No valid settings.")).toBeTruthy();
+    expect(screen.getByText("No collection config recorded.")).toBeTruthy();
+    expect(screen.getByText("No census recorded.")).toBeTruthy();
     expect(screen.getByText("No deterministic baseline rows.")).toBeTruthy();
     expect(screen.getByText("No verdict baseline rows.")).toBeTruthy();
-    expect(screen.getByText("No settled model assessments yet.")).toBeTruthy();
+    expect(screen.getByText("No settled model assessments yet")).toBeTruthy();
     expect(screen.getAllByText("No findings recorded.").length).toBe(3);
     expect(screen.getByText(/Gate pauses seen and not captured: none/)).toBeTruthy();
     expect(screen.getByText(/H1 report as of ledger record 0 \(no records\)/)).toBeTruthy();
@@ -369,7 +370,7 @@ describe("DecisionH1Section", () => {
 
   it("renders the collection status, settings and configs", async () => {
     await renderLoaded();
-    expect(screen.getByText("Collection off")).toBeTruthy();
+    expect(screen.getByText("Off")).toBeTruthy();
     // The reason reads as the server said it; the variable in it is set as code.
     const reason = screen.getByText(
       (_, el) => el?.tagName === "SPAN" && el.textContent === "ARGUS_H1_COLLECT is not set",
@@ -406,8 +407,8 @@ describe("DecisionH1Section", () => {
     const census = screen
       .getByRole("heading", { name: "Census", level: 2 })
       .closest("section") as HTMLElement;
-    const card = within(census).getAllByRole("heading", { level: 3 })[0]
-      .parentElement as HTMLElement;
+    const card = within(census).getAllByRole("heading", { level: 3 })[0].closest("header")
+      ?.parentElement as HTMLElement;
     const row = (label: string) => within(card).getByText(label).nextSibling?.textContent;
     expect(row("Captured")).toBe("40");
     expect(row("Sampled")).toBe("12");
@@ -513,7 +514,7 @@ describe("DecisionH1Section", () => {
     expect(within(table).getByText("0.2–0.4")).toBeTruthy();
     expect(within(table).getByText("0.310")).toBeTruthy();
     expect(within(table).getByText("25.0%")).toBeTruthy();
-    expect(within(table).getByText("unmeasured (n = 5)")).toBeTruthy();
+    expect(within(table).getByText(/^unmeasured \(n = 5 < \d+\)$/)).toBeTruthy();
 
     // Paired baselines.
     expect(screen.getAllByText("Deterministic baseline on the same items").length).toBe(2);
@@ -572,6 +573,6 @@ describe("DecisionH1Section", () => {
   it("treats a malformed body as no report", async () => {
     mockFetch({ "/api/decisions/h1": () => okJson({ nope: true }) });
     render(<DecisionH1Section />);
-    expect(await screen.findByText("No H1 report available.")).toBeTruthy();
+    expect(await screen.findByText("No H1 report available")).toBeTruthy();
   });
 });

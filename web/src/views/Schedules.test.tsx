@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Run, ScheduleWithNext } from "../types";
 import Schedules from "./Schedules";
@@ -188,6 +188,37 @@ describe("Schedules health", () => {
     expect(screen.getByText("3 consecutive failures")).toBeTruthy();
     // The reason is on the card, so triage does not require expanding a run.
     expect(screen.getByText("prereq missing: gh")).toBeTruthy();
+  });
+
+  it("reads a summary that is only the agent's outcome marker as the marker's reason", () => {
+    // The marker is protocol for the scheduler; its reason is the one human
+    // line there is, so the streak says it rather than nothing.
+    mockState.schedules = [schedule()];
+    mockState.runs = [
+      run({ id: "a", status: "failed", resultSummary: "ARGUS_OUTCOME: failed tests are red" }),
+      run({ id: "b", status: "failed" }),
+    ];
+    render(<Schedules />);
+    expect(screen.getByText("2 consecutive failures")).toBeTruthy();
+    expect(screen.getByText("tests are red")).toBeTruthy();
+    expect(screen.queryByText(/ARGUS_OUTCOME/)).toBeNull();
+  });
+
+  it("lays its footer out as a pipeline card's: run, open, then housekeeping", () => {
+    mockState.schedules = [schedule()];
+    render(<Schedules />);
+    const footer = screen
+      .getByRole("button", { name: /run now/i })
+      .closest("footer") as HTMLElement;
+    expect(
+      within(footer)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["Run now", "Edit", "Disable", "Delete"]);
+    // One "Delete" per card on screen; a screen reader hears which card's.
+    expect(
+      within(footer).getByRole("button", { name: `Delete ${mockState.schedules[0].name}` }),
+    ).toBeInTheDocument();
   });
 
   it("does not shout about a single failure a run row already shows", () => {

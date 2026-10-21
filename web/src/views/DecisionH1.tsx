@@ -10,11 +10,20 @@ import type {
   H1VerdictRow,
   H2Distribution,
   H2Finding,
-  H2Measured,
   H2Proportion,
   H2Usage,
 } from "@argus/contracts";
 import { useDecisionH1 } from "../useDecisionH1";
+import {
+  RUNNER_DEFAULT,
+  formatInterval,
+  formatMeasured,
+  formatNullable,
+  formatProportion,
+  pct,
+  rate,
+  unmeasuredBucket,
+} from "./decisionFormat";
 import {
   AlertStrip,
   Button,
@@ -29,37 +38,6 @@ import {
 } from "../ds";
 
 // ── Formatting ──────────────────────────────────────────────────────────────
-
-/** 0.625 → "62.5%". */
-function pct(v: number, digits = 1): string {
-  return `${(v * 100).toFixed(digits)}%`;
-}
-
-/** A configured rate: no padding zeros, so 0.05 reads "5%" rather than "5.0%". */
-function rate(v: number): string {
-  return `${+(v * 100).toFixed(2)}%`;
-}
-
-/** "62.5% (5/8, 95% CI 30.6–86.3%)", or "— (n = 0)" when there is nothing to divide. */
-function formatProportion(p: H2Proportion): string {
-  if (p.value === null) return "— (n = 0)";
-  const ci = p.ci95
-    ? `, 95% CI ${(p.ci95[0] * 100).toFixed(1)}–${(p.ci95[1] * 100).toFixed(1)}%`
-    : "";
-  return `${pct(p.value)} (${p.k}/${p.n}${ci})`;
-}
-
-function formatMeasured<T>(m: H2Measured<T>, show: (v: T) => string): string {
-  return m.status === "measured" ? show(m.value) : `unmeasured — ${m.reason}`;
-}
-
-const formatNullable = (v: number | null, show: (n: number) => string): string =>
-  v === null ? "—" : show(v);
-
-// Shared with the H2 report, so a proportion or a rate reads the same way in
-// both experiments; one list, so the exception to "components only" is one line.
-// eslint-disable-next-line react-refresh/only-export-components -- formatters shared with DecisionExperiments.tsx
-export { formatMeasured, formatNullable, formatProportion, pct, rate };
 
 const formatDistribution = (d: H2Distribution, unit: string): string =>
   d.n === 0
@@ -181,6 +159,30 @@ export function Counts({ counts }: { counts: Record<string, number> }) {
 export function SubHeading({ children, level = 4 }: { children: ReactNode; level?: 3 | 4 }) {
   const H = level === 3 ? "h3" : "h4";
   return <H className="mb-2.5 text-small font-semibold text-ink">{children}</H>;
+}
+
+/**
+ * A card's title, one anatomy for every card in both experiments: what the
+ * card is about in words, the machine id it is about beside it in mono, and a
+ * count at the far end. They used to be set four ways — an id as the heading,
+ * a chip inside one, a label with the id under it, a label alone.
+ */
+export function CardTitle({
+  children,
+  id,
+  aside,
+}: {
+  children: ReactNode;
+  id?: string;
+  aside?: ReactNode;
+}) {
+  return (
+    <header className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+      <h3 className="min-w-0 break-words text-heading font-semibold text-ink">{children}</h3>
+      {id && <p className="min-w-0 break-all font-mono text-caption text-ink-faint">{id}</p>}
+      {aside != null && <p className="ml-auto text-small text-ink-dim">{aside}</p>}
+    </header>
+  );
 }
 
 /** A titled region inside a card, set off from the one above by a hairline. */
@@ -640,14 +642,13 @@ export function CollectionCard({
   enabled,
   reasons,
   settings,
-  noSettings,
   children,
 }: {
   state: Array<[string, ReactNode]>;
   enabled: boolean;
   reasons: string[];
+  /** Null when the settings did not parse; the reasons say why. */
   settings: Array<[string, ReactNode]> | null;
-  noSettings: string;
   /** The recorded collection configs, under a rule: a `Block` with `level={3}`,
    *  since this card has no title of its own. */
   children?: ReactNode;
@@ -679,7 +680,7 @@ export function CollectionCard({
         </div>
         <div className="min-w-0">
           <SubHeading level={3}>Settings</SubHeading>
-          {settings ? <Facts rows={settings} /> : <EmptyLine>{noSettings}</EmptyLine>}
+          {settings ? <Facts rows={settings} /> : <EmptyLine>No valid settings.</EmptyLine>}
         </div>
       </div>
       {children}
@@ -857,13 +858,10 @@ function CollectionSection({
       <CollectionCard
         enabled={status.enabled}
         reasons={status.reasons}
-        noSettings="No settings reported."
         state={[
           [
-            "H1 collection",
-            <StatePill on={status.enabled}>
-              {status.enabled ? "Collection enabled" : "Collection off"}
-            </StatePill>,
+            "Collection",
+            <StatePill on={status.enabled}>{status.enabled ? "On" : "Off"}</StatePill>,
           ],
           [
             "Watcher",
@@ -880,11 +878,11 @@ function CollectionSection({
                   "Models",
                   s.models.length === 0
                     ? "none"
-                    : s.models.map((m) => m ?? "runner default").join(" · "),
+                    : s.models.map((m) => m ?? RUNNER_DEFAULT).join(" · "),
                 ],
                 ["Combined max calls per 24h", String(s.maxCallsPer24h)],
                 ["H1 own share per 24h", String(s.maxOwnCallsPer24h)],
-                ["Min interval between calls", `${+(s.minCallIntervalMs / 60_000).toFixed(2)} min`],
+                ["Min interval between calls", formatInterval(s.minCallIntervalMs)],
                 ["Max spend per 24h", `$${s.maxUsdPer24h}`],
               ]
             : null
@@ -892,7 +890,7 @@ function CollectionSection({
       >
         <Block title="Collection configs" level={3}>
           {collection.configs.length === 0 ? (
-            <EmptyLine>No H1 collection config recorded.</EmptyLine>
+            <EmptyLine>No collection config recorded.</EmptyLine>
           ) : (
             <div className="flex flex-col gap-2">
               {collection.configs.map((c) => (
@@ -906,7 +904,7 @@ function CollectionSection({
                       "Arms (requested model)",
                       c.arms.length === 0
                         ? "none"
-                        : c.arms.map((a) => a.requestedModel ?? "runner default").join(" · "),
+                        : c.arms.map((a) => a.requestedModel ?? RUNNER_DEFAULT).join(" · "),
                     ],
                   ]}
                 />
@@ -1031,7 +1029,7 @@ function SpendSection({ spend }: { spend: H1Report["spend"] }) {
 function CensusCard({ c }: { c: H1Census }) {
   return (
     <Card>
-      <h3 className="mb-3 text-heading font-semibold text-ink">{populationLabel(c.population)}</h3>
+      <CardTitle>{populationLabel(c.population)}</CardTitle>
       <StatGrid
         cols={3}
         items={[
@@ -1120,9 +1118,7 @@ function BaselineRow({ row, children }: { row: H1BaselineRow; children?: ReactNo
   const name = `${row.definition.id}@${row.definition.version}`;
   return (
     <Card>
-      <h3 className="mb-2 text-heading font-semibold text-ink">
-        {populationLabel(row.population)}
-      </h3>
+      <CardTitle>{populationLabel(row.population)}</CardTitle>
       <Facts
         rows={[
           ["Definition", <span className="font-mono">{name}</span>],
@@ -1188,17 +1184,14 @@ function ModelCard({ p }: { p: H1ModelPopulation }) {
   const name = `${question} (${populationLabel(p.population)})`;
   return (
     <Card>
-      <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
-        <h3 className="text-heading font-semibold text-ink">{populationLabel(p.population)}</h3>
-        <p className="font-mono text-caption text-ink-faint">{question}</p>
-      </div>
+      <CardTitle id={question}>{populationLabel(p.population)}</CardTitle>
       <Facts
         columns={2}
         rows={[
           ["Definition", p.question.definition],
           ["Projection", `${p.projection.id}@${p.projection.version}`],
           ["Provider", p.provider.provider],
-          ["Requested model", p.provider.requestedModel ?? "runner default"],
+          ["Requested model", p.provider.requestedModel ?? RUNNER_DEFAULT],
           ["Reported model", p.provider.reportedModel ?? "not reported"],
           ["Adapter version", String(p.provider.adapterVersion)],
           ["Elicitation", p.provider.elicitation],
@@ -1265,7 +1258,7 @@ function ModelCard({ p }: { p: H1ModelPopulation }) {
                     </>
                   ) : (
                     <td colSpan={2} className={`${TD} text-ink-faint`}>
-                      unmeasured (n = {b.n})
+                      {unmeasuredBucket(b.n, p.reliability.minBucket)}
                     </td>
                   )}
                 </tr>
@@ -1313,7 +1306,7 @@ function Report({ data }: { data: NonNullable<ReturnType<typeof useDecisionH1>["
       {empty ? (
         <>
           <Section title="Assessments">
-            <EmptyState icon="inbox" title="Nothing collected yet">
+            <EmptyState icon="inbox" title="No shadow assessments recorded">
               {collection.enabled ? (
                 "Collection is on. A gate is captured when it pauses, and assessed once its operator settles it."
               ) : (
@@ -1353,7 +1346,7 @@ function ReportBody({ report }: { report: H1Report }) {
 
       <Section title="Census">
         {report.census.length === 0 ? (
-          <EmptyRow>No H1 census recorded.</EmptyRow>
+          <EmptyRow>No census recorded.</EmptyRow>
         ) : (
           <div className="grid gap-3 xl:grid-cols-2">
             {report.census.map((c) => (
@@ -1385,7 +1378,7 @@ function ReportBody({ report }: { report: H1Report }) {
 
       <Section title="Model populations">
         {report.models.length === 0 ? (
-          <EmptyState compact icon="inbox" title="No settled model assessments yet.">
+          <EmptyState compact icon="inbox" title="No settled model assessments yet">
             A model row appears once collection is on and a sampled gate is settled by its operator,
             with its review state held from capture to decision.
           </EmptyState>
@@ -1428,6 +1421,15 @@ function ReportBody({ report }: { report: H1Report }) {
 
 // ── Section ─────────────────────────────────────────────────────────────────
 
+/** The server answered, with something that is not a report. */
+export function NoReport({ name }: { name: string }) {
+  return (
+    <EmptyState icon="file" title={`No ${name} report available`}>
+      The server answered, but not with a report this page can read.
+    </EmptyState>
+  );
+}
+
 export function DecisionH1Section() {
   const { data, loading, error, refresh } = useDecisionH1();
 
@@ -1451,11 +1453,7 @@ export function DecisionH1Section() {
         </div>
       )}
       <Handoff busy={loading && !data} label="H1 report" skeleton={<SkeletonRows count={4} />}>
-        {data ? (
-          <Report data={data} />
-        ) : (
-          !error && <EmptyState icon="file">No H1 report available.</EmptyState>
-        )}
+        {data ? <Report data={data} /> : !error && <NoReport name="H1" />}
       </Handoff>
     </section>
   );

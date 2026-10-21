@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import type {
   H2CensusTable,
+  H2QuestionRole,
   H2CollectionStatus,
   H2PopulationBase,
   H2ProbePopulation,
@@ -11,6 +12,7 @@ import { useDecisionExperiments } from "../useDecisionExperiments";
 import {
   AsOf,
   Block,
+  CardTitle,
   CollectionCard,
   ConfigWell,
   Counts,
@@ -24,6 +26,7 @@ import {
   IntegrityCard,
   Matrix,
   MethodsPanel,
+  NoReport,
   Notice,
   ProportionValue,
   ReportDetails,
@@ -36,12 +39,17 @@ import {
   TurnOnCollection,
   UsageFacts,
   WatcherValue,
+} from "./DecisionH1";
+import {
+  RUNNER_DEFAULT,
+  formatInterval,
   formatMeasured,
   formatNullable,
   formatProportion,
   pct,
   rate,
-} from "./DecisionH1";
+  unmeasuredBucket,
+} from "./decisionFormat";
 import {
   AlertStrip,
   Button,
@@ -53,6 +61,12 @@ import {
   SkeletonRows,
   chipClass,
 } from "../ds";
+
+/** A census table's role, in the words of the section it feeds. */
+const ROLE_LABEL: Record<H2QuestionRole, string> = {
+  probe: "Probe question",
+  residual: "Residual question",
+};
 
 // ── Formatting ──────────────────────────────────────────────────────────────
 
@@ -86,11 +100,10 @@ function CollectionSection({
       <CollectionCard
         enabled={status.enabled}
         reasons={status.reasons}
-        noSettings="No valid settings."
         state={[
           [
             "Collection",
-            <StatePill on={status.enabled}>{status.enabled ? "Enabled" : "Off"}</StatePill>,
+            <StatePill on={status.enabled}>{status.enabled ? "On" : "Off"}</StatePill>,
           ],
           [
             "Watcher",
@@ -104,9 +117,9 @@ function CollectionSection({
                 ["Residual sampling rate", rate(s.residualRate)],
                 ["Probe sampling rate", rate(s.probeRate)],
                 ["Max calls per 24h", String(s.maxCallsPer24h)],
-                ["Min interval between calls", `${+(s.minCallIntervalMs / 60_000).toFixed(2)} min`],
+                ["Min interval between calls", formatInterval(s.minCallIntervalMs)],
                 ["Max spend per 24h", `$${s.maxUsdPer24h}`],
-                ["Requested model", s.requestedModel ?? "runner default"],
+                ["Requested model", s.requestedModel ?? RUNNER_DEFAULT],
                 ["Seed", <span className="font-mono">{s.seed}</span>],
               ]
             : null
@@ -129,7 +142,7 @@ function CollectionSection({
                     ],
                     [
                       "Provider",
-                      `${c.provider.provider} · requested ${c.provider.requestedModel ?? "default"} · adapter v${c.provider.adapterVersion}`,
+                      `${c.provider.provider} · requested ${c.provider.requestedModel ?? RUNNER_DEFAULT} · adapter v${c.provider.adapterVersion}`,
                     ],
                     ["Census records", String(c.census)],
                     ["Attempts", String(c.attempts)],
@@ -192,15 +205,12 @@ function CensusCard({ table }: { table: H2CensusTable }) {
   const name = `${table.role} ${table.question.id}@${table.question.version}`;
   return (
     <Card>
-      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-        <h3 className="flex min-w-0 items-center gap-2 text-heading font-semibold text-ink">
-          <span className={chipClass()}>{table.role}</span>
-          <span className="min-w-0 break-all font-mono text-small">
-            {table.question.id}@{table.question.version}
-          </span>
-        </h3>
-        <p className="text-small text-ink-dim">Runs considered: {table.considered}</p>
-      </div>
+      <CardTitle
+        id={`${table.question.id}@${table.question.version}`}
+        aside={`Runs considered: ${table.considered}`}
+      >
+        {ROLE_LABEL[table.role] ?? table.role}
+      </CardTitle>
       <Block title="Excluded">
         {excluded.length === 0 ? (
           <EmptyLine>Nothing excluded.</EmptyLine>
@@ -259,16 +269,18 @@ function CensusCard({ table }: { table: H2CensusTable }) {
 function PopulationHeader({ p }: { p: H2PopulationBase }) {
   return (
     <>
-      <h3 className="mb-2 break-all font-mono text-heading font-semibold text-ink">
-        {p.question.id}@{p.question.version}
-      </h3>
+      <CardTitle>
+        <span className="break-all font-mono">
+          {p.question.id}@{p.question.version}
+        </span>
+      </CardTitle>
       <Facts
         columns={2}
         rows={[
           ["Definition", p.question.definition],
           ["Projection", `${p.projection.id}@${p.projection.version}`],
           ["Provider", p.provider.provider],
-          ["Requested model", p.provider.requestedModel ?? "default"],
+          ["Requested model", p.provider.requestedModel ?? RUNNER_DEFAULT],
           ["Reported model", p.provider.reportedModel ?? "not reported"],
           ["Adapter version", String(p.provider.adapterVersion)],
           ["Elicitation", p.provider.elicitation],
@@ -426,7 +438,7 @@ function ProbeCard({ p }: { p: H2ProbePopulation }) {
                   </>
                 ) : (
                   <td colSpan={2} className={`${TD} text-ink-faint`}>
-                    unmeasured (n &lt; {minBucket})
+                    {unmeasuredBucket(b.n, minBucket)}
                   </td>
                 )}
               </tr>
@@ -568,12 +580,6 @@ export default function DecisionExperiments() {
           Asks how a finished run ended, which Argus can check, and why an unsuccessful one failed,
           which it cannot.
         </ExperimentHeader>
-        <Notice title="Shadow measurement only.">
-          These assessments are never read by any route, gate, retry or approval, and nothing here
-          authorises an approval. Probe results measure recovery of an observed fact; they are not
-          residual-cause accuracy. Residual-cause accuracy is unmeasured until valid reference
-          labels exist.
-        </Notice>
         {error && (
           <div className="mb-6">
             <AlertStrip
@@ -588,11 +594,7 @@ export default function DecisionExperiments() {
           </div>
         )}
         <Handoff busy={loading && !data} label="H2 report" skeleton={<SkeletonRows count={4} />}>
-          {data ? (
-            <Report data={data} />
-          ) : (
-            !error && <EmptyState icon="file">No report available.</EmptyState>
-          )}
+          {data ? <Report data={data} /> : !error && <NoReport name="H2" />}
         </Handoff>
       </section>
       <DecisionH1Section />
@@ -612,7 +614,7 @@ function Report({
   // is all zeros then, so it folds away behind the one thing worth saying.
   const empty = report.asOf.seq === 0 && report.census.length === 0 && noAssessments;
   const assessmentsEmpty = (
-    <EmptyState compact={!empty} icon="inbox" title="No shadow assessments recorded.">
+    <EmptyState compact={!empty} icon="inbox" title="No shadow assessments recorded">
       {collection.enabled ? (
         "Collection is on. A sampled run is assessed once it is between 10 minutes and 24 hours old."
       ) : (
@@ -625,6 +627,14 @@ function Report({
   );
   return (
     <>
+      {/* With the report, as H1's is: the caveat is about these figures. */}
+      <Notice title="Shadow measurement only.">
+        These assessments are never read by any route, gate, retry or approval, and nothing here
+        authorises an approval. Probe results measure recovery of an observed fact; they are not
+        residual-cause accuracy. Residual-cause accuracy is unmeasured until valid reference labels
+        exist.
+      </Notice>
+
       <CollectionSection status={collection} collection={report.collection} />
       {empty ? (
         <>
@@ -642,8 +652,8 @@ function Report({
       )}
 
       <AsOf>
-        As of ledger record {report.asOf.seq} ({report.asOf.at ?? "no records"}). Opening this page
-        never starts collection or calls a model.
+        H2 report as of ledger record {report.asOf.seq} ({report.asOf.at ?? "no records"}). Opening
+        this page never starts collection or calls a model.
       </AsOf>
     </>
   );
@@ -716,7 +726,7 @@ function ReportBody({
       <Section title="Integrity">
         <IntegrityCard
           integrity={report.integrity}
-          empty="No findings."
+          empty="No findings recorded."
           facts={[
             ["History (ledger, journal and joins)", report.integrity.history],
             ["Journal gaps", String(report.integrity.journal.gaps)],

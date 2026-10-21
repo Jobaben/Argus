@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuth } from "../useAuth";
 import { useUsers, type UserRow } from "../useUsers";
+import { AccountPrompt } from "./AccountPrompt";
 import {
   AlertStrip,
   Button,
-  ButtonLink,
   EmptyState,
   Handoff,
   Page,
@@ -91,10 +91,27 @@ function UserItem({
   );
 }
 
-export default function Users() {
-  const auth = useAuth();
+/** The server's refusals — 401 with no session, 403 for a session that is not
+ *  root's — as `useLiveResource` words them. */
+const REFUSED = /^HTTP 40[13]$/;
+
+/**
+ * The account list, for root only. Its own component so that `/api/users` —
+ * root-only on the server, refused to everyone else — is fetched only once the
+ * session is known to be root's. Mounted for everyone, it was asked for on an
+ * empty install and by every signed-out visitor, and its refusal was shown as
+ * a load error under the very state that explained it.
+ */
+function AccountList({ self, onRecheck }: { self: string | null; onRecheck: () => void }) {
   const { users, loading, error, refresh, approve, reject } = useUsers();
   const [actionError, setActionError] = useState<string | null>(null);
+  // A session can end between two reads of the auth status (it expired, or
+  // root signed out in another tab). That is not a fault in this page: the
+  // status is re-read, and the page becomes whichever state it now is.
+  const refused = error !== null && REFUSED.test(error);
+  useEffect(() => {
+    if (refused) onRecheck();
+  }, [refused, onRecheck]);
 
   const guarded = (fn: (u: string) => Promise<void>) => async (u: string) => {
     setActionError(null);
@@ -102,121 +119,141 @@ export default function Users() {
       await fn(u);
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e));
-      void auth.refresh();
+      onRecheck();
     }
   };
 
-  const isRoot = auth.status?.role === "root";
   const pending = users.filter((u) => u.status === "pending");
   const active = users.filter((u) => u.status !== "pending");
   const item = (u: UserRow) => (
     <UserItem
       key={u.username}
       user={u}
-      self={u.username === auth.status?.username}
+      self={u.username === self}
       onApprove={guarded(approve)}
       onReject={guarded(reject)}
     />
   );
 
   return (
+    <>
+      {error && !refused && (
+        <div className="mb-6">
+          <AlertStrip
+            subject="Accounts"
+            message={`Couldn't load users: ${error}`}
+            action={
+              <Button size="sm" icon="retry" onClick={() => refresh()}>
+                Retry
+              </Button>
+            }
+          />
+        </div>
+      )}
+      {actionError && (
+        <div className="mb-6">
+          <AlertStrip subject="Couldn't complete that" message={actionError} role="alert" />
+        </div>
+      )}
+      <Handoff
+        busy={(loading || refused) && users.length === 0}
+        label="accounts"
+        skeleton={<SkeletonRows count={2} />}
+      >
+        {users.length === 0 ? (
+          error ? null : (
+            <EmptyState icon="user" title="No accounts yet">
+              Accounts appear here as people register from the sign-in form.
+            </EmptyState>
+          )
+        ) : (
+          <>
+            {/* Someone waiting to be let in is the one thing on this page that
+                needs a decision, so they come first and look like it. */}
+            {pending.length > 0 && (
+              <Section title={`Waiting for approval · ${pending.length}`}>
+                <div className="relative overflow-hidden rounded-tile border border-await/35 bg-surface shadow-raised">
+                  <span
+                    aria-hidden="true"
+                    className="absolute inset-y-3 left-0 w-[3px] rounded-r-full bg-await"
+                  />
+                  <ul className="divide-y divide-line">{pending.map(item)}</ul>
+                </div>
+              </Section>
+            )}
+            {active.length > 0 && (
+              <Section title={`Accounts · ${active.length}`}>
+                <ul className="divide-y divide-line overflow-hidden rounded-tile border border-line bg-surface shadow-raised">
+                  {active.map(item)}
+                </ul>
+              </Section>
+            )}
+          </>
+        )}
+      </Handoff>
+    </>
+  );
+}
+
+export default function Users() {
+  const auth = useAuth();
+  const { status } = auth;
+  const recheck = auth.refresh;
+
+  const body =
+    status === null ? (
+      <AlertStrip
+        subject="Accounts"
+        message={`Couldn't check who is signed in: ${auth.error ?? "no answer"}`}
+        action={
+          <Button size="sm" icon="retry" onClick={() => recheck()}>
+            Retry
+          </Button>
+        }
+      />
+    ) : !status.configured || !status.authenticated ? (
+      // What the server allows here: on a fresh install the first account,
+      // which becomes root (from the server's own machine only); otherwise a
+      // sign-in, or a request for an account that root then approves. The
+      // form opens in place — it used to live on the Pipelines tab, which a
+      // reader landing here had no way of knowing.
+      <AccountPrompt
+        configured={status.configured}
+        onLogin={auth.login}
+        onSetup={auth.setup}
+        onRegister={auth.register}
+        purpose="accounts"
+        icon="shield"
+        title={status.configured ? "Sign in as root to manage accounts" : "No root account yet"}
+      >
+        {status.configured
+          ? "A new account is created immediately but stays locked until root approves it here, so a registration alone grants nothing."
+          : "The first account created becomes root, and approves everyone who registers after it."}
+      </AccountPrompt>
+    ) : status.role !== "root" ? (
+      <EmptyState icon="shield" title="Only the root user can manage accounts">
+        A new account is created immediately but stays locked until root approves it here, so a
+        registration alone grants nothing.
+      </EmptyState>
+    ) : (
+      <AccountList self={status.username} onRecheck={recheck} />
+    );
+
+  return (
     <Page
       title="Users"
       subtitle="Who can sign in to this server. A new account stays locked until root approves it."
     >
-      {auth.status && !auth.status.configured ? (
-        // A fresh install has no root to sign in as; the first account made
-        // becomes it, and the form that makes it is on the Pipelines tab.
-        <EmptyState
-          icon="shield"
-          title="No root account yet"
-          action={
-            <ButtonLink href="#/pipelines" variant="primary" iconRight="arrow-right">
-              Create the root account
-            </ButtonLink>
-          }
-        >
-          The first account created becomes root, and approves everyone who registers after it.
-        </EmptyState>
-      ) : auth.status && !isRoot ? (
-        <EmptyState
-          icon="shield"
-          title={
-            auth.status.authenticated
-              ? "Only the root user can manage accounts."
-              : "Sign in as root to manage accounts."
-          }
-          action={
-            // The sign-in form lives on the Pipelines tab, which a reader landing
-            // here has no way of knowing — this page was otherwise a dead end.
-            !auth.status.authenticated && (
-              <ButtonLink href="#/pipelines" variant="primary" iconRight="arrow-right">
-                Sign in on the Pipelines tab
-              </ButtonLink>
-            )
-          }
-        >
-          A new account is created immediately but stays locked until root approves it here, so a
-          registration alone grants nothing.
-        </EmptyState>
-      ) : (
-        <>
-          {error && (
-            <div className="mb-6">
-              <AlertStrip
-                subject="Accounts"
-                message={`Couldn't load users: ${error}`}
-                action={
-                  <Button size="sm" icon="retry" onClick={() => refresh()}>
-                    Retry
-                  </Button>
-                }
-              />
-            </div>
-          )}
-          {actionError && (
-            <div className="mb-6">
-              <AlertStrip subject="Couldn't complete that" message={actionError} />
-            </div>
-          )}
-          <Handoff
-            busy={loading && users.length === 0}
-            label="accounts"
-            skeleton={<SkeletonRows count={2} />}
-          >
-            {users.length === 0 ? (
-              error ? null : (
-                <EmptyState icon="user" title="No accounts yet.">
-                  Accounts appear here as people register from the sign-in form.
-                </EmptyState>
-              )
-            ) : (
-              <>
-                {/* Someone waiting to be let in is the one thing on this page that
-                    needs a decision, so they come first and look like it. */}
-                {pending.length > 0 && (
-                  <Section title={`Waiting for approval · ${pending.length}`}>
-                    <div className="relative overflow-hidden rounded-tile border border-await/35 bg-surface shadow-raised">
-                      <span
-                        aria-hidden="true"
-                        className="absolute inset-y-3 left-0 w-[3px] rounded-r-full bg-await"
-                      />
-                      <ul className="divide-y divide-line">{pending.map(item)}</ul>
-                    </div>
-                  </Section>
-                )}
-                {active.length > 0 && (
-                  <Section title={`Accounts · ${active.length}`}>
-                    <ul className="divide-y divide-line overflow-hidden rounded-tile border border-line bg-surface shadow-raised">
-                      {active.map(item)}
-                    </ul>
-                  </Section>
-                )}
-              </>
-            )}
-          </Handoff>
-        </>
-      )}
+      {/* Whose page this is is not known until the status lands. Guessing
+          would flash a sign-in form at root, or ask the server for a list it
+          may refuse. */}
+      <Handoff
+        busy={status === null && auth.loading}
+        label="accounts"
+        skeleton={<SkeletonRows count={2} />}
+      >
+        {body}
+      </Handoff>
     </Page>
   );
 }

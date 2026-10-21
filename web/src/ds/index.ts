@@ -18,9 +18,9 @@ export {
 // Drawer stays out of this eager barrel so its shell loads with lazy drawers.
 // So do the pieces only lazy routes use — the form pickers (RubricFields,
 // ModelSelect, RuntimeSelect, ReasoningEffortSelect, TriggerFields),
-// RuntimeBadge, HeartbeatBar, Legend, Tabs, InfoTip and chronicleLayout:
-// import them from their own modules. A re-export here pulls a module into
-// the shell's chunk even when nothing eager uses it.
+// RuntimeBadge, HeartbeatBar, Legend, Tabs, InfoTip, HealthCounter, AgentTile
+// and chronicleLayout: import them from their own modules. A re-export here
+// pulls a module into the shell's chunk even when nothing eager uses it.
 // `Markdown` is deliberately not re-exported here: it carries the `marked`
 // lexer, and the barrel is imported by the eager shell. Import it from
 // "./Markdown" inside a lazily-loaded view instead.
@@ -34,8 +34,6 @@ export { StatusPill } from "./StatusPill";
 export { Meter } from "./Meter";
 export type { MeterProps } from "./Meter";
 export { ConnectionPill } from "./ConnectionPill";
-export { HealthCounter } from "./HealthCounter";
-export { AgentTile } from "./AgentTile";
 export { SweepBar } from "./SweepBar";
 export { AlertStrip } from "./AlertStrip";
 export { ToastRegion } from "./Toast";

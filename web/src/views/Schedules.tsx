@@ -29,6 +29,8 @@ import { useVerdictTrends } from "../useVerdict";
 import { VerdictSparkline } from "./VerdictPanel";
 import { AgentFields, controlClass, Field, FormFooter, LaunchPanel } from "./Launch";
 import { FactLine, LiveDot, RunRow, type Fact } from "./RunRow";
+import { CardFooter, FilterChip } from "./CardActions";
+import { firstProseLine } from "./outcome";
 import { useHashRoute } from "../useHashRoute";
 import {
   scheduleHealthById,
@@ -101,35 +103,6 @@ function HealthPill({ state }: { state: ScheduleState }) {
 }
 
 type Filter = "all" | "failing" | "paused";
-
-/**
- * A count that filters the list: the button language with a pressed state —
- * a quiet outlined ghost at rest, a lit secondary while its filter is on — so
- * it focuses and presses like every other control here. A count's tone is
- * carried by what it says (the failing count's dot and words are red), not by
- * a skin of its own.
- */
-function FilterChip({
-  selected,
-  onClick,
-  children,
-}: {
-  selected: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <Button
-      variant={selected ? "secondary" : "ghost"}
-      size="sm"
-      aria-pressed={selected}
-      onClick={onClick}
-      className={selected ? "" : "border border-line"}
-    >
-      {children}
-    </Button>
-  );
-}
 
 /**
  * The scheduler's own situation line: what it will do next, and what it has been
@@ -498,18 +471,6 @@ function ScheduleForm({
   );
 }
 
-/** The first line of a run's summary that is prose — not the `ARGUS_OUTCOME:`
- *  protocol line the agent prints for the scheduler, whose verdict the card's
- *  pill already shows. */
-function failureProse(text: string | null | undefined): string {
-  return (
-    (text ?? "")
-      .split("\n")
-      .map((line) => line.trim())
-      .find((line) => line !== "" && !line.startsWith("ARGUS_OUTCOME:")) ?? ""
-  );
-}
-
 /** The last two segments of a path — "…/home-v1/repo" — which are the part
  *  that tells one schedule's directory from another's. */
 function pathTail(path: string): string {
@@ -634,7 +595,10 @@ function ScheduleCard({
   };
 
   const lastFailure = health.consecutiveFailures > 1 ? health.lastConclusive : null;
-  const failureReason = failureProse(lastFailure?.resultSummary);
+  // The first line of prose, not the `ARGUS_OUTCOME:` protocol line whose
+  // verdict the card's pill already shows; a summary that is only the marker
+  // reads as the marker's reason.
+  const failureReason = firstProseLine(lastFailure?.resultSummary);
   const failureCode = lastFailure?.error?.split("\n")[0] ?? "";
   const eventDriven = schedule.trigger.kind === "webhook" || schedule.trigger.kind === "after";
 
@@ -760,15 +724,6 @@ function ScheduleCard({
                 )}
               </p>
             </div>
-            <Button
-              size="sm"
-              icon="play"
-              disabled={pending === "run"}
-              onClick={act("run", () => runNow(schedule.id))}
-              title="Fire this schedule once now, outside its cadence"
-            >
-              {pending === "run" ? "Starting…" : "Run now"}
-            </Button>
           </header>
 
           {/* The one thing a card must not make you count for yourself. A single
@@ -805,8 +760,8 @@ function ScheduleCard({
                   </p>
                 )}
               </div>
-              {/* Opens the recording; it fires nothing. "Replay last failure",
-                under Run now, read as a way to run it again. */}
+              {/* Opens the recording; it fires nothing. Called "Replay last
+                failure", it read as a way to run it again. */}
               <ButtonLink
                 href={`#/run/${encodeURIComponent(lastFailure.id)}`}
                 variant="ghost"
@@ -857,44 +812,56 @@ function ScheduleCard({
         )}
       </div>
 
-      {/* Managing the schedule is quieter than using it: low-emphasis, at the
-          foot of the card, and Delete held apart at the far end. */}
-      <footer className="flex flex-wrap items-center gap-1 border-t border-line px-3 py-2 sm:px-4">
+      {/* The Pipelines card's footer, so the two peer pages are used the same
+          way: Run now first, Edit beside it, housekeeping at the far end. */}
+      <CardFooter
+        error={actionErr}
+        manage={
+          <>
+            <Button
+              variant="ghost"
+              size="sm"
+              icon="power"
+              disabled={pending === "toggle"}
+              onClick={act("toggle", () => update(schedule.id, { enabled: !schedule.enabled }))}
+              title={
+                schedule.enabled
+                  ? "Pause its trigger. Run now keeps working."
+                  : "Let its trigger fire again"
+              }
+            >
+              {schedule.enabled ? "Disable" : "Enable"}
+            </Button>
+            <Button
+              variant="quiet-danger"
+              size="sm"
+              icon="trash"
+              // Every card's button reads "Delete"; the name says which one.
+              aria-label={`Delete ${schedule.name}`}
+              disabled={pending === "delete"}
+              onClick={() => {
+                if (confirm(`Delete schedule "${schedule.name}"?`))
+                  void act("delete", () => remove(schedule.id))();
+              }}
+            >
+              Delete
+            </Button>
+          </>
+        }
+      >
+        <Button
+          size="sm"
+          icon="play"
+          disabled={pending === "run"}
+          onClick={act("run", () => runNow(schedule.id))}
+          title="Fire this schedule once now, outside its cadence"
+        >
+          {pending === "run" ? "Starting…" : "Run now"}
+        </Button>
         <Button ref={editRef} variant="ghost" size="sm" icon="edit" onClick={onEdit}>
           Edit
         </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          icon="power"
-          disabled={pending === "toggle"}
-          onClick={act("toggle", () => update(schedule.id, { enabled: !schedule.enabled }))}
-        >
-          {schedule.enabled ? "Disable" : "Enable"}
-        </Button>
-        {actionErr && (
-          <p
-            role="alert"
-            className="inline-flex min-w-0 items-center gap-1.5 px-2 text-caption text-fail"
-          >
-            <Icon name="alert" size={13} />
-            <span className="min-w-0 break-words">{actionErr}</span>
-          </p>
-        )}
-        <Button
-          variant="quiet-danger"
-          size="sm"
-          icon="trash"
-          className="ml-auto"
-          disabled={pending === "delete"}
-          onClick={() => {
-            if (confirm(`Delete schedule "${schedule.name}"?`))
-              void act("delete", () => remove(schedule.id))();
-          }}
-        >
-          Delete
-        </Button>
-      </footer>
+      </CardFooter>
     </div>
   );
 }
@@ -923,18 +890,24 @@ function ScheduleSkeleton() {
         <div
           key={i}
           aria-hidden="true"
-          className="rounded-tile border border-line bg-surface p-5 shadow-raised"
+          className="rounded-tile border border-line bg-surface shadow-raised"
         >
-          <div className="flex items-center gap-3">
-            <Skeleton className="h-4 w-2/5" />
-            <Skeleton className="h-6 w-16 rounded-full" />
-            <Skeleton className="ml-auto h-7 w-20 rounded-control" />
+          <div className="p-5">
+            <div className="flex items-center gap-3">
+              <Skeleton className="h-4 w-2/5" />
+              <Skeleton className="h-6 w-16 rounded-full" />
+            </div>
+            <Skeleton className="mt-3 h-2.5 w-3/5" />
+            <Skeleton className="mt-2 h-2.5 w-2/5" />
+            <div className="mt-5 space-y-2 rounded-control bg-ground-2/60 p-3">
+              <Skeleton className="h-3 w-4/5" />
+              <Skeleton className="h-3 w-3/5" />
+            </div>
           </div>
-          <Skeleton className="mt-3 h-2.5 w-3/5" />
-          <Skeleton className="mt-2 h-2.5 w-2/5" />
-          <div className="mt-5 space-y-2 rounded-control bg-ground-2/60 p-3">
-            <Skeleton className="h-3 w-4/5" />
-            <Skeleton className="h-3 w-3/5" />
+          {/* The footer's run and edit controls, where they will land. */}
+          <div className="flex gap-1.5 rounded-b-tile border-t border-line bg-ground-2/40 px-5 py-2.5">
+            <Skeleton className="h-7 w-20 rounded-control" />
+            <Skeleton className="h-7 w-14 rounded-control" />
           </div>
         </div>
       ))}
@@ -1144,7 +1117,7 @@ export default function Schedules() {
               // schedule is underneath it would answer the wrong question.
               error ? null : (
                 <EmptyState
-                  title="No schedules yet."
+                  title="No schedules yet"
                   icon="calendar"
                   action={
                     <Button variant="primary" icon="plus" onClick={() => setMode({ kind: "new" })}>
@@ -1164,7 +1137,7 @@ export default function Schedules() {
                 compact
                 tone={filter === "failing" ? "calm" : "neutral"}
                 icon={filter === "failing" ? "check-circle" : "pause"}
-                title={filter === "failing" ? "Nothing is failing." : "Nothing is paused."}
+                title={filter === "failing" ? "Nothing is failing" : "Nothing is paused"}
                 action={
                   <Button variant="ghost" size="sm" onClick={() => setFilter("all")}>
                     Show all {schedules.length}
