@@ -33,6 +33,10 @@ export function ConnectionPill({ live }: { live: boolean }) {
   // status is authoritative for the backoff. They agree in practice; prefer the
   // prop for the dot so the pill matches whatever the page is showing.
   const connected = live || status.live;
+  // Before the first attempt has had its answer there is nothing to report:
+  // every page load used to open on a red "Offline" and a Retry, for the
+  // fraction of a second the socket takes to connect.
+  const connecting = !connected && status.attempt === 0 && status.retryAt === null;
   const remaining = useCountdown(connected ? null : status.retryAt);
   const beat = useSyncedDelay(DURATION.ping);
 
@@ -43,16 +47,22 @@ export function ConnectionPill({ live }: { live: boolean }) {
         aria-label={
           connected
             ? "Live: connected to the Argus server"
-            : remaining === null
-              ? "Offline: connecting to the Argus server"
-              : `Offline: retrying in ${remaining} ${remaining === 1 ? "second" : "seconds"}`
+            : connecting
+              ? "Connecting to the Argus server"
+              : remaining === null
+                ? "Offline: connecting to the Argus server"
+                : `Offline: retrying in ${remaining} ${remaining === 1 ? "second" : "seconds"}`
         }
         // The label is the first thing to go on a narrow bar: the dot's colour
         // already carries the state, and the words live in the accessible name.
         // Quiet when all is well — a dot and a word, the way a status light on a
         // well-run machine is small — and only a filled red pill when it is not.
         className={`inline-flex h-8 items-center gap-2 rounded-full border px-2 text-caption font-semibold transition-colors duration-(--duration-base) sm:px-3 ${
-          connected ? "border-transparent text-ok" : "border-fail/40 bg-fail/10 text-fail"
+          connected
+            ? "border-transparent text-ok"
+            : connecting
+              ? "border-transparent text-ink-faint"
+              : "border-fail/40 bg-fail/10 text-fail"
         }`}
       >
         <span className="relative h-2 w-2 rounded-full bg-current">
@@ -65,6 +75,8 @@ export function ConnectionPill({ live }: { live: boolean }) {
         </span>
         {connected ? (
           <span className="hidden sm:inline">Live</span>
+        ) : connecting ? (
+          <span className="hidden sm:inline">Connecting</span>
         ) : (
           <>
             <span className="hidden sm:inline">Offline</span>
@@ -78,7 +90,7 @@ export function ConnectionPill({ live }: { live: boolean }) {
       </span>
       {/* The one useful thing to do while offline, so on a phone its hit area
           reaches 44px tall without the bar growing to fit it. */}
-      {!connected && (
+      {!connected && !connecting && (
         <button
           type="button"
           onClick={reconnectNow}

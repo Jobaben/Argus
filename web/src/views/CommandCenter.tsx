@@ -889,15 +889,14 @@ function BoardTotal({
   // down — the largest layout shift on the landing page.
   if (!totals) {
     return loading ? (
-      // As wide as the real figure and its reset button, so a header that
-      // wraps on a phone wraps the same way before and after it arrives.
-      <span
-        aria-hidden="true"
-        className="mr-2 flex h-[42px] w-[228px] items-center justify-end gap-2"
-      >
+      // The size of the real figure and its reset button (measured: 185 × 40
+      // with a typical total), so a header that wraps on a phone wraps the
+      // same way before and after it arrives. Wider, it pushed "Launch a
+      // task" to a second line until the total came, then pulled it back.
+      <span aria-hidden="true" className="mr-2 flex h-10 w-[185px] items-center justify-end gap-2">
         <span className="flex flex-col items-end gap-1.5">
           <Skeleton className="h-2.5 w-16" />
-          <Skeleton className="h-5 w-48" />
+          <Skeleton className="h-5 w-36" />
         </span>
         <Skeleton className="h-7 w-7 rounded-control" />
       </span>
