@@ -41,7 +41,7 @@ for anyone not signed in as root):
    panel offers a one-time root bootstrap (username + password, min 8 chars).
    This is **localhost-only**, enforced server-side. The password is stored
    only as a salted scrypt hash — never plaintext.
-2. **Login** — username + password; the session is an HttpOnly cookie. Sign
+2. **Sign in** — username + password; the session is an HttpOnly cookie. Sign
    out from the same panel (your username + **Sign out** appear when
    authenticated).
 3. **Request an account** — anyone on the machine can register; the account
@@ -49,18 +49,29 @@ for anyone not signed in as root):
 
 **The Users tab** (visible in More only to root): all accounts, **pending
 first** under **Waiting for approval**, then **Accounts** — each with
-username, role, and when it was requested or joined. Root can
+username, a role badge (**Root** or **Member**), a **You** badge on your own
+row, and when it was requested or joined. Root can
 **Approve** or **Reject** a pending registration, and **Remove** an active
-member (never yourself). Anyone else who opens `#/users` sees what applies to
-them instead of the list:
+member (never yourself). An action the server refuses is said on the row it
+was about — "Couldn't approve alice: …". Anyone else who opens `#/users` sees
+what applies to them instead of the list:
 
 - a signed-in member: **Only the root user can manage accounts** (that's the
   screenshot above);
 - signed out: **Sign in as root to manage accounts**, whose **Sign in** button
-  opens the sign-in form in place (it also offers **Need access? Request an
-  account**);
+  opens the form titled **Sign in** in place (it also offers **Need access?
+  Request an account**, and **Back to sign in** from there);
 - an unconfigured server: **No root account yet**, whose **Create the root
   account** opens the bootstrap form in place (localhost-only, as above).
+
+A form opened this way has **Cancel** beside its submit button; Cancel or
+Escape puts the page back as it was.
+
+**The sign-in wall:** when the server requires a session for the whole
+dashboard (`ARGUS_TOKEN` is set) and you have none, Argus shows only a sign-in
+page: "This server requires an account. Sign in to see the dashboard." above
+the **Sign in** form, or "Create the first account to see the dashboard."
+above the bootstrap form on a server with no accounts yet.
 
 **Account recovery:** current accounts live in `~/.claude/argus/users.json`, with salted scrypt password hashes. Legacy `auth.json` can be migrated into that store. Deleting only the legacy file does not reset current users. Preserve both files and follow the [operations guidance](../reference/operations.md#backup-and-restore) before attempting host-level recovery.
 
@@ -102,15 +113,20 @@ you have a peer. Pick a machine and the page shows that machine instead, with a
 banner naming it, dating its figures and linking to its own Argus.
 
 Peer mode is **read-only by construction**. There is no approve or revise on a
-peer's board, no triage on a peer's issues, no limits form on a peer's budget —
+peer's board (and no **Completed runs** total, which is this machine's spend),
+no triage on a peer's issues, no limits form on a peer's budget —
 those are mutations on a machine this one does not own, and a button that would
 either fail or need a second control plane is worse than no button. The link out
 is the honest affordance.
 
 Each view also adapts to what a summary can actually carry. Chronicle shows a
-**list** rather than its packed timeline, because a timeline drawn from a
-sampled forty runs would show gaps that mean _not sent_ and read as _nothing
-happened_ — the one thing a timeline must never say.
+**list** of the newest runs the machine reported rather than its packed
+timeline, because a timeline drawn from a sampled forty runs would show gaps
+that mean _not sent_ and read as _nothing happened_ — the one thing a timeline
+must never say. For the same reason it hides its time-window switch there: the
+list is not a window. The Command Center lists a peer's live pipelines, each
+with the phase it is at and the board's own status pill (**Working**, **Needs
+approval**, **Failed**…).
 
 **In solo mode none of this appears.** No picker, no banner, no extra request:
 with one machine the four pages are byte-for-byte the pages they were before
@@ -147,6 +163,9 @@ used.
 ### Reading the fleet
 
 Each machine gets a card: its counts, its spend, its version, and its status.
+The counts are **Down**, **Failing**, **Issues**, **Live** and **Approval** —
+monitors down and failing, open issues, live pipelines and pipelines that need
+approval; hover one for its full name.
 
 | Status          | Meaning                                                                                               |
 | --------------- | ----------------------------------------------------------------------------------------------------- |

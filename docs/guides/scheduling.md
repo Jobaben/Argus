@@ -121,9 +121,10 @@ Pipelines (see [§8](pipelines.md#pipelines)):
 
 - **Webhook** — this schedule fires when something else `POST`s to a URL
   Argus mints for it, not on any clock. Once saved, the trigger editor shows
-  the hook's **URL** and **token** (each with a Copy button) and a **Rotate**
-  action that invalidates the old token immediately — use it if the token
-  ever leaks. The sender authenticates with `Authorization: Bearer <token>`;
+  the hook's **URL** and **token** (each with a Copy button) and **Rotate
+  token**, which invalidates the old token immediately — use it if the token
+  ever leaks. It asks first, in place: **Rotate now** or **Keep token**. The
+  sender authenticates with `Authorization: Bearer <token>`;
   reaching the hook from another machine needs the same non-default
   `ARGUS_HOST`/`ARGUS_TOKEN` setup any remote access to Argus needs (see
   [the API reference](../API.md#security)) — the hook's own token is a separate
@@ -160,7 +161,8 @@ missed-run recovery is on. Below that the working directory, and the **last five
 runs** — status pill, relative start time (hover for the exact instant),
 duration, cost and tokens if reported, and a `manual`/`webhook`/`chained` tag
 naming how the run was fired (nothing shown for an ordinary scheduled firing)
-— with a `3/5 passed` ratio beside them.
+— with a `3/5 passed` ratio beside them. A firing skipped by the overlap
+policy or the budget's hard stop shows a **Skipped** pill.
 
 A schedule that has failed **more than once in a row** says so in a red band,
 with the first line of the most recent error, because one failure is already
@@ -176,7 +178,9 @@ end. An action the server refuses says why on its own line under the buttons
 
 - **Run now** — fire immediately, regardless of the trigger.
 - **Enable / Disable** — pause the trigger without deleting anything.
-- **Edit** / **Delete** (with confirm).
+- **Edit** / **Delete**. Delete asks first, on a line of its own under the
+  buttons: **Delete schedule** or **Keep**, with focus on **Keep** so Escape
+  or a stray Enter deletes nothing.
 - **Expand a run** to see its error or result summary, a link to the full
   **transcript** in Sessions, and a **live-tailing log** (refreshes every 3s
   while running). A running run has a **Cancel** button.

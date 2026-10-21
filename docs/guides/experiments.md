@@ -12,7 +12,7 @@ These features are off by default. Reading reports is separate from enabling col
 
 ## Try it
 
-1. Open **More → Experiments** to inspect retained H2 and H1 evidence. Empty results mean there may be no collected eligible records.
+1. Open **More → Experiments** to inspect retained H1 and H2 evidence. The page lists H1 first, then H2, in the order they are numbered. Empty results mean there may be no collected eligible records.
 2. Read which population, version and reference each result uses before comparing scores.
 3. For historical local feeder/closeout studies, read [development status](../development/README.md) first: their pipelines were archived.
 4. If authoring a new controlled collection, review the switches and bounds below together with [configuration](../reference/configuration.md). Keep collection off during basic onboarding.
@@ -132,7 +132,7 @@ records. Opening it never starts collection, calls a model or writes
 anything. It shows, for each question version and exact provider identity
 (requested model, reported model, adapter version):
 
-- the census by termination class;
+- the **Census** by termination class;
 - attempts by outcome;
 - cost, latency, tokens and snapshot size;
 - integrity findings.
@@ -231,7 +231,11 @@ used is not reported, and stays blank rather than guessed.
 
 ### Reading the report
 
-The Experiments page has an H1 section (`GET /api/decisions/h1`).
+The Experiments page opens with the H1 section (`GET /api/decisions/h1`). Its
+collection settings are listed in the same order and words as H2's —
+sampling, **Requested models**, call caps, interval, spend, seed — and its
+spend counts **Provider calls** (attempts that reached the provider) beside the
+dollar total. A census with nothing captured reads **No census recorded**.
 
 - **Only settled gates** contribute to report results; only valid applied
   operator decisions supply comparison labels. A gate still waiting on you

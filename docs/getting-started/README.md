@@ -122,7 +122,7 @@ Open **Pipelines** at `#/pipelines`. On a fresh installation, choose **Create th
 
 For an existing installation, sign in with an existing account or request one and wait for root approval. The root account manages users; approved members can edit and run pipelines. Pipeline creation, edits, starts, and gate decisions require a signed-in, approved account. See [Administration](../guides/administration.md) for the account flows.
 
-Agent-provider credentials, the Argus account, and an optional `ARGUS_TOKEN` are separate credentials. If you configured `ARGUS_TOKEN`, the browser asks for an Argus login before loading protected dashboard data; API clients need the appropriate bearer token or session. Keep the default local configuration for this walkthrough.
+Agent-provider credentials, the Argus account, and an optional `ARGUS_TOKEN` are separate credentials. If you configured `ARGUS_TOKEN`, the browser shows only a sign-in page — the **Sign in** form, or the first-account form on a server with no accounts yet — and loads no dashboard data until you are signed in (see [the sign-in wall](../guides/administration.md#users--sign-in)). API clients need the appropriate bearer token or session. Keep the default local configuration for this walkthrough.
 
 ## 5. Launch your first task
 
@@ -152,7 +152,7 @@ See [Operations](../reference/operations.md) for shutdown, restart, retained dat
 | Browser opens no page                                      | Keep the terminal open, read its startup error, and check the correct production/development address                             |
 | CLI check fails                                            | Run the reported executable's version command in the same terminal; check PATH or the runtime's `ARGUS_*_BIN` override           |
 | Setup passes but a run reports authentication/model errors | Run that CLI directly as the same user with the same model and directory; setup only checks whether it launches                  |
-| Pipeline edit/start asks for login                         | Create the local root account or sign in with an approved account                                                                |
+| Pipeline edit/start asks you to sign in                    | Create the local root account or sign in with an approved account                                                                |
 | Sessions or history are empty                              | Confirm the watched home paths and that this user has created sessions; OpenCode has no readable Sessions transcript integration |
 | Health request returns 401                                 | Check whether `ARGUS_TOKEN` is set and use your configured authentication; see [Configuration](../reference/configuration.md)    |
 

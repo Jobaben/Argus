@@ -53,7 +53,9 @@ here.
   [Flight Recorder](monitoring.md#flight-recorder) and is named by its status
   and time), and a stats line — **uptime %** (succeeded vs failed
   over the last 30), **last run** time, and either the **next** expected time
-  or, when late/down, the slot that was **expected** and missed.
+  or, when late/down, the slot that was **expected** and missed. On a card too
+  narrow for 30 ticks (a phone), the bar shows the newest runs that fit with
+  each tick wide enough to tap, rather than thirty hairlines.
 - Cards that are `down` or `failing` get a red border so they jump out.
 
 **Status meanings:** `up` — last expected slot ran; `late` — a slot is
@@ -146,6 +148,10 @@ leave that envelope.
 - **Learned envelopes** second, because they are the evidence: per unit of
   work, the median and 5th–95th percentile of duration, cost and tokens, drawn
   as a bar with the median marked, plus how many samples it was learned from.
+- A pipeline phase's envelope (its anomalies too, and a Sentinel incident one
+  opens) is named by its pipeline and phase, such as _Release Train ·
+  Implement_; the phase id follows in mono only when that name does not
+  already say it, and the full stored name is in the tooltip.
 
 **What you can do:**
 
@@ -462,7 +468,9 @@ attributed to Sentinel or to the person who did it.
 **Escalation and quiet hours** (Policy panel):
 
 - **Levels** — by default: notify, then escalate after 30 unacknowledged
-  minutes. Up to five levels.
+  minutes. Up to five levels, numbered from 1 in the panel's **Escalation**
+  ladder. An escalated incident's **Level N** uses the same numbers, so an
+  incident on the second rung reads **Level 2**.
 - **Quiet hours** — a local-clock window (wrapping past midnight is the normal
   case and is handled). Inside it, **the bell is silent but the record still
   lands**: the timeline, the incident list and the escalation clock all carry

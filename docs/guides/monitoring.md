@@ -43,9 +43,10 @@ drawer — this is the wall you keep open on a second monitor.
 
 - A **situation strip** across the top, answering "does anything need me?"
   without reading the board. On the left, what asks something of you: gates
-  awaiting you, failures, down/failing monitors, open issues and anomalies —
-  each a link to the view that explains it, and **awaiting you** / **failed**
-  open the first such review directly. Beside them, the machine at work: runs
+  that need approval, failed pipelines, down/failing monitors, open issues and
+  anomalies — each a link to the view that explains it, and **N need approval**
+  (**1 needs approval**) / **N pipelines failed** open the first such review
+  directly. Beside them, the machine at work: runs
   in flight and live agents. It shows **only what is true**: a metric with
   nothing to report is omitted rather than drawn as a grey zero, and when
   nothing is asked of you it says **Nothing needs you** — even while runs are
@@ -53,19 +54,27 @@ drawer — this is the wall you keep open on a second monitor.
   today's spend against your daily limit as a bar, and a 24-hour histogram of
   run outcomes (failures stacked in red over successes).
 - **Needs you**, when anything does: one line per gate waiting for approval
-  (first) and per phase that stopped short, each naming the pipeline and phase,
-  the failure reason where there is one, and a **Review** button into the same
-  drawer the card opens. A card shows one phase at a time, so this is where a
-  second gate in a fan-out, or a gate on a card further down, is never missed.
+  (first) and per phase that failed, each naming the pipeline and phase, then
+  **Needs approval** or the failure reason (**This phase failed** when there is
+  none), and one **Review** button into the same drawer the card opens — a
+  revise or retry is chosen in there. Its header tallies the list in the
+  strip's words: `2 need approval · 1 failed · 3 outside pipelines`. A card
+  shows one phase at a time, so this is where a second gate in a fan-out, or a
+  gate on a card further down, is never missed.
   Below them, under **Outside pipelines**, come the Briefing's items the board
   has no card for — **Monitor down**, **Monitor failing**, **Anomaly** and
   **Open issue** — each with the same action the Briefing gives it (**Open
-  monitor**, **Inspect run**, **Triage issue**). Four are listed; the rest are a
-  **+N more in the Briefing** link. It draws nothing when nothing is waiting.
+  monitor**, **Inspect run**, **Triage issue**). An open issue raised by a
+  down or failing monitor's schedule alone is folded into that monitor's row,
+  which then names the error and its count, rather than listed a second time.
+  Four are listed; the rest are a **+N more in the Briefing** link. It draws
+  nothing when nothing is waiting.
 - A **live activity rail** down the right: **Live** shows what is running right
   now, including scheduled runs and one-off launches that have no card on the board. Pipeline steps can show current tool activity; batch schedule/one-off invocations do not provide the same per-tool stream. **Recent** lists the last
-  completed runs with outcome, duration and cost. Every row opens that run's
-  [Flight Recorder](#flight-recorder). From about 1024px wide the rail sits
+  completed runs with outcome, duration and cost; a firing skipped by its
+  overlap policy or the budget reads **Skipped**. Every row opens that run's
+  [Flight Recorder](#flight-recorder), and **All runs** at the foot of the rail
+  opens the [Chronicle](#chronicle). From about 1024px wide the rail sits
   beside the board and stays in view as you scroll; on a narrower screen it
   moves below the board. It shows on an empty board too, so a scheduled run or
   one-off launch is visible before any pipeline exists.
@@ -98,19 +107,24 @@ approval` wins over `Failed` over `Working`…), then quieter facts — phase
   directions beyond that. It **follows the run**: the running phase (or the
   middle of several running together) is kept centred, and the view glides
   to the next phase as the run moves on — the first and last phase centre
-  too. Scrolling the graph yourself, or clicking a node, stops following;
-  **Follow** (top-right of the tile) resumes it. **1:1** shows the graph at
-  full size and **Fit** goes back. Edges with more graph beyond them fade out.
+  too. Scrolling the graph yourself, or clicking a node, stops following.
+  The graph's view controls sit in a row of their own above it, so they never
+  cover a node: **Follow**, there whenever the graph scrolls, shows pressed
+  while the view follows and switches following on or off; **Full size**,
+  there when the graph is scaled down, shows it at full size and **Fit** goes
+  back. Edges with more graph beyond them fade out.
 - Beside the graph (below it on a narrow card), the **focus panel**: one
   phase's **step tiles** — step name, `job <runId>`, a status pill, the
   failure reason if it failed, a live activity line and animated sweep bar
   while working, and a per-step meter — duration, tokens, dollars (e.g.
   `2m 19s · 23.5k tok · $1.09`). Click anywhere on a tile to open its step
   drawer. When the phase in focus is the one waiting on you (or the one that
-  stopped short), a callout with its **Review** button leads the panel, above
-  the tiles. Its header names what the phase waited for (behind an arrow
-  pointing back) and where its routes lead (behind an arrow pointing on), each
-  with the condition it needs. By
+  failed), a callout with its **Review** button leads the panel, above
+  the tiles. Under its header, one line names what the phase waits for (behind
+  an arrow pointing back) and another where its routes lead (behind an arrow
+  pointing on): each phase by number and name, with a conditional edge's
+  condition in the same chip the graph draws on that edge, and **or skipped**
+  where a join accepts a branch that never ran. By
   default the focus **follows the action** — the gate awaiting you, else the
   failure, else the live work, else the next phase up — so an untouched board
   always shows the detail that matters right now.
@@ -118,15 +132,24 @@ approval` wins over `Failed` over `Working`…), then quieter facts — phase
   labeled sub-sections, one per instance, each with its own graph and focus.
 - **Completed runs** (top-right): the all-time board total — tokens and
   dollars across every completed run, so a run still going is not in it yet.
-  The small reset button beside it (**Reset total**) is a two-click armed
-  confirm (**Confirm reset** / **Cancel**) — the reset is irreversible. While
-  the total is zero there is nothing to reset, and the button is not shown.
+  The small reset button beside it (**Reset total**) opens a confirm below the
+  figure — "Start the total again from zero? This can't be undone." — with
+  **Cancel** focused, so a stray Enter keeps the total, and **Confirm reset**
+  beside it; Escape or **Cancel** closes it. While the total is zero there is
+  nothing to reset, and the button is not shown.
   **Launch a task** beside it is the page's primary action: it opens the
   Scheduler's one-off form.
 - **Before any pipeline exists**, the board shows the iris and three ways to
   start: **Launch a task**, **New schedule** and **Build a pipeline**. There
   the board's own **Launch a task** is the primary action, and the header's
   becomes a secondary button.
+- **When the board doesn't load** and nothing was loaded before, a strip says
+  why (see [Global UI](navigation.md#global-ui)) with **Retry**, and the board's
+  place reads **The board didn't load** instead of the first-run board — so a
+  failed request never looks like your pipelines are gone. **Needs you** still
+  lists the Briefing's items, marked as partial: "Pipeline gates and failures
+  are missing until the board loads." The activity rail keeps showing runs,
+  since it has its own request.
 
 **What you can do:**
 
@@ -261,7 +284,9 @@ in one glance, spot overlaps, and click into anything.
 - A **time-window switch** (top-right): **1h / 6h / 24h / 3d / 7d**, plus
   **90d** and **1y** from the [Vault](budget-and-history.md#the-vault)
   (default 24h). This is the zoom — there's no free pan; the window always
-  ends at **Now** (marked on the right edge of the axis).
+  ends at **Now** (marked on the right edge of the axis). The axis is marked
+  at round times for the window — every few hours on a day, midnights on a
+  week, months on a year — rather than at even fractions of it.
 - Four counters: **Runs**, **In flight** (still running), **Failed**, and
   **Run spend** (USD reported by scheduler runs in the window).
 - A key above the timeline: **Run status** (Succeeded, Failed, Still running,
@@ -296,7 +321,8 @@ _The status board for background jobs._ Route: `#/agents`
 - Four counters — **Agents**, **Live**, **Working** and **Failed** — once
   there are agents to count.
 - A grid of **agent cards**: name, short id, a color-coded status pill
-  (**Working**, **Done**, **Failed**, **Idle** or **Queued**), a pulsing green
+  (**Working**, **Done**, **Failed**, **Stopped** for a job halted mid-work,
+  **Idle** or **Queued**), a pulsing green
   **Live** dot if it's running right now, the current detail line, a result
   box when there's finished output, and a footer — folder, tempo, and
   last-update time.
@@ -327,7 +353,9 @@ how it got to its current state. A card click on Agents lands here.
   relative times.
 - A **timeline**: every recorded state transition, newest first, with a
   status-colored dot, pill, timestamp and optional detail line; long entries
-  get a "Show details" expander. Agents that predate timeline capture show an
+  get a "Show details" expander. An entry that records progress rather than a
+  change of state is headed **Update**, beside a hollow dot with no status
+  color. Agents that predate timeline capture show an
   honest "no timeline entries recorded" note instead.
 
 **How to use it:** read the timeline bottom-to-top to follow the agent's life
