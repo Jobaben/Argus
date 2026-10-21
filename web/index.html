@@ -14,6 +14,27 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black" />
     <meta name="description" content="Argus — schedule and monitor your Claude Code agents" />
     <title>Argus</title>
+    <!-- The first screen waits on the session status (App gates on it), and the
+         app would only ask once its scripts had run. Asked for here, it is in
+         flight beside them. -->
+    <link rel="preload" href="/api/auth/status" as="fetch" crossorigin />
+    <!-- Both faces every screen sets text in. Left to the stylesheet, the
+         semibold one was asked for only once the first heading was laid out,
+         and that text stayed invisible until it came. -->
+    <link
+      rel="preload"
+      href="/fonts/Hellix-Regular-ma.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <link
+      rel="preload"
+      href="/fonts/Hellix-SemiBold-ma.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
     <style>
       :root {
         color-scheme: dark;

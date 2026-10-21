@@ -80,9 +80,17 @@ import { fileURLToPath } from "node:url";
  *   - the stylesheet, +0.3 kB, for the above;
  *   - offsets: the peer-machine board, picker and banner (−1.5 kB) and the
  *     orphaned instance's Stop confirm now load only when they are on screen.
- * The headroom is back to 1.1 kB.
+ *
+ * Lowered from 132 to 128 once the first paint became one file. Left to the
+ * automatic splitter, every small module a lazy view shared with the board
+ * was its own chunk: 21 files, which the browser fetched six at a time, so
+ * the app started ~30 ms later than it had with 12. `web/vite.config.ts` now
+ * groups everything the entry imports into one `shell` chunk. The same bytes
+ * compress better together, so the payload fell to 125.9 kB. Two kB of
+ * headroom again, and the budget is lowered so the saving cannot quietly fund
+ * the next regression.
  */
-const BUDGET_KB = 132;
+const BUDGET_KB = 128;
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const distDir = path.join(repoRoot, "web", "dist");
