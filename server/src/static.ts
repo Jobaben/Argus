@@ -106,6 +106,9 @@ export function mountWebApp(app: Hono): string | null {
   app.get("*", (c) => {
     const p = c.req.path;
     if (p.startsWith("/api") || p === "/ws") return c.notFound();
+    // Revalidate every time: a heuristically cached copy would name chunks a
+    // rebuild has since removed.
+    c.header("Cache-Control", "no-cache");
     return c.html(readIndex());
   });
   return dir;

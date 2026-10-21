@@ -1,6 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { Button, ButtonLink } from "./Button";
 import { Icon } from "./Icon";
+import { isChunkLoadError, reloadForNewBuild } from "../staleBuild";
 
 /**
  * A per-route error boundary.
@@ -50,6 +51,16 @@ export class ErrorBoundary extends Component<Props, State> {
     // component stack with it, since the message alone rarely locates the row
     // that had the unexpected shape.
     console.error(`[argus] ${this.props.label} view crashed:`, error, info.componentStack);
+    this.recoverFromStaleBuild(error);
+  }
+
+  /**
+   * A view chunk that fails to load means the UI was rebuilt under this tab
+   * (see `staleBuild.ts`). Retrying can't help — `React.lazy` caches the
+   * failure — so reload once to pick up the new build.
+   */
+  private recoverFromStaleBuild(error: Error): void {
+    if (isChunkLoadError(error)) reloadForNewBuild();
   }
 
   private retry = (): void => {
@@ -61,6 +72,7 @@ export class ErrorBoundary extends Component<Props, State> {
     if (error === null) {
       return <div key={this.state.attempt}>{this.props.children}</div>;
     }
+    const staleBuild = isChunkLoadError(error);
     return (
       <div className="mx-auto max-w-[1600px] px-4 py-10 sm:px-6">
         <div
@@ -71,12 +83,17 @@ export class ErrorBoundary extends Component<Props, State> {
             <Icon name="alert" size={20} className="mt-0.5 text-fail" />
             <div className="min-w-0 flex-1">
               <h2 className="text-heading font-semibold text-ink">
-                Something broke in {this.props.label}
+                {staleBuild
+                  ? `Argus was updated — reload to open ${this.props.label}`
+                  : `Something broke in ${this.props.label}`}
               </h2>
               <p className="mt-1.5 max-w-prose text-small leading-relaxed text-ink-dim">
-                The rest of Argus is unaffected — the navigation, the command palette and every
-                other view still work. This is almost always an unexpected shape in the data this
-                view reads.
+                {staleBuild
+                  ? "This tab is still running the previous build, and the files this view needs " +
+                    "have been replaced. Reloading the page picks up the current build."
+                  : "The rest of Argus is unaffected — the navigation, the command palette and " +
+                    "every other view still work. This is almost always an unexpected shape in " +
+                    "the data this view reads."}
               </p>
             </div>
           </div>
@@ -84,9 +101,20 @@ export class ErrorBoundary extends Component<Props, State> {
             {error.message}
           </pre>
           <div className="mt-4 flex flex-wrap items-center gap-2">
-            <Button variant="primary" size="sm" icon="retry" onClick={this.retry}>
-              Try again
-            </Button>
+            {staleBuild ? (
+              <Button
+                variant="primary"
+                size="sm"
+                icon="retry"
+                onClick={() => window.location.reload()}
+              >
+                Reload
+              </Button>
+            ) : (
+              <Button variant="primary" size="sm" icon="retry" onClick={this.retry}>
+                Try again
+              </Button>
+            )}
             <ButtonLink href="#/command" variant="ghost" size="sm">
               Command Center
             </ButtonLink>
