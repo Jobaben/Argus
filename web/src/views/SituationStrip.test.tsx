@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { SituationStrip } from "./SituationStrip";
 import type { Situation } from "../types";
 
@@ -151,6 +151,35 @@ describe("SituationStrip", () => {
     );
     expect(screen.getByRole("link", { name: /down/i })).toHaveAttribute("href", "#/health");
     expect(screen.getByRole("link", { name: /open issues/i })).toHaveAttribute("href", "#/issues");
+  });
+
+  it("colours open issues as the problem count they are, and anomalies as a call to look", () => {
+    render(
+      <SituationStrip
+        situation={situation({
+          counts: {
+            runsInFlight: 0,
+            gatesWaiting: 0,
+            failedInstances: 0,
+            monitorsDown: 0,
+            monitorsFailing: 1,
+            openIssues: 2,
+            liveAgents: 0,
+            anomalies: 1,
+          },
+        })}
+        loading={false}
+      />,
+    );
+    const issues = screen.getByRole("link", { name: "2 open issues" });
+    expect(within(issues).getByText("2").className).toMatch(/text-fail/);
+    const anomaly = screen.getByRole("link", { name: "1 anomaly" });
+    expect(within(anomaly).getByText("1").className).toMatch(/text-await/);
+    // Named as the Health page names it, where the chip leads.
+    expect(screen.getByRole("link", { name: "1 monitor failing" })).toHaveAttribute(
+      "href",
+      "#/health",
+    );
   });
 
   it("counts down to the next firing by name", () => {

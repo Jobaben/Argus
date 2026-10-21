@@ -54,7 +54,11 @@ function MobileNav({
 }) {
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
-  const activeLabel = destinations.find((d) => d.id === activeId)?.label;
+  // A page that lives in the secondary list (Stats, Users…) still names itself
+  // here: falling back to "Menu" left a phone with no idea where it was.
+  const activeLabel = (
+    destinations.find((d) => d.id === activeId) ?? overflow.find((o) => o.id === activeId)
+  )?.label;
   const { present, exited } = usePresence(open);
   const scrimRef = useSurfaceMotion<HTMLDivElement>(open, SURFACE.scrim);
   // `top` — the sheet belongs to the bar it drops out of, so that is the edge it
@@ -133,7 +137,7 @@ function MobileNav({
                     href={`#/${t.id}`}
                     aria-current={t.id === activeId ? "page" : undefined}
                     onClick={() => setOpen(false)}
-                    className={`flex h-11 items-center rounded-control px-3 text-[15px] transition-transform duration-(--duration-press) motion-safe:active:scale-[0.98] ${
+                    className={`flex h-11 items-center rounded-control px-3 text-heading transition-transform duration-(--duration-press) motion-safe:active:scale-[0.98] ${
                       t.id === activeId
                         ? "bg-surface-3 font-semibold text-ink"
                         : "text-ink-dim hover:bg-surface-2"
@@ -291,7 +295,7 @@ export function NavBar({
         <a
           href="#/command"
           aria-label="Argus home"
-          className="flex shrink-0 items-center gap-2.5 rounded-control py-1 pr-1 text-[15px] font-semibold tracking-[0.14em]"
+          className="flex shrink-0 items-center gap-2.5 rounded-control py-1 pr-1 text-heading font-semibold tracking-[0.14em]"
         >
           <IrisMark size={22} />
           <span aria-hidden="true" className="hidden xl:inline">

@@ -44,7 +44,7 @@ function Stat({
       href={href}
       className={`flex h-8 items-center gap-2 rounded-control border px-2.5 transition duration-(--duration-quick) motion-safe:active:scale-[0.97] ${skin.border} ${skin.bg}`}
     >
-      <span className={`text-[15px] font-semibold leading-none ${skin.text}`}>
+      <span className={`text-heading font-semibold leading-none ${skin.text}`}>
         {Math.round(shown)}
       </span>{" "}
       {/* The space is for the accessible name — "3 running", not "3running";
@@ -214,7 +214,10 @@ export function SituationStrip({
   // Only what is true is shown: a zero would be noise competing with the
   // numbers that matter, and the left side's silence is itself the message.
   // Each chip names its noun: "1 failed" beside "1 failing" in the same red
-  // left a newcomer to work out that one was a pipeline and one a schedule.
+  // left a newcomer to work out that one was a pipeline and one a monitor (the
+  // Health page's word, and where both monitor chips lead). An open issue is
+  // red like the other failures — it broke and is still broken — while an
+  // anomaly only ran unusually, and asks for a look rather than a fix.
   const attention: { count: number; label: string; tone: Tone; href: string }[] = (
     [
       { count: c.gatesWaiting, label: "awaiting you", tone: "attention", href: attentionHref },
@@ -232,14 +235,14 @@ export function SituationStrip({
       },
       {
         count: c.monitorsFailing,
-        label: `${noun(c.monitorsFailing, "schedule")} failing`,
+        label: `${noun(c.monitorsFailing, "monitor")} failing`,
         tone: "bad",
         href: "#/health",
       },
       {
         count: c.openIssues,
         label: `open ${noun(c.openIssues, "issue")}`,
-        tone: "attention",
+        tone: "bad",
         href: "#/issues",
       },
       {

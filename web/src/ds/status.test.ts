@@ -55,5 +55,7 @@ describe("runDsStatus", () => {
   it("falls back to the process status when there is no failing outcome", () => {
     expect(runDsStatus({ status: "succeeded", outcome: "succeeded" })).toBe("done");
     expect(runDsStatus({ status: "running" })).toBe("working");
+    expect(runDsStatus({ status: "cancelled" })).toBe("stopped");
+    expect(runDsStatus({ status: "interrupted" })).toBe("stopped");
   });
 });

@@ -2,7 +2,7 @@ import { afterEach, describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import type { PhasePill, StepPill } from "../ds";
 import { PhaseGraph } from "./PhaseGraph";
-import { BOARD_GAP_PX, boardArrangement, FOCUS_MIN_PX } from "./useLaneLayout";
+import { BOARD_GAP_PX, boardArrangement, FOCUS_MIN_PX, STACK_BELOW_PX } from "./useLaneLayout";
 import { attentionPhase } from "./phaseAttention";
 import { MIN_SCALE } from "./laneGraphLayout";
 
@@ -193,7 +193,7 @@ describe("PhaseGraph", () => {
     expect(states.filter((s) => s === "skipped")).toHaveLength(1);
     // The skipped node says so in words and hollows its dot.
     const skipped = screen.getByRole("button", { name: /pushback/ });
-    expect(skipped.textContent).toContain("skip");
+    expect(skipped).toHaveTextContent("Skipped");
   });
 
   it("marks gates, attempts and step progress on the node", () => {
@@ -209,8 +209,9 @@ describe("PhaseGraph", () => {
       />,
     );
     const node = screen.getByRole("button", { name: /review/ });
-    expect(node.textContent).toContain("gate");
-    expect(node.textContent).toContain("try 2");
+    // Sentence case, like every other label: small, not shouted or lowercased.
+    expect(node).toHaveTextContent("Gate");
+    expect(node).toHaveTextContent("Try 2");
     expect(node.title).toContain("needs approval");
   });
 
@@ -274,6 +275,35 @@ describe("boardArrangement", () => {
 
   it("treats an unmeasured card as unknown, not narrow", () => {
     expect(boardArrangement(fanOut(2), 0).stacked).toBe(false);
+  });
+
+  it("keeps a plain chain beside the panel on a tablet-width card, at full size", () => {
+    // 900px used to be the floor, so this stacked with room to spare.
+    const b = boardArrangement(chain(["done", "working", "idle"]), 640);
+    expect(b.stacked).toBe(false);
+    expect(b.graphTrackPx).toBe(b.layout.width + 2);
+  });
+
+  it("stacks only once a single lane could no longer sit beside the panel at full size", () => {
+    const phases = chain(["done", "working"]);
+    const beside = boardArrangement(phases, STACK_BELOW_PX);
+    expect(beside.stacked).toBe(false);
+    // Nothing to spare at the threshold: the full-size lane, the gap, the panel.
+    expect(beside.graphTrackPx).toBe(beside.layout.width + 2);
+    expect(beside.graphTrackPx + BOARD_GAP_PX + FOCUS_MIN_PX).toBe(STACK_BELOW_PX);
+    expect(boardArrangement(phases, STACK_BELOW_PX - 1).stacked).toBe(true);
+  });
+
+  it("puts a fork beside the panel at tablet width, scaled no further than readable", () => {
+    const fork = [
+      pill("plan", "done"),
+      pill("build-a", "working", { needs: ["plan"] }),
+      pill("build-b", "working", { needs: ["plan"] }),
+    ];
+    const b = boardArrangement(fork, 640);
+    expect(b.stacked).toBe(false);
+    expect(b.graphTrackPx + BOARD_GAP_PX + FOCUS_MIN_PX).toBeLessThanOrEqual(640);
+    expect(b.layout.width * MIN_SCALE).toBeLessThanOrEqual(b.graphTrackPx - 2);
   });
 });
 

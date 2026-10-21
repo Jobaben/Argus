@@ -1,6 +1,6 @@
 import { useLayoutEffect, useState } from "react";
 import type { DsStatus, PhasePill } from "../ds";
-import { DURATION, STATUS, useSyncedDelay } from "../ds";
+import { Button, DURATION, STATUS, useSyncedDelay } from "../ds";
 import { fadeEdges, runwayFor } from "./graphFocus";
 import {
   LANE_GEOMETRY,
@@ -169,13 +169,13 @@ function PhaseNode({
       >
         {pill.name}
       </span>
-      {skipped && <span className={MARKER}>skip</span>}
+      {skipped && <span className={MARKER}>Skipped</span>}
       {/* Violet only on the gate someone is waiting at: on a gate nobody has
           reached yet it is a category, and the waiting colour is not one. */}
       {pill.gated && (
-        <span className={`${MARKER} ${pill.status === "await" ? "!text-await" : ""}`}>gate</span>
+        <span className={`${MARKER} ${pill.status === "await" ? "!text-await" : ""}`}>Gate</span>
       )}
-      {(pill.attempt ?? 0) > 0 && <span className={MARKER}>try {pill.attempt + 1}</span>}
+      {(pill.attempt ?? 0) > 0 && <span className={MARKER}>Try {pill.attempt + 1}</span>}
       {/* Best-of-N replaces the step dots: N dots would all be the same step,
           and what a reader wants is how many of the drafts survived. */}
       {pill.candidates && (
@@ -231,10 +231,7 @@ const SCROLL_KEYS = new Set([
   " ",
 ]);
 
-const CONTROL =
-  "h-6 rounded-md border border-line-strong bg-surface-2/95 px-2 text-micro font-semibold text-ink-dim shadow-raised backdrop-blur transition duration-(--duration-quick) hover:bg-surface-3 hover:text-ink motion-safe:active:scale-[0.96]";
-
-/** A node's small word — "gate", "skip", "try 2": readable, not shouted. */
+/** A node's small word — "Gate", "Skipped", "Try 2": readable, not shouted. */
 const MARKER = "shrink-0 text-micro font-semibold leading-none text-ink-faint";
 
 function terminatorPath(
@@ -435,29 +432,30 @@ export function PhaseGraph({
           </div>
         </div>
       </div>
-      {/* Outside the scroller, so they stay put and never fade. */}
+      {/* Outside the scroller, so they stay put and never fade; raised, because
+          they float over the edges. */}
       <div className="absolute right-1.5 top-1.5 flex gap-1">
         {!following && (
-          <button
-            type="button"
+          <Button
+            size="sm"
             data-testid="graph-follow"
             title="Centre the phase the run is on, and keep following it"
             onClick={resume}
-            className={CONTROL}
+            className="shadow-raised"
           >
             Follow
-          </button>
+          </Button>
         )}
         {fitScale < 1 && (
-          <button
-            type="button"
+          <Button
+            size="sm"
             data-testid="graph-zoom"
             title={zoom === "fit" ? "Show at full size" : "Fit the graph to the tile"}
             onClick={() => setZoom((z) => (z === "fit" ? "actual" : "fit"))}
-            className={CONTROL}
+            className="shadow-raised"
           >
             {zoom === "fit" ? "1:1" : "Fit"}
-          </button>
+          </Button>
         )}
       </div>
     </div>

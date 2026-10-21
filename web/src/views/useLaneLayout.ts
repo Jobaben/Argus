@@ -2,9 +2,6 @@ import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PhasePill } from "../ds";
 import { chooseOrientation, laneLayout, MIN_SCALE, type LaneLayout } from "./laneGraphLayout";
 
-/** Below this card width the graph stacks above the focus panel. */
-export const STACK_BELOW_PX = 900;
-
 /** The narrowest the focus panel may get beside the graph before the board stacks. */
 export const FOCUS_MIN_PX = 360;
 
@@ -13,6 +10,21 @@ export const BOARD_GAP_PX = 16;
 
 /** The graph tile's border, both sides. */
 const TILE_CHROME_PX = 2;
+
+/**
+ * Below this card width the graph always stacks above the focus panel.
+ *
+ * It is the narrowest card that holds the smallest graph there is — one lane
+ * of minimum-width nodes inside its padding, at full size — beside the panel at
+ * its minimum: `NODE_MIN_W` 160 + 2 × `LANE_GEOMETRY.pad` 12 + tile border 2 +
+ * gap 16 + panel 360 = 562px. It was 900, which stacked a plain chain at
+ * tablet widths with room to spare beside it. Narrower than this, even that
+ * graph would have to shrink to sit beside the panel, and a shrunken graph
+ * beside a squeezed panel reads worse than both at full width. Wider shapes are
+ * still held to the {@link MIN_SCALE} test below. The board tests hold this
+ * number to the laid-out lane, so a geometry change that moves it fails there.
+ */
+export const STACK_BELOW_PX = 562;
 
 /**
  * The width of the element the ref lands on, tracked as it resizes.

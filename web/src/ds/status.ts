@@ -47,10 +47,11 @@ export function runStatusToDsStatus(s: RunStatus): DsStatus {
       return "failed";
     case "skipped":
       return "idle";
+    // Stopped short of an outcome. "Idle" said the run never did anything,
+    // which a cancelled or interrupted run did; the colour is the same grey.
     case "interrupted":
-      return "idle";
     case "cancelled":
-      return "idle";
+      return "stopped";
   }
 }
 

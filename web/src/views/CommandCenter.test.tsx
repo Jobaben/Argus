@@ -1,12 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
-import type { OverviewEntry, InstanceStatus, PhaseStatus, PhaseReview } from "../types";
+import type {
+  AttentionItem,
+  OverviewEntry,
+  InstanceStatus,
+  PhaseStatus,
+  PhaseReview,
+} from "../types";
 import type { MachineFacetState } from "../fleet/useMachineFacet";
 import CommandCenter from "./CommandCenter";
 
 const approve = vi.fn(() => new Promise<Response>(() => {})); // never resolves: lets us assert disabled-after-click
 const revise = vi.fn(() => new Promise<Response>(() => {}));
 const abort = vi.fn(() => Promise.resolve(new Response(null, { status: 200 })));
+const refresh = vi.fn(() => Promise.resolve());
 
 const mockAuth: { authenticated: boolean } = { authenticated: true };
 vi.mock("../useAuth", () => ({
@@ -64,7 +71,7 @@ const mockOverview: { overview: OverviewEntry[]; loading: boolean; error: string
 };
 
 vi.mock("../useOverview", () => ({
-  useOverview: () => ({ ...mockOverview, refresh: vi.fn(), approve, revise, abort }),
+  useOverview: () => ({ ...mockOverview, refresh, approve, revise, abort }),
 }));
 
 const mockActivity = new Map<string, { label: string; at: string }>();
@@ -135,6 +142,7 @@ beforeEach(() => {
   approve.mockClear();
   revise.mockClear();
   abort.mockClear();
+  refresh.mockClear();
   mockAuth.authenticated = true;
   resetTotals.mockClear();
   mockOverview.overview = [];
@@ -443,6 +451,111 @@ describe("CommandCenter", () => {
       fireEvent.click(within(dialog).getByRole("button", { name: /^approve$/i }));
       expect(approve).toHaveBeenCalledWith("auth-refactor-i1", { phaseId: "ph1" });
     });
+
+    it("lists what the Briefing says needs you outside pipelines, minus what the board already shows", () => {
+      const briefingAttention: AttentionItem[] = [
+        {
+          kind: "issue-open",
+          id: "fp-broken",
+          title: "exit code 1",
+          // The same failure as the board's own "broken · Phase1" row.
+          detail: "2× across broken · Phase1",
+          at: "2026-06-30T10:00:00.000Z",
+        },
+        {
+          kind: "anomaly",
+          id: "schedule:s1|cost|r9",
+          title: "Cost report",
+          detail: "4.2× median cost",
+          at: "2026-06-30T09:00:00.000Z",
+        },
+        {
+          kind: "monitor-down",
+          id: "s2",
+          title: "Dependency audit",
+          detail: "expected a run, none arrived",
+          at: null,
+        },
+        {
+          kind: "issue-open",
+          id: "fp-disk",
+          title: "disk full",
+          detail: "3× across Nightly triage",
+          at: null,
+        },
+      ];
+      mockOverview.overview = [entry("broken", "failed", ["succeeded", "failed"])];
+      render(<CommandCenter attention={briefingAttention} />);
+      const inbox = screen.getByRole("region", { name: /needs you/i });
+      // The board's failure, then three from the Briefing — the issue that is
+      // the board's failure again is folded into its row rather than listed.
+      expect(within(inbox).getAllByRole("listitem")).toHaveLength(4);
+      expect(inbox).toHaveTextContent("1 stopped short · 3 outside pipelines");
+      expect(within(inbox).getByRole("heading", { name: "Outside pipelines" })).toBeInTheDocument();
+
+      const monitor = within(inbox).getByRole("link", { name: "Open monitor" });
+      expect(monitor).toHaveAttribute("href", "#/health");
+      expect(monitor.closest("li")).toHaveTextContent("Dependency audit");
+      expect(monitor.closest("li")).toHaveTextContent("Monitor down · expected a run");
+
+      // An anomaly opens the run it is about, named by the last part of its id.
+      const anomaly = within(inbox).getByRole("link", { name: "Inspect run" });
+      expect(anomaly).toHaveAttribute("href", "#/run/r9");
+      expect(anomaly.closest("li")).toHaveTextContent("Cost report");
+
+      // The one issue left is titled by where it happens.
+      const issues = within(inbox).getAllByRole("link", { name: "Triage issue" });
+      expect(issues).toHaveLength(1);
+      expect(issues[0]).toHaveAttribute("href", "#/issues");
+      expect(issues[0].closest("li")).toHaveTextContent("Nightly triage");
+      expect(issues[0].closest("li")).toHaveTextContent("Open issue · disk full · 3×");
+      expect(within(inbox).queryByText(/exit code 1/)).toBeNull();
+    });
+
+    it("leaves a kind of attention it does not know to the Briefing", () => {
+      const unknown = {
+        kind: "budget-exceeded",
+        id: "b1",
+        title: "Daily limit",
+        detail: "over by $2",
+        at: null,
+      } as unknown as AttentionItem;
+      render(<CommandCenter attention={[unknown]} />);
+      expect(screen.queryByRole("region", { name: /needs you/i })).toBeNull();
+    });
+  });
+
+  describe("a failure reason with an outcome marker", () => {
+    function failedWith(reason: string): OverviewEntry {
+      const e = entry("broken", "failed", ["failed"]);
+      e.latest!.phases[0].steps = [{ name: "dev", runId: "r0", status: "failed" }];
+      e.latest!.phases[0].payload = { reason };
+      return e;
+    }
+
+    it("shows the agent's prose and never the marker line", () => {
+      mockOverview.overview = [
+        failedWith("The api tests are red\nTwo snapshots are stale\nARGUS_OUTCOME: failed tests"),
+      ];
+      render(<CommandCenter />);
+      expect(screen.queryByText(/ARGUS_OUTCOME/)).toBeNull();
+      // One line in "Needs you", the whole of it on the failed step's tile.
+      const inbox = screen.getByRole("region", { name: /needs you/i });
+      expect(within(inbox).getByText("The api tests are red")).toBeInTheDocument();
+      expect(inbox).not.toHaveTextContent(/stale/);
+      const tile = screen.getByRole("button", { name: /^dev/ }).closest("article")!;
+      expect(tile).toHaveTextContent(/The api tests are red\s*Two snapshots are stale/);
+    });
+
+    it("says the marker's reason when the marker is all there is", () => {
+      mockOverview.overview = [failedWith("ARGUS_OUTCOME: blocked the .NET SDK is missing")];
+      render(<CommandCenter />);
+      expect(screen.queryByText(/ARGUS_OUTCOME/)).toBeNull();
+      const inbox = screen.getByRole("region", { name: /needs you/i });
+      expect(within(inbox).getByText("the .NET SDK is missing")).toBeInTheDocument();
+      const tile = screen.getByRole("button", { name: /^dev/ }).closest("article")!;
+      expect(within(tile).getByText("the .NET SDK is missing")).toBeInTheDocument();
+    });
   });
 
   it("surfaces an action error in the drawer and re-enables the gate", async () => {
@@ -483,8 +596,37 @@ describe("CommandCenter", () => {
     mockTotals.totals = null;
     mockOverview.overview = [entry("scheduler-prune", "running", ["running"])];
     render(<CommandCenter />);
-    expect(screen.queryByText("Total spend")).toBeNull();
+    expect(screen.queryByText("Completed runs")).toBeNull();
     expect(screen.queryByText(/run total/)).toBeNull();
+  });
+
+  it("calls the board total what it counts: spend across completed runs", () => {
+    render(<CommandCenter />);
+    expect(screen.getByText("Completed runs")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /reset total/i })).toBeInTheDocument();
+  });
+
+  it("offers no reset when the all-time total is zero", () => {
+    mockTotals.totals = { usd: 0, tokens: 0, since: "2026-07-01T00:00:00.000Z" };
+    render(<CommandCenter />);
+    expect(screen.getByText("Completed runs")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /reset total/i })).toBeNull();
+  });
+
+  it("keeps an open reset confirm until it is answered, even once the total reads zero", () => {
+    const { rerender } = render(<CommandCenter />);
+    fireEvent.click(screen.getByRole("button", { name: /reset total/i }));
+    // Reset from another tab: the figure drops to zero under an open confirm.
+    mockTotals.totals = { usd: 0, tokens: 0, since: "2026-07-02T00:00:00.000Z" };
+    rerender(<CommandCenter />);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("button", { name: /confirm reset/i })).toBeNull();
+    // Answered, so the next completed run brings back the icon, not the confirm.
+    mockTotals.totals = { usd: 0.4, tokens: 1200, since: "2026-07-02T00:00:00.000Z" };
+    rerender(<CommandCenter />);
+    expect(screen.getByRole("button", { name: /reset total/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /confirm reset/i })).toBeNull();
+    expect(resetTotals).not.toHaveBeenCalled();
   });
 
   it("announces attention transitions through the live region", () => {
@@ -513,10 +655,40 @@ describe("CommandCenter", () => {
     expect(screen.getByText(/no pipelines defined yet/i)).toBeInTheDocument();
   });
 
+  it("keeps one primary Launch a task: the empty board's, not the header's too", () => {
+    const primaries = () =>
+      screen
+        .getAllByRole("link", { name: "Launch a task" })
+        .filter((l) => /(^| )bg-ink( |$)/.test(l.className));
+    mockOverview.overview = [];
+    const first = render(<CommandCenter />);
+    expect(screen.getAllByRole("link", { name: "Launch a task" })).toHaveLength(2);
+    expect(primaries()).toHaveLength(1);
+    expect(first.container.querySelector("header")).not.toContainElement(primaries()[0]);
+    first.unmount();
+
+    // With pipelines on the board, the header's is the page's primary again.
+    mockOverview.overview = [entry("pipe", "running", ["running"])];
+    const second = render(<CommandCenter />);
+    expect(primaries()).toHaveLength(1);
+    expect(second.container.querySelector("header")).toContainElement(primaries()[0]);
+  });
+
   it("renders an error banner when the server is unreachable", () => {
     mockOverview.error = "HTTP 500";
     render(<CommandCenter />);
     expect(screen.getByText(/couldn't reach the argus server/i)).toBeInTheDocument();
+  });
+
+  it("holds the board's place, not the first-run board, while the overview cannot load", () => {
+    mockOverview.error = "HTTP 502";
+    render(<CommandCenter />);
+    // "No pipelines defined yet" under a connection error would tell a
+    // returning operator their pipelines were gone.
+    expect(screen.queryByText(/no pipelines defined yet/i)).toBeNull();
+    expect(screen.getByText(/the board shows here again once argus is reachable/i)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(refresh).toHaveBeenCalledOnce();
   });
 
   it("shows the current activity line on a running step", () => {
@@ -652,7 +824,7 @@ describe("an instance whose pipeline was deleted", () => {
     mockOverview.overview = [orphan()];
     vi.stubGlobal("confirm", () => true);
     render(<CommandCenter />);
-    expect(screen.getByText("pipeline deleted")).toBeInTheDocument();
+    expect(screen.getByText("Pipeline deleted")).toBeInTheDocument();
     expect(screen.queryByTestId("gate-opener")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Stop" }));
     await waitFor(() => expect(abort).toHaveBeenCalledWith("gone-i1"));
@@ -683,14 +855,14 @@ describe("an instance whose pipeline was deleted", () => {
     mockAuth.authenticated = false;
     mockOverview.overview = [orphan()];
     render(<CommandCenter />);
-    expect(screen.getByText("pipeline deleted")).toBeInTheDocument();
+    expect(screen.getByText("Pipeline deleted")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
   });
 
   it("an ordinary pipeline's card has no stop control", () => {
     mockOverview.overview = [awaiting()];
     render(<CommandCenter />);
-    expect(screen.queryByText("pipeline deleted")).toBeNull();
+    expect(screen.queryByText("Pipeline deleted")).toBeNull();
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
   });
 });

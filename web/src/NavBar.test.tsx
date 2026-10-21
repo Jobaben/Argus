@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, it, expect, vi } from "vitest";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { NavBar } from "./NavBar";
 
@@ -8,6 +8,10 @@ const destinations = [
   { id: "schedules", label: "Scheduler" },
 ];
 const overflow = [{ id: "stats", label: "Stats", href: "#/stats" }];
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("NavBar", () => {
   it("renders the two destinations and drops the old monitoring strip", () => {
@@ -97,6 +101,128 @@ describe("NavBar badge", () => {
     // Every destination is reachable at once, plus the secondary list.
     expect(screen.getAllByRole("link", { name: /briefing/i }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("link", { name: "Stats" }).length).toBeGreaterThan(0);
+  });
+
+  it("names a page from the secondary list too, rather than falling back to 'Menu'", () => {
+    render(
+      <NavBar
+        destinations={destinations}
+        overflow={overflow}
+        activeId="stats"
+        live
+        onOpenPalette={() => {}}
+      />,
+    );
+    expect(screen.getByRole("button", { name: /open the menu/i })).toHaveTextContent("Stats");
+  });
+});
+
+/**
+ * jsdom lays nothing out. Give the tab strip a width and every tab a 100px slot
+ * in order, so the bar's own measurement decides what fits. The strip is the
+ * element whose children are the tabs; everything else stays unmeasured.
+ */
+function layOutTabs(room: { width: number }) {
+  const slot = (el: HTMLElement) => {
+    const tabs = el.parentElement?.querySelectorAll(":scope > [data-tab]");
+    return el.dataset.tab && tabs ? Array.prototype.indexOf.call(tabs, el) : -1;
+  };
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return this.querySelector(":scope > [data-tab]") ? room.width : 0;
+  });
+  vi.spyOn(HTMLElement.prototype, "offsetLeft", "get").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return Math.max(0, slot(this)) * 100;
+  });
+  vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return slot(this) === -1 ? 0 : 100;
+  });
+}
+
+describe("priority+ overflow", () => {
+  const five = [
+    { id: "briefing", label: "Briefing" },
+    { id: "command", label: "Command Center" },
+    { id: "schedules", label: "Scheduler" },
+    { id: "health", label: "Health", badge: 4 },
+    { id: "budget", label: "Budget" },
+  ];
+
+  it("moves the destinations the bar cannot fit to the head of the More menu", async () => {
+    layOutTabs({ width: 300 });
+    const user = userEvent.setup();
+    render(
+      <NavBar
+        destinations={five}
+        overflow={overflow}
+        activeId="command"
+        live
+        onOpenPalette={() => {}}
+      />,
+    );
+    // Three 100px tabs fit a 300px strip; the other two leave the bar.
+    for (const name of ["Briefing", "Command Center", "Scheduler"]) {
+      expect(screen.getByRole("link", { name })).toBeInTheDocument();
+    }
+    expect(screen.queryByRole("link", { name: /health/i })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Budget" })).toBeNull();
+
+    // A count that leaves the bar stays on screen, on the menu that holds it.
+    const more = screen.getByRole("button", { name: /more/i });
+    expect(more).toHaveTextContent("4");
+    await user.click(more);
+    const items = within(screen.getByRole("menu")).getAllByRole("menuitem");
+    expect(items.map((i) => i.textContent)).toEqual(["Health4", "Budget", "Stats"]);
+    expect(items[0]).toHaveAttribute("href", "#/health");
+  });
+
+  it("brings them back to the bar when the room grows", () => {
+    const room = { width: 300 };
+    layOutTabs(room);
+    render(
+      <NavBar
+        destinations={five}
+        overflow={overflow}
+        activeId="command"
+        live
+        onOpenPalette={() => {}}
+      />,
+    );
+    expect(screen.queryByRole("link", { name: "Budget" })).toBeNull();
+    room.width = 500;
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    expect(screen.getByRole("link", { name: "Budget" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /more/i })).not.toHaveTextContent("4");
+  });
+
+  it("marks the page you are on in More when its tab is one that left the bar", async () => {
+    layOutTabs({ width: 300 });
+    const user = userEvent.setup();
+    render(
+      <NavBar
+        destinations={five}
+        overflow={overflow}
+        activeId="budget"
+        live
+        onOpenPalette={() => {}}
+      />,
+    );
+    // No tab in the bar claims the page; the menu that now holds it does, and
+    // the phone menu still names it.
+    expect(screen.queryByRole("link", { current: "page" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: /more/i }));
+    expect(screen.getByRole("menuitem", { name: "Budget" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(screen.getByRole("button", { name: /open the menu/i })).toHaveTextContent("Budget");
   });
 });
 

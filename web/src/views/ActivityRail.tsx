@@ -30,7 +30,7 @@ import type { ColorToken, OverviewRow } from "../ds";
 
 const RECENT_LIMIT = 8;
 
-/** How long a run may go without a tool call before "starting…" stops being
+/** How long a run may go without a tool call before "Starting…" stops being
  *  the honest word for it. */
 const STARTING_MS = 10_000;
 
@@ -85,7 +85,7 @@ function StepLine({
   /** Another live row carries the same label, so this one names its run. */
   twin: boolean;
 }) {
-  // Every live row says how long it has been going. "starting…" on all of
+  // Every live row says how long it has been going. "Starting…" on all of
   // them, whatever their age, made a two-minute step look exactly like one
   // that had just been spawned — and stuck look exactly like fine.
   const now = useTicker(startedAt !== null);
@@ -116,11 +116,14 @@ function StepLine({
           </span>
         ) : (
           <span className="text-caption text-ink-faint">
-            {starting ? "starting…" : "working"}
+            {starting ? "Starting…" : "Working"}
             {twin && runId && (
               // Two runs of one schedule read as one row drawn twice; the id
               // is what tells them apart.
-              <span className="font-mono"> · run {runId.slice(0, 8)}</span>
+              <>
+                {" · run "}
+                <span className="font-mono">{runId.slice(0, 8)}</span>
+              </>
             )}
           </span>
         )}
@@ -149,7 +152,7 @@ function RunLine({ run, index }: { run: Run; index: number }) {
           </span>
         </span>
         <span className="flex items-baseline gap-2 pl-3.5 text-caption text-ink-faint">
-          <span className={TEXT[token]}>{label.toLowerCase()}</span>
+          <span className={TEXT[token]}>{label}</span>
           {run.durationMs != null && <span>{formatMs(run.durationMs)}</span>}
           {cost != null && <span>{formatUsd(cost)}</span>}
         </span>
@@ -163,7 +166,7 @@ function Heading({ children, count }: { children: string; count?: number }) {
     <h2 className="eyebrow flex items-center gap-2">
       {children}
       {count != null && count > 0 && (
-        <span className="rounded-full bg-run/15 px-1.5 py-px text-[11px] font-semibold tracking-normal text-run">
+        <span className="rounded-full bg-run/15 px-1.5 py-px text-micro font-semibold tracking-normal text-run">
           {count}
         </span>
       )}
@@ -191,23 +194,31 @@ export function ActivityRail({
   error?: boolean;
 }) {
   // Every step the board reports as working, flattened with its pipeline name.
-  const working = useMemo(
-    () =>
-      rows.flatMap((row) =>
-        row.phases.flatMap((phase) =>
-          phase.steps
-            .filter((step) => step.status === "working")
-            .map((step) => ({
-              key: `${row.instanceId ?? row.pipelineId}:${phase.id}:${step.name}`,
-              runId: step.runId ?? null,
+  // Keyed by run, not by step name: a best-of-N phase runs N copies of one
+  // step under one name, and a key they shared let React duplicate or drop
+  // their rows as the board updated. A run is one row, however many times the
+  // board reports it.
+  const working = useMemo(() => {
+    const seen = new Set<string>();
+    return rows.flatMap((row) =>
+      row.phases.flatMap((phase) =>
+        phase.steps.flatMap((step, i) => {
+          const runId = step.runId ?? null;
+          if (step.status !== "working" || (runId && seen.has(runId))) return [];
+          if (runId) seen.add(runId);
+          return [
+            {
+              key: runId ?? `${row.instanceId ?? row.pipelineId}:${phase.id}:${i}`,
+              runId,
               startedAt: step.startedAt ?? null,
               label: `${row.name} · ${step.name}`,
-              activity: step.runId ? (liveActivity.get(step.runId) ?? null) : null,
-            })),
-        ),
+              activity: runId ? (liveActivity.get(runId) ?? null) : null,
+            },
+          ];
+        }),
       ),
-    [rows, liveActivity],
-  );
+    );
+  }, [rows, liveActivity]);
 
   // Recent runs, newest first, excluding the ones still going — those are either
   // in "Live" above or are scheduler runs the board does not own.

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import type { Briefing as BriefingData } from "../types";
 import Briefing from "./Briefing";
 
@@ -156,6 +156,124 @@ describe("Briefing", () => {
     render(<Briefing briefing={briefing()} loading={false} error={null} ack={ack} />);
     fireEvent.click(screen.getByRole("button", { name: /mark caught up/i }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/window was not reset: HTTP 500/);
+  });
+
+  it("calls a failing monitor what the Health page calls it, and says what to do", () => {
+    render(
+      <Briefing
+        briefing={briefing({
+          attention: [
+            {
+              kind: "monitor-failing",
+              id: "s1",
+              title: "Dependency audit",
+              detail: "3 of the last 5 runs failed",
+              at: "2026-07-11T06:00:00.000Z",
+            },
+          ],
+          attentionCount: 1,
+        })}
+        loading={false}
+        error={null}
+        ack={async () => {}}
+      />,
+    );
+    const card = screen.getByRole("link", { name: /Dependency audit/ });
+    expect(card).toHaveAttribute("href", "#/health");
+    expect(within(card).getByText("Monitor failing")).toBeInTheDocument();
+    expect(within(card).getByText("Open monitor")).toBeInTheDocument();
+  });
+
+  it("skips an attention kind it has no card for instead of failing to draw", () => {
+    render(
+      <Briefing
+        briefing={briefing({
+          attention: [
+            // As a newer server might send it to a tab opened before an upgrade.
+            {
+              kind: "quota-exhausted" as never,
+              id: "q1",
+              title: "Token quota",
+              detail: "",
+              at: null,
+            },
+            {
+              kind: "monitor-down",
+              id: "s2",
+              title: "Nightly backup",
+              detail: "expected a run, none arrived",
+              at: null,
+            },
+          ],
+          attentionCount: 2,
+        })}
+        loading={false}
+        error={null}
+        ack={async () => {}}
+      />,
+    );
+    expect(screen.getByRole("link", { name: /Nightly backup/ })).toBeInTheDocument();
+    expect(screen.queryByText("Token quota")).not.toBeInTheDocument();
+  });
+
+  it("opens an anomaly's own run when its id names one", () => {
+    render(
+      <Briefing
+        briefing={briefing({
+          attention: [
+            {
+              kind: "anomaly",
+              id: "schedule:s1|cost|r9",
+              title: "Nightly triage",
+              detail: "4.2× median cost",
+              at: null,
+            },
+          ],
+          attentionCount: 1,
+        })}
+        loading={false}
+        error={null}
+        ack={async () => {}}
+      />,
+    );
+    expect(screen.getByRole("link", { name: /Inspect run/ })).toHaveAttribute("href", "#/run/r9");
+  });
+
+  it("reads a failure by its prose, never its ARGUS_OUTCOME line", () => {
+    render(
+      <Briefing
+        briefing={briefing({
+          window: {
+            ...briefing().window,
+            totalRuns: 2,
+            byStatus: {
+              running: 0,
+              succeeded: 0,
+              failed: 2,
+              skipped: 0,
+              interrupted: 0,
+              cancelled: 0,
+            },
+            failures: [
+              { ...failedRun, error: "lint found 3 errors\nARGUS_OUTCOME: failed lint is red" },
+              // Nothing but the marker: its reason is the message.
+              {
+                ...failedRun,
+                id: "r2",
+                scheduleName: "Audit",
+                error: "ARGUS_OUTCOME: blocked no token",
+              },
+            ],
+          },
+        })}
+        loading={false}
+        error={null}
+        ack={async () => {}}
+      />,
+    );
+    expect(screen.queryByText(/ARGUS_OUTCOME/)).toBeNull();
+    expect(screen.getByText("lint found 3 errors")).toBeInTheDocument();
+    expect(screen.getByText("no token")).toBeInTheDocument();
   });
 
   it("links a failure to the run's transcript, and to Issues when there is none", () => {

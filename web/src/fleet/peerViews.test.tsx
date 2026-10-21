@@ -197,7 +197,8 @@ describe("Command Center in peer mode", () => {
     render(<CommandCenter />);
     expect(screen.getByText("Release train")).toBeInTheDocument();
     expect(screen.getByText("at review")).toBeInTheDocument();
-    expect(screen.getByText("needs approval")).toBeInTheDocument();
+    expect(screen.getByText("Needs approval")).toBeInTheDocument();
+    expect(screen.getByText("Running")).toBeInTheDocument();
   });
 
   it("regression: offers no approve or revise for a machine it does not own", async () => {

@@ -177,7 +177,7 @@ describe("the board on a routed instance", () => {
     const chip = screen.getByRole("button", { name: /Repair/ });
     expect(chip.getAttribute("title")).toMatch(/skipped/);
     expect(chip.getAttribute("title")).not.toMatch(/idle/);
-    expect(chip.textContent).toMatch(/skip/);
+    expect(chip.textContent).toMatch(/Skipped/);
   });
 
   it("draws the condition that governs a conditional branch on its edge, not in the node", () => {
@@ -260,6 +260,6 @@ describe("the board on a routed instance", () => {
     render(<CommandCenter />);
     expect(screen.queryByTestId("phase-decision")).toBeNull();
     expect(screen.queryByTestId("phase-skip")).toBeNull();
-    expect(screen.getByRole("button", { name: /Evaluate/ }).textContent).not.toMatch(/skip/);
+    expect(screen.getByRole("button", { name: /Evaluate/ }).textContent).not.toMatch(/skipped/i);
   });
 });

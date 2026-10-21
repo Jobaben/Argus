@@ -21,92 +21,11 @@ import {
   type DsStatus,
   type IconName,
 } from "../ds";
-import type { AttentionKind, Briefing as BriefingData, InstanceStatus, RunStatus } from "../types";
+import type { Briefing as BriefingData, InstanceStatus, RunStatus } from "../types";
+import { ATTENTION_KINDS, attentionHref } from "./attentionKinds";
+import { firstProseLine } from "./outcome";
 
 type AttentionItem = BriefingData["attention"][number];
-
-/**
- * Where each attention kind sends the user to act on it, and what acting is
- * called. The verb is on the card because a card that only names a problem
- * leaves the reader to work out what to do about it; "Review gate" is the
- * next step, said once, where the eye already is.
- *
- * `rank` is the order the cards are read in. Something blocked on a person (a
- * gate) or silently not running (a monitor that is down) comes before
- * something that ran and went wrong: the first two get worse every minute
- * nobody looks, the rest will still be there.
- */
-const KIND_META: Record<
-  AttentionKind,
-  {
-    href: string;
-    label: string;
-    tone: "fail" | "await";
-    verb: string;
-    icon: IconName;
-    rank: number;
-  }
-> = {
-  "gate-waiting": {
-    href: "#/command",
-    label: "Awaiting approval",
-    tone: "await",
-    verb: "Review gate",
-    icon: "approve",
-    rank: 0,
-  },
-  "monitor-down": {
-    href: "#/health",
-    label: "Monitor down",
-    tone: "fail",
-    verb: "Open monitor",
-    icon: "activity",
-    rank: 0,
-  },
-  "monitor-failing": {
-    href: "#/health",
-    label: "Monitor failing",
-    tone: "fail",
-    verb: "Open monitor",
-    icon: "x-circle",
-    rank: 1,
-  },
-  anomaly: {
-    href: "#/health/watchtower",
-    label: "Anomaly",
-    tone: "await",
-    verb: "Inspect run",
-    icon: "bolt",
-    rank: 2,
-  },
-  "issue-open": {
-    href: "#/issues",
-    label: "Open issue",
-    tone: "fail",
-    verb: "Triage issue",
-    icon: "layers",
-    rank: 3,
-  },
-};
-
-/**
- * A gate is acted on in the Command Center's review drawer and nowhere else —
- * the Pipelines page can only stop an instance — so the card deep-links to the
- * drawer for *this* instance, the same link the palette and `argus tail` use.
- *
- * An anomaly's id is `<key>|<metric>|<runId>` by contract, so its card can open
- * the run it is about ("Inspect run") instead of the Watchtower list, which is
- * kept as the fallback for an id that does not have that shape.
- */
-function attentionHref(item: AttentionItem): string {
-  if (item.kind === "gate-waiting") return `#/command/${encodeURIComponent(item.id)}`;
-  if (item.kind === "anomaly") {
-    const parts = item.id.split("|");
-    const runId = parts.length >= 3 ? parts[parts.length - 1] : "";
-    if (runId) return `#/run/${encodeURIComponent(runId)}`;
-  }
-  return KIND_META[item.kind].href;
-}
 
 /** The pill's colours, in StatusPill's anatomy. */
 const TONE_PILL = {
@@ -166,21 +85,6 @@ function failureHref(run: BriefingData["window"]["failures"][number]): string {
     : "#/issues";
 }
 
-/**
- * The first human line of a run's error or summary. An agent ends its reply
- * with an `ARGUS_OUTCOME: <outcome> <reason>` line for the scheduler to read;
- * it is protocol, not prose, so it is skipped — unless it is all there is, and
- * then its reason is the message.
- */
-function firstLine(s: string | null | undefined): string | null {
-  const lines = (s ?? "").split("\n").map((l) => l.trim());
-  const prose = lines.find((l) => l !== "" && !l.startsWith("ARGUS_OUTCOME:"));
-  if (prose) return prose;
-  const marker = lines.find((l) => l.startsWith("ARGUS_OUTCOME:"));
-  const reason = marker?.replace(/^ARGUS_OUTCOME:\s*\S+\s*/, "").trim();
-  return reason ? reason : null;
-}
-
 type FailedRun = BriefingData["window"]["failures"][number];
 
 /**
@@ -198,8 +102,10 @@ function groupFailures(
     { run: FailedRun; count: number; reason: string | null; summary: string | null }
   >();
   for (const r of runs) {
-    const reason = firstLine(r.error);
-    const summary = firstLine(r.resultSummary);
+    // The first human line of each, without the agent's `ARGUS_OUTCOME` line
+    // (or with that line's reason, when the marker is all there is).
+    const reason = firstProseLine(r.error) || null;
+    const summary = firstProseLine(r.resultSummary) || null;
     const key = [r.scheduleName, reason ?? "", summary ?? ""].join("\u0000");
     const g = groups.get(key);
     if (g) g.count += 1;
@@ -219,7 +125,7 @@ function RunCount({ n }: { n: number }) {
 }
 
 function AttentionCard({ item }: { item: AttentionItem }) {
-  const meta = KIND_META[item.kind];
+  const meta = ATTENTION_KINDS[item.kind];
   const beat = useSyncedDelay(DURATION.pulse);
   // Only a gate is *happening* — someone's pipeline is paused on you right now
   // — so only its dot breathes, in phase with every other waiting dot on screen.
@@ -507,10 +413,14 @@ export default function Briefing({
 
   // Sorted here, not trusted from the server's concatenation order: the order
   // is the page's argument about what to do first, so it is stated in the view.
+  // A kind this build has no card for (a newer server, a tab left open across
+  // an upgrade) is dropped rather than drawn from an undefined entry.
   const attention =
     briefing == null
       ? []
-      : [...briefing.attention].sort((a, b) => KIND_META[a.kind].rank - KIND_META[b.kind].rank);
+      : briefing.attention
+          .filter((a) => a.kind in ATTENTION_KINDS)
+          .sort((a, b) => ATTENTION_KINDS[a.kind].rank - ATTENTION_KINDS[b.kind].rank);
 
   const win = briefing?.window;
   const windowSections: { key: string; node: ReactNode }[] = [];
@@ -723,7 +633,7 @@ export default function Briefing({
         {briefing == null ? null : firstVisit ? (
           <EmptyState
             icon="inbox"
-            title="Nothing to brief yet."
+            title="Nothing to brief yet"
             action={
               <>
                 <ButtonLink href="#/schedules/oneoff" icon="bolt">
@@ -742,7 +652,7 @@ export default function Briefing({
           <EmptyState
             tone="calm"
             icon="check-circle"
-            title="All caught up."
+            title="All caught up"
             action={
               <ButtonLink href="#/command" iconRight="arrow-right">
                 Command Center
@@ -766,7 +676,7 @@ export default function Briefing({
                   compact
                   tone="calm"
                   icon="check-circle"
-                  title="Nothing needs you right now."
+                  title="Nothing needs you right now"
                 >
                   Gates waiting on you, monitors that stop reporting and open issues land here until
                   they are dealt with.

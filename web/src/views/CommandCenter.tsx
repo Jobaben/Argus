@@ -13,6 +13,8 @@ import { FOCUS_MIN_PX, useBoardArrangement, useElementWidth } from "./useLaneLay
 import { edgeState } from "./laneGraphLayout";
 import { decisionFields, isLongValue } from "./decisionValue";
 import { attentionPhase } from "./phaseAttention";
+import { ATTENTION_KINDS, attentionHref } from "./attentionKinds";
+import { firstProseLine, withoutOutcome } from "./outcome";
 import type { StepSelection } from "./StepDrawer";
 import type { GateSelection } from "./GateDrawer";
 import { hashSegments, useHashRoute } from "../useHashRoute";
@@ -47,9 +49,10 @@ import {
   useListPresence,
   useSyncedDelay,
   DURATION,
+  EmptyState,
   useTicker,
 } from "../ds";
-import type { IconName, OverviewRow, OverviewGate, PhasePill, StepPill, DsStatus } from "../ds";
+import type { OverviewRow, OverviewGate, PhasePill, StepPill, DsStatus } from "../ds";
 import type { AttentionItem as BriefingItem, AttentionKind, RouteDecision } from "../types";
 
 const StepDrawer = lazy(() => import("./StepDrawer").then((m) => ({ default: m.StepDrawer })));
@@ -203,7 +206,7 @@ function StepTile({
             title="Another candidate passed its checks first, so this one was stopped"
             className={`relative z-10 ${chipClass("neutral")}`}
           >
-            superseded
+            Superseded
           </span>
         ) : (
           <StatusPill status={step.status} size="sm" />
@@ -212,7 +215,7 @@ function StepTile({
       {step.selected && (
         <div className="flex items-center gap-1.5 text-caption font-semibold text-ok">
           <Icon name="check" size={13} strokeWidth={2.25} />
-          selected — its checks passed
+          Selected — its checks passed
         </div>
       )}
       {reason && (
@@ -321,11 +324,12 @@ function DecisionNote({
               </div>
             ))}
           </dl>
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => setOpen((v) => !v)}
             aria-expanded={open}
-            className="mt-1 inline-flex h-7 items-center gap-1 rounded-md px-1.5 text-caption font-semibold text-ink-dim transition duration-(--duration-quick) hover:bg-surface-2 hover:text-ink"
+            className="mt-1"
           >
             <Icon
               name="chevron-down"
@@ -333,7 +337,7 @@ function DecisionNote({
               className={`transition-transform duration-(--duration-base) ease-(--ease-out-expo) ${open ? "rotate-180" : ""}`}
             />
             {open ? "Less" : "Full value"}
-          </button>
+          </Button>
         </div>
       )}
     </div>
@@ -403,6 +407,9 @@ function PhaseFocus({
     ];
   });
   const undecided = routes.some((r) => r.condition) && pill.status !== "done";
+  // Shown on each failed tile and handed to its drawer, without the agent's
+  // `ARGUS_OUTCOME` line: the tile's status pill already says the verdict.
+  const failReason = withoutOutcome(pill.reason) || null;
   return (
     <div className="flex min-w-0 flex-col gap-3 motion-safe:animate-[slide-up_var(--duration-base)_var(--ease-out-expo)_both]">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-0.5">
@@ -417,30 +424,34 @@ function PhaseFocus({
           {pill.steps.length}
         </span>
         {(pill.attempt ?? 0) > 0 && (
-          <span className={chipClass("neutral")}>attempt {pill.attempt + 1}</span>
+          <span className={chipClass("neutral")}>Attempt {pill.attempt + 1}</span>
         )}
         {pill.retryAt && pill.status === "failed" && (
-          <span className={chipClass("await")}>retry queued</span>
+          <span className={chipClass("await")}>Retry queued</span>
         )}
-        {pill.skipped && <span className={chipClass("neutral")}>skipped</span>}
+        {pill.skipped && <span className={chipClass("neutral")}>Skipped</span>}
         {/* Each incoming edge with the condition that governs it: an
             unconditional edge is just the arrow it always was, a conditional
             one says what has to be true, and a skip-tolerant join says it
-            accepts a branch that never ran. */}
+            accepts a branch that never ran. The arrow points back at where the
+            work comes from; the set has no left arrow, so it is the right one
+            turned round. */}
         {edges.length > 0 && (
           <span
-            className="min-w-0 truncate text-caption text-ink-faint"
+            className="flex min-w-0 items-center gap-1 text-caption text-ink-faint"
             title={`Waits for ${needNames.join(", ")}`}
           >
-            ←{" "}
-            {edges
-              .map(
-                (e) =>
-                  `${name(e.phase)}${e.conditional ? ` (${e.label})` : ""}${
-                    e.allowSkipped ? " or skipped" : ""
-                  }`,
-              )
-              .join(", ")}
+            <Icon name="arrow-right" size={13} className="rotate-180" />
+            <span className="truncate">
+              {edges
+                .map(
+                  (e) =>
+                    `${name(e.phase)}${e.conditional ? ` (${e.label})` : ""}${
+                      e.allowSkipped ? " or skipped" : ""
+                    }`,
+                )
+                .join(", ")}
+            </span>
           </span>
         )}
       </div>
@@ -449,7 +460,7 @@ function PhaseFocus({
           data-testid="phase-routes"
           className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 px-0.5 text-caption text-ink-faint"
         >
-          <span aria-hidden="true">→</span>
+          <Icon name="arrow-right" size={13} />
           {routes.map((r, i) => (
             <span key={r.to.id} className="inline-flex min-w-0 items-center gap-1.5">
               {i > 0 && <span className="opacity-60">·</span>}
@@ -520,7 +531,7 @@ function PhaseFocus({
         }}
       >
         {pill.steps.map((step, i) => {
-          const reason = step.status === "failed" ? pill.reason : null;
+          const reason = step.status === "failed" ? failReason : null;
           return (
             <li key={`${step.name}-${i}`} className="min-w-0">
               <StepTile
@@ -726,7 +737,7 @@ function Row({
             className={chipClass("fail")}
             title="This pipeline was deleted while these instances were live. Stopping them is the only action left."
           >
-            pipeline deleted
+            Pipeline deleted
           </span>
         )}
         {multi ? (
@@ -862,14 +873,20 @@ function BoardTotal({
   // button does not sit indented when the total is absent.
   return (
     <div className="mr-2 flex items-center gap-2">
+      {/* Labelled with what it counts, spend across completed runs: a run
+          still going on the board below is not in it yet. */}
       <Meter
         level="board"
+        label="Completed runs"
         tokens={totals.tokens}
         usd={totals.usd}
         title={`All-time tokens and dollar cost across every completed run since ${sinceLabel}`}
       />
       {/* Bookkeeping, not an action anyone came here to take: an icon beside
-          the figure it resets, then a two-step confirm. */}
+          the figure it resets, then a two-step confirm. Gone at zero, where
+          there is nothing to reset. A confirm already open stays until it is
+          answered: hidden, a total zeroed elsewhere would leave it armed, to
+          reappear unasked with the next completed run. */}
       {arming ? (
         <div className="flex items-center gap-1.5">
           <Button
@@ -890,7 +907,7 @@ function BoardTotal({
             Cancel
           </Button>
         </div>
-      ) : (
+      ) : totals.usd === 0 && totals.tokens === 0 ? null : (
         <IconButton icon="retry" label="Reset total" size="sm" onClick={() => setArming(true)} />
       )}
     </div>
@@ -919,9 +936,12 @@ function attentionItems(rows: OverviewRow[]): AttentionItem[] {
             row,
             gate,
             phaseName: phase?.name ?? gate.phaseId,
+            // The first line of prose, which is what the row has room for. A
+            // reason that is nothing but an agent's `ARGUS_OUTCOME` marker
+            // reads as the marker's own reason, never as the protocol line.
             reason: gate.canApprove
               ? null
-              : (phase?.reason ?? row.failure?.reason ?? null)?.split("\n")[0] || null,
+              : firstProseLine(phase?.reason ?? row.failure?.reason) || null,
           };
         }),
   );
@@ -939,53 +959,9 @@ function gateHref(item: AttentionItem | undefined): string {
 /**
  * What the Briefing says needs a person and the board has no card for — a
  * monitor down or failing, a critical anomaly, an open issue — with the same
- * verbs, icons and destinations the Briefing gives them.
+ * labels, verbs, icons and destinations the Briefing gives them, from the one
+ * table both read ({@link ATTENTION_KINDS}).
  */
-const ELSEWHERE: Record<
-  Exclude<AttentionKind, "gate-waiting">,
-  {
-    label: string;
-    verb: string;
-    icon: IconName;
-    tone: "fail" | "await";
-    href: string;
-    rank: number;
-  }
-> = {
-  "monitor-down": {
-    label: "Monitor down",
-    verb: "Open monitor",
-    icon: "activity",
-    tone: "fail",
-    href: "#/health",
-    rank: 0,
-  },
-  "monitor-failing": {
-    label: "Schedule failing",
-    verb: "Open monitor",
-    icon: "x-circle",
-    tone: "fail",
-    href: "#/health",
-    rank: 1,
-  },
-  anomaly: {
-    label: "Anomaly",
-    verb: "Inspect run",
-    icon: "bolt",
-    tone: "await",
-    href: "#/health/watchtower",
-    rank: 2,
-  },
-  "issue-open": {
-    label: "Open issue",
-    verb: "Triage issue",
-    icon: "layers",
-    tone: "fail",
-    href: "#/issues",
-    rank: 3,
-  },
-};
-
 interface ElsewhereItem {
   key: string;
   item: BriefingItem & { kind: Exclude<AttentionKind, "gate-waiting"> };
@@ -993,7 +969,6 @@ interface ElsewhereItem {
   title: string;
   /** What is wrong with it, after the kind's label. */
   detail: string;
-  href: string;
 }
 
 /** An issue's detail is `<count>× across <schedules>` by contract. */
@@ -1023,17 +998,16 @@ function elsewhereItems(
     briefing
       // By the table rather than by "not a gate": a kind this build does not
       // know (a newer server) is left to the Briefing instead of drawn blank.
-      .filter((i): i is ElsewhereItem["item"] => i.kind !== "gate-waiting" && i.kind in ELSEWHERE)
+      .filter(
+        (i): i is ElsewhereItem["item"] => i.kind !== "gate-waiting" && i.kind in ATTENTION_KINDS,
+      )
       .filter((i) => {
         if (i.kind !== "issue-open") return true;
         const across = ACROSS.exec(i.detail)?.[2];
         return !(across && failed.has(across));
       })
-      .sort((a, b) => ELSEWHERE[a.kind].rank - ELSEWHERE[b.kind].rank)
+      .sort((a, b) => ATTENTION_KINDS[a.kind].rank - ATTENTION_KINDS[b.kind].rank)
       .map((item) => {
-        // An anomaly's id is `<key>|<metric>|<runId>` by contract: open its run.
-        const parts = item.kind === "anomaly" ? item.id.split("|") : [];
-        const runId = parts.length >= 3 ? parts[parts.length - 1] : "";
         // An issue is titled by where it happens, like every other row here, so
         // a failing schedule and the issue it raised read as the same thing.
         const across = item.kind === "issue-open" ? ACROSS.exec(item.detail) : null;
@@ -1042,7 +1016,6 @@ function elsewhereItems(
           item,
           title: across ? across[2] : item.title,
           detail: across ? `${item.title} · ${across[1]}×` : item.detail,
-          href: runId ? `#/run/${encodeURIComponent(runId)}` : ELSEWHERE[item.kind].href,
         };
       })
   );
@@ -1167,7 +1140,7 @@ function AttentionQueue({
           </h3>
           <ul className="divide-y divide-line">
             {shownElsewhere.map(({ key, item: entry, leaving }) => {
-              const meta = ELSEWHERE[entry.item.kind];
+              const meta = ATTENTION_KINDS[entry.item.kind];
               // An id is one token: a schedule name in an anomaly key has spaces.
               const titleId = `needs-you-${key.replace(/[^\w:-]/g, "_")}`;
               return (
@@ -1204,7 +1177,7 @@ function AttentionQueue({
                     </p>
                   </div>
                   <ButtonLink
-                    href={entry.href}
+                    href={attentionHref(entry.item)}
                     size="sm"
                     iconRight="arrow-right"
                     aria-describedby={titleId}
@@ -1280,10 +1253,9 @@ function EmptyBoard({ canBuild }: { canBuild: boolean }) {
  */
 function BoardUnavailable() {
   return (
-    <div className="flex items-center gap-3 rounded-panel border border-line bg-surface/50 px-5 py-6 text-small text-ink-dim">
-      <Icon name="pipeline" size={18} className="shrink-0 text-ink-faint" />
-      <p>The board shows here again once Argus is reachable.</p>
-    </div>
+    <EmptyState compact icon="pipeline">
+      The board shows here again once Argus is reachable.
+    </EmptyState>
   );
 }
 
@@ -1300,6 +1272,13 @@ function BoardUnavailable() {
  * a button here would either fail or need a second control plane across the
  * pairing, and the link out is the honest affordance.
  */
+/** A peer's status word ("running", "awaiting-approval") as a label. It is a
+ *  free string from another machine, so it is only cased, not translated. */
+function peerStatusLabel(status: string): string {
+  const words = status.replace(/-/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 function PeerBoard({ facet }: { facet: ReturnType<typeof useMachineFacet> }) {
   const pipelines = facet.peer?.summary?.facets.pipelines ?? [];
   if (pipelines.length === 0) return <PeerEmpty what="live pipelines" />;
@@ -1312,7 +1291,7 @@ function PeerBoard({ facet }: { facet: ReturnType<typeof useMachineFacet> }) {
             <span className="min-w-0 flex-1 truncate text-sm font-semibold text-ink">{p.name}</span>
             {p.phase && <span className="shrink-0 text-caption text-ink-faint">at {p.phase}</span>}
             <span className={`shrink-0 ${chipClass(gated ? "await" : "run")}`}>
-              {gated ? "needs approval" : p.status}
+              {gated ? STATUS.await.label : peerStatusLabel(p.status)}
             </span>
           </li>
         );
@@ -1390,6 +1369,9 @@ export default function CommandCenter({
   // glides there shows exactly what moved.
   const flip = useFlip();
   const liveActivity = useRunActivity();
+  // The first-run board carries its own primary "Launch a task"; the header's
+  // steps down beside it, so the page still has one thing to press first.
+  const firstRun = !facet.peer && !loading && !error && rows.length === 0;
 
   return (
     <Page
@@ -1398,7 +1380,11 @@ export default function CommandCenter({
       actions={
         <>
           <BoardTotal totals={totals} loading={totalsLoading} reset={reset} />
-          <ButtonLink href="#/schedules/oneoff" variant="primary" icon="bolt">
+          <ButtonLink
+            href="#/schedules/oneoff"
+            variant={firstRun ? "secondary" : "primary"}
+            icon="bolt"
+          >
             Launch a task
           </ButtonLink>
         </>
