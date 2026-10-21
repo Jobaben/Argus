@@ -64,7 +64,6 @@ Markdown and HTML versions are listed separately when both exist. Runtime data, 
 
 - [What the best harnesses do, and where Argus falls short](../HARNESS-RESEARCH.md)
 - [Motion & Feel Uplift — Analysis](../MOTION-UPLIFT-ANALYSIS.md)
-- [Argus Pipeline — Feedback Request](../argus-pipeline-feedback.md)
 - [Agent Harnesses on Non-SWE-bench Benchmarks: An Evidence Review (2026)](../research/2026-09-agentic-benchmarks.md)
 - [Argus — Harness Capability Inventory](../research/2026-09-argus-inventory.md)
 - [What Makes an AI Agent Harness Effective: Literature Review (2026)](../research/2026-09-harness-literature.md)
@@ -122,9 +121,10 @@ Markdown and HTML versions are listed separately when both exist. Runtime data, 
 - [Plan: Argus pipeline reliability (every audit finding)](../argus/reliability/plan.md)
 - [Handoff: Argus reliability plan](../argus/reliability/handoff.md)
 
-## Headless isolation
+## Delivery loop with per-task autonomy
 
-- [Handoff: a Claude setup folder per pipeline](../argus/headless-isolation/handoff.md)
+- [Plan: Delivery loop with per-task autonomy](../argus/delivery-loop/plan.md)
+- [Handoff: Delivery loop with per-task autonomy](../argus/delivery-loop/handoff.md)
 
 ## Design-system sources
 
